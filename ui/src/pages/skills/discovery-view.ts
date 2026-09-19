@@ -3,12 +3,15 @@ import { ref } from "lit/directives/ref.js";
 import { repeat } from "lit/directives/repeat.js";
 import { icons } from "../../components/icons.ts";
 import { t } from "../../i18n/index.ts";
+import { registerSkillsBrowserEnglish } from "../../i18n/locales/en-skills-browser.ts";
 import { clawHubSkillRef } from "../../lib/skills/clawhub-search.ts";
 import { renderPluginCardSummary } from "../plugins/plugin-card.ts";
 import { skillDiscoveryEntries, type SkillDiscoveryEntry } from "./discovery.ts";
 import { renderSkillStateStatus, verdictForSkill } from "./skill-status.ts";
 import type { SkillsProps } from "./view-types.ts";
 import "../../styles/skills-discovery.css";
+
+registerSkillsBrowserEnglish();
 
 function renderCard(entry: SkillDiscoveryEntry, props: SkillsProps) {
   const remote = entry.remote;

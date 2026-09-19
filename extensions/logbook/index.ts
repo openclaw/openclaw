@@ -46,6 +46,7 @@ function readNumberParam(params: unknown, key: string): number {
 const logbookNodeHostCommands: OpenClawPluginNodeHostCommand[] = [
   {
     command: "logbook.snapshot",
+    hasActiveWork: () => false,
     cap: "screen",
     dangerous: false,
     handle: async (paramsJSON) => {

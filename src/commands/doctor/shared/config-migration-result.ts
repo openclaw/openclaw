@@ -2,6 +2,7 @@ import { isDeepStrictEqual } from "node:util";
 import type { ConfigSnapshotReadMeasure } from "../../../config/io.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { DeferredPluginMigration } from "../../../infra/deferred-plugin-migrations.js";
+import type { PreparedAgentDatabaseMigrationDiscovery } from "../../../infra/state-migrations.media-persistence-targets.js";
 import type {
   LegacyStateMigrationStepReceipt,
   PreparedPostSessionPluginMigration,
@@ -10,6 +11,7 @@ import type { PluginMetadataSnapshot } from "../../../plugins/plugin-metadata-sn
 import type { CronCodexRuntimePolicyTarget } from "../cron/store-migration.js";
 
 export type DoctorConfigPreflightOptions = {
+  agentDatabaseMigrationDiscovery?: PreparedAgentDatabaseMigrationDiscovery;
   migrateState?: boolean;
   migrateLegacyConfig?: boolean;
   repairPrefixedConfig?: boolean;

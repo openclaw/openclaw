@@ -26,10 +26,12 @@ import {
 } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { listGatewayAgentsBasic } from "../gateway/agent-list.js";
+import type { SessionRowProjection } from "../gateway/session-row-projection.js";
 import { resolveHeartbeatSessionKey } from "../infra/heartbeat-runner-session.js";
 import { resolveHeartbeatSummariesForAgents } from "../infra/heartbeat-summary-projection.js";
 import { hasResolvableHeartbeatOwnerRoute } from "../infra/outbound/targets.js";
 import { readStartupMigrationWarning } from "../infra/state-migrations.messages.js";
+import { resolveSystemEventQueueKey } from "../infra/system-event-ownership.js";
 import { peekSystemEvents } from "../infra/system-events.js";
 import {
   listActiveDegradedPlugins,
@@ -47,6 +49,7 @@ import { sortAndLimitBy } from "../shared/sort-and-limit.js";
 import { readOpenClawStateWalHealth } from "../state/openclaw-state-db-cache.js";
 import { deliveryContextFromSession } from "../utils/delivery-context.shared.js";
 import { resolveRuntimeServiceVersion } from "../version.js";
+import { buildStatusCliProjection } from "./cli-projection.js";
 import {
   readStatusSessionStores,
   STATUS_RECENT_SESSION_LIMIT,
@@ -354,10 +357,12 @@ export async function getStatusSummary(
   options: {
     includeSensitive?: boolean;
     includeChannelSummary?: boolean;
+    includeCliProjection?: boolean;
     config?: OpenClawConfig;
     sourceConfig?: OpenClawConfig;
     hostDesktopStatus?: import("../gateway/desktop/host-source.js").HostDesktopStatus;
     sessionStores?: StatusSessionStores;
+    sessionRowProjection?: SessionRowProjection;
   } = {},
 ) {
   const { includeSensitive = true, includeChannelSummary = true } = options;
@@ -442,18 +447,18 @@ export async function getStatusSummary(
         }),
       )
     : [];
-  // Fleet status reads every main queue without selecting an ambient execution owner.
-  // Global session scope shares one queue, so include it only once.
-  const mainSessionKeys = new Set(
-    agentList.agents.map(({ id: agentId }) =>
-      resolveCanonicalMainSessionKey({
+  const queuedSystemEvents = agentList.agents.flatMap(({ id: agentId }) =>
+    peekSystemEvents(
+      resolveSystemEventQueueKey(
+        resolveCanonicalMainSessionKey({
+          agentId,
+          mainKey: cfg.session?.mainKey,
+          sessionScope: cfg.session?.scope,
+        }),
         agentId,
-        mainKey: cfg.session?.mainKey,
-        sessionScope: cfg.session?.scope,
-      }),
+      ),
     ),
   );
-  const queuedSystemEvents = [...mainSessionKeys].flatMap(peekSystemEvents);
   const taskMaintenanceModule = await taskRegistryMaintenanceModuleLoader.load();
   // Status may overlap a live Gateway, so task inspection must not initialize
   // the writable process registry or its schema-owning shared-state handle.
@@ -474,11 +479,12 @@ export async function getStatusSummary(
 
   const sessionStores =
     options.sessionStores ??
-    readStatusSessionStores(
+    (await readStatusSessionStores(
       cfg,
       agentList.agents,
       includeSensitive ? STATUS_RECENT_SESSION_LIMIT : 0,
-    );
+      options.sessionRowProjection,
+    ));
   const byAgent = await Promise.all(
     sessionStores.byAgent.map(async ({ agent, path, count, recent }) => ({
       agentId: agent.id,
@@ -510,6 +516,9 @@ export async function getStatusSummary(
   const sqliteWal = readOpenClawStateWalHealth();
   return {
     runtimeVersion: resolveRuntimeServiceVersion(process.env),
+    ...(options.includeCliProjection
+      ? { cliProjection: buildStatusCliProjection(cfg, agentList) }
+      : {}),
     sqliteWal: sqliteWal && !includeSensitive ? { ...sqliteWal, error: undefined } : sqliteWal,
     hostDesktop: hostDesktopStatus,
     linkChannel: linkContext

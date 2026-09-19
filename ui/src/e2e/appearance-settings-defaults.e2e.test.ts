@@ -206,7 +206,7 @@ suite.define(() => {
             toggle.evaluate((element) => Boolean((element as { checked?: boolean }).checked)),
           )
           .toBe(false);
-        await expect.poll(() => row.textContent()).toContain("Using default: Disabled");
+        await expect.poll(() => row.textContent()).not.toContain("Using default:");
         await captureViewport(page, "11-task-progress-collapse-off.png");
 
         await row.click();
@@ -380,14 +380,12 @@ suite.define(() => {
             .getAttribute("aria-pressed"),
         )
         .toBe("true");
-      await expect.poll(() => reloadedLanguageRow.textContent()).toContain("Using default: System");
-      await expect.poll(() => reloadedThemeSection.textContent()).toContain("Using default: Claw");
-      await expect
-        .poll(() => reloadedColorModeRow.textContent())
-        .toContain("Using default: System");
+      await expect.poll(() => reloadedLanguageRow.textContent()).not.toContain("Using default:");
+      await expect.poll(() => reloadedThemeSection.textContent()).not.toContain("Using default:");
+      await expect.poll(() => reloadedColorModeRow.textContent()).not.toContain("Using default:");
       await expect
         .poll(() => reloadedTextSizeSection.textContent())
-        .toContain("Using default: 100%");
+        .not.toContain("Using default:");
       await expect.poll(() => readPersistedSettings(page)).not.toHaveProperty("textScale");
       await expect.poll(() => page.locator("html").getAttribute("data-theme-mode")).toBe("dark");
 

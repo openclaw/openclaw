@@ -187,3 +187,42 @@ export function sameTranscriptIdentity(
   // A run can publish several durable messages; its ID identifies ownership, not a row.
   return left.sequence !== null && right.sequence !== null && left.sequence === right.sequence;
 }
+
+export type SessionProjectionEntry = {
+  message: unknown;
+  identity: SessionMessageIdentity | null;
+  afterSequence?: number | null;
+  live: boolean;
+  pending: boolean;
+  pendingRunId: string | null;
+};
+
+/** Normalize a message into its live, durable, or pending projection entry. */
+export function createSessionProjectionEntry(
+  message: unknown,
+  options?: { envelope?: SessionMessageEnvelope; live?: boolean; pendingRunId?: string | null },
+): SessionProjectionEntry {
+  const identity = readSessionMessageIdentity(message, options?.envelope);
+  const fallback = readRecord(readRecord(message)?.openclawStreamFallback);
+  const provisionalFallback = Boolean(
+    fallback && identity?.role === "assistant" && !identity.id && identity.sequence === null,
+  );
+  const inferredPendingRunId =
+    options?.live !== true && isLocallyOptimisticSessionMessage(message) ? identity?.runId : null;
+  const pendingRunId = normalizeSessionProjectionRunId(
+    options?.pendingRunId ?? inferredPendingRunId,
+  );
+  return {
+    message,
+    identity,
+    afterSequence:
+      options?.envelope?.afterSequence !== undefined
+        ? options.envelope.afterSequence
+        : provisionalFallback && typeof fallback?.afterSequence === "number"
+          ? fallback.afterSequence
+          : undefined,
+    live: options?.live === true || provisionalFallback,
+    pending: pendingRunId !== null,
+    pendingRunId,
+  };
+}

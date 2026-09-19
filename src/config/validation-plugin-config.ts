@@ -10,6 +10,7 @@ import {
   resolveMemorySlotDecision,
 } from "../plugins/config-state.js";
 import { isPluginEnabledByDefaultForPlatform } from "../plugins/default-enablement.js";
+import { findUninspectedPluginDiagnostic } from "../plugins/discovery-availability.js";
 import { resolveManifestCommandAliasOwnerInRegistry } from "../plugins/manifest-command-aliases.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import {
@@ -20,13 +21,16 @@ import {
   getOfficialExternalPluginCatalogEntry,
   resolveOfficialExternalPluginInstallSources,
 } from "../plugins/official-external-plugin-catalog.js";
-import { validatePluginSchemaValue } from "../plugins/schema-validator.js";
 import { hasKind } from "../plugins/slots.js";
 import { isRecord, resolveUserPath } from "../utils.js";
 import { GENERATED_BUNDLED_CHANNEL_CONFIG_METADATA } from "./bundled-channel-config-metadata.generated.js";
 import { shouldSuppressMissingCodexPluginDiagnostics } from "./codex-plugin-diagnostics.js";
 import type { ConfigValidationIssue, OpenClawConfig } from "./types.js";
 import { formatRawChannelConfigIssueMessage } from "./validation-channel-rules.js";
+import {
+  validatePreparedPluginSchemaValue,
+  type PreparedPluginSchemaValidations,
+} from "./validation-prepared.js";
 
 const BLOCKED_PLUGIN_CANDIDATE_PREFIX = "blocked plugin candidate:";
 
@@ -35,118 +39,6 @@ export function formatChannelConfigIssueMessage(message: string, pluginId?: stri
   return safePluginId
     ? `invalid config for plugin ${safePluginId}: ${message}`
     : formatRawChannelConfigIssueMessage(message);
-}
-
-type ExplicitPluginReferences = {
-  entries: Set<string>;
-  allow: Set<string>;
-  deny: Set<string>;
-  slots: Map<string, string>;
-};
-
-function collectExplicitPluginReferences(raw: unknown): ExplicitPluginReferences {
-  const references: ExplicitPluginReferences = {
-    entries: new Set(),
-    allow: new Set(),
-    deny: new Set(),
-    slots: new Map(),
-  };
-  if (!isRecord(raw) || !isRecord(raw.plugins)) {
-    return references;
-  }
-  const { plugins } = raw;
-  if (isRecord(plugins.entries)) {
-    for (const pluginId of Object.keys(plugins.entries)) {
-      const normalized = normalizePluginId(pluginId);
-      if (normalized) {
-        references.entries.add(normalized);
-      }
-    }
-  }
-  for (const [key, target] of [
-    ["allow", references.allow],
-    ["deny", references.deny],
-  ] as const) {
-    const value = plugins[key];
-    if (!Array.isArray(value)) {
-      continue;
-    }
-    for (const entry of value) {
-      if (typeof entry === "string") {
-        const normalized = normalizePluginId(entry);
-        if (normalized) {
-          target.add(normalized);
-        }
-      }
-    }
-  }
-  if (isRecord(plugins.slots)) {
-    for (const [slotId, pluginId] of Object.entries(plugins.slots)) {
-      if (typeof pluginId !== "string") {
-        continue;
-      }
-      const normalized = normalizePluginId(pluginId);
-      if (normalized && normalized !== "none") {
-        references.slots.set(normalized, slotId);
-      }
-    }
-  }
-  return references;
-}
-
-function resolveExplicitPluginReferencePath(
-  references: ExplicitPluginReferences,
-  pluginId: string,
-): string | undefined {
-  const normalized = normalizePluginId(pluginId);
-  if (!normalized) {
-    return undefined;
-  }
-  if (references.entries.has(normalized)) {
-    return `plugins.entries.${normalized}`;
-  }
-  if (references.allow.has(normalized)) {
-    return "plugins.allow";
-  }
-  if (references.deny.has(normalized)) {
-    return "plugins.deny";
-  }
-  const slotId = references.slots.get(normalized);
-  return slotId ? `plugins.slots.${slotId}` : undefined;
-}
-
-/** Classify one registry generation against its authored plugin references and deferred owners. */
-export function createPluginRegistryConfigValidator(params: {
-  raw: unknown;
-  deferredPluginIds: ReadonlySet<string>;
-  issues: ConfigValidationIssue[];
-  warnings: ConfigValidationIssue[];
-}): (registry: PluginManifestRegistry) => void {
-  const references = collectExplicitPluginReferences(params.raw);
-  let checked = false;
-  return (registry) => {
-    if (checked) {
-      return;
-    }
-    checked = true;
-    for (const diagnostic of registry.diagnostics) {
-      const explicitPath = diagnostic.pluginId
-        ? resolveExplicitPluginReferencePath(references, diagnostic.pluginId)
-        : undefined;
-      const issuePath =
-        !diagnostic.pluginId && diagnostic.message.includes("plugin path not found")
-          ? "plugins.load.paths"
-          : (explicitPath ?? "plugins");
-      const pluginLabel = diagnostic.pluginId ? `plugin ${diagnostic.pluginId}` : "plugin";
-      const issue = { path: issuePath, message: `${pluginLabel}: ${diagnostic.message}` };
-      const deferred =
-        diagnostic.pluginId && params.deferredPluginIds.has(normalizePluginId(diagnostic.pluginId));
-      (diagnostic.level === "error" && (explicitPath || !diagnostic.pluginId) && !deferred
-        ? params.issues
-        : params.warnings
-      ).push(issue);
-    }
-  };
 }
 
 /** Deferred channel settings remain authored inputs until their owning plugin can validate them. */
@@ -199,6 +91,7 @@ export function validateExplicitPluginConfig(params: {
   config: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
   applyDefaults: boolean;
+  schemaValidations?: PreparedPluginSchemaValidations;
   registry: PluginManifestRegistry;
   knownIds: Set<string>;
   normalizedPlugins: ReturnType<typeof normalizePluginsConfig>;
@@ -222,6 +115,10 @@ export function validateExplicitPluginConfig(params: {
     issues,
     warnings,
   } = params;
+  // An unavailable configured path may override any discovered plugin's schema.
+  if (findUninspectedPluginDiagnostic(registry.diagnostics)) {
+    return;
+  }
   const blockedPluginDiagnostics = new Map<string, { message: string; source?: string }>();
   const blockedPluginDiagnosticsWithSource: Array<{ message: string; source: string }> = [];
   const normalizeBlockedDiagnosticPath = (value: string | undefined): string => {
@@ -478,14 +375,17 @@ export function validateExplicitPluginConfig(params: {
     const shouldValidate = enabled || entryHasConfig;
     if (shouldValidate) {
       if (record.configSchema) {
-        const result = validatePluginSchemaValue({
-          origin: record.origin,
-          schema: record.configSchema,
-          cacheKey: record.schemaCacheKey ?? record.manifestPath ?? pluginId,
-          value: entry?.config ?? {},
-          applyDefaults: true, // Always apply defaults for AJV schema validation;
-          // writeConfigFile persists persistCandidate, not validated.config (#61841)
-        });
+        const result = validatePreparedPluginSchemaValue(
+          {
+            origin: record.origin,
+            schema: record.configSchema,
+            cacheKey: record.schemaCacheKey ?? record.manifestPath ?? pluginId,
+            value: entry?.config ?? {},
+            applyDefaults: true, // Always apply defaults for AJV schema validation;
+            // writeConfigFile persists persistCandidate, not validated.config (#61841)
+          },
+          params.schemaValidations,
+        );
         if (!result.ok) {
           for (const error of result.errors) {
             const base = `plugins.entries.${pluginId}.config`;

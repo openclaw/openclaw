@@ -109,6 +109,7 @@ suite.define(() => {
     const page = await openPage({ width: 1440 });
     const sidebarBrand = page.locator(".sidebar-brand");
     const agentName = sidebarBrand.locator(".sidebar-agent-card__name-text");
+    await expect.poll(() => agentName.textContent()).toBe("OpenClaw");
 
     await expect
       .poll(() =>
@@ -229,13 +230,14 @@ suite.define(() => {
       });
 
     await expect.poll(() => actionInset("ltr")).toBe(2);
-    await expect.poll(nameFade).toEqual(["0px", "8px", expect.stringContaining("90deg")]);
+    await expect.poll(nameFade).toEqual(["0px", "8px", "none"]);
     await page.evaluate(() => {
       document.documentElement.dir = "rtl";
     });
     await expect.poll(() => actionInset("rtl")).toBe(0);
     await expect.poll(controlGaps).toEqual([0, 0]);
-    await expect.poll(nameFade).toEqual(["8px", "0px", expect.stringContaining("270deg")]);
+    // The fitting Latin name keeps its own direction in RTL page chrome.
+    await expect.poll(nameFade).toEqual(["0px", "8px", "none"]);
   });
 
   it("keeps the native sidebar avatar larger", async () => {

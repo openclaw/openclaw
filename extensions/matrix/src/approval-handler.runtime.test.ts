@@ -560,7 +560,7 @@ describe("matrixApprovalNativeRuntime", () => {
   });
 
   it.each([
-    { terminalStatus: undefined, label: "Not applied" },
+    { terminalStatus: undefined, label: "Denied" },
     { terminalStatus: "cancelled", label: "Cancelled" },
   ] as const)(
     "preserves the $label system-agent heading after denial",

@@ -14,7 +14,7 @@ import {
   prepareSqliteQuerySync,
   runSqliteImmediateTransactionSync,
   type SqliteWorkerBackend,
-} from "openclaw/plugin-sdk/sqlite-runtime";
+} from "openclaw/plugin-sdk/sqlite-worker-runtime";
 import { pickKeyframeId } from "./analyze.js";
 import type {
   LogbookBatchInput,

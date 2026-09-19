@@ -8,13 +8,17 @@ import {
 } from "../../infra/kysely-sync.js";
 import type { TranscriptReadWindow } from "../../sessions/transcript-read-window.js";
 import { readTranscriptDisplaySource } from "./session-accessor.sqlite-display-position.js";
-import { isVisibleHistoryNonMessageEventSql } from "./session-accessor.sqlite-history-interval.js";
+import {
+  isVisibleHistoryNonMessageEvent,
+  isVisibleHistoryNonMessageEventSql,
+} from "./session-accessor.sqlite-history-interval.js";
 import {
   getActiveTranscriptKysely,
   type CurrentTranscriptProjection,
   type SessionTranscriptMessageEvent,
 } from "./session-accessor.sqlite-projection-read.js";
 import {
+  readUnindexedHistoryControls,
   resolveTranscriptBoundaryWindow,
   resolveVisibleMessagePositions,
 } from "./session-accessor.sqlite-reset-window.js";
@@ -160,11 +164,16 @@ export function resolveVisibleHistoryEventCount(projection: CurrentTranscriptPro
     visibleMessages.boundaryActivePosition,
   );
   const readCount = getHistoryCountReader(projection.database, shape);
-  const row = readCount({
+  const count = readCount({
     sessionId: projection.resolved.sessionId,
     boundaryActivePosition: visibleMessages.boundaryActivePosition ?? 0,
   });
-  return visibleMessages.total + (row?.event_count ?? 0);
+  const unindexed = readUnindexedHistoryControls(projection).filter(
+    (row) =>
+      isVisibleHistoryNonMessageEvent(row.event) &&
+      row.active_position >= (visibleMessages.boundaryActivePosition ?? 0),
+  );
+  return visibleMessages.total + (count?.event_count ?? 0) + unindexed.length;
 }
 
 export function resolveVisibleHistoryProjection(
@@ -205,6 +214,24 @@ export function resolveVisibleHistoryProjection(
       ])
       .orderBy("active.active_position", "asc"),
   ).rows;
+  for (const control of readUnindexedHistoryControls(projection)) {
+    if (
+      !isVisibleHistoryNonMessageEvent(control.event) ||
+      control.active_position < (visibleMessages.boundaryActivePosition ?? 0)
+    ) {
+      continue;
+    }
+    rows.push({
+      active_position: control.active_position,
+      following_message_position: control.following_message_position,
+      event_id: typeof control.event.id === "string" ? control.event.id.trim() : "",
+      seq: control.event_seq,
+      serialized_bytes: control.serialized_bytes,
+    });
+  }
+  if (projection.hasUnindexedPrefix) {
+    rows.sort((left, right) => left.active_position - right.active_position);
+  }
   const readNextMessage = prepareSqliteQuerySync<
     number,
     { active_position: number; message_position: number | null }

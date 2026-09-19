@@ -13,7 +13,7 @@ import {
   isStandaloneToolMessageForDisplay,
   normalizeMessage,
 } from "../../../lib/chat/message-normalizer.ts";
-import { summarizeToolGroup } from "../../../lib/chat/tool-call-grouping.ts";
+import { readPreparedActivity, summarizeToolGroup } from "../../../lib/chat/tool-call-grouping.ts";
 import {
   resolveToolCallTargetPaths,
   resolveToolCallView,
@@ -40,13 +40,11 @@ type TaskMessageRecovery = {
 };
 
 type Entry = { key: string; timestamp: number | null } & (
-  | { kind: "tools"; calls: ToolCard[] }
+  | { kind: "tools"; calls: ToolCard[]; activity: ReturnType<typeof readPreparedActivity> }
   | { kind: "user" | "assistant" | "block"; text: string; cappedMessageId?: string }
 );
 
-// Collapsed rows show the first line; expanded rows keep the complete command
-// or script so a multi-line call can be inspected.
-function toolLine(call: ToolCard, mode: "summary" | "full"): string {
+function toolLine(call: ToolCard): string {
   const view = resolveToolCallView(call);
   const text =
     view.command ??
@@ -54,7 +52,7 @@ function toolLine(call: ToolCard, mode: "summary" | "full"): string {
     (view.kind === "search" ? view.target : resolveToolCallTargetPaths(call.name, call.args)[0]) ??
     view.target ??
     [call.name, resolveCollapsedToolArgumentPreview(call.args)].filter(Boolean).join(" ");
-  return mode === "full" ? text.trim() : text.split(/\r?\n/)[0]!.trim();
+  return text.trim();
 }
 
 function entries(messages: unknown[]): Entry[] {
@@ -102,8 +100,15 @@ function entries(messages: unknown[]): Entry[] {
         const previous = result.at(-1);
         if (previous?.kind === "tools") {
           previous.calls.push(call);
+          previous.activity.push(...readPreparedActivity(item.message));
         } else {
-          result.push({ kind: "tools", key, timestamp, calls: [call] });
+          result.push({
+            kind: "tools",
+            key,
+            timestamp,
+            calls: [call],
+            activity: readPreparedActivity(item.message),
+          });
         }
       } else if (
         isToolResultContentType(block.type) ||
@@ -173,13 +178,13 @@ function toolIcon(call: ToolCard) {
   }
 }
 
-function renderToolLine(call: ToolCard, mode: "summary" | "full") {
+function renderToolLine(call: ToolCard) {
   // The text sits in an inline element so template whitespace stays outside
   // the `pre-wrap` region of expanded rows.
   return html`<div
-    class="chat-task-feed__tool-line ${mode === "full" ? "chat-task-feed__tool-line--full" : ""} ${isToolCardError(call) ? "chat-task-feed__error" : ""}"
+    class="chat-task-feed__tool-line chat-task-feed__tool-line--full ${isToolCardError(call) ? "chat-task-feed__error" : ""}"
   >
-    <code>${toolLine(call, mode)}</code>
+    <code>${toolLine(call)}</code>
   </div>`;
 }
 
@@ -220,12 +225,8 @@ export function renderTaskActivityFeed(
           ${
             entry.kind === "tools"
               ? html` <details class="chat-task-feed__tool-group">
-                  <summary>
-                    ${renderToolLine(entry.calls[0]!, "summary")}${entry.calls.length > 1 ? html`<div class="chat-task-feed__summary">${summarizeToolGroup(entry.calls)}</div>` : nothing}
-                  </summary>
-                  <div class="chat-task-feed__calls">
-                    ${entry.calls.map((call) => renderToolLine(call, "full"))}
-                  </div>
+                  <summary>${summarizeToolGroup(entry.activity)}</summary>
+                  <div class="chat-task-feed__calls">${entry.calls.map(renderToolLine)}</div>
                 </details>`
               : entry.kind === "assistant"
                 ? renderMessageMarkdown(

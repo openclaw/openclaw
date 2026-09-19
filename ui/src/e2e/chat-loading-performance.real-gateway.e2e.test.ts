@@ -13,7 +13,6 @@ import {
 } from "../../../test/helpers/openclaw-test-instance.ts";
 import { runQaGatewayFixture } from "../../../test/helpers/qa-gateway-cleanup.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
-import { controlUiSessionPath } from "../test-helpers/control-ui-e2e.ts";
 import { installChatLoadingReadinessObserver } from "./chat-loading-readiness.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -248,7 +247,7 @@ suite.define(() => {
       );
     }
     const handoff = await cliJson(["dashboard", "--json"]);
-    const url = new URL(controlUiSessionPath(selectedKey), suite.server.baseUrl);
+    const url = new URL("/chat/main/12345678", suite.server.baseUrl);
     url.hash = new URL(String(handoff.browserUrl)).hash;
     const artifactDir = suite.artifactDir;
     const rpc: RpcMetric[] = [];
@@ -264,6 +263,10 @@ suite.define(() => {
       async ({ page, context }) => {
         await installChatLoadingReadinessObserver(page);
         await page.addInitScript(() => {
+          window.localStorage.setItem(
+            "openclaw:control-ui:community-invite",
+            JSON.stringify({ dismissedAtMs: 1770000000000 }),
+          );
           const sample: BrowserPerformanceSample = {
             lcpMs: null,
             cls: 0,
@@ -519,11 +522,45 @@ suite.define(() => {
         };
 
         const thread = selectedPane.locator(".chat-thread");
+        const loadedMessageCount = () =>
+          selectedPane.evaluate(
+            (element) =>
+              (element as HTMLElement & { state: { chatMessages: unknown[] } }).state.chatMessages
+                .length,
+          );
+        // Prefetched pages can commit before the preceding wheel gesture settles.
+        const waitForHistoryGesture = () =>
+          expect
+            .poll(() =>
+              selectedPane.evaluate((element) => {
+                const pane = element as HTMLElement & {
+                  loadingOlder: boolean;
+                  historyIntentConsumed: boolean;
+                };
+                return {
+                  loadingOlder: pane.loadingOlder,
+                  historyIntentConsumed: pane.historyIntentConsumed,
+                };
+              }),
+            )
+            .toEqual({ loadingOlder: false, historyIntentConsumed: false });
         await thread.hover();
-        await thread.evaluate((element) => {
-          element.scrollTop = 0;
-        });
-        await page.mouse.wheel(0, -500);
+        const paginationStartedAt = Date.now();
+        const performanceBeforePagination = await readPerformanceSample(page);
+        let loadedMessages = await loadedMessageCount();
+        const initialLoadedMessages = loadedMessages;
+        let olderPageCommits = 0;
+        while (loadedMessages < transcriptLength) {
+          await waitForHistoryGesture();
+          await thread.evaluate((element) => {
+            element.scrollTop = 0;
+          });
+          await page.mouse.wheel(0, -500);
+          await expect.poll(loadedMessageCount).toBeGreaterThan(loadedMessages);
+          loadedMessages = await loadedMessageCount();
+          olderPageCommits += 1;
+          expect(loadedMessages).toBeLessThanOrEqual(transcriptLength);
+        }
         await expect
           .poll(() =>
             rpc.some(
@@ -535,16 +572,22 @@ suite.define(() => {
             ),
           )
           .toBe(true);
-        await expect
-          .poll(() =>
-            selectedPane.evaluate(
-              (element) =>
-                (element as HTMLElement & { state: { chatMessages: unknown[] } }).state.chatMessages
-                  .length,
+        expect(loadedMessages).toBe(transcriptLength);
+        const paginationLoadedMs = Date.now() - paginationStartedAt;
+        const performanceAfterPagination = await readPerformanceSample(page);
+        expect(
+          await selectedPane.evaluate((element) =>
+            (
+              element as HTMLElement & { state: { chatMessages: unknown[] } }
+            ).state.chatMessages.map((message) =>
+              Number(
+                JSON.stringify(message).match(/Synthetic loading proof message (\d+)\./u)?.[1],
+              ),
             ),
-          )
-          .toBe(transcriptLength);
-        // The prepend preserves the reader's anchor; a second gesture reaches the new start.
+          ),
+        ).toEqual(Array.from({ length: transcriptLength }, (_, index) => index + 1));
+        // Each prepend preserves the reader's anchor; another gesture reaches the new start.
+        await waitForHistoryGesture();
         await page.mouse.wheel(0, -1_000_000);
         await selectedPane
           .locator(".chat-thread", {
@@ -555,6 +598,12 @@ suite.define(() => {
           await page.screenshot({ path: path.join(artifactDir, "03-older-history-loaded.png") });
         }
         const paginationMetrics = structuredClone(rpc.slice(startupMetrics.length));
+        const olderPages = paginationMetrics.filter(
+          (metric) =>
+            metric.method === "chat.history" &&
+            metric.sessionKey === selectedKey &&
+            (metric.offset ?? 0) > 0,
+        );
         const captureNarrowReload = async (stage: string, homeOpen: boolean) => {
           await page.setViewportSize({ width: 1050, height: 900 });
           const requestStart = rpc.length;
@@ -632,6 +681,11 @@ suite.define(() => {
               startup: startupMetrics,
               startupIdentity,
               pagination: paginationMetrics,
+              paginationLoadedMs,
+              initialLoadedMessages,
+              olderPageCommits,
+              performanceBeforePagination,
+              performanceAfterPagination,
               narrowHomeOpen,
               narrowHomeClosed,
               images,
@@ -645,6 +699,7 @@ suite.define(() => {
         );
 
         // Save measurements before asserting budgets so failures retain their evidence.
+        expect(olderPages).toHaveLength(1);
         const selectedStartup = startupMetrics.find(
           (metric) => metric.method === "chat.startup" && metric.sessionKey === selectedKey,
         );

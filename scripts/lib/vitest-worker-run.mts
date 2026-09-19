@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { runManagedCommand } from "./managed-child-process.mts";
+import { createVitestResourceOwner } from "./vitest-resource-ownership.mts";
 import {
   requestVitestWorkerArtifacts,
   verifyVitestWorkerArtifacts,
@@ -34,6 +35,8 @@ export function createVitestWorkerRun(
   let channelError: Error | undefined;
   const compilerAbort = new AbortController();
   let compilerJoined = true;
+  let resources: ReturnType<typeof createVitestResourceOwner> | undefined;
+  let resourcesReleased = true;
   const onParentDisconnect = () => {
     channelError ??= new Error("Compiled subprocess owner disconnected before group completion");
     console.error(channelError);
@@ -100,12 +103,19 @@ export function createVitestWorkerRun(
       console.error(
         `[vitest-workers] prepared ${manifest.identity.slice(0, 12)} in ${Math.round(manifest.durationMs)}ms (${Object.keys(manifest.inputs).length} inputs, ${Object.keys(manifest.outputs).length} outputs)`,
       );
+      // The compiler requires a fresh directory; publish fixture ownership only before lending.
+      resources = createVitestResourceOwner(directory);
+      resourcesReleased = false;
       return manifest;
     })());
   }
   return {
     descriptor: { directory } satisfies VitestWorkerDescriptor,
-    borrow<T>(child: ChildProcess, completion: Promise<T>): Promise<T> {
+    borrow<T>(
+      child: ChildProcess,
+      completion: Promise<T>,
+      onPreparationProgress?: () => void,
+    ): Promise<T> {
       let request: Promise<void> | undefined;
       const onMessage = (message: unknown) => {
         if (message !== VITEST_WORKER_PREPARE_REQUEST || request) {
@@ -119,6 +129,7 @@ export function createVitestWorkerRun(
             if (disposal) {
               throw new Error("Compiled subprocess owner is closing");
             }
+            onPreparationProgress?.();
           } catch (error) {
             reply = { type: VITEST_WORKER_PREPARE_REPLY, error: String(error) };
           }
@@ -128,6 +139,11 @@ export function createVitestWorkerRun(
             });
           }
         })();
+        // Only accepted admission and verified readiness count as progress.
+        // Duplicate IPC and the compiler's intermediate output cannot renew it.
+        if (!disposal) {
+          onPreparationProgress?.();
+        }
       };
       child.on("message", onMessage);
       // Existing Windows completion observes exit; artifact ownership additionally
@@ -163,6 +179,8 @@ export function createVitestWorkerRun(
         const uncertain = settled.find((result) => result.status === "rejected");
         try {
           await preparation;
+          resources?.assertReleased();
+          resourcesReleased = true;
           if (uncertain?.status === "rejected") {
             throw uncertain.reason;
           }
@@ -175,9 +193,9 @@ export function createVitestWorkerRun(
           }
         } finally {
           process.off("disconnect", onParentDisconnect);
-          if (uncertain || !compilerJoined) {
+          if (uncertain || !compilerJoined || !resourcesReleased) {
             console.error(
-              `[vitest-workers] retaining ${directory}: ${!compilerJoined ? "compiler" : "borrower"} join failed`,
+              `[vitest-workers] retaining ${directory}: ${!compilerJoined ? "compiler" : !resourcesReleased ? "fixture resource" : "borrower"} join failed`,
             );
           } else if (!parent) {
             // Large generations must not block signal delivery during final cleanup.

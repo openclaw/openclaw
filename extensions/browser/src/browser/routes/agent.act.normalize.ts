@@ -31,7 +31,25 @@ const KEY_ALIASES = new Map([
   ["del", "Delete"],
   ["ctrl", "Control"],
   ["cmd", "Meta"],
+  ["space", "Space"],
 ]);
+
+/**
+ * KeyboardEvent.key for Space is the literal " ". Map that exact whole value
+ * before trim so Browser panel Space presses survive. Keep trim-first chord
+ * splitting for every other input so whitespace-padded Plus (`" + "`, `"+ "`)
+ * still normalizes to `"+"`; use named `Ctrl+Space` for Space chords.
+ */
+function normalizePressKeyChord(raw: unknown): string {
+  if (raw === " ") {
+    return "Space";
+  }
+  // Empty chord segments represent a literal plus key and must survive normalization.
+  return toStringOrEmpty(raw)
+    .split("+")
+    .map((part) => KEY_ALIASES.get(part.toLowerCase()) ?? part)
+    .join("+");
+}
 
 function countBatchActions(actions: BrowserActRequest[]): number {
   let count = 0;
@@ -219,11 +237,7 @@ export function normalizeActRequest(
       return definedAction({ kind, text: body.text, targetId });
     }
     case "press": {
-      // Empty chord segments represent a literal plus key and must survive normalization.
-      const key = toStringOrEmpty(body.key)
-        .split("+")
-        .map((part) => KEY_ALIASES.get(part.toLowerCase()) ?? part)
-        .join("+");
+      const key = normalizePressKeyChord(body.key);
       if (!key) {
         throw new Error("press requires key");
       }

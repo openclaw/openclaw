@@ -178,7 +178,7 @@ async function withSettlementFixture(
 describe("MCP run lifetime", () => {
   it("retires a run-owned transient successor without a durable commit", async () => {
     await withSettlementFixture(async (fixture) => {
-      const { getOrCreateSessionMcpRuntime } =
+      const { getOrCreateSessionMcpRuntime, unopenedMcpConfig } =
         await import("../../agent-bundle-mcp-manager.test-support.js");
       const { getSessionMcpRuntimeManagerForTesting } =
         await import("../../agent-bundle-mcp-manager-api.js");
@@ -196,7 +196,7 @@ describe("MCP run lifetime", () => {
           sessionId,
           sessionKey: fixture.target.sessionKey,
           workspaceDir: fixture.input.runInput.runParams.workspaceDir,
-          cfg: { mcp: { servers: {} } },
+          cfg: unopenedMcpConfig,
           manifestRegistry: { plugins: [] },
         });
         await fixture.settle();
@@ -209,7 +209,7 @@ describe("MCP run lifetime", () => {
 
   it.each([false, true])("retires only run-owned IDs when cleanup is %s", async (cleanup) => {
     await withSettlementFixture(async (fixture) => {
-      const { getOrCreateSessionMcpRuntime } =
+      const { getOrCreateSessionMcpRuntime, unopenedMcpConfig } =
         await import("../../agent-bundle-mcp-manager.test-support.js");
       const { getSessionMcpRuntimeManagerForTesting } =
         await import("../../agent-bundle-mcp-manager-api.js");
@@ -220,7 +220,7 @@ describe("MCP run lifetime", () => {
           sessionId,
           sessionKey: fixture.target.sessionKey,
           workspaceDir: fixture.input.runInput.runParams.workspaceDir,
-          cfg: { mcp: { servers: {} } },
+          cfg: unopenedMcpConfig,
           manifestRegistry: { plugins: [] },
         });
       try {

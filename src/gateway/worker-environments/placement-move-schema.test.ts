@@ -59,6 +59,11 @@ describe("worker placement move schema", () => {
       );
     `);
     const store = createWorkerSessionPlacementStore({ database, now: () => 2_000 });
+    expect(store.getProjectionFacts("session-move")).toMatchObject({
+      placement: { state: "active" },
+      move: undefined,
+      workspaceResultReconciling: false,
+    });
     const begun = store.beginPlacementMove({
       sessionId: "session-move",
       source: { generation: 4, environmentId: "environment-source", ownerEpoch: 7 },
@@ -103,6 +108,7 @@ describe("worker placement move schema", () => {
     const reopened = openOpenClawStateDatabase(options);
     const reopenedStore = createWorkerSessionPlacementStore({ database: reopened });
     expect(reopenedStore.getPlacementMove("session-move")).toEqual(begun.intent);
+    expect(reopenedStore.getProjectionFacts("session-move").move).toEqual(begun.intent);
     expect(reopened.db.prepare("PRAGMA user_version").get()).toEqual(versionBefore);
     expect(
       reopened.db

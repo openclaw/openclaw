@@ -17,6 +17,12 @@ import { tmpdir } from "node:os";
 import { isAbsolute, join, posix as pathPosix, relative, win32 as pathWin32 } from "node:path";
 import { pathToFileURL } from "node:url";
 import { expectDefined } from "../packages/normalization-core/src/expect.js";
+import { collectPackageRootImports } from "../src/infra/package-root-imports.js";
+import {
+  readRuntimeDependencyOwnership,
+  RUNTIME_DEPENDENCY_OWNERSHIP_RELATIVE_PATH,
+  type RuntimeDependencyOwnership,
+} from "../src/infra/runtime-dependency-ownership.js";
 import { ALWAYS_ALLOWED_RUNTIME_DIR_NAMES } from "../src/plugin-sdk/facade-activation-contract.ts";
 import { BUNDLED_RUNTIME_SIDECAR_PATHS } from "../src/plugins/runtime-sidecar-paths.ts";
 import {
@@ -32,17 +38,11 @@ import {
   comparePackageDistInventory,
   PACKAGE_DIST_INVENTORY_RELATIVE_PATH,
 } from "./lib/package-dist-inventory-contract.mts";
-import { collectPackageRootImports } from "./lib/package-root-imports.ts";
 import {
   collectRuntimeDependencySpecs,
   packageNameFromSpecifier,
 } from "./lib/plugin-package-dependencies.mts";
 import { classifyReleaseTrain } from "./lib/release-version.mjs";
-import {
-  readRuntimeDependencyOwnership,
-  RUNTIME_DEPENDENCY_OWNERSHIP_RELATIVE_PATH,
-  type RuntimeDependencyOwnership,
-} from "./lib/runtime-dependency-ownership-contract.mts";
 import { runInstalledWorkspaceBootstrapSmoke } from "./lib/workspace-bootstrap-smoke.mts";
 import { parseReleaseVersion, resolveNpmCommandInvocation } from "./openclaw-npm-release-check.ts";
 import { buildCmdExeCommandLine, resolveWindowsCmdExePath } from "./windows-cmd-helpers.mjs";

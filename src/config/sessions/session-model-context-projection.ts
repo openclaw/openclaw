@@ -3,6 +3,7 @@ import {
   DEFAULT_MISSING_TOOL_RESULT_TEXT,
   SYNTHETIC_MISSING_TOOL_RESULT_DETAIL_KEY,
 } from "../../../packages/agent-core/src/harness/session/tool-result-pairing.js";
+import { supportsNodeSqliteJsonb } from "../../infra/node-sqlite.js";
 import { MODEL_CONTEXT_PRIVATE_METADATA_KEYS } from "../../shared/model-context-message.js";
 
 /** Exclude storage-only fields in SQLite, before a row's JSON crosses into JavaScript. */
@@ -20,7 +21,7 @@ export function projectModelContextEventSql(
     THEN json_remove(${modelEvent}, '$.message.providerReplay') ELSE ${modelEvent} END`;
 }
 
-function pickJsonObject(value: Expression<string>, keys: readonly string[]): RawBuilder<string> {
+function pickJsonObject(value: Expression<unknown>, keys: readonly string[]): RawBuilder<string> {
   // json_each distinguishes absent properties from explicit nulls. Preserve JSON
   // subtypes so booleans and nested navigation facts do not become strings/numbers.
   return /* kysely-allow-raw: narrow JSON member selection, with bound property names. */ sql<string>`(SELECT json_group_object(key, CASE type
@@ -60,6 +61,8 @@ export function projectResetBoundaryNavigationSql(event: Expression<string>): Ra
     ...TRANSCRIPT_NAVIGATION_KEYS,
     "timestamp",
     "firstKeptEntryId",
+    "customType",
+    "display",
   ]);
   // Non-object rows keep their parser behavior; malformed and SQLite-overdepth JSON
   // must reach JSON.parse unchanged instead of failing inside the metadata projection.
@@ -89,7 +92,10 @@ export function projectModelContextNavigationSql(event: Expression<string>): Raw
     "label",
     "name",
   ]);
-  const message = /* kysely-allow-raw: JSON message metadata is selected without content or native replay payloads. */ sql<string>`json_extract(${event}, '$.message')`;
+  // Binary intermediates avoid serializing and reparsing the entire message.
+  const message = supportsNodeSqliteJsonb()
+    ? /* kysely-allow-raw: JSONB remains inside SQLite; durable transcript bytes stay text. */ sql`jsonb_extract(${event}, '$.message')`
+    : /* kysely-allow-raw: supported SQLite 3.44 libraries retain text JSON extraction. */ sql`json_extract(${event}, '$.message')`;
   const messageFacts = pickJsonObject(message, [
     "role",
     "provider",

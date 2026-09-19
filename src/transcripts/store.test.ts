@@ -5,6 +5,7 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { StateDatabaseCoordinatorContentionError } from "../infra/state-database-coordinator.js";
 import { acquireOpenClawStateDatabaseFileExclusion } from "../state/openclaw-state-db-cache.js";
 import {
+  closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
@@ -14,7 +15,10 @@ import { summarizeTranscripts } from "./summary.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-afterEach(() => closeOpenClawStateDatabaseForTest());
+afterEach(async () => {
+  await closeOpenClawStateDatabaseAsync();
+  closeOpenClawStateDatabaseForTest();
+});
 
 function createStore(): { stateDir: string; store: TranscriptsStore } {
   const stateDir = tempDirs.make("openclaw-transcript-test-");
@@ -129,6 +133,7 @@ describe("TranscriptsStore", () => {
       };
       await store.writeSession(target);
       await store.appendUtteranceForSession(target, { text: "Saved history" });
+      await closeOpenClawStateDatabaseAsync();
       closeOpenClawStateDatabaseForTest();
       for (const metadata of [undefined, { sessionIdOrigin: "generated", agentId: "updated" }]) {
         await store.writeSession({ ...target, metadata, stoppedAt: "2026-07-01T10:01:00.000Z" });
@@ -149,6 +154,7 @@ describe("TranscriptsStore", () => {
         path.join(restoredState, "transcripts", "2026-07-01", target.sessionId),
         { recursive: true },
       );
+      await closeOpenClawStateDatabaseAsync();
       closeOpenClawStateDatabaseForTest();
       const { detectLegacyMeetingTranscripts, migrateLegacyMeetingTranscripts } =
         await import("../infra/state-migrations.meeting-transcripts.js");
@@ -293,6 +299,7 @@ describe("TranscriptsStore", () => {
       for (const target of reverse ? [qualified, raw] : [raw, qualified]) {
         await store.writeSession(target);
       }
+      await closeOpenClawStateDatabaseAsync();
       closeOpenClawStateDatabaseForTest();
       await expect(store.readSession(raw.sessionId)).resolves.toEqual(qualified);
       await expect(store.readSession("2026-07-04/2026-07-03-raw-id")).resolves.toEqual(raw);
@@ -553,6 +560,7 @@ describe("TranscriptsStore", () => {
     expect(fs.readFileSync(artifacts.transcriptPath, "utf8")).toContain(
       '"text":"We decided to ship the CLI."',
     );
+    await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
     const reopened = new TranscriptsStore(path.join(stateDir, "transcripts"), {
       env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },

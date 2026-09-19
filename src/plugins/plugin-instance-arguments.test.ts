@@ -2,6 +2,39 @@ import { describe, expect, it, vi } from "vitest";
 import { PluginInstance } from "./plugin-instance.js";
 
 describe("plugin argument restoration", () => {
+  it("reuses frozen fleet input analysis across agent calls and plugin instances", async () => {
+    const config = Object.freeze({
+      agents: Object.freeze({
+        list: Object.freeze(
+          Array.from({ length: 200 }, (_, id) => Object.freeze({ id: `agent-${id}` })),
+        ),
+      }),
+    });
+    const instances = [new PluginInstance("fleet-left"), new PluginInstance("fleet-right")];
+    const original = { read: () => 42 };
+    const views = instances.map((instance) => instance.wrap(original));
+    const consume = instances.map((instance) =>
+      instance.wrap(
+        (input: { config: typeof config; handle: typeof original; agentDir: string }) => {
+          expect(input.config).toBe(config);
+          expect(input.handle).toBe(original);
+        },
+      ),
+    );
+    const ownKeys = vi.spyOn(Reflect, "ownKeys");
+    try {
+      for (const agent of config.agents.list) {
+        consume.forEach((invoke, index) =>
+          invoke({ config, handle: views[index]!, agentDir: `/agents/${agent.id}` }),
+        );
+      }
+      expect(ownKeys.mock.calls.filter(([value]) => value === config)).toHaveLength(1);
+    } finally {
+      ownKeys.mockRestore();
+      await Promise.all(instances.map((instance) => instance.dispose()));
+    }
+  });
+
   it.each([false, true])(
     "does not snapshot untouched payload descriptors (with local handle: %s)",
     async (withHandle) => {
@@ -174,6 +207,41 @@ describe("plugin argument restoration", () => {
       expect(observations[2]).toBe(input);
       await instance.dispose();
       expect(() => consume(input)).toThrow("reloaded or disabled");
+    } finally {
+      await instance.dispose();
+    }
+  });
+
+  it("does not cache frozen cycles that reach mutable caller data", async () => {
+    const instance = new PluginInstance("argument-frozen-cycle");
+    const original = { read: () => 42 };
+    const view = instance.wrap(original);
+    type Root = { cycle: Link; data: { value?: typeof view } };
+    type Link = { root?: Root };
+    const cycle: Link = {};
+    const root: Root = { cycle, data: {} };
+    cycle.root = root;
+    Object.freeze(cycle);
+    Object.freeze(root);
+    let received: Link | undefined;
+    const inspect = instance.wrap((input: Root) => {
+      expect(input).toBe(root);
+    });
+    const consume = instance.wrap((input: Link) => {
+      received = input;
+    });
+    try {
+      // The cycle is encountered before the mutable descendant disproves the root.
+      inspect(root);
+      root.data.value = view;
+      consume(cycle);
+      expect(received).not.toBe(cycle);
+      expect(received?.root?.data.value).toBe(original);
+      expect(received?.root?.cycle).toBe(received);
+      expect(root.data.value).toBe(view);
+      delete root.data.value;
+      consume(cycle);
+      expect(received).toBe(cycle);
     } finally {
       await instance.dispose();
     }

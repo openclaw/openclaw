@@ -8,6 +8,7 @@ import { t } from "../i18n/index.ts";
 import { formatRelativeTimestamp } from "../lib/format.ts";
 import { icons } from "./icons.ts";
 import { toSanitizedMarkdownHtml } from "./markdown.ts";
+import { scrollState } from "./scroll-state.ts";
 import {
   composerDisclosure,
   type ComposerProgressRunLifecycle,
@@ -435,7 +436,12 @@ export function renderSessionProgressCard(
           >${icons.chevronDown}</span
         >
       </summary>
-      <div class="session-progress-card__body" role="region" aria-label=${composerCountLabel}>
+      <div
+        class="session-progress-card__body"
+        role="region"
+        aria-label=${composerCountLabel}
+        ${scrollState()}
+      >
         ${renderProgressCardMarkdown(card.markdown)}
         ${renderSteps(card, hasCurrentRunActivity, effectiveSessionStatus)}
       </div>

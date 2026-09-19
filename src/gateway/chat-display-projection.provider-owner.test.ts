@@ -77,3 +77,85 @@ it("shows the upstream cache limit in persisted history without proxy metadata",
   expect(projected).not.toHaveProperty("errorMessage");
   expect(classifyProviderFailoverSignalWithPlugin).not.toHaveBeenCalled();
 });
+
+it.each([
+  {
+    errorMessage: '429: {"error":{"type":"rate_limit_error","message":"PRIVATE_CANARY"}}',
+    expected:
+      "⚠️ LLM request failed (rate limited, HTTP 429). This is usually temporary — try again shortly.",
+  },
+  {
+    errorMessage: '503: {"error":{"type":"server_error","message":"DNS PRIVATE_CANARY"}}',
+    expected:
+      "⚠️ LLM request failed (provider internal error, HTTP 503). This is usually temporary — try again shortly.",
+  },
+  {
+    errorMessage: "Internal server error",
+    expected:
+      "⚠️ LLM request failed (provider internal error). This is usually temporary — try again shortly.",
+  },
+  {
+    errorMessage: "Request timed out",
+    expected:
+      "⚠️ LLM request failed (request timed out). This is usually temporary — try again shortly.",
+  },
+  {
+    errorMessage: '{"error":{"code":"invalid_api_key","message":"PRIVATE_CANARY"}}',
+    expected:
+      "⚠️ LLM request failed (authentication failed). Re-authenticate the provider and try again.",
+  },
+  {
+    errorMessage: '429: {"error":{"code":"insufficient_quota","message":"PRIVATE_CANARY"}}',
+    expected:
+      "⚠️ LLM request failed (provider billing issue, HTTP 429). Check provider billing and try again.",
+  },
+  {
+    errorCode: "ECONNRESET",
+    errorMessage: "PRIVATE_CANARY",
+    expected: "LLM request failed: network connection was interrupted.",
+  },
+  {
+    errorMessage: "Worker inference result exceeds the transcript message limit.",
+    expected:
+      "The worker could not save the model response because it exceeded the message size limit. Retry with a smaller response or continue on the Gateway. Earlier actions may have completed; verify their results before continuing.",
+  },
+])(
+  "retains a safe diagnosis in history and repeated projections: $errorMessage",
+  ({ expected, ...error }) => {
+    const raw = {
+      role: "assistant",
+      stopReason: "error",
+      content: [],
+      ...error,
+      __openclaw: { runId: "failed-run" },
+    };
+    const original = structuredClone(raw);
+    const projected = projectChatDisplayMessage(raw);
+    expect(projected).toMatchObject({ content: [{ type: "text", text: expected }] });
+    expect(projected).not.toHaveProperty("errorMessage");
+    expect(projected).not.toHaveProperty("errorCode");
+    expect(JSON.stringify(projected)).not.toContain("PRIVATE_CANARY");
+    expect(projectChatDisplayMessage(projected)).toEqual(projected);
+    expect(raw).toEqual(original);
+    expect(classifyProviderFailoverSignalWithPlugin).not.toHaveBeenCalled();
+  },
+);
+
+it("keeps the failure guidance alongside partial reply text", () => {
+  const projected = projectChatDisplayMessage({
+    role: "assistant",
+    stopReason: "error",
+    errorMessage: "429: PRIVATE_CANARY",
+    content: [{ type: "text", text: "The first step completed." }],
+  });
+  expect(projected).toMatchObject({
+    content: [
+      {
+        type: "text",
+        text: "⚠️ LLM request failed (rate limited, HTTP 429). This is usually temporary — try again shortly.\n\nThe first step completed.",
+      },
+    ],
+  });
+  expect(JSON.stringify(projected)).not.toContain("PRIVATE_CANARY");
+  expect(projectChatDisplayMessage(projected)).toEqual(projected);
+});

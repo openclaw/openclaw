@@ -365,6 +365,7 @@ export function installContextEngineLoopHook(params: {
       lastSourceMessages = transcriptMessages;
       return lastAssembledView ?? providerMessages;
     }
+    const preassemblyMessages = providerMessages.slice();
     try {
       if (!params.deferredTurn) {
         if (typeof contextEngine.afterTurn === "function") {
@@ -430,18 +431,19 @@ export function installContextEngineLoopHook(params: {
         runtimeSettings: params.runtimeSettings,
       });
       signal?.throwIfAborted();
-      if (assembled && Array.isArray(assembled.messages)) {
-        const modelMessages = pendingMessages.length
-          ? [...assembled.messages, ...pendingMessages]
-          : assembled.messages;
-        lastAssembledView = params.repairAssembledMessages?.(modelMessages) ?? modelMessages;
-        return lastAssembledView;
+      if (!assembled || !Array.isArray(assembled.messages)) {
+        throw new Error("context engine assembly returned invalid messages");
       }
-      lastAssembledView = null;
+      const modelMessages = pendingMessages.length
+        ? [...assembled.messages, ...pendingMessages]
+        : assembled.messages;
+      lastAssembledView = params.repairAssembledMessages?.(modelMessages) ?? modelMessages;
+      return lastAssembledView;
     } catch {
+      // Restore the provider array even when afterTurn mutated it before failing.
+      providerMessages.splice(0, providerMessages.length, ...preassemblyMessages);
       signal?.throwIfAborted();
-      // Best-effort: any engine failure falls through to the raw source
-      // messages so the tool loop still makes forward progress.
+      // Retry from the original fence so failed assembly cannot consume history.
       lastSeenLength = prePromptMessageCount;
       lastAssembledView = null;
       lastSourceMessages = transcriptMessages;

@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { measureGatewayBootstrapStep } from "./startup-trace.js";
 
 type DiagnosticsTimelineModule = typeof import("../infra/diagnostics-timeline.js");
 
@@ -25,11 +26,14 @@ export async function measureCliCommandStartup<T>(
   options: CliCommandStartupTimingOptions = {},
 ): Promise<T> {
   const env = options.env ?? process.env;
+  const tracedRun = stage.startsWith("doctor.config-preflight.")
+    ? run
+    : () => measureGatewayBootstrapStep(`cli.command.${stage}`, run);
   if (!hasDiagnosticsTimelinePath(env)) {
-    return await run();
+    return await tracedRun();
   }
   const { measureDiagnosticsTimelineSpan } = await loadDiagnosticsTimelineModule();
-  return await measureDiagnosticsTimelineSpan("cli.command-startup", run, {
+  return await measureDiagnosticsTimelineSpan("cli.command-startup", tracedRun, {
     config: options.config,
     env,
     phase: "cli.command-startup",

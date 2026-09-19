@@ -1,4 +1,6 @@
 import type { GatewayAgentRow, ModelCatalogEntry, SessionsListResult } from "../../api/types.ts";
+import { t } from "../../i18n/index.ts";
+import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-session-setup.ts";
 import {
   buildQualifiedChatModelValue,
   normalizeChatModelProviderId,
@@ -14,6 +16,9 @@ import {
   resolveModelRuntimeEntry,
   type ModelRuntimeEntry,
 } from "../../lib/model-runtime-choice.ts";
+import { draftCloudProfileSupportsExecutionMode, type DraftCloudProfile } from "./discovery.ts";
+
+registerNewSessionSetupEnglish();
 
 type DraftModelTarget = {
   entry?: ModelRuntimeEntry;
@@ -210,4 +215,25 @@ export function reconcileDraftModelSelection(params: {
     thinkingLevel: params.thinkingLevel,
     repaired: false,
   };
+}
+
+export function resolveDraftDevicePlacementUnsupportedReason(
+  runtime: ReturnType<typeof resolveDraftAgentRuntime>,
+): string | undefined {
+  return runtime && !runtime.devicePlacement ? t("newSession.deviceRuntimeUnsupported") : undefined;
+}
+
+export function resolveDraftCloudRuntimeUnsupportedReason(
+  runtime: ReturnType<typeof resolveDraftAgentRuntime>,
+  profile?: DraftCloudProfile,
+): string | undefined {
+  if (runtime?.cloudPlacementSupported === false) {
+    return t("newSession.cloudRuntimeUnsupported", { runtime: runtime.id });
+  }
+  return runtime &&
+    profile &&
+    runtime.cloudPlacementExecutionMode &&
+    !draftCloudProfileSupportsExecutionMode(profile, runtime.cloudPlacementExecutionMode)
+    ? t("newSession.cloudProfileRuntimeUnsupported", { runtime: runtime.id })
+    : undefined;
 }

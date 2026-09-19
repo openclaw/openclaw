@@ -10,7 +10,7 @@ import {
   symlinkSync,
   writeFileSync,
 } from "node:fs";
-import { dirname, join, resolve } from "node:path";
+import { delimiter, dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { runInNewContext } from "node:vm";
 import { expectDefined } from "@openclaw/normalization-core";
@@ -59,6 +59,7 @@ const toolingPaths = [
   "scripts/lib/docker-e2e-scenarios.mts",
   "scripts/lib/official-external-channel-catalog.json",
   "scripts/lib/upgrade-survivor-policy.mjs",
+  "scripts/lib/upgrade-survivor-scenarios.json",
   "scripts/lib/frozen-target-compat.sh",
   "scripts/resolve-frozen-codex-live-suite.mjs",
   "scripts/resolve-fs-safe-native-contract.mjs",
@@ -265,7 +266,7 @@ console.log('{"status":"identical"}');
       for (const step of resolveTarget.steps.slice(decoderIndex, identityIndex + 1)) {
         const output = join(root, `${step.id}.out`);
         const env: Record<string, string> = {
-          PATH: `${bin}:${process.env.PATH}`,
+          PATH: [bin, dirname(nodeExecutable), process.env.PATH ?? ""].join(delimiter),
           HOME: root,
           GITHUB_REPOSITORY: "openclaw/openclaw",
           GITHUB_OUTPUT: output,
@@ -1000,7 +1001,7 @@ process.stdout.write(${JSON.stringify(
     }
     const output = join(temporary, `output-${effects.length}`);
     const env: Record<string, string> = {
-      PATH: `${bin}:${process.env.PATH}`,
+      PATH: [bin, dirname(nodeExecutable), process.env.PATH ?? ""].join(delimiter),
       HOME: root,
       LANG: "C.UTF-8",
       GIT_CONFIG_GLOBAL: "/dev/null",

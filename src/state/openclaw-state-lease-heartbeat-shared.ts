@@ -7,6 +7,7 @@ export const leaseHeartbeatState = {
   status: 0,
   request: 1,
   ack: 2,
+  expiresAt: 3,
   starting: 0n,
   ready: 1n,
   closed: 2n,
@@ -20,7 +21,6 @@ export type LeaseHeartbeatWorkerData = {
   parentCoordinatorRetained?: true;
   identity: OpenClawStateLeaseIdentity;
   leaseMs: number;
-  expiresAt: number;
   heartbeatMs: number;
   processOwner?: { identity: StateLeaseProcessOwner; env: NodeJS.ProcessEnv };
   shared: SharedArrayBuffer;

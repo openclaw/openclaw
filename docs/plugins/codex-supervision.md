@@ -102,6 +102,9 @@ Set `appServer.homeScope: "user"` explicitly if the harness should share native
 Codex state too. Supervision honors explicit `appServer` connection settings
 instead of replacing them with its local user-home default.
 
+To share a running local daemon and its existing `config.toml` and login, use
+the [local Codex configuration setup](/plugins/codex-harness/native-features#use-an-existing-local-configtoml).
+
 Catalog reads use the selected store's native Codex authentication, including
 when that store is under an OpenClaw agent directory. Browsing stored sessions
 does not require importing a native credential into OpenClaw. Ordinary managed
@@ -170,16 +173,20 @@ Codex to inspect its full output.
 Open the **Codex** group in the normal sessions sidebar. It lists the same sessions
 grouped by host. **Load more sessions** appends the next page from each host that
 has older rows, and those appended rows survive the sidebar's periodic refresh.
-Each host appears as soon as its own native listing settles. The visible page
+Each host appears as soon as its resident catalog is ready. The visible page
 reconciles after node-connectivity changes, when it regains focus, and at most
 every 30 seconds. A changed result gets a faster follow-up pass. Sessions created
-in Codex Desktop, the CLI, or another native client therefore appear without a
-full page reload. The first page follows Codex's own most-recently-updated order.
-A fresh native fork remains readable by ID but can be absent from these lists
-until its first own user turn.
-Each returned search page scans a bounded number of native pages per host rather
-than sending the query to App Server, because native search can also match
-transcript previews.
+in Codex Desktop, the CLI, or another native client appear after the host's
+background directory reconciliation. Native events update threads driven by that
+Gateway without waiting for the periodic scan. Searches and pagination use the
+resident rows while the home fits in memory. The 20,000-row retained window never
+limits discovery: older pages and scoped searches fall back to native database-only
+paging, with opaque continuations for bounded partial results. An empty partial
+search page can still have a continuation. Exact-thread access also verifies older
+IDs against the authoritative source instead of treating eviction as absence.
+The first page follows recency order, preserving native order within timestamp ties and using a stable
+thread key for pagination. A fresh native fork remains readable by ID but can be absent from
+these lists until its first own user turn. See [catalog hydration and bounds](/plugins/codex-harness).
 
 Host availability and thread status are separate. **Offline** or **Unavailable**
 describes a host refresh. An unavailable host returns no fresh session rows and
@@ -187,13 +194,12 @@ does not change a thread's native status to `offline`. Session rows use Codex
 statuses such as `idle`, `active`, `notLoaded`, or error. A failed host does not
 hide results from healthy hosts.
 
-Concurrent reads of the same local source page share one native request. After
-two consecutive source failures, local catalog refreshes back off for 5 seconds,
-doubling after each failed recovery attempt up to 60 seconds. One recovery probe
-runs per agent and source home; other pages return the previous source error
-without waiting for another timeout. Previously cached pages remain available.
-A successful probe or configuration reload resets backoff. Paired nodes retain
-their separate eight-second foreground response deadline.
+All queries of the same local home share one resident index. Initial native
+hydration uses the existing source failure backoff; completed rows remain in
+memory and in the reconstructible SQLite snapshot. Normal list requests never
+restart discovery after a TTL. Paired nodes retain their separate eight-second
+foreground response deadline; upgrade their catalog reader to obtain resident
+listing on those hosts too.
 
 The sidebar hides the Codex group when it has no visible sessions, including
 when discovery fails. Normal discovery refreshes continue, so the group appears
@@ -233,6 +239,10 @@ home if it disappears. Commands accept only cwd, an optional prompt, and termina
 dimensions, not caller-supplied executables, argv, environment, or credentials.
 Closing the terminal cancels its node invocation. Disconnects and stale pairing
 or connection generations are handled by the same terminal relay as resume.
+Opening an existing session in a terminal also requires a local stdio source or
+a paired node that advertises terminal resume. Unix and WebSocket catalogs
+connected directly to the Gateway remain available for browsing and Chat
+continuation. For terminal access, open a native client configured for that server.
 See [native CLI creation](/web/control-ui/sessions-and-sidebar#start-a-native-coding-cli) for UI controls
 and prerequisites. Existing catalog viewing, resume, and Chat continuation keep
 their separate ownership contracts.
@@ -285,14 +295,15 @@ command.
 
 ## Branch from a local session
 
-Choose **Continue as branch** on a stored or idle row from the Gateway computer.
-OpenClaw creates a normal Chat entry, mirrors bounded user and assistant history
-through the source's last terminal persisted turn (completed, interrupted, or
-failed), records a pending harness branch, and opens the Chat. The generic model
-picker is locked, but no concrete model or provider has been selected yet. The
-source is not resumed, and the canonical harness thread is not started yet.
-Repeating the action opens the existing Chat instead of creating another
-branch.
+Open a stored or idle session from the Gateway computer in the **Codex** sidebar
+and send a message from its session viewer. OpenClaw creates a model-locked Chat
+entry, mirrors bounded user and assistant history through the source's last
+terminal persisted turn (completed, interrupted, or failed), records a pending
+harness branch, and forwards your message to the Chat. The generic model picker
+stays locked.
+Branch preparation does not resume the source or start the canonical harness
+thread; the forwarded message starts that work. Continuing the same source
+opens its existing Chat instead of creating another branch.
 
 The mirror keeps the newest visible tail that fits all three limits: at most 200
 user or assistant messages, 512 KiB of UTF-8 text in total, and 64 KiB per
@@ -300,7 +311,7 @@ message. Oversized messages are truncated with a marker, and older messages are
 omitted when a cap is reached. An image or local-image input becomes the literal
 `[Image attachment]` placeholder. Image data and local paths are not copied.
 
-Send the first normal Chat message to begin work. The Codex harness installs the
+The first forwarded message begins work. The Codex harness installs the
 real approval, elicitation, event, and delivery handlers. It uses an ephemeral
 native fork on the supervision connection to pin the source snapshot without
 supplying a model or provider override. Codex App Server selects both from its
@@ -472,15 +483,17 @@ other Codex client or OpenClaw runner is using that thread or its spawned
 descendants. OpenClaw freshly reads the process-local status, proceeds only for
 `idle` or `notLoaded`, calls the native Codex archive operation, and removes the
 session from the non-archived list. Native Codex also attempts to archive the
-thread's spawned descendants.
+thread's spawned descendants and stops archived descendants that were resumed
+through native collaboration.
 
 Archive is unavailable when the fresh read reports the session active or in an
 error state, when it belongs to a paired node, or while a newly created
 supervised Chat still has a pending branch from that source. Send the Chat's
 first message to materialize its canonical branch before archiving the source.
 Archive is also blocked when OpenClaw knows that an active binding owns the
-exact target thread or any non-archived spawned descendant. OpenClaw follows the
-experimental Codex descendant query through every page. An invalid response,
+exact target thread or any spawned descendant, including archived descendants.
+OpenClaw checks both descendant collections for active work and follows the
+experimental Codex descendant query through every page within one shared bound. An invalid response,
 request failure, repeated cursor or thread, or safety-limit exhaustion rejects
 archive.
 
@@ -516,6 +529,27 @@ commands:
 - `codex.appServer.thread.turns.list.v1`
 - `codex.cli.session.resume`
 
+The node must also advertise support for resuming the selected catalog source.
+Paired-node Chat continuation requires that source to use local stdio; Unix and
+WebSocket sources remain browsable but cannot be continued through the node's CLI.
+If OpenClaw requests an upgrade, update the node and approve its refreshed
+capabilities. Older nodes remain available for browsing; the existing Chat is
+preserved. Legacy CLI bindings that resume the node's native user home retain
+their existing behavior.
+
+New paired-node Chats pin the selected canonical Codex home as well as the node
+and thread. Changing a node's catalog source cannot redirect an existing Chat,
+even when the replacement home contains a copied thread with the same ID.
+Restore the original source to continue that Chat, or select the replacement
+source in the catalog to adopt it into a separate Chat.
+OpenClaw captures each source's physical path for the current configuration;
+retargeting a directory alias takes effect after configuration reload.
+
+Chats adopted by older versions did not record their source home. Their history
+remains available, but native continuation requires a fresh adoption from the
+catalog. OpenClaw creates a separate pinned Chat and preserves the older Chat;
+it does not infer the older Chat's home from the node's current configuration.
+
 The CLI-resume command is a dangerous node command: it needs explicit Gateway
 command allowlisting (`gateway.nodes.commands.allow`) as well as approval of
 the node's command surface. A deny rule still blocks it. The native macOS catalog
@@ -537,7 +571,8 @@ events, approvals, tool calls, or structured attachments. Bound turns still
 require owner/admin authority and are blocked while OpenClaw sandboxing is active.
 
 Avoid running the same thread in another Codex client while using this Chat.
-The node prevents overlapping OpenClaw resume turns within its own process, but
+The node prevents overlapping OpenClaw resume turns for the same thread and
+canonical store within its own process, but
 `notLoaded` does not prove that another native client is idle and there is no
 cross-process runner lease. Paired-node **Archive** remains unavailable,
 regardless of continuation or terminal capabilities.
@@ -618,9 +653,8 @@ change has not refreshed its advertised capabilities.
 ineligible state, its host is offline, or another action is pending. For a
 paired-node row, also verify `operator.admin` and that all three continuation
 commands are advertised and permitted. Terminal access alone is insufficient.
-Gateway-local stored and idle rows offer **Continue as branch** instead of
-unsafe exact-thread takeover. A row that already has a supervised Chat offers
-**Open Chat**.
+Send from a Gateway-local stored or idle session viewer to create a separate
+branch. Continuing a source that already has a supervised Chat opens that Chat.
 
 **Session eligibility could not be verified:** for filesystem-backed local
 sources, transcript, Continue, Archive, and terminal actions verify the selected
@@ -630,7 +664,9 @@ budget and do not scan the full catalog. Missing, unreadable, inconsistent, or
 OpenClaw-managed metadata is not accepted. Refresh the catalog, verify the session
 in its native Codex home, and retry. This error does not prove that the thread
 does not exist. Ordinary discovery keeps its existing behavior. Remote sources
-continue to use native catalog verification.
+continue to use fresh native catalog verification, including when the requested ID
+is still resident or was evicted. Neither remote nor paired-node verification stops at a fixed
+catalog page count; the existing request deadline still bounds the operation.
 
 **Archive is disabled:** archive is available for stored/activity-unknown and
 idle Gateway-local rows after no-other-runner confirmation. Active, error,

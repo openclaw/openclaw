@@ -158,7 +158,7 @@ describe("prepareCodexAttemptConnection", () => {
       const reclaim = vi.spyOn(testCodexAppServerBindingStore, "prepareSessionGenerationReclaim");
       const connect = vi
         .spyOn(bindingConnection, "resolveCodexBindingAppServerConnection")
-        .mockImplementation(() => {
+        .mockImplementation(async () => {
           throw new Error("invalid ownership reached connection preparation");
         });
 

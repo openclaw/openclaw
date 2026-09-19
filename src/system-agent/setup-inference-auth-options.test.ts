@@ -25,6 +25,23 @@ const metaEntry: ProviderInstallCatalogEntry = {
 };
 
 describe("setup inference install options", () => {
+  it("keeps detected-only choices out of every metadata-only setup row", () => {
+    const choice = {
+      ...metaEntry,
+      assistantVisibility: "detected-only" as const,
+      appGuidedAuth: "oauth" as const,
+      appGuidedSecret: true,
+      appGuidedDiscovery: true,
+    };
+    expect({
+      auth: listSetupInferenceAuthOptions([choice]),
+      enable: listSetupInferenceEnableOptions([choice]),
+      install: listSetupInferenceInstallOptions([choice], []),
+      manual: listSetupInferenceManualProviders([choice]),
+      prepare: listSetupInferencePrepareOptions([choice]),
+    }).toEqual({ auth: [], enable: [], install: [], manual: [], prepare: [] });
+  });
+
   it.each([
     ["claude-cli", "claude-cli/sonnet", "claude"],
     ["codex-cli", "openai/default", "openai"],

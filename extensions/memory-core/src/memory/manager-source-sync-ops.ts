@@ -10,7 +10,8 @@ import {
   type MemorySource,
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { runSqliteImmediateTransaction } from "openclaw/plugin-sdk/sqlite-runtime";
-import { MemoryIndexRevisionConflictError } from "./manager-db.js";
+import { withMemoryWorkspaceLock } from "../memory-workspace-lock.js";
+import { MemoryIndexRevisionConflictError } from "./manager-db-kernel.js";
 import type { MemoryIndexEntry } from "./manager-index-preparation.js";
 import { MemoryManagerSessionSyncOps } from "./manager-session-sync-ops.js";
 import {
@@ -66,23 +67,27 @@ export abstract class MemoryManagerSourceSyncOps extends MemoryManagerSessionSyn
     source: MemorySource,
     expectedHash?: string,
   ): Promise<void> {
-    const capturedHash =
-      expectedHash ??
-      (await this.withDatabaseRead(() =>
-        resolveMemorySourceExistingHash({ db: this.db, path: pathname, source }),
-      ));
-    await runSqliteImmediateTransaction(
-      this.db,
-      async () => () => {
-        this.database.sourceIndex.deleteIfCurrent({
-          path: pathname,
-          source,
-          expectedHash: capturedHash,
-        });
-      },
-      undefined,
-      (write) => this.withDatabaseWrite(write),
-    );
+    // Recall and forget also write this database under the workspace lock.
+    // Keep their synchronous writes outside the Worker's native transaction.
+    await withMemoryWorkspaceLock(this.workspaceDir, async () => {
+      const database = this.database;
+      const capturedHash =
+        expectedHash ??
+        (await this.withDatabaseRead(() =>
+          resolveMemorySourceExistingHash({ db: this.db, path: pathname, source }),
+        ));
+      await database.deleteSource({ path: pathname, source, expectedHash: capturedHash }, () => {
+        if (
+          this.closed ||
+          database.closed ||
+          database.readOnly ||
+          !database.db.isOpen ||
+          this.database !== database
+        ) {
+          throw new Error("Memory source owner changed before deletion");
+        }
+      });
+    });
   }
 
   private async deleteStaleSourceFiles(

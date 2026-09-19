@@ -18,6 +18,7 @@ function createWorkspace(overrides: Partial<SessionWorkspaceProps> = {}): Sessio
     error: null,
     activeId: null,
     filter: "all",
+    browserPath: "",
     browserSearch: "",
     dock: "right",
     narrowLayout: false,
@@ -39,6 +40,35 @@ afterEach(() => {
 });
 
 describe("session workspace path actions", () => {
+  it.each([
+    { path: "reports", search: "", loading: false, parent: "" },
+    { path: "reports/monthly", search: "", loading: false, parent: "reports" },
+    { path: "", search: "", loading: false, parent: null },
+    { path: "reports", search: "notes", loading: false, parent: null },
+    { path: "reports", search: "", loading: true, parent: null },
+  ])("keeps only settled non-root folder recovery available: %j", (scenario) => {
+    const onBrowsePath = vi.fn();
+    const workspace = createWorkspace({
+      browserPath: scenario.path,
+      browserSearch: scenario.search,
+      loading: scenario.loading,
+      list: { sessionKey: "agent:main:workspace", root: "/workspace", files: [] },
+      onBrowsePath,
+    });
+    const mount = document.body.appendChild(document.createElement("div"));
+    render(renderSessionWorkspaceRail(workspace, { embedded: true }), mount);
+    const parent = mount.querySelector<HTMLButtonElement>('button[aria-label=".."]');
+    if (scenario.parent === null) {
+      expect(parent).toBeNull();
+      expect(mount.textContent).not.toContain("This folder is unavailable.");
+    } else {
+      expect(parent).not.toBeNull();
+      expect(mount.textContent).toContain("This folder is unavailable.");
+      parent!.click();
+      expect(onBrowsePath).toHaveBeenCalledExactlyOnceWith(scenario.parent);
+    }
+  });
+
   it("keeps path-only session rows selected after their read and refresh", async () => {
     const file = { kind: "modified", path: "README.md", name: "README.md", missing: false };
     const result = { sessionKey: "agent:main:current", root: "/workspace", files: [file] };

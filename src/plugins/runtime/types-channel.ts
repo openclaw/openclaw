@@ -159,6 +159,8 @@ export type PluginRuntimeChannel = {
     /** Compatibility escape hatch; prefer `dispatch`, which keeps session wiring in core. */
     dispatchReply: typeof import("../../channels/turn/lifecycle.js").dispatchAssembledChannelTurn;
   };
+  /** @deprecated Compatibility for shipped plugins; use `channel.inbound`. */
+  turn: PluginRuntimeChannel["inbound"];
   threadBindings: {
     setIdleTimeoutBySessionKey: (params: {
       channelId: string;

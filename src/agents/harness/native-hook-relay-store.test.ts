@@ -1,8 +1,12 @@
 import fs from "node:fs";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db-cache.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseByPathAsync,
+} from "../../state/openclaw-state-db-cache.js";
 import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.js";
 import {
   deleteNativeHookRelayBridgeRecordIfOwned,
@@ -46,8 +50,9 @@ function bridgeRecord(
 }
 
 describe("native hook relay store", () => {
-  it("persists the bridge lifecycle without caller-thread SQLite", async () => {
+  it("persists bridge records and closes their worker without caller-thread SQLite", async () => {
     const sql = observeMainThreadSql();
+    const close = vi.spyOn(DatabaseSync.prototype, "close");
     expect(
       await readNativeHookRelayBridgeRecord({ relayId: "absent", stateDbPath: primaryStateDbPath }),
     ).toBeUndefined();
@@ -118,7 +123,9 @@ describe("native hook relay store", () => {
         stateDbPath: primaryStateDbPath,
       }),
     ).toBeUndefined();
+    await closeOpenClawStateDatabaseByPathAsync(primaryStateDbPath);
     sql.expectIdle();
+    expect(close).not.toHaveBeenCalled();
   });
 
   it("requires matching token and pid to renew or delete a bridge", async () => {

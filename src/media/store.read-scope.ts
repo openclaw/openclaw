@@ -1,6 +1,7 @@
 import fsSync from "node:fs";
 import fs, { type FileHandle } from "node:fs/promises";
 import path from "node:path";
+import { syncDirectoryBestEffort } from "../infra/directory-durability.js";
 import { buildRandomTempFilePath } from "../infra/fs-safe-advanced.js";
 import { FsSafeError, root } from "../infra/fs-safe.js";
 import { redactToolPayloadText } from "../logging/redact.js";
@@ -65,6 +66,7 @@ export async function writeReadScopeMedia<T extends { id: string }>(params: {
   dir: string;
   tempPrefix: string;
   scope: ReadScope;
+  durable?: boolean;
   write: (handle: FileHandle) => Promise<T>;
 }): Promise<T> {
   params.scope.assertCurrent();
@@ -220,6 +222,17 @@ export async function writeReadScopeMedia<T extends { id: string }>(params: {
         throw error;
       }
     }
+    if (params.durable) {
+      params.scope.assertCurrent();
+      assertRequestedDirectory();
+      assertMediaDirectory();
+      assertOwnedFile(temporaryPath);
+      await retained.sync();
+    }
+    params.scope.assertCurrent();
+    assertRequestedDirectory();
+    assertMediaDirectory();
+    assertOwnedFile(temporaryPath);
     finalId = result.id;
     await mediaRoot.move(temporaryName, finalId, {
       overwrite: false,
@@ -241,6 +254,12 @@ export async function writeReadScopeMedia<T extends { id: string }>(params: {
       },
     });
     resource.assertCurrent();
+    if (params.durable) {
+      params.scope.assertCurrent();
+      await syncDirectoryBestEffort(mediaRoot.rootReal);
+      params.scope.assertCurrent();
+      resource.assertCurrent();
+    }
     params.scope.registerResource(resource);
     handedOff = true;
     return result;

@@ -36,6 +36,8 @@ describe("chat transcript geometry", () => {
           scrollHeight: { configurable: true, value: 1200 },
         });
         container.scrollTop = 600;
+        // JSDOM does not emit the browser's scroll read-back that settles initial compensation.
+        container.dispatchEvent(new Event("scroll"));
         flushFrames();
         transcript.hostUpdated();
         flushFrames();

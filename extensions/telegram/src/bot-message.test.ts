@@ -105,7 +105,6 @@ describe("telegram bot message processor", () => {
     bot: {},
     account: {},
     historyLimit: 0,
-    groupHistories: {},
     dmPolicy: {},
     allowFrom: [],
     groupAllowFrom: [],

@@ -320,6 +320,39 @@ describe("renderConfigValidationIssueLines", () => {
     message,
   });
 
+  it.each([
+    {
+      name: "an object",
+      ignoredLines: [
+        "  ignored: {",
+        '    nested: [{ text: "}, ]", values: [1, {}, []] }],',
+        "    // Closing delimiters in this comment: } ]",
+        "  },",
+      ],
+    },
+    {
+      name: "an array",
+      ignoredLines: [
+        "  ignored: [",
+        '    { nested: [[], { text: "}, ]" }] },',
+        "    /* Keep scanning after nested containers. */ {},",
+        "  ],",
+      ],
+    },
+  ])("locates the value after skipping $name with mixed nesting", ({ ignoredLines }) => {
+    const raw = ["{", ...ignoredLines, '  target: "bad",', "}"].join("\n");
+    const config = JSON5.parse(raw);
+
+    expect(
+      renderIssue({
+        issue: issue(["target"], "Invalid input"),
+        raw,
+        parsed: config,
+        effective: config,
+      }),
+    ).toBe('openclaw.json:6 — target: Invalid input, got: "bad"');
+  });
+
   it("combines display paths, source locations, and received values", () => {
     const raw = [
       "{",

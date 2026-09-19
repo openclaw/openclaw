@@ -88,7 +88,7 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
         abortSignal: opts.abortSignal,
       });
     }
-    await startTelegramWebhook({
+    const webhook = await startTelegramWebhook({
       token,
       accountId: account.accountId,
       ownerAgentId,
@@ -107,7 +107,11 @@ export async function monitorTelegramProvider(opts: MonitorTelegramOpts = {}) {
       webhookCertPath: opts.webhookCertPath,
       setStatus: opts.setStatus,
     });
-    await waitForAbortSignal(opts.abortSignal);
+    try {
+      await waitForAbortSignal(opts.abortSignal);
+    } finally {
+      await webhook.stop();
+    }
     return;
   }
 

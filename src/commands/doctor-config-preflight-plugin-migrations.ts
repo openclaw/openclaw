@@ -1,5 +1,6 @@
 import { existsSync } from "node:fs";
 import { resolveDeferredPluginMigrationConfigPaths } from "../config/deferred-plugin-migration-config.js";
+import { cloneEnvWithPlatformSemantics } from "../config/env-vars.js";
 import type { ConfigSnapshotReadMeasure } from "../config/io.js";
 import { resolveConfigPath } from "../config/paths.js";
 import type { ConfigFileSnapshot } from "../config/types.js";
@@ -19,6 +20,10 @@ import type {
 } from "../infra/state-migrations.types.js";
 import type { PluginMetadataSnapshotScopeRunner } from "../plugins/current-plugin-metadata-snapshot.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
+import {
+  withArtifactPreservingStateReads,
+  withOpenClawStateDatabaseReadSnapshot,
+} from "../state/openclaw-state-db-readonly.js";
 import {
   inspectPluginMigrationAvailability,
   type PluginMigrationInspection,
@@ -43,11 +48,19 @@ export function createDoctorPluginMigrationPreparation(params: {
   let expectedPending: readonly DeferredPluginMigration[] = [];
   let refreshSnapshot = false;
   let previousLoaded = false;
-  const loadPrevious = (snapshot?: ConfigFileSnapshot) => {
-    if (previousLoaded || !(snapshot?.exists ?? existsSync(resolveConfigPath(params.env())))) {
+  const loadPrevious = async (snapshot?: ConfigFileSnapshot) => {
+    if (previousLoaded) {
       return;
     }
-    deferred = readDeferredPluginMigrations({ env: params.env() });
+    const env = cloneEnvWithPlatformSemantics(params.env());
+    if (!(snapshot?.exists ?? existsSync(resolveConfigPath(env)))) {
+      return;
+    }
+    deferred = await withArtifactPreservingStateReads(() =>
+      withOpenClawStateDatabaseReadSnapshot(async () => readDeferredPluginMigrations({ env }), {
+        env,
+      }),
+    );
     expectedPending = structuredClone(deferred);
     for (const entry of deferred) {
       previousById.set(entry.pluginId, entry);
@@ -87,7 +100,7 @@ export function createDoctorPluginMigrationPreparation(params: {
     }
   };
   const prepare = async (snapshot: ConfigFileSnapshot) => {
-    loadPrevious(snapshot);
+    await loadPrevious(snapshot);
     if (!snapshot.exists) {
       return [...previousById.values()];
     }
@@ -178,9 +191,9 @@ export function createDoctorPluginMigrationPreparation(params: {
     deferred: () => deferred,
     hasPending: () => previousById.size > 0,
     prepare,
-    snapshotOptions: () => {
+    snapshotOptions: async () => {
       // Existing pending inputs must reach the first config read before backup selection.
-      loadPrevious();
+      await loadPrevious();
       return {
         preparePluginMigrations: !prepared && params.enabled ? prepare : undefined,
         deferredPluginMigrations: [...previousById.values()],

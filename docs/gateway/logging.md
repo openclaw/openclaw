@@ -37,7 +37,27 @@ With config hot reload enabled, changes to `logging.level`, `logging.file`, and
 long-lived channel loggers. Queued records finish writing to their original file.
 Explicit logger-level overrides, such as Baileys verbosity, remain in effect.
 
+Subsystem file logs omit call-site metadata (`_meta.path`) for `trace`, `debug`,
+`info`, and `warn` records, including `raw()` lines, to avoid capturing and parsing
+a stack on every routine message. `error` and `fatal` records retain it. All levels
+retain call-site metadata while diagnostics are enabled and an internal log-record
+consumer is subscribed, preserving [OTLP code locations](/gateway/opentelemetry/privacy-and-trace-context).
+This follows diagnostic enablement and subscriptions on the next record, including
+for existing subsystem loggers. Log messages, structured fields, and error stacks
+supplied by callers are unchanged.
+
 Talk, realtime voice, and managed-room code paths use the shared file logger for bounded lifecycle records intended for operational debugging and OTLP log export. Transcript text, audio payloads, turn ids, call ids, and provider item ids are never copied into the log record.
+
+Discord realtime voice keeps session lifecycle transitions at `info`; audio chunks
+and transcript deltas use `debug`. Model-fetch starts and successful responses
+under one second also use `debug`. Non-2xx responses and responses taking at least
+one second remain at `info`; transport failures remain warnings. The existing
+[model transport diagnostic flags](/logging#targeted-model-transport-diagnostics)
+promote transport details to `info` when enabled.
+
+Secret egress request audit records remain at `info`, including successful
+forwarding. Their structured fields record the proxy outcome without request
+payloads or credentials; see [secret egress proxy](/gateway/secrets/secret-store-and-egress#secret-egress-proxy).
 
 The Control UI Logs tab tails this file via the gateway (`logs.tail`). The CLI does the same:
 
@@ -45,7 +65,7 @@ The Control UI Logs tab tails this file via the gateway (`logs.tail`). The CLI d
 openclaw logs --follow
 ```
 
-If a tail read observes that the active file has disappeared, the Control UI clears its previous records and follows the recreated file. Missing files still return an empty tail; filesystem read errors remain visible.
+If a tail read observes that the active file has disappeared, the Control UI clears its previous records and follows the recreated file. Missing files still return an empty tail. Filesystem read errors, including a log path that points to a directory, remain visible while the Control UI keeps the last successfully read records as stale data.
 
 ### Verbose vs. log levels
 
@@ -234,20 +254,61 @@ With `diagnostics.enabled: true` and warning logging enabled, `sessions.list`
 handlers and `sessions.subscribe` snapshot handlers taking at least one second
 also emit `slow session list`. The `operation` field identifies which request
 produced the record. The record
-includes process/thread identity, the request trace, and `cacheRole`: a completed
-cache hit, an in-flight follower, a projection owner, or `unreached` if the handler
-failed before selecting a cache path. Followers can include `workTraceId` and
-`workSpanId` to identify the request producing their shared result. Successful
-list results report `selectedRowCount` for every cache role.
+includes process/thread identity, the request trace, and row counts:
+`selectedRowCount`, `dirtyRowCount`, `materializedRowCount`, and `reusedRowCount`.
+The latter two distinguish selected rows refreshed during this request from
+selected rows already resident when it began. Dirty counts describe pending
+owner work at the start of the request.
 
-Projection owners report phase totals, visibility-repair counts, synchronous
-preparation/row time, and `yieldWaitMs`/`yieldCount` for time spent awaiting the
-event loop. Hits and followers omit those projection counters. `rows` includes
-its synchronous and yielded intervals; do not add those details to the phase
-total again. `handlerElapsedMs` starts before parameter validation and excludes
+The `materialize` phase measures the wait for session-row projection readiness. In-flight
+catalog renewals no longer block lists or descriptions once a catalog is loaded:
+reads use the current catalog while its replacement loads in the background, then
+rows refresh with the new catalog. Startup still waits for the first catalog.
+Renewals that retain identical catalog content do not dirty resident rows.
+
+Profile and run-registry publications refresh their derived display facts without
+rereading session entries. Worker environment and placement publications refresh
+only the selected rows' worker facts on their next presentation. Stored session
+writes publish exact keys; broad list notifications do not schedule an all-row
+drain. Config, store topology, and adopted model catalogs still refresh affected
+live rows before lists respond. Archived rows stay cold until selected.
+
+Transcript-only row refreshes use a one-second window per resident session: the
+first notification refreshes promptly, and further notifications collapse into a
+trailing refresh. These pending notifications are not dirty rows until that
+refresh is due. Transcript freshness can therefore lag by up to one window;
+optional previews still wait for idle background backfill. Metadata, lifecycle,
+catalog, and topology publications continue to invalidate immediately.
+Transcript notifications do not invalidate parents or children: relationships,
+inherited model settings, and subagent activity have their own metadata or
+registry publications.
+
+Records report phase totals, synchronous selection/row time, and
+`yieldWaitMs`/`yieldCount` for awaiting shared projection readiness. These waits
+can include coalesced work shared with other callers. Phase totals include their
+wait intervals; do not add the detailed counters to those totals again.
+`handlerElapsedMs` starts before parameter validation and excludes
 admission before the handler. The `response` phase includes the synchronous response callback. These are elapsed
 durations, not CPU time or proof of client receipt. No query text or session
 contents are included.
+
+The same record includes fractional-millisecond current-thread CPU measurements
+for synchronous work: `prepareThreadCpuMs`, `rowThreadCpuMs`, and
+`responseThreadCpuMs`. Preparation covers resident selection, filtering, and
+sorting after projection readiness. Row CPU includes presentation and final list
+construction. Both intervals finish before the response callback is measured;
+response CPU excludes network waits. Measurements finish before this diagnostic
+record is published or logged. Projection readiness waits, background
+materialization, intervening microtasks, and worker CPU are not included.
+These are selected inclusive CPU intervals, including same-thread native work and
+garbage collection, not SQL-only CPU or a complete request CPU total.
+
+Unvisited measurements are omitted. Each request retains its own selection,
+presentation, and response CPU without inheriting shared background work.
+If a CPU counter read fails, all CPU fields are omitted for that request;
+its result and elapsed diagnostics are preserved. Existing activation and the
+one-second warning threshold are unchanged, so missing slow records do not account
+for CPU consumed by faster requests.
 
 ### WS log style
 

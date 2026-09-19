@@ -4,8 +4,21 @@
   border-radius: 50%;
 }
 
-.mention-menu__loading:hover {
-  background: transparent;
+.mention-menu__retry {
+  margin: 8px;
+}
+
+:is(.mention-menu, .composer-context-strip__person)
+  .chat-author-avatar.is-pending
+  .chat-author-avatar__image {
+  display: none;
+}
+
+:is(.mention-menu, .composer-context-strip__person)
+  .chat-author-avatar.is-pending
+  .chat-author-avatar__fallback {
+  display: inline-flex;
+  visibility: visible;
 }
 
 @media (prefers-reduced-motion: reduce) {

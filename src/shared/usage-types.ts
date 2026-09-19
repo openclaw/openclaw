@@ -1,4 +1,5 @@
 // Usage types define shared usage accounting structures for sessions and runs.
+import type { SessionCreatedActor } from "../../packages/gateway-protocol/src/schema/sessions-row.js";
 import type { SessionSystemPromptReport } from "../config/sessions/types.js";
 import type {
   CostUsageSummary,
@@ -10,6 +11,12 @@ import type {
   SessionModelUsage,
   SessionToolUsage,
 } from "../infra/session-cost-usage.types.js";
+
+export type SessionUsageCreator = {
+  /** Opaque, namespace-qualified identity used by the creator filter. */
+  key: string;
+  actor?: SessionCreatedActor;
+};
 
 /** One session or session-family row returned by the gateway usage endpoint. */
 export type SessionUsageEntry = {
@@ -31,6 +38,9 @@ export type SessionUsageEntry = {
   historicalInstanceCount?: number;
   updatedAt?: number;
   agentId?: string;
+  /** Immutable session creator; this is not per-turn billing attribution. */
+  createdActor?: SessionCreatedActor;
+  creatorKey?: string;
   channel?: string;
   chatType?: string;
   origin?: {
@@ -65,6 +75,17 @@ export type SessionsUsageAggregates = {
   byProvider: SessionModelUsage[];
   byAgent: Array<{ agentId: string; totals: CostUsageSummary["totals"] }>;
   byChannel: Array<{ channel: string; totals: CostUsageSummary["totals"] }>;
+  byCreator?: Array<
+    SessionUsageCreator & {
+      totals: CostUsageSummary["totals"];
+      sessionCount: number;
+      daily: CostUsageSummary["daily"];
+      /** Date-set cohorts count each session once across any selected days, without exposing IDs. */
+      sessionActivity: Array<{ dates: string[]; sessionCount: number }>;
+    }
+  >;
+  /** Full token/cost categories for every matched session, before the row limit. */
+  costDaily?: CostUsageSummary["daily"];
   latency?: SessionLatencyStats;
   dailyLatency?: SessionDailyLatency[];
   modelDaily?: SessionDailyModelUsage[];
@@ -89,5 +110,7 @@ export type SessionsUsageResult = {
   sessions: SessionUsageEntry[];
   totals: CostUsageSummary["totals"];
   aggregates: SessionsUsageAggregates;
+  /** Visible candidate identities before applying the creator filter. */
+  creatorOptions?: SessionUsageCreator[];
   cacheStatus?: CostUsageSummary["cacheStatus"];
 };

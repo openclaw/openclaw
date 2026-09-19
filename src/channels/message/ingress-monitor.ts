@@ -1,5 +1,5 @@
 /** Shared durable channel-ingress admission, pump, retention, and shutdown lifecycle. */
-import { formatErrorMessage, toErrorObject } from "../../infra/errors.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import {
   getGatewayRestartDrainSignal,
   getGatewaySuspendAdmissionPhase,
@@ -9,7 +9,7 @@ import {
 } from "../../process/gateway-work-admission.js";
 import { sleep } from "../../utils/sleep.js";
 import { createChannelIngressDrain, type ChannelIngressDrain } from "./ingress-drain.js";
-import { waitForPending } from "./ingress-monitor-tasks.js";
+import { createAdmissionClaimLock, waitForPending } from "./ingress-monitor-tasks.js";
 import type {
   ChannelIngressMonitorDeliveryResult,
   ChannelIngressMonitorFacts,
@@ -101,8 +101,7 @@ export function createChannelIngressMonitor<TRaw, TBody, TStoredPayload, TMetada
   let pollTimer: ReturnType<typeof setInterval> | undefined;
   let lastPrunedAt = 0;
   let admissionTail: Promise<void> = Promise.resolve();
-  let admissionClaimLocked = false;
-  const admissionClaimWaiters: Array<() => void> = [];
+  const withAdmissionClaimLock = createAdmissionClaimLock();
   let stopTask: Promise<void> | undefined;
   let lastReportedActive = false;
 
@@ -133,34 +132,6 @@ export function createChannelIngressMonitor<TRaw, TBody, TStoredPayload, TMetada
     } catch (error) {
       reportError(error);
     }
-  };
-
-  const withAdmissionClaimLock = <T>(task: () => Promise<T>): Promise<T> => {
-    const run = (): Promise<T> => {
-      admissionClaimLocked = true;
-      let result: Promise<T>;
-      try {
-        result = Promise.resolve(task());
-      } catch (error) {
-        result = Promise.reject(toErrorObject(error, "Channel ingress admission task failed"));
-      }
-      return result.finally(() => {
-        const next = admissionClaimWaiters.shift();
-        if (next) {
-          next();
-        } else {
-          admissionClaimLocked = false;
-        }
-      });
-    };
-    if (!admissionClaimLocked) {
-      return run();
-    }
-    return new Promise<T>((resolve, reject) => {
-      admissionClaimWaiters.push(() => {
-        void run().then(resolve, reject);
-      });
-    });
   };
 
   const createStoppedError = () =>
@@ -323,6 +294,9 @@ export function createChannelIngressMonitor<TRaw, TBody, TStoredPayload, TMetada
           onAdoptionFinalizing: () => {
             handedOff = true;
             deferredHandoff = true;
+            if (deferredClaim && !deferredClaimSettled) {
+              deferredClaims.add(deferredClaim);
+            }
             lifecycle.onAdoptionFinalizing();
           },
           onFailed: (error) => settleDeferredLifecycle(() => lifecycle.onFailed?.(error)),
@@ -344,6 +318,10 @@ export function createChannelIngressMonitor<TRaw, TBody, TStoredPayload, TMetada
         try {
           result = await delivery;
         } catch (error) {
+          if (deferredHandoff && deferredClaim && !deferredClaimSettled) {
+            await wrappedLifecycle.onFailed?.(error);
+            return { kind: "deferred" };
+          }
           if (isAborted() || lifecycle.abortSignal.aborted) {
             return { kind: "failed-retryable", error };
           }
@@ -358,6 +336,10 @@ export function createChannelIngressMonitor<TRaw, TBody, TStoredPayload, TMetada
           publishActivity();
         }
         if (result?.kind === "failed-retryable") {
+          if (deferredHandoff && deferredClaim && !deferredClaimSettled) {
+            await wrappedLifecycle.onFailed?.(result.error);
+            return { kind: "deferred" };
+          }
           return result;
         }
         // Terminal and handoff outcomes must reach the drain even when stop

@@ -142,6 +142,9 @@ function gatewayAllowedTools(
   if (task === "checked-cell-cache") {
     return ["process"];
   }
+  if (task === "gateway-config-read") {
+    return ["gateway"];
+  }
   return fixtureTools;
 }
 
@@ -296,24 +299,33 @@ function jsonAnswer(text: string): unknown {
   }
 }
 
-function settledCallOutcome(trace: GatewayMatrixTrace, call: ToolCall): ToolOutcome | undefined {
+function callOutcomes(trace: GatewayMatrixTrace, call: ToolCall): ToolOutcome[] {
   let outcome = trace.outcomes.findLast((item) => item.id === call.id);
+  const outcomes = outcome ? [outcome] : [];
   let cursor = trace.calls.indexOf(call);
   while (outcome && !outcome.isError && outcome.details.status === "waiting") {
     const runId = outcome.details.runId;
     if (typeof runId !== "string") {
-      return undefined;
+      break;
     }
     const next = trace.calls.findIndex(
       (item, index) => index > cursor && item.name === "wait" && item.args.runId === runId,
     );
     const wait = trace.calls[next];
     if (!wait) {
-      return undefined;
+      break;
     }
     cursor = next;
     outcome = trace.outcomes.findLast((item) => item.id === wait.id);
+    if (outcome) {
+      outcomes.push(outcome);
+    }
   }
+  return outcomes;
+}
+
+function settledCallOutcome(trace: GatewayMatrixTrace, call: ToolCall): ToolOutcome | undefined {
+  const outcome = callOutcomes(trace, call).at(-1);
   return outcome && ["completed", "failed"].includes(String(outcome.details.status))
     ? outcome
     : undefined;
@@ -364,6 +376,7 @@ export function evaluateGatewayMatrixTask(params: {
   final: string;
   trace: GatewayMatrixTrace;
   receipts: readonly unknown[];
+  probeCode?: string;
 }): BehaviorChecks {
   const { task, trace, expected } = params;
   const receiptRows = params.receipts.filter(record);
@@ -392,7 +405,76 @@ export function evaluateGatewayMatrixTask(params: {
         ["completed", "waiting", "failed"].includes(String(outcome.details.status)),
       ),
   };
-  if (task === "invoices-auto-retention") {
+  if (task === "return-value-effects" || task === "result-save-invalid-json") {
+    const execs = trace.calls.filter((call) => call.name === "exec");
+    const probe = execs.length === 1 ? execs[0] : undefined;
+    const outcome = probe ? completedCallOutcome(trace, probe) : undefined;
+    const output = probe
+      ? callOutcomes(trace, probe).flatMap((item) =>
+          Array.isArray(item.details.output) ? item.details.output.filter(record) : [],
+        )
+      : [];
+    checks.exactProbeSource =
+      probe !== undefined &&
+      typeof params.probeCode === "string" &&
+      source(probe).trim() === params.probeCode.trim();
+    checks.observedProbeValue =
+      outcome !== undefined && isDeepStrictEqual(outcome.details.value, expected);
+    const toolName =
+      task === "return-value-effects" ? "matrix_return_effect" : "matrix_serialization_seed";
+    checks.singleProbeInvocation =
+      trace.activities.length === 1 &&
+      trace.activities.every(
+        (item) =>
+          !item.isError &&
+          item.parentId === probe?.id &&
+          item.name === toolName &&
+          item.result.nonce === expected.nonce,
+      );
+    if (task === "return-value-effects") {
+      checks.singleOutput =
+        output.length === 1 && output[0]?.type === "text" && output[0].text === expected.marker;
+      checks.exactlyOneEffect = isDeepStrictEqual(
+        receiptRows.map(({ kind, tool, nonce }) => ({ kind, tool, nonce })),
+        ["call", "effect"].map((kind) => ({ kind, tool: toolName, nonce: expected.nonce })),
+      );
+    } else {
+      const rejected = output.map((item) =>
+        item.type === "json" && record(item.value) ? item.value : {},
+      );
+      checks.rejectionsObserved =
+        isDeepStrictEqual(
+          rejected.map((item) => item.kind),
+          expected.rejected,
+        ) &&
+        rejected.every((item) => typeof item.error === "string" && item.error.trim().length > 0);
+      checks.singleSeedRead =
+        receiptRows.length === 1 &&
+        receiptRows[0]?.kind === "call" &&
+        receiptRows[0].tool === toolName;
+    }
+  } else if (task === "gateway-config-read") {
+    const read = trace.activities.length === 1 ? trace.activities[0] : undefined;
+    const call = trace.calls.find((item) => item.id === read?.parentId && item.name === "exec");
+    const outcome = call ? completedCallOutcome(trace, call) : undefined;
+    const result = record(read?.result.result) ? read.result.result : undefined;
+    const config = record(result?.config) ? result.config : undefined;
+    checks.singleConfigRead =
+      read !== undefined &&
+      !read.isError &&
+      read.name === "gateway" &&
+      read.input.action === "config.get" &&
+      read.input.path === "tools.codeMode";
+    checks.configSettings =
+      read?.result.ok === true &&
+      result?.path === "tools.codeMode" &&
+      config?.enabled === true &&
+      config.timeoutMs === EXEC_TIMEOUT_MS &&
+      config.maxOutputBytes === MAX_OUTPUT_BYTES;
+    checks.rawConfigReachedGuest =
+      outcome !== undefined && isDeepStrictEqual(outcome.details.value, read?.result);
+    checks.noFixtureEffects = receiptRows.length === 0;
+  } else if (task === "invoices-auto-retention") {
     const firstFetch = trace.activities.find((item) => item.name === "matrix_invoice_export");
     const fetchCell = trace.calls.find((call) => call.id === firstFetch?.parentId);
     const fetched = fetchCell ? completedCallOutcome(trace, fetchCell) : undefined;
@@ -1143,6 +1225,7 @@ export async function runGatewayMatrixCell(
     final: task.final,
     trace,
     receipts: taskReceipts,
+    probeCode: fixture.probeCode,
   });
   const interviewChecks = evaluateGatewayMatrixInterview(
     params.cell.task,

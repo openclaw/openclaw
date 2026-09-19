@@ -13,6 +13,7 @@ import type { SubagentRunRecord } from "./registry/subagent-registry.types.js";
 
 type RequesterCronAuthority = {
   managementEntitlement: NonNullable<CronCreatorAuthorityCapability["managementEntitlement"]>;
+  requesterOwner?: CronCreatorAuthorityCapability["requesterOwner"];
   requesterSessionKey: string;
   requesterSessionId: string;
   requesterAgentId: string;
@@ -146,6 +147,7 @@ export function captureRequesterCronAuthority(params: {
     requesterAgentId,
     requesterSessionId: capture.sessionId,
     managementEntitlement: capture.managementEntitlement,
+    requesterOwner: capture.requesterOwner,
     lifecycleGeneration: capture.lifecycleGeneration,
     sessionLifecycleRevision: session.lifecycleRevision,
     storePath,
@@ -310,6 +312,7 @@ export function consumeRequesterCronAuthorityAdmission(params: {
       runId: string;
       callerOrigin: { kind: "unknown" };
       managementEntitlement: NonNullable<CronCreatorAuthorityCapability["managementEntitlement"]>;
+      requesterOwner?: CronCreatorAuthorityCapability["requesterOwner"];
       isCurrent: () => boolean;
       bindRunScope: (scope: CronCreatorAuthorityCapability) => void;
     }
@@ -337,6 +340,7 @@ export function consumeRequesterCronAuthorityAdmission(params: {
     runId: params.runId,
     callerOrigin: { kind: "unknown" },
     managementEntitlement: dispatch.authority.managementEntitlement,
+    requesterOwner: dispatch.authority.requesterOwner,
     isCurrent: dispatch.isCurrent,
     bindRunScope: (scope) => {
       if (
@@ -345,6 +349,7 @@ export function consumeRequesterCronAuthorityAdmission(params: {
         scope.runId !== params.runId ||
         scope.isCurrent !== dispatch.isCurrent ||
         scope.managementEntitlement !== dispatch.authority.managementEntitlement ||
+        scope.requesterOwner !== dispatch.authority.requesterOwner ||
         scope.callerOrigin.kind !== "unknown" ||
         !scope.active ||
         scope.signal.aborted

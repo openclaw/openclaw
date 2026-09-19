@@ -37,32 +37,10 @@ import {
   withCodexAppServerThreadMutation,
   withExclusiveCodexAppServerThread,
 } from "./thread-ownership.js";
-import { assertCodexSupervisionThreadLineage } from "./thread-policy.js";
-
-/** Passive refusal must precede releasing or acquiring any native subscription. */
-async function assertAdoptedCodexThreadResumeAllowed(
-  params: CodexStartOrResumeThreadParams,
-  threadId: string,
-  context: Pick<CodexThreadRequestContext, "lifecycleTiming" | "throwIfAborted">,
-  assertCurrent: () => void,
-): Promise<CodexThread> {
-  const { thread } = await context.lifecycleTiming.measure("thread-read-adoption-status", () =>
-    params.client.request(
-      "thread/read",
-      { threadId, includeTurns: false },
-      { signal: params.signal, assertCurrent },
-    ),
-  );
-  context.throwIfAborted();
-  assertCodexThreadAcceptsDirectInput(thread);
-  if (thread.status?.type === "active") {
-    throw new CodexAdoptedThreadActiveError();
-  }
-  if (thread.id !== threadId) {
-    throw new Error("Codex returned another thread during adoption status read");
-  }
-  return thread;
-}
+import {
+  assertAdoptedCodexThreadResumeAllowed,
+  assertCodexSupervisionThreadLineage,
+} from "./thread-policy.js";
 
 /** All bound preparation follows attach's native-queue-before-binding-lease order. */
 export async function withCodexThreadLifecycleBinding(
@@ -252,6 +230,7 @@ async function preparePendingCodexThreadResume(
       assertConfigured: observation.assertConfigured,
       assertCurrent,
       dispose,
+      settledSystemError: observation.settledSystemError,
     };
   } catch (error) {
     dispose();
@@ -267,7 +246,7 @@ export async function prepareCodexThreadResume(
 ): Promise<CodexThreadResumePreparation> {
   const assertClient = captureCodexAppServerClientLifetime(
     params.client,
-    binding.connectionScope === "supervision" ? "connection" : "native-process",
+    binding.connectionScope === "supervision" ? "connection" : "thread-configuration",
   );
   const assertCurrent = () => {
     params.params.hostCapabilities.assertActive();
@@ -313,6 +292,7 @@ function observeCodexThreadConfiguration(
   if (!isCodexThreadNonRunning(thread.status)) {
     throw new CodexAdoptedThreadActiveError();
   }
+  const settledSystemError = thread.status.type === "systemError";
   let unloaded = thread.status.type === "notLoaded";
   const dispose = params.client.addNotificationHandler((notification) => {
     if (
@@ -327,6 +307,7 @@ function observeCodexThreadConfiguration(
   });
   return {
     dispose,
+    settledSystemError,
     assertConfigured: () => {
       assertCurrent();
       // Native resume can acknowledge ignored overrides when another subscriber

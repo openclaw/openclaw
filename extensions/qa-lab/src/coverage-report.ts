@@ -1,4 +1,3 @@
-// Qa Lab plugin module implements coverage report behavior.
 import {
   normalizeOptionalString as stringifyConfigValue,
   normalizeStringEntriesLower,

@@ -5,7 +5,8 @@ import { writePackageDistInventory } from "../../scripts/lib/package-dist-invent
 import { PACKAGE_LIFECYCLE_MARKER_CONTRACT_RELATIVE_PATH } from "../../scripts/lib/package-lifecycle-marker.mjs";
 import { withTestDir } from "../test-helpers/temp-dir.js";
 import { runGlobalPackageUpdateSteps } from "./package-update-steps.js";
-import type { CommandRunner, ResolvedGlobalInstallTarget } from "./update-global.js";
+import type { CommandRunner } from "./update-global-command-runner.js";
+import type { ResolvedGlobalInstallTarget } from "./update-global.js";
 
 type PackageUpdateStepResult = Awaited<
   ReturnType<typeof runGlobalPackageUpdateSteps>

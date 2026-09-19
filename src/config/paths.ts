@@ -2,6 +2,7 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { normalizeHomeDirValue } from "@openclaw/normalization-core/home-dir";
 import { normalizeProfileName, resolveProfileStateDir } from "../cli/profile-utils.js";
 import { resolveGatewayNativeServiceIdentityConflict } from "../daemon/constants.js";
 import { resolveHomeRelativePath, resolveRequiredHomeDir } from "../infra/home-dir.js";
@@ -107,7 +108,10 @@ export function isDefaultInstallIdentity(
   const accountHome = resolveRequiredHomeDir({}, homedir);
   // Profiles have distinct host-service names; relocated homes do not. Keep
   // OPENCLAW_HOME isolated so an alternate state tree cannot adopt that service.
-  if (env.OPENCLAW_HOME?.trim()) {
+  // Normalize first: the rest of this gate and every home resolution treat the
+  // literal "undefined"/"null" as unset, so a raw truthiness test here would
+  // deny service management to a default install.
+  if (normalizeHomeDirValue(env.OPENCLAW_HOME)) {
     return false;
   }
   if (

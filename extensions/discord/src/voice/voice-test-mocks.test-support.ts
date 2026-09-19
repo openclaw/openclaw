@@ -24,6 +24,7 @@ const {
   textToSpeechStreamMock,
   textToSpeechMock,
   logVerboseMock,
+  loggerInfoMock,
   loggerWarnMock,
   loggerErrorMock,
   resolveConfiguredRealtimeVoiceProviderMock,
@@ -192,6 +193,7 @@ const {
     })),
     textToSpeechMock: vi.fn(async () => ({ success: true, audioPath: "/tmp/voice.mp3" })),
     logVerboseMock: vi.fn() as Mock,
+    loggerInfoMock: vi.fn() as Mock,
     loggerWarnMock: vi.fn() as Mock,
     loggerErrorMock: vi.fn() as Mock,
     resolveConfiguredRealtimeVoiceProviderMock: vi.fn<
@@ -263,6 +265,7 @@ export const voiceTestMocks = {
   textToSpeechStreamMock,
   textToSpeechMock,
   logVerboseMock,
+  loggerInfoMock,
   loggerWarnMock,
   loggerErrorMock,
   resolveConfiguredRealtimeVoiceProviderMock,
@@ -350,6 +353,7 @@ vi.mock("openclaw/plugin-sdk/runtime-env", async () => {
     ...actual,
     createSubsystemLogger: (subsystem: string) => ({
       ...actual.createSubsystemLogger(subsystem),
+      info: loggerInfoMock,
       warn: loggerWarnMock,
       error: loggerErrorMock,
     }),

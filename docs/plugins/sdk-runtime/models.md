@@ -136,10 +136,16 @@ host.
     direct-provider controls before dispatch.
 
     Set `reasoning` to request a reasoning effort for the selected model. The
-    host normalizes the canonical thinking levels (`off`, `minimal`, `low`,
-    `medium`, `high`, `xhigh`, `adaptive`, `max`, and `ultra`) for the selected
-    provider and model before dispatching the completion. `adaptive` becomes
-    `medium`; `max` and `ultra` become `max` when supported, otherwise `xhigh`.
+    host accepts the canonical thinking levels (`off`, `minimal`, `low`,
+    `medium`, `high`, `xhigh`, `adaptive`, `max`, and `ultra`). Direct completions
+    map `adaptive` to `medium` and `ultra` to `max`; the selected provider transport
+    maps each effort to its supported wire value. Explicit `off` reaches the
+    provider's disabled-thinking policy; whether thinking can be disabled depends
+    on the selected model and auth route.
+
+    Codex isolated completions pass explicit reasoning levels through the native
+    model's supported-effort mapping. When reasoning is omitted, these bounded
+    calls keep their low-effort default.
 
     <Warning>
     Model overrides require operator opt-in via `plugins.entries.<id>.llm.allowModelOverride: true` in config. `plugins.entries.<id>.llm.allowedModels` restricts those overrides; `plugins.entries.<id>.llm.allowedCompletionModels` separately restricts every completion, including host-resolved defaults. For direct completions, a `model@profile` override remains part of the authorized model override. Isolated `model@profile` overrides and `execution.authProfileId` require `plugins.entries.<id>.llm.allowAuthProfileOverride: true`. Cross-agent completions require `plugins.entries.<id>.llm.allowAgentIdOverride: true`.

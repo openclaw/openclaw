@@ -93,14 +93,18 @@ export async function runCodexSettledTurnFinalization(
     provider: modelProvider,
     api: resolveCodexLocalRuntimeAttribution(attempt).api,
   };
-  assertCodexPassiveTurnItems(bounded.items, attempt.prompt, "settled-turn finalization");
-  const text = isSilentReplyText(bounded.text) ? "" : bounded.text.trim();
+  assertCodexPassiveTurnItems(bounded.items, attempt.prompt, "settled-turn finalization", {
+    allowManagedHookPrompts: bounded.managedHooksEnabled,
+  });
+  const text = bounded.text.trim();
   const assistant = createAttributedCodexAssistantMessage(attribution, text, {
     tokenUsage: bounded.usage,
     aborted: false,
     promptError: null,
   });
-  if (!text) {
+  // The host distinguishes authored silence from missing output. Preserve the
+  // sentinel for its optional/required policy without mirroring a non-answer.
+  if (!text || isSilentReplyText(text)) {
     return { assistant, ...(bounded.usage ? { usage: bounded.usage } : {}) };
   }
 

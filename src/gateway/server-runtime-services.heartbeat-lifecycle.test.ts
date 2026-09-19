@@ -5,8 +5,6 @@ import { resetGatewayWorkAdmission } from "../process/gateway-work-admission.js"
 import { createDeferredCore } from "../shared/deferred.js";
 import {
   createLog,
-  createTestCronReconciliation,
-  createTestCronState,
   resetRuntimeServiceMocks,
   runtimeServiceMocks,
 } from "./server-runtime-services.test-harness.js";
@@ -56,10 +54,7 @@ describe("scheduled heartbeat execution loading", { concurrent: false }, () => {
         cfgAtStart: cfg,
         deps: {} as never,
         sessionDeliveryRecoveryMaxEnqueuedAt: 123,
-        cronState: createTestCronState(),
-        cronReconciliation: createTestCronReconciliation(),
-        startCron: false,
-        logCron: { error: vi.fn() },
+        cronEnabled: true,
         log: createLog(),
         resolveGatewayContext: () => undefined,
       });

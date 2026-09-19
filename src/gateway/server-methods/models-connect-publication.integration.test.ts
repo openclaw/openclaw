@@ -9,7 +9,10 @@ import {
   loadSessionEntry,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
-import { getActiveGatewayRootWorkCount } from "../../process/gateway-work-admission.js";
+import {
+  getActiveGatewayRootWorkCount,
+  getActiveGatewayRootWorkHolders,
+} from "../../process/gateway-work-admission.js";
 import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import * as modelCatalogAuth from "../server-model-catalog-auth.js";
 import {
@@ -247,13 +250,18 @@ it("connect negotiates snapshots and preserves draft and saved-session catalog s
       const acquisitionStarted = createDeferred();
       const releaseAcquisition = createDeferred();
       const readPreparedCatalog = modelCatalogAuth.readPreparedCatalog;
+      let acquisitionSettled = false;
       const acquisition = vi
         .spyOn(modelCatalogAuth, "readPreparedCatalog")
         .mockImplementationOnce(async (...args) => {
           // The registered reader has captured the saved account before catalog acquisition.
           acquisitionStarted.resolve();
           await releaseAcquisition.promise;
-          return readPreparedCatalog(...args);
+          try {
+            return await readPreparedCatalog(...args);
+          } finally {
+            acquisitionSettled = true;
+          }
         });
       const racingPublications: ModelsSnapshotEvent[] = [];
       const sessionChanges: unknown[] = [];
@@ -298,7 +306,19 @@ it("connect negotiates snapshots and preserves draft and saved-session catalog s
         expect(racingPublications).toEqual([]);
         expect(getActiveGatewayRootWorkCount()).toBeGreaterThan(0);
         releaseAcquisition.resolve();
-        await expect.poll(() => getActiveGatewayRootWorkCount()).toBe(0);
+        try {
+          await expect.poll(() => getActiveGatewayRootWorkCount()).toBe(0);
+        } catch (error) {
+          try {
+            console.error("Model catalog root work did not settle", {
+              acquisitionSettled,
+              holders: getActiveGatewayRootWorkHolders(),
+            });
+          } catch {
+            // Diagnostic failures must not replace the original assertion.
+          }
+          throw error;
+        }
         // A response on this same socket is a delivery barrier after initial work settles.
         await expect(
           racingClient.request("models.list", { agentId: "alpha", sessionKey }),

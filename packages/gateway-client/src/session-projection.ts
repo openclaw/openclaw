@@ -7,6 +7,8 @@ import {
   findUniqueSnapshotTerminalMatch,
   isUnsequencedLiveTerminal,
   isSessionProjectionToolContinuation,
+  isToolUsePersistedFinalRow,
+  readFinalContentIdentity,
   readSessionProjectionFinalMessageIdentity,
 } from "./session-projection-final-identity.js";
 import {
@@ -14,15 +16,16 @@ import {
   isSessionProjectionErrorMessage,
 } from "./session-projection-message-content.js";
 import {
+  createSessionProjectionEntry as createEntry,
   isLocallyOptimisticSessionMessage,
   sameTranscriptIdentity,
   normalizeSessionProjectionRunId,
   readAssistantStreamSegmentIdentity,
-  readSessionMessageIdentity,
   sameAssistantPersistenceReceipt,
   readSessionProjectionString as readNonemptyString,
   type SessionMessageEnvelope,
   type SessionMessageIdentity,
+  type SessionProjectionEntry,
 } from "./session-projection-message-identity.js";
 import { retainSessionProjectionRuns } from "./session-projection-run-retention.js";
 export {
@@ -44,6 +47,7 @@ export {
 } from "./session-projection-message-identity.js";
 export { isSessionProjectionErrorMessage } from "./session-projection-message-content.js";
 export type {
+  SessionProjectionEntry,
   SessionMessageEnvelope,
   SessionMessageIdentity,
 } from "./session-projection-message-identity.js";
@@ -81,15 +85,6 @@ export type SessionProjectionRun = {
   stopReason?: string;
   errorKind?: string;
   errorMessage?: string;
-};
-
-export type SessionProjectionEntry = {
-  message: unknown;
-  identity: SessionMessageIdentity | null;
-  afterSequence?: number | null;
-  live: boolean;
-  pending: boolean;
-  pendingRunId: string | null;
 };
 
 export type SessionProjectionState = {
@@ -140,35 +135,6 @@ export type SessionProjectionEvent = ScopedSessionProjectionEvent &
     | { type: "transportGap" }
     | { type: "reconnected" }
   );
-
-function createEntry(
-  message: unknown,
-  options?: { envelope?: SessionMessageEnvelope; live?: boolean; pendingRunId?: string | null },
-): SessionProjectionEntry {
-  const identity = readSessionMessageIdentity(message, options?.envelope);
-  const fallback = readRecord(readRecord(message)?.openclawStreamFallback);
-  const provisionalFallback = Boolean(
-    fallback && identity?.role === "assistant" && !identity.id && identity.sequence === null,
-  );
-  const inferredPendingRunId =
-    options?.live !== true && isLocallyOptimisticSessionMessage(message) ? identity?.runId : null;
-  const pendingRunId = normalizeSessionProjectionRunId(
-    options?.pendingRunId ?? inferredPendingRunId,
-  );
-  return {
-    message,
-    identity,
-    afterSequence:
-      options?.envelope?.afterSequence !== undefined
-        ? options.envelope.afterSequence
-        : provisionalFallback && typeof fallback?.afterSequence === "number"
-          ? fallback.afterSequence
-          : undefined,
-    live: options?.live === true || provisionalFallback,
-    pending: pendingRunId !== null,
-    pendingRunId,
-  };
-}
 
 function createProjectionEntries(messages: readonly unknown[]): SessionProjectionEntry[] {
   let pendingUserRunId: string | null = null;
@@ -276,6 +242,15 @@ function entryMatches(
       provisionalEntry.live &&
       !durableSegment &&
       !isSessionProjectionToolContinuation(durableEntry.message) &&
+      // Admitting a text-only toolUse-persisted final must not let it merge
+      // with a *different* same-run answer in either direction: the kept side
+      // suppresses or replaces the other without any content comparison
+      // downstream. Scope the content requirement to that newly admitted
+      // class only; pre-existing matches (identity promotions, non-toolUse
+      // rows) keep their established semantics.
+      (!isToolUsePersistedFinalRow(durableEntry.message) ||
+        readFinalContentIdentity(durableEntry.message) ===
+          readFinalContentIdentity(provisionalEntry.message)) &&
       provisionalEntry.identity.sequence === null &&
       (provisionalEntry.afterSequence === undefined ||
         (provisionalEntry.afterSequence !== null &&
@@ -382,11 +357,12 @@ function insertEntry(
 }
 
 export function projectLiveSessionMessage(
-  state: SessionProjectionState,
+  initialState: SessionProjectionState,
   message: unknown,
   envelope?: SessionMessageEnvelope,
   scope: SessionProjectionScope = {},
 ): SessionProjectionState {
+  let state = initialState;
   if (!scopesMatch(state.scope, scope)) {
     return state;
   }
@@ -398,6 +374,37 @@ export function projectLiveSessionMessage(
   const existing =
     matches.find((entry) => sameTranscriptIdentity(entry.identity, incoming.identity)) ??
     (matches.length === 1 ? matches[0] : undefined);
+  if (
+    existing &&
+    !sameTranscriptIdentity(existing.identity, incoming.identity) &&
+    !sameAssistantPersistenceReceipt(existing.identity, incoming.identity)
+  ) {
+    const durable = existing.identity?.id ? existing : incoming.identity.id ? incoming : null;
+    const provisional = durable === existing ? incoming : existing;
+    if (durable && isToolUsePersistedFinalRow(durable.message)) {
+      // Exact durable identities and persistence receipts never need inference.
+      // For provisional adoption,
+      // use the snapshot owner in both arrival orders, excluding the live copy
+      // itself from the history that can contradict the terminal position.
+      const history = state.entries.filter((entry) => entry !== provisional);
+      const snapshot = durable === incoming ? insertEntry(history, durable) : history;
+      const runId = provisional.identity?.runId;
+      const run = runId ? state.runs[runId] : undefined;
+      const terminalMatch = findUniqueSnapshotTerminalMatch(provisional, [durable], run, snapshot);
+      if (!terminalMatch) {
+        return withEntries(state, insertEntry(state.entries, incoming, state.runs));
+      }
+      if (terminalMatch.inferred && durable.identity && runId && run) {
+        // Keep the original live entry until authoritative history confirms
+        // the inference or restores it after revealing a later assistant row.
+        const inferredSnapshotTerminal = { entry: provisional, matchedIdentity: durable.identity };
+        state = {
+          ...state,
+          runs: { ...state.runs, [runId]: { ...run, inferredSnapshotTerminal } },
+        };
+      }
+    }
+  }
   if (!existing) {
     return withEntries(state, insertEntry(state.entries, incoming, state.runs));
   }

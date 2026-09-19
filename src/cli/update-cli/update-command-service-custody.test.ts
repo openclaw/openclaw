@@ -27,6 +27,7 @@ import {
   isUpdatedInstallGatewayExecutorSupported,
   runUpdatedInstallGatewayCommand,
 } from "./update-command-service-command.js";
+import type { UpdateServiceDefinitionRecovery } from "./update-command-service-context-types.js";
 
 const sourceLoader = resolveRuntimeWorkerUrl(
   updateExecutorNativeEntrypoints.executor,
@@ -42,11 +43,13 @@ it.each([
   { supported: true, destination: "same" },
   { supported: false, destination: "same" },
   { supported: "legacy", destination: "same" },
+  { supported: "without-backup", destination: "same" },
+  { supported: "without-backup", destination: "same", deferred: true },
   { supported: true, destination: "changed" },
   { supported: true, destination: "foreign" },
 ])(
-  "native command admits only the bound receiver: $supported / $destination",
-  async ({ supported, destination }) => {
+  "native command admits only the bound receiver: $supported / $destination / deferred=$deferred",
+  async ({ supported, destination, deferred }) => {
     const scratch = dirs.make("native-command-custody-");
     const receiverRoot = await fs.realpath(process.cwd());
     const root = destination === "same" ? receiverRoot : scratch;
@@ -66,7 +69,9 @@ it.each([
     const {runGatewayServiceUpdateCommand}=await import(${JSON.stringify(resolveRuntimeWorkerUrl(updateExecutorNativeEntrypoints.nativeExecutor).href)});
     const {execFileUtf8}=await import(${JSON.stringify(resolveRuntimeWorkerUrl(updateExecutorNativeEntrypoints.nativeExec).href)});
     const fs=await import("node:fs");
+    if(process.argv.includes("--defer-activation")) fs.writeFileSync(${JSON.stringify(effect)},"unguarded deferred installation");
     const mode=process.argv[process.argv.indexOf("--update-executor")+1];
+    const action=process.argv[3];
     if(mode==="check") {
       if(!process.argv.includes("--json")) {
         process.stdout.write("Recorded warnings from the current update. ");
@@ -88,11 +93,16 @@ it.each([
     else if(mode==="check" && ${JSON.stringify(supported)}==="legacy") {
       process.stdout.write(JSON.stringify({updateExecutor:"root-spawner-v1"}));
     }
-    else try { await runGatewayServiceUpdateCommand(mode,"restart",async()=>{
+    else if(mode==="check" && ${JSON.stringify(supported)}==="without-backup") {
+      process.stdout.write(JSON.stringify({updateExecutor:"root-spawner-v1",targetRootBinding:true}));
+      const {finished}=await import("node:stream/promises");
+      await finished(process.stdin.resume(),{cleanup:true});
+    }
+    else try { await runGatewayServiceUpdateCommand(mode,action,async()=>{
       fs.writeFileSync(${JSON.stringify(receipt)},JSON.stringify({pid:process.pid,parent:process.ppid,noRespawn:process.env.OPENCLAW_NO_RESPAWN}));
       const result=await execFileUtf8(process.execPath,["-e",${JSON.stringify(`require("node:fs").writeFileSync(${JSON.stringify(effect)},"owned")`)}]);
       if(result.code!==0)throw new Error(result.stderr);
-      process.stdout.write(JSON.stringify({action:"restart",ok:true,result:"restarted"}));
+      process.stdout.write(JSON.stringify({action,ok:true,result:action==="install"?"installed":"restarted"}));
     }); } catch(error) { process.stderr.write(error.message); process.exitCode=1; }
   `,
     );
@@ -100,6 +110,39 @@ it.each([
     const runId = randomUUID();
     const work = withUpdateCommandExecutor(runId, async (executor) => {
       const fence = await executor.enter(root);
+      if (supported === "without-backup") {
+        const recovery: UpdateServiceDefinitionRecovery = {};
+        const warnings: string[] = [];
+        const seal = vi.fn(async () => {});
+        const failure = await runUpdatedInstallGatewayCommand(
+          {
+            result: { root: targetRoot },
+            opts: { json: true, run: { runId, env: process.env, executorFence: fence } },
+            invocationEnv: process.env,
+            timeoutMs: 20_000,
+            definitionRecovery: recovery,
+            ...(deferred
+              ? { serviceLoadBoundary: { assertCurrent: fence.assertCurrent, seal } }
+              : {}),
+            onWarnings: (messages) => warnings.push(...messages),
+          },
+          "install",
+        ).then(
+          () => undefined,
+          (error: unknown) => error,
+        );
+        await expect(fs.stat(effect)).rejects.toMatchObject({ code: "ENOENT" });
+        expect(seal).not.toHaveBeenCalled();
+        expect(failure).toMatchObject({
+          message: expect.stringContaining("SERVICE_DEFINITION_UNKNOWN"),
+        });
+        expect(recovery).toEqual({ preserved: true });
+        expect(warnings).toEqual([
+          expect.stringContaining("cannot retain a service definition backup"),
+        ]);
+        await expect(fs.stat(receipt)).rejects.toMatchObject({ code: "ENOENT" });
+        fence.assertCurrent();
+      }
       return await runUpdatedInstallGatewayCommand(
         {
           result: { root: targetRoot },
@@ -110,7 +153,7 @@ it.each([
         "restart",
       );
     });
-    if (supported === true && destination !== "foreign") {
+    if ((supported === true || supported === "without-backup") && destination !== "foreign") {
       expect(await work).toBe("accepted");
       expect(await fs.readFile(effect, "utf8")).toBe("owned");
       const observed = JSON.parse(await fs.readFile(receipt, "utf8"));

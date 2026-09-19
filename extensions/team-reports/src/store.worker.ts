@@ -13,7 +13,7 @@ import {
   openNodeSqliteDatabase,
   runSqliteImmediateTransactionSync,
   type SqliteWorkerCommand,
-} from "openclaw/plugin-sdk/sqlite-runtime";
+} from "openclaw/plugin-sdk/sqlite-worker-runtime";
 import { MAX_REPORT_BYTES } from "./limits.js";
 import { DAY_MS } from "./periods.js";
 import type {

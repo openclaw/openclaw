@@ -249,19 +249,21 @@ export async function runBridgeRequest(params: {
           throw new ToolInputError("search query must be a string.");
         }
         const options = isRecord(values[1]) ? values[1] : undefined;
-        const exact = query.trim().toLowerCase();
+        const spelling = query.trim();
+        const exact = spelling.toLowerCase();
         const mcpBindings = params.namespaceRuntime.mcpBindings;
         const mcpRoutes = [...mcpBindings];
-        const exactMcpId = (mcpRoutes.find(
-          ([, binding]) => binding.callableName === query.trim(),
-        ) ?? mcpRoutes.find(([, binding]) => binding.callableName.toLowerCase() === exact))?.[0];
+        const exactMcpId = (mcpRoutes.find(([, binding]) => binding.callableName === spelling) ??
+          mcpRoutes.find(([, binding]) => binding.callableName.toLowerCase() === exact))?.[0];
         const exactBinding = exactMcpId
           ? undefined
-          : catalogProjection.bindings.find(
+          : (catalogProjection.byCallableName.get(spelling) ??
+            catalogProjection.bindings.find((binding) => binding.name === spelling) ??
+            catalogProjection.bindings.find(
               (binding) =>
                 binding.name.toLowerCase() === exact ||
                 binding.callableName.toLowerCase() === exact,
-            );
+            ));
         const matches = await params.runtime.search(exactBinding?.id ?? exactMcpId ?? query, {
           limit: typeof options?.limit === "number" ? options.limit : undefined,
           allowedIds: catalogProjection.searchableIds,
@@ -301,6 +303,7 @@ export async function runBridgeRequest(params: {
         }
         const described = await params.runtime.describe(binding.id, {
           includeMcp: false,
+          recoverySurface: "catalog",
         });
         const { id: _id, sourceName: _sourceName, mcp: _mcp, ...guestDescription } = described;
         value =
@@ -336,6 +339,7 @@ export async function runBridgeRequest(params: {
           };
         }
         const called = await params.runtime.callExactId(binding.id, input, {
+          recoverySurface: "catalog",
           parentToolCallId: params.parentToolCallId,
           signal: params.signal,
           onUpdate: params.onUpdate,
@@ -386,6 +390,7 @@ export async function runBridgeRequest(params: {
               );
             }
             const called = await params.runtime.callExactId(entry.id, request.input, {
+              recoverySurface: "catalog",
               parentToolCallId: params.parentToolCallId,
               signal: params.signal,
               onUpdate: params.onUpdate,

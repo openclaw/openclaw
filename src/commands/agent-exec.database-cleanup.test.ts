@@ -7,10 +7,8 @@ import {
   deleteSessionEntryLifecycle,
   replaceSessionEntry,
 } from "../config/sessions/session-accessor.js";
-import {
-  createSqliteAuditRecordStore,
-  registerSqliteAuditRecordAsync,
-} from "../infra/sqlite-audit-record-store.js";
+import { registerSqliteAuditRecordAsync } from "../infra/sqlite-audit-record-store.async.js";
+import { createSqliteAuditRecordStore } from "../infra/sqlite-audit-record-store.js";
 import type { RuntimeEnv } from "../runtime.js";
 import {
   closeOpenClawAgentDatabaseByPathAsync,

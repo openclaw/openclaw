@@ -1,19 +1,10 @@
 import { err } from "@openclaw/normalization-core/result";
 import { captureTaskExecutionOwner } from "./task-execution-owner.js";
 import { updateTask } from "./task-registry-mutation.js";
+import { sameTaskRunScope } from "./task-registry-records.js";
 import { withTaskRegistryMutation } from "./task-registry-state.js";
 import { getTaskRegistryProcessState, type TaskRunOwner } from "./task-registry.process-state.js";
 import type { TaskRecord } from "./task-registry.types.js";
-
-function sameTaskRunScope(left: TaskRunOwner["task"], right: TaskRunOwner["task"]): boolean {
-  return (
-    left.runtime === right.runtime &&
-    left.ownerKey === right.ownerKey &&
-    left.scopeKind === right.scopeKind &&
-    left.runId === right.runId &&
-    left.childSessionKey === right.childSessionKey
-  );
-}
 
 export function getTaskRunOwner(task: TaskRecord): TaskRunOwner | undefined {
   const owner = getTaskRegistryProcessState().runOwners.get(task.taskId);

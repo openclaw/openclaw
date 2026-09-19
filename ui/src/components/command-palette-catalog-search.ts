@@ -1,6 +1,11 @@
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
-import type { AgentsListResult, CronJobsListResult, SkillStatusReport } from "../api/types.ts";
+import type {
+  AgentsListResult,
+  CronJobsListResult,
+  GatewaySessionRow,
+  SkillStatusReport,
+} from "../api/types.ts";
 import {
   SETTINGS_SEARCHABLE_SUBPAGE_ROUTES,
   settingsNavigationLabelForRoute,
@@ -11,10 +16,13 @@ import type { RouteId } from "../app-route-paths.ts";
 import type { NativeDeviceSettingsCapability } from "../app/native-device-settings.ts";
 import { t } from "../i18n/index.ts";
 import { registerAppsEnglish } from "../i18n/locales/en-apps.ts";
+import { registerCommandPaletteEnglish } from "../i18n/locales/en-command-palette.ts";
 import { loadModelCatalog, modelCatalogRefreshError } from "../lib/model-catalog-store.ts";
 import type { PluginListResult } from "../lib/plugins/index.ts";
 import { SETTINGS_SEARCH_TARGETS } from "../pages/config/settings-targets.ts";
 import type { IconName } from "./icons.ts";
+
+registerCommandPaletteEnglish();
 
 registerAppsEnglish();
 
@@ -41,8 +49,9 @@ type CommandPaletteCatalogItem = {
 };
 
 export type CommandPaletteItem = Omit<CommandPaletteCatalogItem, "routeId" | "category"> & {
-  category: "search" | "navigation" | "chats" | CommandPaletteCatalogCategory;
+  category: "search" | "navigation" | "chats" | "messages" | CommandPaletteCatalogCategory;
   action: string;
+  session?: GatewaySessionRow;
 };
 
 export function commandPaletteCategoryLabel(category: string): string {
@@ -67,6 +76,8 @@ export function commandPaletteCategoryLabel(category: string): string {
       return t("palette.items.settings");
     case "chats":
       return t("sessionsView.title");
+    case "messages":
+      return t("palette.categories.messages");
     default:
       return category;
   }

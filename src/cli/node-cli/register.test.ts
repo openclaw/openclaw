@@ -80,6 +80,18 @@ describe("registerNodeCli", () => {
     expect(action.mock.calls[0]?.[0]?.json).toBe(true);
   });
 
+  it.each(["/opt/Runtime Tools/node", "C:\\\\Runtime Tools\\\\node.exe"])(
+    "forwards an exact node runtime pin: %s",
+    async (pin) => {
+      await createProgram().parseAsync(["node", "install", "--runtime-path", pin, "--force"], {
+        from: "user",
+      });
+      expect(daemonMocks.runNodeDaemonInstall).toHaveBeenCalledWith(
+        expect.objectContaining({ runtimePath: pin, force: true }),
+      );
+    },
+  );
+
   it("forwards node install options to the daemon adapter", async () => {
     const program = createProgram();
 
@@ -207,6 +219,20 @@ describe("registerNodeCli", () => {
     expect(daemonMocks.runNodeHost.mock.calls[0]?.[0]).not.toHaveProperty("forceWorkerRuns");
   });
 
+  it("hosts worker sessions for this foreground process with --session-host", async () => {
+    await createProgram().parseAsync(["node", "run", "--session-host"], { from: "user" });
+
+    expect(daemonMocks.runNodeHost).toHaveBeenCalledWith(
+      expect.objectContaining({ forceWorkerRuns: true }),
+    );
+    expect(daemonMocks.runNodeHost.mock.calls[0]?.[0]).not.toHaveProperty("ephemeral");
+    expect(daemonMocks.runNodeDaemonInstall).not.toHaveBeenCalled();
+
+    daemonMocks.runNodeHost.mockClear();
+    await createProgram().parseAsync(["node", "run"], { from: "user" });
+    expect(daemonMocks.runNodeHost.mock.calls[0]?.[0]).not.toHaveProperty("forceWorkerRuns");
+  });
+
   it("falls back to configured node run port when --port is omitted", async () => {
     daemonMocks.loadNodeHostConfig.mockResolvedValue({
       version: 1,
@@ -222,14 +248,17 @@ describe("registerNodeCli", () => {
     );
   });
 
-  it("derives the node endpoint, TLS pin, and bootstrap credential from --pair", async () => {
+  it.each([
+    ["--pair", true],
+    ["--pair-if-needed", false],
+  ])("derives endpoint and authentication preference from %s", async (flag, preferBootstrap) => {
     const setupCode = encodePairingSetupCode({
       url: "wss://gateway.example:8443/openclaw-gw",
       bootstrapToken: "bootstrap-123",
       tlsFingerprint: `sha256:${PAIR_TLS_FINGERPRINT.toUpperCase()}`,
     });
 
-    await createProgram().parseAsync(["node", "run", "--pair", `oc-pair://${setupCode}`], {
+    await createProgram().parseAsync(["node", "run", flag, `oc-pair://${setupCode}`], {
       from: "user",
     });
 
@@ -250,9 +279,19 @@ describe("registerNodeCli", () => {
           },
         ],
         gatewayBootstrapToken: "bootstrap-123",
-        preferGatewayBootstrapToken: true,
+        preferGatewayBootstrapToken: preferBootstrap,
       }),
     );
+  });
+
+  it("rejects simultaneous forced and resumable pairing", async () => {
+    await expect(
+      createProgram().parseAsync(["node", "run", "--pair", "first", "--pair-if-needed", "second"], {
+        from: "user",
+      }),
+    ).rejects.toMatchObject({ code: "commander.conflictingOption" });
+    expect(daemonMocks.runNodeHost).not.toHaveBeenCalled();
+    expect(daemonMocks.loadNodeHostConfig).not.toHaveBeenCalled();
   });
 
   it("lets explicit gateway flags override --pair values", async () => {

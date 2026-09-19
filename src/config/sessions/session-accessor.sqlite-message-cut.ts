@@ -480,7 +480,15 @@ function extractEditorMediaRefs(
   }
   const refs = media.flatMap((entry) => {
     const record = asRecord(entry);
-    const mediaPath = typeof record?.path === "string" ? record.path.trim() : "";
+    const mediaUrl = typeof record?.url === "string" ? record.url.trim() : undefined;
+    const mediaPath =
+      mediaUrl === undefined
+        ? typeof record?.path === "string"
+          ? record.path.trim()
+          : ""
+        : /^media:\/\//i.test(mediaUrl)
+          ? mediaUrl
+          : "";
     const contentType = record?.contentType;
     return mediaPath && typeof contentType === "string" && contentType.startsWith("image/")
       ? [{ path: mediaPath, contentType }]

@@ -516,9 +516,56 @@ describe("subscribeEmbeddedAgentSession", () => {
     expect(subscription.getSourceReplyDelivered()).toBeUndefined();
   });
 
-  it.each(["send", "reply", "thread-reply", "poll"])(
-    "suppresses later replies after a recorded source %s with rewritten output",
-    async (action) => {
+  it("does not let an earlier approval prompt suppress the next user reply", async () => {
+    const onBlockReply = vi.fn();
+    const { emit, subscription } = createSubscribedSessionHarness({
+      runId: "approval-input-boundary",
+      blockReplyBreak: "message_end",
+      onBlockReply,
+      onToolResult: async () => {},
+    });
+    emit({
+      type: "tool_execution_end",
+      toolName: "exec",
+      toolCallId: "approval-request",
+      isError: false,
+      result: {
+        details: {
+          status: "approval-pending",
+          approvalId: "approval-request",
+          approvalSlug: "approval-request",
+          host: "gateway",
+          command: "echo approved",
+        },
+      },
+    });
+    await subscription.waitForPendingEvents();
+    expect(subscription.didSendDeterministicApprovalPrompt()).toBe(true);
+    emitAssistantMessageEnd(emit, "Waiting for approval.");
+    await subscription.waitForPendingEvents();
+    expect(onBlockReply).not.toHaveBeenCalled();
+    emit({
+      type: "message_end",
+      message: { role: "user", content: "A new request.", timestamp: 2 },
+    });
+    emitAssistantMessageEnd(emit, "The new request has its own answer.");
+    await subscription.waitForPendingEvents();
+    expect(onBlockReply.mock.calls.map(([payload]) => payload.text)).toEqual([
+      "The new request has its own answer.",
+    ]);
+    expect(subscription.didSendDeterministicApprovalPrompt()).toBe(false);
+    subscription.unsubscribe();
+  });
+
+  it.each([
+    { action: "send", final: true },
+    { action: "reply", final: true },
+    { action: "thread-reply", final: true },
+    { action: "poll", final: true },
+    { action: "send", final: false },
+  ])(
+    "keeps source progress distinct from final receipts for $action (final=$final)",
+    async ({ action, final }) => {
       const { session, emit } = createStubSessionHarness();
       const sessionManager = {};
       Object.assign(session, { sessionManager });
@@ -536,7 +583,7 @@ describe("subscribeEmbeddedAgentSession", () => {
         type: "tool_execution_start",
         toolName: "message",
         toolCallId: "source-send",
-        args: { action, target: "channel:source", message: "Delivered once." },
+        args: { action, final, target: "channel:source", message: "Delivered once." },
       });
       await Promise.resolve();
       recordEmbeddedToolReceipt(
@@ -562,10 +609,22 @@ describe("subscribeEmbeddedAgentSession", () => {
       await Promise.resolve();
 
       expect(subscription.getSourceReplyDelivered()).toBe(true);
+      expect(subscription.getSourceReplyDeliveryState()).toBe(final ? "delivered" : "missing");
       emitAssistantMessageEnd(emit, "A later assistant response must stay suppressed.");
       await Promise.resolve();
       expect(onBlockReply).not.toHaveBeenCalled();
       expect(onDeliveredMessageToolOnlySourceReply).toHaveBeenCalledOnce();
+
+      emit({
+        type: "message_end",
+        message: { role: "user", content: "A new request.", timestamp: 2 },
+      });
+      emitAssistantMessageEnd(emit, "The new request still needs its own reply.");
+      await subscription.waitForPendingEvents();
+      expect(onBlockReply.mock.calls.map(([payload]) => payload.text)).toEqual([
+        "The new request still needs its own reply.",
+      ]);
+      expect(subscription.getSourceReplyDeliveryState()).toBe("missing");
       subscription.unsubscribe();
     },
   );

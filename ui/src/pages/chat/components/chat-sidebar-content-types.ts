@@ -1,3 +1,4 @@
+import type { TemplateResult } from "lit";
 import type { ChatMediaPlaybackMode } from "./chat-media-playback.ts";
 import type { ArtifactDownloadResolver } from "./chat-message-media.ts";
 import type { SessionDiffFileTextLoader, SessionDiffLoader } from "./session-diff-panel.ts";
@@ -57,8 +58,8 @@ type AttachmentSidebarSource = {
 export type AttachmentSidebarState =
   | { status: "pending" }
   | ({ status: "ready" } & AttachmentSidebarSource)
-  | { status: "unavailable" }
-  | { status: "error"; reason: string };
+  | { status: "unavailable"; onRetry?: () => void }
+  | { status: "error"; reason: string; onRetry?: () => void };
 
 export type AttachmentSidebarRuntime = {
   sessionKey?: string;
@@ -85,6 +86,8 @@ type AttachmentSidebarContent = {
   width?: number;
   height?: number;
   voiceNote?: boolean;
+  plainText?: boolean;
+  renderActions?: () => TemplateResult;
   resolveSource?: (
     onRequestUpdate: () => void,
     runtime: AttachmentSidebarRuntime,

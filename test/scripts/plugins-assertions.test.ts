@@ -460,9 +460,10 @@ ${command}
     try {
       const passRoot = path.join(root, "pass");
       mkdirSync(passRoot, { recursive: true });
+      const markerPrefix = 'Skipping "demo';
       writeFileSync(
         path.join(passRoot, "plugins-dir-update.log"),
-        `Skipping "demo-plugin-dir" (source: path).\n${"x".repeat(256 * 1024)}`,
+        `${"x".repeat(64 * 1024 - markerPrefix.length)}${markerPrefix}-plugin-dir" (source: path).\n${"x".repeat(256 * 1024)}`,
         "utf8",
       );
       const pass = await runAssertionAsync(["plugin-dir-update-skipped"], {
@@ -897,6 +898,52 @@ fs.renameSync = (source, destination) => {
           child.once("close", resolve);
         });
       }
+    }
+  });
+
+  it("serves scoped candidate tarballs through canonical npm shrinkwrap paths", async () => {
+    const root = autoCleanupTempDirs.make("openclaw-plugin-npm-scoped-tarball-");
+    const portFile = path.join(root, "port");
+    const tarballPath = path.join(root, "openclaw-ai-2026.7.34.tgz");
+    const archive = "scoped candidate package archive";
+    writeFileSync(tarballPath, archive, "utf8");
+
+    const child = spawn(
+      process.execPath,
+      [
+        "scripts/e2e/lib/plugins/npm-registry-server.mjs",
+        portFile,
+        "@openclaw/ai",
+        "2026.7.34",
+        tarballPath,
+      ],
+      { cwd: process.cwd(), stdio: ["ignore", "pipe", "pipe"] },
+    );
+    const stderr = createBoundedChildOutput();
+    child.stderr.setEncoding("utf8");
+    child.stderr.on("data", stderr.append);
+    const closed = new Promise<void>((resolve) => {
+      child.once("close", () => resolve());
+    });
+    try {
+      for (let attempt = 0; attempt < 100 && !existsSync(portFile); attempt += 1) {
+        await new Promise<void>((resolve) => {
+          setTimeout(resolve, 10);
+        });
+      }
+      const port = Number(readFileSync(portFile, "utf8"));
+      for (const pathname of [
+        "/@openclaw/ai/-/ai-2026.7.34.tgz",
+        "/@openclaw%2Fai/-/ai-2026.7.34.tgz",
+        "/@openclaw%2Fai/-/openclaw-ai-2026.7.34.tgz",
+      ]) {
+        const response = await requestFixtureRegistry(port, pathname);
+        expect(response.statusCode, `${pathname}: ${stderr.text()}`).toBe(200);
+        expect(response.body).toBe(archive);
+      }
+    } finally {
+      child.kill("SIGKILL");
+      await closed;
     }
   });
 

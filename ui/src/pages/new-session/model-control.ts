@@ -34,9 +34,11 @@ import {
   type ChatModelCatalogState,
 } from "../chat/components/chat-model-controls.ts";
 import { CatalogTargetDiscovery } from "./catalog-target.ts";
-import { draftCloudProfileSupportsExecutionMode, type DraftCloudProfile } from "./discovery.ts";
+import type { DraftCloudProfile } from "./discovery.ts";
 import {
   reconcileDraftModelSelection,
+  resolveDraftDevicePlacementUnsupportedReason,
+  resolveDraftCloudRuntimeUnsupportedReason,
   resolveDraftAgentRuntime,
   resolveDraftContextWindowTarget,
   resolveDraftModelTarget,
@@ -52,6 +54,7 @@ type NewSessionMetadataClient = NonNullable<ApplicationContext["gateway"]["snaps
 type NewSessionMetadataState = ChatModelCatalogState & {
   catalog: ModelCatalogEntry[];
   accountSelection?: ChatAccountSelection;
+  displayOnly?: boolean;
 };
 type NewSessionMetadataLoadOptions = {
   agent?: GatewayAgentRow;
@@ -174,14 +177,20 @@ export class NewSessionModelControl {
     this.notify();
   }
 
-  private publishMetadataCatalog(result: ModelCatalogResult) {
+  private assignMetadataCatalog(result: ModelCatalogResult, displayOnly = false) {
     this.metadataState = {
+      ...this.metadataState,
       catalog: result.models,
-      accountSelection: result.accountSelection,
+      displayOnly,
       ...resolveModelCatalogState(result),
     };
+  }
+
+  private publishMetadataCatalog(result: ModelCatalogResult) {
+    this.assignMetadataCatalog(result);
+    this.metadataState.accountSelection = result.accountSelection;
     if (!this.draftAccount && this.pendingSelectionGeneration === this.selectionGeneration) {
-      this.restorePreference(this.pendingPreference, this.pendingAgent, this.pendingContext);
+      this.restorePreference();
     }
     this.restoringPreference = false;
     this.notify();
@@ -199,10 +208,15 @@ export class NewSessionModelControl {
     this.metadataRequest = controller;
     const ownsRequest = () =>
       this.metadataRequest === controller && this.ownsMetadata(client, scope);
+    const previousStatus = this.metadataState.status;
+    const retained = peekModelCatalog(client, scope, { allowStale: true });
+    if (retained && !this.metadataState.hasSnapshot) {
+      this.assignMetadataCatalog(retained, true);
+    }
     this.updateMetadataState({
       ...this.metadataState,
       status: this.metadataState.hasSnapshot
-        ? this.metadataState.status === "error"
+        ? previousStatus === "error"
           ? "error"
           : "ready"
         : "loading",
@@ -392,7 +406,7 @@ export class NewSessionModelControl {
         !this.draftAccount &&
         this.pendingSelectionGeneration === this.selectionGeneration
       ) {
-        this.restorePreference(this.pendingPreference, this.pendingAgent, this.pendingContext);
+        this.restorePreference();
       }
       this.restoringPreference = false;
       return;
@@ -473,11 +487,8 @@ export class NewSessionModelControl {
     return target?.entry?.available === true && target.provider === this.draftAccount.provider;
   }
 
-  private restorePreference(
-    preference: NewSessionPreference | null | undefined,
-    agent: GatewayAgentRow | undefined,
-    context: ApplicationContext | undefined,
-  ) {
+  private restorePreference() {
+    const preference = this.pendingPreference;
     if (!preference) {
       return;
     }
@@ -485,8 +496,8 @@ export class NewSessionModelControl {
       model: preference.model ?? "",
       agentRuntime: preference.agentRuntime,
       thinkingLevel: preference.thinkingLevel ?? "",
-      agent,
-      defaults: context?.sessions.state.result?.defaults,
+      agent: this.pendingAgent,
+      defaults: this.pendingContext?.sessions.state.result?.defaults,
       catalog: this.catalog,
     });
     this.selected = selection.model;
@@ -501,27 +512,23 @@ export class NewSessionModelControl {
     }
   }
 
-  resolveAgentRuntime(options: {
-    agent?: GatewayAgentRow;
-    context: ApplicationContext | undefined;
-  }) {
+  resolveAgentRuntime(
+    options: {
+      agent?: GatewayAgentRow;
+      context: ApplicationContext | undefined;
+    } = { agent: this.pendingAgent, context: this.pendingContext },
+  ) {
     return resolveDraftAgentRuntime({
       model: this.effectiveModel,
       agentRuntime: this.agentRuntime,
       agent: options.agent,
       defaults: options.context?.sessions.state.result?.defaults,
-      catalog: this.catalog,
+      catalog: this.metadataState.displayOnly ? [] : this.catalog,
     });
   }
 
   devicePlacementUnsupportedReason(): string | undefined {
-    const runtime = this.resolveAgentRuntime({
-      agent: this.pendingAgent,
-      context: this.pendingContext,
-    });
-    return runtime && !runtime.devicePlacement
-      ? t("newSession.deviceRuntimeUnsupported")
-      : undefined;
+    return resolveDraftDevicePlacementUnsupportedReason(this.resolveAgentRuntime());
   }
 
   // Worker-turn runtimes rank automatic placement by free worker slots;
@@ -529,27 +536,12 @@ export class NewSessionModelControl {
   // described as least-busy. Unresolved (auto/default) runtimes fall back to
   // the worker-turn description, matching the server's default policy.
   autoPlacementSelectionMode(): "least-busy" | "eligible-order" {
-    const runtime = this.resolveAgentRuntime({
-      agent: this.pendingAgent,
-      context: this.pendingContext,
-    });
+    const runtime = this.resolveAgentRuntime();
     return runtime?.cloudPlacementExecutionMode === "remote-exec" ? "eligible-order" : "least-busy";
   }
 
   cloudRuntimeUnsupportedReason(profile?: DraftCloudProfile): string | undefined {
-    const runtime = this.resolveAgentRuntime({
-      agent: this.pendingAgent,
-      context: this.pendingContext,
-    });
-    if (runtime?.cloudPlacementSupported === false) {
-      return t("newSession.cloudRuntimeUnsupported", { runtime: runtime.id });
-    }
-    return runtime &&
-      profile &&
-      runtime.cloudPlacementExecutionMode &&
-      !draftCloudProfileSupportsExecutionMode(profile, runtime.cloudPlacementExecutionMode)
-      ? t("newSession.cloudProfileRuntimeUnsupported", { runtime: runtime.id })
-      : undefined;
+    return resolveDraftCloudRuntimeUnsupportedReason(this.resolveAgentRuntime(), profile);
   }
 
   render(options: {
@@ -673,6 +665,7 @@ export class NewSessionModelControl {
         ) {
           return;
         }
+        this.metadataState.displayOnly = false;
         this.selected = selection.model;
         const runtimeChanged = this.agentRuntime !== selection.agentRuntime;
         this.agentRuntime = selection.agentRuntime;

@@ -8,7 +8,9 @@ import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { isRecord } from "../utils.js";
 import { executeStatusScanFromOverview } from "./status.scan-execute.ts";
 import { collectStatusScanOverview } from "./status.scan-overview.ts";
-import type { StatusScanResult } from "./status.scan-result.ts";
+import type { StatusJsonScanResult } from "./status.scan-result.ts";
+
+const statusGatewayModuleLoader = createLazyImportLoader(() => import("./status.scan.gateway.js"));
 
 const statusScanMemoryModuleLoader = createLazyImportLoader(
   () => import("./status.scan-memory.js"),
@@ -76,7 +78,11 @@ export async function scanStatusJsonFast(
     all?: boolean;
   },
   runtime: RuntimeEnv,
-): Promise<StatusScanResult> {
+): Promise<StatusJsonScanResult> {
+  const online = await (await statusGatewayModuleLoader.load()).scanStatusJsonGateway(opts);
+  if (online) {
+    return online;
+  }
   const overview = await collectStatusScanOverview({
     env: process.env,
     commandName: "status --json",

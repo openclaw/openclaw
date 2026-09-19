@@ -5,9 +5,9 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { openRootFileSync, readFileDescriptorBoundedSync } from "../../infra/boundary-file-read.js";
 import type { OpenClawSkillMetadata, ParsedSkillFrontmatter } from "../types.js";
 import { resolveSkillManifestMetadata } from "./frontmatter.js";
+import { SKILL_SOURCE_ORIGIN_RELATIVE_PATH } from "./skill-entry-metadata-path.js";
 import { tryRealpath } from "./symlink-targets.js";
 
-const SKILL_SOURCE_ORIGIN_RELATIVE_PATH = path.join(".openclaw", "source-origin.json");
 const MAX_SKILL_SOURCE_ORIGIN_BYTES = 16 * 1024;
 
 function readSourceInstallSkillKey(skillDir: string): string | undefined {

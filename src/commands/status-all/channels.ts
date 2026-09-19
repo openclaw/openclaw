@@ -475,9 +475,10 @@ export async function buildChannelsTable(
   const loadFailuresByChannel = new Map(
     readOnlyPlugins.loadFailures.map((failure) => [failure.channelId, failure] as const),
   );
-  for (const channelId of readOnlyPlugins.missingConfiguredChannelIds.toSorted((left, right) =>
-    left.localeCompare(right),
-  )) {
+  const missingConfiguredChannelIds = readOnlyPlugins.missingConfiguredChannelIds.toSorted(
+    (left, right) => left.localeCompare(right),
+  );
+  for (const channelId of missingConfiguredChannelIds) {
     if (visibleChannelIds.has(channelId)) {
       continue;
     }
@@ -495,17 +496,13 @@ export async function buildChannelsTable(
     visibleChannelIds.add(channelId);
   }
 
-  const missingCandidateChannelIds = [
-    ...new Set([
-      ...readOnlyPlugins.missingConfiguredChannelIds,
-      ...listExplicitConfiguredChannelIdsForConfig(sourceConfig),
-      ...listExplicitConfiguredChannelIdsForConfig(cfg),
-    ]),
-  ].toSorted((left, right) => left.localeCompare(right));
   const explicitConfiguredChannelIds = new Set([
     ...listExplicitConfiguredChannelIdsForConfig(sourceConfig),
     ...listExplicitConfiguredChannelIdsForConfig(cfg),
   ]);
+  const missingCandidateChannelIds = [
+    ...new Set([...readOnlyPlugins.missingConfiguredChannelIds, ...explicitConfiguredChannelIds]),
+  ].toSorted((left, right) => left.localeCompare(right));
   const missingHintsByChannelId = new Map(
     resolveMissingOfficialExternalChannelPluginRepairHints({
       config: cfg,
@@ -544,9 +541,7 @@ export async function buildChannelsTable(
   }
 
   if (!includeSetupFallbackPlugins) {
-    for (const channelId of readOnlyPlugins.missingConfiguredChannelIds.toSorted((left, right) =>
-      left.localeCompare(right),
-    )) {
+    for (const channelId of missingConfiguredChannelIds) {
       if (visibleChannelIds.has(channelId)) {
         continue;
       }

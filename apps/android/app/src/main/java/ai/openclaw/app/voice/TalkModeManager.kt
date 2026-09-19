@@ -3246,15 +3246,10 @@ class TalkModeManager internal constructor(
 
       override fun onBufferReceived(buffer: ByteArray?) {}
 
-      override fun onEndOfSpeech() =
-        withCurrentRecognition(owner, captureId) {
-          if (activePttCaptureId != null) return@withCurrentRecognition
-          // Don't restart while a transcript is being processed — the recognizer
-          // competing for audio resources kills AudioTrack PCM playback.
-          if (listeningMode) {
-            scheduleRestart()
-          }
-        }
+      // onResults/onError always follow end of speech and own the restart. Restarting here
+      // cancels the session before its final hypothesis, and the cancel's ERROR_CLIENT clears
+      // listening, so checkSilence never sends the transcript.
+      override fun onEndOfSpeech() {}
 
       override fun onError(error: Int) =
         withCurrentRecognition(owner, captureId) {

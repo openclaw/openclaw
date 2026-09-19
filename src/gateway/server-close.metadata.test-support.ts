@@ -18,6 +18,7 @@ import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createGatewayKernel } from "./server-kernel.js";
 import type { GatewayServer, GatewayServerOptions } from "./server-public.js";
 import { startGatewayServerCore } from "./server-start.js";
+import { reserveGatewayTestListener } from "./test-helpers.listener.js";
 
 export async function createGatewayMetadataCloseFixture(label: string) {
   const original = captureActivePluginRegistrySnapshot();
@@ -89,6 +90,15 @@ export async function createGatewayMetadataCloseFixture(label: string) {
   };
   const kernels = new Map<number, Awaited<ReturnType<typeof createGatewayKernel>>>();
   const servers: GatewayServer[] = [];
+  const reservedListeners = new Map<
+    number,
+    Awaited<ReturnType<typeof reserveGatewayTestListener>>
+  >();
+  const reservePort = async (port = 0) => {
+    const reservation = await reserveGatewayTestListener(port);
+    reservedListeners.set(reservation.port, reservation);
+    return reservation.port;
+  };
   const create = createGatewayKernel;
   setActivePluginRegistry(createEmptyPluginRegistry());
   return {
@@ -101,6 +111,7 @@ export async function createGatewayMetadataCloseFixture(label: string) {
     event,
     listeners,
     writeCallback,
+    reservePort: () => reservePort(),
     loadCallback(metadata: PluginMetadataSnapshot) {
       const record = metadata.manifestRegistry.plugins.find((entry) => entry.id === pluginId);
       assert(record);
@@ -116,6 +127,13 @@ export async function createGatewayMetadataCloseFixture(label: string) {
       });
     },
     async start(port: number, options?: GatewayServerOptions) {
+      let listener = reservedListeners.get(port);
+      assert(listener, "Reserve the Gateway listener before starting it");
+      // Explicit same-endpoint restarts bind anew after the prior Gateway closes.
+      if (!listener.listener.listening) {
+        await reservePort(port);
+        listener = reservedListeners.get(port)!;
+      }
       const token = `metadata-close-token-${port}`;
       await state.writeConfig({
         ...config,
@@ -135,14 +153,19 @@ export async function createGatewayMetadataCloseFixture(label: string) {
         });
       let server: GatewayServer;
       try {
-        server = await startGatewayServerCore(port, {
-          auth: { mode: "token", token },
-          bind: "loopback",
-          controlUiEnabled: false,
-          sidecarStartup: "defer",
-          ...options,
-        });
+        server = await listener.start(() =>
+          startGatewayServerCore(port, {
+            auth: { mode: "token", token },
+            bind: "loopback",
+            controlUiEnabled: false,
+            sidecarStartup: "defer",
+            ...options,
+          }),
+        );
         servers.push(server);
+      } catch (error) {
+        await listener.closeUnadopted();
+        throw error;
       } finally {
         factory.mockRestore();
       }
@@ -152,6 +175,9 @@ export async function createGatewayMetadataCloseFixture(label: string) {
     async cleanup() {
       for (const server of servers.toReversed()) {
         await server.close().catch(() => {});
+      }
+      for (const listener of reservedListeners.values()) {
+        await listener.closeUnadopted();
       }
       restoreActivePluginRegistrySnapshot(original);
       await state.cleanup();

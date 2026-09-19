@@ -16,6 +16,8 @@ export type UpdateDoctorInput = {
   configInputHash: string;
   requester?: UpdateRequester;
   repair: boolean;
+  yes?: boolean;
+  workspaceSuggestions?: boolean;
 };
 
 export type MigratedUpdateFinalizationInput = {

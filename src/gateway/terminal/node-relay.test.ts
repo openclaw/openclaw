@@ -240,7 +240,12 @@ describe("createNodeRelayBackend", () => {
     expect(surrogateData).toHaveBeenCalledWith("y".repeat(capChars - 1));
   });
 
-  it("never splits a surrogate pair at the input chunk boundary", async () => {
+  it.each([
+    ["a".repeat(2047), "😀b"],
+    ["界".repeat(682), "界b"],
+    [`\ud800x\udc00${"a".repeat(2041)}`, "a".repeat(7)],
+    ["\0".repeat(2048), "\u001b[31m"],
+  ])("preserves UTF-8-bounded input chunks %#", async (firstChunk, secondChunk) => {
     const sendInvokeInput = vi.fn();
     const registry = {
       invoke: vi.fn((params: { onDispatchReady?: (id: string) => void }) => {
@@ -257,7 +262,8 @@ describe("createNodeRelayBackend", () => {
       command: "codex.terminal.resume.v1",
       params: {},
     });
-    const input = `${"a".repeat(2047)}😀b`;
+    const expectedChunks = [firstChunk, secondChunk];
+    const input = expectedChunks.join("");
 
     backend.write(input);
 
@@ -265,6 +271,7 @@ describe("createNodeRelayBackend", () => {
       (call) => (call[1] as { kind: "data"; data: string }).data,
     );
     expect(chunks.join("")).toBe(input);
-    expect(chunks).toEqual(["a".repeat(2047), "😀b"]);
+    expect(chunks).toEqual(expectedChunks);
+    expect(chunks.every((chunk) => Buffer.byteLength(chunk, "utf8") <= 2048)).toBe(true);
   });
 });

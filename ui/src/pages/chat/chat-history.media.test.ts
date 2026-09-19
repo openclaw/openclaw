@@ -61,6 +61,30 @@ describe("chat history canonical media filtering", () => {
 });
 
 describe("chat history attachment card labels", () => {
+  it.each(["paste", "file", undefined] as const)(
+    "carries %s origin from persisted history to its displayed attachment",
+    (origin) => {
+      const { attachments } = projectMessageMedia(
+        userMessageWithMedia([
+          {
+            path: `media://inbound/pasted-text-123---${MANAGED_UUID}.txt`,
+            fileName: "pasted-text-123.txt",
+            contentType: "text/plain",
+            ...(origin ? { origin } : {}),
+          },
+        ]),
+        [],
+      );
+      expect(attachments[0]?.attachment).toMatchObject({
+        label: "pasted-text-123.txt",
+        mimeType: "text/plain",
+      });
+      expect(attachments[0]?.type === "attachment" && attachments[0].attachment.origin).toBe(
+        origin,
+      );
+    },
+  );
+
   it("carries the persisted canonical fileName through the media projection", () => {
     const entries = readTranscriptMediaEntries(
       userMessageWithMedia([

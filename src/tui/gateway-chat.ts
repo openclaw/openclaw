@@ -131,16 +131,18 @@ function resolveStartupRetryDelayMs(err: GatewayClientRequestError): number {
   return Math.min(Math.max(retryAfterMs, 100), STARTUP_CHAT_HISTORY_MAX_RETRY_MS);
 }
 
-function hasStoredOriginDeviceAuth(deviceAuthScope: string): boolean {
+async function hasStoredOriginDeviceAuth(deviceAuthScope: string): Promise<boolean> {
   try {
     const identity = loadDeviceIdentityIfPresent();
     return Boolean(
       identity &&
-      loadOriginDeviceToken({
-        gatewayScope: deviceAuthScope,
-        deviceId: identity.deviceId,
-        role: "operator",
-      })?.token,
+      (
+        await loadOriginDeviceToken({
+          gatewayScope: deviceAuthScope,
+          deviceId: identity.deviceId,
+          role: "operator",
+        })
+      )?.token,
     );
   } catch {
     return false;
@@ -656,7 +658,7 @@ async function resolveGatewayConnection(
     buildConnectionDetails: buildGatewayConnectionDetails,
   });
   const hasStoredOriginAuth = Boolean(
-    bootstrap.deviceAuthScope && hasStoredOriginDeviceAuth(bootstrap.deviceAuthScope),
+    bootstrap.deviceAuthScope && (await hasStoredOriginDeviceAuth(bootstrap.deviceAuthScope)),
   );
   const missingSharedAuth =
     bootstrap.authFailureReason === "Missing gateway auth credentials." ||

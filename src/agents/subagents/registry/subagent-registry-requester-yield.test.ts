@@ -178,6 +178,45 @@ describe("settleRequesterTurnAfterSessionSpawns", () => {
     expect(schedule).toHaveBeenCalledOnce();
   });
 
+  it.each([undefined, 1_000])(
+    "starts a private delivery window on normal release without renewing an existing window (%s)",
+    (windowStartedAt) => {
+      const entry = makeRun("private-child", false);
+      entry.completionTarget = "parent";
+      entry.delivery = {
+        status: "pending",
+        ...(windowStartedAt === undefined
+          ? {}
+          : { windowStartedAt, deadlineAt: windowStartedAt + 30 * 60_000 }),
+      };
+      const releasedAt = Date.now();
+      const persistOrThrow = vi.fn(() => {
+        expect(entry.delivery?.windowStartedAt).toBeGreaterThanOrEqual(
+          windowStartedAt ?? releasedAt,
+        );
+        expect(entry.delivery?.deadlineAt).toBe(
+          (entry.delivery?.windowStartedAt ?? 0) + 30 * 60_000,
+        );
+      });
+
+      expect(
+        settleRequesterTurnAfterSessionSpawns({
+          requesterSessionKey: REQUESTER,
+          requesterTurnRunId: REQUESTER_TURN,
+          requesterYielded: false,
+          acceptedSessionSpawns: [accepted(entry)],
+          runs: new Map([[entry.runId, entry]]),
+          persistOrThrow,
+          schedule: vi.fn(),
+        }),
+      ).toBe(true);
+      expect(persistOrThrow).toHaveBeenCalledOnce();
+      if (windowStartedAt !== undefined) {
+        expect(entry.delivery?.windowStartedAt).toBe(windowStartedAt);
+      }
+    },
+  );
+
   it("promotes the requester attachment only after durable settlement", () => {
     const entry = makeRun("run-child");
     entry.requesterAgentId = "main";

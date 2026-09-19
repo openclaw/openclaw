@@ -1,4 +1,3 @@
-// Matrix plugin module implements credentials behavior.
 import { normalizeAccountId } from "openclaw/plugin-sdk/account-id";
 import { openMatrixCredentialsAsyncStore, openMatrixCredentialsStore } from "./credentials-read.js";
 import {

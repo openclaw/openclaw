@@ -57,14 +57,16 @@ export function createSessionManagedListRefresh(
     observations,
     nextRevision,
     isPageActive,
+    publishPrimary,
   }: {
     managedLists: ReadonlyMap<string, ManagedSessionList>;
     observations: Pick<
       ReturnType<typeof createSessionRosterObservations>,
-      "inherit" | "accept" | "stageObservedRows"
+      "inherit" | "accept" | "stageObservedRows" | "mergeRows"
     >;
     nextRevision: () => number;
     isPageActive: () => boolean;
+    publishPrimary: (result: SessionsListResult | null) => void;
   },
 ) {
   const refreshManagedList = (
@@ -156,16 +158,29 @@ export function createSessionManagedListRefresh(
             false,
           );
           entry.connectionEpoch = scope.epoch;
-          publishManagedList(
-            entry,
-            {
-              result: decorated,
-              agentId: sessionListQueryAgentId(entry.query) ?? null,
-              loading: false,
-              error: null,
-            },
-            isCurrent,
+          const snapshot: SessionListSnapshot = {
+            result: decorated,
+            agentId: agentId ?? null,
+            loading: false,
+            error: null,
+          };
+          // Stage this window before notifying primary observers. Each query keeps
+          // its membership; only overlapping, admitted row facts reach the primary.
+          entry.snapshot = snapshot;
+          const primary = host.readState();
+          const merged = observations.mergeRows(
+            primary.result,
+            decorated?.sessions ?? [],
+            primary.agentId,
+            agentId,
           );
+          if (merged !== primary.result) {
+            publishPrimary(merged);
+          }
+          // Primary listeners can retire the connection or replace this snapshot.
+          if (isCurrent() && entry.snapshot === snapshot) {
+            publishManagedList(entry, snapshot, isCurrent);
+          }
           notifyObserved();
         } catch (error) {
           if (!isCurrent()) {

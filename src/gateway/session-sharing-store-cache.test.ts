@@ -16,6 +16,7 @@ import {
   canReceiveSessionEvent,
   invalidateSessionSharingSnapshot,
   resolveSessionMutationAuthorization,
+  resolveSessionSharingTarget,
 } from "./session-sharing.js";
 import { roleClient, rolePolicyConfig } from "./session-sharing.test-utils.js";
 import { resolveGatewaySessionStoreTargetWithStore } from "./session-utils-store-lookup.js";
@@ -52,6 +53,46 @@ function identifiedClient(userId: string): GatewayClient {
 }
 
 describe("session event authorization store work", () => {
+  it("does not capture a replacement for an already prepared mutation target", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const cfg: OpenClawConfig = {};
+      const scope = { agentId: "main", sessionKey: "agent:main:prepared-target" };
+      const entry = {
+        sessionId: "prepared-session",
+        updatedAt: 1,
+        createdActor: { type: "human", source: "profile", id: "owner" } as const,
+      };
+      await sessionAccessor.upsertSessionEntryCore(scope, entry);
+      const target = resolveSessionSharingTarget({ cfg, ...scope, exactRead: true });
+      if (!target) {
+        throw new Error("prepared target was not created");
+      }
+      const params = {
+        client: identifiedClient("owner"),
+        context: { chatAbortControllers: new Map(), getRuntimeConfig: () => cfg } as never,
+        method: "chat.send",
+        requestParams: scope,
+      };
+      const expectedTarget = {
+        ...scope,
+        sessionKey: target.canonicalKey,
+        storePath: target.storePath,
+        sessionId: entry.sessionId,
+      };
+      const original = resolveSessionMutationAuthorization({ ...params, expectedTarget });
+      expect(original.error).toBeNull();
+      expect(original.authorization).toBeDefined();
+      await sessionAccessor.upsertSessionEntryCore(scope, { ...entry, sessionId: "replacement" });
+      expect(resolveSessionMutationAuthorization(params).error).toBeNull();
+      const replacement = resolveSessionMutationAuthorization({ ...params, expectedTarget });
+      expect(replacement.error).toMatchObject({
+        details: { code: "SESSION_MUTATION_AUTHORIZATION_CHANGED" },
+      });
+      expect(replacement.authorization).toBeUndefined();
+      expect(() => original.authorization?.assertCurrent()).toThrow("session changed");
+    });
+  });
+
   it.each([1, 2, 32])(
     "bounds metadata work for %i event targets while refreshing membership",
     async (targetCount) => {

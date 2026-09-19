@@ -161,6 +161,11 @@ For a new draft, `authProfileId` previews a retained account owned by the
 identified caller with `operator.read` access. It does not save an account
 default. `sessionKey` and `authProfileId` are mutually exclusive.
 
+Saved-session metadata stays current across unrelated session writes. Before
+publishing, the Gateway rechecks the selected session's identity and canonical
+metadata, runtime configuration, and current access authority. Recreating a row
+with identical session facts does not invalidate the read.
+
 Session and identified-account results include `accountSelection` display facts
 with the models. Collaborators do not receive another person's private account
 locator. The `provider-config` view remains shared authored inventory and omits
@@ -175,7 +180,12 @@ performs a passive read, without a model-cache timer or implicit provider refres
 Metadata refresh publishes model-owner facts without preparing every agent's
 commands and model projections. Requests prepare their agent's metadata on demand;
 a slow agent does not delay other agents. Retained commands and projections are
-bounded. Shared model or account replacement still gates these reads, and history
+bounded and do not retain completed requests' session documents. Account selection
+is projected for the current session even when its model catalog is shared.
+Provider renewal with unchanged inventory and auth metadata preserves cached metadata
+without broadcasting `chat.metadata.changed`. Discovery progress alone does not
+invalidate metadata; catalog changes and `refreshFailed` transitions still do.
+Shared model or account replacement still gates these reads, and history
 uses only already-prepared catalogs without starting or waiting for preparation.
 The Models settings page uses `preparedOnly: true` for its initial load, then
 requests `refresh: true` the first time a primary, utility, or fallback model

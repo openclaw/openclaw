@@ -185,6 +185,16 @@ describe("LabsPage", () => {
       expectedPatch: { gateway: { controlUi: { experimental: { customPlugins: null } } } },
       note: "labs: update customPluginUi",
     },
+    {
+      label: "Host Desktop",
+      sourceConfig: {
+        desktop: {
+          host: { enabled: true, managed: false, port: 5908, passwordFile: "/tmp/vnc-password" },
+        },
+      },
+      expectedPatch: { desktop: { host: { enabled: false } } },
+      note: "labs: update hostDesktop",
+    },
   ])(
     "restores the default through the canonical patch flow when disabling $label",
     async (testCase) => {
@@ -297,7 +307,7 @@ describe("LabsPage", () => {
 
   it("shows default provenance", async () => {
     const inherited = await mountPage({});
-    expect(labRow(inherited.page, "Code Mode").textContent).toContain("Using default: Disabled");
+    expect(labRow(inherited.page, "Code Mode").textContent).not.toContain("Using default:");
     inherited.provider.remove();
 
     const overridden = await mountPage({

@@ -64,6 +64,83 @@ unrestricted `*` policy; `automations edit --clear-tools` restores that explicit
 policy. Existing jobs that predate an explicit tool policy retain their current behavior
 until their tool policy is explicitly edited or the job is recreated.
 
+Changing an account-bound job to a payload that does not run tools and later back
+to an agent turn preserves its account restriction. A payload conversion does not
+reauthorize that job as an operator-created job.
+
+Management edits cannot restore missing policy metadata as operator authority.
+For a legacy job that has lost its policy, an authenticated operator can explicitly
+reauthorize it, or an authenticated creator can recreate it with a fresh tool cap.
+
+When the creator's `exec` capability is fixed to the Gateway, the automation also
+retains that target. With `tools.exec.host: "auto"`, the saved target determines
+placement. A conflicting current explicit host setting or required sandbox
+isolation blocks the command instead of moving it to another host. Current tool
+and approval policies still apply.
+
+With `message` in the tool cap, scheduled agent turns can read messages and channel
+information on supported channel plugins without an inbound chat. Operator-created
+jobs use the current operator read policy. Agent-created jobs retain their recorded
+creator origin and account, and the channel's delegated read restrictions still
+apply. Delivery settings do not grant read access.
+
+Current global, agent, profile, and provider tool policy is checked when each new
+scheduled message invocation starts. Configuration changes apply to later invocations;
+an invocation already admitted retains its configuration. Disabling or removing a job,
+withdrawing its `message` capability, or revoking its caller or plugin authority stops
+further affected reads from that occurrence, including pending reads before another
+provider request or result delivery. Re-enabling the job does not restore an
+occurrence's revoked access.
+
+A new account-bound job created by a verified local administrator retains that
+authenticated local source, allowing provider-permitted reads through its saved
+creator account. Editing its `toolsAllow` cap from the same local source explicitly
+reauthorizes an existing job. Description, display-label, and exact no-op edits
+preserve the recorded source. Changes to model-facing names, prompts, tools, schedules,
+or other executable behavior need fresh source authorization and clear the old source
+when none is present. Remote management alone cannot supply local-source authorization,
+and older jobs without a provable origin remain blocked until reauthorized or recreated
+from a fresh authorized source.
+
+Scheduled turns can also `edit`, `delete`, `pin`, and `unpin` Discord messages.
+Agent-created jobs use their recorded creator account and Discord's delegated
+target restrictions. Operator-created jobs use Discord's operator target policy.
+Trusted operator jobs can additionally use `channel-edit`, including the existing
+channel and thread edit options; account-created jobs do not inherit operator
+administration.
+
+For these writes, the job needs `message` in its tool policy, an enabled account
+and action, and the bot's required Discord permissions. Use an updated Discord plugin with
+[scheduled write support](/plugins/sdk-channel-plugins#scheduled-channel-administration).
+
+Account-bound jobs can use Discord `channel-edit` when an authenticated Discord
+turn has authorized their current definition. OpenClaw privately retains that
+requester's Discord account and sender identity, and Discord's current channel
+or thread permissions must allow the edit. The original session creator and a
+configured OpenClaw owner are not substitutes for those native permissions.
+
+Executable edits from the job's owning conversation and account bind the job to
+the current authorized editor. This includes the prompt, model, name, schedule,
+delivery, and tool policy. An executable edit without a matching authenticated
+Discord requester clears this permission and stops further native actions from
+the old occurrence. Description and display-label changes preserve it.
+
+Older jobs, jobs edited by older writers, and jobs whose requester authorization
+was cleared need fresh authorization before `channel-edit` can run. From the
+original Discord conversation and account, ask the agent to edit the job with
+an explicit finite `toolsAllow` list including `message`, or recreate it there.
+If its execution authorization is also missing, recreate it from that conversation;
+management access alone does not restore the missing authorization.
+The editor must already have automation-management access. Other job behavior
+keeps its existing policy; a CLI edit cannot invent a Discord requester. These
+requester facts are omitted from public job results, and no new setting is needed.
+
+Channel-name lookup and subsequent write requests retain the current job and
+plugin authority. Configuration changes apply to the next message invocation;
+disabling or narrowing the job itself stops later requests and retries in the
+current invocation. A confirmed write still returns its result if authority ends
+while the response is pending.
+
 `--model` sets the job's primary model; it does not replace a session `/model` override, so configured fallback chains still apply on top of it. An unresolved or disallowed model fails the run with an explicit validation error rather than silently falling back to the default. If a job has `--model` but no explicit or configured fallback list, OpenClaw passes an empty fallback override instead of silently appending the agent primary as a hidden retry target.
 
 Pick the model for the job's difficulty, not the agent's default. Routine

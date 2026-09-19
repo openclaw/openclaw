@@ -1,4 +1,5 @@
 import { expect, it } from "vitest";
+import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { formatCliProcessFailure, runCliProcessChild } from "./cli-process-child.test-helpers.js";
 
@@ -39,6 +40,7 @@ async function runImportBoundaryChild(forbidden: RegExp, workload: string) {
         console.log("MCP_IMPORT_BOUNDARY_OK");
       `;
       const result = await runCliProcessChild({
+        nodeExecutable: resolveTestNodeExecPath(),
         nodeArgs: ["--import", "tsx", "--input-type=module", "--eval", script],
         // state.env inherits Vitest and operator flags; only fixture paths cross this boundary.
         env: {

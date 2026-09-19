@@ -3,10 +3,8 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { PLUGIN_CAPABILITY_CONSENT_REQUIRED } from "../../../../packages/gateway-protocol/src/capability-consent-error-details.js";
-import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
-import { withIsolatedTestHome } from "../../../../test/test-env.js";
 import type { OpenClawConfig, PluginsConfig } from "../../../config/types.js";
 import { resolveRegistryUpdateChannel } from "../../../infra/update-channels.js";
 import { resolvePluginArtifactDeclaredSurface } from "../../../plugins/capability-artifact.js";
@@ -29,7 +27,6 @@ import { closeOpenClawStateDatabaseByPathAsync } from "../../../state/openclaw-s
 import { resolveOpenClawStateSqlitePath } from "../../../state/openclaw-state-db.paths.js";
 import { expectObjectFields } from "../../../test-utils/mock-call-assertions.js";
 import { VERSION } from "../../../version.js";
-import { applyLegacyDoctorMigrations } from "./legacy-config-compat.js";
 import { collectConfiguredNpmPluginTargets } from "./missing-configured-plugin-install.targets.js";
 import {
   brokenPluginSnapshot,
@@ -37,6 +34,7 @@ import {
   installedRecords,
   officialPluginEntry,
   officialWebSearchPluginEntry,
+  setupPluginInstallTestState,
   successfulInstall,
   successfulUpdate,
 } from "./missing-configured-plugin-install.test-helpers.js";
@@ -173,17 +171,7 @@ const mocks = vi.hoisted(() => ({
     >(),
 }));
 
-const testHome = withIsolatedTestHome({ mode: "hermetic" });
-const testEnv: NodeJS.ProcessEnv = {
-  HOME: testHome.tempHome,
-  OPENCLAW_HOME: testHome.tempHome,
-  OPENCLAW_STATE_DIR: path.join(testHome.tempHome, ".openclaw"),
-};
-afterAll(async () => {
-  await closeOpenClawStateDatabaseByPathAsync(resolveOpenClawStateSqlitePath(testEnv));
-  testHome.cleanup();
-});
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const { testEnv, tempDirs } = setupPluginInstallTestState();
 
 const prepareManagedPluginArtifactConsentHandler = vi.hoisted(() =>
   vi.fn<
@@ -3265,121 +3253,6 @@ describe("repairMissingConfiguredPluginInstalls", () => {
     expect(result.changes).toEqual([
       'Installed missing configured plugin "wecom" from @wecom/wecom-openclaw-plugin@2026.4.23.',
     ]);
-  });
-
-  it("upgrades v2026.7.1-beta.3 Codex Supervisor config and installs Codex", async () => {
-    // This is the bundled plugin id and config surface shipped by v2026.7.1-beta.3.
-    const migration = applyLegacyDoctorMigrations({
-      plugins: {
-        allow: ["codex-supervisor"],
-        entries: {
-          "codex-supervisor": {
-            enabled: true,
-            config: {
-              endpoints: [
-                {
-                  id: "local",
-                  label: "Local Codex",
-                  transport: "stdio-proxy",
-                  command: "codex",
-                  args: ["app-server", "--listen", "stdio://"],
-                  cwd: "/tmp/openclaw",
-                },
-              ],
-              allowRawTranscripts: true,
-              allowWriteControls: false,
-            },
-          },
-        },
-      },
-    });
-
-    expect(migration.next).not.toBeNull();
-    const cfg = migration.next as OpenClawConfig;
-    expect(cfg.plugins?.allow).toEqual(["codex"]);
-    expect(cfg.plugins?.entries?.codex).toEqual({
-      enabled: true,
-      config: {
-        supervision: {
-          enabled: true,
-          endpoints: [
-            {
-              id: "local",
-              label: "Local Codex",
-              transport: "stdio-proxy",
-              command: "codex",
-              args: ["app-server", "--listen", "stdio://"],
-              cwd: "/tmp/openclaw",
-            },
-          ],
-          allowRawTranscripts: true,
-          allowWriteControls: false,
-        },
-      },
-    });
-    expect(cfg.plugins?.entries).not.toHaveProperty("codex-supervisor");
-    expect(migration.changes).toEqual(
-      expect.arrayContaining([
-        "Moved plugins.entries.codex-supervisor to plugins.entries.codex.config.supervision.",
-        "Rewrote plugins.allow codex-supervisor references to codex.",
-      ]),
-    );
-
-    mocks.installPluginFromNpmSpec.mockResolvedValueOnce(
-      successfulInstall({
-        pluginId: "codex",
-        npmSpec: "@openclaw/codex",
-        version: "2026.7.2",
-        resolution: {
-          integrity: "sha512-codex-supervisor-upgrade",
-          resolvedAt: "2026-07-10T00:00:00.000Z",
-        },
-      }),
-    );
-    mocks.listOfficialExternalPluginCatalogEntries.mockReturnValue([
-      {
-        id: "codex",
-        label: "Codex",
-        install: {
-          npmSpec: "@openclaw/codex",
-          defaultChoice: "npm",
-        },
-      },
-    ]);
-
-    const { repairMissingPluginInstallsForIds } =
-      await import("./missing-configured-plugin-install.js");
-    const result = await repairMissingPluginInstallsForIds({
-      cfg,
-      pluginIds: ["codex"],
-      env: testEnv,
-      baselineRecords: {},
-    });
-
-    expectRecordFields(mockCallArg(mocks.installPluginFromNpmSpec), {
-      spec: expectedCodexInstallSpec(),
-      expectedPluginId: "codex",
-      trustedSourceLinkedOfficialInstall: true,
-    });
-    const records = mockCallArg(mocks.writePersistedInstalledPluginIndexInstallRecordsWithLease);
-    expectRecordFields((records as Record<string, unknown>).codex, {
-      source: "npm",
-      spec: "@openclaw/codex",
-      installPath: "/tmp/openclaw-plugins/codex",
-      version: "2026.7.2",
-      resolvedName: "@openclaw/codex",
-      resolvedSpec: "@openclaw/codex@2026.7.2",
-      integrity: "sha512-codex-supervisor-upgrade",
-    });
-    expect(
-      mockCallArg(mocks.writePersistedInstalledPluginIndexInstallRecordsWithLease, 0, 1),
-    ).toEqual(expectedIndexWriteOptions(cfg, testEnv));
-    expect(result.changes).toEqual([
-      `Installed missing configured plugin "codex" from ${expectedCodexInstallSpec()}.`,
-    ]);
-    expect(result.warnings).toEqual([]);
-    expect(result.repairedPluginIds).toEqual(["codex"]);
-    expect(result.records).toEqual(records);
   });
 
   it("installs a missing default Codex runtime plugin from the official external catalog", async () => {

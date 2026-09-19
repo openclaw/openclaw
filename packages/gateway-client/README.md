@@ -46,6 +46,37 @@ For device-authenticated Node connections, supply `deviceIdentity` (or
 storage through `GatewayClientHostDeps`; the package does not load OpenClaw's
 local identity or credentials automatically.
 
+Token storage callbacks may return their existing synchronous result or a
+`Promise`. The client waits for token loading before sending `connect`, and for
+issued-token persistence before calling `onHelloOk`. An accepted hello creates a
+persistence obligation that survives disconnect or stop; bootstrap credentials
+retire after that persistence succeeds. Readiness still belongs to the current
+connection. `stop()` requests shutdown synchronously; `stopAndWait()` also waits
+for accepted token operations to settle, even when transport closure times out.
+A reconnect waits for earlier token operations before reading the token again.
+
+Accepted asynchronous persistence failures reach `onConnectError` even after the
+connection retires. If that callback is absent or throws, `stopAndWait()` rejects
+with the first undelivered persistence error after draining accepted work. A later
+connection can still load credentials; a reported failure does not poison its
+storage queue. Synchronous callback exceptions retain their existing connect-error
+behavior.
+
+Hosts should honor the optional `expectedToken` storage condition. A string
+compares the existing row before writing or clearing; `null` on a store means
+insert only when no row exists. Omission preserves unconditional storage behavior.
+This prevents an older receipt or cleanup from replacing another client's newer
+token. Close cleanup waits for pending persistence and, if its result is uncertain,
+conditionally clears only the sampled and received tokens. Cleanup before any token
+observation retains its existing unconditional behavior. An observed empty cache
+does not permit unconditional cleanup.
+
+When storage callbacks receive `signal` or `assertCurrent`, check them immediately
+before admission and before committing a write. These callbacks stay local to the
+host; do not send them to a worker. Loads use the current connection lifetime;
+cleanup uses the client lifetime. Accepted hello persistence is independent of
+transport lifetime and retains the host's normal storage admission checks.
+
 ## Entry points
 
 - `@openclaw/gateway-client` exports the Node `GatewayClient`, device-auth

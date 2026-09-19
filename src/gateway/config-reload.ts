@@ -554,6 +554,13 @@ export function startGatewayConfigReloader(opts: {
       return { runtime, isCurrent };
     };
     assertInvokerOwned();
+    // A watcher can echo this operation's ledger change before the first checkpoint.
+    // Compare it with the candidate records, not the previous runtime generation.
+    try {
+      nextPluginInstallRecords = await readPluginInstallRecords();
+    } catch (err) {
+      opts.log.warn(`config reload plugin install record check failed: ${String(err)}`);
+    }
     await checkpoint();
     await application?.prepare?.(assertCurrent);
     await checkpoint();
@@ -569,8 +576,8 @@ export function startGatewayConfigReloader(opts: {
     if (stopped) {
       throw new GatewayConfigReloadSupersededError();
     }
-    // The full checkpoint below reads candidate install records before reconciling
-    // watcher echoes. Recheck the invoking admission after asynchronous preparation.
+    // Recheck the invoking admission after asynchronous preparation. The next
+    // checkpoint reconciles watcher echoes against the captured install records.
     assertInvokerOwned();
     const nextConfig = preparedCandidate?.runtimeConfig ?? candidateRuntimeConfig;
     const nextCompareConfig = preparedCandidate?.compareConfig ?? nextSourceConfig;
@@ -635,11 +642,6 @@ export function startGatewayConfigReloader(opts: {
       currentCompareConfig,
       nextCompareConfig,
     );
-    try {
-      nextPluginInstallRecords = await readPluginInstallRecords();
-    } catch (err) {
-      opts.log.warn(`config reload plugin install record check failed: ${String(err)}`);
-    }
     await checkpoint();
     assertCurrent();
     const previousPluginInstallConfig = asPluginInstallConfig(currentPluginInstallRecords);

@@ -32,9 +32,9 @@ import type { MediaFact } from "../../media/media-facts.js";
 import type { PluginCommandReplyOptions } from "../../plugins/plugin-command-dispatch-contract.js";
 import type { InboundEventKind } from "../inbound-event/kind.js";
 import type { CreateChannelReplyPipelineParams } from "../message/reply-pipeline.js";
-import type { MessageReceipt } from "../message/types.js";
 import type { InboundLastRouteUpdate, RecordInboundSession } from "../session.types.js";
 import type { ChannelBotLoopProtectionFacts } from "./bot-loop-protection.js";
+import type { ChannelDeliveryOutcome } from "./delivery-outcome.js";
 
 export type { SupplementalContextFacts } from "../../auto-reply/templating.js";
 
@@ -180,16 +180,6 @@ export type ChannelDeliveryIntent = {
 };
 
 /** Provider-accepted outcome for one logical channel reply payload. */
-export type ChannelDeliveryOutcome = {
-  messageIds?: string[];
-  receipt?: MessageReceipt;
-  threadId?: string;
-  replyToId?: string;
-  visibleReplySent?: boolean;
-  /** Final provider-visible text used for this logical payload's terminal observation. */
-  content?: string;
-};
-
 /** Result returned after delivering one channel reply payload. */
 export type ChannelDeliveryResult = ChannelDeliveryOutcome & {
   deliveryIntent?: ChannelDeliveryIntent;
@@ -202,6 +192,8 @@ export type ChannelDeliveryResult = ChannelDeliveryOutcome & {
   /** Same-payload native settlement; resolved fields override this result before observation. */
   finalization?: Promise<ChannelDeliveryOutcome>;
 };
+
+export type { ChannelDeliveryOutcome } from "./delivery-outcome.js";
 
 /** Durable outbound delivery options available to channel turn delivery adapters. */
 type ChannelTurnDurableDeliveryOptions = Pick<

@@ -21,6 +21,12 @@ import {
   type InstalledPluginIndex,
 } from "../plugins/installed-plugin-index.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
+import {
+  LEGACY_DELIVERY_QUEUE_DIRS,
+  listLegacyDeliveryQueueFiles,
+  listLegacyDeliveryQueueDeliveredMarkers,
+  resolveLegacyDeliveryQueuePath,
+} from "./delivery-queue-legacy-files.js";
 import { deliveryQueueMetadata } from "./delivery-queue-sqlite-bound.js";
 import {
   inferDeliveryQueueFailureRetention,
@@ -29,7 +35,7 @@ import {
 import { hashFileDescriptorSync } from "./file-descriptor.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { parseRegistryNpmSpec } from "./npm-registry-spec.js";
-import { migrationFileExists, safeReadDir } from "./state-migrations.fs.js";
+import { migrationFileExists } from "./state-migrations.fs.js";
 import {
   markLegacyMigrationSourceRemoved,
   readLegacyMigrationReceiptFromDatabase,
@@ -70,16 +76,8 @@ export type LegacyPluginStateSidecarRow = {
 // detected and archived without reopening the migrated database.
 export const PLUGIN_STATE_SQLITE_SIDECAR_SUFFIXES = ["", "-shm", "-wal", "-journal"] as const;
 export const TASK_STATE_SQLITE_SIDECAR_SUFFIXES = PLUGIN_STATE_SQLITE_SIDECAR_SUFFIXES;
-const LEGACY_DELIVERY_QUEUE_DIRS = [
-  { label: "outbound delivery queue", queueName: "outbound", dirName: "delivery-queue" },
-  { label: "session delivery queue", queueName: "session", dirName: "session-delivery-queue" },
-] as const;
 // Only the file-to-SQLite cutover expires old intent; live queues have no age TTL.
 const LEGACY_DELIVERY_QUEUE_MAX_AGE_MS = 72 * 60 * 60_000;
-type LegacyDeliveryQueueFile = {
-  sourcePath: string;
-  status: "pending" | "failed";
-};
 
 class LegacyTaskStateSidecarConflictError extends Error {
   constructor(readonly conflictedKeys: string[]) {
@@ -894,30 +892,6 @@ export async function migrateLegacyTaskStateSidecars(params: {
     changes: [...taskRuns.changes, ...flowRuns.changes],
     warnings: [...taskRuns.warnings, ...flowRuns.warnings],
   };
-}
-
-export function resolveLegacyDeliveryQueuePath(stateDir: string, dirName: string): string {
-  return path.join(stateDir, dirName);
-}
-
-export function listLegacyDeliveryQueueFiles(queueDir: string): LegacyDeliveryQueueFile[] {
-  const pending = safeReadDir(queueDir)
-    .filter((entry) => entry.isFile() && entry.name.endsWith(".json"))
-    .map((entry) => ({ sourcePath: path.join(queueDir, entry.name), status: "pending" as const }));
-  const failedDir = path.join(queueDir, "failed");
-  const failed = safeReadDir(failedDir)
-    .filter((entry) => entry.isFile() && entry.name.endsWith(".json"))
-    .map((entry) => ({
-      sourcePath: path.join(failedDir, entry.name),
-      status: "failed" as const,
-    }));
-  return [...pending, ...failed];
-}
-
-export function listLegacyDeliveryQueueDeliveredMarkers(queueDir: string): string[] {
-  return safeReadDir(queueDir)
-    .filter((entry) => entry.isFile() && entry.name.endsWith(".delivered"))
-    .map((entry) => path.join(queueDir, entry.name));
 }
 
 function buildLegacyDeliveryQueueRow(params: {

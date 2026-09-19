@@ -40,7 +40,8 @@ export function prepareParams(input: {
 }): Record<string, unknown> {
   const next: Record<string, unknown> = {
     ...input.params,
-    followSymlinks: input.followSymlinks,
+    // A caller may narrow the configured permission, never expand it.
+    followSymlinks: input.followSymlinks && input.params.followSymlinks !== false,
   };
   delete next.preflightOnly;
   delete next.expectedCanonicalPath;

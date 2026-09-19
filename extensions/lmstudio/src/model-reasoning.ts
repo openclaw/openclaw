@@ -13,21 +13,14 @@ export const LMSTUDIO_OPENAI_COMPAT_REASONING_EFFORTS = [
   ...LMSTUDIO_OPENAI_COMPAT_ENABLED_REASONING_EFFORTS,
 ] as const;
 
-function resolveLmstudioEnabledTransportReasoningOption(
-  supportedReasoningEfforts: readonly string[],
-): string | undefined {
-  return (
-    supportedReasoningEfforts.find((option) => option === "xhigh") ??
-    supportedReasoningEfforts.find((option) => option === "high") ??
-    supportedReasoningEfforts.find((option) => option !== "none")
-  );
-}
-
 export function buildLmstudioReasoningEffortMap(
   supportedReasoningEfforts: readonly string[],
 ): Record<string, string> | undefined {
   const disabled = supportedReasoningEfforts.includes("none") ? "none" : undefined;
-  const max = resolveLmstudioEnabledTransportReasoningOption(supportedReasoningEfforts);
+  const max =
+    supportedReasoningEfforts.find((option) => option === "xhigh") ??
+    supportedReasoningEfforts.find((option) => option === "high") ??
+    supportedReasoningEfforts.find((option) => option !== "none");
   const map = {
     ...(disabled ? { off: disabled, none: disabled } : {}),
     ...(max ? { adaptive: max, max } : {}),

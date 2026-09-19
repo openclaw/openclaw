@@ -257,6 +257,12 @@ describe("provider install catalog", () => {
               authChoices: [
                 { method: "api-key", choiceId: "same-official", choiceLabel: "Same" },
                 { method: "api-key", choiceId: "same-first", choiceLabel: "A shadow" },
+                {
+                  method: "local",
+                  choiceId: "unavailable-local",
+                  choiceLabel: "Unavailable local model",
+                  platforms: [],
+                },
               ],
             },
           ],

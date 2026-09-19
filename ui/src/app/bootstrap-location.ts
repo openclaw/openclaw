@@ -272,7 +272,11 @@ export function subscribeForegroundChatBootstrap({
   agentSelection,
   connectionBootstrap,
   initialChatRoute,
-}: Pick<ApplicationContext, "gateway" | "agents" | "agentSelection" | "connectionBootstrap"> & {
+  chatSubmissions,
+}: Pick<
+  ApplicationContext,
+  "gateway" | "agents" | "agentSelection" | "connectionBootstrap" | "chatSubmissions"
+> & {
   router: ApplicationRouter;
   initialChatRoute: boolean;
 }): () => void {
@@ -291,8 +295,10 @@ export function subscribeForegroundChatBootstrap({
     const data = asOptionalRecord(match?.data);
     const key =
       data?.kind === "session" && typeof data.sessionKey === "string" ? data.sessionKey : null;
+    // Admission previews have no transcript controller and cannot claim its
+    // bootstrap priority. Resume ordinary scheduling until the real pane mounts.
     connectionBootstrap.setForegroundRoute(
-      match?.routeId !== "chat"
+      match?.routeId !== "chat" || chatSubmissions.creation
         ? null
         : match.status === "pending"
           ? undefined
@@ -311,11 +317,12 @@ export function subscribeForegroundChatBootstrap({
             : null,
     );
   };
-  const stopRoute = router.subscribe(synchronizeRoute);
-  const stopSelection = agentSelection.subscribe(() => synchronizeRoute(router.getState()));
-  return () => {
-    stopConnection();
-    stopRoute();
-    stopSelection();
-  };
+  const synchronize = () => synchronizeRoute(router.getState());
+  const stops = [
+    stopConnection,
+    router.subscribe(synchronizeRoute),
+    agentSelection.subscribe(synchronize),
+    chatSubmissions.subscribeCreate(synchronize),
+  ];
+  return () => stops.forEach((stop) => stop());
 }

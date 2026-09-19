@@ -47,16 +47,17 @@ function auditRecoveryJournalTargetsSnapshot(
   );
 }
 
-function auditRecoveryCheckpointPrefixMatches(
+export function auditRecoveryCheckpointPrefixMatches(
   snapshot: LegacyAuditSourceSnapshot,
   checkpoint: LegacyAuditRawCheckpoint,
 ): boolean {
   if (snapshot.rawBytes.length < checkpoint.size) {
     return false;
   }
+  const prefix = snapshot.rawBytes.subarray(0, checkpoint.size);
   return (
-    createHash("sha256").update(snapshot.rawBytes.subarray(0, checkpoint.size)).digest("hex") ===
-    checkpoint.contentHash
+    createHash("sha256").update(prefix).digest("hex") === checkpoint.contentHash ||
+    createHash("sha256").update(prefix.toString("utf8")).digest("hex") === checkpoint.contentHash
   );
 }
 
@@ -681,29 +682,4 @@ export function findPreviousLegacyAuditRawCheckpoint(
     .entries()
     .toReversed()
     .find((entry) => entry.value.generationKey === generationKey)?.value;
-}
-
-export function recordsAfterLegacyAuditRawCheckpoint<T>(params: {
-  checkpoint: LegacyAuditRawCheckpoint;
-  snapshot: LegacyAuditSourceSnapshot;
-  records: readonly T[];
-}): readonly T[] | undefined {
-  const rawBytes = params.snapshot.rawBytes;
-  if (rawBytes.length < params.checkpoint.size) {
-    return undefined;
-  }
-  const prefixHash = createHash("sha256")
-    .update(rawBytes.subarray(0, params.checkpoint.size))
-    .digest("hex");
-  const legacyUtf8PrefixHash = createHash("sha256")
-    .update(rawBytes.subarray(0, params.checkpoint.size).toString("utf8"))
-    .digest("hex");
-  if (
-    (prefixHash !== params.checkpoint.contentHash &&
-      legacyUtf8PrefixHash !== params.checkpoint.contentHash) ||
-    params.records.length < params.checkpoint.recordCount
-  ) {
-    return undefined;
-  }
-  return params.records.slice(params.checkpoint.recordCount);
 }

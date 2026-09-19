@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { detectWorktreeFilesystemBackend } from "./filesystem-backend.js";
@@ -17,6 +17,51 @@ vi.mock("./filesystem-backend.js", () => ({ detectWorktreeFilesystemBackend: vi.
 const execFileAsync = promisify(execFile);
 async function git(cwd: string, ...args: string[]): Promise<string> {
   return (await execFileAsync("git", ["-C", cwd, ...args])).stdout.trim();
+}
+
+async function gitMetadata(target: string) {
+  // Batch reads: Linux fork cost grows with the test worker's retained memory.
+  // Resolve afresh at every observation because sparse setup changes path routing.
+  const fields = (
+    await git(
+      target,
+      "rev-parse",
+      "HEAD",
+      "--path-format=absolute",
+      "--git-common-dir",
+      ...["index", "HEAD", "config", "config.worktree", "info/sparse-checkout"].flatMap((name) => [
+        "--git-path",
+        name,
+      ]),
+    )
+  ).split("\n");
+  const [
+    commit,
+    commonDir,
+    indexPath,
+    headPath,
+    commonConfigPath,
+    worktreeConfigPath,
+    patternPath,
+  ] = fields;
+  assert(
+    commit &&
+      commonDir &&
+      indexPath &&
+      headPath &&
+      commonConfigPath &&
+      worktreeConfigPath &&
+      patternPath,
+  );
+  return {
+    commit,
+    commonDir,
+    indexPath,
+    headPath,
+    commonConfigPath,
+    worktreeConfigPath,
+    patternPath,
+  };
 }
 
 describe("ManagedWorktreeService sparse isolation", () => {
@@ -61,8 +106,6 @@ describe("ManagedWorktreeService sparse isolation", () => {
       const targets = new Map<string, string>([["repository", repo]]);
       const backends: { name: string; actual: string; expected: string }[] = [];
       const trace: { phase: string; targets: unknown[] }[] = [];
-      const gitPath = (target: string, name: string) =>
-        git(target, "rev-parse", "--path-format=absolute", "--git-path", name);
       const optional = async (file: string) => {
         try {
           return await fs.readFile(file, "utf8");
@@ -84,28 +127,20 @@ describe("ManagedWorktreeService sparse isolation", () => {
         }
         const samples = [];
         for (const [name, target] of targets) {
-          const indexPath = await gitPath(target, "index");
-          const headPath = await gitPath(target, "HEAD");
-          const worktreeConfigPath = await gitPath(target, "config.worktree");
-          const patternPath = await gitPath(target, "info/sparse-checkout");
+          const metadata = await gitMetadata(target);
           samples.push({
             name,
             target,
-            headPath,
-            headFile: await fs.readFile(headPath, "utf8"),
-            commit: await git(target, "rev-parse", "HEAD"),
-            indexPath,
+            ...metadata,
+            headFile: await fs.readFile(metadata.headPath, "utf8"),
             indexSha256: createHash("sha256")
-              .update(await fs.readFile(indexPath))
+              .update(await fs.readFile(metadata.indexPath))
               .digest("hex"),
             indexEntries: await git(target, "ls-files", "-t"),
-            commonDir: await git(target, "rev-parse", "--path-format=absolute", "--git-common-dir"),
             effectiveConfig: await git(target, "config", "--show-origin", "--show-scope", "--list"),
-            commonConfig: await fs.readFile(await gitPath(target, "config"), "utf8"),
-            worktreeConfigPath,
-            worktreeConfig: await optional(worktreeConfigPath),
-            patternPath,
-            patterns: await optional(patternPath),
+            commonConfig: await fs.readFile(metadata.commonConfigPath, "utf8"),
+            worktreeConfig: await optional(metadata.worktreeConfigPath),
+            patterns: await optional(metadata.patternPath),
           });
         }
         trace.push({ phase, targets: samples });
@@ -117,13 +152,16 @@ describe("ManagedWorktreeService sparse isolation", () => {
         const siblings = await Promise.all(
           [...targets.entries()]
             .filter(([label]) => !label.startsWith("template-"))
-            .map(async ([label, target]) => ({
-              label,
-              index: await gitPath(target, "index"),
-              head: await gitPath(target, "HEAD"),
-              indexBytes: await fs.readFile(await gitPath(target, "index")),
-              headBytes: await fs.readFile(await gitPath(target, "HEAD")),
-            })),
+            .map(async ([label, target]) => {
+              const { indexPath: index, headPath: head } = await gitMetadata(target);
+              return {
+                label,
+                index,
+                head,
+                indexBytes: await fs.readFile(index),
+                headBytes: await fs.readFile(head),
+              };
+            }),
         );
         const calls = vi.mocked(backend.cloneTemplate).mock.calls.length;
         const created = await service.create({ repoRoot: repo, name, baseRef: commit, profiles });

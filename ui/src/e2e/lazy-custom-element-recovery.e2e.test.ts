@@ -492,7 +492,10 @@ suite.define(() => {
       }
 
       await retryThroughReload(page, error);
-      await page.getByRole("combobox", { name: "Search chats and commands…" }).waitFor();
+      await page
+        .locator("openclaw-command-palette")
+        .getByRole("textbox", { name: "Search or start a task…" })
+        .waitFor();
 
       await expect.poll(failure.chunkRequestCount).toBe(2);
       expect(await page.locator("openclaw-command-palette").count()).toBe(1);
@@ -500,7 +503,9 @@ suite.define(() => {
         await writeFile(
           path.join(artifactDir, "recovered.png"),
           await takeControlUiViewportScreenshot(page, page.locator(".cmd-palette"), [
-            page.getByRole("combobox", { name: "Search chats and commands…" }),
+            page
+              .locator("openclaw-command-palette")
+              .getByRole("textbox", { name: "Search or start a task…" }),
           ]),
         );
       }

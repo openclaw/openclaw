@@ -49,6 +49,7 @@ export function loadSetupRuntimeChannelCandidate(params: {
   }
   // Registration rollback can restore record fields, so read them only when reporting.
   const recordSetupFailure = (error: unknown, phase: "load" | "register", message: string) => {
+    registryBuilder.rollbackPluginGlobalSideEffects(record.id, record);
     recordPluginError({
       logger: params.logger,
       registry: registryBuilder.registry,
@@ -62,7 +63,7 @@ export function loadSetupRuntimeChannelCandidate(params: {
     });
   };
   const setupRegistration = resolveSetupChannelRegistration(params.mod);
-  if (setupRegistration.loadError) {
+  if ("loadError" in setupRegistration) {
     recordSetupFailure(setupRegistration.loadError, "load", "failed to load setup entry");
     return true;
   }
@@ -162,7 +163,7 @@ export function loadSetupRuntimeChannelCandidate(params: {
     const runtimePluginRegistration = loadBundledRuntimeChannelPlugin({
       registration: runtimeRegistration,
     });
-    if (runtimePluginRegistration.loadError) {
+    if ("loadError" in runtimePluginRegistration) {
       recordSetupFailure(
         runtimePluginRegistration.loadError,
         "load",
@@ -216,7 +217,6 @@ export function loadSetupRuntimeChannelCandidate(params: {
         record.id,
       );
     } catch (error) {
-      registryBuilder.rollbackPluginGlobalSideEffects(record.id, record);
       recordSetupFailure(
         error,
         "register",
@@ -228,9 +228,6 @@ export function loadSetupRuntimeChannelCandidate(params: {
   try {
     api.registerChannel(mergedSetupPlugin);
   } catch (error) {
-    // Setup-runtime registration may already have added contributions.
-    // Roll them back before recording the channel registration failure.
-    registryBuilder.rollbackPluginGlobalSideEffects(record.id, record);
     recordSetupFailure(error, "load", "failed to register setup channel");
     return true;
   }

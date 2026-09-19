@@ -20,24 +20,32 @@ describe.each([
 
     expect(issues.some((issue) => issue.message.includes(key))).toBe(true);
 
-    const result = applyLegacyDoctorMigrations(raw);
+    const result = applyLegacyDoctorMigrations(raw, { sourceConfigBeforeMigrations: raw });
     expect(result.next?.session).toEqual({ maintenance: {} });
     expect(result.changes).toHaveLength(1);
     expect(result.changes[0]).toContain(key);
     expect(result.changes[0]).toContain(outcome);
-    expect(applyLegacyDoctorMigrations(result.next)).toEqual({ next: null, changes: [] });
+    expect(
+      applyLegacyDoctorMigrations(result.next, { sourceConfigBeforeMigrations: result.next }),
+    ).toEqual({ next: null, changes: [] });
   });
 
   it.each(["500ms", "24h", "30d", 30])("preserves positive duration %s", (value) => {
     const raw = configWith(key, value);
     expect(findLegacyConfigIssues(raw).some((issue) => issue.message.includes(key))).toBe(false);
-    expect(applyLegacyDoctorMigrations(raw)).toEqual({ next: null, changes: [] });
+    expect(applyLegacyDoctorMigrations(raw, { sourceConfigBeforeMigrations: raw })).toEqual({
+      next: null,
+      changes: [],
+    });
   });
 
   it("leaves invalid values for schema validation", () => {
     const raw = configWith(key, "invalid");
     expect(findLegacyConfigIssues(raw).some((issue) => issue.message.includes(key))).toBe(false);
-    expect(applyLegacyDoctorMigrations(raw)).toEqual({ next: null, changes: [] });
+    expect(applyLegacyDoctorMigrations(raw, { sourceConfigBeforeMigrations: raw })).toEqual({
+      next: null,
+      changes: [],
+    });
   });
 });
 
@@ -45,14 +53,17 @@ describe("session maintenance zero-duration migration interactions", () => {
   it("preserves the documented reset archive disable value", () => {
     const raw = configWith("resetArchiveRetention", false);
     expect(findLegacyConfigIssues(raw)).toEqual([]);
-    expect(applyLegacyDoctorMigrations(raw)).toEqual({ next: null, changes: [] });
+    expect(applyLegacyDoctorMigrations(raw, { sourceConfigBeforeMigrations: raw })).toEqual({
+      next: null,
+      changes: [],
+    });
   });
 
   it("removes both zero durations in one pass", () => {
     const raw = {
       session: { maintenance: { pruneAfter: 0, resetArchiveRetention: "0h" } },
     };
-    const result = applyLegacyDoctorMigrations(raw);
+    const result = applyLegacyDoctorMigrations(raw, { sourceConfigBeforeMigrations: raw });
 
     expect(result.next?.session).toEqual({ maintenance: {} });
     expect(result.changes).toHaveLength(2);
@@ -64,7 +75,7 @@ describe("session maintenance zero-duration migration interactions", () => {
     const raw = {
       session: { maintenance: { pruneAfter: "0h", resetArchiveRetention: "30d" } },
     };
-    const result = applyLegacyDoctorMigrations(raw);
+    const result = applyLegacyDoctorMigrations(raw, { sourceConfigBeforeMigrations: raw });
 
     expect(result.next?.session).toEqual({
       maintenance: { resetArchiveRetention: "30d" },

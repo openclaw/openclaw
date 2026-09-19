@@ -1,4 +1,3 @@
-// Matrix plugin module implements targets behavior.
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalStringifiedId,
@@ -6,6 +5,7 @@ import {
 import { inspectMatrixDirectRooms, persistMatrixDirectRoomMapping } from "../direct-management.js";
 import { isStrictDirectRoom } from "../direct-room.js";
 import type { MatrixClient } from "../sdk.js";
+import { captureMatrixSendCurrentness } from "../sdk/send-currentness.js";
 import { isMatrixQualifiedUserId, normalizeMatrixResolvableTarget } from "../target-ids.js";
 
 function normalizeTarget(raw: string): string {
@@ -45,7 +45,11 @@ function setDirectRoomCached(client: MatrixClient, key: string, value: string): 
   }
 }
 
-async function resolveDirectRoomId(client: MatrixClient, userId: string): Promise<string> {
+async function resolveDirectRoomId(
+  client: MatrixClient,
+  userId: string,
+  persistDirectMapping: boolean,
+): Promise<string> {
   const trimmed = userId.trim();
   if (!isMatrixQualifiedUserId(trimmed)) {
     throw new Error(`Matrix user IDs must be fully qualified (got "${trimmed}")`);
@@ -53,7 +57,9 @@ async function resolveDirectRoomId(client: MatrixClient, userId: string): Promis
   const selfUserId = (await client.getUserId().catch(() => null))?.trim() || null;
 
   const directRoomCache = resolveDirectRoomCache(client);
-  const cached = directRoomCache.get(trimmed);
+  // A read lookup must not suppress mapping repair on a later send.
+  const cacheKey = persistDirectMapping ? trimmed : `read:${trimmed}`;
+  const cached = directRoomCache.get(cacheKey);
   if (
     cached &&
     (await isStrictDirectRoom({ client, roomId: cached, remoteUserId: trimmed, selfUserId }))
@@ -61,7 +67,7 @@ async function resolveDirectRoomId(client: MatrixClient, userId: string): Promis
     return cached;
   }
   if (cached) {
-    directRoomCache.delete(trimmed);
+    directRoomCache.delete(cacheKey);
   }
 
   const inspection = await inspectMatrixDirectRooms({
@@ -69,30 +75,40 @@ async function resolveDirectRoomId(client: MatrixClient, userId: string): Promis
     remoteUserId: trimmed,
   });
   if (inspection.activeRoomId) {
-    setDirectRoomCached(client, trimmed, inspection.activeRoomId);
-    if (inspection.mappedRoomIds[0] !== inspection.activeRoomId) {
+    if (persistDirectMapping && inspection.mappedRoomIds[0] !== inspection.activeRoomId) {
       await persistMatrixDirectRoomMapping({
         client,
         remoteUserId: trimmed,
         roomId: inspection.activeRoomId,
       }).catch(() => {
+        // A canceled repair must not cache a lookup that suppresses the next valid repair.
+        captureMatrixSendCurrentness(client)?.();
         // Ignore persistence errors when send resolution has already found a usable room.
       });
     }
+    setDirectRoomCached(client, cacheKey, inspection.activeRoomId);
     return inspection.activeRoomId;
   }
 
   throw new Error(`No direct room found for ${trimmed} (m.direct missing)`);
 }
 
-export async function resolveMatrixRoomId(client: MatrixClient, raw: string): Promise<string> {
+export async function resolveMatrixRoomId(
+  client: MatrixClient,
+  raw: string,
+  opts: { persistDirectMapping?: boolean } = {},
+): Promise<string> {
   const target = normalizeMatrixResolvableTarget(normalizeTarget(raw));
   const lowered = normalizeLowercaseStringOrEmpty(target);
   if (lowered.startsWith("user:")) {
-    return await resolveDirectRoomId(client, target.slice("user:".length));
+    return await resolveDirectRoomId(
+      client,
+      target.slice("user:".length),
+      opts.persistDirectMapping ?? true,
+    );
   }
   if (isMatrixQualifiedUserId(target)) {
-    return await resolveDirectRoomId(client, target);
+    return await resolveDirectRoomId(client, target, opts.persistDirectMapping ?? true);
   }
   if (target.startsWith("#")) {
     const resolved = await client.resolveRoom(target);

@@ -62,6 +62,8 @@ async function seedReaperSessions(storePath: string, now: number) {
 
 describe("CronService - session reaper runs in finally block (#31946)", () => {
   beforeEach(() => {
+    // Drive ticks explicitly so real rechecks cannot outlive slow archive workers.
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
     noopLogger.debug.mockClear();
     noopLogger.info.mockClear();
     noopLogger.warn.mockClear();
@@ -70,6 +72,8 @@ describe("CronService - session reaper runs in finally block (#31946)", () => {
   });
 
   afterEach(() => {
+    vi.clearAllTimers();
+    vi.useRealTimers();
     vi.restoreAllMocks();
     vi.clearAllMocks();
   });

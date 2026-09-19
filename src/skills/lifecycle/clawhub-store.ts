@@ -18,7 +18,7 @@ import {
   writeJson,
 } from "../../infra/json-files.js";
 import { replaceFileAtomicSync } from "../../infra/replace-file.js";
-import { normalizeTrackedSkillSlug, validateRequestedSkillSlug } from "./archive-install.js";
+import { normalizeTrackedSkillSlug, validateRequestedSkillSlug } from "./install-paths.js";
 
 export { normalizeOptionalStringValue };
 

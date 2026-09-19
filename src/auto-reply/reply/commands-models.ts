@@ -55,7 +55,10 @@ import { resolveAgentRuntimeLabel } from "../../status/agent-runtime-label.js";
 import type { ReplyPayload } from "../types.js";
 import { rejectUnauthorizedCommand } from "./command-gates.js";
 import type { CommandHandler } from "./commands-types.js";
-import { resolveRuntimeNormalization } from "./model-runtime-normalization.js";
+import {
+  normalizeRuntimeChoiceId,
+  resolveRuntimeNormalization,
+} from "./model-runtime-normalization.js";
 
 const PAGE_SIZE_DEFAULT = 20;
 const PAGE_SIZE_MAX = 100;
@@ -131,14 +134,6 @@ type ParsedModelsCommand =
 
 function isModelsBrowseVisibleProvider(provider: string): boolean {
   return !isRetiredModelPickerProvider(provider);
-}
-
-function normalizeRuntimeChoiceId(runtime: string | undefined): string {
-  const normalized = normalizeLowercaseStringOrEmpty(runtime);
-  if (!normalized || normalized === "auto" || normalized === "default") {
-    return "openclaw";
-  }
-  return normalized;
 }
 
 function buildRuntimeChoice(params: { cfg: OpenClawConfig; runtime: string }): ModelsRuntimeChoice {
@@ -225,7 +220,7 @@ async function projectPreparedModelsProviderData(
     cfg,
     catalog,
     defaultProvider: resolvedDefault.provider,
-    defaultModel: resolvedDefault.model,
+    defaultModel: resolvedDefault,
     agentId,
     ...runtimeNormalization,
   });
@@ -271,9 +266,10 @@ async function projectPreparedModelsProviderData(
         };
   const visibleCatalog = await resolveLogicalVisibleModelCatalog({
     cfg,
+    metadataSnapshot: owner.metadataSnapshot,
     catalog,
     defaultProvider: resolvedDefault.provider,
-    defaultModel: resolvedDefault.model,
+    defaultModel: resolvedDefault,
     agentId,
     workspaceDir,
     view: options.view,

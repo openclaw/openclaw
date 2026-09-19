@@ -51,13 +51,14 @@ describe("chat transcript scroll ownership", () => {
         "transcript extent",
       );
       const total = Number.parseFloat(sizer.style.height);
+      let maxScrollTop = total + 84 - 600;
       Object.defineProperties(container, {
         clientHeight: { configurable: true, value: 600 },
-        scrollHeight: { configurable: true, value: total + 84 },
+        scrollHeight: { configurable: true, get: () => maxScrollTop + 600 },
       });
       container.scrollTo = (options?: ScrollToOptions | number) => {
         if (typeof options === "object") {
-          container.scrollTop = Math.min(options.top ?? container.scrollTop, total + 84 - 600);
+          container.scrollTop = Math.min(options.top ?? container.scrollTop, maxScrollTop);
         }
       };
       policy.chatScrollElement = () => container;
@@ -86,9 +87,20 @@ describe("chat transcript scroll ownership", () => {
       container.dispatchEvent(new Event("scroll"));
       expect(policy.chatReadingHistory).toBe(true);
       expect(policy.chatFollowLocked).toBe(true);
+      // A partial sizer commit lets TanStack retry the clamped adjustment as an absolute write.
+      maxScrollTop += 16;
+      transcript.hostUpdated();
+      expect(container.scrollTop).toBe(maxScrollTop);
+      // The dock can keep shrinking the scroll range before the native read-back arrives.
+      maxScrollTop -= 8;
+      container.scrollTop = maxScrollTop;
+      container.dispatchEvent(new Event("scroll"));
+      expect(policy.chatReadingHistory).toBe(true);
+      expect(policy.chatFollowLocked).toBe(true);
       container.dispatchEvent(new WheelEvent("wheel", { deltaY: 1 }));
       expect(policy.chatReadingHistory).toBe(false);
       expect(policy.chatFollowLocked).toBe(false);
+      expect(transcript.isProgrammaticScroll).toBe(false);
     } finally {
       transcript.hostDisconnected();
       vi.useRealTimers();

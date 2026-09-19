@@ -270,6 +270,28 @@ The script prints only provider status and HTTP class, never tokens.
 The Anthropic check performs a tiny message completion so exhausted or
 non-billable credentials fail before the expensive release matrix.
 
+### Before publication
+
+For regular beta/stable protected publication, after evidence validation run
+`pnpm release:publish-preflight` with the intended tag, exact Full Release
+Validation run and attempt, npm dist-tag, plugin scope, approved soak waiver when
+applicable, and protected publication tooling ref. `pnpm release:candidate`
+invokes this check with its downloaded manifests; do not redownload them or
+replace the selected attempt. Use the report's exact dispatch command for the
+chosen publication route only after resolving every `FAIL` and owner-action
+`WARN`. Alpha uses its matching Tideclaw branch; extended-stable retains its
+separate owner workflows and is not admitted by this preflight.
+
+Check the report before retrying a failed publication: preserve the verified
+`openclaw_npm_resume_run_id` for already-published core bytes, inspect matching
+draft/published release state, and identify exact orphaned plugin/ClawHub children
+before cancellation. Preflight is read-only and does not authorize publication,
+cancel children, or prove a repository secret from local credentials. Bootstrap
+candidates need a read-only `npm whoami` probe using the repository's actual
+`NPM_TOKEN`; follow the secret-isolated step in
+[Release policy](https://docs.openclaw.ai/reference/RELEASING#probe-the-bootstrap-token)
+and retain its run URL. Do not rotate credentials as part of a diagnostic check.
+
 ## Dispatch
 
 An early standalone product-performance run is optional beta confidence. If
@@ -380,8 +402,12 @@ recovering historical separate evidence. Regular final qualification records
 SDK reports for both `beta` and `latest`; review the acknowledgement for the
 actual publication channel. Prepared descriptors live in `publicationArtifacts` in
 the exact final manifest. Product evidence reuse never substitutes Code-SHA
-package or image bytes for the final Release SHA. A parent that produced these
-artifacts needs a fresh all-group FRV instead of same-parent continuation.
+package or image bytes for the final Release SHA. For failed independent npm qualification, use `pnpm frv continue --failed`:
+failed npm jobs retry on their original run, successful preparation jobs
+and diagnostic children carry forward, and the parent verifies the resulting
+receipts. Failure alone is not a continuation rejection. Frozen workflows
+execute their original receipt logic; a local controller upgrade does not
+retrofit that logic, and final verification still owns the recovery result.
 
 The SHA-pinned helper infers `beta` for matching beta release candidates and
 exact alpha tags, and `stable` for stable/correction versions, then passes the
@@ -396,6 +422,9 @@ focused fixes; never widen automatically.
 Publish with `openclaw-release-publish.yml` using `release_profile=from-validation`
 unless a maintainer intentionally wants to cross-check a specific profile; the
 publish workflow reads the effective profile from the full-validation manifest.
+Stable publication requires soak unless the operator supplies `stable_soak_waiver`
+with a reason; the publisher forwards and records that reason in release evidence
+without changing validation coverage or other publication gates.
 
 ### Extended-stable validation
 

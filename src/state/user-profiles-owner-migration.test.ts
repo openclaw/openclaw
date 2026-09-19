@@ -8,12 +8,12 @@ import {
   runOpenClawStateWriteTransaction,
 } from "./openclaw-state-db.js";
 import { readUserProfileAliasRevision } from "./user-profile-events.js";
+import { listUserProfilesSync } from "./user-profile-list.js";
 import { repairMergedGatewayOwnerProfile } from "./user-profiles-owner-migration.js";
 import { mergeOwnerIntoPerson, profileState } from "./user-profiles-owner.test-support.js";
 import {
   ensureGatewayOwnerProfile,
   ensureProfileForTailscaleIdentity,
-  listProfiles,
   readUserProfileAliases,
   syncGitHubIdentity,
 } from "./user-profiles.js";
@@ -51,7 +51,9 @@ describe("Doctor gateway owner repair", () => {
       } else if (identityTarget === "missing") {
         db.prepare("DELETE FROM user_profile_identities WHERE provider = 'gateway.local'").run();
       }
-      const personBefore = listProfiles(options).find((profile) => profile.id === person.id);
+      const personBefore = listUserProfilesSync(options).find(
+        (profile) => profile.id === person.id,
+      );
       const before = profileState(options);
       const aliasRevision = readUserProfileAliasRevision();
       expect(readUserProfileAliases(owner.id, options)).toEqual(new Set([owner.id, person.id]));
@@ -90,7 +92,7 @@ describe("Doctor gateway owner repair", () => {
         displayName: "Local Owner",
       });
       expect(restored.updatedAt).toBeGreaterThan(1);
-      expect(listProfiles(options).find((profile) => profile.id === person.id)).toEqual(
+      expect(listUserProfilesSync(options).find((profile) => profile.id === person.id)).toEqual(
         personBefore,
       );
       expect(

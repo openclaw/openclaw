@@ -6,7 +6,7 @@ import { jsonUtf8Bytes } from "../infra/json-utf8-bytes.js";
 import { projectSessionDisplayMessage } from "./session-display-projection.js";
 import { findExistingTranscriptPath } from "./session-transcript-archive-reader.js";
 import {
-  aggregateSessionTranscriptUsage,
+  createSessionTranscriptUsageAccumulator,
   type SessionTranscriptUsageSnapshot,
 } from "./session-transcript-derived-readers.js";
 import { isOversizedTranscriptLine } from "./session-transcript-record-parser.js";
@@ -51,11 +51,12 @@ export async function readLatestSessionUsageFromTranscriptFileAsync(
     if (stat.size === 0) {
       return null;
     }
-    const messages: unknown[] = [];
+    const usageAccumulator = createSessionTranscriptUsageAccumulator("artifact");
     for await (const line of streamSessionTranscriptLines(filePath)) {
       if (isOversizedTranscriptLine(line)) {
         continue;
       }
+      let normalizedMessage: Record<string, unknown>;
       try {
         const record = JSON.parse(line) as Record<string, unknown>;
         if (
@@ -70,7 +71,7 @@ export async function readLatestSessionUsageFromTranscriptFileAsync(
           message.usage && typeof message.usage === "object" && !Array.isArray(message.usage)
             ? message.usage
             : record.usage;
-        messages.push({
+        normalizedMessage = {
           ...message,
           ...(typeof message.provider !== "string" && typeof record.provider === "string"
             ? { provider: record.provider }
@@ -79,12 +80,13 @@ export async function readLatestSessionUsageFromTranscriptFileAsync(
             ? { model: record.model }
             : {}),
           ...(usage && typeof usage === "object" && !Array.isArray(usage) ? { usage } : {}),
-        });
+        };
       } catch {
         continue;
       }
+      usageAccumulator.add(normalizedMessage);
     }
-    return aggregateSessionTranscriptUsage(messages, "artifact");
+    return usageAccumulator.finish();
   } catch {
     return null;
   }
@@ -97,16 +99,14 @@ export function buildSessionPreviewItems(
   view: "display" | "model-context" = "display",
 ): SessionPreviewItem[] {
   const items: SessionPreviewItem[] = [];
-  for (const message of messages) {
-    const projected = projectSessionDisplayMessage(message, { maxChars, view });
+  // Rejected rows do not consume the limit; older text cannot affect a full preview.
+  for (let index = messages.length - 1; index >= 0 && items.length < maxItems; index -= 1) {
+    const projected = projectSessionDisplayMessage(messages[index], { maxChars, view });
     if (!projected) {
       continue;
     }
     items.push(projected);
   }
 
-  if (items.length <= maxItems) {
-    return items;
-  }
-  return items.slice(-maxItems);
+  return items.toReversed();
 }

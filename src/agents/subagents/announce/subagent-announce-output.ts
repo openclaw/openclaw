@@ -14,6 +14,7 @@ import { findSessionTranscriptArchiveEventReadOnly } from "../../../config/sessi
 import { resolveFreshSessionTotalTokens } from "../../../config/sessions/types.js";
 import { isFastTestRuntimeEnv } from "../../../infra/env.js";
 import { formatDurationCompact } from "../../../infra/format-time/format-duration.js";
+import { isContractToolCallBlock } from "../../../shared/tool-block-contract.js";
 import { buildAgentRunTerminalOutcomeFromWaitResult } from "../../agent-run-terminal-outcome.js";
 import { extractStoredAssistantText } from "../../tools/chat-history-text.js";
 import { isAnnounceSkip } from "../../tools/sessions-send-tokens.js";
@@ -42,13 +43,6 @@ import {
 import { assistantCallsSessionsYield, isSessionsYieldToolResult } from "./subagent-yield-output.js";
 
 const FAST_TEST_RETRY_INTERVAL_MS = 8;
-const ASSISTANT_TOOL_CALL_BLOCK_TYPES = new Set([
-  "toolCall",
-  "tool_use",
-  "toolUse",
-  "functionCall",
-  "function_call",
-]);
 type SubagentAnnounceOutputDeps = SubagentAnnounceResultDeps & {
   callGateway: typeof callSubagentLifecycleGateway;
   readSessionMessagesAsync: typeof readSessionMessagesAsync;
@@ -119,12 +113,7 @@ function countAssistantToolCalls(message: unknown): number {
   }
   const content = (message as { content?: unknown }).content;
   const contentToolCalls = Array.isArray(content)
-    ? content.filter(
-        (block) =>
-          block &&
-          typeof block === "object" &&
-          ASSISTANT_TOOL_CALL_BLOCK_TYPES.has((block as { type?: string }).type ?? ""),
-      ).length
+    ? content.filter((block) => isContractToolCallBlock(block)).length
     : 0;
   const toolCalls =
     (message as { toolCalls?: unknown; tool_calls?: unknown }).toolCalls ??

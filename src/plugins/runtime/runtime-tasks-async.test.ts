@@ -11,7 +11,7 @@ vi.mock("../../state/openclaw-state-worker-context.js", () => ({
   captureOpenClawStateWorkerContext: () => ({ admission: { assertCurrent() {} } }),
 }));
 vi.mock("../../tasks/task-flow-runtime-internal.js", () => ({
-  ensureTaskFlowRegistryReady: mocks.ensureReady,
+  ensureTaskFlowRegistryReadyAsync: mocks.ensureReady,
 }));
 
 const input = { controllerId: "tests/creation", goal: "Synthetic flow" };

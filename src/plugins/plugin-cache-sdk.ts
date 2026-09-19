@@ -28,6 +28,7 @@ type PreparedPluginAliases = {
   cacheKey: string;
   sdkRoots: string[];
   getAliasMap: () => PluginSdkAliasMap;
+  hasSourceSdkAliases: () => boolean;
   getSourceTransformAliasMap: () => PluginSdkAliasMap;
   resolveAlias: (specifier: string) => string | undefined;
 };
@@ -94,6 +95,16 @@ export function getPluginSdkHostFacts(
       workspaceAliasesByMode: new Map(),
     };
     cache.hosts.set(packageRoot, facts);
+  }
+  return facts;
+}
+
+export function getPluginSdkAliasFacts(sdk: PluginCacheSdk, aliasMap: PluginSdkAliasMap) {
+  const cache = sdk.aliasFacts;
+  let facts = cache.get(aliasMap);
+  if (!facts) {
+    facts = {};
+    cache.set(aliasMap, facts);
   }
   return facts;
 }

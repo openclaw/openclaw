@@ -19,6 +19,12 @@ const CRON_SCHEDULE = { kind: "cron", expr: "* * * * *" };
 const EVERY_SCHEDULE = { kind: "every", everyMs: 60_000 };
 const AGENT_TURN = { kind: "agentTurn", message: "hello" };
 const SYSTEM_EVENT = { kind: "systemEvent", text: "hi" };
+const CHANNEL_REQUESTER = {
+  version: 1,
+  channel: "discord",
+  accountId: "work",
+  senderId: "123456789012345678",
+};
 const STALE_AT_SCHEDULE = {
   kind: "at",
   at: "2026-01-12T18:00:00Z",
@@ -159,6 +165,88 @@ describe("normalizeCronJobCreate", () => {
     );
 
     expect(child(createAgent({ payload }), "payload")).not.toHaveProperty("model");
+  });
+  it("retains only authored native requester and caller facts without claiming a captured tool surface", () => {
+    const ignoredGetter = vi.fn(() => true);
+    const channelRequester = Object.defineProperty(
+      {
+        ...CHANNEL_REQUESTER,
+        channel: " Discord ",
+        accountId: " Work ",
+        senderId: " 123456789012345678 ",
+        roles: ["administrator"],
+      },
+      "senderIsOwner",
+      { enumerable: true, get: ignoredGetter },
+    );
+    const normalized = createAgent({
+      toolsAllowProvenance: {
+        version: 1,
+        source: "authenticated-requester",
+        callerOrigin: { kind: "local" },
+        channelRequester,
+      },
+    });
+
+    expect(normalized.toolsAllowProvenance).toEqual({
+      version: 1,
+      source: "authenticated-requester",
+      callerOrigin: { kind: "local" },
+      channelRequester: CHANNEL_REQUESTER,
+    });
+    expect(ignoredGetter).not.toHaveBeenCalled();
+  });
+  it.each([
+    { label: "missing version", patch: { version: undefined } },
+    { label: "unknown version", patch: { version: 2 } },
+    { label: "blank channel", patch: { channel: " " } },
+    { label: "invalid account", patch: { accountId: "__proto__" } },
+    { label: "non-string sender", patch: { senderId: 123 } },
+  ])("drops $label requester facts without losing genuine tool-surface proof", ({ patch }) => {
+    const normalized = createAgent({
+      toolsAllowProvenance: {
+        version: 1,
+        source: "final-executable-surface",
+        callerOrigin: { kind: "local" },
+        channelRequester: { ...CHANNEL_REQUESTER, ...patch },
+      },
+    });
+
+    expect(normalized.toolsAllowProvenance).toEqual({
+      version: 1,
+      source: "final-executable-surface",
+      callerOrigin: { kind: "local" },
+    });
+  });
+  it("rejects accessor and inherited requester identities without invoking getters", () => {
+    const senderGetter = vi.fn(() => CHANNEL_REQUESTER.senderId);
+    const accessorRequester = Object.defineProperty({ ...CHANNEL_REQUESTER }, "senderId", {
+      enumerable: true,
+      get: senderGetter,
+    });
+    const inheritedRequester = Object.create(CHANNEL_REQUESTER) as UnknownRecord;
+    for (const channelRequester of [accessorRequester, inheritedRequester, undefined]) {
+      const normalized = createAgent({
+        toolsAllowProvenance: {
+          version: 1,
+          source: "authenticated-requester",
+          channelRequester,
+        },
+      });
+      expect(normalized).not.toHaveProperty("toolsAllowProvenance");
+    }
+    expect(senderGetter).not.toHaveBeenCalled();
+  });
+  it.each([undefined, 2])("rejects native provenance envelope version %s", (version) => {
+    expect(
+      createAgent({
+        toolsAllowProvenance: {
+          version,
+          source: "authenticated-requester",
+          channelRequester: CHANNEL_REQUESTER,
+        },
+      }),
+    ).not.toHaveProperty("toolsAllowProvenance");
   });
   it("trims cron timezones and drops blank values", () => {
     const trimmed = mainSchedule({ ...CRON_SCHEDULE, tz: "  Europe/Vienna  " });

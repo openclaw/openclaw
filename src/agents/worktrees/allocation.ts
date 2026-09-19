@@ -1,4 +1,8 @@
 import {
+  collectNestedErrorCandidates,
+  extractErrorCode,
+} from "@openclaw/normalization-core/error-coercion";
+import {
   OpenClawStateLeaseError,
   withOpenClawStateLease,
 } from "../../state/openclaw-state-lease.js";
@@ -61,6 +65,13 @@ export async function withWorktreeAllocationLease<T>(
           signal.throwIfAborted();
           return result;
         } catch (error) {
+          if (
+            collectNestedErrorCandidates(error).some(
+              (cause) => extractErrorCode(cause) === "outcome-unknown",
+            )
+          ) {
+            throw error;
+          }
           if (params.signal?.aborted) {
             lease.assertOwned();
             throw new OpenClawStateLeaseError(

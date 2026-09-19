@@ -7,6 +7,8 @@ import {
   isUpdateCompatibilityChunk,
   UPDATE_COMPATIBILITY_CHUNK_HEADER,
 } from "./update-compat-contract.mjs";
+import { isUpdateSourceScriptImport } from "./update-compat-source-imports.mts";
+import { buildUpdateConfigRuntimeAlias } from "./update-config-runtime-compat.mts";
 
 export { isUpdateCompatibilityChunk } from "./update-compat-contract.mjs";
 export const UPDATE_COMPATIBILITY_INVENTORY_FILE = "update-compat-inventory.json";
@@ -223,11 +225,30 @@ class ModuleGraph {
   info(file: string): ModuleInfo {
     let info = this.modules.get(file);
     if (!info) {
+      const source = fs.readFileSync(file, "utf8");
       info = inspectModule(
         file,
-        fs.readFileSync(file, "utf8"),
+        source,
         this.sourceDir === undefined ? undefined : portable(path.relative(this.sourceDir, file)),
       );
+      const delegatedTarget = source.match(
+        /^const target = new URL\("\.\/([\w.-]+\.m?js)", import\.meta\.url\)\.href;$/m,
+      )?.[1];
+      if (
+        this.sourceDir === undefined &&
+        path.basename(file) === "io.runtime.js" &&
+        delegatedTarget
+      ) {
+        const targetFile = path.join(path.dirname(file), delegatedTarget);
+        const targetSource = fs.readFileSync(targetFile, "utf8");
+        // Only the complete generated read contract proves delegation. Unknown wrappers
+        // must still fail provenance tracing; never execute a release to discover exports.
+        if (source === buildUpdateConfigRuntimeAlias(delegatedTarget, targetSource)) {
+          for (const name of info.exports.keys()) {
+            info.exports.set(name, { file: targetFile, symbol: name });
+          }
+        }
+      }
       this.modules.set(file, info);
     }
     return info;
@@ -416,6 +437,9 @@ export function recordUpdateCompatibilityRelease(params: {
         if (owner && POST_SWAP_OWNER.test(owner) && owner !== "src/cli/update-cli/wizard.ts") {
           const specifier = node.arguments[0];
           if (!specifier || !ts.isStringLiteralLike(specifier)) {
+            if (isUpdateSourceScriptImport(owner, node)) {
+              return;
+            }
             throw new Error(`Nonliteral post-swap import in ${file}: ${node.getText()}`);
           }
           if (specifier.text.startsWith(".")) {

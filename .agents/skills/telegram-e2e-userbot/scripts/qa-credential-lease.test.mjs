@@ -1,13 +1,16 @@
 import assert from "node:assert/strict";
+import { performance } from "node:perf_hooks";
 import test from "node:test";
-import { acquireQaLease, QaCredentialBrokerError } from "./qa-credential-lease.mjs";
+import { acquireQaLease, resumeQaLease, QaCredentialBrokerError } from "./qa-credential-lease.mjs";
 
 const env = {
   OPENCLAW_QA_CONVEX_SITE_URL: "https://broker.example.test/",
   OPENCLAW_QA_CONVEX_SECRET_CI: "ci-secret",
 };
 
-test("a resumed event loop cannot use a lease whose confirmation expired", async () => {
+test("a resumed event loop cannot use a lease whose confirmation expired", async (context) => {
+  context.mock.timers.enable({ apis: ["Date", "setInterval"], now: 0 });
+  context.mock.method(performance, "now", () => Date.now());
   const operations = [];
   const lease = await acquireQaLease({
     kind: "telegram-test-userbot",
@@ -23,8 +26,9 @@ test("a resumed event loop cannot use a lease whose confirmation expired", async
       );
     },
   });
-  // Timers cannot run during this suspension; the caller checks before yielding.
-  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 150);
+  assert.doesNotThrow(() => lease.assertHealthy());
+  // Advance both clocks without delivering the suspended heartbeat callbacks.
+  context.mock.timers.setTime(150);
   assert.throws(() => lease.assertHealthy(), /confirmation expired/u);
   await lease.abandon();
   assert.deepEqual(operations, ["acquire", "heartbeat"]);
@@ -86,12 +90,15 @@ test("uses the authenticated Convex CLI when broker variables are absent", async
   });
   await lease.release();
 
-  assert.deepEqual(cliCalls, [
-    {
-      args: ["env", "--deployment", "reminiscent-ibex-847", "get", "OPENCLAW_QA_CONVEX_SECRET_CI"],
-      options: { cwd: "/repo/qa/convex-credential-broker" },
-    },
+  assert.equal(cliCalls.length, 1);
+  assert.deepEqual(cliCalls[0].args, [
+    "env",
+    "--deployment",
+    "reminiscent-ibex-847",
+    "get",
+    "OPENCLAW_QA_CONVEX_SECRET_CI",
   ]);
+  assert.equal(cliCalls[0].options.cwd, "/repo/qa/convex-credential-broker");
   assert.ok(
     brokerCalls.every((call) => call.url.startsWith("https://reminiscent-ibex-847.convex.site/")),
   );
@@ -128,7 +135,7 @@ test("does not call the broker when Convex CLI access is rejected", async () => 
         return Response.json({ status: "ok" });
       },
     }),
-    /Could not load the QA broker through the Convex CLI/u,
+    /Could not load the QA broker through existing Convex launchers/u,
   );
   assert.equal(brokerCalls, 0);
 });
@@ -555,4 +562,356 @@ test("fences a stalled heartbeat and bounds lease cleanup", async () => {
   );
   await lease.release();
   assert.equal(released, true);
+});
+
+test("concurrent and later release calls share the same failed owner result", async () => {
+  const response = Promise.withResolvers();
+  const started = Promise.withResolvers();
+  let releases = 0;
+  const lease = await acquireQaLease({
+    kind: "telegram-test-userbot",
+    env,
+    fetchImpl: async (url) => {
+      if (url.endsWith("/acquire"))
+        return Response.json({
+          status: "ok",
+          credentialId: "owned",
+          leaseToken: "token",
+          payload: {},
+        });
+      if (url.endsWith("/release")) {
+        releases += 1;
+        started.resolve();
+        await response.promise;
+        return Response.json(
+          { status: "error", code: "RELEASE_FAILED", message: "temporarily unavailable" },
+          { status: 503 },
+        );
+      }
+      return Response.json({ status: "ok" });
+    },
+  });
+  const first = lease.release();
+  const second = lease.release();
+  await started.promise;
+  response.resolve();
+  const failure = await first.catch((error) => error);
+  assert.equal(releases, 1);
+  await assert.rejects(second, (error) => error === failure);
+  await assert.rejects(lease.release(), (error) => error === failure);
+  assert.equal(releases, 1);
+});
+
+test("retained lease recovery revalidates the same owner without acquiring a replacement", async () => {
+  const recovery = {
+    identity: {
+      kind: "telegram-test-userbot",
+      credentialId: "held-credential",
+      ownerId: "held-owner",
+      actorRole: "ci",
+      leaseToken: "held-token",
+    },
+    leaseTtlMs: 1_200_000,
+    heartbeatIntervalMs: 30_000,
+  };
+  const calls = [];
+  const fetchImpl = async (url, init) => {
+    const method = url.split("/").at(-1);
+    const body = JSON.parse(init.body);
+    calls.push(method);
+    assert.equal(body.credentialId, recovery.identity.credentialId);
+    assert.equal(body.ownerId, recovery.identity.ownerId);
+    assert.equal(body.leaseToken, recovery.identity.leaseToken);
+    return Response.json({ status: "ok" });
+  };
+  const lease = await resumeQaLease({ recovery, env, fetchImpl });
+  lease.assertHealthy();
+  await lease.release();
+  assert.deepEqual(calls, ["heartbeat", "release"]);
+  await assert.rejects(
+    resumeQaLease({
+      recovery,
+      env,
+      fetchImpl: async (url) => {
+        assert.ok(url.endsWith("/heartbeat"));
+        return Response.json(
+          { status: "error", code: "LEASE_EXPIRED", message: "owner expired" },
+          { status: 409 },
+        );
+      },
+    }),
+    /LEASE_EXPIRED/,
+  );
+});
+
+test("cancellation during CLI lookup prevents broker acquisition", async () => {
+  const controller = new AbortController();
+  const started = Promise.withResolvers();
+  let calls = 0;
+  const acquire = acquireQaLease({
+    kind: "telegram-test-userbot",
+    env: {},
+    signal: controller.signal,
+    runConvexCliImpl: async (_args, { signal }) => {
+      started.resolve();
+      await new Promise((_, reject) =>
+        signal.addEventListener("abort", () => reject(signal.reason), { once: true }),
+      );
+    },
+    fetchImpl: async () => {
+      calls += 1;
+    },
+  });
+  await started.promise;
+  const reason = new Error("lookup cancelled");
+  controller.abort(reason);
+  await assert.rejects(acquire, (error) => error === reason);
+  assert.equal(calls, 0);
+});
+
+test("cancellation retains an in-flight acquire until its exact lease is released", async () => {
+  const controller = new AbortController();
+  const started = Promise.withResolvers();
+  const reply = Promise.withResolvers();
+  const calls = [];
+  const acquire = acquireQaLease({
+    kind: "telegram-test-userbot",
+    env,
+    signal: controller.signal,
+    fetchImpl: async (url, init) => {
+      calls.push(url.split("/").at(-1));
+      if (url.endsWith("/acquire")) {
+        started.resolve(init.signal);
+        return await reply.promise;
+      }
+      return Response.json({ status: "ok" });
+    },
+  });
+  const requestSignal = await started.promise;
+  const reason = new Error("acquisition cancelled");
+  controller.abort(reason);
+  assert.equal(
+    requestSignal.aborted,
+    false,
+    "do not discard an acquire that may have succeeded remotely",
+  );
+  reply.resolve(
+    Response.json({
+      status: "ok",
+      credentialId: "late-credential",
+      leaseToken: "late-token",
+      payload: {},
+    }),
+  );
+  await assert.rejects(acquire, (error) => error === reason);
+  assert.equal(calls.filter((method) => method === "acquire").length, 1);
+  assert.equal(calls.filter((method) => method === "release").length, 1);
+});
+
+async function launcherFixture(context, scripts) {
+  const fs = await import("node:fs");
+  const os = await import("node:os");
+  const path = await import("node:path");
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "telegram-convex-launchers-"));
+  context.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const trace = path.join(root, "calls.jsonl");
+  for (const [name, script] of Object.entries(scripts)) {
+    fs.writeFileSync(
+      path.join(root, name),
+      `#!${process.execPath}\n` +
+        `const fs = require('node:fs'); const args = process.argv.slice(2);\n` +
+        `fs.appendFileSync(${JSON.stringify(trace)}, JSON.stringify({name:${JSON.stringify(name)}, args})+'\\n');\n` +
+        script,
+      { mode: 0o755 },
+    );
+  }
+  return {
+    env: { PATH: root },
+    convexProjectDir: root,
+    calls: () =>
+      fs.existsSync(trace) ? fs.readFileSync(trace, "utf8").trim().split("\n").map(JSON.parse) : [],
+  };
+}
+
+const authenticatedLauncher = `
+const request = args.slice(args.indexOf('env'));
+if (JSON.stringify(request) !== JSON.stringify(['env', '--deployment', 'reminiscent-ibex-847', 'get', 'OPENCLAW_QA_CONVEX_SECRET_CI'])) {
+  console.error('No CONVEX_DEPLOYMENT set; local project selection is unavailable');
+  process.exitCode = 1;
+} else console.log('synthetic-ci-secret');
+`;
+
+for (const winner of ["bunx", "npx"]) {
+  test(`discovers authenticated ${winner} without installing or local deployment configuration`, async (context) => {
+    const scripts = {
+      convex:
+        "console.error('Not authenticated: synthetic-private-diagnostic'); process.exitCode = 1;",
+      [winner]: authenticatedLauncher,
+    };
+    const fixture = await launcherFixture(context, scripts);
+    const requests = [];
+    const lease = await acquireQaLease({
+      kind: "telegram-test-userbot",
+      ...fixture,
+      fetchImpl: async (url, init) => {
+        requests.push({ url, authorization: init.headers.authorization });
+        return Response.json(
+          url.endsWith("/acquire")
+            ? { status: "ok", credentialId: "owned", leaseToken: "token", payload: {} }
+            : { status: "ok" },
+        );
+      },
+    });
+    await lease.release();
+    assert.ok(
+      requests.every(
+        ({ url, authorization }) =>
+          url.startsWith("https://reminiscent-ibex-847.convex.site/") &&
+          authorization === "Bearer synthetic-ci-secret",
+      ),
+    );
+    const selected = fixture.calls().filter(({ name }) => name === winner);
+    assert.equal(selected.length, 1);
+    for (const { args } of selected) {
+      assert.deepEqual(
+        args.slice(0, winner === "bunx" ? 2 : 4),
+        winner === "bunx"
+          ? ["--no-install", "convex"]
+          : ["--offline", "--no", "--ignore-scripts", "convex"],
+      );
+    }
+  });
+}
+
+test("exhausts available launchers before asking for authentication and redacts their output", async (context) => {
+  const denied =
+    "console.error('Not authenticated: synthetic-private-token'); process.exitCode = 1;";
+  const fixture = await launcherFixture(context, { convex: denied, bunx: denied, npx: denied });
+  await assert.rejects(
+    acquireQaLease({
+      kind: "telegram-test-userbot",
+      ...fixture,
+      fetchImpl: async () => assert.fail("unauthenticated discovery cannot acquire a lease"),
+    }),
+    (error) => {
+      assert.match(error.message, /No existing launcher can authenticate/);
+      assert.doesNotMatch(String(error.stack), /synthetic-private-token/);
+      assert.equal(error.cause, undefined);
+      return true;
+    },
+  );
+  assert.deepEqual(
+    fixture.calls().map(({ name }) => name),
+    ["convex", "bunx", "npx"],
+  );
+});
+
+test("an authenticated CLI's empty env output requests broker configuration, not another login", async (context) => {
+  const fixture = await launcherFixture(context, {
+    convex: "console.error('Environment variable not found');",
+  });
+  await assert.rejects(
+    acquireQaLease({
+      kind: "telegram-test-userbot",
+      ...fixture,
+      fetchImpl: async () => assert.fail("missing broker secret cannot acquire a lease"),
+    }),
+    (error) => {
+      assert.match(error.message, /BROKER_CONFIG/);
+      assert.match(error.message, /An existing launcher authenticated/);
+      assert.doesNotMatch(error.message, /Ask the user to provide authenticated/);
+      return true;
+    },
+  );
+});
+
+test("project-access errors do not misdiagnose missing authentication", async (context) => {
+  const fixture = await launcherFixture(context, {
+    convex: "console.error('Forbidden: no access to deployment'); process.exitCode = 1;",
+  });
+  await assert.rejects(acquireQaLease({ kind: "telegram-test-userbot", ...fixture }), (error) => {
+    assert.match(error.message, /access to the broker project/);
+    assert.doesNotMatch(error.message, /Ask the user to provide authenticated/);
+    return true;
+  });
+});
+
+test("cancellation joins the active Convex launcher and never tries another", async (context) => {
+  const fs = await import("node:fs");
+  const path = await import("node:path");
+  const fixture = await launcherFixture(context, {
+    // A create event can arrive before writeFileSync publishes the PID bytes.
+    convex: `
+const pidPath = require('node:path').join(__dirname, 'pid');
+fs.writeFileSync(pidPath + '.tmp', String(process.pid));
+fs.renameSync(pidPath + '.tmp', pidPath);
+setInterval(() => {}, 1000);
+`,
+    bunx: authenticatedLauncher,
+  });
+  const pidPath = path.join(fixture.convexProjectDir, "pid");
+  const started = Promise.withResolvers();
+  const watcher = fs.watch(fixture.convexProjectDir, () => {
+    if (fs.existsSync(pidPath)) started.resolve();
+  });
+  const controller = new AbortController();
+  const reason = new Error("cancelled credential lookup");
+  const pending = acquireQaLease({
+    kind: "telegram-test-userbot",
+    ...fixture,
+    signal: controller.signal,
+    fetchImpl: async () => assert.fail("cancelled discovery cannot acquire a lease"),
+  }).catch((error) => error);
+  let timer;
+  try {
+    await Promise.race([
+      started.promise,
+      new Promise((_, reject) => {
+        timer = setTimeout(() => reject(new Error("launcher did not start")), 5_000);
+      }),
+    ]);
+    controller.abort(reason);
+    assert.equal(await pending, reason);
+    assert.throws(() => process.kill(Number(fs.readFileSync(pidPath, "utf8")), 0), {
+      code: "ESRCH",
+    });
+    assert.deepEqual(
+      fixture.calls().map(({ name }) => name),
+      ["convex"],
+    );
+  } finally {
+    clearTimeout(timer);
+    controller.abort(reason);
+    await pending;
+    watcher.close();
+  }
+});
+
+test("normal scoped release revokes the lease without turning successful work into cancellation", async () => {
+  const { withTelegramRun } = await import("./telegram-run-scope.mjs");
+  let lease;
+  const operations = [];
+  const result = await withTelegramRun(async (scope) => {
+    lease = await acquireQaLease({
+      kind: "telegram-test-userbot",
+      env,
+      fetchImpl: async (url) => {
+        operations.push(url.split("/").at(-1));
+        return Response.json(
+          url.endsWith("/acquire")
+            ? { status: "ok", credentialId: "owned", leaseToken: "token", payload: {} }
+            : { status: "ok" },
+        );
+      },
+    });
+    scope.observeLease({
+      assertLeaseHealthy: lease.assertHealthy,
+      whenLeaseUnhealthy: lease.whenUnhealthy,
+      release: lease.release,
+    });
+    return "recorded";
+  });
+  assert.equal(result, "recorded");
+  assert.deepEqual(operations, ["acquire", "heartbeat", "release"]);
+  assert.throws(() => lease.assertHealthy(), /released/);
 });

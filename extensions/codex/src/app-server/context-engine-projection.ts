@@ -51,21 +51,56 @@ const MAX_TEXT_PART_CHARS = 128_000;
 const APPROX_RENDERED_CHARS_PER_TOKEN = 4;
 // Codex app-server validates the summed v2 turn/start text input against
 // codex-rs/protocol/src/user_input.rs::MAX_USER_INPUT_TEXT_CHARS.
-const CODEX_TURN_START_TEXT_INPUT_MAX_CHARS = 1 << 20;
+export const CODEX_TURN_START_TEXT_INPUT_MAX_CHARS = 1 << 20;
 /** Default token reserve kept out of rendered context-engine prompt text. */
 const DEFAULT_CODEX_PROJECTION_RESERVE_TOKENS = 20_000;
 const MIN_PROMPT_BUDGET_RATIO = 0.5;
 const MIN_PROMPT_BUDGET_TOKENS = 8_000;
+const CODEX_CONTEXT_SENDER_FIELD_MAX_CHARS = 256;
+
+/**
+ * This projection has no access to agent-core's private compaction helper, but
+ * must keep the same attribution contract: a stable ID is identity; display
+ * labels are optional metadata, never provenance on their own.
+ */
+function formatCodexContextSenderSuffix(message: AgentMessage): string {
+  if (message.role !== "user") {
+    return "";
+  }
+  const metadata = Reflect.get(message, "__openclaw");
+  if (!metadata || typeof metadata !== "object") {
+    return "";
+  }
+  const normalize = (value: unknown): string | undefined => {
+    if (typeof value !== "string") {
+      return undefined;
+    }
+    const normalized = value.replaceAll("\0", "").trim();
+    return normalized
+      ? truncateUtf16Safe(normalized, CODEX_CONTEXT_SENDER_FIELD_MAX_CHARS)
+      : undefined;
+  };
+  // SAFETY: object narrowing above guarantees a record; each sender field is validated below.
+  const record = metadata as Record<string, unknown>;
+  const id = normalize(record.senderId);
+  if (!id) {
+    return "";
+  }
+  const name = normalize(record.senderName);
+  const username = normalize(record.senderUsername);
+  return ` sender=${JSON.stringify({ id, ...(name ? { name } : {}), ...(username ? { username } : {}) })}`;
+}
 
 // Codex scans every turn text input byte-for-byte for explicit `$name` skill
-// mentions and `[@name](plugin://…)` links (codex-rs/skills/src/mentions.rs);
+// mentions and `[@name](plugin://…)` links (codex-rs/skills/src/mentions.rs),
+// including whitespace accepted between the label and link target;
 // quoted history must never count as a current explicit invocation, so swap
 // the sigils to same-length fullwidth lookalikes (same technique as
 // escapeCodexChatText). Only the raw current request stays selectable.
 export function neutralizeCodexExplicitMentionSigils(text: string): string {
   return text
     .replace(/\$(?=[A-Za-z0-9_:-])/gu, "＄")
-    .replace(/\[@(?=[A-Za-z0-9_:-]+\]\()/gu, "[＠");
+    .replace(/\[@(?=[A-Za-z0-9_:-]+\]\s*\()/gu, "[＠");
 }
 
 /** Hidden durable notes are context; transient runtime carriers are current-turn only. */
@@ -452,7 +487,10 @@ async function renderMessagesForCodexContext(
       continue;
     }
     const separator = totalChars > 0 ? "\n\n" : "";
-    const chunk = `[${message.role}]\n${text}${separator}`;
+    // The context-engine path owns a second history projection. Keep its user
+    // labels aligned with generic compaction: only authenticated stable IDs
+    // establish speaker provenance; legacy/name-only rows remain anonymous.
+    const chunk = `[${message.role}${formatCodexContextSenderSuffix(message)}]\n${text}${separator}`;
     totalChars += chunk.length;
     if (remaining > 0) {
       // The final truncation below owns the surrogate-safe boundary after adding its marker.

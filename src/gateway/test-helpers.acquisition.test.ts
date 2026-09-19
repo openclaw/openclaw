@@ -54,6 +54,8 @@ type AcquisitionPeer = {
   requests: ReturnType<typeof parseMinimalGatewayRequestFrame>[];
   receivedUpgrade: () => boolean;
   waitForUpgrade: (signal: AbortSignal) => Promise<unknown>;
+  waitForOpen: (signal: AbortSignal) => Promise<void>;
+  waitForConnect: (signal: AbortSignal) => Promise<void>;
   isListening: () => boolean;
   failTransport: () => Promise<Error>;
   close: () => Promise<void>;
@@ -100,6 +102,7 @@ async function withAcquisitionPeer(
   vi.doMock("../../packages/gateway-client/src/websocket.js", observeWebSocket);
   const sockets = new Set<Socket>();
   const requests: ReturnType<typeof parseMinimalGatewayRequestFrame>[] = [];
+  const connectReceived = createDeferred();
   let receivedUpgrade = false;
   const server = createServer();
   const wss = new WebSocketServer({ noServer: true, maxPayload: 64 * 1024 });
@@ -134,6 +137,9 @@ async function withAcquisitionPeer(
       ws.on("message", (data) => {
         const frame = parseMinimalGatewayRequestFrame(data);
         requests.push(frame);
+        if (frame.method === "connect") {
+          connectReceived.resolve();
+        }
         if (
           frame.method === "connect" &&
           (behavior === "transport error" || behavior === "hello then transport error")
@@ -199,6 +205,17 @@ async function withAcquisitionPeer(
       requests,
       receivedUpgrade: () => receivedUpgrade,
       waitForUpgrade: (signal) => once(server, "upgrade", { signal }),
+      waitForOpen: async (signal) => {
+        await once(server, "upgrade", { signal });
+        const client = clients.at(-1);
+        if (!client) {
+          throw new Error("acquisition peer has no opening client");
+        }
+        if (client.readyState !== WebSocket.OPEN) {
+          await once(client, "open", { signal });
+        }
+      },
+      waitForConnect: (signal) => racePromiseWithAbortSignal(connectReceived.promise, signal),
       isListening: () => server.listening,
       failTransport: () => {
         for (const socket of sockets) {
@@ -251,16 +268,23 @@ function mockPeerGateway(peer: AcquisitionPeer, close = peer.close) {
   return start;
 }
 
-async function verifyHeldUpgradeFailure(
+async function verifyAcquisitionTimeout(
   peer: AcquisitionPeer,
   timeoutMs: number,
   signal: AbortSignal,
   acquire: () => Promise<unknown>,
   verifyFailure: (failure: unknown) => void,
+  phase: "upgrade" | "challenge" | "response" = "upgrade",
 ): Promise<void> {
-  const upgradeAbort = new AbortController();
+  const readinessAbort = new AbortController();
   vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-  const upgrade = peer.waitForUpgrade(AbortSignal.any([signal, upgradeAbort.signal]));
+  const readinessSignal = AbortSignal.any([signal, readinessAbort.signal]);
+  const ready =
+    phase === "upgrade"
+      ? peer.waitForUpgrade(readinessSignal)
+      : phase === "challenge"
+        ? peer.waitForOpen(readinessSignal)
+        : peer.waitForConnect(readinessSignal);
   const failure = acquire().then(
     () => undefined,
     (reason: unknown) => reason,
@@ -269,11 +293,15 @@ async function verifyHeldUpgradeFailure(
   const checked = failure.then(verifyFailure);
   void checked.catch(() => {});
   try {
-    expect(await Promise.race([upgrade.then(() => "upgrade"), failure.then(() => "settled")])).toBe(
-      "upgrade",
+    expect(await Promise.race([ready.then(() => "ready"), failure.then(() => "settled")])).toBe(
+      "ready",
     );
+    // Opening settles before shared-auth installs its challenge waiter.
+    await vi.advanceTimersByTimeAsync(0);
     await vi.advanceTimersByTimeAsync(timeoutMs - 1);
-    expect(peer.clients[0]?.readyState).toBe(WebSocket.CONNECTING);
+    expect(peer.clients[0]?.readyState).toBe(
+      phase === "upgrade" ? WebSocket.CONNECTING : WebSocket.OPEN,
+    );
     await vi.advanceTimersByTimeAsync(1);
     await racePromiseWithAbortSignal(checked, signal);
   } catch (error) {
@@ -286,9 +314,9 @@ async function verifyHeldUpgradeFailure(
       () => Promise.allSettled([failure, checked]),
     );
   } finally {
-    upgradeAbort.abort();
+    readinessAbort.abort();
     vi.useRealTimers();
-    await Promise.allSettled([upgrade]);
+    await Promise.allSettled([ready]);
   }
 }
 
@@ -351,6 +379,7 @@ export async function verifyCompositeAcquisition({
         const started =
           helper === "GatewayClient"
             ? startGatewayWithClient({
+                port: peer.port,
                 cfg: {},
                 configPath: state.statePath("client-config.json"),
                 token: "synthetic-token",
@@ -500,12 +529,21 @@ describe("raw Gateway helper acquisition ownership", () => {
             expect(client.listenerCount("open")).toBe(0);
           };
           if (behavior === "hold upgrade") {
-            await verifyHeldUpgradeFailure(
+            await verifyAcquisitionTimeout(
               peer,
               helper === "tracked" ? 5_000 : helper === "webchat" ? 10_000 : 1_000,
               context.signal,
               acquire,
               verifyFailure,
+            );
+          } else if (behavior === "no challenge" || behavior === "no response") {
+            await verifyAcquisitionTimeout(
+              peer,
+              helper === "device request" ? 5_000 : behavior === "no challenge" ? 2_000 : 10_000,
+              context.signal,
+              acquire,
+              verifyFailure,
+              behavior === "no challenge" ? "challenge" : "response",
             );
           } else {
             verifyFailure(
@@ -647,6 +685,7 @@ it("retains a failed acquisition owner", async () => {
             const previousConfig = process.env.OPENCLAW_CONFIG_PATH;
             const previousPort = process.env.OPENCLAW_GATEWAY_PORT;
             const started = await startGatewayWithClient({
+              port: peer.port,
               cfg: {},
               configPath,
               token: "synthetic-token",

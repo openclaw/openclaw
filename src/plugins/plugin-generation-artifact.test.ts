@@ -106,61 +106,85 @@ it.each([
   expect(artifact.assertSourceCurrent).toThrow();
 });
 
-it.each(
-  ["prepare", "capture"].flatMap((acquisition) =>
+it.each([
+  ...["prepare", "capture"].flatMap((acquisition) =>
     ["manifest", "entry", "body"].map((change) => ({ acquisition, change })),
   ),
-)("retains $change identity after package $acquisition and disposal", ({ acquisition, change }) => {
-  const root = fs.mkdtempSync(path.join(os.tmpdir(), "plugin-package-identity-"));
-  cleanups.push(() => fs.rmSync(root, { recursive: true, force: true }));
-  const dependency = path.join(root, "node_modules", "fixture");
-  fs.mkdirSync(dependency, { recursive: true });
-  const manifest = path.join(dependency, "package.json");
-  const dependencyEntry = path.join(dependency, "index.cjs");
-  const body = path.join(dependency, "body.cjs");
-  const entry = path.join(root, "index.cjs");
-  fs.writeFileSync(path.join(root, "package.json"), '{"imports":{"#selected":"fixture"}}');
-  fs.writeFileSync(entry, "exports.read = name => require(name);");
-  fs.writeFileSync(manifest, '{"main":"index.cjs"}');
-  fs.writeFileSync(dependencyEntry, "exports.value = require('./body.cjs');");
-  fs.writeFileSync(body, "module.exports = 'initial body';");
-  const artifact = capturePluginGenerationArtifact(root, entry);
-  cleanups.push(artifact.dispose);
-  const initialDigest = artifact.sourceDigest;
-  const capturedDependency = expectDefined(
-    artifact.sourceAliases[dependency],
-    "dependency capture",
-  );
-  if (change === "manifest") {
-    fs.writeFileSync(manifest, '{"main":"replacement.cjs"}');
-  } else if (change === "entry") {
-    fs.writeFileSync(dependencyEntry, "exports.value = 'replaced entry';");
-  }
-  fs.writeFileSync(body, "module.exports = 'first demand';");
-  if (acquisition === "prepare") {
-    artifact.prepareModule(path.join(capturedDependency, "index.cjs"));
-  } else {
-    expect(
-      artifact.captureModule(artifact.resolve(entry), "#selected", ["node", "require"]),
-    ).toMatchObject({ retryNative: true });
-  }
-  expect(fs.readFileSync(path.join(capturedDependency, "package.json"), "utf8")).toBe(
-    '{"main":"index.cjs"}',
-  );
-  expect(fs.readFileSync(path.join(capturedDependency, "index.cjs"), "utf8")).toBe(
-    "exports.value = require('./body.cjs');",
-  );
-  expect(fs.readFileSync(path.join(capturedDependency, "body.cjs"), "utf8")).toBe(
-    "module.exports = 'first demand';",
-  );
-  expect(artifact.sourceDigest).toBe(initialDigest);
-  artifact.dispose();
-  if (change === "body") {
-    expect(artifact.assertSourceCurrent).not.toThrow();
-    fs.writeFileSync(body, "module.exports = 'later body';");
-  }
-  expect(artifact.assertSourceCurrent).toThrow();
-});
+  { acquisition: "prepare relative", change: "body" },
+  { acquisition: "prepare dot segments", change: "body" },
+])(
+  "retains $change identity after package $acquisition and disposal",
+  ({ acquisition, change }) => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), "plugin-package-identity-"));
+    cleanups.push(() => fs.rmSync(root, { recursive: true, force: true }));
+    const dependency = path.join(root, "node_modules", "fixture");
+    fs.mkdirSync(dependency, { recursive: true });
+    const manifest = path.join(dependency, "package.json");
+    const dependencyEntry = path.join(dependency, "index.cjs");
+    const body = path.join(dependency, "body.cjs");
+    const entry = path.join(root, "index.cjs");
+    fs.writeFileSync(path.join(root, "package.json"), '{"imports":{"#selected":"fixture"}}');
+    fs.writeFileSync(entry, "exports.read = name => require(name);");
+    fs.writeFileSync(manifest, '{"main":"index.cjs"}');
+    fs.writeFileSync(dependencyEntry, "exports.value = require('./body.cjs');");
+    fs.writeFileSync(body, "module.exports = 'initial body';");
+    const artifact = capturePluginGenerationArtifact(root, entry);
+    cleanups.push(artifact.dispose);
+    const bunPreselected = Boolean(process.versions.bun);
+    if (bunPreselected) {
+      // Bun does not expose Node's package-import inspection while Jiti transforms the entry.
+      // Select the same package-map edge that the runtime resolution hook observes on demand.
+      expect(
+        artifact.captureModule(artifact.resolve(entry), "#selected", ["node", "require"]),
+      ).toMatchObject({ retryNative: true });
+    }
+    const initialDigest = artifact.sourceDigest;
+    const capturedDependency = expectDefined(
+      artifact.sourceAliases[dependency] ?? artifact.sourceAliases[fs.realpathSync(dependency)],
+      "dependency capture",
+    );
+    if (change === "manifest") {
+      fs.writeFileSync(manifest, '{"main":"replacement.cjs"}');
+    } else if (change === "entry") {
+      fs.writeFileSync(dependencyEntry, "exports.value = 'replaced entry';");
+    }
+    fs.writeFileSync(body, "module.exports = 'first demand';");
+    if (acquisition.startsWith("prepare")) {
+      const capturedEntry = path.join(capturedDependency, "index.cjs");
+      artifact.prepareModule(
+        acquisition === "prepare relative"
+          ? path.relative(process.cwd(), capturedEntry)
+          : acquisition === "prepare dot segments"
+            ? `${capturedDependency}${path.sep}unused${path.sep}..${path.sep}index.cjs`
+            : capturedEntry,
+      );
+    } else {
+      expect(
+        artifact.captureModule(artifact.resolve(entry), "#selected", ["node", "require"]),
+      ).toMatchObject({ retryNative: true });
+    }
+    expect(fs.readFileSync(path.join(capturedDependency, "package.json"), "utf8")).toBe(
+      '{"main":"index.cjs"}',
+    );
+    expect(fs.readFileSync(path.join(capturedDependency, "index.cjs"), "utf8")).toBe(
+      "exports.value = require('./body.cjs');",
+    );
+    expect(fs.readFileSync(path.join(capturedDependency, "body.cjs"), "utf8")).toBe(
+      bunPreselected ? "module.exports = 'initial body';" : "module.exports = 'first demand';",
+    );
+    expect(artifact.sourceDigest).toBe(initialDigest);
+    artifact.dispose();
+    if (change === "body") {
+      if (bunPreselected) {
+        expect(artifact.assertSourceCurrent).toThrow();
+      } else {
+        expect(artifact.assertSourceCurrent).not.toThrow();
+      }
+      fs.writeFileSync(body, "module.exports = 'later body';");
+    }
+    expect(artifact.assertSourceCurrent).toThrow();
+  },
+);
 
 it.each(["require", "import"] as const)(
   "preserves optional standalone %s while freezing missing dependencies",

@@ -1,4 +1,5 @@
 import type { ApplicationContext } from "../../app/context.ts";
+import { readDeletedSessionStartup } from "../../app/deleted-session-startup.ts";
 import {
   SESSION_NAVIGATION_INTENT_EVENT,
   type SessionNavigationIntent,
@@ -18,6 +19,7 @@ type RetentionHost = HTMLElement & { requestUpdate(): unknown };
 type RetentionBindings = {
   context: () => ApplicationContext | undefined;
   presented: () => boolean;
+  routeHref: () => string;
   layout: () => ChatSplitLayout;
   narrow: () => boolean;
   selectReplacement: (paneId: string, sourceSessionKey: string, sessionKey: string) => void;
@@ -148,6 +150,11 @@ export class ChatPageRetainedSessions {
     replacementSessionKey: string,
     preserveDraft = false,
   ): void => {
+    const context = this.bindings.context();
+    if (context && readDeletedSessionStartup(context, sessionKey)) {
+      this.host.requestUpdate();
+      return;
+    }
     const deletedPane = this.findPane(paneId, sessionKey);
     if (!preserveDraft) {
       deletedPane?.discardStagedAttachments?.();
@@ -158,7 +165,6 @@ export class ChatPageRetainedSessions {
     if (retainedKey !== undefined) {
       retained?.delete(retainedKey);
     }
-    const context = this.bindings.context();
     if (context && !preserveDraft) {
       clearPaneSessionHandoff(context, paneId, sessionKey);
     }
@@ -184,7 +190,11 @@ export class ChatPageRetainedSessions {
   }
 
   private readonly handleNavigationIntent = (event: Event) => {
-    if (!this.bindings.presented() || !(event instanceof CustomEvent)) {
+    if (
+      !this.bindings.presented() ||
+      window.location.href !== this.bindings.routeHref() ||
+      !(event instanceof CustomEvent)
+    ) {
       return;
     }
     this.cancelPreview();

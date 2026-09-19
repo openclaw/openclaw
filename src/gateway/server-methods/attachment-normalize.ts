@@ -8,6 +8,7 @@ export type RpcAttachmentInput = {
   type?: unknown;
   mimeType?: unknown;
   fileName?: unknown;
+  origin?: unknown;
   content?: unknown;
   sizeBytes?: unknown;
   durationMs?: unknown;
@@ -39,7 +40,7 @@ export function normalizeRpcAttachmentsToChatAttachments(
   // source:{type:"base64",media_type,data} payloads used by some clients.
   return (
     attachments
-      ?.map((a) => {
+      ?.map((a): ChatAttachment => {
         const source = a?.source && typeof a.source === "object" ? a.source : undefined;
         const sourceRecord = source as
           | { type?: unknown; media_type?: unknown; data?: unknown }
@@ -59,6 +60,7 @@ export function normalizeRpcAttachmentsToChatAttachments(
           mimeType: typeof a?.mimeType === "string" ? a.mimeType : sourceMimeType,
           fileName: typeof a?.fileName === "string" ? a.fileName : undefined,
           content: normalizeAttachmentContent(a?.content) ?? sourceContent,
+          ...(a?.origin === "paste" || a?.origin === "file" ? { origin: a.origin } : {}),
           ...(sizeBytes !== undefined ? { sizeBytes } : {}),
           ...(durationMs !== undefined ? { durationMs } : {}),
           ...(width !== undefined ? { width } : {}),

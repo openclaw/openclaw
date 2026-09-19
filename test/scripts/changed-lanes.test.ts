@@ -666,6 +666,7 @@ describe("scripts/changed-lanes", () => {
         .map((line) => line.replace("[check:changed:dry-run] would run: ", ""));
       expect(commands).toEqual([
         "pnpm check:no-conflict-markers",
+        "pnpm check:line-cap-ratchet --base origin/main",
         "pnpm check:changelog-attributions",
         "pnpm check:doctor-deprecation-registry",
         "pnpm lint:extensions:no-guarded-wildcard-reexports",
@@ -824,6 +825,111 @@ describe("scripts/changed-lanes", () => {
         "src/untracked.test.ts",
       ],
     });
+  });
+
+  it("compares a pending merge index with the explicit staged base through the CLI", () => {
+    const dir = makeTempRepoRoot(tempDirs, "openclaw-changed-staged-base-");
+    git(dir, ["init", "-q", "--initial-branch=main"]);
+    writeRepoFile(dir, "README.md", "initial\n");
+    commitAll(dir, "initial");
+    const fork = git(dir, ["rev-parse", "HEAD"]);
+    writeRepoFile(dir, "docs/incoming.md", "incoming main\n");
+    commitAll(dir, "incoming main");
+    const base = git(dir, ["rev-parse", "HEAD"]);
+    git(dir, ["switch", "-q", "-c", "feature", fork]);
+    writeRepoFile(dir, "src/feature.test.ts", "export const feature = 1;\n");
+    commitAll(dir, "feature");
+    git(dir, [
+      "-c",
+      "user.email=test@example.com",
+      "-c",
+      "user.name=Test User",
+      "merge",
+      "--no-commit",
+      "--no-ff",
+      "main",
+    ]);
+    writeRepoFile(dir, "src/unstaged.ts", "export const unstaged = 1;\n");
+
+    expect(runChangedLanesCli(dir, ["--json", "--staged"]).paths).toEqual(["docs/incoming.md"]);
+    expect(runChangedLanesCli(dir, ["--json", "--staged", "--base", base]).paths).toEqual([
+      "src/feature.test.ts",
+    ]);
+    const checked = runRepoScript(
+      "scripts/check-changed.mjs",
+      ["--dry-run", "--staged", `--base=${base}`],
+      createNestedGitEnv(),
+      dir,
+    );
+    expect(checked.status, checked.stderr).toBe(0);
+    expect(checked.stderr).toContain("-- src/feature.test.ts");
+    expect(checked.stderr).not.toContain("docs/incoming.md");
+    expect(checked.stderr).not.toContain("src/unstaged.ts");
+    for (const command of [
+      "check:line-cap-ratchet",
+      "check:max-lines-ratchet",
+      "check:assertion-safety",
+    ]) {
+      expect(checked.stderr).toContain(`${command} --staged --base ${base}`);
+    }
+    expect(checked.stderr).toContain(
+      `scripts/report-test-temp-creations.mjs --staged --base ${base}`,
+    );
+    const delegated = buildChangedCheckCrabboxArgs(["--staged", "--base", base], { cwd: dir });
+    expect(delegated.slice(delegated.indexOf("check:changed") + 1)).toEqual([
+      "--paths-from-git",
+      "--base",
+      base,
+      "--head",
+      "HEAD",
+      "--",
+      "src/feature.test.ts",
+    ]);
+  });
+
+  it("classifies staged package scripts against the explicit base instead of HEAD", () => {
+    const dir = makeTempRepoRoot(tempDirs, "openclaw-changed-staged-package-base-");
+    git(dir, ["init", "-q", "--initial-branch=main"]);
+    writeRepoFile(
+      dir,
+      "package.json",
+      prettyJson({ dependencies: { fixture: "1" }, scripts: { check: "old" } }),
+    );
+    commitAll(dir, "initial");
+    const fork = git(dir, ["rev-parse", "HEAD"]);
+    writeRepoFile(
+      dir,
+      "package.json",
+      prettyJson({ dependencies: { fixture: "2" }, scripts: { check: "old" } }),
+    );
+    commitAll(dir, "incoming dependency");
+    const base = git(dir, ["rev-parse", "HEAD"]);
+    git(dir, ["switch", "-q", "-c", "feature", fork]);
+    writeRepoFile(
+      dir,
+      "package.json",
+      prettyJson({ dependencies: { fixture: "2" }, scripts: { check: "new" } }),
+    );
+    git(dir, ["add", "package.json"]);
+    // A worktree-only dependency change must not broaden index classification.
+    writeRepoFile(
+      dir,
+      "package.json",
+      prettyJson({ dependencies: { fixture: "3" }, scripts: { check: "new" } }),
+    );
+    const explicit = runChangedLanesCli(dir, ["--json", "--staged", `--base=${base}`]);
+    expect(explicit.paths).toEqual(["package.json"]);
+    expect(explicit.lanes.tooling).toBe(true);
+    expect(explicit.lanes.all).toBe(false);
+    expect(runChangedLanesCli(dir, ["--json", "--staged"]).lanes.releaseMetadata).toBe(true);
+  });
+
+  it("keeps staged discovery usable before the first commit", () => {
+    const dir = makeTempRepoRoot(tempDirs, "openclaw-changed-staged-unborn-");
+    git(dir, ["init", "-q", "--initial-branch=main"]);
+    writeRepoFile(dir, "README.md", "initial\n");
+    git(dir, ["add", "README.md"]);
+    expect(runChangedLanesCli(dir, ["--json", "--staged"]).paths).toEqual(["README.md"]);
   });
 
   it("includes staged added, modified, and deleted files in the changed format check", () => {
@@ -1164,6 +1270,7 @@ describe("scripts/changed-lanes", () => {
     "src/config/zod-schema.core.ts",
     "src/channels/bundled-channel-ids.generated.ts",
     "src/channels/plugins/config-schema.ts",
+    "src/plugins/sdk-alias-normalization.ts",
     "scripts/load-channel-config-surface.ts",
   ])("routes %s through the bundled channel config metadata lane", (changedPath) => {
     const result = detectChangedLanesForPaths({ paths: [changedPath], base: "HEAD", staged: true });
@@ -2296,6 +2403,7 @@ describe("scripts/changed-lanes", () => {
     });
     expect(plan.commands.map((command) => command.name)).toEqual([
       "conflict markers",
+      "line-cap growth ratchet",
       "max-lines suppression ratchet",
       "assertion SAFETY comment ratchet",
       "changelog attributions",
@@ -2513,6 +2621,10 @@ describe("scripts/changed-lanes", () => {
     expect(
       plan.commands.find((command) => command.args[0] === "release-metadata:check")?.args,
     ).toEqual(["release-metadata:check", "--base", "main", "--head", "feature"]);
+    const staged = createChangedCheckPlan(result, { staged: true, base: "main" });
+    expect(
+      staged.commands.find((command) => command.name === "release metadata guard")?.args,
+    ).toEqual(["release-metadata:check", "--staged", "--base", "main"]);
     expect(plan.commands.find((command) => command.args[0] === "changelog:check")?.args).toEqual([
       "changelog:check",
     ]);
@@ -3306,6 +3418,15 @@ describe("scripts/changed-lanes", () => {
       expected: {
         worktree: ["check:max-lines-ratchet", "--base", "main"],
         staged: ["check:max-lines-ratchet", "--staged", "--base", "HEAD"],
+      },
+    },
+    {
+      name: "blocks line-cap growth with worktree and staged bases",
+      commandName: "line-cap growth ratchet",
+      worktreeOptions: { base: "main" },
+      expected: {
+        worktree: ["check:line-cap-ratchet", "--base", "main"],
+        staged: ["check:line-cap-ratchet", "--staged", "--base", "HEAD"],
       },
     },
     {

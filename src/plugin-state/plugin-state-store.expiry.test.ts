@@ -4,7 +4,7 @@ import {
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
 import {
-  countPluginStateLiveEntries,
+  getPluginStateCapacity,
   createPluginStateKeyedStore,
   createPluginStateSyncKeyedStore,
   resetPluginStateStoreForTests,
@@ -13,7 +13,6 @@ import {
 import {
   clearPluginStateStoreForTests,
   seedPluginStateEntriesForTests,
-  setMaxPluginStateEntriesPerPluginForTests,
 } from "./plugin-state-store.test-helpers.js";
 
 let testState: OpenClawTestState | undefined;
@@ -29,7 +28,6 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.useRealTimers();
-  setMaxPluginStateEntriesPerPluginForTests(undefined);
   resetPluginStateStoreForTests({ closeDatabase: false });
 });
 
@@ -236,7 +234,6 @@ describe("plugin state expiry cleanup", () => {
 
   it("rolls back bounded expiry cleanup when the enclosing namespace write fails", async () => {
     const now = Date.now();
-    setMaxPluginStateEntriesPerPluginForTests(2);
     seedPluginStateEntriesForTests([
       ...Array.from({ length: 1_031 }, (_, index) => ({
         pluginId: "discord",
@@ -247,20 +244,21 @@ describe("plugin state expiry cleanup", () => {
       })),
       {
         pluginId: "discord",
-        namespace: "durable-sibling",
+        namespace: "rollback-expiry",
         key: "first",
         value: { durable: 1 },
       },
       {
         pluginId: "discord",
-        namespace: "durable-sibling",
+        namespace: "rollback-expiry",
         key: "second",
         value: { durable: 2 },
       },
     ]);
     const store = createPluginStateKeyedStore("discord", {
       namespace: "rollback-expiry",
-      maxEntries: 10,
+      maxEntries: 2,
+      overflowPolicy: "reject-new",
     });
 
     await expect(store.register("fresh", { fresh: true })).rejects.toMatchObject({
@@ -269,6 +267,6 @@ describe("plugin state expiry cleanup", () => {
     expect(sweepExpiredPluginStateEntries()).toBe(1_024);
     expect(sweepExpiredPluginStateEntries()).toBe(7);
     await expect(store.lookup("fresh")).resolves.toBeUndefined();
-    expect(countPluginStateLiveEntries("discord")).toBe(2);
+    expect(getPluginStateCapacity("discord").liveEntries).toBe(2);
   });
 });

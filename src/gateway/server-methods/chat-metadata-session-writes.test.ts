@@ -3,6 +3,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { expect, it, vi } from "vitest";
 import { setRuntimeConfigSnapshot } from "../../config/config.js";
 import {
+  appendTranscriptEventSync,
   assignSessionOwner,
   listSessionEntriesCore,
   listSessionParticipantsReadOnly,
@@ -17,12 +18,17 @@ import {
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
+import { bumpGatewayAccessRevision } from "../gateway-access-revision.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { chatHistoryHandlers } from "./chat-history-handler.js";
 import type { GatewayRequestContext, RespondFn } from "./types.js";
 
 const cases = [
   { write: "tracked sibling update", allowed: true },
+  { write: "raw sibling update", allowed: true },
+  { write: "sibling transcript append", allowed: true },
+  { write: "sibling cache replacement", allowed: true },
   { write: "canonical sibling owner", allowed: true },
   { write: "canonical sibling participant", allowed: true },
   { write: "legacy sibling owner", allowed: true },
@@ -48,8 +54,15 @@ const cases = [
   { write: "raw after sibling participant", allowed: false },
   { write: "tracked selected update", allowed: false },
   { write: "selected lifecycle change", allowed: false },
-  { write: "external sibling update", allowed: false },
-  { write: "external selected identical recreation", allowed: false },
+  { write: "external sibling update", allowed: true },
+  // Identical target facts remain publishable even if the row was recreated.
+  { write: "external selected identical recreation", allowed: true },
+  { write: "external selected fully restored recreation", allowed: true },
+  { write: "external selected recreated sessionId", allowed: false },
+  { write: "external selected recreated payload", allowed: false },
+  { write: "external selected recreated lifecycle", allowed: false },
+  { write: "runtime config replacement", allowed: false },
+  { write: "access revision change", allowed: false },
 ] as const;
 
 it.each(
@@ -59,6 +72,7 @@ it.each(
 )("metadata read across $write with $cache cache", async ({ write, allowed, cache }) => {
   await withOpenClawTestState({ label: "metadata-cache-boundary" }, async (state) => {
     const config = {};
+    let runtimeConfig = config;
     await state.writeConfig(config);
     setRuntimeConfigSnapshot(config);
     const selected = { agentId: "main", sessionKey: "agent:main:metadata-selected" };
@@ -154,6 +168,24 @@ it.each(
       expect(scope.isCurrent?.()).toBe(true);
       if (write === "tracked sibling update") {
         await upsertSessionEntryCore(sibling, { label: "changed sibling" });
+      } else if (write === "raw sibling update" || write === "sibling cache replacement") {
+        database.db
+          .prepare("UPDATE session_nodes SET updated_at = updated_at + 1 WHERE session_key = ?")
+          .run(sibling.sessionKey);
+        if (write === "sibling cache replacement") {
+          listSessionEntriesCore({ ...sibling, projection: "list" });
+        }
+      } else if (write === "sibling transcript append") {
+        expect(
+          appendTranscriptEventSync(
+            { ...sibling, sessionId: "sibling" },
+            { type: "session", id: "sibling" },
+          ),
+        ).toEqual({ ok: true, value: true });
+      } else if (write === "runtime config replacement") {
+        runtimeConfig = {};
+      } else if (write === "access revision change") {
+        bumpGatewayAccessRevision();
       } else if (write.startsWith("compound")) {
         runOpenClawAgentWriteTransaction((current) => {
           writeSessionEntry(current, writeTarget.sessionKey, {
@@ -250,6 +282,9 @@ it.each(
               .prepare("UPDATE session_nodes SET updated_at = updated_at + 1 WHERE session_key = ?")
               .run(sibling.sessionKey);
           } else {
+            const beforeRow = external
+              .prepare("SELECT rowid, * FROM session_nodes WHERE session_key = ?")
+              .get(selected.sessionKey);
             external.exec("CREATE TEMP TABLE saved_node AS SELECT * FROM session_nodes;");
             external
               .prepare("DELETE FROM session_nodes WHERE session_key = ?")
@@ -257,10 +292,40 @@ it.each(
             external
               .prepare("INSERT INTO session_nodes SELECT * FROM saved_node WHERE session_key = ?")
               .run(selected.sessionKey);
+            if (write === "external selected fully restored recreation") {
+              external
+                .prepare(
+                  "UPDATE session_nodes SET entry_valid = 1, rowid = ? WHERE session_key = ?",
+                )
+                .run(expectDefined(beforeRow?.rowid, "selected rowid"), selected.sessionKey);
+              expect(
+                external
+                  .prepare("SELECT rowid, * FROM session_nodes WHERE session_key = ?")
+                  .get(selected.sessionKey),
+              ).toEqual(beforeRow);
+            } else if (write === "external selected recreated sessionId") {
+              external
+                .prepare(
+                  "UPDATE session_nodes SET current_session_id = 'replacement', entry_json = json_set(entry_json, '$.sessionId', 'replacement') WHERE session_key = ?",
+                )
+                .run(selected.sessionKey);
+            } else if (write === "external selected recreated payload") {
+              rawSelectedWrite();
+            } else if (write === "external selected recreated lifecycle") {
+              external
+                .prepare(
+                  "UPDATE session_nodes SET entry_json = json_set(entry_json, '$.lifecycleRevision', 'replacement') WHERE session_key = ?",
+                )
+                .run(selected.sessionKey);
+            }
           }
         } finally {
           external.close();
         }
+      }
+      if (allowed) {
+        expect(scope.assertCurrent).toBeDefined();
+        scope.assertCurrent!();
       }
       return metadata;
     });
@@ -270,7 +335,10 @@ it.each(
       .then(() =>
         handler({
           params: { sessionKey: selected.sessionKey },
-          context: createDirectChatContext({ getRuntimeConfig: () => config, readChatMetadata }),
+          context: createDirectChatContext({
+            getRuntimeConfig: () => runtimeConfig,
+            readChatMetadata,
+          }),
           respond,
           client: null,
           req: { type: "req", id: "metadata-cache-boundary", method: "chat.metadata" },
@@ -357,6 +425,7 @@ it.each(
         });
       }
     }
+    await cleanupSessionStateForTest({ stateDir: state.stateDir });
     expect(hasOpenClawAgentDatabaseAsyncResources()).toBe(false);
   });
 });

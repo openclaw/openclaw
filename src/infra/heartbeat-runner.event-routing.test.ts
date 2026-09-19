@@ -1,5 +1,6 @@
 // Covers heartbeat delivery routes for queued events and isolated completions.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import type { InternalGetReplyOptions } from "../auto-reply/reply/get-reply.types.js";
 import { drainFormattedSystemEvents } from "../auto-reply/reply/session-system-events.js";
 import { getReplySystemEventContext } from "../auto-reply/reply/system-event-session-key.js";
@@ -17,7 +18,11 @@ import {
   setupTelegramHeartbeatPluginRuntimeForTests,
   withTempHeartbeatSandbox,
 } from "./heartbeat-runner.test-utils.js";
-import { requestHeartbeatAndWait, setHeartbeatWakeHandler } from "./heartbeat-wake.js";
+import {
+  requestHeartbeatAndWait,
+  setHeartbeatWakeHandler,
+  type HeartbeatRunResult,
+} from "./heartbeat-wake.js";
 import { enqueueSystemEvent, peekSystemEvents, resetSystemEventsForTest } from "./system-events.js";
 
 beforeEach(() => {
@@ -298,14 +303,20 @@ describe("Heartbeat event routing", () => {
       replySpy.mockImplementation(async (ctx) => ({
         text: ctx.InternalTurnSource === "exec" ? "Command completed" : "Reminder handled",
       }));
+      const followUp = createDeferred<HeartbeatRunResult>();
       const runner = startHeartbeatRunner({
         cfg,
-        runOnce: (opts) =>
-          runHeartbeatOnce({
+        runOnce: async (opts) => {
+          const result = await runHeartbeatOnce({
             ...opts,
             cfg,
             deps: { getReplyFromConfig: replySpy, telegram: sendTelegram },
-          }),
+          });
+          if (opts.source === "cron") {
+            followUp.resolve(result);
+          }
+          return result;
+        },
       });
       try {
         await requestHeartbeatAndWait({
@@ -316,14 +327,16 @@ describe("Heartbeat event routing", () => {
           sessionKey: queueKey,
           coalesceMs: 0,
         });
-        await vi.waitFor(() => expect(replySpy).toHaveBeenCalledTimes(2));
+        // The cron wake owns a separate dispatch and storage lifecycle after the exec waiter settles.
+        await expect(followUp.promise).resolves.toMatchObject({ status: "ran" });
+        expect(replySpy).toHaveBeenCalledTimes(2);
         expect(
           replySpy.mock.calls.map(([ctx]) => [ctx.AgentId, ctx.SessionKey, ctx.InternalTurnSource]),
         ).toEqual([
           ["ops", isolatedKey, "exec"],
           ["ops", isolatedKey, "cron"],
         ]);
-        await vi.waitFor(() => expect(peekSystemEvents(queueKey)).toEqual([]));
+        expect(peekSystemEvents(queueKey)).toEqual([]);
         expect(peekSystemEvents(baseKey)).toEqual(["Unrelated base event"]);
         expect(readEntry(baseKey)?.sessionId).toBe("base-conversation");
         expect(readEntry(queueKey)).toBeUndefined();

@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { listCoreGatewayMethodNames } from "./methods/core-descriptors.js";
+import { listCoreGatewayMethodNames } from "./methods/core-method-policy.js";
 import { createGatewayAuxHandlers } from "./server-aux-handlers.js";
 import { coreGatewayHandlers } from "./server-methods/core-handlers.js";
 import type { GatewayRequestHandlers } from "./server-methods/types.js";

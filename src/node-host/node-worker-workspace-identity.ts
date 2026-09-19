@@ -4,6 +4,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { extractErrorCode } from "@openclaw/normalization-core/error-coercion";
 import { hasNodeErrorCode, isPathInside } from "../infra/path-guards.js";
+import { tightenPrivateDirRootSync } from "../infra/private-dir-mode.js";
 import type { NodeWorkerWorkspaceRetainInput } from "../worker/node-workspace-retain-protocol.js";
 import type { NodeWorkerPreparedWorkspaceRow } from "./node-worker-prepared-workspace-store.js";
 
@@ -223,12 +224,13 @@ export function resolveNodeManagedWorkspaceIdentity(
 
 export function ensureContainedDirectory(parent: string, name: string): string {
   const candidate = path.join(parent, name);
-  fs.mkdirSync(candidate, { recursive: true });
+  fs.mkdirSync(candidate, { recursive: true, mode: 0o700 });
   const stats = fs.lstatSync(candidate);
   const resolved = fs.realpathSync.native(candidate);
   if (stats.isSymbolicLink() || !stats.isDirectory() || !isPathInside(parent, resolved)) {
     throw new Error("INVALID_REQUEST: node worker workspace path escaped its owner root");
   }
+  tightenPrivateDirRootSync(resolved, 0o700);
   return resolved;
 }
 

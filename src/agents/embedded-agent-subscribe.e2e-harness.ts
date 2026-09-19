@@ -237,3 +237,26 @@ export function expectSingleAgentEventText(calls: Array<unknown[]>, text: string
   expect(payloads[0]?.text).toBe(text);
   expect(payloads[0]?.delta).toBe(text);
 }
+
+export function emitToolRun(params: {
+  emit: (evt: unknown) => void;
+  toolName: string;
+  toolCallId: string;
+  args?: Record<string, unknown>;
+  isError: boolean;
+  result: unknown;
+}): void {
+  params.emit({
+    type: "tool_execution_start",
+    toolName: params.toolName,
+    toolCallId: params.toolCallId,
+    args: params.args,
+  });
+  params.emit({
+    type: "tool_execution_end",
+    toolName: params.toolName,
+    toolCallId: params.toolCallId,
+    isError: params.isError,
+    result: params.result,
+  });
+}

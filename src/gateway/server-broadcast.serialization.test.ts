@@ -2,8 +2,10 @@
 // not consume per-client seqs (which would fire every client's gap detector and
 // cause a synchronized reconnect storm) and must leave a server-side record.
 import { once } from "node:events";
-import { existsSync } from "node:fs";
+import { existsSync, mkdirSync } from "node:fs";
 import type { AddressInfo } from "node:net";
+import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { rawDataToString } from "@openclaw/gateway-client/websocket-data";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { WebSocket, WebSocketServer, type RawData } from "ws";
@@ -17,6 +19,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { setVerbose } from "../global-state.js";
 import type { SystemPresence } from "../infra/system-presence.js";
 import { resetLogger, setLoggerOverride } from "../logging/logger.js";
+import { resolveOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createPresenceRecipientProjection } from "./presence-projection.js";
@@ -79,6 +82,31 @@ afterEach(() => {
 });
 
 describe("broadcast serialization failures", () => {
+  it("keeps recipient session permissions separate at the same sequence and profile", () => {
+    const first = makeClient("first");
+    const second = makeClient("second");
+    for (const peer of [first, second]) {
+      peer.client.preparedRecipientProfileId = "same-profile";
+    }
+    const { broadcast } = createGatewayBroadcaster({
+      clients: new GatewayClientRegistry([first.client, second.client]),
+      prepareSessionEventProjection: () => (client) => ({
+        sessionKey: "agent:main:chat",
+        session: {
+          key: "agent:main:chat",
+          sharingRole: client === first.client ? "owner" : "viewer",
+        },
+      }),
+    });
+    broadcast("sessions.changed", { sessionKey: "agent:main:chat" });
+    expect(JSON.parse(first.socket.send.mock.calls[0]![0]).payload.session.sharingRole).toBe(
+      "owner",
+    );
+    expect(JSON.parse(second.socket.send.mock.calls[0]![0]).payload.session.sharingRole).toBe(
+      "viewer",
+    );
+  });
+
   it("keeps reentrant targeted frames separate from an in-progress fanout at the same sequence", () => {
     const first = makeClient("first");
     const second = makeClient("second");
@@ -577,18 +605,25 @@ describe("presence recipient projection", () => {
   it("omits obsolete watches without creating missing agent stores or omission metadata", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const person = { text: "watcher", ts: 1 };
-      const project = createPresenceRecipientProjection({
+      const params = {
         cfg: { agents: { entries: { uncreated: {} } } },
         presence: [
           { ...person, watchedSessions: ["agent:uncreated:missing"] },
           { ...person, watchedSessions: [] },
           person,
         ],
-      });
+      };
+      const project = createPresenceRecipientProjection(params);
       const admin = makeClient("admin").client;
       admin.connect.scopes = ["operator.admin"];
       expect(project(admin)).toEqual([person, person, person]);
       expect(existsSync(state.agentDir("uncreated"))).toBe(false);
+
+      const sqlitePath = resolveOpenClawAgentSqlitePath({ agentId: "uncreated", env: state.env });
+      mkdirSync(path.dirname(sqlitePath), { recursive: true });
+      new DatabaseSync(sqlitePath).close();
+      const unreadable = createPresenceRecipientProjection(params);
+      expect(() => unreadable(admin)).toThrow(/schema-missing/);
     });
   });
 });

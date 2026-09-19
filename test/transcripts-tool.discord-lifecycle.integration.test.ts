@@ -8,7 +8,10 @@ import { createTranscriptsTool } from "../src/agents/tools/transcripts-tool.js";
 import { createPluginMetadataSnapshotFixture } from "../src/plugins/plugin-metadata.test-support.js";
 import { createEmptyPluginRegistry } from "../src/plugins/registry-empty.js";
 import { withPluginRuntimeGenerationScope } from "../src/plugins/runtime/generation-scope.js";
-import { closeOpenClawStateDatabaseForTest } from "../src/state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseForTest,
+} from "../src/state/openclaw-state-db.js";
 import { TranscriptsStore } from "../src/transcripts/store.js";
 import { createTempDirTracker } from "./helpers/temp-dir.js";
 
@@ -244,6 +247,7 @@ defineDiscordVoiceTests(
               expectedManager: manager,
             });
             providerStop.mockRestore();
+            await closeOpenClawStateDatabaseAsync();
             closeOpenClawStateDatabaseForTest();
             tempDirs.cleanup();
           }

@@ -2,14 +2,16 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
+import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import {
+  closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
@@ -19,6 +21,7 @@ import {
   deleteClaimedManagedImageRecord,
   insertManagedImageRecord,
   listManagedImageRecordEntries,
+  listManagedImageOriginalMediaIds,
   MANAGED_OUTGOING_ORIGINALS_SUBDIR,
   readManagedImageRecord,
   type ManagedImageRecord,
@@ -58,11 +61,88 @@ describe("managed image record SQLite store", () => {
   });
 
   afterEach(async () => {
+    await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
     await fs.rm(stateDir, { recursive: true, force: true });
   });
 
-  it("round-trips every typed field", () => {
+  it("creates, reads, and reopens managed metadata without parent SQL", async () => {
+    const native = requireNodeSqlite();
+    const counters = [
+      vi.spyOn(native.DatabaseSync.prototype, "prepare"),
+      vi.spyOn(native.DatabaseSync.prototype, "exec"),
+      ...(["get", "all", "run", "iterate"] as const).map((method) =>
+        vi.spyOn(native.StatementSync.prototype, method),
+      ),
+    ];
+    try {
+      const calibration = new native.DatabaseSync(":memory:");
+      try {
+        calibration.exec("CREATE TABLE calibration (value INTEGER)");
+        calibration.prepare("INSERT INTO calibration VALUES (?)").run(1);
+        const read = calibration.prepare("SELECT value FROM calibration");
+        read.get();
+        read.all();
+        expect([...read.iterate()]).toHaveLength(1);
+        expect(counters.every((counter) => counter.mock.calls.length > 0)).toBe(true);
+      } finally {
+        calibration.close();
+        for (const counter of counters) {
+          counter.mockClear();
+        }
+      }
+      expect(await readManagedImageRecord("missing", stateDir)).toBeNull();
+      expect(await listManagedImageRecordEntries({ stateDir })).toEqual([]);
+      expect(await listManagedImageOriginalMediaIds(stateDir)).toEqual([]);
+      expect((await fs.stat(path.join(stateDir, "state", "openclaw.sqlite"))).isFile()).toBe(true);
+      expect(counters.map((counter) => counter.mock.calls.length)).toEqual([0, 0, 0, 0, 0, 0]);
+
+      const first = record();
+      const claimed = record({ attachmentId: "22222222-2222-4222-8222-222222222222" });
+      const older = record({
+        attachmentId: "33333333-3333-4333-8333-333333333333",
+        createdAt: "2026-07-14T00:00:00.000Z",
+        sessionKey: "agent:other:main",
+        original: { ...first.original, mediaId: "older.png" },
+      });
+      insertManagedImageRecord(claimed, stateDir);
+      insertManagedImageRecord(older, stateDir);
+      insertManagedImageRecord(first, stateDir);
+      expect(claimManagedImageRecordCleanupIfCurrent(claimed, stateDir)).toBe(true);
+      await closeOpenClawStateDatabaseAsync();
+      for (const counter of counters) {
+        counter.mockClear();
+      }
+      expect(await readManagedImageRecord(first.attachmentId, stateDir)).toEqual(first);
+      expect(await readManagedImageRecord(claimed.attachmentId, stateDir)).toBeNull();
+      expect(await listManagedImageRecordEntries({ stateDir })).toEqual([
+        { record: first, cleanupPending: false },
+        { record: claimed, cleanupPending: true },
+        { record: older, cleanupPending: false },
+      ]);
+      expect(await listManagedImageOriginalMediaIds(stateDir)).toEqual([
+        first.original.mediaId,
+        claimed.original.mediaId,
+        older.original.mediaId,
+      ]);
+      const options = { stateDir, sessionKey: first.sessionKey };
+      const pending = listManagedImageRecordEntries(options);
+      options.stateDir = path.join(stateDir, "later");
+      options.sessionKey = older.sessionKey;
+      expect(await pending).toEqual([
+        { record: first, cleanupPending: false },
+        { record: claimed, cleanupPending: true },
+      ]);
+      await closeOpenClawStateDatabaseAsync();
+      expect(counters.map((counter) => counter.mock.calls.length)).toEqual([0, 0, 0, 0, 0, 0]);
+    } finally {
+      for (const counter of counters) {
+        counter.mockRestore();
+      }
+    }
+  });
+
+  it("round-trips every typed field", async () => {
     const expected = record({
       messageId: "message-1",
       updatedAt: "2026-07-15T00:01:00.000Z",
@@ -71,10 +151,10 @@ describe("managed image record SQLite store", () => {
 
     insertManagedImageRecord(expected, stateDir);
 
-    expect(readManagedImageRecord(expected.attachmentId, stateDir)).toEqual(expected);
+    expect(await readManagedImageRecord(expected.attachmentId, stateDir)).toEqual(expected);
   });
 
-  it("uses typed columns when the debug JSON copy is corrupt", () => {
+  it("uses typed columns when the debug JSON copy is corrupt", async () => {
     const expected = record();
     insertManagedImageRecord(expected, stateDir);
     const database = openOpenClawStateDatabase({
@@ -88,10 +168,10 @@ describe("managed image record SQLite store", () => {
         .where("attachment_id", "=", expected.attachmentId),
     );
 
-    expect(readManagedImageRecord(expected.attachmentId, stateDir)).toEqual(expected);
+    expect(await readManagedImageRecord(expected.attachmentId, stateDir)).toEqual(expected);
   });
 
-  it("atomically promotes a transient row and refreshes its debug copy", () => {
+  it("atomically promotes a transient row and refreshes its debug copy", async () => {
     const initial = record();
     insertManagedImageRecord(initial, stateDir);
 
@@ -105,7 +185,7 @@ describe("managed image record SQLite store", () => {
       }),
     ).toBe(true);
 
-    const current = readManagedImageRecord(initial.attachmentId, stateDir);
+    const current = await readManagedImageRecord(initial.attachmentId, stateDir);
     expect(current).toMatchObject({
       messageId: "message-committed",
       retentionClass: "history",
@@ -124,7 +204,7 @@ describe("managed image record SQLite store", () => {
     expect(JSON.parse(row?.record_json ?? "{}")).toEqual(current);
   });
 
-  it("keeps a row changed after cleanup planning", () => {
+  it("keeps a row changed after cleanup planning", async () => {
     const planned = record();
     insertManagedImageRecord(planned, stateDir);
     attachManagedImageRecordToMessage({
@@ -136,17 +216,17 @@ describe("managed image record SQLite store", () => {
     });
 
     expect(claimManagedImageRecordCleanupIfCurrent(planned, stateDir)).toBe(false);
-    expect(readManagedImageRecord(planned.attachmentId, stateDir)?.messageId).toBe(
+    expect((await readManagedImageRecord(planned.attachmentId, stateDir))?.messageId).toBe(
       "message-committed",
     );
   });
 
-  it("keeps a cleanup claim durable until the file deletion completes", () => {
+  it("keeps a cleanup claim durable until the file deletion completes", async () => {
     const planned = record();
     insertManagedImageRecord(planned, stateDir);
 
     expect(claimManagedImageRecordCleanupIfCurrent(planned, stateDir)).toBe(true);
-    expect(readManagedImageRecord(planned.attachmentId, stateDir)).toBeNull();
+    expect(await readManagedImageRecord(planned.attachmentId, stateDir)).toBeNull();
     expect(
       attachManagedImageRecordToMessage({
         attachmentId: planned.attachmentId,
@@ -156,11 +236,11 @@ describe("managed image record SQLite store", () => {
         stateDir,
       }),
     ).toBe(false);
-    expect(listManagedImageRecordEntries({ stateDir })).toEqual([
+    expect(await listManagedImageRecordEntries({ stateDir })).toEqual([
       { record: planned, cleanupPending: true },
     ]);
 
     expect(deleteClaimedManagedImageRecord(planned, stateDir)).toBe(true);
-    expect(listManagedImageRecordEntries({ stateDir })).toEqual([]);
+    expect(await listManagedImageRecordEntries({ stateDir })).toEqual([]);
   });
 });

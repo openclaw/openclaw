@@ -25,6 +25,7 @@ import {
 import type { SessionEntry } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { isAbortError } from "../../infra/abort-signal.js";
+import { assertAgentRunLifecycleGenerationCurrent } from "../../infra/agent-events.js";
 import type { MediaFact } from "../../media/media-facts.js";
 import type { PromptImageOrderEntry } from "../../media/prompt-image-order.js";
 import { bindGatewayContextResolver } from "../../plugins/runtime/gateway-request-scope.js";
@@ -49,6 +50,7 @@ import {
   yieldAfterAgentAcceptedAck,
   type RestoredCronContinuation,
 } from "./agent-handler-helpers.js";
+import { captureAgentJobSession } from "./agent-job.js";
 import {
   resolveAgentRestartRecoveryContext,
   resolveAgentRestartRecoveryExecutionIdentityAdmission,
@@ -113,11 +115,41 @@ export async function startAgentRunExecution(params: {
   ) => Promise<boolean>;
 }): Promise<void> {
   const { prepared } = params;
+  const jobSessionBinding = prepared.activeRunAbort.entry ?? {
+    sessionKey: params.resolvedSessionKey,
+    sessionId: params.resolvedSessionId,
+    agentId: params.activeSessionAgentId,
+    lifecycleGeneration: params.lifecycleGeneration,
+  };
   let unpersistedOffloadedRefs = prepared.unpersistedOffloadedRefs;
   const releaseGatewayRootContinuation = retainGatewayRootWorkAdmissionContinuation() ?? undefined;
   try {
     await using preparedModelRuntimeLease = prepared.preparedModelRuntimeLease;
     let leaseActive = true;
+    const abortRegistration = prepared.activeRunAbort;
+    const abortEntry = abortRegistration.entry;
+    const abortController = abortRegistration.controller;
+    const operationalRunInstance = prepared.operationalRunInstance;
+    const sessionKey = abortEntry?.sessionKey;
+    const assertDispatchCurrent = () => {
+      params.assertContextCurrent?.();
+      abortController.signal.throwIfAborted();
+      assertAgentRunLifecycleGenerationCurrent(params.lifecycleGeneration);
+      if (
+        !leaseActive ||
+        (abortRegistration.registered &&
+          (!prepared.activeGatewayWorkAdmission.isActive() ||
+            !abortEntry ||
+            params.context.chatAbortControllers.get(params.runId) !== abortEntry ||
+            abortEntry.controller !== abortController ||
+            abortEntry.operationalRunInstance !== operationalRunInstance ||
+            abortEntry.lifecycleGeneration !== params.lifecycleGeneration ||
+            abortEntry.sessionKey !== sessionKey ||
+            abortEntry.registrationCleanupRequested))
+      ) {
+        throw new Error("agent task creation no longer owns this Gateway run");
+      }
+    };
     let mediaCleanup: Promise<void> | undefined;
     const cleanupAdmittedRun: typeof prepared.activeRunAbort.cleanup = () => {
       const refsToDiscard = unpersistedOffloadedRefs;
@@ -181,6 +213,7 @@ export async function startAgentRunExecution(params: {
         setGatewayDedupeEntries({
           dedupe: params.context.dedupe,
           keys: params.agentDedupeKeys,
+          session: captureAgentJobSession(jobSessionBinding),
           entry: { ts: Date.now(), ok: false, payload, error },
         });
         params.io.emitFinal([false, payload, error], { runId: params.runId, error: renderedErr });
@@ -206,6 +239,7 @@ export async function startAgentRunExecution(params: {
         setAbortedAgentDedupeEntries({
           dedupe: params.context.dedupe,
           keys: params.agentDedupeKeys,
+          session: captureAgentJobSession(jobSessionBinding),
           agentId: params.activeSessionAgentId,
           runId: params.runId,
           stopReason,
@@ -379,6 +413,8 @@ export async function startAgentRunExecution(params: {
         const execution = dispatchAdmittedAgentRun(
           withAgentRunDispatchExecutionIdentity(
             {
+              assertCurrent: assertDispatchCurrent,
+              admittedRunEntry: abortEntry,
               commandRuntimeContext: {
                 config: prepared.replyDispatchRuntime.config,
                 pluginGeneration: prepared.replyDispatchRuntime.pluginGeneration,
@@ -608,6 +644,7 @@ export async function startAgentRunExecution(params: {
     });
   } finally {
     // Shutdown joins the execution through asynchronous runtime disposal, not just bookkeeping.
+    prepared.releaseCallerAuthority?.();
     releaseGatewayRootContinuation?.();
   }
 }

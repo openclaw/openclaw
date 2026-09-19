@@ -465,6 +465,46 @@ releasePolicyIt("rejects fully hydrated disconnected release histories", () => {
   }
 });
 
+releasePolicyIt(
+  "continues hydration when changed shallow boundaries reduce visible history",
+  () => {
+    const fixture = createAncestryFixture({
+      sourceDistance: 8,
+      targetDistance: 1000,
+      related: true,
+    });
+    const marker = join(fixture.root, "count-observed");
+    // Git can replace shallow cuts when it reaches merged history, making fewer
+    // commits visible even though the frontier changed. Replay that observed
+    // count transition while keeping fetches and the final ancestry proof real.
+    const proxy = writeGitProxy(
+      fixture,
+      "non-monotonic-count-git",
+      `if [[ " $* " == *" rev-list --count "* && ! -e "$COUNT_MARKER" ]]; then
+  count=$("$REAL_GIT" "$@") || exit $?
+  : > "$COUNT_MARKER"
+  echo "$((count + 10000))"
+  exit 0
+fi
+exec "$REAL_GIT" "$@"`,
+    );
+    try {
+      const checkout = cloneAncestrySource(fixture, "checkout");
+      expectPolicySuccess(
+        runReleaseAncestry(checkout, "merge-base", {
+          COUNT_MARKER: marker,
+          PATH: `${proxy.binDir}:${process.env.PATH ?? ""}`,
+          REAL_GIT: proxy.realGit,
+        }),
+        "merge-base",
+      );
+      expect(fixtureGit(checkout, ["rev-parse", "refs/remotes/origin/main"])).toBe(fixture.target);
+    } finally {
+      rmSync(fixture.root, { force: true, recursive: true });
+    }
+  },
+);
+
 releasePolicyIt("rejects a successful release history deepen that makes no progress", () => {
   const fixture = createAncestryFixture({
     sourceDistance: 8,

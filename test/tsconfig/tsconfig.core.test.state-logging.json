@@ -6,6 +6,8 @@
   "include": [
     "../../src/state/**/*.test.ts",
     "../../src/state/**/*.test.tsx",
+    "../../src/tasks/**/*.test.ts",
+    "../../src/tasks/**/*.test.tsx",
     "../../src/plugin-state/**/*.test.ts",
     "../../src/plugin-state/**/*.test.tsx",
     "../../src/logging/**/*.test.ts",

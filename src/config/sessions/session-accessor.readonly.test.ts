@@ -30,9 +30,7 @@ import {
   loadExactSessionEntryCandidatesReadOnlyBatch,
   loadExactSessionEntryReadOnly,
   openSessionEntryReadView,
-  readSessionTranscriptTitleProbeBatch,
   readSessionTranscriptWatermark,
-  readSessionTranscriptWatermarkBatch,
   readSessionIdentityEvidenceBatch,
   readSessionStoreSummaryReadOnly,
   recordSessionParticipant,
@@ -239,7 +237,7 @@ describe("session accessor readonly listing", () => {
     expect(isOpenClawAgentDatabaseOpen(resolveOpenClawAgentSqlitePath(listScope))).toBe(false);
   });
 
-  it("returns an empty list without creating or registering a missing agent database", () => {
+  it("keeps missing database probes read-only with empty exact results", () => {
     const stateDir = makeTempDir(tempDirs, "openclaw-session-readonly-missing-");
     const env = { OPENCLAW_STATE_DIR: stateDir };
     const agentId = "worker-1";
@@ -252,7 +250,7 @@ describe("session accessor readonly listing", () => {
       loadExactSessionEntryCandidatesReadOnlyBatch([
         { agentId, env, sessionKeys: [`agent:${agentId}:main`] },
       ]),
-    ).toEqual([{ ok: true, value: [] }]);
+    ).toMatchObject([{ ok: true, value: [] }]);
     expect(
       readSessionStoreSummaryReadOnly(
         { agentId, env },
@@ -515,7 +513,7 @@ describe("session accessor readonly listing", () => {
     expect(() => readSessionStoreSummaryReadOnly(scope, options)).toThrow(SyntaxError);
   });
 
-  it("surfaces missing canonical transcript tables through single and batched reads", async () => {
+  it("surfaces missing canonical transcript tables through watermark reads", async () => {
     const stateDir = makeTempDir(tempDirs, "openclaw-session-readonly-missing-transcript-table-");
     const env = { OPENCLAW_STATE_DIR: stateDir };
     const scope = {
@@ -529,13 +527,13 @@ describe("session accessor readonly listing", () => {
       "DROP TABLE transcript_events;",
     );
 
-    for (const read of [
-      () => readSessionTranscriptWatermark(scope),
-      () => readSessionTranscriptWatermarkBatch([scope]),
-      () => readSessionTranscriptTitleProbeBatch([scope]),
-    ]) {
-      expect(read).toThrow(/no such table: transcript_events/);
-    }
+    expect(() => readSessionTranscriptWatermark(scope)).toThrow(
+      expect.objectContaining({
+        name: "SessionMetadataUnavailableError",
+        reason: "table-missing",
+        missingTables: ["transcript_events"],
+      }),
+    );
   });
 
   it("probes lifecycle status without creating or registering a missing database", () => {
@@ -738,7 +736,7 @@ describe("session accessor readonly listing", () => {
     ]);
   });
 
-  it.each(["identity", "timestamp", "json", "participant"])(
+  it.each(["identity", "timestamp", "json", "nul", "participant", "participant-integer"])(
     "rejects stale valid %s evidence without relying on a fallback read",
     async (corruption) => {
       const stateDir = autoTempDirs.make("openclaw-session-readonly-stale-valid-evidence-");
@@ -754,14 +752,20 @@ describe("session accessor readonly listing", () => {
         { sessionId: readableSessionId, updatedAt: 1 },
       );
       const database = openOpenClawAgentDatabase({ agentId, env });
-      if (corruption === "participant") {
+      if (corruption === "participant" || corruption === "participant-integer") {
         recordSessionParticipant(
           { agentId, env, sessionKey },
           { identity: { type: "agent", id: "peer" }, promptedAt: 1 },
         );
-        database.db
-          .prepare("UPDATE session_participants SET identity_namespace = ? WHERE session_key = ?")
-          .run("{}", sessionKey);
+        if (corruption === "participant") {
+          database.db
+            .prepare("UPDATE session_participants SET identity_namespace = ? WHERE session_key = ?")
+            .run("{}", sessionKey);
+        } else {
+          database.db
+            .prepare("UPDATE session_participants SET contribution_count = ? WHERE session_key = ?")
+            .run(9007199254740992n, sessionKey);
+        }
       } else {
         const entryJson =
           corruption === "json"
@@ -772,7 +776,7 @@ describe("session accessor readonly listing", () => {
               });
         database.db
           .prepare("UPDATE session_nodes SET entry_json = ? WHERE session_key = ?")
-          .run(entryJson, sessionKey);
+          .run(corruption === "nul" ? entryJson + "\0" : entryJson, sessionKey);
       }
       database.db
         .prepare("UPDATE session_nodes SET entry_valid = 1 WHERE session_key = ?")

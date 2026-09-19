@@ -36,6 +36,7 @@ import { defaultRuntime, type RuntimeEnv } from "../../runtime.js";
 import { formatCliCommand } from "../command-format.js";
 import { resolvePluginCapabilityConsentCliOptions } from "../plugin-capability-consent.js";
 import { readPackageVersion } from "./shared.js";
+import { withUpdateConfigWriteAuthority } from "./update-command-config.js";
 import {
   assessPluginUpdate,
   buildInvalidConfigPostCoreUpdateResult,
@@ -167,6 +168,15 @@ export async function updatePluginsAfterCoreUpdate(params: {
   const integrityDrifts: PostCorePluginUpdateResult["integrityDrifts"] = [];
   const pluginUpdateOutcomes: PluginUpdateOutcome[] = [];
   const collectPluginOutcome = (outcome: PluginUpdateOutcome) => {
+    if (outcome.status === "skipped" && outcome.code === "plugin-operator-managed") {
+      warnings.push({
+        pluginId: outcome.pluginId,
+        source: outcome.rootDir,
+        reason: outcome.code,
+        message: outcome.message,
+        guidance: outcome.guidance,
+      });
+    }
     if (outcome.status !== "error" && !isActionableSkippedPostUpdateOutcome(outcome)) {
       pluginUpdateOutcomes.push(outcome);
       return;
@@ -393,11 +403,14 @@ export async function updatePluginsAfterCoreUpdate(params: {
       nextInstallRecords,
       nextConfig,
       baseHash: params.configSnapshot.hash,
-      writeOptions: {
-        ...params.configWriteOptions,
-        inputBase: "source",
-        skipPluginValidation: true,
-      },
+      writeOptions: withUpdateConfigWriteAuthority(
+        {
+          ...params.configWriteOptions,
+          inputBase: "source",
+          skipPluginValidation: true,
+        },
+        params.assertCurrent,
+      ),
     });
     params.assertCurrent?.();
     await withPluginLifecycleLease({ assertCurrent: params.assertCurrent }, async (lease) =>

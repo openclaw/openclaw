@@ -6,6 +6,7 @@ import { resolveHeartbeatReplyPayload } from "../../../auto-reply/heartbeat-repl
 import { selectHeartbeatToolResponse } from "../../../auto-reply/heartbeat-tool-response.js";
 import { getReplyPayloadMetadata } from "../../../auto-reply/reply-payload.js";
 import type { InteractiveReply, MessagePresentation } from "../../../interactive/payload.js";
+import { makeAgentAssistantMessage } from "../../test-helpers/agent-message-fixtures.js";
 import {
   buildPayloads,
   expectSinglePayloadText,
@@ -345,6 +346,48 @@ describe("buildEmbeddedRunPayloads tool-error warnings", () => {
     });
 
     expectSinglePayloadText(payloads, "Done.");
+  });
+
+  it.each(["Second answer.", "NO_REPLY"])(
+    "buildEmbeddedRunPayloads selects each sealed and open segment's answer with middle answer %s",
+    (middleAnswer) => {
+      const answers = ["First answer.", middleAnswer, "Third answer."];
+      const messages = answers.map((text) =>
+        makeAgentAssistantMessage({ content: [{ type: "text", text }] }),
+      );
+      const payloads = buildPayloads({
+        assistantTexts: answers.flatMap((text) => ["Checking first.", text]),
+        answerSegments: messages.slice(0, 2).map((lastAssistant, index) => ({
+          textEnd: (index + 1) * 2,
+          messageEnd: (index + 1) * 2,
+          finalMessageStart: (index + 1) * 2,
+          lastAssistant,
+        })),
+        lastAssistant: messages[2],
+        currentAssistant: messages[2],
+        assistantMessageIndex: 6,
+      });
+      expect(payloads.map((payload) => payload.text)).toEqual(
+        answers.filter((text) => text !== "NO_REPLY"),
+      );
+      expect(
+        payloads.map((payload) => getReplyPayloadMetadata(payload)?.assistantMessageIndex),
+      ).toEqual(middleAnswer === "NO_REPLY" ? [2, 6] : [2, 4, 6]);
+      expect(
+        payloads.map((payload) => getReplyPayloadMetadata(payload)?.precedingInputAnswer),
+      ).toEqual(middleAnswer === "NO_REPLY" ? [true, undefined] : [true, true, undefined]);
+    },
+  );
+
+  it("buildEmbeddedRunPayloads suppresses progress before a silent final in one input", () => {
+    const assistant = makeAgentAssistantMessage({ content: [{ type: "text", text: "NO_REPLY" }] });
+    expect(
+      buildPayloads({
+        assistantTexts: ["Checking first.", "NO_REPLY"],
+        lastAssistant: assistant,
+        currentAssistant: assistant,
+      }),
+    ).toEqual([]);
   });
 
   it("does not replay raw-looking accumulated tool output when final answer text is available", () => {

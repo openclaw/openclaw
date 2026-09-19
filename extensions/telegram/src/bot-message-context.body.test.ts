@@ -151,8 +151,6 @@ async function resolveBody(overrides: Partial<BodyParams> = {}) {
     effectiveGroupAllow: normalizeAllowFrom([]),
     effectiveDmAllow: normalizeAllowFrom([]),
     requireMention: false,
-    groupHistories: new Map(),
-    historyLimit: 0,
     logger: createLogger(),
     ...overrides,
   } as BodyParams);

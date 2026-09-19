@@ -8,6 +8,7 @@ import type {
 } from "openclaw/plugin-sdk/session-catalog";
 import { publishSessionCatalogHost } from "openclaw/plugin-sdk/session-catalog-paging";
 import type { CodexAppServerBindingStore } from "./app-server/session-binding.js";
+import { CodexCatalogLoadingError } from "./session-catalog-availability.js";
 import { currentCodexCatalogListDiagnostics } from "./session-catalog-diagnostics.js";
 import type { CodexCatalogHome } from "./session-catalog-homes.js";
 import {
@@ -72,7 +73,10 @@ function hostFailure(
     kind: "gateway",
     connected: false,
     sessions: [],
-    error: catalogError("APP_SERVER_UNAVAILABLE", error),
+    error:
+      error instanceof CodexCatalogLoadingError
+        ? { code: error.code, message: error.message }
+        : catalogError("APP_SERVER_UNAVAILABLE", error),
   };
 }
 
@@ -234,11 +238,14 @@ class CodexCatalogListDriver {
       }
     }
     params.signal?.throwIfAborted();
+    const fallback = localSources.some((source) => source === undefined)
+      ? (await params.control.homesForAgent(agentId))[0]
+      : undefined;
+    params.signal?.throwIfAborted();
     this.prepared = { agentId, query, requestedHostIds };
     if (requestedHostIds && !query.hostIds?.some((host) => host.startsWith("node:"))) {
       this.nodeHosts = [];
     }
-    const fallback = params.control.homesForAgent(agentId)[0];
     for (const source of localSources) {
       const selected = source ?? fallback;
       const excluded = selected ? managed?.get(selected.sourceHomeId) : undefined;
@@ -489,6 +496,7 @@ class CodexCatalogListDriver {
       new Error("Codex catalog list operation closed");
     this.params = undefined;
     for (const host of this.locals) {
+      host.page.close();
       if (!host.value) {
         host.completion.reject(reason);
       }

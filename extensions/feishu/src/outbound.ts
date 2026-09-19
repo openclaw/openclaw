@@ -1,4 +1,3 @@
-// Feishu plugin module implements outbound behavior.
 import path from "node:path";
 import { isChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
 import {
@@ -26,10 +25,8 @@ import {
 import { convertMarkdownTables } from "openclaw/plugin-sdk/text-chunking";
 import type { ChannelOutboundAdapter } from "../runtime-api.js";
 import { resolveFeishuAccount } from "./accounts.js";
-import { createFeishuClient } from "./client.js";
-import { cleanupAmbientCommentTypingReaction } from "./comment-reaction.js";
+import { sendCommentThreadReply } from "./comment-send.js";
 import { parseFeishuCommentTarget } from "./comment-target.js";
-import { deliverCommentThreadText } from "./drive.js";
 import { resolveFeishuIdentityHeaderTitle } from "./identity-header.js";
 import {
   chunkFeishuMarkdown,
@@ -61,6 +58,7 @@ import {
   createFeishuReplyDeliveryResult,
   type FeishuReplyDeliverySource,
 } from "./reply-delivery-result.js";
+import { withFeishuSendContext } from "./send-context.js";
 import {
   chunkFeishuCardMarkdown,
   sendCardFeishu,
@@ -230,47 +228,6 @@ export function resolveFeishuReplyMode(params: {
         replyToMessageId: undefined,
         replyInThread: false,
       };
-}
-
-async function sendCommentThreadReply(params: {
-  cfg: Parameters<typeof sendMessageFeishu>[0]["cfg"];
-  to: string;
-  text: string;
-  replyId?: string;
-  accountId?: string;
-}) {
-  const target = parseFeishuCommentTarget(params.to);
-  if (!target) {
-    return null;
-  }
-  const account = resolveFeishuAccount({ cfg: params.cfg, accountId: params.accountId });
-  const client = createFeishuClient(account);
-  const replyId = params.replyId?.trim();
-  try {
-    const result = await deliverCommentThreadText(client, {
-      file_token: target.fileToken,
-      file_type: target.fileType,
-      comment_id: target.commentId,
-      content: params.text,
-    });
-    return {
-      messageId:
-        (result.delivery_mode === "reply_comment" ? result.reply_id : result.comment_id) ?? "",
-      chatId: target.commentId,
-      result,
-    };
-  } finally {
-    if (replyId) {
-      void cleanupAmbientCommentTypingReaction({
-        client,
-        deliveryContext: {
-          channel: "feishu",
-          to: params.to,
-          threadId: replyId,
-        },
-      });
-    }
-  }
 }
 
 async function sendOutboundText(params: {
@@ -486,6 +443,22 @@ async function sendFeishuTtsSupplementPayload(params: {
   return lastResult ?? { channel: "feishu", messageId: "" };
 }
 
+function withFeishuOutboundSendContext(adapter: ChannelOutboundAdapter): ChannelOutboundAdapter {
+  const { sendText, sendMedia, sendPayload } = adapter;
+  return {
+    ...adapter,
+    ...(sendText
+      ? { sendText: async (ctx) => withFeishuSendContext(ctx, () => sendText(ctx)) }
+      : {}),
+    ...(sendMedia
+      ? { sendMedia: async (ctx) => withFeishuSendContext(ctx, () => sendMedia(ctx)) }
+      : {}),
+    ...(sendPayload
+      ? { sendPayload: async (ctx) => withFeishuSendContext(ctx, () => sendPayload(ctx)) }
+      : {}),
+  };
+}
+
 // `feishuOutbound` keeps the shared `ChannelOutboundAdapter` shape (whose
 // `sendMedia` is optional) so the object literal — which spreads
 // `createAttachedChannelResultAdapter` (returning `sendMedia?: ... | undefined`)
@@ -494,7 +467,7 @@ async function sendFeishuTtsSupplementPayload(params: {
 // optional `sendMedia` to `FeishuOutboundSendMedia` at the use site
 // (channel.ts direct-send branch, sendFeishuFallbackPayload) instead of
 // forcing a required property here (ClawSweeper P1).
-export const feishuOutbound: ChannelOutboundAdapter = {
+export const feishuOutbound: ChannelOutboundAdapter = withFeishuOutboundSendContext({
   deliveryMode: "direct",
   chunker: chunkFeishuMarkdown,
   chunkerMode: "markdown",
@@ -956,5 +929,5 @@ export const feishuOutbound: ChannelOutboundAdapter = {
       return toFeishuOutboundResult(aggregateFeishuSendResult(mediaResult, results));
     },
   }),
-};
+});
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -1,4 +1,3 @@
-// Feishu plugin module implements channel behavior.
 import {
   assertFeishuChatMember as assertFeishuChatMemberImpl,
   buildFeishuDirectChatMembers as buildFeishuDirectChatMembersImpl,

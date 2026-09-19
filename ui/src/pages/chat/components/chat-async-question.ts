@@ -2,8 +2,10 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { html, nothing } from "lit";
 import { property } from "lit/decorators.js";
 import { keyed } from "lit/directives/keyed.js";
+import type { QuestionDraft } from "../../../app/question-prompt.ts";
 import { t } from "../../../i18n/index.ts";
 import { OpenClawLightDomElement } from "../../../lit/openclaw-element.ts";
+import { questionDraftValues } from "./chat-question-answer-controls.ts";
 import "./chat-question-card.ts";
 
 type AsyncQuestions = {
@@ -12,13 +14,14 @@ type AsyncQuestions = {
 };
 
 export type AsyncQuestionDraft = {
-  answers: Record<string, string[]>;
+  answers: Map<string, QuestionDraft>;
   status?: "submitting" | "submitted" | "skipped";
   error?: string;
 };
 
 export type AsyncQuestionPresentation = {
   drafts: Map<string, AsyncQuestionDraft>;
+  onChange: () => void;
   submit?: (message: string) => Promise<boolean>;
 };
 
@@ -26,6 +29,7 @@ export function createAsyncQuestionPresentation(
   state: {
     asyncQuestionScope?: string;
     asyncQuestionDrafts: Map<string, AsyncQuestionDraft>;
+    asyncQuestionRevision: number;
     transcriptRenderContext: { onAsyncQuestionSubmit?: AsyncQuestionPresentation["submit"] };
   },
   props: {
@@ -33,6 +37,7 @@ export function createAsyncQuestionPresentation(
     currentAgentId?: string;
     connectionEpoch?: number;
     onAsyncQuestionSubmit?: AsyncQuestionPresentation["submit"];
+    onRequestUpdate?: () => void;
   },
 ): AsyncQuestionPresentation {
   const scope = JSON.stringify([props.sessionKey, props.currentAgentId, props.connectionEpoch]);
@@ -41,11 +46,19 @@ export function createAsyncQuestionPresentation(
     state.asyncQuestionDrafts = new Map();
   }
   const drafts = state.asyncQuestionDrafts;
+  const isCurrent = () =>
+    state.asyncQuestionScope === scope && state.asyncQuestionDrafts === drafts;
   return {
     drafts,
+    onChange: () => {
+      if (isCurrent()) {
+        state.asyncQuestionRevision += 1;
+        props.onRequestUpdate?.();
+      }
+    },
     submit: props.onAsyncQuestionSubmit
       ? async (message) => {
-          if (state.asyncQuestionScope !== scope || state.asyncQuestionDrafts !== drafts) {
+          if (!isCurrent()) {
             return false;
           }
           return (await state.transcriptRenderContext.onAsyncQuestionSubmit?.(message)) === true;
@@ -116,23 +129,27 @@ class ChatAsyncQuestion extends OpenClawLightDomElement {
     let draft = presentation.drafts.get(questions.itemId);
     if (!draft) {
       draft = {
-        answers: Object.fromEntries(
+        answers: new Map(
           questions.questions.map((question, index) => [
             String(index),
-            (question.options ?? []).slice(0, 1),
+            { selected: new Set(question.options?.slice(0, 1)), freeText: "" },
           ]),
         ),
       };
       presentation.drafts.set(questions.itemId, draft);
     }
     const currentDraft = draft;
+    const onChange = () => {
+      this.requestUpdate();
+      presentation.onChange();
+    };
     if (draft.status === "submitted" || draft.status === "skipped") {
       return html`<div class="chat-question-summary" role="status">
         ${questions.questions.map(
           (question, index) => html`<div>
             <strong>${question.title}</strong>
             <div>
-              ${draft.status === "skipped" ? t("chat.questions.skipped") : draft.answers[String(index)]?.join(", ")}
+              ${draft.status === "skipped" ? t("chat.questions.skipped") : questionDraftValues(draft.answers.get(String(index))).join(", ")}
             </div>
           </div>`,
         )}
@@ -156,20 +173,17 @@ class ChatAsyncQuestion extends OpenClawLightDomElement {
             collapsed: false,
             disabled: !presentation.submit,
             submitting: draft.status === "submitting",
-            answersById: draft.answers,
+            drafts: draft.answers,
             error: draft.error,
-          },
-          onAnswersChange: (answers: Record<string, string[]>) => {
-            currentDraft.answers = answers;
           },
           onSkip: () => {
             currentDraft.status = "skipped";
-            this.requestUpdate();
+            onChange();
           },
           onSubmit: async (answers: Record<string, string[]>) => {
             currentDraft.status = "submitting";
             currentDraft.error = undefined;
-            this.requestUpdate();
+            onChange();
             const message = questions.questions
               .map(
                 (question, index) =>
@@ -186,7 +200,7 @@ class ChatAsyncQuestion extends OpenClawLightDomElement {
               currentDraft.error = error instanceof Error ? error.message : String(error);
               throw error;
             } finally {
-              this.requestUpdate();
+              onChange();
             }
           },
         }}

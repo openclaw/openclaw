@@ -265,13 +265,18 @@ export function createWindowsOutputDecoder(params?: {
     }
     // Stay on strict UTF-8 until it fails; replay any pending lead bytes through the legacy
     // decoder so split GBK/Big5/etc. characters are not lost at the fallback boundary.
-    const replayBuffer =
-      pendingUtf8Bytes.length > 0 ? Buffer.concat([pendingUtf8Bytes, buffer]) : buffer;
     try {
       const decoded = utf8Decoder.decode(buffer, { stream: true });
-      pendingUtf8Bytes = Buffer.from(getTrailingIncompleteUtf8Bytes(replayBuffer));
+      // Four trailing bytes contain every possible incomplete UTF-8 sequence.
+      const trailingBuffer =
+        buffer.length < 4 && pendingUtf8Bytes.length > 0
+          ? Buffer.concat([pendingUtf8Bytes, buffer])
+          : buffer;
+      pendingUtf8Bytes = Buffer.from(getTrailingIncompleteUtf8Bytes(trailingBuffer));
       return decoded;
     } catch {
+      const replayBuffer =
+        pendingUtf8Bytes.length > 0 ? Buffer.concat([pendingUtf8Bytes, buffer]) : buffer;
       useLegacyDecoder = true;
       pendingUtf8Bytes = Buffer.alloc(0);
       return legacyDecoder.decode(replayBuffer, { stream: true });

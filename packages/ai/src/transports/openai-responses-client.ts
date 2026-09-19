@@ -63,6 +63,7 @@ import {
   resolveAzureOpenAIApiVersion,
 } from "./openai-responses-replay-internal.js";
 import { projectResponsesSteeringInput } from "./openai-responses-steering.js";
+import { hasOnlyResponsesFunctionTools } from "./openai-responses-stream-errors.js";
 import { processResponsesStream } from "./openai-responses-stream-internal.js";
 import { observeResponsesStream } from "./openai-responses-stream-observer-internal.js";
 import {
@@ -570,6 +571,10 @@ function createResponsesTransportExecutor(config: ResponsesTransportExecutorOpti
         }
         try {
           const terminal = await processResponsesStream(responseStream, output, stream, model, {
+            canRetryIdentityConflict: () =>
+              hasOnlyResponsesFunctionTools(
+                transport === "websocket" ? websocketBaseline : continuationBaseline,
+              ),
             ...config.pricingOptions?.(responsesOptions, model),
             firstEventTimeoutMs:
               getFirstStreamEventTimeoutMs(options) ?? config.firstEventTimeoutMs,

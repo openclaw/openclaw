@@ -138,6 +138,7 @@ export class EmbeddedBlockChunker {
   #buffer = "";
   #reopenPrefix = "";
   #consumedLength = 0;
+  #bufferStartsAtLineStart = true;
   readonly #chunking?: BlockReplyChunking;
 
   constructor(chunking?: BlockReplyChunking) {
@@ -157,6 +158,7 @@ export class EmbeddedBlockChunker {
     this.#buffer = "";
     this.#reopenPrefix = "";
     this.#consumedLength = 0;
+    this.#bufferStartsAtLineStart = true;
   }
 
   /** UTF-16 source positions exclude synthetic fences and include skipped whitespace. */
@@ -175,7 +177,16 @@ export class EmbeddedBlockChunker {
       this.#buffer.slice(0, Math.max(0, pendingOffset)) + text.slice(Math.max(0, -pendingOffset));
     const changed = next !== this.#buffer;
     this.#buffer = next;
-    this.#consumedLength = Math.min(this.#consumedLength, sourceOffset + text.length);
+    const consumedLength = Math.min(this.#consumedLength, sourceOffset + text.length);
+    if (consumedLength === 0) {
+      this.#bufferStartsAtLineStart = true;
+    } else if (consumedLength > sourceOffset) {
+      this.#bufferStartsAtLineStart = text.charAt(consumedLength - sourceOffset - 1) === "\n";
+    } else if (consumedLength < this.#consumedLength) {
+      // A withdrawn, already-delivered prefix cannot establish a new fence boundary.
+      this.#bufferStartsAtLineStart = false;
+    }
+    this.#consumedLength = consumedLength;
     return changed;
   }
 
@@ -192,7 +203,7 @@ export class EmbeddedBlockChunker {
   /** Emit safe chunks according to size and Markdown fence constraints. */
   drain(params: {
     force: boolean;
-    emit: (chunk: string, options?: { sourceText: string }) => void;
+    emit: (chunk: string, options?: { sourceText: string; startsAtLineStart: boolean }) => void;
   }) {
     // KNOWN: We cannot split inside fenced code blocks (Markdown breaks + UI glitches).
     // When forced (maxChars), we close + reopen the fence to keep Markdown valid.
@@ -204,6 +215,7 @@ export class EmbeddedBlockChunker {
     const minChars = Math.max(1, Math.floor(chunking?.minChars ?? 1));
     const maxChars = Math.max(minChars, Math.floor(chunking?.maxChars ?? Infinity));
     let source = this.bufferedText;
+    const startsAtLineStart = Boolean(this.#reopenPrefix) || this.#bufferStartsAtLineStart;
 
     if (source.length < minChars && !force) {
       return;
@@ -211,8 +223,9 @@ export class EmbeddedBlockChunker {
 
     if (!chunking || (force && source.length <= maxChars && !this.#reopenPrefix)) {
       if (!chunking || source.trim().length > 0) {
-        emit(source, { sourceText: this.#buffer });
+        emit(source, { sourceText: this.#buffer, startsAtLineStart });
       }
+      this.#bufferStartsAtLineStart = this.#buffer.endsWith("\n");
       this.#consumedLength += this.#buffer.length;
       this.#buffer = "";
       this.#reopenPrefix = "";
@@ -221,7 +234,9 @@ export class EmbeddedBlockChunker {
 
     // Keep original source text so shortened language hints and synthetic
     // fences cannot move the source cursor during checkpoint reconciliation.
-    const { spans: fenceSpans, state: fenceState } = scanFenceSpans(source);
+    const { spans: fenceSpans, state: fenceState } = scanFenceSpans(source, {
+      atLineStart: startsAtLineStart,
+    });
     const openFence = fenceState.open ? fenceSpans.at(-1) : undefined;
     const removedFenceInfo: Array<{ at: number; length: number }> = [];
     let removedFenceInfoLength = 0;
@@ -256,10 +271,15 @@ export class EmbeddedBlockChunker {
           index,
         ) - this.#reopenPrefix.length,
       );
-    const emitSourceChunk = (chunk: string, from: number, to: number) =>
-      emit(chunk, { sourceText: this.#buffer.slice(sourceOffset(from), sourceOffset(to)) });
     let start = 0;
     let reopenFence: FenceSplit | undefined;
+    const emitSourceChunk = (chunk: string, from: number, to: number) =>
+      emit(chunk, {
+        sourceText: this.#buffer.slice(sourceOffset(from), sourceOffset(to)),
+        startsAtLineStart:
+          Boolean(reopenFence) ||
+          (from === 0 ? startsAtLineStart : source.charAt(from - 1) === "\n"),
+      });
     const resumedFence = this.#reopenPrefix ? fenceSpans[0] : undefined;
     if (resumedFence) {
       const closeStart = findFenceCloseLineStart(source, resumedFence);
@@ -355,6 +375,9 @@ export class EmbeddedBlockChunker {
       return;
     }
     const consumed = sourceOffset(start);
+    if (consumed > 0) {
+      this.#bufferStartsAtLineStart = this.#buffer.charAt(consumed - 1) === "\n";
+    }
     this.#consumedLength += consumed;
     this.#buffer = this.#buffer.slice(consumed);
     this.#reopenPrefix = reopenFence ? `${reopenFence.reopenFenceLine}\n` : "";
@@ -576,7 +599,9 @@ function findNextParagraphBreak(
     if (index - startIndex < minCharsFromStart) {
       continue;
     }
-    if (!isSafeFenceBreak(fenceSpans, index)) {
+    const fence = findFenceSpanAt(fenceSpans, index);
+    if (fence) {
+      re.lastIndex = fence.end;
       continue;
     }
     return { index, length: match[0].length };

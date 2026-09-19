@@ -1,6 +1,7 @@
 import { copyFile, mkdir, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
+import { projectAgentToolActivity } from "../../../../src/infra/agent-activity-events.js";
 import {
   focusChatSidePanel,
   openChatSidePanelType,
@@ -323,6 +324,18 @@ suite.define(() => {
                 {
                   match: { taskId: nativeSubagent.id, cursor: "task-earlier" },
                   response: {
+                    activity: ["task-check", "task-check-result"].map((messageId) => ({
+                      messageId,
+                      items: [
+                        projectAgentToolActivity({
+                          toolCallId: "routing-check",
+                          name: "exec",
+                          phase: "result",
+                          status: "completed",
+                          // The native task owns the outcome, not executed host arguments.
+                        }),
+                      ],
+                    })),
                     messages: [
                       {
                         role: "user",
@@ -495,7 +508,7 @@ suite.define(() => {
         });
         await toolRow.waitFor();
         const toolSummary = toolRow.locator("summary");
-        expect((await toolSummary.textContent())?.trim()).toBe("pnpm test routing");
+        expect((await toolSummary.textContent())?.trim()).toBe("Exec");
         const toolBody = toolRow.locator(".chat-task-feed__calls");
         expect(await toolBody.isVisible()).toBe(false);
         await toolSummary.click();

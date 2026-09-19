@@ -9,7 +9,6 @@ import {
   type ConfigJsonSchemaObject as JsonSchemaObject,
   type ConfigSchemaResponse,
 } from "./schema.shared.js";
-import { applyDerivedTags } from "./schema.tags.js";
 import { applyResolvedConfigTierHints } from "./schema.tiers.js";
 import { OpenClawSchema } from "./zod-schema.js";
 
@@ -130,7 +129,7 @@ function computeBaseConfigSchemaStablePayload(): BaseConfigSchemaStablePayload {
   const publicSchema = preparePublicSchema(schema);
   const stablePayload = {
     schema: publicSchema,
-    uiHints: applyDerivedTags(applyResolvedConfigTierHints(publicSchema, baseHints)),
+    uiHints: applyResolvedConfigTierHints(publicSchema, baseHints),
     version: VERSION,
   } satisfies BaseConfigSchemaStablePayload;
   baseConfigSchemaStablePayload = stablePayload;

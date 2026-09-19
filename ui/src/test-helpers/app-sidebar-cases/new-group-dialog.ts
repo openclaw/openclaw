@@ -47,7 +47,7 @@ describe("AppSidebar new group dialog", () => {
         harness.patchMany.mock.invocationCallOrder[0]!,
       );
       expect(harness.patch).not.toHaveBeenCalled();
-      await waitForFast(() => expect(harness.refreshReplacement).toHaveBeenCalledOnce());
+      await waitForFast(() => expect(harness.reconcileMutation).toHaveBeenCalledOnce());
     } finally {
       restoreDialogPolyfill();
     }
@@ -162,7 +162,7 @@ describe("AppSidebar new group dialog", () => {
         { category: "Projects" },
       );
       expect(harness.patch).not.toHaveBeenCalled();
-      expect(harness.refreshReplacement).toHaveBeenCalledOnce();
+      expect(harness.reconcileMutation).toHaveBeenCalledOnce();
       document.body
         .querySelector<HTMLButtonElement>('openclaw-modal-dialog button[type="button"]')
         ?.click();

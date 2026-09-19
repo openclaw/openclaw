@@ -92,7 +92,7 @@ async function runGatewayUpdateInternal(opts: UpdateRunnerOptions): Promise<Upda
   });
   return {
     status: "skipped",
-    mode: "unknown",
+    mode: surface.mode,
     root: pkgRoot,
     reason:
       surface.kind === "global"

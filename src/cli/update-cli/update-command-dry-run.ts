@@ -6,20 +6,18 @@ import { getUpdateRun } from "../../infra/update-run-ledger.js";
 import type { UpdateRunRecord } from "../../infra/update-run-record.js";
 import type { UpdateRunResult } from "../../infra/update-runner.js";
 import { defaultRuntime } from "../../runtime.js";
+import type { UpdateRecoveryStep } from "../../shared/update-outcome.js";
 import type { OpenClawDatabaseSchemaPreflight } from "../../state/openclaw-database-preflight.js";
 import { printResult } from "./progress.js";
 import { formatSchemaRefusalLines, hasSchemaRefusal } from "./schema-preflight.js";
 import { UpdatePreMutationError, type UpdateCommandOptions } from "./shared.js";
+import type { RefuseUpdate } from "./update-command-result.js";
 import type { ManagedServiceRootRedirect } from "./update-command-service-plan.js";
 
 export async function handleDryRunPreflightError(
   error: unknown,
   notes: string[],
-  refuseUpdate: (
-    reason: string,
-    message: string,
-    failureFacts?: readonly UpdateFailureFact[],
-  ) => Promise<void>,
+  refuseUpdate: RefuseUpdate,
 ): Promise<OpenClawDatabaseSchemaPreflight> {
   if (!(error instanceof UpdatePreMutationError)) {
     throw error;
@@ -33,9 +31,16 @@ export async function handleDryRunPreflightError(
     notes.push(error.message.replace(/^Update refused:/u, "Would refuse update:"));
     return { incompatible: [], indeterminate: [] };
   }
-  await refuseUpdate(error.reason, error.message, error.failureFacts);
+  await refuseUpdate(error.reason, error.message, error.failureFacts, error.recoverySteps);
   return { incompatible: [], indeterminate: [] };
 }
+
+export type UpdateDryRunFailure = {
+  recoverySteps?: readonly UpdateRecoveryStep[];
+  reason: string;
+  message: string;
+  failureFacts?: readonly UpdateFailureFact[];
+};
 
 type UpdateDryRunPreview = {
   runId: string;
@@ -58,6 +63,7 @@ type UpdateDryRunPreview = {
   downgradeRisk: boolean;
   actions: string[];
   notes: string[];
+  failures?: readonly UpdateDryRunFailure[];
 };
 
 function printDryRunPreview(preview: UpdateDryRunPreview, jsonMode: boolean): void {
@@ -124,6 +130,7 @@ export function printUpdateDryRun(params: {
   explicitTag: string | null;
   packageSchemaPreflight: OpenClawDatabaseSchemaPreflight;
   preflightNotes?: readonly string[];
+  preflightFailures?: readonly UpdateDryRunFailure[];
   opts: Pick<UpdateCommandOptions, "tag" | "json" | "run">;
 }): void {
   const actions: string[] = [];
@@ -173,7 +180,7 @@ export function printUpdateDryRun(params: {
   }
   if (params.updateInstallKind === "git") {
     notes.push(
-      "Git preview does not execute target scripts or select a build-tested development fallback. The real update repeats database admission before executing each candidate.",
+      "Git preview does not execute target scripts or select a build-tested development fallback. The real update repeats database admission before executing each update.",
     );
   }
 
@@ -207,6 +214,7 @@ export function printUpdateDryRun(params: {
       downgradeRisk: params.downgradeRisk,
       actions,
       notes,
+      ...(params.preflightFailures?.length ? { failures: params.preflightFailures } : {}),
     },
     Boolean(params.opts.json),
   );

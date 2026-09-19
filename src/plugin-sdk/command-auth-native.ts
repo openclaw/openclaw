@@ -3,6 +3,7 @@
  */
 export {
   buildCommandTextFromArgs,
+  canResolveCommandArgMenu,
   findCommandByNativeName,
   formatCommandArgMenuTitle,
   listChatCommands,

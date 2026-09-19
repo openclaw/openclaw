@@ -339,15 +339,21 @@ describe("readGatewayServiceState", () => {
             `[Service]\nExecStart=/missing/openclaw ${node ? "node run" : "gateway"}\n`,
           );
         }
+        const native = await import("./systemd-peer-native.js");
+        for (const method of ["openSystemdBroker", "openSystemdPrivatePeer"] as const) {
+          vi.spyOn(native, method).mockRejectedValue(
+            new Error("Synthetic native manager unavailable"),
+          );
+        }
+        vi.spyOn(await import("./exec-file.js"), "execFileUtf8").mockResolvedValue({
+          stdout: "",
+          stderr: "service manager unavailable",
+          code: 1,
+          termination: "error",
+          errorCode: "ENOENT",
+        });
         if (node) {
           // Only the fixture HOME contains definitions; no native manager is contacted.
-          vi.spyOn(await import("./exec-file.js"), "execFileUtf8").mockResolvedValue({
-            stdout: "",
-            stderr: "service manager unavailable",
-            code: 1,
-            termination: "error",
-            errorCode: "ENOENT",
-          });
           const access = fs.access;
           vi.spyOn(fs, "access").mockImplementation(async (target, mode) => {
             if (!String(target).startsWith(`${home}${path.sep}`)) {
@@ -411,16 +417,24 @@ describe("readGatewayServiceState", () => {
           phase: "inspect",
           timeoutMs: 2_000,
         });
+        expect(result.blockMessage).toBeUndefined();
         if (condition === "absent") {
-          expect(result.blockMessage).toBeUndefined();
           expect(result.serviceMutationSkipMessage).toContain("no Gateway service or listener");
           expect(result.serviceUpdateVerdict?.kind).toBe("absent");
-        } else if (portUsage) {
-          expect(result.blockMessage).toContain("Refusing to mutate code");
-          expect(result.serviceUpdateVerdict).toMatchObject({ kind: "unavailable" });
         } else {
-          expect(result.blockMessage).toContain("busctl executable is unavailable");
-          expect(result.serviceUpdateVerdict?.kind).not.toBe("absent");
+          expect(result.serviceUpdateVerdict).toMatchObject({
+            kind: "unavailable",
+            inspectionReason: "service-manager-unavailable",
+          });
+          expect(result.serviceMutationSkipMessage).toContain(
+            "No supported service manager detected",
+          );
+          expect(result.serviceMutationSkipMessage).toContain(
+            "Restart the Gateway you launched manually after the update.",
+          );
+          expect(result.serviceEnv === undefined).toBe(true);
+          expect(result.serviceDefinitionEnv === undefined).toBe(true);
+          expect(result.serviceNodeRunner === undefined).toBe(true);
         }
         expect(result.serviceMutationAllowed).toBe(false);
         expect(result.stopped).toBe(false);

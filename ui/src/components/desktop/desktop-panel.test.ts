@@ -484,6 +484,7 @@ describe("embedded desktop panel presentation", () => {
     );
     clickPanelButton(panel);
     await waitForFast(() => expect(connect).toHaveBeenCalledTimes(2));
+    expect(panel.renderRoot.querySelectorAll('button[aria-label="Take control"]')).toHaveLength(1);
     clickPanelButton(panel, 'button[aria-label="Take control"]');
     await waitForFast(() => expect(connect).toHaveBeenCalledTimes(3));
     const selectedConnection = connect.mock.calls.at(-1)?.[0];
@@ -505,6 +506,11 @@ describe("embedded desktop panel presentation", () => {
       disconnects: disconnect.mock.calls.length,
       focus: onFocusTargetChange.mock.calls.at(-1)?.[0],
     }).toEqual({ connected: true, connections: 3, disconnects: 2, focus: selectedFocus });
+    expect(panel.renderRoot.textContent).toContain("Agent input is paused");
+    clickPanelButton(panel, 'button[aria-label="Switch to view only"]');
+    await waitForFast(() => expect(connect).toHaveBeenCalledTimes(4));
+    expect(connect.mock.calls.at(-1)?.[0].viewOnly).toBe(true);
+    expect(panel.renderRoot.textContent).not.toContain("Agent input is paused");
   });
 
   it.each(["before", "after"] as const)(
@@ -919,53 +925,6 @@ describe("embedded desktop panel presentation", () => {
     await settleTasks();
 
     expect(request).not.toHaveBeenCalled();
-    expect(panel.isConnected).toBe(true);
-  });
-
-  it("invalidates a pending observe before it can connect", async () => {
-    let resolveObserve: (value: unknown) => void = (_value) => {
-      throw new Error("observe request was not started");
-    };
-    const observe = new Promise<unknown>((resolve) => {
-      resolveObserve = resolve;
-    });
-    const request = vi.fn((method: string) => {
-      if (method === "environments.list") {
-        return Promise.resolve({ environments: [desktopEnvironment] });
-      }
-      return observe;
-    });
-    const connect = vi.fn(async () => createConnectionHandle());
-    const panel = createPanel();
-    panel.client = createGatewayClient(request).client;
-    panel.available = true;
-    panel.embedded = true;
-    panel.presented = true;
-    panel.desktopClientFactory = () => ({ connect });
-    document.body.append(panel);
-
-    await waitForFast(() => {
-      expect(request.mock.calls.filter(([method]) => method === "environments.list")).toHaveLength(
-        1,
-      );
-    });
-    clickPanelButton(panel);
-    await waitForFast(() => {
-      expect(request.mock.calls.filter(([method]) => method === "desktop.observe")).toHaveLength(1);
-    });
-
-    panel.presented = false;
-    await panel.updateComplete;
-    resolveObserve({
-      transport: "rfb",
-      wsPath: "/desktop/observe?token=stale",
-      expiresAtMs: 60_000,
-      control: false,
-      canResize: true,
-    });
-    await settleTasks();
-
-    expect(connect).not.toHaveBeenCalled();
     expect(panel.isConnected).toBe(true);
   });
 });

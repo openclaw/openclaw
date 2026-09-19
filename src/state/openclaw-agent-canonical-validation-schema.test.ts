@@ -198,6 +198,12 @@ describe("canonical session validation invalidation", () => {
 });
 
 describe("canonical validation schema admission", () => {
+  const missingTable = expect.objectContaining({
+    name: "SessionMetadataUnavailableError",
+    reason: "table-missing",
+    missingTables: ["session_canonical_validation_pending"],
+    cause: expect.objectContaining({ message: expect.stringMatching(/missing or drifted/u) }),
+  });
   it.each([
     "DROP TABLE session_canonical_validation_pending",
     "DROP TRIGGER session_nodes_canonical_pending_after_update",
@@ -210,7 +216,9 @@ describe("canonical validation schema admission", () => {
       assertCanonicalSessionValidationSchema(database);
       database.exec(change);
       expect(() => assertCanonicalSessionValidationSchema(database)).toThrow(
-        /canonical validation schema is missing or drifted/u,
+        change.startsWith("DROP TABLE")
+          ? missingTable
+          : /canonical validation schema is missing or drifted/u,
       );
     });
   });
@@ -239,9 +247,7 @@ describe("canonical validation schema admission", () => {
         database.open();
         database.exec(withoutCanonicalSessionValidationSchema(OPENCLAW_AGENT_SCHEMA_SQL));
         database.exec(`PRAGMA schema_version = ${cookie}`);
-        expect(() => assertCanonicalSessionValidationSchema(database)).toThrow(
-          /missing or drifted/u,
-        );
+        expect(() => assertCanonicalSessionValidationSchema(database)).toThrow(missingTable);
       });
     },
   );
@@ -258,9 +264,7 @@ describe("canonical validation schema admission", () => {
           replacement.exec(withoutCanonicalSessionValidationSchema(OPENCLAW_AGENT_SCHEMA_SQL));
           replacement.exec(`PRAGMA schema_version = ${cookie}`);
           database.deserialize(replacement.serialize());
-          expect(() => assertCanonicalSessionValidationSchema(database)).toThrow(
-            /missing or drifted/u,
-          );
+          expect(() => assertCanonicalSessionValidationSchema(database)).toThrow(missingTable);
         } finally {
           replacement.close();
         }

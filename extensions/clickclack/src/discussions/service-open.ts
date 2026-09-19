@@ -1,5 +1,7 @@
 import { resolveSessionAgentIdStrict } from "openclaw/plugin-sdk/agent-scope-runtime";
 import type { PluginRuntime } from "openclaw/plugin-sdk/core";
+import type { SessionDiscussionInfo } from "openclaw/plugin-sdk/session-discussion";
+import { listClickClackAccountIds, resolveClickClackAccount } from "../accounts.js";
 import {
   ClickClackHttpError,
   isClickClackChannelNameConflict,
@@ -19,7 +21,7 @@ import type {
   ClickClackDiscussionBindingStore,
 } from "./binding-store.js";
 import { controlSessionUrl } from "./control-session-url.js";
-import { normalizedServerBaseUrl } from "./eligibility.js";
+import { discussionAccounts, normalizedServerBaseUrl } from "./eligibility.js";
 import {
   discussionCredentialFingerprint,
   discussionExternalRef,
@@ -40,11 +42,14 @@ type OpenDiscussionParams = {
   installationId: string;
   bindingGenerationFactory: () => string;
   sessionKey: string;
-  ensureTimer: () => void;
+  ensureTimer: () => Promise<void>;
   reconcilePendingOpen: (pending: PendingDiscussionOpen) => Promise<void>;
   withChannelMutationLock: <T>(run: () => Promise<T>) => Promise<T>;
   ensureBindingCapacity: (sessionKey: string) => void;
-  finalizePendingBinding: (sessionKey: string, binding: ClickClackDiscussionBinding) => void;
+  finalizePendingBinding: (
+    sessionKey: string,
+    binding: ClickClackDiscussionBinding,
+  ) => Promise<void>;
   warn: (message: string) => void;
 };
 
@@ -153,7 +158,7 @@ function assertManagedChannelContract(
   }
 }
 
-export function assertManagedChannelListContract(
+function assertManagedChannelListContract(
   channels: Awaited<ReturnType<ClickClackClient["channels"]>>,
 ): void {
   if (
@@ -196,7 +201,7 @@ export async function openClickClackDiscussionBinding(
   }
   const serverBaseUrl = normalizedServerBaseUrl(account);
   const credentialFingerprint = discussionCredentialFingerprint(account.token);
-  const unresolved = listPendingDiscussionOpens(runtime).find(
+  const unresolved = (await listPendingDiscussionOpens(runtime)).find(
     (pending) => pending.sessionKey === sessionKey,
   );
   if (
@@ -207,7 +212,11 @@ export async function openClickClackDiscussionBinding(
       unresolved.workspaceId !== workspace.id)
   ) {
     await params.reconcilePendingOpen(unresolved);
-    if (listPendingDiscussionOpens(runtime).some((pending) => pending.sessionKey === sessionKey)) {
+    if (
+      (await listPendingDiscussionOpens(runtime)).some(
+        (pending) => pending.sessionKey === sessionKey,
+      )
+    ) {
       throw new Error(
         "A previous ClickClack discussion open is still unresolved; restore its credential and retry",
       );
@@ -227,12 +236,33 @@ export async function openClickClackDiscussionBinding(
     config.session?.mainKey,
     label,
   );
+  const assertCurrentAuthority = () => {
+    // SAFETY: account resolution only reads the SDK's deep-readonly, schema-validated config.
+    const currentAccounts = discussionAccounts(runtime.config.current() as CoreConfig);
+    const currentAccount = currentAccounts.length === 1 ? currentAccounts[0] : undefined;
+    const currentEntry = runtime.agent.session.getSessionEntry({
+      sessionKey,
+      readConsistency: "latest",
+    });
+    if (
+      !currentAccount ||
+      currentAccount.accountId !== account.accountId ||
+      normalizedServerBaseUrl(currentAccount) !== serverBaseUrl ||
+      currentAccount.apiEndpoint !== account.apiEndpoint ||
+      discussionCredentialFingerprint(currentAccount.token) !== credentialFingerprint ||
+      currentAccount.discussions.workspace !== account.discussions.workspace ||
+      !currentEntry?.sessionId ||
+      currentEntry.archivedAt !== undefined
+    ) {
+      throw new Error("ClickClack discussion authority changed while opening the channel");
+    }
+  };
   return await params.withChannelMutationLock(async () => {
     params.ensureBindingCapacity(sessionKey);
     let channels = await client.channels(workspace.id);
     assertManagedChannelListContract(channels);
     const destinationIdentity = [serverBaseUrl, workspace.id].join("\0");
-    const bindingGeneration = reserveDiscussionBindingGeneration({
+    const bindingGeneration = await reserveDiscussionBindingGeneration({
       runtime,
       sessionKey,
       accountId: account.accountId,
@@ -280,7 +310,7 @@ export async function openClickClackDiscussionBinding(
         sidebar_section: section,
         display_title: displayTitle,
       };
-      recordPendingDiscussionOpen({
+      await recordPendingDiscussionOpen({
         runtime,
         sessionKey,
         generation: bindingGeneration,
@@ -293,7 +323,8 @@ export async function openClickClackDiscussionBinding(
           credentialFingerprint,
         },
       });
-      params.ensureTimer();
+      await params.ensureTimer();
+      assertCurrentAuthority();
       try {
         if (adopted) {
           markClickClackDiscussionChannelIdentityRevoked({
@@ -337,11 +368,12 @@ export async function openClickClackDiscussionBinding(
               serverBaseUrl,
               channelId: recovered.id,
             });
+            assertCurrentAuthority();
             resolved = await client.updateChannel(recovered.id, managedFields);
             break;
           }
           if (definitiveNoCreate) {
-            clearDiscussionBindingGeneration({
+            await clearDiscussionBindingGeneration({
               runtime,
               sessionKey,
               expectedGeneration: bindingGeneration,
@@ -349,7 +381,7 @@ export async function openClickClackDiscussionBinding(
           }
         } catch {
           if (definitiveNoCreate && !adopted) {
-            clearDiscussionBindingGeneration({
+            await clearDiscussionBindingGeneration({
               runtime,
               sessionKey,
               expectedGeneration: bindingGeneration,
@@ -375,7 +407,7 @@ export async function openClickClackDiscussionBinding(
         assertChannelPatch(resolved, managedFields);
       }
     } catch (error) {
-      clearPendingDiscussionOpen({
+      await clearPendingDiscussionOpen({
         runtime,
         sessionKey,
         expectedGeneration: bindingGeneration,
@@ -384,7 +416,7 @@ export async function openClickClackDiscussionBinding(
       throw error;
     }
     if (!resolved.route_id) {
-      clearPendingDiscussionOpen({
+      await clearPendingDiscussionOpen({
         runtime,
         sessionKey,
         expectedGeneration: bindingGeneration,
@@ -398,7 +430,7 @@ export async function openClickClackDiscussionBinding(
       readConsistency: "latest",
     });
     if (!currentEntry?.sessionId || currentEntry.archivedAt !== undefined) {
-      clearPendingDiscussionOpen({
+      await clearPendingDiscussionOpen({
         runtime,
         sessionKey,
         expectedGeneration: bindingGeneration,
@@ -443,6 +475,7 @@ export async function openClickClackDiscussionBinding(
             display_title: currentDisplayTitle,
           };
           try {
+            assertCurrentAuthority();
             currentChannel = await client.updateChannel(channel.id, latestManagedFields);
             assertChannelPatch(currentChannel, latestManagedFields);
             break;
@@ -456,7 +489,7 @@ export async function openClickClackDiscussionBinding(
           }
         }
       } catch (error) {
-        clearPendingDiscussionOpen({
+        await clearPendingDiscussionOpen({
           runtime,
           sessionKey,
           expectedGeneration: bindingGeneration,
@@ -486,9 +519,10 @@ export async function openClickClackDiscussionBinding(
         : {}),
     };
     try {
+      assertCurrentAuthority();
       store.set(sessionKey, nextBinding);
     } catch (error) {
-      clearPendingDiscussionOpen({
+      await clearPendingDiscussionOpen({
         runtime,
         sessionKey,
         expectedGeneration: bindingGeneration,
@@ -496,7 +530,95 @@ export async function openClickClackDiscussionBinding(
       params.warn(`unbound discussion channel remains quarantined: ${channel.id}`);
       throw error;
     }
-    params.finalizePendingBinding(sessionKey, nextBinding);
+    await params.finalizePendingBinding(sessionKey, nextBinding);
     return nextBinding;
+  });
+}
+
+export async function reconcilePendingDiscussionOpen(params: {
+  runtime: PluginRuntime;
+  store: ClickClackDiscussionBindingStore;
+  clientFactory: (account: ResolvedClickClackAccount) => ClickClackClient;
+  pending: PendingDiscussionOpen;
+  allowRetry?: boolean;
+  finalizePendingBinding: (
+    sessionKey: string,
+    binding: ClickClackDiscussionBinding,
+  ) => Promise<void>;
+  open: (sessionKey: string) => Promise<SessionDiscussionInfo>;
+}): Promise<void> {
+  const { pending } = params;
+  const currentBinding = params.store.get(pending.sessionKey);
+  if (currentBinding?.externalRef === pending.externalRef) {
+    await params.finalizePendingBinding(pending.sessionKey, currentBinding);
+    return;
+  }
+  // SAFETY: account resolution only reads the SDK's deep-readonly, schema-validated config.
+  const cfg = params.runtime.config.current() as CoreConfig;
+  const account = listClickClackAccountIds(cfg)
+    .map((accountId) => resolveClickClackAccount({ cfg, accountId }))
+    .find(
+      (candidate) =>
+        candidate.configured &&
+        normalizedServerBaseUrl(candidate) === pending.serverBaseUrl &&
+        discussionCredentialFingerprint(candidate.token) === pending.credentialFingerprint,
+    );
+  if (!account) {
+    // Without the creating credential, keep the destination quarantined until
+    // an operator restores access or explicitly cleans up the pending record.
+    return;
+  }
+  const client = params.clientFactory(account);
+  const entry = params.runtime.agent.session.getSessionEntry({
+    sessionKey: pending.sessionKey,
+    readConsistency: "latest",
+  });
+  const activeAccounts = discussionAccounts(cfg);
+  const retryAccount = activeAccounts.length === 1 ? activeAccounts[0] : undefined;
+  if (
+    params.allowRetry !== false &&
+    entry?.sessionId &&
+    entry.archivedAt === undefined &&
+    retryAccount &&
+    normalizedServerBaseUrl(retryAccount) === pending.serverBaseUrl &&
+    discussionCredentialFingerprint(retryAccount.token) === pending.credentialFingerprint
+  ) {
+    const retryClient = params.clientFactory(retryAccount);
+    const workspaces = await retryClient.workspaces();
+    const configuredWorkspace = workspaces.find(
+      (candidate) =>
+        candidate.id === retryAccount.discussions.workspace ||
+        candidate.slug === retryAccount.discussions.workspace ||
+        candidate.name === retryAccount.discussions.workspace,
+    );
+    if (configuredWorkspace?.id === pending.workspaceId) {
+      await params.open(pending.sessionKey);
+      return;
+    }
+  }
+  const channels = await client.channels(pending.workspaceId);
+  assertManagedChannelListContract(channels);
+  const channel = channels.find(
+    (candidate) =>
+      candidate.external_managed === true && candidate.external_ref === pending.externalRef,
+  );
+  if (channel) {
+    markClickClackDiscussionChannelIdentityRevoked({
+      runtime: params.runtime,
+      accountId: pending.accountId,
+      serverBaseUrl: pending.serverBaseUrl,
+      channelId: channel.id,
+    });
+    await clearPendingDiscussionOpen({
+      runtime: params.runtime,
+      sessionKey: pending.sessionKey,
+      expectedGeneration: pending.generation,
+    });
+    return;
+  }
+  await clearDiscussionBindingGeneration({
+    runtime: params.runtime,
+    sessionKey: pending.sessionKey,
+    expectedGeneration: pending.generation,
   });
 }

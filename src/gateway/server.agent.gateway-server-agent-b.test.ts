@@ -40,6 +40,7 @@ import {
   withGatewayServer,
   writeSessionStore,
 } from "./test-helpers.js";
+import { releaseGatewaySessionStoreFixture } from "./test/server-sessions-resources.test-helpers.js";
 
 installGatewayTestHooks({ scope: "suite" });
 
@@ -203,15 +204,21 @@ afterAll(() => {
 });
 
 describe("gateway server agent", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     vi.mocked(agentCommandMock).mockClear();
     testState.allowFrom = undefined;
     setRegistry(defaultRegistry);
+    await useTempSessionStorePath();
+    await writeSessionStore({ entries: {} });
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     testState.allowFrom = undefined;
     setRegistry(emptyRegistry);
+    for (const dir of gwSessionTempDirs) {
+      await releaseGatewaySessionStoreFixture(dir);
+    }
+    cleanupTempDirs(gwSessionTempDirs);
   });
 
   test(

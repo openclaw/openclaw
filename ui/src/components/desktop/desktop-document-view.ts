@@ -73,6 +73,7 @@ export function renderDesktopDocumentView(options: DesktopDocumentViewOptions) {
           type="button"
           aria-label=${t(options.controlling ? "desktop.switchToViewOnly" : "desktop.takeControl")}
           aria-pressed=${options.controlling ? "true" : "false"}
+          ?disabled=${options.state !== "connected"}
           @click=${options.onControlToggle}
         >
           <span class="desktop-touch-action__icon" aria-hidden="true">

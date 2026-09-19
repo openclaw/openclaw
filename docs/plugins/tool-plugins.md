@@ -179,6 +179,41 @@ context whenever tools are assembled. Argument preparation and execution use the
 same instance. Retained tools stop working when their owning plugin registry is
 retired.
 
+### Owner-authorized continuations
+
+To participate when the exact parent resumes after an explicit `sessions_yield`,
+register an `OpenClawPluginToolFactory<2>` descriptor through `api.registerTool`:
+
+```typescript
+api.registerTool(
+  {
+    contextVersion: 2,
+    create(context) {
+      if (context.senderIsOwner !== true) return null;
+      return createPrivilegedTool({ assertCurrent: context.assertInvocationCurrent });
+    },
+  },
+  { name: "my_privileged_tool" },
+);
+```
+
+The `OpenClawPluginToolContext<2>` type requires `assertInvocationCurrent`.
+Carry it through awaited work and invoke it in the final synchronous write or
+request guard, before effects—not only before starting work or after returning.
+It checks the captured plugin lifetime and admitted run/worker authority; a
+continuation also checks the original owner's live exact-parent binding. Standalone
+HTTP/RPC calls use their authenticated request lifetime, while MCP tools retain
+the existing authenticated grant or loopback-runtime lifetime.
+Metadata-only catalog construction does not grant invocation authority. A retained
+versioned tool without an admitted invocation fails when its guard is called.
+
+Legacy function and static-tool registrations remain supported with their existing
+direct-turn context; this change introduces no removal date or shortened
+compatibility window. They do **not** receive continued owner identity. Opt-in
+alone grants nothing: management-only callers, unrelated sessions, and detached
+cron runs still cannot acquire the owner's identity. `senderIsOwner` is an
+availability check, never a substitute for the required final-effect guard.
+
 Set `hideFromChannelProgress: true` on the concrete factory tool to keep its
 transient activity out of channel progress drafts. Lifecycle events and the
 final tool result still flow normally. OpenClaw preserves the current factory's

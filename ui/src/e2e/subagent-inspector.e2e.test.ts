@@ -36,7 +36,59 @@ suite.define(() => {
         methodResponses: {
           "tasks.list": { tasks: [task] },
           "tasks.history": {
+            activity: [
+              { messageId: "poll", items: [] },
+              {
+                messageId: "failed",
+                items: [
+                  {
+                    itemId: "tool:failed",
+                    toolCallId: "failed",
+                    kind: "tool",
+                    phase: "end",
+                    name: "exec",
+                    title: "Validate samples",
+                    status: "failed",
+                  },
+                ],
+              },
+            ],
             messages: [
+              {
+                role: "assistant",
+                messageId: "poll",
+                content: [
+                  {
+                    type: "toolCall",
+                    id: "poll",
+                    name: "process",
+                    arguments: { action: "poll", sessionId: "samples" },
+                  },
+                ],
+              },
+              {
+                role: "toolResult",
+                toolCallId: "poll",
+                content: [{ type: "text", text: "Still running" }],
+              },
+              {
+                role: "assistant",
+                messageId: "failed",
+                content: [
+                  {
+                    type: "toolCall",
+                    id: "failed",
+                    name: "exec",
+                    arguments: { command: "check-samples" },
+                  },
+                ],
+              },
+              {
+                role: "toolResult",
+                toolCallId: "failed",
+                isError: false,
+                content: [{ type: "text", text: "Missing title; exit 2" }],
+              },
               {
                 role: "assistant",
                 messageId: "child-update",
@@ -54,6 +106,13 @@ suite.define(() => {
       await notice.click();
       const inspector = page.locator("[data-task-detail-panel]");
       await inspector.getByText("The install evidence is ready.").waitFor();
+      const toolSummary = inspector.locator(".chat-task-feed__tool-group summary");
+      expect(await toolSummary.textContent()).toBe("Validate samples (failed)");
+      await toolSummary.click();
+      expect(await inspector.locator(".chat-task-feed__calls").textContent()).toContain(
+        "check-samples",
+      );
+      expect(await inspector.locator(".chat-task-feed__calls").textContent()).toContain("process");
       expect(await inspector.locator(".chat-task-detail__observation").textContent()).toContain(
         "Current tool",
       );

@@ -1,4 +1,3 @@
-// Discord plugin module implements exec approvals behavior.
 import type { ChannelOutboundPayloadHint } from "openclaw/plugin-sdk/channel-contract";
 import type {
   OpenClawConfig,

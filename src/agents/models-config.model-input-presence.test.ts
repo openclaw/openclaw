@@ -217,7 +217,13 @@ describe("models config input presence", () => {
               pluginMetadataSnapshot,
               preparedStaticProviderCatalog: {
                 providers: [plugin],
-                entries: [{ provider: plugin, result: { provider: discovered } }],
+                entries: [
+                  {
+                    provider: plugin,
+                    result: { provider: discovered },
+                    providerConfigs: { [providerId]: discovered },
+                  },
+                ],
               },
               providerDiscoveryEntriesOnly: true,
               providerDiscoveryProviderIds: [providerId],
@@ -371,7 +377,13 @@ describe("models config input presence", () => {
         providerDiscoveryProviderIds: [providerId],
         preparedStaticProviderCatalog: {
           providers: [plugin],
-          entries: [{ provider: plugin, result: { provider: discovered } }],
+          entries: [
+            {
+              provider: plugin,
+              result: { provider: discovered },
+              providerConfigs: { [providerId]: discovered },
+            },
+          ],
         },
       };
       if (independent || missingSource) {

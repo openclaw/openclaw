@@ -6,6 +6,52 @@ fi
 
 set -euo pipefail
 
+# This bootstrap stays inline: no local helper is trusted before code selection.
+pr_git() { "${OPENCLAW_PR_GIT:-${GIT_EXEC:-git}}" "$@"; }
+pr_run_bounded() (
+  set +e
+  # Separate jobs let the deadline reap a hung launcher and its children.
+  set -m
+  "$@" &
+  local tool_pid=$! timer_pid result
+  (/bin/sleep 10; kill -KILL -- "-$tool_pid" 2>/dev/null) &
+  timer_pid=$!
+  wait "$tool_pid" 2>/dev/null
+  result=$?
+  kill -KILL -- "-$timer_pid" 2>/dev/null
+  wait "$timer_pid" 2>/dev/null
+  exit "$result"
+)
+
+GIT_EXEC=$(command -v "${OPENCLAW_PR_GIT:-${GIT_EXEC:-git}}" 2>/dev/null || true)
+if [ -n "$GIT_EXEC" ]; then
+  case "$GIT_EXEC" in /*) ;; *) GIT_EXEC="$PWD/$GIT_EXEC" ;; esac
+fi
+if [ -z "$GIT_EXEC" ] || ! pr_run_bounded "$GIT_EXEC" --version >/dev/null 2>&1; then
+  echo "scripts/pr git preflight failed or exceeded 10 seconds: ${GIT_EXEC:-${OPENCLAW_PR_GIT:-git (not found on PATH)}}" >&2
+  echo "xcode-select -p: $(pr_run_bounded xcode-select -p 2>/dev/null || printf 'unavailable')" >&2
+  echo "export DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer or set OPENCLAW_PR_GIT" >&2
+  exit 1
+fi
+export GIT_EXEC
+export OPENCLAW_PR_GIT="$GIT_EXEC"
+
+# Older trusted wrappers use bare Git before reaching a newer supervisor.
+# Keep this Git-only adapter across exec; OS temp reaping owns its lifetime,
+# as with materialized anchor copies. Matching inodes let reentry reuse it.
+pr_path_git=$(type -P git 2>/dev/null || true)
+case "$pr_path_git" in /*|"") ;; *) pr_path_git="$PWD/$pr_path_git" ;; esac
+if [ -z "$pr_path_git" ] || [ ! "$pr_path_git" -ef "$GIT_EXEC" ]; then
+  pr_git_path_dir=$(mktemp -d "${TMPDIR:-/tmp}/openclaw-pr-git.XXXXXX")
+  if ! ln -s "$GIT_EXEC" "$pr_git_path_dir/git"; then
+    rm -rf "$pr_git_path_dir"
+    exit 1
+  fi
+  pr_git_path_dir=$(cd "$pr_git_path_dir" && pwd -P)
+  export PATH="$pr_git_path_dir:$PATH"
+fi
+unset pr_path_git pr_git_path_dir
+
 # This wrapper parses GitHub CLI JSON. Caller shells may force ANSI color globally.
 export NO_COLOR=1
 export CLICOLOR=0
@@ -56,6 +102,99 @@ if [ "${1-}" = "--dev-wrapper" ]; then
 fi
 requested_subcommand="${1-}"
 
+# Keep dependency sourcing independent of wrapper selection. In particular, an
+# older anchor still supplies its own package/version policy to this bootstrap.
+pr_materialize_dependencies() {
+  node --input-type=module - "$1" "$canonical_repo_root" "$2" <<'EOF_TOOLING'
+import { execFileSync, spawnSync } from "node:child_process";
+import { mkdirSync, realpathSync, rmSync, symlinkSync } from "node:fs";
+import { delimiter, dirname, join, resolve } from "node:path";
+const [owner, canonicalPath, destination] = process.argv.slice(2);
+const canonical = realpathSync(canonicalPath);
+const gitBinary = process.env.OPENCLAW_PR_GIT;
+const git = (root, args) => execFileSync(gitBinary, ["-C", root, ...args], {
+  encoding: "utf8", timeout: 300_000, stdio: ["ignore", "pipe", "pipe"],
+}).trim();
+function config(root, key, type = "--path") {
+  const result = spawnSync(gitBinary, ["-C", root, "config", type, "--get", key], {
+    encoding: "utf8", timeout: 300_000,
+  });
+  if (result.status === 1) return "";
+  if (result.status !== 0) throw new Error(`Cannot read Git setting ${key} in ${root}.`);
+  return result.stdout.trim();
+}
+function repository(url, root) {
+  if (/^(?:\.?\.?\/|\/)/.test(url)) return realpathSync(resolve(root, url));
+  const parsed = new URL(url.replace(/^git@([^:]+):/, "ssh://git@$1/"));
+  if (parsed.protocol === "file:") return realpathSync(decodeURIComponent(parsed.pathname));
+  return `${parsed.hostname.toLowerCase()}/${parsed.pathname.replace(/^\/|\/$/g, "").replace(/\.git$/, "").toLowerCase()}`;
+}
+let root = canonical;
+try {
+  const requested = process.env.OPENCLAW_PR_TOOLING_ROOT || config(canonical, "openclaw.pr.toolingRoot");
+  if (requested) {
+    root = realpathSync(resolve(canonical, requested));
+    if (git(root, ["rev-parse", "--is-inside-work-tree"]) !== "true" ||
+        realpathSync(git(root, ["rev-parse", "--show-toplevel"])) !== root ||
+        config(root, "core.sparseCheckout", "--bool") === "true" ||
+        repository(git(root, ["remote", "get-url", "origin"]), root) !==
+          repository(git(canonical, ["remote", "get-url", "origin"]), canonical)) {
+      throw new Error(`Tooling root must be a full Git work tree of this repository: ${root}`);
+    }
+    console.error(`scripts/pr tooling root: ${root}`);
+  }
+  const materialize = () => {
+    const result = spawnSync(process.execPath, [owner, join(root, "node_modules"), destination], {
+      encoding: "utf8", stdio: ["ignore", "inherit", "pipe"],
+    });
+    if (result.stderr) process.stderr.write(result.stderr);
+    if (result.error) throw result.error;
+    // Older anchored materializers used exit 1 for their version refusal.
+    // Destination write errors never carry this complete validation diagnostic.
+    const drift = result.status === 78 || (result.status === 1 &&
+      /^Installed scripts\/pr dependency '[^\r\n]+' has version [^\r\n]+; the trust anchor requires [^\r\n]+\.$/m.test(result.stderr));
+    if (result.status !== 0 && !drift) throw new Error(`Dependency materialization failed in ${destination}; tooling root was not refreshed.`);
+    return result.status === 0;
+  };
+  if (!materialize()) {
+    if (!requested) process.exit(1);
+    const requireCleanMain = () => {
+      const branch = git(root, ["branch", "--show-current"]) || "(detached)";
+      const dirty = git(root, ["status", "--porcelain", "--untracked-files=all", "--ignore-submodules=none"]);
+      if (root === canonical || branch !== "main" || dirty) {
+        throw new Error(`Cannot refresh scripts/pr tooling root ${root} (branch=${branch}, ${dirty ? "dirty" : "clean"}${root === canonical ? ", canonical checkout" : ""}). Restore its frozen dependencies manually or set OPENCLAW_PR_TOOLING_ROOT to a separate clean main checkout.`);
+      }
+    };
+    requireCleanMain();
+    console.error(`Refreshing scripts/pr tooling root ${root} (main): fetch origin main, merge --ff-only origin/main, pnpm install --frozen-lockfile.`);
+    git(root, ["fetch", "origin", "main"]);
+    // Fetch may run hooks; reread the checkout before changing files.
+    requireCleanMain();
+    git(root, ["merge", "--ff-only", "refs/remotes/origin/main"]);
+    // Package-manager Git children must use the same preflighted binary too.
+    const bin = join(dirname(destination), ".pr-tooling-bin");
+    mkdirSync(bin);
+    try {
+      symlinkSync(gitBinary, join(bin, "git"));
+      // A post-merge hook can dirty or switch the checkout despite merge succeeding.
+      requireCleanMain();
+      const installed = spawnSync("pnpm", ["-C", root, "install", "--frozen-lockfile"], {
+        stdio: "inherit", env: { ...process.env, PATH: `${bin}${delimiter}${process.env.PATH ?? ""}` },
+      });
+      if (installed.status !== 0) throw new Error(`Frozen dependency installation failed in ${root}.`);
+    } finally {
+      rmSync(bin, { recursive: true, force: true });
+    }
+    if (!materialize()) throw new Error(`Refreshed scripts/pr tooling root ${root} still does not match the trust anchor; no further refresh was attempted.`);
+    console.error(`Refreshed and verified scripts/pr tooling root: ${root}`);
+  }
+} catch (error) {
+  console.error(`scripts/pr tooling root ${root}: ${error.message}`);
+  process.exitCode = 1;
+}
+EOF_TOOLING
+}
+
 # Select trusted wrapper code independently from the canonical repository root;
 # a linked wrapper may be removed by merge-run or gc before supervision ends.
 # Physical paths keep helper argv aligned with Node's canonical module URLs.
@@ -73,33 +212,37 @@ pr_wrapper_components=(scripts/pr scripts/pr-lib)
 # re-selection: the running bytes ARE the anchor, and the temp copy has no git
 # context of its own to select against.
 if [ -n "${OPENCLAW_PR_ANCHOR_REPO_ROOT:-}" ]; then
-  if ! git -C "$OPENCLAW_PR_ANCHOR_REPO_ROOT" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+  if ! pr_git -C "$OPENCLAW_PR_ANCHOR_REPO_ROOT" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
     echo "OPENCLAW_PR_ANCHOR_REPO_ROOT is not a git work tree: $OPENCLAW_PR_ANCHOR_REPO_ROOT" >&2
     exit 1
   fi
   canonical_repo_root="$OPENCLAW_PR_ANCHOR_REPO_ROOT"
-elif common_git_dir=$(git -C "$script_parent_dir" rev-parse --path-format=absolute --git-common-dir 2>/dev/null); then
+  # Older parents pin only their own dependency set. The anchored child owns
+  # completing its installation before any loader, supervisor, or lock starts.
+  pr_materialize_dependencies "$script_parent_dir/pr-lib/materialize-dependencies.mjs" \
+    "$script_parent_dir/../node_modules"
+elif common_git_dir=$(pr_git -C "$script_parent_dir" rev-parse --path-format=absolute --git-common-dir 2>/dev/null); then
   canonical_repo_root="$(dirname "$common_git_dir")"
   canonical_self="$canonical_repo_root/scripts/$(basename "${BASH_SOURCE[0]}")"
   if [ "$script_self" != "$canonical_self" ] && [ -x "$canonical_self" ]; then
-    linked_inventory=$(git -C "$script_parent_dir" show HEAD:scripts/pr-lib/wrapper-components.txt)
+    linked_inventory=$(pr_git -C "$script_parent_dir" show HEAD:scripts/pr-lib/wrapper-components.txt)
     while IFS= read -r wrapper_component; do
       pr_wrapper_components+=("$wrapper_component")
     done <<< "$linked_inventory"
-    if ! git -C "$script_parent_dir" diff --quiet HEAD -- "${pr_wrapper_components[@]/#/:(top)}"; then
+    if ! pr_git -C "$script_parent_dir" diff --quiet HEAD -- "${pr_wrapper_components[@]/#/:(top)}"; then
       echo "scripts/pr wrapper files have uncommitted changes in this worktree." >&2
       echo "Refusing to run unreviewed wrapper code from: $script_parent_dir" >&2
       exit 1
     fi
     linked_wrapper_revision=$(
-      git -C "$script_parent_dir" rev-parse "${pr_wrapper_components[@]/#/HEAD:}" 2>/dev/null || true
+      pr_git -C "$script_parent_dir" rev-parse "${pr_wrapper_components[@]/#/HEAD:}" 2>/dev/null || true
     )
     canonical_wrapper_revision=$(
-      git -C "$canonical_repo_root" rev-parse "${pr_wrapper_components[@]/#/HEAD:}" 2>/dev/null || true
+      pr_git -C "$canonical_repo_root" rev-parse "${pr_wrapper_components[@]/#/HEAD:}" 2>/dev/null || true
     )
     if [ -n "$linked_wrapper_revision" ] &&
       [ "$linked_wrapper_revision" = "$canonical_wrapper_revision" ] &&
-      git -C "$canonical_repo_root" diff --quiet HEAD -- "${pr_wrapper_components[@]/#/:(top)}"; then
+      pr_git -C "$canonical_repo_root" diff --quiet HEAD -- "${pr_wrapper_components[@]/#/:(top)}"; then
       exec "$canonical_self" "$@"
     fi
     # The canonical checkout can be parked on another branch or carry local
@@ -108,10 +251,10 @@ elif common_git_dir=$(git -C "$script_parent_dir" rev-parse --path-format=absolu
     # does not need the materialized dependency context.
     # refs/remotes/... explicitly: bare "origin/main" is a DWIM name that a
     # local branch or tag named origin/main could shadow, spoofing the anchor.
-    anchor_commit=$(git -C "$script_parent_dir" rev-parse --verify refs/remotes/origin/main^{commit} 2>/dev/null || true)
+    anchor_commit=$(pr_git -C "$script_parent_dir" rev-parse --verify refs/remotes/origin/main^{commit} 2>/dev/null || true)
     anchor_wrapper_revision=""
     if [ -n "$anchor_commit" ] &&
-      anchor_inventory=$(git -C "$script_parent_dir" show "$anchor_commit:scripts/pr-lib/wrapper-components.txt" 2>/dev/null); then
+      anchor_inventory=$(pr_git -C "$script_parent_dir" show "$anchor_commit:scripts/pr-lib/wrapper-components.txt" 2>/dev/null); then
       # A newer anchor can add helpers outside the caller's inventory. Its own
       # closure governs canonical substitution as well as extraction below.
       anchor_components=(scripts/pr scripts/pr-lib)
@@ -119,10 +262,10 @@ elif common_git_dir=$(git -C "$script_parent_dir" rev-parse --path-format=absolu
         anchor_components+=("$anchor_component")
       done <<< "$anchor_inventory"
       anchor_wrapper_revision=$(
-        git -C "$script_parent_dir" rev-parse "${anchor_components[@]/#/$anchor_commit:}" 2>/dev/null || true
+        pr_git -C "$script_parent_dir" rev-parse "${anchor_components[@]/#/$anchor_commit:}" 2>/dev/null || true
       )
       canonical_wrapper_revision=$(
-        git -C "$canonical_repo_root" rev-parse "${anchor_components[@]/#/HEAD:}" 2>/dev/null || true
+        pr_git -C "$canonical_repo_root" rev-parse "${anchor_components[@]/#/HEAD:}" 2>/dev/null || true
       )
     fi
     linked_matches_anchor=0
@@ -141,7 +284,7 @@ elif common_git_dir=$(git -C "$script_parent_dir" rev-parse --path-format=absolu
       requested_classification=$(pr_subcommand_classification "$requested_subcommand" 2>/dev/null || true)
       if [ "$linked_matches_anchor" != "1" ] && [ "$dev_wrapper_opt_in" = "1" ] && [ "$requested_classification" = "advisory" ]; then
         if [ "${OPENCLAW_PR_DEV_WRAPPER_BANNER_SHOWN:-}" != "1" ]; then
-          local_head_revision=$(git -C "$script_parent_dir" rev-parse HEAD 2>/dev/null || printf 'unknown')
+          local_head_revision=$(pr_git -C "$script_parent_dir" rev-parse HEAD 2>/dev/null || printf 'unknown')
           echo "WARNING: running local scripts/pr revision $local_head_revision via dev-wrapper opt-in." >&2
           echo "subcommand '$requested_subcommand' is classified advisory." >&2
           echo "The local wrapper differs from the canonical checkout and origin/main; landing subcommands remain refused." >&2
@@ -157,7 +300,7 @@ elif common_git_dir=$(git -C "$script_parent_dir" rev-parse --path-format=absolu
         # anchor code; announce the substitution so it is never silent.
         if [ -n "$anchor_wrapper_revision" ] &&
           [ "$canonical_wrapper_revision" = "$anchor_wrapper_revision" ] &&
-          git -C "$canonical_repo_root" diff --quiet HEAD -- "${anchor_components[@]/#/:(top)}"; then
+          pr_git -C "$canonical_repo_root" diff --quiet HEAD -- "${anchor_components[@]/#/:(top)}"; then
           echo "scripts/pr wrapper in this worktree $wrapper_route_reason; running the canonical checkout's wrapper (matches the origin/main trust anchor): $canonical_repo_root" >&2
           exec "$canonical_self" "$@"
         fi
@@ -170,13 +313,13 @@ elif common_git_dir=$(git -C "$script_parent_dir" rev-parse --path-format=absolu
         # Archive emits paths relative to its cwd, so run it (and the
         # verification listing) from the worktree toplevel to keep component
         # paths intact in the materialized tree.
-        anchor_git_root=$(git -C "$script_parent_dir" rev-parse --show-toplevel 2>/dev/null || true)
+        anchor_git_root=$(pr_git -C "$script_parent_dir" rev-parse --show-toplevel 2>/dev/null || true)
         if [ -n "$anchor_wrapper_revision" ] && [ -n "$anchor_git_root" ] &&
           anchor_exec_dir=$(mktemp -d "${TMPDIR:-/tmp}/openclaw-pr-anchor.XXXXXX" 2>/dev/null); then
           anchor_extraction_valid=0
           # BSD tar can stop at the end marker before Git finishes writing padding,
           # causing SIGPIPE under pipefail. Require producer completion before reading.
-          if git -C "$anchor_git_root" archive "$anchor_commit" -- \
+          if pr_git -C "$anchor_git_root" archive "$anchor_commit" -- \
             "${anchor_components[@]}" > "$anchor_exec_dir/anchor.tar" 2>/dev/null &&
             tar -xf "$anchor_exec_dir/anchor.tar" -C "$anchor_exec_dir" 2>/dev/null; then
             rm "$anchor_exec_dir/anchor.tar"
@@ -188,14 +331,14 @@ elif common_git_dir=$(git -C "$script_parent_dir" rev-parse --path-format=absolu
             # the same TOCTOU class as the canonical-substitution exec above.
             while IFS=$'\t' read -r anchor_meta anchor_path; do
               anchor_blob="${anchor_meta##* }"
-              extracted_blob=$(git -C "$anchor_git_root" hash-object -- \
+              extracted_blob=$(pr_git -C "$anchor_git_root" hash-object -- \
                 "$anchor_exec_dir/$anchor_path" 2>/dev/null || true)
               if [ -z "$extracted_blob" ] || [ "$extracted_blob" != "$anchor_blob" ]; then
                 anchor_extraction_valid=0
                 break
               fi
               anchor_verified_entries=$((anchor_verified_entries + 1))
-            done < <(git -C "$anchor_git_root" ls-tree -r --full-tree "$anchor_commit" -- "${anchor_components[@]}")
+            done < <(pr_git -C "$anchor_git_root" ls-tree -r --full-tree "$anchor_commit" -- "${anchor_components[@]}")
             # An empty listing means the anchor read failed; never exec unverified bytes.
             if [ "$anchor_verified_entries" = "0" ]; then
               anchor_extraction_valid=0
@@ -203,31 +346,16 @@ elif common_git_dir=$(git -C "$script_parent_dir" rev-parse --path-format=absolu
           fi
           if [ "$anchor_extraction_valid" = "1" ] &&
             grep -q "OPENCLAW_PR_ANCHOR_REPO_ROOT" "$anchor_exec_dir/scripts/pr" 2>/dev/null; then
-            # Only third-party tooling comes from the installed canonical tree.
+            # Only third-party tooling comes from the selected installed tree.
             # Pin package directories: a later install may replace top-level aliases.
             # A whole node_modules link could load unanchored workspace source.
-            if ! node --input-type=module - "$canonical_repo_root/node_modules" "$anchor_exec_dir/node_modules" <<'EOF_NODE'
-import { mkdirSync, realpathSync, statSync, symlinkSync } from "node:fs";
-import { join } from "node:path";
-const dependencies = ["tsx", "zod", "minimatch", "yaml"].map((dependency) => {
-  const installedPath = join(process.argv[2], dependency);
-  try {
-    const target = realpathSync(installedPath);
-    if (!statSync(target).isDirectory()) throw new Error("not a package directory");
-    return { dependency, target };
-  } catch {
-    console.error(`Cannot resolve installed scripts/pr dependency '${dependency}' at ${installedPath}.`);
-    console.error("Restore frozen dependencies in a clean trusted-main checkout before retrying; no dependencies were installed.");
-    process.exit(1);
-  }
-});
-mkdirSync(process.argv[3]);
-for (const { dependency, target } of dependencies) {
-  // Native junctions avoid Git Bash copying package directories on Windows.
-  symlinkSync(target, join(process.argv[3], dependency),
-    process.platform === "win32" ? "junction" : "dir");
-}
-EOF_NODE
+            anchor_dependency_owner="$anchor_exec_dir/scripts/pr-lib/materialize-dependencies.mjs"
+            # Older anchors still rely on their parent to prepare dependencies.
+            # Keep that bootstrap in this caller, using the extracted manifest.
+            if [ ! -f "$anchor_dependency_owner" ]; then
+              anchor_dependency_owner="$script_parent_dir/pr-lib/materialize-dependencies.mjs"
+            fi
+            if ! pr_materialize_dependencies "$anchor_dependency_owner" "$anchor_exec_dir/node_modules"
             then
               rm -rf "$anchor_exec_dir"
               exit 1
@@ -235,7 +363,7 @@ EOF_NODE
             # Not cleaned by trap: exec replaces this shell, and bash re-reads
             # the script file during execution, so the copy must outlive the
             # whole supervised run. OS tmp reaping owns this directory.
-            echo "scripts/pr wrapper in this worktree $wrapper_route_reason; running wrapper code materialized from the refs/remotes/origin/main trust anchor at revision $(git -C "$script_parent_dir" rev-parse --short "$anchor_commit")." >&2
+            echo "scripts/pr wrapper in this worktree $wrapper_route_reason; running wrapper code materialized from the refs/remotes/origin/main trust anchor at revision $(pr_git -C "$script_parent_dir" rev-parse --short "$anchor_commit")." >&2
             OPENCLAW_PR_ANCHOR_REPO_ROOT="$canonical_repo_root" exec "$anchor_exec_dir/scripts/pr" "$@"
           fi
           rm -rf "$anchor_exec_dir"
@@ -245,8 +373,8 @@ EOF_NODE
         # the working tree matches HEAD and this list matches what was rejected.
         differing_wrapper_components=()
         for wrapper_component in "${pr_wrapper_components[@]}"; do
-          linked_component_revision=$(git -C "$script_parent_dir" rev-parse "HEAD:$wrapper_component" 2>/dev/null || true)
-          anchor_component_revision=$(git -C "$script_parent_dir" rev-parse "refs/remotes/origin/main:$wrapper_component" 2>/dev/null || true)
+          linked_component_revision=$(pr_git -C "$script_parent_dir" rev-parse "HEAD:$wrapper_component" 2>/dev/null || true)
+          anchor_component_revision=$(pr_git -C "$script_parent_dir" rev-parse "refs/remotes/origin/main:$wrapper_component" 2>/dev/null || true)
           if [ -z "$linked_component_revision" ] ||
             [ -z "$anchor_component_revision" ] ||
             [ "$linked_component_revision" != "$anchor_component_revision" ]; then
@@ -359,13 +487,14 @@ Usage:
   classified advisory. OPENCLAW_PR_DEV_WRAPPER=1 is equivalent.
 
 Required commands: git, gh, jq, rg (ripgrep), pnpm, node.
+When macOS blocks ps, PR operation locks require Python 3 with ctypes on PATH.
 USAGE
 }
 
 require_cmds() {
   local missing=()
   local cmd
-  for cmd in git gh jq rg pnpm node; do
+  for cmd in gh jq rg pnpm node; do
     if ! command -v "$cmd" >/dev/null 2>&1; then
       missing+=("$cmd")
     fi
@@ -499,6 +628,11 @@ main() {
   esac
 
   require_cmds
+
+  case "$cmd" in
+    review-validate-artifacts) review_artifact_preflight "${1-}" || return 1 ;;
+    prepare-init | prepare-run) review_artifact_preflight "${1-}" true || return 1 ;;
+  esac
 
   # merge-run reconciles retained outcomes before reading disposable artifacts or base guards.
   if [ "$cmd" != merge-run ] && is_main_only_pr_command "$cmd"; then

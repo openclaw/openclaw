@@ -110,15 +110,26 @@ function validateArtifactParent(request, parent, env) {
   );
 }
 
-function readArtifactRun(request, runId, runAttempt) {
+function validateArtifactProducerTuple(runId, runAttempt) {
   requireValue(
     DECIMAL.test(String(runId)) && DECIMAL.test(String(runAttempt)),
     "Invalid artifact producer tuple.",
   );
-  const run = api(request.repository, `actions/runs/${runId}`);
+}
+
+export function validateArtifactProducerRun(
+  request,
+  run,
+  runId,
+  runAttempt,
+  { allowNewerAttempts = false, allowFailure = false } = {},
+) {
+  validateArtifactProducerTuple(runId, runAttempt);
   requireValue(
     String(run.id) === String(runId) &&
-      String(run.run_attempt) === String(runAttempt) &&
+      (allowNewerAttempts
+        ? DECIMAL.test(String(run.run_attempt)) && BigInt(run.run_attempt) >= BigInt(runAttempt)
+        : String(run.run_attempt) === String(runAttempt)) &&
       run.event === "workflow_dispatch" &&
       String(run.path).split("@", 1)[0] === WORKFLOW &&
       run.repository?.full_name === request.repository &&
@@ -129,10 +140,21 @@ function readArtifactRun(request, runId, runAttempt) {
     "Artifact producer run identity changed.",
   );
   requireValue(
-    run.status !== "completed" || run.conclusion === "success",
+    allowFailure || run.status !== "completed" || run.conclusion === "success",
     `Artifact ${request.stage} producer failed: ${run.html_url}`,
   );
   return run;
+}
+
+function readArtifactRun(request, runId, runAttempt, options) {
+  validateArtifactProducerTuple(runId, runAttempt);
+  return validateArtifactProducerRun(
+    request,
+    api(request.repository, `actions/runs/${runId}`),
+    runId,
+    runAttempt,
+    options,
+  );
 }
 
 function validateArtifactReceipt(receipt, request, runId, runAttempt) {
@@ -155,7 +177,7 @@ function validateArtifactReceipt(receipt, request, runId, runAttempt) {
       toolingSha: request.toolingSha,
     });
     requireValue(
-      raw.producer.runId === String(runId) && raw.producer.runAttempt === String(runAttempt),
+      raw.producer.runId === String(runId) && BigInt(raw.producer.runAttempt) <= BigInt(runAttempt),
       "Raw npm bundle came from another artifact producer.",
     );
     if (request.preflightPhase === "all") {
@@ -164,7 +186,8 @@ function validateArtifactReceipt(receipt, request, runId, runAttempt) {
         qualified.schema === QUALIFIED_NPM_PREFLIGHT_SCHEMA &&
           qualified.source.sha === request.sourceSha &&
           qualified.producer.runId === String(runId) &&
-          qualified.producer.runAttempt === String(runAttempt) &&
+          DECIMAL.test(qualified.producer.runAttempt) &&
+          BigInt(qualified.producer.runAttempt) <= BigInt(runAttempt) &&
           qualified.producer.workflowSha === request.toolingSha,
         "Qualified npm bundle came from another artifact producer.",
       );
@@ -263,8 +286,83 @@ async function resolveProducer(request, env) {
       "Original artifact dispatch is unavailable or changed; start a fresh FRV run.",
     );
   }
-  readArtifactRun(request, record.runId, record.runAttempt);
-  output({ run_id: record.runId, run_attempt: record.runAttempt, dispatch_id: request.dispatchId });
+  const run = readArtifactRun(request, record.runId, record.runAttempt, {
+    allowNewerAttempts: request.stage === "npm",
+  });
+  output({
+    run_id: record.runId,
+    run_attempt: String(run.run_attempt),
+    dispatch_id: request.dispatchId,
+  });
+}
+
+function artifactAttemptJobs(request, runId, attempt) {
+  validateArtifactProducerRun(
+    request,
+    api(request.repository, `actions/runs/${runId}/attempts/${attempt}`),
+    runId,
+    attempt,
+    { allowFailure: true },
+  );
+  const jobs = [];
+  for (let page = 1; page <= 10; page += 1) {
+    const response = api(
+      request.repository,
+      `actions/runs/${runId}/attempts/${attempt}/jobs?per_page=100&page=${page}`,
+    );
+    requireValue(
+      Array.isArray(response.jobs) &&
+        Number.isSafeInteger(response.total_count) &&
+        response.total_count > 0 &&
+        response.total_count <= 1000,
+      "Artifact producer job inventory is incomplete.",
+    );
+    jobs.push(...response.jobs);
+    if (jobs.length === response.total_count) {
+      break;
+    }
+    requireValue(
+      response.jobs.length === 100 && page < 10 && jobs.length < response.total_count,
+      "Artifact producer job inventory is incomplete.",
+    );
+  }
+  requireValue(
+    jobs.every(
+      (job) =>
+        String(job.run_id) === String(runId) &&
+        String(job.run_attempt) === String(attempt) &&
+        job.head_sha === request.toolingSha,
+    ),
+    "Artifact producer job identity changed.",
+  );
+  return jobs;
+}
+
+// Retried checks may reuse bytes, but cannot replace bytes already consumed by
+// the immutable candidate and its successful diagnostic children.
+function effectiveNpmPreparationAttempt(request, runId, runAttempt) {
+  readArtifactRun(request, runId, runAttempt);
+  requireValue(BigInt(runAttempt) <= 100n, "Artifact producer attempt history exceeds its limit.");
+  let selected;
+  for (let attempt = 1; attempt <= Number(runAttempt); attempt += 1) {
+    const matches = artifactAttemptJobs(request, runId, attempt).filter(
+      (job) => job.name === "Prepare npm artifacts / Prepare publishable npm package",
+    );
+    requireValue(matches.length <= 1, "Artifact preparation job is ambiguous.");
+    if (!matches.length) {
+      continue;
+    }
+    requireValue(
+      !selected || selected.conclusion !== "success",
+      "Successful npm preparation was replaced; its frozen bytes cannot be adopted.",
+    );
+    selected = matches[0];
+  }
+  requireValue(
+    selected && (selected.status !== "completed" || selected.conclusion === "success"),
+    "Raw npm bundle requires its unique exact completed producer job.",
+  );
+  return String(selected.run_attempt);
 }
 
 async function waitForArtifact(request, env) {
@@ -273,8 +371,13 @@ async function waitForArtifact(request, env) {
   requireValue(["raw", "receipt"].includes(env.ARTIFACT_OUTPUT), "Invalid artifact output.");
   const raw = env.ARTIFACT_OUTPUT === "raw";
   requireValue(!raw || request.stage === "npm", "Only npm exposes early raw artifacts.");
+  const rawAttempt = raw
+    ? String(runAttempt) === "1"
+      ? "1"
+      : effectiveNpmPreparationAttempt(request, runId, runAttempt)
+    : undefined;
   const name = raw
-    ? `openclaw-npm-package-descriptor-${runId}-${runAttempt}`
+    ? `openclaw-npm-package-descriptor-${runId}-${rawAttempt}`
     : `full-release-artifact-receipt-${runId}-${runAttempt}`;
   const deadline = Date.now() + WAIT_MINUTES * 60_000;
   let receipt;
@@ -298,8 +401,7 @@ async function waitForArtifact(request, env) {
           toolingSha: request.toolingSha,
         });
         requireValue(
-          receipt.producer.runId === String(runId) &&
-            receipt.producer.runAttempt === String(runAttempt),
+          receipt.producer.runId === String(runId) && receipt.producer.runAttempt === rawAttempt,
           "Raw npm producer identity changed.",
         );
         const job = api(request.repository, `actions/jobs/${receipt.producer.jobId}`);
@@ -313,6 +415,20 @@ async function waitForArtifact(request, env) {
         }
       } else if (receipt) {
         values = validateArtifactReceipt(receipt, request, runId, runAttempt);
+        if (request.stage === "npm") {
+          const prepared = JSON.parse(values.prepared_bundle_json);
+          requireValue(
+            prepared.producer.runAttempt ===
+              effectiveNpmPreparationAttempt(request, runId, runAttempt),
+            "Raw npm preparation attempt changed.",
+          );
+          verifyNpmBundleProducer({
+            producer: prepared.producer,
+            repository: request.repository,
+            toolingSha: request.toolingSha,
+            requireCompletedParent: true,
+          });
+        }
         if (request.stage === "npm" && request.preflightPhase === "all") {
           const qualified = JSON.parse(values.qualified_preflight_bundle_json);
           verifyNpmBundleProducer({

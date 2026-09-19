@@ -9,11 +9,15 @@ import { stopChatRealtimeTalk } from "./chat-realtime.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { invalidateImageLightbox } from "./chat-state-page.ts";
 import { cancelChatStreamRenderFrame } from "./chat-state-render.ts";
-import { ChatAttachmentReadLifecycle } from "./components/chat-attachments.ts";
+import { ChatAttachmentReadLifecycle } from "./components/chat-attachment-reads.ts";
 import { releaseChatMediaResourceSubscriber } from "./components/chat-message-media.ts";
 import { clearSessionWorkspacePreviews } from "./components/chat-session-workspace-state.ts";
 import { clearSessionWorkspaceTimers } from "./components/chat-session-workspace.ts";
-import { ChatComposerPersistence, type ChatComposerPersistResult } from "./composer-persistence.ts";
+import {
+  ChatComposerPersistence,
+  type ChatComposerPersistResult,
+  markChatComposerEdit,
+} from "./composer-persistence.ts";
 import { activeQueuedMessageEdit } from "./queued-message-edit.ts";
 import type { AfterCommitEffect, RenderLifecycle } from "./render-lifecycle.ts";
 import { cancelChatScroll, scheduleCommittedChatScroll } from "./scroll.ts";
@@ -53,6 +57,30 @@ export class ChatStateController<TState extends ChatPageHost> implements Reactiv
 
   get state(): TState | undefined {
     return this.stateValue;
+  }
+
+  attachmentInputProps(state: TState) {
+    const reads = this.attachmentReads;
+    const readSignal = reads.readSignal;
+    return {
+      attachmentReads: reads,
+      attachments: state.chatAttachments,
+      attachmentLimits: state.hello?.policy?.attachments,
+      getAttachments: () => state.chatAttachments,
+      pendingAttachmentReads: reads.pendingReads,
+      getPendingAttachmentReads: () => reads.pendingReads,
+      readSignal,
+      onPendingReadsChange: (delta: 1 | -1) => {
+        if (delta === 1 && readSignal === reads.readSignal) {
+          markChatComposerEdit(state);
+        }
+        reads.updatePending(readSignal, delta);
+      },
+      onAttachmentsChange: (next: ChatPageHost["chatAttachments"]) => {
+        state.chatAttachments = next;
+        state.requestUpdate?.();
+      },
+    };
   }
 
   createRenderLifecycle(): RenderLifecycle {
@@ -299,7 +327,7 @@ export class ChatStateController<TState extends ChatPageHost> implements Reactiv
     if (!state) {
       return;
     }
-    scheduleCommittedChatScroll(state, force, false, { contentChanged });
+    scheduleCommittedChatScroll(state, force, state.chatHasAutoScrolled, { contentChanged });
   }
 
   restoreComposer(options: { preserveCurrent?: boolean } = {}) {

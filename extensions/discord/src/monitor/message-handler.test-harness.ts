@@ -28,7 +28,7 @@ export async function createBaseDiscordMessageContext(
     data: { guild: { id: "g1", name: "Guild" } },
     client: { rest: {} },
     message: {
-      id: "m1",
+      id: "1001",
       channelId: "c1",
       timestamp: new Date().toISOString(),
       attachments: [],

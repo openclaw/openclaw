@@ -140,7 +140,7 @@ describe("file-transfer exact approval transport", () => {
         expect.objectContaining({
           pluginId: "file-transfer",
           policy: expect.objectContaining({
-            commands: [FILE_FETCH_COMMAND, "dir.list", "dir.fetch", "file.write"],
+            commands: [FILE_FETCH_COMMAND, "file.stat", "dir.list", "dir.fetch", "file.write"],
           }),
         }),
       ]);

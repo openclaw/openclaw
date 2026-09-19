@@ -7,7 +7,7 @@ import {
   errorShape,
   type SessionsPatchParams,
 } from "../../packages/gateway-protocol/src/index.js";
-import { readAcpSessionMetaForEntry } from "../acp/runtime/session-meta.js";
+import { readAcpSessionMetaForEntry } from "../acp/runtime/session-meta-readonly.js";
 import {
   resolveAgentDir,
   resolveAgentWorkspaceDir,
@@ -17,9 +17,15 @@ import {
   requiresAgentHarnessPluginSelection,
   resolveAgentHarnessOwnerPluginIds,
 } from "../agents/harness/runtime-plugin-load-plan.js";
-import type { ModelCatalogEntry, ModelCatalogSnapshot } from "../agents/model-catalog.js";
+import { selectModelCatalogRuntimeEntry } from "../agents/model-catalog-view.js";
+import {
+  findModelCatalogEntry,
+  type ModelCatalogEntry,
+  type ModelCatalogSnapshot,
+} from "../agents/model-catalog.js";
 import { splitTrailingAuthProfile } from "../agents/model-ref-profile.js";
 import {
+  type ModelRef,
   resolveDefaultModelForAgent,
   resolveSubagentConfiguredModelSelection,
 } from "../agents/model-selection.js";
@@ -30,14 +36,13 @@ import {
   resolveModelRuntimeDirective,
 } from "../auto-reply/reply/directive-handling.model-runtime.js";
 import {
-  formatThinkingLevels,
-  isThinkingLevelSupported,
   normalizeElevatedLevel,
   normalizeFastMode,
   normalizeReasoningLevel,
   normalizeThinkLevel,
   normalizeUsageDisplay,
-  resolveSupportedThinkingLevel,
+  resolveSupportedThinkingLevelFromProfile,
+  resolveThinkingProfile,
 } from "../auto-reply/thinking.js";
 import type { InternalSessionEntry as SessionEntry } from "../config/sessions.js";
 import {
@@ -110,6 +115,8 @@ type SessionPatchProjectionParams = {
   /** Exact harness owner authorized to project its new reserved session row. */
   authorizedAgentHarnessId?: string;
   personalModelSelection?: UserModelAccountSelection;
+  /** Resolved spawn identity supplied only by the trusted creation owner. */
+  preparedModelSelection?: ModelRef;
 };
 
 type SessionPatchProjectionResult =
@@ -243,6 +250,31 @@ function* projectSessionPatchSteps(
     }
     return loadedModelCatalog?.entries;
   }
+  function* loadThinkingProfileForPatch(
+    provider: string,
+    model: string,
+    entry?: SessionEntry,
+  ): Generator<void, ReturnType<typeof resolveThinkingProfile>, ModelCatalogSnapshot | undefined> {
+    const catalog = yield* loadPreparedModelCatalogForPatch();
+    const agentRuntime = resolveThinkingRuntime(provider, model, entry);
+    const logical = catalog
+      ? findModelCatalogEntry(catalog, { provider, modelId: model })
+      : undefined;
+    const selected =
+      logical && loadedModelCatalog
+        ? selectModelCatalogRuntimeEntry({
+            entry: logical,
+            routeVariants: loadedModelCatalog.routeVariants,
+            runtimeId: agentRuntime,
+          }).entry
+        : undefined;
+    return resolveThinkingProfile({
+      provider,
+      model,
+      catalog: selected ? [selected] : catalog,
+      agentRuntime,
+    });
+  }
 
   const existing =
     params.existingEntry && projectCanonicalSessionEntryShape({ ...params.existingEntry });
@@ -371,38 +403,32 @@ function* projectSessionPatchSteps(
     }
   }
 
-  if ("thinkingLevel" in patch) {
-    const raw = patch.thinkingLevel;
-    if (raw === null) {
-      // Clear the override and fall back to model default
-      delete next.thinkingLevel;
-    } else if (raw !== undefined) {
-      const normalized = normalizeThinkLevel(raw);
-      if (!normalized) {
-        const hintProvider =
-          normalizeOptionalString(existing?.providerOverride) || resolvedDefault.provider;
-        const hintModel = normalizeOptionalString(existing?.modelOverride) || resolvedDefault.model;
-        const thinkingCatalog = yield* loadPreparedModelCatalogForPatch();
-        const thinkingRuntime = resolveThinkingRuntime(hintProvider, hintModel, existing);
-        return invalid(
-          `invalid thinkingLevel (use ${formatThinkingLevels(hintProvider, hintModel, "|", thinkingCatalog, thinkingRuntime)})`,
-        );
-      }
-      next.thinkingLevel = normalized;
+  const rawThinking = patch.thinkingLevel;
+  if (rawThinking === null) {
+    delete next.thinkingLevel;
+  } else if (rawThinking !== undefined) {
+    const normalized = normalizeThinkLevel(rawThinking);
+    if (!normalized) {
+      const hintProvider =
+        normalizeOptionalString(existing?.providerOverride) || resolvedDefault.provider;
+      const hintModel = normalizeOptionalString(existing?.modelOverride) || resolvedDefault.model;
+      const profile = yield* loadThinkingProfileForPatch(hintProvider, hintModel, existing);
+      return invalid(
+        `invalid thinkingLevel (use ${profile.levels.map(({ label }) => label).join("|")})`,
+      );
     }
+    next.thinkingLevel = normalized;
   }
 
-  if ("fastMode" in patch) {
-    const raw = patch.fastMode;
-    if (raw === null) {
-      delete next.fastMode;
-    } else if (raw !== undefined) {
-      const normalized = normalizeFastMode(raw);
-      if (normalized === undefined) {
-        return invalid('invalid fastMode (use true, false, or "auto")');
-      }
-      next.fastMode = normalized;
+  const rawFastMode = patch.fastMode;
+  if (rawFastMode === null) {
+    delete next.fastMode;
+  } else if (rawFastMode !== undefined) {
+    const normalized = normalizeFastMode(rawFastMode);
+    if (normalized === undefined) {
+      return invalid('invalid fastMode (use true, false, or "auto")');
     }
+    next.fastMode = normalized;
   }
 
   if ("toolOverrides" in patch) {
@@ -421,8 +447,7 @@ function* projectSessionPatchSteps(
   }
 
   if ("verboseLevel" in patch) {
-    const raw = patch.verboseLevel;
-    const parsed = parseVerboseOverride(raw);
+    const parsed = parseVerboseOverride(patch.verboseLevel);
     if (!parsed.ok) {
       return invalid(parsed.error);
     }
@@ -430,8 +455,7 @@ function* projectSessionPatchSteps(
   }
 
   if ("traceLevel" in patch) {
-    const raw = patch.traceLevel;
-    const parsed = parseTraceOverride(raw);
+    const parsed = parseTraceOverride(patch.traceLevel);
     if (!parsed.ok) {
       return invalid(parsed.error);
     }
@@ -453,17 +477,15 @@ function* projectSessionPatchSteps(
     }
   }
 
-  if ("responseUsage" in patch) {
-    const raw = patch.responseUsage;
-    if (raw === null) {
-      delete next.responseUsage;
-    } else if (raw !== undefined) {
-      const normalized = normalizeUsageDisplay(raw);
-      if (!normalized) {
-        return invalid('invalid responseUsage (use "off"|"tokens"|"full")');
-      }
-      next.responseUsage = normalized;
+  const rawResponseUsage = patch.responseUsage;
+  if (rawResponseUsage === null) {
+    delete next.responseUsage;
+  } else if (rawResponseUsage !== undefined) {
+    const normalized = normalizeUsageDisplay(rawResponseUsage);
+    if (!normalized) {
+      return invalid('invalid responseUsage (use "off"|"tokens"|"full")');
     }
+    next.responseUsage = normalized;
   }
 
   if ("elevatedLevel" in patch) {
@@ -512,12 +534,10 @@ function* projectSessionPatchSteps(
       next.execNode = trimmed;
     }
   }
-  if ("permissionMode" in patch) {
-    if (patch.permissionMode === null) {
-      delete next.permissionMode;
-    } else if (patch.permissionMode !== undefined) {
-      next.permissionMode = patch.permissionMode;
-    }
+  if (patch.permissionMode === null) {
+    delete next.permissionMode;
+  } else if (patch.permissionMode !== undefined) {
+    next.permissionMode = patch.permissionMode;
   }
   if (
     "agentRuntime" in patch &&
@@ -536,9 +556,7 @@ function* projectSessionPatchSteps(
       : undefined;
     delete next.modelFallback;
     const raw = patch.model;
-    let selection:
-      | { provider: string; model: string; profile?: string; isDefault: boolean }
-      | undefined;
+    let selection: (ModelRef & { profile?: string; isDefault: boolean }) | undefined;
     if (raw === null) {
       selection = { ...resolvedDefault, isDefault: true };
     } else if (raw !== undefined) {
@@ -564,6 +582,7 @@ function* projectSessionPatchSteps(
         defaultProvider: resolvedDefault.provider,
         defaultModel: resolvedDefault.model,
         subagentModelHint,
+        preparedModelSelection: params.preparedModelSelection,
       });
       if (!resolved.ok) {
         return invalid(resolved.error);
@@ -571,27 +590,28 @@ function* projectSessionPatchSteps(
       selection = resolved;
     }
     if (selection) {
-      if (typeof patch.agentRuntime === "string") {
-        if (
-          splitTrailingAuthProfile(raw ?? "").model !== `${selection.provider}/${selection.model}`
-        ) {
-          return invalid("agentRuntime requires an explicit canonical provider/model selection");
-        }
-        const runtime = resolveModelRuntimeDirective({
-          cfg,
-          provider: selection.provider,
-          rawRuntime: patch.agentRuntime,
-          sessionEntry: next,
-        });
-        if (runtime.kind !== "set" || runtime.runtime !== patch.agentRuntime) {
-          return invalid(
-            runtime.kind === "invalid"
-              ? runtime.errorText
-              : "Use a canonical agentRuntime id, or null to follow configured routing",
-          );
-        }
-        applyModelRuntimeDirective(next, runtime);
+      if (
+        typeof patch.agentRuntime === "string" &&
+        splitTrailingAuthProfile(raw ?? "").model !== `${selection.provider}/${selection.model}`
+      ) {
+        return invalid("agentRuntime requires an explicit canonical provider/model selection");
       }
+      const runtime = resolveModelRuntimeDirective({
+        cfg,
+        provider: selection.provider,
+        rawRuntime: patch.agentRuntime ?? undefined,
+        sessionEntry: next,
+      });
+      if (runtime.kind === "invalid") {
+        return invalid(runtime.errorText);
+      }
+      if (
+        typeof patch.agentRuntime === "string" &&
+        (runtime.kind !== "set" || runtime.runtime !== patch.agentRuntime)
+      ) {
+        return invalid("Use a canonical agentRuntime id, or null to follow configured routing");
+      }
+      applyModelRuntimeDirective(next, runtime);
       if (selection.profile && isUserModelAuthProfileId(selection.profile)) {
         if (params.personalModelSelection?.authProfileId !== selection.profile) {
           return {
@@ -655,34 +675,16 @@ function* projectSessionPatchSteps(
     const effectiveProvider = next.providerOverride ?? resolvedDefault.provider;
     const effectiveModel = next.modelOverride ?? resolvedDefault.model;
     const thinkingLevel = normalizeThinkLevel(next.thinkingLevel);
-    let thinkingRuntime: string | undefined;
     if (!thinkingLevel) {
       delete next.thinkingLevel;
     } else {
-      const thinkingCatalog = yield* loadPreparedModelCatalogForPatch();
-      thinkingRuntime = resolveThinkingRuntime(effectiveProvider, effectiveModel, next);
-      if (
-        !isThinkingLevelSupported({
-          provider: effectiveProvider,
-          model: effectiveModel,
-          level: thinkingLevel,
-          catalog: thinkingCatalog,
-          agentRuntime: thinkingRuntime,
-        })
-      ) {
-        if ("thinkingLevel" in patch) {
-          return invalid(
-            `thinkingLevel "${thinkingLevel}" is not supported for ${effectiveProvider}/${effectiveModel} (use ${formatThinkingLevels(effectiveProvider, effectiveModel, "|", thinkingCatalog, thinkingRuntime)})`,
-          );
-        }
-        next.thinkingLevel = resolveSupportedThinkingLevel({
-          provider: effectiveProvider,
-          model: effectiveModel,
-          level: thinkingLevel,
-          catalog: thinkingCatalog,
-          agentRuntime: thinkingRuntime,
-        });
+      const profile = yield* loadThinkingProfileForPatch(effectiveProvider, effectiveModel, next);
+      if ("thinkingLevel" in patch && !profile.levels.some(({ id }) => id === thinkingLevel)) {
+        return invalid(
+          `thinkingLevel "${thinkingLevel}" is not supported for ${effectiveProvider}/${effectiveModel} (use ${profile.levels.map(({ label }) => label).join("|")})`,
+        );
       }
+      next.thinkingLevel = resolveSupportedThinkingLevelFromProfile(profile, thinkingLevel);
     }
   }
 

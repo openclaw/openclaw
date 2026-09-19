@@ -302,12 +302,21 @@ async function sendCodexDiagnosticsFeedbackForTargets(
   const sent: CodexDiagnosticsTarget[] = [];
   const failed: Array<{ target: CodexDiagnosticsTarget; error: string }> = [];
   for (const target of targets) {
-    let connection: ReturnType<typeof resolveCodexBindingAppServerConnection>;
+    const assertCurrent = () => {
+      const current = resolvePendingCodexDiagnosticsTargets(deps, [target], ctx.config);
+      if (!codexDiagnosticsTargetsMatch([target], current)) {
+        throw new Error("The Codex diagnostics session changed before upload; request it again.");
+      }
+    };
+    let connection: Awaited<ReturnType<typeof resolveCodexBindingAppServerConnection>>;
     try {
-      connection = resolveCodexBindingAppServerConnection({
+      connection = await resolveCodexBindingAppServerConnection({
         binding: target,
         authProfileId: target.authProfileId,
         pluginConfig,
+        agentDir: target.agentDir,
+        config: ctx.config,
+        assertCurrent,
       });
     } catch (error) {
       failed.push({
@@ -329,6 +338,7 @@ async function sendCodexDiagnosticsFeedbackForTargets(
       {
         config: ctx.config,
         agentDir: target.agentDir,
+        assertCurrent,
         ...(connection.clientAuthProfileId !== undefined
           ? { authProfileId: connection.clientAuthProfileId }
           : {}),

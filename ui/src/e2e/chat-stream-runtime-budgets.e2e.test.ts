@@ -1,6 +1,8 @@
 import { appendFile } from "node:fs/promises";
 import path from "node:path";
 import { beforeEach, expect, it } from "vitest";
+import { projectAgentToolActivity } from "../../../src/infra/agent-activity-events.js";
+import type { ApplicationContext } from "../app/context.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
   createChatFlowE2eSuite,
@@ -10,7 +12,7 @@ import {
   waitForChatScrollIdle,
 } from "./chat-flow.test-support.ts";
 import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
-import { waitForCommittedComposerDraft } from "./settle.test-support.ts";
+import { waitForCommittedComposerDraft, waitForCommittedState } from "./settle.test-support.ts";
 
 // Durable runtime budgets for the chat streaming surface. Byte budgets
 // (scripts/check-control-ui-performance.mts) cannot see rendering work, so
@@ -127,7 +129,7 @@ function renderedChunkText(index: number): string {
 }
 
 async function installRenderProbe(page: ChatFlowPage) {
-  await page.evaluate(() => {
+  await page.evaluate(async () => {
     const scope = window as ScopedWindow;
     const chatPage = document.querySelector("openclaw-chat-page");
     if (!chatPage) {
@@ -240,6 +242,11 @@ async function installRenderProbe(page: ChatFlowPage) {
       }
       return originalRequestUpdate.apply(this, args);
     };
+    // Frames queued before instrumentation run without the wrapper. Drain them
+    // before callers reset the counters and begin the measured interaction.
+    await new Promise<void>((resolve) => {
+      requestAnimationFrame(() => resolve());
+    });
   });
 }
 
@@ -344,9 +351,19 @@ async function openStreamingTurn(
   return runId;
 }
 
+function toolFloodActivity(index: number, phase: "start" | "result") {
+  return projectAgentToolActivity({
+    toolCallId: `call-${index}`,
+    name: "edit",
+    phase,
+    args: { path: `src/file-${index}.ts` },
+    ...(phase === "result" ? { isError: false } : {}),
+  });
+}
+
 async function probeDeferredToolProjection(page: ChatFlowPage, runId: string): Promise<void> {
   await page.evaluate(
-    ({ runId: targetRunId, seqSeed }) => {
+    ({ runId: targetRunId, seqSeed, activity }) => {
       const scope = window as ScopedWindow;
       const gateway = scope.openclawControlUiE2eGateway;
       if (!gateway) {
@@ -382,6 +399,14 @@ async function probeDeferredToolProjection(page: ChatFlowPage, runId: string): P
         sessionKey: "main",
         state: "delta",
       });
+      gateway.emit("agent", {
+        data: activity,
+        runId: targetRunId,
+        seq: ++seq,
+        sessionKey: "main",
+        stream: "item",
+        ts: Date.now(),
+      });
       emitToolPhase("start", { args: { path: "src/file-1.ts" } });
       setTimeout(() => emitToolPhase("update", { partialResult: "partial output 1" }), 10);
       setTimeout(() => emitToolPhase("input_delta", { diff: { added: 1, removed: 1 } }), 20);
@@ -403,7 +428,7 @@ async function probeDeferredToolProjection(page: ChatFlowPage, runId: string): P
         });
       }, 120);
     },
-    { runId, seqSeed: TOOL_FLOOD_SEQ_SEED },
+    { runId, seqSeed: TOOL_FLOOD_SEQ_SEED, activity: toolFloodActivity(1, "start") },
   );
   await page.waitForFunction(
     () => (window as ScopedWindow).ocToolProjectionProbe?.ready === true,
@@ -414,7 +439,7 @@ async function probeDeferredToolProjection(page: ChatFlowPage, runId: string): P
 
 async function completeFirstToolLifecycle(page: ChatFlowPage, runId: string): Promise<void> {
   await page.evaluate(
-    ({ runId: targetRunId, seq }) => {
+    ({ runId: targetRunId, seq, activity }) => {
       const gateway = (window as ScopedWindow).openclawControlUiE2eGateway;
       if (!gateway) {
         throw new Error("mock gateway handle missing");
@@ -432,8 +457,16 @@ async function completeFirstToolLifecycle(page: ChatFlowPage, runId: string): Pr
         stream: "tool",
         ts: Date.now(),
       });
+      gateway.emit("agent", {
+        data: activity,
+        runId: targetRunId,
+        seq: seq + 1,
+        sessionKey: "main",
+        stream: "item",
+        ts: Date.now(),
+      });
     },
-    { runId, seq: TOOL_FLOOD_SEQ_SEED + 4 },
+    { runId, seq: TOOL_FLOOD_SEQ_SEED + 5, activity: toolFloodActivity(1, "result") },
   );
   await page.evaluate(
     () =>
@@ -452,7 +485,7 @@ async function emitRemainingToolLifecycleFlood(
   // phase across timer ticks so the live stream exercises deferred projection,
   // not only the result path's forced flush.
   await page.evaluate(
-    ({ runId: targetRunId, pairCount: targetPairCount, phaseIntervalMs, seqSeed }) => {
+    ({ runId: targetRunId, pairCount: targetPairCount, phaseIntervalMs, seqSeed, activities }) => {
       const scope = window as ScopedWindow;
       const gateway = scope.openclawControlUiE2eGateway;
       if (!gateway) {
@@ -460,7 +493,7 @@ async function emitRemainingToolLifecycleFlood(
       }
       scope.ocBurstDone = false;
       let emitted = 1;
-      let seq = seqSeed + 4;
+      let seq = seqSeed + 6;
       const emitToolPhase = (phase: string, data: Record<string, unknown>) => {
         gateway.emit("agent", {
           data: {
@@ -490,6 +523,14 @@ async function emitRemainingToolLifecycleFlood(
           sessionKey: "main",
           state: "delta",
         });
+        gateway.emit("agent", {
+          data: activities[emitted - 2]!.start,
+          runId: targetRunId,
+          seq: ++seq,
+          sessionKey: "main",
+          stream: "item",
+          ts: Date.now(),
+        });
         emitToolPhase("start", { args: { path: `src/file-${emitted}.ts` } });
         setTimeout(() => {
           emitToolPhase("update", { partialResult: `partial output ${emitted}` });
@@ -497,6 +538,14 @@ async function emitRemainingToolLifecycleFlood(
             emitToolPhase("input_delta", { diff: { added: emitted, removed: 1 } });
             setTimeout(() => {
               emitToolPhase("result", { result: `tool output ${emitted}` });
+              gateway.emit("agent", {
+                data: activities[emitted - 2]!.result,
+                runId: targetRunId,
+                seq: ++seq,
+                sessionKey: "main",
+                stream: "item",
+                ts: Date.now(),
+              });
               if (emitted < targetPairCount) {
                 setTimeout(emitCall, phaseIntervalMs);
               } else {
@@ -513,6 +562,10 @@ async function emitRemainingToolLifecycleFlood(
       pairCount,
       phaseIntervalMs: TOOL_FLOOD_PHASE_INTERVAL_MS,
       seqSeed: TOOL_FLOOD_SEQ_SEED,
+      activities: Array.from({ length: pairCount - 1 }, (_, index) => ({
+        start: toolFloodActivity(index + 2, "start"),
+        result: toolFloodActivity(index + 2, "result"),
+      })),
     },
   );
   await page.waitForFunction(() => (window as ScopedWindow).ocBurstDone === true, undefined, {
@@ -540,11 +593,51 @@ function buildLongTranscriptFixture(messageCount: number): Array<Record<string, 
 suite.define(() => {
   it("commits a streamed delta burst in frame-bound transcript batches", async () => {
     await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
-      const gateway = await installMockGateway(page);
+      const gateway = await installMockGateway(page, { deferredMethods: ["sessions.describe"] });
       await page.goto(`${suite.server.baseUrl}chat`);
       await gateway.waitForRequest("chat.startup");
       const runId = await openStreamingTurn(page, gateway, "burst coalescing probe");
 
+      // Release the startup fact read after Send so it observes the running turn,
+      // then join its publication before measuring stream invalidations.
+      await gateway.waitForRequest("sessions.describe");
+      await gateway.resolveDeferred("sessions.describe");
+      await waitForCommittedState(
+        page,
+        ({ sessionKey }) => {
+          const app = document.querySelector<
+            HTMLElement & { runtime?: { context: ApplicationContext } }
+          >("openclaw-app");
+          return (
+            app?.runtime?.context.sessions.state.result?.sessions.some(
+              (row) =>
+                row.key === sessionKey && row.status === "running" && row.hasActiveRun === true,
+            ) === true
+          );
+        },
+        { sessionKey: "agent:main:main" },
+      );
+
+      // The delayed swarm child query publishes roster metadata after first paint.
+      // Observe its committed result before measuring stream-driven invalidations.
+      const childList = await gateway.waitForRequest("sessions.list", {
+        match: { spawnedBy: "agent:main:main" },
+      });
+      const childScope = requireRecord(childList.params);
+      await expect
+        .poll(() =>
+          page.evaluate((scope) => {
+            const app = document.querySelector<
+              HTMLElement & {
+                runtime?: { context: ApplicationContext };
+              }
+            >("openclaw-app");
+            const snapshot = app?.runtime?.context.sessions.listSnapshot(scope);
+            return Boolean(snapshot?.result && !snapshot.loading && !snapshot.error);
+          }, childScope),
+        )
+        .toBe(true);
+      await waitForChatScrollIdle(page);
       await installRenderProbe(page);
       await resetRenderProbe(page);
 
@@ -613,8 +706,12 @@ suite.define(() => {
       await emitRemainingToolLifecycleFlood(page, runId, TOOL_FLOOD_PAIR_COUNT);
       // Uninterrupted narration no longer separates tool cards. Expand the
       // real grouped activity before counting its retained invocation rows.
+      const firstRetainedCall = TOOL_FLOOD_PAIR_COUNT - TOOL_STREAM_LIMIT_CONTRACT + 1;
       const activity = page.getByRole("button", {
-        name: `Edited ${TOOL_STREAM_LIMIT_CONTRACT} files`,
+        name: Array.from(
+          { length: TOOL_STREAM_LIMIT_CONTRACT },
+          (_, index) => `Edit in src/file-${firstRetainedCall + index}.ts`,
+        ).join(", "),
         exact: true,
       });
       await activity.waitFor();
@@ -624,7 +721,6 @@ suite.define(() => {
       await expect
         .poll(() => floodCards.count(), { timeout: 15_000 })
         .toBe(TOOL_STREAM_LIMIT_CONTRACT);
-      const firstRetainedCall = TOOL_FLOOD_PAIR_COUNT - TOOL_STREAM_LIMIT_CONTRACT + 1;
       expect(await page.locator('[data-message-id^="tool:assistant:call-1:"]').count()).toBe(0);
       expect(
         await page

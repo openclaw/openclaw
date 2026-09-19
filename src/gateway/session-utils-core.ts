@@ -59,6 +59,25 @@ export function deriveSessionTitle(
   return undefined;
 }
 
+export function prepareSessionTitleRead(
+  entry: SessionEntry | undefined,
+  displayName: string | undefined,
+  opts: { includeDerivedTitles?: boolean; includeLastMessage?: boolean },
+) {
+  if (!entry?.sessionId || !(opts.includeDerivedTitles || opts.includeLastMessage)) {
+    return undefined;
+  }
+  // Metadata wins over transcript text in both scalar and tool rows. Carry
+  // that result forward so title-only reads do not hydrate discarded payloads.
+  const derivedTitle = opts.includeDerivedTitles
+    ? deriveSessionTitle(entry, undefined, displayName)
+    : undefined;
+  return {
+    derivedTitle,
+    needsTranscript: opts.includeLastMessage || !derivedTitle,
+  };
+}
+
 export function resolvePositiveNumber(value: number | null | undefined): number | undefined {
   return asPositiveFiniteNumber(value);
 }

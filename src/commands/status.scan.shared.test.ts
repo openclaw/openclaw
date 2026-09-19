@@ -432,7 +432,7 @@ describe("resolveGatewayProbeSnapshot", () => {
 
     try {
       const result = await resolveGatewayProbeSnapshot({
-        cfg: { gateway: { auth: { mode: "none" } } },
+        cfg: { gateway: { auth: { mode: "token", token: "tok" } } },
         opts: { timeoutMs: parsed?.timeoutMs },
       });
 

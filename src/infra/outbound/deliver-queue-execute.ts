@@ -591,6 +591,7 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
       if (err instanceof OutboundDeliveryError && err.results.length > 0) {
         deliveredResults = err.results;
       }
+      const failureIsProvenNotSent = isProvenBatchNotSent(err, payloadOutcomes);
       const hasPlatformSendEvidence =
         deliveredResults.length > 0 ||
         (!allPayloadsSuppressed &&
@@ -606,7 +607,17 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
           await runCommitHooksAfterAck();
           emitFailedTerminals(platformSendFailureStage);
         } else if (params.abortSignal?.aborted) {
-          if (hasPlatformSendEvidence) {
+          if (
+            failureIsProvenNotSent &&
+            deliveredResults.length === 0 &&
+            params.deliveryCompletion
+          ) {
+            // A pre-I/O fence may abort after its durable dispatch marker was
+            // written. Keep the wholly unsent final replayable, not ambiguous;
+            // the next attempt still rechecks its persisted writer authority.
+            await queueOwner.fail(failDeliveryBeforePlatformSend, formatErrorMessage(err));
+            queuedPostSendState = "failed";
+          } else if (hasPlatformSendEvidence) {
             if (queuedPostSendState !== "failed") {
               await queueOwner.fail(
                 failDeliveryAfterPlatformSend,
@@ -628,7 +639,6 @@ export async function deliverOutboundPayloadsWithQueueCleanup(
             emitFailedTerminals("queue");
           }
         } else if (!platformResultsReturned) {
-          const failureIsProvenNotSent = isProvenBatchNotSent(err, payloadOutcomes);
           const sendEvidence =
             deliveredResults.length > 0 ||
             (!failureIsProvenNotSent &&

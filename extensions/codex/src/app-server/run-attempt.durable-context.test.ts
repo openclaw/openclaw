@@ -3,7 +3,7 @@ import { SessionManager } from "openclaw/plugin-sdk/agent-sessions";
 import { appendSessionTranscriptMessageByIdentity } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { expect, it, vi } from "vitest";
 import { projectContextEngineAssemblyForCodex } from "./context-engine-projection.js";
-import { dynamicToolBuildState } from "./dynamic-tool-build-state.js";
+import { setCodexTestToolFactory } from "./host-capability.test-support.js";
 import {
   assistantMessage,
   bindProductionHarnessHostCapabilitiesForTest,
@@ -180,9 +180,9 @@ it("does not replay covered history on the same thread after local message-tool 
     content: [{ type: "text" as const, text: "Sent." }],
     details: { messageId: "telegram-123" },
   }));
-  dynamicToolBuildState.openClawCodingToolsFactory = () => [messageTool];
 
   const params = createParams(sessionFile, workspaceDir);
+  setCodexTestToolFactory(params, () => [messageTool]);
   await attachSqliteSessionTarget(
     params,
     path.join(tempDir, "local-source-reply-sessions.json"),
@@ -274,7 +274,7 @@ it("does not replay covered history on the same thread after local message-tool 
     await harness.waitForMethod("turn/interrupt");
     await harness.notify({
       method: "turn/completed",
-      params: { threadId, turn: { id: "turn-2", status: "interrupted" } },
+      params: { threadId, turn: { id: "turn-2", status: "interrupted", items: [] } },
     });
     await terminal;
     const binding = await readCodexAppServerBinding(sessionFile);

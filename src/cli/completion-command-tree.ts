@@ -11,6 +11,7 @@ export type ShellCompletionContext = {
   pathVariants: string[][];
   completions: string[];
   valueOptions: string[];
+  requiredValueOptions: string[];
   valueChoices: ShellCompletionValueChoice[];
 };
 
@@ -44,6 +45,7 @@ export function collectShellCompletionCommandTree(program: Command): ShellComple
     command: Command,
     pathVariants: string[][],
     inheritedValueOptions: readonly string[],
+    inheritedRequiredValueOptions: readonly string[],
     inheritedValueChoices: readonly ShellCompletionValueChoice[],
   ): ShellCompletionContext => {
     const ownOptionFlags = new Set(command.options.flatMap(completionFlags));
@@ -56,11 +58,15 @@ export function collectShellCompletionCommandTree(program: Command): ShellComple
       ],
       valueOptions: [
         ...new Set([
-          ...inheritedValueOptions,
+          ...inheritedValueOptions.filter((flag) => !ownOptionFlags.has(flag)),
           ...command.options.flatMap((option) =>
             option.required || option.optional ? completionFlags(option) : [],
           ),
         ]),
+      ],
+      requiredValueOptions: [
+        ...inheritedRequiredValueOptions.filter((flag) => !ownOptionFlags.has(flag)),
+        ...command.options.flatMap((option) => (option.required ? completionFlags(option) : [])),
       ],
       valueChoices: [
         ...inheritedValueChoices.flatMap(({ flags, ...choice }) => {
@@ -92,6 +98,7 @@ export function collectShellCompletionCommandTree(program: Command): ShellComple
           commandNameVariants(child).map((name) => parents.concat(name)),
         ),
         context.valueOptions,
+        context.requiredValueOptions,
         context.valueChoices,
       );
     }
@@ -99,5 +106,5 @@ export function collectShellCompletionCommandTree(program: Command): ShellComple
     return context;
   };
 
-  return { root: visit(program, [[]], [], []), descendants };
+  return { root: visit(program, [[]], [], [], []), descendants };
 }

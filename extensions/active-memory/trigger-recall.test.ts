@@ -4,7 +4,6 @@ import {
   buildTriggerRecallContext,
   isPromotedTrustedMemoryEntry,
   MAX_TRIGGER_CONTEXT_CHARS,
-  scoreTriggerMatch,
   resolveTriggerRecall,
   selectStrongTriggerMatches,
 } from "./trigger-recall.js";
@@ -42,17 +41,100 @@ describe("active-memory trigger recall", () => {
     hoisted.listTriggerCandidates.mockReset();
   });
 
-  it("matches trigger phrases deterministically", () => {
-    expect(scoreTriggerMatch("Can you help when booking a flight?", result())).toBeGreaterThan(0.8);
-    expect(scoreTriggerMatch("Explain SQLite indexes", result())).toBeLessThan(0.5);
-    expect(
-      scoreTriggerMatch("This party starts at eight", result({ score: 0.2, triggers: "art" })),
-    ).toBeLessThan(0.65);
-    // Single-word concept triggers (the promotion writer's output) cap at
-    // 0.85 * 0.8 = 0.68 with zero relevance; the 0.65 threshold must admit them.
-    const singleWordTrigger = result({ score: 0, triggers: "project" });
-    expect(scoreTriggerMatch("Project status", singleWordTrigger)).toBeCloseTo(0.68);
-    expect(selectStrongTriggerMatches("Project status", [singleWordTrigger])).toHaveLength(1);
+  it.each([
+    ["reordered words", "flight booking", "booking flight", 0.8, 0.96],
+    ["repeated words", "booking a flight", "booking booking flight", 0.5, 0.9],
+    ["Unicode and case", "CAFÉ 東京", "café 東京", 1, 1],
+    ["single-word promotion", "Project status", "project", 0, 0.68],
+    ["two of three words", "booking flight", "booking flight seat", 1, 0.7866666667],
+    ["upper relevance clamp", "flight booking", "flight booking", 9, 1],
+    ["lower relevance clamp", "flight booking", "flight booking", -1, 0.8],
+  ] as const)(
+    "selects deterministic trigger scores for %s",
+    (_label, message, triggers, score, expected) => {
+      const entry = result({ triggers, score });
+      const selected = selectStrongTriggerMatches(message, [entry]);
+      expect(selected).toHaveLength(1);
+      expect(selected[0]).toMatchObject(entry);
+      expect(selected[0]?.matchScore).toBeCloseTo(expected);
+    },
+  );
+
+  it.each([
+    ["insufficient overlap", "booking", "booking flight", 1],
+    ["whole words", "This party starts at eight", "art", 0.2],
+    ["unrelated message", "Explain SQLite indexes", "flight booking", 0.8],
+  ] as const)("rejects weak trigger matches for %s", (_label, message, triggers, score) => {
+    expect(selectStrongTriggerMatches(message, [result({ triggers, score })])).toEqual([]);
+  });
+
+  it("prepares the message once across trigger candidates without reusing another message", () => {
+    const phrases = [
+      "flight booking; booking flight; flight flight booking; flight booking booking",
+      "connection time; time connection; connection connection time; connection time time",
+    ];
+    const phraseValues = new Set(phrases.flatMap((value) => value.split("; ")));
+    const entries = Array.from({ length: 512 }, (_, index) =>
+      result({
+        path: `memory/${String(index).padStart(3, "0")}.md`,
+        score: 1,
+        triggers: phrases[index % 2],
+        snippet: `Travel guidance ${String(index)}.`,
+      }),
+    );
+    const before = structuredClone(entries);
+    const padding = " filler".repeat(4094);
+    const messages = [`flight booking${padding}`, `connection time${padding}`] as const;
+    const work: Array<{ message: number; phrases: number }> = [];
+    for (const group of [0, 1, 0] as const) {
+      const message = messages[group];
+      const spy = vi.spyOn(String.prototype, "toLowerCase");
+      let selected: ReturnType<typeof selectStrongTriggerMatches>;
+      try {
+        selected = selectStrongTriggerMatches(message, entries);
+      } finally {
+        work.push({
+          message: spy.mock.contexts.filter((receiver) => receiver === message).length,
+          phrases: spy.mock.contexts.filter(
+            (receiver) => typeof receiver === "string" && phraseValues.has(receiver),
+          ).length,
+        });
+        spy.mockRestore();
+      }
+      expect(selected).toEqual(
+        [group, group + 2, group + 4].map((index) =>
+          Object.assign({}, entries[index], { matchScore: 1 }),
+        ),
+      );
+      const context = buildTriggerRecallContext(selected);
+      expect(context).toContain(`Travel guidance ${String(group)}.`);
+      expect(context?.length).toBeLessThanOrEqual(MAX_TRIGGER_CONTEXT_CHARS + 80);
+    }
+    expect(entries).toEqual(before);
+    for (const counts of work) {
+      expect(counts.phrases).toBe(2048);
+      expect(counts.message).toBeLessThanOrEqual(1);
+    }
+  });
+
+  it.each([
+    ["absent triggers", [result({ triggers: undefined })]],
+    ["ineligible entries", [result({ source: "sessions" }), result({ provenance: undefined })]],
+    ["empty phrases", [result({ triggers: "; |\n" })]],
+    ["no usable words", [result({ triggers: "a !; b ?" })]],
+  ] as const)("skips message preparation for %s", (_label, entries) => {
+    const message = "Flight booking preferences";
+    const spy = vi.spyOn(String.prototype, "toLowerCase");
+    let selected: ReturnType<typeof selectStrongTriggerMatches>;
+    let preparations: number;
+    try {
+      selected = selectStrongTriggerMatches(message, [...entries]);
+    } finally {
+      preparations = spy.mock.contexts.filter((receiver) => receiver === message).length;
+      spy.mockRestore();
+    }
+    expect(selected).toEqual([]);
+    expect(preparations).toBe(0);
   });
 
   it("limits automatic injection to curated or trusted-origin entries", () => {

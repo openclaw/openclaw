@@ -1,8 +1,11 @@
 import { CompactionReplayRefreshRequiredError } from "@openclaw/ai/transports";
 import { describe, expect, it, vi } from "vitest";
+import { buildKnownAgentRunFailureReplyPayload } from "../../../auto-reply/reply/agent-runner-failure-reply.js";
 import { buildAgentRunTerminalOutcomeFromLifecycleEvent } from "../../agent-run-terminal-outcome.js";
 import { FailoverError } from "../../failover-error.js";
 import { resolveAgentRunErrorLifecycleFields } from "../../run-termination.js";
+import { SessionManager } from "../../sessions/session-manager.js";
+import { resolveAuthProfileFailureReason } from "./auth-profile-failure-policy.js";
 import { handleEmbeddedPromptFailure } from "./prompt-failure.js";
 
 type Params = Parameters<typeof handleEmbeddedPromptFailure>[0];
@@ -327,5 +330,58 @@ describe("handleEmbeddedPromptFailure", () => {
     }
 
     await vi.waitFor(() => expect(events).toEqual(["advance", "mark-start", "mark-finish"]));
+  });
+
+  it("keeps a live SessionManager transcript-validation error off shared credential health", async () => {
+    let promptError: unknown;
+    try {
+      SessionManager.inMemory("/tmp").appendModelChange("", "");
+    } catch (error) {
+      promptError = error;
+    }
+    expect(promptError).toBeInstanceOf(Error);
+    expect(promptError).toHaveProperty("message", "Invalid session transcript entry: model_change");
+
+    const params = makeParams({
+      promptError,
+      provider: "openrouter",
+      modelId: "gemini-2.5-flash",
+      activeErrorContext: { provider: "openrouter", model: "gemini-2.5-flash" },
+      failover: {
+        resolveAuthProfileFailureReason: (reason, opts) =>
+          resolveAuthProfileFailureReason({
+            failoverReason: reason,
+            providerStarted: opts?.providerStarted,
+            transientRateLimit: opts?.transientRateLimit,
+            policy: "shared",
+          }),
+        advanceAuthProfile: vi.fn(async () => false),
+      },
+    });
+
+    const error = await handleEmbeddedPromptFailure(params).catch((failure: unknown) => failure);
+
+    expect(error).toBe(promptError);
+    expect(params.failover.maybeMarkAuthProfileFailure).not.toHaveBeenCalled();
+    expect(params.failover.advanceAuthProfile).not.toHaveBeenCalled();
+    expect(params.traceAttempts).toEqual([
+      expect.objectContaining({
+        provider: "openrouter",
+        model: "gemini-2.5-flash",
+        result: "surface_error",
+        reason: "format",
+        stage: "prompt",
+      }),
+    ]);
+    expect(
+      buildKnownAgentRunFailureReplyPayload({
+        err: error,
+        sessionCtx: { ChatType: "direct" },
+        resolvedVerboseLevel: "off",
+      }),
+    ).toMatchObject({
+      text: "LLM request failed: the Gateway rejected a session transcript entry. Compact or reset this session and try again.",
+      isError: true,
+    });
   });
 });

@@ -13,8 +13,10 @@ import { readGatewayOwnerLease } from "../../infra/gateway-owner-lease.js";
 import {
   getUpdateRun,
   recordUpdateRunPhase,
+  recordUpdateRunStep,
   recordUpdateRunVerification,
 } from "../../infra/update-run-ledger.js";
+import { updateRunStepsFromResultStep } from "../../infra/update-run-step.js";
 import type { UpdateRunResult } from "../../infra/update-runner.js";
 import { defaultRuntime } from "../../runtime.js";
 import { CLI_NAME } from "../cli-name.js";
@@ -36,7 +38,10 @@ import {
   isPackageManagerUpdateMode,
   runUpdatedInstallGatewayCommand,
 } from "./update-command-service-command.js";
-import type { ManagedGatewayUpdateVerdict } from "./update-command-service-context-types.js";
+import type {
+  ManagedGatewayUpdateVerdict,
+  UpdateServiceDefinitionRecovery,
+} from "./update-command-service-context-types.js";
 import { resolveServiceRefreshEnv } from "./update-command-service-env.js";
 import {
   UpdateServiceLoadBoundaryError,
@@ -59,7 +64,6 @@ export {
   maybeResumeWindowsTaskAutoStartAfterPackageUpdate,
   maybeStopManagedServiceBeforeMutableUpdate,
   revalidateManagedGatewayServiceAfterUpdate,
-  resolvePreparedGatewayUpdatePolicy,
   shouldBlockMutableUpdateFromGatewayServiceEnv,
   UpdateCommandAbort,
   type PreManagedServiceStop,
@@ -235,6 +239,7 @@ export async function maybeRestartService(params: {
   onVerificationFailure?: (reason: string) => void;
   onPluginWarnings?: (warnings: readonly PluginUpdateWarning[]) => void;
   onVerified?: (verifiedAtMs: number) => void;
+  definitionRecovery?: UpdateServiceDefinitionRecovery;
 }): Promise<"ok" | "readiness-pending" | "failed" | "restart-health-failed"> {
   const run = params.opts.run;
   const executor = run?.executorFence;
@@ -272,10 +277,42 @@ export async function maybeRestartService(params: {
       return await failed();
     }
   }
-  let activation = { ...params, invocationEnv, serviceEnv, assertCurrent };
+  let activation = {
+    ...params,
+    invocationEnv,
+    serviceEnv,
+    assertCurrent,
+    onWarnings: (warnings: string[]) => {
+      assertCurrent();
+      const step = {
+        name: "managed-service-reconciliation",
+        command: "openclaw gateway install --force",
+        cwd: params.result.root ?? "",
+        durationMs: 0,
+        exitCode: 0,
+        warnings,
+      };
+      params.result.steps.push(step);
+      if (run) {
+        try {
+          for (const row of updateRunStepsFromResultStep(step)) {
+            recordUpdateRunStep(run.runId, { ...row, endedAtMs: Date.now() }, { env: run.env });
+          }
+        } catch {
+          assertCurrent();
+          warnings.push("Could not record the service definition warning in update history.");
+        }
+      }
+    },
+  };
   const verdict = activation.serviceUpdateVerdict;
   let preserveDefinition =
     verdict?.kind === "unresolved" || (verdict?.kind === "owned" && !verdict.refreshDefinition);
+  if (params.definitionRecovery?.backup || params.definitionRecovery?.preserved) {
+    activation.refreshServiceEnv = false;
+    activation.serviceRuntimeRefreshRequired = false;
+    preserveDefinition = true;
+  }
   const requiresInstallRootRefresh =
     verdict?.kind === "owned" && verdict.requiresInstallRootRefresh;
   const isPackageUpdate = isPackageManagerUpdateMode(activation.result.mode);
@@ -285,7 +322,7 @@ export async function maybeRestartService(params: {
       (activation.refreshServiceEnv ||
         activation.serviceInstallEnv === null ||
         activation.requireRunningServiceAfterRestart));
-  if (preserveDefinition) {
+  if (preserveDefinition && !params.definitionRecovery?.backup) {
     defaultRuntime.error(
       "Gateway service definition left unchanged; ask its deployment owner to repair stale metadata if needed.",
     );
@@ -346,8 +383,7 @@ export async function maybeRestartService(params: {
             (canRestartUpdatedInstall() || !isPackageUpdate)
           ) {
             activationAccepted =
-              (await runUpdatedInstallGatewayCommand(activation, "restart", preserveDefinition)) ===
-              "accepted";
+              (await runUpdatedInstallGatewayCommand(activation, "restart")) === "accepted";
           }
           health = await reinspect();
         }
@@ -372,7 +408,13 @@ export async function maybeRestartService(params: {
       },
     });
     assertCurrent();
-    if (verification.stopReason === "gateway-readiness-pending") {
+    if (verification.stopReason === "still-starting" && activation.result.status !== "error") {
+      activation.result.reason = "still-starting";
+    }
+    if (
+      verification.stopReason === "gateway-readiness-pending" ||
+      verification.stopReason === "still-starting"
+    ) {
       return "readiness-pending" as const;
     }
     if (!verification.ok) {
@@ -442,7 +484,11 @@ export async function maybeRestartService(params: {
             });
             assertCurrent();
             refreshedGatewayHealth =
-              health.healthy || health.waitOutcome === "timeout" ? health : undefined;
+              health.healthy ||
+              health.waitOutcome === "timeout" ||
+              health.waitOutcome === "still-starting"
+                ? health
+                : undefined;
             recordUpdateGatewayHealth(params.opts.run, health, activation.gatewayPort);
           }
         } catch (err) {
@@ -545,21 +591,19 @@ export async function maybeRestartService(params: {
           await createUpdateConfigSnapshot();
         }
         recordPhase("restarting");
-        const restart = await runUpdatedInstallGatewayCommand(
-          activation,
-          "restart",
-          preserveDefinition,
-        ).catch((error: unknown) => {
-          if (!(error instanceof GatewayRestartHealthError)) {
-            throw error;
-          }
-          // Activation succeeded; the update verifier owns the longer readiness budget.
-          childReadinessPending = true;
-          defaultRuntime.error(
-            "Gateway is not ready yet; continuing update readiness verification.",
-          );
-          return "accepted" as const;
-        });
+        const restart = await runUpdatedInstallGatewayCommand(activation, "restart").catch(
+          (error: unknown) => {
+            if (!(error instanceof GatewayRestartHealthError)) {
+              throw error;
+            }
+            // Activation succeeded; the update verifier owns the longer readiness budget.
+            childReadinessPending = true;
+            defaultRuntime.error(
+              "Gateway is not ready yet; continuing update readiness verification.",
+            );
+            return "accepted" as const;
+          },
+        );
         restarted = true;
         activationAccepted = restart === "accepted";
         if (

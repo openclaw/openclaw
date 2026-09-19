@@ -3,6 +3,7 @@ import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { Worker } from "node:worker_threads";
+import { configureFsSafeNative, getFsSafeNativeConfig } from "@openclaw/fs-safe/config";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { resolvePathViaExistingAncestorSync } from "./boundary-path.js";
@@ -182,6 +183,12 @@ describe("state database coordinator", () => {
         uid: typeof process.getuid === "function" ? process.getuid() : undefined,
         coordinatorPath: explicit ? path.join(root, "custom", "coordinator.sqlite") : undefined,
       };
+      const nativeMode = getFsSafeNativeConfig().mode;
+      // fs-safe's Bun realpath workaround bypasses node:fs spies until oven-sh/bun#42374.
+      // Select its portable path so this probe-count assertion observes the realpath owner.
+      if (process.versions.bun) {
+        configureFsSafeNative({ mode: "off" });
+      }
       const resolvePath = vi.spyOn(fsSync, "realpathSync");
       try {
         for (let attempt = 0; attempt < 2; attempt++) {
@@ -203,6 +210,9 @@ describe("state database coordinator", () => {
         }
       } finally {
         resolvePath.mockRestore();
+        if (process.versions.bun) {
+          configureFsSafeNative({ mode: nativeMode });
+        }
       }
     },
   );

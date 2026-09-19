@@ -105,31 +105,42 @@ with its scheduler-owned continuation.
 
 ## Progress after yield
 
-The old agent turn closes its admission authority and channel dispatch cleans
-up its draft. Task notifications can continue after this handoff: opt a child
-into `state_changes` with `openclaw tasks notify <lookup> state_changes`.
-The default `done_only` and `silent` policies produce no progress notifications.
+Yield closes the old execution, not the delegated work. On Discord and Telegram,
+an interactive requester can hand its existing progress card to the core task
+presenter. The message ID, checklist, commentary, and bounded public display
+state survive the handoff. Channel cleanup stops the old stream without
+deleting the adopted card. The final answer remains a separate delivery.
+Discord requires `streaming.mode: "progress"`; this handoff does not change
+channel streaming defaults.
 
-The existing task delivery owner coalesces host-observed child activity into a
-single update per requester batch over 15 seconds. It uses the original
-channel, account, recipient, and thread, and mirrors the update to the requester
-transcript. Updates show bounded task labels, execution or wait state, and tool
-activity counts. Private child prose, tool arguments, and results stay out of
-these notifications. A batch shows at most eight tasks in creation order;
-additional activity remains available in Tasks.
+An adopted card can continue for `done_only` children; `silent` children remain
+excluded. Channel commentary, tool-detail, and quiet-mode settings still apply.
+Without a usable card, the shared reply pipeline provides its normal waiting
+acknowledgment when the turn would otherwise be silent. It does not create a
+second detached progress card.
+Tasks explicitly set to `state_changes` still receive brief state notifications
+through the same core batching owner. Without an adopted card, those notices do
+not include command arguments or commentary.
 
-Progress does not start a requester turn or mark a result delivered. A resumed
-requester, changed batch generation, cancellation, reset, muted task, or closed
-Gateway invalidates queued progress. The delivery owner rechecks authority
-after loading the transport and immediately before the adapter sends. It never
-reuses the closed turn's callbacks or drafts.
+Core coalesces prepared child activity over 15 seconds and edits the captured
+channel, account, recipient, and thread. Updates show named child activity and
+terminal outcomes within the channel's line budget. Public commentary and tool
+details follow the shared compositor and redaction policy; private prompts,
+reasoning, and raw child results are not progress content. An admitted requester
+continuation can update the retained checklist.
 
-Progress is best effort and process-local: up to 128 batches retain at most 32
-task references each. An overflowing queue leaves activity in Tasks; transport
-failure does not affect completion. Progress without a concrete channel target
-remains visible in Tasks and does not wake the parent just to narrate activity.
-Restart discards queued progress while the existing durable completion owner
-continues to own the final result.
+Progress does not start a requester turn or credit completion delivery.
+Cancellation, reset, replacement, silence, and Gateway shutdown invalidate stale
+publication authority. Each edit rechecks current ownership after asynchronous
+preparation and immediately before transport handoff. Stored message IDs and
+display snapshots do not revive old callbacks or execution authority.
+
+The existing conversation receipt owner persists the bounded display snapshot.
+Restart restores presentation from that receipt only for the current task and
+requester window. Process-local queues remain bounded to 128 batches with at
+most 32 accepted children each. Missing or ambiguous receipts do not authorize
+a replacement message; activity remains available in Tasks. Presentation
+failure never takes ownership of the final result from completion delivery.
 
 Cron observes the registry's descendant settlement boundary before starting
 its bounded synthesis grace period. A yielded task remains pending between the

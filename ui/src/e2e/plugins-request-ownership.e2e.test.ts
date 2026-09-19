@@ -179,18 +179,20 @@ suite.define(() => {
           },
         },
       });
-      await page.goto(`${suite.server.baseUrl}settings/plugins/workboard#configuration`);
+      await page.goto(`${suite.server.baseUrl}settings/plugins/workboard?view=settings`);
       await gateway.waitForRequest("plugins.catalog.get");
       await gateway.setMethodResponse("config.get", configResponse("After"));
-      await page.getByRole("textbox", { name: "Greeting", exact: true }).fill("After");
+      const greeting = page.getByRole("textbox", { name: "Greeting", exact: true });
+      await greeting.fill("After");
+      await greeting.press("Tab");
       await gateway.waitForRequest("config.set");
       await gateway.waitForRequest("plugins.inspect", { after: 1 });
       await gateway.waitForRequest("plugins.catalog.get", { after: 1 });
       await page
-        .locator(".plugin-catalog-detail__tabs")
-        .getByRole("tab", { name: "Skills", exact: true })
+        .locator(".plugins-settings-breadcrumb")
+        .getByRole("link", { name: "Workboard", exact: true })
         .click();
-      const rows = page.locator(".plugin-catalog-detail__row h3");
+      const rows = page.locator(".plugin-capability__copy > strong");
       await expect.poll(() => rows.allTextContents()).toEqual(["Current skill"]);
 
       await gateway.resolveDeferred(

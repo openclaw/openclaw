@@ -1,4 +1,3 @@
-// Discord plugin module implements send target parsing behavior.
 import {
   parseDiscordTarget,
   type DiscordTarget,

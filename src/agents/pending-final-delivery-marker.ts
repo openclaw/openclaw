@@ -1,6 +1,10 @@
 /** Persists restart-recoverable final delivery markers for agent runs. */
 import { randomUUID } from "node:crypto";
-import { setReplyPayloadMetadata, type ReplyPayload } from "../auto-reply/reply-payload.js";
+import {
+  getReplyPayloadMetadata,
+  setReplyPayloadMetadata,
+  type ReplyPayload,
+} from "../auto-reply/reply-payload.js";
 import {
   buildRecoverablePendingFinalDeliveryText,
   normalizePendingFinalDeliveryPayloads,
@@ -99,6 +103,21 @@ export async function persistPendingFinalDeliveryMarker(
   if (markerPersisted) {
     for (const payload of sendablePayloads) {
       setReplyPayloadMetadata(payload, {
+        ...(entry.restartRecoveryHarnessCompletion
+          ? {
+              sessionWriterDeliveryAuthority: {
+                ...getReplyPayloadMetadata(payload)?.sessionWriterDeliveryAuthority,
+                agentId: entry.restartRecoveryHarnessCompletion.requesterAgentId,
+                expectedSessionId: params.runOwnedSessionId,
+                ...(entry.lifecycleRevision
+                  ? { expectedLifecycleRevision: entry.lifecycleRevision }
+                  : {}),
+                sessionKey: params.sessionKey,
+                storePath: params.storePath,
+                harnessCompletion: structuredClone(entry.restartRecoveryHarnessCompletion),
+              },
+            }
+          : {}),
         pendingFinalDeliveryCompletion: {
           deliveryId,
           intentId,

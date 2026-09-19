@@ -167,6 +167,9 @@ describe("session startup catch-up", () => {
     await harness.waitForSessionSync();
 
     expect(harness.syncCalls).toEqual([{ reason: "session-startup-catchup" }]);
+    expect(harness.deletedSources).toEqual([
+      { path: stalePath, source: "sessions", expectedHash: "stale-hash" },
+    ]);
     expect(harness.getIndexedSourceState(stalePath)).toBeUndefined();
   });
 
@@ -187,6 +190,7 @@ describe("session startup catch-up", () => {
       await expect(catchUp).rejects.toBe(scanError);
       await expect(corpusList).rejects.toBe(scanError);
       expect(harness.syncCalls).toEqual([]);
+      expect(harness.deletedSources).toEqual([]);
       expect(harness.getIndexedSourceState(stalePath)).toEqual({
         path: stalePath,
         hash: "preserved-hash",

@@ -75,10 +75,6 @@
 }
 
 @media (max-width: 560px) {
-  .chat-main__conversation {
-    --chat-transcript-fade-height: 64px;
-  }
-
   .chat-main__conversation::before {
     height: 56px;
     background: linear-gradient(
@@ -799,9 +795,7 @@
 }
 
 .chat-task-detail__heading .sidebar-title {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
 }
 
 .chat-task-detail__meta {
@@ -1217,7 +1211,7 @@ openclaw-session-discussion {
   display: block;
   flex: 1 1 auto;
   width: 100%;
-  min-height: 360px;
+  min-height: 0;
   border: 0;
   background: var(--bg);
 }
@@ -1384,6 +1378,13 @@ openclaw-session-discussion {
   display: grid;
   width: 100%;
   min-height: 0;
+
+  &:has(.chat-html-preview:not([hidden])) {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    min-width: 0;
+  }
 }
 
 .sidebar-attachment-preview__markdown {

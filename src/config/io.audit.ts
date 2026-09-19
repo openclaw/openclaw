@@ -1,12 +1,11 @@
 // Audits config paths and values for diagnostics and safety checks.
 import { randomUUID } from "node:crypto";
 import path from "node:path";
-import {
-  createSqliteAuditRecordStore,
-  registerSqliteAuditRecordAsync,
-} from "../infra/sqlite-audit-record-store.js";
+import { registerSqliteAuditRecordAsync } from "../infra/sqlite-audit-record-store.async.js";
+import { createSqliteAuditRecordStore } from "../infra/sqlite-audit-record-store.js";
 import { redactSecrets } from "../logging/redact.js";
 import { resolveConfigAuditStoreEnv } from "./config-journal-snapshot.js";
+import type { ConfigHealthFingerprint } from "./io.health-state.types.js";
 import type { ConfigWriteAuditOrigin } from "./io.types.js";
 import { resolveStateDir } from "./paths.js";
 import { redactSensitiveArgv } from "./redact-argv.js";
@@ -124,7 +123,7 @@ function capArgv(argv: readonly string[] | undefined): string[] {
   return argv.slice(0, CONFIG_AUDIT_ARGV_CAP);
 }
 
-export function snapshotConfigAuditProcessInfo(): ConfigAuditProcessInfo {
+function snapshotConfigAuditProcessInfo(): ConfigAuditProcessInfo {
   return {
     pid: process.pid,
     ppid: process.ppid,
@@ -142,49 +141,6 @@ const LEGACY_CONFIG_AUDIT_LOG_FILENAME = ["config-audit", "jsonl"].join(".");
 
 export type ConfigWriteAuditResult = "rename" | "copy-fallback" | "failed" | "rejected";
 
-type ConfigWriteAuditRecord = {
-  ts: string;
-  source: "config-io";
-  event: "config.write";
-  result: ConfigWriteAuditResult;
-  configPath: string;
-  pid: number;
-  ppid: number;
-  cwd: string;
-  argv: string[];
-  execArgv: string[];
-  watchMode: boolean;
-  watchSession: string | null;
-  watchCommand: string | null;
-  existsBefore: boolean;
-  previousHash: string | null;
-  nextHash: string | null;
-  previousBytes: number | null;
-  nextBytes: number | null;
-  previousDev: string | null;
-  nextDev: string | null;
-  previousIno: string | null;
-  nextIno: string | null;
-  previousMode: number | null;
-  nextMode: number | null;
-  previousNlink: number | null;
-  nextNlink: number | null;
-  previousUid: number | null;
-  nextUid: number | null;
-  previousGid: number | null;
-  nextGid: number | null;
-  changedPathCount: number | null;
-  changedPaths?: string[];
-  origin?: ConfigWriteAuditOrigin;
-  hasMetaBefore: boolean;
-  hasMetaAfter: boolean;
-  gatewayModeBefore: string | null;
-  gatewayModeAfter: string | null;
-  suspicious: string[];
-  errorCode?: string;
-  errorMessage?: string;
-};
-
 export type ConfigExternalChangeAuditRecord = {
   ts: string;
   source: "config-io";
@@ -200,60 +156,76 @@ export type ConfigExternalChangeAuditRecord = {
   opaqueChange?: boolean;
 };
 
-export type ConfigObserveAuditRecord = {
-  ts: string;
-  source: "config-io";
-  event: "config.observe";
-  phase: "read";
+export function createConfigObserveAuditRecord(params: {
   configPath: string;
-  pid: number;
-  ppid: number;
-  cwd: string;
-  argv: string[];
-  execArgv: string[];
-  exists: boolean;
   valid: boolean;
-  hash: string | null;
-  bytes: number | null;
-  mtimeMs: number | null;
-  ctimeMs: number | null;
-  dev: string | null;
-  ino: string | null;
-  mode: number | null;
-  nlink: number | null;
-  uid: number | null;
-  gid: number | null;
-  hasMeta: boolean;
-  gatewayMode: string | null;
+  current: ConfigHealthFingerprint;
   suspicious: string[];
-  lastKnownGoodHash: string | null;
-  lastKnownGoodBytes: number | null;
-  lastKnownGoodMtimeMs: number | null;
-  lastKnownGoodCtimeMs: number | null;
-  lastKnownGoodDev: string | null;
-  lastKnownGoodIno: string | null;
-  lastKnownGoodMode: number | null;
-  lastKnownGoodNlink: number | null;
-  lastKnownGoodUid: number | null;
-  lastKnownGoodGid: number | null;
-  lastKnownGoodGatewayMode: string | null;
-  backupHash: string | null;
-  backupBytes: number | null;
-  backupMtimeMs: number | null;
-  backupCtimeMs: number | null;
-  backupDev: string | null;
-  backupIno: string | null;
-  backupMode: number | null;
-  backupNlink: number | null;
-  backupUid: number | null;
-  backupGid: number | null;
-  backupGatewayMode: string | null;
-  clobberedPath: string | null;
-  restoredFromBackup: boolean;
-  restoredBackupPath: string | null;
-  restoreErrorCode: string | null;
-  restoreErrorMessage: string | null;
-};
+  lastKnownGood: ConfigHealthFingerprint | undefined;
+  backup: ConfigHealthFingerprint | null | undefined;
+  clobberedPath?: string | null;
+  restoredFromBackup?: boolean;
+  restoredBackupPath?: string | null;
+  restoreErrorCode?: string | null;
+  restoreErrorMessage?: string | null;
+}) {
+  const { current, lastKnownGood, backup } = params;
+  return {
+    ts: current.observedAt,
+    source: "config-io" as const,
+    event: "config.observe" as const,
+    phase: "read" as const,
+    configPath: params.configPath,
+    ...snapshotConfigAuditProcessInfo(),
+    exists: true,
+    valid: params.valid,
+    hash: current.hash,
+    bytes: current.bytes,
+    mtimeMs: current.mtimeMs,
+    ctimeMs: current.ctimeMs,
+    dev: current.dev,
+    ino: current.ino,
+    mode: current.mode,
+    nlink: current.nlink,
+    uid: current.uid,
+    gid: current.gid,
+    hasMeta: current.hasMeta,
+    gatewayMode: current.gatewayMode,
+    suspicious: params.suspicious,
+    lastKnownGoodHash: lastKnownGood?.hash ?? null,
+    lastKnownGoodBytes: lastKnownGood?.bytes ?? null,
+    lastKnownGoodMtimeMs: lastKnownGood?.mtimeMs ?? null,
+    lastKnownGoodCtimeMs: lastKnownGood?.ctimeMs ?? null,
+    lastKnownGoodDev: lastKnownGood?.dev ?? null,
+    lastKnownGoodIno: lastKnownGood?.ino ?? null,
+    lastKnownGoodMode: lastKnownGood?.mode ?? null,
+    lastKnownGoodNlink: lastKnownGood?.nlink ?? null,
+    lastKnownGoodUid: lastKnownGood?.uid ?? null,
+    lastKnownGoodGid: lastKnownGood?.gid ?? null,
+    lastKnownGoodGatewayMode: lastKnownGood?.gatewayMode ?? null,
+    backupHash: backup?.hash ?? null,
+    backupBytes: backup?.bytes ?? null,
+    backupMtimeMs: backup?.mtimeMs ?? null,
+    backupCtimeMs: backup?.ctimeMs ?? null,
+    backupDev: backup?.dev ?? null,
+    backupIno: backup?.ino ?? null,
+    backupMode: backup?.mode ?? null,
+    backupNlink: backup?.nlink ?? null,
+    backupUid: backup?.uid ?? null,
+    backupGid: backup?.gid ?? null,
+    backupGatewayMode: backup?.gatewayMode ?? null,
+    clobberedPath: params.clobberedPath ?? null,
+    restoredFromBackup: params.restoredFromBackup ?? false,
+    restoredBackupPath: params.restoredBackupPath ?? null,
+    restoreErrorCode: params.restoreErrorCode ?? null,
+    restoreErrorMessage: params.restoreErrorMessage ?? null,
+  };
+}
+
+type ConfigObserveAuditRecord = Omit<
+  ReturnType<typeof createConfigObserveAuditRecord>,
+  "hash" | "bytes"
+> & { hash: string | null; bytes: number | null };
 
 export type ConfigAuditRecord =
   | ConfigWriteAuditRecord
@@ -275,22 +247,6 @@ type ConfigAuditProcessInfo = {
   cwd: string;
   argv: string[];
   execArgv: string[];
-};
-
-type ConfigWriteAuditRecordBase = Omit<
-  ConfigWriteAuditRecord,
-  | "result"
-  | "nextDev"
-  | "nextIno"
-  | "nextMode"
-  | "nextNlink"
-  | "nextUid"
-  | "nextGid"
-  | "errorCode"
-  | "errorMessage"
-> & {
-  nextHash: string;
-  nextBytes: number;
 };
 
 function normalizeAuditLabel(value: string | undefined): string | null {
@@ -351,12 +307,12 @@ export function createConfigWriteAuditRecordBase(params: {
   suspicious: string[];
   now?: string;
   processInfo?: ConfigAuditProcessInfo;
-}): ConfigWriteAuditRecordBase {
+}) {
   const processSnapshot = resolveConfigAuditProcessInfo(params.processInfo);
   return {
     ts: params.now ?? new Date().toISOString(),
-    source: "config-io",
-    event: "config.write",
+    source: "config-io" as const,
+    event: "config.write" as const,
     configPath: params.configPath,
     pid: processSnapshot.pid,
     ppid: processSnapshot.ppid,
@@ -388,6 +344,8 @@ export function createConfigWriteAuditRecordBase(params: {
   };
 }
 
+type ConfigWriteAuditRecordBase = ReturnType<typeof createConfigWriteAuditRecordBase>;
+
 function capConfigAuditEntries(values: readonly string[], cap: number): string[] {
   if (values.length <= cap) {
     return [...values];
@@ -409,7 +367,7 @@ export function finalizeConfigWriteAuditRecord(params: {
   result: ConfigWriteAuditResult;
   nextMetadata?: ConfigAuditStatMetadata | null;
   err?: unknown;
-}): ConfigWriteAuditRecord {
+}) {
   const errorCode =
     params.err &&
     typeof params.err === "object" &&
@@ -448,6 +406,8 @@ export function finalizeConfigWriteAuditRecord(params: {
     ...(errorMessage !== undefined ? { errorMessage } : {}),
   };
 }
+
+type ConfigWriteAuditRecord = ReturnType<typeof finalizeConfigWriteAuditRecord>;
 
 type ConfigAuditAppendContext = {
   env: NodeJS.ProcessEnv;

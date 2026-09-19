@@ -10,6 +10,7 @@ import {
   getAdmittedRunDelegatedAuthority,
   prepareAgentRunAdmission,
 } from "../../agents/admitted-run-context.js";
+import * as fsSafe from "../../infra/fs-safe.js";
 import { ensureStagedInputDirectory, stagedInputDirectory } from "../../media/staged-inputs.js";
 import { runNodeWorkerWorkspaceTransfer } from "../../node-host/node-worker-transfer-client.js";
 import {
@@ -214,8 +215,8 @@ describe("attachment transfer revocation", () => {
     { boundary: "source-open", revoke: true },
     { boundary: "before-stage-open", revoke: false },
     { boundary: "before-stage-open", revoke: true },
-    { boundary: "after-stage-open", revoke: false },
-    { boundary: "after-stage-open", revoke: true },
+    { boundary: "private-stage-created", revoke: false },
+    { boundary: "private-stage-created", revoke: true },
     { boundary: "after-publish", revoke: false },
     { boundary: "after-publish", revoke: true },
     { boundary: "after-final-publish", revoke: false },
@@ -313,77 +314,76 @@ describe("attachment transfer revocation", () => {
       );
     });
     const sourceAccessAfterRevocation: string[] = [];
+    const observeSourceAccess = (file: string) => {
+      if (file.includes(".workspace.workspace-transfer-") && reached && revoke) {
+        sourceAccessAfterRevocation.push(file);
+      }
+    };
     const originalReadFile = fs.readFile.bind(fs);
     vi.spyOn(fs, "readFile").mockImplementation(async (...args) => {
       const file = typeof args[0] === "string" ? args[0] : "";
-      const installing = file.includes(".workspace.workspace-transfer-");
-      if (installing && reached && revoke) {
-        sourceAccessAfterRevocation.push(file);
-      }
+      observeSourceAccess(file);
       return await originalReadFile(...args);
     });
-    let copySource: string | undefined;
-    const originalOpen = fs.open.bind(fs);
-    vi.spyOn(fs, "open").mockImplementation(async (...args) => {
-      const file = typeof args[0] === "string" ? args[0] : "";
-      const sourceRead =
-        file.includes(".workspace.workspace-transfer-") &&
-        typeof args[1] === "number" &&
-        (args[1] &
-          (fsSync.constants.O_CREAT | fsSync.constants.O_WRONLY | fsSync.constants.O_RDWR)) ===
-          0;
-      if (sourceRead) {
-        copySource = file;
-        if (reached && revoke) {
-          sourceAccessAfterRevocation.push(file);
-        }
-      }
-      const privateStage =
-        copySource?.endsWith(path.normalize(fresh)) &&
-        path.dirname(file) === path.join(workspaceDir, directory) &&
-        path.basename(file).startsWith(".fs-safe-") &&
-        typeof args[1] === "number" &&
-        (args[1] & fsSync.constants.O_CREAT) !== 0;
-      if (privateStage && boundary === "before-stage-open") {
-        crossBoundary();
-      }
-      const handle = await originalOpen(...args);
-      if (sourceRead) {
-        const read = handle.read.bind(handle);
-        vi.spyOn(handle, "read").mockImplementation(async (...readArgs) => {
-          if (reached && revoke) {
-            sourceAccessAfterRevocation.push(file);
+    const stageBoundary = ["before-stage-open", "private-stage-created"].includes(boundary);
+    const originalRoot = fsSafe.root;
+    vi.spyOn(fsSafe, "root").mockImplementation(async (...args) => {
+      const guarded = await originalRoot(...args);
+      if (path.basename(guarded.rootReal).startsWith(".workspace.workspace-transfer-")) {
+        const open = guarded.open.bind(guarded);
+        vi.spyOn(guarded, "open").mockImplementation(async (...openArgs) => {
+          const file = path.resolve(guarded.rootReal, openArgs[0]);
+          observeSourceAccess(file);
+          const opened = await open(...openArgs);
+          const read = opened.handle.read.bind(opened.handle);
+          vi.spyOn(opened.handle, "read").mockImplementation(async (...readArgs) => {
+            observeSourceAccess(file);
+            return await read(...readArgs);
+          });
+          if (file.endsWith(path.normalize(fresh)) && boundary === "source-open") {
+            crossBoundary();
           }
-          return await read(...readArgs);
+          return opened;
         });
-        if (file.endsWith(path.normalize(fresh)) && boundary === "source-open") {
-          crossBoundary();
-        }
       }
-      if (privateStage && boundary === "after-stage-open") {
-        crossBoundary();
+      if (guarded.rootReal === workspaceDir) {
+        const copyIn = guarded.copyIn.bind(guarded);
+        vi.spyOn(guarded, "copyIn").mockImplementation(async (relativePath, input, options) => {
+          await copyIn(relativePath, input, {
+            ...options,
+            assertBeforeMutation: () => {
+              options?.assertBeforeMutation?.();
+              if (reached || relativePath !== fresh || !stageBoundary) {
+                return;
+              }
+              // Native copying may fill the stage before this mutation fence observes it.
+              const stageExists = fsSync
+                .readdirSync(path.join(workspaceDir, directory))
+                .some((name) => name.startsWith(".fs-safe-"));
+              if (stageExists === (boundary === "private-stage-created")) {
+                crossBoundary();
+              }
+            },
+            onDestinationPublished: (receipt) => {
+              options?.onDestinationPublished?.(receipt);
+              const publishedInput = boundary === "after-final-publish" ? subsequent : fresh;
+              if (
+                receipt.path === path.join(workspaceDir, publishedInput) &&
+                ["after-publish", "after-final-publish", "after-publish-replaced"].includes(
+                  boundary,
+                )
+              ) {
+                if (boundary === "after-publish-replaced") {
+                  fsSync.unlinkSync(receipt.path);
+                  fsSync.writeFileSync(receipt.path, "later user replacement", { mode: 0o600 });
+                }
+                crossBoundary();
+              }
+            },
+          });
+        });
       }
-      return handle;
-    });
-    const originalLink = fsSync.linkSync.bind(fsSync);
-    vi.spyOn(fsSync, "linkSync").mockImplementation((...args) => {
-      originalLink(...args);
-      const target = path.join(
-        workspaceDir,
-        boundary === "after-final-publish" ? subsequent : fresh,
-      );
-      if (
-        args[1] === target &&
-        (boundary === "after-publish" ||
-          boundary === "after-final-publish" ||
-          boundary === "after-publish-replaced")
-      ) {
-        if (boundary === "after-publish-replaced") {
-          fsSync.unlinkSync(target);
-          fsSync.writeFileSync(target, "later user replacement", { mode: 0o600 });
-        }
-        crossBoundary();
-      }
+      return guarded;
     });
     await new Promise<void>((resolve) => {
       server.listen(0, "127.0.0.1", resolve);

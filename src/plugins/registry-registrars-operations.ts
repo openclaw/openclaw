@@ -323,21 +323,26 @@ export function createOperationRegistrars(state: PluginRegistryState) {
     service: { id: string },
     kind: "service" | "gateway discovery service",
   ) => {
-    const id = service.id.trim();
-    const registrations =
-      kind === "service" ? registry.services : registry.gatewayDiscoveryServices;
-    const existing = id ? registrations.find((entry) => entry.service.id.trim() === id) : undefined;
-    if (id && !existing) {
-      return id;
-    }
-    // Snapshot and activating loads can both register the same owner; keep the first.
-    if (existing?.pluginId !== record.id) {
-      reportRegistrationError(
-        record,
-        existing
-          ? `${kind} already registered: ${id} (${existing.pluginId})`
-          : `${kind} registration missing id`,
-      );
+    try {
+      const id = service.id.trim();
+      const registrations =
+        kind === "service" ? registry.services : registry.gatewayDiscoveryServices;
+      const existing = id ? registrations.find((entry) => entry.id === id) : undefined;
+      if (id && !existing) {
+        return id;
+      }
+      // Snapshot and activating loads can both register the same owner; keep the first.
+      if (existing?.pluginId !== record.id) {
+        reportRegistrationError(
+          record,
+          existing
+            ? `${kind} already registered: ${id} (${existing.pluginId})`
+            : `${kind} registration missing id`,
+        );
+      }
+    } catch {
+      // Plugin accessors can throw sensitive values; report only the boundary failure.
+      reportRegistrationError(record, `${kind} registration id cannot be normalized`);
     }
     return undefined;
   };
@@ -349,6 +354,7 @@ export function createOperationRegistrars(state: PluginRegistryState) {
     }
     record.services.push(id);
     registry.services.push({
+      id,
       pluginId: record.id,
       pluginName: record.name,
       service,
@@ -369,7 +375,7 @@ export function createOperationRegistrars(state: PluginRegistryState) {
     }
     record.gatewayDiscoveryServiceIds.push(id);
     registry.gatewayDiscoveryServices.push({
-      ...createRegistration(record, { service }),
+      ...createRegistration(record, { id, service }),
       // The advertiser can be native data; its registration still owns execution and cleanup.
       instance: getPluginInstance(record),
     });

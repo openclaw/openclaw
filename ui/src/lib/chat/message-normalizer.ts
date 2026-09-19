@@ -69,10 +69,12 @@ export function readMessageSenderSession(value: unknown): NormalizedMessage["sen
   }
   const sessionKey = normalizeOptionalString(source.sessionKey);
   const agentId = normalizeOptionalString(source.agentId);
+  const label = normalizeOptionalString(source.label);
   return sessionKey || agentId
     ? {
         ...("sessionKey" in source ? { sessionKey } : {}),
         ...("agentId" in source ? { agentId } : {}),
+        ...(label ? { label } : {}),
       }
     : undefined;
 }

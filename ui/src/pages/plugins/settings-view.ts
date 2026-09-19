@@ -1,10 +1,8 @@
 import { html, nothing, type TemplateResult } from "lit";
 import { repeat } from "lit/directives/repeat.js";
-import type { ConfigUiHints } from "../../api/types.ts";
 import { renderNode } from "../../components/config-form.ts";
 import { renderHubTabs } from "../../components/hub-tabs.ts";
 import { icons } from "../../components/icons.ts";
-import { renderReasonedDisabledControl } from "../../components/reasoned-disabled-control.ts";
 import {
   renderSettingsEmpty,
   renderSettingsLoadingSkeleton,
@@ -13,70 +11,58 @@ import {
   renderSettingsRow,
   renderSettingsSection,
   renderSettingsStatus,
-  renderSettingsToggle,
 } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
 import type { JsonSchema } from "../../lib/config-form-utils.ts";
 import { formatUiExternalText } from "../../lib/format-error.ts";
-import { formatDateMs } from "../../lib/format.ts";
 import { shouldHandleNavigationClick } from "../../lib/navigation-click.ts";
-import type {
-  PluginCatalogItem,
-  PluginListResult,
-  PluginsInspectResult,
-} from "../../lib/plugins/index.ts";
-import {
-  pluginDetailCompatibilityRows,
-  renderPluginDetailCompatibility,
-  renderPluginDetailReadme,
-  renderPluginDetailVersions,
-} from "./catalog-detail.ts";
-import { clawHubPackageUrl } from "./catalog-links.ts";
-import { formatCompactCount } from "./catalog-results.ts";
+import type { PluginsInspectResult } from "../../lib/plugins/index.ts";
+import { renderPluginReadme } from "./catalog-detail.ts";
 import {
   renderArtTile,
   renderPluginDeclaredCapabilities,
   renderPluginGrants,
 } from "./consent-dialog.ts";
-import { renderPluginDetailRows, renderPluginDetailShell } from "./detail-shell.ts";
-import { buildInstalledPluginDetailTabs, type InstalledPluginDetailTab } from "./detail-tabs.ts";
-import { renderPluginOfficialBadge, renderPluginStateStatus } from "./plugin-card.ts";
-import { pluginRowKey, type PluginRowMessage } from "./plugin-row-message.ts";
-import { matchesPluginQuery, pluginStatePresentation } from "./plugin-state-presentation.ts";
-import { renderPluginSecurityAudit } from "./security-audit.ts";
+import { renderPluginDetailShell } from "./detail-shell.ts";
+import type { InstalledPluginDetailTab } from "./detail-tabs.ts";
+import {
+  renderPluginCapabilitySection,
+  renderPluginMetadata,
+  renderPluginPublisher,
+  renderPluginAskAction,
+} from "./overview.ts";
+import { renderPluginStateStatus } from "./plugin-card.ts";
+import {
+  pluginRowKey,
+  renderPluginRowMessage,
+  type PluginRowMessage,
+} from "./plugin-row-message.ts";
+import { matchesPluginQuery } from "./plugin-state-presentation.ts";
+import type { PluginSettingsEditor, PluginSettingsField } from "./settings-editor.ts";
 import { renderPluginLifecycle } from "./settings-lifecycle.ts";
-import { pluginEntryValue } from "./settings-model.ts";
+import { pluginEntryValue, type PluginSettingsEditorModel } from "./settings-model.ts";
+import type { PluginToolPreview } from "./tool-preview.ts";
+import "./settings-editor.ts";
 
 export type PluginSettingsTab = "installed" | "advanced";
 
-type SharedProps = {
-  connected: boolean;
+type SharedProps = Omit<
+  PluginSettingsEditorModel,
+  "pluginId" | "configSchema" | "backHref" | "onBack"
+> & {
   loading: boolean;
-  result: PluginListResult | null;
   error: string | null;
   busy: Readonly<Record<string, boolean>>;
   messages: Readonly<Record<string, PluginRowMessage>>;
-  pageNotice: PluginRowMessage | null;
   iconUrls: Readonly<Record<string, string>>;
   canMutate: boolean;
   reloadBlockedReason: string | null;
   mutationBlockedReason: string | null;
-  configBusy: boolean;
-  configSchemaLoading: boolean;
-  configError: string | null;
-  canEditConfig: boolean;
-  configValue: Record<string, unknown> | null;
-  configHints: ConfigUiHints;
-  configUnsupportedPaths: readonly string[];
   onIconError: (pluginId: string) => void;
   onSetEnabled: (pluginId: string, enabled: boolean, rowKey: string) => void;
   onUninstall: (pluginId: string, rowKey: string) => void;
   onReload: (pluginId: string, rowKey: string) => void;
-  onConfigPatch: (path: Array<string | number>, value: unknown) => void;
-  onConfigRemove: (path: Array<string | number>) => void;
   onConfigReload: () => void;
-  onConfigReadRetry: () => void;
-  onConfigWriteRetry: () => void;
   onRefresh: () => void;
 };
 
@@ -90,37 +76,24 @@ type InventoryProps = SharedProps & {
   onOpenPlugin: (pluginId: string) => void;
 };
 
-export type DetailProps = SharedProps & {
-  pluginId: string;
-  inspection: PluginsInspectResult | null;
-  inspectionError: string | null;
-  configSchema: JsonSchema | null;
-  hostControlsSchema: JsonSchema | null;
-  backHref: string;
-  backLabel: string;
-  tab: InstalledPluginDetailTab;
-  onBack: () => void;
-  onRetryInspection: () => void;
-  onTabChange: (tab: InstalledPluginDetailTab) => void;
-};
+export type DetailProps = SharedProps &
+  PluginSettingsEditorModel & {
+    renderCredential?: PluginSettingsEditor["renderCredential"];
+    onAskPlugin?: () => void;
+    onAskSetting?: (field: PluginSettingsField) => void;
+    skillsSection?: TemplateResult;
+    tools?: PluginToolPreview[];
+    onOpenTool?: (name: string) => void;
+    settingsHref?: string;
 
-function renderMessage(message: PluginRowMessage | undefined) {
-  if (!message) {
-    return nothing;
-  }
-  return html`<div
-    class="plugins-row-message plugins-row-message--${message.kind} oc-banner ${
-      message.kind === "error"
-        ? "oc-banner-error"
-        : message.kind === "warning"
-          ? "oc-banner-warning"
-          : "oc-banner-success"
-    }"
-    role=${message.kind === "error" ? "alert" : "status"}
-  >
-    ${message.text}
-  </div>`;
-}
+    inspection: PluginsInspectResult | null;
+    inspectionError: string | null;
+    hostControlsSchema: JsonSchema | null;
+    backLabel: string;
+    tab: InstalledPluginDetailTab;
+    onRetryInspection: () => void;
+    onTabChange: (tab: InstalledPluginDetailTab) => void;
+  };
 
 function renderRetryError(error: string, onRetry: () => void): TemplateResult {
   return html`<div
@@ -226,7 +199,7 @@ function renderInstalledInventory(props: InventoryProps): TemplateResult {
             }
             <span class="settings-row__chevron" aria-hidden="true">${icons.chevronRight}</span>
           </div>
-          ${renderMessage(props.messages[key])}
+          ${renderPluginRowMessage(props.messages[key])}
         </article>
       `;
     },
@@ -308,7 +281,6 @@ export function renderPluginSettingsInventory(props: InventoryProps): TemplateRe
         title: html`<h1 class="plugins-settings-title">${t("tabs.plugins")}</h1>`,
         subtitle: t("pluginsPage.settingsDescription"),
       })}
-      ${props.pageNotice ? renderMessage(props.pageNotice) : nothing}
       <div class="plugins-settings-content">
         ${renderSettingsTabs(props)}
         <wa-tab-panel
@@ -323,32 +295,6 @@ export function renderPluginSettingsInventory(props: InventoryProps): TemplateRe
     `,
     { carapace: true },
   );
-}
-
-function renderConfiguration(props: DetailProps, plugin: PluginCatalogItem): TemplateResult {
-  if (!props.configValue || !props.configSchema) {
-    if (props.configError) {
-      return renderRetryError(props.configError, props.onConfigReadRetry);
-    }
-    return renderSettingsLoadingSkeleton({ rows: 3, carapace: true });
-  }
-  const pluginEntry = pluginEntryValue(props.configValue, plugin.id);
-  return html`
-    ${renderNode({
-      rawAvailable: false,
-      maskSensitive: true,
-      schema: props.configSchema,
-      value: pluginEntry.config ?? {},
-      path: ["plugins", "entries", plugin.id, "config"],
-      hints: props.configHints,
-      unsupported: new Set(props.configUnsupportedPaths),
-      disabled: !props.canEditConfig || props.configBusy,
-      showLabel: false,
-      onPatch: props.onConfigPatch,
-      onRemove: props.onConfigRemove,
-    })}
-    ${props.configError ? renderRetryError(props.configError, props.onConfigWriteRetry) : nothing}
-  `;
 }
 
 function renderAccess(props: DetailProps): TemplateResult {
@@ -400,12 +346,12 @@ function renderAccess(props: DetailProps): TemplateResult {
   `;
 }
 
-function renderInstalledAdvanced(props: DetailProps): TemplateResult {
+function renderPermissions(props: DetailProps, query: string): TemplateResult | typeof nothing {
   if (!props.inspection) {
-    return renderSettingsLoadingSkeleton({ rows: 3, carapace: true });
+    return query ? nothing : renderSettingsLoadingSkeleton({ rows: 3, carapace: true });
   }
   const pluginEntry = pluginEntryValue(props.configValue, props.pluginId);
-  return html`${
+  const controls =
     props.hostControlsSchema && props.configValue
       ? renderNode({
           rawAvailable: false,
@@ -417,80 +363,29 @@ function renderInstalledAdvanced(props: DetailProps): TemplateResult {
           unsupported: new Set(props.configUnsupportedPaths),
           disabled: !props.canEditConfig || props.configBusy,
           showLabel: false,
+          compact: true,
+          commitOnBlur: true,
+          searchCriteria:
+            query && !t("pluginsPage.editor.permissions").toLocaleLowerCase().includes(query)
+              ? { text: query, tags: [] }
+              : undefined,
           onPatch: props.onConfigPatch,
           onRemove: props.onConfigRemove,
         })
-      : nothing
+      : nothing;
+  if (query && controls === nothing) {
+    return nothing;
   }
-  ${props.configError ? renderRetryError(props.configError, props.onConfigWriteRetry) : nothing}
-  ${renderPluginDeclaredCapabilities(props.inspection.declared)}
-  ${renderPluginGrants(props.inspection.grants, props.inspection.plugin.origin)}`;
-}
-
-function installedTabLabel(tab: InstalledPluginDetailTab, needsSetup: boolean): unknown {
-  const label = t(`pluginsPage.detailTabs.${tab}`);
-  if (tab !== "configuration" || !needsSetup) {
-    return label;
-  }
-  const warning = t("pluginsPage.additionalConfigurationRequired");
-  return html`<span class="plugin-installed-detail__configuration-label">
-    ${label}
-    <span class="plugin-installed-detail__setup-dot" title=${warning} aria-label=${warning}></span>
-  </span>`;
-}
-
-function renderInstalledTabPanel(
-  props: DetailProps,
-  plugin: PluginCatalogItem,
-  tab: InstalledPluginDetailTab,
-): TemplateResult {
-  const catalog = props.inspection?.catalog;
-  const components = props.inspection?.components;
-  if (tab === "readme" && catalog) {
-    return renderPluginDetailReadme(catalog);
-  }
-  if (tab === "configuration") {
-    return html`<div class="plugin-installed-detail__panel-head">
-        <p>${t("pluginsPage.configurationDescription")}</p>
-        ${renderConfigActions(props)}
-      </div>
-      ${
-        plugin.state === "needs-setup"
-          ? html`<div class="callout warning oc-banner oc-banner-warning" role="status">
-              ${t("pluginsPage.setupRequiredDescription")}
-            </div>`
-          : nothing
-      }
-      ${renderConfiguration(props, plugin)}`;
-  }
-  if (tab === "skills" && components) {
-    return renderPluginDetailRows(components.skills);
-  }
-  if (tab === "mcpServers" && components) {
-    return renderPluginDetailRows(components.mcpServers);
-  }
-  if (tab === "commands" && components) {
-    return renderPluginDetailRows(components.commands);
-  }
-  if (tab === "hooks" && components) {
-    return renderPluginDetailRows(components.hooks);
-  }
-  if (tab === "lspServers" && components) {
-    return renderPluginDetailRows(components.lspServers);
-  }
-  if (tab === "compatibility" && catalog) {
-    return renderPluginDetailCompatibility(catalog);
-  }
-  if (tab === "versions" && catalog) {
-    return renderPluginDetailVersions(catalog);
-  }
-  if (tab === "access") {
-    return renderAccess(props);
-  }
-  if (tab === "lifecycle") {
-    return renderPluginLifecycle(props, plugin);
-  }
-  return renderInstalledAdvanced(props);
+  return html`${controls}
+  ${
+    query
+      ? nothing
+      : html`${renderAccess(props)}
+          <div class="plugin-editor__permission-details">
+            ${renderPluginDeclaredCapabilities(props.inspection.declared)}
+            ${renderPluginGrants(props.inspection.grants, props.inspection.plugin.origin)}
+          </div>`
+  }`;
 }
 
 export function renderPluginSettingsDetail(props: DetailProps): TemplateResult {
@@ -528,170 +423,70 @@ export function renderPluginSettingsDetail(props: DetailProps): TemplateResult {
     );
   }
   const key = pluginRowKey(plugin.id);
-  const statePresentation = pluginStatePresentation(plugin);
-  const stateStatus =
-    plugin.state === "error"
-      ? renderSettingsStatus({
-          ...statePresentation,
-          carapace: true,
-        })
-      : nothing;
-  const setupRequired = plugin.state === "needs-setup";
   const catalog = props.inspection?.catalog;
-  const components = props.inspection?.components ?? {
-    mapped: [],
-    skills: [],
-    mcpServers: [],
-    commands: [],
-    hooks: [],
-    lspServers: [],
-    unavailable: { capabilities: [], mcpServers: [], lspServers: [] },
-  };
-  const hasConfiguration = Boolean(
-    props.configSchema ||
-    props.configSchemaLoading ||
-    props.configError ||
-    plugin.state === "needs-setup",
-  );
-  const tabs = buildInstalledPluginDetailTabs({
-    hasReadme: Boolean(catalog?.detail.readme),
-    hasConfiguration,
-    components,
-    hasCompatibility: Boolean(catalog && pluginDetailCompatibilityRows(catalog).length > 0),
-    hasVersions: Boolean(catalog?.detail.versions.length),
-  });
-  const activeTab = tabs.includes(props.tab) ? props.tab : (tabs[0] ?? "configuration");
-  const authorHandle = catalog?.detail.author?.handle ?? catalog?.plugin.catalog.author;
-  const publisherName =
-    catalog?.detail.author?.displayName ?? authorHandle ?? plugin.packageName ?? plugin.name;
-  const packageUrl = catalog
-    ? clawHubPackageUrl(catalog.detail.packageName, authorHandle)
-    : undefined;
-  const sidebar = catalog
-    ? html`<dl>
-          ${
-            catalog.plugin.catalog.downloads === undefined
-              ? nothing
-              : html`<div>
-                  <dt>${t("pluginsPage.catalogDownloadsColumn")}</dt>
-                  <dd>${icons.download} ${formatCompactCount(catalog.plugin.catalog.downloads)}</dd>
-                </div>`
-          }
-          ${
-            plugin.version
-              ? html`<div>
-                  <dt>${t("pluginsPage.version")}</dt>
-                  <dd>${plugin.version}</dd>
-                </div>`
-              : nothing
-          }
-          ${
-            catalog.detail.updatedAt
-              ? html`<div>
-                  <dt>${t("pluginsPage.detailUpdated")}</dt>
-                  <dd>${formatDateMs(catalog.detail.updatedAt, { dateStyle: "medium" })}</dd>
-                </div>`
-              : nothing
-          }
-        </dl>
-        ${
-          catalog.detail.security
-            ? renderPluginSecurityAudit(
-                catalog.detail.security.status,
-                catalog.detail.security.auditUrl ??
-                  (packageUrl ? `${packageUrl}/security-audit` : undefined),
-              )
-            : nothing
-        }
-        ${
-          packageUrl
-            ? html`<a
-                class="btn plugin-catalog-detail__clawhub"
-                href=${packageUrl}
-                target="_blank"
-                rel="noopener noreferrer"
-                >${t("pluginsPage.detailViewOnClawHub")}</a
-              >`
-            : nothing
-        }`
-    : undefined;
+  const components = props.inspection?.components;
+  const settings = props.tab === "configuration";
+  const notices = html`${props.error ? renderRetryError(props.error, props.onRefresh) : nothing}
+  ${props.inspectionError ? renderRetryError(props.inspectionError, props.onRetryInspection) : nothing}
+  ${plugin.error ? html`<div class="callout danger oc-banner oc-banner-error" role="alert">${formatUiExternalText(plugin.error)}</div>` : nothing}
+  ${renderPluginRowMessage(props.messages[key])}`;
+  if (settings) {
+    return renderSettingsPage(
+      html`
+        ${notices}
+        <openclaw-plugin-settings-editor
+          .model=${props}
+          .renderCredential=${props.renderCredential}
+          .onAskSetting=${props.onAskSetting}
+          .renderPermissions=${(query: string) => renderPermissions(props, query)}
+        ></openclaw-plugin-settings-editor>
+      `,
+      { wide: true, carapace: true },
+    );
+  }
+  const names = (values: string[] | undefined) => (values ?? []).map((name) => ({ name }));
+  const skills = (components?.skills ?? []).map((name) => ({
+    name,
+    description: catalog?.detail.skills.find((skill) => skill.name === name)?.description,
+  }));
+  const tools = props.tools ?? names(props.inspection?.declared.tools);
   return renderSettingsPage(
-    html`${renderPluginDetailShell({
+    renderPluginDetailShell({
       id: "plugin-installed-detail",
       name: plugin.name,
-      summary: plugin.description || catalog?.plugin.catalog.summary || plugin.id,
+      summary: plugin.description || catalog?.plugin.catalog.summary,
       backHref: props.backHref,
       backLabel: props.backLabel,
       onBack: props.onBack,
-      titleAction: html`<div class="plugins-settings-detail-actions">
-        ${stateStatus}
-        ${renderReasonedDisabledControl(
-          props.mutationBlockedReason,
-          renderSettingsToggle({
-            checked: plugin.enabled,
-            disabled:
-              setupRequired ||
-              (!props.mutationBlockedReason && (!props.canMutate || Boolean(props.busy[key]))),
-            ariaDisabled: setupRequired || !props.canMutate,
-            ariaLabel: t("pluginsPage.toggleNamed", { name: plugin.name }),
-            onChange: (enabled) => {
-              if (setupRequired || !props.canMutate || props.busy[key]) {
-                return false;
-              }
-              props.onSetEnabled(plugin.id, enabled, key);
-              return true;
-            },
-          }),
-        )}
-      </div>`,
-      identity: html`<div class="plugin-catalog-detail__publisher">
-        <span
-          class="plugin-catalog-detail__publisher-icon"
-          aria-hidden="true"
-          data-plugin-icon-id=${plugin.id}
-        >
-          ${
-            props.iconUrls[plugin.id]
-              ? html`<img
-                  src=${props.iconUrls[plugin.id]}
-                  alt=""
-                  @error=${() => props.onIconError(plugin.id)}
-                />`
-              : icons.box
-          }
-        </span>
-        <div>
-          <div class="plugin-catalog-detail__publisher-name">
-            <strong>${publisherName}</strong>
-            ${catalog?.plugin.catalog.official ? renderPluginOfficialBadge() : nothing}
-          </div>
-          ${authorHandle ? html`<span>@${authorHandle.replace(/^@/u, "")}</span>` : nothing}
-        </div>
-      </div>`,
-      sidebar,
-      tabs: tabs.map((tab) => ({
-        value: tab,
-        label: installedTabLabel(tab, plugin.state === "needs-setup"),
-      })),
-      activeTab,
-      requestedTab: props.tab,
-      onTabChange: props.onTabChange,
-      panel: html`${props.pageNotice ? renderMessage(props.pageNotice) : nothing}
-      ${props.error ? renderRetryError(props.error, props.onRefresh) : nothing}
-      ${
-        props.inspectionError
-          ? renderRetryError(props.inspectionError, props.onRetryInspection)
-          : nothing
-      }
-      ${
-        plugin.error
-          ? html`<div class="callout danger oc-banner oc-banner-error" role="alert">
-              ${formatUiExternalText(plugin.error)}
-            </div>`
-          : nothing
-      }
-      ${renderMessage(props.messages[key])} ${renderInstalledTabPanel(props, plugin, activeTab)}`,
-    })}`,
+      icon: html`<span data-plugin-icon-id=${plugin.id}
+        >${props.iconUrls[plugin.id] ? html`<img src=${props.iconUrls[plugin.id]} alt="" @error=${() => props.onIconError(plugin.id)} />` : icons.box}</span
+      >`,
+      identity: renderPluginPublisher(catalog, props.inspection?.overview?.publisherName),
+      titleAction: html`${renderPluginLifecycle(
+        {
+          ...props,
+          settingsHref: props.settingsHref ?? "#configuration",
+          onSettings: () => props.onTabChange("configuration"),
+        },
+        plugin,
+      )}${renderPluginAskAction(props.onAskPlugin)}`,
+      sidebar:
+        catalog || plugin.version || props.inspection?.overview
+          ? renderPluginMetadata(catalog, plugin.version, props.inspection?.overview)
+          : undefined,
+      panel: html`${notices}
+      ${!props.inspection && !props.inspectionError ? renderSettingsLoadingSkeleton({ rows: 2, carapace: true }) : nothing}
+      ${props.skillsSection ?? renderPluginCapabilitySection(t("pluginsPage.detailTabs.skills"), skills, icons.book)}
+      ${renderPluginCapabilitySection(t("pluginsPage.detailMcpServers"), names(components?.mcpServers), icons.plug)}
+      ${renderPluginCapabilitySection(t("pluginsPage.detailTools"), tools, icons.wrench, props.onOpenTool)}
+      ${renderPluginCapabilitySection(t("pluginsPage.detailTabs.commands"), names(components?.commands), icons.terminal)}
+      ${renderPluginCapabilitySection(t("pluginsPage.detailTabs.hooks"), names(components?.hooks), icons.plug)}
+      ${renderPluginCapabilitySection(t("pluginsPage.detailTabs.lspServers"), names(components?.lspServers), icons.fileText)} `,
+      readme:
+        props.inspection?.overview?.readme || catalog?.detail.readme
+          ? renderPluginReadme(props.inspection?.overview?.readme ?? catalog?.detail.readme)
+          : undefined,
+    }),
     { wide: true, carapace: true },
   );
 }

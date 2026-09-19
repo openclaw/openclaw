@@ -54,6 +54,10 @@ export function readActiveUpdateRun(db: DatabaseSync): UpdateRunRecord | undefin
   return readRuns(db, { limit: 1, active: true })[0];
 }
 
+export function readLatestUpdateRun(db: DatabaseSync): UpdateRunRecord | undefined {
+  return readRuns(db, { limit: 1 })[0];
+}
+
 export async function getUpdateRunAsync(
   runId: string,
   options: OpenClawStateDatabaseOptions = {},

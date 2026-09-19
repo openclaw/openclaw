@@ -33,6 +33,14 @@ openclaw message thread create --channel discord --target channel:<forumId> \
 
 Forum parents do not accept Discord components. If you need components, send to the thread itself (`channel:<threadId>`).
 
+When `thread-create` successfully sends all initial content, its result reports confirmed message
+IDs and chunk counts in `initialMessageDelivery` with `status: "delivered"`.
+`threadSnapshot: "creation"` means the returned `thread` fields describe creation
+time; do not retry content based on `message_count` or `last_message_id`.
+Empty standalone threads have no initial-delivery receipt. Partial failures
+report accepted chunks separately; `failedChunkDelivery: "unknown"` means the
+failed chunk may have been delivered, so inspect the thread before retrying.
+
 ## Session and thread behavior
 
 <AccordionGroup>

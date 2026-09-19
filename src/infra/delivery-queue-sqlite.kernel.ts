@@ -346,7 +346,7 @@ export function countFailedDeliveryQueueEntriesInDatabase(database: OpenClawStat
 }
 
 export function countPendingDeliveryQueueEntriesInDatabase(
-  database: OpenClawStateDatabase,
+  database: Pick<OpenClawStateDatabase, "db">,
   queueNames: readonly string[],
 ): number {
   const queueDb = getNodeSqliteKysely<DeliveryQueueDatabase>(database.db);

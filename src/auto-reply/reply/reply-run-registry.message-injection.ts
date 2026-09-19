@@ -5,6 +5,7 @@ import {
   QuestionDispatchRefusedError,
 } from "../../agents/harness/gateway-question-dispatch.js";
 import { SessionPendingInputCustodyError } from "../../config/sessions/session-pending-input-custody-error.js";
+import { getAgentRunContext } from "../../infra/agent-run-registry.js";
 import { hasPromptImageInput } from "../../media/prompt-image-input.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import {
@@ -30,9 +31,11 @@ import {
 } from "./reply-run-registry.state.js";
 
 type ReplyBackendQueueMessageMismatch =
+  | "input_visibility_mismatch"
   | "tool_authority_mismatch"
   | "image_input_unsupported"
   | "source_reply_delivery_mode_mismatch"
+  | "reply_expectation_mismatch"
   | "task_suggestion_delivery_mode_mismatch";
 
 type ReplyMessageInjectionRejectionReason =
@@ -47,14 +50,22 @@ export function resolveReplyBackendQueueMessageMismatch(
   backend: Pick<
     ReplyBackendHandle,
     | "sourceReplyDeliveryMode"
+    | "terminalReplyExpectation"
     | "supportsQueueMessageImages"
     | "taskSuggestionDeliveryMode"
     | "toolAuthorityFingerprint"
+    | "runId"
   >,
   options?: ReplyBackendQueueMessageOptions,
   authority?: { toolAuthorityFingerprint?: string },
 ): ReplyBackendQueueMessageMismatch | undefined {
   if (options?.isInboundUserMessage === true) {
+    const runContext = backend.runId ? getAgentRunContext(backend.runId) : undefined;
+    // A new human turn must keep its own visible answer. Steering shares the
+    // active turn's output owner, so leave this input with FIFO followup admission.
+    if (runContext?.isControlUiVisible === false && runContext.projectSessionMessages === false) {
+      return "input_visibility_mismatch";
+    }
     const activeFingerprint = normalizeOptionalString(
       backend.toolAuthorityFingerprint ?? authority?.toolAuthorityFingerprint,
     );
@@ -62,6 +73,12 @@ export function resolveReplyBackendQueueMessageMismatch(
     if (!activeFingerprint || !incomingFingerprint || activeFingerprint !== incomingFingerprint) {
       return "tool_authority_mismatch";
     }
+  }
+  if (
+    options?.terminalReplyExpectation !== undefined &&
+    options.terminalReplyExpectation !== (backend.terminalReplyExpectation ?? "required")
+  ) {
+    return "reply_expectation_mismatch";
   }
   if (hasPromptImageInput(options) && backend.supportsQueueMessageImages !== true) {
     return "image_input_unsupported";
@@ -195,9 +212,18 @@ export function resolveReplyMessageInjectionRejection(params: {
   const pendingInputAuthorityProven =
     activeFingerprint !== undefined &&
     normalizeOptionalString(params.options?.pendingInputAuthorityFingerprint) === activeFingerprint;
+  // Hidden coordination can settle its own question, but cannot own the visible
+  // answer to a new human turn through ordinary steering.
+  const hiddenPendingInputAuthorized =
+    mismatch === "input_visibility_mismatch" &&
+    params.options?.isInboundUserMessage === true &&
+    backend.messageInjectionV2?.version === 2 &&
+    activeFingerprint !== undefined &&
+    (pendingInputAuthorityProven ||
+      normalizeOptionalString(params.options.toolAuthorityFingerprint) === activeFingerprint);
   if (
-    mismatch === "tool_authority_mismatch" &&
-    pendingInputAuthorityProven &&
+    ((mismatch === "tool_authority_mismatch" && pendingInputAuthorityProven) ||
+      hiddenPendingInputAuthorized) &&
     !hasPromptImageInput(params.options) &&
     injection.claimPendingUserInputAnswer
   ) {
@@ -214,7 +240,14 @@ export function resolveReplyMessageInjectionRejection(params: {
     };
   }
   return mismatch
-    ? { reason: mismatch, backend, cancelPendingUserInput: injection.cancelPendingUserInput }
+    ? {
+        reason: mismatch,
+        backend,
+        cancelPendingUserInput:
+          mismatch !== "input_visibility_mismatch" || hiddenPendingInputAuthorized
+            ? injection.cancelPendingUserInput
+            : undefined,
+      }
     : { backend, injection };
 }
 
@@ -251,6 +284,7 @@ export function beginReplyMessageInjectionTarget(
       options?.isInboundUserMessage === true &&
       hasPromptImageInput(options) &&
       (resolved.reason === "tool_authority_mismatch" ||
+        resolved.reason === "input_visibility_mismatch" ||
         resolved.reason === "image_input_unsupported")
         ? resolved.cancelPendingUserInput
         : undefined;

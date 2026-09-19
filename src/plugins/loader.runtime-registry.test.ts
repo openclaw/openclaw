@@ -13,6 +13,7 @@ import { requestHeartbeat, setHeartbeatWakeHandler } from "../infra/heartbeat-wa
 import { drainSystemEvents } from "../infra/system-events.js";
 import { resetPluginStateStoreForTests } from "../plugin-state/plugin-state-store.js";
 import { runCommandWithTimeout } from "../process/exec.js";
+import { toSafeImportPath } from "../shared/import-specifier.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { VERSION } from "../version.js";
 import { setCurrentPluginMetadataSnapshot } from "./current-plugin-metadata.test-support.js";
@@ -21,7 +22,6 @@ import {
   registerEmbeddingProvider,
 } from "./embedding-providers.js";
 import { loadInstalledPluginIndexInstallRecordsSync } from "./installed-plugin-index-records.js";
-// Verifies plugin loader runtime registry behavior.
 import { refreshPersistedInstalledPluginIndex } from "./installed-plugin-index-store-write.js";
 import { resolvePluginLoadCacheContext } from "./loader-load-context.js";
 import * as loaderModule from "./loader-module-runtime.js";
@@ -202,15 +202,15 @@ it.each(["cjs", "ts"])(
             expect.objectContaining({ id: plugin.id, status: "loaded" }),
           );
           const loadedStats = getPluginModuleLoaderStats();
-          if (extension === "ts") {
+          if (process.versions.bun && extension === "cjs") {
+            expect(loadedStats.nativeHits).toBeGreaterThan(loaderStats.nativeHits);
+          } else {
             expect(loadedStats.sourceTransformForced).toBeGreaterThan(
               loaderStats.sourceTransformForced,
             );
             expect(loadedStats.topSourceTransformTargets).toContainEqual(
-              expect.objectContaining({ target: plugin.file }),
+              expect.objectContaining({ target: toSafeImportPath(plugin.file) }),
             );
-          } else {
-            expect(loadedStats.nativeHits).toBeGreaterThan(loaderStats.nativeHits);
           }
           expect(JSON.parse(fs.readFileSync(observed, "utf8"))).toEqual({
             entries: [],
@@ -234,7 +234,7 @@ it.each(["cjs", "ts"])(
           const system = runtime.system;
           expect(system.requestHeartbeat).toBe(requestHeartbeat);
           expect(system.runCommandWithTimeout).toBe(runCommandWithTimeout);
-          expect(drainSystemEvents("prepared-runtime-system")).toEqual(["registration"]);
+          expect(drainSystemEvents("agent:main:prepared-runtime-system")).toEqual(["registration"]);
           await vi.waitFor(() =>
             expect(heartbeat).toHaveBeenCalledWith(
               expect.objectContaining({ reason: "registration" }),
@@ -303,7 +303,7 @@ it.each(["cjs", "ts"])(
           expect(runtime.system.formatNativeDependencyHint({ packageName: "fixture" })).toBe(
             "retained method",
           );
-          expect(drainSystemEvents("prepared-runtime-system")).toEqual(["materialized"]);
+          expect(drainSystemEvents("agent:main:prepared-runtime-system")).toEqual(["materialized"]);
           await vi.waitFor(() =>
             expect(heartbeat).toHaveBeenCalledWith(
               expect.objectContaining({ reason: "materialized" }),
@@ -412,7 +412,7 @@ it.each(["cjs", "ts"])(
           expect(resolveRuntime).toHaveBeenCalledTimes(1);
         } finally {
           disposeHeartbeat();
-          drainSystemEvents("prepared-runtime-system");
+          drainSystemEvents("agent:main:prepared-runtime-system");
         }
       },
     );

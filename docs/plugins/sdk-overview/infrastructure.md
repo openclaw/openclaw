@@ -114,6 +114,28 @@ Worker exit releases execution capacity; `close()` also waits for pending file
 cleanup. Keep persistent data and files borrowed outside the Worker out of this
 directory.
 
+When native termination fails, the pool retains that worker's input custody and
+capacity. `retryFailedRetirements()` retries only those failed retirements and
+joins native exit and pending file cleanup without interrupting healthy tasks or
+waiting for them to finish. It does not replay failed work or close the pool.
+An owner that is shutting down must stop new admissions, drain healthy tasks,
+and finish with `close()`.
+
+`serveWorkerTasks` supplies a third handler argument, `WorkerTaskControl`. Await
+`control.runNativeSection(() => nativeOperation())` around each bounded native
+operation that must finish before its worker can be terminated. The fence also
+awaits a returned promise, for native libraries with asynchronous entrypoints.
+Keep unrelated work and rendering outside the fence; do not fence an entire
+document or a host request. Call `control.throwIfCancelled()` between pages or
+other units of work so cancellation cannot start another native operation.
+
+Cancellation, deadlines, pool closure, and worker retirement close native-section
+admission atomically. An unfenced worker is terminated immediately; a fenced
+worker remains charged against admission and execution capacity until its current
+native operation finishes and the worker exits. A deadline requests cancellation;
+it cannot safely interrupt a stuck native call. Native sections must therefore
+have bounded inputs and must not wait for network, user input, or unbounded work.
+
 ### SQLite worker stores
 
 Use `openSqliteWorkerStore<Operations>` from

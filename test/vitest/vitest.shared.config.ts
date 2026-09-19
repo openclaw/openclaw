@@ -17,6 +17,7 @@ import {
   BUNDLED_PLUGIN_TEST_GLOB,
 } from "./vitest.bundled-plugin-paths.ts";
 import { loadVitestPerformanceConfig } from "./vitest.performance-config.ts";
+import { createRedactingReporterPlugin } from "./vitest.reporters.ts";
 import { shouldPrintVitestThrottle } from "./vitest.system-load.ts";
 import { DEFAULT_VITEST_TEST_TIMEOUT_MS } from "./vitest.timeouts.ts";
 import { compiledSubprocessesPlugin } from "./vitest.worker-artifacts.ts";
@@ -130,7 +131,11 @@ if (!isCI && localScheduling.throttledBySystem && shouldPrintVitestThrottle(proc
 export const sharedVitestConfig = {
   root: repoRoot,
   envDir: false as const,
-  plugins: [createStateSchemaInlinePlugin(repoRoot), compiledSubprocessesPlugin()],
+  plugins: [
+    createStateSchemaInlinePlugin(repoRoot),
+    compiledSubprocessesPlugin(),
+    createRedactingReporterPlugin(),
+  ],
   resolve: {
     alias: [
       {
@@ -259,6 +264,16 @@ export const sharedVitestConfig = {
           "gateway-protocol",
           "src",
           "startup-unavailable.ts",
+        ),
+      },
+      {
+        find: "@openclaw/gateway-protocol/system-agent-context",
+        replacement: path.join(
+          repoRoot,
+          "packages",
+          "gateway-protocol",
+          "src",
+          "system-agent-context.ts",
         ),
       },
       {

@@ -34,9 +34,10 @@ import type { InternalSessionEntry } from "../config/sessions/types.js";
 import { getAgentEventLifecycleGeneration } from "../infra/agent-events.js";
 import { clearAgentRunContext, registerAgentRunContext } from "../infra/agent-run-registry.js";
 import {
-  createFileBackedCompactionCheckpointStore,
+  branchCheckpointSessionFromStoredBoundary,
   readSessionLeafStateFromTranscriptAsync,
   resolveCompactionCheckpointTranscriptPosition,
+  restoreCheckpointSessionFromStoredBoundary,
 } from "./session-compaction-checkpoints.js";
 
 const tempDirs: string[] = [];
@@ -230,9 +231,8 @@ describe("session-compaction-checkpoints", () => {
       compactionCheckpoints: [checkpoint],
     });
 
-    const store = createFileBackedCompactionCheckpointStore();
     const branchKey = "agent:main:checkpoint-branch";
-    const branched = await store.branchCheckpointSession({
+    const branched = await branchCheckpointSessionFromStoredBoundary({
       expectedState: checkpointExpectedState(sessionId),
       storePath,
       sourceKey: sessionKey,
@@ -245,7 +245,7 @@ describe("session-compaction-checkpoints", () => {
         sandbox: "required",
       },
     });
-    const restored = await store.restoreCheckpointSession({
+    const restored = await restoreCheckpointSessionFromStoredBoundary({
       expectedState: checkpointExpectedState(sessionId),
       storePath,
       sessionKey,
@@ -346,7 +346,7 @@ describe("session-compaction-checkpoints", () => {
     setActiveEmbeddedRun(sessionId, handle, sessionKey, sessionKey);
     try {
       const nextKey = "agent:main:checkpoint-running-branch";
-      const branched = await createFileBackedCompactionCheckpointStore().branchCheckpointSession({
+      const branched = await branchCheckpointSessionFromStoredBoundary({
         agentId: MAIN_AGENT_ID,
         expectedState: { sessionId, lifecycleRevision },
         storePath,
@@ -442,17 +442,16 @@ describe("session-compaction-checkpoints", () => {
       await ownerChangeStarted;
 
       const branchKey = `${sessionKey}:${mode}-conflict`;
-      const store = createFileBackedCompactionCheckpointStore();
       const mutation =
         mode === "branch"
-          ? store.branchCheckpointSession({
+          ? branchCheckpointSessionFromStoredBoundary({
               expectedState,
               storePath,
               sourceKey: sessionKey,
               nextKey: branchKey,
               checkpointId: checkpoint.checkpointId,
             })
-          : store.restoreCheckpointSession({
+          : restoreCheckpointSessionFromStoredBoundary({
               expectedState,
               storePath,
               sessionKey,
@@ -570,7 +569,7 @@ describe("session-compaction-checkpoints", () => {
     });
 
     const branchKey = "agent:main:stale-checkpoint-branch";
-    const branched = await createFileBackedCompactionCheckpointStore().branchCheckpointSession({
+    const branched = await branchCheckpointSessionFromStoredBoundary({
       expectedState: checkpointExpectedState(sessionId),
       storePath,
       sourceKey: sessionKey,
@@ -593,14 +592,13 @@ describe("session-compaction-checkpoints", () => {
       branchEvents.some((event) => isAssistantTextEvent(event, "entry id boundary message")),
     ).toBe(true);
 
-    const markerBranched =
-      await createFileBackedCompactionCheckpointStore().branchCheckpointSession({
-        expectedState: checkpointExpectedState(sessionId),
-        storePath,
-        sourceKey: sessionKey,
-        nextKey: "agent:main:stale-marker-checkpoint-branch",
-        checkpointId: markerCheckpoint.checkpointId,
-      });
+    const markerBranched = await branchCheckpointSessionFromStoredBoundary({
+      expectedState: checkpointExpectedState(sessionId),
+      storePath,
+      sourceKey: sessionKey,
+      nextKey: "agent:main:stale-marker-checkpoint-branch",
+      checkpointId: markerCheckpoint.checkpointId,
+    });
     if (markerBranched.status !== "created") {
       throw new Error("expected stale-entry SQLite marker checkpoint branch");
     }
@@ -668,7 +666,7 @@ describe("session-compaction-checkpoints", () => {
       },
     );
 
-    const branched = await createFileBackedCompactionCheckpointStore().branchCheckpointSession({
+    const branched = await branchCheckpointSessionFromStoredBoundary({
       expectedState: checkpointExpectedState(sessionId),
       storePath,
       sourceKey: sessionKey,

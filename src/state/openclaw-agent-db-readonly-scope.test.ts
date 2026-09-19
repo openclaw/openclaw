@@ -1,5 +1,6 @@
 import type { DatabaseSync } from "node:sqlite";
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
+import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "./openclaw-agent-db-contract.js";
@@ -7,6 +8,49 @@ import { closeOpenClawAgentDatabaseByPathAsync } from "./openclaw-agent-db-lifec
 import { OpenClawAgentDatabaseReadOnlyScope } from "./openclaw-agent-db-readonly-scope.js";
 import { withOpenClawAgentDatabaseReadOnly } from "./openclaw-agent-db-readonly.js";
 import { openOpenClawAgentDatabase } from "./openclaw-agent-db.js";
+
+it("bounds query preparation while scoped reads observe new commits", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const options = { agentId: "main", env: state.env };
+    const { path } = openOpenClawAgentDatabase(options);
+    await closeOpenClawAgentDatabaseByPathAsync(path);
+    const scope = new OpenClawAgentDatabaseReadOnlyScope();
+    const writer = new (requireNodeSqlite().DatabaseSync)(path);
+    try {
+      scope.run({ agentId: "main", path }, () => {
+        withOpenClawAgentDatabaseReadOnly(({ db }) => {
+          const query = getNodeSqliteKysely<{
+            schema_meta: { meta_key: string; updated_at: number };
+          }>(db)
+            .selectFrom("schema_meta")
+            .select("updated_at")
+            .where("meta_key", "=", "primary");
+          const prepare = vi.spyOn(db, "prepare");
+          try {
+            for (let stamp = 1; stamp <= 20; stamp++) {
+              writer
+                .prepare("UPDATE schema_meta SET updated_at = ? WHERE meta_key = 'primary'")
+                .run(stamp);
+              expect(
+                withOpenClawAgentDatabaseReadOnly(
+                  (database) => executeSqliteQueryTakeFirstSync(database.db, query)?.updated_at,
+                  options,
+                ),
+              ).toEqual({ found: true, value: stamp });
+            }
+            const preparations = prepare.mock.calls.filter(([sql]) => sql === query.compile().sql);
+            expect(preparations.length).toBeLessThanOrEqual(2);
+          } finally {
+            prepare.mockRestore();
+          }
+        }, options);
+      });
+    } finally {
+      writer.close();
+      scope.close();
+    }
+  });
+});
 
 it("keeps one connection while nested reads retain independent committed snapshots", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {

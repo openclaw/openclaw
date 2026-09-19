@@ -72,7 +72,7 @@ function startSecretStoreExpiryMaintenance(
 export async function attachInitialGatewayLifetimeSidecars(params: {
   chatMetadataLifecycle: GatewayChatMetadataLifecycle;
   gatewayRequestContext: GatewayRequestContext;
-  flushPendingSessionsChangedEvents: (context?: object) => void;
+  flushPendingSessionsChangedEvents: (context?: object) => Promise<void>;
   minimalTestGateway: boolean;
   logWarning: (message: string) => void;
   reconcileGitHubPublications?: () => Promise<void>;
@@ -123,8 +123,8 @@ export async function attachInitialGatewayLifetimeSidecars(params: {
     );
   }
   params.publishSidecars({
-    stop: () => {
-      params.flushPendingSessionsChangedEvents(params.gatewayRequestContext);
+    stop: async () => {
+      await params.flushPendingSessionsChangedEvents(params.gatewayRequestContext);
     },
   });
 }

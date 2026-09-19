@@ -1,3 +1,5 @@
+import type { ProviderModelRef } from "@openclaw/model-catalog-core/model-catalog-refs";
+
 /** Automatic intent bound to the complete request before creation resolves aliases. */
 export type AgentRuntimeSpawnModelAutoSelection = {
   model: string;
@@ -7,6 +9,7 @@ export type AgentRuntimeSpawnModelAutoSelection = {
 
 export type AgentRuntimeSessionSpawnContext = {
   completionOwnerSessionKey?: string;
+  resolvedModel?: ProviderModelRef;
   inheritedToolPolicy: {
     version: 1;
     allow: string[];

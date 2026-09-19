@@ -8,6 +8,11 @@ import {
 } from "./cloud.js";
 import type { MSTeamsActivityLike } from "./sdk-types.js";
 import type { MSTeamsApp } from "./sdk.js";
+import {
+  assertMSTeamsSendHandoff,
+  withMSTeamsConnectorHandoff,
+  type MSTeamsSendHandoff,
+} from "./send-handoff.js";
 
 type MSTeamsAccountRef = {
   id?: string;
@@ -243,35 +248,39 @@ export async function sendMSTeamsActivityWithReference(
   app: MSTeamsApp,
   source: MSTeamsSdkReferenceSource,
   activity: MSTeamsActivityLike,
-  options?: MSTeamsProactiveOptions,
+  options?: MSTeamsProactiveOptions & MSTeamsSendHandoff,
 ): Promise<{ id?: string }> {
-  const ref = buildSdkConversationReference(source, options);
-  const api = await getApiClientForReference(app, ref);
-  const activities = api.conversations.activities(ref.conversation.id);
-  const quotedActivity = options?.quoteActivityId
-    ? await quoteMSTeamsActivity(activity, options.quoteActivityId)
-    : activity;
-  const activityWithRef = mergeReferenceIntoActivity(quotedActivity, ref);
-  const isTargeted =
-    (activityWithRef.recipient as { isTargeted?: unknown } | undefined)?.isTargeted === true;
-  if (isTargeted && ref.conversation.conversationType === "personal") {
-    throw new Error("Targeted messages are not supported in 1:1 (personal) chats.");
-  }
+  return withMSTeamsConnectorHandoff(options ?? {}, async (handoff) => {
+    assertMSTeamsSendHandoff(handoff);
+    const ref = buildSdkConversationReference(source, options);
+    const api = await getApiClientForReference(app, ref);
+    const activities = api.conversations.activities(ref.conversation.id);
+    const quotedActivity = options?.quoteActivityId
+      ? await quoteMSTeamsActivity(activity, options.quoteActivityId)
+      : activity;
+    const activityWithRef = mergeReferenceIntoActivity(quotedActivity, ref);
+    const isTargeted =
+      (activityWithRef.recipient as { isTargeted?: unknown } | undefined)?.isTargeted === true;
+    if (isTargeted && ref.conversation.conversationType === "personal") {
+      throw new Error("Targeted messages are not supported in 1:1 (personal) chats.");
+    }
 
-  const activityId = typeof activityWithRef.id === "string" ? activityWithRef.id : undefined;
-  if (activityId) {
+    const activityId = typeof activityWithRef.id === "string" ? activityWithRef.id : undefined;
+    assertMSTeamsSendHandoff(handoff);
+    if (activityId) {
+      const res =
+        isTargeted && activities.updateTargeted
+          ? await activities.updateTargeted(activityId, activityWithRef)
+          : await activities.update(activityId, activityWithRef);
+      return { ...activityWithRef, ...(res && typeof res === "object" ? res : {}) };
+    }
+
     const res =
-      isTargeted && activities.updateTargeted
-        ? await activities.updateTargeted(activityId, activityWithRef)
-        : await activities.update(activityId, activityWithRef);
-    return { ...activityWithRef, ...(res && typeof res === "object" ? res : {}) };
-  }
-
-  const res =
-    isTargeted && activities.createTargeted
-      ? await activities.createTargeted(activityWithRef)
-      : await activities.create(activityWithRef);
-  return { ...activityWithRef, ...res };
+      isTargeted && activities.createTargeted
+        ? await activities.createTargeted(activityWithRef)
+        : await activities.create(activityWithRef);
+    return { ...activityWithRef, ...res };
+  });
 }
 
 export async function updateMSTeamsActivityWithReference(

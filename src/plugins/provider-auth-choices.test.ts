@@ -1,5 +1,5 @@
 // Covers provider auth choice rendering and fallback behavior.
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const pluginRegistryMocks = vi.hoisted(() => ({
   loadPluginManifestRegistryForInstalledIndex: vi.fn(),
@@ -106,6 +106,8 @@ function setSingleManifestProviderAuthChoices(
 }
 
 describe("provider auth choice manifest helpers", () => {
+  afterEach(() => vi.restoreAllMocks());
+
   beforeEach(() => {
     pluginRegistryMocks.loadPluginManifestRegistryForInstalledIndex.mockReset();
     pluginRegistryMocks.loadPluginManifestRegistryForInstalledIndex.mockReturnValue({
@@ -170,6 +172,77 @@ describe("provider auth choice manifest helpers", () => {
     });
   });
 
+  it("preserves public metadata shape and shallow aliases across every choice reader", () => {
+    const scopes = ["text-inference"];
+    const channelLogin = { aliases: ["sign-in"] };
+    const futureMetadata = { version: 1 };
+    setSingleManifestProviderAuthChoices("demo", [
+      {
+        provider: "demo",
+        method: "api-key",
+        choiceId: "demo-key",
+        choiceLabel: "",
+        choiceHint: undefined,
+        onboardingScopes: scopes,
+        channelLogin,
+        futureMetadata,
+        optionKey: "demoKey",
+        cliFlag: "--demo-key",
+        cliOption: "--demo-key <key>",
+        cliDescription: "",
+        deprecatedChoiceIds: ["old-demo"],
+      },
+    ]);
+    const expected = {
+      pluginId: "demo",
+      providerId: "demo",
+      methodId: "api-key",
+      choiceId: "demo-key",
+      choiceLabel: "",
+      choiceHint: undefined,
+      onboardingScopes: scopes,
+      channelLogin,
+      futureMetadata,
+      optionKey: "demoKey",
+      cliFlag: "--demo-key",
+      cliOption: "--demo-key <key>",
+      cliDescription: "",
+      deprecatedChoiceIds: ["old-demo"],
+    };
+    for (const read of [
+      () => resolveManifestProviderAuthChoices()[0],
+      () => resolveManifestDeclaredProviderAuthChoices()[0],
+      () => resolveManifestProviderAuthChoice("demo-key"),
+      () => resolveManifestDeprecatedProviderAuthChoice("old-demo"),
+    ]) {
+      const value = read();
+      if (!value) {
+        throw new Error("Expected the declared auth choice");
+      }
+      expect(value).toStrictEqual(expected);
+      expect(Object.keys(value)).toEqual(Object.keys(expected));
+      expect(Object.hasOwn(value, "choiceHint")).toBe(true);
+      expect(Object.hasOwn(value, "origin")).toBe(false);
+      expect(Object.hasOwn(value, "declaration")).toBe(false);
+      expect(value.onboardingScopes).toBe(scopes);
+      expect(value.channelLogin).toBe(channelLogin);
+      expect(Reflect.get(value, "futureMetadata")).toBe(futureMetadata);
+      const again = read();
+      expect(Object.is(value, again)).toBe(false);
+      value.choiceLabel = "changed output";
+      expect(again).toStrictEqual(expected);
+    }
+    expect(resolveProviderOnboardAuthFlags()).toStrictEqual([
+      {
+        optionKey: "demoKey",
+        authChoice: "demo-key",
+        cliFlag: "--demo-key",
+        cliOption: "--demo-key <key>",
+        description: "",
+      },
+    ]);
+  });
+
   it("does not resolve equal-priority owners of the same login choice", () => {
     setManifestPlugins(
       ["first", "second"].map((id) => ({
@@ -181,6 +254,59 @@ describe("provider auth choice manifest helpers", () => {
 
     expect(resolveManifestProviderAuthChoice("shared-login")).toBeUndefined();
   });
+
+  it.each(["darwin", "linux", "win32"] as const)(
+    "keeps platform-limited setup choices and flags eligible only on %s",
+    (platform) => {
+      vi.spyOn(process, "platform", "get").mockReturnValue(platform);
+      const config = { plugins: { entries: { native: { enabled: true } } } };
+      setManifestPlugins([
+        {
+          id: "native",
+          origin: "bundled",
+          providerAuthChoices: [
+            {
+              provider: "native",
+              method: "local",
+              choiceId: "native-local",
+              platforms: ["darwin"],
+              deprecatedChoiceIds: ["old-native"],
+              optionKey: "nativeLocal",
+              cliFlag: "--native-local",
+              cliOption: "--native-local",
+            },
+            { provider: "native", method: "remote", choiceId: "native-remote" },
+            { provider: "native", method: "unavailable", choiceId: "unavailable", platforms: [] },
+          ],
+          setup: { providers: [{ id: "native", authMethods: ["local"] }] },
+        },
+      ]);
+
+      const expectedIds =
+        platform === "darwin" ? ["native-local", "native-remote"] : ["native-remote"];
+      expect(
+        resolveManifestProviderAuthChoices({ config }).map((choice) => choice.choiceId),
+      ).toEqual(expectedIds);
+      expect(
+        resolveManifestDeclaredProviderAuthChoices({ config }).map((choice) => choice.choiceId),
+      ).toEqual(expectedIds);
+      expect(Boolean(resolveManifestProviderAuthChoice("native-local", { config }))).toBe(
+        platform === "darwin",
+      );
+      expect(Boolean(resolveManifestDeprecatedProviderAuthChoice("old-native", { config }))).toBe(
+        platform === "darwin",
+      );
+      expect(resolveProviderOnboardAuthFlags({ config }).map((flag) => flag.authChoice)).toEqual(
+        platform === "darwin" ? ["native-local"] : [],
+      );
+      expect(config.plugins.entries.native.enabled).toBe(true);
+      expect(
+        resolveManifestProviderAuthChoices({ config, includeUnsupportedPlatforms: true }).map(
+          (choice) => choice.choiceId,
+        ),
+      ).toEqual(["native-local", "native-remote", "unavailable"]);
+    },
+  );
 
   it("carries the declared credential-only and chat login contracts", () => {
     setSingleManifestProviderAuthChoices("demo", [
@@ -197,6 +323,65 @@ describe("provider auth choice manifest helpers", () => {
       credentialOnly: true,
       channelLogin: { aliases: ["demo-login"] },
     });
+  });
+
+  it("resolves explicit method identity before a conflicting manifest choice ID", () => {
+    const explicitChoice = "provider-plugin:Demo:LOCAL";
+    setManifestPlugins([
+      createManifestPlugin("demo-plugin", [
+        {
+          provider: "demo",
+          method: "local",
+          choiceId: "demo-local",
+          modelTarget: "utility",
+        },
+        {
+          provider: "demo",
+          method: "remote",
+          choiceId: "demo-remote",
+        },
+      ]),
+      createManifestPlugin("other-plugin", [
+        {
+          provider: "other",
+          method: "remote",
+          choiceId: explicitChoice,
+        },
+      ]),
+    ]);
+    expect(resolveManifestProviderAuthChoice(explicitChoice)).toMatchObject({
+      pluginId: "demo-plugin",
+      providerId: "demo",
+      methodId: "local",
+      choiceId: "demo-local",
+      modelTarget: "utility",
+    });
+    expect(resolveManifestProviderAuthChoice("provider-plugin:demo:remote")).toMatchObject({
+      pluginId: "demo-plugin",
+      providerId: "demo",
+      methodId: "remote",
+      choiceId: "demo-remote",
+    });
+    expect(resolveManifestProviderAuthChoice("provider-plugin:demo:missing")).toBeUndefined();
+  });
+
+  it("binds post-dispatch method metadata to the selected plugin despite ambiguous provider declarations", () => {
+    setManifestPlugins(
+      ["selected", "other"].map((id) =>
+        createManifestPlugin(id, [
+          {
+            provider: "demo",
+            method: "local",
+            choiceId: `${id}-local`,
+            ...(id === "selected" ? { modelTarget: "utility" } : {}),
+          },
+        ]),
+      ),
+    );
+    expect(resolveManifestProviderAuthChoice("provider-plugin:demo:local")).toBeUndefined();
+    expect(
+      resolveManifestProviderAuthChoice("provider-plugin:demo:local", { pluginId: "selected" }),
+    ).toMatchObject({ pluginId: "selected", modelTarget: "utility" });
   });
 
   it("keeps descriptor setup fallback out of executable declared choices", () => {
@@ -280,6 +465,14 @@ describe("provider auth choice manifest helpers", () => {
                   cliFlag: "--groq-api-key",
                   cliOption: "--groq-api-key <key>",
                   cliDescription: "Groq API key",
+                },
+                {
+                  method: "local",
+                  choiceId: "unavailable-local",
+                  platforms: [],
+                  optionKey: "unavailableLocal",
+                  cliFlag: "--unavailable-local",
+                  cliOption: "--unavailable-local",
                 },
               ],
             },

@@ -65,31 +65,23 @@ function sseResponse(
   } as Response;
 }
 
-function sseResponseLines(params: {
-  audio?: string;
-  transcript?: string;
-  done?: boolean;
-}): string[] {
+function sseResponseLines(params: { audio: string; transcript?: string }): string[] {
   const lines: string[] = [];
-  if (params.audio || params.transcript) {
-    lines.push(
-      `data: ${JSON.stringify({
-        choices: [
-          {
-            delta: {
-              audio: {
-                ...(params.audio ? { data: params.audio } : {}),
-                ...(params.transcript ? { transcript: params.transcript } : {}),
-              },
+  lines.push(
+    `data: ${JSON.stringify({
+      choices: [
+        {
+          delta: {
+            audio: {
+              data: params.audio,
+              ...(params.transcript ? { transcript: params.transcript } : {}),
             },
           },
-        ],
-      })}\n`,
-    );
-  }
-  if (params.done) {
-    lines.push("data: [DONE]\n");
-  }
+        },
+      ],
+    })}\n`,
+  );
+  lines.push("data: [DONE]\n");
   return lines;
 }
 
@@ -194,7 +186,6 @@ describe("openrouter music generation provider", () => {
       const lines = sseResponseLines({
         audio: Buffer.from("wav-bytes").toString("base64"),
         transcript: "café 🦞 soundtrack",
-        done: true,
       });
       const bytes = new TextEncoder().encode(
         lines.map((line) => line.trimEnd()).join(ending) + (terminated ? ending : ""),
@@ -225,7 +216,6 @@ describe("openrouter music generation provider", () => {
       response: sseResponse(
         sseResponseLines({
           audio: Buffer.from("wav-bytes").toString("base64"),
-          done: true,
         }),
         { cancel, releaseLock },
       ),
@@ -255,7 +245,7 @@ describe("openrouter music generation provider", () => {
       const cancel = vi.fn();
       const lines =
         outcome === "completed"
-          ? sseResponseLines({ audio: Buffer.from("wav-bytes").toString("base64"), done: true })
+          ? sseResponseLines({ audio: Buffer.from("wav-bytes").toString("base64") })
           : outcome === "provider error"
             ? ['data: {"error":{"message":"provider disconnected"}}\n']
             : [];
@@ -308,7 +298,7 @@ describe("openrouter music generation provider", () => {
 
   it("rejects streamed audio with non-canonical base64 pad bits", async () => {
     postJsonRequestMock.mockResolvedValue({
-      response: sseResponse(sseResponseLines({ audio: "ZE==", done: true })),
+      response: sseResponse(sseResponseLines({ audio: "ZE==" })),
       release: vi.fn(async () => {}),
     });
 

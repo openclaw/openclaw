@@ -305,6 +305,9 @@ export async function healthCommand(
       }
     }
     const accountIdsByChannel = (() => {
+      if (opts.verbose) {
+        return undefined;
+      }
       const entries = displayAgents.length > 0 ? displayAgents : resolvedAgents;
       const byChannel: Record<string, string[]> = {};
       for (const [channelId, byAgent] of channelBindings.entries()) {
@@ -321,17 +324,12 @@ export async function healthCommand(
           byChannel[channelId] = accountIds;
         }
       }
-      return byChannel;
+      return Object.keys(byChannel).length > 0 ? byChannel : undefined;
     })();
-    const channelLines =
-      Object.keys(accountIdsByChannel).length > 0
-        ? formatHealthChannelLines(summary, {
-            accountMode: opts.verbose ? "all" : "default",
-            accountIdsByChannel,
-          })
-        : formatHealthChannelLines(summary, {
-            accountMode: opts.verbose ? "all" : "default",
-          });
+    const channelLines = formatHealthChannelLines(summary, {
+      accountMode: opts.verbose ? "all" : "default",
+      accountIdsByChannel,
+    });
     for (const line of channelLines) {
       runtime.log(styleHealthChannelLine(line, rich));
     }

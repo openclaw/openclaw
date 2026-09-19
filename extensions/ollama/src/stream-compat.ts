@@ -15,8 +15,8 @@ import {
   resolveMoonshotThinkingType,
 } from "openclaw/plugin-sdk/provider-model-shared";
 import { isLoopbackHost } from "openclaw/plugin-sdk/ssrf-runtime";
-import { shouldWrapOllamaCompatMoonshotThinking } from "./model-behavior.js";
 import { supportsOllamaCloudFullThinkingEffort } from "./model-reasoning.js";
+import { isOllamaCloudKimiModelRef } from "./sanitizers/kimi-inline-reasoning.js";
 
 export type OllamaThinkValue = boolean | "low" | "medium" | "high" | "max";
 
@@ -165,13 +165,6 @@ function normalizeOllamaThinkValue(
   return undefined;
 }
 
-function resolveOllamaThinkValue(
-  thinkingLevel: unknown,
-  nativeMax: boolean,
-): OllamaThinkValue | undefined {
-  return normalizeOllamaThinkValue(thinkingLevel, nativeMax);
-}
-
 export function resolveOllamaThinkParamValue(
   params: Record<string, unknown> | undefined,
   nativeMax = false,
@@ -251,7 +244,7 @@ export function createConfiguredOllamaCompatStreamWrapper(
     ? resolveOllamaThinkParamValue(model.params, nativeMax)
     : undefined;
   const runtimeThinkValue = isNativeOllamaTransport
-    ? resolveOllamaThinkValue(ctx.thinkingLevel, nativeMax)
+    ? normalizeOllamaThinkValue(ctx.thinkingLevel, nativeMax)
     : undefined;
   // "off" is also the implicit agent default. Preserve explicit native Ollama
   // model config unless the active run requests a non-off thinking level.
@@ -263,10 +256,7 @@ export function createConfiguredOllamaCompatStreamWrapper(
     streamFn = createOllamaThinkingWrapper(streamFn, ollamaThinkValue);
   }
 
-  if (
-    normalizeProviderId(ctx.provider) === "ollama" &&
-    shouldWrapOllamaCompatMoonshotThinking(ctx.modelId)
-  ) {
+  if (normalizeProviderId(ctx.provider) === "ollama" && isOllamaCloudKimiModelRef(ctx.modelId)) {
     const thinkingType = resolveMoonshotThinkingType({
       configuredThinking: ctx.extraParams?.thinking,
       thinkingLevel: ctx.thinkingLevel,

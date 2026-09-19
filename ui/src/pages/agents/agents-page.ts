@@ -42,8 +42,8 @@ import {
   loadCronScopeStats,
   loadCronStatus,
   runCronJob,
-  type CronState,
 } from "../../lib/cron/index.ts";
+import type { CronState } from "../../lib/cron/types.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { isGatewayAvailable } from "../../lib/gateway-availability.ts";
 import {
@@ -207,6 +207,7 @@ class AgentsPage
           if (
             !this.applyingRouteSelection &&
             this.routeDataInitialized &&
+            this.routeData &&
             agentId &&
             route.matches[0]?.routeId === "agents" &&
             (!route.pendingMatches.length || route.pendingMatches[0]?.routeId === "agents")
@@ -457,6 +458,7 @@ class AgentsPage
   private applyRouteData() {
     const data = this.routeData;
     if (!data) {
+      this.routeDataInitialized = false;
       return;
     }
     this.routeDataInitialized = true;
@@ -522,7 +524,7 @@ class AgentsPage
   }
 
   private ensureInitialData() {
-    if (!this.connected || !this.client || !this.routeDataInitialized) {
+    if (!this.connected || !this.client || !this.routeDataInitialized || !this.routeData) {
       return;
     }
     if (
@@ -582,6 +584,10 @@ class AgentsPage
   }
 
   private loadActivePanelData() {
+    // A reused page can receive a roster before its next route data commits.
+    if (!this.routeData) {
+      return;
+    }
     const agentId = this.resolveSelectedAgentId();
     if (!agentId) {
       return;

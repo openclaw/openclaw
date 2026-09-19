@@ -119,19 +119,30 @@ describe("gateway request scope", () => {
   });
   it("drops generation ownership for re-admission and restores the caller afterward", async () => {
     const generation = await import("./generation-scope.js");
+    const { getCurrentPluginMetadataSnapshot } =
+      await import("../current-plugin-metadata-snapshot.js");
+    const { bindPluginMetadataSnapshotCache, createPluginCache, getScopedPluginCache } =
+      await import("../plugin-cache.js");
     const registry = createEmptyPluginRegistry();
     const metadataSnapshot = createPluginMetadataSnapshotFixture({
       plugins: [{ id: "fixture", providers: ["fixture-provider"] }],
     });
+    const cache = createPluginCache();
+    bindPluginMetadataSnapshotCache(metadataSnapshot, cache);
+    const outsideMetadata = getCurrentPluginMetadataSnapshot();
     await withTestGatewayScope(async (runtimeScope) => {
       await generation.withPluginRuntimeGenerationScope(
         { metadataSnapshot, pluginRegistry: registry },
         async () => {
           const original = runtimeScope.getPluginRuntimeGatewayRequestScope();
           expect(original?.declaredProviderOwners).toBe(metadataSnapshot.declaredProviderOwners);
+          expect(getCurrentPluginMetadataSnapshot()).toBe(metadataSnapshot);
+          expect(getScopedPluginCache()).toBe(cache);
           await generation.runOutsidePluginRuntimeGenerationScope(async () => {
             await Promise.resolve();
             expect(generation.getPluginRuntimeGenerationRegistry()).toBeUndefined();
+            expect(getCurrentPluginMetadataSnapshot()).toBe(outsideMetadata);
+            expect(getScopedPluginCache()).toBeUndefined();
             expectGatewayScope(runtimeScope, {
               ...TEST_SCOPE,
               pluginRegistry: undefined,
@@ -140,6 +151,8 @@ describe("gateway request scope", () => {
           });
           expect(runtimeScope.getPluginRuntimeGatewayRequestScope()).toBe(original);
           expect(generation.getPluginRuntimeGenerationRegistry()).toBe(registry);
+          expect(getCurrentPluginMetadataSnapshot()).toBe(metadataSnapshot);
+          expect(getScopedPluginCache()).toBe(cache);
         },
       );
     });

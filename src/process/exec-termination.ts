@@ -20,6 +20,8 @@ type TerminationChild = {
 
 export function createCommandTerminationController(params: {
   child: TerminationChild;
+  /** Remote process identity arrives before a pending termination can target its tree. */
+  spawned?: Promise<void>;
   cancelController: AbortController;
   baseEnv?: NodeJS.ProcessEnv;
   env?: NodeJS.ProcessEnv;
@@ -34,10 +36,13 @@ export function createCommandTerminationController(params: {
 } {
   let processTreeSettlement: Promise<void> | undefined;
   let cleanup: "normal" | "cooperative" | "forced" | "uncertain" = "normal";
-  const originalStart =
+  const readOriginalStart = () =>
     params.processTree && params.child.pid && process.platform !== "win32"
       ? getFileLockProcessStartTime(params.child.pid)
       : null;
+  let awaitingSpawn = params.spawned !== undefined;
+  let terminateWhenSpawned = false;
+  let originalStart = awaitingSpawn ? null : readOriginalStart();
   let windowsTerminationPromise: Promise<void> | undefined;
 
   const isDirectChildAlive = () =>
@@ -83,6 +88,10 @@ export function createCommandTerminationController(params: {
   };
 
   const terminate = (): boolean => {
+    if (awaitingSpawn) {
+      terminateWhenSpawned = true;
+      return false;
+    }
     const childPid = params.child.pid;
     const directChildAlive = isDirectChildAlive();
     if (process.platform === "win32" && !directChildAlive) {
@@ -141,7 +150,7 @@ export function createCommandTerminationController(params: {
       try {
         process.kill(-childPid, params.killSignal ?? "SIGTERM");
       } catch (error) {
-        // SAFETY: Node's kill error carries errno; every non-ESRCH result stays uncertain.
+        // SAFETY: Node's kill error carries errno; retain failed sends until group exit is observed.
         if ((error as NodeJS.ErrnoException).code !== "ESRCH") {
           cleanup = "uncertain";
         }
@@ -150,6 +159,7 @@ export function createCommandTerminationController(params: {
         const deadline = Date.now() + params.killGraceMs;
         const check = () => {
           if (!groupAlive()) {
+            cleanup = "cooperative";
             resolve();
             return;
           }
@@ -182,5 +192,19 @@ export function createCommandTerminationController(params: {
     return cleanup;
   };
 
+  if (params.spawned) {
+    void params.spawned.then(
+      () => {
+        originalStart = readOriginalStart();
+        awaitingSpawn = false;
+        if (terminateWhenSpawned && !terminate()) {
+          params.cancelController.abort();
+        }
+      },
+      () => {
+        awaitingSpawn = false;
+      },
+    );
+  }
   return { terminate, settle };
 }

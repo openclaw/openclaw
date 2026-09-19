@@ -79,13 +79,8 @@ type AppRouteModule = {
   ) => string | undefined;
 };
 
-export type ApplicationRouter = Router<
-  RouteId,
-  ApplicationContext<RouteId>,
-  AppRouteModule,
-  unknown
->;
-type AppRoute = PageDefinition<RouteId, ApplicationContext<RouteId>, AppRouteModule>;
+export type ApplicationRouter = Router<RouteId, ApplicationContext, AppRouteModule, unknown>;
+type AppRoute = PageDefinition<RouteId, ApplicationContext, AppRouteModule>;
 
 const APP_ROUTE_TREE = [
   ...chatPages,
@@ -159,7 +154,7 @@ function canonicalRouteLocation(
 }
 
 export function createApplicationRouter(): ApplicationRouter {
-  const router = createRouter<RouteId, ApplicationContext<RouteId>, AppRouteModule>({
+  const router = createRouter<RouteId, ApplicationContext, AppRouteModule>({
     routes: appRoutes,
   });
   // The shared router intentionally matches exact paths only. People, Workboard
@@ -213,7 +208,7 @@ export async function startApplicationRouter(
   router: ApplicationRouter,
   history: RouterHistory,
   basePath: string,
-  context: ApplicationContext<RouteId>,
+  context: ApplicationContext,
 ): Promise<void> {
   setPluginTabSlugs(context.gateway.snapshot.hello?.controlUiTabs);
   let location = history.location();

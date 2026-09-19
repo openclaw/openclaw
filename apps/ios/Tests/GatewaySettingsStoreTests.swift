@@ -735,7 +735,6 @@ private func withLastGatewaySnapshot(_ body: () -> Void) {
             #expect(registry.entries.map(\.stableID) == [gatewayA.stableID, gatewayB.stableID])
             #expect(registry.activeStableID == gatewayB.stableID)
             #expect(registry.connectedStableIDs == [gatewayB.stableID])
-            #expect(GatewaySettingsStore.connectedGatewayEntries().map(\.stableID) == [gatewayB.stableID])
             #expect(registry.entries.last?.lastConnectedAtMs == 1234)
             #expect(registry.entries.last?.contextPath == "/openclaw-gateway")
             #expect(GatewaySettingsStore.upsertGatewayRegistryEntry(gatewayA))
@@ -749,7 +748,7 @@ private func withLastGatewaySnapshot(_ body: () -> Void) {
             #expect(GatewaySettingsStore.setGatewayConnectionEnabled(
                 stableID: gatewayB.stableID,
                 enabled: false))
-            #expect(GatewaySettingsStore.connectedGatewayEntries() == [gatewayA])
+            #expect(GatewaySettingsStore.loadGatewayRegistry().connectedStableIDs == [gatewayA.stableID])
 
             #expect(GatewaySettingsStore.removeGatewayRegistryEntry(stableID: gatewayB.stableID))
             #expect(GatewaySettingsStore.loadGatewayRegistry().entries == [gatewayA])

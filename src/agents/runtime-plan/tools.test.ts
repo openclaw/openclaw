@@ -266,9 +266,13 @@ describe("AgentRuntimePlan tool policy helpers", () => {
     expect(getPluginToolMeta(expectDefined(result[0], "result[0] test invariant"))).toBe(metadata);
   });
 
-  it.each(["plan", "provider"] as const)(
-    "owns the assembly array after %s normalization while retaining plugin tool admission",
-    async (route) => {
+  it.each([
+    ["plan", "unchanged"],
+    ["provider", "unchanged"],
+    ["provider", "cloned"],
+  ] as const)(
+    "owns the assembly array after %s normalization (%s) while retaining plugin tool admission",
+    async (route, mode) => {
       const instance = new PluginInstance("normalizer-fixture");
       const catalogRef = createToolSearchCatalogRef();
       try {
@@ -291,7 +295,9 @@ describe("AgentRuntimePlan tool policy helpers", () => {
         };
         setPluginToolMeta(tool, metadata);
         // Even a pass-through provider hook returns an instance-owned collection view.
-        const normalize = instance.wrap((tools: AgentTool[]) => tools);
+        const normalize = instance.wrap((tools: AgentTool[]) =>
+          mode === "cloned" ? tools.map((entry) => ({ ...entry })) : tools,
+        );
         mocks.normalizeProviderToolSchemas.mockImplementationOnce(({ tools }) => normalize(tools));
         const runtimePlan =
           route === "plan"

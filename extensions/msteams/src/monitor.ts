@@ -1,4 +1,3 @@
-// Msteams plugin module implements monitor behavior.
 import type { Server } from "node:http";
 import type { Request, Response } from "express";
 import {

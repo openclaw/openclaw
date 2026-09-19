@@ -17,7 +17,10 @@ import { recordCronNextCheckProposal } from "../../infra/agent-run-registry.js";
 import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
 import { isRecord } from "../../utils.js";
 import { resolveSessionAgentId } from "../agent-scope.js";
-import { bindCronManagementGrant } from "../cron-creator-authority-context.js";
+import {
+  bindCronManagementGrant,
+  bindCronRequesterGrant,
+} from "../cron-creator-authority-context.js";
 import { CRON_TOOL_DISPLAY_SUMMARY } from "../tool-description-presets.js";
 import { setToolTerminalPresentation } from "../tool-terminal-presentation.js";
 import { AUTOMATIONS_TOOL_NAME } from "./automations-tool-name.js";
@@ -222,6 +225,7 @@ Job wakeMode (main jobs): "now"(default)|"next-heartbeat". Restricted automation
 export function createCronTool(opts?: CronToolOptions, deps?: CronToolDeps): AnyAgentTool {
   const gatewayCall = deps?.callGatewayTool ?? callGatewayTool;
   const managementAuthority = bindCronManagementGrant(opts?.runId);
+  const requesterAuthority = bindCronRequesterGrant(opts?.runId);
   // Trigger-gated surfaces default on, matching cron/service/jobs-validation.ts.
   const triggersEnabled = opts?.config?.cron?.triggers?.enabled !== false;
   const tool: AnyAgentTool = {
@@ -248,16 +252,23 @@ export function createCronTool(opts?: CronToolOptions, deps?: CronToolDeps): Any
       ) => {
         const identity = getGatewayToolCallerIdentity();
         const grant = managementAuthority?.mint(request[0], operationSignal);
-        if (grant && !identity) {
+        const requesterGrant =
+          !grant &&
+          !identity?.cronCreatorAuthorityGrant &&
+          (request[0] === "cron.add" || request[0] === "cron.update")
+            ? (requesterAuthority ?? identity?.mintCronRequesterGrant)?.(operationSignal)
+            : undefined;
+        if ((grant || requesterGrant) && !identity) {
           throw new Error(
             "Automation management requires the active configured channel owner or Control UI administrator turn.",
           );
         }
-        return grant && identity
+        return (grant || requesterGrant) && identity
           ? await withGatewayToolCallerIdentity(
               {
                 ...identity,
-                cronManagementGrant: grant,
+                ...(grant ? { cronManagementGrant: grant } : {}),
+                ...(requesterGrant ? { cronCreatorAuthorityGrant: requesterGrant } : {}),
               },
               () => gatewayCall<T>(...request),
             )

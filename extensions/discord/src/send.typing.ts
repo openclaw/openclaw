@@ -1,4 +1,3 @@
-// Discord plugin module implements send.typing behavior.
 import { resolveDiscordRest } from "./client.js";
 import { sendChannelTyping } from "./internal/discord.js";
 import type { DiscordReactOpts } from "./send.types.js";

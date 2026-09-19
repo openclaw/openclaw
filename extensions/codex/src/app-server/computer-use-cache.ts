@@ -11,6 +11,7 @@ import {
   resolveFirstExistingMacOSDesktopCodexBundledMarketplacePath,
   resolveMacOSDesktopCodexBundledMarketplaceCandidates,
 } from "./desktop-app-paths.js";
+import { waitForCodexDesktopGeneration } from "./desktop-generation.js";
 
 type CodexComputerUsePluginCacheRepairResult =
   | {
@@ -175,6 +176,9 @@ async function ensureRealDirectoryCopy(
   let backupCreated = false;
   try {
     await fs.cp(sourcePluginRoot, stagedPath, { recursive: true });
+    // Source-copy notifications are only invalidations; reconcile them before
+    // the original generation's synchronous guard authorizes publication.
+    await waitForCodexDesktopGeneration();
     if (ownedParent) {
       await assertDirectoryIdentityStable(ownedParent, "Computer Use plugin cache parent");
     }

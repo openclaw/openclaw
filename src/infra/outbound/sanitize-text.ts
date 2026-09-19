@@ -69,11 +69,10 @@ function convertHtmlOutsideCode(text: string, options: { style?: "markdown" }): 
  */
 export function sanitizeForPlainText(text: string, options: { style?: "markdown" } = {}): string {
   const prepared = flattenMarkdownDetails(stripInternalRuntimeScaffolding(text));
-  const conversionCanChangeCode = prepared.includes("<") || prepared.includes("\n\n\n");
-  const codeRegions =
-    conversionCanChangeCode && MAY_CONTAIN_MARKDOWN_CODE_RE.test(prepared)
-      ? findCodeRegions(prepared)
-      : [];
+  if (!prepared.includes("<") && !prepared.includes("\n\n\n")) {
+    return prepared;
+  }
+  const codeRegions = MAY_CONTAIN_MARKDOWN_CODE_RE.test(prepared) ? findCodeRegions(prepared) : [];
   if (codeRegions.length === 0) {
     return convertHtmlOutsideCode(prepared, options);
   }

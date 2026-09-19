@@ -16,7 +16,7 @@ import { createScriptTestHarness } from "./test-helpers.js";
 
 const { createTempDir } = createScriptTestHarness();
 
-it("renders and verifies an old pinned target using trusted publication tooling", () => {
+function publicationFixture() {
   const root = realpathSync(createTempDir("release-publish-historical-tooling-"));
   const repository = resolve(".");
   mkdirSync(join(root, "scripts"));
@@ -59,6 +59,11 @@ it("renders and verifies an old pinned target using trusted publication tooling"
     copyFileSync(join(repository, source), join(root, ".release-harness", source));
   }
   symlinkSync(join(repository, "node_modules"), join(root, "node_modules"), "dir");
+  return { root, repository, targetSha };
+}
+
+it("renders and verifies an old pinned target using trusted publication tooling", () => {
+  const { root, repository, targetSha } = publicationFixture();
   const workflow = parse(
     readFileSync(join(repository, ".github/workflows/openclaw-release-publish.yml"), "utf8"),
   );
@@ -222,3 +227,89 @@ gh() {
     expect(existsSync(commands)).toBe(false);
   },
 );
+
+it.each([
+  { state: "missing", body: "canonical", error: undefined },
+  { state: "matching", body: "proof", error: undefined },
+  { state: "different", body: "canonical", error: "differs from this release run" },
+  { state: "missing", body: "different", error: "Public release notes are no longer canonical" },
+  { state: "missing", body: "wrong-sha", error: "does not match" },
+])("resumes a public release with $state evidence and $body notes", ({ state, body, error }) => {
+  const { root, targetSha } = publicationFixture();
+  const notes = "## 2026.9.4\n\n### Fixes\n\n- Frozen release fix.";
+  const releaseBody =
+    body === "different"
+      ? "Unrelated release notes"
+      : body === "proof" || body === "wrong-sha"
+        ? `${notes}\n\n### Release verification\n\n- release SHA: \`${body === "wrong-sha" ? "b".repeat(40) : targetSha}\``
+        : notes;
+  const assetName = "openclaw-2026.9.4-release-manifest.json";
+  writeFileSync(
+    join(root, "release.json"),
+    JSON.stringify({
+      isDraft: false,
+      body: releaseBody,
+      assets: state === "missing" ? [] : [{ name: assetName }],
+      url: "https://github.com/fixture/repository/releases/tag/v2026.9.4",
+    }),
+  );
+  writeFileSync(join(root, "manifest.json"), '{"source":"frozen"}');
+  writeFileSync(
+    join(root, "existing.json"),
+    state === "different" ? '{"source":"changed"}' : '{"source":"frozen"}',
+  );
+  const result = spawnSync(
+    "bash",
+    [
+      "-c",
+      `
+source "$GITHUB_WORKSPACE/.release-harness/scripts/lib/release-publish-children.sh"
+verify_release_tag_target() { :; }
+gh() {
+  case "$1 $2" in
+    "release view") cat "$RUNNER_TEMP/release.json" ;;
+    "release download")
+      local destination=""
+      while (( $# > 0 )); do
+        if [[ "$1" == --dir ]]; then destination="$2"; break; fi
+        shift
+      done
+      cp "$RUNNER_TEMP/existing.json" "$destination/$ASSET_NAME"
+      ;;
+    "release upload") printf '%s\\n' "$@" >> "$RUNNER_TEMP/uploads" ;;
+    *) echo "Unexpected mutation: $*" >&2; return 1 ;;
+  esac
+}
+prepared_release_notes_file="$RUNNER_TEMP/prepared.md"
+render_github_release_notes "$prepared_release_notes_file"
+guard_existing_public_release
+create_or_update_github_release
+attach_or_verify_release_asset "$RUNNER_TEMP/manifest.json" "$ASSET_NAME"
+`,
+    ],
+    {
+      cwd: root,
+      encoding: "utf8",
+      env: {
+        ...createNestedGitEnv(),
+        GITHUB_WORKSPACE: root,
+        RUNNER_TEMP: root,
+        GITHUB_STEP_SUMMARY: join(root, "summary"),
+        GITHUB_REPOSITORY: "fixture/repository",
+        RELEASE_TAG: "v2026.9.4",
+        TARGET_SHA: targetSha,
+        GITHUB_REF: "refs/tags/release-publish/aaaaaaaaaaaa-1",
+        PARENT_WORKFLOW_SHA: "a".repeat(40),
+        PUBLISH_OPENCLAW_NPM: "true",
+        RELEASE_NPM_DIST_TAG: "latest",
+        ASSET_NAME: assetName,
+      },
+    },
+  );
+  expect(result.status, result.stderr).toBe(error ? 1 : 0);
+  if (error) {
+    expect(result.stderr).toContain(error);
+  }
+  expect(existsSync(join(root, "uploads"))).toBe(state === "missing" && !error);
+  expect(JSON.parse(readFileSync(join(root, "release.json"), "utf8")).body).toBe(releaseBody);
+});

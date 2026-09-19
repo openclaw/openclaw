@@ -289,7 +289,7 @@ describe("AppSidebar agent chip", () => {
     vi.useFakeTimers();
     vi.stubGlobal(
       "matchMedia",
-      vi.fn(() => ({ matches: true })),
+      vi.fn(() => ({ matches: true, addEventListener() {}, removeEventListener() {} })),
     );
     try {
       const { sidebar } = await mountSidebar(
@@ -350,7 +350,7 @@ describe("AppSidebar agent chip", () => {
     vi.useFakeTimers();
     vi.stubGlobal(
       "matchMedia",
-      vi.fn(() => ({ matches: false })),
+      vi.fn(() => ({ matches: false, addEventListener() {}, removeEventListener() {} })),
     );
     try {
       const { sidebar } = await mountSidebar(

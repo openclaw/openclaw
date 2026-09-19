@@ -1,6 +1,7 @@
 import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it } from "vitest";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { recordOpenClawAgentCanonicalValidation } from "./openclaw-agent-canonical-validation-receipt.js";
 import type {
   OpenClawAgentDatabase,
   OpenClawAgentDatabaseOptions,
@@ -8,6 +9,7 @@ import type {
 import { openOpenClawAgentDatabaseReadOnly } from "./openclaw-agent-db-readonly-open.js";
 import {
   adoptOpenClawAgentDatabaseValidation,
+  clearOpenClawAgentDatabaseValidationCache,
   getOpenClawAgentDatabaseValidation,
   hasOpenClawAgentCanonicalValidation,
   invalidateOpenClawAgentDatabaseValidation,
@@ -45,6 +47,65 @@ async function withReceiptFixture(
 }
 
 describe("canonical proof on physical database validation", () => {
+  it("does not publish an uncommitted durable receipt into a cold reader cache", async () => {
+    await withReceiptFixture(true, (database, options) => {
+      expect(() =>
+        runOpenClawAgentWriteTransaction((current) => {
+          recordOpenClawAgentCanonicalValidation(current);
+          clearOpenClawAgentDatabaseValidationCache(current.path);
+          expect(hasOpenClawAgentCanonicalValidation(current)).toBe(false);
+          throw new Error("rollback durable receipt");
+        }, options),
+      ).toThrow("rollback durable receipt");
+      expect(hasOpenClawAgentCanonicalValidation(database)).toBe(false);
+      expect(database.db.prepare("SELECT canonical_ready FROM session_key_contract").get()).toEqual(
+        { canonical_ready: null },
+      );
+    });
+  });
+
+  it.each([
+    { cache: "warm", admission: "set" },
+    { cache: "cold", admission: "set" },
+    { cache: "warm", admission: "adopt" },
+    { cache: "cold", admission: "adopt" },
+  ] as const)(
+    "does not revive revoked canonical proof on $cache integrity admission by $admission",
+    async ({ cache, admission }) => {
+      await withReceiptFixture(true, (database, options) => {
+        runOpenClawAgentWriteTransaction(recordOpenClawAgentCanonicalValidation, options);
+        expect(markOpenClawAgentCanonicalValidation(database)).toBe(true);
+        const receipt = getOpenClawAgentDatabaseValidation(database);
+        if (!receipt) {
+          throw new Error("Expected physical validation receipt");
+        }
+        // A separate worker can retain independent proof for this same physical file.
+        const transferred = {
+          ...receipt,
+          valid: receipt.valid.slice(0),
+          canonicalReady: receipt.canonicalReady.slice(0),
+        };
+        if (cache === "cold") {
+          clearOpenClawAgentDatabaseValidationCache(database.path);
+        }
+        invalidateOpenClawAgentDatabaseValidation(database.path);
+        if (admission === "adopt") {
+          expect(adoptOpenClawAgentDatabaseValidation(database, transferred)).toBe(true);
+          expect(getOpenClawAgentDatabaseValidation(database)).toBe(transferred);
+        } else {
+          setOpenClawAgentDatabaseValidation(database);
+          expect(getOpenClawAgentDatabaseValidation(database)).toBeDefined();
+        }
+        expect(hasOpenClawAgentCanonicalValidation(database)).toBe(false);
+        expect(markOpenClawAgentCanonicalValidation(database)).toBe(true);
+        expect(hasOpenClawAgentCanonicalValidation(database)).toBe(true);
+        if (admission === "adopt") {
+          expect(Atomics.load(new Int32Array(transferred.canonicalReady), 0)).toBe(1);
+        }
+      });
+    },
+  );
+
   it.each([false, true])(
     "initializes readiness from committed emptiness (populated: %s)",
     async (populated) => {

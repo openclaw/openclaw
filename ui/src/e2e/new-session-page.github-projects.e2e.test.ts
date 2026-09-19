@@ -87,7 +87,7 @@ suite.define(() => {
         await pollLocatorText(checkout.locator(".new-session-page__trigger-label")).toBe(
           "New worktree",
         );
-        const baseRef = checkoutPopover.getByLabel("From");
+        const baseRef = checkoutPopover.getByLabel("From", { exact: true });
         expect(await baseRef.getAttribute("placeholder")).toBe("From");
         expect(await baseRef.inputValue()).toBe("");
         expect(await checkoutPopover.locator("datalist option").count()).toBe(0);
@@ -152,7 +152,7 @@ suite.define(() => {
     const chatModuleBlocked = new Promise<void>((resolve) => {
       releaseChatModule = resolve;
     });
-    await page.route("**/assets/chat-page-*.js*", async (route) => {
+    await page.route("**/assets/route-entry-*.js*", async (route) => {
       chatModuleRequested = true;
       await chatModuleBlocked;
       await route.continue();
@@ -335,7 +335,9 @@ suite.define(() => {
       expect(await gateway.getRequests("projects.add")).toHaveLength(0);
 
       await expect.poll(() => chatModuleRequested).toBe(true);
-      expect(new URL(page.url()).pathname).toBe(controlUiSessionPath(sessionKey));
+      // The blocked preview module has not rendered; only confirmed navigation
+      // may publish the accepted URL once that preview load settles.
+      expect(new URL(page.url()).pathname).toBe("/new");
       expect(await gateway.getRequests("chat.startup")).toHaveLength(0);
       await gateway.emitGatewayEvent("chat", {
         runId,

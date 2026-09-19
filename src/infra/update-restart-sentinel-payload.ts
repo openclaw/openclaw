@@ -30,7 +30,12 @@ export function normalizeControlPlaneUpdateResult(result: UpdateRunResult): Upda
       (result.status === "skipped" && result.reason === "already-current")) &&
     isUpdateGatewayReadinessPending(result)
   ) {
-    return { ...result, status: "skipped", reason: "gateway-readiness-unverified" };
+    return {
+      ...result,
+      status: "skipped",
+      reason:
+        result.reason === "still-starting" ? "still-starting" : "gateway-readiness-unverified",
+    };
   }
   const beforeSha = result.before?.sha?.trim();
   const afterSha = result.after?.sha?.trim();
@@ -45,13 +50,19 @@ export function normalizeControlPlaneUpdateResult(result: UpdateRunResult): Upda
 }
 
 function resolvePersistedRecovery(result: UpdateRunResult): UpdateRunResult["recovery"] {
-  if (!result.recovery) {
+  const recovery = result.recovery;
+  if (!recovery) {
     return undefined;
   }
-  const recovery = { ...result.recovery };
-  // Restored runtimes parse this object strictly, so persist only the pre-update shape.
-  delete recovery.packageRollbackVerified;
-  return recovery;
+  // Restored runtimes parse this strictly; keep new diagnostics in the update result.
+  return recovery.serviceRestartSafe
+    ? {
+        serviceRestartSafe: true,
+        version: recovery.version,
+        buildId: recovery.buildId,
+        service: recovery.service,
+      }
+    : { serviceRestartSafe: false, reason: recovery.reason };
 }
 
 /** Build the restart sentinel payload written after update runs. */

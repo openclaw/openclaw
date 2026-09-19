@@ -23,6 +23,7 @@ function createRegistry() {
     pluginId: "retention-probe",
     origin: "workspace",
     source: "retention-probe",
+    id: "retention-probe",
     service: {
       id: "retention-probe",
       start() {

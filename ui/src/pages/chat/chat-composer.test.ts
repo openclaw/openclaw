@@ -15,6 +15,7 @@ import {
   resetComposerFixture,
 } from "./chat-composer.test-support.ts";
 import { renderChatComposer } from "./components/chat-composer.ts";
+import { installChatComposerPickerDismissal } from "./components/chat-picker-overlay.ts";
 import * as realtimeTalkInput from "./talk/input.ts";
 
 const discoverRealtimeTalkInputsMock = vi.fn();
@@ -111,6 +112,7 @@ function dictationPointer(type: "pointerdown" | "pointerup", pointerId: number):
 }
 
 beforeEach(() => {
+  onTestFinished(installChatComposerPickerDismissal(document));
   // ESM imports remain live when the composer was cached by another test file.
   // Patch the shared dependencies instead of clearing isolate:false's registry.
   vi.spyOn(realtimeTalkInput, "discoverRealtimeTalkInputs").mockImplementation(
@@ -350,7 +352,7 @@ describe("renderChatComposer controls", () => {
 
     expect(container.querySelector<HTMLTextAreaElement>("textarea")?.disabled).toBe(true);
     expect(container.querySelector(".agent-chat__input")?.getAttribute("aria-busy")).toBe("true");
-    const status = container.querySelector('.agent-chat__composer-underlaps[data-tone="info"]');
+    const status = container.querySelector('.agent-chat__composer-status[data-tone="info"]');
     expect(status?.textContent).toContain("Preparing workspace…");
     expect(status?.querySelector(".btn__spinner")).not.toBeNull();
   });
@@ -888,7 +890,7 @@ describe("renderChatComposer controls", () => {
     expect(onToggleRealtimeTalk).toHaveBeenCalledOnce();
   });
 
-  it("shows an actionable error underlap and returns the microphone to idle on startup failure", async () => {
+  it("shows an actionable error status and returns the microphone to idle on startup failure", async () => {
     vi.useFakeTimers();
     openMicrophoneMock.mockRejectedValue(new DOMException("blocked", "NotAllowedError"));
     const request = vi.fn(async (method: string) => {
@@ -913,16 +915,16 @@ describe("renderChatComposer controls", () => {
     await vi.advanceTimersByTimeAsync(800);
     await vi.waitFor(() =>
       expect(
-        container.querySelector('.agent-chat__composer-underlaps[data-tone="danger"]'),
+        container.querySelector('.agent-chat__composer-status[data-tone="danger"]'),
       ).not.toBeNull(),
     );
 
-    const underlap = container.querySelector('.agent-chat__composer-underlaps[data-tone="danger"]');
-    expect(underlap?.getAttribute("role")).toBeNull();
-    expect(underlap?.querySelector('[role="alert"]')?.textContent).toContain(
+    const status = container.querySelector('.agent-chat__composer-status[data-tone="danger"]');
+    expect(status?.getAttribute("role")).toBeNull();
+    expect(status?.querySelector('[role="alert"]')?.textContent).toContain(
       t("chat.composer.microphonePermissionBlocked"),
     );
-    expect(underlap?.textContent).toContain(t("chat.composer.dictationStartRecovery"));
+    expect(status?.textContent).toContain(t("chat.composer.dictationStartRecovery"));
     expect(container.querySelector(".chat-send-btn--dictating")).toBeNull();
     expect(container.querySelector(".chat-send-btn--voice")).not.toBeNull();
   });

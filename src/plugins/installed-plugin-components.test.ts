@@ -86,7 +86,10 @@ describe("projectInstalledPluginComponents", () => {
           skills: ["./skills"],
         } as PluginManifestRecord,
         declared: { ...emptyDeclared, skills: ["./skills"] },
-      }).skills,
-    ).toEqual(["discord"]);
+      }),
+    ).toMatchObject({
+      skills: ["discord"],
+      skillDetails: [{ name: "discord", description: "Discord workflows." }],
+    });
   });
 });

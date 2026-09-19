@@ -159,7 +159,7 @@ async function handleFileTransferInvoke(
   }
   let boundCanonicalPath: string | undefined;
   let boundFilesystemIdentity: PathBinding | undefined;
-  if (command === "file.fetch") {
+  if (command === "file.fetch" || command === "file.stat") {
     const preflight = await runPathPreflight({
       ctx,
       op,

@@ -1,6 +1,7 @@
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { note } from "../../packages/terminal-core/src/note.js";
+import { listAgentIds } from "../agents/agent-scope-config.js";
 import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
 import { createConfigIO } from "../config/io.factory.js";
 import { readConfigFileSnapshot, type ConfigSnapshotReadMeasure } from "../config/io.js";
@@ -32,6 +33,7 @@ import {
   readAgentDatabaseAdmissionRefusal,
   recordAgentDatabaseAdmissions,
 } from "../state/agent-database-admission.js";
+import { getAgentDatabaseStartupAdmission } from "../state/agent-database-startup.js";
 import {
   withArtifactPreservingStateReads,
   withOpenClawStateDatabaseReadSnapshot,
@@ -43,7 +45,6 @@ import {
 import { measureDoctorConfigPreflightStep } from "./doctor-config-preflight-measure.js";
 import type { DoctorConfigPreflightPluginSnapshotRead } from "./doctor-config-preflight-plugin-index.js";
 import {
-  formatStartupPluginVerificationFailure,
   refreshStartupPluginQuarantine,
   runDoctorPluginConvergence,
 } from "./doctor-config-preflight-plugin-verification.js";
@@ -74,27 +75,36 @@ export async function readStartupMigrationSnapshot(params: {
   ) => Promise<readonly DeferredPluginMigration[]>;
 }): Promise<DoctorConfigPreflightPluginSnapshotRead & { recovery?: PreparedConfigRecovery }> {
   return await withArtifactPreservingStateReads(async () => {
-    await refuseStartupMigrationsForLiveGatewayOwner(params.env);
+    await measureDoctorConfigPreflightStep("admission.live-owner", () =>
+      refuseStartupMigrationsForLiveGatewayOwner(params.env),
+    );
     try {
-      const selected = await readConfigFileSnapshot({
-        observe: false,
-        isolateEnv: true,
-        pluginValidation: "core-only",
-        deferredPluginMigrations: params.deferredPluginMigrations,
-      });
+      const selected = await measureDoctorConfigPreflightStep("admission.core-config", () =>
+        readConfigFileSnapshot({
+          observe: false,
+          isolateEnv: true,
+          pluginValidation: "core-only",
+          deferredPluginMigrations: params.deferredPluginMigrations,
+        }),
+      );
       const recoveryOptions = { configPath: selected.path, observe: false, env: params.env };
-      const coreRecovery = await createConfigIO({
-        ...recoveryOptions,
-        pluginValidation: "core-only",
-        deferredPluginMigrations: params.deferredPluginMigrations,
-      }).prepareConfigRecovery(selected);
+      const coreRecovery = await measureDoctorConfigPreflightStep("admission.core-recovery", () =>
+        createConfigIO({
+          ...recoveryOptions,
+          pluginValidation: "core-only",
+          deferredPluginMigrations: params.deferredPluginMigrations,
+        }).prepareConfigRecovery(selected),
+      );
       const candidate = coreRecovery?.snapshot ?? selected;
       const startupConfig = resolveStartupConfigSnapshot(candidate);
       await assertStartupStateMigrationReady({
         cfg: startupConfig?.sourceConfig ?? candidate.sourceConfig ?? candidate.config,
         env: params.env,
       });
-      const deferredPluginMigrations = await params.preparePluginMigrations?.(candidate);
+      const deferredPluginMigrations = await measureDoctorConfigPreflightStep(
+        "admission.plugin-migrations",
+        () => params.preparePluginMigrations?.(candidate),
+      );
       // Core readiness must be decided before plugin metadata opens shared state.
       if (startupConfig) {
         await params.validateConfig?.(startupConfig);
@@ -122,7 +132,9 @@ export async function readStartupMigrationSnapshot(params: {
           ),
       );
       assertStartupConfigUnchanged(selected, read.snapshot);
-      const recovery = await createConfigIO(recoveryOptions).prepareConfigRecovery(read.snapshot);
+      const recovery = await measureDoctorConfigPreflightStep("admission.config-recovery", () =>
+        createConfigIO(recoveryOptions).prepareConfigRecovery(read.snapshot),
+      );
       if (Boolean(coreRecovery) !== Boolean(recovery)) {
         throwStartupMigrationIdentityChanged();
       }
@@ -140,7 +152,12 @@ export async function readStartupMigrationSnapshot(params: {
         throw new Error('OpenClaw config is invalid; run "openclaw doctor --fix" before startup.');
       }
       await params.validateConfig?.(repair?.snapshot ?? read.snapshot);
-      if (params.beforeStateMigrations && !(await params.beforeStateMigrations(read.snapshot))) {
+      if (
+        params.beforeStateMigrations &&
+        !(await measureDoctorConfigPreflightStep("admission.config-guard", () =>
+          params.beforeStateMigrations?.(read.snapshot),
+        ))
+      ) {
         throwStartupMigrationGuardRejected();
       }
       return { ...read, ...(recovery ? { recovery } : {}) };
@@ -167,33 +184,78 @@ async function assertStartupStateMigrationReady(params: {
   cfg: OpenClawConfig;
   env: NodeJS.ProcessEnv;
 }): Promise<void> {
-  const { assertOpenClawDatabasesReady } = await import("../state/openclaw-database-preflight.js");
-  await assertOpenClawDatabasesReady({
-    env: params.env,
-    config: params.cfg,
-    operation: "gateway-startup",
-  });
-  const { assertSessionStoreMigrationComplete } =
-    await import("../config/sessions/startup-migration.js");
-  const { resolveAllAgentSessionStoreCandidateTargetsSync } =
-    await import("../config/sessions/targets.js");
-  const { inspectOpenClawRegisteredAgentDatabases } =
-    await import("../state/openclaw-agent-db-registry.js");
-  const targets = resolveAllAgentSessionStoreCandidateTargetsSync(params.cfg, {
-    env: params.env,
-    registeredDatabases: await inspectOpenClawRegisteredAgentDatabases({
-      env: params.env,
-      includeIncompatibleSchemaVersions: true,
-    }),
-  }).filter((target) => !readAgentDatabaseAdmissionRefusal(target.agentId, { env: params.env }));
-  assertSessionStoreMigrationComplete({ ...params, targets });
+  const { assertOpenClawDatabasesReady } = await measureDoctorConfigPreflightStep(
+    "admission.database-runtime-import",
+    () => import("../state/openclaw-database-preflight.js"),
+  );
+  const agentCount = listAgentIds(params.cfg).length;
+  const admissionMetrics: Record<string, number> = { agentCount };
+  await measureDoctorConfigPreflightStep(
+    "admission.database-readiness",
+    () =>
+      assertOpenClawDatabasesReady({
+        env: params.env,
+        config: params.cfg,
+        operation: "gateway-startup",
+        onAgentInspection: (stats) => {
+          Object.assign(admissionMetrics, stats);
+        },
+      }),
+    undefined,
+    () => admissionMetrics,
+  );
+  const [
+    { assertSessionStoreMigrationComplete },
+    { resolveAllAgentSessionStoreCandidateTargetsSync },
+    { inspectOpenClawRegisteredAgentDatabases },
+  ] = await measureDoctorConfigPreflightStep("admission.session-runtime-import", () =>
+    Promise.all([
+      import("../config/sessions/startup-migration.js"),
+      import("../config/sessions/targets.js"),
+      import("../state/openclaw-agent-db-registry.js"),
+    ]),
+  );
+  const registeredDatabases = await measureDoctorConfigPreflightStep(
+    "admission.agent-inventory",
+    () =>
+      inspectOpenClawRegisteredAgentDatabases({
+        env: params.env,
+        includeIncompatibleSchemaVersions: true,
+      }),
+  );
+  const targets = await measureDoctorConfigPreflightStep(
+    "admission.session-targets",
+    () =>
+      resolveAllAgentSessionStoreCandidateTargetsSync(params.cfg, {
+        env: params.env,
+        registeredDatabases,
+      }).filter(
+        (target) => !readAgentDatabaseAdmissionRefusal(target.agentId, { env: params.env }),
+      ),
+    undefined,
+    () => ({ agentCount, registeredDatabaseCount: registeredDatabases.length }),
+  );
+  await measureDoctorConfigPreflightStep(
+    "admission.session-readiness",
+    () => assertSessionStoreMigrationComplete({ ...params, targets }),
+    undefined,
+    () => ({ targetCount: targets.length }),
+  );
   recordStartupMigrationWarnings(
     listAgentDatabaseAdmissionRefusals({ env: params.env }).map(
       (refusal) => `${refusal.reason}\n${refusal.repairHint}`,
     ),
   );
-  const { assertConfiguredWorkspaceStateReady } = await import("../agents/workspace-state-dirs.js");
-  await assertConfiguredWorkspaceStateReady(params);
+  const { assertConfiguredWorkspaceStateReady } = await measureDoctorConfigPreflightStep(
+    "admission.workspace-runtime-import",
+    () => import("../agents/workspace-state-dirs.js"),
+  );
+  await measureDoctorConfigPreflightStep(
+    "admission.workspace-readiness",
+    () => assertConfiguredWorkspaceStateReady(params),
+    undefined,
+    () => ({ agentCount }),
+  );
 }
 
 type MigrationCheckpoint = {
@@ -219,6 +281,7 @@ export async function prepareDoctorMigrationPlugins(params: {
   snapshotRead: DoctorConfigPreflightPluginSnapshotRead;
   readRefreshedSnapshot: () => Promise<DoctorConfigPreflightPluginSnapshotRead>;
   beforeStateMigrations?: (snapshot: ConfigFileSnapshot) => Promise<boolean>;
+  onWarnings: (warnings: readonly string[]) => void;
   onDeferredPlugins: (
     pending: readonly DeferredPluginMigration[],
     inspection?: PluginMigrationInspection,
@@ -231,11 +294,7 @@ export async function prepareDoctorMigrationPlugins(params: {
     params.converge ? runDoctorPluginConvergence : refreshStartupPluginQuarantine
   )(params);
   setActiveDegradedPlugins(convergence.quarantinedPlugins);
-  if (convergence.blockingDiagnostic) {
-    throwStartupMigrationRefusal(
-      formatStartupPluginVerificationFailure(convergence.blockingDiagnostic),
-    );
-  }
+  params.onWarnings(convergence.warnings ?? []);
   params.lease?.heartbeat();
   params.onDeferredPlugins(convergence.deferredPlugins ?? [], convergence.migrationInspection);
   if (!params.converge) {
@@ -354,13 +413,21 @@ export async function assertDoctorPreflightMigrationsComplete(params: {
       receipt.refusedAgentDatabasePaths?.length,
   );
   const admissions =
-    scopedRefusals.length > 0 ? await evaluateAgentDatabaseAdmissions(params.cfg) : [];
+    scopedRefusals.length > 0
+      ? getAgentDatabaseStartupAdmission()
+        ? listAgentDatabaseAdmissionRefusals()
+        : await evaluateAgentDatabaseAdmissions(params.cfg)
+      : [];
   if (scopedRefusals.length > 0) {
     recordAgentDatabaseAdmissions(admissions);
   }
   const isolatedPaths = new Set(
     admissions
-      .filter((refusal) => canIsolateAgentDatabase(params.cfg, refusal.agentId))
+      .filter(
+        (refusal) =>
+          refusal.code !== "agent-database-ownership-mismatch" ||
+          canIsolateAgentDatabase(params.cfg, refusal.agentId),
+      )
       .flatMap((refusal) => refusal.paths.map((pathname) => path.resolve(pathname))),
   );
   for (const receipt of scopedRefusals) {

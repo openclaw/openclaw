@@ -97,6 +97,54 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
+it.each(["pending", "settled"] as const)(
+  "keeps the %s roster window through recap-only updates",
+  async (phase) => {
+    vi.useFakeTimers();
+    const f = fixture();
+    const detach = f.store.subscribe(() => {});
+    try {
+      await vi.advanceTimersByTimeAsync(0);
+      if (phase === "settled") {
+        f.respond(0, "Current activity");
+        await vi.advanceTimersByTimeAsync(0);
+      }
+      f.source.publishEvent({
+        type: "event",
+        event: "sessions.changed",
+        payload: {
+          sessionKey: "agent:main:main",
+          agentId: "main",
+          reason: "activity-summary",
+          session: {
+            key: "agent:main:main",
+            kind: "direct",
+            lastMessagePreview: "Current activity",
+          },
+        },
+      });
+      await vi.advanceTimersByTimeAsync(250);
+      if (phase === "pending") {
+        f.respond(0, "Current activity");
+      }
+      await vi.advanceTimersByTimeAsync(20_000);
+      expect(f.requests).toHaveLength(1);
+      expect(f.store.snapshot.cards[0]?.preview).toBe("Current activity");
+      expect(f.store.snapshot.loading).toBe(false);
+
+      f.invalidate();
+      await vi.advanceTimersByTimeAsync(250);
+      expect(f.requests).toHaveLength(2);
+      f.respond(1, "Refreshed membership");
+      await vi.advanceTimersByTimeAsync(0);
+      expect(f.store.snapshot.cards[0]?.preview).toBe("Refreshed membership");
+    } finally {
+      detach();
+      f.close();
+    }
+  },
+);
+
 it("coalesces repeated invalidations behind one correlated roster request", async () => {
   vi.useFakeTimers();
   const f = fixture();

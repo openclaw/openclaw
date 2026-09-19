@@ -11,15 +11,27 @@ import {
 import type { SessionTranscriptMessageAnchorPage } from "./session-accessor.sqlite-active-events.js";
 import type { TranscriptEvent } from "./session-accessor.sqlite-contract.js";
 import { positionTranscriptDisplayEvents } from "./session-accessor.sqlite-display-position.js";
+import { findUnindexedActiveTranscriptEntry } from "./session-accessor.sqlite-history-navigation.js";
 import {
   getActiveTranscriptKysely,
   type CurrentTranscriptProjection,
   type SessionTranscriptMessageEvent,
 } from "./session-accessor.sqlite-projection-read.js";
 import {
+  readUnindexedHistoryControls,
   resolveClosedResetInterval,
   type ClosedResetInterval,
 } from "./session-accessor.sqlite-reset-window.js";
+
+export function isVisibleHistoryNonMessageEvent(event: Record<string, unknown>): boolean {
+  return (
+    event.type === "reset" ||
+    event.type === "compaction" ||
+    (event.type === "custom_message" &&
+      event.display === true &&
+      event.customType !== OPENCLAW_RUNTIME_CONTEXT_CUSTOM_TYPE)
+  );
+}
 
 /** Select display slots without loading custom content or details into history metadata. */
 export function isVisibleHistoryNonMessageEventSql(
@@ -49,22 +61,38 @@ function selectHistoricalDisplayEvents(
   projection: CurrentTranscriptProjection,
   interval: ClosedResetInterval,
 ) {
-  return getActiveTranscriptKysely(projection.database)
-    .selectFrom("session_transcript_active_events as active")
-    .innerJoin(
-      // Without statistics, the covering event-type index can scan the session for every row.
-      getActiveTranscriptKysely(projection.database)
-        .selectFrom("transcript_event_identities")
-        .select(["session_id", "seq", "event_type"])
-        .modifyEnd(
-          /* kysely-allow-raw: pin the canonical sequence lookup to avoid quadratic cold-history joins. */ sql`INDEXED BY idx_agent_transcript_event_identity_sequence`,
-        )
-        .as("identity"),
-      (join) =>
+  const active = getActiveTranscriptKysely(projection.database).selectFrom(
+    "session_transcript_active_events as active",
+  );
+  const identity =
+    // Without statistics, the covering event-type index can scan the session for every row.
+    getActiveTranscriptKysely(projection.database)
+      .selectFrom("transcript_event_identities")
+      .select(["session_id", "seq", "event_type"])
+      .modifyEnd(
+        /* kysely-allow-raw: pin the canonical sequence lookup to avoid quadratic cold-history joins. */ sql`INDEXED BY idx_agent_transcript_event_identity_sequence`,
+      )
+      .as("identity");
+  const withIdentity = projection.hasUnindexedPrefix
+    ? active.leftJoin(identity, (join) =>
         join
           .onRef("identity.session_id", "=", "active.session_id")
           .onRef("identity.seq", "=", "active.event_seq"),
+      )
+    : active.innerJoin(identity, (join) =>
+        join
+          .onRef("identity.session_id", "=", "active.session_id")
+          .onRef("identity.seq", "=", "active.event_seq"),
+      );
+  const unindexedControls = readUnindexedHistoryControls(projection)
+    .filter(
+      (row) =>
+        isVisibleHistoryNonMessageEvent(row.event) &&
+        row.active_position > interval.startExclusiveActivePosition &&
+        row.active_position <= interval.endInclusiveActivePosition,
     )
+    .map((row) => row.event_seq);
+  return withIdentity
     .innerJoin("transcript_events as event", (join) =>
       join
         .onRef("event.session_id", "=", "active.session_id")
@@ -82,13 +110,27 @@ function selectHistoricalDisplayEvents(
           eb.ref("active.event_seq"),
           eb.ref("event.seq"),
         ),
+        ...(unindexedControls.length > 0
+          ? [
+              eb(
+                "active.event_seq",
+                "in",
+                /* kysely-allow-raw: one bounded binding carries recovered control sequences. */
+                sql<number>`(SELECT value FROM json_each(${JSON.stringify(unindexedControls)}))`,
+              ),
+            ]
+          : []),
       ]),
     );
 }
 
-function readDisplayableActiveEventById(projection: CurrentTranscriptProjection, eventId: string) {
+export function readDisplayableActiveEventById(
+  projection: CurrentTranscriptProjection,
+  eventId: string,
+  maxBytes?: number,
+) {
   const db = getActiveTranscriptKysely(projection.database);
-  return executeSqliteQueryTakeFirstSync(
+  const indexed = executeSqliteQueryTakeFirstSync(
     projection.database.db,
     db
       .selectFrom("transcript_event_identities as identity")
@@ -107,8 +149,18 @@ function readDisplayableActiveEventById(projection: CurrentTranscriptProjection,
         "active.active_position",
         "active.message_position",
         "identity.event_type",
-        "event.event_json",
       ])
+      .select((eb) =>
+        maxBytes === undefined
+          ? eb.ref("event.event_json").as("event_json")
+          : eb
+              .case()
+              .when(eb(eb.fn<number>("octet_length", ["event.event_json"]), "<=", maxBytes))
+              .then(eb.ref("event.event_json"))
+              .else(null)
+              .end()
+              .as("event_json"),
+      )
       .where("identity.session_id", "=", projection.resolved.sessionId)
       .where("identity.event_id", "=", eventId)
       .where((eb) =>
@@ -123,6 +175,34 @@ function readDisplayableActiveEventById(projection: CurrentTranscriptProjection,
         ]),
       ),
   );
+  if (indexed) {
+    return indexed.event_json === null ? undefined : { ...indexed, event_json: indexed.event_json };
+  }
+  const unindexed = findUnindexedActiveTranscriptEntry(projection, eventId);
+  if (
+    !unindexed ||
+    (unindexed.message_position === null && !isVisibleHistoryNonMessageEvent(unindexed.event)) ||
+    (maxBytes !== undefined && unindexed.serialized_bytes - 1 > maxBytes)
+  ) {
+    return undefined;
+  }
+  const event = executeSqliteQueryTakeFirstSync(
+    projection.database.db,
+    db
+      .selectFrom("transcript_events")
+      .select("event_json")
+      .where("session_id", "=", projection.resolved.sessionId)
+      .where("seq", "=", unindexed.event_seq),
+  );
+  return event
+    ? {
+        event_seq: unindexed.event_seq,
+        active_position: unindexed.active_position,
+        message_position: unindexed.message_position,
+        event_type: typeof unindexed.event.type === "string" ? unindexed.event.type : null,
+        event_json: event.event_json,
+      }
+    : undefined;
 }
 
 function countHistoricalDisplayEvents(
@@ -195,14 +275,10 @@ function resolveClosedResetIntervalForDisplayable(
   });
 }
 
-export function resolveHistoricalHistoryEventById(
+export function resolveHistoricalHistoryEvent(
   projection: CurrentTranscriptProjection,
-  eventId: string,
+  row: NonNullable<ReturnType<typeof readDisplayableActiveEventById>>,
 ): SessionTranscriptMessageEvent | undefined {
-  const row = readDisplayableActiveEventById(projection, eventId);
-  if (!row) {
-    return undefined;
-  }
   const interval = resolveClosedResetIntervalForDisplayable(projection, row);
   if (!interval) {
     return undefined;
@@ -217,12 +293,9 @@ export function resolveHistoricalHistoryEventById(
 export function readHistoricalHistoryAnchorPage(
   projection: CurrentTranscriptProjection,
   displaySource: string | undefined,
+  row: NonNullable<ReturnType<typeof readDisplayableActiveEventById>>,
   options: TranscriptAnchorPageOptions,
 ): SessionTranscriptMessageAnchorPage | undefined {
-  const row = readDisplayableActiveEventById(projection, options.messageId);
-  if (!row) {
-    return undefined;
-  }
   const interval = resolveClosedResetIntervalForDisplayable(projection, row);
   if (!interval) {
     return undefined;

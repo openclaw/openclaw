@@ -8,6 +8,7 @@ import {
   type DeferredPluginMigration,
 } from "../infra/deferred-plugin-migrations.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import { readDoctorConfigPreflightSnapshot } from "./doctor-config-preflight-plugin-index.js";
 import { runDoctorConfigPreflight } from "./doctor-config-preflight.js";
 import { withDoctorConfigPreflightHome } from "./doctor-config-preflight.test-support.js";
 
@@ -60,6 +61,42 @@ async function withRuntimeOwner(
 }
 
 describe("runtime plugin migration ownership", () => {
+  it.each([
+    { facts: "prepared-empty", includePluginMetadata: true, valid: false },
+    { facts: "prepared-empty", includePluginMetadata: false, valid: false },
+    { facts: "provided-empty", includePluginMetadata: true, valid: false },
+    { facts: "provided-pending", includePluginMetadata: true, valid: true },
+    { facts: "absent", includePluginMetadata: true, valid: true },
+  ] as const)(
+    "validates with $facts migration facts (metadata: $includePluginMetadata)",
+    async ({ facts, includePluginMetadata, valid }) => {
+      await withRuntimeOwner(async (configPath) => {
+        const retained = { ...pending, validationExcludedPaths: [["legacyFixture"]] };
+        recordDeferredPluginMigrations({ pending: [retained] });
+        const raw = JSON.stringify({ ...config, legacyFixture: { enabled: true } });
+        await fs.writeFile(configPath, raw);
+        const result = await readDoctorConfigPreflightSnapshot({
+          allowCurrentPluginMetadata: false,
+          includePluginMetadata,
+          preparePluginMetadataSnapshot: false,
+          skipPluginValidation: false,
+          observe: false,
+          ...(facts === "prepared-empty" ? { preparePluginMigrations: async () => [] } : {}),
+          ...(facts === "provided-empty" ? { deferredPluginMigrations: [] } : {}),
+          ...(facts === "provided-pending" ? { deferredPluginMigrations: [retained] } : {}),
+        });
+        expect(result.snapshot.valid).toBe(valid);
+        if (!valid) {
+          expect(result.snapshot.issues).toContainEqual(
+            expect.objectContaining({ message: expect.stringContaining("legacyFixture") }),
+          );
+        }
+        expect(await fs.readFile(configPath, "utf8")).toBe(raw);
+        expect(readDeferredPluginMigrations()).toEqual([retained]);
+      });
+    },
+  );
+
   it.each([
     { entry: "startup", declaration: "cliBackends" },
     { entry: "startup", declaration: "harness" },

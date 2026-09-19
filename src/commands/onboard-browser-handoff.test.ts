@@ -97,6 +97,40 @@ describe("resolveConnectedControlUiPresenceKeys", () => {
 });
 
 describe("runBrowserHatchHandoff", () => {
+  it.each([true, false])(
+    "opens utility-only setup on the custodian route (browser=%s)",
+    async (opened) => {
+      const note = vi.fn(async (_message: string, _title?: string) => {});
+      const prompter = createWizardPrompter({ note });
+      const openBrowser = vi.fn(async (_url: string) => opened);
+      sharedMocks.detectBrowserOpenSupport.mockResolvedValue({ ok: true });
+      const config = {
+        meta: { migrations: { utilityModelSeparation: true as const } },
+        agents: { defaults: { utilityModel: "fixture/small" } },
+      };
+      const result = await runBrowserHatchHandoff(
+        { config, prompter },
+        {
+          env: { DISPLAY: ":0" },
+          openBrowser,
+          resolveTarget: async () => ({ ...target, config }),
+          verifyLoopbackAlias: async () => true,
+          probePresence: async () => ({ reachable: true, clientKeys: [] }),
+          pollForClient: async () => ({ connected: true }),
+        },
+      );
+      expect(result).toEqual({ handedOff: true });
+      const url = new URL(openBrowser.mock.calls[0]![0]);
+      expect(url.pathname).toBe("/custodian");
+      expect(url.searchParams.get("onboarding")).toBe("1");
+      expect(url.searchParams.has("session")).toBe(false);
+      expect(url.hash).toContain("bootstrapToken=one-time-bootstrap");
+      if (!opened) {
+        expect(note.mock.calls.flat().join("\n")).toContain("/custodian?onboarding=1");
+      }
+    },
+  );
+
   it("does not hand off when only an existing Control UI heartbeat changes", async () => {
     const prompter = createWizardPrompter();
     let elapsedMs = 0;

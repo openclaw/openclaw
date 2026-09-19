@@ -21,7 +21,12 @@ function catalogReference(value: unknown): TerminalPanelCatalogReference | null 
   return nonEmptyString(value.catalogId) &&
     nonEmptyString(value.hostId) &&
     nonEmptyString(value.threadId)
-    ? { catalogId: value.catalogId, hostId: value.hostId, threadId: value.threadId }
+    ? {
+        catalogId: value.catalogId,
+        hostId: value.hostId,
+        threadId: value.threadId,
+        ...(nonEmptyString(value.sourceHomeId) ? { sourceHomeId: value.sourceHomeId } : {}),
+      }
     : null;
 }
 

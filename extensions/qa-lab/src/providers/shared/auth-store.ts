@@ -1,4 +1,3 @@
-// Qa Lab plugin module implements auth store behavior.
 import path from "node:path";
 import {
   loadAuthProfileStoreWithoutExternalProfiles,

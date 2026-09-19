@@ -119,6 +119,10 @@ describe("worker node enrollment", () => {
       fs.writeFile(path.join(packageRoot, "node-version.mjs"), "export const supported = true;"),
       fs.writeFile(path.join(packageRoot, "node-sqlite.mjs"), "export const probe = true;"),
       fs.writeFile(
+        path.join(packageRoot, "node-host-launcher.mjs"),
+        "export const launcher = true;",
+      ),
+      fs.writeFile(
         path.join(packageRoot, "node-runtime-update.mjs"),
         "export const update = true;",
       ),
@@ -601,6 +605,62 @@ describe("worker node enrollment", () => {
     await expect(manager.begin(record)).resolves.toMatchObject({
       displayName: `Cloud worker ${"x".repeat(50)}`,
     });
+  });
+
+  it("keeps the session-list inventory stable while polling pairing and node readiness", async () => {
+    const bootstrap = await vi.importActual<typeof import("../../infra/device-bootstrap.js")>(
+      "../../infra/device-bootstrap.js",
+    );
+    vi.mocked(ensureDevicePairSetupBootstrapToken).mockImplementationOnce((params) =>
+      bootstrap.ensureDevicePairSetupBootstrapToken({ ...params, baseDir: root }),
+    );
+    const record = createProvisioning();
+    const polledVersions: number[] = [];
+    const manager = createManager({
+      resolveAvailability: async (deviceId) => {
+        expect(deviceId).toBe("paired-cloud-node");
+        polledVersions.push(store.inventoryVersion());
+        return { available: polledVersions.length === 3 };
+      },
+    });
+    const enrollment = await manager.begin(record);
+    if (enrollment.mode !== "connect") {
+      throw new Error("Expected a fresh node enrollment");
+    }
+    const setup = decodePairingSetupCode(enrollment.setupCode);
+    const inventoryVersion = store.inventoryVersion();
+    const pending = store.get(record.environmentId);
+    const waiting = enrollment.waitForDeviceId();
+    try {
+      expect(store.inventoryVersion()).toBe(inventoryVersion);
+      expect(store.get(record.environmentId)).toEqual(pending);
+
+      await bootstrap.verifyDeviceBootstrapToken({
+        baseDir: root,
+        token: setup.bootstrapToken,
+        deviceId: "paired-cloud-node",
+        publicKey: "paired-cloud-public-key",
+        role: "node",
+        scopes: [],
+      });
+      await bootstrap.consumeDeviceBootstrapTokenWithSetupCompletion({
+        baseDir: root,
+        token: setup.bootstrapToken,
+        deviceId: "paired-cloud-node",
+        completedAtMs: 1_100,
+      });
+      expect(store.get(record.environmentId)).toMatchObject({
+        nodeSetupId: enrollment.setupId,
+        nodeDeviceId: "paired-cloud-node",
+      });
+
+      await expect(waiting).resolves.toBe("paired-cloud-node");
+      expect(polledVersions).toEqual([inventoryVersion, inventoryVersion, inventoryVersion]);
+      expect(store.inventoryVersion()).toBe(inventoryVersion);
+    } finally {
+      manager.close(enrollment);
+      await waiting.catch(() => undefined);
+    }
   });
 
   it("aborts pending enrollment waits idempotently and rejects enrollment after shutdown", async () => {

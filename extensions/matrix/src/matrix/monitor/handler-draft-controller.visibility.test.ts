@@ -48,6 +48,7 @@ describe("Matrix progress visibility", () => {
       logVerboseMessage: vi.fn(),
     });
     const options = controller.buildPreviewToolProgressReplyOptions();
+    expect(options.progressPreambleEnabled).toBe(true);
     const progress = { itemId: "item-1", progressText: "still working" };
 
     expect(await options.onItemEvent?.(progress)).toBe(false);

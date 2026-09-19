@@ -219,6 +219,27 @@ enum WatchDeliveryStatusCode: String, Codable, Equatable {
     case blocked
 }
 
+private func localizedDeliveryStatusText(
+    code: WatchDeliveryStatusCode,
+    label: String,
+    detail: String?,
+    blockedText: () -> String,
+    localize: (WatchStatusLocalizationKey) -> String) -> String
+{
+    switch code {
+    case .sending:
+        String(format: localize(.sendingFormat), label)
+    case .sent:
+        String(format: localize(.sentFormat), label)
+    case .queued:
+        String(format: localize(.queuedFormat), label)
+    case .failed:
+        String(format: localize(.failedFormat), label, detail ?? localize(.unavailable))
+    case .blocked:
+        blockedText()
+    }
+}
+
 struct WatchAppCommandStatus: Codable, Equatable {
     var command: WatchAppCommand
     var code: WatchDeliveryStatusCode
@@ -232,18 +253,12 @@ struct WatchAppCommandStatus: Codable, Equatable {
             return legacyVerbatim
         }
         let label = self.command.localizedLabel(localize: localize)
-        return switch self.code {
-        case .sending:
-            String(format: localize(.sendingFormat), label)
-        case .sent:
-            String(format: localize(.sentFormat), label)
-        case .queued:
-            String(format: localize(.queuedFormat), label)
-        case .failed:
-            String(format: localize(.failedFormat), label, self.detail ?? localize(.unavailable))
-        case .blocked:
-            self.detail ?? localize(.refreshingFromIPhone)
-        }
+        return localizedDeliveryStatusText(
+            code: self.code,
+            label: label,
+            detail: self.detail,
+            blockedText: { self.detail ?? localize(.refreshingFromIPhone) },
+            localize: localize)
     }
 
     static func decodeLegacyLocalizedText(_ text: String) -> Self? {
@@ -268,21 +283,12 @@ struct WatchReplyStatus: Codable, Equatable {
         if let legacyVerbatim {
             return legacyVerbatim
         }
-        return switch self.code {
-        case .sending:
-            String(format: localize(.sendingFormat), self.actionLabel)
-        case .sent:
-            String(format: localize(.sentFormat), self.actionLabel)
-        case .queued:
-            String(format: localize(.queuedFormat), self.actionLabel)
-        case .failed:
-            String(
-                format: localize(.failedFormat),
-                self.actionLabel,
-                self.detail ?? localize(.unavailable))
-        case .blocked:
-            localize(.refreshingFromIPhone)
-        }
+        return localizedDeliveryStatusText(
+            code: self.code,
+            label: self.actionLabel,
+            detail: self.detail,
+            blockedText: { localize(.refreshingFromIPhone) },
+            localize: localize)
     }
 
     static func decodeLegacyLocalizedText(_ text: String) -> Self? {

@@ -190,6 +190,20 @@ variables are not copied into the service.
 
 ### Host sleep
 
+Choose **Keep computer awake** in the native tray menu to prevent idle sleep
+while the desktop companion is running, including when its windows are closed.
+The setting is off by default and remembers your choice across app restarts.
+Turning it off or quitting OpenClaw releases the keep-awake request. It does not
+change your permanent power settings or unlock the computer. If the operating
+system cannot honor a saved request, the menu marks the checked preference
+**inactive** and reports the error. You can still uncheck it to turn the saved
+preference off.
+
+Linux uses GNOME’s session manager or an xdg-desktop-portal backend that supports
+idle inhibition. Depending on the desktop, this can also prevent display dimming and automatic
+locking; manual locking remains available. The optional macOS and Windows Tauri
+builds prevent system idle sleep without requesting that the display stay on.
+
 On systems with systemd-logind, the companion prepares a suspension lease for
 its local Gateway before the host sleeps. After wake, it reconnects and resumes
 the Gateway; remote Gateway routes are left untouched. If logind or the system
@@ -382,6 +396,14 @@ Canvas bridge or its A2UI push commands.
 
 ## Gateway service (systemd)
 
+On Linux hosts without a supported service manager, run the Gateway in the
+foreground or through your own supervisor, such as rc.d. `openclaw gateway status
+--deep` reports **no supported service manager detected** and identifies a
+remaining service unit as stale. That recorded unit does not select the status
+probe's configuration or port. Updates continue with a service warning; restart
+your manually launched Gateway after the update. An unavailable user session bus
+on a systemd host remains a separate service-access diagnostic.
+
 Install with one of:
 
 ```bash
@@ -399,6 +421,16 @@ openclaw doctor
 `openclaw gateway install` renders a systemd **user** unit by default. Full
 service guidance, including the **system**-level unit variant for shared or
 always-on hosts, lives in the [Gateway runbook](/gateway#supervision-and-service-lifecycle).
+
+Managed units escape literal paths automatically. In a custom unit, do not add
+shell quotes around `WorkingDirectory=` or `EnvironmentFile=` paths, even when
+they contain spaces. Use a separate `EnvironmentFile=` directive for each absolute
+path; systemd ignores relative paths. Write `%%` for a literal percent sign.
+`EnvironmentFile=` also accepts glob patterns, so escape literal glob characters
+with a backslash. Managed working-directory paths must not end in spaces or
+tabs: systemd 255 loses that trailing whitespace when starting the process.
+OpenClaw rejects those paths rather than risk using a different directory;
+choose a path without trailing whitespace.
 
 Write a unit by hand only for a custom setup. Minimal user-unit example
 (`~/.config/systemd/user/openclaw-gateway[-<profile>].service`):
@@ -455,6 +487,10 @@ Covered child process surfaces:
 - MCP stdio server children
 - Managed local model and embedding service children
 - OpenClaw-launched browser/Chrome processes (via the plugin SDK process runtime)
+
+Sandbox backend transports keep their prepared environment and inherited OOM
+score instead of receiving this wrapper. Workload resource policy belongs to
+the sandbox backend; ordinary host commands and PTYs retain the child-first bias.
 
 The wrapper is Linux-only and skipped when `/bin/sh` is unavailable, or when
 the child env sets `OPENCLAW_CHILD_OOM_SCORE_ADJ` to `0`, `false`, `no`, or

@@ -25,8 +25,8 @@ import {
   resetTaskRegistryForTests,
 } from "../../tasks/task-registry.test-support.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { loadGatewaySessionEntryReadOnly } from "../session-utils.js";
+import { createHistoryReadContext } from "./chat-history.test-helpers.js";
 import { identifiedClient, runTaskHandler } from "./tasks.test-helpers.js";
 
 type ReadTaskHistory = NonNullable<AgentHarness["taskHistory"]>["read"];
@@ -97,10 +97,15 @@ describe("tasks.history", () => {
   it("reads and pages a registered harness transcript without a child session", async () => {
     await withHistoryState(async () => {
       const older = { role: "user", content: "Inspect the files" };
-      const latest = { role: "assistant", content: "The files are consistent" };
+      const latest = {
+        role: "toolResult",
+        messageId: "latest",
+        content: "The files are consistent",
+      };
+      const activity = [{ messageId: "latest", items: [] }];
       const read = vi.fn<ReadTaskHistory>(async ({ cursor }) =>
         cursor === undefined
-          ? { messages: [latest], nextCursor: "older-page" }
+          ? { messages: [latest], activity, nextCursor: "older-page" }
           : { messages: [older] },
       );
       registerHistoryReader(read);
@@ -111,6 +116,7 @@ describe("tasks.history", () => {
       const first = await runTaskHandler("tasks.history", { taskId: task.taskId, limit: 1 });
       expect(first.calls[0]?.[0]).toBe(true);
       expect(first.payload?.messages).toEqual([latest]);
+      expect(first.payload?.activity).toEqual(activity);
       const cursor = expectDefined(first.payload?.nextCursor, "older task history cursor");
       const second = await runTaskHandler("tasks.history", {
         taskId: task.taskId,
@@ -145,7 +151,24 @@ describe("tasks.history", () => {
         "Second child message",
         "Latest child message",
       ]) {
-        await appendTranscriptMessage(scope, { message: { role: "assistant", content } });
+        await appendTranscriptMessage(scope, {
+          message:
+            content === "Latest child message"
+              ? {
+                  role: "toolResult",
+                  toolCallId: "poll",
+                  toolName: "process",
+                  isError: false,
+                  content,
+                  details: {
+                    status: "completed",
+                    sessionId: "job",
+                    aggregated: "done",
+                    exitCode: 0,
+                  },
+                }
+              : { role: "assistant", content },
+        });
       }
       const task = createTaskFixture("subagent", {
         requesterSessionKey,
@@ -154,7 +177,7 @@ describe("tasks.history", () => {
         runId: "openclaw-child",
         task: "Inspect synthetic files",
       });
-      const context = createDirectChatContext();
+      const context = await createHistoryReadContext();
       const first = await runTaskHandler(
         "tasks.history",
         { taskId: task.taskId, limit: 2 },
@@ -167,6 +190,7 @@ describe("tasks.history", () => {
         { content: "Second child message" },
         { content: "Latest child message" },
       ]);
+      expect(first.payload?.activity).toEqual([{ messageId: expect.any(String), items: [] }]);
       const cursor = expectDefined(first.payload?.nextCursor, "older child transcript cursor");
       const second = await runTaskHandler(
         "tasks.history",
@@ -221,7 +245,7 @@ describe("tasks.history", () => {
         task: "History job",
         detail: { kind: "cron-run", sessionId: oldScope.sessionId },
       });
-      const context = createDirectChatContext();
+      const context = await createHistoryReadContext();
       const first = await runTaskHandler(
         "tasks.history",
         { taskId: task.taskId, limit: 2 },
@@ -244,7 +268,7 @@ describe("tasks.history", () => {
       );
       expect(second.payload?.messages).toMatchObject([{ content: "Old first" }]);
       expect(second.payload?.nextCursor).toBeUndefined();
-      const rotationContext = createDirectChatContext({
+      const rotationContext = await createHistoryReadContext({
         readChatStartupProjection: async () => {
           await upsertSessionEntryCore(oldScope, { sessionId: "concurrent-new-run", updatedAt: 3 });
           return undefined;
@@ -269,7 +293,7 @@ describe("tasks.history", () => {
         visibility: "shared",
         createdActor: { type: "human", source: "profile", id: "another-owner" },
       });
-      const revokedContext = createDirectChatContext({
+      const revokedContext = await createHistoryReadContext({
         readChatStartupProjection: async () => {
           await upsertSessionEntryCore(baseScope, {
             sessionId: "private-new-run",
@@ -292,7 +316,7 @@ describe("tasks.history", () => {
       });
       expect(revoked.calls[0]).toMatchObject([false, undefined, { code: "INVALID_REQUEST" }]);
       expect(revoked.payload?.messages).toBeUndefined();
-      const changedContext = createDirectChatContext({
+      const changedContext = await createHistoryReadContext({
         readChatStartupProjection: async () => {
           markTaskTerminalById({
             taskId: task.taskId,
@@ -358,7 +382,7 @@ describe("tasks.history", () => {
           { taskId: task.taskId },
           {},
           null,
-          createDirectChatContext(),
+          await createHistoryReadContext(),
         );
         expect(result.calls[0]).toMatchObject([false, undefined, { code: "UNAVAILABLE" }]);
         expect(result.payload?.messages).toBeUndefined();
@@ -409,7 +433,7 @@ describe("tasks.history", () => {
         if (change === "requester access") {
           config.gateway!.roles!.definitions.reader!.sessions = { others: "view" };
         }
-        const context = createDirectChatContext({ getRuntimeConfig: () => config });
+        const context = await createHistoryReadContext({ getRuntimeConfig: () => config });
         const task = createNativeTask();
         const entered = createDeferred();
         const history = createDeferred<TasksHistoryResult>();

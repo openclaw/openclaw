@@ -9,6 +9,11 @@ import { parseGitHubLinkTarget } from "./github-link-target.ts";
 import { createAssistantTranscriptPlainTextFallback } from "./markdown-assistant-transcript.ts";
 import { renderMarkdownCodeBlock } from "./markdown-code-blocks.ts";
 import { isHostLocalMarkdownFileHref } from "./markdown-file-links.ts";
+import { markdownGitHubAliasSignature } from "./markdown-github-repositories.ts";
+import {
+  prepareMarkdownHumanMentions,
+  restoreMarkdownHumanMentions,
+} from "./markdown-human-mentions.ts";
 import { createMarkdownParser } from "./markdown-parser.ts";
 import { stripProgressCardRawContentBlocks } from "./markdown-raw-content.ts";
 import {
@@ -39,6 +44,7 @@ const allowedTags = [
   "input",
   "li",
   "ol",
+  "openclaw-person-reference",
   "p",
   "pre",
   "s",
@@ -57,6 +63,8 @@ const allowedTags = [
 
 const allowedAttrs = [
   "checked",
+  "profile-id",
+  "label",
   "class",
   "disabled",
   "href",
@@ -578,8 +586,17 @@ export function toSanitizedMarkdownHtml(
   options: MarkdownRenderOptions = {},
 ): string {
   const renderOptions = normalizeMarkdownRenderOptions(options);
+  const prepared =
+    renderOptions.mode === "document" || markdownLocal.length <= MARKDOWN_PARSE_LIMIT
+      ? prepareMarkdownHumanMentions(
+          markdownLocal,
+          renderOptions.humanMentions,
+          markdownParser.utils.normalizeReference,
+        )
+      : { source: markdownLocal, tokens: [] };
+  renderOptions.humanMentionTokens = prepared.tokens;
   const renderInput = normalizeMarkdownLineBreaks(
-    stripUnsupportedCitationControlMarkers(markdownLocal),
+    stripUnsupportedCitationControlMarkers(prepared.source),
   );
   if (!renderInput.trim()) {
     return "";
@@ -587,7 +604,7 @@ export function toSanitizedMarkdownHtml(
   if (renderInput.length > MARKDOWN_CACHE_MAX_CHARS) {
     return renderSanitizedMarkdown(renderInput, renderOptions);
   }
-  const cacheKey = `${i18n.getLocale()}\0${renderOptions.assistantTranscriptRoleHeaders}\0${renderOptions.codeBlockChrome}\0${renderOptions.codeBlockInteraction}\0${renderOptions.fileLinks}\0${JSON.stringify(renderOptions.githubRepo ? [renderOptions.githubRepo.owner, renderOptions.githubRepo.repo] : null)}\0${renderOptions.interactiveImages}\0${renderOptions.linkFavicons}\0${renderOptions.progressBars}\0${renderOptions.mode}\0${renderOptions.remoteImages}\0${renderOptions.sessionLinks}\0${renderOptions.tableInteractions}\0${renderInput}`;
+  const cacheKey = `${i18n.getLocale()}\0${renderOptions.assistantTranscriptRoleHeaders}\0${renderOptions.codeBlockChrome}\0${renderOptions.codeBlockInteraction}\0${renderOptions.fileLinks}\0${JSON.stringify(renderOptions.githubRepo ? [renderOptions.githubRepo.owner, renderOptions.githubRepo.repo] : null)}\0${markdownGitHubAliasSignature(renderOptions.githubRepositories, renderOptions.githubRepo)}\0${renderOptions.interactiveImages}\0${renderOptions.linkFavicons}\0${renderOptions.progressBars}\0${renderOptions.mode}\0${renderOptions.remoteImages}\0${renderOptions.sessionLinks}\0${renderOptions.tableInteractions}\0${JSON.stringify(renderOptions.humanMentionTokens)}\0${renderInput}`;
   const cached = getCachedMarkdown(cacheKey);
   if (cached !== null) {
     return cached;
@@ -599,7 +616,7 @@ export function toSanitizedMarkdownHtml(
 
 function toPlainTextElement(value: string, options: MarkdownRenderEnv): HTMLDivElement {
   return createAssistantTranscriptPlainTextFallback(
-    normalizeMarkdownLineBreaks(value),
+    restoreMarkdownHumanMentions(normalizeMarkdownLineBreaks(value), options.humanMentionTokens),
     options.assistantTranscriptRoleHeaders,
     () => t("sessionsView.assistant"),
   );
@@ -611,6 +628,10 @@ export function toStreamingMarkdownParts(
   streamKey?: string,
 ): [stableHtml: string, tailHtml: string] {
   const renderOptions = normalizeMarkdownRenderOptions(options);
+  // Explicit selections are complete user input, not incremental assistant text.
+  if (renderOptions.humanMentions.length) {
+    return [toSanitizedMarkdownHtml(markdownLocal, options), ""];
+  }
   const rawInput = normalizeMarkdownLineBreaks(
     stripUnsupportedCitationControlMarkers(markdownLocal),
   );

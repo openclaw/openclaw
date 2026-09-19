@@ -5,7 +5,7 @@ import {
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { listPairedDevicesReadOnly } from "../infra/device-pairing-store-readonly.js";
 import { hasEffectivePairedDeviceRole, type PairedDevice } from "../infra/device-pairing.js";
-import { listBoundWebPushSubscriptions, type BoundWebPushSubscription } from "../infra/push-web.js";
+import type { BoundWebPushSubscription } from "../infra/push-web.js";
 import { roleScopesAllow } from "../shared/operator-scope-compat.js";
 import { resolveUserProfileId } from "../state/user-profiles.js";
 import { resolveOperatorRolePolicyForProfile } from "./operator-role-policy.js";
@@ -89,11 +89,12 @@ export function listCurrentWebPushTargets(params: {
   requiredScopes: readonly string[];
   visibilityScopes?: readonly string[];
   stateDir?: string;
+  subscriptions: readonly BoundWebPushSubscription[];
 }): CurrentWebPushTarget[] {
   const pairedByDeviceId = new Map(
     listPairedDevicesReadOnly(params.stateDir).map((device) => [device.deviceId, device]),
   );
-  return listBoundWebPushSubscriptions(params.stateDir).flatMap((subscription) => {
+  return params.subscriptions.flatMap((subscription) => {
     const target = resolveCurrentWebPushTarget({
       subscription,
       device: pairedByDeviceId.get(subscription.deviceId),

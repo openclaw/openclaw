@@ -3,13 +3,17 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { performance } from "node:perf_hooks";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
-import { expect, it, vi } from "vitest";
+import { beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import {
   runQueuedStoreWrite,
   type StoreWriterQueue,
   type StoreWriterTiming,
 } from "./store-writer-queue.js";
+
+beforeEach(async () => {
+  await nextTurn();
+});
 
 it("marks idle and reentrant execution without deferring either callback", async () => {
   const queues = new Map<string, StoreWriterQueue>();
@@ -147,6 +151,74 @@ it("yields after one expensive ready writer before running its successors", asyn
   } finally {
     await first;
     await settled;
+    clock.mockRestore();
+  }
+});
+
+it("keeps I/O progressing across store backlogs in separate runtime chunks", async () => {
+  const sibling = await importFreshModule<typeof import("./store-writer-queue.js")>(
+    import.meta.url,
+    "./store-writer-queue.js?scope=shared-turn-budget",
+  );
+  const queues = new Map<string, StoreWriterQueue>();
+  const gate = createDeferred();
+  const orders = Array.from({ length: 8 }, () => [] as number[]);
+  const clock = vi.spyOn(performance, "now").mockReturnValue(0);
+  let completed = 0;
+  let done = false;
+  const batches: number[] = [];
+  const writers = orders.flatMap((order, store) => {
+    const enqueue = store % 2 === 0 ? runQueuedStoreWrite : sibling.runQueuedStoreWrite;
+    const storePath = `fair-store-${store}`;
+    const first = enqueue({
+      queues,
+      storePath,
+      label: "held-first",
+      fn: async () => gate.promise,
+    });
+    return [
+      first,
+      ...Array.from({ length: 8 }, (_, value) =>
+        enqueue({
+          queues,
+          storePath,
+          label: "queued",
+          fn: async () => {
+            order.push(value);
+            completed++;
+          },
+        }),
+      ),
+    ];
+  });
+  const settled = Promise.all(writers).finally(() => {
+    done = true;
+  });
+  const ioProgress = (async () => {
+    let previous = 0;
+    for (;;) {
+      await nextTurn();
+      batches.push(completed - previous);
+      previous = completed;
+      if (done) {
+        break;
+      }
+    }
+  })();
+  gate.resolve();
+  try {
+    await settled;
+    await ioProgress;
+    // I/O must not wait for even one successor from every busy store at once.
+    expect(Math.max(...batches)).toBeLessThan(orders.length);
+    expect(completed).toBe(64);
+    for (const order of orders) {
+      expect(order).toEqual([0, 1, 2, 3, 4, 5, 6, 7]);
+    }
+    expect(queues.size).toBe(0);
+  } finally {
+    await settled;
+    await ioProgress;
     clock.mockRestore();
   }
 });

@@ -98,6 +98,7 @@ describe("gateway benchmark discovery isolation", () => {
     pluginRegistry.gatewayDiscoveryServices.push({
       pluginId: "fixture-discovery",
       source: "test",
+      id: "fixture-discovery",
       service: { id: "fixture-discovery", advertise },
     });
 

@@ -147,7 +147,8 @@ cache billing are described in [Model Studio context caching](https://www.alibab
 - Native ChatGPT-backed Responses routes keep the session cache key, honor `none`, and omit both OpenAI lifetime fields.
 - Cache hits surface via `usage.prompt_tokens_details.cached_tokens` (Chat Completions) or `input_tokens_details.cached_tokens` (Responses API), mapped to `cacheRead`.
 - Responses API payloads can also expose `input_tokens_details.cache_write_tokens`, mapped to `cacheWrite` and priced at the model's cache-write rate; Responses payloads that omit the field keep `cacheWrite` at `0`. OpenAI's Chat Completions API does not document or emit a `cache_write_tokens` counter, but OpenClaw still reads `prompt_tokens_details.cache_write_tokens` there for OpenRouter-compatible and DeepSeek-style proxies that report a separate write count.
-- In practice, OpenAI behaves more like an initial-prefix cache than Anthropic's moving full-history reuse - see [OpenAI live expectations](#openai-live-expectations) below.
+- Captured consecutive Responses request bodies retained byte-identical history prefixes, so history rewriting did not explain the observed shortfall. Provider breakpoint placement can affect reported `cacheRead`: OpenAI documents message-end breakpoints for GPT-5.6 and later on the Platform API, while the ChatGPT-backed Responses route was observed to report hits in 1,024-token steps. See [OpenAI live expectations](#openai-live-expectations) below.
+- On Responses routes the whole system prompt, including the volatile suffix below the cache boundary, is sent as `instructions`. A suffix change (date rollover, timezone, elevated level, watched sessions, model identity, Project Memory facts) re-caches from the changed point on the next request; the stable prefix and tools are not split into a separate cached block the way Anthropic checkpoints are. Cache observations report this as a `systemPromptSuffix` change.
 
 ### Amazon Bedrock
 
@@ -323,7 +324,7 @@ pnpm test:docker:live-cli-backend:claude:cache
 ### OpenAI live expectations
 
 - Expect `cacheRead` only; `cacheWrite` stays `0` on Chat Completions.
-- Treat repeated-turn cache reuse as a provider-specific plateau, not Anthropic-style moving full-history reuse.
+- `cacheRead` can lag the full prompt and advance in provider-sized steps. The observed interval below is not a guaranteed bound on uncached input; routing, cache availability, and changed prompt content can also reduce reuse.
 - Floors are watch-only (a miss is logged as a warning, not a test failure), derived from live behavior observed on `gpt-5.4-mini` and unchanged since 2026.4.5:
 
 | Scenario             | `cacheRead` floor | Hit-rate floor |
@@ -335,7 +336,14 @@ pnpm test:docker:live-cli-backend:claude:cache
 
 The most recently observed baseline numbers (from `live-cache-regression-baseline.ts`, recorded 2026-04-04) landed at: stable prefix `cacheRead=4864`, hit rate `0.966`; tool transcript `cacheRead=4608`, hit rate `0.896`; image transcript `cacheRead=4864`, hit rate `0.954`; MCP-style transcript `cacheRead=4608`, hit rate `0.891`.
 
-Why the assertions differ: Anthropic exposes explicit cache breakpoints and moving conversation-history reuse, while OpenAI's effective reusable prefix in live traffic can plateau earlier than the full prompt. Comparing the two providers against a single cross-provider percentage threshold produces false regressions.
+Why the assertions differ: Anthropic exposes explicit cache breakpoints, while OpenAI's reported reuse depends on available matching cached prefixes. The dated measurements below showed stepwise growth, not a universal hit-rate guarantee. Comparing the two providers against a single cross-provider percentage threshold produces false regressions.
+
+Observed on 2026-09-16 with `openai/gpt-5.6-luna` through the ChatGPT-backed Responses route (`transport: auto`, default `cacheRetention`), using both `openclaw agent --local` and an isolated Gateway:
+
+- Every reported `cacheRead` was congruent to 512 modulo 1,024 (`32256`, `33280`, `34304`, `35328`), consistent with 1,024-token reuse increments in this sample, not proof of a fixed provider-wide breakpoint policy. A session whose prompt grew from `32658` to `33098` tokens across four turns kept reporting `32256` until the prompt crossed the next interval; a 60-second pause between turns did not change this.
+- Consecutive request bodies were byte-identical up to the newly appended items, including replayed runtime-context carriers, ruling out history rewriting in those captures without establishing why every token was not reused.
+- Changing the host timezone mid-session (which rewrites the `## Temporal Context` lines inside `instructions`) dropped one turn from `32256` to `22016` cached tokens on a `32974`-token prompt; the following turn was back at `32256`.
+- A new session sometimes reused the shared instructions-and-tools prefix on its first request and sometimes started cold, with or without a shared `prompt_cache_key`; routing looked session-sticky rather than key-driven, which matches OpenAI's note that the key is not needed to optimize caching on GPT-5.6 and later.
 
 ## `diagnostics.cacheTrace` config
 
@@ -359,7 +367,7 @@ diagnostics:
 
 ### What to inspect
 
-Prompt-cache observations record `input`, `cacheRead`, and `cacheWrite` per completed foreground model request alongside its stable system-prefix/tools fingerprint, and flag cache-read drops from the previous request, including reported zero reads; billing totals remain separate. Observations and warnings require cache tracing (`diagnostics.cacheTrace.enabled` or `OPENCLAW_CACHE_TRACE=1`) or debug logging, and trace results identify each request within its attempt.
+Prompt-cache observations record `input`, `cacheRead`, and `cacheWrite` per completed foreground model request alongside its stable system-prefix, volatile-suffix, and tools fingerprints, and flag cache-read drops from the previous request, including reported zero reads; billing totals remain separate. A flagged drop lists the tracked changes since the last request (`model`, `cacheRetention`, `transport`, `streamStrategy`, `systemPrompt`, `systemPromptSuffix`, `tools`, `aggregateToolResultTruncation`). Observations and warnings require cache tracing (`diagnostics.cacheTrace.enabled` or `OPENCLAW_CACHE_TRACE=1`) or debug logging, and trace results identify each request within its attempt.
 
 - Cache trace events are JSONL with staged snapshots like `session:loaded`, `prompt:before`, `stream:context`, and `session:after`.
 - Per-turn cache token impact is visible in normal usage surfaces: `cacheRead` and `cacheWrite` show up in `/usage tokens`, `/status`, session usage summaries, and custom `messages.usageTemplate` layouts.
@@ -370,8 +378,8 @@ Prompt-cache observations record `input`, `cacheRead`, and `cacheWrite` per comp
 ## Quick troubleshooting
 
 - **High `cacheWrite` on most turns**: check for volatile system-prompt inputs; verify the model/provider supports your cache settings.
-- **High `cacheWrite` on Anthropic**: often means the cache breakpoint is landing on content that changes every request.
-- **Low OpenAI `cacheRead`**: verify the stable prefix is at the front, the repeated prefix is at least 1024 tokens, and the same `prompt_cache_key` is reused for turns that should share a cache.
+- **High `cacheWrite` on Anthropic**: often means the cache breakpoint is landing on content that changes every request. A volatile system-suffix change can preserve the stable system-prefix checkpoint while invalidating later conversation checkpoints; cache observations report `systemPromptSuffix` for that change.
+- **Low OpenAI `cacheRead`**: verify the stable prefix is at the front, the repeated prefix is at least 1024 tokens, and the same `prompt_cache_key` is reused for turns that should share a cache. A volatile system-suffix change can cause a one-turn drop that recovers on the next request; enable cache tracing and look for `systemPromptSuffix` in the `[prompt-cache]` warning. A small or stepwise shortfall can reflect provider granularity, but does not rule out prompt changes or cache availability.
 - **No effect from `cacheRetention`**: confirm the model key matches `agents.defaults.models["provider/model"]`.
 - **Bedrock Nova requests without cache hits**: set `cacheRetention` explicitly to `short` or `long`, verify that the model is one of the supported variants above, and check that the prefix meets AWS's token limits; `long` still uses a five-minute TTL.
 

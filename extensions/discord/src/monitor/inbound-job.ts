@@ -1,4 +1,3 @@
-// Discord plugin module implements inbound job behavior.
 import {
   resolveDiscordChannelIdSafe,
   resolveDiscordChannelInfoSafe,

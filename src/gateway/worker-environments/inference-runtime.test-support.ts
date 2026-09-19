@@ -212,6 +212,7 @@ export function setup(
       routeVariants: [],
     },
     configuredRuntimeModels: [],
+    findConfiguredRuntimeModel: () => undefined,
     inlineProviderModels: [],
     createStores: () => ({ authStorage: {} as never, modelRegistry: {} as never }),
   } satisfies PreparedModelRuntimeSnapshot;

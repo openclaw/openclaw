@@ -1,3 +1,9 @@
+# shellcheck source=scripts/pr-lib/github.sh
+source "$(cd "${BASH_SOURCE[0]%/*}" && pwd -P)/github.sh" || return 1
+
+# shellcheck source=scripts/pr-lib/host-tools.sh
+source "${BASH_SOURCE[0]%/*}/host-tools.sh" || return 1
+
 # Shell-local operation state, never inherited freshness from the environment.
 unset PR_MAIN_SHA
 PR_MAIN_SHA=""
@@ -15,7 +21,7 @@ repo_root() {
   local common_git_dir
   base_dir="${script_parent_dir:-$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)}"
 
-  if common_git_dir=$(git -C "$base_dir" rev-parse --path-format=absolute --git-common-dir 2>/dev/null); then
+  if common_git_dir=$(pr_git -C "$base_dir" rev-parse --path-format=absolute --git-common-dir 2>/dev/null); then
     (cd "$(dirname "$common_git_dir")" && pwd)
     return
   fi
@@ -25,21 +31,25 @@ repo_root() {
 }
 
 ensure_gh_api_auth() {
-  # Diagnose only this viewer request's budget. A pooled REST probe can describe
-  # a different credential; raw response/error text must never reach diagnostics.
+  # Retain GraphQL here: a relay's REST /user may identify its caller instead of
+  # the mutation writer. REST is not an equivalent authentication preflight.
   local response exit_code=0
-  response=$(gh_plain api graphql -f 'query=query { viewer { login } }' --include 2>/dev/null) || exit_code=$?
+  response=$(pr_gh_plain api graphql -f 'query=query { viewer { login } }' --include 2>&1) || exit_code=$?
+  if [ "$exit_code" -eq 75 ] || [ "$exit_code" -eq 77 ]; then
+    printf '%s\n' "$response" >&2
+    return 1
+  fi
   printf '%s' "$response" | node "$(dirname "${BASH_SOURCE[0]}")/gh-api-preflight.mjs" "$exit_code"
 }
 
 ensure_full_pr_worktree_checkout() {
   local sparse_checkout
   # An unset key (exit 1) is normal; other Git failures must not skip materialization.
-  sparse_checkout=$(git config --bool core.sparseCheckout 2>/dev/null) || [ "$?" -eq 1 ] || return 1
+  sparse_checkout=$(pr_git config --bool core.sparseCheckout 2>/dev/null) || [ "$?" -eq 1 ] || return 1
   if [ "$sparse_checkout" = "true" ]; then
     # Prepare gates build the whole repository. Inherited sparse settings can
     # omit tracked transitive inputs and turn healthy PRs into false failures.
-    git sparse-checkout disable
+    pr_git sparse-checkout disable
   fi
 }
 
@@ -47,7 +57,7 @@ refuse_review_transition() {
   local pr="$1"
   local reason="$2"
   echo "Refusing scripts/pr transition for PR #$pr: $reason" >&2
-  git status --short >&2
+  pr_git status --short >&2
   return 1
 }
 
@@ -56,7 +66,7 @@ refuse_review_transition() {
 require_no_foreign_untracked() {
   local pr="$1"
   local file
-  git ls-files --others --exclude-standard -z |
+  pr_git ls-files --others --exclude-standard -z |
     while IFS= read -r -d '' file; do
       case "$file" in .local|.local/*) continue ;; esac
       refuse_review_transition "$pr" "untracked files are not owned by scripts/pr."
@@ -71,7 +81,7 @@ require_no_ignored_transition_paths() {
   local file
   # Keep ls-files' literal subtree matching: check-ignore on a directory misses
   # ignored descendants that restore would delete. Bound argv; skip empty diffs.
-  git diff --name-only --no-renames -z "$source" "$target" |
+  pr_git diff --name-only --no-renames -z "$source" "$target" |
     while IFS= read -r -d '' file; do
       case "$file" in
         .local|.local/*)
@@ -89,7 +99,7 @@ require_no_ignored_transition_paths() {
         fi
       done
     done |
-    xargs -0 -r -s 32768 git ls-files --others --ignored --exclude-standard -z -- |
+    xargs -0 -r -s 32768 "${OPENCLAW_PR_GIT:-${GIT_EXEC:-git}}" ls-files --others --ignored --exclude-standard -z -- |
     while IFS= read -r -d '' file; do
       refuse_review_transition "$pr" "ignored file '$file' would be overwritten by the journaled transition."
       return 1
@@ -101,9 +111,9 @@ validate_review_transition_state() {
   local source="$2"
   local target="$3"
   local current
-  current=$(git rev-parse HEAD)
+  current=$(pr_git rev-parse HEAD)
   if { [ "$current" != "$source" ] && [ "$current" != "$target" ]; } ||
-    [ -n "$(git ls-files -u)" ]
+    [ -n "$(pr_git ls-files -u)" ]
   then
     refuse_review_transition "$pr" "the journaled transition state is ambiguous."
     return 1
@@ -154,8 +164,8 @@ recover_review_transition() {
     return 1
   }
   IFS=$'\t' read -r source target mode branch <<<"$fields"
-  if ! GIT_NO_LAZY_FETCH=1 git cat-file -e "$source^{commit}" 2>/dev/null ||
-    ! GIT_NO_LAZY_FETCH=1 git cat-file -e "$target^{commit}" 2>/dev/null ||
+  if ! GIT_NO_LAZY_FETCH=1 pr_git cat-file -e "$source^{commit}" 2>/dev/null ||
+    ! GIT_NO_LAZY_FETCH=1 pr_git cat-file -e "$target^{commit}" 2>/dev/null ||
     { [ "$mode" = "branch" ] && [ "$branch" != "temp/pr-$pr" ]; }
   then
     refuse_review_transition "$pr" "the transition journal names an invalid endpoint or branch."
@@ -165,25 +175,25 @@ recover_review_transition() {
   validate_review_transition_state "$pr" "$source" "$target" || return 1
   # Restore can write files before committing its index. Rebuild the validated
   # source index so replay also owns source-only files left after index deletion.
-  git read-tree "$source" || return 1
-  if ! git diff --quiet "$source" "$target"; then
-    git diff --name-only --no-renames -z "$source" "$target" |
-      git --literal-pathspecs restore --source="$target" --staged --worktree \
+  pr_git read-tree "$source" || return 1
+  if ! pr_git diff --quiet "$source" "$target"; then
+    pr_git diff --name-only --no-renames -z "$source" "$target" |
+      pr_git --literal-pathspecs restore --source="$target" --staged --worktree \
         --pathspec-from-file=- --pathspec-file-nul || return 1
   fi
-  if [ "$(git write-tree)" != "$(git rev-parse "$target^{tree}")" ] || ! git diff --quiet; then
+  if [ "$(pr_git write-tree)" != "$(pr_git rev-parse "$target^{tree}")" ] || ! pr_git diff --quiet; then
     refuse_review_transition "$pr" "the tracked tree did not reach the journaled target."
     return 1
   fi
   if [ "$mode" = "branch" ]; then
-    git checkout -B "$branch" "$target" || return 1
+    pr_git checkout -B "$branch" "$target" || return 1
   else
-    git checkout --detach "$target" || return 1
+    pr_git checkout --detach "$target" || return 1
   fi
 
   local actual_branch
-  actual_branch=$(git branch --show-current)
-  if [ "$(git rev-parse HEAD)" != "$target" ] || ! git diff --quiet || ! git diff --cached --quiet ||
+  actual_branch=$(pr_git branch --show-current)
+  if [ "$(pr_git rev-parse HEAD)" != "$target" ] || ! pr_git diff --quiet || ! pr_git diff --cached --quiet ||
     { [ "$mode" = "branch" ] && [ "$actual_branch" != "$branch" ]; } ||
     { [ "$mode" = "detached" ] && [ -n "$actual_branch" ]; } ||
     ! require_no_foreign_untracked "$pr"
@@ -199,7 +209,7 @@ checkout_pr_worktree_target() {
   local target_ref="$2"
   local branch="${3:-}"
   recover_review_transition "$pr" || return 1
-  if [ -n "$(git ls-files -u)" ] || ! git diff --quiet || ! git diff --cached --quiet ||
+  if [ -n "$(pr_git ls-files -u)" ] || ! pr_git diff --quiet || ! pr_git diff --cached --quiet ||
     ! require_no_foreign_untracked "$pr"
   then
     refuse_review_transition "$pr" "foreign state blocks a new transition."
@@ -207,8 +217,8 @@ checkout_pr_worktree_target() {
   fi
 
   local source target mode=detached
-  source=$(git rev-parse HEAD) || return 1
-  target=$(git rev-parse "$target_ref^{commit}") || return 1
+  source=$(pr_git rev-parse HEAD) || return 1
+  target=$(pr_git rev-parse "$target_ref^{commit}") || return 1
   require_no_ignored_transition_paths "$pr" "$source" "$target" || return 1
   [ -z "$branch" ] || mode=branch
   write_review_transition_journal "$pr" "$source" "$target" "$mode" "$branch" || return 1
@@ -216,15 +226,27 @@ checkout_pr_worktree_target() {
 }
 
 fetch_canonical_ref() {
-  local refspec="$1" root source git_dir
+  local refspec="$1" root source git_dir promisor filter=""
   shift
   root=$(repo_root) || return 1
-  source=$(git -C "$root" remote get-url origin) || return 1
-  git_dir=$(git rev-parse --absolute-git-dir) || return 1
+  source=$(pr_git -C "$root" remote get-url origin) || return 1
+  git_dir=$(pr_git rev-parse --absolute-git-dir) || return 1
   # Resolve relative URLs at the canonical root; ignore worktree origin/refmaps.
   # Other PRs and ordinary fetches own shared refs and the root FETCH_HEAD.
   # Automatic maintenance can prune unrelated worktree metadata, even on fetch.
-  git -C "$root" --git-dir="$git_dir" fetch --no-auto-maintenance --no-tags --refmap= "$@" "$source" "$refspec"
+  set -- fetch --no-auto-maintenance --no-tags --refmap= "$@" "$source" "$refspec"
+  promisor=$(pr_git -C "$root" config --bool remote.origin.promisor) || [ "$?" -eq 1 ] || return 1
+  if [ "$promisor" = true ]; then
+    filter=$(pr_git -C "$root" config --get remote.origin.partialclonefilter) || [ "$?" -eq 1 ] || return 1
+    if [ -n "$filter" ]; then
+      # Literal URLs lose origin's filter; --filter would persist a new remote.
+      # Project the canonical promisor settings only for this fetch.
+      set -- "--config-env=remote.$source.promisor=PR_CANONICAL_FETCH_PROMISOR" \
+        "--config-env=remote.$source.partialclonefilter=PR_CANONICAL_FETCH_FILTER" "$@"
+    fi
+  fi
+  PR_CANONICAL_FETCH_PROMISOR="$promisor" PR_CANONICAL_FETCH_FILTER="$filter" \
+    pr_git -C "$root" --git-dir="$git_dir" "$@"
 }
 
 fetch_canonical_main() {
@@ -261,7 +283,7 @@ fetch_pr_head() {
   # GitHub's pull/head projection can lag live PR metadata and the branch.
   # Fetch immutable source bytes without overwriting the operation's main checkpoint.
   fetch_canonical_ref "$refspec" --no-write-fetch-head || return 1
-  fetched_sha=$(GIT_NO_LAZY_FETCH=1 git rev-parse --verify "${destination:-$expected_sha}^{commit}") || return 1
+  fetched_sha=$(GIT_NO_LAZY_FETCH=1 pr_git rev-parse --verify "${destination:-$expected_sha}^{commit}") || return 1
   if [ "$fetched_sha" != "$expected_sha" ]; then
     echo "PR head changed while fetching it (expected $expected_sha, fetched $fetched_sha)." >&2
     return 1
@@ -280,8 +302,23 @@ refresh_main_snapshot() {
   PR_MAIN_SHA=""
   local sha
   fetch_canonical_main || return 1
-  sha=$(git rev-parse --verify 'FETCH_HEAD^{commit}') || return 1
+  sha=$(pr_git rev-parse --verify 'FETCH_HEAD^{commit}') || return 1
   PR_MAIN_SHA="$sha"
+}
+
+provision_pr_worktree() {
+  local root="$1" pr="$2" seed_sha="$3" provisioner_dir
+  provisioner_dir=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P) || return 1
+  # Runtime code and workspace aliases follow the wrapper's selected trust anchor.
+  # Pass current shell lock facts; the adapter consumes the owner's live predicate.
+  (
+    # The trusted wrapper pins installed packages; caller module-dir overrides
+    # must not redirect this source loader or reconcile its dependency links.
+    unset PNPM_CONFIG_MODULES_DIR pnpm_config_modules_dir npm_config_modules_dir
+    TSX_TSCONFIG_PATH="$provisioner_dir/../../tsconfig.json" \
+      node --import "$provisioner_dir/../tsx.mjs" "$provisioner_dir/worktree-provision.mts" \
+        "$root" "$pr" "$seed_sha" "$PR_OPERATION_LOCK_REF" "$PR_OPERATION_LOCK_OWNER_OID"
+  ) || return 1
 }
 
 enter_worktree() {
@@ -320,10 +357,12 @@ enter_worktree() {
     # The PR lock owns this existing temp branch, not shared origin/main or FETCH_HEAD.
     PR_MAIN_SHA=""
     fetch_canonical_main "refs/heads/temp/pr-$pr" || return 1
-    git -C "$root" worktree add -B "temp/pr-$pr" "$dir" "refs/heads/temp/pr-$pr" || return 1
+    local seed_sha
+    seed_sha=$(GIT_NO_LAZY_FETCH=1 pr_git -C "$root" rev-parse --verify "refs/heads/temp/pr-$pr^{commit}") || return 1
+    provision_pr_worktree "$root" "$pr" "$seed_sha" || return 1
     resolved_parent=$(resolve_existing_dir_path "$(dirname "$dir")") || return 1
     resolved_dir="$resolved_parent/pr-$pr"
-    initialized_sha=$(git -C "$dir" rev-parse --verify HEAD) || return 1
+    initialized_sha=$(pr_git -C "$dir" rev-parse --verify HEAD) || return 1
     state=$(pr_worktree_state "$dir" "" entry) || return $?
     registration=$(worktree_registration_state "$resolved_dir") || return $?
     [ "$registration" = registered ] || return 1
@@ -336,8 +375,8 @@ enter_worktree() {
   # that is not a worktree lets discovery escape up into the shared canonical
   # checkout, where a sibling session's branch would be clobbered.
   local actual_toplevel actual_identity expected_identity
-  actual_toplevel=$(resolve_existing_dir_path "$(git rev-parse --path-format=absolute --show-toplevel 2>/dev/null)" 2>/dev/null || true)
-  actual_identity=$(git rev-parse --path-format=absolute --git-dir --git-common-dir) || return $?
+  actual_toplevel=$(resolve_existing_dir_path "$(pr_git rev-parse --path-format=absolute --show-toplevel 2>/dev/null)" 2>/dev/null || true)
+  actual_identity=$(pr_git rev-parse --path-format=absolute --git-dir --git-common-dir) || return $?
   expected_identity=$(printf '%s\n' "$state" | jq -r '.admin, .common') || return $?
   if [ "$actual_toplevel" != "$resolved_dir" ] || [ "$actual_identity" != "$expected_identity" ]; then
     echo "Refusing scripts/pr operation for PR #$pr: expected worktree $resolved_dir, Git resolved ${actual_toplevel:-no repository}; scripts/pr refuses to mutate the shared canonical checkout." >&2
@@ -360,7 +399,7 @@ pr_meta_json() {
   local pr="$1"
   local metadata files expected_file_count actual_file_count head_before head_after head_after_json
   local repo_json repo_nwo repo_url identity_filter identity_before identity_after
-  repo_json=$(gh_plain repo view --json nameWithOwner,url) || return 1
+  repo_json=$(pr_gh_plain repo view --json nameWithOwner,url) || return 1
   if ! repo_nwo=$(printf '%s\n' "$repo_json" | jq -er '.nameWithOwner | select(type == "string" and test("^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$"))') ||
     ! repo_url=$(printf '%s\n' "$repo_json" | jq -er --arg repo "$repo_nwo" '.url | select(type == "string" and test("^https://[A-Za-z0-9.-]+/[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$") and endswith("/" + $repo))'); then
     echo "Invalid base repository identity for PR #$pr." >&2
@@ -384,8 +423,7 @@ pr_meta_json() {
     return 1
   fi
 
-  # gh truncates large file arrays at 100. A valid partial list (or a missing
-  # changeType on older gh versions) can use REST, but null is never an empty diff.
+  # The REST adapter collects all file pages; unavailable data is never an empty diff.
   if ! printf '%s\n' "$metadata" | jq -e '
     def count: type == "number" and . >= 0 and . == floor;
     .changedFiles as $count | .files
@@ -398,33 +436,6 @@ pr_meta_json() {
     return 1
   fi
   files=$(printf '%s\n' "$metadata" | jq -c '.files') || return 1
-  actual_file_count=$(printf '%s\n' "$files" | jq -r 'length') || return 1
-  if [ "$actual_file_count" -eq "$expected_file_count" ] &&
-    printf '%s\n' "$files" | jq -e 'all(.[]; .changeType | type == "string" and length > 0)' >/dev/null; then
-    files=$(printf '%s\n' "$files" | jq -c 'map({
-      path, additions, deletions,
-      changeType: (if (.changeType | ascii_downcase) == "removed" or (.changeType | ascii_downcase) == "deleted"
-        then "DELETED" else (.changeType | ascii_upcase) end)
-    })') || return 1
-  else
-    if ! files=$(
-      set -o pipefail
-      gh_plain api --paginate "repos/$repo_nwo/pulls/$pr/files?per_page=100" -H 'Cache-Control: max-age=0' |
-        jq -ces '
-          if length > 0 and all(.[]; type == "array") then add
-          else error("expected complete array pages") end
-          | map({
-              path: .filename,
-              additions: .additions,
-              deletions: .deletions,
-              changeType: (if .status == "removed" then "DELETED" else (.status | ascii_upcase) end)
-            })
-        '
-    ); then
-      echo "Failed to collect paginated PR file metadata for #$pr." >&2
-      return 1
-    fi
-  fi
 
   head_after_json=$(GH_REPO="$repo_nwo" read_pr_view_json "$pr" "number,url,baseRefName,baseRefOid,headRefName,headRefOid,headRepository,headRepositoryOwner") || return 1
   head_after=$(pr_view_string_field "$head_after_json" "headRefOid" "$pr" "Retry review initialization.") || return 1
@@ -509,7 +520,10 @@ list_pr_worktrees() {
       continue
     fi
     local info
-    info=$(gh pr view "$pr" --json state,title,url --jq '[.state, .title, .url] | @tsv' 2>/dev/null || printf 'UNKNOWN\t(unavailable)\t')
+    info=$(pr_gh pr view "$pr" --json state,title,url --jq '[.state, .title, .url] | @tsv') || {
+      [ "$?" -ne 75 ] || return 1
+      info=$'UNKNOWN\t(unavailable)\t'
+    }
     printf '%s\t%s\t%s\n' "$pr" "$dir" "$info"
   done
 
@@ -547,7 +561,10 @@ gc_pr_worktrees() {
       continue
     fi
     local state
-    state=$(gh pr view "$pr" --json state --jq .state 2>/dev/null || printf 'UNKNOWN')
+    state=$(pr_gh pr view "$pr" --json state --jq .state) || {
+      [ "$?" -ne 75 ] || { release_pr_operation_lock; return 1; }
+      state=UNKNOWN
+    }
     case "$state" in
       MERGED|CLOSED)
         if ! require_worktree_cleanup_evidence "$dir"; then

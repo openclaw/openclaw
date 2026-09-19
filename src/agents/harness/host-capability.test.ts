@@ -156,6 +156,32 @@ afterEach(() => {
 });
 
 describe("agent harness host capability", () => {
+  it.each([
+    { available: undefined, expected: [] },
+    { available: false, expected: ["github_identity_status"] },
+    { available: true, expected: ["github_identity_status", "github_publish"] },
+  ])(
+    "captures GitHub availability independently of plugin inputs: $available",
+    async ({ available, expected }) => {
+      const { attempt } = await admittedAttempt("github-tools", {
+        githubPublicationAvailable: available,
+      });
+      const host = createAgentHarnessHostCapabilities({ attempt, pluginId: "copilot" });
+      attempt.githubPublicationAvailable = available !== true;
+      try {
+        const tools = host.capabilities.createToolSurface?.({
+          githubPublicationAvailable: available !== true,
+          config: { tools: { profile: "coding" } },
+        });
+        expect(
+          tools?.filter((tool) => tool.name.startsWith("github_")).map((tool) => tool.name),
+        ).toEqual(expected);
+      } finally {
+        host.close();
+      }
+    },
+  );
+
   it.each(["restart", "unrelated scope", "user abort", "timeout"] as const)(
     "preserves the original cancellation when a startup capability closes: %s",
     async (reason) => {

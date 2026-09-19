@@ -1,9 +1,6 @@
 import "./tooltip.ts";
-import {
-  GITHUB_HOVERCARD_PROVIDER_TAG,
-  githubLinkAnchorFromEvent,
-  parseGitHubLinkTarget,
-} from "./github-link-target.ts";
+import { anchorFromNavigationEvent } from "../lib/navigation-click.ts";
+import { ownsHoverPreview } from "./link-reader-hovercard-registration.ts";
 import { collectTooltipNameText, isTooltipTriggerElement } from "./tooltip-content.ts";
 
 function titleNamesElement(element: Element) {
@@ -65,7 +62,7 @@ export function installTitleTooltips(ownerDocument: Document) {
   // Preview eligibility owns the hint before its lazy runtime or request settles.
   // Title suppression and accessible naming still use the normal restoration lifecycle.
   const ownsPreview = (link: HTMLAnchorElement | null | undefined) =>
-    Boolean(link?.closest(GITHUB_HOVERCARD_PROVIDER_TAG) && parseGitHubLinkTarget(link.href));
+    Boolean(link && ownsHoverPreview(link));
   const content = () => {
     if (ownsPreview(active?.link)) {
       return "";
@@ -150,7 +147,7 @@ export function installTitleTooltips(ownerDocument: Document) {
       return;
     }
     const elements = event.composedPath().filter(isTooltipTriggerElement);
-    const link = githubLinkAnchorFromEvent(event);
+    const link = anchorFromNavigationEvent(event);
     // Iframe titles name browsing contexts, not hints. Explicit wrappers already
     // own their trigger; adapting those again would create competing popups.
     const explicit = elements.some((element) => element.localName === "openclaw-tooltip");

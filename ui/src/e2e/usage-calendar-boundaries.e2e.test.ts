@@ -66,6 +66,7 @@ suite.define(() => {
         byAgent: [],
         byChannel: [],
         daily: [],
+        costDaily: [],
       };
       const calendars = [
         { timeZone: "utc", date: utcDate, mode: "utc" },
@@ -109,22 +110,13 @@ suite.define(() => {
                         },
                       ],
                       totals,
-                      aggregates,
+                      aggregates: { ...aggregates, costDaily: [{ date, ...totals }] },
                     },
                   })),
                   {
                     match: {},
                     response: { updatedAt, sessions: [], totals: emptyTotals, aggregates },
                   },
-                ],
-              },
-              "usage.cost": {
-                cases: [
-                  ...calendars.map(({ date, mode }) => ({
-                    match: { endDate: date, mode },
-                    response: { updatedAt, days: 1, daily: [{ date, ...totals }], totals },
-                  })),
-                  { match: {}, response: { updatedAt, days: 1, daily: [], totals: emptyTotals } },
                 ],
               },
               "usage.status": { updatedAt, providers: [] },
@@ -140,7 +132,9 @@ suite.define(() => {
           await gateway.waitForRequest("sessions.usage", { match: { agentScope: "all" } });
           for (const { timeZone, date, mode } of calendars) {
             const initialRequests = (await gateway.getRequests("sessions.usage")).length;
-            await page.locator(".usage-select").selectOption(timeZone);
+            await page
+              .getByRole("combobox", { name: "Time zone", exact: true })
+              .selectOption(timeZone);
             await gateway.waitForRequest("sessions.usage", { after: initialRequests });
             for (const [label, days] of [
               ["Today", 1],
@@ -192,11 +186,6 @@ suite.define(() => {
                 );
               }
               expect(request.params).toMatchObject({ startDate, endDate: date, mode });
-              expect((await gateway.getRequests("usage.cost")).at(-1)?.params).toMatchObject({
-                startDate,
-                endDate: date,
-                mode,
-              });
               expect(
                 await page
                   .locator(".usage-date-input")
@@ -320,14 +309,14 @@ suite.define(() => {
                 byAgent: [],
                 byChannel: [],
                 daily: [],
+                costDaily: [{ date, ...totals }],
               },
             },
-            "usage.cost": { updatedAt: end, days: 1, daily: [{ date, ...totals }], totals },
             "usage.status": { updatedAt: end, providers: [] },
           },
         });
         await page.goto(`${suite.server.baseUrl}usage`);
-        await page.locator(".usage-select").selectOption("local");
+        await page.getByRole("combobox", { name: "Time zone", exact: true }).selectOption("local");
         const dateInputs = await page.locator(".usage-date-input").all();
         expect(dateInputs).toHaveLength(2);
         for (const input of dateInputs) {
@@ -454,16 +443,16 @@ suite.define(() => {
                 byAgent: [],
                 byChannel: [],
                 daily: [],
+                costDaily: [{ date, ...totals }],
               },
             },
-            "usage.cost": { updatedAt, days: 1, daily: [{ date, ...totals }], totals },
             "usage.status": { updatedAt, providers: [] },
             "sessions.usage.timeseries": { points },
             "sessions.usage.logs": { logs: [] },
           },
         });
         await page.goto(`${suite.server.baseUrl}usage`);
-        await page.locator(".usage-select").selectOption("local");
+        await page.getByRole("combobox", { name: "Time zone", exact: true }).selectOption("local");
         const dateInputs = await page.locator(".usage-date-input").all();
         expect(dateInputs).toHaveLength(2);
         for (const input of dateInputs) {
@@ -492,7 +481,7 @@ suite.define(() => {
             "Sep 6, 01:00 AM · 100 tokens · Out 0 · In 100 · CW 0 · CR 0",
             "Sep 6, 11:59 PM · 100 tokens · Out 0 · In 100 · CW 0 · CR 0",
           ]);
-        await page.locator(".usage-select").selectOption("utc");
+        await page.getByRole("combobox", { name: "Time zone", exact: true }).selectOption("utc");
         await expect
           .poll(async () => (await gateway.getRequests("sessions.usage")).at(-1)?.params)
           .toMatchObject({ startDate: date, endDate: date, mode: "utc" });

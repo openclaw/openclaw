@@ -127,6 +127,12 @@ describe.skipIf(process.platform === "win32")("native multi-invocation report ow
         expect(index.merge).toMatchObject({ code: 0, signal: null });
       }
       if (mode === "watchdog") {
+        expect(
+          fs.readFileSync(
+            path.join(path.dirname(path.dirname(result.output)), "cold-started"),
+            "utf8",
+          ),
+        ).toBe("started");
         expect(index.entries[0].attempts).toHaveLength(2);
         expect(index.entries[0].attempts[0].outcome.noOutputTimedOut).toBe(true);
       }
@@ -146,7 +152,7 @@ describe.skipIf(process.platform === "win32")("native multi-invocation report ow
     },
   );
 
-  it("loads each file-backed merge project once and preserves its final identity", async () => {
+  it("loads each file-backed merge project once and preserves its identity and caches", async () => {
     const result = await run("config-load-once");
     expect(result.code, result.stderr).toBe(0);
     expect(inventory(json(result.output))).toEqual(expected);
@@ -159,6 +165,16 @@ describe.skipIf(process.platform === "win32")("native multi-invocation report ow
     ).toEqual(["alpha", "beta"]);
     const replay = json(path.join(result.reportSet!, "aggregate.json.capture.json"));
     const root = path.dirname(path.dirname(result.output));
+    const defaultCache = path.join(root, "node_modules/.vitest-cache");
+    expect(fs.readFileSync(path.join(defaultCache, "canary"), "utf8")).toBe("another cache owner");
+    expect(fs.readFileSync(path.join(defaultCache, "_metadata.json"), "utf8")).toBe(
+      '{"lockfileHash":"unrelated-owner"}',
+    );
+    for (const name of ["alpha", "beta"]) {
+      expect(json(path.join(root, `fs-cache-${name}/_metadata.json`)).lockfileHash).toBeTypeOf(
+        "string",
+      );
+    }
     expect(replay.projects).toEqual(
       (
         [

@@ -1,0 +1,25 @@
+name: Setup security review policy runtime
+description: Install trusted policy dependencies without workspace dependencies or lifecycle scripts.
+runs:
+  using: composite
+  steps:
+    - name: Setup Node.js
+      uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      with:
+        node-version: "24.x"
+        package-manager-cache: false
+
+    - name: Install trusted policy dependencies
+      shell: bash
+      run: |
+        set -euo pipefail
+        policy_runtime="$(mktemp -d "${RUNNER_TEMP}/openclaw-security-review.XXXXXX")"
+        cp "$GITHUB_ACTION_PATH/package.json" "$GITHUB_ACTION_PATH/package-lock.json" "$policy_runtime/"
+        (
+          cd "$policy_runtime"
+          npm ci --ignore-scripts --no-audit --no-fund
+        )
+        mkdir -p "$GITHUB_WORKSPACE/scripts/github/node_modules"
+        for dependency in yaml minimatch; do
+          ln -s "$policy_runtime/node_modules/$dependency" "$GITHUB_WORKSPACE/scripts/github/node_modules/$dependency"
+        done

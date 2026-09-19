@@ -35,7 +35,12 @@ describe("worker environment service", () => {
           provisionOperationId: operationId,
         });
         expect(profile).toEqual({ region: "test" });
-        expect(options).toEqual({ profileId: "development", machineClass: "large", os: "os-a" });
+        expect(options).toEqual({
+          profileId: "development",
+          machineClass: "large",
+          os: "os-a",
+          assertCurrent: expect.any(Function),
+        });
         return allocate;
       },
     );
@@ -164,7 +169,12 @@ describe("worker environment service", () => {
         });
         support.getDevelopmentProfile().settings = { region: "mutated" };
         expect(profile).toEqual({ region: "test" });
-        expect(options).toEqual({ profileId: "development", machineClass: "beast", os: "os-a" });
+        expect(options).toEqual({
+          profileId: "development",
+          machineClass: "beast",
+          os: "os-a",
+          assertCurrent: expect.any(Function),
+        });
         return { leaseId: "lease-1", ssh: support.SSH_ENDPOINT };
       },
     });
@@ -262,7 +272,7 @@ describe("worker environment service", () => {
     expect(provision).toHaveBeenCalledWith(
       { region: "test" },
       expect.stringMatching(/^provision:v2:[a-f0-9]{64}$/u),
-      { profileId: "development" },
+      { profileId: "development", assertCurrent: expect.any(Function) },
     );
   });
 
@@ -289,7 +299,7 @@ describe("worker environment service", () => {
     expect(provision).toHaveBeenCalledWith(
       { region: "test" },
       expect.stringMatching(/^provision:v2:[a-f0-9]{64}$/u),
-      { profileId: "development" },
+      { profileId: "development", assertCurrent: expect.any(Function) },
     );
   });
 
@@ -355,7 +365,7 @@ describe("worker environment service", () => {
       expect(provision).toHaveBeenCalledWith(
         { region: "test" },
         expect.stringMatching(/^provision:v2:[a-f0-9]{64}$/u),
-        { profileId: "development", executionMode: mode },
+        { profileId: "development", executionMode: mode, assertCurrent: expect.any(Function) },
       );
       expect(support.testState.bootstrapWorker).toHaveBeenCalledTimes(transport === "SSH" ? 1 : 0);
     },

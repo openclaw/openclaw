@@ -19,6 +19,7 @@ import {
   prepareSqliteQueryTakeFirstSync,
   sqliteStringSet,
 } from "./kysely-sync.js";
+import { assertNoActiveSqliteReaders, withSqliteReaderOwner } from "./sqlite-reader-lifecycle.js";
 
 type SyncHelperTestDatabase = {
   items: {
@@ -372,6 +373,25 @@ describe("kysely sync helpers", () => {
     ]);
     expect(prepares.calls()).toBe(4);
     database.exec("drop table items");
+  });
+
+  it("attributes active lazy readers and releases them after early return", () => {
+    database = new DatabaseSync(":memory:");
+    database.exec("create table items (id integer primary key, name text not null)");
+    database.exec("insert into items values (1, 'Ada'), (2, 'Grace')");
+    const db = getNodeSqliteKysely<SyncHelperTestDatabase>(database);
+    const iterator = withSqliteReaderOwner(
+      { operation: "fixture.rows", ownerKind: "worker", actorId: 7 },
+      () => iterateSqliteQuerySync(database!, db.selectFrom("items").selectAll().orderBy("id")),
+    );
+
+    expect(iterator.next()).toEqual({ done: false, value: { id: 1, name: "Ada" } });
+    expect(() => assertNoActiveSqliteReaders(database!, "fixture worker")).toThrow(
+      "oldest operation=fixture.rows",
+    );
+
+    iterator.return?.();
+    expect(() => assertNoActiveSqliteReaders(database!, "fixture worker")).not.toThrow();
   });
 
   it("does not reuse an active cached statement during synchronous callback re-entry", () => {

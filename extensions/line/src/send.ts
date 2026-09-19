@@ -1,4 +1,3 @@
-// Line plugin module implements send behavior.
 import { randomUUID } from "node:crypto";
 import { HTTPFetchError, messagingApi } from "@line/bot-sdk";
 import lineBotSdkPackage from "@line/bot-sdk/package.json" with { type: "json" };
@@ -256,8 +255,13 @@ async function postLineProviderMessages(
   retryKey?: string,
   authorize?: LineSendOpts["authorize"],
 ): Promise<LineProviderResponse> {
-  if (authorize && !(await authorize())) {
-    throw new Error("LINE send authorization denied");
+  const requestBody = JSON.stringify(request);
+  if (authorize) {
+    const authorized = authorize();
+    // A synchronous handoff check and the request must share one execution turn.
+    if (!(typeof authorized === "boolean" ? authorized : await authorized)) {
+      throw new Error("LINE send authorization denied");
+    }
   }
   const response = await fetchWithRuntimeDispatcherOrMockedGlobal(
     `https://api.line.me/v2/bot/message/${operation}`,
@@ -269,7 +273,7 @@ async function postLineProviderMessages(
         "User-Agent": `@line/bot-sdk/${lineBotSdkPackage.version}`,
         ...(retryKey ? { "X-Line-Retry-Key": retryKey } : {}),
       },
-      body: JSON.stringify(request),
+      body: requestBody,
     },
   );
 

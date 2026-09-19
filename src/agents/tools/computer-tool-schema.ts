@@ -62,6 +62,12 @@ export function createComputerToolSchema(
                 "Paired node id or display name; implies target=node. Omit when selecting the sole connected computer-capable node.",
             }),
           ),
+          environmentId: Type.Optional(
+            Type.String({
+              description:
+                "Conversation-attached environment ID returned by the environment tool. Selects its desktop; later calls retain that target. Cannot combine with target, node, or Gateway overrides.",
+            }),
+          ),
         }
       : {}),
     // Codex accepts a single schema in array `items`, not tuple item arrays.

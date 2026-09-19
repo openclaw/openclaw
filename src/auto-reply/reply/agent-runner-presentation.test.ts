@@ -69,7 +69,6 @@ function createPresentation(
   return createAgentTurnPresentation({
     turn,
     replyMediaContext: { normalizePayload: async (payload) => payload },
-    directlySentBlockKeys: new Set(),
     directBlockDeliveries: [],
     heartbeatState: { didLogStrip: false },
   });

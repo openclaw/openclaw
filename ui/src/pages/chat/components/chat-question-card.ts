@@ -1,11 +1,15 @@
-// Control UI chat module renders the shared docked question panel and terminal summaries.
-import { LitElement, html, nothing } from "lit";
+import { html, nothing } from "lit";
 import { property, state } from "lit/decorators.js";
-import type { QuestionPrompt } from "../../../app/question-prompt.ts";
+import type { QuestionDraft, QuestionPrompt } from "../../../app/question-prompt.ts";
 import { icons } from "../../../components/icons.ts";
 import { t } from "../../../i18n/index.ts";
 import { formatRelativeTimestamp } from "../../../lib/format.ts";
-import { renderQuestionFreeText, renderQuestionOptions } from "./chat-question-answer-controls.ts";
+import { OpenClawLightDomElement } from "../../../lit/openclaw-element.ts";
+import {
+  questionDraftValues,
+  renderQuestionFreeText,
+  renderQuestionOptions,
+} from "./chat-question-answer-controls.ts";
 import { renderQuestionExternalStep } from "./chat-question-external-step.ts";
 
 type QuestionPanelQuestion = QuestionPrompt["questions"][number];
@@ -21,7 +25,7 @@ type QuestionPanelViewModel = {
   autoFocus?: boolean;
   disabled: boolean;
   submitting?: boolean;
-  answersById?: Record<string, string[]>;
+  drafts: Map<string, QuestionDraft>;
   error?: string | null;
   requestPosition?: { current: number; total: number };
 };
@@ -30,7 +34,7 @@ type QuestionPanelProps = {
   model: QuestionPanelViewModel;
   onSubmit?: (answersById: Record<string, string[]>) => void | Promise<void>;
   onSkip?: () => void | Promise<void>;
-  onAnswersChange?: (answersById: Record<string, string[]>) => void;
+  onChange?: () => void;
   onSecretStoreAllowedHostsChange?: (allowedHosts: string) => void;
   onDismissError?: () => void;
   onCollapsedChange?: (collapsed: boolean) => void;
@@ -49,31 +53,11 @@ type GatewayQuestionPanelOptions = {
   onNextRequest?: () => void;
 };
 
-function promptDraftAnswers(prompt: QuestionPrompt): Record<string, string[]> {
-  return Object.fromEntries(
-    prompt.questions.map((question) => {
-      const draft = prompt.drafts.get(question.questionId);
-      const freeText = question.isSecret ? draft?.freeText : draft?.freeText.trim();
-      return [question.questionId, [...(draft?.selected ?? []), ...(freeText ? [freeText] : [])]];
-    }),
-  );
-}
-
-function updatePromptDrafts(prompt: QuestionPrompt, answersById: Record<string, string[]>): void {
-  for (const question of prompt.questions) {
-    const values = answersById[question.questionId] ?? [];
-    const optionLabels = new Set(question.options.map((option) => option.label));
-    prompt.drafts.set(question.questionId, {
-      selected: new Set(values.filter((value) => optionLabels.has(value))),
-      freeText: values.find((value) => !optionLabels.has(value)) ?? "",
-    });
-  }
-}
-
 export function createGatewayQuestionPanelProps(
   prompt: QuestionPrompt,
   options: GatewayQuestionPanelOptions,
 ): QuestionPanelProps {
+  const { onChange, onSubmit, onSkip } = options;
   return {
     model: {
       requestKey: prompt.id,
@@ -83,41 +67,38 @@ export function createGatewayQuestionPanelProps(
       sessionKey: prompt.sessionKey,
       secretStoreAllowedHostsDraft: prompt.secretStoreAllowedHostsDraft,
       collapsed: options.collapsed ?? false,
-      disabled: prompt.status !== "pending" || prompt.submitting,
+      disabled: prompt.status !== "pending",
       submitting: prompt.submitting,
-      answersById: promptDraftAnswers(prompt),
+      drafts: prompt.drafts,
       error: prompt.error,
       requestPosition: options.requestPosition,
     },
-    onAnswersChange: (answersById) => {
-      updatePromptDrafts(prompt, answersById);
-      options.onChange?.();
-    },
+    onChange,
     onSecretStoreAllowedHostsChange: (allowedHosts) => {
       prompt.secretStoreAllowedHostsDraft = allowedHosts;
-      options.onChange?.();
+      onChange?.();
     },
-    onSubmit: options.onSubmit
+    onSubmit: onSubmit
       ? async (answersById) => {
-          await options.onSubmit?.(answersById);
+          await onSubmit(answersById);
           if (prompt.status === "pending" && prompt.error) {
             throw new Error(prompt.error);
           }
         }
       : undefined,
-    onSkip: options.onSkip
+    onSkip: onSkip
       ? async () => {
-          await options.onSkip?.();
+          await onSkip();
           if (prompt.status === "pending" && prompt.error) {
             throw new Error(prompt.error);
           }
         }
       : undefined,
     onDismissError:
-      prompt.error && options.onChange
+      prompt.error && onChange
         ? () => {
             prompt.error = null;
-            options.onChange?.();
+            onChange();
           }
         : undefined,
     onCollapsedChange: options.onCollapsedChange,
@@ -157,9 +138,12 @@ export function renderChatQuestionSummary(prompt: QuestionPrompt) {
     <div class="chat-question-summary" aria-label=${t("chat.questions.summaryLabel")}>
       ${prompt.questions.map(
         (question) => html`
-          <div class="chat-question-summary__line">
-            <strong>${question.header}:</strong>
-            <span>${terminalAnswer(prompt, question)}</span>
+          <div class="chat-question-summary__item">
+            <div class="chat-question-summary__prompt">${question.question}</div>
+            <div class="chat-question-summary__line">
+              <strong>${question.header}:</strong>
+              <span>${terminalAnswer(prompt, question)}</span>
+            </div>
           </div>
         `,
       )}
@@ -167,28 +151,13 @@ export function renderChatQuestionSummary(prompt: QuestionPrompt) {
   `;
 }
 
-function answersSignature(answersById: Record<string, string[]>): string {
-  return JSON.stringify(
-    Object.entries(answersById)
-      .toSorted(([left], [right]) => left.localeCompare(right))
-      .map(([id, values]) => [id, values]),
-  );
-}
-
-class ChatQuestionPanel extends LitElement {
-  override createRenderRoot() {
-    return this;
-  }
-
+class ChatQuestionPanel extends OpenClawLightDomElement {
   @property({ attribute: false }) props?: QuestionPanelProps;
-  @state() private selectedById = new Map<string, string[]>();
-  @state() private freeTextById = new Map<string, string>();
   @state() private currentQuestionIndex = 0;
-  @state() private pendingAction: "submit" | "skip" | null = null;
+  @state() private pendingAction: { kind: "submit" | "skip" } | null = null;
   private requestKey: string | null = null;
   private collapsed = false;
   private focusAfterUpdate = false;
-  private syncedAnswersSignature: string | null = null;
 
   private setCollapsed(collapsed: boolean): void {
     if (this.props?.onCollapsedChange) {
@@ -206,11 +175,8 @@ class ChatQuestionPanel extends LitElement {
     const nextCollapsed = model?.collapsed ?? false;
     if (nextRequestKey !== this.requestKey) {
       this.requestKey = nextRequestKey;
-      this.selectedById = new Map();
-      this.freeTextById = new Map();
       this.currentQuestionIndex = 0;
       this.pendingAction = null;
-      this.syncedAnswersSignature = null;
       this.collapsed = nextCollapsed;
       this.focusAfterUpdate = !nextCollapsed && model?.autoFocus !== false;
     } else if (this.props?.onCollapsedChange) {
@@ -219,30 +185,6 @@ class ChatQuestionPanel extends LitElement {
       }
       this.collapsed = nextCollapsed;
     }
-    if (!model?.answersById) {
-      return;
-    }
-    const signature = answersSignature(model.answersById);
-    if (signature === this.syncedAnswersSignature) {
-      return;
-    }
-    this.syncedAnswersSignature = signature;
-    const selectedById = new Map<string, string[]>();
-    const freeTextById = new Map<string, string>();
-    for (const question of model.questions) {
-      const optionLabels = new Set(question.options.map((option) => option.label));
-      const values = model.answersById[question.questionId] ?? [];
-      selectedById.set(
-        question.questionId,
-        values.filter((value) => optionLabels.has(value)),
-      );
-      const custom = values.filter((value) => !optionLabels.has(value)).join(", ");
-      if (custom) {
-        freeTextById.set(question.questionId, custom);
-      }
-    }
-    this.selectedById = selectedById;
-    this.freeTextById = freeTextById;
   }
 
   override updated(): void {
@@ -253,28 +195,24 @@ class ChatQuestionPanel extends LitElement {
     this.querySelector<HTMLElement>(".chat-question-panel")?.focus({ preventScroll: true });
   }
 
-  private freeTextValue(question: QuestionPanelQuestion): string | undefined {
-    const draft = this.freeTextById.get(question.questionId);
-    return question.isSecret ? draft : draft?.trim();
-  }
-
-  private answerValues(question: QuestionPanelQuestion): string[] {
-    const selected = this.selectedById.get(question.questionId) ?? [];
-    const freeText = this.freeTextValue(question);
-    return [...selected, ...(freeText ? [freeText] : [])];
+  private answerValues(model: QuestionPanelViewModel, question: QuestionPanelQuestion): string[] {
+    return questionDraftValues(model.drafts.get(question.questionId), question.isSecret);
   }
 
   private buildAnswers(model: QuestionPanelViewModel): Record<string, string[]> {
     return Object.fromEntries(
-      model.questions.map((question) => [question.questionId, this.answerValues(question)]),
+      model.questions.map((question) => [question.questionId, this.answerValues(model, question)]),
     );
   }
 
-  private answersChanged(model: QuestionPanelViewModel): void {
-    const answersById = this.buildAnswers(model);
-    model.answersById = answersById;
-    this.syncedAnswersSignature = answersSignature(answersById);
-    this.props?.onAnswersChange?.(answersById);
+  private updateDraft(
+    model: QuestionPanelViewModel,
+    question: QuestionPanelQuestion,
+    draft: QuestionDraft,
+  ): void {
+    model.drafts.set(question.questionId, draft);
+    this.requestUpdate();
+    this.props?.onChange?.();
   }
 
   private focusPanel(): void {
@@ -289,24 +227,17 @@ class ChatQuestionPanel extends LitElement {
     label: string,
     advance = true,
   ): void {
-    const selectedById = new Map(this.selectedById);
-    const current = selectedById.get(question.questionId) ?? [];
-    selectedById.set(
-      question.questionId,
-      question.multiSelect
-        ? current.includes(label)
-          ? current.filter((value) => value !== label)
-          : [...current, label]
-        : // Single-select re-click keeps the choice: radios never deselect.
-          [label],
-    );
-    this.selectedById = selectedById;
-    if (!question.multiSelect) {
-      const freeTextById = new Map(this.freeTextById);
-      freeTextById.delete(question.questionId);
-      this.freeTextById = freeTextById;
+    const draft = model.drafts.get(question.questionId);
+    const selected = new Set(question.multiSelect ? draft?.selected : []);
+    if (question.multiSelect && selected.has(label)) {
+      selected.delete(label);
+    } else {
+      selected.add(label);
     }
-    this.answersChanged(model);
+    this.updateDraft(model, question, {
+      selected,
+      freeText: question.multiSelect ? (draft?.freeText ?? "") : "",
+    });
     if (
       advance &&
       !question.multiSelect &&
@@ -322,48 +253,52 @@ class ChatQuestionPanel extends LitElement {
     question: QuestionPanelQuestion,
     value: string,
   ): void {
-    this.freeTextById = new Map(this.freeTextById).set(question.questionId, value);
-    if (!question.multiSelect && (question.isSecret ? value : value.trim())) {
-      this.selectedById = new Map(this.selectedById).set(question.questionId, []);
-    }
-    this.answersChanged(model);
+    const draft = model.drafts.get(question.questionId);
+    this.updateDraft(model, question, {
+      selected:
+        !question.multiSelect && (question.isSecret ? value : value.trim())
+          ? new Set()
+          : (draft?.selected ?? new Set()),
+      freeText: value,
+    });
   }
 
-  private async submit(model: QuestionPanelViewModel): Promise<void> {
-    if (
-      !this.props?.onSubmit ||
-      !model.questions.every((question) => this.answerValues(question).length > 0)
-    ) {
+  private async resolve(model: QuestionPanelViewModel, kind: "submit" | "skip"): Promise<void> {
+    if (model.disabled || model.submitting || this.pendingAction) {
       return;
     }
-    const requestKey = model.requestKey;
-    this.pendingAction = "submit";
-    try {
-      await this.props.onSubmit(this.buildAnswers(model));
-    } catch {
-      if (this.requestKey === requestKey) {
-        this.pendingAction = null;
+    let run: () => void | Promise<void>;
+    if (kind === "submit") {
+      const onSubmit = this.props?.onSubmit;
+      if (
+        !onSubmit ||
+        !model.questions.every((question) => this.answerValues(model, question).length > 0)
+      ) {
+        return;
       }
+      run = () => onSubmit(this.buildAnswers(model));
+    } else {
+      const onSkip = this.props?.onSkip;
+      if (!onSkip) {
+        return;
+      }
+      run = onSkip;
     }
-  }
-
-  private async skip(model: QuestionPanelViewModel): Promise<void> {
-    if (!this.props?.onSkip) {
-      return;
-    }
-    const requestKey = model.requestKey;
-    this.pendingAction = "skip";
+    const action = { kind };
+    this.pendingAction = action;
     try {
-      await this.props.onSkip();
+      await run();
     } catch {
-      if (this.requestKey === requestKey) {
+      // The caller owns the error shown in model.error.
+    } finally {
+      if (this.pendingAction === action) {
         this.pendingAction = null;
       }
     }
   }
 
   private advanceOrSubmit(model: QuestionPanelViewModel, question: QuestionPanelQuestion): void {
-    if (this.answerValues(question).length === 0) {
+    if (this.answerValues(model, question).length === 0) {
       return;
     }
     if (this.currentQuestionIndex < model.questions.length - 1) {
@@ -371,7 +306,7 @@ class ChatQuestionPanel extends LitElement {
       this.focusPanel();
       return;
     }
-    void this.submit(model);
+    void this.resolve(model, "submit");
   }
 
   private goBack(): void {
@@ -399,7 +334,7 @@ class ChatQuestionPanel extends LitElement {
       return;
     }
     if (event.target instanceof HTMLInputElement) {
-      if (event.key === "Enter" && this.answerValues(question).length > 0) {
+      if (event.key === "Enter" && this.answerValues(model, question).length > 0) {
         event.preventDefault();
         this.advanceOrSubmit(model, question);
       }
@@ -458,7 +393,7 @@ class ChatQuestionPanel extends LitElement {
     if (
       event.key === "Enter" &&
       !(event.target instanceof HTMLButtonElement) &&
-      this.answerValues(question).length > 0
+      this.answerValues(model, question).length > 0
     ) {
       event.preventDefault();
       this.advanceOrSubmit(model, question);
@@ -475,9 +410,10 @@ class ChatQuestionPanel extends LitElement {
     if (!question) {
       return nothing;
     }
-    const disabled = model.disabled || this.pendingAction !== null;
+    const disabled = model.disabled || model.submitting || this.pendingAction !== null;
     const isLast = this.currentQuestionIndex === model.questions.length - 1;
-    const canAdvance = this.answerValues(question).length > 0;
+    const canAdvance = this.answerValues(model, question).length > 0;
+    const draft = model.drafts.get(question.questionId);
     const progress = `${this.currentQuestionIndex + 1}/${model.questions.length}`;
     const requestProgress = model.requestPosition
       ? `${model.requestPosition.current}/${model.requestPosition.total}`
@@ -507,9 +443,7 @@ class ChatQuestionPanel extends LitElement {
           <button
             class="chat-question-panel__collapsed-button"
             type="button"
-            @click=${() => {
-              this.setCollapsed(false);
-            }}
+            @click=${() => this.setCollapsed(false)}
             aria-label=${t("chat.questions.expand")}
           >
             <span>${question.header}</span>
@@ -550,7 +484,7 @@ class ChatQuestionPanel extends LitElement {
         ${renderQuestionExternalStep(question.url)}
         ${renderQuestionOptions({
           question,
-          selected: this.selectedById.get(question.questionId) ?? [],
+          selected: draft?.selected ?? new Set(),
           disabled,
           onSelect: (label) => this.toggleOption(model, question, label),
         })}
@@ -633,8 +567,8 @@ class ChatQuestionPanel extends LitElement {
         }
         ${renderQuestionFreeText({
           question,
-          value: this.freeTextById.get(question.questionId) ?? "",
-          selected: Boolean(this.freeTextValue(question)),
+          value: draft?.freeText ?? "",
+          selected: Boolean(question.isSecret ? draft?.freeText : draft?.freeText.trim()),
           disabled,
           onInput: (value) => this.setFreeText(model, question, value),
         })}
@@ -677,10 +611,10 @@ class ChatQuestionPanel extends LitElement {
                   class="btn btn--sm chat-question-panel__skip"
                   type="button"
                   ?disabled=${disabled}
-                  @click=${() => void this.skip(model)}
+                  @click=${() => void this.resolve(model, "skip")}
                 >
                   ${
-                    this.pendingAction === "skip"
+                    this.pendingAction?.kind === "skip"
                       ? t("chat.questions.skipping")
                       : t("chat.questions.skip")
                   }
@@ -694,7 +628,7 @@ class ChatQuestionPanel extends LitElement {
             @click=${() => this.advanceOrSubmit(model, question)}
           >
             ${
-              this.pendingAction === "submit" || model.submitting
+              this.pendingAction?.kind === "submit" || model.submitting
                 ? t("chat.questions.submitting")
                 : isLast
                   ? t("chat.questions.submit")

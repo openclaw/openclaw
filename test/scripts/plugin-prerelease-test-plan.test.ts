@@ -795,7 +795,7 @@ describe("scripts/lib/plugin-prerelease-test-plan.mts", () => {
       check_name: "check-dependencies",
       task: "dependencies",
       // Concurrent Knip scans need cores and memory headroom.
-      runner: "blacksmith-32vcpu-ubuntu-2404",
+      runner: "blacksmith-16vcpu-ubuntu-2404",
     });
     expect(
       workflow.jobs["check-shard"].steps.find(

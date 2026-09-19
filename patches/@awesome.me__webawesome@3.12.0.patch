@@ -1,3 +1,365 @@
+diff --git a/dist/chunks/chunk.BCXHEFKE.js b/dist/chunks/chunk.BCXHEFKE.js
+index 01d9b3366bda44776cc7db51481c9b81be72d228..bee944e7dcd41e0e658ce0e73f2bf4156ff4d920 100644
+--- a/dist/chunks/chunk.BCXHEFKE.js
++++ b/dist/chunks/chunk.BCXHEFKE.js
+@@ -25,9 +25,6 @@ import {
+ import {
+   uniqueId
+ } from "./chunk.KNJT7KBU.js";
+-import {
+-  waitForEvent
+-} from "./chunk.F25QOBDY.js";
+ import {
+   animateWithClass
+ } from "./chunk.L6CIKOFQ.js";
+@@ -63,83 +60,45 @@ var WaTooltip = class extends WebAwesomeElement {
+     this.for = null;
+     this.anchor = null;
+     this.eventController = new AbortController();
+-    this.handleBlur = () => {
+-      this.dismissedByPress = false;
+-      if (this.hasTrigger("focus")) {
+-        this.hide();
+-      }
+-    };
+-    this.handleClick = () => {
+-      if (this.hasTrigger("click")) {
+-        if (this.open) {
+-          this.hide();
+-        } else {
+-          this.show();
++    this.openTransition = { open: false };
++    this.handleTrigger = (event) => {
++      const type = event.type;
++      const hover = type === "mouseover" || type === "mouseout";
++      let open = type === "focus" || type === "mouseover";
++      if (type === "click" || type === "mousedown") {
++        if (!this.hasTrigger("click")) {
++          if (!this.hasTrigger("manual")) this.lightDismiss();
++          return;
+         }
+-        return;
+-      }
+-      if (this.hasTrigger("manual")) {
+-        return;
+-      }
+-      this.lightDismiss();
+-    };
+-    this.handleFocus = () => {
+-      if (this.dismissedByPress) {
+-        return;
+-      }
+-      if (this.hasTrigger("focus")) {
+-        this.show();
++        if (type !== "click") return;
++        open = !this.open;
++      } else {
++        if (!open) {
++          const target = event.relatedTarget;
++          if (hover && target && (this.anchor?.contains(target) || this.contains(target))) return;
++          this.dismissedByPress = false;
++        }
++        if (this.dismissedByPress || !this.hasTrigger(hover ? "hover" : "focus")) return;
+       }
+-    };
+-    this.handleMouseDown = () => {
+-      if (this.hasTrigger("click") || this.hasTrigger("manual")) {
+-        return;
++      const request = () => open ? this.show() : this.hide();
++      if (hover) {
++        clearTimeout(this.hoverTimeout);
++        this.hoverTimeout = window.setTimeout(request, open ? this.showDelay : this.hideDelay);
++      } else {
++        request();
+       }
+-      this.lightDismiss();
+     };
+-    this.handleDocumentKeyDown = (event) => {
+-      if (this.hasTrigger("manual")) {
+-        return;
+-      }
+-      if (event.key === "Escape" && this.open && isTopDismissible(this)) {
++    this.handleDocumentDismiss = (event) => {
++      if (this.hasTrigger("manual")) return;
++      if (event.type === "keydown") {
++        if (event.key !== "Escape" || !this.open || !isTopDismissible(this)) return;
+         event.preventDefault();
+         event.stopPropagation();
+-        this.hide();
+-      }
+-    };
+-    this.handleDocumentClick = (event) => {
+-      if (this.hasTrigger("manual")) {
+-        return;
+-      }
+-      if (this.anchor && event.composedPath().includes(this.anchor)) {
++      } else if (this.anchor && event.composedPath().includes(this.anchor)) {
+         return;
+       }
+       this.hide();
+     };
+-    this.handleMouseOver = () => {
+-      if (this.dismissedByPress) {
+-        return;
+-      }
+-      if (this.hasTrigger("hover")) {
+-        clearTimeout(this.hoverTimeout);
+-        this.hoverTimeout = window.setTimeout(() => this.show(), this.showDelay);
+-      }
+-    };
+-    this.handleMouseOut = (event) => {
+-      const relatedTarget = event.relatedTarget;
+-      const movedIntoAnchor = Boolean(relatedTarget && this.anchor?.contains(relatedTarget));
+-      const movedIntoTooltip = Boolean(relatedTarget && this.contains(relatedTarget));
+-      if (movedIntoAnchor || movedIntoTooltip) {
+-        return;
+-      }
+-      this.dismissedByPress = false;
+-      if (this.hasTrigger("hover")) {
+-        clearTimeout(this.hoverTimeout);
+-        this.hoverTimeout = window.setTimeout(() => {
+-          this.hide();
+-        }, this.hideDelay);
+-      }
+-    };
+   }
+   connectedCallback() {
+     super.connectedCallback();
+@@ -148,43 +107,32 @@ var WaTooltip = class extends WebAwesomeElement {
+       if (this.eventController.signal.aborted) {
+         this.eventController = new AbortController();
+       }
+-      this.addEventListener("mouseout", this.handleMouseOut);
++      this.addEventListener("mouseout", this.handleTrigger);
+       this.dismissedByPress = false;
+-      if (this.open) {
+-        this.open = false;
+-        this.updateComplete.then(() => {
+-          this.open = true;
+-        });
+-      }
++      // The owner reads current intent after rendering, including on reconnect.
++      void this.requestOpen(this.open);
+       if (!this.id) {
+         this.id = uniqueId("wa-tooltip-");
+       }
+-      if (this.for && this.anchor) {
++      if (this.for) {
+         this.anchor = null;
+         this.handleForChange();
+-      } else if (this.for) {
+-        this.handleForChange();
+       }
+     }
+   }
+   disconnectedCallback() {
+     super.disconnectedCallback();
+-    document.removeEventListener("keydown", this.handleDocumentKeyDown);
+-    document.removeEventListener("click", this.handleDocumentClick);
+     unregisterDismissible(this);
+     this.eventController.abort();
++    clearTimeout(this.hoverTimeout);
++    this.openTransition = { open: false, promise: this.openTransition.promise };
++    this.popup?.popup?.classList.remove("show-with-scale", "hide-with-scale");
++    if (this.body) this.body.hidden = true;
++    if (this.popup) this.popup.active = false;
+     if (this.anchor) {
+       this.removeFromAriaLabelledBy(this.anchor, this.id);
+     }
+   }
+-  firstUpdated(changedProperties) {
+-    this.body.hidden = !this.open;
+-    if (this.open) {
+-      this.popup.active = true;
+-      this.popup.reposition();
+-    }
+-    super.firstUpdated(changedProperties);
+-  }
+   /** Hides the tooltip, or cancels a pending show, and keeps it hidden until re-armed. */
+   lightDismiss() {
+     clearTimeout(this.hoverTimeout);
+@@ -216,41 +164,47 @@ var WaTooltip = class extends WebAwesomeElement {
+     }
+   }
+   async handleOpenChange() {
+-    if (this.open) {
+-      if (this.disabled) {
+-        return;
+-      }
+-      const waShowEvent = new WaShowEvent();
+-      this.dispatchEvent(waShowEvent);
+-      if (waShowEvent.defaultPrevented) {
+-        this.open = false;
+-        return;
+-      }
+-      if (!this.hasTrigger("manual")) {
+-        document.addEventListener("keydown", this.handleDocumentKeyDown, { signal: this.eventController.signal });
+-        document.addEventListener("click", this.handleDocumentClick, { signal: this.eventController.signal });
+-        registerDismissible(this);
+-      }
+-      this.body.hidden = false;
+-      this.popup.active = true;
+-      await animateWithClass(this.popup.popup, "show-with-scale");
+-      this.popup.reposition();
+-      this.dispatchEvent(new WaAfterShowEvent());
+-    } else {
+-      const waHideEvent = new WaHideEvent();
+-      this.dispatchEvent(waHideEvent);
+-      if (waHideEvent.defaultPrevented) {
+-        this.open = true;
+-        return;
++    if (this.disabled) this.open = false;
++    const previous = this.openTransition;
++    const open = this.open;
++    if (!this.isConnected || previous.open === open) return previous.promise;
++    const allowed = this.dispatchEvent(open ? new WaShowEvent() : new WaHideEvent());
++    if (this.openTransition === previous) {
++      if (!allowed && !this.disabled) {
++        this.open = previous.open;
++      } else if ((this.open && !this.disabled) === open) {
++        const transition = this.openTransition = { open };
++        // Disconnect invalidates the transition, so identity also fences connections.
++        const isCurrent = () => this.openTransition === transition && (this.open && !this.disabled) === open;
++        const dismissible = open && !this.hasTrigger("manual");
++        for (const type of ["keydown", "click"]) {
++          document[dismissible ? "addEventListener" : "removeEventListener"](type, this.handleDocumentDismiss, { signal: this.eventController.signal });
++        }
++        if (dismissible) registerDismissible(this);
++        else unregisterDismissible(this);
++        if (open) {
++          this.body.hidden = false;
++          this.popup.active = true;
++        }
++        // Join previous animation cleanup before reusing its classes.
++        this.popup.popup.classList.remove("show-with-scale", "hide-with-scale");
++        transition.promise = (async () => {
++          await previous.promise;
++          if (!isCurrent()) return;
++          await animateWithClass(this.popup.popup, open ? "show-with-scale" : "hide-with-scale");
++          if (!isCurrent()) return;
++          if (open) {
++            this.popup.reposition();
++          } else {
++            this.popup.active = false;
++            this.body.hidden = true;
++          }
++          // Reposition emits a synchronous public event that can revoke ownership.
++          if (isCurrent()) this.dispatchEvent(open ? new WaAfterShowEvent() : new WaAfterHideEvent());
++        })();
+       }
+-      document.removeEventListener("keydown", this.handleDocumentKeyDown);
+-      document.removeEventListener("click", this.handleDocumentClick);
+-      unregisterDismissible(this);
+-      await animateWithClass(this.popup.popup, "hide-with-scale");
+-      this.popup.active = false;
+-      this.body.hidden = true;
+-      this.dispatchEvent(new WaAfterHideEvent());
+     }
++    return this.openTransition.promise;
+   }
+   handleForChange() {
+     const rootNode = this.getRootNode?.();
+@@ -264,23 +218,19 @@ var WaTooltip = class extends WebAwesomeElement {
+     }
+     this.dismissedByPress = false;
+     const { signal } = this.eventController;
+-    if (newAnchor) {
+-      this.addToAriaLabelledBy(newAnchor, this.id);
+-      newAnchor.addEventListener("blur", this.handleBlur, { capture: true, signal });
+-      newAnchor.addEventListener("focus", this.handleFocus, { capture: true, signal });
+-      newAnchor.addEventListener("click", this.handleClick, { signal });
+-      newAnchor.addEventListener("mousedown", this.handleMouseDown, { signal });
+-      newAnchor.addEventListener("mouseover", this.handleMouseOver, { signal });
+-      newAnchor.addEventListener("mouseout", this.handleMouseOut, { signal });
+-    }
+-    if (oldAnchor) {
+-      this.removeFromAriaLabelledBy(oldAnchor, this.id);
+-      oldAnchor.removeEventListener("blur", this.handleBlur, { capture: true });
+-      oldAnchor.removeEventListener("focus", this.handleFocus, { capture: true });
+-      oldAnchor.removeEventListener("click", this.handleClick);
+-      oldAnchor.removeEventListener("mousedown", this.handleMouseDown);
+-      oldAnchor.removeEventListener("mouseover", this.handleMouseOver);
+-      oldAnchor.removeEventListener("mouseout", this.handleMouseOut);
++    const events = [
++      ["blur", this.handleTrigger, true],
++      ["focus", this.handleTrigger, true],
++      ["click", this.handleTrigger],
++      ["mousedown", this.handleTrigger],
++      ["mouseover", this.handleTrigger],
++      ["mouseout", this.handleTrigger]
++    ];
++    if (newAnchor) this.addToAriaLabelledBy(newAnchor, this.id);
++    if (oldAnchor) this.removeFromAriaLabelledBy(oldAnchor, this.id);
++    for (const [type, listener, capture] of events) {
++      newAnchor?.addEventListener(type, listener, { capture, signal });
++      oldAnchor?.removeEventListener(type, listener, capture);
+     }
+     this.anchor = newAnchor;
+   }
+@@ -290,26 +240,19 @@ var WaTooltip = class extends WebAwesomeElement {
+       this.popup.reposition();
+     }
+   }
+-  handleDisabledChange() {
+-    if (this.disabled && this.open) {
+-      this.hide();
+-    }
++  async requestOpen(open) {
++    if (!this.isConnected) return;
++    this.open = open && !this.disabled;
++    await this.updateComplete;
++    return this.handleOpenChange();
+   }
+   /** Shows the tooltip. */
+-  async show() {
+-    if (this.open) {
+-      return void 0;
+-    }
+-    this.open = true;
+-    return waitForEvent(this, "wa-after-show");
++  show() {
++    return this.requestOpen(true);
+   }
+   /** Hides the tooltip */
+-  async hide() {
+-    if (!this.open) {
+-      return void 0;
+-    }
+-    this.open = false;
+-    return waitForEvent(this, "wa-after-hide");
++  hide() {
++    return this.requestOpen(false);
+   }
+   render() {
+     return html`
+@@ -332,7 +275,7 @@ var WaTooltip = class extends WebAwesomeElement {
+         hover-bridge
+         .anchor=${this.anchor}
+       >
+-        <div part="body" class="body">
++        <div part="body" class="body" hidden>
+           <slot></slot>
+         </div>
+       </wa-popup>
+@@ -384,7 +327,7 @@ __decorateClass([
+   state()
+ ], WaTooltip.prototype, "anchor", 2);
+ __decorateClass([
+-  watch("open", { waitUntilFirstUpdate: true })
++  watch(["open", "disabled"], { waitUntilFirstUpdate: true })
+ ], WaTooltip.prototype, "handleOpenChange", 1);
+ __decorateClass([
+   watch("for")
+@@ -392,9 +335,6 @@ __decorateClass([
+ __decorateClass([
+   watch(["distance", "placement", "skidding"])
+ ], WaTooltip.prototype, "handleOptionsChange", 1);
+-__decorateClass([
+-  watch("disabled")
+-], WaTooltip.prototype, "handleDisabledChange", 1);
+ WaTooltip = __decorateClass([
+   customElement("wa-tooltip")
+ ], WaTooltip);
 diff --git a/dist/chunks/chunk.CWBSN34U.js b/dist/chunks/chunk.CWBSN34U.js
 index 5b1df53a771e31410852af7ea483db52edbc0140..dbb7dc5db6d83acaf9261846451ce86b9eb4cab6 100644
 --- a/dist/chunks/chunk.CWBSN34U.js
@@ -983,11 +1345,127 @@ index 9b4c748a83e5e990fd6eeb6367b37713b56773b2..f801fce20728a10630b6e47099a1054b
      private handleFocus;
      private handleDocumentFocusIn;
      private handleDocumentKeyDown;
+diff --git a/dist/components/tooltip/tooltip.d.ts b/dist/components/tooltip/tooltip.d.ts
+index dfbeaf70a47cf538c5c47e3efc338a74fde965d8..d2b2e05e8f364ed0834394bc0c8c77f132a03f81 100644
+--- a/dist/components/tooltip/tooltip.d.ts
++++ b/dist/components/tooltip/tooltip.d.ts
+@@ -1,4 +1,3 @@
+-import { type PropertyValues } from 'lit';
+ import WebAwesomeElement from '../../internal/webawesome-element.js';
+ import WaPopup from '../popup/popup.js';
+ /**
+@@ -62,19 +61,14 @@ export default class WaTooltip extends WebAwesomeElement {
+     for: string | null;
+     anchor: null | Element;
+     private eventController;
++    private openTransition;
++    private requestOpen;
+     connectedCallback(): void;
+     disconnectedCallback(): void;
+-    firstUpdated(changedProperties: PropertyValues<typeof this>): void;
+-    private handleBlur;
+-    private handleClick;
+-    private handleFocus;
+-    private handleMouseDown;
++    private handleTrigger;
+     /** Hides the tooltip, or cancels a pending show, and keeps it hidden until re-armed. */
+     private lightDismiss;
+-    private handleDocumentKeyDown;
+-    private handleDocumentClick;
+-    private handleMouseOver;
+-    private handleMouseOut;
++    private handleDocumentDismiss;
+     private hasTrigger;
+     /** Adds the tooltip ID to the aria-labelledby attribute */
+     private addToAriaLabelledBy;
+@@ -83,7 +77,6 @@ export default class WaTooltip extends WebAwesomeElement {
+     handleOpenChange(): Promise<void>;
+     handleForChange(): void;
+     handleOptionsChange(): Promise<void>;
+-    handleDisabledChange(): void;
+     /** Shows the tooltip. */
+     show(): Promise<void>;
+     /** Hides the tooltip */
 diff --git a/dist/custom-elements.json b/dist/custom-elements.json
-index 4128d582ee76895db1e7a8b55349680d84bfa40f..51fa14f3ad1234ce8fc7991fd83b002b30238d92 100644
+index 4128d582ee76895db1e7a8b55349680d84bfa40f..70d0ee2585a901e6e75c8120b88d3dda369b1d92 100644
 --- a/dist/custom-elements.json
 +++ b/dist/custom-elements.json
-@@ -27842,13 +27842,13 @@
+@@ -17736,22 +17736,12 @@
+             },
+             {
+               "kind": "field",
+-              "name": "handleBlur",
+-              "privacy": "private"
+-            },
+-            {
+-              "kind": "field",
+-              "name": "handleClick",
++              "name": "openTransition",
+               "privacy": "private"
+             },
+             {
+               "kind": "field",
+-              "name": "handleFocus",
+-              "privacy": "private"
+-            },
+-            {
+-              "kind": "field",
+-              "name": "handleMouseDown",
++              "name": "handleTrigger",
+               "privacy": "private"
+             },
+             {
+@@ -17762,22 +17752,7 @@
+             },
+             {
+               "kind": "field",
+-              "name": "handleDocumentKeyDown",
+-              "privacy": "private"
+-            },
+-            {
+-              "kind": "field",
+-              "name": "handleDocumentClick",
+-              "privacy": "private"
+-            },
+-            {
+-              "kind": "field",
+-              "name": "handleMouseOver",
+-              "privacy": "private"
+-            },
+-            {
+-              "kind": "field",
+-              "name": "handleMouseOut",
++              "name": "handleDocumentDismiss",
+               "privacy": "private"
+             },
+             {
+@@ -17854,13 +17829,6 @@
+                 "text": "handleOptionsChange() => void"
+               }
+             },
+-            {
+-              "kind": "method",
+-              "name": "handleDisabledChange",
+-              "type": {
+-                "text": "handleDisabledChange() => void"
+-              }
+-            },
+             {
+               "kind": "method",
+               "name": "show",
+@@ -17946,6 +17914,11 @@
+                 "name": "WebAwesomeElement",
+                 "module": "internal/webawesome-element.js"
+               }
++            },
++            {
++              "kind": "method",
++              "name": "requestOpen",
++              "privacy": "private"
+             }
+           ],
+           "events": [
+@@ -27842,13 +27815,13 @@
                "privacy": "private"
              },
              {
@@ -1484,6 +1962,368 @@ index 886b0e05a9d51bbe6636d1e394d49ef4edfb84fc..93d65f3128c2a4acb30c51ac3899b8d8
        item.submenuElement.setAttribute("data-placement", placement2);
        Object.assign(item.submenuElement.style, {
          left: `${x2}px`,
+diff --git a/dist-cdn/chunks/chunk.A73F6EP3.js b/dist-cdn/chunks/chunk.A73F6EP3.js
+index 598039ac639bfa2343778fbe65212a4ce2a54845..4c755be245c69d80d46e59b009aeb05738657020 100644
+--- a/dist-cdn/chunks/chunk.A73F6EP3.js
++++ b/dist-cdn/chunks/chunk.A73F6EP3.js
+@@ -25,9 +25,6 @@ import {
+ import {
+   uniqueId
+ } from "./chunk.O6IZ4I7T.js";
+-import {
+-  waitForEvent
+-} from "./chunk.F25QOBDY.js";
+ import {
+   animateWithClass
+ } from "./chunk.L6CIKOFQ.js";
+@@ -70,83 +67,45 @@ var WaTooltip = class extends WebAwesomeElement {
+     this.for = null;
+     this.anchor = null;
+     this.eventController = new AbortController();
+-    this.handleBlur = () => {
+-      this.dismissedByPress = false;
+-      if (this.hasTrigger("focus")) {
+-        this.hide();
+-      }
+-    };
+-    this.handleClick = () => {
+-      if (this.hasTrigger("click")) {
+-        if (this.open) {
+-          this.hide();
+-        } else {
+-          this.show();
++    this.openTransition = { open: false };
++    this.handleTrigger = (event) => {
++      const type = event.type;
++      const hover = type === "mouseover" || type === "mouseout";
++      let open = type === "focus" || type === "mouseover";
++      if (type === "click" || type === "mousedown") {
++        if (!this.hasTrigger("click")) {
++          if (!this.hasTrigger("manual")) this.lightDismiss();
++          return;
+         }
+-        return;
+-      }
+-      if (this.hasTrigger("manual")) {
+-        return;
+-      }
+-      this.lightDismiss();
+-    };
+-    this.handleFocus = () => {
+-      if (this.dismissedByPress) {
+-        return;
+-      }
+-      if (this.hasTrigger("focus")) {
+-        this.show();
++        if (type !== "click") return;
++        open = !this.open;
++      } else {
++        if (!open) {
++          const target = event.relatedTarget;
++          if (hover && target && (this.anchor?.contains(target) || this.contains(target))) return;
++          this.dismissedByPress = false;
++        }
++        if (this.dismissedByPress || !this.hasTrigger(hover ? "hover" : "focus")) return;
+       }
+-    };
+-    this.handleMouseDown = () => {
+-      if (this.hasTrigger("click") || this.hasTrigger("manual")) {
+-        return;
++      const request = () => open ? this.show() : this.hide();
++      if (hover) {
++        clearTimeout(this.hoverTimeout);
++        this.hoverTimeout = window.setTimeout(request, open ? this.showDelay : this.hideDelay);
++      } else {
++        request();
+       }
+-      this.lightDismiss();
+     };
+-    this.handleDocumentKeyDown = (event) => {
+-      if (this.hasTrigger("manual")) {
+-        return;
+-      }
+-      if (event.key === "Escape" && this.open && isTopDismissible(this)) {
++    this.handleDocumentDismiss = (event) => {
++      if (this.hasTrigger("manual")) return;
++      if (event.type === "keydown") {
++        if (event.key !== "Escape" || !this.open || !isTopDismissible(this)) return;
+         event.preventDefault();
+         event.stopPropagation();
+-        this.hide();
+-      }
+-    };
+-    this.handleDocumentClick = (event) => {
+-      if (this.hasTrigger("manual")) {
+-        return;
+-      }
+-      if (this.anchor && event.composedPath().includes(this.anchor)) {
++      } else if (this.anchor && event.composedPath().includes(this.anchor)) {
+         return;
+       }
+       this.hide();
+     };
+-    this.handleMouseOver = () => {
+-      if (this.dismissedByPress) {
+-        return;
+-      }
+-      if (this.hasTrigger("hover")) {
+-        clearTimeout(this.hoverTimeout);
+-        this.hoverTimeout = window.setTimeout(() => this.show(), this.showDelay);
+-      }
+-    };
+-    this.handleMouseOut = (event) => {
+-      const relatedTarget = event.relatedTarget;
+-      const movedIntoAnchor = Boolean(relatedTarget && this.anchor?.contains(relatedTarget));
+-      const movedIntoTooltip = Boolean(relatedTarget && this.contains(relatedTarget));
+-      if (movedIntoAnchor || movedIntoTooltip) {
+-        return;
+-      }
+-      this.dismissedByPress = false;
+-      if (this.hasTrigger("hover")) {
+-        clearTimeout(this.hoverTimeout);
+-        this.hoverTimeout = window.setTimeout(() => {
+-          this.hide();
+-        }, this.hideDelay);
+-      }
+-    };
+   }
+   connectedCallback() {
+     super.connectedCallback();
+@@ -155,43 +114,32 @@ var WaTooltip = class extends WebAwesomeElement {
+       if (this.eventController.signal.aborted) {
+         this.eventController = new AbortController();
+       }
+-      this.addEventListener("mouseout", this.handleMouseOut);
++      this.addEventListener("mouseout", this.handleTrigger);
+       this.dismissedByPress = false;
+-      if (this.open) {
+-        this.open = false;
+-        this.updateComplete.then(() => {
+-          this.open = true;
+-        });
+-      }
++      // The owner reads current intent after rendering, including on reconnect.
++      void this.requestOpen(this.open);
+       if (!this.id) {
+         this.id = uniqueId("wa-tooltip-");
+       }
+-      if (this.for && this.anchor) {
++      if (this.for) {
+         this.anchor = null;
+         this.handleForChange();
+-      } else if (this.for) {
+-        this.handleForChange();
+       }
+     }
+   }
+   disconnectedCallback() {
+     super.disconnectedCallback();
+-    document.removeEventListener("keydown", this.handleDocumentKeyDown);
+-    document.removeEventListener("click", this.handleDocumentClick);
+     unregisterDismissible(this);
+     this.eventController.abort();
++    clearTimeout(this.hoverTimeout);
++    this.openTransition = { open: false, promise: this.openTransition.promise };
++    this.popup?.popup?.classList.remove("show-with-scale", "hide-with-scale");
++    if (this.body) this.body.hidden = true;
++    if (this.popup) this.popup.active = false;
+     if (this.anchor) {
+       this.removeFromAriaLabelledBy(this.anchor, this.id);
+     }
+   }
+-  firstUpdated(changedProperties) {
+-    this.body.hidden = !this.open;
+-    if (this.open) {
+-      this.popup.active = true;
+-      this.popup.reposition();
+-    }
+-    super.firstUpdated(changedProperties);
+-  }
+   /** Hides the tooltip, or cancels a pending show, and keeps it hidden until re-armed. */
+   lightDismiss() {
+     clearTimeout(this.hoverTimeout);
+@@ -223,41 +171,47 @@ var WaTooltip = class extends WebAwesomeElement {
+     }
+   }
+   async handleOpenChange() {
+-    if (this.open) {
+-      if (this.disabled) {
+-        return;
+-      }
+-      const waShowEvent = new WaShowEvent();
+-      this.dispatchEvent(waShowEvent);
+-      if (waShowEvent.defaultPrevented) {
+-        this.open = false;
+-        return;
+-      }
+-      if (!this.hasTrigger("manual")) {
+-        document.addEventListener("keydown", this.handleDocumentKeyDown, { signal: this.eventController.signal });
+-        document.addEventListener("click", this.handleDocumentClick, { signal: this.eventController.signal });
+-        registerDismissible(this);
+-      }
+-      this.body.hidden = false;
+-      this.popup.active = true;
+-      await animateWithClass(this.popup.popup, "show-with-scale");
+-      this.popup.reposition();
+-      this.dispatchEvent(new WaAfterShowEvent());
+-    } else {
+-      const waHideEvent = new WaHideEvent();
+-      this.dispatchEvent(waHideEvent);
+-      if (waHideEvent.defaultPrevented) {
+-        this.open = true;
+-        return;
++    if (this.disabled) this.open = false;
++    const previous = this.openTransition;
++    const open = this.open;
++    if (!this.isConnected || previous.open === open) return previous.promise;
++    const allowed = this.dispatchEvent(open ? new WaShowEvent() : new WaHideEvent());
++    if (this.openTransition === previous) {
++      if (!allowed && !this.disabled) {
++        this.open = previous.open;
++      } else if ((this.open && !this.disabled) === open) {
++        const transition = this.openTransition = { open };
++        // Disconnect invalidates the transition, so identity also fences connections.
++        const isCurrent = () => this.openTransition === transition && (this.open && !this.disabled) === open;
++        const dismissible = open && !this.hasTrigger("manual");
++        for (const type of ["keydown", "click"]) {
++          document[dismissible ? "addEventListener" : "removeEventListener"](type, this.handleDocumentDismiss, { signal: this.eventController.signal });
++        }
++        if (dismissible) registerDismissible(this);
++        else unregisterDismissible(this);
++        if (open) {
++          this.body.hidden = false;
++          this.popup.active = true;
++        }
++        // Join previous animation cleanup before reusing its classes.
++        this.popup.popup.classList.remove("show-with-scale", "hide-with-scale");
++        transition.promise = (async () => {
++          await previous.promise;
++          if (!isCurrent()) return;
++          await animateWithClass(this.popup.popup, open ? "show-with-scale" : "hide-with-scale");
++          if (!isCurrent()) return;
++          if (open) {
++            this.popup.reposition();
++          } else {
++            this.popup.active = false;
++            this.body.hidden = true;
++          }
++          // Reposition emits a synchronous public event that can revoke ownership.
++          if (isCurrent()) this.dispatchEvent(open ? new WaAfterShowEvent() : new WaAfterHideEvent());
++        })();
+       }
+-      document.removeEventListener("keydown", this.handleDocumentKeyDown);
+-      document.removeEventListener("click", this.handleDocumentClick);
+-      unregisterDismissible(this);
+-      await animateWithClass(this.popup.popup, "hide-with-scale");
+-      this.popup.active = false;
+-      this.body.hidden = true;
+-      this.dispatchEvent(new WaAfterHideEvent());
+     }
++    return this.openTransition.promise;
+   }
+   handleForChange() {
+     const rootNode = this.getRootNode?.();
+@@ -271,23 +225,19 @@ var WaTooltip = class extends WebAwesomeElement {
+     }
+     this.dismissedByPress = false;
+     const { signal } = this.eventController;
+-    if (newAnchor) {
+-      this.addToAriaLabelledBy(newAnchor, this.id);
+-      newAnchor.addEventListener("blur", this.handleBlur, { capture: true, signal });
+-      newAnchor.addEventListener("focus", this.handleFocus, { capture: true, signal });
+-      newAnchor.addEventListener("click", this.handleClick, { signal });
+-      newAnchor.addEventListener("mousedown", this.handleMouseDown, { signal });
+-      newAnchor.addEventListener("mouseover", this.handleMouseOver, { signal });
+-      newAnchor.addEventListener("mouseout", this.handleMouseOut, { signal });
+-    }
+-    if (oldAnchor) {
+-      this.removeFromAriaLabelledBy(oldAnchor, this.id);
+-      oldAnchor.removeEventListener("blur", this.handleBlur, { capture: true });
+-      oldAnchor.removeEventListener("focus", this.handleFocus, { capture: true });
+-      oldAnchor.removeEventListener("click", this.handleClick);
+-      oldAnchor.removeEventListener("mousedown", this.handleMouseDown);
+-      oldAnchor.removeEventListener("mouseover", this.handleMouseOver);
+-      oldAnchor.removeEventListener("mouseout", this.handleMouseOut);
++    const events = [
++      ["blur", this.handleTrigger, true],
++      ["focus", this.handleTrigger, true],
++      ["click", this.handleTrigger],
++      ["mousedown", this.handleTrigger],
++      ["mouseover", this.handleTrigger],
++      ["mouseout", this.handleTrigger]
++    ];
++    if (newAnchor) this.addToAriaLabelledBy(newAnchor, this.id);
++    if (oldAnchor) this.removeFromAriaLabelledBy(oldAnchor, this.id);
++    for (const [type, listener, capture] of events) {
++      newAnchor?.addEventListener(type, listener, { capture, signal });
++      oldAnchor?.removeEventListener(type, listener, capture);
+     }
+     this.anchor = newAnchor;
+   }
+@@ -297,26 +247,19 @@ var WaTooltip = class extends WebAwesomeElement {
+       this.popup.reposition();
+     }
+   }
+-  handleDisabledChange() {
+-    if (this.disabled && this.open) {
+-      this.hide();
+-    }
++  async requestOpen(open) {
++    if (!this.isConnected) return;
++    this.open = open && !this.disabled;
++    await this.updateComplete;
++    return this.handleOpenChange();
+   }
+   /** Shows the tooltip. */
+-  async show() {
+-    if (this.open) {
+-      return void 0;
+-    }
+-    this.open = true;
+-    return waitForEvent(this, "wa-after-show");
++  show() {
++    return this.requestOpen(true);
+   }
+   /** Hides the tooltip */
+-  async hide() {
+-    if (!this.open) {
+-      return void 0;
+-    }
+-    this.open = false;
+-    return waitForEvent(this, "wa-after-hide");
++  hide() {
++    return this.requestOpen(false);
+   }
+   render() {
+     return x`
+@@ -339,7 +282,7 @@ var WaTooltip = class extends WebAwesomeElement {
+         hover-bridge
+         .anchor=${this.anchor}
+       >
+-        <div part="body" class="body">
++        <div part="body" class="body" hidden>
+           <slot></slot>
+         </div>
+       </wa-popup>
+@@ -391,7 +334,7 @@ __decorateClass([
+   r()
+ ], WaTooltip.prototype, "anchor", 2);
+ __decorateClass([
+-  watch("open", { waitUntilFirstUpdate: true })
++  watch(["open", "disabled"], { waitUntilFirstUpdate: true })
+ ], WaTooltip.prototype, "handleOpenChange", 1);
+ __decorateClass([
+   watch("for")
+@@ -399,9 +342,6 @@ __decorateClass([
+ __decorateClass([
+   watch(["distance", "placement", "skidding"])
+ ], WaTooltip.prototype, "handleOptionsChange", 1);
+-__decorateClass([
+-  watch("disabled")
+-], WaTooltip.prototype, "handleDisabledChange", 1);
+ WaTooltip = __decorateClass([
+   t("wa-tooltip")
+ ], WaTooltip);
 diff --git a/dist-cdn/chunks/chunk.L6CIKOFQ.js b/dist-cdn/chunks/chunk.L6CIKOFQ.js
 index 20d309f89017ef7d1857f3b1c88216a88354fefd..ea0b8ee34255009d9d9e86605dbdc05969ea3840 100644
 --- a/dist-cdn/chunks/chunk.L6CIKOFQ.js
@@ -2005,11 +2845,127 @@ index 9b4c748a83e5e990fd6eeb6367b37713b56773b2..f801fce20728a10630b6e47099a1054b
      private handleFocus;
      private handleDocumentFocusIn;
      private handleDocumentKeyDown;
+diff --git a/dist-cdn/components/tooltip/tooltip.d.ts b/dist-cdn/components/tooltip/tooltip.d.ts
+index dfbeaf70a47cf538c5c47e3efc338a74fde965d8..d2b2e05e8f364ed0834394bc0c8c77f132a03f81 100644
+--- a/dist-cdn/components/tooltip/tooltip.d.ts
++++ b/dist-cdn/components/tooltip/tooltip.d.ts
+@@ -1,4 +1,3 @@
+-import { type PropertyValues } from 'lit';
+ import WebAwesomeElement from '../../internal/webawesome-element.js';
+ import WaPopup from '../popup/popup.js';
+ /**
+@@ -62,19 +61,14 @@ export default class WaTooltip extends WebAwesomeElement {
+     for: string | null;
+     anchor: null | Element;
+     private eventController;
++    private openTransition;
++    private requestOpen;
+     connectedCallback(): void;
+     disconnectedCallback(): void;
+-    firstUpdated(changedProperties: PropertyValues<typeof this>): void;
+-    private handleBlur;
+-    private handleClick;
+-    private handleFocus;
+-    private handleMouseDown;
++    private handleTrigger;
+     /** Hides the tooltip, or cancels a pending show, and keeps it hidden until re-armed. */
+     private lightDismiss;
+-    private handleDocumentKeyDown;
+-    private handleDocumentClick;
+-    private handleMouseOver;
+-    private handleMouseOut;
++    private handleDocumentDismiss;
+     private hasTrigger;
+     /** Adds the tooltip ID to the aria-labelledby attribute */
+     private addToAriaLabelledBy;
+@@ -83,7 +77,6 @@ export default class WaTooltip extends WebAwesomeElement {
+     handleOpenChange(): Promise<void>;
+     handleForChange(): void;
+     handleOptionsChange(): Promise<void>;
+-    handleDisabledChange(): void;
+     /** Shows the tooltip. */
+     show(): Promise<void>;
+     /** Hides the tooltip */
 diff --git a/dist-cdn/custom-elements.json b/dist-cdn/custom-elements.json
-index 4128d582ee76895db1e7a8b55349680d84bfa40f..51fa14f3ad1234ce8fc7991fd83b002b30238d92 100644
+index 4128d582ee76895db1e7a8b55349680d84bfa40f..70d0ee2585a901e6e75c8120b88d3dda369b1d92 100644
 --- a/dist-cdn/custom-elements.json
 +++ b/dist-cdn/custom-elements.json
-@@ -27842,13 +27842,13 @@
+@@ -17736,22 +17736,12 @@
+             },
+             {
+               "kind": "field",
+-              "name": "handleBlur",
+-              "privacy": "private"
+-            },
+-            {
+-              "kind": "field",
+-              "name": "handleClick",
++              "name": "openTransition",
+               "privacy": "private"
+             },
+             {
+               "kind": "field",
+-              "name": "handleFocus",
+-              "privacy": "private"
+-            },
+-            {
+-              "kind": "field",
+-              "name": "handleMouseDown",
++              "name": "handleTrigger",
+               "privacy": "private"
+             },
+             {
+@@ -17762,22 +17752,7 @@
+             },
+             {
+               "kind": "field",
+-              "name": "handleDocumentKeyDown",
+-              "privacy": "private"
+-            },
+-            {
+-              "kind": "field",
+-              "name": "handleDocumentClick",
+-              "privacy": "private"
+-            },
+-            {
+-              "kind": "field",
+-              "name": "handleMouseOver",
+-              "privacy": "private"
+-            },
+-            {
+-              "kind": "field",
+-              "name": "handleMouseOut",
++              "name": "handleDocumentDismiss",
+               "privacy": "private"
+             },
+             {
+@@ -17854,13 +17829,6 @@
+                 "text": "handleOptionsChange() => void"
+               }
+             },
+-            {
+-              "kind": "method",
+-              "name": "handleDisabledChange",
+-              "type": {
+-                "text": "handleDisabledChange() => void"
+-              }
+-            },
+             {
+               "kind": "method",
+               "name": "show",
+@@ -17946,6 +17914,11 @@
+                 "name": "WebAwesomeElement",
+                 "module": "internal/webawesome-element.js"
+               }
++            },
++            {
++              "kind": "method",
++              "name": "requestOpen",
++              "privacy": "private"
+             }
+           ],
+           "events": [
+@@ -27842,13 +27815,13 @@
                "privacy": "private"
              },
              {

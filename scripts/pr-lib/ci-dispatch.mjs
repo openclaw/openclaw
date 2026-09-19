@@ -2,11 +2,12 @@
 
 import { spawnSync } from "node:child_process";
 import { isDirectRunUrl } from "../lib/direct-run.mjs";
-import { execGhJson, execGhRead, execPlainGh, workflowRunsApiArgs } from "../lib/plain-gh.mjs";
+import { workflowRunsApiArgs } from "../lib/plain-gh.mjs";
 import {
   isProtectedMainWorkflowPath,
   parseCrabboxGateCheckSummary,
 } from "./crabbox-gate-contract.mjs";
+import { execPrGh, execPrGhJson } from "./github.mjs";
 
 const REPOSITORY = "openclaw/openclaw";
 const CRABBOX_WORKFLOW = ".github/workflows/pr-crabbox-gate-publisher.yml";
@@ -79,25 +80,25 @@ function listCiRuns(headRefOid, backend) {
           "per_page=20",
         ]
       : workflowRunsApiArgs(REPOSITORY, headRefOid, "workflow_dispatch", 20);
-  return execGhJson(args, { stdio: ["ignore", "pipe", "pipe"] }).workflow_runs;
+  return execPrGhJson(args, { stdio: ["ignore", "pipe", "pipe"] }).workflow_runs;
 }
 
 function readCurrentPrHeadOid(pr) {
-  return execGhRead(["pr", "view", String(pr), "--json", "headRefOid", "--jq", ".headRefOid"], {
+  return execPrGh(["api", `repos/${REPOSITORY}/pulls/${pr}`, "--jq", ".head.sha"], {
     encoding: "utf8",
     stdio: ["ignore", "pipe", "pipe"],
   }).trim();
 }
 
 function readWorkflowRun(runId) {
-  return execGhJson(["api", "--method", "GET", `repos/${REPOSITORY}/actions/runs/${runId}`], {
+  return execPrGhJson(["api", "--method", "GET", `repos/${REPOSITORY}/actions/runs/${runId}`], {
     stdio: ["ignore", "pipe", "pipe"],
   });
 }
 
 function readExactHeadChecks(headSha) {
   const endpoint = `repos/${REPOSITORY}/commits/${headSha}/check-runs?filter=latest&per_page=100`;
-  const pages = execGhJson(["api", "--paginate", "--slurp", endpoint], {
+  const pages = execPrGhJson(["api", "--paginate", "--slurp", endpoint], {
     stdio: ["ignore", "pipe", "pipe"],
   });
   if (!Array.isArray(pages) || pages.some((page) => !Array.isArray(page?.check_runs))) {
@@ -202,7 +203,7 @@ async function dispatchCiForPr(
     pollIntervalMs = 1500,
     readHeadOid = readCurrentPrHeadOid,
     runDispatch = (args) =>
-      execPlainGh(args, { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }),
+      execPrGh(args, { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] }, "plain"),
     wait = delay,
     waitForCrabbox = waitForCrabboxResult,
   } = {},
@@ -250,7 +251,7 @@ function parseBackendArgs(argv) {
 
 function warnOnLocalHeadDrift(record) {
   const probe = spawnSync(
-    "git",
+    process.env.OPENCLAW_PR_GIT || process.env.GIT_EXEC || "git",
     ["rev-parse", "--verify", "--quiet", `refs/heads/${record.headRefName}`],
     { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] },
   );

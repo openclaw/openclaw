@@ -1,3 +1,4 @@
+import { statSync } from "node:fs";
 import type { DatabaseSync } from "node:sqlite";
 import { formatErrorMessage } from "../infra/errors.js";
 import { enableNodeSqliteKyselyStatementCache } from "../infra/kysely-sync.js";
@@ -70,15 +71,40 @@ export function openUnpublishedStateDatabase(params: {
   lockFailureReporting: SqliteLockFailureReporting;
   ensureSchema: (database: DatabaseSync) => void;
   recordOpenFailure: (pathname: string, error: Error) => void;
+  existingSchema?: boolean;
 }): OpenClawStateDatabase {
   const { busyTimeoutMs, lockFailureReporting } = params;
   const runtimeDirectory = resolveStateLifecycleRuntimeDirectory();
-  ensureOpenClawStatePermissions(params.pathname, params.env);
-  const db = openTrackedStateDatabase(params.pathname);
+  const original = params.existingSchema ? statSync(params.pathname) : undefined;
+  if (original && !original.isFile()) {
+    throw new Error(`Existing shared-state database must be a regular file: ${params.pathname}`);
+  }
+  const assertSameFile = () => {
+    if (original) {
+      const current = statSync(params.pathname);
+      if (!current.isFile() || current.dev !== original.dev || current.ino !== original.ino) {
+        throw new Error(`Existing shared-state database generation changed: ${params.pathname}`);
+      }
+    }
+  };
+  if (!params.existingSchema) {
+    ensureOpenClawStatePermissions(params.pathname, params.env);
+  }
+  const db = openTrackedStateDatabase(params.pathname, { existingOnly: params.existingSchema });
   let walMaintenance: SqliteWalMaintenance | undefined;
   try {
     enableNodeSqliteKyselyStatementCache(db);
     setSqliteBusyTimeout(db, busyTimeoutMs);
+    if (params.existingSchema) {
+      assertSameFile();
+      params.ensureSchema(db);
+      assertSameFile();
+      return {
+        db,
+        path: params.pathname,
+        walMaintenance: { checkpoint: () => false, close: () => true },
+      };
+    }
     const maintenance = runWithSqliteBusyTimeout(
       db,
       busyTimeoutMs,

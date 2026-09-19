@@ -1,7 +1,10 @@
+import type { AmbientEnvTriggerPolicy } from "../channels/config-presence.js";
 import type { ChannelId } from "../channels/plugins/types.public.js";
+import { listAmbientOnlyConfiguredChannelIds } from "../plugins/channel-presence-policy.js";
 import { getPluginInstance } from "../plugins/plugin-instance-scope.js";
 import type { PluginRegistry } from "../plugins/registry-types.js";
 import type { prepareGatewayLifecycle } from "./server-lifecycle.js";
+import type { GatewayReloadHandlerParams } from "./server-reload-contracts.js";
 
 type ChannelManager = Awaited<ReturnType<typeof prepareGatewayLifecycle>>["channelManager"];
 
@@ -11,11 +14,18 @@ export function createPluginReloadChannels({
   previousRegistry,
   skipChannels,
   previousStopStarted,
+  reloadParams,
+  ambientEnvTriggers,
 }: {
   channelManager: ChannelManager;
   previousRegistry: PluginRegistry;
   skipChannels: boolean;
   previousStopStarted: () => boolean;
+  reloadParams: Pick<
+    Parameters<GatewayReloadHandlerParams["reloadPlugins"]>[0],
+    "nextConfig" | "sourceConfig" | "env"
+  >;
+  ambientEnvTriggers: AmbientEnvTriggerPolicy;
 }) {
   const channelTargets = new Set<ChannelId>();
   let releaseChannelStarts: ReturnType<ChannelManager["pauseChannelStarts"]> | undefined;
@@ -143,6 +153,30 @@ export function createPluginReloadChannels({
     collectTargets,
     stopAdditional,
     startReplacedChannels,
+    startPublishedChannels: async (
+      registry: PluginRegistry,
+      errors: unknown[],
+      manifestRecords: Parameters<typeof listAmbientOnlyConfiguredChannelIds>[0]["manifestRecords"],
+    ) => {
+      try {
+        channelManager.setAmbientAutostartSuppressedChannelIds(
+          new Set(
+            ambientEnvTriggers === "suppress"
+              ? listAmbientOnlyConfiguredChannelIds({
+                  config: reloadParams.nextConfig,
+                  activationSourceConfig: reloadParams.sourceConfig,
+                  env: reloadParams.env,
+                  includePersistedAuthState: false,
+                  manifestRecords,
+                })
+              : [],
+          ),
+        );
+        await startReplacedChannels(registry, errors);
+      } finally {
+        await releaseChannelHandoffs(errors);
+      }
+    },
     releaseChannelHandoffs,
     restoreUnchanged: async (changedPluginIds: ReadonlySet<string>, errors: unknown[]) => {
       if (!releaseChannelStarts) {

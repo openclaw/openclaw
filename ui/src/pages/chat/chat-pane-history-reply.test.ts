@@ -99,6 +99,7 @@ describe("chat pane reply-source history navigation", () => {
 
     pane.requestReplyMessage("source-message");
     await Promise.resolve();
+    pane.resetOlderMessagesViewport();
     pane.requestReplyMessage("source-message");
     expect(request).toHaveBeenCalledOnce();
     pane.connectionGeneration += 1;

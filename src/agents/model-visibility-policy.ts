@@ -8,7 +8,7 @@ import {
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveAgentConfig } from "./agent-scope.js";
 import type { ModelCatalogEntry } from "./model-catalog.types.js";
-import type { ModelManifestNormalizationContext } from "./model-ref-shared.js";
+import type { ModelManifestNormalizationContext, ModelRef } from "./model-ref-shared.js";
 import { resolveConfiguredModelFallbacks } from "./model-selection-resolve.js";
 import {
   createModelVisibilityPolicyWithFallbacks,
@@ -46,7 +46,7 @@ export function createModelVisibilityPolicy(
     cfg: OpenClawConfig;
     catalog: ModelCatalogEntry[];
     defaultProvider: string;
-    defaultModel?: string;
+    defaultModel?: string | ModelRef;
     agentId?: string;
     allowManifestNormalization?: boolean;
     allowPluginNormalization?: boolean;

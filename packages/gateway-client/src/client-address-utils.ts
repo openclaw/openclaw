@@ -8,8 +8,23 @@ export function normalizeGatewayErrorText(value: unknown): string {
   return typeof value === "string" ? value.trim().toLowerCase() : "";
 }
 
-export function isSensitiveUrlQueryParamName(key: string): boolean {
+function isSensitiveUrlQueryParamName(key: string): boolean {
   return /(?:token|password|secret|key|auth|credential)/iu.test(key);
+}
+
+export function isGatewayClientStoppedError(err: unknown): boolean {
+  const message = err instanceof Error ? err.message : String(err);
+  return message === "gateway client stopped" || message === "Error: gateway client stopped";
+}
+
+export function formatGatewayClientErrorForLog(err: unknown): string {
+  const redactedUrlLikeString = String(err)
+    .replace(/\/\/([^@/?#\s]+)@/g, "//***:***@")
+    .replace(/(Authorization:\s*Bearer\s+)[^\s]+/giu, "$1***")
+    .replace(/([?&])([^=&\s]+)=([^&#\s"'<>)]*)/g, (match, prefix: string, key: string) =>
+      isSensitiveUrlQueryParamName(key) ? `${prefix}${key}=***` : match,
+    );
+  return redactedUrlLikeString;
 }
 
 const SHA256_HEX_FINGERPRINT = /^[a-fA-F0-9]{64}$/u;

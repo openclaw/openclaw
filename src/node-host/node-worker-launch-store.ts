@@ -1,9 +1,11 @@
 import type { DatabaseSync } from "node:sqlite";
+import { isGatewayExternallySupervised } from "../infra/gateway-supervision.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
+import { extractSqliteTableSchema } from "../infra/sqlite-schema-sql.js";
 import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import type { DB as OpenClawStateDatabase } from "../state/openclaw-state-db.generated.js";
 import {
@@ -16,6 +18,8 @@ import {
   isNodeWorkerTerminalState,
   nodeWorkerLaunchReceiptFromRow,
   validateNodeWorkerContainerIdentity,
+  type NodeWorkerCleanupBinding,
+  type NodeWorkerCleanupMode,
   type NodeWorkerContainerIdentity,
   type NodeWorkerLaunchReceipt,
   type NodeWorkerLaunchRow,
@@ -34,7 +38,10 @@ export type {
 
 type NodeWorkerLaunchDatabase = Pick<
   OpenClawStateDatabase,
-  "node_worker_launch_containers" | "node_worker_launches" | "node_worker_turns"
+  | "node_worker_launch_cleanup"
+  | "node_worker_launch_containers"
+  | "node_worker_launches"
+  | "node_worker_turns"
 >;
 
 export type NodeWorkerLaunchClaim = Pick<
@@ -60,31 +67,21 @@ export type NodeWorkerLaunchClaimResult =
       nonterminalCount: number;
     };
 
-const NODE_WORKER_LAUNCH_SCHEMA_START = "CREATE TABLE IF NOT EXISTS node_worker_launches (";
 const NODE_WORKER_LAUNCH_SCHEMA_END = "\n  WHERE completed_at_ms IS NOT NULL;";
-const NODE_WORKER_LAUNCH_CONTAINER_SCHEMA_START =
-  "CREATE TABLE IF NOT EXISTS node_worker_launch_containers (";
-const NODE_WORKER_LAUNCH_CONTAINER_SCHEMA_END = "\n) STRICT;";
 const initializedDatabases = new WeakSet<DatabaseSync>();
 const TERMINAL_RECEIPT_RETENTION_MS = 24 * 60 * 60 * 1_000;
 const TERMINAL_PRUNE_BATCH_LIMIT = 256;
 
 function ensureNodeWorkerLaunchSchema(
   database: DatabaseSync,
-  kind: "journal" | "container" = "journal",
+  table: Exclude<keyof NodeWorkerLaunchDatabase, "node_worker_turns">,
 ): void {
-  const startMarker =
-    kind === "journal"
-      ? NODE_WORKER_LAUNCH_SCHEMA_START
-      : NODE_WORKER_LAUNCH_CONTAINER_SCHEMA_START;
-  const endMarker =
-    kind === "journal" ? NODE_WORKER_LAUNCH_SCHEMA_END : NODE_WORKER_LAUNCH_CONTAINER_SCHEMA_END;
-  const start = OPENCLAW_STATE_SCHEMA_SQL.indexOf(startMarker);
-  const end = start >= 0 ? OPENCLAW_STATE_SCHEMA_SQL.indexOf(endMarker, start) : -1;
-  if (start < 0 || end < start) {
-    throw new Error(`OpenClaw node worker launch ${kind} schema marker is missing.`);
-  }
-  database.exec(OPENCLAW_STATE_SCHEMA_SQL.slice(start, end + endMarker.length)); // sqlite-allow-raw -- Canonical feature-local additive DDL only.
+  // sqlite-allow-raw -- Canonical feature-local additive DDL only.
+  database.exec(
+    extractSqliteTableSchema(OPENCLAW_STATE_SCHEMA_SQL, table, {
+      endMarker: table === "node_worker_launches" ? NODE_WORKER_LAUNCH_SCHEMA_END : undefined,
+    }),
+  );
 }
 
 function query(database: DatabaseSync) {
@@ -103,6 +100,18 @@ function selectLaunchRows(database: DatabaseSync) {
           "node_worker_launches.launch_id",
         )
         .select("node_worker_launch_containers.container_json"),
+    )
+    .$if(tableExists(database, "node_worker_launch_cleanup"), (selection) =>
+      selection
+        .leftJoin(
+          "node_worker_launch_cleanup",
+          "node_worker_launch_cleanup.launch_id",
+          "node_worker_launches.launch_id",
+        )
+        .select([
+          "node_worker_launch_cleanup.cleanup_mode",
+          "node_worker_launch_cleanup.lineage_settled",
+        ]),
     );
 }
 
@@ -320,15 +329,18 @@ export class NodeWorkerLaunchStore {
     this.databaseOptions = options.env ? { env: options.env } : {};
   }
 
-  private write<T>(operationLabel: string, operation: (database: DatabaseSync) => T): T {
+  private write<T>(
+    operationLabel: string,
+    operation: (database: DatabaseSync, databasePath: string) => T,
+  ): T {
     let initializedDatabase: DatabaseSync | undefined;
     const result = runOpenClawStateWriteTransaction(
-      ({ db }) => {
+      ({ db, path }) => {
         if (!initializedDatabases.has(db)) {
-          ensureNodeWorkerLaunchSchema(db);
+          ensureNodeWorkerLaunchSchema(db, "node_worker_launches");
           initializedDatabase = db;
         }
-        return operation(db);
+        return operation(db, path);
       },
       this.databaseOptions,
       { operationLabel },
@@ -518,6 +530,27 @@ export class NodeWorkerLaunchStore {
     });
   }
 
+  cleanupBinding(
+    params: Pick<NodeWorkerCleanupBinding, "launchId" | "planHash" | "supervisor">,
+  ): NodeWorkerCleanupBinding {
+    return this.write("node-worker-launch.cleanup-binding", (database, databasePath) => {
+      const current = requireMatchingRow(database, params.launchId, params.planHash);
+      if (
+        isNodeWorkerTerminalState(current.state) ||
+        !rowHasSupervisor(current, params.supervisor)
+      ) {
+        throw new Error("node worker cleanup binding no longer owns its launch");
+      }
+      return {
+        databasePath,
+        externallySupervised: isGatewayExternallySupervised(this.databaseOptions.env),
+        launchId: params.launchId,
+        planHash: params.planHash,
+        supervisor: { ...params.supervisor },
+      };
+    });
+  }
+
   finishCancelled(params: {
     expected: NodeWorkerSupervisorIdentity;
     supervisor: NodeWorkerProcessIdentity;
@@ -584,6 +617,7 @@ export class NodeWorkerLaunchStore {
     planHash: string;
     supervisor: NodeWorkerProcessIdentity;
     worker: NodeWorkerProcessIdentity;
+    cleanupMode: NodeWorkerCleanupMode | null;
     container?: NodeWorkerContainerIdentity;
     nowMs?: number;
   }): NodeWorkerLaunchReceipt {
@@ -606,7 +640,7 @@ export class NodeWorkerLaunchStore {
         return nodeWorkerLaunchReceiptFromRow(current);
       }
       if (params.container) {
-        ensureNodeWorkerLaunchSchema(database, "container");
+        ensureNodeWorkerLaunchSchema(database, "node_worker_launch_containers");
         executeSqliteQuerySync(
           database,
           query(database)
@@ -619,6 +653,17 @@ export class NodeWorkerLaunchStore {
                 engineTarget: params.container.engineTarget,
               }),
             }),
+        );
+      }
+      if (params.cleanupMode !== null) {
+        ensureNodeWorkerLaunchSchema(database, "node_worker_launch_cleanup");
+        executeSqliteQuerySync(
+          database,
+          query(database).insertInto("node_worker_launch_cleanup").values({
+            launch_id: params.launchId,
+            cleanup_mode: params.cleanupMode,
+            lineage_settled: null,
+          }),
         );
       }
       const updatedAtMs = Math.max(nowMs, current.created_at_ms, current.updated_at_ms);

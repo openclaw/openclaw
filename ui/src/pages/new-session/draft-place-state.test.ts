@@ -34,6 +34,8 @@ function createRepositoryFixture(
   );
   const context = {
     gateway: {
+      connection: { gatewayUrl: "ws://gateway.example" },
+      subscribe: () => () => undefined,
       subscribeEvents: () => () => undefined,
       snapshot: {
         phase: "connected",
@@ -95,6 +97,28 @@ function createRepositoryFixture(
 }
 
 describe("DraftPlaceState repository selection", () => {
+  it("captures pending placement preferences instead of transient discovery defaults", () => {
+    const { state, request, readPreference } = createRepositoryFixture({ workspaceGit: true });
+    const discovery = createDeferred<WorktreesBranchesResult>();
+    request.mockReturnValue(discovery.promise);
+    readPreference.mockReturnValue({
+      worktree: true,
+      where: { kind: "device", id: "desktop" },
+      projectId: "pending-project",
+      baseRef: "release/next",
+    });
+    state.adoptAgentDefaults();
+    expect(state.placementPreferenceReady).toBe(false);
+    expect(state.worktree).toBe(false);
+    expect(state.preferenceSelection()).toMatchObject({
+      worktree: true,
+      where: { kind: "device", id: "desktop" },
+      projectId: "pending-project",
+      baseRef: "release/next",
+    });
+    discovery.resolve({ repositoryStatus: "git", branches: [] });
+  });
+
   it.each(["device", "cloud"] as const)(
     "starts a new workspace on %s while the default workspace Git probe is pending",
     async (destination) => {

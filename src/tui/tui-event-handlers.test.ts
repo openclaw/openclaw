@@ -1,7 +1,7 @@
 // Covers TUI event handler routing for keyboard and backend events.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
-import * as failoverClassifier from "../agents/failover/classify.js";
+import * as failoverClassifier from "../agents/failover/classify-core.js";
 import { MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE } from "../shared/assistant-error-format.js";
 import { createEventHandlers } from "./tui-event-handlers.js";
 import {
@@ -2857,7 +2857,7 @@ describe("tui-event-handlers: handleAgentEvent", () => {
 
   it("renders non-auth failures without invoking provider classification", () => {
     const classify = vi
-      .spyOn(failoverClassifier, "classifyFailoverReason")
+      .spyOn(failoverClassifier, "classifyFailoverReasonCore")
       .mockImplementation(() => {
         throw new Error("provider classification must not block non-auth error rendering");
       });

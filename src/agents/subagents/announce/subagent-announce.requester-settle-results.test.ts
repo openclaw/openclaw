@@ -7,6 +7,8 @@ import {
   wakeParams,
 } from "./subagent-announce.requester-settle-fixture.test-support.js";
 import {
+  REQUESTER,
+  requesterSettleKey,
   deliverSpy,
   makeSettledChild,
   completeBatchSpy,
@@ -17,6 +19,42 @@ const { maybeWakeRequesterAfterAllChildrenSettled } =
   await import("./subagent-announce.requester-settle-wake.js");
 
 describe("maybeWakeRequesterAfterAllChildrenSettled results", () => {
+  it("wakes the requester once with a batch-stable idempotency key when the fan-out drains", async () => {
+    registryRuntimeMock.listSubagentRunsForRequester.mockReturnValue([
+      makeSettledChild({
+        runId: "run-b",
+        completion: { required: true, resultText: "network findings" },
+      }),
+      makeSettledChild({
+        runId: "run-a",
+        completion: { required: true, resultText: "social findings" },
+      }),
+    ]);
+
+    const woke = await maybeWakeRequesterAfterAllChildrenSettled(wakeParams());
+
+    expect(woke).toBe(true);
+    expect(deliverSpy).toHaveBeenCalledTimes(1);
+    const call = deliveredCallArg();
+    expect(call.targetRequesterSessionKey).toBe(REQUESTER);
+    expect(call.requesterIsSubagent).toBe(false);
+    expect(call.expectsCompletionMessage).toBe(false);
+    expect(call.requireDirectDelivery).toBe(true);
+    expect(call.requireVisibleReply).toBeUndefined();
+    expect(call.directIdempotencyKey).toBe(requesterSettleKey("run-a,run-b"));
+    const message = String(call.triggerMessage);
+    expect(message).toContain("settled");
+    expect(message).toContain("social findings");
+    expect(message).toContain("network findings");
+    expect(message).toContain("NO_REPLY");
+    expect(registryRuntimeMock.hasDescendantRunAwaitingSettle).toHaveBeenCalledWith(
+      REQUESTER,
+      "run-b",
+      "main",
+      null,
+    );
+  });
+
   it("delivers the complete final source reply after a same-run silent terminal", async () => {
     const text = `${"<source-reply>".repeat(400)}required source reply tail`;
     const child = makeSettledChild({

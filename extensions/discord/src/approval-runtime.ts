@@ -1,4 +1,3 @@
-// Discord plugin module implements approval runtime behavior.
 export {
   isChannelExecApprovalClientEnabledFromConfig,
   matchesApprovalRequestFilters,

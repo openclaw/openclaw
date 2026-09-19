@@ -1,5 +1,6 @@
 import { getEnvironmentData, setEnvironmentData } from "node:worker_threads";
 import {
+  parseRemoteModelCatalogBundle,
   validateAndSanitizeRemoteModelCatalogBundle,
   type RemoteModelCatalogBundle,
   type RemoteModelCatalogPricing,
@@ -15,9 +16,11 @@ import { isRemoteModelCatalogRefreshEnabled, resolveRemoteCatalogUrl } from "./r
 import { readRemoteModelCatalog, readRemoteModelCatalogAsync } from "./remote-store.js";
 
 type RemoteModelCatalogOverlay = Readonly<Record<string, ModelCatalogProvider>>;
-type ActiveRemoteModelCatalog = {
+type RemoteModelCatalogMetadata = {
   sourceUrl: string;
   generatedAt: number;
+};
+type ActiveRemoteModelCatalog = RemoteModelCatalogMetadata & {
   providers: RemoteModelCatalogOverlay;
   pricing?: Readonly<Record<string, RemoteModelCatalogPricing>>;
 };
@@ -27,7 +30,10 @@ let readBundledGeneratedAt = bundledCatalogGeneratedAt;
 let readStoredCatalog = readRemoteModelCatalog;
 let readStoredCatalogAsync = readRemoteModelCatalogAsync;
 
-function isCompatible(bundle: RemoteModelCatalogBundle): boolean {
+function isCompatible(bundle: RemoteModelCatalogBundle, bundledGeneratedAt: number): boolean {
+  if (bundle.generatedAt <= bundledGeneratedAt) {
+    return false;
+  }
   if (!bundle.minVersion) {
     return true;
   }
@@ -43,6 +49,21 @@ function readCompatibleRemoteModelCatalog(): ActiveRemoteModelCatalog | null {
   return selectCompatibleRemoteModelCatalog(readStoredCatalog(), bundledGeneratedAt);
 }
 
+function readCompatibleRemoteModelCatalogMetadata(): RemoteModelCatalogMetadata | null {
+  const bundledGeneratedAt = readBundledGeneratedAt();
+  if (bundledGeneratedAt === undefined) {
+    return null;
+  }
+  const stored = readStoredCatalog();
+  if (!stored) {
+    return null;
+  }
+  const bundle = parseRemoteModelCatalogBundle(JSON.parse(stored.bundle_json));
+  return isCompatible(bundle, bundledGeneratedAt)
+    ? { sourceUrl: stored.source_url, generatedAt: bundle.generatedAt }
+    : null;
+}
+
 function selectCompatibleRemoteModelCatalog(
   stored: ReturnType<typeof readRemoteModelCatalog>,
   bundledGeneratedAt: number,
@@ -51,7 +72,7 @@ function selectCompatibleRemoteModelCatalog(
     return null;
   }
   const bundle = validateAndSanitizeRemoteModelCatalogBundle(JSON.parse(stored.bundle_json));
-  if (bundle.generatedAt <= bundledGeneratedAt || !isCompatible(bundle)) {
+  if (!isCompatible(bundle, bundledGeneratedAt)) {
     return null;
   }
   return {
@@ -149,7 +170,7 @@ export function checkRemoteModelCatalogUpdate(
   if (getActiveRemoteModelCatalog(config)?.generatedAt === expected.generatedAt) {
     return "unchanged";
   }
-  const stored = readCompatibleRemoteModelCatalog();
+  const stored = readCompatibleRemoteModelCatalogMetadata();
   if (!stored) {
     return "unchanged";
   }

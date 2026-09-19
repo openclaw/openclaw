@@ -1,4 +1,3 @@
-import type { NormalizeReplySkipReason } from "../../auto-reply/reply/normalize-reply-skip-reason.js";
 import {
   HEARTBEAT_SKIP_CRON_IN_PROGRESS,
   type HeartbeatRunResult,
@@ -16,8 +15,6 @@ import { resolveCronToolsAllowExecTargetRecoveryError } from "../scheduled-tool-
 import { cronScriptFailureMetadata } from "../script-failure.js";
 import { appendCronPayloadText, cronStreamScheduleKey } from "../stream-schedule.js";
 import type {
-  CronDeliveryTrace,
-  CronResolvedDeliveryState,
   CronJob,
   CronStoredJob,
   CronNextCheckProposal,
@@ -26,8 +23,9 @@ import type {
 } from "../types.js";
 import { abortErrorMessage, timeoutErrorMessage } from "./execution-errors.js";
 import { resolveJobPayloadTextForMain } from "./jobs-scheduling.js";
-import type { CronServiceState } from "./state.js";
+import type { CronRunDeliveryResult, CronServiceState } from "./state.js";
 import {
+  type CronJobExecutionResult,
   type CronTriggerEvalOutcome,
   type ExecuteJobCoreOptions,
   resolveMainSessionCronDeliveryContext,
@@ -43,21 +41,7 @@ export async function executeJobCore(
   job: CronStoredJob,
   abortSignal?: AbortSignal,
   options?: ExecuteJobCoreOptions,
-): Promise<
-  CronRunOutcome &
-    CronRunTelemetry & {
-      delivered?: boolean;
-      deliveryAttempted?: boolean;
-      deliveryError?: string;
-      deliverySuppressionReason?: NormalizeReplySkipReason;
-      deliveryState?: CronResolvedDeliveryState;
-      delivery?: CronDeliveryTrace;
-      nextCheck?: CronNextCheckProposal;
-      scriptStateChanged?: boolean;
-      scriptState?: unknown;
-      triggerEval?: CronTriggerEvalOutcome;
-    }
-> {
+): Promise<CronJobExecutionResult> {
   const resolveAbortError = () => ({
     status: "error" as const,
     error: abortErrorMessage(abortSignal),
@@ -241,12 +225,8 @@ async function executeMainSessionCronJob(
   owningCronLaneTaskMarker?: CommandLaneTaskMarker,
 ): Promise<
   CronRunOutcome &
-    CronRunTelemetry & {
-      delivered?: boolean;
-      deliveryAttempted?: boolean;
-      deliveryError?: string;
-      delivery?: CronDeliveryTrace;
-    }
+    CronRunTelemetry &
+    Pick<CronRunDeliveryResult, "delivered" | "deliveryAttempted" | "deliveryError" | "delivery">
 > {
   const text = resolveJobPayloadTextForMain(job);
   if (!text) {
@@ -339,16 +319,7 @@ async function executeDetachedCronJob(
   abortSignal: AbortSignal | undefined,
   options?: ExecuteJobCoreOptions,
 ): Promise<
-  CronRunOutcome &
-    CronRunTelemetry & {
-      delivered?: boolean;
-      deliveryAttempted?: boolean;
-      deliveryError?: string;
-      deliverySuppressionReason?: NormalizeReplySkipReason;
-      deliveryState?: CronResolvedDeliveryState;
-      delivery?: CronDeliveryTrace;
-      nextCheck?: CronNextCheckProposal;
-    }
+  CronRunOutcome & CronRunTelemetry & CronRunDeliveryResult & { nextCheck?: CronNextCheckProposal }
 > {
   const interrupted = () => {
     const error = abortErrorMessage(abortSignal);

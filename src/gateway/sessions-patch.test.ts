@@ -54,7 +54,7 @@ const providerThinkingMocks = vi.hoisted(() => ({
     vi.fn<typeof import("../plugins/provider-thinking.js").resolveEffectiveThinkingProfile>(),
 }));
 
-vi.mock("../acp/runtime/session-meta.js", () => ({
+vi.mock("../acp/runtime/session-meta-readonly.js", () => ({
   readAcpSessionMetaForEntry: acpSessionMetaMocks.readAcpSessionMetaForEntry,
 }));
 
@@ -663,13 +663,23 @@ describe("gateway sessions patch", () => {
     expect(entry.agentStatus).toBeUndefined();
   });
 
-  test("persists thinkingLevel=off (does not clear)", async () => {
+  test.each([
+    { field: "thinkingLevel", value: "off" },
+    { field: "responseUsage", value: "off" },
+    { field: "reasoningLevel", value: "off" },
+    { field: "fastMode", value: false },
+    { field: "fastMode", value: true },
+    { field: "verboseLevel", value: "full" },
+    { field: "elevatedLevel", value: "off" },
+    { field: "elevatedLevel", value: "on" },
+  ] as const)("persists explicit $field=$value", async ({ field, value }) => {
     const entry = expectPatchOk(
       await runPatch({
-        patch: { key: MAIN_SESSION_KEY, thinkingLevel: "off" },
+        patch: { key: MAIN_SESSION_KEY, [field]: value },
       }),
     );
-    expect(entry.thinkingLevel).toBe("off");
+    // Explicit off values must survive configured defaults, including messages.responseUsage.
+    expect(entry[field]).toBe(value);
   });
 
   test.each(["thinkingLevel", "contextWindow"] as const)(
@@ -691,17 +701,6 @@ describe("gateway sessions patch", () => {
     },
   );
 
-  test("persists responseUsage=off (does not clear)", async () => {
-    const entry = expectPatchOk(
-      await runPatch({
-        patch: { key: MAIN_SESSION_KEY, responseUsage: "off" },
-      }),
-    );
-    // Explicit off must persist so a configured messages.responseUsage default
-    // cannot re-enable the footer the user turned off.
-    expect(entry.responseUsage).toBe("off");
-  });
-
   test("clears responseUsage when patch sets null", async () => {
     const store: Record<string, SessionEntry> = {
       [MAIN_SESSION_KEY]: { responseUsage: "tokens" } as SessionEntry,
@@ -715,15 +714,6 @@ describe("gateway sessions patch", () => {
     expect(entry.responseUsage).toBeUndefined();
   });
 
-  test("persists reasoningLevel=off (does not clear)", async () => {
-    const entry = expectPatchOk(
-      await runPatch({
-        patch: { key: MAIN_SESSION_KEY, reasoningLevel: "off" },
-      }),
-    );
-    expect(entry.reasoningLevel).toBe("off");
-  });
-
   test("clears reasoningLevel when patch sets null", async () => {
     const store: Record<string, SessionEntry> = {
       [MAIN_SESSION_KEY]: { reasoningLevel: "stream" } as SessionEntry,
@@ -735,24 +725,6 @@ describe("gateway sessions patch", () => {
       }),
     );
     expect(entry.reasoningLevel).toBeUndefined();
-  });
-
-  test("persists fastMode=false (does not clear)", async () => {
-    const entry = expectPatchOk(
-      await runPatch({
-        patch: { key: MAIN_SESSION_KEY, fastMode: false },
-      }),
-    );
-    expect(entry.fastMode).toBe(false);
-  });
-
-  test("persists fastMode=true", async () => {
-    const entry = expectPatchOk(
-      await runPatch({
-        patch: { key: MAIN_SESSION_KEY, fastMode: true },
-      }),
-    );
-    expect(entry.fastMode).toBe(true);
   });
 
   test("recreates partial rows without dropping session settings", async () => {
@@ -938,38 +910,11 @@ describe("gateway sessions patch", () => {
     expect(cleared.toolOverrides).toBeUndefined();
   });
 
-  test("persists verboseLevel=full", async () => {
-    const entry = expectPatchOk(
-      await runPatch({
-        patch: { key: MAIN_SESSION_KEY, verboseLevel: "full" },
-      }),
-    );
-    expect(entry.verboseLevel).toBe("full");
-  });
-
   test("rejects invalid verboseLevel values with all valid choices in the error", async () => {
     const result = await runPatch({
       patch: { key: MAIN_SESSION_KEY, verboseLevel: "maybe" },
     });
     expectPatchError(result, 'invalid verboseLevel (use "on"|"off"|"full")');
-  });
-
-  test("persists elevatedLevel=off (does not clear)", async () => {
-    const entry = expectPatchOk(
-      await runPatch({
-        patch: { key: MAIN_SESSION_KEY, elevatedLevel: "off" },
-      }),
-    );
-    expect(entry.elevatedLevel).toBe("off");
-  });
-
-  test("persists elevatedLevel=on", async () => {
-    const entry = expectPatchOk(
-      await runPatch({
-        patch: { key: MAIN_SESSION_KEY, elevatedLevel: "on" },
-      }),
-    );
-    expect(entry.elevatedLevel).toBe("on");
   });
 
   test("clears elevatedLevel when patch sets null", async () => {
@@ -1706,6 +1651,45 @@ describe("gateway sessions patch", () => {
 
     expect(entry.thinkingLevel).toBe("xhigh");
   });
+
+  test.each([
+    { requested: "max", nativeEffort: "max", accepted: true },
+    { requested: "max", nativeEffort: "high", accepted: false },
+  ] as const)(
+    "validates thinking against the selected runtime variant ($nativeEffort, accepted=$accepted)",
+    async ({ requested, nativeEffort, accepted }) => {
+      const host: ModelCatalogEntry = {
+        provider: "runtime-fixture",
+        id: "reasoner",
+        name: "Reasoner",
+        reasoning: true,
+        compat: { supportedReasoningEfforts: [accepted ? "high" : "max"] },
+      };
+      const native: ModelCatalogEntry = {
+        ...host,
+        nativeRuntime: "fixture-native",
+        compat: { supportedReasoningEfforts: [nativeEffort] },
+      };
+      const result = await projectSessionsPatchEntry({
+        cfg: { agents: { defaults: { model: "runtime-fixture/reasoner" } } },
+        storeKey: MAIN_SESSION_KEY,
+        existingEntry: mainStoreEntry({})[MAIN_SESSION_KEY],
+        isLabelInUse: () => false,
+        preparedAgentRuntime: "fixture-native",
+        patch: { key: MAIN_SESSION_KEY, thinkingLevel: requested },
+        loadGatewayModelCatalogSnapshot: async () => ({
+          entries: [host],
+          routeVariants: [host, native],
+        }),
+      });
+
+      if (accepted) {
+        expect(expectPatchOk(result).thinkingLevel).toBe(requested);
+      } else {
+        expectPatchError(result, 'thinkingLevel "max" is not supported');
+      }
+    },
+  );
 
   test("validates global patches against the selected agent", async () => {
     const entry = expectPatchOk(

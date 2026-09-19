@@ -81,6 +81,18 @@ export function createDesktopSessionRegistry(
   const entries = new Map<string, DesktopSessionEntry>();
   const owners = new Set<DesktopSessionEntry>();
   const claimedOwnerEpochs = new Map<string, number>();
+  const controlListeners = new Set<{
+    sourceKey: string;
+    ownerEpoch: number;
+    changed(controlled: boolean): void;
+  }>();
+  const notifyControl = (entry: DesktopSessionEntry) => {
+    for (const listener of controlListeners) {
+      if (listener.sourceKey === entry.sourceKey && listener.ownerEpoch === entry.ownerEpoch) {
+        listener.changed(entry.controller !== undefined);
+      }
+    }
+  };
 
   const claimOwnerEpoch = (sourceKey: string, ownerEpoch: number): boolean => {
     const claimedEpoch = claimedOwnerEpochs.get(sourceKey);
@@ -126,6 +138,7 @@ export function createDesktopSessionRegistry(
       }
       entry.observers.clear();
       entry.controller = undefined;
+      notifyControl(entry);
       for (const pending of entry.pendingStreams.values()) {
         pending.reservation.release();
         pending.stream.destroy();
@@ -291,6 +304,7 @@ export function createDesktopSessionRegistry(
     entry.observers.add(attached);
     if (attached.control) {
       entry.controller = attached;
+      notifyControl(entry);
     }
     return {
       release() {
@@ -301,6 +315,7 @@ export function createDesktopSessionRegistry(
         entry.observers.delete(attached);
         if (entry.controller === attached) {
           entry.controller = undefined;
+          notifyControl(entry);
         }
         scheduleLinger(entry);
       },
@@ -442,6 +457,31 @@ export function createDesktopSessionRegistry(
     hasPendingStream,
     reserveObserver,
     retainActivity,
+    hasActivity: (sourceKey: string, ownerEpoch: number) => {
+      const entry = entries.get(sourceKey);
+      return (
+        entry?.ownerEpoch === ownerEpoch &&
+        !entry.stopped &&
+        (entry.observers.size > 0 ||
+          entry.observerReservations.size > 0 ||
+          entry.activities.size > 0)
+      );
+    },
+    hasController: (sourceKey: string, ownerEpoch: number) => {
+      const entry = entries.get(sourceKey);
+      return entry?.ownerEpoch === ownerEpoch && !entry.stopped && entry.controller !== undefined;
+    },
+    onControlChanged: (
+      sourceKey: string,
+      ownerEpoch: number,
+      changed: (controlled: boolean) => void,
+    ) => {
+      const listener = { sourceKey, ownerEpoch, changed };
+      controlListeners.add(listener);
+      return () => {
+        controlListeners.delete(listener);
+      };
+    },
     claimOwnerEpoch,
     isOwnerEpochCurrent: (sourceKey: string, ownerEpoch: number) =>
       claimedOwnerEpochs.get(sourceKey) === ownerEpoch,

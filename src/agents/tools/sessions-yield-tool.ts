@@ -64,9 +64,9 @@ export function createSessionsYieldTool(opts?: {
       }
       if (getAgentToolExecutionContext()?.hasUnobservedAsyncToolResults) {
         return jsonResult({
-          status: "error",
-          error:
-            "Yield deferred because earlier async tool results have not reached the model yet. Finish this model response to receive those results, then reconsider whether external work still requires yielding.",
+          status: "deferred",
+          message:
+            "Earlier async tool results are still being delivered. Finish this response to receive them, then yield again only if external work still requires waiting.",
         });
       }
       const claim = await opts.claimYield?.(waitFor ? { waitFor } : undefined);

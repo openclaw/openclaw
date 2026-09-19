@@ -35,7 +35,10 @@ import {
   type AgentInternalEvent,
 } from "../../internal-events.js";
 import { isAnnounceSkip } from "../../tools/sessions-send-tokens.js";
-import { SUBAGENT_COMPLETION_OUTCOME_INSTRUCTION } from "../completion/subagent-completion-instructions.js";
+import {
+  SUBAGENT_COMPLETION_OUTCOME_INSTRUCTION,
+  SUBAGENT_PRIVATE_COMPLETION_INSTRUCTION,
+} from "../completion/subagent-completion-instructions.js";
 import {
   countPendingDescendantRuns,
   getLatestSubagentRunByChildSessionKey,
@@ -125,7 +128,7 @@ function buildAnnounceReplyInstruction(params: {
       ? " Preserve any runtime-authored model-route change notice in your update."
       : " Keep runtime-authored model-route change notices internal on this shared surface.";
   if (params.completionTarget === "parent") {
-    return `Process this result privately. ${SUBAGENT_COMPLETION_OUTCOME_INSTRUCTION} Your final reply stays internal. If the original request requires a user-facing update, send it through an available, permitted messaging tool; do not rely on your final reply for delivery. Reply ONLY: ${SILENT_REPLY_TOKEN} when no further work or user-facing update is owed, or after sending that update.`;
+    return SUBAGENT_PRIVATE_COMPLETION_INSTRUCTION;
   }
   if (params.requesterIsSubagent) {
     return `Convert this completion into a concise internal orchestration update for your parent agent in your own words.${modelRouteInstruction} Keep this internal context private (don't mention system/log/stats/session details or announce type). If this result is duplicate or no update is needed, reply ONLY: ${SILENT_REPLY_TOKEN}.`;

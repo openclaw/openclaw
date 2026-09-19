@@ -22,7 +22,7 @@ Under the hood, heartbeat cadence is owned by the Automations scheduler: the gat
 
 Scheduled heartbeats require automations. When `cron.enabled` is `false` or `OPENCLAW_SKIP_CRON=1`, the gateway logs a startup warning and does not run scheduled heartbeats. Manual and event-driven heartbeat wakes remain available. There is no separate heartbeat fallback timer.
 
-Setting `heartbeat.every: "0m"` also disables only the recurring cadence. A targeted event-driven wake can still run one agent turn, such as the completion follow-up requested by a background exec task. It does not create or re-enable a recurring schedule. Use tool policy and sandboxing, rather than heartbeat cadence, to control whether those agent turns may execute commands.
+Setting `heartbeat.every: "0m"` disables only the recurring cadence. A targeted event-driven wake can still run one agent turn, such as a background exec completion. It does not create or re-enable a recurring schedule. To keep background exec without automatic completion turns or their model calls, set `tools.exec.notifyOnExit: false`; check `agents.entries.<id>.tools.exec.notifyOnExit` for per-agent overrides. Collect results with `process poll`. See [Background exec notifications](/gateway/background-process#disable-automatic-completion-turns). Tool policy and sandboxing control whether agent turns may execute commands.
 
 Targeted event wakes retain the same per-agent rate limits when recurring cadence is disabled. Those limits are a 30-second minimum between event turns, and a flood guard after five starts within 60 seconds. Deferred work resumes when its guard expires. Config reloads preserve this accounting without enrolling the agent in recurring or broadcast heartbeats.
 
@@ -102,6 +102,7 @@ string. `heartbeat.target` accepts `owner`, `last`, `none`, or a channel ID such
 - When automations are disabled entirely, scheduled heartbeats do not run even if heartbeat cadence remains enabled.
 - Active hours (`heartbeat.activeHours`) are checked in the configured timezone. Outside the window, heartbeats are skipped until the next tick inside the window.
 - Scheduled heartbeats defer while the main queue or automation work is active or queued, while any reply or embedded run for the same agent is active, and while the resolved target session has active or queued work. Immediate and manual wakes bypass the broad same-agent active-run check, but still honor the main, automation, and target-session busy guards. Sibling agents do not pause each other.
+- A targeted background-command completion waits for its own session to become free, including final-delivery recovery, but does not wait for unrelated sessions or automations. A completion coalesced with scheduled heartbeat work retains the scheduled work's busy guards.
 
 ## What the heartbeat prompt is for
 
@@ -518,6 +519,8 @@ openclaw system event --text "Check for urgent follow-ups" --mode now
 | `--json`                     | Output JSON.                                                                                     |
 
 If no `--session-key` is given and multiple agents have `heartbeat` configured, `--mode now` runs each of those agent heartbeats immediately.
+
+Broadcast completion reports an agent failure even if another agent succeeded or was quietly skipped. Busy retries and guarded deferrals keep their existing retry behavior.
 
 Related heartbeat controls in the same CLI group:
 

@@ -272,41 +272,29 @@ export function createWorkerLiveRuntime(client: WorkerLiveClient): WorkerLiveRun
       }
       return;
     }
-    if (event.type === "tool_execution_start") {
+    if (
+      event.type === "tool_execution_start" ||
+      event.type === "tool_execution_update" ||
+      event.type === "tool_execution_end"
+    ) {
+      const tool = { name: event.toolName, toolCallId: event.toolCallId };
       enqueueLive({
         kind: "tool",
         payload: {
-          phase: "start",
-          name: event.toolName,
-          toolCallId: event.toolCallId,
-          args: redactAgentDiagnosticPayload(event.args),
-          ...(event.hideFromChannelProgress ? { hideFromChannelProgress: true } : {}),
-        },
-      });
-      return;
-    }
-    if (event.type === "tool_execution_update") {
-      enqueueLive({
-        kind: "tool",
-        payload: {
-          phase: "update",
-          name: event.toolName,
-          toolCallId: event.toolCallId,
-          partialResult: redactAgentDiagnosticPayload(event.partialResult),
-          ...(event.hideFromChannelProgress ? { hideFromChannelProgress: true } : {}),
-        },
-      });
-      return;
-    }
-    if (event.type === "tool_execution_end") {
-      enqueueLive({
-        kind: "tool",
-        payload: {
-          phase: "result",
-          name: event.toolName,
-          toolCallId: event.toolCallId,
-          isError: event.isError,
-          result: redactAgentDiagnosticPayload(event.result),
+          ...(event.type === "tool_execution_start"
+            ? { phase: "start" as const, ...tool, args: redactAgentDiagnosticPayload(event.args) }
+            : event.type === "tool_execution_update"
+              ? {
+                  phase: "update" as const,
+                  ...tool,
+                  partialResult: redactAgentDiagnosticPayload(event.partialResult),
+                }
+              : {
+                  phase: "result" as const,
+                  ...tool,
+                  isError: event.isError,
+                  result: redactAgentDiagnosticPayload(event.result),
+                }),
           ...(event.hideFromChannelProgress ? { hideFromChannelProgress: true } : {}),
         },
       });

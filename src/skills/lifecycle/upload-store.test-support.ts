@@ -6,7 +6,6 @@ type SkillUploadStoreTestApi = {
     env?: NodeJS.ProcessEnv;
     installLeaseHeartbeatMs?: number;
     installLeaseMs?: number;
-    now?: () => number;
     path?: string;
     tempRootDir?: string;
     ttlMs?: number;

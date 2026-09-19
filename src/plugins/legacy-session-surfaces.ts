@@ -160,7 +160,9 @@ export function prepareLegacySessionSurfaces(params: {
       config: params.config,
       env: params.env,
     });
-  const manifestRecords = context.manifestRegistry?.plugins ?? [];
+  const manifestRecords = (context.manifestRegistry?.plugins ?? []).filter(
+    (record) => record.packageManifest?.setupFeatures?.legacySessionSurfaces === true,
+  );
   const selectedPluginIds = new Set(
     resolveConfiguredChannelPluginIds({
       config: context.config,
@@ -171,22 +173,14 @@ export function prepareLegacySessionSurfaces(params: {
     }),
   );
   const normalizedConfig = normalizePluginsConfig(context.activationSourceConfig.plugins);
-  for (const record of manifestRecords) {
-    if (
-      record.packageManifest?.setupFeatures?.legacySessionSurfaces === true &&
+  const declaringRecords = manifestRecords.filter(
+    (record) =>
+      selectedPluginIds.has(record.id) ||
       isEnabledLegacySurfaceOwner({
         record,
         config: context.activationSourceConfig,
         normalizedConfig,
-      })
-    ) {
-      selectedPluginIds.add(record.id);
-    }
-  }
-  const declaringRecords = manifestRecords.filter(
-    (record) =>
-      selectedPluginIds.has(record.id) &&
-      record.packageManifest?.setupFeatures?.legacySessionSurfaces === true,
+      }),
   );
   if (declaringRecords.length === 0) {
     return EMPTY_LEGACY_SESSION_SURFACES;

@@ -177,6 +177,14 @@ function setSparseCheckout(repoDir: string) {
 function enterPrWorktree(repoDir: string, pr: number) {
   const result = runLockShell(repoDir, [
     "ensure_gh_api_auth() { return 0; }",
+    // The provisioner suite owns allocation/config/template proof. Keep these
+    // shell registration, branch-reset, and sparse checks on a real Git checkout.
+    "provision_pr_worktree() {",
+    '  command git -C "$1" worktree add -- "$1/.worktrees/pr-$2" "temp/pr-$2"',
+    "}",
+    // Entry and cleanup still run under the real per-PR lock.
+    `acquire_pr_operation_lock ${pr}`,
+    "trap release_pr_operation_lock EXIT",
     `enter_worktree ${pr}`,
   ]);
   expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
@@ -190,6 +198,13 @@ function expectWorktreeBranch(worktreeDir: string, branch: string) {
       encoding: "utf8",
     }).trim(),
   ).toBe(branch);
+  const tips = execFileSync("git", ["rev-parse", "HEAD", "main"], {
+    cwd: worktreeDir,
+    encoding: "utf8",
+  })
+    .trim()
+    .split("\n");
+  expect(tips[0]).toBe(tips[1]);
 }
 
 function expectMaterializedWorktree(worktreeDir: string) {
@@ -280,6 +295,7 @@ function createFreshMainTemplate() {
   for (const command of [
     "awk",
     "cat",
+    "cmp",
     "date",
     "env",
     "jq",
@@ -292,6 +308,8 @@ function createFreshMainTemplate() {
     "sh",
     "sleep",
     "xargs",
+    "uname",
+    ...(process.platform === "darwin" ? ["python3"] : []),
   ]) {
     symlinkSync(
       execFileSync("which", [command], { encoding: "utf8", env: setupEnv }).trim(),
@@ -817,6 +835,8 @@ describePosix("scripts/pr per-PR operation lock", () => {
       const template = (freshMainTemplate ??= createFreshMainTemplate());
       const repoDir = tempDirs.make("openclaw-pr-fresh-main-");
       cpSync(template.repoDir, repoDir, { recursive: true });
+      // The copied CLI now executes the cold provisioner, not only shell preflights.
+      linkPrWrapperDependencies(repoDir);
       const { cachedMain, canonicalTree } = template;
       const stateDir = join(repoDir, "fixture-state");
       const homeDir = join(stateDir, "home");
@@ -924,17 +944,19 @@ describePosix("scripts/pr per-PR operation lock", () => {
         "set -euo pipefail",
         'case "$*" in',
         '  "auth token") printf "token:1\\n" >> "$OPENCLAW_TEST_GH_EVENTS"; exit 1 ;;',
-        '  "repo view --json nameWithOwner,url") printf \'{"nameWithOwner":"fixture/fixture","url":"https://github.com/fixture/fixture"}\\n\' ;;',
+        '  "browse --no-browser") printf "https://github.com/fixture/fixture\\n" ;;',
+        '  "api --hostname github.com repos/fixture/fixture -H Cache-Control: max-age=0") printf \'{"full_name":"fixture/fixture","html_url":"https://github.com/fixture/fixture"}\\n\' ;;',
         '  "api graphql -f query=query { viewer { login } } --include")',
         '    if [ "$OPENCLAW_TEST_AUTH_FAILURE" = 1 ]; then',
         '      printf "viewer:1\\n" >> "$OPENCLAW_TEST_GH_EVENTS"; exit 1',
         "    fi",
         '    printf "viewer:0\\n" >> "$OPENCLAW_TEST_GH_EVENTS"',
         '    printf \'HTTP/2.0 200 OK\\n\\n{"data":{"viewer":{"login":"fixture-user"}}}\\n\' ;;',
-        '  "pr view 42 --json number,url,baseRefName,baseRefOid,headRefName,headRefOid,headRepository,headRepositoryOwner"|"pr view 42 --json headRefOid"|"pr view 42 --json headRefName,headRefOid,headRepository,headRepositoryOwner")',
-        '    cat "$OPENCLAW_TEST_PR_METADATA"; printf "head:0\\n" >> "$OPENCLAW_TEST_GH_EVENTS" ;;',
-        '  "pr view 42 --json number,title,state,isDraft,author,baseRefName,baseRefOid,headRefName,headRefOid,headRepository,headRepositoryOwner,url,body,labels,assignees,changedFiles,additions,deletions,statusCheckRollup,files")',
-        '    cat "$OPENCLAW_TEST_PR_METADATA"; printf "metadata:0\\n" >> "$OPENCLAW_TEST_GH_EVENTS" ;;',
+        '  "api --hostname github.com repos/fixture/fixture/pulls/42")',
+        '    jq \'{number,title,html_url:.url,state:(.state|ascii_downcase),draft:.isDraft,user:.author,base:{ref:.baseRefName,sha:.baseRefOid,repo:{id:123}},head:{ref:.headRefName,sha:.headRefOid,repo:{id:123,name:.headRepository.name,full_name:.headRepository.nameWithOwner,html_url:.headRepository.url,owner:.headRepositoryOwner}},body,labels,assignees,changed_files:.changedFiles,additions,deletions}\' "$OPENCLAW_TEST_PR_METADATA"; printf "pull:0\\n" >> "$OPENCLAW_TEST_GH_EVENTS" ;;',
+        '  "api --hostname github.com repos/fixture/fixture/pulls/42/files?per_page=100 --paginate --slurp -H Cache-Control: max-age=0") printf "[[]]\\n" ;;',
+        '  "api --hostname github.com repos/fixture/fixture/commits/"*"/check-runs?filter=latest&per_page=100 --paginate --slurp") printf \'[{"check_runs":[]}]\\n\' ;;',
+        '  "api --hostname github.com repos/fixture/fixture/commits/"*"/status?per_page=100 --paginate --slurp") printf \'[{"statuses":[]}]\\n\' ;;',
         '  *) printf "unexpected:99\\n" >> "$OPENCLAW_TEST_GH_EVENTS"; echo "unexpected fixture gh request" >&2; exit 99 ;;',
         "esac",
       ]);
@@ -981,6 +1003,7 @@ describePosix("scripts/pr per-PR operation lock", () => {
       const childEnv: NodeJS.ProcessEnv = {
         ...env,
         OPENCLAW_GH_BIN: gh,
+        GH_REPO: "fixture/fixture",
         OPENCLAW_TEST_PR_METADATA: metadataPath,
         OPENCLAW_TEST_GH_EVENTS: ghEventsPath,
         OPENCLAW_TEST_REAL_GIT: realGit,
@@ -1033,7 +1056,7 @@ describePosix("scripts/pr per-PR operation lock", () => {
             .soft(ghEvents, output)
             .toEqual(
               command === "review-init"
-                ? ["token:1", "metadata:0", "head:0", "token:1", "viewer:1"]
+                ? ["token:1", "token:1", "pull:0", "token:1", "pull:0", "token:1", "viewer:1"]
                 : ["token:1", "viewer:1"],
             );
           expect.soft(controller.exitCode, output).toBe(1);
@@ -1324,7 +1347,7 @@ describePosix("scripts/pr per-PR operation lock", () => {
       "owner_oid=$(printf 'owner-lock\\n' | git hash-object -w --stdin)",
       "successor_oid=$(printf 'successor-lock\\n' | git hash-object -w --stdin)",
       `git update-ref '${lockRef}' "$owner_oid"`,
-      "git() {",
+      "pr_git() {",
       `  if [ "$*" = "-C ${repoDir} update-ref --no-deref -d ${lockRef} $owner_oid" ]; then`,
       `    command git -C '${repoDir}' update-ref '${lockRef}' "$successor_oid" "$owner_oid"`,
       "    return 1",
@@ -1506,7 +1529,7 @@ describePosix("scripts/pr per-PR operation lock", () => {
       "prepare_pr_operation_lock_candidate 99",
       "old_oid=$PR_OPERATION_LOCK_CANDIDATE_OID",
       `git update-ref '${lockRef}' "$old_oid"`,
-      "git() {",
+      "pr_git() {",
       `  if [ ! -e '${raceTriggered}' ] && [[ "$*" == *"rev-parse --verify ${lockRef}"* ]]; then`,
       `    : >'${raceTriggered}'`,
       `    command git -C '${repoDir}' update-ref --no-deref -d '${lockRef}' "$old_oid"`,
@@ -1589,7 +1612,7 @@ describePosix("scripts/pr per-PR operation lock", () => {
       "acquire_pr_operation_lock 42",
       "owner_oid=$PR_OPERATION_LOCK_OWNER_OID",
       "delete_attempts=0",
-      "git() {",
+      "pr_git() {",
       `  if [ "$*" = "-C ${repoDir} update-ref --no-deref -d ${lockRef} $owner_oid" ]; then`,
       "    delete_attempts=$((delete_attempts + 1))",
       '    if [ "$delete_attempts" -lt 3 ]; then return 1; fi',
@@ -1610,7 +1633,7 @@ describePosix("scripts/pr per-PR operation lock", () => {
       "acquire_pr_operation_lock 42",
       "owner_oid=$PR_OPERATION_LOCK_OWNER_OID",
       "delete_attempts=0",
-      "git() {",
+      "pr_git() {",
       `  if [ "$*" = "-C ${repoDir} update-ref --no-deref -d ${lockRef} $owner_oid" ]; then`,
       "    delete_attempts=$((delete_attempts + 1))",
       "    return 1",
@@ -1721,9 +1744,11 @@ describePosix("scripts/pr per-PR operation lock", () => {
       invocation: "review_validate_artifacts",
       failure: "artifact",
       code: 1,
-      fetches: 1,
-      retained: true,
+      fetches: 0,
+      retained: false,
     },
+    { invocation: "prepare_init", failure: "artifact", code: 1, fetches: 0, retained: false },
+    { invocation: "prepare_init", failure: "not-ready", code: 1, fetches: 0, retained: false },
     { invocation: "enter_worktree", failure: "notification", code: 1, fetches: 0, retained: true },
   ])(
     "preserves native entry phase ownership for $invocation ($failure, $code)",
@@ -1747,19 +1772,20 @@ describePosix("scripts/pr per-PR operation lock", () => {
       const ownerFile = join(repoDir, "entry-owner-oid");
       const result = await runSupervisedOperation(repoDir, "entry-validation.sh", [
         `source '${join(repoRoot, "scripts/pr-lib/review.sh")}'`,
+        `source '${join(repoRoot, "scripts/pr-lib/prepare-core.sh")}'`,
         `script_parent_dir='${join(repoRoot, "scripts")}'`,
         "acquire_pr_operation_lock 42",
         `printf '%s\\n' "$PR_OPERATION_LOCK_OWNER_OID" > '${ownerFile}'`,
         "begin_pr_operation_validation_phase",
         ...(failure === "notification" ? ["OPENCLAW_PR_LOCK_NOTIFY_FD=invalid"] : []),
         "fetch_count=0",
-        "gh_plain() {",
+        "pr_gh_plain() {",
         `  printf 'auth\\n' >> '${traceFile}'`,
         failure === "auth"
           ? `  return ${code}`
           : '  printf \'HTTP/2.0 200 OK\\n\\n{"data":{"viewer":{"login":"fixture-user"}}}\\n\'',
         "}",
-        "git() {",
+        "pr_git() {",
         `  printf 'git %s\\n' "$*" >> '${traceFile}'`,
         '  case "$*" in fetch\\ *|-C\\ *\\ fetch\\ *)',
         "    fetch_count=$((fetch_count + 1))",
@@ -1775,7 +1801,9 @@ describePosix("scripts/pr per-PR operation lock", () => {
 
       expect.soft(result.status, `${result.stdout}\n${result.stderr}`).toBe(code === 0 ? 0 : 1);
       const commands = readFileSync(traceFile, "utf8").trim().split("\n");
-      expect.soft(commands.filter((command) => command === "auth")).toHaveLength(1);
+      expect
+        .soft(commands.filter((command) => command === "auth"))
+        .toHaveLength(failure === "artifact" || failure === "not-ready" ? 0 : 1);
       expect.soft(commands.filter((command) => command.includes(" fetch "))).toHaveLength(fetches);
       if (failure.startsWith("fetch-")) {
         const failedAt = commands.indexOf("failed-fetch");
@@ -1839,6 +1867,7 @@ describePosix("scripts/pr per-PR operation lock", () => {
       writeFileSync(
         mergeScript,
         `${readFileSync(mergeScript, "utf8")}\n` +
+          "review_artifact_preflight() { :; }\n" +
           "validate_review_artifact_data() { :; }\n" +
           "merge_verify() { MERGE_USE_CRABBOX_ADMIN_BYPASS=false; mark_pr_operation_side_effects_started; }\n",
       );
@@ -1889,6 +1918,7 @@ describePosix("scripts/pr per-PR operation lock", () => {
         "set -euo pipefail",
         'case "$*" in',
         '  "auth token") exit 1 ;;',
+        '  "browse --no-browser") printf "https://github.com/fixture/repo\\n" ;;',
         '  "api graphql --hostname "*)',
         '    state=OPEN; if grep -q "^merged$" "$OPENCLAW_TEST_LIFECYCLE"; then state=MERGED; fi',
         `    jq -cn --arg state "$state" --arg head '${preparedHead}' '{data:{repository:{id:"fixture-repo",databaseId:123,url:"https://github.com/fixture/repo",nameWithOwner:"fixture/repo",ref:{target:{oid:$head}},pullRequest:{id:"fixture-pr",number:42,url:"https://github.com/fixture/repo/pull/42",state:$state,headRefOid:$head,baseRefName:"main",isDraft:false,mergeCommit:(if $state=="MERGED" then {oid:$head} else null end),autoMergeRequest:null,isInMergeQueue:false,isMergeQueueEnabled:false,mergeable:"MERGEABLE",mergeStateStatus:"CLEAN"}}}}' ;;`,
@@ -1899,18 +1929,14 @@ describePosix("scripts/pr per-PR operation lock", () => {
         '    git rev-parse refs/openclaw/pr-operation-locks/42 > "$OPENCLAW_TEST_OWNER"',
         '    if [ "$OPENCLAW_TEST_FAILURE" = merge ]; then echo "fixture merge failed" >&2; exit 7; fi',
         '    printf "merged\\n" >> "$OPENCLAW_TEST_LIFECYCLE" ;;',
-        '  "pr view 42 --json state --jq .state" | "pr view 43 --json state --jq .state") printf "MERGED\\n" ;;',
-        '  "repo view --json nameWithOwner,url")',
-        '    printf "invocation\\t%s\\n" "$PWD" >> "$OPENCLAW_TEST_LIFECYCLE"',
-        `    printf '%s\\n' '{"url":"https://github.com/fixture/repo","nameWithOwner":"fixture/repo"}' ;;`,
+        '  "api --hostname github.com repos/fixture/repo/pulls/42"* | "api --hostname github.com repos/fixture/repo/pulls/43"*) printf \'{"state":"closed","merged_at":"2026-09-18T00:00:00Z","head":{"ref":""}}\\n\' ;;',
         '  "api --hostname github.com repos/fixture/repo -H Cache-Control: max-age=0")',
+        '    if [ ! -f "$OPENCLAW_TEST_LIFECYCLE" ] || ! grep -q "^invocation" "$OPENCLAW_TEST_LIFECYCLE"; then printf "invocation\\t%s\\n" "$PWD" >> "$OPENCLAW_TEST_LIFECYCLE"; fi',
         `    printf '%s\\n' '{"id":123,"node_id":"fixture-repo","full_name":"fixture/repo","html_url":"https://github.com/fixture/repo"}' ;;`,
-        '  "repo view "*) printf "fixture/repo\\n" ;;',
         `  "api --hostname github.com --paginate --slurp repos/fixture/repo/issues/42/comments?per_page=100 -H Cache-Control: max-age=0") printf '%s\\n' ${JSON.stringify(reviewComments)} ;;`,
         '  "api --hostname github.com --method POST repos/fixture/repo/issues/42/comments "*)',
         '    printf "comment\\n" >> "$OPENCLAW_TEST_LIFECYCLE"',
         '    printf "https://example.invalid/comment\\n" ;;',
-        `  "pr view 42 --repo "*) printf '%s\\n' '{"headRefName":""}' ;;`,
         '  *) echo "unexpected fixture gh call: $*" >&2; exit 99 ;;',
         "esac",
       ]);
@@ -1941,11 +1967,13 @@ describePosix("scripts/pr per-PR operation lock", () => {
         {
           cwd: worktreeDir,
           encoding: "utf8",
-          timeout: 15_000,
+          // Linked landing verifies the full transitive anchor before starting cleanup.
+          timeout: wrapper === "linked" ? 120_000 : 15_000,
           env: {
             ...process.env,
             canonical_repo_root: join(repoDir, "untrusted-root"),
             OPENCLAW_GH_BIN: gh,
+            GH_REPO: "fixture/repo",
             OPENCLAW_PR_AUTO_MERGE: "0",
             OPENCLAW_PR_MERGE_METHOD: "merge",
             OPENCLAW_TEST_FAILURE: failure,
@@ -2160,7 +2188,7 @@ describePosix("scripts/pr per-PR operation lock", () => {
     const result = await runSupervisedOperation(repoDir, ".local/joined-worktree-operation.sh", [
       `export PATH='${binDir}':"$PATH"`,
       "acquire_pr_operation_lock 42",
-      "git() {",
+      "pr_git() {",
       '  case "$*" in',
       '    "worktree list"*) printf \'worktree %s\\0branch refs/heads/pr-42\\0\\0\' "$PWD" ;;',
       "    \"diff --name-only --no-renames -z \"*) printf 'base.txt\\0' ;;",
@@ -2480,7 +2508,7 @@ describePosix("scripts/pr per-PR operation lock", () => {
     const ghContinue = join(repoDir, "gc-gh-continue");
     const outputFile = join(repoDir, "gc-output");
     const fixture = writeOperationFixture(repoDir, "gc.sh", [
-      "gh() {",
+      "pr_gh() {",
       `  : >'${ghStarted}'`,
       `  while [ ! -e '${ghContinue}' ]; do sleep 0.05; done`,
       "  printf 'MERGED\\n'",
@@ -2823,7 +2851,7 @@ describePosix("scripts/pr per-PR operation lock", () => {
     try {
       expect(await waitFor(() => existsSync(held))).toBe(true);
       const result = runLockShell(repoDir, [
-        "gh() { if [ \"$1 $2\" = 'repo view' ]; then printf 'openclaw/openclaw\\n'; else printf 'MERGED\\n'; fi; }",
+        "pr_gh() { if [ \"$1 $2\" = 'repo view' ]; then printf 'openclaw/openclaw\\n'; else printf 'MERGED\\n'; fi; }",
         "gc_pr_worktrees false",
       ]);
       expect(result.status).toBe(0);
@@ -2840,7 +2868,7 @@ describePosix("scripts/pr per-PR operation lock", () => {
     const result = runLockShell(repoDir, [
       "bad_oid=$(printf 'not-a-lock\\n' | git hash-object -w --stdin)",
       `git update-ref '${lockRef}' "$bad_oid"`,
-      "gh() { printf 'MERGED\\n'; }",
+      "pr_gh() { printf 'MERGED\\n'; }",
       "gc_pr_worktrees false",
     ]);
     expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
@@ -2855,7 +2883,7 @@ describePosix("scripts/pr per-PR operation lock", () => {
     const worktreeDir = join(repoDir, ".worktrees", "pr-42");
     mkdirSync(worktreeDir, { recursive: true });
     const result = runLockShell(repoDir, [
-      "gh() { printf 'MERGED\\n'; }",
+      "pr_gh() { printf 'MERGED\\n'; }",
       "remove_worktree_if_present() { return 0; }",
       "delete_local_branch_if_safe() { return 0; }",
       "gc_pr_worktrees false",
@@ -2880,7 +2908,10 @@ describePosix("scripts/pr per-PR operation lock", () => {
     const located = runLockShell(repoDir, ["worktree_path_for_branch pr-42"]);
     expect(located.status, `${located.stdout}\n${located.stderr}`).toBe(0);
     expect(located.stdout.trim()).toBe(canonicalWorktreeDir);
-    const result = runLockShell(repoDir, ["gh() { printf 'MERGED\\n'; }", "gc_pr_worktrees false"]);
+    const result = runLockShell(repoDir, [
+      "pr_gh() { printf 'MERGED\\n'; }",
+      "gc_pr_worktrees false",
+    ]);
     expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(0);
     expect(result.stdout).toContain("removed .worktrees/pr-42");
     // oxlint-disable-next-line no-warning-comments -- remove after the upstream Bun newline-path fix ships.
@@ -2909,7 +2940,7 @@ describePosix("scripts/pr per-PR operation lock", () => {
   it.each([1, 23])("propagates status %s from NUL-framed worktree listings", (code) => {
     const repoDir = createRepo();
     const result = runLockShell(repoDir, [
-      "git() {",
+      "pr_git() {",
       '  if [ "$1" = worktree ] && [ "$2" = list ]; then',
       "    printf 'worktree %s\\0branch refs/heads/pr-42\\0\\0' \"$PWD\"",
       `    return ${code}`,
@@ -2982,7 +3013,7 @@ describePosix("scripts/pr per-PR operation lock", () => {
         encoding: "utf8",
       });
       const result = runLockShell(repoDir, [
-        "git() {",
+        "pr_git() {",
         '  command git "$@" || return $?',
         `  if [ "$*" = "branch -d -- ${branch}" ]; then`,
         `    command git worktree add -q -b ${branch}/topic .worktrees/pr-99 || return $?`,
@@ -3008,7 +3039,7 @@ describePosix("scripts/pr per-PR operation lock", () => {
   it.each([0, 23])("rejects truncated listings without masking Git status %s", (code) => {
     const repoDir = createRepo();
     const result = runLockShell(repoDir, [
-      "git() {",
+      "pr_git() {",
       '  if [ "${1:-} ${2:-}" = "worktree list" ]; then',
       "    printf 'worktree %s\\0branch refs/heads/pr-42' \"$PWD\"",
       `    return ${code}`,
@@ -3038,7 +3069,7 @@ describePosix("scripts/pr per-PR operation lock", () => {
         encoding: "utf8",
       });
       const result = runLockShell(repoDir, [
-        "git() {",
+        "pr_git() {",
         '  printf "%s\\n" "$*" >> git-calls',
         '  if [ "${1:-} ${2:-}" = "worktree list" ]; then',
         '    case " ${FUNCNAME[*]} " in',
@@ -3073,7 +3104,7 @@ describePosix("scripts/pr per-PR operation lock", () => {
     const repoDir = createRepo();
     execFileSync("git", ["branch", "pr-42"], { cwd: repoDir });
     const result = runLockShell(repoDir, [
-      "git() {",
+      "pr_git() {",
       '  if [ "$1" = for-each-ref ] && [[ "$*" == *" -- refs/heads/pr-42" ]]; then',
       '    command git "$@" || return $?',
       `    return ${code}`,
@@ -3159,7 +3190,7 @@ describePosix("scripts/pr per-PR operation lock", () => {
       rmSync(worktreeDir, { recursive: true });
       rmSync(unrelatedDir, { recursive: true });
       const result = runLockShell(repoDir, [
-        "git() {",
+        "pr_git() {",
         '  if [[ "$*" == *"worktree prune"* ]]; then echo unexpected-prune >&2; return 97; fi',
         '  command git "$@"',
         "}",
@@ -3225,7 +3256,7 @@ describePosix("scripts/pr per-PR operation lock", () => {
         ...(state === "unreadable-backlink"
           ? ['node() { command node --require "$PWD/deny-backlink.cjs" "$@"; }']
           : []),
-        "git() {",
+        "pr_git() {",
         '  printf "%s\\n" "$*" >> git-calls',
         '  if [[ "$*" == *"worktree prune"* ]]; then return 97; fi',
         '  if [ "${1:-} ${2:-}" = "update-ref -d" ]; then return 96; fi',
@@ -3272,7 +3303,7 @@ describePosix("scripts/pr per-PR operation lock", () => {
       cwd: repoDir,
     });
     const result = runLockShell(repoDir, [
-      "git() {",
+      "pr_git() {",
       "  if [ \"$1 $2\" = 'worktree remove' ]; then",
       ...(partial ? ['    command git "$@" || return $?'] : []),
       "    echo 'fixture remove failure' >&2",
@@ -3313,7 +3344,7 @@ describePosix("scripts/pr per-PR operation lock", () => {
         writeFileSync(join(admin, "gitdir"), "");
       }
       const result = runLockShell(repoDir, [
-        "git() {",
+        "pr_git() {",
         '  if [[ "$*" == *"worktree prune"* ]]; then echo unexpected-prune >&2; return 97; fi',
         ...(fault === "retained-admin"
           ? [
@@ -3369,6 +3400,7 @@ describePosix("scripts/pr per-PR operation lock", () => {
       cwd: repoDir,
     });
     rmSync(worktreeDir, { recursive: true });
+    addTrackedUiConfig(repoDir);
     const { result } = enterPrWorktree(repoDir, 42);
     expect(result.stdout).toContain("Removing exact stale PR worktree .worktrees/pr-42");
     expect(existsSync(worktreeDir)).toBe(true);
@@ -3378,6 +3410,7 @@ describePosix("scripts/pr per-PR operation lock", () => {
     const repoDir = createRepo();
     execFileSync("git", ["remote", "add", "origin", repoDir], { cwd: repoDir });
     execFileSync("git", ["branch", "temp/pr-43"], { cwd: repoDir });
+    addTrackedUiConfig(repoDir);
     const { worktreeDir } = enterPrWorktree(repoDir, 43);
     expect(existsSync(worktreeDir)).toBe(true);
     expectWorktreeBranch(worktreeDir, "temp/pr-43");

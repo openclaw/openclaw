@@ -210,7 +210,7 @@ function defaultReadProcessCmdline(pid: number, platform: NodeJS.Platform): stri
   return null;
 }
 
-async function resolveGatewayOwnerStatus(
+export async function resolveGatewayOwnerStatus(
   pid: number,
   payload: LockPayload | null,
   platform: NodeJS.Platform,
@@ -268,7 +268,7 @@ async function resolveGatewayOwnerStatus(
   return isGatewayArgv(args, { allowGatewayBinary: true }) ? "alive" : "dead";
 }
 
-async function readLockPayload(
+export async function readLockPayload(
   lockPath: string,
   requireInspection = false,
 ): Promise<LockPayload | null> {
@@ -327,7 +327,7 @@ async function shouldReclaimGatewayLock(params: {
   }
 }
 
-function resolveGatewayLockPaths(env: NodeJS.ProcessEnv, suppliedLockDir?: string) {
+export function resolveGatewayLockPaths(env: NodeJS.ProcessEnv, suppliedLockDir?: string) {
   const resolvedStateDir = resolveStateDir(env);
   const stateDir = resolveIdentityPathViaExistingAncestorSync(resolvedStateDir);
   const lockDir = suppliedLockDir ?? resolveGatewayLockDir(stateDir);

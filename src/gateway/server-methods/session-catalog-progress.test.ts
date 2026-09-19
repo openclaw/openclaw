@@ -151,8 +151,8 @@ describe("session catalog progress ownership", () => {
       await Promise.all(publications);
       expect(leaderBroadcast).toHaveBeenCalledTimes(2);
       expect(followerBroadcast).toHaveBeenCalledTimes(2);
-      expect(settledBroadcast).not.toHaveBeenCalled();
-      expect(list).toHaveBeenCalledTimes(3);
+      expect(settledBroadcast).toHaveBeenCalledTimes(2);
+      expect(list).toHaveBeenCalledTimes(4);
       expect(warn).toHaveBeenCalledTimes(3);
     } finally {
       release();
@@ -174,7 +174,6 @@ describe("session catalog progress ownership", () => {
   it.each([0, 128])(
     "keeps an active list shared after %i distinct lists settle",
     async (completedQueries) => {
-      const now = vi.spyOn(Date, "now").mockReturnValue(1_000);
       const started = createDeferredCore();
       const release = createDeferredCore();
       const list = vi.fn<SessionCatalogProvider["list"]>(async ({ search }) => {
@@ -192,7 +191,6 @@ describe("session catalog progress ownership", () => {
       const pending = [leader];
       try {
         await started.promise;
-        now.mockReturnValue(5_000);
         for (let index = 0; index < completedQueries; index += 1) {
           const respond = await call(
             "sessions.catalog.list",
@@ -213,16 +211,11 @@ describe("session catalog progress ownership", () => {
           });
         }
         expect(list.mock.calls.filter(([params]) => params.search === "held")).toHaveLength(1);
-        now.mockReturnValue(7_999);
-        await call("sessions.catalog.list", request, config, client);
-        expect(list.mock.calls.filter(([params]) => params.search === "held")).toHaveLength(1);
-        now.mockReturnValue(8_000);
         await call("sessions.catalog.list", request, config, client);
         expect(list.mock.calls.filter(([params]) => params.search === "held")).toHaveLength(2);
       } finally {
         release.resolve();
         await Promise.allSettled(pending.map(({ completion }) => completion));
-        now.mockRestore();
       }
     },
   );

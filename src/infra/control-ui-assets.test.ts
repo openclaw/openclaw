@@ -279,43 +279,6 @@ if (process.exitCode === 0) {
     }
   });
 
-  it.each(["ready", "stale", "incomplete"])(
-    "checks %s macOS Resources ahead of a healthy unused dist root",
-    async (kind) => {
-      const root = abs("fixtures/packaged-app");
-      const execPath = path.join(root, "OpenClaw.app", "Contents", "MacOS", "OpenClaw");
-      const bundledUiDir = path.join(root, "OpenClaw.app", "Contents", "Resources", "control-ui");
-      const indexPath = path.join(bundledUiDir, "index.html");
-      const document = (buildId: string) =>
-        `<html data-openclaw-control-ui-build-id="${buildId}-${"a".repeat(64)}"><script src="./assets/startup.js"></script></html>`;
-      setFile(execPath);
-      setFile(indexPath, document(kind === "stale" ? "runtime-a" : "runtime-b"));
-      if (kind !== "incomplete") {
-        setFile(path.join(bundledUiDir, "assets", "startup.js"));
-      }
-      setFile(path.join(root, "dist", "control-ui", "index.html"), document("runtime-b"));
-      setFile(path.join(root, "dist", "control-ui", "assets", "startup.js"));
-      setFile(path.join(root, "ui", "vite.config.ts"));
-      setFile(path.join(root, "scripts", "ui.js"));
-      vi.mocked(openclawRoot.resolveOpenClawPackageRootSync).mockReturnValue(root);
-
-      const result = await ensureControlUiAssetsBuilt(undefined, {
-        argv1: path.join(root, "entry.js"),
-        cwd: root,
-        execPath,
-        expectedBuildId: "runtime-b",
-      });
-      expect(result).toMatchObject({ ok: kind === "ready", built: false });
-      if (result.ok) {
-        expect(result.assets.indexPath).toBe(indexPath);
-      } else {
-        expect(result.message).toContain(indexPath);
-        expect(result.message).toContain("Reinstall OpenClaw");
-      }
-      expect(state.runCommandWithTimeout).not.toHaveBeenCalled();
-    },
-  );
-
   it("tells packaged installs to reinstall when their bundled assets are missing", async () => {
     const root = abs("fixtures/packaged-missing");
     const indexPath = path.join(root, "dist", "control-ui", "index.html");
@@ -630,16 +593,6 @@ if (process.exitCode === 0) {
     // moduleUrl candidate: <moduleDir>/control-ui
     const moduleUrl = pathToFileURL(path.join(pkgRoot, "dist", "bundle.js")).toString();
     expect(resolveControlUiRootSync({ moduleUrl })).toBe(uiDir);
-  });
-
-  it("prefers packaged app Control UI assets in Contents/Resources", () => {
-    const execPath = abs("fixtures/OpenClaw.app/Contents/MacOS/OpenClaw");
-    const bundledUiDir = abs("fixtures/OpenClaw.app/Contents/Resources/control-ui");
-    setFile(path.join(bundledUiDir, "index.html"), "<html></html>\n");
-
-    setFile(execPath);
-
-    expect(resolveControlUiRootSync({ execPath })).toBe(bundledUiDir);
   });
 
   it("resolves control-ui root for symlinked argv1 via realpath", () => {

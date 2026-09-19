@@ -1,8 +1,11 @@
 import { expect, it } from "vitest";
-import { SKIPPED_UPDATE_OUTCOMES } from "../shared/update-outcome.js";
+import {
+  SKIPPED_UPDATE_OUTCOMES,
+  UPDATE_ENVIRONMENT_FAILURE_REASONS,
+} from "../shared/update-outcome.js";
 import { projectPublicUpdateFailureIdentifiers } from "./update-failure-public-identifiers.js";
 
-it.each(Object.keys(SKIPPED_UPDATE_OUTCOMES))(
+it.each([...Object.keys(SKIPPED_UPDATE_OUTCOMES), ...UPDATE_ENVIRONMENT_FAILURE_REASONS])(
   "preserves the public update outcome %s in report identifiers",
   async (reason) => {
     const fact = { check: reason, code: reason };

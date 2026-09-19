@@ -9,6 +9,22 @@ export class OutboundHandoffRejectedError extends PlatformMessageNotDispatchedEr
   }
 }
 
+/** Finds an exact rejected host handoff through delivery wrappers. */
+export function findOutboundHandoffRejectedError(
+  error: unknown,
+): OutboundHandoffRejectedError | undefined {
+  const seen = new Set<unknown>();
+  let current = error;
+  while (current && typeof current === "object" && !seen.has(current)) {
+    if (current instanceof OutboundHandoffRejectedError) {
+      return current;
+    }
+    seen.add(current);
+    current = "cause" in current ? current.cause : undefined;
+  }
+  return undefined;
+}
+
 /** Call only while the current preparation or handoff is proven not dispatched. */
 export function assertOutboundHandoffCurrent(assertCurrent: (() => void) | undefined): void {
   try {

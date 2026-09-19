@@ -88,7 +88,7 @@ export type OpenClawConfig = {
     /** Last OpenClaw version that wrote this config. */
     lastTouchedVersion?: string;
     /** One-time doctor migrations already applied to this config. */
-    migrations?: { modelPolicyAllowlist?: true };
+    migrations?: { modelPolicyAllowlist?: true; utilityModelSeparation?: true };
   };
   /** Authentication provider/profile configuration. */
   auth?: AuthConfig;
@@ -271,6 +271,10 @@ export type ResolvedSourceConfig = BrandedConfigState<"resolved-source">;
 export type RuntimeConfig = BrandedConfigState<"runtime">;
 
 export type ConfigValidationIssue = {
+  errorCode?: string;
+  fixHint?: string;
+  code?: import("../plugins/manifest-types.js").PluginDiagnosticCode;
+  source?: string;
   /** Dot-path to the invalid or legacy config value. */
   path: string;
   /** Structured validator path used internally for lossless source diagnostics. */

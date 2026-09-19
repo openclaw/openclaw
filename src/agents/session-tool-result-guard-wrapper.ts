@@ -24,10 +24,10 @@ import {
 } from "../sessions/user-turn-transcript.js";
 import type { AssistantErrorTranscript } from "./assistant-error-transcript.js";
 import { isMidTurnPrecheckAssistantError } from "./embedded-agent-runner/run/midturn-precheck.js";
-import type { EmbeddedRunTrigger } from "./embedded-agent-runner/run/params.js";
 import { resolveLiveToolResultMaxChars } from "./embedded-agent-runner/tool-result-truncation.js";
 import { runAgentHarnessBeforeMessageWriteHook } from "./harness/hook-helpers.js";
 import { projectAgentHarnessTranscriptMessageForDisplay } from "./harness/transcript-visibility.js";
+import type { EmbeddedRunTrigger } from "./run-trigger.js";
 import type { AgentMessage } from "./runtime/index.js";
 import { installSessionToolResultGuard } from "./session-tool-result-guard.js";
 import type { SessionManager } from "./sessions/index.js";
@@ -54,6 +54,7 @@ type GuardedSessionManager = SessionManager & {
     prepareAssistantTranscriptMessage: PrepareAssistantTranscriptMessage | undefined,
     skipBeforeMessageWriteHooks: boolean | undefined,
     assistantErrorTranscript: AssistantErrorTranscript | undefined,
+    inputProvenance: InputProvenance | undefined,
   ) => void;
 };
 
@@ -104,12 +105,14 @@ export function guardSessionManager(
   let prepareAssistantTranscriptMessage =
     opts?.trigger === "memory" ? undefined : opts?.prepareAssistantTranscriptMessage;
   let skipBeforeMessageWriteHooks = opts?.skipBeforeMessageWriteHooks;
+  let inputProvenance = opts?.inputProvenance;
   if (typeof guardedSessionManager.flushPendingToolResults === "function") {
     guardedSessionManager.setTranscriptRunContext?.(
       opts?.runId,
       prepareAssistantTranscriptMessage,
       skipBeforeMessageWriteHooks,
       opts?.assistantErrorTranscript,
+      inputProvenance,
     );
     return guardedSessionManager;
   }
@@ -185,6 +188,7 @@ export function guardSessionManager(
     }
     const projectedMessage = projectAgentHarnessTranscriptMessageForDisplay({
       hidden: opts?.trigger === "memory",
+      inputProvenance,
       message,
     });
     if (projectedMessage !== message) {
@@ -235,7 +239,7 @@ export function guardSessionManager(
     runId: opts?.runId,
     transformMessageForPersistence: (message) => {
       queuedUserTurnTranscriptRecorder = undefined;
-      const withProvenance = applyInputProvenanceToUserMessage(message, opts?.inputProvenance);
+      const withProvenance = applyInputProvenanceToUserMessage(message, inputProvenance);
       const runtimeContext = takeRuntimeUserTurnTranscriptContext(message);
       // Replay may reuse the current user without appending it. Its prepared
       // metadata must not leak onto a later queued user, including staged steering.
@@ -314,10 +318,17 @@ export function guardSessionManager(
   guardedSessionManager.clearPendingToolResults = guard.clearPendingToolResults;
   guardedSessionManager.clearNextUserMessagePersistenceSuppression =
     guard.clearNextUserMessagePersistenceSuppression;
-  guardedSessionManager.setTranscriptRunContext = (runId, prepare, skipHooks, errors) => {
+  guardedSessionManager.setTranscriptRunContext = (
+    runId,
+    prepare,
+    skipHooks,
+    errors,
+    provenance,
+  ) => {
     guard.setTranscriptRunId(runId, errors);
     prepareAssistantTranscriptMessage = prepare;
     skipBeforeMessageWriteHooks = skipHooks;
+    inputProvenance = provenance;
   };
   return guardedSessionManager;
 }

@@ -84,6 +84,7 @@ export type SandboxBackendHandle = {
   workdirRoots?: readonly string[];
   capabilities?: {
     browser?: boolean;
+    readOnlyResourceMounts?: boolean;
   };
   buildExecSpec(params: {
     command: string;
@@ -97,6 +98,13 @@ export type SandboxBackendHandle = {
     timedOut: boolean;
     token?: unknown;
   }) => Promise<void>;
+  /** Mint termination-only custody while execution is admitted; retained cleanup cannot run arbitrary commands. */
+  prepareProcessCleanup?: (env: Record<string, string>) => {
+    env: Record<string, string>;
+    terminate: () => Promise<void>;
+    /** Interrupt may run guest signal handlers, so it retains ordinary live execution checks. */
+    interrupt: (timeoutMs: number) => Promise<boolean>;
+  };
   runShellCommand(params: SandboxBackendCommandParams): Promise<SandboxBackendCommandResult>;
   createFsBridge?: (params: { sandbox: SandboxFsBridgeContext }) => SandboxFsBridge;
 };

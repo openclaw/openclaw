@@ -4,6 +4,7 @@
  * safely bootstrap local auth profiles, and returns runtime/persisted overlays.
  */
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
+import { resolveRequiredOsHomeDir } from "../../infra/home-dir.js";
 import { readMiniMaxCliCredentialsCached } from "../cli-credentials.js";
 import { EXTERNAL_CLI_SYNC_TTL_MS, MINIMAX_CLI_PROFILE_ID, authProfilesLog } from "./constants.js";
 import { hasUsableOAuthCredential } from "./credential-state.js";
@@ -24,6 +25,7 @@ type ExternalCliResolvedProfile = {
 
 type ExternalCliAuthProfileOptions = {
   allowKeychainPrompt?: boolean;
+  env?: NodeJS.ProcessEnv;
   providerIds?: Iterable<string>;
   profileIds?: Iterable<string>;
 };
@@ -34,7 +36,7 @@ type ExternalCliSyncProvider = {
   provider: string;
   aliases?: readonly string[];
   readCredentials: (
-    options?: Pick<ExternalCliAuthProfileOptions, "allowKeychainPrompt">,
+    options?: Pick<ExternalCliAuthProfileOptions, "allowKeychainPrompt" | "env">,
   ) => OAuthCredential | null;
   persistence?: ExternalCliResolvedProfile["persistence"];
 };
@@ -61,7 +63,11 @@ const EXTERNAL_CLI_SYNC_PROVIDERS: ExternalCliSyncProvider[] = [
     profileId: MINIMAX_CLI_PROFILE_ID,
     provider: "minimax-portal",
     aliases: ["minimax", "minimax-cli"],
-    readCredentials: () => readMiniMaxCliCredentialsCached({ ttlMs: EXTERNAL_CLI_SYNC_TTL_MS }),
+    readCredentials: (options) =>
+      readMiniMaxCliCredentialsCached({
+        ttlMs: EXTERNAL_CLI_SYNC_TTL_MS,
+        ...(options?.env ? { homeDir: resolveRequiredOsHomeDir(options.env) } : {}),
+      }),
   },
 ];
 
@@ -278,9 +284,11 @@ function backfillExternalCliIdentity(params: {
   providerConfig: ExternalCliSyncProvider;
   existingOAuth: OAuthCredential;
   allowKeychainPrompt?: boolean;
+  env?: NodeJS.ProcessEnv;
 }): OAuthCredential | null {
   const creds = params.providerConfig.readCredentials({
     allowKeychainPrompt: params.allowKeychainPrompt,
+    env: params.env,
   });
   // Matching token material proves the stored profile came from this CLI owner.
   // Persist that fact so refresh ownership does not depend on a later file read.
@@ -337,6 +345,7 @@ export function resolveExternalCliAuthProfiles(
           providerConfig,
           existingOAuth,
           allowKeychainPrompt: options?.allowKeychainPrompt,
+          env: options?.env,
         });
         if (backfilled) {
           profiles.push({
@@ -350,6 +359,7 @@ export function resolveExternalCliAuthProfiles(
       const creds = normalizeExternalCliCredentialProvider(
         providerConfig.readCredentials({
           allowKeychainPrompt: options?.allowKeychainPrompt,
+          env: options?.env,
         }),
         existingOAuth?.provider ?? providerConfig.provider,
       );

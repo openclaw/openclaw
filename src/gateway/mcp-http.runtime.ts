@@ -128,11 +128,7 @@ function isComputerAllowedByMcpScope(
 
 type ResolvedNodeScope = {
   params: McpLoopbackScopeParams;
-  policyResolved?: {
-    agentId: string | undefined;
-    workspaceDir?: string;
-    tools: McpLoopbackTool[];
-  };
+  policyResolved?: CachedScopedTools;
 };
 
 async function resolveNodeScope(
@@ -184,11 +180,7 @@ async function resolvePairedComputerNodeScope(
 function resolveMcpLoopbackTools(
   params: McpLoopbackScopeParams,
   mode: LoopbackToolsAllowMode,
-): {
-  agentId: string | undefined;
-  workspaceDir?: string;
-  tools: McpLoopbackTool[];
-} {
+): CachedScopedTools {
   params.signal?.throwIfAborted();
   const { toolsAllow, ...context } = params.context;
   const excludeToolNames = new Set(NATIVE_TOOL_EXCLUDE);
@@ -227,13 +219,17 @@ function resolveMcpLoopbackTools(
     nodeExecAvailable: params.nodeExecAvailability?.isAvailable,
     pairedNodeComputerUse: params.pairedComputerUseAvailability?.prepared,
   });
+  const tools =
+    mode === "exact"
+      ? applyGrantToolsAllow(scoped.tools, toolsAllow)
+      : applyPolicyToolsAllow(scoped.tools, toolsAllow);
+  const toolSchema = buildMcpToolSchema(tools);
+  scoped.captureFinalCronCreatorTools?.(new Set(toolSchema.map((tool) => tool.name)));
   return {
     agentId: scoped.agentId,
     workspaceDir: scoped.workspaceDir,
-    tools:
-      mode === "exact"
-        ? applyGrantToolsAllow(scoped.tools, toolsAllow)
-        : applyPolicyToolsAllow(scoped.tools, toolsAllow),
+    tools,
+    toolSchema,
   };
 }
 
@@ -349,13 +345,7 @@ export class McpLoopbackToolCache {
       return cached;
     }
 
-    const next = resolved.policyResolved ?? resolveMcpLoopbackTools(params, "exact");
-    const nextEntry: CachedScopedTools = {
-      agentId: next.agentId,
-      workspaceDir: next.workspaceDir,
-      tools: next.tools,
-      toolSchema: buildMcpToolSchema(next.tools),
-    };
+    const nextEntry = resolved.policyResolved ?? resolveMcpLoopbackTools(params, "exact");
     // Revocation may overtake discovery before a grant owns any cached rows.
     if (epoch !== this.#epoch) {
       return nextEntry;

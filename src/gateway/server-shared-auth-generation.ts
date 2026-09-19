@@ -1,6 +1,7 @@
 // Gateway shared-auth generation enforcement.
 // Disconnects clients when config writes invalidate shared credentials.
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { resolveGatewayReloadSettings } from "./config-reload-settings.js";
 import {
   invalidateGatewayPolicyClient,
@@ -26,6 +27,27 @@ export type SharedGatewaySessionGenerationOwnership = {
 };
 
 const stateRevisions = new WeakMap<SharedGatewaySessionGenerationState, number>();
+
+const generationReaderStates = resolveGlobalSingleton(
+  Symbol.for("openclaw.sharedGatewaySessionGenerationReaders"),
+  () => new WeakMap<() => string | undefined, SharedGatewaySessionGenerationState>(),
+);
+
+/** Retain the actual generation owner for request admission across an awaited write. */
+export function createRequiredSharedGatewaySessionGenerationReader(
+  state: SharedGatewaySessionGenerationState,
+): () => string | undefined {
+  const read = () => getRequiredSharedGatewaySessionGeneration(state);
+  generationReaderStates.set(read, state);
+  return read;
+}
+
+/** Only readers created by this owner provide transaction-safe generation facts. */
+export function getSharedGatewaySessionGenerationReaderState(
+  read: (() => string | undefined) | undefined,
+): SharedGatewaySessionGenerationState | undefined {
+  return read ? generationReaderStates.get(read) : undefined;
+}
 
 function advanceStateRevision(state: SharedGatewaySessionGenerationState): number {
   const revision = (stateRevisions.get(state) ?? 0) + 1;

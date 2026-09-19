@@ -56,26 +56,33 @@ export function createAliasedCompletionProgram(): Command {
   return program;
 }
 
+type BashCompletionInput = {
+  line?: string;
+  word?: string;
+  point?: number;
+  cword?: number;
+  bashPath?: string;
+  env?: NodeJS.ProcessEnv;
+};
+
 export function runGeneratedBashCompletion(
   program: Command,
   words: readonly string[],
-  input: {
-    line?: string;
-    word?: string;
-    point?: number;
-    cword?: number;
-    bashPath?: string;
-    env?: NodeJS.ProcessEnv;
-  } = {},
+  input: BashCompletionInput = {},
 ): string[] {
   const script = getCompletionScript("bash", program);
-  const result = spawnSync(
-    input.bashPath ?? "bash",
-    [
-      "--noprofile",
-      "--norc",
-      "-c",
-      `${script}
+  return runBashCompletionScript(script, words, input);
+}
+
+export function runBashCompletionScript(
+  script: string,
+  words: readonly string[],
+  input: BashCompletionInput = {},
+): string[] {
+  const result = spawnSync(input.bashPath ?? "bash", ["--noprofile", "--norc"], {
+    encoding: "utf8",
+    env: input.env,
+    input: `${script}
 COMP_WORDS=(${words.map(quoteCliArg).join(" ")})
 COMP_CWORD=${input.cword ?? words.length - 1}
 COMP_LINE=${quoteCliArg(input.line ?? words.join(" "))}
@@ -83,9 +90,7 @@ COMP_POINT=${input.point ?? "${#COMP_LINE}"}
 _openclaw_completion openclaw ${quoteCliArg(input.word ?? words.at(-1) ?? "")}
 printf '%s\\n' "\${COMPREPLY[@]}"
 `,
-    ],
-    { encoding: "utf8", env: input.env },
-  );
+  });
 
   if (result.error) {
     throw result.error;
@@ -108,17 +113,20 @@ const fishPath = findFish();
 export const itWithFish: TestAPI["skip"] = fishPath ? it : it.skip;
 
 export function runGeneratedFishCompletion(program: Command, commandLine: string): string[] {
+  return runFishCompletionScript(getCompletionScript("fish", program), commandLine);
+}
+
+export function runFishCompletionScript(script: string, commandLine: string): string[] {
   if (!fishPath) {
     throw new Error("Fish is unavailable");
   }
 
-  const script = getCompletionScript("fish", program);
   const quotedCommandLine = commandLine.replaceAll("'", "\\'");
-  const result = spawnSync(
-    fishPath,
-    ["--no-config", "--command", `${script}\ncomplete --do-complete '${quotedCommandLine}'`],
-    { encoding: "utf8", timeout: 15_000 },
-  );
+  const result = spawnSync(fishPath, ["--no-config"], {
+    encoding: "utf8",
+    timeout: 15_000,
+    input: `${script}\ncomplete --do-complete '${quotedCommandLine}'\n`,
+  });
 
   if (result.error) {
     throw result.error;
@@ -254,7 +262,18 @@ export class PowerShellCompletionRunner {
     commandLine: string,
     cursorPosition = commandLine.length,
   ): Promise<string[]> {
-    const script = getCompletionScript("powershell", program);
+    return this.completeScript(
+      getCompletionScript("powershell", program),
+      commandLine,
+      cursorPosition,
+    );
+  }
+
+  completeScript(
+    script: string,
+    commandLine: string,
+    cursorPosition = commandLine.length,
+  ): Promise<string[]> {
     const caseId = createHash("sha256")
       .update(script)
       .update("\0")

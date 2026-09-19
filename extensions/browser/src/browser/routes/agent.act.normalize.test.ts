@@ -126,6 +126,10 @@ describe("normalizeActRequest keyboard keys", () => {
     ["Cmd+A", "Meta+A"],
     ["Ctrl+Shift+Esc", "Control+Shift+Escape"],
     ["Ctrl++", "Control++"],
+    [" ", "Space"],
+    ["Space", "Space"],
+    ["space", "Space"],
+    ["Ctrl+Space", "Control+Space"],
   ])("normalizes the keyboard alias %s", (key, expected) => {
     expect(normalizeActRequest({ kind: "press", key })).toMatchObject({ key: expected });
   });
@@ -136,6 +140,18 @@ describe("normalizeActRequest keyboard keys", () => {
       expect(normalizeActRequest({ kind: "press", key })).toMatchObject({ key });
     },
   );
+
+  it.each([
+    [" + ", "+"],
+    ["+ ", "+"],
+  ])("keeps trim-first Plus-key handling for %j", (key, expected) => {
+    expect(normalizeActRequest({ kind: "press", key })).toMatchObject({ key: expected });
+  });
+
+  it("still rejects an empty press key after trimming", () => {
+    expect(() => normalizeActRequest({ kind: "press", key: "" })).toThrow("press requires key");
+    expect(() => normalizeActRequest({ kind: "press", key: "\t" })).toThrow("press requires key");
+  });
 
   it("normalizes keyboard aliases inside nested batch actions", () => {
     expect(

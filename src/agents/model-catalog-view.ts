@@ -28,6 +28,7 @@ import {
 import {
   projectModelCatalogEntryForRoute,
   createConfiguredModelCatalogOverridesResolver,
+  type ModelCatalogRoutePolicy,
   type ModelCatalogRouteProjection,
 } from "./model-catalog-route.js";
 import type { ModelCatalogEntry, ModelCatalogSnapshot } from "./model-catalog.types.js";
@@ -74,8 +75,10 @@ export function createModelCatalogView(params: {
   cfg: OpenClawConfig;
   catalog: ModelCatalogEntry[];
   routeVariants?: readonly ModelCatalogEntry[];
+  routePolicy?: ModelCatalogRoutePolicy;
+  keyOf?: ReturnType<typeof createModelCatalogIdentityKeyResolver>;
 }) {
-  const keyOf = createModelCatalogIdentityKeyResolver();
+  const keyOf = params.keyOf ?? createModelCatalogIdentityKeyResolver();
   const variantsByKey = new Map<string, ModelCatalogEntry[]>();
   for (const entry of params.routeVariants ?? params.catalog) {
     const key = keyOf(entry);
@@ -84,15 +87,55 @@ export function createModelCatalogView(params: {
     variantsByKey.set(key, variants);
   }
   // Deferred lookups can follow an await or owner reload; only the initial index shares policy.
-  const variantsOf = (entry: Pick<ModelCatalogEntry, "provider" | "id">) =>
-    variantsByKey.get(resolveModelCatalogIdentityKey(entry));
+  const variantsOf = (
+    entry: Pick<ModelCatalogEntry, "provider" | "id">,
+    key = resolveModelCatalogIdentityKey(entry),
+  ) => variantsByKey.get(key);
+  const routePolicy = params.routePolicy ?? openAIModelCatalogRoutePolicy;
   const resolveOverrides = createConfiguredModelCatalogOverridesResolver({
     cfg: params.cfg,
-    policy: openAIModelCatalogRoutePolicy,
+    policy: routePolicy,
   });
+  const projectRoute = (
+    entry: ModelCatalogEntry,
+    projection: ModelCatalogRouteProjection,
+    overrides: ReturnType<typeof resolveOverrides>,
+    variants: readonly ModelCatalogEntry[] | undefined,
+  ) => projectModelCatalogEntryForRoute({ entry, projection, catalog: variants, overrides });
+  const projections = new WeakMap<
+    ModelCatalogEntry,
+    {
+      overrides: ReturnType<typeof resolveOverrides>;
+      rows: Map<
+        | ModelCatalogRouteProjection["kind"]
+        | Extract<ModelCatalogRouteProjection, { kind: "selected" }>["route"],
+        ReturnType<typeof projectRoute>
+      >;
+    }
+  >();
   return {
     logicalEntries: dedupeByKey(params.catalog, keyOf),
     variantsOf,
+    readProjection(
+      entry: ModelCatalogEntry,
+      projection: ModelCatalogRouteProjection,
+      identityKey?: string,
+    ) {
+      // Reuse only paired metadata from this view's donor scope. Readiness stays with callers;
+      // configured overrides are captured lazily at the entry's first publication.
+      let cached = projections.get(entry);
+      if (!cached) {
+        cached = { overrides: resolveOverrides(entry), rows: new Map() };
+        projections.set(entry, cached);
+      }
+      const key = projection.kind === "selected" ? projection.route : projection.kind;
+      let row = cached.rows.get(key);
+      if (!row) {
+        row = projectRoute(entry, projection, cached.overrides, variantsOf(entry, identityKey));
+        cached.rows.set(key, row);
+      }
+      return row;
+    },
     project(
       entry: ModelCatalogEntry,
       evaluation: ModelAuthAvailabilityEvaluation,
@@ -105,18 +148,16 @@ export function createModelCatalogView(params: {
             ? {
                 kind: "selected",
                 route: evaluation.selectedRoute,
-                policy: openAIModelCatalogRoutePolicy,
+                policy: routePolicy,
               }
-            : { kind: "unresolved", policy: openAIModelCatalogRoutePolicy };
+            : { kind: "unresolved", policy: routePolicy };
       // Runtime selection can narrow donors without rebuilding the configured-row index.
-      const variants = routeVariants ?? variantsOf(entry);
-      const overrides = resolveOverrides(entry);
-      return projectModelCatalogEntryForRoute({
+      return projectRoute(
         entry,
         projection,
-        ...(variants ? { catalog: variants } : {}),
-        ...(overrides ? { overrides } : {}),
-      });
+        resolveOverrides(entry),
+        routeVariants ?? variantsOf(entry),
+      );
     },
   };
 }

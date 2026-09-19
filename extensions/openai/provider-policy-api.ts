@@ -693,6 +693,7 @@ export function resolveThinkingProfile(params: ProviderDefaultThinkingPolicyCont
         params.agentRuntime,
         params.compat,
         params.api,
+        params.thinkingLevelMap,
       );
     default:
       return null;

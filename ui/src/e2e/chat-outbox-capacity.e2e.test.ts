@@ -311,6 +311,7 @@ suite.define(() => {
               expect.objectContaining({
                 attachments: files.map((file) => ({
                   type: "image",
+                  origin: "file",
                   mimeType: file.mimeType,
                   fileName: file.name,
                   content: file.buffer.toString("base64"),

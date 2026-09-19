@@ -6,6 +6,7 @@ import { createDeferred } from "../../../../test/helpers/promise.js";
 import {
   clearConfigCache,
   clearRuntimeConfigSnapshot,
+  getRuntimeConfig,
   type OpenClawConfig,
 } from "../../../config/config.js";
 import {
@@ -62,6 +63,7 @@ import {
   getPreparedModelRuntimeMocks,
   resetPreparedModelRuntimeHarness,
 } from "../../prepared-model-runtime.test-harness.js";
+import { ModelRegistry } from "../../sessions/model-registry.js";
 import { createAgentsWaitTool } from "../../tools/agents-wait-tool.js";
 import {
   createAdmittedGatewayToolCallerIdentity,
@@ -87,6 +89,7 @@ import {
 } from "../swarm/swarm-scheduler.js";
 import { cleanupProvisionalSession } from "./subagent-spawn-cleanup.js";
 import { callSubagentGateway } from "./subagent-spawn-gateway.js";
+import { registerNativeCancellationCases } from "./subagent-spawn.cancellation.test-support.js";
 
 const runEmbeddedAgent = vi.hoisted(() => vi.fn());
 
@@ -155,6 +158,9 @@ beforeEach(async () => {
   stateDir = state.stateDir;
   runtimeConfig = await writeTestConfig();
   const preparedRuntime = getPreparedModelRuntimeMocks();
+  preparedRuntime.modelRegistry.fork.mockImplementation((authStorage) =>
+    ModelRegistry.inMemory(authStorage),
+  );
   const model = {
     api: "openai-completions" as const,
     baseUrl: "https://example.invalid/v1",
@@ -203,7 +209,7 @@ afterEach(async ({ task }) => {
 });
 
 async function createBoundParent() {
-  const cfg = runtimeConfig;
+  const cfg = getRuntimeConfig();
   const storePath = await writeSubagentSessionEntry({
     stateDir,
     agentId: "main",
@@ -316,12 +322,14 @@ function createBoundWorker(bound: Awaited<ReturnType<typeof createBoundParent>>)
 function createBoundSpawnInvocation(
   bound: Awaited<ReturnType<typeof createBoundParent>>,
   collector?: { collect: true; groupId: string; context: "isolated" },
+  requesterModel?: { provider: string; model: string },
 ) {
   const source = createSessionsSpawnTool({
     config: bound.cfg,
     agentSessionKey: parentSessionKey,
     requesterRunId: parentRunId,
     requesterTurnRunId: parentRunId,
+    requesterModel,
   });
   let tool = source;
   if (collector) {
@@ -519,7 +527,32 @@ function throwBoundFailures(failures: unknown[]) {
 }
 
 describe("recursive spawn production boundary", () => {
-  it("authorizes and admits an upgraded descendant before model execution", async () => {
+  registerNativeCancellationCases({
+    createBoundParent,
+    createBoundGateway,
+    closeBoundGateway,
+    throwBoundFailures,
+    parentSessionKey,
+    parentRunId,
+    assertNoModelExecution: () => expect(runEmbeddedAgent).not.toHaveBeenCalled(),
+  });
+
+  it.each([
+    {
+      name: "configured child model",
+      configuredChildModel: true,
+      storedParentModel: "test-model",
+      requesterModel: { provider: "custom", model: "test-model" },
+    },
+    { name: "parent session model", configuredChildModel: false, storedParentModel: "child-model" },
+    {
+      name: "active parent turn model",
+      configuredChildModel: false,
+      storedParentModel: "test-model",
+      requesterModel: { provider: "custom", model: "child-model" },
+    },
+  ])("admits a descendant using the $name", async (scenario) => {
+    const { configuredChildModel, storedParentModel, requesterModel } = scenario;
     const customProvider = expectDefined(
       runtimeConfig.models?.providers?.custom,
       "custom provider fixture",
@@ -532,7 +565,7 @@ describe("recursive spawn production boundary", () => {
         ...runtimeConfig.agents,
         defaults: {
           ...runtimeConfig.agents?.defaults,
-          subagents: { model: "custom/child-model" },
+          ...(configuredChildModel ? { subagents: { model: "custom/child-model" } } : {}),
           modelPolicy: { allow: ["custom/manual-only"] },
         },
       },
@@ -560,6 +593,14 @@ describe("recursive spawn production boundary", () => {
     clearConfigCache();
     clearRuntimeConfigSnapshot();
     const bound = await createBoundParent();
+    await upsertSessionEntryCore(
+      { storePath: bound.storePath, sessionKey: parentSessionKey },
+      {
+        providerOverride: "custom",
+        modelOverride: storedParentModel,
+        modelOverrideSource: "user",
+      },
+    );
     const { context, runtime, identities, readAgentRuntimeExecutionLineage } =
       await createBoundGateway(bound);
     const modelRun = createDeferred<EmbeddedAgentRunResult>();
@@ -571,7 +612,7 @@ describe("recursive spawn production boundary", () => {
     let childRunId: string | undefined;
     const failures: unknown[] = [];
     try {
-      const result = await createBoundSpawnInvocation(bound)();
+      const result = await createBoundSpawnInvocation(bound, undefined, requesterModel)();
       expect(result.details, JSON.stringify(result)).toMatchObject({
         status: "accepted",
         childSessionKey: expect.any(String),

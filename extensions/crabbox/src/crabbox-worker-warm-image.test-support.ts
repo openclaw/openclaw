@@ -166,6 +166,7 @@ export async function provisionWarmProfile(
   options?: NonNullable<Parameters<WorkerProvider["provision"]>[2]>,
 ) {
   return provider.provision(profile, operationId, {
+    assertCurrent: () => {},
     nodeRuntimeIdentity: NODE_RUNTIME_IDENTITY,
     ...options,
     ...(machineClass ? { machineClass } : {}),
@@ -213,6 +214,7 @@ export function createProjectOptions(
     return undefined;
   };
   const options = {
+    assertCurrent: () => controller.signal.throwIfAborted(),
     nodeRuntimeIdentity: {
       nodeBootstrapSha256: createNodeBootstrapFixture().sha256,
       executionMode: "worker-turn" as const,

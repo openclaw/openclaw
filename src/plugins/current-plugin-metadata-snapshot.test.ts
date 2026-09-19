@@ -1,4 +1,3 @@
-// Covers current plugin metadata snapshot generation.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -34,6 +33,8 @@ import {
   clearPluginMetadataLifecycleCaches,
   retainGatewayPluginMetadata,
 } from "./plugin-metadata-lifecycle.js";
+// Covers current plugin metadata snapshot generation.
+import { buildPluginMetadataProviderFacts } from "./plugin-metadata-provider-facts.js";
 import {
   restorePluginMetadataSnapshot,
   type PluginMetadataSnapshot,
@@ -113,6 +114,8 @@ function createSnapshot(
       setupProviders: new Map(),
       commandAliases: new Map(),
       contracts: new Map(),
+      providerAuthContributions:
+        buildPluginMetadataProviderFacts(plugins).providerAuthContributions,
       modelIdNormalizationPolicies: collectManifestModelIdNormalizationPolicies(plugins),
     },
     metrics: {

@@ -1,4 +1,3 @@
-// Discord plugin module implements doctor shared behavior.
 import type { ChannelDoctorLegacyConfigRule } from "openclaw/plugin-sdk/channel-contract";
 
 // Runtime config loading already normalizes these aliases without rewriting the

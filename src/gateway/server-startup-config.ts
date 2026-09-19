@@ -11,6 +11,11 @@ import { measureDiagnosticsTimelineSpan } from "../infra/diagnostics-timeline.js
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import {
+  describeSecretResolutionOperatorDiagnostic,
+  describeSecretResolutionOperatorRecovery,
+  isSecretResolutionError,
+} from "../secrets/resolve-errors.js";
+import {
   classifySecretResolutionErrorDegradations,
   isRetryableSecretDegradationReason,
   listSecretResolutionErrorOwners,
@@ -340,6 +345,12 @@ export function createRuntimeSecretsActivator(params: {
       }
     }
     if (activationParams.reason === "startup") {
+      if (isSecretResolutionError(err) && err.code === "SECRET_REF_REDACTED_VALUE") {
+        throw new Error(
+          `Startup failed: ${describeSecretResolutionOperatorDiagnostic(err)}. ${describeSecretResolutionOperatorRecovery(err)}.`,
+          { cause: err },
+        );
+      }
       if (degradations.length > 0) {
         throw new Error("Startup failed: required secrets are unavailable.");
       }

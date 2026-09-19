@@ -18,6 +18,14 @@ export type NodeWorkerStopState = Extract<NodeWorkerTerminalState, "cancelled" |
 
 export type NodeWorkerEnvironmentBinding = ReturnType<typeof nodeWorkerEnvironmentBinding>;
 
+export type NodeWorkerPendingAdmission = {
+  binding: NodeWorkerEnvironmentBinding;
+  launchId: string;
+  planHash: string;
+  abort: AbortController;
+  done: Promise<NodeWorkerLaunchReceipt>;
+};
+
 /** Only environment facts survive a turn; descriptors contain disposable admission authority. */
 export function nodeWorkerEnvironmentBinding(input: NodeWorkerLaunchInput) {
   const { admission, assignment } = input.descriptor;
@@ -95,6 +103,24 @@ export type NodeWorkerObservedTerminal = NodeWorkerActiveBase & {
   outcome: NodeWorkerTerminalOutcome;
   cancelledTurn?: NodeWorkerLaunchClaim;
 };
+
+export function createNodeWorkerObservedTerminal(
+  active: NodeWorkerRunningChild,
+  outcome: NodeWorkerTerminalOutcome,
+): NodeWorkerObservedTerminal {
+  return {
+    state: "observed",
+    binding: active.binding,
+    gatewayNamespace: active.gatewayNamespace,
+    launchId: active.launchId,
+    planHash: active.planHash,
+    supervisor: active.supervisor,
+    worker: active.worker,
+    ...(active.container ? { container: active.container } : {}),
+    outcome,
+    ...(!active.stopState && active.turn?.cancelled ? { cancelledTurn: active.turn.claim } : {}),
+  };
+}
 
 export type NodeWorkerActiveOwnership = NodeWorkerRunningChild | NodeWorkerObservedTerminal;
 

@@ -180,13 +180,6 @@
       "count": 1,
       "kind": "html-text",
       "name": "text",
-      "path": "ui/src/components/command-palette.ts",
-      "text": "esc"
-    },
-    {
-      "count": 1,
-      "kind": "html-text",
-      "name": "text",
       "path": "ui/src/components/file-preview-modal.ts",
       "text": "esc"
     },

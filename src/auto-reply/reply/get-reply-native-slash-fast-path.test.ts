@@ -45,6 +45,16 @@ const { maybeResolveNativeSlashCommandFastReply } =
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => cliBackendsTesting.resetDepsForTest());
 
+const runtimeCliBackends = [
+  {
+    id: "claude-cli",
+    modelProvider: "anthropic",
+    pluginId: "anthropic",
+    config: { command: "claude" },
+    bundleMcp: false,
+  },
+];
+
 const createTypingController = (): TypingController => ({
   onReplyStart: async () => {},
   startTypingLoop: async () => {},
@@ -84,12 +94,30 @@ function runTestNativeSlashFastReply(
   });
 }
 
+function buildNativeCommandCtx(body: string, overrides: Parameters<typeof buildTestCtx>[0] = {}) {
+  const authorized = overrides.CommandAuthorized ?? true;
+  return buildTestCtx({
+    Body: body,
+    CommandBody: body,
+    CommandSource: "native",
+    CommandAuthorized: authorized,
+    CommandTurn: {
+      kind: "native",
+      source: "native",
+      authorized,
+      commandName: body.slice(1).split(/\s+/, 1)[0] ?? "",
+      body,
+    },
+    ...overrides,
+  });
+}
+
 describe("maybeResolveNativeSlashCommandFastReply", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
     vi.stubEnv("OPENCLAW_TEST_FAST", "1");
     cliBackendsTesting.setDepsForTest({
-      resolveRuntimeCliBackends: () => [{ id: "claude-cli", modelProvider: "anthropic" }] as never,
+      resolveRuntimeCliBackends: () => runtimeCliBackends,
       resolvePluginSetupCliBackend: () => {
         throw new Error("native command attempted synchronous CLI setup discovery");
       },
@@ -132,7 +160,6 @@ describe("maybeResolveNativeSlashCommandFastReply", () => {
     preparedCatalog?: ModelCatalogSnapshot,
   ) {
     handleCommandsMock.mockResolvedValue(response);
-    const commandName = body.slice(1).split(/\s+/, 1)[0] ?? "";
     const typing = createTypingController();
     const resolvedConfig =
       config ??
@@ -142,25 +169,14 @@ describe("maybeResolveNativeSlashCommandFastReply", () => {
         },
       } as OpenClawConfig);
     const result = await runTestNativeSlashFastReply({
-      ctx: buildTestCtx({
-        Body: body,
+      ctx: buildNativeCommandCtx(body, {
         BodyForAgent: body,
         RawBody: body,
-        CommandBody: body,
-        CommandSource: "native",
-        CommandAuthorized: true,
         Provider: "telegram",
         Surface: "telegram",
         GatewayClientScopes: ["operator.admin"],
         SessionKey: "telegram:slash:123",
         CommandTargetSessionKey: "agent:main:telegram:123",
-        CommandTurn: {
-          kind: "native",
-          source: "native",
-          authorized: true,
-          commandName,
-          body,
-        },
       }),
       cfg: markCompleteReplyConfig(resolvedConfig),
       agentId: "main",
@@ -292,6 +308,79 @@ describe("maybeResolveNativeSlashCommandFastReply", () => {
     expect(preparedModelCatalog.loadProviderScopedThinkingCatalog).not.toHaveBeenCalled();
   });
 
+  it("renders native status thinking for the pinned model and target agent", async () => {
+    cliBackendsTesting.setDepsForTest({
+      resolveRuntimeCliBackends: () => runtimeCliBackends,
+      resolvePluginSetupCliBackend: ({ backend }) => {
+        if (backend === "fixture" || backend === "openai") {
+          return undefined;
+        }
+        throw new Error(`unexpected native status CLI backend lookup: ${backend}`);
+      },
+      resolvePluginSetupRegistry: () => {
+        throw new Error("native status must not load the full CLI setup registry");
+      },
+    });
+    const { buildStatusReplyParts } = await import("../../status/status-text.js");
+    buildStatusReplyMock.mockImplementation(
+      async (params: Parameters<typeof buildStatusReplyParts>[0]) =>
+        buildStatusReplyParts({
+          ...params,
+          statusChannel: "telegram",
+          resolvedHarness: "openclaw",
+          pluginHealthLineOverride: "Plugins: test",
+          taskLineOverride: "",
+          skipDefaultTaskLookup: true,
+          modelAuthOverride: "api-key",
+          activeModelAuthOverride: "api-key",
+          includeTranscriptUsage: false,
+        }),
+    );
+    vi.spyOn(preparedModelCatalog, "readPreparedModelCatalog").mockResolvedValue([
+      { provider: "openai", id: "gpt-5.5", name: "Default model", reasoning: false },
+      { provider: "fixture", id: "selected-model", name: "Selected model", reasoning: true },
+    ]);
+    const storePath = path.join(tempDirs.make("openclaw-native-status-thinking-"), "sessions.json");
+    const sessionKey = "agent:main:telegram:123";
+    await replaceSessionEntry(
+      { agentId: "main", sessionKey, storePath },
+      {
+        sessionId: "pinned-model",
+        updatedAt: Date.now(),
+        providerOverride: "fixture",
+        modelOverride: "selected-model",
+        modelOverrideSource: "user",
+      },
+    );
+
+    const { result } = await resolveNativeDirectiveCommand("/status", {
+      session: { store: storePath },
+      agents: {
+        defaults: {
+          model: "openai/gpt-5.5",
+          models: {
+            "openai/gpt-5.5": { params: { thinking: "off" } },
+            "fixture/selected-model": { params: { thinking: "low" } },
+          },
+        },
+        entries: {
+          main: { models: { "fixture/selected-model": { params: { thinking: "high" } } } },
+        },
+      },
+    });
+
+    expect(result).toMatchObject({
+      handled: true,
+      reply: { text: expect.stringContaining("think high") },
+    });
+    const entry = loadExactSessionEntry({ sessionKey, storePath })?.entry;
+    expect(entry).toMatchObject({
+      providerOverride: "fixture",
+      modelOverride: "selected-model",
+    });
+    expect(entry?.thinkingLevel).toBeUndefined();
+  });
+
   it("marks native /compact terminal replies for delivery under message_tool_only (#90185)", async () => {
     const reply = {
       text: "⚙️ Compaction skipped: no real conversation messages yet • Context 12.1k",
@@ -331,20 +420,9 @@ describe("maybeResolveNativeSlashCommandFastReply", () => {
 
     const typing = createTypingController();
     const result = await runTestNativeSlashFastReply({
-      ctx: buildTestCtx({
-        Body: "/compact",
-        CommandBody: "/compact",
-        CommandSource: "native",
-        CommandAuthorized: true,
+      ctx: buildNativeCommandCtx("/compact", {
         SessionKey: "telegram:slash:123",
         CommandTargetSessionKey: "agent:main:main",
-        CommandTurn: {
-          kind: "native",
-          source: "native",
-          authorized: true,
-          commandName: "compact",
-          body: "/compact",
-        },
       }),
       cfg: markCompleteReplyConfig(
         {
@@ -499,10 +577,7 @@ describe("maybeResolveNativeSlashCommandFastReply", () => {
       );
 
       const result = await runTestNativeSlashFastReply({
-        ctx: buildTestCtx({
-          Body: "/compact",
-          CommandBody: "/compact",
-          CommandSource: "native",
+        ctx: buildNativeCommandCtx("/compact", {
           CommandAuthorized: transportAuthorized,
           Provider: "telegram",
           Surface: "telegram",
@@ -510,13 +585,6 @@ describe("maybeResolveNativeSlashCommandFastReply", () => {
           SenderId: "approved-sender",
           SessionKey: "telegram:slash:123",
           CommandTargetSessionKey: targetSessionKey,
-          CommandTurn: {
-            kind: "native",
-            source: "native",
-            authorized: transportAuthorized,
-            commandName: "compact",
-            body: "/compact",
-          },
         }),
         cfg: markCompleteReplyConfig(
           {
@@ -635,20 +703,9 @@ describe("maybeResolveNativeSlashCommandFastReply", () => {
     );
 
     const result = await runTestNativeSlashFastReply({
-      ctx: buildTestCtx({
-        Body: "/status",
-        CommandBody: "/status",
-        CommandSource: "native",
-        CommandAuthorized: true,
+      ctx: buildNativeCommandCtx("/status", {
         SessionKey: "telegram:slash:123",
         CommandTargetSessionKey: targetSessionKey,
-        CommandTurn: {
-          kind: "native",
-          source: "native",
-          authorized: true,
-          commandName: "status",
-          body: "/status",
-        },
       }),
       cfg: markCompleteReplyConfig({
         session: { store: storePath },
@@ -822,23 +879,13 @@ describe("maybeResolveNativeSlashCommandFastReply", () => {
     });
 
     const result = await runTestNativeSlashFastReply({
-      ctx: buildTestCtx({
-        Body: `/${commandName}`,
-        CommandBody: `/${commandName}`,
-        CommandSource: "native",
+      ctx: buildNativeCommandCtx(`/${commandName}`, {
         CommandAuthorized: authorized,
         Provider: "telegram",
         Surface: "telegram",
         From: "telegram:denied-sender",
         SenderId: "denied-sender",
         CommandTargetSessionKey: sessionKey,
-        CommandTurn: {
-          kind: "native",
-          source: "native",
-          authorized,
-          commandName: commandName.split(" ", 1)[0] ?? "",
-          body: `/${commandName}`,
-        },
       }),
       cfg: markCompleteReplyConfig({
         session: { store: storePath },
@@ -907,19 +954,8 @@ describe("maybeResolveNativeSlashCommandFastReply", () => {
     });
 
     const result = await runTestNativeSlashFastReply({
-      ctx: buildTestCtx({
-        Body: "/compact",
-        CommandBody: "/compact",
-        CommandSource: "native",
-        CommandAuthorized: true,
+      ctx: buildNativeCommandCtx("/compact", {
         CommandTargetSessionKey: sessionKey,
-        CommandTurn: {
-          kind: "native",
-          source: "native",
-          authorized: true,
-          commandName: "compact",
-          body: "/compact",
-        },
       }),
       cfg: markCompleteReplyConfig({ session: { store: storePath } } as OpenClawConfig),
       agentId: "main",
@@ -948,20 +984,9 @@ describe("maybeResolveNativeSlashCommandFastReply", () => {
     const persistedArchivedEntry = loadExactSessionEntry({ sessionKey, storePath })?.entry;
 
     const result = await runTestNativeSlashFastReply({
-      ctx: buildTestCtx({
-        Body: "/compact",
-        CommandBody: "/compact",
-        CommandSource: "native",
-        CommandAuthorized: true,
+      ctx: buildNativeCommandCtx("/compact", {
         Provider: "telegram",
         CommandTargetSessionKey: sessionKey,
-        CommandTurn: {
-          kind: "native",
-          source: "native",
-          authorized: true,
-          commandName: "compact",
-          body: "/compact",
-        },
       }),
       cfg: markCompleteReplyConfig({ session: { store: storePath } } as OpenClawConfig),
       agentId: "main",
@@ -1003,20 +1028,9 @@ describe("maybeResolveNativeSlashCommandFastReply", () => {
 
     try {
       await runTestNativeSlashFastReply({
-        ctx: buildTestCtx({
-          Body: "/compact",
-          CommandBody: "/compact",
-          CommandSource: "native",
-          CommandAuthorized: true,
+        ctx: buildNativeCommandCtx("/compact", {
           Provider: "telegram",
           CommandTargetSessionKey: sessionKey,
-          CommandTurn: {
-            kind: "native",
-            source: "native",
-            authorized: true,
-            commandName: "compact",
-            body: "/compact",
-          },
         }),
         cfg: markCompleteReplyConfig({ session: { store: storePath } } as OpenClawConfig),
         agentId: "main",

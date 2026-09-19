@@ -151,6 +151,7 @@ export function registerSessionOwnershipAvatarTests() {
       result.owners = [
         { type, id: "profile-lobster", label },
         { type: "human", id: "profile-ada", label: "Ada" },
+        { type: "human", id: "profile-bob", label: "Bob" },
       ];
 
       const { sidebar } = await mountSidebar(gateway, harness.sessions);

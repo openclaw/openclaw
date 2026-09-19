@@ -209,7 +209,8 @@ export function parseSessionChangedEvent(payload: unknown): ParsedSessionChanged
   if (!event) {
     return null;
   }
-  const source = recordOrNull(event.session) ?? event;
+  const session = recordOrNull(event.session);
+  const source = session ? { ...event, ...session } : event;
   const key =
     stringValue(recordValue(source, "key")) ?? stringValue(recordValue(event, "sessionKey"));
   if (!key) {
@@ -408,6 +409,7 @@ export function reconcileSessionChangedRow(
   const { key } = info;
   const {
     agentId: _agentId,
+    catalogChanged: _catalogChanged,
     clientRunId: _clientRunId,
     compacted: _compacted,
     key: _key,

@@ -5,7 +5,7 @@ import { loadUserTurnTranscriptRecorderFactoryForTest } from "openclaw/plugin-sd
 import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { describe, expect, it, vi } from "vitest";
 import { projectContextEngineAssemblyForCodex } from "./context-engine-projection.js";
-import { dynamicToolBuildState } from "./dynamic-tool-build-state.js";
+import { setCodexTestToolFactory } from "./host-capability.test-support.js";
 import type { CodexServerNotification } from "./protocol.js";
 import {
   bindProductionHarnessHostCapabilitiesForTest,
@@ -84,7 +84,10 @@ describe("runCodexAppServerAttempt question refresh", () => {
       if (method === "turn/interrupt") {
         await notify({
           method: "turn/completed",
-          params: { threadId: "thread-1", turn: { id: "turn-1", status: "interrupted" } },
+          params: {
+            threadId: "thread-1",
+            turn: { id: "turn-1", status: "interrupted", items: [] },
+          },
         });
       }
       if (method === "thread/backgroundTerminals/list") {
@@ -128,7 +131,7 @@ describe("runCodexAppServerAttempt question refresh", () => {
         pendingRefresh = true;
         return { content: [{ type: "text" as const, text: "generation changed" }], details: {} };
       });
-      dynamicToolBuildState.openClawCodingToolsFactory = () => [reload];
+      setCodexTestToolFactory(params, () => [reload]);
       params.pluginRuntimeRefreshPending = () => pendingRefresh;
       if (!params.sessionKey) {
         throw new Error("Expected the fixture's managed session key");
@@ -325,7 +328,7 @@ describe("runCodexAppServerAttempt question refresh", () => {
         params: {
           threadId: "thread-1",
           turnId: "turn-1",
-          turn: { id: "turn-1", status: "completed" },
+          turn: { id: "turn-1", status: "completed", items: [] },
         },
       });
       await run;

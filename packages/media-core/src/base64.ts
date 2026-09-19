@@ -38,14 +38,32 @@ export function estimateBase64DecodedBytes(base64: string): number {
   return Math.max(0, estimated);
 }
 
-function isBase64DataChar(code: number): boolean {
-  return (
-    (code >= 0x41 && code <= 0x5a) ||
-    (code >= 0x61 && code <= 0x7a) ||
-    (code >= 0x30 && code <= 0x39) ||
-    code === 0x2b ||
-    code === 0x2f
-  );
+/**
+ * Validates padded, whitespace-free base64 without normalizing it or decoding bytes.
+ * Keep attachment alphabet/padding semantics; canonicalizeBase64 additionally checks pad bits.
+ */
+export function isValidBase64(value: string): boolean {
+  if (value.length === 0 || value.length % 4 !== 0) {
+    return false;
+  }
+
+  let padding = 0;
+  let sawPadding = false;
+  for (let i = 0; i < value.length; i += 1) {
+    const code = value.charCodeAt(i);
+    if (code === 0x3d) {
+      padding += 1;
+      if (padding > 2) {
+        return false;
+      }
+      sawPadding = true;
+      continue;
+    }
+    if (sawPadding || base64DataValue(code) < 0) {
+      return false;
+    }
+  }
+  return true;
 }
 
 function base64DataValue(code: number): number {
@@ -58,7 +76,7 @@ function base64DataValue(code: number): number {
   if (code >= 0x30 && code <= 0x39) {
     return code - 0x30 + 52;
   }
-  return code === 0x2b ? 62 : 63;
+  return code === 0x2b ? 62 : code === 0x2f ? 63 : -1;
 }
 
 /**
@@ -73,7 +91,7 @@ export function canonicalizeBase64(base64: string): string | undefined {
   let outLen = 0;
   let padding = 0;
   let sawPadding = false;
-  let lastDataCode = 0;
+  let lastDataValue = 0;
 
   for (let i = 0; i < base64.length; i += 1) {
     const code = base64.charCodeAt(i);
@@ -94,10 +112,12 @@ export function canonicalizeBase64(base64: string): string | undefined {
         return undefined;
       }
       sawPadding = true;
-    } else if (sawPadding || !isBase64DataChar(code)) {
-      return undefined;
     } else {
-      lastDataCode = code;
+      const value = base64DataValue(code);
+      if (sawPadding || value < 0) {
+        return undefined;
+      }
+      lastDataValue = value;
     }
     if (out !== undefined) {
       out[outLen] = code;
@@ -114,7 +134,7 @@ export function canonicalizeBase64(base64: string): string | undefined {
   }
   const effectivePadding = remainder === 0 ? padding : 4 - remainder;
   const padBitMask = effectivePadding === 2 ? 0x0f : effectivePadding === 1 ? 0x03 : 0;
-  if (padBitMask !== 0 && (base64DataValue(lastDataCode) & padBitMask) !== 0) {
+  if (padBitMask !== 0 && (lastDataValue & padBitMask) !== 0) {
     return undefined;
   }
   // Every kept character was validated against the base64 alphabet (ASCII),

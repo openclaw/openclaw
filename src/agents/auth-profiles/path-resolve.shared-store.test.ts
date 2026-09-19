@@ -6,6 +6,7 @@ import { writeConfigMachineState } from "../../state/config-machine-state-write.
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { withEnv } from "../../test-utils/env.js";
+import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
 import { resolveAuthStatePathForDisplay, resolveAuthStorePathForDisplay } from "./paths.js";
 import {
   clearRuntimeAuthProfileStoreSnapshots,
@@ -36,8 +37,11 @@ describe("shared auth store path resolution", () => {
     vi.resetModules();
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     clearRuntimeAuthProfileStoreSnapshots();
+    for (const stateDir of tempDirs.dirs) {
+      await cleanupSessionStateForTest({ stateDir });
+    }
     closeOpenClawStateDatabaseForTest();
   });
 

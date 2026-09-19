@@ -444,6 +444,76 @@ describe("createOpenClawTools browser plugin integration", () => {
     }
   });
 
+  it("does not expose scheduled message authority to plugin delivery with an announce route", () => {
+    const sessionKey = "agent:main:cron:scheduled-plugin-delivery";
+    const telegramPlugin = createOutboundTestPlugin({
+      id: "telegram",
+      outbound: {
+        deliveryMode: "direct",
+        sendText: async () => ({ channel: "telegram", messageId: "sent-1" }),
+      },
+    });
+    setActivePluginRegistry(
+      createTestRegistry([
+        {
+          pluginId: "telegram",
+          source: "test",
+          plugin: {
+            ...telegramPlugin,
+            config: {
+              ...telegramPlugin.config,
+              listAccountIds: () => ["work"],
+              resolveAccount: () => ({}),
+            },
+          },
+        },
+      ]),
+    );
+    const turnCapability = mintMessageActionTurnCapability({
+      agentId: "main",
+      runId: "scheduled-message-run",
+      sessionId: "session-cron",
+      sessionKey,
+      scheduled: {
+        policy: { version: 1, mode: "trusted" },
+        assertCurrent: () => {},
+      },
+    });
+    try {
+      hoisted.resolvePluginTools.mockReturnValue([]);
+      createOpenClawTools({
+        config: {
+          channels: { telegram: { enabled: true, accounts: { work: { enabled: true } } } },
+          plugins: { allow: ["telegram"] },
+        },
+        agentSessionKey: sessionKey,
+        runSessionKey: `${sessionKey}:run:session-cron`,
+        runId: "scheduled-message-run",
+        sessionId: "session-cron",
+        agentChannel: "telegram",
+        agentAccountId: "work",
+        agentTo: "123",
+        agentThreadId: "7",
+        requesterAgentIdOverride: "main",
+        messageActionTurnCapability: turnCapability,
+        disableMessageTool: true,
+      });
+      const context = firstResolvePluginToolsParams().context as {
+        deliveryContext?: unknown;
+        delivery?: unknown;
+      };
+      expect(context.deliveryContext).toEqual({
+        channel: "telegram",
+        to: "123",
+        accountId: "work",
+        threadId: "7",
+      });
+      expect(context.delivery).toBeUndefined();
+    } finally {
+      revokeMessageActionTurnCapability(turnCapability);
+    }
+  });
+
   it("does not expose process-local plugin delivery to gateway-owned channels", () => {
     const gatewayPlugin = createOutboundTestPlugin({
       id: "gatewaychat",
@@ -556,6 +626,7 @@ describe("createOpenClawTools browser plugin integration", () => {
           allowGatewaySubagentBinding: false,
           modelCatalog: { entries: [], routeVariants: [] },
           configuredRuntimeModels: [],
+          findConfiguredRuntimeModel: () => undefined,
           inlineProviderModels: [],
           createStores: vi.fn(),
         },

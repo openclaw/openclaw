@@ -237,8 +237,8 @@ describe("full release same-parent recovery workflow", () => {
       id: "plan_cache",
       "continue-on-error": true,
       with: {
-        key: "full-release-execution-plan-v1-${{ github.run_id }}",
-        path: "${{ runner.temp }}/full-release-execution-plan",
+        key: "full-release-execution-plan-v2-${{ github.run_id }}",
+        path: "full-release-execution-plan",
       },
     });
     expect(cache.with).not.toHaveProperty("fail-on-cache-miss");
@@ -247,7 +247,7 @@ describe("full release same-parent recovery workflow", () => {
       with: {
         "github-token": "${{ github.token }}",
         name: "full-release-execution-plan-${{ github.run_id }}",
-        path: "${{ runner.temp }}/full-release-execution-plan",
+        path: "${{ github.workspace }}/full-release-execution-plan",
         "run-id": "${{ github.run_id }}",
       },
     });
@@ -258,6 +258,48 @@ describe("full release same-parent recovery workflow", () => {
         overwrite: false,
       },
     });
+    const earlyRestore = step("resolve_target", "Restore immutable plan for publication admission");
+    expect(earlyRestore.with).toEqual(cache.with);
+    expect(earlyRestore.uses).toContain("actions/cache/restore@");
+    expect(earlyRestore.if).toBe("github.run_attempt != 1");
+    const restoredUpload = step(
+      "resolve_target",
+      "Upload restored immutable release execution plan",
+    );
+    expect(restoredUpload.if).toBe("github.run_attempt != 1");
+    expect(restoredUpload.with).toEqual(upload.with);
+    expect(step("resolve_target", "Upload immutable publication admission").if).toBeUndefined();
+    const resolver = workflow.jobs.resolve_target;
+    if (!resolver) {
+      throw new Error("missing resolve_target job");
+    }
+    const resolverSteps = resolver.steps.map((entry) => entry.name);
+    expect(resolverSteps.indexOf(earlyRestore.name)).toBeLessThan(
+      resolverSteps.indexOf("Admit publication source"),
+    );
+    expect(resolverSteps.indexOf(restoredUpload.name)).toBeGreaterThan(
+      resolverSteps.indexOf("Admit publication source"),
+    );
+    const witness = step(
+      "release_execution_plan",
+      "Record immutable release execution plan digest",
+    );
+    expect(witness.if).toBe(
+      "${{ always() && github.run_attempt == 1 && steps.plan_upload.outcome == 'success' }}",
+    );
+    expect(
+      execFileSync("bash", ["-c", String(witness.run)], {
+        env: { PATH: process.env.PATH, EXECUTION_PLAN_SHA256: "a".repeat(64) },
+        encoding: "utf8",
+      }),
+    ).toBe(`FRV_EXECUTION_PLAN_SHA256=${"a".repeat(64)}\n`);
+    const save = step("release_execution_plan", "Save immutable release execution plan");
+    expect(cache.uses).toContain("actions/cache/restore@");
+    expect(save.uses).toContain("actions/cache/save@");
+    expect(save.with).toEqual(cache.with);
+    expect(save.if).toBe(
+      "${{ always() && github.run_attempt == 1 && steps.plan_witness.outcome == 'success' }}",
+    );
     for (const job of ["release_decision", "diagnostic_drain", "summary"]) {
       expect(step(job, "Download immutable release execution plan").with).toMatchObject({
         name: "full-release-execution-plan-${{ github.run_id }}",

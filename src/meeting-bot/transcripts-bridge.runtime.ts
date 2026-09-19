@@ -2,6 +2,10 @@ import path from "node:path";
 import { coerceErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import { resolveStateDir } from "../config/paths.js";
 import { KeyedAsyncQueue } from "../plugin-sdk/keyed-async-queue.js";
+import {
+  createTranscriptSummaryUpdates,
+  persistTranscriptSummary,
+} from "../transcripts/capture-summary.js";
 import { resolveTranscriptsConfig } from "../transcripts/config.js";
 import type {
   TranscriptSessionDescriptor,
@@ -12,8 +16,8 @@ import type {
   TranscriptUtterance,
 } from "../transcripts/provider-types.js";
 import { sanitizeTranscriptSourceLocator } from "../transcripts/source-locator.js";
+import { TranscriptsSummaryChangedError } from "../transcripts/store-errors.js";
 import { TranscriptsStore } from "../transcripts/store.js";
-import { summarizeTranscripts } from "../transcripts/summary.js";
 import { MeetingTranscriptDeliveryError } from "./session-transcript-store.js";
 import type { MeetingSessionRecord, MeetingTranscriptLine } from "./session-types.js";
 import type {
@@ -36,6 +40,7 @@ type ActiveCapture<TSession extends MeetingSessionRecord> = {
   session: TSession;
   timer?: ReturnType<typeof setInterval>;
   utteranceCount: number;
+  summaryUpdates?: Awaited<ReturnType<typeof createTranscriptSummaryUpdates>>;
 };
 
 type Subscriber = {
@@ -165,6 +170,21 @@ export function createMeetingDurableTranscriptBridge<
           }
           try {
             await store.writeSession(descriptor);
+            active.summaryUpdates = await createTranscriptSummaryUpdates({
+              config,
+              cfg: params.options.openclawConfig,
+              store,
+              session: descriptor,
+              logger: params.logger,
+              isCaptureActive: () =>
+                captures.get(session.id) === active && active.initialized && !active.closing,
+              assertCurrent: () => {
+                if (captures.get(session.id) !== active || active.closing) {
+                  throw new TranscriptsSummaryChangedError();
+                }
+              },
+            });
+            active.summaryUpdates.start();
             active.initialized = true;
             active.initializationWarned = false;
           } catch (error) {
@@ -267,6 +287,7 @@ export function createMeetingDurableTranscriptBridge<
       if (!active) {
         return false;
       }
+      const summariesStopped = active.summaryUpdates?.stop();
       try {
         let initializationError: Error | undefined;
         if (!active.initialized) {
@@ -307,6 +328,7 @@ export function createMeetingDurableTranscriptBridge<
         if (initializationError !== undefined) {
           throw initializationError;
         }
+        await summariesStopped;
         const finalCaptureError = active.finalCaptureError;
         const stoppedAt = new Date().toISOString();
         const stopped = {
@@ -325,13 +347,17 @@ export function createMeetingDurableTranscriptBridge<
         try {
           await tasks.enqueue(session.id, async () => {
             await store.writeSession(stopped);
-            const utterances = await store.readUtterancesForSession(stopped, {
-              maxUtterances: config.maxUtterances,
+            await persistTranscriptSummary({
+              config,
+              cfg: params.options.openclawConfig,
+              store,
+              session: stopped,
+              assertCurrent: () => {
+                if (captures.get(session.id) !== active || !active.closing) {
+                  throw new TranscriptsSummaryChangedError();
+                }
+              },
             });
-            await store.writeSummary(
-              summarizeTranscripts({ session: stopped, utterances }),
-              stopped,
-            );
           });
         } catch (error) {
           params.logger.warn(
@@ -340,6 +366,7 @@ export function createMeetingDurableTranscriptBridge<
           throw error;
         }
       } finally {
+        await summariesStopped;
         // Final delivery drains before retirement, even if durable finalization
         // needs recovery. Subscribers no longer receive this capture's audio.
         await tasks.enqueue(session.id, async () => {

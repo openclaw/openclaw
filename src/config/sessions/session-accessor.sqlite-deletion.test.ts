@@ -165,6 +165,39 @@ describe("session deletion and native owner state", () => {
   const read = (key = sessionKey) =>
     loadSessionEntry({ sessionKey: key, storePath, readConsistency: "latest" });
 
+  it.each([false, true])(
+    "deletes only unreferenced transcript IDs without parsing unrelated entries (shared: %s)",
+    async (shared) => {
+      await seed(sessionKey, null);
+      for (let index = 0; index < 24; index += 1) {
+        await replaceSessionEntry(
+          { sessionKey: `agent:main:unrelated-${index}`, storePath },
+          {
+            sessionId: `unrelated-${index}`,
+            updatedAt: Date.now(),
+            ...(shared && index === 0 ? { previousSessionId: sessionId } : {}),
+            skillsSnapshot: { prompt: "saved prompt".repeat(1024), skills: [] },
+          },
+        );
+      }
+      const target = resolveSqliteTargetFromSessionStorePath(storePath, { agentId: "main" });
+      const database = openOpenClawAgentDatabase({ agentId: "main", path: target.path });
+      const parse = vi.spyOn(JSON, "parse");
+      expect((await remove()).deleted).toBe(true);
+      expect(
+        parse.mock.calls.filter(
+          ([json]) => typeof json === "string" && json.includes('"sessionId":"unrelated-'),
+        ),
+      ).toEqual([]);
+      expect(
+        database.db
+          .prepare("SELECT session_id FROM session_windows WHERE session_id = ?")
+          .get(sessionId),
+      ).toEqual(shared ? { session_id: sessionId } : undefined);
+      expect(read()).toBeUndefined();
+    },
+  );
+
   it.each([
     { deleteWindows: false, sparse: false, rejectSuggestions: false },
     { deleteWindows: true, sparse: false, rejectSuggestions: false },

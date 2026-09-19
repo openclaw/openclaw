@@ -184,7 +184,8 @@ export async function managedRepairUpdaterScript(params: {
       env: run.env,
       run,
       phase: ${JSON.stringify(params.phase)},
-      onEvent: ({ type }) => process.stderr.write("repair-boundary: " + type + "\\n"),
+      onEvent: (event) => process.stderr.write("repair-boundary: " + event.type +
+        (event.type === "turn-finished" ? " summary=" + JSON.stringify(event.summary) : "") + "\\n"),
       result: { status: "error", mode: "npm", reason: "candidate-validation-failed", steps: [], durationMs: 0 },
       validate: async () => {
         const ok = fs.existsSync(${JSON.stringify(path.join(candidate, "repair-second-exec.txt"))}) &&

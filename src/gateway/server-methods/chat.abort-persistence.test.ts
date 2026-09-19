@@ -4,7 +4,6 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { makeUserMessage } from "../../../test/helpers/user-message.js";
 import { formatSqliteSessionFileMarker } from "../../config/sessions/legacy-sqlite-marker.js";
@@ -76,7 +75,7 @@ vi.mock("../session-utils.js", async () => {
   };
 });
 
-const { chatHandlers } = await import("./chat.js");
+const { handleDirectExternalChatSend } = await import("./chat-send-external-entry.js");
 
 const transcriptFixtures = new Map<
   string,
@@ -808,10 +807,7 @@ describe("chat abort transcript persistence", () => {
       agentRunSeq: new Map<string, number>([["run-stop-1", 1]]),
     });
 
-    await expectDefined(
-      chatHandlers["chat.send"],
-      'chatHandlers["chat.send"] test invariant',
-    )({
+    await handleDirectExternalChatSend({
       params: {
         sessionKey: "main",
         message: "/stop",
@@ -861,10 +857,7 @@ describe("chat abort transcript persistence", () => {
       removeChatRun: vi.fn().mockReturnValue({ sessionKey: activeSessionKey, clientRunId: runId }),
     });
 
-    await expectDefined(
-      chatHandlers["chat.send"],
-      'chatHandlers["chat.send"] test invariant',
-    )({
+    await handleDirectExternalChatSend({
       params: {
         sessionKey: requestedSessionKey,
         message: "stop",
@@ -927,10 +920,7 @@ describe("chat abort transcript persistence", () => {
       getRuntimeConfig: () => cfg,
     });
 
-    await expectDefined(
-      chatHandlers["chat.send"],
-      'chatHandlers["chat.send"] test invariant',
-    )({
+    await handleDirectExternalChatSend({
       params: {
         sessionKey: "global",
         ...(selectedAgentId === "work" ? { agentId: selectedAgentId } : {}),
@@ -1364,10 +1354,7 @@ describe("chat abort transcript persistence", () => {
       chatAbortControllers: new Map([["run-stop-client-session", active]]),
     });
 
-    await expectDefined(
-      chatHandlers["chat.send"],
-      'chatHandlers["chat.send"] test invariant',
-    )({
+    await handleDirectExternalChatSend({
       params: {
         sessionKey: "other-session",
         sessionId,

@@ -8,7 +8,7 @@ import {
   deleteTaskRecordById,
   listTaskRecordsUnsorted,
   markTaskTerminalById,
-} from "../tasks/runtime-internal.js";
+} from "../tasks/task-registry.js";
 import { configureTaskRegistryRuntime } from "../tasks/task-registry.store.js";
 import { resetTaskRegistryForTests } from "../tasks/task-runtime.test-helpers.js";
 import { createInMemoryTaskRegistryStore } from "../test-utils/task-registry-store.js";
@@ -64,10 +64,12 @@ describe("tasks.list Gateway performance", () => {
       let workMs = performance.now();
       const workClock = vi.spyOn(performance, "now").mockImplementation(() => workMs);
       const prepareAccess = taskSessionAccess.prepareTaskSessionReadFilter;
+      let onAccessSlice: ((batch: Parameters<typeof prepareAccess>[1]) => void) | undefined;
       const accessWork = vi
         .spyOn(taskSessionAccess, "prepareTaskSessionReadFilter")
         .mockImplementation((...args) => {
           const filter = prepareAccess(...args);
+          onAccessSlice?.(args[1]);
           workMs += 20;
           return filter;
         });
@@ -283,53 +285,48 @@ describe("tasks.list Gateway performance", () => {
           throw new Error("expected a task churn fixture");
         }
         resetTaskRegistryForTests({ persist: false });
-        let taskChurnActive = true;
-        let taskChurnStarted = false;
+        configureTaskRegistryRuntime({
+          store: createInMemoryTaskRegistryStore({
+            tasks: churnTasks,
+            deliveryStates: new Map(),
+          }),
+        });
         let taskChurnRevision = 0;
-        const churnTask = () => {
-          if (!taskChurnActive) {
+        const registrySelections = vi.spyOn(taskRuntime, "listTaskRecordPage");
+        // Invalidate each scan when it reads the fixture task. Counting free-running
+        // callbacks does not prove that any mutation invalidated the selected page.
+        onAccessSlice = (batch) => {
+          if (!batch.some((task) => task.taskId === churnTaskId)) {
             return;
           }
           taskChurnRevision += 1;
-          markTaskTerminalById({
-            taskId: churnTaskId,
-            status: "succeeded",
-            endedAt: TASK_COUNT + 100 + taskChurnRevision,
-          });
-          setImmediate(churnTask);
+          const endedAt = TASK_COUNT + 100 + taskChurnRevision;
+          expect(
+            markTaskTerminalById({ taskId: churnTaskId, status: "succeeded", endedAt })?.endedAt,
+          ).toBe(endedAt);
         };
-        configureTaskRegistryRuntime({
-          store: {
-            ...createInMemoryTaskRegistryStore(),
-            loadSnapshot: () => {
-              if (!taskChurnStarted) {
-                taskChurnStarted = true;
-                setImmediate(churnTask);
-              }
-              return { tasks: churnTasks, deliveryStates: new Map() };
+        try {
+          const unstableRegistry = await sendRpc<Record<string, unknown>>(
+            admin,
+            "tasks-unstable-registry",
+            "tasks.list",
+            { limit: 1 },
+          );
+          expect(taskChurnRevision).toBeGreaterThanOrEqual(3);
+          expect(registrySelections).toHaveBeenCalledTimes(3);
+          expect(unstableRegistry).toMatchObject({
+            ok: false,
+            error: {
+              code: "UNAVAILABLE",
+              message: "Task activity did not stabilize. Wait a moment, then refresh Tasks.",
+              retryable: true,
+              retryAfterMs: 250,
             },
-          },
-        });
-        const unstableRegistry = await sendRpc<Record<string, unknown>>(
-          admin,
-          "tasks-unstable-registry",
-          "tasks.list",
-          { limit: 1 },
-        );
-        taskChurnActive = false;
-        await new Promise<void>((resolve) => {
-          setImmediate(resolve);
-        });
-        expect(taskChurnRevision).toBeGreaterThanOrEqual(3);
-        expect(unstableRegistry).toMatchObject({
-          ok: false,
-          error: {
-            code: "UNAVAILABLE",
-            message: "Task activity did not stabilize. Wait a moment, then refresh Tasks.",
-            retryable: true,
-            retryAfterMs: 250,
-          },
-        });
+          });
+        } finally {
+          onAccessSlice = undefined;
+          registrySelections.mockRestore();
+        }
 
         const scopedTasks = new Map(
           [...createTaskSnapshot()].slice(0, 65).map(([taskId, task], index) => {
@@ -379,14 +376,13 @@ describe("tasks.list Gateway performance", () => {
             loadSnapshot: () => ({ tasks: accessTasks, deliveryStates: new Map() }),
           },
         });
-        let accessChurnActive = true;
         let accessMutationCount = 0;
-        const accessChurn = async () => {
-          while (true) {
-            if (!accessChurnActive) {
-              return;
-            }
-            const nextVisibility = accessMutationCount % 2 === 0 ? "shared" : "draft";
+        // Invalidate every completed page before the handler checks access again.
+        // A free-running RPC loop can leave a stable gap between its writes.
+        const accessChurn = vi
+          .spyOn(taskRuntime, "listTaskRecordPage")
+          .mockImplementation(async (params) => {
+            const page = await selectPage(params);
             const response = await sendRpc<Record<string, unknown>>(
               admin,
               `visibility-churn-${accessMutationCount}`,
@@ -394,34 +390,33 @@ describe("tasks.list Gateway performance", () => {
               {
                 sessionKey: FOREIGN_SESSION_KEY,
                 agentId: "main",
-                visibility: nextVisibility,
+                visibility: accessMutationCount % 2 === 0 ? "shared" : "draft",
               },
             );
-            if (!response.ok) {
-              throw new Error(`visibility churn failed: ${response.error?.message}`);
-            }
+            expect(response.ok, JSON.stringify(response.error)).toBe(true);
             accessMutationCount += 1;
-          }
-        };
-        const accessChurnPromise = accessChurn();
-        const unstableAccess = await sendRpc<Record<string, unknown>>(
-          viewer,
-          "tasks-unstable-access",
-          "tasks.list",
-          { limit: 1 },
-        );
-        accessChurnActive = false;
-        await accessChurnPromise;
-        expect(accessMutationCount).toBeGreaterThanOrEqual(3);
-        expect(unstableAccess).toMatchObject({
-          ok: false,
-          error: {
-            code: "UNAVAILABLE",
-            message: "Task activity did not stabilize. Wait a moment, then refresh Tasks.",
-            retryable: true,
-            retryAfterMs: 250,
-          },
-        });
+            return page;
+          });
+        try {
+          const unstableAccess = await sendRpc<Record<string, unknown>>(
+            viewer,
+            "tasks-unstable-access",
+            "tasks.list",
+            { limit: 1 },
+          );
+          expect(accessMutationCount).toBe(3);
+          expect(unstableAccess).toMatchObject({
+            ok: false,
+            error: {
+              code: "UNAVAILABLE",
+              message: "Task activity did not stabilize. Wait a moment, then refresh Tasks.",
+              retryable: true,
+              retryAfterMs: 250,
+            },
+          });
+        } finally {
+          accessChurn.mockRestore();
+        }
       } finally {
         sortSpy.mockRestore();
         accessWork.mockRestore();

@@ -2,6 +2,7 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import type { SessionsCreateResult } from "../../packages/gateway-protocol/src/index.js";
 import { resolveAgentDir, resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
+import "../agents/subagents/spawn/subagent-spawn-model.mocks.shared.js";
 import { withGatewayToolCallerIdentity } from "../agents/tools/gateway-caller-context.js";
 import {
   callAgentToolGatewayRequest,
@@ -182,9 +183,9 @@ describe("built-in session tool role authority", () => {
           identities: [REQUESTER, sessionId],
           assertAllowed: () => {},
         });
-        const { chatHandlers } = await import("./server-methods/chat.js");
+        const chatSendOwner = await import("./server-methods/chat-send-external-entry.js");
         const startChild = vi
-          .spyOn(chatHandlers, "chat.send")
+          .spyOn(chatSendOwner, "handleDirectExternalChatSend")
           .mockImplementation(async ({ respond }) => {
             respond(true, { status: "started", runId: "fork-child-run" });
           });

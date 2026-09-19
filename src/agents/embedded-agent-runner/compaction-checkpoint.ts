@@ -2,7 +2,7 @@
 import { formatSqliteSessionFileMarker } from "../../config/sessions/legacy-sqlite-marker.js";
 import type { SessionTranscriptRuntimeTarget } from "../../config/sessions/session-accessor.js";
 import {
-  createFileBackedCompactionCheckpointStore,
+  persistSessionCompactionCheckpoint,
   readSessionLeafStateFromTranscriptAsync,
   resolveCompactionCheckpointTranscriptPosition,
   resolveSessionCompactionCheckpointReason,
@@ -11,7 +11,10 @@ import {
 import { formatErrorMessage } from "../../infra/errors.js";
 import { log } from "./logger.js";
 
-export const compactionCheckpointStore = createFileBackedCompactionCheckpointStore();
+export {
+  captureCompactionCheckpointSnapshotAsync,
+  cleanupCompactionCheckpointSnapshot,
+} from "../../gateway/session-compaction-checkpoints.js";
 
 export async function persistCompactionCheckpoint(params: {
   sessionTarget: SessionTranscriptRuntimeTarget;
@@ -33,7 +36,7 @@ export async function persistCompactionCheckpoint(params: {
       preferredLeafId: params.leafId,
       transcriptState,
     });
-    const stored = await compactionCheckpointStore.persistCheckpoint({
+    const stored = await persistSessionCompactionCheckpoint({
       sessionTarget: params.sessionTarget,
       reason: resolveSessionCompactionCheckpointReason({ trigger: params.trigger }),
       snapshot: params.snapshot,

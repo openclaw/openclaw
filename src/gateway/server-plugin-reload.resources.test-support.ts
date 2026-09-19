@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import { expect, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getPluginInstance } from "../plugins/plugin-instance-scope.js";
+import type { PluginInstanceConsumer } from "../plugins/plugin-instance.types.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import type { GatewayRequestHandlerOptions } from "./server-methods/types.js";
 import type { RecoveryFixtureFactory } from "./server-plugin-reload.recovery.test-support.js";
 
@@ -242,23 +244,74 @@ export async function verifyFailedRecoveryCleanup(createFixture: RecoveryFixture
   expect(fixture.siblingStop).not.toHaveBeenCalled();
 }
 
-export async function verifySelfConsumerReload(createFixture: RecoveryFixtureFactory) {
-  const fixture = await createFixture({ abortOnCandidateStart: false });
-  const record = fixture.previousRegistry.plugins.find((plugin) => plugin.id === "first");
+export async function verifySelfConsumerReload(
+  createFixture: RecoveryFixtureFactory,
+  caller:
+    | "own invocation"
+    | "between invocations"
+    | "pending cleanup"
+    | "final checkpoint"
+    | "later replacement target",
+) {
+  const prepareConfigEffects = vi.fn(() => async () => {});
+  let checkpoints = 0;
+  let consumer: PluginInstanceConsumer | undefined;
+  const fixture = await createFixture({
+    abortOnCandidateStart: false,
+    prepareConfigEffects,
+    checkpoint: async () => {
+      if (++checkpoints <= 3) {
+        expect(fixture.owner.getReloadStatus()).toBeUndefined();
+      }
+      if (checkpoints === 3 && caller === "final checkpoint") {
+        assert(instance);
+        consumer = instance.retainConsumer();
+      }
+    },
+  });
+  const pluginIds = caller === "later replacement target" ? ["first", "sibling"] : ["first"];
+  const record = fixture.previousRegistry.plugins.find((plugin) => plugin.id === pluginIds.at(-1));
   assert(record);
   const instance = getPluginInstance(record);
   assert(instance);
-  const consumer = instance.retainConsumer();
+  if (caller !== "final checkpoint") {
+    consumer = instance.retainConsumer();
+  }
+  const cleanup = createDeferredCore();
+  const closing = caller === "pending cleanup" ? consumer?.close(() => cleanup.promise) : undefined;
+  vi.useFakeTimers();
   try {
-    await expect(consumer.run(() => fixture.reload())).rejects.toMatchObject({
+    const reloading = (
+      caller === "own invocation" && consumer
+        ? consumer.run(() => fixture.reload())
+        : fixture.reload(undefined, pluginIds)
+    ).catch((error: unknown) => error);
+    // Observe the original bounded failure without releasing the work reload depends on.
+    await vi.advanceTimersByTimeAsync(70_000);
+    expect(await reloading).toMatchObject({
       details: { phase: "prepare", committed: false },
     });
+    expect(prepareConfigEffects).not.toHaveBeenCalled();
     expect(fixture.firstStop).not.toHaveBeenCalled();
     expect(fixture.siblingStop).not.toHaveBeenCalled();
     expect(fixture.candidates).toHaveLength(0);
     expect(fixture.registryOwner.registry).toBe(fixture.previousRegistry);
     expect(instance.run(() => "still serving")).toBe("still serving");
-  } finally {
+    cleanup.resolve();
+    await closing;
+    assert(consumer);
     consumer.release();
+    // A refusal on a later instance must unwind reservations already acquired for earlier ones.
+    for (const previous of fixture.previousRegistry.plugins) {
+      getPluginInstance(previous)?.retainWork()();
+    }
+    await expect(fixture.reload(undefined, pluginIds)).resolves.toMatchObject({
+      runtime: { pluginIds },
+    });
+  } finally {
+    cleanup.resolve();
+    await closing;
+    consumer?.release();
+    vi.useRealTimers();
   }
 }

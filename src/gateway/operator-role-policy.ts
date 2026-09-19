@@ -10,7 +10,6 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getUserProfileRole } from "../state/user-profiles.js";
 import { bumpGatewayAccessRevision } from "./gateway-access-revision.js";
-import { gatewayClientSessionCreator } from "./server-methods/gateway-client-identity.js";
 import {
   resolveOperatorSessionCreation,
   type TrustedSessionCreation,
@@ -134,7 +133,7 @@ export function resolveGatewayOperatorRoleActor(
   if (actor) {
     return actor;
   }
-  const profileId = gatewayClientSessionCreator(client ?? null)?.id;
+  const profileId = client?.authenticatedUserProfile?.profileId;
   return profileId && profileId !== GATEWAY_OWNER_PROFILE_ID
     ? { kind: "operator", profileId }
     : undefined;

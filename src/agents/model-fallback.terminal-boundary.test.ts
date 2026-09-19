@@ -1,5 +1,9 @@
 import { assert, beforeEach, describe, expect, it, vi } from "vitest";
 import { GatewayDrainingError } from "../process/gateway-work-admission.js";
+import {
+  AgentRunTerminalOutcomeError,
+  findAgentRunTerminalOutcome,
+} from "./agent-run-terminal-error.js";
 import { createCliOutputFailoverError } from "./cli-runner/output-error.js";
 import {
   FailoverError,
@@ -17,8 +21,11 @@ import {
 import { runWithImageModelFallback } from "./model-fallback-image.js";
 import { runWithModelFallback } from "./model-fallback-runner.js";
 import {
+  createSessionPlacementSettlementClosedAbortError,
+  isSessionPlacementSettlementClosedError,
   createAgentRunDirectAbortError,
   createAgentRunRestartAbortError,
+  createAgentRunSupersededAbortError,
 } from "./run-termination.js";
 
 const { providerHook } = vi.hoisted(() => ({
@@ -40,6 +47,7 @@ function maxTurns() {
 }
 
 const terminalStops = [
+  { name: "recorded supersession", make: createAgentRunSupersededAbortError },
   { name: "max turns", make: maxTurns },
   {
     name: "CLI turn stopped",
@@ -55,6 +63,10 @@ const terminalStops = [
       recordModelFallbackStop(error);
       return error;
     },
+  },
+  {
+    name: "session placement turn settlement closed",
+    make: () => createSessionPlacementSettlementClosedAbortError(),
   },
 ];
 
@@ -77,21 +89,55 @@ it("does not replay an unscoped preflight subclass on another model", async () =
   expect(providerHook).not.toHaveBeenCalled();
 });
 
+it("does not rotate models when session placement turn settlement is closed", async () => {
+  const error = createSessionPlacementSettlementClosedAbortError();
+  const run = vi.fn().mockRejectedValueOnce(error).mockResolvedValueOnce("unexpected candidate 2");
+  await expect(runWithModelFallback({ ...fallbackOptions, run })).rejects.toBe(error);
+  expect(run).toHaveBeenCalledOnce();
+  expect(providerHook).not.toHaveBeenCalled();
+  expect(shouldDiscardDeferredSessionSuspension({ error })).toBe(true);
+});
+
+it("retains closed ownership when async disposal also fails", async () => {
+  const closed = createSessionPlacementSettlementClosedAbortError();
+  // Exercise the real await-using wrapper, including downleveled SuppressedError.
+  const produceError = async () => {
+    await using lease = {
+      [Symbol.asyncDispose]: async () => {
+        throw new Error("cleanup failed");
+      },
+    };
+    void lease;
+    throw closed;
+  };
+  const error: unknown = await produceError().catch((caught: unknown) => caught);
+  expect(isSessionPlacementSettlementClosedError(error)).toBe(true);
+  expect(shouldDiscardDeferredSessionSuspension({ error })).toBe(true);
+  const run = vi.fn().mockRejectedValue(error);
+  await expect(runWithModelFallback({ ...fallbackOptions, run })).rejects.toBe(error);
+  expect(run).toHaveBeenCalledOnce();
+  expect(providerHook).not.toHaveBeenCalled();
+});
+
 const wrappers = [
-  { name: "direct", wrap: (error: FailoverError): unknown => error },
-  { name: "error", wrap: (error: FailoverError): unknown => ({ error }) },
+  { name: "direct", wrap: (error: Error): unknown => error },
+  { name: "error", wrap: (error: Error): unknown => ({ error }) },
+  {
+    name: "suppressed",
+    wrap: (error: Error): unknown => ({ error: new Error("cleanup failed"), suppressed: error }),
+  },
   {
     name: "cause",
-    wrap: (error: FailoverError): unknown => new Error("wrapper", { cause: error }),
+    wrap: (error: Error): unknown => new Error("wrapper", { cause: error }),
   },
   {
     name: "aggregate",
-    wrap: (error: FailoverError): unknown =>
+    wrap: (error: Error): unknown =>
       new AggregateError([error, new Error("persistence failed")], "wrapper"),
   },
   {
     name: "cyclic",
-    wrap: (error: FailoverError): unknown => {
+    wrap: (error: Error): unknown => {
       const wrapper = { message: "wrapper", cause: undefined as unknown, errors: [{ error }] };
       wrapper.cause = wrapper;
       return wrapper;
@@ -99,8 +145,7 @@ const wrappers = [
   },
   {
     name: "preflight",
-    wrap: (error: FailoverError): unknown =>
-      new AgentHarnessPreflightError("wrapper", { cause: error }),
+    wrap: (error: Error): unknown => new AgentHarnessPreflightError("wrapper", { cause: error }),
   },
 ];
 
@@ -357,4 +402,69 @@ describe.each([
     expect(find(cycle)).toBe(first);
     expect(find({ cause: null, errors: [null, { error: third }] })).toBe(third);
   });
+});
+
+it.each(wrappers)("discards closed-turn suspension through $name", ({ wrap }) => {
+  const error = wrap(createSessionPlacementSettlementClosedAbortError());
+  expect(shouldDiscardDeferredSessionSuspension({ error })).toBe(true);
+  expect(providerHook).not.toHaveBeenCalled();
+});
+
+it.each([
+  "session placement turn settlement is closed",
+  new Error("session placement turn settlement is closed"),
+])("does not infer settlement ownership from display text: %s", (error) =>
+  expect(isSessionPlacementSettlementClosedError(error)).toBe(false),
+);
+
+it("preserves the typed marker behind a hostile sibling accessor", async () => {
+  const closed = createSessionPlacementSettlementClosedAbortError();
+  const wrapper = Object.defineProperty({ errors: [closed] }, "cause", {
+    get() {
+      throw new Error("opaque cause");
+    },
+  });
+  expect(isSessionPlacementSettlementClosedError(wrapper)).toBe(true);
+  expect(shouldDiscardDeferredSessionSuspension({ error: wrapper })).toBe(true);
+  const run = vi.fn().mockRejectedValue(wrapper);
+  await expect(runWithModelFallback({ ...fallbackOptions, run })).rejects.toBe(wrapper);
+  expect(run).toHaveBeenCalledOnce();
+  expect(providerHook).not.toHaveBeenCalled();
+});
+
+it.each(wrappers)("preserves canonical terminal outcome identity through $name", ({ wrap }) => {
+  const error = new AgentRunTerminalOutcomeError(new Error("timeout"), {
+    status: "timeout",
+    reason: "hard_timeout",
+  });
+  expect(findAgentRunTerminalOutcome(wrap(error))).toBe(error.terminalOutcome);
+});
+
+it("discovers a canonical timeout beside an opaque cause and a settlement closure", async () => {
+  const timeout = new AgentRunTerminalOutcomeError(new Error("timeout"), {
+    status: "timeout",
+    reason: "hard_timeout",
+  });
+  const wrapper = Object.defineProperty(
+    { errors: [createSessionPlacementSettlementClosedAbortError(), timeout] },
+    "cause",
+    {
+      get() {
+        throw new Error("opaque cause");
+      },
+    },
+  );
+  expect(findAgentRunTerminalOutcome(wrapper)).toBe(timeout.terminalOutcome);
+  expect(shouldDiscardDeferredSessionSuspension({ error: wrapper })).toBe(true);
+  const run = vi.fn().mockRejectedValue(wrapper);
+  await expect(runWithModelFallback({ ...fallbackOptions, run })).rejects.toBe(wrapper);
+  expect(run).toHaveBeenCalledOnce();
+  expect(providerHook).not.toHaveBeenCalled();
+});
+
+it("does not infer terminal outcomes from untyped fields or cyclic wrappers", () => {
+  const wrapper = { cause: undefined as unknown, terminalOutcome: { status: "timeout" } };
+  wrapper.cause = wrapper;
+  expect(findAgentRunTerminalOutcome(wrapper)).toBeUndefined();
+  expect(findAgentRunTerminalOutcome(null)).toBeUndefined();
 });

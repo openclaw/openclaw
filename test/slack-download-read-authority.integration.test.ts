@@ -38,6 +38,7 @@ import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../src/
 import type { PluginRuntime } from "../src/plugins/runtime/types.js";
 import { createPluginRecord } from "../src/plugins/status.test-fixtures.js";
 import { withOpenClawTestState } from "../src/test-utils/openclaw-test-state.js";
+import { observeFsSafeRootMoves } from "./helpers/fs-safe-root.test-support.js";
 import { createSolidPngBuffer } from "./helpers/image-fixtures.js";
 import { createDeferred, withTestTimeout } from "./helpers/promise.js";
 
@@ -451,14 +452,8 @@ async function withDownloadFixture(
           }
           return handle;
         });
-        const realRename = fs.rename.bind(fs);
-        vi.spyOn(fs, "rename").mockImplementation(async (...args) => {
-          await realRename(...args);
-          if (
-            typeof args[1] === "string" &&
-            path.dirname(args[1]) === mediaDir &&
-            !args[1].endsWith(".tmp")
-          ) {
+        observeFsSafeRootMoves(mediaDir, (target) => {
+          if (path.dirname(target) === mediaDir && !target.endsWith(".tmp")) {
             hit("published");
           }
         });

@@ -13,6 +13,7 @@ import { formatSqliteSessionFileMarker } from "../../config/sessions/legacy-sqli
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import type { CompactionProvider } from "../../plugins/compaction-provider.js";
 import { requireActivePluginRegistry } from "../../plugins/runtime.js";
+import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
 import { MAX_OVERFLOW_COMPACTION_ATTEMPTS } from "../agent-compaction-constants.js";
 import {
   getCompactionSafeguardRuntime,
@@ -48,8 +49,15 @@ import { loadExtensionFromFactory } from "./extensions/loader.js";
 import { SessionManager } from "./session-manager.js";
 import { SettingsManager } from "./settings-manager.js";
 
+const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
+  afterEach(async () => {
+    for (const stateDir of tempDirs.dirs) {
+      await cleanupSessionStateForTest({ stateDir });
+    }
+    cleanup();
+  }),
+);
 registerAgentSessionLoopTestLifecycle();
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 function createStaleThinkingContent(): AssistantMessage["content"] {
   return [

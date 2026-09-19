@@ -86,14 +86,14 @@ vi.mock("../../state/claw-package-adoption.js", () => ({
 }));
 
 const { ClawHubRequestError } = await import("../../infra/clawhub-client.js");
+const { readClawHubSkillsLockfileStatusSync } = await import("./clawhub-store.js");
+const { resolveClawHubSkillStatusLinkSync } = await import("./clawhub-status.js");
 
 const {
   installSkillFromClawHub,
   preflightSkillFromClawHub,
-  readClawHubSkillsLockfileStatusSync,
   readTrackedClawHubSkillSlugs,
   readVerifiedClawHubSkillSourceUrl,
-  resolveClawHubSkillStatusLinkSync,
   resolveClawHubSkillVerificationTarget,
   searchSkillsFromClawHub,
   untrackClawHubSkill,

@@ -1,4 +1,5 @@
 // Doctor consumes provider retirement facts only after selecting the exact auth route.
+import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import {
   listAgentIds,
@@ -18,27 +19,33 @@ import {
   resolveConfiguredModelPolicyAllow,
   resolveModelRefFromString,
 } from "../../../agents/model-selection-shared.js";
+import { resolvePluginModelCatalogOwnerPluginId } from "../../../agents/plugin-model-catalog.js";
+import { resolveProviderModelMaterializationAuthMode } from "../../../agents/provider-model-route-auth.js";
 import {
   canonicalizeProviderModelId,
   projectProviderModelRouteConfig,
 } from "../../../agents/provider-model-route.js";
 import { mergeAgentModelEntryForConfig } from "../../../config/model-input.js";
-import { resolveMergedModelProviderConfig } from "../../../config/model-provider-config.js";
+import {
+  findConfiguredProviderModel,
+  projectModelProviderConfig,
+  resolveMergedModelProviderConfig,
+} from "../../../config/model-provider-config.js";
 import type { SessionEntry } from "../../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import { normalizePluginsConfig } from "../../../plugins/config-state.js";
+import { createInstalledPluginEnabledPredicate } from "../../../plugins/installed-plugin-index.js";
 import {
   loadManifestMetadataSnapshot,
   isManifestPluginAvailableForControlPlane,
 } from "../../../plugins/manifest-contract-eligibility.js";
 import { buildManifestBuiltInModelSuppressionResolver } from "../../../plugins/manifest-model-suppression.js";
 import type { PluginMetadataSnapshot } from "../../../plugins/plugin-metadata-snapshot.types.js";
-import {
-  applyModelOverrideToSessionEntry,
-  isModelSelectionLocked,
-} from "../../../sessions/model-overrides.js";
 import { listMutableCodexRouteAgentEntries } from "./codex-route-agent-entries.js";
 import { readModelConfigPrimaryRef } from "./codex-route-model-ref.js";
 import { rewriteModelReferenceSlot } from "./codex-route-model-slots.js";
+
+type ModelRetirementScope = "route" | "owner" | "provider";
 
 export type ModelRefRepair =
   | { kind: "unchanged" }
@@ -47,9 +54,9 @@ export type ModelRefRepair =
       kind: "replace";
       modelRef: string;
       reason: "retirement";
-      retirementScope: "route" | "provider";
+      retirementScope: ModelRetirementScope;
     }
-  | { kind: "clear"; provider: string; modelRef: string; retirementScope: "route" | "provider" };
+  | { kind: "clear"; provider: string; modelRef: string; retirementScope: ModelRetirementScope };
 export type ModelRefRepairResolver = (params: {
   modelRef: string;
   agentId?: string;
@@ -83,6 +90,7 @@ export function createRetiredModelRefRepairResolver(params: {
 }): ModelRefRepairResolver {
   const env = params.env ?? process.env;
   const agents = params.agentIds ?? listAgentIds(params.cfg);
+  const normalizedPluginsConfig = normalizePluginsConfig(params.cfg.plugins);
   const warn = (message: string) => {
     if (params.warnings && !params.warnings.includes(message)) {
       params.warnings.push(message);
@@ -95,20 +103,9 @@ export function createRetiredModelRefRepairResolver(params: {
       const metadataSnapshot =
         params.metadataSnapshot ??
         loadManifestMetadataSnapshot({ config: params.cfg, workspaceDir, env });
-      const retirementCandidates = new Set(
-        metadataSnapshot.plugins
-          .filter((plugin) =>
-            isManifestPluginAvailableForControlPlane({
-              snapshot: metadataSnapshot,
-              plugin,
-              config: params.cfg,
-            }),
-          )
-          .flatMap((plugin) =>
-            (plugin.modelCatalog?.suppressions ?? [])
-              .filter((rule) => rule.retirement)
-              .map((rule) => `${rule.provider}/${rule.model}`.toLowerCase()),
-          ),
+      const isInstalledPluginEnabled = createInstalledPluginEnabledPredicate(
+        metadataSnapshot.index.plugins,
+        params.cfg,
       );
       const authViews = new Map<
         string | undefined,
@@ -141,7 +138,27 @@ export function createRetiredModelRefRepairResolver(params: {
       return [
         agentId,
         {
-          retirementCandidates,
+          nativeApiKeyRoute(provider: string) {
+            const pluginId = resolvePluginModelCatalogOwnerPluginId({
+              providerId: provider,
+              pluginMetadataSnapshot: metadataSnapshot,
+            });
+            const plugin = metadataSnapshot.plugins.find(
+              (candidate) =>
+                candidate.id === pluginId &&
+                isManifestPluginAvailableForControlPlane({
+                  snapshot: metadataSnapshot,
+                  plugin: candidate,
+                  config: params.cfg,
+                  normalizedConfig: normalizedPluginsConfig,
+                  isInstalledPluginEnabled,
+                }),
+            );
+            const catalog = Object.entries(plugin?.modelCatalog?.providers ?? {}).find(
+              ([providerId]) => normalizeProviderId(providerId) === provider,
+            )?.[1];
+            return catalog?.baseUrl ? { api: catalog.api, baseUrl: catalog.baseUrl } : undefined;
+          },
           model: model.resolve,
           currentModel: currentModel.resolve,
           modelPolicy: params.checkModelPolicy
@@ -150,7 +167,7 @@ export function createRetiredModelRefRepairResolver(params: {
                 catalog: [],
                 agentId,
                 defaultProvider: currentModel.defaultRef.provider,
-                defaultModel: currentModel.defaultRef.model,
+                defaultModel: currentModel.defaultRef,
                 manifestPlugins: metadataSnapshot.plugins,
               })
             : undefined,
@@ -189,13 +206,10 @@ export function createRetiredModelRefRepairResolver(params: {
     input: Parameters<ModelRefRepairResolver>[0],
     agentId: string,
   ): ModelRefRepair => {
-    const owner = owners.get(agentId);
-    if (!owner) {
-      return { kind: "unchanged" };
-    }
     const parsed = splitTrailingAuthProfile(input.modelRef);
-    const model = owner.model(parsed.model);
-    if (!model) {
+    const owner = owners.get(agentId);
+    const model = owner?.model(parsed.model);
+    if (!owner || !model) {
       return { kind: "unchanged" };
     }
     const provider = model.provider;
@@ -227,30 +241,49 @@ export function createRetiredModelRefRepairResolver(params: {
             modelRef: parsed.profile ? `${canonical}@${parsed.profile}` : canonical,
             reason: "reference-preservation",
           };
-    if (!owner.retirementCandidates.has(`${provider}/${id}`.toLowerCase())) {
+    if (!owner.suppression().hasRetirementCandidate({ provider, id })) {
       return validatePolicy(preserved);
     }
     let rule = owner.suppression()({ provider, id, unconditionalOnly: true });
-    const retirementScope = rule?.retirement ? "provider" : "route";
+    let retirementScope: ModelRetirementScope = rule?.retirement ? "provider" : "route";
     if (!rule?.retirement) {
       const pinnedProfileId =
         (input.authProfileSource === "user" || input.authProfileSource === "user-link"
           ? input.authProfileId
           : undefined) ?? parsed.profile;
       const preferredProfileId = pinnedProfileId ? undefined : input.authProfileId;
-      const auth = owner.auth(pinnedProfileId ?? preferredProfileId).evaluateModelAuth(provider, {
-        modelId: id,
-        pinnedProfileId,
-        preferredProfileId,
-      });
+      const auth = owner
+        .auth(pinnedProfileId ?? preferredProfileId)
+        .evaluateRuntimeModelAuth(provider, {
+          modelId: id,
+          pinnedProfileId,
+          preferredProfileId,
+        });
       // Missing catalog/auth evidence is not proof of retirement. In particular,
       // a native account owned by a runtime cannot be inferred from OAuth elsewhere.
       const configured =
         auth.routeResolution === null &&
+        !auth.availabilityAuthoritative &&
         (auth.selectedAuthMode !== undefined || auth.availability === true)
           ? resolveMergedModelProviderConfig(params.cfg, provider)
           : undefined;
-      const baseUrl = auth.selectedRoute?.baseUrl ?? configured?.baseUrl;
+      const configuredModel = findConfiguredProviderModel(configured, provider, id, (modelId) =>
+        canonicalizeProviderModelId(provider, modelId),
+      );
+      // Manifest defaults describe the native API-key transport, not OAuth or
+      // runtime-owned accounts. Keep an authored transport as one route tuple.
+      const configuredRoute = configured
+        ? {
+            api: configuredModel?.api ?? configured.api,
+            baseUrl: configuredModel?.baseUrl ?? configured.baseUrl,
+          }
+        : auth.routeResolution === null &&
+            !auth.availabilityAuthoritative &&
+            auth.availability === true &&
+            resolveProviderModelMaterializationAuthMode(auth.selectedAuthMode) === "api_key"
+          ? owner.nativeApiKeyRoute(provider)
+          : undefined;
+      const baseUrl = auth.selectedRoute?.baseUrl ?? configuredRoute?.baseUrl;
       if (!baseUrl) {
         warn(
           `Retained ${canonical} for agent "${agentId}": its exact authentication route is unavailable. Restore that provider account and rerun openclaw doctor --fix, or choose a current model explicitly.`,
@@ -264,8 +297,35 @@ export function createRetiredModelRefRepairResolver(params: {
             config: params.cfg,
             route: auth.selectedRoute,
           })
-        : params.cfg;
+        : projectModelProviderConfig(params.cfg, provider, {
+            api: configuredRoute?.api,
+            baseUrl,
+          });
       rule = owner.suppression(routeConfig)({ provider, id, baseUrl });
+      if (rule?.retirement) {
+        const routes =
+          auth.routeResolution?.kind === "routes"
+            ? auth.routeResolution.routes
+            : configuredRoute
+              ? [configuredRoute]
+              : [];
+        const successor = rule.retirement.replacedBy;
+        if (
+          routes.length > 0 &&
+          routes.every((route) => {
+            const retirement = owner.suppression(
+              projectModelProviderConfig(params.cfg, provider, route),
+            )({
+              provider,
+              id,
+              baseUrl: route.baseUrl,
+            })?.retirement;
+            return retirement !== undefined && retirement.replacedBy === successor;
+          })
+        ) {
+          retirementScope = "owner";
+        }
+      }
     }
     if (!rule?.retirement) {
       return validatePolicy(preserved);
@@ -312,19 +372,24 @@ export function createRetiredModelRefRepairResolver(params: {
         `Retained shared model reference "${input.modelRef}": agent authentication routes require different repairs. Choose a current model in each affected agent's model configuration.`,
       );
     }
-    if (!consistent) {
-      return authRepair;
-    }
-    if (first.kind === "unchanged") {
+    if (!consistent || first.kind === "unchanged") {
       return authRepair;
     }
     // Shared metadata remains valid if any owner still offers another auth route.
-    return "retirementScope" in first &&
-      decisions.some(
-        (decision) => "retirementScope" in decision && decision.retirementScope === "route",
-      )
-      ? { ...first, retirementScope: "route" }
-      : first;
+    if (!("retirementScope" in first)) {
+      return first;
+    }
+    const scopes = new Set(
+      decisions.flatMap((decision) =>
+        "retirementScope" in decision ? [decision.retirementScope] : [],
+      ),
+    );
+    const retirementScope = scopes.has("route")
+      ? "route"
+      : scopes.has("owner")
+        ? "owner"
+        : "provider";
+    return { ...first, retirementScope };
   };
 }
 
@@ -465,6 +530,11 @@ export function repairRetiredModelSlots(params: RetiredModelSlotRepair): void {
       continue;
     }
     const retain = "retirementScope" in decision && decision.retirementScope === "route";
+    if (retain && asOptionalRecord(models[modelRef])?.alias) {
+      params.warnings?.push(
+        `Retained ${params.path}.models.${modelRef} alias: applicable authentication routes do not share a verified successor. Choose its model target explicitly.`,
+      );
+    }
     const existing = models[replacement];
     const source = retain ? modelSettingsWithoutAlias(models[modelRef]) : models[modelRef];
     const settings =
@@ -625,56 +695,4 @@ export function repairRetiredConfigModelRefs(
     rewriteVoice(asOptionalRecord(settings)?.voice, `channels.discord.accounts.${account}.voice`);
   }
   return { config: changes.length ? config : cfg, changes };
-}
-
-/** Session selection owns invalidation of context/fallback metadata and profile preservation. */
-export function repairRetiredSessionModelRef(
-  entry: SessionEntry,
-  agentId: string,
-  resolve: ModelRefRepairResolver,
-  defaultModelRef: string | undefined,
-  warnings: string[],
-): boolean {
-  if (!entry.modelOverride || isModelSelectionLocked(entry)) {
-    return false;
-  }
-  const modelRef = entry.providerOverride
-    ? `${entry.providerOverride}/${entry.modelOverride}`
-    : entry.modelOverride;
-  const decision = resolve({
-    modelRef,
-    agentId,
-    authProfileId: entry.authProfileOverride,
-    authProfileSource: entry.authProfileOverrideSource,
-  });
-  if (decision.kind === "unchanged") {
-    return false;
-  }
-  const replacement = splitTrailingAuthProfile(
-    decision.kind === "replace" ? decision.modelRef : (defaultModelRef ?? ""),
-  ).model;
-  if (
-    decision.kind === "clear" &&
-    replacement === decision.modelRef &&
-    entry.authProfileOverride &&
-    (entry.authProfileOverrideSource === "user" || entry.authProfileOverrideSource === "user-link")
-  ) {
-    const warning = `Retained retired ${decision.modelRef} for agent "${agentId}": clearing this session override would still select it with the same pinned account. Choose a supported default or an allowed model override, then rerun openclaw doctor --fix.`;
-    if (!warnings.includes(warning)) {
-      warnings.push(warning);
-    }
-    return false;
-  }
-  const slash = replacement.indexOf("/");
-  return applyModelOverrideToSessionEntry({
-    entry,
-    selection: {
-      provider: replacement.slice(0, slash),
-      model: replacement.slice(slash + 1),
-      isDefault: decision.kind === "clear",
-    },
-    preserveAuthProfileOverride:
-      decision.kind === "replace" || replacement.slice(0, slash) === decision.provider,
-    selectionSource: entry.modelOverrideSource === "auto" ? "auto" : "user",
-  }).updated;
 }

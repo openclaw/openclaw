@@ -4,11 +4,18 @@
 // mocked out. Covers shared-inbox survival, later-entry processing, recovery
 // once capacity frees, interrupted-delivery restart, and legacy marker
 // interpretation.
-import type { OpenKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
-import { createPluginStateSyncKeyedStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import type {
+  OpenAsyncKeyedStoreOptions,
+  OpenKeyedStoreOptions,
+} from "openclaw/plugin-sdk/plugin-state-runtime";
+import {
+  createPluginStateKeyedStoreForTests,
+  createPluginStateSyncKeyedStoreForTests,
+} from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { composeOutbound, generateIdentity, MemoryAuditStore } from "../protocol/index.js";
+import { composeOutbound, generateIdentity } from "../protocol/index.js";
+import { MemoryAuditStore } from "../protocol/memory-stores.test-support.js";
 import { ReefMessageFlow } from "./flow.js";
 import {
   allow,
@@ -39,6 +46,11 @@ function reopenRuntime(stateDir: string) {
   const runtime = createPluginRuntimeMock();
   runtime.state.openSyncKeyedStore = <T>(options: OpenKeyedStoreOptions) =>
     createPluginStateSyncKeyedStoreForTests<T>("reef", {
+      ...options,
+      env: { OPENCLAW_STATE_DIR: stateDir },
+    });
+  runtime.state.openKeyedStore = <T>(options: OpenAsyncKeyedStoreOptions) =>
+    createPluginStateKeyedStoreForTests<T>("reef", {
       ...options,
       env: { OPENCLAW_STATE_DIR: stateDir },
     });
@@ -92,13 +104,8 @@ function relayRetaining(entries: Map<number, InboxEntry>) {
 }
 
 describe("Reef capacity-parked delivery recovery (production connection path)", () => {
-  beforeEach(() => {
-    resetFlowStoresForTests();
-  });
-
-  afterEach(() => {
-    resetFlowStoresForTests();
-  });
+  beforeEach(resetFlowStoresForTests);
+  afterEach(resetFlowStoresForTests);
 
   it("survives delivered-capacity parks from two peers, keeps later entries attemptable, and completes both once capacity frees", async () => {
     const alice = generateIdentity();

@@ -1,5 +1,6 @@
 import type { DatabaseSync } from "node:sqlite";
 import { isMainThread } from "node:worker_threads";
+import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
 import { assertSqliteIntegrityInWorker } from "../infra/sqlite-integrity-worker.js";
 import {
   runSqliteIntegrityCheckSync,
@@ -9,6 +10,7 @@ import {
 import { registerDeferredSqliteWalWriteAdmission } from "../infra/sqlite-wal-write-admission.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { assertAgentDatabaseAdmitted } from "./agent-database-admission.js";
 import {
   assertAgentDeletionDatabaseCleanupAccess,
   getAgentDeletionDatabaseCleanup,
@@ -74,6 +76,7 @@ function assertAgentDatabaseOperationCurrent(
   assertCurrent?: () => void,
 ): void {
   pending.controller.signal.throwIfAborted();
+  assertAgentDatabaseAdmitted(database.agentId, { env: options.env });
   if (cache.databases.get(pending.path) !== database || !database.db.isOpen) {
     throw new Error(`Agent database closed before its admitted operation: ${pending.path}`);
   }
@@ -114,7 +117,10 @@ export function createOpenClawAgentDatabaseAdmissionOwner(
       return Promise.reject(error);
     }
     // Admission retains its original path, registration, and permission inputs across awaits.
-    const options = { ...inputOptions, env: { ...(inputOptions.env ?? process.env) } };
+    const options = {
+      ...inputOptions,
+      env: cloneEnvWithPlatformSemantics(inputOptions.env ?? process.env),
+    };
     const agentId = normalizeAgentId(options.agentId);
     const pathname = resolveOpenClawAgentSqlitePath({ ...options, agentId });
     const existing = cache.pending.get(pathname);
@@ -165,7 +171,10 @@ export function createOpenClawAgentDatabaseAdmissionOwner(
     withAdmission: OpenClawAgentDatabaseWriteAdmission,
     operation: (database: OpenClawAgentDatabase) => T | Promise<T>,
   ): Promise<T> {
-    const options = { ...inputOptions, env: { ...(inputOptions.env ?? process.env) } };
+    const options = {
+      ...inputOptions,
+      env: cloneEnvWithPlatformSemantics(inputOptions.env ?? process.env),
+    };
     const agentId = normalizeAgentId(options.agentId);
     const pathname = resolveOpenClawAgentSqlitePath({ ...options, agentId });
     const existing = cache.pending.get(pathname);
@@ -317,6 +326,7 @@ export function createOpenClawAgentDatabaseAdmissionOwner(
   ): void {
     const pathname = pending.path;
     pending.controller.signal.throwIfAborted();
+    assertAgentDatabaseAdmitted(pending.agentId, { env: options.env });
     if (cache.pending.get(pathname) !== pending) {
       throw new Error(`Agent database open was replaced: ${pathname}`);
     }

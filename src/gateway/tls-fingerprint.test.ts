@@ -61,6 +61,7 @@ describe("Gateway client certificate inspection", () => {
       await fs.writeFile(certPath, TEST_TLS_CERT_PEM, { mode: 0o644 });
       const before = await fs.stat(certPath);
       const read = vi.spyOn(fs, "readFile");
+      const open = vi.spyOn(fs, "open");
 
       await expect(
         resolveLocalPin({
@@ -71,7 +72,7 @@ describe("Gateway client certificate inspection", () => {
         }),
       ).resolves.toBe(fingerprint);
 
-      expect(read.mock.calls.map(([file]) => file)).toEqual([certPath]);
+      expect([...read.mock.calls, ...open.mock.calls].map(([file]) => file)).toEqual([certPath]);
       const after = await fs.stat(certPath);
       expect([after.mode, after.mtimeMs]).toEqual([before.mode, before.mtimeMs]);
     },
@@ -90,7 +91,9 @@ describe("Gateway client certificate inspection", () => {
 
   it("does not read certificates when local TLS is disabled", async () => {
     const read = vi.spyOn(fs, "readFile");
+    const open = vi.spyOn(fs, "open");
     await expect(resolveLocalPin({ enabled: false })).resolves.toBeUndefined();
     expect(read).not.toHaveBeenCalled();
+    expect(open).not.toHaveBeenCalled();
   });
 });

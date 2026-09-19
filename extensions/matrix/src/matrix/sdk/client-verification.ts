@@ -20,6 +20,10 @@ import type { MatrixCryptoBootstrapApi, MatrixDeviceVerificationStatusLike } fro
 const normalizeNullableVerificationString = normalizeNullableString;
 
 export abstract class MatrixClientVerification extends MatrixClientCore {
+  async refreshOwnDeviceKeys(): Promise<void> {
+    await this.client.getCrypto()?.userHasCrossSigningKeys(await this.getUserId(), true);
+  }
+
   async getRoomKeyBackupStatus(): Promise<MatrixRoomKeyBackupStatus> {
     if (!this.encryptionEnabled) {
       return {

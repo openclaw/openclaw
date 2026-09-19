@@ -235,7 +235,8 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).not.toContain("## Memory Recall");
     expect(prompt).not.toContain("## Documentation");
     expect(prompt).not.toContain("## Reply Tags");
-    expect(prompt).not.toContain("## Messaging");
+    expect(prompt).toContain("## Messaging");
+    expect(prompt).not.toContain("### message tool");
     expect(prompt).not.toContain("## Voice (TTS)");
     expect(prompt).not.toContain("## Silent Replies");
     expect(prompt).not.toContain("## Heartbeats");
@@ -319,7 +320,7 @@ describe("buildAgentSystemPrompt", () => {
       sourceReplyDeliveryMode: "automatic",
     });
     expect(automaticMessagePrompt).not.toContain("message(action=send)");
-    expect(automaticMessagePrompt).not.toContain("## Messaging");
+    expect(automaticMessagePrompt).toContain("Missing messaging tools are not permission");
   });
 
   it("keeps promised asynchronous work open in full and minimal prompts", () => {
@@ -1721,26 +1722,6 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain(`final ONLY ${SILENT_REPLY_TOKEN}`);
   });
 
-  it.each([false, true])(
-    "scopes channel routing without blocking external-service CLIs (message=%s)",
-    (messageAvailable) => {
-      const prompt = buildAgentSystemPrompt({
-        workspaceDir: "/tmp/openclaw",
-        toolNames: messageAvailable ? ["exec", "message"] : ["exec"],
-        runtimeInfo: { channel: "discord" },
-      });
-
-      expect(prompt).toContain(
-        "OpenClaw channel replies/actions: use OpenClaw routing, not exec/curl.",
-      );
-      expect(prompt).toContain(
-        "Other services (e.g. email): user-authorized CLI/API use is allowed",
-      );
-      expect(prompt).toContain("normal tool permissions and approvals still apply");
-      expect(prompt).not.toContain("Provider messaging: never exec/curl");
-    },
-  );
-
   it("keeps model-visible channel ids stable across external registration order", () => {
     const activeRegistry = captureActivePluginRegistrySnapshot();
     const registrations = ["zeta-channel", "alpha-channel"].map((id) => ({
@@ -1855,9 +1836,9 @@ describe("buildAgentSystemPrompt", () => {
     const minimal = buildPreferPrompt(["sessions_spawn", "sessions_send"], "minimal");
 
     expect(withSend).toContain(
-      "later turns in a kept session do not report back; follow up via `sessions_send`.",
+      "later turns in a kept OpenClaw session do not report back; follow up via `sessions_send`.",
     );
-    expect(withoutSend).toContain("later turns in a kept session do not report back.");
+    expect(withoutSend).toContain("later turns in a kept OpenClaw session do not report back.");
     expect(withoutSend).not.toContain("follow up via `sessions_send`");
     expect(minimal).not.toContain("## Delegation");
   });

@@ -10,7 +10,12 @@ import { isQueuedMessageBeingEdited } from "./queued-message-edit.ts";
 export function markQueuedChatSendsWaitingForReconnect(host: ChatQueueScopedSessionHost) {
   const items = chatOutboxOwner(host).allItems(host);
   for (const item of items) {
-    if (!item.sendRunId || (item.sendState !== "sending" && item.sendState !== "waiting-idle")) {
+    if (
+      !item.sendRunId ||
+      (item.sendState !== "submitting" &&
+        item.sendState !== "sending" &&
+        item.sendState !== "waiting-idle")
+    ) {
       continue;
     }
     // An unsent row held by an editor cannot be in flight. Keep its captured

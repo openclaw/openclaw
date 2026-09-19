@@ -22,7 +22,7 @@ import type { TelegramUpdateKeyContext } from "./bot-updates.js";
 import type { TelegramBotOptions } from "./bot.types.js";
 import type { TelegramContext } from "./bot/types.js";
 import type { TelegramTransport } from "./fetch.js";
-import type { TelegramReplyChainEntry } from "./message-cache.js";
+import type { TelegramReplyChainEntry } from "./message-cache-codec.js";
 import type { TelegramThreadSpec } from "./thread-spec.js";
 
 export type TelegramPendingInboundTarget = {
@@ -78,6 +78,7 @@ type TelegramHandlerLogger = {
 };
 
 export type RegisterTelegramHandlerParams = {
+  nativeCommandNames?: ReadonlyMap<string, string>;
   cfg: OpenClawConfig;
   accountId: string;
   ownerAgentId: string;
@@ -113,7 +114,6 @@ export type TelegramInboundDisposition =
   | { kind: "processed" };
 
 export interface TelegramInboundPipeline {
-  cancelPending: (target: TelegramPendingInboundTarget) => void;
   handle: (ctx: Context) => Promise<TelegramInboundDisposition>;
 }
 

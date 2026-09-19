@@ -21,6 +21,7 @@ struct ChatMessageDetailsPreservationTests {
                     content: nil),
             ],
             timestamp: 1,
+            transcriptMessageID: "tool-result",
             toolCallId: "call-1",
             toolName: "edit",
             details: AnyCodable(["diff": AnyCodable("+1 added\n-1 removed")]))
@@ -47,8 +48,12 @@ struct ChatMessageDetailsPreservationTests {
     @MainActor @Test func `decode pipeline keeps message details`() throws {
         let payloadData = try JSONEncoder().encode([self.toolResultMessage(), self.systemNoticeMessage()])
         let anyMessages = try JSONDecoder().decode([AnyCodable].self, from: payloadData)
-        let decoded = OpenClawChatViewModel.decodeMessages(anyMessages)
+        let activity = try JSONDecoder().decode([OpenClawChatHistoryActivity].self,
+            from: Data(#"[{"messageId":"tool-result","items":[]}]"#.utf8))
+        let decoded = OpenClawChatViewModel.decodeMessages(anyMessages, activity: activity)
 
+        #expect(decoded.first?.activity == [])
+        #expect(decoded.last?.activity == nil)
         #expect(decoded.first?.details != nil)
         #expect(decoded.last?.provenance?.sourceTool == "restart-sentinel")
     }

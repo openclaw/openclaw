@@ -1,7 +1,8 @@
 // @vitest-environment node
 // Control UI tests cover translate behavior.
-import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
+
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { importFreshModule } from "../../../../src/plugin-sdk/test-helpers/import-fresh.js";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import * as translate from "../lib/translate.ts";
 import { ar } from "../locales/ar.ts";

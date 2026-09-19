@@ -30,8 +30,7 @@ export function writeWorkerFixtureManifest(directory, inputSources, outputSource
   return manifest;
 }
 
-if (import.meta.main) {
-  const [directory, input, receipt] = process.argv.slice(2);
+export async function runWorkerFixtureCompiler(directory, input, receipt) {
   const { runtimeProcessEntrypoints } =
     await import("../../../src/infra/runtime-process-entrypoints.ts");
   const declaration = fileURLToPath(
@@ -63,4 +62,8 @@ if (import.meta.main) {
       outputs: Object.keys(manifest.outputs).length,
     }) + "\n",
   );
+}
+
+if (import.meta.main) {
+  await runWorkerFixtureCompiler(...process.argv.slice(2));
 }

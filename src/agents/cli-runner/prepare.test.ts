@@ -1,5 +1,4 @@
-// Exercises CLI run preparation: auth boundaries, prompt hooks, context
-// injection, MCP loopback setup, and reusable session decisions.
+// Exercises CLI preparation, auth, prompt hooks, MCP setup, and session reuse.
 import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
@@ -322,14 +321,10 @@ function setCliBackendForPrepareTest(
         ...(params.autoSelectAuthProfile !== undefined
           ? { autoSelectAuthProfile: params.autoSelectAuthProfile }
           : {}),
-        ...(params.authEpochMode ? { authEpochMode: params.authEpochMode } : {}),
         ...(params.prepareExecution ? { prepareExecution: params.prepareExecution } : {}),
         config: {
-          command: params.command ?? "claude",
-          args: ["--print"],
+          ...createJsonlStdinBackendConfig(params.command ?? "claude"),
           resumeArgs: ["--resume", "{sessionId}"],
-          output: "jsonl",
-          input: "stdin",
           sessionMode: params.sessionMode ?? "existing",
           ...(params.modelAliases ? { modelAliases: params.modelAliases } : {}),
           ...(params.liveSession ? { liveSession: "claude-stdio" as const } : {}),
@@ -726,7 +721,10 @@ describe("prepareCliRunContext", () => {
     mockBuildActiveMusicGenerationTaskPromptContextForSession.mockResolvedValue(undefined);
     ensureSandboxWorkspaceForSessionMock.mockReset();
     ensureSandboxWorkspaceForSessionMock.mockResolvedValue(null);
-    fixture = createCliRunnerPrepareFixture(prepareCliRunContext);
+    // Discovery cases explicitly opt out of the prepared empty catalog.
+    fixture = createCliRunnerPrepareFixture((params) =>
+      prepareCliRunContext({ skillsSnapshot: { prompt: "", skills: [] }, ...params }),
+    );
   });
 
   afterEach(() => {
@@ -3291,6 +3289,7 @@ describe("prepareCliRunContext", () => {
     try {
       const context = await fixture.prepare({
         cwd: taskDir,
+        skillsSnapshot: undefined,
         ...(managed
           ? {
               sessionEntry: {
@@ -6378,6 +6377,7 @@ describe("prepareCliRunContext", () => {
       try {
         const pending = fixture.prepare({
           runId: "cli-skills-revocation",
+          skillsSnapshot: undefined,
           ...(phase === "prepared"
             ? { preparedRunAdmission: admission }
             : { admittedRunContext: await admission.admit("embedded") }),

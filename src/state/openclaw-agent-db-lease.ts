@@ -12,6 +12,7 @@ import {
 } from "../infra/kysely-sync.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { runWithSqliteBusyTimeout } from "../infra/sqlite-busy-timeout.js";
+import { extractSqliteTableSchema } from "../infra/sqlite-schema-sql.js";
 import {
   assertExistingDatabaseIdentity,
   readDatabasePathIdentitySync,
@@ -463,14 +464,12 @@ export function assertNoOpenClawAgentDatabaseLeases(
 }
 
 const existingAgentLeaseSchema = ["schema_meta", "state_leases", "agent_database_leases"]
-  .map((table) => {
-    const start = OPENCLAW_STATE_SCHEMA_SQL.indexOf(`CREATE TABLE IF NOT EXISTS ${table} (`);
-    const end = OPENCLAW_STATE_SCHEMA_SQL.indexOf(") STRICT;", start);
-    if (start < 0 || end < 0) {
-      throw new Error("Existing agent lease schema is unavailable.");
-    }
-    return OPENCLAW_STATE_SCHEMA_SQL.slice(start, end + ") STRICT;".length);
-  })
+  .map((table) =>
+    extractSqliteTableSchema(OPENCLAW_STATE_SCHEMA_SQL, table, {
+      endMarker: ") STRICT;",
+      errorMessage: "Existing agent lease schema is unavailable.",
+    }),
+  )
   .join("\n");
 
 function withExistingAgentLeaseWrite<T>(

@@ -15,32 +15,24 @@ import { splitTrailingAuthProfile } from "./model-ref-profile.js";
 import {
   type ModelManifestNormalizationContext,
   type ModelRef,
-  findNormalizedProviderKey,
-  legacyModelKey,
   modelKey,
-  normalizeModelRef,
-  normalizeProviderId,
-  normalizeProviderIdForAuth,
 } from "./model-ref-shared.js";
 import {
   resolveDefaultModelForAgent,
   resolveSubagentConfiguredModelSelection,
 } from "./model-selection-config.js";
-import { findNormalizedProviderValue, parseModelRef } from "./model-selection-normalize.js";
+import { parseModelRef } from "./model-selection-normalize.js";
 import { resolvePersistedOverrideModelRef } from "./model-selection-persisted.js";
 import {
-  buildConfiguredModelCatalog,
   buildModelAliasIndex,
-  inferUniqueProviderFromConfiguredModels,
   normalizeModelSelection,
-  resolveBareModelDefaultProvider,
-  resolveConfiguredModelRef,
-  resolveHooksGmailModel,
-  resolveModelAliasFromPair,
   resolveModelRefFromString,
   type ModelAliasIndex,
 } from "./model-selection-shared.js";
-export { resolveAllowedModelRefCore as resolveAllowedModelRef } from "./model-selection-resolve.js";
+export {
+  resolveAllowedModelRefCore as resolveAllowedModelRef,
+  resolveModelAliasFromPair,
+} from "./model-selection-resolve.js";
 export { buildAllowedModelSet } from "./model-selection-shared.js";
 export {
   resolveThinkingDefault,
@@ -57,24 +49,24 @@ export {
 } from "./model-selection-persisted.js";
 
 export {
-  buildConfiguredModelCatalog,
-  buildModelAliasIndex,
   findNormalizedProviderKey,
-  findNormalizedProviderValue,
-  inferUniqueProviderFromConfiguredModels,
   legacyModelKey,
   modelKey,
   normalizeModelRef,
-  normalizeModelSelection,
   normalizeProviderId,
   normalizeProviderIdForAuth,
-  parseModelRef,
+} from "./model-ref-shared.js";
+export { findNormalizedProviderValue, parseModelRef } from "./model-selection-normalize.js";
+export {
+  buildConfiguredModelCatalog,
+  buildModelAliasIndex,
+  inferUniqueProviderFromConfiguredModels,
+  normalizeModelSelection,
   resolveBareModelDefaultProvider,
   resolveConfiguredModelRef,
   resolveHooksGmailModel,
-  resolveModelAliasFromPair,
   resolveModelRefFromString,
-};
+} from "./model-selection-shared.js";
 export {
   isCliProvider,
   prepareCliProviderClassifier,
@@ -110,11 +102,7 @@ export function resolvePersistedModelRef(
       return { provider: runtimeProvider, model: runtimeModel };
     }
     return (
-      parseModelRef(runtimeModel, defaultProvider, {
-        allowManifestNormalization: params.allowManifestNormalization,
-        allowPluginNormalization: params.allowPluginNormalization,
-        manifestPlugins: params.manifestPlugins,
-      }) ?? {
+      parseModelRef(runtimeModel, defaultProvider, params) ?? {
         provider: defaultProvider,
         model: runtimeModel,
       }
@@ -136,25 +124,13 @@ export function resolvePersistedModelRef(
  * overrides before falling back to runtime identity.
  */
 export function resolvePersistedSelectedModelRef(
-  params: {
-    defaultProvider?: unknown;
-    runtimeProvider?: unknown;
-    runtimeModel?: unknown;
-    overrideProvider?: unknown;
-    overrideModel?: unknown;
+  params: Parameters<typeof resolvePersistedModelRef>[0] & {
     overrideRouteResolution?: ModelFallbackRouteResolution;
-    allowManifestNormalization?: boolean;
-    allowPluginNormalization?: boolean;
-  } & ModelManifestNormalizationContext,
+  },
 ): ModelRef | null {
   const override = resolvePersistedOverrideModelRef({
-    defaultProvider: params.defaultProvider,
-    overrideProvider: params.overrideProvider,
-    overrideModel: params.overrideModel,
+    ...params,
     routeResolution: params.overrideRouteResolution,
-    allowManifestNormalization: params.allowManifestNormalization,
-    allowPluginNormalization: params.allowPluginNormalization,
-    manifestPlugins: params.manifestPlugins,
   });
   if (override) {
     return override;
@@ -258,7 +234,8 @@ export function resolveSubagentSpawnModelSelection(params: {
   cfg: OpenClawConfig;
   agentId: string;
   modelOverride?: unknown;
-}): string {
+  inheritedModel?: ModelRef;
+}): { model: string; resolvedModel?: ModelRef } {
   const runtimeDefault = resolveDefaultModelForAgent({
     cfg: params.cfg,
     agentId: params.agentId,
@@ -268,9 +245,16 @@ export function resolveSubagentSpawnModelSelection(params: {
     agentId: params.agentId,
     modelOverride: params.modelOverride,
     defaultProvider: runtimeDefault.provider,
+    includeAgentPrimary: !params.inheritedModel,
   });
   if (configured) {
-    return configured;
+    return { model: configured };
+  }
+  if (params.inheritedModel) {
+    return {
+      model: `${params.inheritedModel.provider}/${params.inheritedModel.model}`,
+      resolvedModel: { ...params.inheritedModel },
+    };
   }
   const raw =
     resolveAgentModelPrimaryValue(params.cfg.agents?.defaults?.model) ??
@@ -280,7 +264,7 @@ export function resolveSubagentSpawnModelSelection(params: {
     agentId: params.agentId,
     defaultProvider: runtimeDefault.provider,
   });
-  return resolveModelThroughAliases(raw, aliasIndex);
+  return { model: resolveModelThroughAliases(raw, aliasIndex) };
 }
 
 export function resolveConfiguredSubagentSpawnModelSelection(params: {

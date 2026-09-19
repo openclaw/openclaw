@@ -14,7 +14,7 @@ import type { AgentModelConfig } from "../config/types.agents-shared.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { formatErrorMessage, toErrorObject } from "../infra/errors.js";
 import { isProviderApiKeyConfigured } from "../plugin-sdk/provider-auth.js";
-import { getProviderEnvVars as getDefaultProviderEnvVars } from "../secrets/provider-env-vars.js";
+import { getProviderEnvVarsCore } from "../secrets/provider-env-vars.js";
 
 // Shared media-generation runtime helpers for provider fallback, request
 // timeout normalization, model selection, and capability value normalization.
@@ -693,9 +693,9 @@ export function buildNoCapabilityModelConfiguredMessage(params: {
   modelConfigKey: string;
   providers: Array<{ id: string; defaultModel?: string | null }>;
   fallbackSampleRef?: string;
-  getProviderEnvVars?: typeof getDefaultProviderEnvVars;
+  getProviderEnvVars?: typeof getProviderEnvVarsCore;
 }): string {
-  const getProviderEnvVars = params.getProviderEnvVars ?? getDefaultProviderEnvVars;
+  const getProviderEnvVars = params.getProviderEnvVars ?? getProviderEnvVarsCore;
   const sampleModel = params.providers.find(
     (provider) =>
       normalizeOptionalString(provider.id) && normalizeOptionalString(provider.defaultModel),

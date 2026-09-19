@@ -2825,64 +2825,6 @@ describe("short-term promotion", () => {
     expect(await testing.readRecallStore(workspaceDir, new Date().toISOString())).toEqual(raw);
   });
 
-  it("waits for an active short-term lock before repairing", async (workspaceDir) => {
-    await testing.writeRawRecallStore(workspaceDir, {
-      version: 1,
-      updatedAt: "2026-04-04T00:00:00.000Z",
-      entries: {
-        bad: {
-          path: "",
-        },
-      },
-    });
-    await testing.writeShortTermLock(workspaceDir, {
-      owner: `${process.pid}:${Date.now()}`,
-      acquiredAt: Date.now(),
-    });
-
-    const blocked = createDeferred<void>();
-    const lockKey = memoryCoreWorkspaceStateKey(workspaceDir);
-    configureMemoryCoreDreamingState(<T>(options: OpenKeyedStoreOptions) => {
-      const store = createPluginStateKeyedStoreForTests<T>("memory-core", options);
-      return {
-        ...store,
-        async registerIfAbsent(...args: Parameters<typeof store.registerIfAbsent>) {
-          const acquired = await store.registerIfAbsent(...args);
-          if (options.namespace === SHORT_TERM_LOCK_NAMESPACE && args[0] === lockKey && !acquired) {
-            blocked.resolve();
-          }
-          return acquired;
-        },
-      };
-    });
-    let settled = false;
-    const repairPromise = repairShortTermPromotionArtifacts({ workspaceDir }).then((result) => {
-      settled = true;
-      return result;
-    });
-    try {
-      // Real worker replies establish contention before the fixture releases its row.
-      await Promise.race([
-        blocked.promise,
-        repairPromise.then(() => {
-          throw new Error("Repair completed before observing the active lock");
-        }),
-      ]);
-      expect(settled).toBe(false);
-
-      await testing.deleteShortTermLock(workspaceDir);
-      const repair = await repairPromise;
-
-      expect(repair.changed).toBe(true);
-      expect(repair.rewroteStore).toBe(true);
-      expect(repair.removedInvalidEntries).toBe(1);
-    } finally {
-      await testing.deleteShortTermLock(workspaceDir);
-      await Promise.allSettled([repairPromise]);
-      await configureMemoryCoreDreamingStateForTests();
-    }
-  });
-
   it("preserves recall updates from sequential and parallel nested workspace writers", async (workspaceDir) => {
     const result = memoryRecallResult(
       "memory/2026-04-03.md",

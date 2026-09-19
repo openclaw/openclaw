@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { resolveConfigEnvVars } from "../config/env-substitution.js";
 import { createConfigRuntimeEnv } from "../config/env-vars.js";
+import { captureRuntimeConfig } from "../config/runtime-source-projection.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { resolveUserPath } from "../utils.js";
@@ -29,7 +30,8 @@ import {
 } from "./plugin-runtime-artifact-selection.js";
 import { normalizePluginIdScope } from "./plugin-scope.js";
 import { getPluginLoaderCacheState } from "./registry-lifecycle.js";
-import { getPluginRegistryForContext } from "./runtime.js";
+import { getPluginRegistryRuntime } from "./registry-runtime-binding.js";
+import { getActivePluginRegistry, getPluginRegistryForContext } from "./runtime.js";
 import type { PluginSdkResolutionPreference } from "./sdk-alias.js";
 
 const runtimeBindingCacheIds = new WeakMap<object, number>();
@@ -46,17 +48,6 @@ function resolveRuntimeBindingCacheId(value: object | undefined): number | undef
   const id = nextRuntimeBindingCacheId++;
   runtimeBindingCacheIds.set(value, id);
   return id;
-}
-
-function resolveRuntimeBindingCacheIdentity(options: PluginLoadOptions): string {
-  const { runtimeOptions } = options;
-  return JSON.stringify({
-    capabilityCatalogContext: resolveRuntimeBindingCacheId(options.capabilityCatalogContext),
-    modelAuth: resolveRuntimeBindingCacheId(runtimeOptions?.modelAuth),
-    modelConfig: resolveRuntimeBindingCacheId(runtimeOptions?.modelConfig),
-    nodes: resolveRuntimeBindingCacheId(runtimeOptions?.nodes),
-    subagent: resolveRuntimeBindingCacheId(runtimeOptions?.subagent),
-  });
 }
 
 function buildActivationMetadataHash(params: {
@@ -124,7 +115,7 @@ function buildCacheKeys(params: {
   allowProcessHomeSessionCatalogs?: boolean;
   activate?: boolean;
   runtimeSideEffects: boolean;
-  cliMetadata: boolean;
+  mode: NonNullable<PluginLoadOptions["mode"]>;
   expectedSourceDigests?: Readonly<Record<string, string>>;
 }) {
   const { roots, loadPaths, devSourceRoot } = params.discoveryContext;
@@ -183,7 +174,7 @@ function buildCacheKeys(params: {
     coreGatewayMethodNames: params.coreGatewayMethodNames ?? [],
     activate: params.activate !== false,
     runtimeSideEffects: params.runtimeSideEffects,
-    cliMetadata: params.cliMetadata,
+    mode: params.mode,
     expectedSourceDigests: params.expectedSourceDigests
       ? Object.entries(params.expectedSourceDigests).toSorted(([a], [b]) => a.localeCompare(b))
       : undefined,
@@ -273,7 +264,7 @@ export function resolvePluginLoadCacheContext(options: PluginLoadOptions = {}) {
     activationSourceConfig: options.activationSourceConfig,
   });
   const env = shouldResolveRawConfigEnvVars ? createConfigRuntimeEnv(rawConfig, baseEnv) : baseEnv;
-  const cfg = applyTestPluginDefaults(
+  const runtimeConfig = applyTestPluginDefaults(
     shouldResolveRawConfigEnvVars
       ? (resolveConfigEnvVars(rawConfig, env, {
           onMissing: () => undefined,
@@ -281,11 +272,15 @@ export function resolvePluginLoadCacheContext(options: PluginLoadOptions = {}) {
       : rawConfig,
     env,
   );
-  const activationSourceConfig = shouldResolveRawConfigEnvVars
+  const activationConfig = shouldResolveRawConfigEnvVars
     ? (resolveConfigEnvVars(rawActivationSourceConfig, env, {
         onMissing: () => undefined,
       }) as OpenClawConfig)
     : rawActivationSourceConfig;
+  // Registration callbacks retain these exact snapshots for their instance lifetime.
+  const cfg = captureRuntimeConfig(runtimeConfig);
+  const activationSourceConfig =
+    activationConfig === runtimeConfig ? cfg : captureRuntimeConfig(activationConfig);
   const normalized = normalizePluginsConfig(cfg.plugins);
   // Identical plugin inputs may share facts; source channel policy keeps its own root config.
   const activationSource = createPluginActivationSource({
@@ -304,6 +299,15 @@ export function resolvePluginLoadCacheContext(options: PluginLoadOptions = {}) {
     options.preferBuiltPluginArtifacts,
   );
   const runtimeSubagentMode = resolveRuntimeSubagentMode(options.runtimeOptions);
+  const activeRegistry =
+    runtimeSubagentMode === "gateway-bindable" &&
+    options.mode !== "cli-metadata" &&
+    (!options.runtimeOptions?.nodes || !options.runtimeOptions?.subagent)
+      ? getActivePluginRegistry()
+      : undefined;
+  const borrowedGatewayRuntime = activeRegistry
+    ? getPluginRegistryRuntime(activeRegistry)
+    : undefined;
   const coreGatewayMethodNames = resolveCoreGatewayMethodNames(options);
   // Config identity cannot prove a custom profile's environment. Only borrow
   // the process-owned generation; full snapshots cover narrower loads, while
@@ -382,14 +386,24 @@ export function resolvePluginLoadCacheContext(options: PluginLoadOptions = {}) {
       : undefined,
     loadModules: options.loadModules,
     runtimeSubagentMode,
-    runtimeBindingIdentity: resolveRuntimeBindingCacheIdentity(options),
+    runtimeBindingIdentity: JSON.stringify({
+      capabilityCatalogContext: resolveRuntimeBindingCacheId(options.capabilityCatalogContext),
+      modelAuth: resolveRuntimeBindingCacheId(options.runtimeOptions?.modelAuth),
+      modelConfig: resolveRuntimeBindingCacheId(options.runtimeOptions?.modelConfig),
+      nodes: resolveRuntimeBindingCacheId(options.runtimeOptions?.nodes),
+      subagent: resolveRuntimeBindingCacheId(options.runtimeOptions?.subagent),
+      // Root publication becomes the next donor; only caller-owned handles track donor changes.
+      borrowedGatewayRuntime: shouldActivate
+        ? undefined
+        : resolveRuntimeBindingCacheId(borrowedGatewayRuntime),
+    }),
     pluginSdkResolution: options.pluginSdkResolution,
     coreGatewayMethodNames,
     allowProcessHomeSessionCatalogs: options.allowProcessHomeSessionCatalogs,
     activate: shouldActivate,
     runtimeSideEffects,
     expectedSourceDigests: options.expectedSourceDigests,
-    cliMetadata: options.mode === "cli-metadata",
+    mode: options.mode ?? "full",
   });
   return {
     cacheState,
@@ -410,6 +424,7 @@ export function resolvePluginLoadCacheContext(options: PluginLoadOptions = {}) {
     runtimeSideEffects,
     shouldLoadModules: options.loadModules !== false,
     runtimeSubagentMode,
+    borrowedGatewayRuntime,
     installRecords,
     devSourceRoot: discoveryContext.devSourceRoot,
     cacheKey,

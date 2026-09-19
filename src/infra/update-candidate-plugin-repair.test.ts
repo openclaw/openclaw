@@ -242,7 +242,7 @@ it("reports an unresolved dependency whose published projection lost the origina
   const result = await completeUpdateCandidatePluginRehearsal(f);
   expect(result.copiedFiles).toBe(0);
   expect(result.warnings).toContain(
-    `Update rehearsal could not recover the original plugin path for ${path.join(managed, "index.mjs")}.`,
+    `Update checks could not recover the original plugin path for ${path.join(managed, "index.mjs")}.`,
   );
   await expect(fs.access(path.join(path.dirname(managed), "shared"))).rejects.toMatchObject({
     code: "ENOENT",
@@ -323,7 +323,7 @@ it.each(["relative", "package", "absolute", "file URL"])(
     }
     const original = await fs.readFile(path.join(f.shared, "value.js"));
     await expect(completeUpdateCandidatePluginRehearsal(f)).rejects.toThrow(
-      "escapes the update rehearsal",
+      "outside the temporary update copy",
     );
     expect(await fs.readFile(path.join(f.shared, "value.js"))).toEqual(original);
   },

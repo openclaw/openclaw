@@ -11,9 +11,14 @@ import { reconciliationEntries } from "./workspace-reconcile-derived-paths.js";
 import { WORKSPACE_RESULT_GIT_TIMEOUT_MS as PATCH_TIMEOUT_MS } from "./workspace-result-git.js";
 import {
   requireWorkerResultStorageRef,
+  resolveStagedWorkspaceReadEntry,
+  stagedWorkspaceEntryBytes,
+  STAGED_WORKSPACE_READ_MAX_BYTES,
+  STAGED_WORKSPACE_READ_MAX_ENTRIES,
   STAGED_RESULT_MESSAGE,
   type StagedWorkerArtifactInventory,
   type StagedWorkerWorkspaceInventory,
+  type StagedWorkerWorkspaceReadEntry,
   type WorkspaceArtifactReadOperations,
 } from "./workspace-result-inventory.js";
 
@@ -137,19 +142,7 @@ export async function loadStagedWorkerWorkspace(
   };
 }
 
-export async function readStagedWorkerWorkspaceEntry(
-  params: { root: string; objectsByPath: StagedWorkerWorkspaceInventory["objectsByPath"] },
-  entry: WorkerWorkspaceManifestEntry,
-): Promise<Buffer> {
-  const object = params.objectsByPath.get(entry.path);
-  if (!object) {
-    throw new Error(`Cloud workspace result has no payload for ${entry.path}`);
-  }
-  const content = await readGitBlob({
-    root: params.root,
-    objectId: object.objectId,
-    maxBytes: MAX_RECONCILIATION_FILE_BYTES,
-  });
+function assertStagedEntryContent(entry: WorkerWorkspaceManifestEntry, content: Buffer): void {
   const matches =
     entry.type === "symlink"
       ? content.toString("utf8") === entry.target
@@ -158,7 +151,89 @@ export async function readStagedWorkerWorkspaceEntry(
   if (!matches) {
     throw new Error(`Cloud workspace staged result payload is invalid: ${entry.path}`);
   }
-  return content;
+}
+
+export async function readStagedWorkerWorkspaceEntries(params: {
+  root: string;
+  entries: readonly StagedWorkerWorkspaceReadEntry[];
+}): Promise<Buffer> {
+  if (params.entries.length > STAGED_WORKSPACE_READ_MAX_ENTRIES) {
+    throw new Error("Cloud workspace staged result batch exceeds its entry limit");
+  }
+  let bytes = 0;
+  for (const { object, entry } of params.entries) {
+    const size = stagedWorkspaceEntryBytes(entry);
+    if (
+      !/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/u.test(object.objectId) ||
+      !Number.isSafeInteger(size) ||
+      size < 0 ||
+      size > MAX_RECONCILIATION_FILE_BYTES
+    ) {
+      throw new Error(`Cloud workspace staged result payload is invalid: ${entry.path}`);
+    }
+    bytes += size;
+  }
+  if (params.entries.length > 1 && bytes > STAGED_WORKSPACE_READ_MAX_BYTES) {
+    throw new Error("Cloud workspace staged result batch exceeds its byte limit");
+  }
+  const only = params.entries.length === 1 ? params.entries[0] : undefined;
+  if (only) {
+    const content = await readGitBlob({
+      root: params.root,
+      objectId: only.object.objectId,
+      maxBytes: MAX_RECONCILIATION_FILE_BYTES,
+    });
+    assertStagedEntryContent(only.entry, content);
+    return only.entry.type === "file" ? content : Buffer.alloc(0);
+  }
+  if (params.entries.length === 0) {
+    return Buffer.alloc(0);
+  }
+
+  // Only verified OIDs enter the line protocol; filenames remain in the manifest.
+  const result = await runGitBuffered(params.root, ["cat-file", "--batch"], {
+    input: Buffer.from(params.entries.map(({ object }) => `${object.objectId}\n`).join("")),
+    timeoutMs: PATCH_TIMEOUT_MS,
+    maxOutputBytes: bytes + params.entries.length * 128 + 1,
+  });
+  if (result.termination !== "exit" || result.code !== 0) {
+    throw new Error(result.stderr.toString("utf8").trim() || "git cat-file failed");
+  }
+  const contents: Buffer[] = [];
+  let offset = 0;
+  for (const { object, entry } of params.entries) {
+    const headerEnd = result.stdout.indexOf(0x0a, offset);
+    const header =
+      headerEnd >= offset && headerEnd - offset <= 128
+        ? /^([a-f0-9]{40}|[a-f0-9]{64}) blob (0|[1-9][0-9]*)$/u.exec(
+            result.stdout.subarray(offset, headerEnd).toString("utf8"),
+          )
+        : null;
+    const size = Number(header?.[2]);
+    const contentStart = headerEnd + 1;
+    const contentEnd = contentStart + size;
+    if (
+      header?.[1] !== object.objectId ||
+      !Number.isSafeInteger(size) ||
+      size > MAX_RECONCILIATION_FILE_BYTES ||
+      (entry.type === "file" && size !== entry.size) ||
+      contentEnd >= result.stdout.byteLength ||
+      result.stdout[contentEnd] !== 0x0a
+    ) {
+      throw new Error(`Cloud workspace staged result payload is invalid: ${entry.path}`);
+    }
+    const content = result.stdout.subarray(contentStart, contentEnd);
+    assertStagedEntryContent(entry, content);
+    if (entry.type === "file") {
+      contents.push(content);
+    }
+    offset = contentEnd + 1;
+  }
+  if (offset !== result.stdout.byteLength) {
+    throw new Error("Cloud workspace staged result contains unexpected payload bytes");
+  }
+  // Links are validated above; their filesystem representation uses the manifest target.
+  return Buffer.concat(contents);
 }
 
 export async function collectStagedWorkerArtifacts(
@@ -186,10 +261,10 @@ export async function collectStagedWorkerArtifacts(
   const selected = snapshot.changedEntries.find((entry) => entry.path === input.previewPath);
   const preview =
     selected?.type === "file" && selected.size <= WORKSPACE_PREVIEW_MAX_BYTES
-      ? await readStagedWorkerWorkspaceEntry(
-          { root: input.root, objectsByPath: snapshot.objectsByPath },
-          selected,
-        )
+      ? await readStagedWorkerWorkspaceEntries({
+          root: input.root,
+          entries: [resolveStagedWorkspaceReadEntry(snapshot.objectsByPath, selected)],
+        })
       : undefined;
   return {
     baseManifestRef: snapshot.baseManifestRef,

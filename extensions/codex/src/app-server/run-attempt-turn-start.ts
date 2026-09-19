@@ -1,16 +1,9 @@
 import {
   embeddedAgentLog,
   formatErrorMessage,
-  runAgentCleanupStep,
   runAgentHarnessLlmInputHook,
   runAgentHarnessLlmOutputHook,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { isIncognitoSessionKey } from "../incognito-session.js";
-import {
-  CODEX_APP_SERVER_UNSUBSCRIBE_TIMEOUT_MS,
-  closeCodexStartupClientBestEffort,
-  unsubscribeCodexThreadBestEffort,
-} from "./attempt-client-cleanup.js";
 import { classifyCodexModelCallFailureKind } from "./attempt-diagnostics.js";
 import {
   buildCodexTurnStartFailureResult,
@@ -43,16 +36,7 @@ export async function startCodexAttemptTurn(
   notifications: CodexAttemptNotificationController,
   requestRuntime: Awaited<ReturnType<typeof prepareCodexAttemptTurnRequest>>,
 ): Promise<{ result: EmbeddedRunAttemptResult } | { turn: CodexTurnStartResponse }> {
-  const {
-    prompt,
-    state: resourceState,
-    trajectoryRecorder,
-    markTrajectoryEndRecorded,
-    activateNativePreToolUseFailureFallback,
-    releaseCurrentRoute,
-    releaseSandboxExecEnvironment,
-    releaseSharedClientLeaseAndRetireOneShotClient,
-  } = resources;
+  const { prompt, state: resourceState, trajectoryRecorder, markTrajectoryEndRecorded } = resources;
   const { context, turnState, systemPromptReport } = prompt;
   const { runtime, historyState, hookContext, hookContextWindowFields, hookRunner } = context;
   const { connection, runtimeParams, effectiveRuntimeProviderId, effectiveRuntimeModelId } =
@@ -72,6 +56,9 @@ export async function startCodexAttemptTurn(
   const { waitForActiveNativeTurnCompletion } = notifications;
   const { codexModelCallDiagnostics, startCodexTurn, buildLlmInputEvent } = requestRuntime;
   let turn: CodexTurnStartResponse | undefined;
+  // From this point, failure may include an accepted native write. Never return
+  // the warm claim idle merely because active-turn setup did not complete.
+  resourceState.turnStartAttempted = true;
   try {
     codexModelCallDiagnostics.emitStarted();
     runAgentHarnessLlmInputHook({ event: buildLlmInputEvent(), ctx: hookContext, hookRunner });
@@ -241,50 +228,6 @@ export async function startCodexAttemptTurn(
         ctx: hookContext,
         hookRunner,
       });
-      const bindingReleased = isIncognitoSessionKey(params.sessionKey)
-        ? await bindingStore.mutate(bindingIdentity, {
-            kind: "clear",
-            threadId: resourceState.thread.threadId,
-          })
-        : true;
-      if (bindingReleased && !resourceState.startupClientUnsafe) {
-        const released = await unsubscribeCodexThreadBestEffort(resourceState.client, {
-          threadId: resourceState.thread.threadId,
-          timeoutMs: CODEX_APP_SERVER_UNSUBSCRIBE_TIMEOUT_MS,
-        });
-        if (!released) {
-          // Detach the unsafe client before releasing this lease, but let sibling leases finish.
-          await runAgentCleanupStep({
-            runId: params.runId,
-            sessionId: params.sessionId,
-            step: "codex-retire-unsafe-startup-client",
-            log: embeddedAgentLog,
-            cleanup: async () => closeCodexStartupClientBestEffort(resourceState.client),
-          });
-        }
-      }
-      releaseCurrentRoute();
-      activateNativePreToolUseFailureFallback();
-      const relay = resourceState.nativeHookRelay;
-      relay?.unregister();
-      await runAgentCleanupStep({
-        runId: params.runId,
-        sessionId: params.sessionId,
-        step: "codex-turn-start-failure-native-hook-relay",
-        log: embeddedAgentLog,
-        cleanup: async () => {
-          await relay?.drain();
-        },
-      });
-      await releaseSandboxExecEnvironment();
-      await runAgentCleanupStep({
-        runId: params.runId,
-        sessionId: params.sessionId,
-        step: "codex-trajectory-flush-startup-failure",
-        log: embeddedAgentLog,
-        cleanup: async () => trajectoryRecorder?.flush(),
-      });
-      await releaseSharedClientLeaseAndRetireOneShotClient();
       if (usageLimitError) {
         await markCodexAuthProfileBlockedFromRateLimits({
           params,
@@ -323,8 +266,6 @@ export async function startCodexAttemptTurn(
     }
   }
   if (!turn) {
-    activateNativePreToolUseFailureFallback();
-    await releaseSharedClientLeaseAndRetireOneShotClient();
     throw new Error("codex app-server turn/start failed without an error");
   }
   const authoritySourceRef = context.attemptTools.scheduledAppAuthoritySourceRef;

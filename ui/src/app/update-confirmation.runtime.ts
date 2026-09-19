@@ -9,6 +9,7 @@
 // Gateway restart that tears down the connection cannot unmount it.
 import { html, nothing, render } from "lit";
 import type { UpdateRunRecord } from "../../../src/infra/update-run-record.ts";
+import { isReportableUpdateRun } from "../../../src/shared/update-outcome.ts";
 import type { UpdateAvailable, UpdateScheduleState } from "../api/types.ts";
 import { t } from "../i18n/index.ts";
 import { registerUpdateActionsEnglish } from "../i18n/locales/en-update-actions.ts";
@@ -155,7 +156,7 @@ export async function confirmAndStartUpdateRuntime(
       const readError = current.kind === "run" ? latestProgress?.readError : null;
       const working = current.kind === "working" || run?.status === "running";
       const finished = run !== null && run.status !== "running";
-      const failed = current.kind === "failed" || (finished && run.status !== "succeeded");
+      const failed = current.kind === "failed" || (run !== null && isReportableUpdateRun(run));
       const checkingStatus = statusCheck === "pending";
       const statusCheckError = typeof statusCheck === "object" ? statusCheck.error : null;
       const showRecovery = failed || Boolean(readError) || statusCheck !== "idle";

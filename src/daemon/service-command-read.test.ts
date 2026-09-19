@@ -7,6 +7,7 @@ import {
   LAUNCH_AGENT_ENV_WRAPPER_SHELL,
   quoteLaunchAgentEnvironmentValue,
 } from "./launchd-plist.js";
+import { decodeLaunchAgentPlistFixture } from "./launchd-plist.test-support.js";
 import { readLaunchAgentProgramArguments } from "./launchd-runtime.js";
 import {
   resolveLaunchAgentEnvFilePath,
@@ -29,7 +30,7 @@ const native = vi.hoisted(() => ({
   launchctl: vi.fn(),
   scheduler: vi.fn(),
   plutil: vi.fn(),
-  plistRecords: new Map<string, unknown>(),
+  plists: new Set<string>(),
 }));
 vi.mock("./exec-file.js", () => ({ execFileUtf8: native.launchctl }));
 vi.mock("../process/exec.js", async (importOriginal) => ({
@@ -52,7 +53,7 @@ const renderPlist = (args: string[]) => {
     stderrPath: "/service-stderr.log",
     environment,
   });
-  native.plistRecords.set(contents, { ProgramArguments: args, EnvironmentVariables: environment });
+  native.plists.add(contents);
   return contents;
 };
 const readers: Array<{
@@ -92,13 +93,13 @@ describe("native service command inspection", () => {
       stderr: "Could not find service",
     });
     native.scheduler.mockReset().mockReturnValue({ status: 1, stdout: "-2147024894" });
-    native.plistRecords.clear();
-    native.plutil.mockReset().mockImplementation(async (_command, _args, options) => {
+    native.plists.clear();
+    native.plutil.mockReset().mockImplementation(async (_command, args, options) => {
       const captured = Buffer.from(options.input).toString("utf8");
-      if (!native.plistRecords.has(captured)) {
+      if (!native.plists.has(captured)) {
         throw new Error("native-plist-inspection-secret-canary");
       }
-      return { stdout: JSON.stringify(native.plistRecords.get(captured)), stderr: "" };
+      return decodeLaunchAgentPlistFixture(options.input, args[1]);
     });
   });
   afterEach(async () => {
@@ -258,13 +259,24 @@ describe("native service command inspection", () => {
     { decoded: { ProgramArguments: programArguments, EnvironmentVariables: { HOME: 42 } } },
   ])("rejects unsupported native plist field types: $decoded", async ({ decoded }) => {
     await writeFile(resolveLaunchAgentPlistPath(env), renderPlist(programArguments));
-    native.plutil.mockResolvedValue({ stdout: JSON.stringify(decoded), stderr: "" });
+    native.plutil.mockImplementation(async (_command, args, options) =>
+      args[1] === "json"
+        ? {
+            stdout: JSON.stringify(Array.isArray(decoded) ? decoded : { Label: label, ...decoded }),
+            stderr: "",
+          }
+        : decodeLaunchAgentPlistFixture(options.input, args[1]),
+    );
     await expect(readLaunchAgentProgramArguments(env, { requireEffective: true })).rejects.toThrow(
       "Effective LaunchAgent service command could not be inspected.",
     );
   });
 
-  it("preserves the native command without trimming or dropping arguments", async () => {
+  it("preserves the native command without trimming or dropping arguments", async ({
+    onTestFinished,
+  }) => {
+    const clock = vi.spyOn(performance, "now").mockReturnValue(1_000);
+    onTestFinished(() => clock.mockRestore());
     const recordedArguments = ["node", "  spaced argument  ", ""];
     const contents = renderPlist(recordedArguments);
     await writeFile(resolveLaunchAgentPlistPath(env), contents);
@@ -273,10 +285,17 @@ describe("native service command inspection", () => {
         readLaunchAgentProgramArguments(env, { requireEffective, timeoutMs: 750 }),
       ).resolves.toMatchObject({ programArguments: recordedArguments });
     }
-    expect(native.plutil).toHaveBeenCalledWith(
+    expect(native.plutil).toHaveBeenNthCalledWith(
+      1,
+      "/usr/bin/plutil",
+      ["-convert", "xml1", "-o", "-", "--", "-"],
+      expect.objectContaining({ input: Buffer.from(contents), timeoutMs: 750, logOutput: false }),
+    );
+    expect(native.plutil).toHaveBeenNthCalledWith(
+      2,
       "/usr/bin/plutil",
       ["-convert", "json", "-o", "-", "--", "-"],
-      expect.objectContaining({ input: Buffer.from(contents), timeoutMs: 750, logOutput: false }),
+      expect.objectContaining({ input: contents, timeoutMs: 750, logOutput: false }),
     );
   });
 

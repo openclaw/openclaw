@@ -1,0 +1,12 @@
+{
+  "name": "openclaw-security-review-runtime",
+  "private": true,
+  "version": "1.0.0",
+  "dependencies": {
+    "minimatch": "10.2.6",
+    "yaml": "2.9.0"
+  },
+  "overrides": {
+    "brace-expansion": "5.0.9"
+  }
+}

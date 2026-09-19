@@ -1603,6 +1603,11 @@ select {
   grid-template-columns: minmax(112px, 0.8fr) minmax(112px, 0.8fr) minmax(0, 1.4fr);
 }
 
+.evidence-search-field,
+.evidence-search-field input {
+  min-width: 0;
+}
+
 .evidence-filters label {
   display: grid;
   gap: 4px;

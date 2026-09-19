@@ -5,6 +5,10 @@ import {
   readSessionPlacementRecovery,
   writeSessionPlacementRecovery,
 } from "../lib/sessions/session-placement-recovery.ts";
+import { makeChatHost } from "../pages/chat/chat-host.test-support.ts";
+import { applyChatPendingInputs, getChatPendingInputs } from "../pages/chat/chat-pending-inputs.ts";
+import { buildChatItems } from "../pages/chat/chat-thread-build.ts";
+import { admitChatSubmission, reduceChatSessionProjection } from "../pages/chat/history-merge.ts";
 import {
   createPlacementStartupHarness,
   createStartupPlacement,
@@ -29,6 +33,11 @@ describe("application placement delivery recovery", () => {
         message: "send rejected",
       });
       const request = vi.fn((method: string, payload?: Record<string, unknown>) => {
+        if (method === "sessions.describe") {
+          return Promise.resolve({
+            session: { placement: createStartupPlacement("reclaimed", 3) },
+          });
+        }
         if (method === "sessions.dispatch") {
           return Promise.resolve({ placement: createStartupPlacement("active", 2) });
         }
@@ -271,11 +280,7 @@ describe("application placement delivery recovery", () => {
           expect(startup.get(input.recovery.sessionKey)).toBeNull();
           expect(startup.hasPendingTurn(input.recovery.sessionKey)).toBe(false);
           const handoff = chatSubmissions.readInitial(input.recovery.sessionKey, client);
-          if (acceptedInput) {
-            expect(handoff).toBeNull();
-          } else {
-            expect(handoff?.pendingRunId).toBe(input.recovery.messageId);
-          }
+          expect(handoff?.pendingRunId).toBe(input.recovery.messageId);
         } else {
           expect(startup.get(input.recovery.sessionKey)).toMatchObject({
             phase: "failed",
@@ -303,6 +308,123 @@ describe("application placement delivery recovery", () => {
       startup.dispose();
     }
   });
+
+  it.each([
+    { order: "pane-first", receipt: "pending" },
+    { order: "recovery-first", receipt: "pending" },
+    { order: "recovery-first", receipt: "consumed" },
+  ] as const)(
+    "keeps exactly one initial prompt when $receipt custody arrives $order",
+    async ({ order, receipt }) => {
+      const history = createDeferred<unknown>();
+      const request = vi.fn(() => history.promise);
+      const { startup, input, gateway, chatSubmissions } = createPlacementStartupHarness(request);
+      input.recovery = { ...input.recovery, phase: "sending" };
+      writeSessionPlacementRecovery(input.recovery);
+      const pane = makeChatHost({
+        sessionKey: input.recovery.sessionKey,
+        currentSessionId: "physical-cloud-session",
+        client: gateway.snapshot.client,
+        chatSubmissions,
+      });
+      const page = {
+        items: [
+          {
+            id: "accepted-initial-input",
+            runId: input.recovery.messageId,
+            state: "queued" as const,
+            acceptedAt: input.createdAt,
+            message: {
+              role: "user",
+              content: [{ type: "text", text: input.recovery.message }],
+              timestamp: input.createdAt,
+              __openclaw: { id: "pending:accepted-initial-input" },
+            },
+          },
+        ],
+        total: 1,
+      };
+      const visibleMessages = () => {
+        const initialTurn = startup.get(pane.sessionKey)?.initialTurn;
+        return buildChatItems({
+          paneId: `startup-custody-${order}`,
+          sessionKey: pane.sessionKey,
+          messages: pane.chatMessages,
+          pendingInputs: getChatPendingInputs(pane)?.page.items,
+          queue: initialTurn ? [initialTurn] : [],
+          initialTurnId: initialTurn?.id,
+          toolMessages: [],
+          streamSegments: [],
+          stream: null,
+          streamStartedAt: null,
+          showToolCalls: true,
+        }).flatMap((item) =>
+          item.kind === "group" && item.role === "user"
+            ? item.messages.map((entry) => entry.message)
+            : [],
+        );
+      };
+      const publications: unknown[][] = [];
+      const stop = startup.subscribe(() => {
+        admitChatSubmission(pane, getChatPendingInputs(pane)?.page.items);
+        publications.push(visibleMessages());
+      });
+      try {
+        startup.resumeRecovery();
+        await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
+        expect(visibleMessages()).toHaveLength(1);
+        publications.length = 0;
+        if (order === "pane-first") {
+          applyChatPendingInputs(pane, page);
+          expect(visibleMessages()).toHaveLength(1);
+        }
+        history.resolve({
+          sessionId: pane.currentSessionId,
+          messages: [],
+          pendingInputs: receipt === "pending" ? page : { items: [], total: 0 },
+          inputReceipts: [
+            {
+              runId: input.recovery.messageId,
+              state: receipt,
+              ...(receipt === "consumed" ? { consumedByEventId: "aggregate-input" } : {}),
+            },
+          ],
+        });
+        await vi.waitFor(() => expect(startup.get(pane.sessionKey)).toBeNull());
+        expect(visibleMessages()).toHaveLength(1);
+        expect(publications.length).toBeGreaterThan(0);
+        for (const messages of publications) {
+          expect(messages).toHaveLength(1);
+          expect(messages[0]).toMatchObject({
+            content: [{ type: "text", text: input.recovery.message }],
+          });
+        }
+        if (receipt === "consumed") {
+          const aggregate = {
+            role: "user",
+            content: [{ type: "text", text: input.recovery.message }],
+            __openclaw: {
+              id: "aggregate-input",
+              seq: 1,
+              idempotencyKey: "followup-collect:session:batch",
+            },
+          };
+          // The pane requested this snapshot before the handoff supplied inputRunIds.
+          reduceChatSessionProjection(pane, { type: "snapshotLoaded", messages: [aggregate] });
+          applyChatPendingInputs(pane, { items: [], total: 0 });
+          expect(visibleMessages()).toEqual([aggregate]);
+        } else {
+          applyChatPendingInputs(pane, page);
+          expect(visibleMessages()).toEqual(page.items.map((item) => item.message));
+          expect(pane.chatMessages).toEqual([]);
+        }
+        expect(request).toHaveBeenCalledOnce();
+      } finally {
+        stop();
+        startup.dispose();
+      }
+    },
+  );
 
   it.each(["message", "credential"])(
     "delivery recovery fences a stale observation after %s ownership changes",

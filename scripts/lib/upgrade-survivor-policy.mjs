@@ -1,30 +1,10 @@
-const UPGRADE_SURVIVOR_SCENARIOS = Object.freeze([
-  "base",
-  "msteams-polls",
-  "abandoned-update",
-  "legacy-operator-state",
-  "workshop-doctor-recovery",
-  "mobile-pairing-reconnect",
-  "acpx-openclaw-tools-bridge",
-  "feishu-channel",
-  "bootstrap-persona",
-  "channel-post-core-restore",
-  "plugin-deps-cleanup",
-  "configured-plugin-installs",
-  "missing-configured-plugin-migration",
-  "custom-plugin-siblings",
-  "projects-doctor",
-  "taskflow-restoration",
-  "stale-source-plugin-shadow",
-  "prerelease-plugin-registry",
-  "tilde-log-path",
-  "meeting-transcripts-sqlite",
-  "versioned-runtime-deps",
-  "cron-scheduled-authority",
-  "sqlite-volume",
-  "recovery-cleanup",
-  "auth-profile-v2026-7-2-beta-5",
-  "watchos-direct-node",
+import catalog from "./upgrade-survivor-scenarios.json" with { type: "json" };
+
+const UPGRADE_SURVIVOR_SCENARIOS = Object.freeze(catalog.scenarios);
+// Frozen Codex allowlist recipes retain their assertion-only scenario.
+export const UPGRADE_SURVIVOR_ASSERTION_SCENARIOS = Object.freeze([
+  ...UPGRADE_SURVIVOR_SCENARIOS,
+  ...catalog.assertionOnlyScenarios,
 ]);
 
 // Oldest release line supported by the operator-state upgrade regression gate.
@@ -46,6 +26,7 @@ const TRUSTED_HARNESS_OWNED_SCENARIOS = new Set([
   "mobile-pairing-reconnect",
   "abandoned-update",
   "projects-doctor",
+  "projects-startup-migration",
   "taskflow-restoration",
   "workshop-doctor-recovery",
 ]);
@@ -64,7 +45,9 @@ const aggregateScenarios = UPGRADE_SURVIVOR_SCENARIOS.filter(
     scenario !== "msteams-polls" &&
     scenario !== "abandoned-update" &&
     scenario !== "missing-configured-plugin-migration" &&
+    scenario !== "missing-load-path" &&
     scenario !== "projects-doctor" &&
+    scenario !== "projects-startup-migration" &&
     scenario !== "taskflow-restoration" &&
     scenario !== "workshop-doctor-recovery" &&
     scenario !== "mobile-pairing-reconnect" &&
@@ -162,10 +145,17 @@ function comparePublishedReleaseVersion(a, b) {
 
 export function supportsUpgradeSurvivorScenarioAtBaseline(scenario, baselineSpec) {
   const version = parsePublishedReleaseVersion(baselineSpec);
-  if (scenario === "projects-doctor" || scenario === "taskflow-restoration") {
+  if (
+    scenario === "projects-doctor" ||
+    scenario === "projects-startup-migration" ||
+    scenario === "taskflow-restoration"
+  ) {
     return baselineSpec === "openclaw@2026.9.4";
   }
-  if (scenario === "abandoned-update" || scenario === "missing-configured-plugin-migration") {
+  if (scenario === "abandoned-update") {
+    return baselineSpec === "openclaw@2026.9.4" || baselineSpec === "openclaw@2026.9.3";
+  }
+  if (scenario === "missing-configured-plugin-migration") {
     return baselineSpec === "openclaw@2026.9.2";
   }
   if (scenario === "workshop-doctor-recovery") {

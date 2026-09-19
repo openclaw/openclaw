@@ -61,6 +61,8 @@ export type DebugOverlayStatusSnapshot = GatewayStatusSnapshot & {
 
 export type DebugOverlayStatusSample = GatewayStatusSample<DebugOverlayStatusSnapshot>;
 
+const PING_DEGRADED_THRESHOLD_MS = 250;
+
 function formatPingMs(value: number): string {
   return t("debug.overlay.pingMs", { value: String(Math.round(value)) });
 }
@@ -73,6 +75,7 @@ export function renderDebugOverlayWidget(
     ${renderGatewayCpuVital(status, history)}
     <openclaw-sparkline
       class="gateway-vital gateway-vital--ping"
+      data-degraded=${status.pingMs > PING_DEGRADED_THRESHOLD_MS ? "" : nothing}
       title=${t("debug.overlay.pingDescription")}
       .label=${t("debug.overlay.ping")}
       .samples=${collectGatewayStatusSamples(history, (sample) => sample.pingMs)}

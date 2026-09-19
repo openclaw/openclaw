@@ -581,6 +581,27 @@ describe("installScheduledTask", () => {
     });
   });
 
+  it("warns and activates an existing task when an ordinary policy refresh fails", async () => {
+    await withUserProfileDir(async (_tmpDir, env) => {
+      schtasksResponses.push(okSchtasksResponse, okSchtasksResponse, accessDeniedResponse);
+      const warn = vi.fn();
+      await installScheduledTask({
+        env,
+        stdout: new PassThrough(),
+        programArguments: ["node", "gateway.js"],
+        warn,
+      });
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining("Access is denied"));
+      expect(schtasksCalls.map((call) => call[0])).toEqual([
+        "/Query",
+        "/Change",
+        "/Create",
+        "/Run",
+      ]);
+      expectTaskRunCall(3);
+    });
+  });
+
   it.each([
     {
       kind: "existing",

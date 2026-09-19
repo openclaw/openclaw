@@ -52,9 +52,8 @@ export function parseArgs(argv: string[]) {
   const explicitPaths =
     separatorIndex === -1 ? [] : argv.slice(separatorIndex + 1).map(normalizePath);
   const paths: string[] = [];
-  const args = {
+  const args: { staged: boolean; base?: string; head: string; paths: string[] } = {
     staged: false,
-    base: "origin/main",
     head: "HEAD",
     paths,
   };
@@ -109,8 +108,8 @@ function listChangedPaths(args: ReturnType<typeof parseArgs>) {
     );
   }
   const diffArgs = args.staged
-    ? ["diff", "--cached", "--name-only", "--diff-filter=ACMR"]
-    : ["diff", "--name-only", "--diff-filter=ACMR", `${args.base}...${args.head}`];
+    ? ["diff", "--cached", "--name-only", "--diff-filter=ACMR", ...(args.base ? [args.base] : [])]
+    : ["diff", "--name-only", "--diff-filter=ACMR", `${args.base ?? "origin/main"}...${args.head}`];
   return git(diffArgs)
     .split("\n")
     .map(normalizePath)
@@ -126,7 +125,10 @@ function readBlob(ref: string, filePath: string) {
 }
 
 function refsFor(args: ReturnType<typeof parseArgs>) {
-  return args.staged ? { before: "HEAD", after: "" } : { before: args.base, after: args.head };
+  return {
+    before: args.base ?? (args.staged ? "HEAD" : "origin/main"),
+    after: args.staged ? "" : args.head,
+  };
 }
 
 function readBeforeAfter(args: ReturnType<typeof parseArgs>, filePath: string) {

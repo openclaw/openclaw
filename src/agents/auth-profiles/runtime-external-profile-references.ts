@@ -119,7 +119,12 @@ export function mergeRuntimeExternalProfileReferences(params: {
   if (params.next.runtimeExternalProfileIdsAuthoritative === true) {
     return params.next;
   }
-  if (runtimeExternalProfileIds.size === 0) {
+  // A completed empty lookup is still authoritative; durable refreshes must
+  // not turn it back into an unknown external-profile set.
+  if (
+    runtimeExternalProfileIds.size === 0 &&
+    params.existing.runtimeExternalProfileIdsAuthoritative !== true
+  ) {
     return params.next;
   }
   const merged = cloneAuthProfileStore(params.next);

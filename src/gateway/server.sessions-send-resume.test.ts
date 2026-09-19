@@ -22,6 +22,12 @@ import {
   listSessionPendingInputs,
 } from "../config/sessions/session-accessor.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
+import { isPathInside } from "../infra/path-guards.js";
+import { unregisterOpenClawAgentDatabase } from "../state/openclaw-agent-db-registry.js";
+import {
+  closeOpenClawAgentDatabasesAsync,
+  listOpenClawRegisteredAgentDatabases,
+} from "../state/openclaw-agent-db.js";
 import { findTaskByRunId } from "../tasks/task-registry.js";
 import {
   agentCommandMock,
@@ -34,7 +40,19 @@ import {
 } from "./test-helpers.js";
 
 installGatewayTestHooks({ scope: "suite" });
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
+  afterEach(async () => {
+    for (const root of tempDirs.dirs) {
+      await closeOpenClawAgentDatabasesAsync(root);
+    }
+    for (const database of listOpenClawRegisteredAgentDatabases()) {
+      if ([...tempDirs.dirs].some((root) => isPathInside(root, database.path))) {
+        unregisterOpenClawAgentDatabase(database);
+      }
+    }
+    cleanup();
+  }),
+);
 let server: Awaited<ReturnType<typeof startTestGatewayServer>>;
 let kernel: Awaited<ReturnType<(typeof import("./server-kernel.js"))["createGatewayKernel"]>>;
 beforeAll(async () => {

@@ -115,6 +115,8 @@ Each `models[]` entry is a **provider** entry (default) or a **CLI** entry:
   </Tab>
 </Tabs>
 
+CLI entries need a nonblank `command` and a nonempty `args` list. Arguments remain literal strings with optional template interpolation; existing literal file paths and custom wrapper arguments are supported. Pass the attachment through a template such as `{{AttachmentPath}}` or your command's existing input contract. Empty argument lists are not supported because OpenClaw does not feed attachments to CLI stdin. `openclaw doctor` reports missing commands or args with the exact config path and a manual fix; it does not invent commands or rewrite these entries. At runtime, an incomplete entry records a failure without launching the binary, and the next configured model is tried. If none succeeds, the attachment gets a failure outcome and a warning is logged. Config validation remains permissive for these fields so an existing config can still start the Gateway after an update.
+
 ### Provider credentials
 
 Provider media understanding uses the same auth resolution as normal model calls: auth profiles, environment variables, then `models.providers.<providerId>.apiKey`. `tools.media.models[]` entries do not accept an inline `apiKey` field.
@@ -254,6 +256,8 @@ Per-capability `attachments` controls which attachments are processed:
 </ParamField>
 
 When `mode: "all"`, outputs are labeled `[Image 1/2]`, `[Audio 2/2]`, etc.
+
+Local attachments stay within the session's allowed media roots. Directory aliases such as macOS `/tmp` and `/private/tmp` are accepted when the opened file remains inside those roots; they do not grant access to sibling sandbox workspaces.
 
 ### File-attachment extraction
 

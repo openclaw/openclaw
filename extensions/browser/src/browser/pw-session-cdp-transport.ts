@@ -167,7 +167,9 @@ export async function connectOverCdpTransport(
           return;
         }
         try {
-          onMessage(message);
+          void Promise.resolve(onMessage(message)).catch((error: unknown) => {
+            closeTransportSocket(formatErrorMessage(error));
+          });
         } catch (error) {
           closeTransportSocket(formatErrorMessage(error));
         }

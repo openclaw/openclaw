@@ -326,6 +326,8 @@ describe("codex web search provider", () => {
       "openai_base_url=http://127.0.0.1:44080/v1",
       "-c",
       "model_catalog_json=/tmp/qa catalog/models.json",
+      "-c",
+      "project_root_markers=[]",
       "--listen",
       "stdio://",
     ]);

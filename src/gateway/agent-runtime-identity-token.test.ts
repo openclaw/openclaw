@@ -77,7 +77,6 @@ function rewriteSignedPayload(
 async function importRuntimeTokenModule(): Promise<
   typeof import("./agent-runtime-identity-token.js")
 > {
-  vi.resetModules();
   const runtimeToken = await import("./agent-runtime-identity-token.js");
   const stateDb = await import("../state/openclaw-state-db.js");
   reloadedStateDatabaseClosers.add(stateDb.closeOpenClawStateDatabaseForTest);
@@ -117,7 +116,6 @@ afterEach(() => {
   }
   reloadedStateDatabaseClosers.clear();
   execApprovalsStoreTesting.reset();
-  vi.resetModules();
   envSnapshot.restore();
   for (const home of tempHomes.splice(0)) {
     fs.rmSync(home, { recursive: true, force: true });
@@ -243,6 +241,7 @@ describe("agent runtime identity token", () => {
 
   it("persists the local signing secret so tokens verify across processes", async () => {
     useTempHome();
+    vi.resetModules();
     const firstProcess = await importRuntimeTokenModule();
 
     const token = await firstProcess.mintAgentRuntimeIdentityToken({
@@ -255,6 +254,7 @@ describe("agent runtime identity token", () => {
     expect(persistedToken).toEqual(expect.any(String));
     expect(persistedToken).not.toHaveLength(0);
 
+    vi.resetModules();
     const secondProcess = await importRuntimeTokenModule();
     await expect(secondProcess.verifyAgentRuntimeIdentityToken(token)).resolves.toMatchObject({
       kind: "agentRuntime",
@@ -394,6 +394,8 @@ describe("agent runtime identity token", () => {
       sessionSpawnContext: withAgentRuntimeExecutionLineage(
         {
           completionOwnerSessionKey: " agent:main:discord:direct:alice ",
+          resolvedModel: { provider: "custom", model: "custom/model" },
+          spawnModelAutoSelection: { model: "custom/custom/model", hasFallbackOrigin: true },
           inheritedToolPolicy: {
             version: 1,
             allow: [" read ", "sessions_spawn"],
@@ -427,6 +429,8 @@ describe("agent runtime identity token", () => {
       executionIdentity: parentExecutionIdentity,
       sessionSpawnContext: {
         completionOwnerSessionKey: "agent:main:discord:direct:alice",
+        resolvedModel: { provider: "custom", model: "custom/model" },
+        spawnModelAutoSelection: { model: "custom/custom/model", hasFallbackOrigin: true },
         inheritedToolPolicy: {
           version: 1,
           allow: ["read", "sessions_spawn"],
@@ -488,7 +492,7 @@ describe("agent runtime identity token", () => {
     },
   );
 
-  it("round-trips a signed private cron creator grant only with final provenance", async () => {
+  it("round-trips captured-surface grants and rejects unqualified creator grants", async () => {
     useTempHome();
     const runtimeToken = await importRuntimeTokenModule();
     const run = operationalRun();
@@ -512,7 +516,7 @@ describe("agent runtime identity token", () => {
         operationalRunInstance: run.operationalRunInstance,
         cronCreatorAuthorityGrant,
       }),
-    ).rejects.toThrow("require final tool-surface provenance");
+    ).rejects.toThrow("require tool-surface or authenticated-requester provenance");
     const managementToken = await runtimeToken.mintAgentRuntimeIdentityToken({
       agentId: "main",
       sessionKey: "agent:main:main",
@@ -525,6 +529,61 @@ describe("agent runtime identity token", () => {
       cronManagementGrant: cronCreatorAuthorityGrant,
     });
   });
+
+  it.each(["signed", "direct"] as const)(
+    "carries a %s live native requester grant without claiming complete tool capture",
+    async (mode) => {
+      useTempHome();
+      const runtimeToken = await importRuntimeTokenModule();
+      const grants = await import("./cron-creator-authority-grant.js");
+      const run = operationalRun("run-native-requester");
+      const requester = {
+        version: 1 as const,
+        channel: "discord",
+        accountId: "work",
+        senderId: "native-current-sender",
+      };
+      const scope = grants.createCronCreatorAuthorityRunScope(
+        run.operationalRunInstance.runId,
+        { kind: "external", channel: "discord" },
+        undefined,
+        undefined,
+        requester,
+      );
+      try {
+        const grant = grants.mintCronCreatorAuthorityGrant(
+          scope,
+          undefined,
+          undefined,
+          undefined,
+          "requester",
+        );
+        const params = {
+          agentId: "main",
+          sessionKey: "agent:main:shared-discord",
+          operationalRunInstance: run.operationalRunInstance,
+          turnSourceChannel: "discord",
+          turnSourceAccountId: "work",
+          cronCreatorAuthorityGrant: grant,
+        };
+        const identity = await createIdentity(runtimeToken, mode, params);
+        expect(identity).toMatchObject({ cronCreatorAuthorityGrant: grant });
+        expect(identity).not.toHaveProperty("cronToolsAllowCapture");
+        expect(JSON.stringify(identity)).not.toContain(requester.senderId);
+        expect(JSON.stringify(scope)).not.toContain(requester.senderId);
+        expect(grants.resolveCronCreatorAuthorityGrantProvenance(grant, scope.runId)).toEqual({
+          capturesRuntimeAuthority: false,
+          channelRequester: requester,
+        });
+        grants.revokeCronCreatorAuthorityRunScope(scope);
+        await expect(createIdentity(runtimeToken, mode, params)).rejects.toThrow(
+          "require tool-surface or authenticated-requester provenance",
+        );
+      } finally {
+        grants.revokeCronCreatorAuthorityRunScope(scope);
+      }
+    },
+  );
 
   it("does not mint local credentials while rejecting invalid presented tokens", async () => {
     useTempHome();
@@ -563,6 +622,7 @@ describe("agent runtime identity token", () => {
 
   it("rejects tokens minted from a different local state directory", async () => {
     useTempHome();
+    vi.resetModules();
     const firstProcess = await importRuntimeTokenModule();
     const token = await firstProcess.mintAgentRuntimeIdentityToken({
       agentId: "main",
@@ -572,6 +632,7 @@ describe("agent runtime identity token", () => {
     expect(readExecApprovals().socket?.token).toEqual(expect.any(String));
 
     useTempHome();
+    vi.resetModules();
     const secondProcess = await importRuntimeTokenModule();
     const secondToken = await secondProcess.mintAgentRuntimeIdentityToken({
       agentId: "main",

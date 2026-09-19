@@ -412,6 +412,7 @@ describe("ClawHub plugin catalog client", () => {
         owner: {
           handle: "alice",
           displayName: "Alice",
+          official: true,
           image: "https://avatars.example.com/alice.png",
         },
         versions: {
@@ -467,6 +468,7 @@ describe("ClawHub plugin catalog client", () => {
         },
         security: {
           overview: "Exact release passed ClawHub security review.",
+          verdict: "review",
           securityAuditUrl: "https://example.com/alice/plugins/memory-plus/security-audit",
           trust: {
             scanStatus: "clean",
@@ -496,6 +498,7 @@ describe("ClawHub plugin catalog client", () => {
         handle: "alice",
         displayName: "Alice",
         imageUrl: "https://avatars.example.com/alice.png",
+        official: true,
       },
       topics: ["Retrieval"],
       createdAt: 100,
@@ -521,6 +524,7 @@ describe("ClawHub plugin catalog client", () => {
       },
       security: {
         status: "clean",
+        verdict: "review",
         auditUrl: "https://example.com/alice/plugins/memory-plus/security-audit",
         summary: "Exact release passed ClawHub security review.",
       },

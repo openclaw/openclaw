@@ -3,7 +3,7 @@ import type { Bot } from "grammy";
 import { isChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { createTelegramPromptContextProjectionSequence } from "../prompt-context-projection.js";
+import { createObservedPromptContextSequence } from "./delivery.test-support.js";
 const { loadWebMedia } = vi.hoisted(() => ({
   loadWebMedia: vi.fn(),
 }));
@@ -164,19 +164,6 @@ function mockPhotoMedia(count = 2) {
   return Array.from({ length: count }, (_, index) => {
     mockMediaLoad(`photo-${index}.jpg`, "image/jpeg", `photo-${index}`);
     return `https://example.com/photo-${index}.jpg`;
-  });
-}
-
-function createObservedPromptContextSequence(
-  record: (value: unknown) => void,
-  source?: { transcriptMessageId: string },
-) {
-  return createTelegramPromptContextProjectionSequence({
-    ...(source ? { source } : {}),
-    record: async (value) => {
-      record(value);
-      return true;
-    },
   });
 }
 
@@ -476,7 +463,7 @@ describe("deliverReplies", () => {
       bot,
     });
 
-    expect(result).toEqual({ delivered: true });
+    expect(result).toMatchObject({ delivered: true });
     expect(runtime.error).not.toHaveBeenCalled();
     expect(setMessageReaction).toHaveBeenCalledWith("123", 456, [{ type: "emoji", emoji: "🔥" }]);
     if (text) {
@@ -1188,7 +1175,7 @@ describe("deliverReplies", () => {
           transcriptMirror,
           promptContextSequence,
         }),
-      ).resolves.toEqual({ delivered: true });
+      ).resolves.toMatchObject({ delivered: true });
       await promptContextSequence.finish();
 
       expect(sendMediaGroup).toHaveBeenCalledOnce();
@@ -1362,7 +1349,7 @@ describe("deliverReplies", () => {
         runtime,
         bot: createBot({ sendMediaGroup, sendPhoto, sendDocument }),
       }),
-    ).resolves.toEqual({ delivered: true });
+    ).resolves.toMatchObject({ delivered: true });
 
     expect(sendMediaGroup).toHaveBeenCalledOnce();
     expect(sendPhoto).toHaveBeenCalledTimes(2);
@@ -1706,7 +1693,7 @@ describe("deliverReplies", () => {
         textMode: "html",
         transcriptMirror,
       }),
-    ).resolves.toEqual({ delivered: true });
+    ).resolves.toMatchObject({ delivered: true });
 
     expect(sendPhoto).toHaveBeenCalledOnce();
     expect(mockCallArg(sendPhoto, 0, 2)).toHaveProperty("caption", undefined);
@@ -1738,7 +1725,7 @@ describe("deliverReplies", () => {
         textMode: "html",
         transcriptMirror,
       }),
-    ).resolves.toEqual({ delivered: true });
+    ).resolves.toMatchObject({ delivered: true });
 
     expect(sendPhoto).toHaveBeenCalledTimes(2);
     expectRecordFields(mockCallArg(sendPhoto, 0, 2), { caption: invisibleText });
@@ -2158,7 +2145,11 @@ describe("deliverReplies", () => {
     }
     expect(sendMessage).toHaveBeenCalledTimes(2);
     expect(observed.deliveryResult.messageIds).toEqual(["41", "42"]);
-    expect(observed.deliveryResult.receipt?.threadId).toBe("43");
+    expect(observed.deliveryResult.receipt?.threadId).toBeUndefined();
+    expect(observed.deliveryResult.receipt?.parts).toEqual([
+      expect.objectContaining({ platformMessageId: "41", threadId: "42" }),
+      expect.objectContaining({ platformMessageId: "42", threadId: "43" }),
+    ]);
     expect(observer).toHaveBeenCalledOnce();
     expect(recordSentMessage).toHaveBeenCalledOnce();
   });
@@ -3139,7 +3130,7 @@ describe("deliverReplies", () => {
         textMode: "html",
         transcriptMirror,
       }),
-    ).resolves.toEqual({ delivered: true });
+    ).resolves.toMatchObject({ delivered: true });
 
     expect(sendVoice).toHaveBeenCalledTimes(2);
     expect(sendMessage).toHaveBeenCalledTimes(2);

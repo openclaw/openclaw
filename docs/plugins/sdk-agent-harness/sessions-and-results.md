@@ -102,6 +102,14 @@ yourself.
 This keeps text, image, video, music, TTS, approval, and messaging-tool
 outputs on the same delivery path as OpenClaw-backed runs.
 
+For successful `sessions_spawn` results, use `normalizeAcceptedSessionSpawnResult`
+from `openclaw/plugin-sdk/agent-harness-tool-runtime` and retain its
+`AcceptedSessionSpawn` in the attempt's `acceptedSessionSpawns`. Capture the
+original result before middleware changes its details. Preserve
+`expectsCompletionMessage`: core needs that fact to transfer child completion
+delivery when the requester yields. The helper returns `null` for an unaccepted
+or incomplete receipt and treats missing completion intent as `false`.
+
 Set `AgentHarnessAttemptResult.hostOwnedToolMediaUrls` only for native artifacts
 that the trusted harness runtime created and persisted itself. Every entry must
 also appear in `toolMediaUrls`. Never include model-selected dynamic-tool or

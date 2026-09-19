@@ -1,10 +1,14 @@
 // Maintenance preserve providers protect runtime-owned sessions from pruning/capping.
 import {
   collectActiveSessionWorkAdmissions,
-  getActiveSessionLifecycleMutationCount,
-  isSessionLifecycleMutationActive,
+  collectActiveSessionLifecycleMutationIdentities,
 } from "../../sessions/session-lifecycle-admission.js";
 import { normalizeStoreSessionKey } from "./store-entry.js";
+import {
+  collectSessionWorkAdmissionKeysFromSnapshot,
+  resolveSessionMaintenancePreserveKeys,
+  type SessionMaintenancePreservationSnapshot,
+} from "./store-maintenance-preserve-snapshot.js";
 import type { SessionEntry } from "./types.js";
 
 /** Provider hook for session keys that maintenance/pruning should preserve. */
@@ -62,27 +66,21 @@ export function collectActiveSessionWorkAdmissionKeys(params: {
   storePath: string;
   store: Record<string, SessionEntry>;
 }): Set<string> | undefined {
-  const activeIdentities =
-    collectActiveSessionWorkAdmissions().get(params.storePath) ?? new Set<string>();
-  if (activeIdentities.size === 0) {
-    return undefined;
-  }
-  const normalizedIdentities = new Set(
-    Array.from(activeIdentities, (identity) => normalizeStoreSessionKey(identity)),
-  );
-  const keys = new Set<string>();
-  for (const [key, entry] of Object.entries(params.store)) {
-    if (
-      normalizedIdentities.has(normalizeStoreSessionKey(key)) ||
-      activeIdentities.has(entry.sessionId)
-    ) {
-      // Maintenance iterates the persisted keys verbatim, while admissions
-      // normally use canonical identities. Preserve both representations.
-      keys.add(key);
-      keys.add(normalizeStoreSessionKey(key));
-    }
-  }
+  const keys = collectSessionWorkAdmissionKeysFromSnapshot(params.store, [
+    ...(collectActiveSessionWorkAdmissions().get(params.storePath) ?? []),
+  ]);
   return keys.size > 0 ? keys : undefined;
+}
+
+/** Capture live parent owners before dispatch; no protection registry is copied into the worker. */
+export function captureSessionMaintenancePreservation(
+  storePath: string,
+): SessionMaintenancePreservationSnapshot {
+  return {
+    providerKeys: [...(collectSessionMaintenancePreserveKeys() ?? [])].toSorted(),
+    workIdentities: [...(collectActiveSessionWorkAdmissions().get(storePath) ?? [])].toSorted(),
+    lifecycleIdentities: collectActiveSessionLifecycleMutationIdentities(storePath),
+  };
 }
 
 /** Collects runtime, active-work, and lifecycle keys protected from automatic maintenance. */
@@ -91,23 +89,9 @@ export function collectSessionMaintenancePreserveKeysForStore(params: {
   store: Record<string, SessionEntry>;
   baseKeys?: Iterable<string | undefined>;
 }): Set<string> | undefined {
-  const keys = collectSessionMaintenancePreserveKeys(params.baseKeys) ?? new Set<string>();
-  for (const key of collectActiveSessionWorkAdmissionKeys({
-    storePath: params.storePath,
-    store: params.store,
-  }) ?? []) {
-    keys.add(key);
-  }
-  if (getActiveSessionLifecycleMutationCount() > 0) {
-    for (const [key, entry] of Object.entries(params.store)) {
-      const normalizedKey = normalizeStoreSessionKey(key);
-      if (
-        isSessionLifecycleMutationActive(params.storePath, [key, normalizedKey, entry.sessionId])
-      ) {
-        keys.add(key);
-        keys.add(normalizedKey);
-      }
-    }
-  }
+  const keys = resolveSessionMaintenancePreserveKeys({
+    ...params,
+    snapshot: captureSessionMaintenancePreservation(params.storePath),
+  });
   return keys.size > 0 ? keys : undefined;
 }

@@ -9,6 +9,7 @@ import { isRecord as isObjectRecord } from "@openclaw/normalization-core/record-
 import { runCommandWithTimeout } from "../process/exec.js";
 import { hasErrnoCode } from "./errno.js";
 import { FsSafeError, pathExists } from "./fs-safe.js";
+import { resolveInstallWorkTimeoutMs } from "./install-mode-options.js";
 import { assertCanonicalPathWithinBase } from "./install-safe-path.js";
 import { formatNpmCommandFailureOutput } from "./install-source-utils.js";
 import { tryReadJson, writeJson } from "./json-files.js";
@@ -45,33 +46,51 @@ export function hasPackageRuntimeDependencies(manifest: {
   );
 }
 
-async function sanitizeManifestForNpmInstall(targetDir: string): Promise<void> {
+async function sanitizeManifestForNpmInstall(
+  targetDir: string,
+  omitOpenClawHostDependency: boolean,
+): Promise<() => Promise<void>> {
   const manifestPath = path.join(targetDir, "package.json");
   const parsed = await tryReadJson<unknown>(manifestPath);
   if (!isObjectRecord(parsed)) {
-    return;
+    return () => Promise.resolve();
   }
   const manifest = parsed;
+  const originalManifest = await fs.readFile(manifestPath);
+  let changed = false;
 
-  const devDependencies = manifest.devDependencies;
-  if (!isObjectRecord(devDependencies)) {
-    return;
-  }
-
-  const filteredEntries = Object.entries(devDependencies).filter(([, rawSpec]) => {
-    const spec = typeof rawSpec === "string" ? rawSpec.trim() : "";
-    return !spec.startsWith("workspace:");
-  });
-  if (filteredEntries.length === Object.keys(devDependencies).length) {
-    return;
-  }
-
-  if (filteredEntries.length === 0) {
+  // npm resolves omitted development dependencies even when it does not install them.
+  if (Object.hasOwn(manifest, "devDependencies")) {
     delete manifest.devDependencies;
-  } else {
-    manifest.devDependencies = Object.fromEntries(filteredEntries);
+    changed = true;
   }
-  await writeJson(manifestPath, manifest, { trailingNewline: true });
+
+  if (omitOpenClawHostDependency) {
+    for (const key of [
+      "dependencies",
+      "optionalDependencies",
+      "peerDependencies",
+      "peerDependenciesMeta",
+    ] as const) {
+      const dependencies = manifest[key];
+      if (!isObjectRecord(dependencies) || !Object.hasOwn(dependencies, "openclaw")) {
+        continue;
+      }
+      delete dependencies.openclaw;
+      if (Object.keys(dependencies).length === 0) {
+        delete manifest[key];
+      }
+      changed = true;
+    }
+  }
+
+  if (changed) {
+    await writeJson(manifestPath, manifest, { trailingNewline: true });
+    return async () => {
+      await fs.writeFile(manifestPath, originalManifest);
+    };
+  }
+  return () => Promise.resolve();
 }
 
 async function hideProjectNpmConfigForInstall(targetDir: string): Promise<HiddenProjectConfigFile> {
@@ -244,9 +263,11 @@ export async function installPackageDir<
   targetDir: string;
   mode: "install" | "update";
   timeoutMs: number;
+  workTimeoutMs?: number | null;
   logger?: { info?: (message: string) => void; warn?: (message: string) => void };
   copyErrorPrefix: string;
   hasDeps: boolean;
+  omitOpenClawHostDependency?: boolean;
   sourceHardlinks?: InstallSourceHardlinks;
   depsLogMessage: string;
   afterCopy?: (installedDir: string) => void | Promise<void>;
@@ -459,30 +480,54 @@ export async function installPackageDir<
 
   if (params.hasDeps) {
     try {
-      await sanitizeManifestForNpmInstall(stageDir);
-      const hiddenProjectNpmConfig = await hideProjectNpmConfigForInstall(stageDir);
-      params.logger?.info?.(params.depsLogMessage);
-      const npmRes = await (async () => {
-        try {
-          return await runCommandWithTimeout(
-            // Plugins install into isolated directories, so omitting peer deps can strip
-            // runtime requirements that npm would otherwise materialize for the package.
-            // Verified on Blacksmith Ubuntu/Node 24/npm 11: `--silent` can make npm fail
-            // with empty stdout/stderr for bad specs like `workspace:^`; `--loglevel=error`
-            // stays quiet on success while preserving the actionable npm failure text.
-            ["npm", ...createSafeNpmInstallArgs({ omitDev: true, loglevel: "error" })],
-            {
-              timeoutMs: Math.max(params.timeoutMs, 300_000),
-              cwd: stageDir,
-              env: createSafeNpmInstallEnv(process.env, { npmConfigCwd: stageDir }),
-            },
-          );
-        } finally {
-          await restoreProjectNpmConfigAfterInstall(hiddenProjectNpmConfig);
+      const restoreManifest = await sanitizeManifestForNpmInstall(
+        stageDir,
+        params.omitOpenClawHostDependency === true,
+      );
+      let npmFailure: string | undefined;
+      try {
+        const hiddenProjectNpmConfig = await hideProjectNpmConfigForInstall(stageDir);
+        params.logger?.info?.(params.depsLogMessage);
+        const npmRes = await (async () => {
+          try {
+            return await runCommandWithTimeout(
+              // Plugins install into isolated directories, so omitting peer deps can strip
+              // runtime requirements that npm would otherwise materialize for the package.
+              // Verified on Blacksmith Ubuntu/Node 24/npm 11: `--silent` can make npm fail
+              // with empty stdout/stderr for bad specs like `workspace:^`; `--loglevel=error`
+              // stays quiet on success while preserving the actionable npm failure text.
+              [
+                "npm",
+                ...createSafeNpmInstallArgs({
+                  omitDev: true,
+                  loglevel: "error",
+                  ignoreWorkspaces: true,
+                }),
+              ],
+              {
+                timeoutMs: resolveInstallWorkTimeoutMs(
+                  params.workTimeoutMs,
+                  Math.max(params.timeoutMs, 300_000),
+                ),
+                cwd: stageDir,
+                env: createSafeNpmInstallEnv(process.env, {
+                  npmConfigCwd: stageDir,
+                  ignoreWorkspaces: true,
+                }),
+              },
+            );
+          } finally {
+            await restoreProjectNpmConfigAfterInstall(hiddenProjectNpmConfig);
+          }
+        })();
+        if (npmRes.code !== 0) {
+          npmFailure = `npm install failed: ${formatNpmCommandFailureOutput(npmRes)}`;
         }
-      })();
-      if (npmRes.code !== 0) {
-        return await fail(`npm install failed: ${formatNpmCommandFailureOutput(npmRes)}`);
+      } finally {
+        await restoreManifest();
+      }
+      if (npmFailure) {
+        return await fail(npmFailure);
       }
     } catch (error) {
       return await fail(`npm install failed: ${String(error)}`, error);

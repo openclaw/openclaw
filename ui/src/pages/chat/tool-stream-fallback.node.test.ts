@@ -299,7 +299,7 @@ describe("app-tool-stream fallback lifecycle handling", () => {
       ),
       agentId: "work",
     });
-    expect(host.sessions.refreshReplacement).not.toHaveBeenCalled();
+    expect(host.sessions.reconcileMutation).not.toHaveBeenCalled();
     expect(host.sessions.state.modelOverrides).toEqual({});
   });
 

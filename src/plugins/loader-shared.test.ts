@@ -70,6 +70,7 @@ function createRecordWithBuildVersion(openclawVersion: unknown) {
       normalized: activationSource.plugins,
       activationSource,
       autoEnabledReasons: {},
+      shouldLoadModules: true,
     },
     onlyPluginIdSet: null,
     dreamingSidecar: null,

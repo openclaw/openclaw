@@ -237,6 +237,7 @@ function createOAuthHandler(region: MiniMaxRegion) {
         progress,
         region,
         ...(ctx.signal ? { signal: ctx.signal } : {}),
+        ...(ctx.assertCurrent ? { assertCurrent: ctx.assertCurrent } : {}),
       });
 
       progress.stop("MiniMax OAuth complete");

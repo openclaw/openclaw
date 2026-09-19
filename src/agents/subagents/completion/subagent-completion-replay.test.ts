@@ -3,6 +3,7 @@ import { createDeferred } from "../../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
 import { resolvePreferredOpenClawTmpDir } from "../../../infra/tmp-openclaw-dir.js";
 import { getActiveGatewayRootWorkCount } from "../../../process/gateway-work-admission.js";
+import { closeOpenClawAgentDatabasesAsync } from "../../../state/openclaw-agent-db.js";
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
@@ -38,6 +39,9 @@ describe("completed requester delivery replay fence", () => {
   });
 
   afterEach(async () => {
+    for (const dir of tempDirs.dirs) {
+      await closeOpenClawAgentDatabasesAsync(dir);
+    }
     await closeOpenClawStateDatabaseAsync();
     subagentRuns.clear();
     resetTaskRegistryForTests({ persist: false });
@@ -200,6 +204,9 @@ describe("completed requester delivery replay fence", () => {
         terminalReply: { disposition: "visible", text: "canonical result" },
         triggerCleanup: false,
       });
+      // Admission must start from a real pending obligation, not a marker-less row.
+      input.subagent.requesterSettleWake = { status: "pending", attemptCount: 0 };
+      saveSubagentRegistryToSqlite(subagentRuns);
       driver.controller.resumeRequesterSettleWake(input.subagent.runId, input.subagent);
       await admitted.promise;
       expect(

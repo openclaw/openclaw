@@ -126,6 +126,8 @@ export async function augmentModelCatalogWithAgentHarness(params: {
   workspaceDir: string;
   defaultProvider: string;
   defaultModel?: string;
+  /** Concrete runtime already selected for a turn; omitted for configured inventory reads. */
+  agentRuntime?: string;
   snapshot: ModelCatalogSnapshot;
   /** Current route and donor facts stay separate from retained raw inventory. */
   preparedSnapshot?: ModelCatalogSnapshot;
@@ -172,14 +174,16 @@ export async function augmentModelCatalogWithAgentHarness(params: {
     const routeEntry = [...prepared.entries, ...(prepared.staticEntries ?? [])].find(
       (entry) => routeKeyOf(entry) === refKey,
     );
-    defaultRuntime = resolveAgentHarnessPolicy({
-      provider: ref.provider,
-      modelId: ref.model,
-      modelApi: routeEntry?.api,
-      modelBaseUrl: routeEntry?.baseUrl,
-      config: params.cfg,
-      agentId: params.agentId,
-    }).runtime;
+    defaultRuntime =
+      params.agentRuntime ??
+      resolveAgentHarnessPolicy({
+        provider: ref.provider,
+        modelId: ref.model,
+        modelApi: routeEntry?.api,
+        modelBaseUrl: routeEntry?.baseUrl,
+        config: params.cfg,
+        agentId: params.agentId,
+      }).runtime;
     addRuntime(defaultRuntime, ref.provider);
   }
   if (params.includePickerRuntimes) {

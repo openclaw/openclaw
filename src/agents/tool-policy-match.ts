@@ -2,6 +2,7 @@
  * Runtime matcher for sandbox tool policies. Deny patterns always win, then
  * an empty allow list means "allow everything not denied".
  */
+import { TOOL_NAME_SEPARATOR } from "./agent-bundle-mcp-names.js";
 import { compileGlobPatterns, matchesAnyGlobPattern } from "./glob-pattern.js";
 import type { SandboxToolPolicy } from "./sandbox/types.js";
 import {
@@ -9,6 +10,23 @@ import {
   normalizeToolPolicyName,
   readToolAllowlistIntersection,
 } from "./tool-policy-shared.js";
+
+/** Exclude a server before discovery only when every tool in its namespace is denied. */
+export function createMcpServerToolDenyMatcher(toolDenylist?: string[]) {
+  const denials = toolDenylist?.map(normalizeToolPolicyName) ?? [];
+  const denyAll = denials.includes("bundle-mcp") || denials.includes("group:plugins");
+  const namespaces = compileGlobPatterns({
+    // A matched prefix covers arbitrary tool suffixes only with a trailing wildcard.
+    raw: denials.filter((pattern) => pattern.endsWith("*")),
+    normalize: normalizeToolPolicyName,
+  });
+  return (safeServerName: string): boolean =>
+    denyAll ||
+    matchesAnyGlobPattern(
+      normalizeToolPolicyName(safeServerName + TOOL_NAME_SEPARATOR),
+      namespaces,
+    );
+}
 
 /** Snapshot one synchronous filtering operation; execution checks must prepare current policy. */
 export function createToolPolicyMatcher(

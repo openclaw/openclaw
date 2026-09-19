@@ -162,3 +162,28 @@ export async function dispatchRestartRecoveryUntilStarted(params: {
     })),
   ]);
 }
+
+export type RestartRecoveryTerminalStatus = "error" | "ok" | "timeout";
+
+export function normalizeRestartRecoveryTerminalStatus(
+  value: unknown,
+): RestartRecoveryTerminalStatus | undefined {
+  return value === "error" || value === "ok" || value === "timeout" ? value : undefined;
+}
+
+export async function probeRestartRecoveryTerminalStatus(
+  runId: string,
+  gatewayRuntime: GatewayRecoveryRuntime,
+): Promise<RestartRecoveryTerminalStatus | undefined> {
+  try {
+    const result = await gatewayRuntime.waitForAgent<{ endedAt?: unknown; status?: unknown }>(
+      { runId, timeoutMs: 0 },
+      2_000,
+    );
+    const status = normalizeRestartRecoveryTerminalStatus(result.status);
+    // A zero-time wait also reports timeout for active or unknown work.
+    return status === "timeout" && typeof result.endedAt !== "number" ? undefined : status;
+  } catch {
+    return undefined;
+  }
+}

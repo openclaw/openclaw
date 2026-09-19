@@ -2,7 +2,7 @@
 import fs from "node:fs";
 import Module from "node:module";
 import path from "node:path";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { openRootFileSync } from "../infra/boundary-file-read.js";
 import { sameFileIdentity } from "../infra/fs-safe-advanced.js";
 import { isPathInside } from "../infra/path-guards.js";
@@ -10,6 +10,7 @@ import { toSafeImportPath } from "../shared/import-specifier.js";
 import { createJiti } from "./jiti-factory.js";
 import {
   clearPluginModuleRequireCache,
+  isPluginSourceModulePath,
   tryNativeRequireJavaScriptModule,
   tryNativeRequireModule,
 } from "./native-module-require.js";
@@ -24,6 +25,7 @@ import {
 import { getPluginInstance } from "./plugin-instance-scope.js";
 import type { PluginOrigin } from "./plugin-origin.types.js";
 import { installOpenClawInternalCorePackageNativeResolver } from "./plugin-sdk-native-resolver.js";
+import { visitPluginSourceReferences } from "./plugin-source-references.js";
 import { resolvePluginRuntimeRecord } from "./runtime-context.js";
 import { getPluginRuntimeGatewayRequestScope } from "./runtime/gateway-request-scope.js";
 import {
@@ -90,6 +92,118 @@ function toSourceTransformImportPath(specifier: string): string {
   return toSafeImportPath(specifier);
 }
 
+function resolveAutomaticJitiTsconfig(loaderFilename: string): string | undefined {
+  const enabled = process.env.JITI_TSCONFIG_PATHS;
+  if (enabled !== "1" && enabled !== "true") {
+    return undefined;
+  }
+  let directory = path.dirname(loaderFilename);
+  while (true) {
+    const config = path.join(directory, "tsconfig.json");
+    if (fs.existsSync(config)) {
+      return config;
+    }
+    const parent = path.dirname(directory);
+    if (parent === directory) {
+      return undefined;
+    }
+    directory = parent;
+  }
+}
+
+type BabelImportCallPath = {
+  node: {
+    callee: { type: string; name?: string };
+    arguments: unknown[];
+  };
+  scope: { getBinding(name: string): unknown };
+  replaceWith(node: unknown): void;
+};
+
+type BabelProgramPath = {
+  scope: { generateUidIdentifier(name: string): { name: string } };
+  traverse(visitor: { CallExpression(call: BabelImportCallPath): void }): void;
+  unshiftContainer(name: "body", nodes: unknown): void;
+};
+
+function createBunJitiImportCachePlugin(babel: {
+  types: {
+    callExpression(callee: unknown, args: unknown[]): unknown;
+    identifier(name: string): unknown;
+  };
+  template: { statements: { ast(source: string): unknown } };
+}) {
+  return {
+    visitor: {
+      Program: {
+        exit(program: BabelProgramPath) {
+          const calls: BabelImportCallPath[] = [];
+          program.traverse({
+            CallExpression(call) {
+              if (
+                call.node.callee.type === "Identifier" &&
+                call.node.callee.name === "jitiImport" &&
+                !call.scope.getBinding("jitiImport")
+              ) {
+                calls.push(call);
+              }
+            },
+          });
+          if (calls.length === 0) {
+            return;
+          }
+          const cache = program.scope.generateUidIdentifier("openclawJitiImports");
+          const load = program.scope.generateUidIdentifier("openclawJitiImport");
+          for (const call of calls) {
+            call.replaceWith(
+              babel.types.callExpression(babel.types.identifier(load.name), call.node.arguments),
+            );
+          }
+          program.unshiftContainer(
+            "body",
+            babel.template.statements.ast(`
+              var ${cache.name};
+              function ${load.name}(specifier, ...args) {
+                let entry = ${cache.name};
+                while (entry) {
+                  if (entry.specifier === specifier) {
+                    return entry.pending;
+                  }
+                  entry = entry.next;
+                }
+                const pending = (async () => {
+                  await 0;
+                  return jitiImport(specifier, ...args);
+                })();
+                ${cache.name} = { specifier, pending, next: ${cache.name} };
+                return pending;
+              }
+            `),
+          );
+        },
+      },
+    },
+  };
+}
+
+function preserveBunJitiDynamicImportResults(loader: ReturnType<typeof createJiti>): void {
+  if (!process.versions.bun || typeof loader.options?.transform !== "function") {
+    return;
+  }
+  const transform = loader.options.transform;
+  loader.options.transform = (options) =>
+    transform({
+      ...options,
+      babel: {
+        ...options.babel,
+        plugins: [
+          ...(Array.isArray(options.babel?.plugins) ? options.babel.plugins : []),
+          createBunJitiImportCachePlugin,
+        ],
+      },
+    });
+}
+
 function resolvePluginModuleLoaderCacheEntry(params: ResolvePluginModuleLoaderCacheEntryParams) {
   const loaderFilename = toSafeImportPath(params.loaderFilename ?? params.modulePath);
   const tryNative = params.tryNative ?? resolvePluginLoaderTryNative(params.modulePath, params);
@@ -99,6 +213,7 @@ function resolvePluginModuleLoaderCacheEntry(params: ResolvePluginModuleLoaderCa
     ? {
         cacheKey: createPluginLoaderModuleCacheKey({ tryNative, aliasMap: explicit }),
         getAliasMap: () => explicit,
+        hasSourceSdkAliases: undefined,
         getSourceTransformAliasMap: () => explicit,
         resolveAlias: (specifier: string) => explicit[specifier],
       }
@@ -118,6 +233,7 @@ function resolvePluginModuleLoaderCacheEntry(params: ResolvePluginModuleLoaderCa
   return {
     loaderFilename,
     getAliasMap: aliases.getAliasMap,
+    hasSourceSdkAliases: aliases.hasSourceSdkAliases,
     resolveAlias: aliases.resolveAlias,
     tryNative,
     transformOpenClawDependencies,
@@ -136,19 +252,57 @@ function createPluginModuleLoader(
 ): PluginModuleLoader {
   // A declined native require can leave an ESM dependency in flight. The
   // fallback must transform both the entry and OpenClaw SDK dependencies.
+  let sourceSdkAliases: boolean | undefined;
+  const hasSourceSdkAliases = () =>
+    (sourceSdkAliases ??=
+      params.hasSourceSdkAliases?.() ??
+      Object.entries(params.getAliasMap()).some(
+        ([specifier, target]) =>
+          isPluginSdkAliasSpecifier(specifier) && isPluginSourceModulePath(target),
+      ));
+  const sourceSdkReferences = new Map<string, boolean>();
+  const referencesSourceSdk = (target: string) => {
+    const cached = sourceSdkReferences.get(target);
+    if (cached !== undefined) {
+      return cached;
+    }
+    let found = false;
+    try {
+      const source = target.startsWith("file:") ? fileURLToPath(target) : target;
+      const sourceText = fs.readFileSync(source, "utf8");
+      if (!sourceText.includes("plugin-sdk/")) {
+        sourceSdkReferences.set(target, false);
+        return false;
+      }
+      const resolver = createJiti(source, { fsCache: false, moduleCache: false, tryNative: false });
+      visitPluginSourceReferences(source, sourceText, resolver, (specifier, kind) => {
+        if (kind === "asset" || !isPluginSdkAliasSpecifier(specifier)) {
+          return;
+        }
+        const sdkTarget = params.resolveAlias(specifier);
+        found ||= Boolean(sdkTarget && isPluginSourceModulePath(sdkTarget));
+      });
+    } catch {
+      // Native loading remains the error owner when source inspection is unavailable.
+    }
+    sourceSdkReferences.set(target, found);
+    return found;
+  };
+  const requiresSourceSdkTransform = (target: string) =>
+    !process.versions.bun && referencesSourceSdk(target) && hasSourceSdkAliases();
   let loadWithSourceTransform: PluginModuleLoader | undefined;
   const getLoadWithSourceTransform = () => {
     if (loadWithSourceTransform) {
       return loadWithSourceTransform;
     }
-    const jitiOptions = buildPluginLoaderJitiOptions(
-      params.sourceTransformAliasMap?.() ?? params.getAliasMap(),
-      {
-        modulePath: params.loaderFilename,
-      },
-    );
+    const aliasMap = params.sourceTransformAliasMap?.() ?? params.getAliasMap();
+    const jitiOptions = buildPluginLoaderJitiOptions(aliasMap, {
+      modulePath: params.loaderFilename,
+    });
+    const automaticTsconfig = resolveAutomaticJitiTsconfig(params.loaderFilename);
     const jitiLoader = (params.createLoader ?? createJiti)(params.loaderFilename, {
       ...jitiOptions,
+      ...(automaticTsconfig ? { tsconfigPaths: automaticTsconfig } : {}),
       // Source SDK aliases resolve outside node_modules, so Jiti's nativeModules
       // matcher misses them. Keep host state native while plugin source remains
       // transformable and reloadable within its cache generation.
@@ -169,19 +323,25 @@ function createPluginModuleLoader(
                 if (!target) {
                   return undefined;
                 }
+                if (isPluginSourceModulePath(target)) {
+                  return jitiLoader(target);
+                }
                 const native = tryNativeRequireModule(target, {
                   allowWindows: true,
+                  aliasMap: params.resolveAlias,
                   fallbackOnMissingDependency: true,
                 });
                 return native.ok ? native.moduleExport : jitiLoader(target);
               },
             },
           ),
-      nativeModules: params.transformOpenClawDependencies
-        ? jitiOptions.nativeModules.filter((moduleName) => moduleName !== "openclaw")
-        : jitiOptions.nativeModules,
+      nativeModules:
+        params.transformOpenClawDependencies || (!process.versions.bun && hasSourceSdkAliases())
+          ? jitiOptions.nativeModules.filter((moduleName) => moduleName !== "openclaw")
+          : jitiOptions.nativeModules,
       tryNative: false,
     });
+    preserveBunJitiDynamicImportResults(jitiLoader);
     loadWithSourceTransform = (target) => jitiLoader(toSourceTransformImportPath(target));
     return loadWithSourceTransform;
   };
@@ -196,7 +356,7 @@ function createPluginModuleLoader(
     // even when a retained loader is invoked from a newer operation scope.
     const loaded = withPluginCache(params.cache, () => {
       pluginModuleLoaderStats.calls += 1;
-      if (params.tryNative) {
+      if (params.tryNative && !requiresSourceSdkTransform(target)) {
         const native = tryNativeRequireJavaScriptModule(target, {
           allowWindows: true,
           aliasMap: params.resolveAlias,

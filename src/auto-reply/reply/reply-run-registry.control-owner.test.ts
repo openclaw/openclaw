@@ -1,5 +1,5 @@
-import { afterEach, describe, expect, it } from "vitest";
-import { replyRunRegistry } from "./reply-run-registry.js";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { beginReplyMessageInjectionTarget, replyRunRegistry } from "./reply-run-registry.js";
 import { resolveActiveReplyRunOwnerForSignal } from "./reply-run-registry.state.js";
 
 const sessionKey = "agent:main:voice-control";
@@ -7,6 +7,42 @@ const sessionKey = "agent:main:voice-control";
 afterEach(() => replyRunRegistry.get(sessionKey)?.complete());
 
 describe("reply run control ownership", () => {
+  it.each(["required", "optional"] as const)(
+    "keeps a mismatched input out of a %s reply owner",
+    async (terminalReplyExpectation) => {
+      const queueMessage = vi.fn(async () => {});
+      const operation = replyRunRegistry.begin({
+        sessionKey,
+        sessionId: "session-reply-expectation",
+        resetTriggered: false,
+      });
+      operation.attachBackend({
+        kind: "embedded",
+        terminalReplyExpectation,
+        cancel: vi.fn(),
+        queueMessage,
+      });
+      operation.setPhase("running");
+      const target = replyRunRegistry.resolveCurrentMessageInjectionTarget(operation.key);
+      if (!target) {
+        throw new Error("Expected a live message injection target");
+      }
+      await expect(
+        beginReplyMessageInjectionTarget(target, "different input", {
+          terminalReplyExpectation:
+            terminalReplyExpectation === "required" ? "optional" : "required",
+        }).outcome,
+      ).resolves.toEqual({ status: "rejected", reason: "reply_expectation_mismatch" });
+      expect(queueMessage).not.toHaveBeenCalled();
+      await expect(
+        beginReplyMessageInjectionTarget(target, "matching input", {
+          terminalReplyExpectation,
+        }).outcome,
+      ).resolves.toEqual({ status: "accepted" });
+      expect(queueMessage).toHaveBeenCalledOnce();
+    },
+  );
+
   it.each(["key", "sessionId"] as const)(
     "fences retained controls after its %s changes",
     (field) => {

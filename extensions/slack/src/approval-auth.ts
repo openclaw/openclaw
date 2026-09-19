@@ -1,4 +1,3 @@
-// Slack plugin module implements approval auth behavior.
 import {
   createChannelApprovalAuth,
   resolveApprovalApprovers,

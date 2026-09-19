@@ -349,56 +349,73 @@ describe("AppSidebar session mutation feedback", () => {
     });
   });
 
-  it("reconciles and stops an idle active cloud worker through its session", async () => {
-    const request = vi.fn(() => Promise.resolve({ ok: true }));
-    const { gateway, harness, sidebar, context } = await mountMutationHarness({
-      request,
-    } as unknown as GatewayBrowserClient);
-    gateway.publish({
-      hello: gatewayHelloForMethods(["sessions.reclaim"]),
-    });
-    const state = createSessionState("main", ["agent:main:main", "agent:main:a"]);
-    const row = state.result?.sessions.find((candidate) => candidate.key === "agent:main:a");
-    if (!row) {
-      throw new Error("expected cloud session row");
-    }
-    row.placement = {
-      state: "active",
-      generation: 1,
-      createdAtMs: 1,
-      updatedAtMs: 1,
-      stateChangedAtMs: 1,
-      environmentId: "environment-1",
-      activeOwnerEpoch: 1,
-      workerBundleHash: "0".repeat(64),
-      workspaceBaseManifestRef: "base-ref",
-      remoteWorkspaceDir: "/workspace",
-    };
-    harness.publishList({ result: state.result, agentId: state.agentId });
-    await sidebar.updateComplete;
+  it.each(["refreshed", "failed"] as const)(
+    "reconciles and stops an idle active cloud worker through its session (%s)",
+    async (refreshOutcome) => {
+      const request = vi.fn(() => Promise.resolve({ ok: true }));
+      const { gateway, harness, sidebar, context } = await mountMutationHarness({
+        request,
+      } as unknown as GatewayBrowserClient);
+      if (refreshOutcome === "failed") {
+        harness.reconcileMutation.mockResolvedValueOnce({
+          status: "failed",
+          error: "Stopped session refresh unavailable",
+        });
+      }
+      gateway.publish({
+        hello: gatewayHelloForMethods(["sessions.reclaim"]),
+      });
+      const state = createSessionState("main", ["agent:main:main", "agent:main:a"]);
+      const row = state.result?.sessions.find((candidate) => candidate.key === "agent:main:a");
+      if (!row) {
+        throw new Error("expected cloud session row");
+      }
+      row.placement = {
+        state: "active",
+        generation: 1,
+        createdAtMs: 1,
+        updatedAtMs: 1,
+        stateChangedAtMs: 1,
+        environmentId: "environment-1",
+        activeOwnerEpoch: 1,
+        workerBundleHash: "0".repeat(64),
+        workspaceBaseManifestRef: "base-ref",
+        remoteWorkspaceDir: "/workspace",
+      };
+      harness.publishList({ result: state.result, agentId: state.agentId });
+      await sidebar.updateComplete;
 
-    const menu = await openSessionMenu(sidebar, row.key);
-    menu.querySelector<HTMLElement>('[value="stop-cloud-worker"]')?.click();
-    const actions = await waitForConfirmDialogActions();
-    expect(document.body.querySelector("openclaw-modal-dialog")?.textContent).toContain(
-      'Stop the cloud worker for "a"?',
-    );
-    answerConfirmDialog(actions, "confirm");
+      const menu = await openSessionMenu(sidebar, row.key);
+      menu.querySelector<HTMLElement>('[value="stop-cloud-worker"]')?.click();
+      const actions = await waitForConfirmDialogActions();
+      expect(document.body.querySelector("openclaw-modal-dialog")?.textContent).toContain(
+        'Stop the cloud worker for "a"?',
+      );
+      answerConfirmDialog(actions, "confirm");
 
-    await waitForFast(() => expect(request).toHaveBeenCalledOnce());
-    expect(context.placementStartup.pause).toHaveBeenCalledExactlyOnceWith(
-      "agent:main:a",
-      "Worker stop requested. Review the initial message before retrying.",
-      { readSessionPlacementRecovery, pauseSessionPlacementRecovery },
-    );
-    expect(context.placementStartup.pause).toHaveBeenCalledBefore(request);
-    expect(request).toHaveBeenCalledWith(
-      "sessions.reclaim",
-      { key: "agent:main:a", agentId: "main" },
-      { timeoutMs: null },
-    );
-    await waitForFast(() => expect(harness.refreshReplacement).toHaveBeenCalledWith("main"));
-  });
+      await waitForFast(() => expect(request).toHaveBeenCalledOnce());
+      expect(context.placementStartup.pause).toHaveBeenCalledExactlyOnceWith(
+        "agent:main:a",
+        "Worker stop requested. Review the initial message before retrying.",
+        { readSessionPlacementRecovery, pauseSessionPlacementRecovery },
+      );
+      expect(context.placementStartup.pause).toHaveBeenCalledBefore(request);
+      expect(request).toHaveBeenCalledWith(
+        "sessions.reclaim",
+        { key: "agent:main:a", agentId: "main" },
+        { timeoutMs: null },
+      );
+      await waitForFast(() => expect(harness.reconcileMutation).toHaveBeenCalledWith("main"));
+      await waitForFast(() => {
+        const error = sidebar.querySelector("[data-sidebar-session-error]")?.textContent ?? null;
+        if (refreshOutcome === "failed") {
+          expect(error).toContain("Stopped session refresh unavailable");
+        } else {
+          expect(error).toBeNull();
+        }
+      });
+    },
+  );
 
   it("reclaims a pending cloud worker through its session", async () => {
     const request = vi.fn(() => Promise.resolve({ ok: true }));
@@ -441,7 +458,7 @@ describe("AppSidebar session mutation feedback", () => {
       { key: "agent:main:a", agentId: "main" },
       { timeoutMs: null },
     );
-    await waitForFast(() => expect(harness.refreshReplacement).toHaveBeenCalledWith("main"));
+    await waitForFast(() => expect(harness.reconcileMutation).toHaveBeenCalledWith("main"));
   });
 
   it("shows and dismisses a fixed sidebar error when a session patch is rejected", async () => {
@@ -528,7 +545,7 @@ describe("AppSidebar session mutation feedback", () => {
     });
     expect(harness.patchMany).toHaveBeenCalledOnce();
     expect(harness.patch).not.toHaveBeenCalled();
-    expect(harness.refreshReplacement).toHaveBeenCalledOnce();
+    expect(harness.reconcileMutation).toHaveBeenCalledOnce();
   });
 
   it("suppresses a late rejection after a same-client reconnect", async () => {

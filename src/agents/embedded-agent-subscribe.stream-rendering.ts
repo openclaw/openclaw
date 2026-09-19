@@ -129,8 +129,22 @@ export function createStreamRendering({
   const stripBlockTags = (
     text: string,
     stateLocal: StreamBlockState,
-    options?: { final?: boolean; completeMarkdownChunk?: boolean },
+    options?: { final?: boolean; completeMarkdownChunk?: boolean; startsAtLineStart?: boolean },
   ): string => {
+    const hasPendingPrefix = Boolean(
+      stateLocal.pendingFenceFragment || stateLocal.pendingTagFragment,
+    );
+    if (!hasPendingPrefix && options?.startsAtLineStart !== undefined) {
+      const atLineStart = options.startsAtLineStart;
+      stateLocal.fence = { ...stateLocal.fence, atLineStart };
+      if (stateLocal.thinking && !stateLocal.reasoningPendingFenceFragment) {
+        stateLocal.reasoningFence = { ...stateLocal.reasoningFence, atLineStart };
+      }
+      if (stateLocal.final) {
+        stateLocal.finalFence = { ...stateLocal.finalFence, atLineStart };
+      }
+    }
+    const fenceStateStart = stateLocal.fence;
     const input = `${stateLocal.pendingFenceFragment ?? ""}${stateLocal.pendingTagFragment ?? ""}${text}`;
     stateLocal.pendingFenceFragment = undefined;
     stateLocal.pendingTagFragment = undefined;
@@ -142,14 +156,13 @@ export function createStreamRendering({
       ? { text: input, pendingFenceFragment: undefined }
       : options?.completeMarkdownChunk
         ? { text: input, pendingFenceFragment: undefined }
-        : splitTrailingFenceFragment(input, stateLocal.fence?.atLineStart ?? true);
+        : splitTrailingFenceFragment(input, fenceStateStart?.atLineStart ?? true);
     stateLocal.pendingFenceFragment = pendingFenceFragment;
     if (!fenceInput) {
       return "";
     }
 
     const inlineStateStart = stateLocal.inlineCode ?? createInlineCodeState();
-    const fenceStateStart = stateLocal.fence;
     const initialCodeSpans = buildCodeSpanIndex(fenceInput, inlineStateStart, fenceStateStart);
     const { text: scanText, pendingTagFragment } = options?.final
       ? { text: fenceInput, pendingTagFragment: undefined }
@@ -363,6 +376,7 @@ export function createStreamRendering({
       assistantMessageIndex?: number;
       final?: boolean;
       completeMarkdownChunk?: boolean;
+      startsAtLineStart?: boolean;
       finalReply?: ReplyDirectiveParseResult;
     },
   ) => {
@@ -382,6 +396,7 @@ export function createStreamRendering({
             stripBlockTags(text, state.blockState, {
               final: options?.final === true,
               completeMarkdownChunk: options?.completeMarkdownChunk === true,
+              startsAtLineStart: options?.startsAtLineStart,
             }),
           )
     ).trimEnd();
@@ -548,7 +563,9 @@ export function createStreamRendering({
     if (!params.onBlockReply) {
       return undefined;
     }
-    let pendingChunk: { text: string; sourceText?: string } | undefined;
+    let pendingChunk:
+      | { text: string; sourceText?: string; startsAtLineStart?: boolean }
+      | undefined;
     if (blockChunker.hasBuffered()) {
       blockChunker.drain({
         force: true,
@@ -556,11 +573,12 @@ export function createStreamRendering({
           if (pendingChunk !== undefined) {
             emitBlockChunk(pendingChunk.text, {
               sourceText: pendingChunk.sourceText,
+              startsAtLineStart: pendingChunk.startsAtLineStart,
               assistantMessageIndex: options?.assistantMessageIndex,
               completeMarkdownChunk: true,
             });
           }
-          pendingChunk = { text, sourceText: metadata?.sourceText };
+          pendingChunk = { text, ...metadata };
         },
       });
     }
@@ -570,6 +588,7 @@ export function createStreamRendering({
       emitBlockChunk(pendingChunk?.text ?? "", {
         ...options,
         sourceText: pendingChunk?.sourceText,
+        startsAtLineStart: pendingChunk?.startsAtLineStart,
         completeMarkdownChunk: options?.final === true,
       });
     }

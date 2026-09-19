@@ -203,9 +203,9 @@ export function createSessionRosterObservations(
     }
     return { state, primaryRows, observedRows };
   };
-  const createFieldProjection = () => {
+  const prepareProjection = () => {
     const { state, primaryRows, observedRows } = captureHeldRows();
-    return (row: GatewaySessionRow, agentId?: string | null) => {
+    const projectFields = (row: GatewaySessionRow, agentId?: string | null) => {
       const key = identity(row, agentId);
       if (!key) {
         return row;
@@ -224,9 +224,20 @@ export function createSessionRosterObservations(
       }
       return current;
     };
+    return {
+      projectFields,
+      projectRows: (rows: readonly GatewaySessionRow[]): GatewaySessionRow[] =>
+        rows.map((row) => {
+          const projected = projectFields(row);
+          // Field freshness cannot change the caller's tree keys or membership.
+          return projected.key === row.key
+            ? projected
+            : inheritRow({ ...projected, key: row.key }, projected);
+        }),
+    };
   };
   const projectFields = (row: GatewaySessionRow, agentId?: string | null) =>
-    createFieldProjection()(row, agentId);
+    prepareProjection().projectFields(row, agentId);
   const heldRowsFor = (
     row: GatewaySessionRow,
     agentId?: string | null,
@@ -431,7 +442,7 @@ export function createSessionRosterObservations(
     const readRevisions = new WeakMap(
       rows.map((row) => [row, issuedRevision ?? rowRevision(row)] as const),
     );
-    const project = createFieldProjection();
+    const { projectFields: project } = prepareProjection();
     return stageManagedResults(
       scope,
       (entry) => merge(entry.snapshot.result, managed ? rows : [], entry.snapshot.agentId, agentId),
@@ -544,19 +555,9 @@ export function createSessionRosterObservations(
       return undefined;
     },
     projectFields,
-    projectRows: (rows: readonly GatewaySessionRow[]): GatewaySessionRow[] => {
-      if (rows.length === 0) {
-        return [];
-      }
-      const project = createFieldProjection();
-      return rows.map((row) => {
-        const projected = project(row);
-        // Field freshness cannot change the caller's tree keys or membership.
-        return projected.key === row.key
-          ? projected
-          : inheritRow({ ...projected, key: row.key }, projected);
-      });
-    },
+    prepareProjection,
+    projectRows: (rows: readonly GatewaySessionRow[]): GatewaySessionRow[] =>
+      rows.length === 0 ? [] : prepareProjection().projectRows(rows),
     stageObservedRows,
     stageManagedResults,
     rowRevision,
@@ -581,7 +582,7 @@ export function createSessionRosterObservations(
       terminal: SessionRunTerminal,
       event: { scope: SessionConnectionScope | null; revision: number },
     ) {
-      const project = createFieldProjection();
+      const { projectFields: project } = prepareProjection();
       const reconcileRow = (agentId: string | null) =>
         createSessionRunTerminalReconciler(terminal, {
           agentId: (row) => owner(row, agentId),

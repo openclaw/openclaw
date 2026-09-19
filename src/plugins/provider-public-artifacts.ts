@@ -21,7 +21,7 @@ import { loadValidatedPublicSurfaceModule } from "./public-surface-loader.js";
 import { resolvePluginRootPublicSurfacePath } from "./public-surface-runtime.js";
 import { resolvePluginRuntimeRecord } from "./runtime-context.js";
 
-export { listTrustedExternalProviderPolicyOwners };
+export { listProviderPolicyOwners } from "./provider-policy-owners.js";
 
 type ProviderPolicyRegistry = { plugins: readonly PluginManifestRecord[] };
 
@@ -92,18 +92,16 @@ export function resolveProviderPolicySurface(
     return null;
   }
   return (
-    loadTrustedExternalProviderPolicyArtifacts(
+    loadProviderPolicyArtifacts(
       listTrustedExternalProviderPolicyOwners(providerId, options.manifestRegistry),
     )?.surface ?? null
   );
 }
 
-/** Loads the first usable policy surface from caller-selected trusted owners. */
-export function loadTrustedExternalProviderPolicyArtifacts(
-  owners: readonly PluginManifestRecord[],
-) {
+/** Loads the first usable policy surface from caller-selected admitted owners. */
+export function loadProviderPolicyArtifacts(owners: readonly PluginManifestRecord[]) {
   for (const owner of owners) {
-    const surface = resolveTrustedExternalProviderPolicySurface(owner);
+    const surface = resolveProviderPolicySurfaceForOwner(owner);
     if (surface) {
       return { owner, surface };
     }
@@ -112,11 +110,11 @@ export function loadTrustedExternalProviderPolicyArtifacts(
   return owner ? { owner, surface: null } : null;
 }
 
-/** Loads policy hooks from a host-verified official external plugin install. */
-function resolveTrustedExternalProviderPolicySurface(
+/** Loads policy hooks from the selected bundled or host-verified official owner. */
+export function resolveProviderPolicySurfaceForOwner(
   record: PluginManifestRecord,
 ): ProviderPolicySurface | null {
-  if (record.trustedOfficialInstall !== true) {
+  if (record.origin !== "bundled" && record.trustedOfficialInstall !== true) {
     return null;
   }
   const modulePath = resolvePluginRootPublicSurfacePath({

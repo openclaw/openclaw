@@ -18,6 +18,11 @@ import {
   setupGatewaySessionsHandlerTestHarness,
 } from "./test/server-sessions.test-helpers.js";
 
+afterEach(() => {
+  closeOpenClawStateDatabaseForTest();
+});
+
+// Register after the reset so stacked teardown drains fixture stores first.
 const { createSelectedGlobalSessionStore } = setupGatewaySessionsHandlerTestHarness();
 
 const mainModel = { id: "main-only", name: "Main Model", provider: "main-provider" };
@@ -29,10 +34,6 @@ function createAgentModelCatalogLoader() {
     return { entries, routeVariants: entries };
   });
 }
-
-afterEach(() => {
-  closeOpenClawStateDatabaseForTest();
-});
 
 const mainRef = "main-provider/main-only";
 const workRef = "work-provider/work-only";

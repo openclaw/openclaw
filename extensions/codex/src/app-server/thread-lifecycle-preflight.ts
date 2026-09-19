@@ -111,7 +111,7 @@ export async function prepareCodexThreadLifecyclePreflight(params: CodexStartOrR
   const nativeSkillIsolation = await lifecycleTiming.measure("native-skill-isolation", () =>
     resolveCodexNativeSkillIsolation({
       client: params.client,
-      codexHome: params.appServer.start.env?.CODEX_HOME,
+      codexHome: params.appServer.start.codexHome ?? params.appServer.start.env?.CODEX_HOME,
       cwd: params.cwd,
       home: params.appServer.start.env?.HOME,
       signal: params.signal,

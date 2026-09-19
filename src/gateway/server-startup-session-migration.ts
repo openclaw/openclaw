@@ -1,6 +1,9 @@
 import { hasSubagentSessionRecoveryOwner } from "../agents/subagents/registry/subagent-session-reconciliation.js";
 import { patchSessionEntryCore } from "../config/sessions/session-accessor.js";
-import { readSessionEntriesByStatus } from "../config/sessions/session-accessor.sqlite-status.js";
+import {
+  hasSessionEntriesByStatus,
+  readSessionEntriesByStatus,
+} from "../config/sessions/session-accessor.sqlite-status.js";
 import {
   runSessionStartupMigration,
   type SessionStartupMigrationLogger,
@@ -15,6 +18,7 @@ import {
   isIncognitoSessionKey,
   resolveAgentIdFromSessionKey,
 } from "../routing/session-key.js";
+import { withOpenClawAgentDatabaseReadOnly } from "../state/openclaw-agent-db-readonly.js";
 import {
   openOpenClawAgentDatabase,
   type OpenClawAgentDatabaseOptions,
@@ -53,17 +57,30 @@ function isUnsettledPredecessor(entry: InternalSessionEntry): boolean {
 async function reconcileStartupOrphans(
   database: OpenClawAgentDatabaseOptions,
   log: SessionStartupMigrationLogger,
+  assertCurrent?: () => void,
 ) {
   const env = database.env ?? process.env;
   const statePath = resolveOpenClawStateSqlitePath(env);
   if (!hasGatewayLifecycleCoordinator({ databasePath: statePath })) {
     return;
   }
+  try {
+    const running = withOpenClawAgentDatabaseReadOnly(
+      (connection) => hasSessionEntriesByStatus(connection, ["running"]),
+      database,
+    );
+    if (running.found && !running.value) {
+      return;
+    }
+  } catch {
+    // The writable owner retains schema repair and integrity diagnosis for uncertain reads.
+  }
   const lock = await readActiveGatewayLockIdentity({ env, requireInspection: true });
   if (lock?.pid !== process.pid || !lock.ownerId) {
     return;
   }
   const assertGatewayOwner = () => {
+    assertCurrent?.();
     const lease = readGatewayOwnerLease({ env, current: true });
     if (
       !hasGatewayLifecycleCoordinator({ databasePath: statePath }) ||
@@ -135,6 +152,8 @@ async function reconcileStartupOrphans(
 export async function runStartupSessionMigration(params: {
   cfg: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
+  agentIds?: ReadonlySet<string>;
+  assertCurrent?: () => void;
   log: SessionStartupMigrationLogger;
   deps?: SessionMigrationDeps;
 }): Promise<void> {
@@ -144,15 +163,19 @@ export async function runStartupSessionMigration(params: {
     ...params,
     handoffDatabase: async (database) => {
       try {
-        await reconcileStartupOrphans(database, params.log);
+        await reconcileStartupOrphans(database, params.log, params.assertCurrent);
       } catch (error) {
+        params.assertCurrent?.();
         params.log.warn(
           `session: retained startup orphans because ownership could not be verified: ${String(error)}`,
         );
       }
       reconcile ??= (await import("../config/sessions/session-transcript-reconcile.js"))
         .reconcileSessionTranscriptIndexes;
-      reconciledSessions += (await reconcile(database)).reconciledSessions;
+      params.assertCurrent?.();
+      const result = await reconcile(database);
+      params.assertCurrent?.();
+      reconciledSessions += result.reconciledSessions;
     },
   });
   if (reconciledSessions > 0) {

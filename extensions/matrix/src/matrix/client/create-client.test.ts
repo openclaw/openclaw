@@ -1,4 +1,5 @@
 // Matrix tests cover create client plugin behavior.
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const ensureMatrixSdkLoggingConfiguredMock = vi.hoisted(() => vi.fn());
@@ -6,6 +7,8 @@ const resolveValidatedMatrixHomeserverUrlMock = vi.hoisted(() => vi.fn());
 const maybeMigrateLegacyStorageMock = vi.hoisted(() => vi.fn(async () => undefined));
 const resolveMatrixStoragePathsMock = vi.hoisted(() => vi.fn());
 const writeStorageMetaMock = vi.hoisted(() => vi.fn());
+const createSyncStoreMock = vi.hoisted(() => vi.fn());
+const preparedSyncStore = vi.hoisted(() => ({ hasSavedSyncFromCleanShutdown: () => true }));
 const MatrixClientMock = vi.hoisted(() => vi.fn());
 const stateRuntimeMock = vi.hoisted(() => ({
   resolveStateDir: vi.fn(),
@@ -27,6 +30,10 @@ vi.mock("./storage.js", () => ({
   maybeMigrateLegacyStorage: maybeMigrateLegacyStorageMock,
   resolveMatrixStoragePaths: resolveMatrixStoragePathsMock,
   writeStorageMeta: writeStorageMetaMock,
+}));
+
+vi.mock("./file-sync-store.js", () => ({
+  SqliteBackedMatrixSyncStore: { create: createSyncStoreMock },
 }));
 
 vi.mock("../sdk.js", () => ({
@@ -51,6 +58,7 @@ describe("createMatrixClient", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    createSyncStoreMock.mockResolvedValue(preparedSyncStore);
     ensureMatrixSdkLoggingConfiguredMock.mockReturnValue(undefined);
     resolveValidatedMatrixHomeserverUrlMock.mockResolvedValue("https://matrix.example.org");
     resolveMatrixStoragePathsMock.mockReturnValue(storagePaths);
@@ -83,7 +91,7 @@ describe("createMatrixClient", () => {
       encryption: undefined,
       localTimeoutMs: undefined,
       initialSyncLimit: undefined,
-      storageRootDir: storagePaths.rootDir,
+      syncStore: preparedSyncStore,
       recoveryKeyPath: storagePaths.recoveryKeyPath,
       idbSnapshotPath: storagePaths.idbSnapshotPath,
       cryptoDatabasePrefix: "openclaw-matrix-default-token-hash",
@@ -92,6 +100,25 @@ describe("createMatrixClient", () => {
       dispatcherPolicy: undefined,
       stateRuntime: stateRuntimeMock,
     });
+  });
+
+  it("loads the persisted replay decision before constructing or returning the client", async () => {
+    const hydration = createDeferred<typeof preparedSyncStore>();
+    createSyncStoreMock.mockReturnValue(hydration.promise);
+    const pending = createMatrixClient({
+      homeserver: "https://matrix.example.org",
+      userId: "@bot:example.org",
+      accessToken: "tok",
+    });
+    await vi.waitFor(() => expect(createSyncStoreMock).toHaveBeenCalled());
+    expect(MatrixClientMock).not.toHaveBeenCalled();
+    hydration.resolve(preparedSyncStore);
+    await pending;
+    expect(MatrixClientMock).toHaveBeenCalledWith(
+      "https://matrix.example.org",
+      "tok",
+      expect.objectContaining({ syncStore: preparedSyncStore }),
+    );
   });
 
   it("derives ssrfPolicy from allowPrivateNetwork when no explicit policy is provided", async () => {
@@ -110,7 +137,7 @@ describe("createMatrixClient", () => {
       encryption: undefined,
       localTimeoutMs: undefined,
       initialSyncLimit: undefined,
-      storageRootDir: undefined,
+      syncStore: undefined,
       recoveryKeyPath: undefined,
       idbSnapshotPath: undefined,
       cryptoDatabasePrefix: undefined,
@@ -139,7 +166,7 @@ describe("createMatrixClient", () => {
       encryption: undefined,
       localTimeoutMs: undefined,
       initialSyncLimit: undefined,
-      storageRootDir: undefined,
+      syncStore: undefined,
       recoveryKeyPath: undefined,
       idbSnapshotPath: undefined,
       cryptoDatabasePrefix: undefined,
@@ -165,7 +192,7 @@ describe("createMatrixClient", () => {
       encryption: undefined,
       localTimeoutMs: undefined,
       initialSyncLimit: undefined,
-      storageRootDir: undefined,
+      syncStore: undefined,
       recoveryKeyPath: undefined,
       idbSnapshotPath: undefined,
       cryptoDatabasePrefix: undefined,
@@ -193,7 +220,7 @@ describe("createMatrixClient", () => {
       encryption: undefined,
       localTimeoutMs: undefined,
       initialSyncLimit: undefined,
-      storageRootDir: undefined,
+      syncStore: undefined,
       recoveryKeyPath: undefined,
       idbSnapshotPath: undefined,
       cryptoDatabasePrefix: undefined,

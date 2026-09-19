@@ -2,7 +2,12 @@ import { expectDefined } from "@openclaw/normalization-core";
 // Transcript filter for removing heartbeat-only prompt/ack artifacts.
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString as readString } from "@openclaw/normalization-core/string-coerce";
-import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
+import {
+  collectToolCallIds,
+  isContractToolCallBlock,
+  isContractToolResultBlock,
+  readToolCallName,
+} from "../shared/tool-block-contract.js";
 import { HEARTBEAT_RESPONSE_TOOL_NAME } from "./heartbeat-tool-response.js";
 import {
   HEARTBEAT_RESPONSE_TOOL_INSTRUCTIONS,
@@ -23,68 +28,20 @@ const HEARTBEAT_TASK_PROMPT_COMPLETIONS = [
   HEARTBEAT_RESPONSE_TOOL_INSTRUCTIONS,
   `After completing all due tasks, use ${HEARTBEAT_RESPONSE_TOOL_NAME}`,
 ];
-const TOOL_CALL_BLOCK_TYPES = new Set([
-  "toolCall",
-  "functionCall",
-  "toolUse",
-  "tool_call",
-  "function_call",
-  "tool_use",
-]);
-const TOOL_RESULT_BLOCK_TYPES = new Set([
-  "toolResult",
-  "tool_result",
-  "tool_result_error",
-  "function_call_output",
-]);
 type HeartbeatTranscriptMessage = { role: string; content?: unknown };
-
-function readNestedString(record: Record<string, unknown>, key: string): string | undefined {
-  const value = record[key];
-  const direct = readString(value);
-  if (direct) {
-    return direct;
-  }
-  if (!isRecord(value)) {
-    return undefined;
-  }
-  return readString(value.name);
-}
 
 function collectToolCallBlocks(content: unknown): Array<Record<string, unknown>> {
   if (!Array.isArray(content)) {
     return [];
   }
-  return content.filter(
-    (block): block is Record<string, unknown> =>
-      isRecord(block) && TOOL_CALL_BLOCK_TYPES.has(readString(block.type) ?? ""),
-  );
+  return content.filter(isContractToolCallBlock);
 }
 
 function collectToolResultBlocks(content: unknown): Array<Record<string, unknown>> {
   if (!Array.isArray(content)) {
     return [];
   }
-  return content.filter(
-    (block): block is Record<string, unknown> =>
-      isRecord(block) && TOOL_RESULT_BLOCK_TYPES.has(readString(block.type) ?? ""),
-  );
-}
-
-function readToolCallName(block: Record<string, unknown>): string | undefined {
-  return readString(block.name) ?? readNestedString(block, "function");
-}
-
-function collectToolCallIds(block: Record<string, unknown>): string[] {
-  const ids = [
-    readString(block.call_id),
-    readString(block.tool_call_id),
-    readString(block.toolCallId),
-    readString(block.tool_use_id),
-    readString(block.toolUseId),
-    readString(block.id),
-  ].filter((id): id is string => Boolean(id));
-  return uniqueStrings(ids);
+  return content.filter(isContractToolResultBlock);
 }
 
 function readNestedToolCallArguments(record: Record<string, unknown>): unknown {
@@ -183,9 +140,7 @@ function isEmbeddedToolResultOnlyContent(content: unknown): boolean {
   return (
     Array.isArray(content) &&
     content.length > 0 &&
-    content.every(
-      (block) => isRecord(block) && TOOL_RESULT_BLOCK_TYPES.has(readString(block.type) ?? ""),
-    )
+    content.every((block) => isContractToolResultBlock(block))
   );
 }
 
@@ -244,7 +199,7 @@ function collectSuccessfulToolResultCallIds(message: {
       ids.push(...collectToolCallIds(block));
     }
   }
-  return uniqueStrings(ids);
+  return [...new Set(ids)];
 }
 
 function isRealNonHeartbeatUserMessage(

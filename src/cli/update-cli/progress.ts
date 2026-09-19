@@ -233,9 +233,15 @@ function formatStepStatus(step: {
 export function printResult(
   result: UpdateRunResult,
   opts: UpdateCommandOptions,
-  reportHints: { doctorHint?: string | null; nextAction?: string } = {},
+  reportHints: {
+    doctorHint?: string | null;
+    nextAction?: string;
+    record?: UpdateRunRecord;
+  } = {},
 ): void {
-  const run = result.runId ? getUpdateRun(result.runId, { env: opts.run?.env }) : undefined;
+  const run =
+    reportHints.record ??
+    (result.runId ? getUpdateRun(result.runId, { env: opts.run?.env }) : undefined);
   if (opts.json) {
     defaultRuntime.writeJson({ ...result, ...(run ? { run } : {}) });
     return;
@@ -243,7 +249,10 @@ export function printResult(
   if (result.runId) {
     activeUpdateProgress.get(result.runId)?.(run);
   }
-  const report = renderUpdateRunReport(run ?? updateRunReportInputFromResult(result), reportHints);
+  const report = renderUpdateRunReport(run ?? updateRunReportInputFromResult(result), {
+    ...reportHints,
+    mode: result.mode === "unknown" ? run?.target.kind : result.mode,
+  });
   defaultRuntime.log("");
   defaultRuntime.log(theme.heading(report.headline));
   for (const line of report.lines) {

@@ -38,31 +38,37 @@ describe("workspace mutation authority", () => {
         generation.abort(new Error("Workspace operation cancelled"));
       }
     };
-    const realOpen = fs.open.bind(fs);
-    vi.spyOn(fs, "open").mockImplementation(async (...args) => {
-      const handle = await realOpen(...args);
-      const [target, flags] = args;
-      if (
-        kind === "append" &&
-        String(target) === filePath &&
-        typeof flags === "number" &&
-        (flags & constants.O_APPEND) !== 0
-      ) {
-        const read = handle.read.bind(handle);
-        handle.read = (async (...readArgs: Parameters<typeof read>) => {
-          const result = await read(...readArgs);
-          finishPreparation();
-          return result;
-        }) as typeof handle.read;
-      } else if (String(target) !== filePath && path.dirname(String(target)) === root) {
-        const sync = handle.sync.bind(handle);
-        handle.sync = async () => {
-          await sync();
-          finishPreparation();
-        };
-      }
-      return handle;
-    });
+    if (kind === "append") {
+      const realOpen = fs.open.bind(fs);
+      vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+        const handle = await realOpen(...args);
+        const [target, flags] = args;
+        if (
+          String(target) === filePath &&
+          typeof flags === "number" &&
+          (flags & constants.O_APPEND) !== 0
+        ) {
+          const read = handle.read.bind(handle);
+          handle.read = (async (...readArgs: Parameters<typeof read>) => {
+            const result = await read(...readArgs);
+            finishPreparation();
+            return result;
+          }) as typeof handle.read;
+        }
+        return handle;
+      });
+    } else {
+      const targetPath = await fs.realpath(filePath);
+      __setFsSafeTestHooksForTest({
+        // Native writes do not open their staging handles through node:fs.
+        beforePinnedWriteParentAdmission: async (preparedPath) => {
+          if (preparedPath === targetPath) {
+            await Promise.resolve();
+            finishPreparation();
+          }
+        },
+      });
+    }
     const options = { workspaceOnly: true, abortSignal: generation.signal };
     const execute = () => {
       if (kind === "append") {

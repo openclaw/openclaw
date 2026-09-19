@@ -1,4 +1,3 @@
-import { AsyncLocalStorage } from "node:async_hooks";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { extractErrorCode } from "@openclaw/normalization-core/error-coercion";
@@ -10,41 +9,18 @@ import {
   createPluginRootArtifacts,
   type PluginSourceCacheRecord,
 } from "./plugin-cache-artifacts.js";
-import type {
-  PluginDirectoryCacheEntry,
-  PluginEntryCheck,
-  PluginFileCacheEntry,
-  PluginPathCacheEntry,
-} from "./plugin-cache-files.types.js";
-import type { PluginCacheFact, PluginCacheManagement } from "./plugin-cache-management.js";
-import type { PluginCacheMetadata } from "./plugin-cache-metadata.js";
-import { createPluginCacheSdk, type PluginCacheSdk } from "./plugin-cache-sdk.js";
-import { pluginInstanceInvocation } from "./plugin-instance-invocation.js";
-import type { PluginInstanceResource, PluginModuleLoaderOwner } from "./plugin-instance.types.js";
+import type { PluginCacheFact } from "./plugin-cache-management.js";
+import { createPluginCacheSdk } from "./plugin-cache-sdk.js";
+import type { PluginCache, PluginRootCacheRecord } from "./plugin-cache.types.js";
+import {
+  createPluginExecutionFrame,
+  getPluginExecutionFrame,
+  pluginInstanceInvocation,
+  runWithPluginExecutionFrame,
+} from "./plugin-instance-invocation.js";
+import type { PluginInstanceResource } from "./plugin-instance.types.js";
 
-export type PluginRootCacheRecord = ReturnType<typeof createPluginRootArtifacts> & {
-  rootDir: string;
-  files: Map<string, PluginFileCacheEntry>;
-  checkedEntries: Map<string, PluginEntryCheck>;
-  paths: Map<string, PluginPathCacheEntry>;
-  directory?: PluginDirectoryCacheEntry;
-};
-
-export interface PluginCache
-  extends
-    PluginCacheMetadata,
-    PluginCacheManagement<PluginCache>,
-    ReturnType<typeof createPluginCacheArtifacts> {
-  kind: "process" | "operation";
-  roots: Map<string, PluginRootCacheRecord>;
-  rootAliases: Map<string, string>;
-  sdk: PluginCacheSdk;
-  retireRegistryLoads?: () => Promise<PluginHostCleanupResult>;
-  setupModules: Map<string, PluginModuleLoaderOwner>;
-  instances: Set<PluginInstanceResource>;
-  retirement?: Promise<PluginHostCleanupResult>;
-  [Symbol.asyncDispose](): Promise<void>;
-}
+export type { PluginCache } from "./plugin-cache.types.js";
 
 const PLUGIN_CACHE_FACT_INVALIDATED = "PLUGIN_CACHE_FACT_INVALIDATED";
 
@@ -76,18 +52,14 @@ export function isPluginCacheFactInvalidatedError(error: unknown): boolean {
   return extractErrorCode(error) === PLUGIN_CACHE_FACT_INVALIDATED;
 }
 
-type PluginCacheScope = { cache: PluginCache; parent?: PluginCacheScope };
-
 const state = resolveGlobalSingleton<{
   current?: PluginCache;
-  scope: AsyncLocalStorage<PluginCacheScope>;
   snapshotOwners: WeakMap<object, PluginCache>;
   retirements: Array<{
     cache: PluginCache;
     completion: Promise<PromiseSettledResult<PluginHostCleanupResult>>;
   }>;
 }>(Symbol.for("openclaw.pluginCache"), () => ({
-  scope: new AsyncLocalStorage<PluginCacheScope>(),
   snapshotOwners: new WeakMap(),
   retirements: [],
 }));
@@ -228,13 +200,13 @@ export function adoptProcessPluginCache(cache: PluginCache): void {
 }
 
 export function getScopedPluginCache(): PluginCache | undefined {
-  return state.scope.getStore()?.cache;
+  return getPluginExecutionFrame()?.cacheScope?.cache;
 }
 
 /** Installation refreshes every enclosing operation, including callers outside metadata phases. */
 export function getScopedPluginCaches(): PluginCache[] {
   const caches: PluginCache[] = [];
-  for (let scope = state.scope.getStore(); scope; scope = scope.parent) {
+  for (let scope = getPluginExecutionFrame()?.cacheScope; scope; scope = scope.parent) {
     caches.push(scope.cache);
   }
   return caches;
@@ -245,7 +217,14 @@ export function getPluginCache(): PluginCache {
 }
 
 export function withPluginCache<T>(cache: PluginCache, run: () => T): T {
-  return state.scope.run({ cache, parent: state.scope.getStore() }, run);
+  const current = getPluginExecutionFrame();
+  return runWithPluginExecutionFrame(
+    createPluginExecutionFrame(
+      { ...current, cacheScope: { cache, parent: current?.cacheScope } },
+      current,
+    ),
+    run,
+  );
 }
 
 /** Coalesce asynchronous facts without republishing data after explicit invalidation. */
@@ -317,7 +296,11 @@ export async function preparePluginCacheFact<T>(
 }
 
 export function runOutsidePluginCache<T>(run: () => T): T {
-  return state.scope.exit(run);
+  const current = getPluginExecutionFrame();
+  return runWithPluginExecutionFrame(
+    createPluginExecutionFrame({ ...current, cacheScope: undefined }, current),
+    run,
+  );
 }
 
 /** Frozen views retain their producer so deferred access fills the same generation. */

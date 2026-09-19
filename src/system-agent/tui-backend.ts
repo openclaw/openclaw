@@ -566,6 +566,7 @@ async function requireTuiVerifiedInference(
         modelProvider: model.provider,
         thinkingLevel: resolveThinkingDefault({
           cfg: route.runConfig,
+          agentId: route.agentId,
           provider: route.provider,
           model: route.model,
           catalog,

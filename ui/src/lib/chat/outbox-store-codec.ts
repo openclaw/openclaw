@@ -63,6 +63,9 @@ function normalizeChatAttachment(value: unknown): ChatAttachment | null {
     return null;
   }
   const restored: ChatAttachment = { id, mimeType };
+  if (entry.origin === "paste" || entry.origin === "file") {
+    restored.origin = entry.origin;
+  }
   const selectionAnnotation = readChatSelectionAnnotation(entry.selectionAnnotation);
   if (selectionAnnotation) {
     restored.selectionAnnotation = selectionAnnotation;
@@ -195,6 +198,8 @@ export function normalizeStoredQueueItem(value: unknown): ChatQueueItem | null {
   }
   if (entry.sendState === "steering" || entry.sendState === "executing-command") {
     item.sendState = "unconfirmed";
+  } else if (entry.sendState === "submitting") {
+    item.sendState = "waiting-idle";
   } else if (entry.sendState === "sending") {
     item.sendState = "waiting-reconnect";
   } else if (

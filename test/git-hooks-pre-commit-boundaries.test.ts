@@ -442,7 +442,7 @@ describe.each([false, true])("Git operation state (linked=%s)", (linked) => {
     );
     expect(run(dir, "bash", ["git-hooks/pre-commit"])).toBe("formatted");
     expect(readFormatterLog(log)).toEqual([
-      "oxfmt --write --no-error-on-unmatched-pattern changed.ts",
+      "oxfmt --write --threads=1 --no-error-on-unmatched-pattern changed.ts",
     ]);
     expect(readFileSync(path.join(dir, "changed.ts"), "utf8")).toBe(`${working}// formatted\n`);
     expect(run(dir, "git", ["show", ":changed.ts"])).toBe(`${working}// formatted`);

@@ -411,6 +411,21 @@ describe("model catalog normalization", () => {
     ]);
   });
 
+  it("retains an explicitly empty supported reasoning effort list", () => {
+    const catalog = normalizeModelCatalog(
+      {
+        providers: {
+          example: { models: [{ id: "reasoner", compat: { supportedReasoningEfforts: [] } }] },
+        },
+      },
+      { ownedProviders: new Set(["example"]) },
+    );
+
+    expect(catalog?.providers?.example?.models[0]?.compat).toEqual({
+      supportedReasoningEfforts: [],
+    });
+  });
+
   it.each([
     { name: "non-record catalog", value: null },
     { name: "unowned provider", value: { providers: { anthropic: { models: [{ id: "x" }] } } } },

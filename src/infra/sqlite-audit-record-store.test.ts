@@ -7,10 +7,8 @@ import {
 } from "../state/openclaw-state-db.js";
 import { withTestDir } from "../test-helpers/temp-dir.js";
 import { getNodeSqliteKysely } from "./kysely-sync.js";
-import {
-  createSqliteAuditRecordStore,
-  registerSqliteAuditRecordAsync,
-} from "./sqlite-audit-record-store.js";
+import { registerSqliteAuditRecordAsync } from "./sqlite-audit-record-store.async.js";
+import { createSqliteAuditRecordStore } from "./sqlite-audit-record-store.js";
 
 function withAuditStoreFixture(
   options: { prefix: string },

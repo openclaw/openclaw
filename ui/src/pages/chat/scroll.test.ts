@@ -7,6 +7,7 @@ import {
   getChatSessionScrollPosition,
   handleChatScroll,
   handleChatScrollTakeover,
+  lockChatScroll,
   resetChatScroll,
   saveChatSessionScrollPosition,
   scheduleChatScroll,
@@ -878,5 +879,29 @@ describe("programmatic scroll ownership", () => {
     handleChatScroll(host, createScrollEvent(3000, 2000, 400));
 
     expect(host.chatUserNearBottom).toBe(false);
+  });
+});
+
+describe("reader-controlled panel takeover", () => {
+  afterEach(() => vi.restoreAllMocks());
+  it("retires pending follow at the physical end and publishes the locked state once", () => {
+    const { host } = createScrollHost();
+    const invalidate = vi.fn();
+    host.renderLifecycle.invalidate = invalidate;
+    const frames = installAnimationFrameQueue();
+    scheduleChatScroll(host, true);
+    expect(frames.callbacks).toHaveLength(1);
+    invalidate.mockClear();
+    lockChatScroll(host);
+    expect(frames.callbacks).toHaveLength(0);
+    expect(host.chatFollowLocked).toBe(true);
+    expect(host.chatUserNearBottom).toBe(false);
+    expect(host.chatHasAutoScrolled).toBe(true);
+    expect(invalidate).toHaveBeenCalledTimes(1);
+    lockChatScroll(host);
+    expect(invalidate).toHaveBeenCalledTimes(1);
+    handleChatScrollTakeover(host, true);
+    expect(host.chatFollowLocked).toBe(false);
+    expect(host.chatUserNearBottom).toBe(true);
   });
 });

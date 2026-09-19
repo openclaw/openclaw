@@ -34,7 +34,11 @@ import type { PreparedModelRuntimeSnapshot } from "../prepared-model-runtime.js"
 import type { CompactionRequestConstraints } from "../sessions/compaction/request-budget.js";
 import { SessionManager } from "../sessions/index.js";
 import type { CompactEmbeddedAgentSessionParams } from "./compact.types.js";
-import { compactionCheckpointStore, persistCompactionCheckpoint } from "./compaction-checkpoint.js";
+import {
+  captureCompactionCheckpointSnapshotAsync,
+  cleanupCompactionCheckpointSnapshot,
+  persistCompactionCheckpoint,
+} from "./compaction-checkpoint.js";
 import { asCompactionHookRunner, runPostCompactionSideEffects } from "./compaction-hooks.js";
 import {
   compactContextEngineWithSafetyTimeout,
@@ -273,7 +277,7 @@ export async function executeQueuedContextEngineCompaction(input: {
       // are notified regardless of which engine is active.
       const engineOwnsCompaction = contextEngine.info.ownsCompaction === true;
       checkpointSnapshot = engineOwnsCompaction
-        ? await compactionCheckpointStore.captureSnapshot({
+        ? await captureCompactionCheckpointSnapshotAsync({
             sessionFile: params.sessionFile,
             sessionManager: SessionManager.open(runtimeTarget),
             sessionTarget: runtimeTarget,
@@ -675,7 +679,7 @@ export async function executeQueuedContextEngineCompaction(input: {
     } finally {
       closed = true;
       if (!checkpointSnapshotRetained) {
-        await compactionCheckpointStore.cleanupSnapshot(checkpointSnapshot);
+        await cleanupCompactionCheckpointSnapshot(checkpointSnapshot);
       }
     }
   });

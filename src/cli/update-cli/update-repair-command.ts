@@ -4,20 +4,30 @@ import {
 } from "../../config/config.js";
 import { resolveGatewayPort } from "../../config/paths.js";
 import { readPackageVersion } from "../../infra/package-json.js";
+import {
+  normalizeUpdateChannel,
+  resolveEffectiveUpdateChannel,
+} from "../../infra/update-channels.js";
+import { compareSemverStrings, resolveNpmChannelTag } from "../../infra/update-check.js";
 import { UPDATE_RUN_ID_ENV } from "../../infra/update-control-plane-sentinel.js";
 import { readBuiltGatewayBuildId } from "../../infra/update-git-runtime.js";
 import {
   inspectUpdateRepairDriverAdmission,
-  isAbandonedUpdateRun,
   isUnacknowledgedAbandonedUpdateRun,
 } from "../../infra/update-run-activity.js";
 import {
   acknowledgeAbandonedUpdateRun,
   listUpdateRuns,
   reconcileAbandonedUpdateRuns,
+  reconcilePackageOwnerRefusal,
   recordUpdateRunRepairContinuation,
 } from "../../infra/update-run-ledger.js";
-import type { UpdateRunRecord } from "../../infra/update-run-record.js";
+import {
+  isAcknowledgedAbandonedUpdateRun,
+  isUnacknowledgedPackageOwnerRefusal,
+  type UpdateRunRecord,
+} from "../../infra/update-run-record.js";
+import { assertUpdateRecoveryAdmission } from "../../infra/update-run-recovery-admission.js";
 import { DEFAULT_UPDATE_STEP_TIMEOUT_MS } from "../../infra/update-run-timeouts.js";
 import { defaultRuntime } from "../../runtime.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
@@ -30,6 +40,7 @@ import {
 import {
   parseTimeoutMsOrExit,
   resolveUpdateRoot,
+  resolveTargetVersion,
   tryResolveInvocationCwd,
   type UpdateFinalizeOptions,
 } from "./shared.js";
@@ -60,8 +71,8 @@ function inspectNewerRecoveryHistory(recoveryRuns: UpdateRunRecord[], env: NodeJ
   const postCoreRuns = history.filter(
     (run) =>
       run.createdAtMs >= oldestRecovery &&
-      isAbandonedUpdateRun(run) &&
-      !run.steps.some((step) => step.step === "reconcile:acknowledged") &&
+      run.status === "failed" &&
+      !isAcknowledgedAbandonedUpdateRun(run) &&
       needsPostCoreRepair(run),
   );
   // A bounded prefix cannot prove absence of interrupted work beyond its tail.
@@ -99,6 +110,46 @@ export async function updateRepairCommand(opts: UpdateFinalizeOptions): Promise<
     return;
   }
   const lastRun = listUpdateRuns({ limit: 1 }, options)[0];
+  if (
+    !activeRuns.length &&
+    opts.channel === undefined &&
+    !opts.acceptCapabilities &&
+    lastRun &&
+    isUnacknowledgedPackageOwnerRefusal(lastRun)
+  ) {
+    const snapshot = await readConfigFileSnapshot({ skipPluginValidation: true });
+    const root = await resolveUpdateRoot();
+    const installedVersion = await readPackageVersion(root);
+    const { channel } = resolveEffectiveUpdateChannel({
+      configChannel: normalizeUpdateChannel(
+        lastRun.target.channel ?? snapshot.config.update?.channel,
+      ),
+      currentVersion: installedVersion,
+      installKind: "package",
+    });
+    if (snapshot.valid && (channel !== "dev" || lastRun.target.tag)) {
+      const targetVersion =
+        lastRun.target.version ??
+        (lastRun.target.tag
+          ? await resolveTargetVersion(lastRun.target.tag, timeoutMs, { env })
+          : (await resolveNpmChannelTag({ channel, timeoutMs, env })).version);
+      await assertUpdateRecoveryAdmission(options);
+      // Registry resolution awaited I/O; inspect the installed version again before recording recovery.
+      const currentVersion = await readPackageVersion(root);
+      const comparison = compareSemverStrings(currentVersion, targetVersion);
+      if (comparison !== null && comparison >= 0) {
+        assertConfigWriteAllowedInCurrentMode({ env });
+        if (reconcilePackageOwnerRefusal(lastRun, options)) {
+          reportRepairResult(
+            opts,
+            [lastRun.runId],
+            `OpenClaw ${currentVersion} satisfies the package target ${targetVersion}. Acknowledged the package-owner refusal; no maintenance or service restart was needed.`,
+          );
+          return;
+        }
+      }
+    }
+  }
   const recoveryRuns = activeRuns.length
     ? activeRuns
     : lastRun && isUnacknowledgedAbandonedUpdateRun(lastRun)
@@ -191,12 +242,24 @@ export async function updateRepairCommand(opts: UpdateFinalizeOptions): Promise<
   const message = reconciled.length
     ? `Gateway is healthy. Reconciled ${reconciled.length} abandoned update run${reconciled.length === 1 ? "" : "s"}. No maintenance or service restart was needed.`
     : "Gateway is healthy. Abandoned update runs are already reconciled. No maintenance or service restart was needed.";
+  reportRepairResult(
+    opts,
+    reconciled.map((run) => run.runId),
+    message,
+  );
+}
+
+function reportRepairResult(
+  opts: UpdateFinalizeOptions,
+  reconciledRuns: string[],
+  message: string,
+): void {
   if (opts.json) {
     defaultRuntime.writeJson({
       status: "ok",
       mode: "repair",
       restart: false,
-      reconciledRuns: reconciled.map((run) => run.runId),
+      reconciledRuns,
       message,
     });
   } else {

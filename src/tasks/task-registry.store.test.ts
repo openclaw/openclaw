@@ -25,6 +25,7 @@ import {
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
+import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -41,6 +42,7 @@ import {
 } from "./task-flow-registry.js";
 import type { TaskFlowRecord } from "./task-flow-registry.types.js";
 import { getTaskRegistryMaintenanceSnapshot } from "./task-registry-maintenance-snapshot.js";
+import { reloadTaskRegistryFromStoreAsync } from "./task-registry-state.js";
 import {
   createTaskRecord as createTaskRecordOrNull,
   deleteTaskRecordById,
@@ -51,7 +53,6 @@ import {
   listTaskRecords,
   markTaskTerminalById,
   publishTaskRecordAfterAtomicStore,
-  reloadTaskRegistryFromStore,
   updateTaskNotifyPolicyById,
 } from "./task-registry.js";
 import {
@@ -59,10 +60,7 @@ import {
   resetTaskRegistryMaintenanceRuntimeForTests,
   runTaskRegistryMaintenance,
 } from "./task-registry.maintenance.js";
-import {
-  configureTaskRegistryRuntime,
-  type TaskRegistryObserverEvent,
-} from "./task-registry.store.js";
+import { configureTaskRegistryRuntime } from "./task-registry.store.js";
 import { bindTaskRecord } from "./task-registry.store.kernel.js";
 import {
   bindTaskRunExecution,
@@ -72,6 +70,7 @@ import {
   deleteTaskAndDeliveryStateFromSqlite,
   upsertTaskWithDeliveryStateToSqlite,
 } from "./task-registry.store.sqlite.js";
+import type { TaskRegistryObserverEvent } from "./task-registry.store.types.js";
 import type { TaskDeliveryState, TaskNotifyPolicy, TaskRecord } from "./task-registry.types.js";
 import {
   parseOptionalTaskTerminalOutcome,
@@ -327,7 +326,7 @@ describe("task-registry store runtime", () => {
     );
   });
 
-  it("blocks writes until an explicit reload recovers the registry", () => {
+  it("blocks writes until an explicit reload recovers the registry", async () => {
     const storedTask = createStoredTask();
     let restoreShouldFail = true;
     const loadSnapshot = vi.fn(() => {
@@ -366,7 +365,7 @@ describe("task-registry store runtime", () => {
     expect(loadSnapshot).toHaveBeenCalledTimes(1);
 
     restoreShouldFail = false;
-    reloadTaskRegistryFromStore();
+    await reloadTaskRegistryFromStoreAsync(captureOpenClawStateWorkerContext());
 
     expect(getTaskById(storedTask.taskId)).toMatchObject({ taskId: storedTask.taskId });
     expect(loadSnapshot).toHaveBeenCalledTimes(2);
@@ -740,7 +739,7 @@ describe("task-registry store runtime", () => {
           let restoredPolicy: TaskNotifyPolicy | null = null;
           let restoreError: string | null = null;
           try {
-            reloadTaskRegistryFromStore();
+            await reloadTaskRegistryFromStoreAsync(captureOpenClawStateWorkerContext());
             restoredPolicy = getTaskById(created.taskId)?.notifyPolicy ?? null;
           } catch (error) {
             restoreError = error instanceof Error ? error.message : String(error);
@@ -797,7 +796,7 @@ describe("task-registry store runtime", () => {
           expect(
             updateTaskNotifyPolicyById({ taskId: created.taskId, notifyPolicy })?.notifyPolicy,
           ).toBe(notifyPolicy);
-          reloadTaskRegistryFromStore();
+          await reloadTaskRegistryFromStoreAsync(captureOpenClawStateWorkerContext());
           expect(getTaskById(created.taskId)?.notifyPolicy).toBe(notifyPolicy);
         },
       );
@@ -1728,10 +1727,6 @@ describe("task-registry store runtime", () => {
       configureTaskRegistryRuntime({
         store: {
           ...createInMemoryTaskRegistryStore(),
-          loadSnapshot: () => ({
-            tasks: new Map(),
-            deliveryStates: new Map(),
-          }),
           withMutation: <T>(operation: () => T): T => {
             if (failureStage === "admission") {
               throw new Error("Synthetic coordinator admission failure");

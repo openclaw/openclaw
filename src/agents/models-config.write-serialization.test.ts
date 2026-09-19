@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { resolveInstalledPluginIndexPolicyHash } from "../plugins/installed-plugin-index-policy.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import {
@@ -18,14 +19,10 @@ import {
 import { readGeneratedModelsJson } from "./models-config.test-utils.js";
 import {
   encodePluginModelCatalogRelativePath,
-  loadPersistedPluginModelCatalogs,
+  loadPersistedPluginModelCatalogsReadOnly,
   PLUGIN_MODEL_CATALOG_GENERATED_BY,
   replacePersistedPluginModelCatalogs,
 } from "./plugin-model-catalog.js";
-
-function listPersistedPluginModelCatalogs(agentDir: string) {
-  return loadPersistedPluginModelCatalogs(agentDir).catalogs;
-}
 
 function readRawCatalogCacheRow(
   agentDir: string,
@@ -196,6 +193,29 @@ beforeEach(() => {
 });
 
 describe("models-config write serialization", () => {
+  it("retains configless caller options across asynchronous config capture", async () => {
+    await withModelsTempHome(async (home) => {
+      setRuntimeConfigSnapshot(CUSTOM_PROXY_MODELS_CONFIG);
+      const options = {
+        env: { MODEL_CAPTURE_VALUE: "original" },
+        workspaceDir: home,
+        providerDiscoveryProviderIds: ["custom-proxy"],
+        pluginMetadataSnapshot: createPluginMetadataSnapshot(home),
+      };
+      const pending = ensureOpenClawModelsJson(undefined, path.join(home, "agent"), options);
+      options.workspaceDir = path.join(home, "replacement");
+      options.providerDiscoveryProviderIds.push("replacement");
+      options.env.MODEL_CAPTURE_VALUE = "replacement";
+      await pending;
+      const context = planOpenClawModelsJsonMock.mock.calls[0]?.[0]?.context;
+      expect(context).toMatchObject({
+        workspaceDir: home,
+        providerDiscoveryProviderIds: ["custom-proxy"],
+        env: { MODEL_CAPTURE_VALUE: "original" },
+      });
+    });
+  });
+
   it("refreshes cached usage prices after publishing an agent's models.json", async () => {
     await withModelsTempHome(async (home) => {
       const configFor = (input: number) => ({
@@ -288,7 +308,7 @@ describe("models-config write serialization", () => {
         { pluginId: "planned-plugin", contents: plannedPluginContents },
       ]);
       expect(await fs.readFile(path.join(agentDir, "models.json"), "utf8")).toBe(rootContents);
-      expect(listPersistedPluginModelCatalogs(agentDir)).toEqual([
+      expect(loadPersistedPluginModelCatalogsReadOnly(agentDir)).toEqual([
         { pluginId: "existing-plugin", contents: existingPluginContents },
       ]);
       expect(readRawCatalogCacheRow(agentDir, "existing-plugin")).toEqual(originalPluginRow);
@@ -381,7 +401,7 @@ describe("models-config write serialization", () => {
     });
   });
 
-  it("migrates released provider credentials before model planning can regenerate a catalog", async () => {
+  it("plans from canonical catalogs while leaving released credentials for Doctor", async () => {
     await withModelsTempHome(async (home) => {
       const agentDir = path.join(home, "agent");
       const relativePath = encodePluginModelCatalogRelativePath("zai");
@@ -399,20 +419,30 @@ describe("models-config write serialization", () => {
       })}\n`;
       await fs.mkdir(path.dirname(sourcePath), { recursive: true });
       await fs.writeFile(sourcePath, contents, "utf8");
-      planOpenClawModelsJsonMock.mockImplementation(async () => {
-        expect(listPersistedPluginModelCatalogs(agentDir)).toEqual([{ pluginId: "zai", contents }]);
+      const canonical = contents.replace(
+        "released-zai-provider-test-key",
+        "canonical-zai-provider-test-key",
+      );
+      replacePersistedPluginModelCatalogs({
+        agentDir,
+        pluginCatalogWrites: { [relativePath]: canonical },
+      });
+      planOpenClawModelsJsonMock.mockImplementation(async ({ pluginCatalogs }) => {
+        expect(pluginCatalogs).toEqual([{ pluginId: "zai", contents: canonical }]);
         return { action: "skip" };
       });
 
       await ensureOpenClawModelsJson({}, agentDir);
 
       expect(planOpenClawModelsJsonMock).toHaveBeenCalledOnce();
-      await expectMissingPath(fs.access(sourcePath));
-      expect(listPersistedPluginModelCatalogs(agentDir)).toEqual([{ pluginId: "zai", contents }]);
+      expect(await fs.readFile(sourcePath, "utf8")).toBe(contents);
+      expect(loadPersistedPluginModelCatalogsReadOnly(agentDir)).toEqual([
+        { pluginId: "zai", contents: canonical },
+      ]);
     });
   });
 
-  it("refuses to regenerate provider catalogs while released credentials cannot be read", async () => {
+  it("leaves unreadable released credentials untouched during canonical planning", async () => {
     if (process.getuid?.() === 0) {
       return;
     }
@@ -431,10 +461,11 @@ describe("models-config write serialization", () => {
       await fs.chmod(sourcePath, 0o000);
 
       try {
-        await expect(ensureOpenClawModelsJson({}, agentDir)).rejects.toThrow(
-          "Cannot safely prepare provider models until legacy catalog migration succeeds",
-        );
-        expect(planOpenClawModelsJsonMock).not.toHaveBeenCalled();
+        planOpenClawModelsJsonMock.mockResolvedValue({ action: "skip" });
+        await expect(ensureOpenClawModelsJson({}, agentDir)).resolves.toMatchObject({
+          wrote: false,
+        });
+        expect(planOpenClawModelsJsonMock).toHaveBeenCalledOnce();
       } finally {
         await fs.chmod(sourcePath, 0o600);
       }
@@ -518,7 +549,7 @@ describe("models-config write serialization", () => {
       const root = JSON.parse(await fs.readFile(path.join(agentDir, "models.json"), "utf8")) as {
         providers?: Record<string, unknown>;
       };
-      const stored = listPersistedPluginModelCatalogs(agentDir);
+      const stored = loadPersistedPluginModelCatalogsReadOnly(agentDir);
       expect(stored).toHaveLength(1);
       expect(stored[0]?.pluginId).toBe("zai");
       const catalog = JSON.parse(stored[0]?.contents ?? "{}") as {
@@ -558,7 +589,7 @@ describe("models-config write serialization", () => {
       const result = await ensureOpenClawModelsJson({}, agentDir);
 
       expect(result.wrote).toBe(true);
-      expect(listPersistedPluginModelCatalogs(agentDir)).toEqual([]);
+      expect(loadPersistedPluginModelCatalogsReadOnly(agentDir)).toEqual([]);
     });
   });
 
@@ -579,13 +610,13 @@ describe("models-config write serialization", () => {
       const result = await ensureOpenClawModelsJson({}, agentDir);
 
       expect(result.wrote).toBe(false);
-      expect(listPersistedPluginModelCatalogs(agentDir)).toEqual([
+      expect(loadPersistedPluginModelCatalogsReadOnly(agentDir)).toEqual([
         expect.objectContaining({ pluginId: "zai" }),
       ]);
     });
   });
 
-  it("repairs malformed catalog state before startup planning and fingerprints it once", async () => {
+  it("passes persisted catalog bytes to planning without repair or repeated fingerprint changes", async () => {
     await withModelsTempHome(async (home) => {
       const agentDir = path.join(home, "agent");
       replacePersistedPluginModelCatalogs({
@@ -624,22 +655,18 @@ describe("models-config write serialization", () => {
       } finally {
         database.close();
       }
-      planOpenClawModelsJsonMock.mockImplementation(async () => {
-        const parsed = JSON.parse(readRawCatalogCacheRow(agentDir, "nvidia").value_json) as {
-          providers?: { nvidia?: { api?: string; models?: unknown[] } };
-        };
-        expect(parsed.providers?.nvidia?.models).toEqual([]);
-        expect(parsed.providers?.nvidia).not.toHaveProperty("api");
+      planOpenClawModelsJsonMock.mockImplementation(async ({ pluginCatalogs }) => {
+        expect(pluginCatalogs).toEqual([{ pluginId: "nvidia", contents: malformed }]);
         return { action: "skip" };
       });
 
       await ensureOpenClawModelsJson({}, agentDir);
-      const repaired = readRawCatalogCacheRow(agentDir, "nvidia");
-      expect(repaired.updated_at).not.toBe(42);
+      const unchanged = readRawCatalogCacheRow(agentDir, "nvidia");
+      expect(unchanged).toEqual({ value_json: malformed, updated_at: 42 });
       await ensureOpenClawModelsJson({}, agentDir);
 
       expect(planOpenClawModelsJsonMock).toHaveBeenCalledOnce();
-      expect(readRawCatalogCacheRow(agentDir, "nvidia")).toEqual(repaired);
+      expect(readRawCatalogCacheRow(agentDir, "nvidia")).toEqual(unchanged);
     });
   });
 

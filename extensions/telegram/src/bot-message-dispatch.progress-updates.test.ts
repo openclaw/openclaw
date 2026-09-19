@@ -1,12 +1,16 @@
+import { projectAgentToolActivity } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
   createChannelPartialDeliveryError,
   isChannelPartialDeliveryError,
 } from "openclaw/plugin-sdk/channel-inbound";
+import { setReplyPayloadMetadata } from "openclaw/plugin-sdk/reply-payload-testing";
 import { expect, it } from "vitest";
 import {
+  allDeliveredReplyTexts,
   appendAssistantMirrorMessageByIdentity,
   type DispatchReplyWithBufferedBlockDispatcherArgs,
   describeTelegramDispatch,
+  emitToolStart,
   createContext,
   createSequencedDraftStream,
   createTelegramDraftStream,
@@ -29,23 +33,29 @@ import {
 } from "./bot-message-dispatch.test-harness.js";
 
 describeTelegramDispatch("dispatchTelegramMessage progress-updates", () => {
-  it.each(["tool start", "command output"] as const)(
+  it.each(["tool start", "prepared tool start"] as const)(
     "does not restart progress drafts for %s after final answer delivery",
     async (lateCallback) => {
       const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2001 });
       dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
         async ({ dispatcherOptions, replyOptions }) => {
-          await replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
+          await emitToolStart(replyOptions, { name: "exec", phase: "start", toolCallId: "exec-1" });
           await dispatcherOptions.deliver({ text: "Branch is up to date" }, { kind: "final" });
           if (lateCallback === "tool start") {
-            await replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
-          } else {
-            await replyOptions?.onCommandOutput?.({
-              phase: "end",
-              title: "Exec",
+            await emitToolStart(replyOptions, {
               name: "exec",
-              status: "failed",
-              exitCode: 1,
+              phase: "start",
+              toolCallId: "late-exec",
+            });
+          } else if (lateCallback === "prepared tool start") {
+            await replyOptions?.onItemEvent?.({
+              itemId: "tool:late",
+              toolCallId: "late",
+              kind: "tool",
+              name: "exec",
+              title: "Exec",
+              phase: "start",
+              status: "running",
             });
           }
           return { queuedFinal: true };
@@ -62,47 +72,38 @@ describeTelegramDispatch("dispatchTelegramMessage progress-updates", () => {
 
       expect(answerDraftStream.updatePreview).toHaveBeenCalledTimes(1);
       expect(answerDraftStream.updatePreview).toHaveBeenCalledWith(
-        telegramProgressPreview("Shelling\n\n🛠️ Exec", "<b>Shelling</b>\n<b>🛠️ Exec</b>"),
+        telegramProgressPreview(
+          "Shelling\n\n🛠️ Exec running",
+          "<b>Shelling</b>\n<b>🛠️ Exec</b> <i>running</i>",
+        ),
       );
       expectDeliveredReply(0, { text: "Branch is up to date" });
     },
   );
 
-  it("does not restart progress drafts for command output while final answer delivery is pending", async () => {
-    const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2001 });
-    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
-      async ({ dispatcherOptions, replyOptions }) => {
-        await replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
-        const finalDelivery = dispatcherOptions.deliver(
-          { text: "Branch is up to date" },
-          { kind: "final" },
-        );
-        await replyOptions?.onCommandOutput?.({
-          phase: "end",
-          title: "Exec",
-          name: "exec",
-          status: "failed",
-          exitCode: 1,
-        });
-        await finalDelivery;
-        return { queuedFinal: true };
-      },
-    );
-
-    await dispatchWithContext({
-      context: createContext(),
-      streamMode: "progress",
-      telegramCfg: {
-        streaming: { mode: "progress", progress: { toolProgress: true, label: "Shelling" } },
-      },
-    });
-
-    expect(answerDraftStream.updatePreview).toHaveBeenCalledTimes(1);
-    expect(answerDraftStream.updatePreview).toHaveBeenCalledWith(
-      telegramProgressPreview("Shelling\n\n🛠️ Exec", "<b>Shelling</b>\n<b>🛠️ Exec</b>"),
-    );
-    expectDeliveredReply(0, { text: "Branch is up to date" });
-  });
+  it.each(["partial", "block"] as const)(
+    "does not rotate a finalized %s answer for a late prepared start",
+    async (mode) => {
+      const { answerDraftStream } = setupDraftStreams({ answerMessageId: 2001 });
+      dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+        async ({ dispatcherOptions, replyOptions }) => {
+          await replyOptions?.onPartialReply?.({ text: "Final answer" });
+          await dispatcherOptions.deliver({ text: "Final answer" }, { kind: "final" });
+          const rotations = answerDraftStream.forceNewMessage.mock.calls.length;
+          const clears = answerDraftStream.clear.mock.calls.length;
+          await emitToolStart(replyOptions, { name: "exec", toolCallId: "late", phase: "start" });
+          expect(answerDraftStream.forceNewMessage).toHaveBeenCalledTimes(rotations);
+          expect(answerDraftStream.clear).toHaveBeenCalledTimes(clears);
+          return { queuedFinal: true };
+        },
+      );
+      await dispatchWithContext({
+        context: createContext(),
+        streamMode: mode,
+        telegramCfg: { streaming: { mode, preview: { toolProgress: true } } },
+      });
+    },
+  );
 
   it("uses the transcript final when progress-mode final text is truncated", async () => {
     setupDraftStreams({ answerMessageId: 2001 });
@@ -119,7 +120,7 @@ describeTelegramDispatch("dispatchTelegramMessage progress-updates", () => {
     });
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
       async ({ dispatcherOptions, replyOptions }) => {
-        await replyOptions?.onToolStart?.({ name: "exec", phase: "start" });
+        await emitToolStart(replyOptions, { name: "exec", phase: "start", toolCallId: "exec-1" });
         await dispatcherOptions.deliver({ text: truncatedFinal }, { kind: "final" });
         return { queuedFinal: true };
       },
@@ -132,6 +133,32 @@ describeTelegramDispatch("dispatchTelegramMessage progress-updates", () => {
     });
 
     expectDeliveredReply(0, { text: fullAnswer });
+  });
+
+  it("dispatchTelegramMessage delivers an earlier excerpt and the latest transcript answer in order", async () => {
+    const earlierAnswer =
+      "Here is the earlier answer with enough stable prefix text before the ellipsis...";
+    const latestAnswer =
+      "Here is the earlier answer with enough stable prefix text before the ellipsis and a much longer answer to the next question.";
+    const context = createContext();
+    context.ctxPayload.SessionKey = "agent:default:telegram:direct:123";
+    mockDefaultSessionEntry();
+    readLatestAssistantTextByIdentity.mockResolvedValue({
+      text: latestAnswer,
+      timestamp: Date.now() + 1_000,
+    });
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      await dispatcherOptions.deliver(
+        setReplyPayloadMetadata({ text: earlierAnswer }, { precedingInputAnswer: true }),
+        { kind: "final" },
+      );
+      await dispatcherOptions.deliver({ text: latestAnswer }, { kind: "final" });
+      return { queuedFinal: true };
+    });
+
+    await dispatchWithContext({ context, streamMode: "off" });
+
+    expect(allDeliveredReplyTexts()).toEqual([earlierAnswer, latestAnswer]);
   });
 
   it("hands the complete long final to draft-owned pagination", async () => {
@@ -337,14 +364,7 @@ describeTelegramDispatch("dispatchTelegramMessage progress-updates", () => {
       dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ replyOptions }) => {
         await replyOptions?.onReplyStart?.();
         await replyOptions?.onAssistantMessageStart?.();
-        await replyOptions?.onToolStart?.({ name: "exec", phase: "start", toolCallId: "exec-1" });
-        await replyOptions?.onItemEvent?.({
-          itemId: "command:exec-1",
-          toolCallId: "exec-1",
-          kind: "command",
-          name: "exec",
-          status: "running",
-        });
+        await emitToolStart(replyOptions, { name: "exec", phase: "start", toolCallId: "exec-1" });
         if (replyOptions?.forceToolResultProgress) {
           await replyOptions.onToolResult?.({ text: "🛠️ Exec" });
         }
@@ -354,6 +374,14 @@ describeTelegramDispatch("dispatchTelegramMessage progress-updates", () => {
           name: "exec",
           exitCode: 0,
         });
+        await replyOptions?.onItemEvent?.(
+          projectAgentToolActivity({
+            name: "exec",
+            toolCallId: "exec-1",
+            phase: "result",
+            isError: false,
+          }),
+        );
         return { queuedFinal: false };
       });
 
@@ -382,9 +410,9 @@ describeTelegramDispatch("dispatchTelegramMessage progress-updates", () => {
       await replyOptions?.onAssistantMessageStart?.();
       await replyOptions?.onToolResult?.({
         text: "🧭 Agents",
-        channelData: { openclawToolProgressId: "dynamic-1" },
+        channelData: { openclawToolProgressId: "tool:dynamic-1" },
       });
-      await replyOptions?.onToolStart?.({
+      await emitToolStart(replyOptions, {
         name: "agents_list",
         phase: "start",
         itemId: "dynamic-1",
@@ -402,7 +430,10 @@ describeTelegramDispatch("dispatchTelegramMessage progress-updates", () => {
     });
 
     expect(draftStream.updatePreview).toHaveBeenLastCalledWith(
-      telegramProgressPreview("Working\n\n🧭 Agents", "<b>Working</b>\n<b>🧭 Agents</b>"),
+      telegramProgressPreview(
+        "Working\n\n🧭 Agents running",
+        "<b>Working</b>\n<b>🧭 Agents</b> <i>running</i>",
+      ),
     );
   });
 
@@ -412,7 +443,7 @@ describeTelegramDispatch("dispatchTelegramMessage progress-updates", () => {
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ replyOptions }) => {
       await replyOptions?.onReplyStart?.();
       await replyOptions?.onAssistantMessageStart?.();
-      await replyOptions?.onToolStart?.({
+      await emitToolStart(replyOptions, {
         name: "exec",
         phase: "start",
         itemId: "command-1",
@@ -422,7 +453,7 @@ describeTelegramDispatch("dispatchTelegramMessage progress-updates", () => {
       });
       await replyOptions?.onToolResult?.({
         text: "🛠️ Bash",
-        channelData: { openclawToolProgressId: "command-1" },
+        channelData: { openclawToolProgressId: "tool:command-1" },
       });
       return { queuedFinal: false };
     });
@@ -462,14 +493,18 @@ describeTelegramDispatch("dispatchTelegramMessage progress-updates", () => {
 
     expect(draftStream.clear).toHaveBeenCalledTimes(1);
     await queuedReplyOptions?.onQueuedFollowupAdmitted?.();
-    await queuedReplyOptions?.onToolStart?.({ name: "exec", phase: "start" });
+    await emitToolStart(queuedReplyOptions, {
+      name: "exec",
+      toolCallId: "followup-exec",
+      phase: "start",
+    });
     await queuedReplyOptions?.onToolResult?.({ text: "📄 Web Fetch: working" });
 
     expect(draftStream.forceNewMessage).toHaveBeenCalledTimes(1);
     expect(draftStream.updatePreview).toHaveBeenCalledWith(
       telegramProgressPreview(
-        "Shelling\n\n🛠️ Exec\n📄 Web Fetch: working",
-        "<b>Shelling</b>\n<b>🛠️ Exec</b>\n📄 Web Fetch: working",
+        "Shelling\n\n🛠️ Exec running\n📄 Web Fetch: working",
+        "<b>Shelling</b>\n<b>🛠️ Exec</b> <i>running</i>\n📄 Web Fetch: working",
       ),
     );
 
@@ -490,7 +525,7 @@ describeTelegramDispatch("dispatchTelegramMessage progress-updates", () => {
           progressText: "I'll make exactly 10 harmless, read-only tool calls.",
         });
         for (let index = 1; index <= 10; index += 1) {
-          await replyOptions?.onToolStart?.({
+          await emitToolStart(replyOptions, {
             phase: "start",
             name: "exec",
             toolCallId: `exec-${index}`,
@@ -524,160 +559,13 @@ describeTelegramDispatch("dispatchTelegramMessage progress-updates", () => {
     expectDeliveredReply(0, { text: "Done" });
   });
 
-  it("renders command status without command output in Telegram progress draft previews", async () => {
-    const draftStream = createSequencedDraftStream(2001);
-    createTelegramDraftStream.mockReturnValue(draftStream);
-    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ replyOptions }) => {
-      await replyOptions?.onReplyStart?.();
-      await replyOptions?.onAssistantMessageStart?.();
-      await replyOptions?.onToolStart?.({
-        name: "exec",
-        phase: "start",
-        toolCallId: "exec-1",
-        args: { command: "false" },
-      });
-      await replyOptions?.onCommandOutput?.({
-        phase: "end",
-        title: "command false",
-        name: "exec",
-        toolCallId: "exec-1",
-        output: "No such file or directory",
-        exitCode: 2,
-      });
-      return { queuedFinal: false };
-    });
-
-    await dispatchWithContext({
-      context: createContext(),
-      streamMode: "progress",
-      telegramCfg: {
-        streaming: {
-          mode: "progress",
-          progress: { toolProgress: true, label: "Shelling", commandText: "raw" },
-        },
-      },
-    });
-
-    // The finished line keeps the command text shown at start; the output
-    // event's item title ("command false") does not relabel it.
-    expect(draftStream.updatePreview).toHaveBeenLastCalledWith(
-      telegramProgressPreview(
-        "Shelling\n\n🛠️ exit 2; false",
-        "<b>Shelling</b>\n<b>🛠️ Exec</b> false <i>exit 2</i>",
-      ),
-    );
-  });
-
-  it("keeps the command text through the embedded producer's terminal command item", async () => {
-    const draftStream = createSequencedDraftStream(2001);
-    createTelegramDraftStream.mockReturnValue(draftStream);
-    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ replyOptions }) => {
-      await replyOptions?.onReplyStart?.();
-      await replyOptions?.onAssistantMessageStart?.();
-      // The embedded exec producer's event order for one failing command.
-      await replyOptions?.onToolStart?.({
-        itemId: "tool:exec-1",
-        name: "exec",
-        phase: "start",
-        toolCallId: "exec-1",
-        args: { command: "false" },
-      });
-      await replyOptions?.onItemEvent?.({
-        itemId: "tool:exec-1",
-        kind: "tool",
-        title: "exec false",
-        phase: "start",
-        status: "running",
-        name: "exec",
-        meta: "false",
-        toolCallId: "exec-1",
-        commandBearing: true,
-      });
-      await replyOptions?.onItemEvent?.({
-        itemId: "command:exec-1",
-        kind: "command",
-        title: "command false",
-        phase: "start",
-        status: "running",
-        name: "exec",
-        meta: "false",
-        toolCallId: "exec-1",
-      });
-      await replyOptions?.onCommandOutput?.({
-        phase: "end",
-        name: "exec",
-        toolCallId: "exec-1",
-        output: "No such file or directory",
-        status: "failed",
-        exitCode: 2,
-      });
-      await replyOptions?.onItemEvent?.({
-        itemId: "tool:exec-1",
-        kind: "tool",
-        title: "exec false",
-        phase: "end",
-        status: "failed",
-        name: "exec",
-        meta: "false",
-        toolCallId: "exec-1",
-        commandBearing: true,
-      });
-      await replyOptions?.onItemEvent?.({
-        itemId: "command:exec-1",
-        kind: "command",
-        title: "command false",
-        phase: "end",
-        status: "failed",
-        name: "exec",
-        meta: "false",
-        toolCallId: "exec-1",
-        summary: "No such file or directory",
-      });
-      await replyOptions?.onCommandOutput?.({
-        itemId: "command:exec-1",
-        phase: "end",
-        title: "command false",
-        name: "exec",
-        toolCallId: "exec-1",
-        output: "No such file or directory",
-        status: "failed",
-        exitCode: 2,
-      });
-      return { queuedFinal: false };
-    });
-
-    await dispatchWithContext({
-      context: createContext(),
-      streamMode: "progress",
-      telegramCfg: {
-        streaming: {
-          mode: "progress",
-          progress: { toolProgress: true, label: "Shelling", commandText: "raw" },
-        },
-      },
-    });
-
-    const previews = draftStream.updatePreview.mock.calls.map((call) => call[0]?.text ?? "");
-    expect(previews.length).toBeGreaterThan(0);
-    for (const preview of previews) {
-      expect(preview).toContain("<b>🛠️ Exec</b> false");
-      expect(preview).not.toContain("command false");
-    }
-    expect(draftStream.updatePreview).toHaveBeenLastCalledWith(
-      telegramProgressPreview(
-        "Shelling\n\n🛠️ exit 2; false",
-        "<b>Shelling</b>\n<b>🛠️ Exec</b> false <i>exit 2</i>",
-      ),
-    );
-  });
-
   it("hides command titles in Telegram status-only progress draft previews", async () => {
     const draftStream = createSequencedDraftStream(2001);
     createTelegramDraftStream.mockReturnValue(draftStream);
     dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ replyOptions }) => {
       await replyOptions?.onReplyStart?.();
       await replyOptions?.onAssistantMessageStart?.();
-      await replyOptions?.onToolStart?.({
+      await emitToolStart(replyOptions, {
         name: "exec",
         phase: "start",
         toolCallId: "exec-1",
@@ -691,6 +579,15 @@ describeTelegramDispatch("dispatchTelegramMessage progress-updates", () => {
         output: "secret response",
         exitCode: 2,
       });
+      await replyOptions?.onItemEvent?.(
+        projectAgentToolActivity({
+          name: "exec",
+          toolCallId: "exec-1",
+          phase: "result",
+          args: { command: "curl -H 'Authorization: token' https://example.test" },
+          isError: true,
+        }),
+      );
       return { queuedFinal: false };
     });
 
@@ -706,7 +603,10 @@ describeTelegramDispatch("dispatchTelegramMessage progress-updates", () => {
     });
 
     expect(draftStream.updatePreview).toHaveBeenLastCalledWith(
-      telegramProgressPreview("Shelling\n\n🛠️ exit 2", "<b>Shelling</b>\n<b>🛠️ Exec</b> exit 2"),
+      telegramProgressPreview(
+        "Shelling\n\n🛠️ Exec failed",
+        "<b>Shelling</b>\n<b>🛠️ Exec</b> <i>failed</i>",
+      ),
     );
   });
 });

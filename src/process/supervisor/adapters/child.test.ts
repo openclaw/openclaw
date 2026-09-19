@@ -99,12 +99,15 @@ describe("createChildAdapter", () => {
       flush: () => "",
     }));
     createServiceChildRelayAdapterMock.mockResolvedValue({
-      pid: 9999,
-      onStdout: vi.fn(),
-      onStderr: vi.fn(),
-      wait: vi.fn(),
-      kill: vi.fn(),
-      dispose: vi.fn(),
+      ready: Promise.resolve(),
+      adapter: {
+        pid: 9999,
+        onStdout: vi.fn(),
+        onStderr: vi.fn(),
+        wait: vi.fn(),
+        kill: vi.fn(),
+        dispose: vi.fn(),
+      },
     });
     delete process.env.OPENCLAW_SERVICE_MARKER;
     vi.useRealTimers();
@@ -732,9 +735,9 @@ describe("createChildAdapter", () => {
     const { adapter } = await createAdapterHarness({ pid: 9756 });
     const settled = vi.fn();
     void adapter.wait().then(settled);
-    expect(adapter.waitForExtinction).toBeUndefined();
+    expect(adapter.waitForExtinction).toBeTypeOf("function");
     const closing = closeOwnedStdioProcess(adapter, { force: true });
-    const rejected = expect(closing).rejects.toThrow("cannot confirm descendant extinction");
+    const rejected = expect(closing).rejects.toThrow("before the kill deadline");
     await vi.advanceTimersByTimeAsync(3_000);
     adapter.kill("SIGKILL");
     await vi.advanceTimersByTimeAsync(999);
@@ -745,7 +748,7 @@ describe("createChildAdapter", () => {
     adapter.kill("SIGKILL");
     await vi.advanceTimersByTimeAsync(4_000);
     expect(settled).toHaveBeenCalledOnce();
-    expect(adapter.waitForExtinction).toBeUndefined();
+    await expect(adapter.waitForExtinction!()).rejects.toThrow("before the kill deadline");
     adapter.dispose();
   });
 

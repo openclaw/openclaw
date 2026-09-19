@@ -28,6 +28,7 @@ type FileWriteParams = {
   createParents: boolean;
   expectedSha256?: string;
   followSymlinks?: boolean;
+  rejectHardlinks?: boolean;
   preflightOnly?: boolean;
   expectedCanonicalPath?: unknown;
   expectedBinding?: unknown;
@@ -40,6 +41,7 @@ type FileWriteSuccess = {
   sha256: string;
   overwritten: boolean;
   binding: PathBinding;
+  rejectHardlinks?: true;
 };
 
 type FileWriteError = {
@@ -146,6 +148,7 @@ async function writeBoundTarget(input: {
   binding: Extract<PathBinding, { kind: "write" }>;
   buffer: Buffer;
   canonicalTargetPath: string;
+  rejectHardlinks: boolean;
 }): Promise<
   { ok: true; path: string; overwritten: boolean; identity: FileIdentity } | FileWriteError
 > {
@@ -172,6 +175,11 @@ async function writeBoundTarget(input: {
           "filesystem identity differs from the authorized target",
           input.canonicalTargetPath,
         );
+      }
+      // Workspace document writes must not modify aliases outside their allowed path.
+      // Ordinary file.write retains its existing inode-preserving behavior.
+      if (input.rejectHardlinks && stats.nlink > 1n) {
+        return err("HARDLINK_TARGET_DENIED", "refusing to overwrite a file with hard links");
       }
       // Preserve the inode authorized by the binding while fs-safe owns write rollback.
       await overwriteFileHandle(handle, input.buffer);
@@ -256,6 +264,7 @@ export async function handleFileWrite(
     typeof params?.expectedSha256 === "string" ? params.expectedSha256 : undefined;
   const followSymlinks = params?.followSymlinks === true;
   const preflightOnly = params?.preflightOnly === true;
+  const rejectHardlinks = params?.rejectHardlinks === true;
 
   // 1. Validate path: must be absolute, non-empty, no NUL byte
   if (!rawPath) {
@@ -357,6 +366,7 @@ export async function handleFileWrite(
         sha256: computedSha256,
         overwritten: false,
         binding: await captureWriteBinding(canonicalTargetPath),
+        ...(rejectHardlinks ? { rejectHardlinks: true as const } : {}),
       };
     }
     if (!expectedBinding) {
@@ -403,6 +413,9 @@ export async function handleFileWrite(
         `file already exists and overwrite is false: ${targetPath}`,
       );
     }
+    if (rejectHardlinks && existingLStat.nlink > 1n) {
+      return err("HARDLINK_TARGET_DENIED", "refusing to overwrite a file with hard links");
+    }
     overwritten = true;
     existingIdentity = fileIdentity(existingLStat);
   } catch (statErr: unknown) {
@@ -439,6 +452,7 @@ export async function handleFileWrite(
       sha256: computedSha256,
       overwritten,
       binding: await captureWriteBinding(canonicalTargetPath, existingIdentity),
+      ...(rejectHardlinks ? { rejectHardlinks: true as const } : {}),
     };
   }
 
@@ -447,6 +461,7 @@ export async function handleFileWrite(
       binding: expectedBinding,
       buffer: buf,
       canonicalTargetPath,
+      rejectHardlinks,
     });
     if (!writeResult.ok) {
       return writeResult;

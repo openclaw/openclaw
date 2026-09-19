@@ -383,6 +383,12 @@ export function closeOpenClawAgentDatabases(rootPath?: string): void {
 
 /** Drain native opens before a lifecycle owner releases shared state or removes its root. */
 export async function closeOpenClawAgentDatabasesAsync(rootPath?: string): Promise<void> {
+  // Retained resources may drain slowly; revoke native admission before yielding to them.
+  for (const owner of cache.activePending) {
+    if (rootPath === undefined || isPathInside(rootPath, owner.path)) {
+      revokePendingAgentDatabaseOpen(owner.path);
+    }
+  }
   await drainAgentDatabaseResources({ rootPath }, async () => {
     while (true) {
       const pending = [...cache.activePending].filter(

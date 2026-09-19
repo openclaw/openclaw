@@ -38,14 +38,19 @@ describe("saved terminal assistant identity", () => {
     });
     expect(state.runs[runId]?.message).toBe(durable);
   });
-  it.each(["error", "timeout", "aborted", "completed"] as const)(
-    "reconciles %s by receipt in either order and across cursor/full replay",
-    (status) => {
+  it.each(
+    (["error", "timeout", "aborted", "completed"] as const).flatMap((status) =>
+      (["error", "toolUse"] as const).map((stopReason) => ({ status, stopReason })),
+    ),
+  )(
+    "reconciles $status with $stopReason by receipt in either order and across cursor/full replay",
+    ({ status, stopReason }) => {
       for (const persistedFirst of [false, true]) {
         const terminal = partial({ runId, idempotencyKey: "saved-final" });
         // Persistence hooks may transform content and add media after streaming.
         const durable = {
           ...saved("saved-final", 2),
+          stopReason,
           content: [
             { type: "text", text: "Saved transformed text" },
             { type: "image", source: { type: "url", url: "https://example.test/image.png" } },

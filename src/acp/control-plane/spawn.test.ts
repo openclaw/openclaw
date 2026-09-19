@@ -367,15 +367,31 @@ describe("failed ACP provisional cleanup", () => {
           { ...scope, context, resolveGatewayContext: () => context },
           async () => {
             vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-            const cleaning = cleanup({ ...initialized, closeRuntimeOnFailure: retainedRelease });
+            const settled = vi.fn();
+            const cleaning = cleanup({
+              ...initialized,
+              closeRuntimeOnFailure: retainedRelease,
+            }).then(settled);
             try {
               await entered.promise;
               await vi.advanceTimersByTimeAsync(10_001);
-              await cleaning;
+              if (boundary === "before admission") {
+                await cleaning;
+              } else {
+                expect(
+                  settled,
+                  "admitted deletion must settle before cleanup returns",
+                ).not.toHaveBeenCalled();
+              }
               expect(retainedRelease).toHaveBeenCalledTimes(
                 boundary === "before admission" ? 1 : 0,
               );
               expect(close).toHaveBeenCalledOnce();
+              release.resolve();
+              await cleaning;
+              expect(loadSessionEntry({ sessionKey, agentId })).toEqual(
+                boundary === "before admission" ? before : undefined,
+              );
             } finally {
               vi.useRealTimers();
               release.resolve();
@@ -383,9 +399,6 @@ describe("failed ACP provisional cleanup", () => {
               await Promise.allSettled(executions);
             }
             expect(deletion).toHaveBeenCalledTimes(boundary === "before admission" ? 0 : 1);
-            expect(loadSessionEntry({ sessionKey, agentId })).toEqual(
-              boundary === "before admission" ? before : undefined,
-            );
             expect(close).toHaveBeenCalledOnce();
             expect(ensureSession).toHaveBeenCalledOnce();
             expect(socket).not.toHaveBeenCalled();

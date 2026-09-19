@@ -2,15 +2,12 @@ import {
   asNullableRecord as asConfigRecord,
   isRecord,
 } from "@openclaw/normalization-core/record-coerce";
-import { stableStringify } from "@openclaw/normalization-core/stable-stringify";
 import { GatewayRequestError } from "../../api/gateway.ts";
 import type { ConfigSnapshot } from "../../api/types.ts";
 import { coerceConfigFormNumberString } from "../../components/config-form.numeric.ts";
 import { t } from "../../i18n/index.ts";
 import {
   cloneConfigObject,
-  isSensitiveLeafValue,
-  REDACTED_SENTINEL,
   removePathValue,
   sanitizeRedactedFormForSubmit,
   schemaMayAcceptString,
@@ -21,6 +18,11 @@ import {
 } from "../config-form-utils.ts";
 import { formatUiError } from "../format-error.ts";
 import { parseJson5Text, warmJson5 } from "../json5-runtime.ts";
+import {
+  configContentConflicts,
+  configFormContentConflicts,
+  replayConfigDraftEdits,
+} from "./config-draft-replay.ts";
 import {
   resolveAgentConfigEntryTarget,
   resolveEditableSnapshotConfig,
@@ -312,7 +314,8 @@ export function configFormForSubmit(state: RuntimeConfigState): Record<string, u
   return sanitizeRedactedFormForSubmit(
     form,
     state.configFormOriginal,
-    state.configRawOriginalParsed,
+    // The draft original is include-resolved source; raw only describes the root file.
+    state.configFormOriginal,
   );
 }
 
@@ -326,90 +329,6 @@ export type ConfigSubmittedDraft = {
 };
 
 export type ConfigWriteAck = { config: Record<string, unknown>; hash: string };
-
-function replayConfigDraftEdits(
-  submitted: Record<string, unknown> | null,
-  current: Record<string, unknown> | null,
-  acknowledgedConfig: Record<string, unknown>,
-): Record<string, unknown> | null {
-  if (!submitted || !current) {
-    return null;
-  }
-  const draft = cloneConfigObject(acknowledgedConfig);
-  const replay = (
-    before: Record<string, unknown>,
-    after: Record<string, unknown>,
-    canonical: Record<string, unknown>,
-    path: string[],
-  ) => {
-    for (const key of new Set([...Object.keys(before), ...Object.keys(after)])) {
-      const nextPath = [...path, key];
-      if (!Object.hasOwn(after, key)) {
-        removePathValue(draft, nextPath);
-      } else if (isRecord(before[key]) && isRecord(after[key]) && isRecord(canonical[key])) {
-        replay(before[key], after[key], canonical[key], nextPath);
-      } else if (stableStringify(before[key]) !== stableStringify(after[key])) {
-        setPathValue(draft, nextPath, cloneConfigObject(after[key]));
-      }
-    }
-  };
-  replay(submitted, current, acknowledgedConfig, []);
-  return draft;
-}
-
-// Redacted receipt values describe visibility, not a change to the stored secret.
-function projectConfigContent(
-  config: Record<string, unknown>,
-  canonical: Record<string, unknown>,
-): Record<string, unknown> {
-  const project = (value: unknown, visible: unknown): unknown => {
-    if (visible === REDACTED_SENTINEL && isSensitiveLeafValue(value)) {
-      return REDACTED_SENTINEL;
-    }
-    if (Array.isArray(value)) {
-      return value.map((item, index) =>
-        project(item, Array.isArray(visible) ? visible[index] : undefined),
-      );
-    }
-    if (isRecord(value)) {
-      return Object.fromEntries(
-        Object.entries(value).map(([key, item]) => [
-          key,
-          project(item, isRecord(visible) ? visible[key] : undefined),
-        ]),
-      );
-    }
-    return value;
-  };
-  return Object.fromEntries(
-    Object.entries(config).map(([key, value]) => [key, project(value, canonical[key])]),
-  );
-}
-
-function configContentConflicts(
-  original: Record<string, unknown>,
-  current: Record<string, unknown>,
-  canonical: Record<string, unknown>,
-): boolean {
-  const before = projectConfigContent(original, canonical);
-  const draft = projectConfigContent(current, canonical);
-  return (
-    stableStringify(replayConfigDraftEdits(before, canonical, draft)) !== stableStringify(draft)
-  );
-}
-
-function configFormContentConflicts(
-  original: Record<string, unknown>,
-  current: Record<string, unknown>,
-  canonical: Record<string, unknown>,
-): boolean {
-  const before = projectConfigContent(original, canonical);
-  const draft = projectConfigContent(current, canonical);
-  return (
-    stableStringify(replayConfigDraftEdits(before, draft, canonical)) !==
-    stableStringify(replayConfigDraftEdits(before, canonical, draft))
-  );
-}
 
 export function assertConfigDraftCurrent(state: RuntimeConfigState): void {
   const canonical = resolveEditableSnapshotConfig(state.configSnapshot);
@@ -726,6 +645,56 @@ export function resetConfigPendingChanges(state: RuntimeConfigState) {
 
 export function removeConfigFormValue(state: RuntimeConfigState, path: Array<string | number>) {
   mutateConfigForm(state, (draft) => removePathValue(draft, path));
+}
+
+/** Rebase surviving edits onto the saved snapshot without replaying this field's intent. */
+export function discardConfigFormValue(state: RuntimeConfigState, path: Array<string | number>) {
+  const canonical = resolveEditableSnapshotConfig(state.configSnapshot);
+  const original = state.configFormOriginal;
+  if (
+    !canonical ||
+    !state.configSnapshot?.hash ||
+    state.configValid !== true ||
+    !original ||
+    !state.configForm ||
+    state.configFormMode !== "form"
+  ) {
+    return false;
+  }
+  let current = cloneConfigObject(state.configForm);
+  const previous = path.reduce<unknown>(
+    (value, segment) =>
+      Array.isArray(value) && typeof segment === "number"
+        ? value[segment]
+        : isRecord(value) && typeof segment === "string"
+          ? value[segment]
+          : undefined,
+    original,
+  );
+  if (previous === undefined) {
+    removePathValue(current, path);
+  } else {
+    setPathValue(current, path, cloneConfigObject(previous));
+  }
+  // Restore absence with the submission owner's existing empty-container rules;
+  // otherwise Cancel alone leaves a dirty draft and schedules a redundant write.
+  current = sanitizeRedactedFormForSubmit(current, original, original);
+  if (configFormContentConflicts(original, current, canonical)) {
+    state.configAutoSaveStatus = "conflict";
+    state.lastError = "config changed since last load; re-run config.get and retry";
+    return false;
+  }
+  const draft = replayConfigDraftEdits(original, current, canonical);
+  if (!draft) {
+    return false;
+  }
+  rebaseConfigDraft(state);
+  if (state.configAutoSaveStatus !== "paused") {
+    state.configAutoSaveStatus = "idle";
+  }
+  syncConfigDraft(state, draft);
+  state.lastError = null;
+  return true;
 }
 
 export function stageDefaultAgentConfigEntry(state: RuntimeConfigState, agentId: string): boolean {

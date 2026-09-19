@@ -66,7 +66,7 @@ export {
 } from "../gateway/session-transcript-catalog.js";
 export {
   createSessionCatalogGitHubLinker,
-  projectSessionCatalogSourceActor,
+  createSessionCatalogSourceActorProjector,
 } from "../gateway/session-catalog-identity.js";
 
 export {

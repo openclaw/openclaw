@@ -6,9 +6,10 @@ import { createServer as createNetServer, type Socket } from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
-import { beforeAll, describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it, vi } from "vitest";
 import { testing } from "../../scripts/bench-gateway-restart.ts";
 import { stopChild } from "../../scripts/lib/gateway-bench-child.ts";
+import * as gatewayBenchProbes from "../../scripts/lib/gateway-bench-probes.ts";
 import { parseProcessRssKb, requestProbeStatus } from "../../scripts/lib/gateway-bench-probes.ts";
 import {
   collectOutputLines,
@@ -746,27 +747,23 @@ node    1234 user   12u  IPv4    0t0      TCP localhost:1234
   });
 
   it("finishes restart probes when ready arrives without an unavailable window", async () => {
-    const server = createServer((_req, res) => {
-      res.statusCode = 200;
-      res.end("ok");
-    });
-    await new Promise<void>((resolve, reject) => {
-      server.once("error", reject);
-      server.listen(0, "127.0.0.1", () => resolve());
-    });
+    let ready = false;
+    // Supply a healthy observation without the real HTTP probe's load-sensitive deadline.
+    const probe = vi
+      .spyOn(gatewayBenchProbes, "requestProbeStatus")
+      .mockImplementation(async () => {
+        ready = true;
+        return { errorKind: null, status: 200 };
+      });
     try {
-      const address = server.address();
-      if (!address || typeof address === "string") {
-        throw new Error("test server did not bind to a TCP port");
-      }
       const sampleStartAt = performance.now();
       const result = await testing.waitForRestartProbe({
         deadlineAt: sampleStartAt + 2_000,
         events: [],
-        isDone: () => performance.now() - sampleStartAt > 60,
+        isDone: () => ready,
         iteration: 1,
         path: "/readyz",
-        port: address.port,
+        port: 0,
         sampleStartAt,
         signalSentAt: sampleStartAt,
       });
@@ -776,10 +773,10 @@ node    1234 user   12u  IPv4    0t0      TCP localhost:1234
       expect(result.ms ?? 0).toBeLessThan(1_000);
       expect(result.downtimeMs).toBeNull();
       expect(result.unavailableMs).toBeNull();
+      expect(result.firstErrorKind).toBeNull();
+      expect(probe).toHaveBeenCalledOnce();
     } finally {
-      await new Promise<void>((resolve, reject) => {
-        server.close((error) => (error ? reject(error) : resolve()));
-      });
+      probe.mockRestore();
     }
   });
 

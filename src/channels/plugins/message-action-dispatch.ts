@@ -4,8 +4,17 @@
  * Runs plugin-owned message actions from the shared agent tool with sender trust checks.
  */
 import type { AgentToolResult } from "../../agents/runtime/index.js";
+import type { MessageActionAuthorization } from "../../gateway/message-action-turn-capability.js";
+import { assertOutboundHandoffCurrent } from "../../infra/outbound/deliver-handoff.js";
+import {
+  prepareMessageActionWriteAuthority,
+  withMessageActionWriteAuthority,
+} from "../../infra/outbound/message-action-write-authority.js";
+import { normalizeAccountId } from "../../routing/account-id.js";
 import { withChannelReadAuthority } from "../../shared/channel-read-authority.js";
+import { normalizeMessageChannel } from "../../utils/message-channel-normalize.js";
 import { normalizeConversationReadInvocationOrigin } from "./conversation-read-origin.js";
+import { resolveChannelDefaultAccountId } from "./helpers.js";
 import {
   hasCurrentConversationTarget,
   hasMatchingCurrentAccountContext,
@@ -31,6 +40,8 @@ type ServerOwnedConversationReadOrigin = ReturnType<
 
 type ChannelMessageActionDispatchContext = Omit<ChannelMessageActionContext, "action"> & {
   action: unknown;
+  /** Host-only authority, removed before invoking any plugin callback. */
+  messageActionAuthorization?: MessageActionAuthorization;
 };
 
 type PreparedMessageActionReadContext = {
@@ -39,6 +50,9 @@ type PreparedMessageActionReadContext = {
   origin: ServerOwnedConversationReadOrigin;
   actionPolicy: ChannelMessageActionReadPolicy;
   enforcement: MessageActionReadEnforcement;
+  scheduledAccess?: ScheduledMessageActionAccess;
+  assertDashboardReadCurrent?: () => void;
+  hasRegistrationAuthority: boolean;
   assertReadAuthorityCurrent?: () => void;
   assertAliasAuthorityCurrent: () => void;
 };
@@ -136,7 +150,7 @@ type MessageActionReadEnforcement =
     };
 
 // Context retrieval only. The broader conversation-read class also contains mutations.
-const FENCED_PROVIDER_READ_ACTIONS = new Set<ChannelMessageActionName>([
+const FENCED_PROVIDER_READ_ACTIONS: ReadonlySet<string> = new Set<ChannelMessageActionName>([
   "read",
   "search",
   "reactions",
@@ -154,6 +168,85 @@ const FENCED_PROVIDER_READ_ACTIONS = new Set<ChannelMessageActionName>([
   "download-file",
 ]);
 
+export function isFencedProviderReadAction(action: string): action is ChannelMessageActionName {
+  return FENCED_PROVIDER_READ_ACTIONS.has(action);
+}
+
+const SCHEDULED_MESSAGE_WRITE_POLICIES = new Map<string, "operator" | "provider">([
+  ["channel-edit", "operator"],
+  ["delete", "provider"],
+  ["edit", "provider"],
+  ["pin", "provider"],
+  ["unpin", "provider"],
+]);
+
+/** Host admission stays action-specific; a plugin declaration never adds actions. */
+export function isScheduledMessageWriteAction(
+  action: string,
+): action is "channel-edit" | "delete" | "edit" | "pin" | "unpin" {
+  return SCHEDULED_MESSAGE_WRITE_POLICIES.has(action);
+}
+
+type ScheduledMessageActionAccess = {
+  assertCurrent: () => void;
+} & (
+  | { kind: "trusted-operator" }
+  | {
+      kind: "account";
+      channelRequester?: NonNullable<MessageActionAuthorization["scheduled"]>["channelRequester"];
+    }
+);
+
+/** Validates a live scheduled grant's scope; each action consumer owns admission. */
+function resolveScheduledMessageActionAccess(params: {
+  authorization?: MessageActionAuthorization;
+  action: ChannelMessageActionName;
+  channel: string;
+  accountId?: string | null;
+}): ScheduledMessageActionAccess | undefined {
+  const authority = params.authorization?.scheduled;
+  if (!authority) {
+    return undefined;
+  }
+  const assertCurrent = authority.assertSourceCurrent ?? authority.assertCurrent;
+  assertCurrent();
+  const policy = authority.policy;
+  if (policy.mode === "trusted") {
+    return { kind: "trusted-operator", assertCurrent };
+  }
+  if (!params.accountId || normalizeAccountId(params.accountId) !== policy.ownerAccountId) {
+    throw new Error(
+      `Scheduled ${params.channel}:${params.action} cannot use another creator account.`,
+    );
+  }
+  if (params.action === "channel-edit" && normalizeMessageChannel(params.channel) === "discord") {
+    const requester = authority.channelRequester;
+    if (!requester) {
+      throw new Error(
+        "This account-bound automation needs fresh Discord requester authorization for channel-edit. " +
+          "From its original Discord conversation and account, edit it with an explicit toolsAllow cap including message, or recreate it there.",
+      );
+    }
+    if (requester.channel !== "discord" || requester.accountId !== policy.ownerAccountId) {
+      throw new Error(
+        "Scheduled Discord channel-edit requires its authenticated requester account and channel.",
+      );
+    }
+    return { kind: "account", channelRequester: requester, assertCurrent };
+  }
+  const origin = policy.ownerOrigin;
+  if (
+    !origin ||
+    origin.kind === "unknown" ||
+    (origin.kind === "external" && normalizeMessageChannel(params.channel) !== origin.channel)
+  ) {
+    throw new Error(
+      `Scheduled ${params.channel}:${params.action} requires matching recorded creator origin.`,
+    );
+  }
+  return { kind: "account", assertCurrent };
+}
+
 function resolveMessageActionReadEnforcement(params: {
   action: ChannelMessageActionName;
   actions: ChannelPlugin["actions"];
@@ -164,7 +257,7 @@ function resolveMessageActionReadEnforcement(params: {
   if (providerOwnedReadGates === true || providerOwnedReadGates?.includes(params.action) === true) {
     const fencedReadAction =
       params.actions?.readAuthorityActions?.includes(params.action) === true &&
-      FENCED_PROVIDER_READ_ACTIONS.has(params.action);
+      isFencedProviderReadAction(params.action);
     if (params.pluginOrigin === "bundled") {
       // Bundled admission stays provider-owned, but an opted-in read must use
       // its registered lifecycle owner rather than an unfenced artifact fallback.
@@ -263,26 +356,56 @@ function prepareMessageActionReadContext(
     return undefined;
   }
   const action = ctx.action as ChannelMessageActionName;
-  const origin = normalizeConversationReadInvocationOrigin(
-    ctx.conversationReadOrigin,
-  ) as ServerOwnedConversationReadOrigin;
-  const actionContext: ChannelMessageActionContext = {
-    ...ctx,
-    action,
-    conversationReadOrigin: origin,
-  };
   const authority = registration.captureReadAuthority?.();
+  const hasRegistrationAuthority = authority?.() === true;
   const enforcement = resolveMessageActionReadEnforcement({
     action,
     actions: registration.plugin.actions,
     pluginOrigin: registration.origin,
-    hasReadAuthority: authority?.() === true,
+    hasReadAuthority: hasRegistrationAuthority,
   });
+  const scheduledAccess =
+    isFencedProviderReadAction(action) &&
+    enforcement.kind === "provider-owned" &&
+    enforcement.fenced
+      ? resolveScheduledMessageActionAccess({
+          authorization: ctx.messageActionAuthorization,
+          action,
+          channel: ctx.channel,
+          accountId: ctx.accountId,
+        })
+      : undefined;
+  const origin = (
+    scheduledAccess
+      ? scheduledAccess.kind === "trusted-operator"
+        ? "direct-operator"
+        : "delegated"
+      : normalizeConversationReadInvocationOrigin(ctx.conversationReadOrigin)
+  ) as ServerOwnedConversationReadOrigin;
+  const { messageActionAuthorization: _authorization, ...pluginContext } = ctx;
+  const actionContext: ChannelMessageActionContext = {
+    ...pluginContext,
+    action,
+    conversationReadOrigin: origin,
+  };
   const assertCallerCurrent = ctx.assertDirectAdapterHandoff;
+  // A dashboard grant cannot replace native provider/account context or a job grant.
+  const assertDashboardReadCurrent =
+    enforcement.kind === "provider-owned" &&
+    enforcement.fenced &&
+    !ctx.messageActionAuthorization?.scheduled &&
+    ctx.toolContext === undefined &&
+    ctx.requesterAccountId === undefined
+      ? ctx.messageActionAuthorization?.assertDashboardReadCurrent
+      : undefined;
   const assertReadAuthorityCurrent =
-    origin !== "direct-operator" && enforcement.kind === "provider-owned" && enforcement.fenced
+    (origin !== "direct-operator" || scheduledAccess) &&
+    enforcement.kind === "provider-owned" &&
+    enforcement.fenced
       ? () => {
           assertCallerCurrent?.();
+          assertDashboardReadCurrent?.();
+          scheduledAccess?.assertCurrent();
           if (!authority?.()) {
             throw new Error(`Plugin ${ctx.channel} read authority is no longer active.`);
           }
@@ -294,9 +417,14 @@ function prepareMessageActionReadContext(
     origin,
     actionPolicy,
     enforcement,
+    scheduledAccess,
+    assertDashboardReadCurrent,
+    hasRegistrationAuthority,
     assertReadAuthorityCurrent,
     assertAliasAuthorityCurrent: () => {
       assertCallerCurrent?.();
+      assertDashboardReadCurrent?.();
+      scheduledAccess?.assertCurrent();
       const current =
         registration.captureReadAuthority && !authority?.()
           ? undefined
@@ -331,6 +459,8 @@ type MessageActionConversationReadGateParams = {
   origin: ServerOwnedConversationReadOrigin;
   actionPolicy: ChannelMessageActionReadPolicy;
   enforcement: MessageActionReadEnforcement;
+  scheduledAccess?: ScheduledMessageActionAccess;
+  assertDashboardReadCurrent?: () => void;
 };
 
 /** The shared host decision before any read-capable plugin callback runs. */
@@ -345,6 +475,8 @@ function resolveMessageActionConversationReadGate(
     if (
       params.enforcement.fenced &&
       params.enforcement.pluginTrust === "external" &&
+      !params.scheduledAccess &&
+      !params.assertDashboardReadCurrent &&
       (!hasMatchingCurrentProviderContext(params.ctx) ||
         !hasMatchingCurrentAccountContext(params.ctx) ||
         !hasCurrentConversationTarget(params.ctx))
@@ -401,11 +533,84 @@ function enforceMessageActionConversationReadGate(
   );
 }
 
-/** Authorizes and canonicalizes external exact-current targets before target resolution. */
+function prepareScheduledMessageWriteContext(
+  ctx: ChannelMessageActionDispatchContext,
+  prepared: PreparedMessageActionReadContext,
+): ChannelMessageActionContext | undefined {
+  const action = prepared.actionContext.action;
+  const policy = SCHEDULED_MESSAGE_WRITE_POLICIES.get(action);
+  if (!policy || !ctx.messageActionAuthorization?.scheduled) {
+    return undefined;
+  }
+  const accountId =
+    ctx.accountId ?? resolveChannelDefaultAccountId({ plugin: prepared.plugin, cfg: ctx.cfg });
+  const access = resolveScheduledMessageActionAccess({
+    authorization: ctx.messageActionAuthorization,
+    action,
+    channel: ctx.channel,
+    accountId,
+  });
+  if (!access) {
+    return undefined;
+  }
+  const channelRequester = access.kind === "account" ? access.channelRequester : undefined;
+  if (policy === "operator" && access.kind !== "trusted-operator" && !channelRequester) {
+    throw new Error(
+      `Scheduled ${ctx.channel}:${action} requires a job authorized by an operator. Account jobs cannot inherit operator administration.`,
+    );
+  }
+  if (policy === "provider") {
+    const providerGates = prepared.plugin.actions?.providerOwnedReadGates;
+    if (providerGates !== true && !providerGates?.includes(action)) {
+      throw new Error(
+        `Scheduled ${ctx.channel}:${action} requires provider-owned target authorization.`,
+      );
+    }
+  }
+  return prepareMessageActionWriteAuthority({
+    context: {
+      ...prepared.actionContext,
+      accountId,
+      ...(channelRequester
+        ? {
+            requesterAccountId: channelRequester.accountId,
+            requesterSenderId: channelRequester.senderId,
+            senderIsOwner: false,
+            toolContext: undefined,
+          }
+        : { senderIsOwner: policy === "operator" ? true : prepared.actionContext.senderIsOwner }),
+      conversationReadOrigin:
+        policy === "operator"
+          ? prepared.actionContext.conversationReadOrigin
+          : access.kind === "trusted-operator"
+            ? "direct-operator"
+            : "delegated",
+      assertDirectAdapterHandoff: prepared.assertAliasAuthorityCurrent,
+    },
+    plugin: prepared.plugin,
+    hasRegistrationAuthority: prepared.hasRegistrationAuthority,
+    assertCurrent: access.assertCurrent,
+  });
+}
+
+/** Admit provider preparation before resolving an external target. */
 export function prepareExternalMessageActionTargetForResolution(
   ctx: ChannelMessageActionDispatchContext,
-): { params: Record<string, unknown>; assertReadAuthorityCurrent?: () => void } {
+): {
+  params: Record<string, unknown>;
+  accountId?: string | null;
+  assertReadAuthorityCurrent?: () => void;
+  assertTargetAuthorityCurrent?: () => void;
+} {
   const prepared = prepareMessageActionReadContext(ctx);
+  const scheduledWrite = prepared && prepareScheduledMessageWriteContext(ctx, prepared);
+  if (scheduledWrite) {
+    return {
+      params: ctx.params,
+      accountId: scheduledWrite.accountId,
+      assertTargetAuthorityCurrent: scheduledWrite.assertDirectAdapterHandoff,
+    };
+  }
   if (prepared?.assertReadAuthorityCurrent) {
     prepared.assertReadAuthorityCurrent();
     enforceMessageActionConversationReadGate({
@@ -435,9 +640,16 @@ export function shouldDeferExternalMessageActionTargetResolution(
   ctx: ChannelMessageActionDispatchContext,
 ): boolean {
   const prepared = prepareMessageActionReadContext(ctx);
-  // Official reads also wait for the Gateway's attested requester and live registry.
+  // Scheduled writers and official reads wait for the Gateway's attested
+  // requester and live registry before any alias lookup.
   return (
-    isExternalDelegatedMessageActionRead(prepared) || Boolean(prepared?.assertReadAuthorityCurrent)
+    isExternalDelegatedMessageActionRead(prepared) ||
+    Boolean(prepared?.assertReadAuthorityCurrent) ||
+    Boolean(
+      prepared &&
+      ctx.messageActionAuthorization?.scheduled &&
+      isScheduledMessageWriteAction(prepared.actionContext.action),
+    )
   );
 }
 
@@ -463,53 +675,63 @@ export async function dispatchChannelMessageAction(
   if (!prepared) {
     return null;
   }
-  return await withChannelReadAuthority(prepared.assertReadAuthorityCurrent, async () => {
-    const { actionContext, plugin } = prepared;
-    const actions = plugin.actions;
-    if (!actions?.handleAction) {
-      return null;
-    }
-    const authorizedActionContext = attachExternalCurrentTargetSibling({
-      ctx: actionContext,
-      ...prepared,
+  const scheduledWrite = prepareScheduledMessageWriteContext(ctx, prepared);
+  const run = (actionContext: ChannelMessageActionContext) =>
+    withChannelReadAuthority(prepared.assertReadAuthorityCurrent, async () => {
+      const { plugin } = prepared;
+      const actions = plugin.actions;
+      if (!actions?.handleAction) {
+        return null;
+      }
+      const authorizedActionContext = attachExternalCurrentTargetSibling({
+        ctx: actionContext,
+        ...prepared,
+      });
+      const gateParams = {
+        ctx: authorizedActionContext,
+        ...prepared,
+      };
+      // This writer passed the private job/account gate and declared provider target checks.
+      const match =
+        scheduledWrite && SCHEDULED_MESSAGE_WRITE_POLICIES.get(actionContext.action) === "provider"
+          ? true
+          : resolveMessageActionConversationReadGate(gateParams);
+      let matches: boolean;
+      if (typeof match === "function") {
+        prepared.assertAliasAuthorityCurrent();
+        matches = await match();
+        prepared.assertAliasAuthorityCurrent();
+      } else {
+        matches = match;
+      }
+      enforceMessageActionConversationReadMatch(gateParams, matches);
+      // Some plugin actions depend on the sender identity to enforce channel-local
+      // trust. Reject tool-driven calls before invoking the action without it.
+      if (
+        requiresTrustedRequesterSender(authorizedActionContext, plugin) &&
+        !authorizedActionContext.requesterSenderId?.trim()
+      ) {
+        throw new Error(
+          `Trusted sender identity is required for ${authorizedActionContext.channel}:${authorizedActionContext.action} in tool-driven contexts.`,
+        );
+      }
+      // `handleAction` may be broad; `supportsAction` lets plugins cheaply decline
+      // action names before the dispatcher enters channel-specific behavior.
+      if (
+        actions.supportsAction &&
+        !actions.supportsAction({ action: authorizedActionContext.action })
+      ) {
+        return null;
+      }
+      assertOutboundHandoffCurrent(authorizedActionContext.assertDirectAdapterHandoff);
+      prepared.assertReadAuthorityCurrent?.();
+      if (typeof match === "function") {
+        prepared.assertAliasAuthorityCurrent();
+      }
+      return await actions.handleAction(authorizedActionContext);
     });
-    const gateParams = {
-      ctx: authorizedActionContext,
-      ...prepared,
-    };
-    const match = resolveMessageActionConversationReadGate(gateParams);
-    let matches: boolean;
-    if (typeof match === "function") {
-      prepared.assertAliasAuthorityCurrent();
-      matches = await match();
-      prepared.assertAliasAuthorityCurrent();
-    } else {
-      matches = match;
-    }
-    enforceMessageActionConversationReadMatch(gateParams, matches);
-    // Some plugin actions depend on the sender identity to enforce channel-local
-    // trust. Reject tool-driven calls before invoking the action without it.
-    if (
-      requiresTrustedRequesterSender(authorizedActionContext, plugin) &&
-      !authorizedActionContext.requesterSenderId?.trim()
-    ) {
-      throw new Error(
-        `Trusted sender identity is required for ${authorizedActionContext.channel}:${authorizedActionContext.action} in tool-driven contexts.`,
-      );
-    }
-    // `handleAction` may be broad; `supportsAction` lets plugins cheaply decline
-    // action names before the dispatcher enters channel-specific behavior.
-    if (
-      actions.supportsAction &&
-      !actions.supportsAction({ action: authorizedActionContext.action })
-    ) {
-      return null;
-    }
-    authorizedActionContext.assertDirectAdapterHandoff?.();
-    prepared.assertReadAuthorityCurrent?.();
-    if (typeof match === "function") {
-      prepared.assertAliasAuthorityCurrent();
-    }
-    return await actions.handleAction(authorizedActionContext);
-  });
+  if (!scheduledWrite) {
+    return await run(prepared.actionContext);
+  }
+  return await withMessageActionWriteAuthority({ context: scheduledWrite, run });
 }

@@ -73,7 +73,7 @@ describe("session catalog provider steps", () => {
     };
     const order: string[] = [];
     const onHost = vi.fn();
-    const lifetime = new SessionCatalogListLifetime(() => true, []);
+    const lifetime = new SessionCatalogListLifetime(() => true, [], ["fixture"]);
     const catalog = provider({
       createListOperation: (params) => {
         let first = true;
@@ -136,7 +136,7 @@ describe("session catalog provider steps", () => {
     const next = vi.fn(() => first.promise);
     const close = vi.fn(() => host?.reject(new Error("list operation closed")));
     const owner = new AbortController();
-    const lifetime = new SessionCatalogListLifetime(() => true, [owner.signal]);
+    const lifetime = new SessionCatalogListLifetime(() => true, [owner.signal], ["fixture"]);
     const catalog = provider({
       createListOperation: (params) => {
         return {

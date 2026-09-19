@@ -227,6 +227,11 @@ type LiveSubagentContext = {
     idempotencyKey?: string,
   ) => Promise<{ runId: string }>;
   record: (phase: string, facts: Record<string, unknown>) => void;
+  sessionsSendCliArgs: (params: {
+    key: string;
+    message: string;
+    idempotencyKey: string;
+  }) => string[];
   interrogate: (
     sessionKey: string,
     marker: string,
@@ -236,7 +241,7 @@ type LiveSubagentContext = {
 };
 
 export async function runWithLiveSubagentGateway(
-  options: { children?: number },
+  options: { children?: number; additionalTools?: string[]; peerSessions?: boolean },
   body: (context: LiveSubagentContext) => Promise<void>,
 ): Promise<void> {
   expect(Boolean(process.env.OPENAI_API_KEY?.trim()), "OpenAI API key is present").toBe(true);
@@ -261,6 +266,7 @@ export async function runWithLiveSubagentGateway(
       OPENCLAW_PLUGINS_PATHS: undefined,
       OPENCLAW_DEBUG_MODEL_PAYLOAD: undefined,
       OPENCLAW_DEBUG_SSE: undefined,
+      OPENCLAW_SUBAGENT_EXEC: undefined,
     },
   });
   let server: GatewayServer | undefined;
@@ -294,7 +300,18 @@ export async function runWithLiveSubagentGateway(
         plugins: { enabled: false },
         tools: {
           codeMode: false,
-          allow: ["sessions_spawn", "sessions_yield", "subagents", "read", "exec", "process"],
+          ...(options.peerSessions
+            ? { sessions: { visibility: "all" as const }, agentToAgent: { enabled: true } }
+            : {}),
+          allow: [
+            "sessions_spawn",
+            "sessions_yield",
+            "subagents",
+            "read",
+            "exec",
+            "process",
+            ...(options.additionalTools ?? []),
+          ],
           exec: { mode: "full", host: "gateway" },
         },
         models: {
@@ -447,7 +464,30 @@ export async function runWithLiveSubagentGateway(
         expect(successfulYields(messages) > 0, "parent really yielded").toBe(true);
         return successfulYields(messages);
       };
-      await body({ gateway, state, gates, start, record, interrogate, waitForFinal });
+      const sessionsSendCliArgs: LiveSubagentContext["sessionsSendCliArgs"] = (params) => [
+        process.execPath,
+        path.resolve("scripts/run-node.mjs"),
+        "gateway",
+        "call",
+        "sessions.send",
+        "--params",
+        JSON.stringify(params),
+        "--expect-url",
+        `ws://127.0.0.1:${port}`,
+        "--timeout",
+        "300000",
+        "--json",
+      ];
+      await body({
+        gateway,
+        state,
+        gates,
+        start,
+        record,
+        sessionsSendCliArgs,
+        interrogate,
+        waitForFinal,
+      });
     },
     async () => {
       // Capture evidence before cleanup can terminalize or release pending work.

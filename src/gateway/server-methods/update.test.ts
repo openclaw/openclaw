@@ -580,6 +580,19 @@ describe("update.run restart scheduling", () => {
     expect(payload?.ok).toBe(true);
     const run = getUpdateRun(payload!.runId);
     expect(run).toMatchObject({ status: "failed", reason: "unexpected-error" });
+    expect(run?.steps).toContainEqual(
+      expect.objectContaining({
+        step: "restarting",
+        status: "failed",
+        failureFacts: [
+          expect.objectContaining({
+            check: "restarting",
+            code: "Error",
+            message: "state database unavailable",
+          }),
+        ],
+      }),
+    );
     expect(payload?.message).toBe(run?.origin.nextAction);
     expect(summarizeUpdateRunResponse(payload).next).toContain(
       "Run openclaw update status after the gateway restarts.",

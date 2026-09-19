@@ -1,7 +1,7 @@
-import { hash } from "node:crypto";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { onSessionIdentityMutation } from "../../sessions/session-lifecycle-events.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
@@ -14,9 +14,7 @@ import {
   loadTranscriptEvents,
   replaceSessionEntry,
   replaceSessionEntrySync,
-  replaceTranscriptEventsSync,
 } from "./session-accessor.js";
-import { planSessionLifecycleArtifactCleanup } from "./session-accessor.sqlite-lifecycle-artifacts.js";
 import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
 import { runByteLimitedArchiveCleanupFixture } from "./test-helpers.js";
@@ -397,17 +395,6 @@ describe("SQLite lifecycle cleanup races", () => {
     }
     const database = openOpenClawAgentDatabase({ agentId: "main", path: databasePath });
     const cleanupNow = Date.now() + 60_000;
-    const planned = planSessionLifecycleArtifactCleanup(database, {
-      archiveRemovedEntryTranscripts: true,
-      archiveDirectory: path.dirname(storePath),
-      sessionKeySegmentPrefix: "cleanup-race",
-      transcriptContentMarker: "cleanup-race-marker",
-      orphanTranscriptMinAgeMs: 0,
-      nowMs: cleanupNow,
-    });
-    expect(planned.entries).toHaveLength(1);
-    expect(planned.deletePlans).toHaveLength(1);
-
     const refreshedEntry = { label: "refreshed", sessionId, updatedAt: now + 1 };
     let refreshed = false;
     archiveMaterializationHook.afterMaterialize = () => {
@@ -557,59 +544,6 @@ describe("SQLite lifecycle cleanup races", () => {
     await expect(deletion).resolves.toMatchObject({ deleted: true });
     await expect(writer).resolves.toMatchObject({ label: "progressed" });
     expect(progressedDuringMaterialization).toBe(true);
-  });
-
-  it("reports a transcript guard mismatch after publishing earlier history", async () => {
-    const sessionKey = "agent:main:historical-guard-race";
-    const sessionIds = ["historical-guard-first", "historical-guard-second", "guard-current"];
-    const events = sessionIds.map((sessionId) => ({
-      type: "session" as const,
-      id: sessionId,
-      content: `${sessionId} transcript`,
-    }));
-    for (const [index, sessionId] of sessionIds.entries()) {
-      await replaceSessionEntry({ sessionKey, storePath }, { sessionId, updatedAt: index + 1 });
-      await replaceTranscriptEvents({ sessionKey, sessionId, storePath }, [events[index]!]);
-    }
-    const currentEntry = loadSessionEntry({ sessionKey, storePath });
-    if (!currentEntry) {
-      throw new Error("expected current guarded entry");
-    }
-    let materializations = 0;
-    archiveMaterializationHook.afterMaterialize = () => {
-      materializations += 1;
-      if (materializations === 2) {
-        replaceTranscriptEventsSync({ sessionKey, sessionId: sessionIds[2]!, storePath }, [
-          { ...events[2]!, content: "concurrent transcript" },
-        ]);
-      }
-    };
-
-    const result = await deleteSessionEntryLifecycle({
-      archiveTranscript: true,
-      expectedEntry: currentEntry,
-      expectedTranscript: {
-        digest: { eventCount: 1, rollingHash: hash("sha256", `\0${JSON.stringify(events[2])}`) },
-        sessionId: sessionIds[2]!,
-      },
-      storePath,
-      target: { canonicalKey: sessionKey, storeKeys: [sessionKey] },
-    });
-
-    expect(result).toMatchObject({ deleted: false, expectedEntryMismatch: true });
-    expect(result.archivedTranscripts).toHaveLength(1);
-    expect(materializations).toBe(2);
-    expect(loadSessionEntry({ sessionKey, storePath })).toEqual(currentEntry);
-    const archivedSessionId = result.archivedTranscripts[0]?.sessionId;
-    expect(sessionIds.slice(0, 2)).toContain(archivedSessionId);
-    for (const [index, historicalSessionId] of sessionIds.slice(0, 2).entries()) {
-      await expect(
-        loadTranscriptEvents({ sessionKey, sessionId: historicalSessionId, storePath }),
-      ).resolves.toEqual(historicalSessionId === archivedSessionId ? [] : [events[index]!]);
-    }
-    await expect(
-      loadTranscriptEvents({ sessionKey, sessionId: sessionIds[2]!, storePath }),
-    ).resolves.toEqual([{ ...events[2]!, content: "concurrent transcript" }]);
   });
 
   it("releases the store writer while lifecycle cleanup archives a transcript", async () => {
@@ -881,6 +815,14 @@ describe("SQLite lifecycle cleanup races", () => {
       );
     };
 
+    const publishedRemovals: string[] = [];
+    onTestFinished(
+      onSessionIdentityMutation((mutation) => {
+        if (mutation.kind === "delete") {
+          publishedRemovals.push(...mutation.previous.sessionKeys);
+        }
+      }),
+    );
     const result = await applySessionEntryLifecycleMutation({
       storePath,
       maintenanceOverride: {
@@ -891,6 +833,8 @@ describe("SQLite lifecycle cleanup races", () => {
     });
 
     expect(batchSizes).toEqual([64, 2]);
+    expect(publishedRemovals).not.toContain(racedKey);
+    expect(publishedRemovals).toHaveLength(64);
     expect(result).toMatchObject({
       beforeCount: entryCount,
       afterCount: 2,

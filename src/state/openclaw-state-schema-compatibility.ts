@@ -54,15 +54,22 @@ function getOpenClawStateCanonicalNamedIndexSet(): ReadonlySet<string> {
   return openClawStateCanonicalNamedIndexSet;
 }
 
+const runtimeSchemaCache = new Map<boolean, string>();
+
 /** Project canonical SQL to the tables the shared runtime may create during this open. */
 export function getOpenClawStateRuntimeSchema(options: {
   includeVersionLazyAdditiveTables: boolean;
 }): string {
+  const { includeVersionLazyAdditiveTables } = options;
+  const cached = runtimeSchemaCache.get(includeVersionLazyAdditiveTables);
+  if (cached !== undefined) {
+    return cached;
+  }
   let schema = OPENCLAW_STATE_SCHEMA_SQL;
-  const omittedTables = options.includeVersionLazyAdditiveTables
+  const omittedTables = includeVersionLazyAdditiveTables
     ? FIRST_USE_STATE_TABLES
     : LAZY_ADDITIVE_STATE_TABLES;
-  const omittedIndexes = options.includeVersionLazyAdditiveTables
+  const omittedIndexes = includeVersionLazyAdditiveTables
     ? FIRST_USE_STATE_INDEXES
     : LAZY_ADDITIVE_STATE_INDEXES;
   for (const tableName of omittedTables) {
@@ -84,6 +91,7 @@ export function getOpenClawStateRuntimeSchema(options: {
     }
     schema = `${schema.slice(0, start)}${schema.slice(end + 1)}`;
   }
+  runtimeSchemaCache.set(includeVersionLazyAdditiveTables, schema);
   return schema;
 }
 

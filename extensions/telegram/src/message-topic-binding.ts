@@ -9,11 +9,9 @@ import { parseStrictPositiveInteger } from "openclaw/plugin-sdk/number-runtime";
 import { resolveStorePath } from "openclaw/plugin-sdk/session-store-runtime";
 import { resolveTelegramAccountOwnerAgentId } from "./account-owner.js";
 import { resolveDefaultTelegramAccountId } from "./accounts.js";
+import { hasProviderObservedTelegramThreadBinding } from "./message-cache-codec.js";
 import { resolveTelegramMessageCacheScope } from "./message-cache-persistence.js";
-import {
-  createTelegramMessageCache,
-  hasProviderObservedTelegramThreadBinding,
-} from "./message-cache.js";
+import { createTelegramMessageCache } from "./message-cache.js";
 import { parseTelegramTarget } from "./targets.js";
 
 type ConversationReadInvocationOrigin = NonNullable<

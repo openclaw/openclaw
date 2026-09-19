@@ -6,6 +6,7 @@ import {
   closeOpenClawStateDatabaseForTest,
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
+import { createCronMutationCompletion } from "./mutation-completion.js";
 import { CRON_JOB_SCRATCH_MAX_BYTES } from "./scratch-contract.js";
 import {
   hashCronScratchSource,
@@ -51,6 +52,44 @@ async function createFixture() {
 }
 
 describe("cron job scratch store", () => {
+  it("marks actual writes but not an unset no-op or revision conflict", async () => {
+    const fixture = await createFixture();
+    const absent = createCronMutationCompletion("cron.scratch.set")!;
+    await expect(
+      absent.run(async () =>
+        writeCronJobScratch({
+          ...fixture,
+          jobId: "job-1",
+          content: null,
+        }),
+      ),
+    ).resolves.toEqual({ ok: true, currentRevision: 0 });
+    expect(absent.isCommitted()).toBe(false);
+
+    const write = createCronMutationCompletion("cron.scratch.set")!;
+    await write.run(async () =>
+      writeCronJobScratch({
+        ...fixture,
+        jobId: "job-1",
+        content: "committed",
+      }),
+    );
+    expect(write.isCommitted()).toBe(true);
+
+    const conflict = createCronMutationCompletion("cron.scratch.set")!;
+    await expect(
+      conflict.run(async () =>
+        writeCronJobScratch({
+          ...fixture,
+          jobId: "job-1",
+          content: "stale",
+          expectedRevision: 0,
+        }),
+      ),
+    ).resolves.toMatchObject({ ok: false, reason: "revision-conflict" });
+    expect(conflict.isCommitted()).toBe(false);
+  });
+
   it("distinguishes no row from present-empty content", async () => {
     const fixture = await createFixture();
     expect(readCronJobScratchState(fixture.storePath, "job-1", fixture.options)).toEqual({

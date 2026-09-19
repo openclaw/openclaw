@@ -16,6 +16,11 @@ const loggerMocks = vi.hoisted(() => ({
   warn: vi.fn(),
 }));
 
+// Lifecycle projection formats stored failures without initializing provider runtime.
+vi.mock("../plugins/loader-runtime-load.js", () => {
+  throw new Error("Session lifecycle presentation imported plugin runtime ownership");
+});
+
 vi.mock("../config/sessions/session-accessor.js", () => ({
   patchSessionEntryCore: persistenceMocks.updateSessionEntry,
   appendSessionTranscriptReport: vi.fn(async () => ({ ok: true, value: undefined })),

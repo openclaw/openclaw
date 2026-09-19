@@ -394,37 +394,30 @@ describe("external shared-state ownership", () => {
       claimedAt: 2,
     } as const;
     const { DatabaseSync } = requireNodeSqlite();
-    const originalExec = Object.getOwnPropertyDescriptor(DatabaseSync.prototype, "exec")?.value as
-      | ((this: import("node:sqlite").DatabaseSync, sql: string) => void)
-      | undefined;
-    if (!originalExec) {
-      throw new Error("DatabaseSync.exec descriptor is unavailable");
-    }
+    const prepare = sqliteReadonlyLocation.prepareSqliteReadOnlyLocationSync;
     let writer: InstanceType<typeof DatabaseSync> | undefined;
     let injected = false;
-    const exec = vi.spyOn(DatabaseSync.prototype, "exec").mockImplementation(function (
-      this: import("node:sqlite").DatabaseSync,
-      sql: string,
-    ) {
-      if (!injected && sql.includes("PRAGMA busy_timeout")) {
-        injected = true;
+    const snapshot = vi
+      .spyOn(sqliteReadonlyLocation, "prepareSqliteReadOnlyLocationSync")
+      .mockImplementationOnce((pathname) => {
+        const prepared = prepare(pathname);
         writer = new DatabaseSync(databasePath);
-        originalExec.call(writer, "PRAGMA journal_mode = WAL; PRAGMA wal_autocheckpoint = 0;");
+        writer.exec("PRAGMA journal_mode = WAL; PRAGMA wal_autocheckpoint = 0;");
         writer
           .prepare(
             "INSERT INTO config_machine_state (state_key, value_json, updated_at_ms) VALUES (?, ?, ?)",
           )
           .run(STATE_SUPERVISION_KEY, JSON.stringify(ownership), ownership.claimedAt);
-      }
-      return originalExec.call(this, sql);
-    });
+        injected = true;
+        return prepared;
+      });
 
     try {
       expect(inspectOpenClawStateOwnershipAtPath(databasePath)).toBeNull();
       expect(injected).toBe(true);
       expect(inspectOpenClawStateOwnershipAtPath(databasePath)).toEqual(ownership);
     } finally {
-      exec.mockRestore();
+      snapshot.mockRestore();
       writer?.close();
     }
   });
@@ -831,25 +824,27 @@ describe("external shared-state ownership", () => {
 
   it("fences a claim made during a canonical current-schema cold open", () => {
     const env = createEnv();
-    const databasePath = openOpenClawStateDatabase({ env }).path;
+    const { path: databasePath, db: seeded } = openOpenClawStateDatabase({ env });
+    const databaseLocation = seeded.location();
     closeOpenClawStateDatabaseForTest();
     const { DatabaseSync } = requireNodeSqlite();
-    const originalPrepare = Object.getOwnPropertyDescriptor(DatabaseSync.prototype, "prepare")
-      ?.value as
-      | ((
-          this: import("node:sqlite").DatabaseSync,
-          sql: string,
-        ) => import("node:sqlite").StatementSync)
+    const originalExec = Object.getOwnPropertyDescriptor(DatabaseSync.prototype, "exec")?.value as
+      | ((this: import("node:sqlite").DatabaseSync, sql: string) => void)
       | undefined;
-    if (!originalPrepare) {
-      throw new Error("DatabaseSync.prepare descriptor is unavailable");
+    if (!originalExec) {
+      throw new Error("DatabaseSync.exec descriptor is unavailable");
     }
     let claimInjected = false;
-    const prepare = vi.spyOn(DatabaseSync.prototype, "prepare").mockImplementation(function (
+    const validating = new Set<import("node:sqlite").DatabaseSync>();
+    const exec = vi.spyOn(DatabaseSync.prototype, "exec").mockImplementation(function (
       this: import("node:sqlite").DatabaseSync,
       sql: string,
     ) {
-      if (!claimInjected && sql.includes("SELECT app_version FROM schema_meta")) {
+      if (!validating.size && sql === "BEGIN" && this.location() === databaseLocation) {
+        validating.add(this);
+      }
+      originalExec.call(this, sql);
+      if (!claimInjected && validating.has(this) && sql === "COMMIT") {
         claimInjected = true;
         const claimant = new DatabaseSync(databasePath);
         try {
@@ -872,13 +867,12 @@ describe("external shared-state ownership", () => {
           claimant.close();
         }
       }
-      return originalPrepare.call(this, sql);
     });
 
     try {
       expect(() => openOpenClawStateDatabase({ env })).toThrow(OpenClawStateOwnershipError);
     } finally {
-      prepare.mockRestore();
+      exec.mockRestore();
     }
     expect(claimInjected).toBe(true);
   });

@@ -1,3 +1,4 @@
+import { createChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
 import {
   createOutboundPayloadPlan,
   projectOutboundPayloadPlanForDelivery,
@@ -16,6 +17,7 @@ import {
   dispatchWithContext,
   generateTopicLabel,
   loadSessionStore,
+  observeInboundDelivery,
   telegramDepsForTest,
 } from "./bot-message-dispatch.test-harness.js";
 import type { TelegramMessageContext } from "./bot-message-dispatch.test-harness.js";
@@ -41,6 +43,146 @@ function createMessageToolOnlyGroupContext(): TelegramMessageContext {
 }
 
 describeTelegramDispatch("dispatchTelegramMessage fallback-topic-media", () => {
+  it.each([
+    { name: "cancelled final", events: ["cancel-final"], fallback: false },
+    { name: "empty final after sending hook", events: ["empty-hook-final"], fallback: false },
+    {
+      name: "cancelled tool then failed final",
+      events: ["cancel-tool", "fail-final"],
+      fallback: true,
+    },
+    {
+      name: "cancelled block then failed final",
+      events: ["cancel-block", "fail-final"],
+      fallback: true,
+    },
+    {
+      name: "failed final then cancelled final",
+      events: ["fail-final", "cancel-final"],
+      fallback: true,
+    },
+    {
+      name: "failed tool then cancelled final",
+      events: ["fail-tool", "cancel-final"],
+      fallback: false,
+    },
+    { name: "partially delivered final", events: ["partial-final"], fallback: false },
+    { name: "empty metadata reply", events: ["empty-final"], fallback: true },
+  ])("preserves ordinary message fallback outcome for $name", async ({ events, fallback }) => {
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async ({ dispatcherOptions }) => {
+      const onDelivered = observeInboundDelivery.mock.calls.at(-1)?.[0].onDelivered;
+      for (const event of events) {
+        switch (event) {
+          case "cancel-final":
+            await onDelivered?.(
+              { text: "Cancelled" },
+              { kind: "final" },
+              {
+                visibleReplySent: false,
+                suppression: { reason: "cancelled_by_reply_payload_sending_hook" },
+              },
+            );
+            break;
+          case "cancel-tool":
+            await onDelivered?.(
+              { text: "Cancelled" },
+              { kind: "tool" },
+              {
+                visibleReplySent: false,
+                suppression: { reason: "cancelled_by_reply_payload_sending_hook" },
+              },
+            );
+            break;
+          case "cancel-block":
+            await onDelivered?.(
+              { text: "Cancelled" },
+              { kind: "block" },
+              {
+                visibleReplySent: false,
+                suppression: { reason: "cancelled_by_reply_payload_sending_hook" },
+              },
+            );
+            break;
+          case "empty-hook-final":
+            await onDelivered?.(
+              { text: "Emptied by hook" },
+              { kind: "final" },
+              {
+                visibleReplySent: false,
+                suppression: { reason: "empty_after_reply_payload_sending_hook" },
+              },
+            );
+            break;
+          case "fail-final":
+            await dispatcherOptions.onError?.(new Error("Delivery failed"), { kind: "final" });
+            break;
+          case "fail-tool":
+            await dispatcherOptions.onError?.(new Error("Delivery failed"), { kind: "tool" });
+            break;
+          case "partial-final":
+            await dispatcherOptions.onError?.(
+              createChannelPartialDeliveryError(new Error("Delivery failed"), {
+                visibleReplySent: true,
+              }),
+              { kind: "final" },
+            );
+            break;
+          case "empty-final":
+            dispatcherOptions.onSkip?.({}, { kind: "final", reason: "empty" });
+            break;
+        }
+      }
+      return {
+        queuedFinal: false,
+        counts: { block: 0, final: 0, tool: 0 },
+        noVisibleReplyFallbackEligible: events.includes("partial-final"),
+      };
+    });
+    const context = createContext();
+    context.ctxPayload.RawBody = "Check this please";
+    context.ctxPayload.BodyForAgent = "Check this please";
+    await expect(
+      dispatchWithContext({ context, streamMode: "off", retryDispatchErrors: true }),
+    ).resolves.toEqual({ kind: "completed" });
+    expect(deliverReplies).toHaveBeenCalledTimes(Number(fallback));
+    if (fallback) {
+      expect(deliverReplies).toHaveBeenCalledWith(
+        expect.objectContaining({
+          replies: [{ text: "No response generated. Please try again." }],
+        }),
+      );
+    }
+  });
+
+  it("does not send an empty fallback after an ordinary final is cancelled by a payload hook", async () => {
+    dispatchReplyWithBufferedBlockDispatcher.mockImplementation(async (params) =>
+      dispatchThroughSharedOwner({
+        ...params,
+        replyResolver: async () => ({ text: "Here is the answer" }),
+        dispatcherOptions: {
+          ...params.dispatcherOptions,
+          deliver: async (payload, info) => {
+            const result = {
+              visibleReplySent: false as const,
+              suppression: { reason: "cancelled_by_reply_payload_sending_hook" as const },
+            };
+            await observeInboundDelivery.mock.calls
+              .at(-1)?.[0]
+              .onDelivered?.(payload, info, result);
+            return result;
+          },
+        },
+      }),
+    );
+    const context = createContext({ ctxPayload: createDirectSessionPayload() });
+    context.ctxPayload.RawBody = "Check this please";
+    context.ctxPayload.BodyForAgent = "Check this please";
+
+    await dispatchWithContext({ context, streamMode: "off" });
+
+    expect(deliverReplies).not.toHaveBeenCalled();
+  });
+
   it("uses resolved DM config for auto-topic-label overrides", async () => {
     dispatchReplyWithBufferedBlockDispatcher.mockResolvedValue({
       queuedFinal: true,

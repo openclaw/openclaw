@@ -7,6 +7,7 @@ struct ChatToolActivityItem: Identifiable, Equatable {
         case running
         case finished
         case failed
+        case blocked
         case unavailable
 
         var title: LocalizedStringResource {
@@ -14,6 +15,7 @@ struct ChatToolActivityItem: Identifiable, Equatable {
             case .running: "Working"
             case .finished: "Finished"
             case .failed: "Failed"
+            case .blocked: "Blocked"
             case .unavailable: "No result"
             }
         }
@@ -26,13 +28,30 @@ struct ChatToolActivityItem: Identifiable, Equatable {
     let resultText: String?
     let state: State
     let liveDiffStat: ChatToolDiffStat?
+    var activity: OpenClawAgentActivityItem?
+    var activityPrepared = false
+
+    var isVisible: Bool {
+        self.activity?.isVisible ?? !self.activityPrepared
+    }
+
+    var displayState: State {
+        guard let activity = self.activity else { return self.state }
+        switch activity.status {
+        case "running": return .running
+        case "completed": return .finished
+        case "failed": return .failed
+        case "blocked": return .blocked
+        default: return .unavailable
+        }
+    }
 
     var isError: Bool {
-        self.state == .failed
+        self.displayState == .failed
     }
 
     var isPending: Bool {
-        self.state == .running
+        self.displayState == .running
     }
 }
 
@@ -134,7 +153,7 @@ private struct ChatToolActivityRowContent: View {
     }
 
     private var accessibilityValue: String {
-        let status = String(localized: self.item.state.title)
+        let status = String(localized: self.item.displayState.title)
         return self.detailLine.map { "\(status), \($0)" } ?? status
     }
 
@@ -289,7 +308,7 @@ private struct ChatToolActivityRowContent: View {
             Spacer(minLength: 0)
 
             if self.isDesktopLayout {
-                Text(self.item.state.title)
+                Text(self.item.displayState.title)
                     .font(OpenClawChatTypography.caption)
                     .foregroundStyle(self.item.isError ? OpenClawChatTheme.danger : .secondary)
                     .fixedSize()
@@ -299,7 +318,7 @@ private struct ChatToolActivityRowContent: View {
     }
 
     private var toolTitle: some View {
-        Text(self.display.title)
+        Text(self.item.activity?.title ?? self.display.title)
             .font(OpenClawChatTypography.footnoteSemiBold)
             .foregroundStyle(self.item.isError ? OpenClawChatTheme.danger : self.textColor)
             .lineLimit(1)
@@ -525,10 +544,17 @@ struct ChatToolActivityList: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: self.isDesktopLayout ? 6 : 2) {
-            // Protocol IDs can collide with specified fallback IDs; encounter order is unique here.
-            ForEach(self.items.indices, id: \.self) { index in
+            ForEach(self.items.indices.filter { self.items[$0].isVisible }, id: \.self) { index in
                 ChatToolActivityRow(item: self.items[index])
                     .equatable()
+            }
+            let quiet = self.items.indices.filter { !self.items[$0].isVisible }
+            if !quiet.isEmpty {
+                DisclosureGroup("Tool details") {
+                    ForEach(quiet, id: \.self) { index in
+                        ChatToolActivityRow(item: self.items[index]).equatable()
+                    }
+                }
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)

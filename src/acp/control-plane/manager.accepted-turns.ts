@@ -22,7 +22,11 @@ export async function runAcceptedManagerTurn(params: {
   stopping: boolean;
   turns: AcceptedTurns;
   withSessionActor: WithManagerSessionActor;
-  run: (input: AcpRunTurnInput, acceptedTurn: AcceptedTurnState) => Promise<void>;
+  run: (
+    input: AcpRunTurnInput,
+    acceptedTurn: AcceptedTurnState,
+    isCurrentActor: () => boolean,
+  ) => Promise<void>;
   onQueuedCancellation: () => Promise<void>;
 }): Promise<void> {
   const { input } = params;
@@ -54,9 +58,9 @@ export async function runAcceptedManagerTurn(params: {
     try {
       await params.withSessionActor(
         params,
-        async () => {
+        async (isCurrentActor) => {
           started = true;
-          await params.run({ ...input, signal }, turn);
+          await params.run({ ...input, signal }, turn, isCurrentActor);
         },
         signal,
       );
@@ -75,7 +79,7 @@ export async function runAcceptedManagerTurn(params: {
     throw error;
   } finally {
     turns.delete(turn);
-    if (turns.size === 0) {
+    if (turns.size === 0 && params.turns.get(actorKey) === turns) {
       params.turns.delete(actorKey);
     }
   }

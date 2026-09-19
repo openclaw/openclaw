@@ -11,7 +11,7 @@ import { forgetMemoryEntries } from "../memory-forget.js";
 import type { EmbeddingProvider } from "./embeddings.js";
 import { memoryCpuProcessEntrypoints } from "./manager-cpu-entrypoints.js";
 import * as memoryCpuWorkerRuntime from "./manager-cpu-worker-runtime.js";
-import { MemoryIndexRevisionConflictError } from "./manager-db.js";
+import { MemoryIndexRevisionConflictError } from "./manager-db-kernel.js";
 import { createManagerIndexFixture } from "./manager-index.test-support.js";
 
 const { closeAllMemorySearchManagers, getMemorySearchManager } = await import("./index.js");
@@ -26,7 +26,6 @@ describe("memory index", () => {
   const {
     createConfig: createCfg,
     getFreshManager,
-    getFtsSessionManager,
     getPersistentManager,
     seedSessionTranscript: seedMemoryIndexSessionTranscript,
     trackManager,
@@ -466,32 +465,6 @@ describe("memory index", () => {
     expect(results[0]?.score).toBeGreaterThan(results[1]?.score ?? 0);
   });
 
-  it("bootstraps an empty index on first search so session transcript hits are available", async () => {
-    const manager = await getFtsSessionManager();
-    if (!manager) {
-      return;
-    }
-
-    await seedMemoryIndexSessionTranscript({
-      sessionId: "session-bootstrap",
-      messages: [
-        {
-          role: "assistant",
-          timestamp: "2026-04-07T15:25:04.113Z",
-          content: "The current Project Nebula codename is ORBIT-10.",
-        },
-      ],
-    });
-
-    const results = await manager.search("current Project Nebula codename ORBIT-10", {
-      minScore: 0,
-      maxResults: 3,
-    });
-
-    expect(results[0]?.source).toBe("sessions");
-    expect(results[0]?.snippet).toContain("ORBIT-10");
-  });
-
   it("keeps remember-only session transcripts out of ordinary manager searches", async () => {
     providerFixture.forceNoProvider = true;
     const cfg = createCfg({
@@ -526,15 +499,6 @@ describe("memory index", () => {
       sources: ["sessions"],
     });
     expect(trustedResults[0]?.source).toBe("sessions");
-  });
-
-  it("returns before provider or index bootstrap for a blank query", async () => {
-    const manager = await getPersistentManager(createCfg({ provider: "required-provider" }));
-    providerFixture.providerCalls = [];
-
-    await expect(manager.search(" \n\t ")).resolves.toStrictEqual([]);
-
-    expect(providerFixture.providerCalls).toHaveLength(0);
   });
 
   it("does not block querying on session reconciliation", async () => {

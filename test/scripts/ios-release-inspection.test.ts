@@ -276,7 +276,7 @@ case "$1" in
   exec)
     test -f "$GITHUB_WORKSPACE/installed"
     if [[ "$2" == ruby ]]; then
-      printf '2.238.0'
+      printf '2.239.0'
     else
       [[ "$BUNDLE_GEMFILE" == "$GITHUB_WORKSPACE/apps/ios/Gemfile" ]]
       [[ "$2 $3 $4" == "fastlane ios release_inspect" ]]

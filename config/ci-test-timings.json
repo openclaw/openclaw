@@ -2,30 +2,41 @@
   "compactGroupSeconds": {
     "blacksmith": {
       "agentic-agents-core-auth": 83,
-      "agentic-agents-core-isolated": 28,
-      "agentic-agents-core-models#selector-109-303a818aee68#generation-f69713e30bce#part-1-of-2#include-55-b55a92a2ef01": 162,
-      "agentic-agents-core-models#selector-109-303a818aee68#generation-f69713e30bce#part-2-of-2#include-54-ad9bf6a44ffd": 34,
-      "agentic-agents-core-runner-cli-1": 16,
-      "agentic-agents-core-runner-cli-2": 28,
-      "agentic-agents-core-runner-cli-3": 30,
-      "agentic-agents-core-runner-commands": 31,
+      "agentic-agents-core-isolated": 22,
+      "agentic-agents-core-models": 213,
+      "agentic-agents-core-models#selector-141-624f72b5682d#generation-703969a5b865#part-1-of-3#include-1-230b54ee5fd2": 31,
+      "agentic-agents-core-models#selector-141-624f72b5682d#generation-703969a5b865#part-2-of-3#include-70-997b51ee4e5e": 67,
+      "agentic-agents-core-models#selector-141-624f72b5682d#generation-703969a5b865#part-3-of-3#include-70-870481fb0d1a": 84,
+      "agentic-agents-core-runner-cli-1": 6,
+      "agentic-agents-core-runner-cli-2": 11,
+      "agentic-agents-core-runner-cli-3": 8,
+      "agentic-agents-core-runner-commands": 74,
+      "agentic-agents-core-runner-commands#selector-21-0feda0c60a07#generation-73a8ef7e308e#part-1-of-2#include-1-7933a428c1d9": 28,
+      "agentic-agents-core-runner-commands#selector-21-0feda0c60a07#generation-73a8ef7e308e#part-2-of-2#include-20-e5e879348e6a": 46,
       "agentic-agents-core-runner-embedded": 24,
-      "agentic-agents-core-runner-sessions": 32,
-      "agentic-agents-core-runtime#selector-263-7c88906089ad#generation-479ca91b3c58#part-1-of-2#include-132-95de3e28a623": 118,
-      "agentic-agents-core-runtime#selector-263-7c88906089ad#generation-479ca91b3c58#part-2-of-2#include-131-7b3613ca5587": 92,
+      "agentic-agents-core-runner-sessions": 23,
+      "agentic-agents-core-runtime": 254,
+      "agentic-agents-core-runtime#selector-339-9173d393f942#generation-33f97313256e#part-1-of-3#include-2-81d1fa5552c6": 8,
+      "agentic-agents-core-runtime#selector-339-9173d393f942#generation-33f97313256e#part-2-of-3#include-169-06971255b61c": 123,
+      "agentic-agents-core-runtime#selector-339-9173d393f942#generation-33f97313256e#part-3-of-3#include-168-3d20f995c617": 124,
+      "agentic-agents-core-spawn-production-boundary": 33,
       "agentic-agents-core-subagents": 20,
-      "agentic-agents-core-tools": 118,
-      "agentic-agents-embedded-base-1": 76,
-      "agentic-agents-embedded-base-2": 78,
-      "agentic-agents-embedded-base-3": 115,
-      "agentic-agents-embedded-incomplete-turn": 13,
-      "agentic-agents-embedded-overflow-compaction": 38,
-      "agentic-agents-embedded-run": 71,
-      "agentic-agents-support#selector-240-7818352ad8a2#generation-0e457cd483eb#part-1-of-4#include-58-17e6de36251d": 136,
-      "agentic-agents-support#selector-240-7818352ad8a2#generation-0e457cd483eb#part-2-of-4#include-58-4438f71bf15a": 104,
-      "agentic-agents-support#selector-240-7818352ad8a2#generation-0e457cd483eb#part-3-of-4#include-62-cfe45c4748f3": 110,
-      "agentic-agents-support#selector-240-7818352ad8a2#generation-0e457cd483eb#part-4-of-4#include-62-74867344ad49": 88,
-      "agentic-agents-tools": 120,
+      "agentic-agents-core-tools": 149,
+      "agentic-agents-core-tools#selector-175-6313d9de554e#generation-8b769d1aaf5d#part-1-of-2#include-88-25271b245f2c": 73,
+      "agentic-agents-core-tools#selector-175-6313d9de554e#generation-8b769d1aaf5d#part-2-of-2#include-87-faf0ab372214": 77,
+      "agentic-agents-embedded-base-1": 133,
+      "agentic-agents-embedded-base-2": 66,
+      "agentic-agents-embedded-base-3": 96,
+      "agentic-agents-embedded-incomplete-turn": 7,
+      "agentic-agents-embedded-overflow-compaction": 29,
+      "agentic-agents-embedded-run": 100,
+      "agentic-agents-support": 623,
+      "agentic-agents-support#selector-357-2f3b9ea53f27#generation-ec1b64d45faa#part-1-of-5#include-72-57598f2f3d08": 171,
+      "agentic-agents-support#selector-357-2f3b9ea53f27#generation-ec1b64d45faa#part-2-of-5#include-70-084e2ed4504f": 152,
+      "agentic-agents-support#selector-357-2f3b9ea53f27#generation-ec1b64d45faa#part-3-of-5#include-71-367124f59fd6": 96,
+      "agentic-agents-support#selector-357-2f3b9ea53f27#generation-ec1b64d45faa#part-4-of-5#include-72-534ed6ad2a3c": 97,
+      "agentic-agents-support#selector-357-2f3b9ea53f27#generation-ec1b64d45faa#part-5-of-5#include-72-7de59d89e5b3": 112,
+      "agentic-agents-tools": 147,
       "agentic-cli": 595,
       "agentic-cli-process#selector-19-4f46963f9c67#generation-5f1ca4b9056b#part-1-of-5#include-1-479c1a04519b": 115,
       "agentic-cli-process#selector-19-4f46963f9c67#generation-5f1ca4b9056b#part-2-of-5#include-4-d908085490cb": 32,
@@ -33,256 +44,199 @@
       "agentic-cli-process#selector-19-4f46963f9c67#generation-5f1ca4b9056b#part-4-of-5#include-4-013265b2ead9": 72,
       "agentic-cli-process#selector-19-4f46963f9c67#generation-5f1ca4b9056b#part-5-of-5#include-6-ead538ecd745": 156,
       "agentic-cli-process#selector-44-c896d15834af#generation-9971083e0f85#part-4-of-7#include-5-0a875c70dd51": 89,
-      "agentic-command-support": 57,
-      "agentic-commands-agent-channel": 71,
-      "agentic-commands-doctor": 61,
+      "agentic-command-support": 46,
+      "agentic-commands-agent-channel": 178,
+      "agentic-commands-doctor": 183,
+      "agentic-commands-doctor#selector-59-ad405256f962#generation-9daf4f3f209c#part-1-of-2#include-30-ac9d86f0efb3": 79,
+      "agentic-commands-doctor#selector-59-ad405256f962#generation-9daf4f3f209c#part-2-of-2#include-29-ec66519e72f4": 104,
       "agentic-commands-doctor-auth": 33,
-      "agentic-commands-doctor-config-state#selector-24-ab1254cc097d#generation-6b1d9ee0e5c4#part-1-of-2#include-12-617a7c58fa8b": 145,
-      "agentic-commands-doctor-config-state#selector-24-ab1254cc097d#generation-6b1d9ee0e5c4#part-2-of-2#include-12-d72cdfc1cac6": 160,
-      "agentic-commands-doctor-device": 9,
-      "agentic-commands-doctor-gateway": 11,
-      "agentic-commands-doctor-platform": 3,
-      "agentic-commands-doctor-plugins-tools": 21,
-      "agentic-commands-doctor-sessions-cron": 117,
-      "agentic-commands-doctor-sessions-cron-memory": 116,
-      "agentic-commands-doctor-sessions-cron-sqlite": 119,
-      "agentic-commands-doctor-shared": 50,
+      "agentic-commands-doctor-config-state": 615,
+      "agentic-commands-doctor-config-state#selector-42-02031bbd82b8#generation-b44b593f7b3f#part-1-of-5#include-4-6feb923c40d3": 152,
+      "agentic-commands-doctor-config-state#selector-42-02031bbd82b8#generation-b44b593f7b3f#part-2-of-5#include-10-719e3afca12a": 133,
+      "agentic-commands-doctor-config-state#selector-42-02031bbd82b8#generation-b44b593f7b3f#part-3-of-5#include-10-716a971e378d": 155,
+      "agentic-commands-doctor-config-state#selector-42-02031bbd82b8#generation-b44b593f7b3f#part-4-of-5#include-9-a42d33509a1f": 85,
+      "agentic-commands-doctor-config-state#selector-42-02031bbd82b8#generation-b44b593f7b3f#part-5-of-5#include-9-4091c2ecb22e": 171,
+      "agentic-commands-doctor-gateway": 8,
+      "agentic-commands-doctor-platform": 5,
+      "agentic-commands-doctor-plugins-tools": 131,
+      "agentic-commands-doctor-plugins-tools#selector-23-9947989a4465#generation-e063bfd54b6c#part-1-of-2#include-1-b062f204726d": 68,
+      "agentic-commands-doctor-plugins-tools#selector-23-9947989a4465#generation-e063bfd54b6c#part-2-of-2#include-22-c1b7a3d6894a": 51,
+      "agentic-commands-doctor-sessions-cron": 137,
+      "agentic-commands-doctor-sessions-cron#selector-26-4473bd0dbb16#generation-33bc0e20df30#part-1-of-2#include-13-0ee25f13c5fb": 56,
+      "agentic-commands-doctor-sessions-cron#selector-26-4473bd0dbb16#generation-33bc0e20df30#part-2-of-2#include-13-89571c3ce226": 81,
+      "agentic-commands-doctor-sessions-cron-memory": 56,
+      "agentic-commands-doctor-sessions-cron-sqlite": 151,
+      "agentic-commands-doctor-shared": 99,
       "agentic-commands-doctor-whatsapp": 2,
-      "agentic-commands-doctor-workspace": 6,
-      "agentic-commands-models": 30,
-      "agentic-commands-onboard-config": 76,
-      "agentic-commands-status-tools": 64,
-      "agentic-control-plane-agent-chat#selector-59-71fb81d0abd1#generation-237b2b391946#part-1-of-4#include-13-c5b0bb00b228": 97,
-      "agentic-control-plane-agent-chat#selector-59-71fb81d0abd1#generation-237b2b391946#part-2-of-4#include-18-4cca05003585": 126,
-      "agentic-control-plane-agent-chat#selector-59-71fb81d0abd1#generation-237b2b391946#part-3-of-4#include-15-98e4cd42a5c2": 93,
-      "agentic-control-plane-agent-chat#selector-59-71fb81d0abd1#generation-237b2b391946#part-4-of-4#include-13-2f31d9ff4b39": 98,
-      "agentic-control-plane-auth-node#selector-50-57fff42f7a22#generation-b71efc0c8d44#part-1-of-2#include-25-2604b7e6555f": 76,
-      "agentic-control-plane-auth-node#selector-50-57fff42f7a22#generation-b71efc0c8d44#part-2-of-2#include-25-619a26abf67e": 95,
-      "agentic-control-plane-http-models": 52,
-      "agentic-control-plane-http-plugin-ws": 39,
-      "agentic-control-plane-runtime": 17,
-      "agentic-control-plane-runtime-config": 32,
-      "agentic-control-plane-runtime-cron": 57,
-      "agentic-control-plane-runtime-network": 2,
-      "agentic-control-plane-runtime-server": 87,
-      "agentic-control-plane-runtime-shared-token": 28,
-      "agentic-control-plane-runtime-state": 48,
-      "agentic-control-plane-runtime-ui-tools": 38,
-      "agentic-control-plane-startup-config": 13,
-      "agentic-control-plane-startup-core": 43,
-      "agentic-control-plane-startup-health-runtime": 21,
-      "agentic-control-plane-startup-restart-close": 21,
-      "agentic-gateway-core-1#selector-203-056753ebbd2c#generation-8dac0271c401#part-1-of-2#include-95-e829054c6989": 163,
-      "agentic-gateway-core-1#selector-203-056753ebbd2c#generation-8dac0271c401#part-2-of-2#include-108-51e4a7eea634": 104,
-      "agentic-gateway-core-2": 309,
-      "agentic-gateway-core-3": 167,
-      "agentic-gateway-core-runtime": 22,
-      "agentic-gateway-methods#selector-234-3cf9dc441ea3#generation-d2f7913c5f44#part-1-of-2#include-117-dc87482e3328": 198,
-      "agentic-gateway-methods#selector-234-3cf9dc441ea3#generation-d2f7913c5f44#part-2-of-2#include-117-465f18257252": 161,
+      "agentic-commands-doctor-workspace": 8,
+      "agentic-commands-models": 100,
+      "agentic-commands-onboard-config": 82,
+      "agentic-commands-status-tools": 173,
+      "agentic-commands-status-tools#selector-120-bdb99743e8cb#generation-9e47cc4e47ec#part-1-of-2#include-60-142f13813271": 82,
+      "agentic-commands-status-tools#selector-120-bdb99743e8cb#generation-9e47cc4e47ec#part-2-of-2#include-60-bcd81a5c8c15": 91,
+      "agentic-control-plane-agent-chat": 440,
+      "agentic-control-plane-agent-chat#selector-78-def6e6752686#generation-d5273755a91a#part-1-of-3#include-28-adb1da838caa": 140,
+      "agentic-control-plane-agent-chat#selector-78-def6e6752686#generation-d5273755a91a#part-2-of-3#include-26-8eac26744c9f": 182,
+      "agentic-control-plane-agent-chat#selector-78-def6e6752686#generation-d5273755a91a#part-3-of-3#include-24-76fe41c47f1f": 110,
+      "agentic-control-plane-auth-node": 194,
+      "agentic-control-plane-auth-node#selector-56-34e3ffbcfc42#generation-be49348e9602#part-1-of-2#include-28-325f96aa47b5": 82,
+      "agentic-control-plane-auth-node#selector-56-34e3ffbcfc42#generation-be49348e9602#part-2-of-2#include-28-d9d68aa57c36": 90,
+      "agentic-control-plane-http-models": 93,
+      "agentic-control-plane-http-plugin-ws": 90,
+      "agentic-control-plane-runtime": 20,
+      "agentic-control-plane-runtime-config": 95,
+      "agentic-control-plane-runtime-cron": 191,
+      "agentic-control-plane-runtime-cron#selector-13-f5b7dd10778e#generation-bc402d081865#part-1-of-2#include-7-c2f50229c5dc": 35,
+      "agentic-control-plane-runtime-cron#selector-13-f5b7dd10778e#generation-bc402d081865#part-2-of-2#include-6-7b5506cca8e9": 148,
+      "agentic-control-plane-runtime-server": 265,
+      "agentic-control-plane-runtime-server#selector-97-d79f4d72abb2#generation-f42aecb68019#part-1-of-3#include-1-f8c1df2aaf3e": 22,
+      "agentic-control-plane-runtime-server#selector-97-d79f4d72abb2#generation-f42aecb68019#part-2-of-3#include-48-b3f5b5163506": 126,
+      "agentic-control-plane-runtime-server#selector-97-d79f4d72abb2#generation-f42aecb68019#part-3-of-3#include-48-e94444e4cba4": 116,
+      "agentic-control-plane-runtime-shared-token": 19,
+      "agentic-control-plane-runtime-state": 142,
+      "agentic-control-plane-runtime-ui-tools": 8,
+      "agentic-control-plane-startup-config": 12,
+      "agentic-control-plane-startup-core": 60,
+      "agentic-control-plane-startup-health-runtime": 28,
+      "agentic-control-plane-startup-restart-close": 48,
+      "agentic-gateway-core-1": 447,
+      "agentic-gateway-core-1#selector-285-aa8acc96c67a#generation-f088109dd83f#part-1-of-4#include-61-f5a378d175b8": 135,
+      "agentic-gateway-core-1#selector-285-aa8acc96c67a#generation-f088109dd83f#part-2-of-4#include-75-9b5fb5d9b1cf": 105,
+      "agentic-gateway-core-1#selector-285-aa8acc96c67a#generation-f088109dd83f#part-3-of-4#include-75-f5f04cc2b6c3": 89,
+      "agentic-gateway-core-1#selector-285-aa8acc96c67a#generation-f088109dd83f#part-4-of-4#include-74-ff1cebc50b8d": 115,
+      "agentic-gateway-core-1#selector-286-bef6d9c91d88#generation-fd114c76c81d#part-1-of-4#include-61-413eb28ac120": 150,
+      "agentic-gateway-core-1#selector-286-bef6d9c91d88#generation-fd114c76c81d#part-2-of-4#include-75-c0cdbde82794": 105,
+      "agentic-gateway-core-1#selector-286-bef6d9c91d88#generation-fd114c76c81d#part-3-of-4#include-75-0506d831ae2a": 91,
+      "agentic-gateway-core-1#selector-286-bef6d9c91d88#generation-fd114c76c81d#part-4-of-4#include-75-13f298e696e7": 101,
+      "agentic-gateway-core-2": 402,
+      "agentic-gateway-core-2#selector-292-1233f92d0f64#generation-a34d2cb212b0#part-1-of-3#include-93-b472c4e81c8c": 115,
+      "agentic-gateway-core-2#selector-292-1233f92d0f64#generation-a34d2cb212b0#part-2-of-3#include-100-637c378d79db": 149,
+      "agentic-gateway-core-2#selector-292-1233f92d0f64#generation-a34d2cb212b0#part-3-of-3#include-99-c58358b848a8": 108,
+      "agentic-gateway-core-2#selector-292-6934979f42f2#generation-9c23b4fedf54#part-1-of-3#include-93-82711098a95d": 115,
+      "agentic-gateway-core-2#selector-292-6934979f42f2#generation-9c23b4fedf54#part-2-of-3#include-100-3e7ee769632a": 132,
+      "agentic-gateway-core-2#selector-292-6934979f42f2#generation-9c23b4fedf54#part-3-of-3#include-99-ae9d6d16795e": 160,
+      "agentic-gateway-core-3": 382,
+      "agentic-gateway-core-3#selector-299-4bb5aec06f33#generation-a12926b2907b#part-1-of-3#include-100-dcc0e27dc3d7": 144,
+      "agentic-gateway-core-3#selector-299-4bb5aec06f33#generation-a12926b2907b#part-2-of-3#include-100-0131dfd6a83d": 183,
+      "agentic-gateway-core-3#selector-299-4bb5aec06f33#generation-a12926b2907b#part-3-of-3#include-99-cb1f844484d8": 122,
+      "agentic-gateway-core-3#selector-299-d163e4b4a7a9#generation-062cd6d7646d#part-1-of-3#include-100-2200d856f1f0": 104,
+      "agentic-gateway-core-3#selector-299-d163e4b4a7a9#generation-062cd6d7646d#part-2-of-3#include-100-6188a663465d": 169,
+      "agentic-gateway-core-3#selector-299-d163e4b4a7a9#generation-062cd6d7646d#part-3-of-3#include-99-1f8833e3aa9e": 109,
+      "agentic-gateway-core-runtime": 17,
+      "agentic-gateway-methods": 510,
+      "agentic-gateway-methods#selector-346-ae94537ecb6d#generation-bf91fd36fe40#part-1-of-5#include-1-ccb1c00d89ea": 26,
+      "agentic-gateway-methods#selector-346-ae94537ecb6d#generation-bf91fd36fe40#part-2-of-5#include-87-7b21c648dbb2": 131,
+      "agentic-gateway-methods#selector-346-ae94537ecb6d#generation-bf91fd36fe40#part-3-of-5#include-86-ba786a5c7aa7": 112,
+      "agentic-gateway-methods#selector-346-ae94537ecb6d#generation-bf91fd36fe40#part-4-of-5#include-86-b48ab076102e": 119,
+      "agentic-gateway-methods#selector-346-ae94537ecb6d#generation-bf91fd36fe40#part-5-of-5#include-86-64c0a267f481": 115,
       "agentic-gateway-server-isolated": 30,
       "agentic-plugin-sdk": 83,
-      "auto-reply-core-top-level": 39,
-      "auto-reply-reply-agent-runner#selector-56-3ecbf0f97d81#generation-16539bbac62f#part-1-of-2#include-28-5349f36cdbde": 69,
-      "auto-reply-reply-agent-runner#selector-56-3ecbf0f97d81#generation-16539bbac62f#part-2-of-2#include-28-1c1dce8faa3d": 76,
-      "auto-reply-reply-commands-1": 40,
-      "auto-reply-reply-commands-2": 45,
-      "auto-reply-reply-commands-3": 22,
-      "auto-reply-reply-dispatch": 95,
-      "auto-reply-reply-dispatch-core": 21,
-      "auto-reply-reply-dispatch-delivery": 28,
-      "auto-reply-reply-dispatch-lifecycle": 16,
-      "auto-reply-reply-session": 69,
-      "auto-reply-reply-state-routing": 46,
-      "core-runtime-config#selector-281-c9b0a74487c5#generation-b4ecd53eedca#part-1-of-2#include-141-30a969d72faf": 96,
-      "core-runtime-config#selector-281-c9b0a74487c5#generation-b4ecd53eedca#part-2-of-2#include-140-3f214bdbbb57": 72,
-      "core-runtime-cron-core": 48,
-      "core-runtime-cron-isolated-agent#selector-54-88990b5aab92#generation-2f2a941acfb4#part-1-of-2#include-27-d8ac37d4b03b": 59,
-      "core-runtime-cron-isolated-agent#selector-54-88990b5aab92#generation-2f2a941acfb4#part-2-of-2#include-27-291cabc93781": 61,
-      "core-runtime-cron-service": 139,
-      "core-runtime-hooks": 43,
-      "core-runtime-infra-approval-exec": 38,
-      "core-runtime-infra-channel-plugin": 28,
-      "core-runtime-infra-cli-ui": 3,
+      "agentic-plugin-sdk#selector-114-7ee32dee7981#generation-e2d98d802215#part-1-of-2#include-1-4d9bced7fb6c": 5,
+      "agentic-plugin-sdk#selector-114-7ee32dee7981#generation-e2d98d802215#part-2-of-2#include-113-b628d2eff8ff": 75,
+      "auto-reply-core-top-level": 40,
+      "auto-reply-reply-agent-runner": 205,
+      "auto-reply-reply-agent-runner#selector-67-3cced80a4370#generation-7857c2537d13#part-1-of-2#include-34-21b7b0b3c9be": 56,
+      "auto-reply-reply-agent-runner#selector-67-3cced80a4370#generation-7857c2537d13#part-2-of-2#include-33-2591bc25257b": 149,
+      "auto-reply-reply-commands-1": 41,
+      "auto-reply-reply-commands-2": 42,
+      "auto-reply-reply-commands-3": 23,
+      "auto-reply-reply-dispatch": 107,
+      "auto-reply-reply-dispatch-core": 10,
+      "auto-reply-reply-dispatch-delivery": 18,
+      "auto-reply-reply-dispatch-lifecycle": 10,
+      "auto-reply-reply-session": 66,
+      "auto-reply-reply-state-routing": 58,
+      "core-runtime-config": 847,
+      "core-runtime-config#selector-408-e07a9dc1edc0#generation-0a01808fa366#part-1-of-6#include-3-5dbb152e5b0e": 270,
+      "core-runtime-config#selector-408-e07a9dc1edc0#generation-0a01808fa366#part-2-of-6#include-81-7b9c713a44cb": 89,
+      "core-runtime-config#selector-408-e07a9dc1edc0#generation-0a01808fa366#part-3-of-6#include-81-836387ec7c2b": 80,
+      "core-runtime-config#selector-408-e07a9dc1edc0#generation-0a01808fa366#part-4-of-6#include-81-18c23b3a128a": 91,
+      "core-runtime-config#selector-408-e07a9dc1edc0#generation-0a01808fa366#part-5-of-6#include-81-c2caec6ab477": 74,
+      "core-runtime-config#selector-408-e07a9dc1edc0#generation-0a01808fa366#part-6-of-6#include-81-e2f5d1aba04e": 153,
+      "core-runtime-cron-core": 40,
+      "core-runtime-cron-isolated-agent": 177,
+      "core-runtime-cron-isolated-agent#selector-64-994d36b3ff77#generation-86718d149922#part-1-of-2#include-32-29a1024bbfdb": 88,
+      "core-runtime-cron-isolated-agent#selector-64-994d36b3ff77#generation-86718d149922#part-2-of-2#include-32-bced2a98b340": 67,
+      "core-runtime-cron-service": 274,
+      "core-runtime-cron-service#selector-116-2af76374be6e#generation-28f74794f96e#part-1-of-2#include-58-0cdca2acdc8b": 98,
+      "core-runtime-cron-service#selector-116-2af76374be6e#generation-28f74794f96e#part-2-of-2#include-58-1e8678407b25": 154,
+      "core-runtime-hooks": 25,
+      "core-runtime-infra-approval-exec": 23,
+      "core-runtime-infra-channel-plugin": 8,
+      "core-runtime-infra-cli-ui": 8,
       "core-runtime-infra-core-utils": 4,
-      "core-runtime-infra-device": 17,
-      "core-runtime-infra-diagnostics-state": 27,
-      "core-runtime-infra-env-auth": 11,
-      "core-runtime-infra-events-runtime": 15,
-      "core-runtime-infra-file-safety": 4,
-      "core-runtime-infra-files-commands": 6,
-      "core-runtime-infra-gateway-lock-argv": 2,
-      "core-runtime-infra-gateway-processes": 1,
-      "core-runtime-infra-gateway-watch": 1,
-      "core-runtime-infra-heartbeat-core": 14,
-      "core-runtime-infra-heartbeat-runner": 95,
-      "core-runtime-infra-misc": 40,
-      "core-runtime-infra-misc-dedupe-disk": 1,
-      "core-runtime-infra-misc-os": 1,
-      "core-runtime-infra-misc-values": 1,
-      "core-runtime-infra-net-install": 23,
+      "core-runtime-infra-device": 21,
+      "core-runtime-infra-diagnostics-state": 67,
+      "core-runtime-infra-env-auth": 6,
+      "core-runtime-infra-events-runtime": 7,
+      "core-runtime-infra-file-safety": 7,
+      "core-runtime-infra-files-commands": 15,
+      "core-runtime-infra-gateway-lock-argv": 18,
+      "core-runtime-infra-gateway-processes": 2,
+      "core-runtime-infra-gateway-watch": 4,
+      "core-runtime-infra-heartbeat-core": 11,
+      "core-runtime-infra-heartbeat-runner": 228,
+      "core-runtime-infra-heartbeat-runner#selector-34-5384812a8453#generation-a49465bd083e#part-1-of-2#include-17-b38cf59cc346": 88,
+      "core-runtime-infra-heartbeat-runner#selector-34-5384812a8453#generation-a49465bd083e#part-2-of-2#include-17-678c524f856e": 115,
+      "core-runtime-infra-misc": 96,
+      "core-runtime-infra-misc-dedupe-disk": 2,
+      "core-runtime-infra-misc-os": 2,
+      "core-runtime-infra-misc-values": 4,
+      "core-runtime-infra-net-install": 47,
       "core-runtime-infra-network-node": 10,
-      "core-runtime-infra-network-platform": 14,
-      "core-runtime-infra-outbound-actions": 64,
-      "core-runtime-infra-outbound-core": 93,
-      "core-runtime-infra-process": 49,
-      "core-runtime-infra-provider-push": 20,
-      "core-runtime-infra-repo-tooling": 5,
-      "core-runtime-infra-storage-state#selector-79-ef9ec170b3bc#generation-5870883d04ff#part-1-of-2#include-40-4396eceae19a": 186,
-      "core-runtime-infra-storage-state#selector-79-ef9ec170b3bc#generation-5870883d04ff#part-2-of-2#include-39-839173be450e": 69,
-      "core-runtime-infra-system-runtime": 86,
-      "core-runtime-media-ui-1": 131,
-      "core-runtime-media-ui-2": 117,
-      "core-runtime-media-ui-3": 73,
-      "core-runtime-media-ui-support": 155,
-      "core-runtime-secrets": 61,
-      "core-runtime-shared": 73,
-      "core-unit-fast-1": 63,
-      "core-unit-fast-2": 70,
-      "core-unit-fast-fake-timers": 24,
-      "core-unit-fast-isolated#selector-117-8d590c58b01f#generation-b41ac07a9f1f#part-1-of-2#include-59-f39c30a95f45": 63,
-      "core-unit-fast-isolated#selector-117-8d590c58b01f#generation-b41ac07a9f1f#part-2-of-2#include-58-240f9331e09c": 66,
-      "core-unit-src-security-1": 161,
-      "core-unit-src-security-2": 116,
-      "core-unit-src-security-3": 158,
-      "core-unit-src-security-support": 24,
-      "core-unit-support": 52
+      "core-runtime-infra-network-platform": 13,
+      "core-runtime-infra-outbound-actions": 47,
+      "core-runtime-infra-outbound-core": 135,
+      "core-runtime-infra-process": 117,
+      "core-runtime-infra-provider-push": 25,
+      "core-runtime-infra-repo-tooling": 14,
+      "core-runtime-infra-storage-state": 2191,
+      "core-runtime-infra-storage-state#selector-363-a38567b75234#generation-e15ec24067f2#part-1-of-10#include-1-4f8fa8f01120": 40,
+      "core-runtime-infra-storage-state#selector-363-a38567b75234#generation-e15ec24067f2#part-10-of-10#include-43-319dfc75be55": 235,
+      "core-runtime-infra-storage-state#selector-363-a38567b75234#generation-e15ec24067f2#part-2-of-10#include-35-656d9be7938a": 238,
+      "core-runtime-infra-storage-state#selector-363-a38567b75234#generation-e15ec24067f2#part-3-of-10#include-36-56bf66b1ba40": 217,
+      "core-runtime-infra-storage-state#selector-363-a38567b75234#generation-e15ec24067f2#part-4-of-10#include-39-3214814f6d9f": 220,
+      "core-runtime-infra-storage-state#selector-363-a38567b75234#generation-e15ec24067f2#part-5-of-10#include-40-b7af8b6fd1ab": 260,
+      "core-runtime-infra-storage-state#selector-363-a38567b75234#generation-e15ec24067f2#part-6-of-10#include-41-00defb0799f2": 274,
+      "core-runtime-infra-storage-state#selector-363-a38567b75234#generation-e15ec24067f2#part-7-of-10#include-42-06dddef54d55": 220,
+      "core-runtime-infra-storage-state#selector-363-a38567b75234#generation-e15ec24067f2#part-8-of-10#include-43-ceba8e4dbbd7": 213,
+      "core-runtime-infra-storage-state#selector-363-a38567b75234#generation-e15ec24067f2#part-9-of-10#include-43-b62670ce4342": 263,
+      "core-runtime-infra-system-runtime": 693,
+      "core-runtime-infra-system-runtime#selector-155-8d83ec4497b8#generation-c77d0afce231#part-1-of-5#include-2-dc9c8867ef88": 257,
+      "core-runtime-infra-system-runtime#selector-155-8d83ec4497b8#generation-c77d0afce231#part-2-of-5#include-39-16642f11497a": 94,
+      "core-runtime-infra-system-runtime#selector-155-8d83ec4497b8#generation-c77d0afce231#part-3-of-5#include-38-dad49f5dc958": 113,
+      "core-runtime-infra-system-runtime#selector-155-8d83ec4497b8#generation-c77d0afce231#part-4-of-5#include-38-16c73b71fea5": 105,
+      "core-runtime-infra-system-runtime#selector-155-8d83ec4497b8#generation-c77d0afce231#part-5-of-5#include-38-cedc5d231afb": 106,
+      "core-runtime-media-ui-1": 121,
+      "core-runtime-media-ui-1#selector-396-eb4876d610ea#generation-1ef45e93b280#part-1-of-2#include-194-1069d89fc30f": 63,
+      "core-runtime-media-ui-1#selector-396-eb4876d610ea#generation-1ef45e93b280#part-2-of-2#include-202-e63f13de9890": 57,
+      "core-runtime-media-ui-2": 138,
+      "core-runtime-media-ui-3": 103,
+      "core-runtime-media-ui-support": 77,
+      "core-runtime-secrets": 33,
+      "core-runtime-shared": 59,
+      "core-unit-fast-1": 103,
+      "core-unit-fast-1#selector-742-a5bf94f23371#generation-3854d9125ae3#part-1-of-2#include-2-7aac2c6cc462": 8,
+      "core-unit-fast-1#selector-742-a5bf94f23371#generation-3854d9125ae3#part-2-of-2#include-740-395cc7c7c807": 95,
+      "core-unit-fast-2": 106,
+      "core-unit-fast-fake-timers": 16,
+      "core-unit-fast-isolated": 101,
+      "core-unit-fast-isolated#selector-136-dbd58e719d49#generation-9964b4972db2#part-1-of-2#include-68-4f037d4b14f3": 47,
+      "core-unit-fast-isolated#selector-136-dbd58e719d49#generation-9964b4972db2#part-2-of-2#include-68-3c8424ed69cf": 53,
+      "core-unit-src-security-1": 190,
+      "core-unit-src-security-1#selector-225-3f5a6514cd26#generation-6c9333c26ee9#part-1-of-3#include-1-000a2d207cbf": 10,
+      "core-unit-src-security-1#selector-225-3f5a6514cd26#generation-6c9333c26ee9#part-2-of-3#include-112-60813d74ddc8": 92,
+      "core-unit-src-security-1#selector-225-3f5a6514cd26#generation-6c9333c26ee9#part-3-of-3#include-112-1baacc11e75a": 95,
+      "core-unit-src-security-2": 229,
+      "core-unit-src-security-2#selector-225-9a1cc86d3e88#generation-ca47cb66c52c#part-1-of-2#include-113-037c2c3bf946": 136,
+      "core-unit-src-security-2#selector-225-9a1cc86d3e88#generation-ca47cb66c52c#part-2-of-2#include-112-08757815d6ec": 95,
+      "core-unit-src-security-3": 151,
+      "core-unit-src-security-3#selector-225-18706cbb014d#generation-a78ab1d0b8bf#part-1-of-2#include-113-205026d6c968": 85,
+      "core-unit-src-security-3#selector-225-18706cbb014d#generation-a78ab1d0b8bf#part-2-of-2#include-112-d7e45fbd5f3e": 67,
+      "core-unit-src-security-support": 11,
+      "core-unit-support": 25
     },
     "github": {}
-  },
-  "runtimePlacementTimings": {
-    "blacksmith": [
-      {
-        "configs": [
-          "test/vitest/vitest.agents-core.config.ts"
-        ],
-        "env": {},
-        "includePatterns": [
-          "src/agents/prepared-model-catalog-worker.integration.test.ts"
-        ],
-        "pretestBuildMode": "runtime",
-        "seconds": 41
-      },
-      {
-        "configs": [
-          "test/vitest/vitest.agents-core.config.ts"
-        ],
-        "env": {},
-        "includePatterns": [
-          "src/agents/runtime-plugins.context-engine.integration.test.ts",
-          "src/agents/simple-completion-runtime.plugin-scope.test.ts"
-        ],
-        "pretestBuildMode": "runtime",
-        "seconds": 12
-      },
-      {
-        "configs": [
-          "test/vitest/vitest.commands.config.ts"
-        ],
-        "env": {},
-        "includePatterns": [
-          "src/commands/doctor-config-preflight.process.test.ts",
-          "src/commands/doctor-config-preflight.refusal.process.test.ts",
-          "src/commands/doctor-config-preflight.v17-atomicity.process.test.ts"
-        ],
-        "pretestBuildMode": "runtime",
-        "seconds": 79
-      },
-      {
-        "configs": [
-          "test/vitest/vitest.commands.config.ts"
-        ],
-        "env": {},
-        "includePatterns": [
-          "src/commands/doctor-plugin-install-config.process.test.ts"
-        ],
-        "pretestBuildMode": "runtime",
-        "seconds": 43
-      },
-      {
-        "configs": [
-          "test/vitest/vitest.gateway-server.config.ts"
-        ],
-        "env": {},
-        "includePatterns": [
-          "src/gateway/server-sidecar-retention.test.ts"
-        ],
-        "pretestBuildMode": "runtime",
-        "seconds": 14
-      },
-      {
-        "configs": [
-          "test/vitest/vitest.gateway-server.config.ts"
-        ],
-        "env": {},
-        "includePatterns": [
-          "src/gateway/server.config-patch.test.ts"
-        ],
-        "pretestBuildMode": "runtime",
-        "seconds": 54
-      },
-      {
-        "configs": [
-          "test/vitest/vitest.infra.config.ts"
-        ],
-        "env": {},
-        "includePatterns": [
-          "src/infra/update-candidate-canary.integration.test.ts",
-          "src/infra/update-managed-service-handoff-lifecycle.test.ts"
-        ],
-        "pretestBuildMode": "runtime",
-        "seconds": 265
-      },
-      {
-        "configs": [
-          "test/vitest/vitest.plugin-sdk-light.config.ts",
-          "test/vitest/vitest.plugin-sdk.config.ts"
-        ],
-        "env": {},
-        "includePatterns": [
-          "src/plugin-sdk/channel-entry-contract.lifecycle.test.ts"
-        ],
-        "pretestBuildMode": "runtime",
-        "seconds": 10
-      },
-      {
-        "configs": [
-          "test/vitest/vitest.runtime-config.config.ts"
-        ],
-        "env": {
-          "OPENCLAW_VITEST_MAX_WORKERS": "2"
-        },
-        "includePatterns": [
-          "src/config/config-startup-corpus.test.ts",
-          "src/config/state-startup-corpus.test.ts"
-        ],
-        "pretestBuildMode": "runtime",
-        "seconds": 201
-      },
-      {
-        "configs": [
-          "test/vitest/vitest.unit-fast.config.ts"
-        ],
-        "env": {},
-        "includePatterns": [
-          "src/plugins/setup-registry.migrations.test.ts",
-          "src/plugins/source-checkout-runtime.test.ts"
-        ],
-        "pretestBuildMode": "runtime",
-        "seconds": 12
-      },
-      {
-        "configs": [
-          "test/vitest/vitest.unit-src.config.ts"
-        ],
-        "env": {},
-        "includePatterns": [
-          "src/node-host/linux-node-plugin.integration.test.ts"
-        ],
-        "pretestBuildMode": "runtime",
-        "seconds": 13
-      }
-    ],
-    "github": []
   },
   "repoE2eFileSeconds": {
     "extensions/browser/src/browser/client-fetch.attach-only.e2e.test.ts": 1,
@@ -496,7 +450,193 @@
     "test/skills-proposal-manual-target.e2e.test.ts": 2,
     "test/status-shared-state-readonly.e2e.test.ts": 83
   },
-  "source": "median of 2 successful CI and release-check runs: 35042635751, 35044335386",
+  "runtimePlacementTimings": {
+    "blacksmith": [
+      {
+        "configs": [
+          "test/vitest/vitest.agents-core.config.ts"
+        ],
+        "env": {},
+        "includePatterns": [
+          "src/agents/agent-command-local.test.ts"
+        ],
+        "pretestBuildMode": "runtime",
+        "seconds": 28
+      },
+      {
+        "configs": [
+          "test/vitest/vitest.agents-core.config.ts"
+        ],
+        "env": {},
+        "includePatterns": [
+          "src/agents/prepared-model-catalog-worker.integration.test.ts"
+        ],
+        "pretestBuildMode": "runtime",
+        "seconds": 31
+      },
+      {
+        "configs": [
+          "test/vitest/vitest.agents-core.config.ts"
+        ],
+        "env": {},
+        "includePatterns": [
+          "src/agents/runtime-plugins.context-engine.integration.test.ts",
+          "src/agents/simple-completion-runtime.plugin-scope.test.ts"
+        ],
+        "pretestBuildMode": "runtime",
+        "seconds": 8
+      },
+      {
+        "configs": [
+          "test/vitest/vitest.commands.config.ts"
+        ],
+        "env": {},
+        "includePatterns": [
+          "src/commands/doctor-config-flow.legacy-composition.test.ts",
+          "src/commands/doctor-config-preflight.process.test.ts",
+          "src/commands/doctor-config-preflight.refusal.process.test.ts",
+          "src/commands/doctor-config-preflight.v17-atomicity.process.test.ts"
+        ],
+        "pretestBuildMode": "runtime",
+        "seconds": 152
+      },
+      {
+        "configs": [
+          "test/vitest/vitest.commands.config.ts"
+        ],
+        "env": {},
+        "includePatterns": [
+          "src/commands/doctor-plugin-install-config.process.test.ts"
+        ],
+        "pretestBuildMode": "runtime",
+        "seconds": 70
+      },
+      {
+        "configs": [
+          "test/vitest/vitest.gateway-core.config.ts",
+          "test/vitest/vitest.gateway-client.config.ts"
+        ],
+        "env": {},
+        "includePatterns": [
+          "src/gateway/gateway-active-memory.test.ts",
+          "src/gateway/gateway-concurrent-streams.test.ts"
+        ],
+        "pretestBuildMode": "runtime",
+        "seconds": 17
+      },
+      {
+        "configs": [
+          "test/vitest/vitest.gateway-methods.config.ts",
+          "test/vitest/vitest.gateway-methods-isolated.config.ts"
+        ],
+        "env": {
+          "OPENCLAW_VITEST_MAX_WORKERS": "2"
+        },
+        "includePatterns": [
+          "test/plugins/codex-model-catalog.gateway.test.ts"
+        ],
+        "pretestBuildMode": "runtime",
+        "seconds": 26
+      },
+      {
+        "configs": [
+          "test/vitest/vitest.gateway-server.config.ts"
+        ],
+        "env": {},
+        "includePatterns": [
+          "src/gateway/server-sidecar-retention.test.ts"
+        ],
+        "pretestBuildMode": "runtime",
+        "seconds": 22
+      },
+      {
+        "configs": [
+          "test/vitest/vitest.gateway-server.config.ts"
+        ],
+        "env": {},
+        "includePatterns": [
+          "src/gateway/server.config-patch.test.ts"
+        ],
+        "pretestBuildMode": "runtime",
+        "seconds": 95
+      },
+      {
+        "configs": [
+          "test/vitest/vitest.infra.config.ts"
+        ],
+        "env": {},
+        "includePatterns": [
+          "src/entry.memory-json.test.ts"
+        ],
+        "pretestBuildMode": "runtime",
+        "seconds": 40
+      },
+      {
+        "configs": [
+          "test/vitest/vitest.infra.config.ts"
+        ],
+        "env": {},
+        "includePatterns": [
+          "src/infra/update-candidate-canary.integration.test.ts",
+          "src/infra/update-managed-service-handoff-lifecycle.test.ts"
+        ],
+        "pretestBuildMode": "runtime",
+        "seconds": 265
+      },
+      {
+        "configs": [
+          "test/vitest/vitest.plugin-sdk-light.config.ts",
+          "test/vitest/vitest.plugin-sdk.config.ts"
+        ],
+        "env": {},
+        "includePatterns": [
+          "src/plugin-sdk/channel-entry-contract.lifecycle.test.ts"
+        ],
+        "pretestBuildMode": "runtime",
+        "seconds": 5
+      },
+      {
+        "configs": [
+          "test/vitest/vitest.runtime-config.config.ts"
+        ],
+        "env": {
+          "OPENCLAW_VITEST_MAX_WORKERS": "2"
+        },
+        "includePatterns": [
+          "src/config/config-startup-corpus.test.ts",
+          "src/config/sessions/session-accessor.sqlite-reclamation-memory.test.ts",
+          "src/config/state-startup-corpus.test.ts"
+        ],
+        "pretestBuildMode": "runtime",
+        "seconds": 270
+      },
+      {
+        "configs": [
+          "test/vitest/vitest.unit-fast.config.ts"
+        ],
+        "env": {},
+        "includePatterns": [
+          "src/plugins/setup-registry.migrations.test.ts",
+          "src/plugins/source-checkout-runtime.test.ts"
+        ],
+        "pretestBuildMode": "runtime",
+        "seconds": 8
+      },
+      {
+        "configs": [
+          "test/vitest/vitest.unit-src.config.ts"
+        ],
+        "env": {},
+        "includePatterns": [
+          "src/node-host/linux-node-plugin.integration.test.ts"
+        ],
+        "pretestBuildMode": "runtime",
+        "seconds": 10
+      }
+    ],
+    "github": []
+  },
+  "source": "median of 5 successful CI and release-check runs: 35432985665, 35433007757, 35433834963, 35433862651, 35434723207; agentic-cli, agentic-cli-process and agentic-gateway-server-isolated families and matching runtime-placement records retained from main b37e28c63ad",
   "uiE2e": {
     "fileSeconds": {
       "ui/src/e2e/about.e2e.test.ts": 1,
@@ -844,6 +984,6 @@
     },
     "perFileOverheadSeconds": 0.8
   },
-  "updatedAt": "2026-09-16",
+  "updatedAt": "2026-09-19",
   "version": 1
 }

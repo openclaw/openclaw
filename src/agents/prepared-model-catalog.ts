@@ -408,6 +408,8 @@ export async function loadProviderScopedThinkingCatalog(params: {
   config: OpenClawConfig;
   provider: string;
   model: string;
+  /** Concrete runtime selected by the turn owner, including session overrides. */
+  agentRuntime?: string;
   agentId?: string;
   agentDir?: string;
   workspaceDir?: string;
@@ -433,9 +435,24 @@ export async function loadProviderScopedThinkingCatalog(params: {
       resolveDefaultAgentWorkspaceDir(),
     defaultProvider: params.provider,
     defaultModel: `${params.provider}/${params.model}`,
+    agentRuntime: params.agentRuntime,
     snapshot: catalog,
   });
-  const entries = normalizeThinkingCatalogProviders(snapshot.entries);
+  let entries = snapshot.entries;
+  if (params.agentRuntime) {
+    const entry = findModelInCatalog(entries, params.provider, params.model);
+    if (entry) {
+      // A logical row may belong to another picker runtime; retain only the selected donor.
+      const { selectModelCatalogRuntimeEntry } = await import("./model-catalog-view.js");
+      const selected = selectModelCatalogRuntimeEntry({
+        entry,
+        routeVariants: snapshot.routeVariants,
+        runtimeId: params.agentRuntime,
+      }).entry;
+      entries = entries.map((candidate) => (candidate === entry ? selected : candidate));
+    }
+  }
+  entries = normalizeThinkingCatalogProviders(entries);
   if (params.requiredInputRoute !== undefined) {
     const entry = findModelInCatalog(entries, params.provider, params.model);
     if (

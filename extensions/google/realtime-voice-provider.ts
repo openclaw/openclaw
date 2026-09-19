@@ -131,26 +131,10 @@ type GoogleRealtimeVoiceProviderConfig = {
   thinkingBudget?: number;
 };
 
-type GoogleRealtimeLiveConfig = {
+type GoogleRealtimeLiveConfig = GoogleRealtimeVoiceProviderConfig & {
   apiKey: string;
   instructions?: string;
   tools?: RealtimeVoiceTool[];
-  model?: string;
-  voice?: string;
-  temperature?: number;
-  apiVersion?: string;
-  prefixPaddingMs?: number;
-  silenceDurationMs?: number;
-  startSensitivity?: GoogleRealtimeSensitivity;
-  endSensitivity?: GoogleRealtimeSensitivity;
-  activityHandling?: GoogleRealtimeActivityHandling;
-  turnCoverage?: GoogleRealtimeTurnCoverage;
-  automaticActivityDetectionDisabled?: boolean;
-  enableAffectiveDialog?: boolean;
-  sessionResumption?: boolean;
-  contextWindowCompression?: boolean;
-  thinkingLevel?: GoogleRealtimeThinkingLevel;
-  thinkingBudget?: number;
 };
 
 type GoogleRealtimeVoiceBridgeConfig = RealtimeVoiceBridgeCreateRequest & GoogleRealtimeLiveConfig;
@@ -217,15 +201,6 @@ function asNonNegativeInteger(value: unknown): number | undefined {
   return asSafeIntegerInRange(value, { min: 0 });
 }
 
-function asGoogleRealtimeThinkingBudget(value: unknown): number | undefined {
-  const budget = asFiniteNumber(value);
-  return budget !== undefined &&
-    Number.isSafeInteger(budget) &&
-    (budget === -1 || (budget >= 0 && budget <= 24_576))
-    ? budget
-    : undefined;
-}
-
 function resolveGoogleRealtimeProviderConfigRecord(
   config: Record<string, unknown>,
 ): Record<string, unknown> | undefined {
@@ -258,7 +233,7 @@ function normalizeProviderConfig(
     sessionResumption: asBoolean(raw?.sessionResumption),
     contextWindowCompression: asBoolean(raw?.contextWindowCompression),
     thinkingLevel: asThinkingLevel(raw?.thinkingLevel),
-    thinkingBudget: asGoogleRealtimeThinkingBudget(raw?.thinkingBudget),
+    thinkingBudget: asSafeIntegerInRange(raw?.thinkingBudget, { min: -1, max: 24_576 }),
   };
 }
 
@@ -1421,23 +1396,8 @@ export function buildGoogleRealtimeVoiceProvider(): RealtimeVoiceProviderPlugin 
       }
       return new GoogleRealtimeVoiceBridge({
         ...req,
+        ...config,
         apiKey,
-        model: config.model,
-        voice: config.voice,
-        temperature: config.temperature,
-        apiVersion: config.apiVersion,
-        prefixPaddingMs: config.prefixPaddingMs,
-        silenceDurationMs: config.silenceDurationMs,
-        startSensitivity: config.startSensitivity,
-        endSensitivity: config.endSensitivity,
-        activityHandling: config.activityHandling,
-        turnCoverage: config.turnCoverage,
-        automaticActivityDetectionDisabled: config.automaticActivityDetectionDisabled,
-        enableAffectiveDialog: config.enableAffectiveDialog,
-        sessionResumption: config.sessionResumption,
-        contextWindowCompression: config.contextWindowCompression,
-        thinkingLevel: config.thinkingLevel,
-        thinkingBudget: config.thinkingBudget,
       });
     },
     createBrowserSession: createGoogleRealtimeBrowserSession,

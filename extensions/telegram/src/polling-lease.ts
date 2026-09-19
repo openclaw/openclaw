@@ -1,4 +1,3 @@
-// Telegram plugin module implements polling lease behavior.
 import { resolveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import { fingerprintTelegramBotToken } from "./token-fingerprint.js";
 

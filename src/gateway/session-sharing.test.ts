@@ -781,28 +781,30 @@ describe("session sharing policy", () => {
           expectedSessionId: "session-suggestions",
         },
       );
-      const check = (user: string) =>
+      const check = (recipient: GatewayClient) =>
         canReceiveSessionEvent({
           cfg: {},
-          client: client({ user }) as never,
+          client: recipient,
           sessionKeys: [sessionKey],
           event: "session.suggestion",
           payload: { suggestion: { author: { id: "author" } } },
         });
 
-      expect(check("author")).toBe(true);
-      expect(check("member")).toBe(true);
-      expect(check("owner")).toBe(true);
-      expect(check("viewer")).toBe(false);
-      expect(
-        canReceiveSessionEvent({
-          cfg: {},
-          client: client({}) as never,
-          sessionKeys: [sessionKey],
-          event: "session.suggestion",
-          payload: { suggestion: { author: { id: "author" } } },
-        }),
-      ).toBe(false);
+      expect(check(client({ user: "author" }))).toBe(true);
+      expect(check(client({ user: "member" }))).toBe(true);
+      expect(check(client({ user: "owner" }))).toBe(true);
+      expect(check(client({ user: "viewer" }))).toBe(false);
+      expect(check(client({}))).toBe(false);
+
+      const recipient = client({ user: "author", displayName: "Viewer" });
+      recipient.internal = { operatorRoleActor: { kind: "operator", profileId: "viewer" } };
+      expect(check(recipient)).toBe(true);
+      recipient.authenticatedUserProfile!.profileId = "viewer";
+      expect(check(recipient)).toBe(false);
+      recipient.internal.operatorRoleActor = { kind: "operator", profileId: "author" };
+      expect(check(recipient)).toBe(false);
+      recipient.authenticatedUserProfile = undefined;
+      expect(check(recipient)).toBe(true);
     });
   });
 

@@ -1,7 +1,8 @@
 /* @vitest-environment jsdom */
 
-import { html, render } from "lit";
+import { html, nothing, render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../../../test/helpers/promise.js";
 import type { QuestionPrompt } from "../../../app/question-prompt.ts";
 import { createGatewayQuestionPanelProps } from "./chat-question-card.ts";
 
@@ -221,7 +222,7 @@ describe("shared question panel", () => {
     { isSecret: false, value: "  normal answer  ", expected: "normal answer" },
     { isSecret: false, value: "   ", expected: null },
   ])(
-    "preserves or normalizes hydrated drafts: $isSecret / '$value'",
+    "preserves draft text and normalizes only submitted non-secrets: $isSecret / '$value'",
     async ({ isSecret, value, expected }) => {
       const prompt = gatewayPrompt({
         questions: [
@@ -240,7 +241,7 @@ describe("shared question panel", () => {
       await panelIn(container);
       const input = container.querySelector<HTMLInputElement>("input")!;
       const submit = container.querySelector<HTMLButtonElement>(".chat-question-panel__advance")!;
-      expect(input.value).toBe(expected ?? "");
+      expect(input.value).toBe(value);
       expect(input.placeholder).toBe("Value");
       expect(submit.disabled).toBe(expected === null);
       submit.click();
@@ -484,6 +485,79 @@ describe("shared question panel", () => {
     container.querySelector<HTMLButtonElement>(".chat-question-panel__advance")?.click();
 
     expect(onSubmit).toHaveBeenCalledWith({ format: ["Compact"] });
+  });
+
+  it("keeps a typed answer distinct from an identical option across remounts", async () => {
+    const prompt = gatewayPrompt();
+    const onSubmit = vi.fn();
+    drawGateway(prompt, { onSubmit });
+    const panel = await panelIn(container);
+    const other = container.querySelector<HTMLInputElement>(".chat-question-panel__other")!;
+    other.value = "Compact";
+    other.dispatchEvent(new InputEvent("input", { bubbles: true }));
+    await panel.updateComplete;
+
+    render(nothing, container);
+    drawGateway(prompt, { onSubmit });
+    await panelIn(container);
+
+    expect(container.querySelector<HTMLInputElement>(".chat-question-panel__other")!.value).toBe(
+      "Compact",
+    );
+    expect(container.querySelector('[aria-checked="true"]')).toBeNull();
+    container.querySelector<HTMLButtonElement>(".chat-question-panel__advance")!.click();
+    expect(onSubmit).toHaveBeenCalledExactlyOnceWith({ format: ["Compact"] });
+  });
+
+  it.each(["submit", "skip"] as const)(
+    "unlocks a pending question when its %s callback settles without a resolution",
+    async (action) => {
+      const pending = createDeferred();
+      const callback = vi.fn(() => pending.promise);
+      drawGateway(gatewayPrompt(), { onSubmit: callback, onSkip: callback });
+      const panel = await panelIn(container);
+      container.querySelector<HTMLButtonElement>('[role="radio"]')!.click();
+      await panel.updateComplete;
+      const button = container.querySelector<HTMLButtonElement>(
+        action === "submit" ? ".chat-question-panel__advance" : ".chat-question-panel__skip",
+      )!;
+      button.click();
+      await panel.updateComplete;
+      expect(button.disabled).toBe(true);
+
+      // A retired transport can settle normally while reconnect recovery keeps the prompt pending.
+      pending.resolve();
+      await vi.waitFor(() => expect(button.disabled).toBe(false));
+      button.click();
+      expect(callback).toHaveBeenCalledTimes(2);
+    },
+  );
+
+  it("keeps a newer submission locked when an older visit to the same question settles", async () => {
+    const older = createDeferred();
+    const newer = createDeferred();
+    const onSubmit = vi.fn().mockReturnValueOnce(older.promise).mockReturnValueOnce(newer.promise);
+    const prompt = gatewayPrompt();
+    drawGateway(prompt, { onSubmit });
+    const panel = await panelIn(container);
+    container.querySelector<HTMLButtonElement>('[role="radio"]')!.click();
+    await panel.updateComplete;
+    container.querySelector<HTMLButtonElement>(".chat-question-panel__advance")!.click();
+
+    drawGateway(gatewayPrompt({ id: "another-question" }));
+    await panel.updateComplete;
+    drawGateway(prompt, { onSubmit });
+    await panel.updateComplete;
+    const button = container.querySelector<HTMLButtonElement>(".chat-question-panel__advance")!;
+    button.click();
+    await panel.updateComplete;
+    older.resolve();
+    await older.promise;
+    await panel.updateComplete;
+    expect(button.disabled).toBe(true);
+    newer.resolve();
+    await vi.waitFor(() => expect(button.disabled).toBe(false));
+    expect(onSubmit).toHaveBeenCalledTimes(2);
   });
 
   it("keeps Skip available with skip-only wiring", async () => {

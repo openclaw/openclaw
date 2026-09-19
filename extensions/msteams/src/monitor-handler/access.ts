@@ -1,4 +1,3 @@
-// Msteams plugin module implements access behavior.
 import { formatAllowlistMatchMeta } from "openclaw/plugin-sdk/allow-from";
 import { logInboundDrop } from "openclaw/plugin-sdk/channel-inbound";
 import {

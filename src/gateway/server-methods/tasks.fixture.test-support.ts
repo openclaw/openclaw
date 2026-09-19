@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { afterEach, beforeEach, expect, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import {
   type HeartbeatWakeRequest,
   requestHeartbeat,
@@ -8,7 +9,10 @@ import {
 } from "../../infra/heartbeat-wake.js";
 import { resetSystemEventsForTest } from "../../infra/system-events.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseForTest,
+} from "../../state/openclaw-state-db.js";
 import {
   resetTaskRegistryControlRuntimeForTests,
   resetTaskRegistryForTests,
@@ -45,14 +49,19 @@ export function useTaskGatewayFixture() {
         resetTaskRegistryForTests();
         stateDirEnvSnapshot.restore();
         closeOpenClawAgentDatabasesForTest();
+        await closeOpenClawStateDatabaseAsync();
         closeOpenClawStateDatabaseForTest();
         cleanup();
       }
     }),
   );
 
-  beforeEach(() => {
+  beforeEach(async () => {
     setTestEnvValue("OPENCLAW_STATE_DIR", tempDirs.make("openclaw-gateway-tasks-"));
+    await upsertSessionEntryCore(
+      { agentId: "main", sessionKey: mainSessionTaskScope.requesterSessionKey },
+      { sessionId: "session-main", updatedAt: 1 },
+    );
     resetTaskRegistryForTests();
     heartbeatWakeRequests = [];
     disposeHeartbeatWakeHandler = setHeartbeatWakeHandler(async (request) => {

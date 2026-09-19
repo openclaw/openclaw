@@ -1,6 +1,7 @@
 import { DatabaseSync } from "node:sqlite";
 import { expect, it, vi } from "vitest";
 import type { TaskFlowRecord } from "./task-flow-registry.types.js";
+import type { TaskRegistryMutationScope } from "./task-registry.store.types.js";
 import type { TaskRecord } from "./task-registry.types.js";
 
 vi.mock("../state/openclaw-state-db.js", () => {
@@ -11,6 +12,89 @@ vi.mock("../state/openclaw-state-db-readonly.js", () => {
 });
 vi.mock("../plugins/loader-runtime-load.js", () => {
   throw new Error("A connection-bound kernel imported plugin runtime ownership");
+});
+
+it("preserves ordered scoped tasks and their exact delivery rows", async () => {
+  const [tasks, { OPENCLAW_STATE_SCHEMA_SQL }, { runSqliteImmediateTransactionSync }] =
+    await Promise.all([
+      import("./task-registry.store.kernel.js"),
+      import("../state/openclaw-state-schema.js"),
+      import("../infra/sqlite-transaction.js"),
+    ]);
+  const db = new DatabaseSync(":memory:");
+  const record = (taskId: string, patch: Partial<TaskRecord> = {}): TaskRecord => ({
+    taskId,
+    runtime: "cli",
+    requesterSessionKey: "agent:main:fixture",
+    ownerKey: "agent:main:fixture",
+    scopeKind: "session",
+    task: "Scoped task",
+    status: "running",
+    deliveryStatus: "pending",
+    notifyPolicy: "silent",
+    createdAt: 100,
+    ...patch,
+  });
+  const direct = record("direct", { createdAt: 50 });
+  const runFirst = record("run\0first", {
+    runId: " shared-run ",
+    childSessionKey: " shared-child ",
+  });
+  const runSecond = record("run-second", { runId: "shared-run", createdAt: 200 });
+  const literalEscape = record("run\\u0000first", { runId: "shared-run" });
+  const child = record("child", { childSessionKey: " shared-child " });
+  const unrelated = record("unrelated", { runId: " ", childSessionKey: " " });
+  const broad = Array.from({ length: 64 }, (_, index) =>
+    record(`broad-${String(index).padStart(3, "0")}`, { runId: "broad-run" }),
+  );
+  const cases: Array<{ scope: TaskRegistryMutationScope; expected: TaskRecord[] }> = [
+    { scope: { taskId: "absent", runId: " ", childSessionKey: " " }, expected: [] },
+    {
+      scope: { taskId: direct.taskId, runId: " shared-run ", childSessionKey: " shared-child " },
+      expected: [direct, child, runFirst, literalEscape, runSecond],
+    },
+    { scope: { taskId: "absent", runId: "broad-run" }, expected: broad },
+  ];
+  try {
+    db.exec(OPENCLAW_STATE_SCHEMA_SQL);
+    runSqliteImmediateTransactionSync(db, () => {
+      for (const task of [
+        unrelated,
+        runSecond,
+        literalEscape,
+        runFirst,
+        child,
+        direct,
+        ...broad.toReversed(),
+      ]) {
+        tasks.upsertTaskWithDeliveryStateInDatabase(
+          { db },
+          {
+            task,
+            ...(task === child
+              ? {}
+              : {
+                  deliveryState: { taskId: task.taskId, lastNotifiedEventAt: task.createdAt + 1 },
+                }),
+          },
+        );
+      }
+    });
+    for (const { scope, expected } of cases) {
+      const snapshot = tasks.readTaskRegistryMutationSnapshotInDatabase(db, scope);
+      expect([...snapshot.tasks.values()]).toEqual(expected);
+      expect([...snapshot.deliveryStates.values()]).toEqual(
+        expected
+          .filter((task) => task !== child)
+          .map((task) => ({ taskId: task.taskId, lastNotifiedEventAt: task.createdAt + 1 }))
+          .toSorted((left, right) =>
+            left.taskId < right.taskId ? -1 : left.taskId > right.taskId ? 1 : 0,
+          ),
+      );
+    }
+  } finally {
+    db.close();
+  }
 });
 
 it("isolates supplied connections and rolls back compound task, flow, delivery, and binding writes", async () => {

@@ -250,6 +250,16 @@ export async function discardPackageUpdateBackup(
   }
 }
 
+export async function discardPackageLauncherBackup(
+  snapshot: PackageLauncherBackup,
+  globalRoot: string,
+  assertCurrent?: () => void,
+): Promise<string | null> {
+  return snapshot.backupDir
+    ? await discardPackageUpdateBackup(snapshot.backupDir, "shim backup", globalRoot, assertCurrent)
+    : null;
+}
+
 export async function removePackageUpdatePath(targetPath: string): Promise<boolean> {
   try {
     await removePackagePath(targetPath);

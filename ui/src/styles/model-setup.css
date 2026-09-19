@@ -555,3 +555,12 @@
     width: 100%;
   }
 }
+
+/* Discovery has body + footer; its body must shrink before the footer can clip. */
+.model-setup-discovery {
+  grid-template-rows: minmax(0, 1fr) auto;
+}
+
+.model-setup-discovery > .model-setup-wizard__body {
+  min-height: 0;
+}

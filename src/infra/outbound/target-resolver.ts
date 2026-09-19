@@ -9,6 +9,7 @@ import type {
 } from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { defaultRuntime, type RuntimeEnv } from "../../runtime.js";
+import { captureChannelReadAuthority } from "../../shared/channel-read-authority.js";
 import { buildDirectoryCacheKey, DirectoryCache } from "./directory-cache.js";
 import { getRuntimeVisibleChannelPlugin } from "./runtime-visible-channels.js";
 import {
@@ -312,6 +313,7 @@ async function listDirectoryEntries(params: {
   if (!fn) {
     return [];
   }
+  captureChannelReadAuthority()?.();
   return await fn({
     cfg: params.cfg,
     accountId: params.accountId ?? undefined,

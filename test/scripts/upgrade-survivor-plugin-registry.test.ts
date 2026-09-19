@@ -307,7 +307,7 @@ on_exit 0
 
   it.each([
     ["custom-plugin-siblings", "openclaw@2026.9.4"],
-    ["abandoned-update", "openclaw@2026.9.2"],
+    ["abandoned-update", "openclaw@2026.9.4"],
     ["workshop-doctor-recovery", "openclaw@2026.9.4"],
   ])("follows the planner's no-registry decision for %s", (scenario, baseline) => {
     const { captureDir, result } = runSurvivor({

@@ -94,7 +94,10 @@ export function validateNpmPreflightDistTag({ manifest, npmDistTag }) {
     typeof manifest.packageVersion === "string" &&
     resolveNpmPreflightSdkSelectors(manifest.packageVersion, manifest.npmDistTag).length === 2 &&
     ["beta", "latest"].includes(npmDistTag) &&
-    manifest.pluginSdkApi?.schema === "openclaw.plugin-sdk-api-release-evidence-set/v1" &&
+    [
+      "openclaw.plugin-sdk-api-release-evidence-set/v1",
+      "openclaw.plugin-sdk-api-release-evidence-set/v2",
+    ].includes(manifest.pluginSdkApi?.schema) &&
     selectors &&
     Object.keys(selectors).length === 2 &&
     ["beta", "latest"].every(
@@ -218,6 +221,7 @@ export function validateExtendedStableRunIdentity({
   fullReleaseRunId = "",
   fullReleaseRunAttempt = "",
   workflowPath = "",
+  trustedPluginWorkflowSha = "",
 }) {
   const fullReleasePreflight =
     kind === "preflight" && run.workflowName === "Full Release Validation";
@@ -258,8 +262,20 @@ export function validateExtendedStableRunIdentity({
   }
   // FRV runs trusted tooling against a separately pinned release source; its
   // qualified manifest, not the workflow head, binds that source SHA.
+  // A main-branch plugin recovery likewise separates tooling from source. The
+  // caller authenticates its tooling lineage; the immutable run title binds the
+  // exact candidate checked by that trusted workflow.
+  const trustedPluginRecovery =
+    kind === "plugin" &&
+    npmDistTag === "extended-stable" &&
+    run.headBranch === "main" &&
+    /^[0-9a-f]{40}$/u.test(trustedPluginWorkflowSha) &&
+    run.headSha === trustedPluginWorkflowSha &&
+    /^extended-stable\/[0-9]{4}\.(?:[1-9]|1[0-2])\.33$/u.test(expectedBranch ?? "") &&
+    workflowPath.split("@", 1)[0] === ".github/workflows/plugin-npm-release.yml";
   if (
     !fullReleasePreflight &&
+    !trustedPluginRecovery &&
     npmDistTag === "extended-stable" &&
     (run.headBranch !== expectedBranch || run.headSha !== expectedSha)
   ) {
@@ -556,6 +572,7 @@ async function main() {
       fullReleaseRunId: process.env.FULL_RELEASE_VALIDATION_RUN_ID,
       fullReleaseRunAttempt: process.env.FULL_RELEASE_VALIDATION_RUN_ATTEMPT,
       workflowPath: process.env.RUN_WORKFLOW_PATH,
+      trustedPluginWorkflowSha: process.env.TRUSTED_PLUGIN_WORKFLOW_SHA,
     });
     console.log(`Verified referenced ${process.env.RUN_KIND} run.`);
     return;

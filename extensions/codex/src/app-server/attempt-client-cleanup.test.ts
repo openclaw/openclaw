@@ -131,7 +131,7 @@ describe("Codex app-server attempt client cleanup", () => {
       method: "turn/completed",
       params: {
         threadId: "thread-1",
-        turn: { id: "turn-other", status: "interrupted" },
+        turn: { id: "turn-other", status: "interrupted", items: [] },
       },
     });
     await Promise.resolve();
@@ -141,7 +141,7 @@ describe("Codex app-server attempt client cleanup", () => {
       method: "turn/completed",
       params: {
         threadId: "thread-1",
-        turn: { id: "turn-1", status: "interrupted" },
+        turn: { id: "turn-1", status: "interrupted", items: [] },
       },
     });
 
@@ -225,7 +225,10 @@ describe("Codex app-server attempt client cleanup", () => {
         expect(settled).not.toHaveBeenCalled();
         harness.send({
           method: "turn/completed",
-          params: { threadId: "thread-1", turn: { id: "turn-1", status: "interrupted" } },
+          params: {
+            threadId: "thread-1",
+            turn: { id: "turn-1", status: "interrupted", items: [] },
+          },
         });
         await expect(completion).resolves.toBe(true);
         expect(harness.client.getCloseError()).toBeUndefined();
@@ -292,7 +295,7 @@ describe("Codex app-server attempt client cleanup", () => {
         });
         harness.send({
           method: "turn/completed",
-          params: { threadId: "thread-1", turn: { id: "turn-1", status: "completed" } },
+          params: { threadId: "thread-1", turn: { id: "turn-1", status: "completed", items: [] } },
         });
         harness.send({
           method: "turn/started",
@@ -374,7 +377,7 @@ describe("Codex app-server attempt client cleanup", () => {
       await route.bindTurn("turn-1");
       harness.send({
         method: "turn/completed",
-        params: { threadId: "thread-1", turn: { id: "turn-1", status: "completed" } },
+        params: { threadId: "thread-1", turn: { id: "turn-1", status: "completed", items: [] } },
       });
       const completion = interruptCodexTurnAndWaitBestEffort(harness.client, {
         threadId: "thread-1",
@@ -436,7 +439,7 @@ describe("Codex app-server attempt client cleanup", () => {
     if (completed) {
       harness.send({
         method: "turn/completed",
-        params: { threadId: "thread-1", turn: { id: "turn-1", status: "completed" } },
+        params: { threadId: "thread-1", turn: { id: "turn-1", status: "completed", items: [] } },
       });
     }
 

@@ -7,6 +7,7 @@ export const updateRecoverySchema = z.discriminatedUnion("serviceRestartSafe", [
     version: z.string().trim().min(1),
     buildId: z.string().trim().min(1).max(96).optional(),
     service: z.enum(["healthy", "failed"]).optional(),
+    reason: z.string().trim().min(1).optional(),
   }),
   z.strictObject({
     serviceRestartSafe: z.literal(false),

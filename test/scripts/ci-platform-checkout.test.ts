@@ -1364,9 +1364,19 @@ owner.run_git(directory, "-c", "alias.diagnostic=" + alias, "diagnostic", timeou
     expect(denial.owner_frames.some((frame) => frame.function === "drain")).toBe(
       process.platform === "win32" && site === "timeout-drain",
     );
+    const windowsDrain = process.platform === "win32" && site === "timeout-drain";
+    expect(denial.owner_frames.some((frame) => frame.function === "job_members")).toBe(
+      windowsDrain,
+    );
     for (const frame of chain.flatMap((record) => record.owner_frames)) {
       expect(Number.isInteger(frame.line) && frame.line > 0).toBe(true);
-      expect(["<module>", "main", "run_git", "drain"]).toContain(frame.function);
+      expect([
+        "<module>",
+        "main",
+        "run_git",
+        "drain",
+        ...(windowsDrain ? ["job_members"] : []),
+      ]).toContain(frame.function);
     }
   },
 );

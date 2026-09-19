@@ -1,9 +1,11 @@
+import type { AgentHistoryActivity } from "../../infra/agent-activity-events.js";
 import type { InternalSessionEntry, SessionEntry } from "./types.js";
 
 export type ChatHistoryPage = {
   activeLeafEntryId?: string | null;
   deltaCursor?: string;
   messages: unknown[];
+  activity?: AgentHistoryActivity[];
   responseOffset?: number;
   completeCliImport?: true;
   // Absent only for anchored (messageId) reads: the anchor may resolve a

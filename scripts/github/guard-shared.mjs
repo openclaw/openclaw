@@ -7,6 +7,104 @@ export const GITHUB_API_REQUEST_TIMEOUT_MS = 30_000;
 
 const githubApiRetryStatuses = new Set([502, 503, 504]);
 const githubApiRetryDelaysMs = [1_000, 2_000, 4_000];
+const approvalCommands = new Set([
+  "/allow-security-sensitive-change",
+  "/allow-dependencies-change",
+]);
+
+export function parseApprovalCommands(body) {
+  const lines = (body ?? "")
+    .split(/\r?\n/u)
+    .map((line) => line.trim())
+    .filter(Boolean);
+  return lines.every((line) => approvalCommands.has(line)) ? lines : [];
+}
+
+// Commit statuses are the publisher's durable record of which PRs it evaluated.
+// GitHub's commit-to-PR association index is incomplete across fork repositories.
+export async function readSecurityReviewHistory(api, owner, repo, head) {
+  const contexts = new Set([
+    "openclaw/ci-gate",
+    "openclaw/security-sensitive-review",
+    "openclaw/dependency-review",
+  ]);
+  const statuses = await api.paginate(`/repos/${owner}/${repo}/commits/${head}/statuses`);
+  const numbers = new Set();
+  const counts = new Map();
+  for (const status of statuses) {
+    const context = typeof status.context === "string" ? status.context.toLowerCase() : "";
+    if (!contexts.has(context)) {
+      continue;
+    }
+    counts.set(context, (counts.get(context) ?? 0) + 1);
+    if (status.creator?.login !== "github-actions[bot]" || status.creator?.type !== "Bot") {
+      continue;
+    }
+    const recorded = /^PR #([1-9][0-9]*): /u.exec(status.description ?? "");
+    if (recorded && Number.isSafeInteger(Number(recorded[1]))) {
+      numbers.add(Number(recorded[1]));
+    }
+  }
+  return { pullRequestNumbers: [...numbers].toSorted((left, right) => left - right), counts };
+}
+
+export async function publishGuardStatus(guard, state, description) {
+  if (state === "success") {
+    // GitHub statuses belong to commits, while author and comment authority
+    // belong to PRs. Never lend one PR's approval to another PR with that head.
+    const history = await readSecurityReviewHistory(
+      guard.api,
+      guard.owner,
+      guard.repo,
+      guard.pullRequest.head.sha,
+    );
+    // GitHub refuses writes after 1,000 statuses per commit/context. Stop
+    // successes early so exhaustion cannot leave a permanently green result.
+    if ((history.counts.get(guard.context) ?? 0) >= 900) {
+      await publishGuardStatus(
+        guard,
+        "failure",
+        "Review status capacity is nearly exhausted; push a new commit",
+      );
+      throw new Error("Review status capacity is nearly exhausted; push a new commit.");
+    }
+    if (!history.pullRequestNumbers.includes(guard.pullRequest.number)) {
+      throw new Error("The current PR's security review status was not recorded.");
+    }
+    for (const number of history.pullRequestNumbers) {
+      if (number === guard.pullRequest.number) {
+        continue;
+      }
+      const other = await guard.api.request(`/repos/${guard.owner}/${guard.repo}/pulls/${number}`);
+      if (
+        other.state === "open" &&
+        other.base?.ref === guard.pullRequest.base.ref &&
+        other.head?.sha === guard.pullRequest.head.sha
+      ) {
+        await publishGuardStatus(
+          guard,
+          "failure",
+          "Multiple PRs use this head; close duplicates or push a distinct commit",
+        );
+        throw new Error(
+          "Multiple open PRs use the same head. Close duplicate PRs or push a distinct commit; security review updates automatically.",
+        );
+      }
+    }
+  }
+  await guard.api.request(
+    `/repos/${guard.owner}/${guard.repo}/statuses/${guard.pullRequest.head.sha}`,
+    {
+      method: "POST",
+      body: JSON.stringify({
+        context: guard.context,
+        state,
+        description: `PR #${guard.pullRequest.number}: ${description}`,
+        target_url: guard.runUrl,
+      }),
+    },
+  );
+}
 
 export function sanitizeGuardDisplayValue(value) {
   return String(value)
@@ -27,56 +125,6 @@ export function normalizeGuardLoginSet(value, fallback = "") {
   );
 }
 
-export function guardTrustedActorCandidates({ pullRequest, event, currentHeadSha }) {
-  const eventHeadSha = event?.pull_request?.head?.sha;
-  const eventAfterSha = event?.after;
-  const eventMatchesCurrentHead =
-    Boolean(currentHeadSha) &&
-    (eventHeadSha === currentHeadSha || eventAfterSha === currentHeadSha);
-  if (!eventMatchesCurrentHead) {
-    return [];
-  }
-  const candidates = [];
-  const seen = new Set();
-  for (const [source, login] of [["pull request author", pullRequest?.user?.login]]) {
-    if (typeof login !== "string" || login.length === 0) {
-      continue;
-    }
-    const normalizedLogin = login.toLowerCase();
-    if (seen.has(normalizedLogin)) {
-      continue;
-    }
-    seen.add(normalizedLogin);
-    candidates.push({ login, source });
-  }
-  return candidates;
-}
-
-export function isCommentNewerThan(comment, newerThan) {
-  if (!newerThan) {
-    return false;
-  }
-  const commentTime = Date.parse(comment.created_at ?? "");
-  const barrierTime = Date.parse(newerThan);
-  return Number.isFinite(commentTime) && Number.isFinite(barrierTime) && commentTime > barrierTime;
-}
-
-export function guardCommentHeadSha(comment) {
-  const body = comment?.body ?? "";
-  const patterns = [
-    /Approved SHA:\s+`([a-f0-9]{40})`/iu,
-    /current head SHA\s+\(`([a-f0-9]{40})`\)/iu,
-    /Current SHA:\s+`([a-f0-9]{40})`/iu,
-  ];
-  for (const pattern of patterns) {
-    const match = body.match(pattern);
-    if (match?.[1]) {
-      return match[1];
-    }
-  }
-  return null;
-}
-
 export function createIssueMutationHelpers({
   api,
   issuePath,
@@ -87,7 +135,9 @@ export function createIssueMutationHelpers({
 }) {
   const ignoreUnavailableWritePermission = (action) => (error) => {
     if (error?.status === 403) {
-      warn(`Skipping ${action}; token does not have write permission.`);
+      warn(
+        `Skipping ${action}; GitHub API rejected the request: ${sanitizeGuardDisplayValue(error.message)}`,
+      );
       return;
     }
     if (error?.status === 404 || error?.status === 422) {
@@ -146,63 +196,6 @@ export function createIssueMutationHelpers({
       .catch(ignoreUnavailableWritePermission("comment creation"));
   };
   return { removeLabelIfPresent, addLabelIfMissing, deleteCommentIfPresent, upsertComment };
-}
-
-export function createGuardApproverChecks({
-  api,
-  owner,
-  repo,
-  securityTeamSlug,
-  explicitSecurityApprovers,
-  warn = console.warn,
-}) {
-  const membershipCache = new Map();
-  const repositoryRoleCache = new Map();
-  const isSecurityMember = async (login) => {
-    const normalizedLogin = login.toLowerCase();
-    if (explicitSecurityApprovers.has(normalizedLogin)) {
-      return true;
-    }
-    if (membershipCache.has(normalizedLogin)) {
-      return membershipCache.get(normalizedLogin);
-    }
-    try {
-      const membership = await api.request(
-        `/orgs/${owner}/teams/${securityTeamSlug}/memberships/${encodeURIComponent(login)}`,
-      );
-      const allowed = membership?.state === "active";
-      membershipCache.set(normalizedLogin, allowed);
-      return allowed;
-    } catch (error) {
-      if (error?.status !== 404) {
-        warn(`Could not verify ${login} against ${securityTeamSlug}: ${error.message}`);
-      }
-      membershipCache.set(normalizedLogin, false);
-      return false;
-    }
-  };
-  const getRepositoryRoleName = async (login) => {
-    const normalizedLogin = login.toLowerCase();
-    if (repositoryRoleCache.has(normalizedLogin)) {
-      return repositoryRoleCache.get(normalizedLogin);
-    }
-    try {
-      const result = await api.request(
-        `/repos/${owner}/${repo}/collaborators/${encodeURIComponent(login)}/permission`,
-      );
-      const roleName = typeof result?.role_name === "string" ? result.role_name : null;
-      repositoryRoleCache.set(normalizedLogin, roleName);
-      return roleName;
-    } catch (error) {
-      if (error?.status !== 404) {
-        warn(`Could not verify repository permission for ${login}: ${error.message}`);
-      }
-      repositoryRoleCache.set(normalizedLogin, null);
-      return null;
-    }
-  };
-  const isRepositoryAdmin = async (login) => (await getRepositoryRoleName(login)) === "admin";
-  return { getRepositoryRoleName, isSecurityMember, isRepositoryAdmin };
 }
 
 function githubErrorBodyTooLarge(maxBytes) {

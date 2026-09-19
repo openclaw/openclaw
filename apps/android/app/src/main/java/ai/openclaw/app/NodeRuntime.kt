@@ -131,10 +131,14 @@ import ai.openclaw.app.wear.WearProxyGatewayException
 import ai.openclaw.app.wear.WearRealtimeAttemptOwner
 import ai.openclaw.app.wear.WearRealtimeTalkController
 import ai.openclaw.app.wear.projectWearAgentPulse
+import ai.openclaw.app.wear.projectWearFullReply
 import ai.openclaw.app.wear.wearConnectionFailure
 import ai.openclaw.wear.shared.WearMessage
 import ai.openclaw.wear.shared.WearRealtimeTalkCodec
 import ai.openclaw.wear.shared.WearRealtimeTalkSnapshot
+import ai.openclaw.wear.shared.WearReplyText
+import ai.openclaw.wear.shared.WearReplyTextPage
+import ai.openclaw.wear.shared.WearReplyTextStatus
 import android.Manifest
 import android.content.Context
 import android.content.pm.PackageManager
@@ -154,6 +158,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -1471,8 +1476,8 @@ class NodeRuntime private constructor(
   private val _gatewayAgents = MutableStateFlow<List<GatewayAgentSummary>>(emptyList())
   val gatewayAgents: StateFlow<List<GatewayAgentSummary>> = _gatewayAgents.asStateFlow()
 
-  // Preserve an explicit user choice across metadata refreshes. Gateway reconnects
-  // clear it so the newly connected gateway's canonical main agent wins again.
+  // The focused Gateway owns this choice for the runtime's lifetime; replacing a
+  // socket must not rebind Chat or Talk to the default agent.
   @Volatile private var selectedChatAgentId: String? = null
   private val chatSelectionSeq = AtomicLong(0)
   private val _cronStatus = MutableStateFlow(GatewayCronStatus(enabled = false, jobs = 0, nextWakeAtMs = null))
@@ -1686,17 +1691,21 @@ class NodeRuntime private constructor(
           selectGatewayDevicePairingCapabilities(hello.methods.orEmpty(), operatorScopes)
         _gatewayAccentArgb.value = null
         _gatewaySourcePreviewConfig.value = null
-        val mainSessionKey =
-          prepareMainSessionKey(resolveAgentIdFromMainSessionKey(hello.mainSessionKey))
-        // Create/adopt before history refresh; this keeps the first connected read on the
-        // device-owned session without changing the shipped key or its existing transcript.
-        chat.onGatewayConnected(mainSessionBinding(mainSessionKey))
+        synchronized(gatewayDataScopeLock) {
+          val mainSessionKey =
+            prepareMainSessionKey(selectedChatAgentId ?: resolveAgentIdFromMainSessionKey(hello.mainSessionKey))
+          // Create/adopt before history refresh; this keeps the first connected read on the
+          // device-owned session without changing the shipped key or its existing transcript.
+          chat.onGatewayConnected(mainSessionBinding(mainSessionKey))
+        }
         refreshGatewayControlPage()
         updateStatus {
           operatorConnectionProblem = null
           operatorConnected = true
           operatorStatusText = "Connected"
         }
+        // Revalidate removals even when no screen refreshes metadata after reconnect.
+        if (selectedChatAgentId != null) refreshAgents()
         // Bootstrap can connect the node before operator access is ready.
         refreshNodesDevices()
         // Method and scope snapshots are synchronous above; refresh only after both so
@@ -1808,6 +1817,7 @@ class NodeRuntime private constructor(
       requestGateway = ::requestWearGateway,
       isGatewayConnected = operatorSession::isReady,
       gatewayStatusText = { synchronized(gatewayStatusLock) { operatorStatusText } },
+      gatewayProblemCode = { synchronized(gatewayStatusLock) { operatorConnectionProblem?.code } },
       hasOperatorAdminScope = { OperatorAdminScope in _operatorScopes.value },
       supportsSessionModelCatalog = { gatewayAdvertisesCapability("session-scoped-model-catalog") == true },
       activeAgentId = ::currentWearAgentId,
@@ -1836,6 +1846,10 @@ class NodeRuntime private constructor(
       connectGateway = { refreshGatewayConnection() },
       disconnectGateway = { disconnect() },
       loadAgentPulse = ::loadWearAgentPulse,
+      readChatReply = ::readWearChatReply,
+      readTalkReply = { nodeId, sessionKey, attemptId, entryId, offset, revision ->
+        wearRealtimeTalkController.readReply(nodeId, sessionKey, attemptId, entryId, offset, revision)
+      },
       startRealtimeTalk = { nodeId, sessionKey, attemptId, language, attemptScopedAudio ->
         if (startWearRealtimeTalk(nodeId, sessionKey, attemptId, language, attemptScopedAudio)) wearRealtimeTalkSnapshot.value else null
       },
@@ -1843,6 +1857,49 @@ class NodeRuntime private constructor(
         if (stopWearRealtimeTalk(nodeId, attemptId)) wearRealtimeTalkSnapshot.value else null
       },
     )
+  }
+
+  private suspend fun readWearChatReply(
+    sessionKey: String,
+    agentId: String,
+    entryId: String,
+    offset: Int,
+    revision: String?,
+  ): WearReplyTextPage {
+    val scope = captureGatewayDataScope() ?: return WearReplyTextPage(WearReplyTextStatus.Unavailable)
+    val methods = captureGatewayMethods()
+    val lease = operatorSession.captureRequestLease(scope.stableId) ?: return WearReplyTextPage(WearReplyTextStatus.Unavailable)
+    if (!lease.supportsMethod("chat.message.get")) return WearReplyTextPage(WearReplyTextStatus.Unsupported)
+    val selectedAgent = currentWearAgentId()
+    val caller = currentCoroutineContext()
+    caller.ensureActive()
+
+    fun current() = isGatewayDataScopeCurrent(scope) && isGatewayMethodsSnapshotCurrent(methods) && currentWearAgentId() == selectedAgent
+    val params =
+      buildJsonObject {
+        put("sessionKey", JsonPrimitive(sessionKey))
+        put("agentId", JsonPrimitive(agentId))
+        put("messageId", JsonPrimitive(entryId))
+        put("maxChars", JsonPrimitive(WearReplyText.MAX_TEXT_LENGTH))
+      }
+    val payload =
+      lease.request("chat.message.get", params.toString()) { enqueue ->
+        if (!current()) throw GatewayRequestNotEnqueued("Wear reply read retired")
+        caller.ensureActive()
+        enqueue()
+      }
+    val page =
+      projectWearFullReply(
+        json.parseToJsonElement(payload),
+        entryId,
+        "\u0000".let { separator -> listOf(scope.stableId, scope.generation.toString(), methods.epoch.toString(), agentId, sessionKey, entryId).joinToString(separator) },
+        offset,
+        revision,
+      )
+    caller.ensureActive()
+    var accepted = false
+    lease.commitIfCurrent { accepted = current() }
+    return if (accepted) page else WearReplyTextPage(WearReplyTextStatus.Changed)
   }
 
   private fun currentWearAgentId(): String? = resolveAgentIdFromMainSessionKey(mainSessionKey.value) ?: gatewayDefaultAgentId.value
@@ -1983,7 +2040,6 @@ class NodeRuntime private constructor(
     }
     skillsSummary.reset()
     synchronized(gatewayDataScopeLock) {
-      selectedChatAgentId = null
       chatSelectionSeq.incrementAndGet()
       sessionCatalogRefreshSeq.incrementAndGet()
       sessionCatalogContinueSeq.incrementAndGet()
@@ -3192,6 +3248,7 @@ class NodeRuntime private constructor(
   val chatPendingSessionSettingsKeys: StateFlow<Set<String>> = chat.pendingSessionSettingsKeys
   val chatStreamingAssistantText: StateFlow<String?> = chat.streamingAssistantText
   val chatPendingToolCalls: StateFlow<List<ChatPendingToolCall>> = chat.pendingToolCalls
+  val chatToolActivities: StateFlow<List<ChatPendingToolCall>> = chat.toolActivities
   val chatSubagentActivities: StateFlow<Map<String, ai.openclaw.app.chat.ChatSubagentActivity>> = chat.subagentActivities
   val chatQuestions: StateFlow<List<ChatQuestionPrompt>> = chat.questions
   val chatProgressCard: StateFlow<ChatProgressCard?> = chat.progressCard
@@ -5577,6 +5634,7 @@ class NodeRuntime private constructor(
     val disconnectAttemptId = retireConnectAttempt()
     synchronized(gatewayDataScopeLock) {
       gatewayDataGeneration += 1
+      if (retireRunState) selectedChatAgentId = null
       clearOperatorGatewayState(retirePendingCronRuns = true)
     }
     if (retireRunState) updateGatewayDefaultAgentId(null)
@@ -7095,14 +7153,17 @@ class NodeRuntime private constructor(
   private suspend fun refreshAgentsFromGateway() {
     val gatewayScope = captureGatewayDataScope() ?: return
     if (!operatorConnected) return
+    val selectionSequence = chatSelectionSeq.get()
     try {
       val res = requestGatewayData(gatewayScope, "agents.list", "{}")
       val root = json.parseToJsonElement(res).asObjectOrNull() ?: return
       val defaultAgentId = root["defaultId"].asStringOrNull()?.trim().orEmpty()
       val mainKey = normalizeMainKey(root["mainKey"].asStringOrNull())
       val agents = parseGatewayAgentSummaries(root)
+      if (agents.isEmpty()) return
 
       publishGatewayData(gatewayScope) {
+        if (chatSelectionSeq.get() != selectionSequence) return@publishGatewayData
         updateGatewayDefaultAgentId(defaultAgentId)
         _gatewayAgents.value = agents
         val selectedAgentId = selectedChatAgentId?.takeIf { id -> agents.any { it.id == id } }

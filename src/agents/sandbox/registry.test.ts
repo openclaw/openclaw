@@ -22,6 +22,7 @@ import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db
 import { deleteTestEnvValue, setTestEnvValue } from "../../test-utils/env.js";
 import {
   readBrowserRegistry,
+  assertSandboxBrowserRegistryEntryCurrent,
   readRegisteredSandboxRuntimeIds,
   readRegistry,
   readRegistryEntry,
@@ -86,6 +87,16 @@ async function expectPathMissing(targetPath: string): Promise<void> {
 }
 
 describe("registry race safety", () => {
+  it("retains exact browser workspace custody and rejects a rebound owner", async () => {
+    await updateBrowserRegistry(browserEntry({ workspaceDir: "/private/workspace" }));
+    await updateBrowserRegistry(browserEntry({ lastUsedAtMs: 2 }));
+    const [selected] = (await readBrowserRegistry()).entries;
+    expect(selected?.workspaceDir).toBe("/private/workspace");
+    expect(() => assertSandboxBrowserRegistryEntryCurrent(selected!)).not.toThrow();
+    await updateBrowserRegistry(browserEntry({ workspaceDir: "/other/workspace" }));
+    expect(() => assertSandboxBrowserRegistryEntryCurrent(selected!)).toThrow("owner changed");
+  });
+
   it("does not migrate legacy registry files from runtime reads", async () => {
     // Runtime reads should ignore old monolithic files; explicit doctor/repair
     // owns migration so normal startup cannot mutate registry layout.

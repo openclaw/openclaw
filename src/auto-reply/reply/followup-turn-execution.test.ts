@@ -106,6 +106,33 @@ describe("executeFollowupTurn", () => {
     },
   );
 
+  it.each(["legacy", "lost", "dropped", "external"] as const)(
+    "keeps queued media ownership through %s source state",
+    async (source) => {
+      const turn = createTurn();
+      turn.queued.run.mediaNormalizationOwner =
+        source === "lost" || source === "dropped" ? "gateway" : undefined;
+      turn.queued.queuedFollowupReplyDisposition =
+        source === "legacy"
+          ? {
+              kind: "deliver",
+              deliver: Object.assign(async () => {}, { ownsCompletion: () => true }),
+            }
+          : source === "dropped"
+            ? { kind: "drop", reason: "source-unavailable" }
+            : undefined;
+      await executeFollowupTurn({
+        turn,
+        defaults: { typing: createTypingController(), typingMode: "never", defaultModel: "claude" },
+        onToolResult: vi.fn(async () => {}),
+        onCompactionNoticePayload: vi.fn(async () => {}),
+      });
+      expect(state.execute.mock.calls[0]?.[0]?.followupRun.run.mediaNormalizationOwner).toBe(
+        source === "external" ? undefined : "gateway",
+      );
+    },
+  );
+
   it("normalizes queued route facts into the canonical execution call", async () => {
     const turn = createTurn();
     const typing = createTypingController();

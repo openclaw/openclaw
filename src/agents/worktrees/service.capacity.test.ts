@@ -19,7 +19,7 @@ import { getRegistryWorktree } from "./registry.js";
 import { ManagedWorktreeService } from "./service.js";
 import {
   useManagedWorktreeTestRepository,
-  materializeManagedWorktreeFixture,
+  materializeManagedWorktreeFixtures,
 } from "./service.test-support.js";
 
 const execFileAsync = promisify(execFile);
@@ -51,15 +51,13 @@ describe("ManagedWorktreeService capacity", () => {
   }
 
   async function fill(count: number) {
-    for (let index = 0; index < count; index += 1) {
-      await materializeManagedWorktreeFixture({
-        env,
-        stateDir,
-        repoRoot: repo,
-        name: `kept-${index}`,
-        now: Date.now(),
-      });
-    }
+    await materializeManagedWorktreeFixtures({
+      env,
+      stateDir,
+      repoRoot: repo,
+      names: Array.from({ length: count }, (_, index) => `kept-${index}`),
+      now: Date.now(),
+    });
   }
 
   beforeEach(async () => {

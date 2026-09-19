@@ -38,7 +38,10 @@ import {
 import { isWebchatClient } from "../../../utils/message-channel.js";
 import { isLocalishHost, isLoopbackAddress } from "../../net.js";
 import { resolveNodePairingClientIpSource } from "../../node-pairing-auto-approve.js";
-import { MAX_PREAUTH_PAYLOAD_BYTES } from "../../server-constants.js";
+import {
+  MAX_PREAUTH_PAYLOAD_BYTES,
+  MAX_QUEUED_GATEWAY_PREAUTH_FRAMES,
+} from "../../server-constants.js";
 import { formatForLog, logWs } from "../../ws-log.js";
 import { truncateCloseReason } from "../close-reason.js";
 import type { GatewayConnectionFrame } from "../connection-transport.js";
@@ -172,25 +175,32 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
       .catch(onError);
   };
 
+  const rejectOversizedPreauthFrame = (data: GatewayConnectionFrame): boolean => {
+    const payloadBytes = rawDataByteLength(data);
+    if (payloadBytes <= MAX_PREAUTH_PAYLOAD_BYTES) {
+      return false;
+    }
+    logRejectedLargePayload({
+      surface: "gateway.ws.preauth",
+      bytes: payloadBytes,
+      limitBytes: MAX_PREAUTH_PAYLOAD_BYTES,
+      reason: "preauth_frame_limit",
+    });
+    setHandshakeState("failed");
+    setCloseCause("preauth-payload-too-large", {
+      payloadBytes,
+      limitBytes: MAX_PREAUTH_PAYLOAD_BYTES,
+    });
+    close(1009, "preauth payload too large");
+    return true;
+  };
+
   const handleMessage = async (data: GatewayConnectionFrame, admission?: "continuation") => {
     if (isClosed()) {
       return;
     }
 
-    const preauthPayloadBytes = !getClient() ? rawDataByteLength(data) : undefined;
-    if (preauthPayloadBytes !== undefined && preauthPayloadBytes > MAX_PREAUTH_PAYLOAD_BYTES) {
-      logRejectedLargePayload({
-        surface: "gateway.ws.preauth",
-        bytes: preauthPayloadBytes,
-        limitBytes: MAX_PREAUTH_PAYLOAD_BYTES,
-        reason: "preauth_frame_limit",
-      });
-      setHandshakeState("failed");
-      setCloseCause("preauth-payload-too-large", {
-        payloadBytes: preauthPayloadBytes,
-        limitBytes: MAX_PREAUTH_PAYLOAD_BYTES,
-      });
-      close(1009, "preauth payload too large");
+    if (!getClient() && rejectOversizedPreauthFrame(data)) {
       return;
     }
 
@@ -372,6 +382,7 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
           markHandshakeFailure,
           sendHandshakeErrorResponse,
           sendFrame,
+          onHelloDelivered: flushQueuedHandshakeFrames,
           isWebchatConnect,
           runDetachedConnectWork,
           pendingNodePairingCleanup,
@@ -539,11 +550,12 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
     }
   };
 
-  const receive = (data: GatewayConnectionFrame) => {
+  const dispatchIncomingMessage = (data: GatewayConnectionFrame, onSettled?: () => void) => {
     // Capture receipt before any await: older requests keep their admitted lifetime,
     // while shutdown frames may only settle an exact pending node owner.
     const admission = params.connectionWork.isClosing ? "continuation" : undefined;
     if (admission && getClient()?.connect.role !== "node") {
+      onSettled?.();
       return;
     }
     void params.connectionWork
@@ -554,8 +566,57 @@ export function attachGatewayWsMessageHandler(params: GatewayWsMessageHandlerPar
       )
       .catch((error: unknown) => {
         logGateway.error(`request dispatch failed conn=${connId}: ${formatForLog(error)}`);
-      });
+      })
+      .finally(onSettled);
   };
-  socket.on("message", receive);
-  return receive;
+
+  let queuedHandshakeFrames: GatewayConnectionFrame[] | undefined;
+  function flushQueuedHandshakeFrames() {
+    const frames = queuedHandshakeFrames?.splice(0) ?? [];
+    queuedHandshakeFrames = undefined;
+    if (isClosed()) {
+      return;
+    }
+    for (const frame of frames) {
+      onMessage(frame);
+    }
+  }
+
+  const onMessage = (data: GatewayConnectionFrame): void => {
+    if (isClosed()) {
+      return;
+    }
+    if (queuedHandshakeFrames) {
+      // Keep the preauth cap authoritative for pipelined frames until this
+      // connection actually owns an admitted client.
+      if (rejectOversizedPreauthFrame(data)) {
+        queuedHandshakeFrames.length = 0;
+        return;
+      }
+      if (queuedHandshakeFrames.length >= MAX_QUEUED_GATEWAY_PREAUTH_FRAMES - 1) {
+        setHandshakeState("failed");
+        setCloseCause("handshake-message-overflow", {
+          queuedFrames: queuedHandshakeFrames.length,
+        });
+        queuedHandshakeFrames.length = 0;
+        close(1008, "too many pending handshake frames");
+        return;
+      }
+      queuedHandshakeFrames.push(data);
+      return;
+    }
+
+    if (getClient()) {
+      dispatchIncomingMessage(data);
+      return;
+    }
+
+    // Reserve the first handshake only. Hello delivery retires pre-auth limits and
+    // replays queued frames; the final settlement callback remains a failure-path drain.
+    queuedHandshakeFrames = [];
+    dispatchIncomingMessage(data, flushQueuedHandshakeFrames);
+  };
+
+  socket.on("message", onMessage);
+  return onMessage;
 }

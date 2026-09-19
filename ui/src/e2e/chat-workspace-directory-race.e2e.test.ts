@@ -8,6 +8,93 @@ import { openChatSidePanelType } from "./chat-side-panel.test-support.ts";
 const suite = createChatFlowE2eSuite();
 
 suite.define(() => {
+  it.each([false, true])(
+    "keeps parent navigation usable after a directory refresh (missing: %s)",
+    async (missing) => {
+      const artifacts = createControlUiE2eArtifactDir(
+        missing ? "files-missing-directory" : "files-existing-directory",
+      );
+      await suite.withPage({}, async ({ page }) => {
+        const baseListing = { sessionKey: "main", root: "/workspace", files: [] };
+        const rootListing = {
+          ...baseListing,
+          browser: {
+            path: "",
+            entries: [
+              { kind: "directory", name: "reports", path: "reports" },
+              { kind: "directory", name: "other", path: "other" },
+            ],
+          },
+        };
+        const directoryListing = (folder: string, name: string) => ({
+          ...baseListing,
+          browser: {
+            path: folder,
+            parentPath: "",
+            entries: [{ kind: "file", name, path: `${folder}/${name}`, size: 12 }],
+          },
+        });
+        const gateway = await installMockGateway(page, {
+          methodResponses: {
+            "artifacts.list": { artifacts: [] },
+            "sessions.files.list": rootListing,
+          },
+        });
+        await page.goto(`${suite.server.baseUrl}chat`);
+        await openChatSidePanelType(page, "Files");
+        const rail = page.locator(".chat-workspace-rail");
+        await rail.getByRole("button", { name: "reports", exact: true }).waitFor();
+        await gateway.setMethodResponse(
+          "sessions.files.list",
+          directoryListing("reports", "notes.md"),
+        );
+        await rail.getByRole("button", { name: "reports", exact: true }).click();
+        const originalFile = rail.getByRole("button", {
+          name: "reports/notes.md",
+          exact: true,
+        });
+        await originalFile.waitFor();
+
+        // A removed or renamed directory returns a successful listing without browser.
+        await gateway.setMethodResponse(
+          "sessions.files.list",
+          missing ? baseListing : directoryListing("reports", "refreshed.md"),
+        );
+        await gateway.emitChatFinal({ runId: "folder-change", text: "Workspace updated." });
+        await originalFile.waitFor({ state: "hidden" });
+        if (!missing) {
+          await rail.getByRole("button", { name: "reports/refreshed.md", exact: true }).waitFor();
+        }
+        await page.screenshot({ path: path.join(artifacts, "after-refresh.png") });
+        await writeFile(
+          path.join(artifacts, "requests-before-recovery.json"),
+          JSON.stringify(await gateway.getRequests("sessions.files.list"), null, 2),
+        );
+        const parent = rail.getByRole("button", { name: "..", exact: true });
+        await expect.poll(() => parent.isVisible()).toBe(true);
+
+        await gateway.setMethodResponse("sessions.files.list", {
+          ...rootListing,
+          browser: {
+            ...rootListing.browser,
+            entries: rootListing.browser.entries.filter(
+              (entry) => !missing || entry.path !== "reports",
+            ),
+          },
+        });
+        await parent.click();
+        await rail.getByRole("button", { name: "other", exact: true }).waitFor();
+        await gateway.setMethodResponse(
+          "sessions.files.list",
+          directoryListing("other", "keep.md"),
+        );
+        await rail.getByRole("button", { name: "other", exact: true }).click();
+        await rail.getByRole("button", { name: "other/keep.md", exact: true }).waitFor();
+        await page.screenshot({ path: path.join(artifacts, "sibling-folder.png") });
+      });
+    },
+  );
+
   it("keeps a newly opened project file selected after an older directory response", async () => {
     const artifacts = createControlUiE2eArtifactDir("files-directory-selection");
     await suite.withPage({}, async ({ page }) => {

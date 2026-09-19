@@ -481,9 +481,45 @@ it.each([
 });
 
 it.each([
+  { status: "succeeded", reason: null, recovery: false },
+  { status: "skipped", reason: "external-supervisor-update-required", recovery: false },
+  { status: "skipped", reason: "container-image-install", recovery: false },
+  { status: "skipped", reason: "already-current", recovery: false },
+  { status: "skipped", reason: "dirty", recovery: true },
+  { status: "failed", reason: "build-failed", recovery: true },
+] as const)(
+  "offers update recovery only for failed $status/$reason outcomes",
+  async ({ status, reason, recovery }) => {
+    const run = createUpdateRunFixture({ status, reason, phase: "finished", finishedAtMs: 4_000 });
+    const stream = createProgressStream({ run, busy: false, connected: true, failure: null });
+    const settled = confirmAndStartUpdateRuntime({
+      existingRun: run,
+      startGatewayUpdate: vi.fn(),
+      onCheckStatus: vi.fn(async () => true),
+      onReviewUpdate: vi.fn(),
+      watchUpdateProgress: stream.watchUpdateProgress,
+      updateAvailable: UPDATE_AVAILABLE,
+      updateSchedule: null,
+      viaNativeApp: false,
+    });
+    const { modal } = await getRenderedModalDialog(document.body);
+    const labels = new Set(
+      [...modal.querySelectorAll("button")].map((button) => button.textContent?.trim()),
+    );
+    expect(labels.has("Retry update")).toBe(recovery);
+    expect(labels.has("Review update")).toBe(recovery);
+    expect(labels.has("Check status")).toBe(recovery);
+    findButton("Close").click();
+    await settled;
+    expect(stream.stopped).toBe(true);
+  },
+);
+
+it.each([
   { status: "running", entry: "existing" },
   { status: "failed", entry: "existing" },
   { status: "succeeded", entry: "existing" },
+  { status: "skipped", entry: "existing" },
   { status: "running", entry: "started" },
 ] as const)(
   "keeps the $status report and exposes read recovery for a $entry run",
@@ -492,7 +528,12 @@ it.each([
       status,
       phase: status === "running" ? "verifying" : "finished",
       finishedAtMs: status === "running" ? null : 4_000,
-      reason: status === "failed" ? "build-failed" : null,
+      reason:
+        status === "failed"
+          ? "build-failed"
+          : status === "skipped"
+            ? "external-supervisor-update-required"
+            : null,
     });
     let admitted = entry === "existing";
     let rejectRunReads = false;
@@ -550,7 +591,7 @@ it.each([
       expect(view.run).toEqual(run);
       const check = findButton("Check status");
       expect(check.disabled).toBe(false);
-      if (status === "running") {
+      if (status !== "failed") {
         expect(
           [...modal.querySelectorAll("button")].some(
             (button) => button.textContent?.trim() === "Retry update",

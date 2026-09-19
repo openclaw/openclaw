@@ -3,6 +3,7 @@
  * for native Codex turns.
  */
 import crypto from "node:crypto";
+import { codexAppIdentityKey } from "./app-identity.js";
 import { defaultCodexAppInventoryCache, CodexAppInventoryCache } from "./app-inventory-cache.js";
 import {
   resolveCodexPluginsPolicy,
@@ -112,7 +113,7 @@ type BuildCodexPluginThreadConfigParams = {
 
 // Admission changes must rebuild existing bindings too, or older bindings can
 // bypass updated app approval checks after the gateway has been upgraded.
-const CODEX_PLUGIN_THREAD_CONFIG_INPUT_FINGERPRINT_VERSION = 6;
+const CODEX_PLUGIN_THREAD_CONFIG_INPUT_FINGERPRINT_VERSION = 13;
 const CODEX_PLUGIN_THREAD_CONFIG_FINGERPRINT_VERSION = 2;
 
 /** Returns true when plugin config exists and thread config may need app patches. */
@@ -186,7 +187,8 @@ export async function buildCodexPluginThreadConfig(
           policy,
           request: threadRequest,
           appCache,
-          appCacheKey: threadAppCacheKey,
+          appCacheKey: params.appCacheKey,
+          appInventoryCacheKey: threadAppCacheKey,
           configCwd: params.configCwd,
           metadataCache: params.metadataCache,
           nowMs: params.nowMs,
@@ -210,7 +212,8 @@ export async function buildCodexPluginThreadConfig(
       policy,
       request: threadRequest,
       appCache,
-      appCacheKey: threadAppCacheKey,
+      appCacheKey: params.appCacheKey,
+      appInventoryCacheKey: threadAppCacheKey,
       configCwd: params.configCwd,
       metadataCache: params.metadataCache,
       nowMs: params.nowMs,
@@ -230,7 +233,8 @@ export async function buildCodexPluginThreadConfig(
       identity: record.policy,
       request: threadRequest,
       appCache,
-      appCacheKey: threadAppCacheKey,
+      appCacheKey: params.appCacheKey,
+      appInventoryCacheKey: threadAppCacheKey,
       configCwd: params.configCwd,
       metadataCache: params.metadataCache,
       deferAppInventoryRefresh: true,
@@ -265,7 +269,8 @@ export async function buildCodexPluginThreadConfig(
       policy,
       request: threadRequest,
       appCache,
-      appCacheKey: threadAppCacheKey,
+      appCacheKey: params.appCacheKey,
+      appInventoryCacheKey: threadAppCacheKey,
       configCwd: params.configCwd,
       metadataCache: params.metadataCache,
       nowMs: params.nowMs,
@@ -286,7 +291,8 @@ export async function buildCodexPluginThreadConfig(
       policy,
       request: threadRequest,
       appCache,
-      appCacheKey: threadAppCacheKey,
+      appCacheKey: params.appCacheKey,
+      appInventoryCacheKey: threadAppCacheKey,
       configCwd: params.configCwd,
       metadataCache: params.metadataCache,
       nowMs: params.nowMs,
@@ -300,7 +306,7 @@ export async function buildCodexPluginThreadConfig(
   const accountAppsResult: Awaited<ReturnType<typeof readCodexThreadAdmissibleAccountApps>> =
     policy.allowAllPlugins
       ? await readCodexThreadAdmissibleAccountApps(params, appCache)
-      : { apps: [] };
+      : { apps: [], installedApps: [] };
   // A deny-all thread needs no native settings; read them only before admitting an app.
   let appAdmissionConfig: Promise<CodexPluginThreadAppAdmissionConfig> | undefined;
   const getAdmissionConfig = () => (appAdmissionConfig ??= readCodexConfigForAppAdmission(params));
@@ -315,12 +321,12 @@ export async function buildCodexPluginThreadConfig(
   const policyApps: Record<string, CodexAppPolicyContextEntry> = {};
   const pluginAppIds: Record<string, string[]> = {};
   const pluginOwnedAppIds = collectCodexReservedPluginAppIds({
-    policy,
+    policy: inventory.policy,
     inventory,
     accountApps: accountAppsResult.apps,
   });
   const unresolvedDisabledPluginOwnership = policy.allowAllPlugins
-    ? policy.pluginPolicies.find((pluginPolicy) => {
+    ? inventory.policy.pluginPolicies.find((pluginPolicy) => {
         const record = inventory.records.find(
           (candidate) => candidate.policy.configKey === pluginPolicy.configKey,
         );
@@ -402,14 +408,17 @@ export async function buildCodexPluginThreadConfig(
     // An explicit plugin policy is more specific than the account-wide policy.
     // Reserve proven ownership even when activation/readiness fails so a broad
     // account policy cannot re-admit an app that the explicit path excluded.
-    if (pluginOwnedAppIds.has(app.id)) {
+    if (pluginOwnedAppIds.has(codexAppIdentityKey(app.id))) {
       continue;
     }
     const admissionConfig = await getAdmissionConfig();
     if (resolveCodexExplicitAppEnablement(admissionConfig.layers, app.id) === false) {
       continue;
     }
-    const accountApp = toCodexPluginOwnedAccountApp(app);
+    const accountApp = toCodexPluginOwnedAccountApp(
+      app,
+      accountAppsResult.installedApps.find((installed) => installed.id === app.id),
+    );
     // Global callability does not prove this thread's workspace/managed policy.
     provisionalAppIds.add(app.id);
     apps[app.id] = buildEnabledAppConfig(
@@ -604,7 +613,13 @@ export async function refreshCodexPluginAppApprovalPolicy(params: {
     admissionConfig.config,
   );
   const currentApps = new Map(
-    inventory?.apps.map((app) => [app.id, toCodexPluginOwnedAccountApp(app)]),
+    inventory?.apps.map((app) => [
+      app.id,
+      toCodexPluginOwnedAccountApp(
+        app,
+        inventory.installedApps.find((installed) => installed.id === app.id),
+      ),
+    ]),
   );
   const apps = { ...params.policyContext.apps };
   for (const [id, policy] of targetApps) {

@@ -18,8 +18,8 @@ import { withSessionTranscriptWriteLock } from "openclaw/plugin-sdk/session-tran
 import * as sqliteRuntime from "openclaw/plugin-sdk/sqlite-runtime";
 import { closeOpenClawAgentDatabasesForTest } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { recordMemorySessionTombstones } from "../memory-entry-origins.js";
-import { MemoryIndexRevisionConflictError } from "./manager-db.js";
+import { seedMemoryForgetTombstones } from "../test-helpers.js";
+import { MemoryIndexRevisionConflictError } from "./manager-db-kernel.js";
 import { createManagerIndexFixture } from "./manager-index.test-support.js";
 import { closeAllMemoryIndexManagers } from "./manager-runtime.js";
 import { MemoryIndexManager } from "./manager.js";
@@ -545,7 +545,7 @@ describe("memory manager shared agent connection", () => {
       expect(session).toBeDefined();
       Reflect.set(manager, "sessionsDirty", true);
       if (scenario === "deleted-session") {
-        recordMemorySessionTombstones({ agentId: "main", sessionIds: [sessionId] });
+        seedMemoryForgetTombstones({ agentId: "main", sessionIds: [sessionId] });
         Reflect.set(manager, "sessionsReconcileDirty", true);
       } else {
         shared.db
@@ -559,6 +559,7 @@ describe("memory manager shared agent connection", () => {
     const writer = new DatabaseSync(shared.path);
     writer.exec("BEGIN IMMEDIATE");
     const started = performance.now();
+    const writerReleased = createDeferred<void>();
     const observedCacheCounts = new Set<number>();
     let observeCacheTimer: NodeJS.Immediate | undefined;
     const observeCache = () => {
@@ -574,12 +575,15 @@ describe("memory manager shared agent connection", () => {
       if (scenario === "cache-prune") {
         observeCache();
       }
+      writerReleased.resolve();
     }, 100);
     const sync = manager.sync({ reason: sessionWork ? "session-delta" : "watch" });
+    void sync.catch(() => undefined);
     try {
-      const [results] = await Promise.all([reader.search("Alpha"), sync]);
+      const [results] = await Promise.all([reader.search("Alpha"), writerReleased.promise]);
       expect(results.some((result) => result.path === "memory/2026-01-12.md")).toBe(true);
       expect(performance.now() - started).toBeLessThan(1000);
+      await sync;
       if (scenario === "deleted-memory") {
         expect(
           shared.db

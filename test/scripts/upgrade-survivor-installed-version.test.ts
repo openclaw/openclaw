@@ -5,6 +5,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it } from "vitest";
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { readUpgradeSurvivorPaths } from "./upgrade-survivor-paths.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const testNodeExecPath = resolveTestNodeExecPath();
@@ -37,10 +38,8 @@ describe.skipIf(process.platform === "win32")(
       const home = tempDirs.make("survivor-installed-version-");
       const state = join(home, "state");
       const tmp = join(home, "tmp");
-      const artifacts = join(home, "artifacts");
-      const prefix = join(artifacts, "npm-prefix");
-      const packageRoot = join(prefix, "lib", "node_modules", "openclaw");
-      const bin = join(prefix, "bin");
+      const paths = readUpgradeSurvivorPaths(home);
+      const { artifactRoot: artifacts, packageRoot, binDir: bin, summaryJson: summaryPath } = paths;
       for (const directory of [state, tmp, packageRoot, bin]) {
         mkdirSync(directory, { recursive: true });
       }
@@ -119,7 +118,6 @@ if (args[0] === 'update') {
 trap 'case "$BASH_COMMAND" in "phase "*) install_fixture_phases ;; esac' DEBUG
 `,
       );
-      const summaryPath = join(artifacts, "summary.json");
       const result = spawnSync("bash", [runner], {
         encoding: "utf8",
         timeout: 15_000,
@@ -132,8 +130,7 @@ trap 'case "$BASH_COMMAND" in "phase "*) install_fixture_phases ;; esac' DEBUG
           OPENCLAW_CONFIG_PATH: join(state, "openclaw.json"),
           OPENCLAW_E2E_REDACTOR_MODULE: redactor,
           TMPDIR: tmp,
-          OPENCLAW_UPGRADE_SURVIVOR_RUNTIME_ROOT: join(home, "runtime"),
-          OPENCLAW_UPGRADE_SURVIVOR_SUMMARY_JSON: summaryPath,
+          ...paths.env,
           OPENCLAW_UPGRADE_SURVIVOR_BASELINE: `openclaw@${baselineVersion}`,
           OPENCLAW_UPGRADE_SURVIVOR_CANDIDATE_SPEC: join(home, "candidate.tgz"),
           BASH_ENV: prelude,
@@ -162,9 +159,7 @@ trap 'case "$BASH_COMMAND" in "phase "*) install_fixture_phases ;; esac' DEBUG
         expect(diagnostics.logs["update.json"]).toBeNull();
         return;
       }
-      expect(readFileSync(join(artifacts, "update.err"), "utf8")).toContain(
-        "target Doctor fixture failed",
-      );
+      expect(readFileSync(paths.updateErr, "utf8")).toContain("target Doctor fixture failed");
       const calls: string[][] = readFileSync(join(home, "calls"), "utf8")
         .trim()
         .split("\n")

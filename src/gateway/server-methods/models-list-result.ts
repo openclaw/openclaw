@@ -626,6 +626,7 @@ export async function prepareModelsListResult(
   });
   const readCatalog = await prepareLogicalVisibleModelCatalog({
     cfg,
+    metadataSnapshot,
     catalog,
     defaultProvider: DEFAULT_PROVIDER,
     defaultModel,

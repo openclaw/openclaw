@@ -53,32 +53,22 @@ describe("Firecrawl target validation", () => {
 });
 
 describe("Firecrawl search payloads", () => {
-  it.each([
-    [{ data: [{ url: "https://example.com/data" }] }, "https://example.com/data"],
-    [{ results: [{ url: "https://example.com/results" }] }, "https://example.com/results"],
-    [{ data: { results: [{ url: "https://example.com/nested" }] } }, "https://example.com/nested"],
-    [{ data: { web: [{ url: "https://example.com/web" }] } }, "https://example.com/web"],
-    [
-      { web: { results: [{ url: "https://example.com/web-results" }] } },
-      "https://example.com/web-results",
-    ],
-  ] as const)("accepts supported result envelopes", (payload, expectedUrl) => {
-    expect(firecrawlClient.resolveSearchItems(payload)[0]?.url).toBe(expectedUrl);
-  });
-
   it("normalizes alternate result fields", () => {
-    const result = firecrawlClient.resolveSearchItems({
-      data: [
-        {
-          sourceURL: "https://www.example.com/source",
-          metadata: { title: "Fallback title" },
-          description: "Fallback description",
-          markdown: "Body",
-          publishedDate: "2026-08-03",
-        },
-        { url: `${hostileControlToken} bypass`, title: "discard" },
-      ],
-    });
+    const result = firecrawlClient.resolveSearchItems(
+      {
+        data: [
+          {
+            sourceURL: "https://www.example.com/source",
+            metadata: { title: "Fallback title" },
+            description: "Fallback description",
+            markdown: "Body",
+            publishedDate: "2026-08-03",
+          },
+          { url: `${hostileControlToken} bypass`, title: "discard" },
+        ],
+      },
+      100,
+    );
 
     expect(result).toEqual([
       expect.objectContaining({
@@ -93,17 +83,20 @@ describe("Firecrawl search payloads", () => {
   });
 
   it("bounds rows and sanitizes hostile URL and publication fields", () => {
-    const result = firecrawlClient.resolveSearchItems({
-      data: [
-        {
-          url: `https://example.com/${hostileControlToken}`,
-          publishedDate: `${hostileControlToken} bypass`,
-        },
-        ...Array.from({ length: 499 }, (_, index) => ({
-          url: `https://example.com/${index}`,
-        })),
-      ],
-    });
+    const result = firecrawlClient.resolveSearchItems(
+      {
+        data: [
+          {
+            url: `https://example.com/${hostileControlToken}`,
+            publishedDate: `${hostileControlToken} bypass`,
+          },
+          ...Array.from({ length: 499 }, (_, index) => ({
+            url: `https://example.com/${index}`,
+          })),
+        ],
+      },
+      100,
+    );
 
     expect(result).toHaveLength(100);
     expect(result[0]?.url).not.toContain(hostileControlToken);

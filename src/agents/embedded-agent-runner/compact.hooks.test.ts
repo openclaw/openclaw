@@ -107,6 +107,7 @@ import {
   sessionManualCompactionMock,
   triggerInternalHookMock,
 } from "./compact.hooks.harness.js";
+import { createCompactHooksPreparedModelRuntime } from "./compact.hooks.metadata.test-support.js";
 import {
   abortEmbeddedAgentRun,
   clearActiveEmbeddedRun,
@@ -1799,16 +1800,13 @@ describe("compactEmbeddedAgentSessionDirect hooks", () => {
       }),
       workspaceDir: join(TEST_WORKSPACE_DIR, "workspace"),
     };
-    const preparedModelRuntime = {
+    const preparedModelRuntime = createCompactHooksPreparedModelRuntime({
       agentId: "main",
       agentDir: join(TEST_WORKSPACE_DIR, "agents/main/agent"),
       config: { tools: { profile: "coding" } },
       workspaceDir: join(TEST_WORKSPACE_DIR, "workspace"),
       metadataSnapshot,
-      configuredRuntimeModels: [],
-      inlineProviderModels: [],
-      createStores: () => ({ authStorage: {}, modelRegistry: {} }),
-    } as never;
+    }) as never;
     acquireAgentRunPreparedModelRuntimeMock.mockResolvedValueOnce({
       snapshot: preparedModelRuntime,
       [Symbol.asyncDispose]: vi.fn(async () => {}),

@@ -627,6 +627,7 @@ class MainViewModel private constructor(
     runtimeState(initial = null) { it.voiceWakeLastTriggeredCommand }
   val voiceWakeWordsSaving: StateFlow<Boolean> = runtimeState(initial = false) { it.voiceWakeWordsSaving }
   val voiceWakeWordsNoticeText: StateFlow<String?> = runtimeState(initial = null) { it.voiceWakeWordsNoticeText }
+  val appearanceTextScale: StateFlow<AppearanceTextScale> = prefs.appearanceTextScale
   val appearanceThemeMode: StateFlow<AppearanceThemeMode> = prefs.appearanceThemeMode
   val appearanceThemeFamily: StateFlow<AppearanceThemeFamily> = prefs.appearanceThemeFamily
   val appearanceAccentArgb: StateFlow<Long?> = prefs.appearanceAccentArgb
@@ -672,6 +673,7 @@ class MainViewModel private constructor(
     runtimeState(initial = emptySet()) { it.chatPendingSessionSettingsKeys }
   val chatStreamingAssistantText: StateFlow<String?> = runtimeState(initial = null) { it.chatStreamingAssistantText }
   val chatPendingToolCalls: StateFlow<List<ChatPendingToolCall>> = runtimeState(initial = emptyList()) { it.chatPendingToolCalls }
+  val chatToolActivities: StateFlow<List<ChatPendingToolCall>> = runtimeState(initial = emptyList()) { it.chatToolActivities }
   val chatSubagentActivities: StateFlow<Map<String, ai.openclaw.app.chat.ChatSubagentActivity>> =
     runtimeState(initial = emptyMap()) { it.chatSubagentActivities }
   val chatQuestions: StateFlow<List<ChatQuestionPrompt>> = runtimeState(initial = emptyList()) { it.chatQuestions }
@@ -1273,6 +1275,10 @@ class MainViewModel private constructor(
     viewModelScope.launch(Dispatchers.Default) {
       runtime.setProfileAppearancePreference(key, value)
     }
+  }
+
+  fun setAppearanceTextScale(scale: AppearanceTextScale) {
+    prefs.setAppearanceTextScale(scale)
   }
 
   fun setAppearanceThemeMode(mode: AppearanceThemeMode) {

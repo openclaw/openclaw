@@ -61,6 +61,7 @@ import { PluginInstance } from "../plugins/plugin-instance.js";
 import { withPluginLifecycleLease } from "../plugins/plugin-lifecycle-lease.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
+import { createServiceRegistration } from "../plugins/services.test-support.js";
 import { seedInstalledPluginIndex } from "../plugins/test-helpers/installed-plugin-index.js";
 import {
   captureGatewayRootWorkAdmissionContinuationScope,
@@ -337,12 +338,9 @@ describe("buildGatewayReloadPlan", () => {
           },
         } as never,
         registerService(service) {
-          registry.services.push({
-            pluginId: "browser",
-            source: "test",
-            origin: "bundled",
-            service,
-          });
+          registry.services.push(
+            createServiceRegistration(service, { pluginId: "browser", origin: "bundled" }),
+          );
         },
       }),
     );
@@ -376,16 +374,16 @@ describe("buildGatewayReloadPlan", () => {
   });
   it("selects only attached service owners for their declared config and preserves unknown restart policy", () => {
     const serviceRegistry = createTestRegistry([]);
-    serviceRegistry.services.push({
-      pluginId: "exporter",
-      source: "test",
-      origin: "workspace",
-      service: {
-        id: "exporter",
-        reload: { configPrefixes: ["diagnostics.otel", "diagnostics.enabled"] },
-        start() {},
-      },
-    });
+    serviceRegistry.services.push(
+      createServiceRegistration(
+        {
+          id: " exporter ",
+          reload: { configPrefixes: ["diagnostics.otel", "diagnostics.enabled"] },
+          start() {},
+        },
+        { pluginId: "exporter" },
+      ),
+    );
     setActivePluginRegistry(serviceRegistry);
     const plan = buildGatewayReloadPlan(["diagnostics.otel.endpoint", "diagnostics.enabled"]);
     expect(plan.restartGateway).toBe(false);
@@ -405,12 +403,12 @@ describe("buildGatewayReloadPlan", () => {
       ["second", "shared.policy.child"],
       ["sibling", "shared.other"],
     ] as const) {
-      registry.services.push({
-        pluginId: id,
-        source: "test",
-        origin: "workspace",
-        service: { id, reload: { configPrefixes: [prefix] }, start() {} },
-      });
+      registry.services.push(
+        createServiceRegistration(
+          { id, reload: { configPrefixes: [prefix] }, start() {} },
+          { pluginId: id },
+        ),
+      );
     }
     setActivePluginRegistry(registry);
     expect(buildGatewayReloadPlan(["shared.policy.child.enabled"]).restartServices).toEqual(
@@ -497,12 +495,12 @@ describe("buildGatewayReloadPlan", () => {
     const serviceRegistry = createTestRegistry([
       { pluginId: "whatsapp", plugin: whatsappPlugin, source: "test" },
     ]);
-    serviceRegistry.services.push({
-      pluginId: "exporter",
-      source: "test",
-      origin: "workspace",
-      service: { id: "exporter", reload: { configPrefixes: [prefix] }, start() {} },
-    });
+    serviceRegistry.services.push(
+      createServiceRegistration(
+        { id: "exporter", reload: { configPrefixes: [prefix] }, start() {} },
+        { pluginId: "exporter" },
+      ),
+    );
     setActivePluginRegistry(serviceRegistry);
     expect(resolveConfigReloadMetadata(changedPath)).toEqual({ kind });
     const plan = buildGatewayReloadPlan([changedPath]);
@@ -537,12 +535,12 @@ describe("buildGatewayReloadPlan", () => {
           source: "test",
         },
       ]);
-      serviceRegistry.services.push({
-        pluginId: "exporter",
-        source: "test",
-        origin: "workspace",
-        service: { id: "exporter", reload: { configPrefixes: [prefix] }, start() {} },
-      });
+      serviceRegistry.services.push(
+        createServiceRegistration(
+          { id: "exporter", reload: { configPrefixes: [prefix] }, start() {} },
+          { pluginId: "exporter" },
+        ),
+      );
       if (globalNoop) {
         serviceRegistry.reloads.push({
           pluginId: "policy-owner",
@@ -567,12 +565,12 @@ describe("buildGatewayReloadPlan", () => {
       const serviceRegistry = createTestRegistry([
         { pluginId: "mattermost", plugin: mattermostPlugin, source: "test" },
       ]);
-      serviceRegistry.services.push({
-        pluginId: "exporter",
-        source: "test",
-        origin: "workspace",
-        service: { id: "exporter", reload: { configPrefixes: [prefix] }, start() {} },
-      });
+      serviceRegistry.services.push(
+        createServiceRegistration(
+          { id: "exporter", reload: { configPrefixes: [prefix] }, start() {} },
+          { pluginId: "exporter" },
+        ),
+      );
       setActivePluginRegistry(serviceRegistry);
       const plan = buildGatewayReloadPlan(["channels.mattermost.accounts.work.token"]);
       expect(plan.restartServices).toEqual(new Set(["exporter"]));
@@ -7238,6 +7236,48 @@ describe("startGatewayConfigReloader", () => {
 
     await harness.reloader.stop();
   });
+
+  it.each(["install", "uninstall"] as const)(
+    "captures candidate install records before an initial watcher echo (%s)",
+    async (reason) => {
+      const config: OpenClawConfig = { gateway: { reload: {} } };
+      const records: Record<string, PluginInstallRecord> = {
+        notes: { source: "npm", spec: "notes@1", installPath: "/tmp/openclaw/plugins/notes" },
+      };
+      const snapshot = makeSnapshot({ sourceConfig: config, config, hash: "committed-source" });
+      let emitEcho = () => {};
+      const readSnapshot = vi.fn(async () => {
+        if (readSnapshot.mock.calls.length === 1) {
+          emitEcho();
+        }
+        return snapshot;
+      });
+      const runtime = { operationId: "ledger-change", generation: 2, pluginIds: ["notes"] };
+      const harness = createReloaderHarness(readSnapshot, {
+        initialConfig: config,
+        initialPluginInstallRecords: reason === "install" ? {} : records,
+        readPluginInstallRecords: async () => (reason === "install" ? records : {}),
+        onHotReload: async (plan, nextConfig, ownership) => {
+          ownership.markRuntimeCommitted(nextConfig, plan);
+          return { status: "applied", runtime };
+        },
+      });
+      emitEcho = () => harness.watcher.emit("change");
+      await harness.reloader.ready;
+      try {
+        await expect(
+          harness.reloader.applyPluginLifecycleChange({ config, pluginIds: ["notes"], reason }),
+        ).resolves.toEqual(runtime);
+        expect(harness.onHotReload).toHaveBeenCalledOnce();
+        expect(getOnlyHotReloadCall(harness)[0].changedPaths).toEqual(["plugins.installs.notes"]);
+        await vi.runOnlyPendingTimersAsync();
+        expect(harness.onHotReload).toHaveBeenCalledOnce();
+        expect(harness.onRestart).not.toHaveBeenCalled();
+      } finally {
+        await harness.reloader.stop();
+      }
+    },
+  );
 
   it.each(["hybrid", "off"] as const)(
     "applies explicit metadata through the hot owner without replaying watcher echoes (%s)",

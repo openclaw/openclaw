@@ -13,6 +13,17 @@ afterEach(() => {
 });
 
 describe("collectPackageDistImports", () => {
+  it("leaves installed dependency modules to their own package scope", () => {
+    expect(
+      collectPackageDistImports({
+        files: ["node_modules/vendor/index.js", "dist/node_modules/vendor/index.mjs"],
+        readText: () => {
+          throw new Error("Dependency source belongs to a separate package scope");
+        },
+      }),
+    ).toEqual([]);
+  });
+
   it("collects runtime imports around JSDoc without including documentation references", () => {
     const imports = collectPackageDistImports({
       files: ["dist/index.js"],

@@ -27,7 +27,6 @@ import { getActiveSecretsRuntimeSnapshotState } from "../secrets/runtime-state.j
 import { createDeferredCore } from "../shared/deferred.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
-import { getFreePort } from "../test-utils/ports.js";
 import { createGatewayMetadataCloseFixture } from "./server-close.metadata.test-support.js";
 import type { GatewayServer } from "./server-public.js";
 
@@ -46,7 +45,7 @@ it.each(["final", "sibling", "cache", "restart", "memory-and-plugin", "memory-on
     const memoryFailure = new Error("registered memory cleanup failed");
     const hasPluginFailure = mode !== "memory-only";
     const hasMemoryFailure = mode === "memory-and-plugin" || mode === "memory-only";
-    const port = await getFreePort();
+    const port = await fixture.reservePort();
     const logFile = fixture.state.path("shutdown.log");
     setLoggerOverride({ file: logFile, level: "debug", consoleLevel: "silent" });
     const registry = createEmptyPluginRegistry();
@@ -166,7 +165,7 @@ it.each(["final", "sibling", "cache", "restart", "memory-and-plugin", "memory-on
       let siblingPort: number | undefined;
       if (mode === "sibling") {
         setActivePluginRegistry(createEmptyPluginRegistry());
-        siblingPort = await getFreePort();
+        siblingPort = await fixture.reservePort();
         await fixture.start(siblingPort);
       }
       const close = vi.spyOn(server, "close");

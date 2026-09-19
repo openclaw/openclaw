@@ -28,8 +28,8 @@ vi.mock("./gateway-cli/pre-bootstrap.js", async (importOriginal) => ({
   selectGatewayRunEnvironment: async () => true,
   prepareGatewayRunBootstrap: async () => false,
 }));
-vi.mock("../logging.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../logging.js")>()),
+vi.mock("../logging/console.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../logging/console.js")>()),
   enableConsoleCapture: vi.fn(),
 }));
 

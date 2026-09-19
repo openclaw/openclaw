@@ -1,4 +1,3 @@
-// Matrix plugin module implements channel account paths behavior.
 import { createPairingPrefixStripper } from "openclaw/plugin-sdk/channel-pairing";
 import { PAIRING_APPROVED_MESSAGE } from "openclaw/plugin-sdk/channel-status";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";

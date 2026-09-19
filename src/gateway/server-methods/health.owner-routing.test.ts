@@ -1,6 +1,7 @@
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { recordStartupRecoveryStoreResult } from "../../agents/main-session-recovery/main-session-restart-recovery-diagnostics.js";
+import { setPreparedModelRuntimeStartupStatus } from "../../agents/prepared-model-runtime.startup-status.js";
 import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
@@ -9,20 +10,26 @@ import {
 } from "../../infra/agent-events.js";
 import { recordStartupMigrationWarnings } from "../../infra/state-migrations.messages.js";
 import { withStateDirEnv } from "../../test-helpers/state-dir-env.js";
+import type { HealthSummary } from "../health/types.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import { healthHandlers } from "./health.js";
 
 afterEach(() => {
+  setPreparedModelRuntimeStartupStatus(undefined);
   resetConfigRuntimeState();
   vi.restoreAllMocks();
 });
 
-async function callStatus(config: OpenClawConfig, scopes = ["operator.read"]) {
+async function callStatus(
+  config: OpenClawConfig,
+  scopes = ["operator.read"],
+  options: { includeCliProjection?: boolean } = {},
+) {
   setRuntimeConfigSnapshot(config, config);
   const respond = vi.fn();
   await healthHandlers.status!({
     req: {} as never,
-    params: { includeChannelSummary: false },
+    params: { includeChannelSummary: false, ...options },
     respond: respond as never,
     context: {} as never,
     client: { connect: { role: "operator", scopes } } as never,
@@ -32,6 +39,111 @@ async function callStatus(config: OpenClawConfig, scopes = ["operator.read"]) {
 }
 
 describe("Gateway status owner routing", () => {
+  it.each(["status", "cached health", "refreshed health"] as const)(
+    "reports current model acquisition and recovery through %s",
+    async (surface) => {
+      await withStateDirEnv("openclaw-gateway-model-status-", async ({ stateDir }) => {
+        const config = {
+          agents: { entries: { main: {}, second: {} } },
+          session: { store: path.join(stateDir, "agents", "{agentId}", "sessions.json") },
+        } satisfies OpenClawConfig;
+        const degraded = {
+          degraded: true,
+          pendingAgents: ["second"],
+          stage: "workspace plugins; agent second",
+        };
+        const snapshot: HealthSummary = {
+          ok: true,
+          ts: Date.now(),
+          durationMs: 1,
+          channels: {},
+          channelOrder: [],
+          channelLabels: {},
+          heartbeatSeconds: 0,
+          agents: [],
+          sessions: { path: path.join(stateDir, "sessions.json"), count: 0, recent: [] },
+          modelRuntime: degraded,
+        };
+        const refreshHealthSnapshot = vi.fn(async () => snapshot);
+        const read = async () => {
+          if (surface === "status") {
+            return callStatus(config);
+          }
+          const respond = vi.fn();
+          await healthHandlers.health!({
+            req: {} as never,
+            params: { probe: surface === "refreshed health" },
+            respond: respond as never,
+            context: {
+              getHealthCache: () => snapshot,
+              refreshHealthSnapshot,
+              getRuntimeSnapshot: () => ({ channels: {}, channelAccounts: {} }),
+              logHealth: { error: vi.fn() },
+            } as never,
+            client: { connect: { role: "operator", scopes: ["operator.read"] } } as never,
+            isWebchatConnect: () => false,
+          });
+          return respond;
+        };
+
+        setPreparedModelRuntimeStartupStatus(degraded);
+        const acquiring = await read();
+        expect(acquiring.mock.calls[0]?.[0]).toBe(true);
+        expect(acquiring.mock.calls[0]?.[1]).toMatchObject({ modelRuntime: degraded });
+
+        const complete = { degraded: false, pendingAgents: [] };
+        setPreparedModelRuntimeStartupStatus(complete);
+        const recovered = await read();
+        expect(recovered.mock.calls[0]?.[0]).toBe(true);
+        expect(recovered.mock.calls[0]?.[1].modelRuntime).toEqual(complete);
+      });
+    },
+  );
+
+  it("projects requested CLI facts without choosing a fleet owner or widening read scopes", async () => {
+    await withStateDirEnv("openclaw-gateway-cli-status-", async ({ stateDir }) => {
+      const config = {
+        agents: {
+          ownership: "explicit",
+          entries: { alpha: { name: "Alpha" }, beta: { identity: { name: "Beta" } } },
+        },
+        update: { channel: "beta" },
+        plugins: { slots: { memory: "none" } },
+        session: { store: path.join(stateDir, "agents", "{agentId}", "sessions.json") },
+      } satisfies OpenClawConfig;
+
+      const ordinary = await callStatus(config);
+      expect(ordinary.mock.calls[0]?.[1]).not.toHaveProperty("cliProjection");
+
+      const requested = await callStatus(config, ["operator.read"], { includeCliProjection: true });
+      expect(requested.mock.calls[0]?.[0]).toBe(true);
+      expect(requested.mock.calls[0]?.[1]).toMatchObject({
+        cliProjection: {
+          agents: {
+            defaultId: null,
+            ownership: "explicit",
+            selectionRequired: true,
+            rows: [
+              { id: "alpha", name: "Alpha" },
+              { id: "beta", name: "Beta" },
+            ],
+          },
+          updateChannel: "beta",
+          memoryPlugin: { enabled: false, slot: null, reason: 'plugins.slots.memory="none"' },
+        },
+        sessions: {
+          paths: [],
+          defaults: { model: null, contextTokens: null },
+          recent: [],
+          byAgent: [
+            { agentId: "alpha", path: "[redacted]", recent: [] },
+            { agentId: "beta", path: "[redacted]", recent: [] },
+          ],
+        },
+      });
+    });
+  });
+
   it("reports current startup recovery failures with restricted details until their store heals", async () => {
     await withStateDirEnv("openclaw-gateway-recovery-warning-", async ({ stateDir }) => {
       const target = { agentId: "main", storePath: path.join(stateDir, "sessions.json") };
@@ -94,6 +206,22 @@ describe("Gateway status owner routing", () => {
               heapTotalBytes: 4096,
               externalBytes: 2048,
               arrayBuffersBytes: 1024,
+            },
+            workerPools: {
+              transcriptReconciliation: {
+                maxWorkers: 1,
+                workers: 0,
+                workersCreated: 0,
+                activeTasks: 0,
+                pendingTasks: 0,
+              },
+              modelCatalog: {
+                maxWorkers: 1,
+                workers: 0,
+                workersCreated: 0,
+                activeTasks: 0,
+                pendingTasks: 0,
+              },
             },
           }),
         );

@@ -20,6 +20,7 @@ import { resolveChatAttachmentPolicy } from "../../chat-attachment-policy.js";
 import { resolveControlUiIdentity } from "../../control-ui-identity.js";
 import {
   listControlUiPluginTabs,
+  listControlUiLinkReaders,
   listControlUiPluginWidgetKinds,
 } from "../../control-ui-plugin-tabs.js";
 import {
@@ -32,6 +33,7 @@ import {
 import { canReadDetailedUpdateMetadata } from "../../events.js";
 import { ADMIN_SCOPE } from "../../method-scopes.js";
 import { scheduleNodeConnectionNotification } from "../../node-connection-notifications.js";
+import { resolveBrowserAuthOrigin } from "../../provider-browser-auth.js";
 import {
   MAX_BUFFERED_BYTES,
   MAX_PAYLOAD_BYTES,
@@ -74,6 +76,7 @@ export async function sendGatewayHello(
     frame,
     connectParams,
     sendFrame,
+    onHelloDelivered,
     pendingNodePairingCleanup,
     releasePendingNodePairingCleanup,
   } = context;
@@ -128,6 +131,10 @@ export async function sendGatewayHello(
     requireGatewayAuthGrant: resolvedAuth.mode !== "none",
   });
   const controlUiWidgetKinds = listControlUiPluginWidgetKinds(scopes);
+  const controlUiLinkReaders = listControlUiLinkReaders(
+    scopes,
+    buildRequestContext().getGatewayMethodRegistry?.(),
+  );
   const controlUiLocation = resolveControlUiLinkLocation(context.configSnapshot);
   // Gateway runtime provenance is independent of the UI artifact source.
   // Consumers use the source field to decide whether UI build comparison applies.
@@ -147,7 +154,9 @@ export async function sendGatewayHello(
       connId,
     },
     features: {
-      methods: gatewayMethods,
+      methods: resolveBrowserAuthOrigin(context.browserOrigin, new AbortController().signal)
+        ? gatewayMethods
+        : gatewayMethods.filter((method) => method !== "mcp.authLogin"),
       events,
       capabilities: [
         GATEWAY_SERVER_CAPS.BOARD_WIDGET_PUT_CANVAS_DOC,
@@ -156,6 +165,7 @@ export async function sendGatewayHello(
         GATEWAY_SERVER_CAPS.MODEL_CATALOG_SNAPSHOT,
         GATEWAY_SERVER_CAPS.NODE_WORKER_BUNDLE_RETENTION,
         GATEWAY_SERVER_CAPS.NODE_WORKER_BUNDLE_STATUS,
+        GATEWAY_SERVER_CAPS.NODE_WORKER_CAPTURED_EXEC_POLICY,
         GATEWAY_SERVER_CAPS.NODE_WORKER_ENVIRONMENT_SESSION,
         GATEWAY_SERVER_CAPS.NODE_WORKER_PORTAL_STREAM,
         GATEWAY_SERVER_CAPS.PROFILE_BINDING,
@@ -178,6 +188,7 @@ export async function sendGatewayHello(
       : {}),
     ...(controlUiTabs.length > 0 ? { controlUiTabs } : {}),
     ...(controlUiWidgetKinds.length > 0 ? { controlUiWidgetKinds } : {}),
+    ...(controlUiLinkReaders.length > 0 ? { controlUiLinkReaders } : {}),
     ...(Object.keys(pluginSurfaceUrls).length > 0 ? { pluginSurfaceUrls } : {}),
     auth: {
       method: authMethod,
@@ -261,6 +272,7 @@ export async function sendGatewayHello(
     }
     snapshot.suspension = { phase: getGatewaySuspendAdmissionPhase() };
     await sendFrame({ type: "res", id: frame.id, ok: true, payload: helloOk });
+    onHelloDelivered();
   } catch (err) {
     if (bootstrapHandoff) {
       if (bootstrapHandoff.completion) {

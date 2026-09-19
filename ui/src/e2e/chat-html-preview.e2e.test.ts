@@ -1,5 +1,6 @@
 // Uses the real isolated sandbox listener with deterministic Gateway file data.
 import type { Server } from "node:http";
+import path from "node:path";
 import { expect, it } from "vitest";
 import { buildSandboxHostPath } from "../../../src/agents/sandbox-host.js";
 import { CONTROL_UI_BOOTSTRAP_CONFIG_PATH } from "../../../src/gateway/control-ui-bootstrap-contract.js";
@@ -157,13 +158,13 @@ suite.define(() => {
               const outer = panel.locator(".chat-html-preview__frame");
               await outer.waitFor();
               const document = outer.contentFrame().frameLocator("iframe");
-              expect(await outer.contentFrame().locator("iframe").getAttribute("sandbox")).toBe(
-                mode === "strict" ? "" : "allow-scripts allow-forms",
-              );
               await document.getByRole("heading", { name: "Local HTML page" }).waitFor();
               await panel
                 .locator("openclaw-chat-html-preview [role=status]")
                 .waitFor({ state: "hidden" });
+              expect(await outer.contentFrame().locator("iframe").getAttribute("sandbox")).toBe(
+                mode === "strict" ? "" : "allow-scripts allow-forms",
+              );
               expect(
                 await document.locator("h1").evaluate((heading) => getComputedStyle(heading).color),
               ).toBe("rgb(12, 34, 56)");
@@ -204,6 +205,37 @@ suite.define(() => {
               await outer.waitFor();
               const attachmentDocument = outer.contentFrame().frameLocator("iframe");
               await attachmentDocument.getByRole("heading", { name: "Local HTML page" }).waitFor();
+              await panel
+                .locator("openclaw-chat-html-preview [role=status]")
+                .waitFor({ state: "hidden" });
+              await page.screenshot({
+                path: path.join(suite.artifactDir, `attachment-${mode}.png`),
+              });
+              for (const height of [1000, 480]) {
+                await page.setViewportSize({ width: 1440, height });
+                await expect
+                  .poll(async () => {
+                    const frame = await outer.boundingBox();
+                    const available = await panel
+                      .locator(".sidebar-content")
+                      .evaluate((element) => {
+                        const bounds = element.getBoundingClientRect();
+                        return (
+                          bounds.bottom - Number.parseFloat(getComputedStyle(element).paddingBottom)
+                        );
+                      });
+                    return Math.abs(frame!.y + frame!.height - available);
+                  })
+                  .toBeLessThanOrEqual(1);
+                const frame = await outer.boundingBox();
+                const viewport = await attachmentDocument.locator("body").evaluate(() => ({
+                  width: window.innerWidth,
+                  height: window.innerHeight,
+                }));
+                expect(viewport.width).toBeCloseTo(frame!.width, 0);
+                expect(viewport.height).toBeCloseTo(frame!.height, 0);
+              }
+              await page.setViewportSize({ width: 1440, height: 1000 });
               const attachmentFrame = await outer.elementHandle();
               await panel.getByRole("button", { name: "Source", exact: true }).click();
               expect(await panel.locator("pre:visible").textContent()).toBe(source);

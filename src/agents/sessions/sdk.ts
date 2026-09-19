@@ -114,15 +114,6 @@ interface CreateAgentSessionResult {
   modelFallbackMessage?: string;
 }
 
-// Re-exports
-
-export type {
-  ExtensionAPI,
-  ExtensionContext,
-  ExtensionFactory,
-  ToolDefinition,
-} from "./extensions/index.js";
-
 // Helper Functions
 
 function createSessionPrepareNextTurnWithContext(

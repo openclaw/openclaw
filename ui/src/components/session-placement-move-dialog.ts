@@ -1,6 +1,7 @@
 import { html, nothing } from "lit";
 import type { SessionMoveTarget } from "../../../packages/gateway-protocol/src/index.js";
 import { t } from "../i18n/index.ts";
+import { registerNewSessionSetupEnglish } from "../i18n/locales/en-new-session-setup.ts";
 import { formatUiError } from "../lib/format-error.ts";
 import {
   renderCloudMachineMenuItems,
@@ -14,6 +15,8 @@ import { DraftCloudMachineState } from "../pages/new-session/draft-cloud-machine
 import "../styles/new-session.css";
 import { icons } from "./icons.ts";
 import { withPromiseModalHost } from "./promise-modal-host.ts";
+
+registerNewSessionSetupEnglish();
 
 type Catalog = {
   profiles: readonly DraftCloudProfile[];

@@ -449,6 +449,12 @@ describe("buildEmbeddedSystemPrompt", () => {
         config: {
           agents: { defaults: { models: { "fixture/configured": { alias: "configured-alias" } } } },
         },
+        preparedModelRuntime: {
+          isCurrent: () => true,
+          configuredModelAliases: [
+            { alias: "configured-alias", provider: "fixture", model: "configured" },
+          ],
+        },
       },
       directHint: false,
     },

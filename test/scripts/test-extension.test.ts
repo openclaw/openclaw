@@ -535,6 +535,8 @@ describe("scripts/test-extension.mts", () => {
         config: "test/vitest/vitest.extension-database-workers.config.ts",
         extensionIds: [
           "acpx",
+          "browser",
+          "feishu",
           "matrix",
           "mattermost",
           "memory-core",
@@ -553,7 +555,7 @@ describe("scripts/test-extension.mts", () => {
               ),
           ),
           bundledPluginRoot("memory-core"),
-          ...["msteams", "acpx", "qa-lab"].flatMap((extensionId) =>
+          ...["msteams", "feishu", "acpx", "browser", "qa-lab"].flatMap((extensionId) =>
             databaseWorkerExtensionTestFiles.filter((file) =>
               file.startsWith(`extensions/${extensionId}/`),
             ),

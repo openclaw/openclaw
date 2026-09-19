@@ -3,6 +3,7 @@ import { hostname } from "node:os";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getFileLockProcessStartTime } from "../shared/pid-alive.js";
+import type { OpenClawStateSchemaReadAdmission } from "../state/openclaw-state-db-contract.js";
 import {
   withExistingOpenClawStateDatabaseCurrentReadOnly,
   withExistingOpenClawStateDatabaseReadOnly,
@@ -73,58 +74,64 @@ export function readGatewayOwnerLease(
     port?: number;
     /** Mutation admission must not inherit a discovery snapshot. */
     current?: boolean;
+    openStateSchemaReadAdmission?: OpenClawStateSchemaReadAdmission;
   } = {},
 ): GatewayOwnerLeaseIdentity | undefined {
-  const read = params.current
-    ? withExistingOpenClawStateDatabaseCurrentReadOnly
-    : withExistingOpenClawStateDatabaseReadOnly;
-  return read(
-    ({ db }) => {
-      if (!tableExists(db, "state_leases")) {
-        return undefined;
-      }
-      const row = readOpenClawStateLease(db, gatewayOwnerKey);
-      if (!row) {
-        return undefined;
-      }
-      const processOwner = parseStateLeaseProcessOwner(row.payloadJson);
-      let payload: unknown;
-      try {
-        payload = row.payloadJson ? JSON.parse(row.payloadJson) : null;
-      } catch {
-        payload = null;
-      }
-      if (
-        !processOwner ||
-        !isRecord(payload) ||
-        typeof payload.port !== "number" ||
-        !Number.isInteger(payload.port) ||
-        payload.port <= 0 ||
-        payload.port > 65535 ||
-        (payload.mode !== "foreground" && payload.mode !== "supervised")
-      ) {
-        throw new Error("Gateway owner lease identity could not be verified");
-      }
-      if (params.port !== undefined && payload.port !== params.port) {
-        return undefined;
-      }
-      const supervisor = parseSupervisor(payload.supervisor);
-      if ((payload.mode === "foreground") !== (supervisor === null)) {
-        throw new Error("Gateway owner lease supervisor does not match its listener mode");
-      }
-      return {
-        ...processOwner,
-        owner: row.owner,
-        port: payload.port,
-        mode: payload.mode,
-        supervisor,
-        // Expiry cannot revoke the separate physical Gateway coordinator.
-        state: readStateLeaseProcessOwnerStatus(processOwner),
-        expired: row.expiresAt === null || row.expiresAt <= Date.now(),
-      };
-    },
-    { env: params.env },
-  );
+  const operation = ({
+    db,
+  }: {
+    db: import("node:sqlite").DatabaseSync;
+  }): GatewayOwnerLeaseIdentity | undefined => {
+    if (!tableExists(db, "state_leases")) {
+      return undefined;
+    }
+    const row = readOpenClawStateLease(db, gatewayOwnerKey);
+    if (!row) {
+      return undefined;
+    }
+    const processOwner = parseStateLeaseProcessOwner(row.payloadJson);
+    let payload: unknown;
+    try {
+      payload = row.payloadJson ? JSON.parse(row.payloadJson) : null;
+    } catch {
+      payload = null;
+    }
+    if (
+      !processOwner ||
+      !isRecord(payload) ||
+      typeof payload.port !== "number" ||
+      !Number.isInteger(payload.port) ||
+      payload.port <= 0 ||
+      payload.port > 65535 ||
+      (payload.mode !== "foreground" && payload.mode !== "supervised")
+    ) {
+      throw new Error("Gateway owner lease identity could not be verified");
+    }
+    if (params.port !== undefined && payload.port !== params.port) {
+      return undefined;
+    }
+    const supervisor = parseSupervisor(payload.supervisor);
+    if ((payload.mode === "foreground") !== (supervisor === null)) {
+      throw new Error("Gateway owner lease supervisor does not match its listener mode");
+    }
+    return {
+      ...processOwner,
+      owner: row.owner,
+      port: payload.port,
+      mode: payload.mode,
+      supervisor,
+      // Expiry cannot revoke the separate physical Gateway coordinator.
+      state: readStateLeaseProcessOwnerStatus(processOwner),
+      expired: row.expiresAt === null || row.expiresAt <= Date.now(),
+    };
+  };
+  return params.current || params.openStateSchemaReadAdmission
+    ? withExistingOpenClawStateDatabaseCurrentReadOnly(
+        operation,
+        { env: params.env },
+        params.openStateSchemaReadAdmission,
+      )
+    : withExistingOpenClawStateDatabaseReadOnly(operation, { env: params.env });
 }
 
 /** Publish only while the caller holds the Gateway lifecycle coordinator. */

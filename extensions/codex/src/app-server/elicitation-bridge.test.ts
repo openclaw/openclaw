@@ -1547,6 +1547,30 @@ describe("Codex app-server elicitation bridge", () => {
     expect(mockCallGatewayTool).not.toHaveBeenCalled();
   });
 
+  it("matches a connector approval to the admitted Apps SDK identity", async () => {
+    const suffix = "0123456789abcdef0123456789abcdef";
+    const result = await handleCodexAppServerElicitationRequest({
+      requestParams: buildConnectorPluginApprovalElicitation({
+        _meta: {
+          codex_approval_kind: "mcp_tool_call",
+          source: "connector",
+          app_id: `asdk_app_${suffix}`,
+          connector_id: `connector_${suffix}`,
+          connector_name: "Google Calendar",
+          tool_title: "create_event",
+        },
+      }),
+      paramsForRun: createParams(),
+      ...codexTestTurnIds(),
+      pluginAppPolicyContext: createPluginAppPolicyContext({
+        allowDestructiveActions: true,
+        apps: [{ appId: `connector_${suffix}`, pluginName: "google-calendar", mcpServerNames: [] }],
+      }),
+    });
+    expect(result?.action).toBe("accept");
+    expect(mockCallGatewayTool).not.toHaveBeenCalled();
+  });
+
   it("declines live connector elicitations with mismatched app and connector ids", async () => {
     const result = await handleCodexAppServerElicitationRequest({
       requestParams: buildConnectorPluginApprovalElicitation({

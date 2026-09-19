@@ -1,4 +1,3 @@
-// Whatsapp plugin module implements mentions behavior.
 import {
   buildMentionRegexes,
   normalizeMentionText,

@@ -293,6 +293,21 @@ export function ensureSessionGroupRegistered(
   if (!normalized) {
     return false;
   }
+  // Existing categories need no writer admission. A missing name is only a
+  // hint: another writer can register it before our transaction is admitted.
+  const readDb = dbFor(env);
+  if (
+    executeSqliteQuerySync(
+      readDb,
+      kyselyFor(readDb)
+        .selectFrom("session_groups")
+        .select("name")
+        .where("name", "=", normalized)
+        .limit(1),
+    ).rows[0]
+  ) {
+    return false;
+  }
   let inserted = false;
   runOpenClawStateWriteTransaction(
     ({ db }) => {

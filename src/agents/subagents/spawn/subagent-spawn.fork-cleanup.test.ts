@@ -81,7 +81,6 @@ describe("subagent fork context through SQLite and tool boundaries", () => {
       settleFailedQueuedSubagentLaunchMock: settleFailedQueuedSubagentLaunch,
       completeCollectorLaunchCleanupMock: completeCollectorLaunchCleanup,
       resolveContextEngineMock: async () => ({ prepareSubagentSpawn }),
-      resolveSubagentSpawnModelSelection: () => "openai/gpt-5.6-luna",
       getRuntimeConfig: () => config,
       getSessionBindingService: () => ({
         getCapabilities: () => ({

@@ -105,19 +105,19 @@ function cloneRestartSentinelPayload(
 function enqueueRestartSentinelWake(
   message: string,
   sessionKey: string,
-  agentId?: string,
+  agentId: string,
   deliveryContext?: DeliveryContext,
 ) {
   const eventOptions = {
     sessionKey,
     ...(deliveryContext ? { deliveryContext } : {}),
   };
-  enqueueSystemEvent(message, agentId ? withSystemEventOwner(eventOptions, agentId) : eventOptions);
+  enqueueSystemEvent(message, withSystemEventOwner(eventOptions, agentId));
   requestHeartbeat({
     source: "restart-sentinel",
     intent: "immediate",
     reason: "wake",
-    ...(agentId ? { agentId } : {}),
+    agentId,
     sessionKey,
   });
 }
@@ -174,31 +174,31 @@ export async function deliverQueuedSessionDelivery(params: {
 }) {
   params.queueContext.admission.assertCurrent();
   const queuedEntry = resolveCorrelatedSubagentDelivery(params.entry);
-  const { cfg, agentId, entry, storePath, canonicalKey } = loadSessionEntry(queuedEntry.sessionKey);
+  const { cfg, agentId, entry, storePath, canonicalKey } = loadSessionEntry(
+    queuedEntry.sessionKey,
+    queuedEntry.kind === "systemEvent" ? { agentId: queuedEntry.agentId } : undefined,
+  );
   const deliveryContext = resolveQueuedSessionDeliveryContext(queuedEntry);
 
   if (queuedEntry.kind === "systemEvent") {
-    const { agentId: systemEventAgentId, text } = queuedEntry;
+    const { agentId: systemEventAgentId = agentId, text } = queuedEntry;
     enqueueRestartSentinelWake(text, canonicalKey, systemEventAgentId, deliveryContext);
     return;
   }
 
-  if (
-    queuedEntry.expectedSessionId &&
-    (!entry?.sessionId || entry.sessionId !== queuedEntry.expectedSessionId)
-  ) {
+  const sessionChanged =
+    Boolean(queuedEntry.expectedSessionId) && entry?.sessionId !== queuedEntry.expectedSessionId;
+  if (sessionChanged) {
     log.warn("restart continuation skipped: session changed", {
       sessionKey: canonicalKey,
       queueId: queuedEntry.id,
       expectedSessionId: queuedEntry.expectedSessionId,
       actualSessionId: entry?.sessionId ?? null,
     });
-    enqueueRestartSentinelWake(queuedEntry.message, canonicalKey, undefined, deliveryContext);
-    return;
   }
 
-  if (!queuedEntry.route) {
-    enqueueRestartSentinelWake(queuedEntry.message, canonicalKey, undefined, deliveryContext);
+  if (sessionChanged || !queuedEntry.route) {
+    enqueueRestartSentinelWake(queuedEntry.message, canonicalKey, agentId, deliveryContext);
     return;
   }
 

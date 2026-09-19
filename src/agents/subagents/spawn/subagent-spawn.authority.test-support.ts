@@ -129,13 +129,13 @@ export function installSpawnAttachmentFixture(params: {
   entered: () => void;
   release: Promise<void>;
 }) {
-  const root = path.join(params.stateDir, ".openclaw", "attachments");
+  const root = path.join(params.stateDir, "attachments", "subagents", "main");
   const lateWrites: string[] = [];
   const attachmentDirs: string[] = [];
   const mkdir = fs.mkdir;
   const mkdirSpy = vi.spyOn(fs, "mkdir").mockImplementation(async (...args) => {
     const result = await mkdir(...args);
-    if (typeof args[0] === "string" && path.dirname(args[0]) === root) {
+    if (typeof args[0] === "string" && path.dirname(path.dirname(args[0])) === root) {
       attachmentDirs.push(args[0]);
       if (!getAdmittedRunDelegatedAuthority(params.admitted)) {
         lateWrites.push("directory");
@@ -156,12 +156,16 @@ export function installSpawnAttachmentFixture(params: {
     return {
       ...store,
       writeText: async (...args) => {
+        const attachmentDir = path.join(rootDir, args[0].split("/")[0] ?? "");
+        if (!attachmentDirs.includes(attachmentDir)) {
+          attachmentDirs.push(attachmentDir);
+        }
         if (!getAdmittedRunDelegatedAuthority(params.admitted)) {
           lateWrites.push("content");
         }
         const result = await store.writeText(...args);
         expect(await fs.readFile(path.join(rootDir, args[0]), "utf8")).toBe("synthetic attachment");
-        if (params.pauseAt === "files") {
+        if (params.pauseAt === "directory" || params.pauseAt === "files") {
           params.entered();
           await params.release;
         }

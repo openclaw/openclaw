@@ -116,7 +116,9 @@ class CloudWorkersPage extends OpenClawLightDomElement {
     this.catalogLoading = true;
     this.catalogError = null;
     try {
-      const result = await scope.client.request<EnvironmentsListResult>("environments.list", {});
+      const result = await scope.client.request<EnvironmentsListResult>("environments.list", {
+        projection: "profiles",
+      });
       if (!this.gateway.isCurrent(scope)) {
         return;
       }

@@ -259,6 +259,10 @@ suite.define(() => {
         await group.locator("summary").click();
       }
       await expect.poll(() => widget.locator(".chat-swarm__tasks").isVisible()).toBe(true);
+      const finalChild = widget.getByRole("listitem").filter({ hasText: "Research lane 30" });
+      await expect
+        .poll(() => finalChild.getByRole("img", { name: "Queued", exact: true }).isVisible())
+        .toBe(true);
       await page.screenshot({
         path: path.join(proofDir, "active-details.png"),
         animations: "disabled",
@@ -321,6 +325,11 @@ suite.define(() => {
         .toContain("30 of 30");
       expect(await widget.locator(".chat-swarm__marker--failed").count()).toBe(5);
       expect(await widget.locator(".chat-swarm__marker--done").count()).toBe(25);
+      await expect
+        .poll(() =>
+          finalChild.getByRole("img", { name: "Failed or stopped", exact: true }).isVisible(),
+        )
+        .toBe(true);
       await page.screenshot({ path: path.join(proofDir, "terminal.png"), animations: "disabled" });
       await page.reload();
       await widget.waitFor();

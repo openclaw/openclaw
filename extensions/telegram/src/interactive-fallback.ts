@@ -1,4 +1,3 @@
-// Telegram plugin module implements interactive fallback behavior.
 import {
   adaptMessagePresentationForChannel,
   legacyInteractiveReplyToPresentation,

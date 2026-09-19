@@ -35,7 +35,7 @@ const BUNDLE_SUFFIX = ".json";
 const REDACTED_HOSTNAME = "<redacted-hostname>";
 const MAX_SAFE_ERROR_MESSAGE_LENGTH = 500;
 const MAX_SHUTDOWN_ERRORS = 32;
-const MAX_SHUTDOWN_ERROR_STACK_LENGTH = 8_000;
+const MAX_SAFE_ERROR_STACK_LENGTH = 8_000;
 
 type DiagnosticHeapSpaceSummary = {
   spaceName: string;
@@ -91,7 +91,7 @@ type DiagnosticStabilityBundleEvidence = {
   memoryPressure?: DiagnosticMemoryPressureBundleEvidence;
   shutdown?: {
     step: string;
-    errors: Array<NonNullable<DiagnosticStabilityBundle["error"]> & { stack?: string }>;
+    errors: Array<NonNullable<DiagnosticStabilityBundle["error"]>>;
   };
 };
 
@@ -113,6 +113,7 @@ export type DiagnosticStabilityBundle = {
     name?: string;
     code?: string;
     message?: string;
+    stack?: string;
   };
   evidence?: DiagnosticStabilityBundleEvidence;
   snapshot: DiagnosticStabilitySnapshot;
@@ -210,30 +211,28 @@ function readSafeErrorMetadata(error: unknown): DiagnosticStabilityBundle["error
   const name = readErrorName(error);
   const code = readErrorCode(error);
   const message = readErrorMessage(error);
-  if (!name && !code && !message) {
+  const stack =
+    error && typeof error === "object" && "stack" in error && typeof error.stack === "string"
+      ? truncateUtf16Safe(
+          redactSensitiveText(error.stack, { mode: "tools" }),
+          MAX_SAFE_ERROR_STACK_LENGTH,
+        )
+      : undefined;
+  if (!name && !code && !message && !stack) {
     return undefined;
   }
   return {
     ...(name ? { name } : {}),
     ...(code ? { code } : {}),
     ...(message ? { message } : {}),
+    ...(stack ? { stack } : {}),
   };
 }
 
 function readShutdownError(error: unknown) {
-  const metadata =
-    readSafeErrorMetadata(error) ??
-    (error === null || typeof error !== "object"
-      ? readSafeErrorMetadata({ message: formatErrorMessage(error) })
-      : undefined);
-  const stack =
-    error && typeof error === "object" && "stack" in error && typeof error.stack === "string"
-      ? truncateUtf16Safe(
-          redactSensitiveText(error.stack, { mode: "tools" }),
-          MAX_SHUTDOWN_ERROR_STACK_LENGTH,
-        )
-      : undefined;
-  return { ...metadata, ...(stack ? { stack } : {}) };
+  const normalized =
+    error && typeof error === "object" ? error : { message: formatErrorMessage(error) };
+  return readSafeErrorMetadata(normalized) ?? {};
 }
 
 function collectShutdownErrors(error: unknown) {

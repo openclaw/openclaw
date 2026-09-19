@@ -1,5 +1,6 @@
 import type { FormatCapabilityProfile, FormatConstruct } from "./format-capabilities.js";
 import { copyHtmlTags } from "./ir-metadata.js";
+import { sliceMarkdownIRRanges } from "./ir-slice.js";
 import {
   createStyleSpan,
   mergeAnnotationSpans,
@@ -8,7 +9,7 @@ import {
   type MarkdownStyle,
   type MarkdownStyleSpan,
 } from "./ir-spans.js";
-import { appendMarkdownIR, sliceMarkdownIR, type MarkdownIR } from "./ir.js";
+import { appendMarkdownIR, type MarkdownIR } from "./ir.js";
 
 type TextEdit = { start: number; end: number; text: string };
 
@@ -119,14 +120,18 @@ function applyTextEdits(ir: MarkdownIR, edits: TextEdit[]): MarkdownIR {
     links: ir.links,
     annotations: ir.annotations,
   });
-  const result: MarkdownIR = { text: "", styles: [], links: [] };
   let cursor = 0;
-  for (const edit of ordered) {
-    appendMarkdownIR(result, sliceMarkdownIR(content, cursor, edit.start));
-    result.text += edit.text;
+  const ranges = ordered.map((edit) => {
+    const range = { start: cursor, end: edit.start };
     cursor = edit.end;
+    return range;
+  });
+  ranges.push({ start: cursor, end: ir.text.length });
+  const result: MarkdownIR = { text: "", styles: [], links: [] };
+  for (const [index, slice] of sliceMarkdownIRRanges(content, ranges).entries()) {
+    appendMarkdownIR(result, slice);
+    result.text += ordered[index]?.text ?? "";
   }
-  appendMarkdownIR(result, sliceMarkdownIR(content, cursor, ir.text.length));
   result.styles = mergeStyleSpans(result.styles);
   if (result.annotations) {
     result.annotations = mergeAnnotationSpans(result.annotations);

@@ -11,6 +11,7 @@ import {
   systemdInspectionError,
 } from "./systemd-exec.js";
 import { openSystemdUserManager } from "./systemd-peer-native.js";
+import { resolveUnavailableSystemdInspectionReason } from "./systemd-unavailable.js";
 import { resolveSystemdUserTransport } from "./systemd-user-transport.js";
 
 export async function createSystemdCommandQuery(
@@ -127,7 +128,16 @@ export async function createSystemdCommandQuery(
       assertCurrent?.();
     }
     if (result.termination === "error" && result.errorCode === "ENOENT") {
-      throw new ServiceInspectionError("systemd-busctl-unavailable");
+      const reason =
+        scope === "system"
+          ? await resolveUnavailableSystemdInspectionReason(
+              "systemd-busctl-unavailable",
+              process.env,
+              callDeadline,
+            )
+          : "systemd-busctl-unavailable";
+      assertCurrent?.();
+      throw new ServiceInspectionError(reason);
     }
     if (legacyOutput && (result.termination !== "exit" || performance.now() >= callDeadline)) {
       throw systemdInspectionError(result, unavailable().message, scope);

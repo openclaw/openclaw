@@ -86,6 +86,20 @@
       "help": "Allow non-loopback access to diff viewer URLs when the token path is known."
     }
   },
+  "configGroups": [
+    {
+      "id": "diff-rendering",
+      "title": "Diff rendering",
+      "order": 10,
+      "properties": ["defaults"]
+    },
+    {
+      "id": "viewer-access",
+      "title": "Viewer access",
+      "order": 20,
+      "properties": ["viewerBaseUrl", "security"]
+    }
+  ],
   "configSchema": {
     "type": "object",
     "additionalProperties": false,

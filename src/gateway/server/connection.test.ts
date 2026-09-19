@@ -3,7 +3,9 @@ import type { IncomingMessage } from "node:http";
 import { describe, expect, it, vi } from "vitest";
 import { GATEWAY_SERVER_CAPS } from "../../../packages/gateway-protocol/src/server-capabilities.js";
 import { PROTOCOL_VERSION } from "../../../packages/gateway-protocol/src/version.js";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import type { HealthSummary } from "../health/types.js";
 import { GatewayConnectionWork } from "../server-connection-work.js";
 import type { GatewayConnectionTransport } from "./connection-transport.js";
 import { attachGatewayConnection } from "./connection.js";
@@ -28,6 +30,15 @@ describe("Gateway connection transport", () => {
           }> = [];
           const clients = new Set<GatewayWsClient>();
           const connectionWork = new GatewayConnectionWork();
+          const helloSent = createDeferred();
+          const healthRefreshStarted = createDeferred();
+          const transportClosed = createDeferred<Error>();
+          const waitForReadiness = async (ready: Promise<void>) => {
+            const error = await Promise.race([ready, transportClosed.promise]);
+            if (error) {
+              throw error;
+            }
+          };
           let readyState = 1;
           let finishHello: ((error?: Error) => void) | undefined;
           const socket: GatewayConnectionTransport = {
@@ -40,6 +51,7 @@ describe("Gateway connection transport", () => {
               frames.push(frame);
               if (frame.payload?.type === "hello-ok") {
                 finishHello = callback;
+                helloSent.resolve();
               } else {
                 callback?.();
               }
@@ -49,9 +61,11 @@ describe("Gateway connection transport", () => {
                 return;
               }
               readyState = 3;
+              const error = new Error("transport closed", { cause: { code, reason } });
+              transportClosed.resolve(error);
               const pending = finishHello;
               finishHello = undefined;
-              pending?.(new Error("transport closed"));
+              pending?.(error);
               incoming.emit("close", code, Buffer.from(reason));
             },
             terminate: () => socket.close(1006),
@@ -60,7 +74,20 @@ describe("Gateway connection transport", () => {
             once: incoming.once.bind(incoming),
           };
           const releasePreauth = vi.fn();
-          const refreshHealthSnapshot = vi.fn(async () => ({}) as never);
+          const refreshHealthSnapshot = vi.fn(async (): Promise<HealthSummary> => {
+            healthRefreshStarted.resolve();
+            return {
+              ok: true,
+              ts: 1,
+              durationMs: 0,
+              channels: {},
+              channelOrder: [],
+              channelLabels: {},
+              heartbeatSeconds: 0,
+              agents: [],
+              sessions: { path: "", count: 0, recent: [] },
+            };
+          });
           const activateReceive = vi.fn(() => expect(clients.size).toBe(1));
           const requestContext = {
             ...createGatewayWsTestRequestContext(),
@@ -134,7 +161,8 @@ describe("Gateway connection transport", () => {
 
             incoming.emit("message", connect("connect-1"));
             incoming.emit("message", connect("connect-2"));
-            await vi.waitFor(() => expect(finishHello).toBeTypeOf("function"));
+            await waitForReadiness(helloSent.promise);
+            expect(finishHello).toBeTypeOf("function");
             expect(clients.size).toBe(1);
             expect(activateReceive).toHaveBeenCalledOnce();
             expect(releasePreauth).toHaveBeenCalledOnce();
@@ -153,7 +181,8 @@ describe("Gateway connection transport", () => {
             finishHello = undefined;
             complete(delivery === "failed" ? new Error("write failed") : undefined);
             if (delivery === "written") {
-              await vi.waitFor(() => expect(refreshHealthSnapshot).toHaveBeenCalledOnce());
+              await waitForReadiness(healthRefreshStarted.promise);
+              expect(refreshHealthSnapshot).toHaveBeenCalledOnce();
             }
             await connectionWork.drain();
 

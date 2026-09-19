@@ -393,6 +393,7 @@ suite.define(() => {
           : createUpdateRunFixture({
               phase: "finished",
               status: outcome,
+              reason: outcome === "skipped" ? "no-upstream" : "build-failed",
               finishedAtMs: Date.now(),
             });
       const gateway = await installMockGateway(page, {

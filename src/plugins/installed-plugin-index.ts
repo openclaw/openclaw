@@ -173,20 +173,13 @@ export function refreshInstalledPluginIndex(
   return buildInstalledPluginIndex({ ...params, refreshReason: params.reason }).index;
 }
 
-export function getInstalledPluginRecord(
-  index: InstalledPluginIndex,
-  pluginId: string,
-): InstalledPluginIndexRecord | undefined {
-  return index.plugins.find((plugin) => plugin.pluginId === pluginId);
-}
-
 export function isInstalledPluginEnabled(
   index: InstalledPluginIndex,
   pluginId: string,
   config?: OpenClawConfig,
   env?: NodeJS.ProcessEnv,
 ): boolean {
-  const record = getInstalledPluginRecord(index, pluginId);
+  const record = index.plugins.find((plugin) => plugin.pluginId === pluginId);
   if (!record || !config) {
     return record?.enabled ?? false;
   }

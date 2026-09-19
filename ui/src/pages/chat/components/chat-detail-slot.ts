@@ -68,7 +68,7 @@ export function renderChatDetailSlot(params: {
       .canvasPluginSurfaceUrl=${host.canvasPluginSurfaceUrl}
       .embedSandboxMode=${host.embedSandboxMode}
       .allowExternalEmbedUrls=${host.allowExternalEmbedUrls}
-      .githubRepo=${params.chat.githubRepo}
+      .githubContext=${{ githubRepo: params.chat.githubRepo, githubRepositories: params.chat.githubRepositories }}
       .onOpenWorkspaceFile=${(target: { path: string; line?: number | null }) =>
         openSessionWorkspaceFile(host, target)}
       .onOpenSessionLink=${params.chat.onOpenSessionLink}

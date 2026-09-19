@@ -15,12 +15,15 @@ export type ModelProvidersRouteData = {
   /** Concrete agent whose credential store populated the auth snapshot. */
   agentId: string | null;
   selectionIntentRevision: number;
+  /** An explicit connection entry from a saved setup link. */
+  connect?: boolean;
 };
 
 async function loadModelProvidersRouteData(
   context: Pick<ApplicationContext, "gateway" | "agents" | "settingsAgentSelection">,
   options: RouteLoaderOptions,
 ): Promise<ModelProvidersRouteData> {
+  const connect = new URLSearchParams(options.location.search).get("connect") === "1";
   const gateway = context.gateway;
   const gatewaySnapshot = gateway.snapshot;
   const selection = context.settingsAgentSelection;
@@ -49,6 +52,7 @@ async function loadModelProvidersRouteData(
       client: null,
       agentId,
       selectionIntentRevision,
+      connect,
     };
   }
   if (!agentId) {
@@ -64,11 +68,13 @@ async function loadModelProvidersRouteData(
       client: null,
       agentId,
       selectionIntentRevision,
+      connect,
     };
   }
   return {
     gateway,
     gatewaySnapshot,
+    connect,
     data: await loadModelProvidersData(client, { agentId, signal: options.signal }),
     client,
     agentId,
@@ -78,6 +84,7 @@ async function loadModelProvidersRouteData(
 
 export const page = definePage({
   ...routePageSpec("model-providers"),
+  loaderDeps: (_context, location) => location.search,
   loader: loadModelProvidersRouteData,
   component: () =>
     import("./model-providers-page.ts").then(() => ({

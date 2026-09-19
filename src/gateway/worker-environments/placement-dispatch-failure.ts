@@ -1,6 +1,6 @@
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
-import { STALE_WORKER_BUILD_REASON, supportsWorkerExecutionContextLaunch } from "./admission.js";
+import { STALE_WORKER_BUILD_REASON, supportsCurrentWorkerLaunch } from "./admission.js";
 import { DevicePlacementUnavailableError } from "./device-placement-eligibility.js";
 import { matchesWorkerPlacementTarget } from "./placement-reclaim-contract.js";
 import {
@@ -198,7 +198,7 @@ export function isCurrentActiveWorkerEnvironment(
     environment?.bootstrapReceipt?.bundleHash === placement.workerBundleHash &&
     // A persisted bundle hash can still match a worker using an older launch shape.
     // Recovery may reuse only the currently admitted execution-context dialect.
-    supportsWorkerExecutionContextLaunch(environment?.bootstrapReceipt)
+    supportsCurrentWorkerLaunch(environment?.bootstrapReceipt)
   );
 }
 

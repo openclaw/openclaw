@@ -1,6 +1,10 @@
 import pLimit from "p-limit";
+import type { ProgressContinuationState } from "../../../channels/progress-continuation.js";
 import { getGatewayContextResolver } from "../../../plugins/runtime/gateway-request-scope.js";
-import { runWithGatewayIndependentRootWorkContinuation } from "../../../process/gateway-work-admission.js";
+import {
+  runWithGatewayDetachedWorkContinuation,
+  runWithGatewayIndependentRootWorkContinuation,
+} from "../../../process/gateway-work-admission.js";
 import type { AcceptedSessionSpawn } from "../../accepted-session-spawn.js";
 import {
   ensureCompletionState,
@@ -15,6 +19,7 @@ import {
 import { completeSubagentRunAttempt } from "./subagent-registry-lifecycle-completion.js";
 import type {
   CleanupBookkeepingParams,
+  PendingRequesterSettleWakeCommit,
   ScheduledRequesterSettleWake,
   SubagentLifecycleOptions,
 } from "./subagent-registry-lifecycle-context.js";
@@ -34,6 +39,10 @@ export type { SubagentLifecycleOptions } from "./subagent-registry-lifecycle-con
 const RESTORED_REQUESTER_SETTLE_WAKE_CONCURRENCY = 2;
 
 export class SubagentLifecycleController {
+  readonly pendingRequesterSettleWakeCommits = new WeakMap<
+    SubagentRunRecord,
+    PendingRequesterSettleWakeCommit
+  >();
   private readonly scheduledResumeTimers = new Set<ReturnType<typeof setTimeout>>();
   private pendingRequesterSettleWakeRearms = new WeakSet<SubagentRunRecord>();
   private readonly scheduledRequesterSettleWakeRuns = new WeakSet<SubagentRunRecord>();
@@ -201,10 +210,10 @@ export class SubagentLifecycleController {
   ): Promise<unknown> => {
     const runCurrent = async () =>
       this.options.runs.get(entry.runId) === entry ? run() : undefined;
-    // Reserve the independent Gateway root before entering the limiter. The
-    // queue wait counts during restart drain, but may outlive this exact row;
-    // validate its ownership only when the execution slot actually opens.
-    return runWithGatewayIndependentRootWorkContinuation(() => {
+    // Retry timers can outlive their original async scope. Reserve a detached
+    // Gateway root before the limiter, then revalidate row ownership when the
+    // execution slot opens; the queued wait still counts during restart drain.
+    return runWithGatewayDetachedWorkContinuation(() => {
       if (!this.restoredRequesterSettleWakeRuns.has(entry.runId)) {
         return runCurrent();
       }
@@ -314,6 +323,7 @@ export class SubagentLifecycleController {
       requesterTurnRunId: string;
       requesterYielded: boolean;
       acceptedSessionSpawns: readonly AcceptedSessionSpawn[];
+      progressPresentation?: ProgressContinuationState;
     },
     source: "live" | "restore" = "live",
   ) =>

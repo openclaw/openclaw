@@ -25,6 +25,37 @@ import {
 
 export type PreparedLegacyStateMigrationStep = Omit<LegacyStateMigrationStepPlan, "outcome">;
 
+export function migrationStepPlan(
+  step: PreparedLegacyStateMigrationStep,
+): PreparedLegacyStateMigrationStep {
+  return {
+    id: step.id,
+    phase: step.phase,
+    source: step.source,
+    target: step.target,
+    requiredness: step.requiredness,
+    reversibility: step.reversibility,
+    ...(step.refusal ? { refusal: step.refusal } : {}),
+  };
+}
+
+export function closeMigrationPlanTail(
+  steps: readonly PreparedLegacyStateMigrationStep[],
+  blocker: PreparedLegacyStateMigrationStep,
+): PreparedLegacyStateMigrationStep[] {
+  const blockerIndex = steps.indexOf(blocker);
+  return steps.map((step, index) => {
+    const plannedStep = migrationStepPlan(step);
+    if (index > blockerIndex) {
+      plannedStep.refusal = {
+        code: "blocked-by-prior-refusal",
+        message: `Migration step "${step.id}" is blocked by prior refusal at "${blocker.id}".`,
+      };
+    }
+    return plannedStep;
+  });
+}
+
 function digest(value: unknown): string {
   return `sha256:${createHash("sha256").update(stableStringify(value)).digest("hex")}`;
 }

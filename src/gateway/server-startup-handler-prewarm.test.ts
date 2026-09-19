@@ -4,15 +4,9 @@ import {
   resetGatewayWorkAdmission,
   tryBeginGatewayRootWorkAdmission,
 } from "../process/gateway-work-admission.js";
-import { SIDEBAR_SESSION_ROSTER_LIMIT } from "../shared/session-list-limits.js";
-import { recordAgentDatabaseAdmissions } from "../state/agent-database-admission.js";
 
 const mocks = vi.hoisted(() => ({
   events: [] as string[],
-  canPrewarmCombinedSessionStoresForGateway: vi.fn(() => {
-    mocks.events.push("sessions.count");
-    return true;
-  }),
   loadCombinedSessionStoreForGatewayCore: vi.fn((_cfg: unknown, options: { agentId: string }) => {
     mocks.events.push(`sessions.load.${options.agentId}`);
     return {
@@ -21,10 +15,6 @@ const mocks = vi.hoisted(() => ({
       store: {},
     };
   }),
-  listSessionsFromStoreAsync: vi.fn(async (params: { opts: { agentId: string } }) => {
-    mocks.events.push(`sessions.rows.${params.opts.agentId}`);
-    return { sessions: [] };
-  }),
   listManagedPlugins: vi.fn(async () => {
     mocks.events.push("plugins");
     return { plugins: [] };
@@ -32,12 +22,7 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock("../config/sessions/combined-store-gateway.js", () => ({
-  canPrewarmCombinedSessionStoresForGateway: mocks.canPrewarmCombinedSessionStoresForGateway,
   loadCombinedSessionStoreForGatewayCore: mocks.loadCombinedSessionStoreForGatewayCore,
-}));
-
-vi.mock("./session-utils-list.js", () => ({
-  listSessionsFromStoreAsync: mocks.listSessionsFromStoreAsync,
 }));
 
 vi.mock("../plugins/management-service.js", () => ({
@@ -48,13 +33,7 @@ const { scheduleGatewayHandlerPrewarm } = await import("./server-startup-handler
 
 beforeEach(() => {
   mocks.events.length = 0;
-  mocks.canPrewarmCombinedSessionStoresForGateway.mockClear();
-  mocks.canPrewarmCombinedSessionStoresForGateway.mockImplementation(() => {
-    mocks.events.push("sessions.count");
-    return true;
-  });
   mocks.loadCombinedSessionStoreForGatewayCore.mockClear();
-  mocks.listSessionsFromStoreAsync.mockClear();
   mocks.listManagedPlugins.mockClear();
 });
 
@@ -64,40 +43,7 @@ afterEach(() => {
 });
 
 describe("scheduleGatewayHandlerPrewarm", () => {
-  it("warms healthy agents without scheduling a refused secondary agent", async () => {
-    vi.useFakeTimers();
-    recordAgentDatabaseAdmissions(
-      [
-        {
-          agentId: "research",
-          embeddedOwnerId: "main",
-          paths: ["/synthetic/research.sqlite"],
-          code: "agent-database-ownership-mismatch",
-          reason: "Refused agent research: database belongs to main.",
-          repairHint: "Preserve the copy and restart after repair.",
-        },
-      ],
-      { source: "startup" },
-    );
-    try {
-      const sidecar = scheduleGatewayHandlerPrewarm({
-        cfgAtStart: { agents: { entries: { main: { default: true }, research: {} } } },
-        log: { warn: vi.fn() },
-      });
-      await vi.runAllTimersAsync();
-      await sidecar.stop();
-      expect(mocks.events).toEqual([
-        "sessions.count",
-        "sessions.load.main",
-        "sessions.rows.main",
-        "plugins",
-      ]);
-    } finally {
-      recordAgentDatabaseAdmissions([], { source: "startup" });
-    }
-  });
-
-  it("warms the sidebar roster page and process-stable plugin data in dashboard order", async () => {
+  it("warms process-stable plugin data without rebuilding resident session rows", async () => {
     vi.useFakeTimers();
     const cfg = {
       agents: { list: [{ id: "main", default: true }, { id: "research" }] },
@@ -111,41 +57,9 @@ describe("scheduleGatewayHandlerPrewarm", () => {
     expect(mocks.events).toEqual([]);
     await vi.runAllTimersAsync();
 
-    expect(mocks.events).toEqual([
-      "sessions.count",
-      "sessions.load.main",
-      "sessions.rows.main",
-      "sessions.load.research",
-      "sessions.rows.research",
-      "plugins",
-    ]);
-    expect(mocks.loadCombinedSessionStoreForGatewayCore).toHaveBeenNthCalledWith(1, cfg, {
-      agentId: "main",
-      projection: "list",
-    });
-    expect(mocks.loadCombinedSessionStoreForGatewayCore).toHaveBeenNthCalledWith(2, cfg, {
-      agentId: "research",
-      projection: "list",
-    });
-    expect(mocks.listSessionsFromStoreAsync).toHaveBeenNthCalledWith(
-      1,
-      expect.objectContaining({
-        cfg,
-        opts: {
-          agentId: "main",
-          configuredAgentsOnly: true,
-          includeDerivedTitles: true,
-          includeGlobal: true,
-          includeUnknown: true,
-          limit: SIDEBAR_SESSION_ROSTER_LIMIT,
-        },
-      }),
-    );
+    expect(mocks.events).toEqual(["plugins"]);
+    expect(mocks.loadCombinedSessionStoreForGatewayCore).not.toHaveBeenCalled();
     expect(mocks.listManagedPlugins).toHaveBeenCalledWith({ config: cfg });
-    expect(mocks.canPrewarmCombinedSessionStoresForGateway).toHaveBeenCalledWith(cfg, {
-      agentIds: ["main", "research"],
-      maxRows: 2_000,
-    });
     await sidecar.stop();
   });
 
@@ -243,29 +157,6 @@ describe("scheduleGatewayHandlerPrewarm", () => {
     expect(requestLoad).toHaveBeenCalledOnce();
     expect(laterPrewarm).toHaveBeenCalledOnce();
     await expect(requestLoad()).resolves.toBe("request result");
-  });
-
-  it("skips optional session prewarm when the combined session stores are large", async () => {
-    vi.useFakeTimers();
-    const info = vi.fn();
-    mocks.canPrewarmCombinedSessionStoresForGateway.mockImplementation(() => {
-      mocks.events.push("sessions.count");
-      return false;
-    });
-    const cfg = {
-      agents: { list: [{ id: "main", default: true }, { id: "research" }] },
-    } as never;
-
-    scheduleGatewayHandlerPrewarm({
-      cfgAtStart: cfg,
-      log: { info, warn: vi.fn() },
-    });
-    await vi.runAllTimersAsync();
-
-    expect(mocks.events).toEqual(["sessions.count", "plugins"]);
-    expect(info).toHaveBeenCalledWith(
-      "skipping optional dashboard session prewarm: combined stores exceed 2000 rows",
-    );
   });
 
   it("stops before scheduling another event-loop turn", async () => {

@@ -1,4 +1,3 @@
-// Discord plugin module implements message handler.context behavior.
 import {
   buildChannelInboundEventContext,
   createCommandTurnContext,
@@ -240,14 +239,6 @@ export async function buildDiscordMessageProcessContext(params: {
         memberRoleIds: replyContext.memberRoleIds,
       })
     : true;
-  const replyVisible = evaluateSupplementalContextVisibility({
-    mode: contextVisibilityMode,
-    kind: "quote",
-    senderAllowed: replySenderAllowed,
-  }).include;
-  if (replyContext && !replyVisible && isGuildMessage) {
-    logVerbose(`discord: drop reply context (mode=${contextVisibilityMode})`);
-  }
   if (forumContextLine) {
     combinedBody = `${combinedBody}\n${forumContextLine}`;
   }
@@ -391,6 +382,8 @@ export async function buildDiscordMessageProcessContext(params: {
     channelIngress,
     channel: "discord",
     resolveSupplementalMedia: true,
+    // User-selected bot text is reply context, not a new bot-authored event.
+    suppressSelfQuoteBody: false,
     contextVisibility: contextVisibilityMode,
     accountId: route.accountId,
     messageId: canonicalMessageId ?? message.id,
@@ -474,34 +467,33 @@ export async function buildDiscordMessageProcessContext(params: {
       transcribed: (_media, index) => index === preflightAudioIndex,
     }),
     supplemental: {
-      quote:
-        replyContext && replyVisible
-          ? {
-              id: replyContext.id,
-              body: replyContext.body,
-              sender: replyContext.sender,
-              senderAllowed: replySenderAllowed,
-              isSelf: Boolean(botUserId && replyContext.senderId === botUserId),
-              media: async () => {
-                const referencedReplyMediaList = await resolveReferencedReplyMediaList(
-                  message,
-                  mediaMaxBytes,
-                  {
-                    fetchImpl: discordRestFetch,
-                    ssrfPolicy: cfg.browser?.ssrfPolicy,
-                    readIdleTimeoutMs: DISCORD_ATTACHMENT_IDLE_TIMEOUT_MS,
-                    totalTimeoutMs: DISCORD_ATTACHMENT_TOTAL_TIMEOUT_MS,
-                    abortSignal,
-                  },
-                );
-                return abortSignal?.aborted
-                  ? []
-                  : await toInboundMediaFactsWithMetadata(referencedReplyMediaList, {
-                      messageId: replyContext.id,
-                    });
-              },
-            }
-          : undefined,
+      quote: replyContext
+        ? {
+            id: replyContext.id,
+            body: replyContext.body,
+            sender: replyContext.sender,
+            senderAllowed: replySenderAllowed,
+            isSelf: Boolean(botUserId && replyContext.senderId === botUserId),
+            media: async () => {
+              const referencedReplyMediaList = await resolveReferencedReplyMediaList(
+                message,
+                mediaMaxBytes,
+                {
+                  fetchImpl: discordRestFetch,
+                  ssrfPolicy: cfg.browser?.ssrfPolicy,
+                  readIdleTimeoutMs: DISCORD_ATTACHMENT_IDLE_TIMEOUT_MS,
+                  totalTimeoutMs: DISCORD_ATTACHMENT_TOTAL_TIMEOUT_MS,
+                  abortSignal,
+                },
+              );
+              return abortSignal?.aborted
+                ? []
+                : await toInboundMediaFactsWithMetadata(referencedReplyMediaList, {
+                    messageId: replyContext.id,
+                  });
+            },
+          }
+        : undefined,
       thread: {
         starterBody: !effectivePreviousTimestamp ? threadStarterBody : undefined,
         label: threadLabel,

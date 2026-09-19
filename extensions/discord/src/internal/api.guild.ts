@@ -1,4 +1,3 @@
-// Discord plugin module implements api.guild behavior.
 import {
   Routes,
   type APIChannel,

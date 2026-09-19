@@ -9,7 +9,18 @@ import type {
   WorkspaceManifestComputationOperations,
   WorkspaceManifestValueInputs,
 } from "./workspace-manifest-computation.js";
-import type { WorkerWorkspaceManifest } from "./workspace-manifest.js";
+import type {
+  WorkerWorkspaceManifest,
+  WorkerWorkspaceManifestEntry,
+} from "./workspace-manifest.js";
+import {
+  resolveStagedWorkspaceReadEntry,
+  stagedWorkspaceEntryBytes,
+  STAGED_WORKSPACE_READ_MAX_BYTES,
+  STAGED_WORKSPACE_READ_MAX_ENTRIES,
+  type StagedWorkerWorkspaceInventory,
+  type StagedWorkerWorkspaceReadEntry,
+} from "./workspace-result-inventory.js";
 
 function encodeManifestValue(
   input: WorkspaceManifestValueInputs[keyof WorkspaceManifestValueInputs],
@@ -32,6 +43,7 @@ function computationInputBytes(command: WorkspaceManifestComputationCommand): nu
     case "workspace.manifest.capture":
     case "workspace.manifest.snapshot":
     case "workspace.manifest.file":
+    case "workspace.manifest.nodes":
       return bytes + command.input.payload.byteLength;
     case "workspace.manifest.parse":
       return bytes + command.input.raw.byteLength;
@@ -49,11 +61,17 @@ function computationInputBytes(command: WorkspaceManifestComputationCommand): nu
       return bytes + command.input.payload.byteLength;
     case "workspace.manifest.staged":
       return bytes + (command.input.root.length + command.input.ref.length) * 2;
-    case "workspace.manifest.entry":
+    case "workspace.manifest.entries":
       return (
         bytes +
-        (command.input.root.length + command.input.entry.path.length) * 2 +
-        (command.input.entry.type === "symlink" ? command.input.entry.target.length * 2 : 128)
+        command.input.root.length * 2 +
+        command.input.entries.reduce(
+          (total, { object, entry }) =>
+            total +
+            (object.objectId.length + object.mode.length + entry.path.length) * 2 +
+            (entry.type === "symlink" ? entry.target.length * 2 : 128),
+          0,
+        )
       );
   }
   command satisfies never;
@@ -65,6 +83,7 @@ function transferableManifestInput(command: GitWorkerCommand): ArrayBuffer[] {
     case "workspace.manifest.capture":
     case "workspace.manifest.snapshot":
     case "workspace.manifest.file":
+    case "workspace.manifest.nodes":
       return [command.input.payload.buffer];
     case "workspace.manifest.parse":
       return [command.input.raw.buffer];
@@ -228,6 +247,18 @@ export async function computeWorkspaceFileSnapshot(
   );
 }
 
+export async function readWorkspaceNodes(root: string, paths: string[]) {
+  const hashes = captureHashes();
+  return new Map(
+    hashes.accept(
+      await compute({
+        type: "workspace.manifest.nodes",
+        input: encodeManifestValue({ root, paths, hashes: hashes.hashes }),
+      }),
+    ),
+  );
+}
+
 export async function parseWorkspaceManifest(
   raw: string,
   expectedRef: string,
@@ -300,21 +331,46 @@ export async function loadStagedWorkspaceManifest(root: string, ref: string, sig
   return await compute({ type: "workspace.manifest.staged", input: { root, ref } }, signal);
 }
 
-export async function readStagedWorkspaceManifestEntry(
-  input: WorkspaceManifestComputationOperations["workspace.manifest.entry"]["input"],
+export async function* readStagedWorkspaceManifestEntries(
+  input: {
+    root: string;
+    entries: readonly WorkerWorkspaceManifestEntry[];
+    objectsByPath: StagedWorkerWorkspaceInventory["objectsByPath"];
+  },
   signal?: AbortSignal,
 ) {
-  return await compute(
-    {
-      type: "workspace.manifest.entry",
-      input: {
-        root: input.root,
-        object: { mode: input.object.mode, objectId: input.object.objectId },
-        entry: input.entry,
-      },
-    },
-    signal,
-  );
+  let nextEntry = 0;
+  while (nextEntry < input.entries.length) {
+    signal?.throwIfAborted();
+    const entries: StagedWorkerWorkspaceReadEntry[] = [];
+    let bytes = 0;
+    while (nextEntry < input.entries.length) {
+      const entry = input.entries[nextEntry]!;
+      const entryBytes = stagedWorkspaceEntryBytes(entry);
+      if (
+        entries.length > 0 &&
+        (entries.length === STAGED_WORKSPACE_READ_MAX_ENTRIES ||
+          bytes + entryBytes > STAGED_WORKSPACE_READ_MAX_BYTES)
+      ) {
+        break;
+      }
+      entries.push(resolveStagedWorkspaceReadEntry(input.objectsByPath, entry));
+      bytes += entryBytes;
+      nextEntry++;
+    }
+    const contents = await compute(
+      { type: "workspace.manifest.entries", input: { root: input.root, entries } },
+      signal,
+    );
+    let offset = 0;
+    for (const { entry } of entries) {
+      signal?.throwIfAborted();
+      const content =
+        entry.type === "file" ? contents.subarray(offset, offset + entry.size) : undefined;
+      offset += entry.type === "file" ? entry.size : 0;
+      yield { entry, content };
+    }
+  }
 }
 
 export async function prepareWorkspaceStageInput(
@@ -330,6 +386,7 @@ export async function prepareWorkspaceStageInput(
     {
       type: "workspace.manifest.stage-input",
       input: {
+        inputPath: input.inputPath,
         stagingRoot: input.stagingRoot,
         stagedResultRef: input.stagedResultRef,
         baseManifestRef: input.baseManifestRef,

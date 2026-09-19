@@ -1,4 +1,3 @@
-// Voice Call plugin module implements tailscale behavior.
 import { runCommandWithTimeout } from "openclaw/plugin-sdk/process-runtime";
 import { resolveVoiceCallStreamExposurePaths, type VoiceCallConfig } from "../config.js";
 

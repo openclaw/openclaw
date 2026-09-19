@@ -704,7 +704,7 @@ describe("session delivery queue runtime", () => {
       expect(deliver).not.toHaveBeenCalled();
       await vi.advanceTimersByTimeAsync(1);
       await expect(listPending.mock.results[1]?.value).resolves.toHaveLength(1);
-      await vi.advanceTimersByTimeAsync(0);
+      await vi.runOnlyPendingTimersAsync();
       await stop();
       expect(deliver).toHaveBeenCalledTimes(1);
       expect(await loadPendingSessionDeliveries(queueContext)).toStrictEqual([]);

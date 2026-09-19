@@ -16,6 +16,7 @@ import {
   writePluginInstallIndexForE2E,
 } from "../plugin-index-sqlite.mjs";
 import { hasExpectedPluginUninstallConfigState } from "../plugin-uninstall-assertions.mjs";
+import { fileContainsText } from "../release-assertion-files.mjs";
 import { readTextFileTail } from "../text-file-utils.mjs";
 
 const command = process.argv[2];
@@ -23,7 +24,6 @@ const scratchRoot = process.env.OPENCLAW_PLUGINS_TMP_DIR || os.tmpdir();
 const readJson = (file) => JSON.parse(fs.readFileSync(file, "utf8"));
 const scratchFile = (name) => path.join(scratchRoot, name);
 const ERROR_DETAIL_TAIL_BYTES = 16 * 1024;
-const LOG_SCAN_CHUNK_BYTES = 64 * 1024;
 
 function readClawHubPreflightLimits() {
   return {
@@ -66,40 +66,6 @@ function comparablePath(value) {
 
 function pathsEqual(left, right) {
   return comparablePath(left) === comparablePath(right);
-}
-
-function fileContainsText(file, needle) {
-  let stat;
-  try {
-    stat = fs.statSync(file);
-  } catch {
-    return false;
-  }
-  if (!stat.isFile() || stat.size <= 0) {
-    return false;
-  }
-  const fd = fs.openSync(file, "r");
-  try {
-    const buffer = Buffer.alloc(Math.min(LOG_SCAN_CHUNK_BYTES, stat.size));
-    let carry = "";
-    let offset = 0;
-    while (offset < stat.size) {
-      const bytesToRead = Math.min(buffer.length, stat.size - offset);
-      const bytesRead = fs.readSync(fd, buffer, 0, bytesToRead, offset);
-      if (bytesRead <= 0) {
-        break;
-      }
-      offset += bytesRead;
-      const text = carry + buffer.subarray(0, bytesRead).toString("utf8");
-      if (text.includes(needle)) {
-        return true;
-      }
-      carry = text.slice(-Math.max(0, needle.length - 1));
-    }
-    return false;
-  } finally {
-    fs.closeSync(fd);
-  }
 }
 
 function getInstallRecords() {

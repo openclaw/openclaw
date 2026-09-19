@@ -39,6 +39,20 @@
     "webSearchProviders": ["firecrawl", "firecrawl-free"],
     "tools": ["firecrawl_search", "firecrawl_scrape"]
   },
+  "configGroups": [
+    {
+      "id": "web-search",
+      "title": "Web search",
+      "order": 10,
+      "properties": ["webSearch"]
+    },
+    {
+      "id": "web-fetch",
+      "title": "Web fetch",
+      "order": 20,
+      "properties": ["webFetch"]
+    }
+  ],
   "configSchema": {
     "type": "object",
     "additionalProperties": false,

@@ -70,6 +70,7 @@ describe("system.info", () => {
   afterEach(() => vi.restoreAllMocks());
 
   it("returns a schema-valid host resource snapshot", async () => {
+    const readCpus = vi.spyOn(os, "cpus");
     const respond = vi.fn();
     const eventLoop = {
       degraded: false,
@@ -80,6 +81,13 @@ describe("system.info", () => {
       delayMaxMs: 20,
       utilization: 0.25,
       cpuCoreRatio: 0.3,
+      cpuBreakdown: {
+        mainThreadCoreRatio: 0.1,
+        workerCoreRatio: 0.15,
+        otherThreadsCoreRatio: 0.05,
+        hostUtilization: 0.7,
+        hostCpuCount: 8,
+      },
     };
     const getEventLoopHealth = vi.fn(() => ({ ...eventLoop }));
 
@@ -92,15 +100,15 @@ describe("system.info", () => {
       },
     } as unknown as GatewayRequestHandlerOptions;
 
-    await expectDefined(
+    const handler = expectDefined(
       systemHandlers["system.info"],
       'systemHandlers["system.info"] test invariant',
-    )(request);
+    );
+    await handler(request);
     eventLoop.cpuCoreRatio = 0.6;
-    await expectDefined(
-      systemHandlers["system.info"],
-      'systemHandlers["system.info"] test invariant',
-    )(request);
+    readCpus.mockReturnValue([]);
+    vi.mocked(Date.now).mockReturnValue(sampleTime + 1_999);
+    await handler(request);
 
     expect(respond).toHaveBeenCalledTimes(2);
     expect(mocks.runCommandWithTimeout.mock.calls.map(([argv]) => argv)).toEqual([["mount"]]);
@@ -117,6 +125,7 @@ describe("system.info", () => {
     expect(payload.uptimeMs).toBeGreaterThanOrEqual(0);
     expect(payload.defaultAgentUtilityModel).toEqual({ status: "unavailable" });
     expect(payload.eventLoop?.cpuCoreRatio).toBe(0.3);
+    expect(payload.eventLoop?.cpuBreakdown).toEqual(eventLoop.cpuBreakdown);
     expect(payload.processMemory?.rssBytes).toBeGreaterThan(0);
     expect(payload.processMemory?.heapUsedBytes).toBeGreaterThan(0);
     const refreshed = respond.mock.calls[1]?.[1];
@@ -124,11 +133,21 @@ describe("system.info", () => {
       throw new Error("system.info returned an invalid refreshed payload");
     }
     expect(refreshed.eventLoop?.cpuCoreRatio).toBe(0.6);
+    expect(refreshed.cpuCount).toBe(payload.cpuCount);
+    expect(refreshed.cpuModel).toBe(payload.cpuModel);
+    expect(readCpus).toHaveBeenCalledTimes(1);
+    expect(refreshed.eventLoop?.cpuBreakdown).toEqual(eventLoop.cpuBreakdown);
     expect(getEventLoopHealth).toHaveBeenCalledTimes(2);
     expect(payload).toHaveProperty("disks", [
       { path: "/", totalBytes: 1_024_000, availableBytes: 409_600 },
       { path: "/Volumes/Data", totalBytes: 2_048_000, availableBytes: 1_536_000 },
     ]);
+
+    vi.mocked(Date.now).mockReturnValue(sampleTime + 2_000);
+    await handler(request);
+    expect(readCpus).toHaveBeenCalledTimes(2);
+    expect(respond.mock.calls[2]?.[1]).toMatchObject({ cpuCount: 0 });
+    expect(respond.mock.calls[2]?.[1]).not.toHaveProperty("cpuModel");
   });
 
   it.each(["throw", "mount-exit", "statfs-error", "empty"])(

@@ -1,39 +1,25 @@
-/**
- * Transcript inspection helpers shared by session filesystem views and usage metrics.
- * Keep provider-specific block aliases centralized so both surfaces classify tools consistently.
- */
 import {
-  normalizeOptionalLowercaseString,
+  normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
+import { isToolCallContentType } from "../chat/tool-content.js";
 
 type ToolResultCounts = {
   total: number;
   errors: number;
 };
 
-// Transcript providers disagree on tool-call block spellings; keep the accepted
-// aliases centralized so display and metrics code classify the same payloads.
-const TOOL_CALL_TYPES = new Set(["tool_use", "toolcall", "tool_call"]);
 const TOOL_RESULT_TYPES = new Set(["tool_result", "tool_result_error"]);
 
-const normalizeType = (value: unknown): string => {
-  return typeof value === "string" ? (normalizeOptionalLowercaseString(value) ?? "") : "";
-};
-
-/** Extracts de-duplicated tool names from direct fields and structured content blocks. */
+/** Preserves call occurrences; a top-level legacy name can mirror the first matching block. */
 export const extractToolCallNames = (message: Record<string, unknown>): string[] => {
-  const names = new Set<string>();
-  const toolNameRaw = message.toolName ?? message.tool_name;
-  const toolName =
-    typeof toolNameRaw === "string" ? normalizeOptionalString(toolNameRaw) : undefined;
-  if (toolName) {
-    names.add(toolName);
-  }
+  const toolName = normalizeOptionalString(message.toolName ?? message.tool_name);
+  const names = toolName ? [toolName] : [];
+  let unmatchedTopLevelName = toolName;
 
   const content = message.content;
   if (!Array.isArray(content)) {
-    return Array.from(names);
+    return names;
   }
 
   for (const entry of content) {
@@ -41,17 +27,18 @@ export const extractToolCallNames = (message: Record<string, unknown>): string[]
       continue;
     }
     const block = entry as Record<string, unknown>;
-    const type = normalizeType(block.type);
-    if (!TOOL_CALL_TYPES.has(type)) {
+    if (!isToolCallContentType(normalizeOptionalString(block.type))) {
       continue;
     }
-    const name = typeof block.name === "string" ? normalizeOptionalString(block.name) : undefined;
-    if (name) {
-      names.add(name);
+    const name = normalizeOptionalString(block.name);
+    if (name && name === unmatchedTopLevelName) {
+      unmatchedTopLevelName = undefined;
+    } else if (name) {
+      names.push(name);
     }
   }
 
-  return Array.from(names);
+  return names;
 };
 
 /** Counts recognized tool-result blocks and the subset explicitly marked as errors. */
@@ -68,7 +55,7 @@ export const countToolResults = (message: Record<string, unknown>): ToolResultCo
       continue;
     }
     const block = entry as Record<string, unknown>;
-    const type = normalizeType(block.type);
+    const type = normalizeLowercaseStringOrEmpty(block.type);
     if (!TOOL_RESULT_TYPES.has(type)) {
       continue;
     }

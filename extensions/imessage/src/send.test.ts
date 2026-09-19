@@ -5,7 +5,7 @@ import path from "node:path";
 import { isChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
 import { sanitizeForPlainText } from "openclaw/plugin-sdk/channel-outbound";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import type { OpenKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
+import type { OpenAsyncKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { createOpenClawTestState, type OpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { IMessageRpcClient } from "./client.js";
@@ -301,7 +301,7 @@ describe("sendMessageIMessage receipts", () => {
       readRequests,
       createChannelDelivery,
     } = createIMessageOutboundRpcFixture(openClawState, sendMessageIMessage);
-    const { deliverThroughChannel } = await createChannelDelivery();
+    const { deliverThroughChannel } = createChannelDelivery();
     const channelYaml = ["```yaml", ...roles.map((role) => `${role}:`), "```"].join("\n");
     const channelYamlResult = await deliverThroughChannel(channelYaml);
     expect(channelYamlResult.sanitized).toContain("```yaml");
@@ -530,7 +530,7 @@ describe("sendMessageIMessage receipts", () => {
   it("scrubs embedded separators and preserves dunder links over local RPC", async () => {
     const { cfg, deliver, countNativeRequests, readRequests, createChannelDelivery } =
       createIMessageOutboundRpcFixture(openClawState, sendMessageIMessage);
-    const { channelChunker, channelSanitizer } = await createChannelDelivery();
+    const { channelChunker, channelSanitizer } = createChannelDelivery();
     let embeddedRequestCount = 0;
     for (const separator of [rawSeparator, entitySeparator]) {
       for (const role of roles) {
@@ -576,7 +576,7 @@ describe("sendMessageIMessage receipts", () => {
   it("preserves fenced YAML roles across monitor and channel RPC chunks", async () => {
     const { cfg, deliver, countNativeRequests, readRequests, createChannelDelivery } =
       createIMessageOutboundRpcFixture(openClawState, sendMessageIMessage);
-    const { channelChunker, channelSanitizer } = await createChannelDelivery();
+    const { channelChunker, channelSanitizer } = createChannelDelivery();
     const oversizedYaml = [
       "```yaml",
       ...Array.from({ length: 6 }, (_, index) =>
@@ -839,7 +839,7 @@ describe("sendMessageIMessage receipts", () => {
   it("rejects malformed, empty, and forged private content without native dispatch", async () => {
     const { cfg, actionOptions, deliver, readRequests, readActions, createChannelDelivery } =
       createIMessageOutboundRpcFixture(openClawState, sendMessageIMessage);
-    const { deliverThroughChannel } = await createChannelDelivery();
+    const { deliverThroughChannel } = createChannelDelivery();
     const { imessageActionsRuntime } = await import("./actions.runtime.js");
     const forgedTokenEntity = "&#xE000;".repeat("user".length);
     const roleTokenSwap = [
@@ -1465,7 +1465,7 @@ describe("sendMessageIMessage receipts", () => {
     const deleteGate = createDeferred<void>();
     const openSpy = vi
       .spyOn(state, "openKeyedStore")
-      .mockImplementation(<T>(options: OpenKeyedStoreOptions) => {
+      .mockImplementation(<T>(options: OpenAsyncKeyedStoreOptions) => {
         const store = openStore<T>(options);
         if (options.namespace === "imessage.sent-echoes") {
           const register = store.register.bind(store);

@@ -1,4 +1,3 @@
-// QA Lab Matrix plugin module implements scenario runtime approval behavior.
 import { randomUUID } from "node:crypto";
 import { setTimeout as sleep } from "node:timers/promises";
 import type { ChannelApprovalKind } from "openclaw/plugin-sdk/approval-handler-runtime";

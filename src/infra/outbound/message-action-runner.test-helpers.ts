@@ -22,8 +22,8 @@ import {
 
 type ChannelActionHandler = NonNullable<NonNullable<ChannelPlugin["actions"]>["handleAction"]>;
 
-// Create shared bindings before mock factories run so non-isolated tests reset
-// and assert against the same functions that the production imports receive.
+// Factories can run during static imports, before the exported alias initializes.
+// Use the hoisted binding directly so resets and imports share the same functions.
 const hoistedMessageActionRunnerMocks = vi.hoisted(() => ({
   resolveOutboundChannelPlugin: vi.fn(),
   executeSendAction: vi.fn(),
@@ -48,35 +48,38 @@ export const messageActionRunnerMocks = hoistedMessageActionRunnerMocks;
 vi.mock("./channel-resolution.js", () => ({
   normalizeDeliverableOutboundChannel: (value?: string | null) =>
     typeof value === "string" ? value.trim().toLowerCase() || undefined : undefined,
-  resolveOutboundChannelPlugin: messageActionRunnerMocks.resolveOutboundChannelPlugin,
+  resolveOutboundChannelPlugin: hoistedMessageActionRunnerMocks.resolveOutboundChannelPlugin,
   resetOutboundChannelResolutionStateForTest: vi.fn(),
 }));
 
 vi.mock("./outbound-send-service.js", () => ({
-  executeSendAction: messageActionRunnerMocks.executeSendAction,
-  executePollAction: messageActionRunnerMocks.executePollAction,
-  hasCorePresentationDelivery: messageActionRunnerMocks.hasCorePresentationDelivery,
+  executeSendAction: hoistedMessageActionRunnerMocks.executeSendAction,
+  executePollAction: hoistedMessageActionRunnerMocks.executePollAction,
+  hasCorePresentationDelivery: hoistedMessageActionRunnerMocks.hasCorePresentationDelivery,
   materializeMessagePresentationFallback:
-    messageActionRunnerMocks.materializeMessagePresentationFallback,
+    hoistedMessageActionRunnerMocks.materializeMessagePresentationFallback,
 }));
 
 vi.mock("./message.gateway.runtime.js", () => ({
-  callGateway: messageActionRunnerMocks.callGateway,
-  callGatewayLeastPrivilege: messageActionRunnerMocks.callGatewayLeastPrivilege,
-  isGatewayTransportError: messageActionRunnerMocks.isGatewayTransportError,
-  randomIdempotencyKey: messageActionRunnerMocks.randomIdempotencyKey,
+  callGateway: hoistedMessageActionRunnerMocks.callGateway,
+  callGatewayLeastPrivilege: hoistedMessageActionRunnerMocks.callGatewayLeastPrivilege,
+  isGatewayTransportError: hoistedMessageActionRunnerMocks.isGatewayTransportError,
+  randomIdempotencyKey: hoistedMessageActionRunnerMocks.randomIdempotencyKey,
 }));
 
 vi.mock("./source-reply-mirror.js", () => ({
-  beginTerminalSourceReplyDelivery: messageActionRunnerMocks.beginTerminalSourceReplyDelivery,
-  cancelTerminalSourceReplyDelivery: messageActionRunnerMocks.cancelTerminalSourceReplyDelivery,
-  isDeliveredCurrentSourceReplyAsync: messageActionRunnerMocks.isDeliveredCurrentSourceReplyAsync,
+  beginTerminalSourceReplyDelivery:
+    hoistedMessageActionRunnerMocks.beginTerminalSourceReplyDelivery,
+  cancelTerminalSourceReplyDelivery:
+    hoistedMessageActionRunnerMocks.cancelTerminalSourceReplyDelivery,
+  isDeliveredCurrentSourceReplyAsync:
+    hoistedMessageActionRunnerMocks.isDeliveredCurrentSourceReplyAsync,
   reconcileTerminalSourceReplyDelivery:
-    messageActionRunnerMocks.reconcileTerminalSourceReplyDelivery,
+    hoistedMessageActionRunnerMocks.reconcileTerminalSourceReplyDelivery,
 }));
 
 vi.mock("../../tts/tts.runtime.js", () => ({
-  maybeApplyTtsToPayload: messageActionRunnerMocks.maybeApplyTtsToPayload,
+  maybeApplyTtsToPayload: hoistedMessageActionRunnerMocks.maybeApplyTtsToPayload,
 }));
 
 vi.mock("./outbound-session.js", () => ({
@@ -101,18 +104,18 @@ vi.mock("../../channels/plugins/bootstrap-registry.js", () => ({
 
 vi.mock("./message-action-threading.js", async (importOriginal) => {
   const threading = await importOriginal<typeof import("./message-action-threading.js")>();
-  messageActionRunnerMocks.prepareOutboundMirrorRoute.mockImplementation(
+  hoistedMessageActionRunnerMocks.prepareOutboundMirrorRoute.mockImplementation(
     threading.prepareOutboundMirrorRoute,
   );
   return {
     ...threading,
-    prepareOutboundMirrorRoute: messageActionRunnerMocks.prepareOutboundMirrorRoute,
+    prepareOutboundMirrorRoute: hoistedMessageActionRunnerMocks.prepareOutboundMirrorRoute,
   };
 });
 
 vi.mock("../../media/web-media.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../media/web-media.js")>()),
-  loadWebMedia: messageActionRunnerMocks.loadWebMedia,
+  loadWebMedia: hoistedMessageActionRunnerMocks.loadWebMedia,
 }));
 
 type RunMessageAction = typeof import("./message-action-runner.js").runMessageAction;
@@ -244,7 +247,7 @@ export function createGatewayActionPlugin(params: {
   messaging?: ChannelPlugin["messaging"];
   threading?: ChannelPlugin["threading"];
   handleAction: ChannelActionHandler;
-}): ChannelPlugin {
+}): ChannelPlugin & { actions: NonNullable<ChannelPlugin["actions"]> } {
   const actions = new Set(params.actions);
   const gatewayActions = new Set(params.gatewayActions ?? params.actions);
   return {

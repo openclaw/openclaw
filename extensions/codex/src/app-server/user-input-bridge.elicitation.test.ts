@@ -185,17 +185,18 @@ describe("Codex ordinary MCP elicitation adapter", () => {
   it("compiles a queued request before caller mutation and preserves FIFO", async () => {
     const gateway = createControlledGateway();
     const bridge = createBridge({ gatewayCall: gateway.call });
-    const first = bridge.handleElicitationRequest({ id: "first", params: formParams() });
+    const controller = new AbortController();
+    const first = bridge.handleElicitationRequest(
+      { id: "first", params: formParams() },
+      controller.signal,
+    );
     await vi.waitFor(() => expect(requestedQuestions(gateway.calls)).toHaveLength(1));
 
     const raw = formParams();
     const second = bridge.handleElicitationRequest({ id: "second", params: raw });
     (raw.requestedSchema.properties.name as { type: string }).type = "integer";
 
-    bridge.handleNotification({
-      method: "serverRequest/resolved",
-      params: { threadId: "thread-1", requestId: "first" },
-    });
+    controller.abort();
     await expect(first).resolves.toEqual({ action: "cancel", content: null, _meta: null });
     await vi.waitFor(() => expect(requestedQuestions(gateway.calls)).toHaveLength(2));
     await vi.waitFor(() =>
@@ -212,44 +213,21 @@ describe("Codex ordinary MCP elicitation adapter", () => {
     });
   });
 
-  it("preserves exact string-versus-integer request ids when cancelling", async () => {
-    const gateway = createControlledGateway();
-    const bridge = createBridge({ gatewayCall: gateway.call });
-    const integerRequest = bridge.handleElicitationRequest({ id: 7, params: formParams() });
-    const stringRequest = bridge.handleElicitationRequest({ id: "7", params: formParams() });
-    await vi.waitFor(() => expect(requestedQuestions(gateway.calls)).toHaveLength(1));
-
-    bridge.handleNotification({
-      method: "serverRequest/resolved",
-      params: { threadId: "thread-1", requestId: 7 },
-    });
-    await expect(integerRequest).resolves.toMatchObject({ action: "cancel" });
-    await vi.waitFor(() => expect(requestedQuestions(gateway.calls)).toHaveLength(2));
-    await vi.waitFor(() =>
-      expect(gateway.calls.filter((entry) => entry.method === "question.waitAnswer")).toHaveLength(
-        2,
-      ),
-    );
-
-    bridge.handleNotification({
-      method: "serverRequest/resolved",
-      params: { threadId: "thread-1", requestId: 7 },
-    });
-    const current = requestedQuestions(gateway.calls)[1]!;
-    gateway.answer(current.id, { name: ["Ada"] });
-    await expect(stringRequest).resolves.toMatchObject({ action: "accept" });
-  });
-
-  it("cancels an exact queued request without disturbing the active request", async () => {
+  it("skips a cancelled queued request promptly and preserves FIFO for its successor", async () => {
     const gateway = createControlledGateway();
     const bridge = createBridge({ gatewayCall: gateway.call });
     const active = bridge.handleElicitationRequest({ id: "active", params: formParams() });
-    const queued = bridge.handleElicitationRequest({ id: "queued", params: formParams() });
+    const controller = new AbortController();
+    const queued = bridge.handleElicitationRequest(
+      { id: "queued", params: formParams() },
+      controller.signal,
+    );
+    const successor = bridge.handleElicitationRequest({ id: "successor", params: formParams() });
     await vi.waitFor(() => expect(requestedQuestions(gateway.calls)).toHaveLength(1));
-    bridge.handleNotification({
-      method: "serverRequest/resolved",
-      params: { threadId: "thread-1", requestId: "queued" },
-    });
+    const queuedResult = vi.fn();
+    void queued.then(queuedResult);
+    controller.abort();
+    await vi.waitFor(() => expect(queuedResult).toHaveBeenCalledOnce());
     await expect(queued).resolves.toMatchObject({ action: "cancel" });
     await vi.waitFor(() =>
       expect(gateway.calls.filter((entry) => entry.method === "question.waitAnswer")).toHaveLength(
@@ -259,6 +237,17 @@ describe("Codex ordinary MCP elicitation adapter", () => {
     const current = requestedQuestions(gateway.calls)[0]!;
     gateway.answer(current.id, { name: ["Ada"] });
     await expect(active).resolves.toMatchObject({ action: "accept" });
+    await vi.waitFor(() => expect(requestedQuestions(gateway.calls)).toHaveLength(2));
+    await vi.waitFor(() =>
+      expect(gateway.calls.filter((entry) => entry.method === "question.waitAnswer")).toHaveLength(
+        2,
+      ),
+    );
+    gateway.answer(requestedQuestions(gateway.calls)[1]!.id, { name: ["Grace"] });
+    await expect(successor).resolves.toMatchObject({
+      action: "accept",
+      content: { name: "Grace" },
+    });
   });
 
   it("lets lifecycle cancellation fence a late committed answer", async () => {
@@ -278,12 +267,13 @@ describe("Codex ordinary MCP elicitation adapter", () => {
       return { status: "cancelled" };
     };
     const bridge = createBridge({ gatewayCall });
-    const response = bridge.handleElicitationRequest({ id: "late", params: formParams() });
+    const controller = new AbortController();
+    const response = bridge.handleElicitationRequest(
+      { id: "late", params: formParams() },
+      controller.signal,
+    );
     await vi.waitFor(() => expect(requestedQuestions(calls)).toHaveLength(1));
-    bridge.handleNotification({
-      method: "serverRequest/resolved",
-      params: { threadId: "thread-1", requestId: "late" },
-    });
+    controller.abort();
     answer({ status: "answered", answers: { answers: { name: ["too late"] } } });
     await expect(response).resolves.toEqual({ action: "cancel", content: null, _meta: null });
   });

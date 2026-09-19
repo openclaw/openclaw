@@ -588,7 +588,7 @@ describe("registerBundledHealthChecks", () => {
     "missing-api",
     "missing-export",
     "broken-api",
-  ])("fails visibly for a selected Codex install with %s state", (state) => {
+  ])("reports an availability warning for a selected Codex install with %s state", (state) => {
     mocks.loadPluginManifestRegistryForPluginRegistry.mockReturnValue({
       plugins:
         state === "missing"
@@ -608,7 +608,16 @@ describe("registerBundledHealthChecks", () => {
     if (state === "broken-api") {
       writeFileSync(join(workspaceDir, "api.js"), 'throw new Error("selected artifact failed");');
     }
-    expect(() => registerBundledHealthChecks({ cfg: codexConfig, cwd: workspaceDir })).toThrow(
+    const findings = registerBundledHealthChecks({ cfg: codexConfig, cwd: workspaceDir });
+    expect(findings).toEqual([
+      expect.objectContaining({
+        checkId: "core/doctor/codex-session-routes",
+        source: "codex",
+        severity: "warning",
+      }),
+    ]);
+    expect(findings[0]?.message).toContain("openclaw doctor --fix");
+    expect(findings[0]?.message).toContain(
       state === "missing"
         ? "The configured Codex plugin was not found. Install it with openclaw plugins install @openclaw/codex."
         : state.startsWith("untrusted")

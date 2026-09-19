@@ -1,3 +1,4 @@
+import path from "node:path";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { vi } from "vitest";
 import {
@@ -72,9 +73,13 @@ export function createClientFactory(
     modelProvider?: string;
     responseCompletions?: Array<{ responseId: string; usage: JsonValue }>;
     preBindDeltaCount?: number;
+    managedRequirements?: JsonValue;
+    hooks?: JsonValue[];
+    terminalItems?: JsonValue[];
   } = {},
 ) {
   const methods: string[] = [];
+  let startOptions: NonNullable<Parameters<CodexAppServerClientFactory>[0]>["startOptions"];
   const fixture = createFakeCodexAppServerClient(async (method: string, params?: unknown) => {
     methods.push(method);
     if (options.beforeRequest) {
@@ -88,13 +93,27 @@ export function createClientFactory(
       };
     }
     if (method === "config/read") {
+      const home = startOptions?.env?.CODEX_HOME;
       return {
-        config: { mcp_servers: { inherited: { command: "unsafe" } } },
-        layers: [{ name: { type: "user" } }],
+        config: {
+          mcp_servers: { inherited: { command: "unsafe" } },
+          features: { hooks: true, plugins: false },
+          project_root_markers: [],
+        },
+        layers: [
+          {
+            name: { type: "user", ...(home ? { file: path.join(home, "config.toml") } : {}) },
+            config: {},
+          },
+        ],
       };
     }
+    if (method === "hooks/list") {
+      const cwds = isRecord(params) && Array.isArray(params.cwds) ? params.cwds : [];
+      return { data: [{ cwd: cwds[0], hooks: options.hooks ?? [], warnings: [], errors: [] }] };
+    }
     if (method === "configRequirements/read") {
-      return { requirements: null };
+      return { requirements: options.managedRequirements ?? null };
     }
     if (method === "thread/start" && isRecord(params) && typeof params.model === "string") {
       return threadStartResult(params.model, options.modelProvider);
@@ -204,6 +223,7 @@ export function createClientFactory(
               turnId: "turn-finalizer",
               turn: {
                 ...completedTurnResult().turn,
+                ...(options.terminalItems ? { items: options.terminalItems } : {}),
                 status: options.terminalStatus ?? "completed",
                 ...(options.terminalError ? { error: options.terminalError } : {}),
                 ...(options.terminalStatus === "interrupted" || options.emptyAnswer
@@ -220,7 +240,10 @@ export function createClientFactory(
   });
   const request = fixture.request;
   const client = Object.assign(fixture.client, { close: vi.fn() });
-  const factory = vi.fn(async () => client) as unknown as CodexAppServerClientFactory;
+  const factory = vi.fn(async (params: Parameters<CodexAppServerClientFactory>[0]) => {
+    startOptions = params?.startOptions;
+    return client;
+  }) as unknown as CodexAppServerClientFactory;
   return {
     factory,
     methods,

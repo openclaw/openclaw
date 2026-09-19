@@ -67,6 +67,16 @@ describe("resolve-fs-safe-native-contract", () => {
     expect(resolveContract(root, ref)).toBe("not-applicable");
   });
 
+  it("reports the exact 2026.7.34 Python-only 0.4.1 contract as not applicable", () => {
+    const { root, ref } = commitSource(
+      "0.4.1",
+      legacyDefaults,
+      "extended-stable/2026.7.33",
+      "2026.7.34",
+    );
+    expect(resolveContract(root, ref)).toBe("not-applicable");
+  });
+
   it("keeps the current native consumer contract strict", () => {
     const { root, ref } = commitSource(
       "0.8.1",

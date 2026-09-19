@@ -5,11 +5,13 @@ import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { evaluateEntryRequirementsForCurrentPlatform } from "../../shared/entry-status.js";
 import { CONFIG_DIR } from "../../utils.js";
 import {
-  readClawHubSkillsLockfileStatusSync,
   resolveClawHubSkillStatusLinkSync,
   resolveLocalSkillCardStatusSync,
+} from "../lifecycle/clawhub-status.js";
+import {
+  readClawHubSkillsLockfileStatusSync,
   type ClawHubSkillsLockfileStatusRead,
-} from "../lifecycle/clawhub.js";
+} from "../lifecycle/clawhub-store.js";
 import { resolveBundledSkillsDir } from "../loading/bundled-dir.js";
 import {
   hasBinary,

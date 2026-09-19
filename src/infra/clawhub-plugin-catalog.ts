@@ -38,11 +38,13 @@ export type ClawHubPluginCatalogEntry = {
 };
 
 export type ClawHubPluginDetail = ClawHubPluginCatalogEntry & {
-  owner?: { handle?: string; displayName?: string; imageUrl?: string };
+  owner?: { handle?: string; displayName?: string; imageUrl?: string; official?: boolean };
   topics: string[];
   createdAt?: number;
   updatedAt?: number;
   readme?: string;
+  repositoryUrl?: string;
+  documentationUrl?: string;
   compatibility?: ClawHubPluginCompatibility;
   configFields: ClawHubPluginConfigField[];
   mcpServers: string[];
@@ -425,6 +427,7 @@ function projectSecurity(value: ClawHubPackageSecurityResponse): ClawHubPluginSe
         : (moderationStatus ?? trust.scanStatus ?? "unknown");
   return {
     status,
+    ...(value.verdict ? { verdict: value.verdict } : {}),
     auditUrl: value.securityAuditUrl,
     summary: value.overview,
   };
@@ -652,6 +655,7 @@ export async function fetchClawHubPluginDetail(
     ...(ownerHandle ? { handle: ownerHandle } : {}),
     ...(ownerDisplayName ? { displayName: ownerDisplayName } : {}),
     ...(ownerImageUrl ? { imageUrl: ownerImageUrl } : {}),
+    ...(typeof ownerRecord?.official === "boolean" ? { official: ownerRecord.official } : {}),
   };
   return {
     ...catalog,
@@ -661,6 +665,7 @@ export async function fetchClawHubPluginDetail(
     ...(createdAt !== undefined ? { createdAt } : {}),
     ...(updatedAt !== undefined ? { updatedAt } : {}),
     ...(readme ? { readme } : {}),
+    ...(verification?.sourceRepo ? { repositoryUrl: verification.sourceRepo } : {}),
     ...((manifest.compatibility ?? packageCompatibility)
       ? { compatibility: manifest.compatibility ?? packageCompatibility }
       : {}),

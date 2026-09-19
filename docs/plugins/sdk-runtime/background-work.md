@@ -166,12 +166,12 @@ Start agent work in the background: hook-dispatched turns for external content, 
 
     Results preserve the corresponding synchronous payloads and owner scope.
     Reads query persisted SQLite records in the shared database worker, without
-    overwriting the process registry. Cold registry restoration still uses its
-    existing main-thread storage owner. Access checks for bare owner keys without
-    a persisted requester agent await any required runtime configuration, plugin
-    metadata, and consent preparation.
-    Warmed task and flow SQL queries and these managed-flow writes run in the
-    worker. Committed writes reconcile the relevant process task and flow registries before
+    overwriting the process registry. Cold restoration also reads through the
+    worker and installs a complete snapshot before exposing the registry. Concurrent
+    callers share restoration, and newer synchronous writes take precedence over
+    delayed snapshots. Access checks for bare owner keys await any required
+    runtime configuration, plugin metadata, and consent preparation.
+    Committed writes reconcile the relevant process task and flow registries before
     publication; a failed reconciliation leaves that projection dirty without
     changing the durable write result. A result describes its operation snapshot
     and may be superseded by a later mutation.
@@ -183,7 +183,9 @@ Start agent work in the background: hook-dispatched turns for external content, 
     Lists sort newest first. Equal task timestamps sort by task ID descending;
     equal flow timestamps sort by flow ID ascending. Run-ID lookup retains its
     runtime preference and oldest-first selection, then uses task ID ascending
-    for ties. Legacy synchronous methods
+    for ties. When an ACP run ID is reused, lookup excludes superseded backing
+    generations before applying that ordering. Backing details stay internal and
+    are not included in task views. Legacy synchronous methods
     keep their existing insertion-order tie behavior.
 
     The synchronous read methods and corresponding managed-flow state mutations
@@ -272,3 +274,11 @@ for remote or unidentified owners, including Copilot, whose SDK does not expose
 its process identity. The SDK never substitutes the Gateway PID. Records without
 an identity retain the existing grace period, including records written before
 execution ownership was available.
+
+Bundled harnesses delivering a completion can pass
+`isSourceSessionAdmissionAllowed` to `deliverAgentHarnessTaskCompletion(...)`.
+Keep this callback bound to the current parent and task ownership. The delivery
+owner rechecks it after asynchronous routing and immediately before a new Gateway
+turn or message injection is accepted. Work already accepted keeps its own
+lifecycle and can finish after the source retires. Use `signal` when the caller
+also intends to cancel accepted work.

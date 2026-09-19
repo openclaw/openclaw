@@ -660,9 +660,12 @@ describe("Where chip", () => {
       expect(cloudRow?.querySelector(".new-session-page__selected-summary")?.textContent).toBe(
         expectedOs === "linux" ? "Linux · Small" : "Windows · Large",
       );
-      expect(container.querySelector("#new-session-where-trigger")?.textContent?.trim()).toBe(
-        "aws",
-      );
+      expect(
+        container
+          .querySelector("#new-session-where-trigger")
+          ?.textContent?.replace(/\s+/g, " ")
+          .trim(),
+      ).toBe(expectedOs === "linux" ? "aws · Linux · Small" : "aws · Windows · Large");
       expect(
         container.querySelector(`[data-value="os:${expectedOs}"]`)?.getAttribute("aria-pressed"),
       ).toBe("true");
@@ -714,7 +717,7 @@ describe("Where chip", () => {
     },
   ])(
     "preserves $label while filtering its cloud card from search",
-    ({ os, machineClass, label }) => {
+    ({ os, machineClass, label, machine }) => {
       const container = renderPicker(
         true,
         undefined,
@@ -742,9 +745,62 @@ describe("Where chip", () => {
       );
       expect(container.querySelector('[data-value="cloud:aws"]')).toBeNull();
       expect(container.querySelector(".new-session-page__trigger-label")?.textContent).toBe(label);
+      expect(container.querySelector(".new-session-page__trigger-summary")?.textContent).toBe(
+        `· ${os === "windows/wsl2" ? "Windows (WSL2)" : "Linux"} · ${machine}`,
+      );
       expect(container.querySelector("openclaw-select-picker")).toBeNull();
     },
   );
+
+  it.each([
+    { id: "aws", os: "macos", osLabel: "macOS", size: "standard", sizeLabel: "Standard" },
+    { id: "azure", os: "windows/normal", osLabel: "Windows", size: "tiny", sizeLabel: "Tiny" },
+    { id: "daytona", os: "linux", osLabel: "Linux", size: "fast", sizeLabel: "Fast" },
+    { id: "gcp", os: "windows/wsl2", osLabel: "Windows (WSL2)", size: "beast", sizeLabel: "Beast" },
+  ])(
+    "shows catalog labels for $id / $os / $size without provider-specific logic",
+    ({ id, os, osLabel, size, sizeLabel }) => {
+      const container = renderPicker(true, undefined, {
+        cloudProfileId: id,
+        cloudProfiles: [
+          {
+            id,
+            providerId: "test-provider",
+            operatingSystems: [{ id: os, label: osLabel }],
+            machines: [{ id: size, label: sizeLabel, os }],
+          },
+        ],
+      });
+      const trigger = container.querySelector("#new-session-where-trigger");
+      expect(trigger?.textContent?.replace(/\s+/g, " ").trim()).toBe(
+        `${id} · ${osLabel} · ${sizeLabel}`,
+      );
+      expect(trigger?.getAttribute("aria-label")).toContain(`${id}, ${osLabel} · ${sizeLabel}`);
+    },
+  );
+
+  it.each([
+    { operatingSystems: undefined, machines: undefined, summary: null },
+    {
+      operatingSystems: [{ id: "linux", label: "Linux" }],
+      machines: undefined,
+      summary: "· Linux",
+    },
+    {
+      operatingSystems: undefined,
+      machines: [{ id: "small", label: "Small" }],
+      summary: "· Small",
+    },
+  ])("shows only reported cloud metadata: $summary", ({ operatingSystems, machines, summary }) => {
+    const container = renderPicker(true, undefined, {
+      cloudProfileId: "custom",
+      cloudProfiles: [{ id: "custom", providerId: "test-provider", operatingSystems, machines }],
+    });
+    expect(container.querySelector(".new-session-page__trigger-label")?.textContent).toBe("custom");
+    expect(container.querySelector(".new-session-page__trigger-summary")?.textContent ?? null).toBe(
+      summary,
+    );
+  });
 
   it("shows a session-slot caption without capacity bars", () => {
     const state = resolveWhereChip({

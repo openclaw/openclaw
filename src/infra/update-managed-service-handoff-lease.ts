@@ -119,6 +119,26 @@ export function createManagedHandoffLeaseStore(
     const scope = properties(result.stdout);
     return !result.error && (result.status === 0 || scope.LoadState === "not-found") ? scope : null;
   }
+  function isInNativeScope(life: HandoffNativeLifetime, scope = nativeScope(life)) {
+    if (
+      !scope ||
+      scope.Id !== life.scope ||
+      scope.LoadState !== "loaded" ||
+      !scope.ControlGroup ||
+      (life.placement.kind === "attached" && scope.InvocationID !== life.placement.invocation)
+    ) {
+      return false;
+    }
+    // Match the manager's complete path, not a unit-name suffix or the last
+    // controller record. Keep the sealed handoff's v1/v2 membership semantics.
+    return fs
+      .readFileSync("/proc/self/cgroup", "utf8")
+      .split("\n")
+      .some((line) => {
+        const systemd = /^[1-9][0-9]*:name=systemd:(.*)$/.exec(line);
+        return line === "0::" + scope.ControlGroup || systemd?.[1] === scope.ControlGroup;
+      });
+  }
   function nativeClosed(life: HandoffNativeLifetime, scope = nativeScope(life)) {
     // systemd retains populated cgroups even after failed/reset-failed. Its
     // cgroup retirement and unit GC require recursive emptiness, unlike ActiveState.
@@ -642,18 +662,15 @@ export function createManagedHandoffLeaseStore(
     ) {
       return false;
     }
+    const scope = nativeScope(life);
     if (
       ownPlacement &&
       (![lease.helper.pid, lease.executor.pid].includes(process.pid) ||
         processState(lease.helper.pid === process.pid ? lease.helper : lease.executor) !== "live" ||
-        !fs
-          .readFileSync("/proc/self/cgroup", "utf8")
-          .trim()
-          .endsWith("/" + life.scope))
+        !isInNativeScope(life, scope))
     ) {
       return false;
     }
-    const scope = nativeScope(life);
     if (nativeClosed(life, scope)) {
       return true;
     }
@@ -688,6 +705,7 @@ export function createManagedHandoffLeaseStore(
     release,
     assertSourceUnborrowed,
     stopNative,
+    isInNativeScope,
     processIdentity,
     isProcessIdentityCurrent,
     readProcessStartIdentity,

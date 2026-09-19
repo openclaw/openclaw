@@ -61,6 +61,21 @@ export function handleMessageEnd(
   evt: AgentEvent & { message: AgentMessage },
 ): void | Promise<void> {
   const msg = evt.message;
+  if (msg.role === "user" && ctx.state.lastAssistant) {
+    ctx.state.answerSegments.push({
+      textEnd: ctx.state.assistantTexts.length,
+      messageEnd: ctx.state.assistantMessageIndex,
+      finalMessageStart: ctx.state.assistantMessageStartIndex,
+      lastAssistant: ctx.state.lastAssistant,
+    });
+    ctx.state.sourceReplyDeliveryState = "missing";
+    ctx.state.messageToolOnlySourceReplyDelivered = false;
+    ctx.state.deterministicApprovalPromptPending = false;
+    ctx.state.deterministicApprovalPromptSent = false;
+    ctx.state.currentSourceMessagingToolSentTextsNormalized.length = 0;
+    ctx.state.lastAssistant = undefined;
+    return;
+  }
   if (msg?.role !== "assistant" || isSubscribeTranscriptOnlyOpenClawAssistantMessage(msg)) {
     return;
   }

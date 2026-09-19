@@ -3564,6 +3564,77 @@ class AutoreviewHardeningTests(unittest.TestCase):
 
             self.assertIn("# Prompt file: review.md", evidence.prompt)
 
+    def test_absolute_prompt_file_keeps_evidence_guards(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            repo = init_repo(Path(tempdir)).resolve()
+            prompt = repo / "review.md"
+            prompt.write_bytes(b"review context\n")
+            args = argparse.Namespace(prompt=[], prompt_file=[str(prompt)], dataset=[])
+            evidence = self.helper["capture_evidence_inputs"](args, repo)
+            self.assertEqual(evidence.prompt, "# Prompt file: review.md\nreview context\n")
+            self.assertEqual(evidence.files[0].raw_path, "review.md")
+            self.helper["verify_evidence"](repo, evidence.files)
+            prompt.write_text("changed\n", encoding="utf-8")
+            with self.assertRaisesRegex(SystemExit, "evidence changed"):
+                self.helper["verify_evidence"](repo, evidence.files)
+            with self.assertRaisesRegex(SystemExit, "repo-relative"):
+                self.helper["capture_evidence_file"](repo, str(prompt), "--dataset")
+            (repo / ".env").write_text("fixture\n", encoding="utf-8")
+            with self.assertRaisesRegex(SystemExit, "sensitive"):
+                self.helper["capture_evidence_file"](repo, str(repo / ".env"), "--prompt-file")
+
+    @unittest.skipIf(os.name == "nt", "the fake executable is POSIX-only")
+    def test_git_preflight_failures_stop_before_target_selection(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            root = Path(tempdir)
+            repo = init_repo(root)
+            for body, diagnostic, minimum in (
+                ("exit 7", "exit 7", 0),
+                ("exec sleep 60", "timed out after 10s", 9),
+            ):
+                with self.subTest(diagnostic=diagnostic):
+                    binary = write_executable(root / f"git-stub-{minimum}", f"#!/bin/sh\n{body}\n")
+                    started = time.monotonic()
+                    result = subprocess.run(
+                        [sys.executable, str(SCRIPT), "--mode", "local", "--dry-run"],
+                        cwd=repo, env={**os.environ, "AUTOREVIEW_GIT": str(binary)},
+                        text=True, capture_output=True, timeout=20,
+                    )
+                    elapsed = time.monotonic() - started
+                    self.assertEqual(result.returncode, 2, result.stdout + result.stderr)
+                    self.assertIn("incomplete", result.stderr)
+                    self.assertIn(diagnostic, result.stderr)
+                    self.assertIn(str(binary), result.stderr)
+                    self.assertIn("DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer", result.stderr)
+                    self.assertNotIn("autoreview target:", result.stdout)
+                    self.assertNotIn("scoped-clean", result.stdout + result.stderr)
+                    self.assertGreaterEqual(elapsed, minimum)
+                    self.assertLess(elapsed, 15)
+
+    def test_git_override_uses_trusted_resolution_and_preserves_git_environment(self) -> None:
+        with tempfile.TemporaryDirectory() as tempdir:
+            root = Path(tempdir)
+            repo = init_repo(root)
+            binary = write_executable(root / "git-stub", "#!/bin/sh\nexit 0\n")
+            developer = str(root / "Xcode.app/Contents/Developer")
+            with mock.patch.dict(os.environ, {"AUTOREVIEW_GIT": str(binary), "DEVELOPER_DIR": developer,
+                                               "GIT_DIR": "untrusted", "DYLD_INSERT_LIBRARIES": "untrusted"}):
+                with mock.patch.object(subprocess, "run", return_value=subprocess.CompletedProcess([], 0, b"ok", b"")) as run:
+                    self.assertEqual(self.helper["git"](repo, "rev-parse", "HEAD"), "ok")
+                    self.assertEqual(self.helper["git_bytes"](repo, "show", "HEAD").stdout, b"ok")
+                for call in run.call_args_list:
+                    self.assertEqual(call.args[0][0], str(binary))
+                    self.assertEqual(call.kwargs["env"]["DEVELOPER_DIR"], developer)
+                    self.assertNotIn("GIT_DIR", call.kwargs["env"])
+                    self.assertNotIn("DYLD_INSERT_LIBRARIES", call.kwargs["env"])
+                reviewer_env = self.helper["safe_engine_env"](repo, engine="codex")
+                self.assertNotIn("AUTOREVIEW_GIT", reviewer_env)
+                self.assertNotIn("DEVELOPER_DIR", reviewer_env)
+            local_binary = write_executable(repo / "git-stub", "#!/bin/sh\nexit 0\n")
+            with mock.patch.dict(os.environ, {"AUTOREVIEW_GIT": str(local_binary)}):
+                with self.assertRaisesRegex(SystemExit, "executable not found"):
+                    self.helper["resolve_git"](repo)
+
     def test_review_prompts_omit_absolute_repo_path_and_keep_instructions_whole(self) -> None:
         with tempfile.TemporaryDirectory() as tempdir:
             repo = init_repo(Path(tempdir))
@@ -3597,7 +3668,7 @@ class AutoreviewHardeningTests(unittest.TestCase):
             outside = root / "outside.md"
             outside.write_text("outside\n", encoding="utf-8")
 
-            with self.assertRaisesRegex(SystemExit, "repo-relative"):
+            with self.assertRaisesRegex(SystemExit, "inside the reviewed repository"):
                 self.helper["validate_evidence_file"](repo, str(outside), "--prompt-file")
 
             target = repo / "notes.md"
@@ -3611,6 +3682,8 @@ class AutoreviewHardeningTests(unittest.TestCase):
                 raise
             with self.assertRaisesRegex(SystemExit, "symlinked"):
                 self.helper["validate_evidence_file"](repo, "link.md", "--dataset")
+            with self.assertRaisesRegex(SystemExit, "symlinked"):
+                self.helper["capture_evidence_file"](repo, str(link.resolve().parent / "link.md"), "--prompt-file")
 
     def test_safe_engine_env_strips_process_injection_variables(self) -> None:
         old = os.environ.copy()

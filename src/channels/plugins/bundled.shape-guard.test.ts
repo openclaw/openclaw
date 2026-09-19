@@ -441,7 +441,7 @@ describe("bundled channel entry shape guards", () => {
     }
   });
 
-  it("falls back through the cached loader for package-local dist entries needing SDK aliases", async () => {
+  it("loads package-local dist entries with SDK aliases", async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-bundled-package-dist-"));
     const pluginDir = path.join(root, "extensions", "alpha", "dist");
     writeAlphaSdkAliasDistFixture(pluginDir, "Package dist Alpha");
@@ -479,7 +479,7 @@ describe("bundled channel entry shape guards", () => {
     }
   });
 
-  it("falls back through the cached loader for direct override dist entries needing SDK aliases", async () => {
+  it("loads direct override dist entries with SDK aliases", async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-bundled-direct-dist-"));
     const previousBundledPluginsDir = process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
     const pluginsRoot = path.join(root, "bundled-plugins");

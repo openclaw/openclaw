@@ -722,7 +722,7 @@ describe("discord reply target selection", () => {
 
 describe("discord autoThread name sanitization", () => {
   it("strips mentions and collapses whitespace", () => {
-    const name = sanitizeDiscordThreadName("  <@123>  <@&456> <#789>  Help   here  ", "msg-1");
+    const name = sanitizeDiscordThreadName("  <@123>  <@&456> <#789>  Help   here  ", "1001");
     expect(name).toBe("Help here");
   });
 
@@ -958,7 +958,7 @@ function makeReactionEvent(overrides?: {
   memberRoleIds?: string[];
 }) {
   const userId = overrides?.userId ?? "user-1";
-  const messageId = overrides?.messageId ?? "msg-1";
+  const messageId = overrides?.messageId ?? "1001";
   const channelId = overrides?.channelId ?? "channel-1";
   const messageFetch =
     overrides?.messageFetch ??
@@ -1122,7 +1122,7 @@ describe("discord DM reaction handling", () => {
 
     try {
       const fetchMessage = vi.fn(async () => ({
-        id: "msg-1",
+        id: "1001",
         channel_id: "channel-1",
         author: { id: "bot-1", username: "bot", discriminator: "0" },
       }));
@@ -1134,7 +1134,7 @@ describe("discord DM reaction handling", () => {
       const gatewayEvent = {
         user_id: "user-1",
         channel_id: "channel-1",
-        message_id: "msg-1",
+        message_id: "1001",
         guild_id: "guild-123",
         emoji: { id: null, name: "👍" },
         ...(testCase.action === "added"
@@ -1161,16 +1161,16 @@ describe("discord DM reaction handling", () => {
       const actor = testCase.action === "added" ? "actor" : "user-1";
       expect(events.map(({ text, contextKey }) => ({ text, contextKey }))).toEqual([
         {
-          text: `Discord reaction ${testCase.action}: 👍 by ${actor} on guild-123 #general msg msg-1 from bot`,
-          contextKey: `discord:reaction:${testCase.action}:msg-1:user-1:👍`,
+          text: `Discord reaction ${testCase.action}: 👍 by ${actor} on guild-123 #general msg 1001 from bot`,
+          contextKey: `discord:reaction:${testCase.action}:1001:user-1:👍`,
         },
         {
-          text: `Discord super reaction ${testCase.action}: 👍 by ${actor} on guild-123 #general msg msg-1 from bot`,
-          contextKey: `discord:reaction:${testCase.action}:msg-1:user-1:👍:burst`,
+          text: `Discord super reaction ${testCase.action}: 👍 by ${actor} on guild-123 #general msg 1001 from bot`,
+          contextKey: `discord:reaction:${testCase.action}:1001:user-1:👍:burst`,
         },
       ]);
       expect(fetchMessage).toHaveBeenCalledTimes(4);
-      expect(fetchMessage).toHaveBeenCalledWith("/channels/channel-1/messages/msg-1");
+      expect(fetchMessage).toHaveBeenCalledWith("/channels/channel-1/messages/1001");
       expect(resolveAgentRouteMock).toHaveBeenCalledWith(
         expect.objectContaining({
           guildId: "guild-123",

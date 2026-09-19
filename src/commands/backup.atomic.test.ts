@@ -4,6 +4,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import * as directoryDurability from "../infra/directory-durability.js";
 import { createTempHomeEnv, type TempHomeEnv } from "../test-utils/temp-home.js";
 import {
   backupVerifyCommandMock,
@@ -159,13 +160,16 @@ describe("backupCreateCommand atomic archive write", () => {
     const { archiveDir, outputPath, runtime } = await prepareAtomicBackupScenario({
       archivePrefix: "openclaw-backup-race-",
     });
-    const realLink = fs.link.bind(fs);
-    const linkSpy = vi.spyOn(fs, "link");
+    const publish = directoryDurability.publishFileExclusive;
+    const publicationSpy = vi.spyOn(directoryDurability, "publishFileExclusive");
     try {
       tarCreateMock.mockReturnValueOnce(createMockTarStream());
-      linkSpy.mockImplementationOnce(async (existingPath, newPath) => {
-        await fs.writeFile(newPath, "concurrent-archive", "utf8");
-        return await realLink(existingPath, newPath);
+      publicationSpy.mockImplementationOnce(async (options) => {
+        await fs.writeFile(options.targetPath, "concurrent-archive", {
+          encoding: "utf8",
+          flag: "wx",
+        });
+        return await publish(options);
       });
 
       await expect(
@@ -176,7 +180,7 @@ describe("backupCreateCommand atomic archive write", () => {
 
       expect(await fs.readFile(outputPath, "utf8")).toBe("concurrent-archive");
     } finally {
-      linkSpy.mockRestore();
+      publicationSpy.mockRestore();
       await fs.rm(archiveDir, { recursive: true, force: true });
     }
   });
@@ -185,10 +189,10 @@ describe("backupCreateCommand atomic archive write", () => {
     const { archiveDir, outputPath, runtime } = await prepareAtomicBackupScenario({
       archivePrefix: "openclaw-backup-no-hardlink-",
     });
-    const linkSpy = vi.spyOn(fs, "link");
+    const publicationSpy = vi.spyOn(directoryDurability, "publishFileExclusive");
     try {
       tarCreateMock.mockReturnValueOnce(createMockTarStream());
-      linkSpy.mockRejectedValueOnce(
+      publicationSpy.mockRejectedValueOnce(
         Object.assign(new Error("hard links not supported"), { code: "EOPNOTSUPP" }),
       );
 
@@ -197,10 +201,13 @@ describe("backupCreateCommand atomic archive write", () => {
           output: outputPath,
         }),
       ).rejects.toThrow(/requires hard-link support/iu);
+      expect(publicationSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ strategy: "link-required" }),
+      );
       await expectPathMissing(outputPath);
       await expect(fs.readdir(archiveDir)).resolves.toEqual([]);
     } finally {
-      linkSpy.mockRestore();
+      publicationSpy.mockRestore();
       await fs.rm(archiveDir, { recursive: true, force: true });
     }
   });

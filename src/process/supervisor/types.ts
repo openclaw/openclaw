@@ -1,4 +1,7 @@
 // Process supervisor types describe supervised runs and termination reasons.
+import type { WindowsJobExtinction } from "../../../scripts/lib/managed-windows-job.mts";
+
+export type ProcessExtinctionResult = void | WindowsJobExtinction;
 
 export type TerminationReason =
   | "manual-cancel"
@@ -35,8 +38,8 @@ export type ManagedRun = {
   startedAtMs: number;
   stdin?: ManagedRunStdin;
   wait: () => Promise<RunExit>;
-  /** Join the adapter's native ownership boundary; deliberately detached outsiders are excluded. */
-  waitForExtinction?: () => Promise<void>;
+  /** Join cleanup; unavailable Windows Job certification resolves with an uncertain outcome. */
+  waitForExtinction?: () => Promise<ProcessExtinctionResult>;
   cancel: (reason?: TerminationReason) => void;
   /** Stop every decoded, raw, captured, and output-clock update for this run. */
   detachOutput?: () => void;
@@ -63,12 +66,21 @@ export type ProcessAdapterConstruction = {
   beforeSpawn?: () => void;
   abortSignal?: AbortSignal;
   /** Publish resource cleanup before readiness or private-input delivery can fail. */
-  onSpawnCleanup?: (cleanup: Promise<void>) => void;
+  onSpawnCleanup?: (cleanup: Promise<ProcessExtinctionResult>) => void;
 };
 
 export type AwaitedStdoutConsumer = {
   /** Subscribe once; EOF, decoder flush, and every accepted chunk settle before resolution. */
   consumeStdout: (listener: (chunk: string) => void | Promise<void>) => Promise<void>;
+};
+
+export type ProcessCleanupResult = {
+  readonly reason: "forced-relay-exit";
+  readonly signalRequested: "SIGKILL";
+  readonly signalError?: Error;
+  readonly exit: { readonly code: number | null; readonly signal: NodeJS.Signals | null };
+  readonly durationMs: number;
+  readonly escalationAfterMs: number;
 };
 
 export type SpawnProcessAdapter<WaitSignal = NodeJS.Signals | number | null> = {
@@ -84,7 +96,8 @@ export type SpawnProcessAdapter<WaitSignal = NodeJS.Signals | number | null> = {
     listener: (error: Error, source: "process" | "stdin" | "stdout" | "stderr") => void,
   ) => void;
   wait: () => Promise<{ code: number | null; signal: WaitSignal }>;
-  waitForExtinction?: () => Promise<void>;
+  waitForExtinction?: () => Promise<ProcessExtinctionResult>;
+  readonly cleanupResult?: ProcessCleanupResult;
   kill: (signal?: NodeJS.Signals) => void;
   dispose: () => void;
 };

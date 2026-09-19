@@ -75,7 +75,10 @@ const addDoctorLegacyIssues = vi.hoisted(() =>
 );
 const note = vi.hoisted(() => vi.fn());
 
-vi.mock("../infra/state-migrations.doctor.js", () => ({
+vi.mock("../infra/state-migrations.doctor.js", async () => ({
+  ...(await vi.importActual<typeof import("../infra/state-migrations.doctor.js")>(
+    "../infra/state-migrations.doctor.js",
+  )),
   autoMigrateLegacyState,
 }));
 

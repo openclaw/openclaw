@@ -27,7 +27,11 @@ import {
   isSignalManagedNativeConnectionUrlForBind,
   resolveLocalSignalTransportPort,
 } from "./transport-policy.js";
-import { normalizeSignalTransportHost, normalizeSignalTransportUrl } from "./transport-url.js";
+import {
+  assertSignalSocketTransport,
+  normalizeSignalTransportHost,
+  normalizeSignalTransportUrl,
+} from "./transport-url.js";
 
 export { detectSignalTransport, type SignalTransportProbeResult } from "./transport-detection.js";
 
@@ -45,6 +49,7 @@ function managedTransportOptions(
 
 function normalizeTransport(transport: SignalTransportConfig): SignalTransportConfig {
   if (transport.kind === "managed-native") {
+    assertSignalSocketTransport(transport);
     return {
       ...transport,
       ...(transport.url ? { url: normalizeSignalTransportUrl(transport.url) } : {}),
@@ -103,7 +108,11 @@ function assertSignalLocalEndpointDoesNotConflictWithManagedSibling(params: {
       continue;
     }
     const siblingTransport = siblingAccount.transport;
-    if (siblingTransport?.kind !== "managed-native" || siblingTransport.httpPort !== localPort) {
+    if (
+      siblingTransport?.kind !== "managed-native" ||
+      siblingTransport.socketPath !== undefined ||
+      siblingTransport.httpPort !== localPort
+    ) {
       continue;
     }
     throw new Error(
@@ -163,6 +172,15 @@ export function prepareSignalManagedNativeTransport(params: {
 }): SignalManagedNativeTransport {
   const existing = resolveConfiguredSignalTransport(params.cfg, params.accountId);
   const existingManaged = existing?.kind === "managed-native" ? existing : undefined;
+  const socketCandidate = {
+    kind: "managed-native" as const,
+    ...existingManaged,
+    ...params.overrides,
+  };
+  if (socketCandidate.socketPath !== undefined) {
+    assertSignalSocketTransport(socketCandidate);
+    return socketCandidate;
+  }
   const preferredPort = params.overrides?.httpPort ?? existingManaged?.httpPort;
   const prepared: SignalManagedNativeTransport = {
     kind: "managed-native",
@@ -185,6 +203,9 @@ export function prepareSignalManagedNativeTransport(params: {
     portsByAccountId.set(normalizedAccountId, accountPorts);
     const transport = accountConfig.transport;
     if (transport?.kind === "managed-native") {
+      if (transport.socketPath !== undefined) {
+        continue;
+      }
       if (transport.httpPort !== undefined) {
         accountPorts.add(transport.httpPort);
       } else {

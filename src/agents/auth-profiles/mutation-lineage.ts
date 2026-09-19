@@ -102,6 +102,18 @@ function getPersistedMutationRecord(ownerKey: string): PersistedMutationRecord |
   return persistedMutationRecords.get(ownerKey);
 }
 
+/** All persisted rows, including usage state, follow their exact owner's write generation. */
+export function getRuntimeAuthProfileStoreMutationRevisionAtDatabasePath(
+  ownerKey: string,
+  scope: "rows" | "credentials" = "rows",
+): number {
+  const record = getPersistedMutationRecord(ownerKey);
+  if (record && scope === "credentials") {
+    return Math.max(record.credentialRevision, record.profileSetRevision, record.mutationFloor);
+  }
+  return record ? maxMutationRevision(record) : evictedOwnerMutationFloor;
+}
+
 export function recordRuntimeAuthProfileStorePersistedMutation(
   ownerKey: string,
   mutation: {

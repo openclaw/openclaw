@@ -436,6 +436,7 @@ export function createSessionWorkspaceProps(
     dock: workspace.dock,
     narrowLayout: options?.narrowLayout === true,
     filter: workspace.filter,
+    browserPath: workspace.browserPath,
     browserSearch: workspace.browserSearch,
     onSetFilter: (filter) => {
       workspace.filter = filter;

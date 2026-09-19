@@ -323,6 +323,21 @@ async function invokePreflight(input: {
     }
     return { ok: false, result: preflight };
   }
+  // Old nodes ignore unknown request fields; confirm this restriction before the mutating call.
+  if (
+    input.op === "file.write" &&
+    input.params.rejectHardlinks === true &&
+    payload?.rejectHardlinks !== true
+  ) {
+    return {
+      ok: false,
+      result: policyDeniedResult({
+        op: input.op,
+        code: "HARDLINK_REJECTION_UNSUPPORTED",
+        message: "node does not support hardlink-safe workspace writes; update the node and retry",
+      }),
+    };
+  }
   const canonicalPath = payload && typeof payload.path === "string" ? payload.path : "";
   if (!canonicalPath) {
     return {

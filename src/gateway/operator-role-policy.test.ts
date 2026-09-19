@@ -154,6 +154,34 @@ describe("operator role policy", () => {
     expect(resolveOperatorRolePolicy(owner, cfg)).toBeUndefined();
   });
 
+  it("reads current verified identity while preserving explicit role authority", () => {
+    const client = identifiedClient("profile-first");
+    const profile = client.authenticatedUserProfile!;
+    profile.displayName = "profile-other";
+    expect(resolveGatewayOperatorRoleActor(client)).toEqual({
+      kind: "operator",
+      profileId: "profile-first",
+    });
+
+    profile.profileId = "profile-next";
+    expect(resolveGatewayOperatorRoleActor(client)).toEqual({
+      kind: "operator",
+      profileId: "profile-next",
+    });
+    client.internal = { operatorRoleActor: { kind: "operator", profileId: "profile-explicit" } };
+    expect(resolveGatewayOperatorRoleActor(client)).toEqual({
+      kind: "operator",
+      profileId: "profile-explicit",
+    });
+
+    client.internal = undefined;
+    client.authenticatedUserProfile = undefined;
+    client.authenticatedUserId = "profile-unverified";
+    expect(resolveGatewayOperatorRoleActor(client)).toBeUndefined();
+    expect(resolveGatewayOperatorRoleActor(null)).toBeUndefined();
+    expect(resolveGatewayOperatorRoleActor(undefined)).toBeUndefined();
+  });
+
   it("falls back from stale assignments to the configured default or denies access", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       const profile = ensureProfileForEmail("role-stale@example.com");

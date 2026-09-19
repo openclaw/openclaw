@@ -422,7 +422,7 @@ describe("Slack live QA runtime helpers", () => {
     ).toBeUndefined();
   });
 
-  it.each(["slack-allowlist-block", "slack-mention-gating"])(
+  it.each(["slack-allowlist-block", "slack-channel-disabled-warning", "slack-mention-gating"])(
     "keeps the %s negative observation inside its flow deadline",
     (scenarioId) => {
       const scenario = testing.findScenario([scenarioId])[0];

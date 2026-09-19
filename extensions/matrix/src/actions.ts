@@ -1,4 +1,3 @@
-// Matrix plugin module implements actions behavior.
 import { createActionGate } from "openclaw/plugin-sdk/channel-actions";
 import type {
   ChannelMessageActionAdapter,

@@ -1,6 +1,6 @@
 // Control UI chat module implements chat avatar behavior.
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import { html } from "lit";
+import { html, nothing } from "lit";
 import { isReservedSystemAgentId } from "../../../../src/system-agent/agent-id.js";
 import type { GatewayBrowserClient, GatewayHelloOk } from "../../api/gateway.ts";
 import type { AgentsListResult } from "../../api/types.ts";
@@ -10,7 +10,6 @@ import {
   resolveLocalUserAvatarUrl,
   resolveLocalUserName,
 } from "../../app/user-identity.ts";
-import { icons } from "../../components/icons.ts";
 import {
   identityAvatarClass,
   renderAgentIdentityAvatar,
@@ -161,10 +160,6 @@ type ForwardedAvatarOptions = {
 };
 
 export function renderForwardedAvatar(agentId: string | undefined, opts: ForwardedAvatarOptions) {
-  // Forwarded rows carry the source agent's identity: another
-  // agent's avatar via the sender map, the current agent's own
-  // avatar for same-agent sessions, and the forward glyph only for
-  // unresolvable or legacy sources.
   if (agentId && agentId === opts.agentId) {
     return renderChatAvatar("assistant", {
       agentId,
@@ -175,9 +170,8 @@ export function renderForwardedAvatar(agentId: string | undefined, opts: Forward
   }
   const agent = agentId ? opts.agents?.find((candidate) => candidate.id === agentId) : undefined;
   if (!agent) {
-    return html`<div class="chat-avatar chat-avatar--forwarded" aria-hidden="true">
-      ${icons.forward}
-    </div>`;
+    // The group grid reserves the gutter even when the source has no known agent identity.
+    return nothing;
   }
   const name = agent.identity?.name?.trim() || agent.id;
   const avatar = opts.senderAgentAvatars?.get(agent.id) ?? resolveAgentAvatarUrl(agent);

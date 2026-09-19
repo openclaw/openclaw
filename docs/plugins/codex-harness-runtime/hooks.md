@@ -21,13 +21,23 @@ history, verify that Codex unloaded the previous configuration, then append a
 complete superseding policy message before admitting the turn. Historical policy
 text can remain in the transcript; the later policy explicitly supersedes it.
 
-If another client lease, subscriber, or failed native unload prevents configuration
-proof, the turn stops before inference. A prewrite ownership refusal keeps the
-healthy shared client and its other conversations available. External WebSocket,
-Unix-socket, and stdio-proxy connections do not prove exclusive native-process
-ownership, so ordinary conversations cannot perform this guarded cold refresh on
-those transports. Use OpenClaw-managed local stdio; for lease contention, stop
-competing native work before reconnecting. Policy refusals and uncertain or
+Ordinary conversations use the same unsubscribe-and-resume flow over local stdio,
+WebSocket, Unix-socket, and stdio-proxy connections. The native conversation ID
+and history stay unchanged. OpenClaw verifies that the original app-server client
+is still current, the thread has no active turn, and Codex has unloaded the
+previous configuration before installing the current policy.
+
+This refresh requires OpenClaw to be the sole lifecycle owner of the native
+conversation. A gateway-owned remote app-server satisfies this deployment contract
+when no independent client can reload the same conversation during the handoff.
+The connection and unload checks do not provide an atomic handoff between
+independent clients: a competing resume can reinstall old native configuration.
+Shared app-servers with competing conversation owners are outside this refresh
+contract.
+
+If a subscriber or failed native unload prevents configuration proof, the turn
+stops before inference. A prewrite ownership refusal keeps the healthy shared
+client and its other conversations available. Policy refusals and uncertain or
 acknowledged policy-write failures preserve the conversation and stop automatic
 auth-profile, model-fallback, and whole-turn retries.
 

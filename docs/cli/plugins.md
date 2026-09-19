@@ -40,10 +40,10 @@ openclaw plugins inspect <id> [--runtime] [--json]
 openclaw plugins inspect --all [--runtime] [--json]
 openclaw plugins info <id>                    # alias for inspect
 openclaw plugins enable <ids...> [--accept-capabilities]
-openclaw plugins disable <id>
-openclaw plugins reload <id> [--accept-capabilities] [--json]
-openclaw plugins uninstall <id> [--dry-run] [--keep-files] [--force]
-openclaw plugins update <id-or-npm-spec> | --all [--dry-run]
+openclaw plugins disable <ids...>
+openclaw plugins reload <ids...> [--accept-capabilities] [--json]
+openclaw plugins uninstall <ids...> [--dry-run] [--keep-files] [--force]
+openclaw plugins update <ids-or-npm-specs...> | --all [--dry-run]
 openclaw plugins registry [--refresh] [--json]
 openclaw plugins doctor [--json]
 openclaw plugins init <id> [--name <name>] [--type tool|provider|feature] [--directory <path>]

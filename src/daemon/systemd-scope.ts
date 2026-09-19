@@ -1,5 +1,6 @@
 /** Installed systemd scope discovery and dueling-manager diagnostics. */
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { hasErrnoCode } from "../infra/errno.js";
@@ -201,6 +202,13 @@ export async function findSystemdGatewayInstallation(
     findUserSystemdGatewayScope(env),
     findSystemSystemdGatewayScope(env),
   ]);
+  if (system) {
+    // A template is shared; native inspection needs this account's runnable instance.
+    system.unitName = system.unitName.replace(
+      /@\.service$/,
+      () => `@${os.userInfo().username}.service`,
+    );
+  }
   if (user && system) {
     // Only the SAME canonical gateway installed in both scopes is a dueling
     // conflict (issue #79375). A marker-owned system unit with a *different*

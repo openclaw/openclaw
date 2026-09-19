@@ -286,6 +286,20 @@ function resolveRuntimeEntryProviders(entryResult: ProviderDiscoveryEntryResult)
   });
 }
 
+function retainSyntheticAuthProviders(
+  providers: ProviderPlugin[],
+  authProviders: ProviderPlugin[],
+): ProviderPlugin[] {
+  const retained = new Set(providers);
+  const result = [...providers];
+  for (const provider of authProviders) {
+    if (!retained.has(provider)) {
+      result.push({ ...provider, catalog: undefined, staticCatalog: undefined });
+    }
+  }
+  return result;
+}
+
 export function planPluginDiscoveryRuntime(
   params: ResolveRuntimePluginDiscoveryProvidersParams,
 ): ProviderDiscoveryPlan {
@@ -299,6 +313,11 @@ export function planPluginDiscoveryRuntime(
           typeof provider.prepareSyntheticAuth === "function")),
   );
   const runtimeEntryProviders = resolveRuntimeEntryProviders(entryResult);
+  const authProviders = params.includeSyntheticAuthProviders
+    ? entryProviders.filter(
+        (provider) => provider.resolveSyntheticAuth || provider.prepareSyntheticAuth,
+      )
+    : [];
   if (params.discoveryEntriesOnly === true) {
     return { kind: "entries", providers: entryProviders };
   }
@@ -308,7 +327,10 @@ export function planPluginDiscoveryRuntime(
     runtimeEntryProviders.length === entryResult.providers.length &&
     entryResult.runtimeManifestCatalogPluginIds.size === 0
   ) {
-    return { kind: "entries", providers: runtimeEntryProviders };
+    return {
+      kind: "entries",
+      providers: retainSyntheticAuthProviders(runtimeEntryProviders, authProviders),
+    };
   }
   let fullPluginIds = params.onlyPluginIds;
   let retainedProviders: ProviderPlugin[] | undefined;
@@ -326,7 +348,10 @@ export function planPluginDiscoveryRuntime(
       ...entryResult.runtimeManifestCatalogPluginIds,
     ]);
     if (fullPluginIds.length === 0) {
-      return { kind: "entries", providers: runtimeEntryProviders };
+      return {
+        kind: "entries",
+        providers: retainSyntheticAuthProviders(runtimeEntryProviders, authProviders),
+      };
     }
     const fullPluginIdSet = new Set(fullPluginIds);
     retainedProviders = runtimeEntryProviders.filter(
@@ -342,7 +367,11 @@ export function planPluginDiscoveryRuntime(
       fullPluginIds = entryPluginIds;
     }
   }
-  return { kind: "runtime", providers: retainedProviders ?? [], pluginIds: fullPluginIds };
+  return {
+    kind: "runtime",
+    providers: retainSyntheticAuthProviders(retainedProviders ?? [], authProviders),
+    pluginIds: fullPluginIds,
+  };
 }
 
 export function resolvePluginDiscoveryProvidersRuntime(
@@ -357,5 +386,27 @@ export function resolvePluginDiscoveryProvidersRuntime(
     env: params.env ?? process.env,
     ...(plan.pluginIds ? { onlyPluginIds: plan.pluginIds } : {}),
   });
-  return [...plan.providers, ...fullProviders];
+  const providers = [...plan.providers];
+  const entryIndices = new Map(
+    providers.map((provider, index) => [normalizeProviderId(provider.id), index]),
+  );
+  for (const provider of fullProviders) {
+    const index = entryIndices.get(normalizeProviderId(provider.id));
+    const entry = index === undefined ? undefined : providers[index];
+    if (index !== undefined && entry && entry.pluginId === provider.pluginId) {
+      // Runtime owns catalog replacement and its auth pair. A lightweight-only
+      // auth contribution survives without keeping a superseded catalog hook.
+      providers[index] =
+        provider.resolveSyntheticAuth || provider.prepareSyntheticAuth
+          ? provider
+          : {
+              ...provider,
+              resolveSyntheticAuth: entry.resolveSyntheticAuth,
+              prepareSyntheticAuth: entry.prepareSyntheticAuth,
+            };
+    } else if (hasProviderCatalogHook(provider)) {
+      providers.push(provider);
+    }
+  }
+  return providers;
 }

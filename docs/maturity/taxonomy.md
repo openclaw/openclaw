@@ -230,13 +230,13 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
       <span className="maturity-surface-meta"><span className="maturity-level-pill maturity-level-alpha"><span className="maturity-level-code">M2</span><span>Alpha</span></span><span>5 areas - 66% complete</span></span>
     </a>
 
-    <a className="maturity-surface-link" href="#feishu-qq-bot-wechat-yuanbao-zalo-zalo-personal-regional-channels">
-      <span className="maturity-surface-title">Feishu, QQ Bot, WeChat, Yuanbao, Zalo, Zalo Personal, regional channels</span>
+    <a className="maturity-surface-link" href="#regional-channel-cohort">
+      <span className="maturity-surface-title">Regional channel cohort</span>
       <span className="maturity-surface-meta"><span className="maturity-level-pill maturity-level-alpha"><span className="maturity-level-code">M2</span><span>Alpha</span></span><span>4 areas - 58% complete</span></span>
     </a>
 
-    <a className="maturity-surface-link" href="#mattermost-line-irc-nextcloud-talk-nostr-twitch-tlon-synology-chat">
-      <span className="maturity-surface-title">Mattermost, LINE, IRC, Nextcloud Talk, Nostr, Twitch, Tlon, Synology Chat</span>
+    <a className="maturity-surface-link" href="#community-channel-cohort">
+      <span className="maturity-surface-title">Community channel cohort</span>
       <span className="maturity-surface-meta"><span className="maturity-level-pill maturity-level-alpha"><span className="maturity-level-code">M2</span><span>Alpha</span></span><span>4 areas - 54% complete</span></span>
     </a>
 
@@ -4995,10 +4995,13 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
   </Accordion>
 
-  <Accordion title="Feishu, QQ Bot, WeChat, Yuanbao, Zalo, Zalo Personal, regional channels - M2 Alpha - 4 areas">
+  <Accordion title="Regional channel cohort - M2 Alpha - 4 areas">
+    <a id="regional-channel-cohort" />
     <a id="feishu-qq-bot-wechat-yuanbao-zalo-zalo-personal-regional-channels" />
 
     Important regional coverage, but public support level should be calibrated per account type, upstream approval, and maintainer proof.
+
+    **Current catalog members:** [Feishu](/channels/feishu), [QQ bot](/channels/qqbot), [WeChat](/channels/wechat), [WeCom](/channels/wecom), [Yuanbao](/channels/yuanbao), [Zalo](/channels/zalo), [Zalo ClawBot](/channels/zaloclawbot), [Zalo personal](/channels/zalouser)
 
     <div className="maturity-surface-rollup"><span>Coverage Unscored</span><span>Quality Alpha - 55%</span><span>Completeness Alpha - 58%</span><span><span className="maturity-lts maturity-lts-none">None</span></span></div>
 
@@ -5084,10 +5087,13 @@ A surface is a product area such as Gateway runtime, Discord, or the macOS app. 
 
   </Accordion>
 
-  <Accordion title="Mattermost, LINE, IRC, Nextcloud Talk, Nostr, Twitch, Tlon, Synology Chat - M2 Alpha - 4 areas">
+  <Accordion title="Community channel cohort - M2 Alpha - 4 areas">
+    <a id="community-channel-cohort" />
     <a id="mattermost-line-irc-nextcloud-talk-nostr-twitch-tlon-synology-chat" />
 
     Supported surfaces exist, but maturity likely varies by upstream and maintainer coverage. Score individually later.
+
+    **Current catalog members:** [Buzz](/channels/buzz), [ClickClack](/channels/clickclack), [IRC](/channels/irc), [LINE](/channels/line), [Mattermost](/channels/mattermost), [Nextcloud Talk](/channels/nextcloud-talk), [Nostr](/channels/nostr), [Raft](/channels/raft), [Reef](/channels/reef), [SMS](/channels/sms), [Synology Chat](/channels/synology-chat), [Tlon](/channels/tlon), [Twitch](/channels/twitch)
 
     <div className="maturity-surface-rollup"><span>Coverage Unscored</span><span>Quality Alpha - 53%</span><span>Completeness Alpha - 54%</span><span><span className="maturity-lts maturity-lts-none">None</span></span></div>
 

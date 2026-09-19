@@ -12,11 +12,8 @@ import {
   resolveTerminalDynamicToolBatchAction,
   shouldReleaseTurnAfterTerminalDynamicTool,
 } from "./dynamic-tool-execution.js";
-import type {
-  CodexDynamicToolCallParams,
-  CodexDynamicToolCallResponse,
-  CodexServerNotification,
-} from "./protocol.js";
+import type { CodexDynamicToolRuntimeResponse } from "./dynamic-tool-response-state.js";
+import type { CodexDynamicToolCallParams, CodexServerNotification } from "./protocol.js";
 import { buildCodexLifecycleTerminalMeta } from "./run-attempt-lifecycle-terminal.js";
 import { emitCodexAppServerEvent } from "./run-attempt-lifecycle.js";
 import type { CodexAttemptResources } from "./run-attempt-resources.js";
@@ -38,7 +35,7 @@ export function createCodexAttemptLifecycleController(
   const { state, activeTurnItemIds, pendingOpenClawDynamicToolCompletionIds } = turnRuntime;
   const releaseTurnAfterTerminalDynamicTool = (value: {
     call: CodexDynamicToolCallParams;
-    response: CodexDynamicToolCallResponse;
+    response: CodexDynamicToolRuntimeResponse;
     durationMs: number;
   }) => {
     if (
@@ -117,7 +114,7 @@ export function createCodexAttemptLifecycleController(
   };
   const scheduleTurnReleaseAfterTerminalDynamicTool = (value: {
     call: CodexDynamicToolCallParams;
-    response: CodexDynamicToolCallResponse;
+    response: CodexDynamicToolRuntimeResponse;
     durationMs: number;
   }) => {
     state.pendingTerminalDynamicToolRelease = value;

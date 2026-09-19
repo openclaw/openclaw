@@ -1,4 +1,3 @@
-// Discord plugin module implements thread bindings behavior.
 export type {
   ThreadBindingManager,
   ThreadBindingRecord,

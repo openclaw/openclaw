@@ -128,3 +128,37 @@ Two capture modes package page context for the agent. For Mac tabs, either mode 
 One composer accepts up to four browser annotation cards and 8,000 total characters of generated annotation context. When it reaches either limit, the browser panel keeps the current capture so you can remove a card and retry; Undo also preserves the limit instead of evicting another card.
 
 Staged images, files, pasted images, large pasted text, browser annotations, and mixed attachment packages stay with their composer and session across route changes, split-pane remounts, hard reloads, and application restarts. The browser-local retention, scope, and disposal rules described under [New session page](/web/control-ui/sessions-and-sidebar#new-session-page) also apply to existing-session composers. If attachments exceed the durable cap, the current tab keeps them and shows the storage warning; the text remains restart-recoverable, but those attachments do not. If the browser refuses storage entirely, the current tab keeps the live composer and shows the same warning, but that draft cannot be recovered after restart.
+
+## GitHub side panel
+
+The bundled [GitHub plugin](/plugins/github) contributes this reader and its
+hover previews. It is enabled by default. Disabling the plugin removes these
+contributions and leaves GitHub links as ordinary external links. Other plugins
+can contribute the same docked reader surface through the
+[Plugin SDK](/plugins/sdk-overview).
+
+Click a GitHub issue, pull request, or commit link to read it in a browser-style
+tab beside the conversation. Each tab has a GitHub icon, a title, and a close
+control; the address bar and **Open on GitHub** link stay visible. Opening the
+same item from chat selects its existing tab. Links inside the reader and URLs
+entered in the address bar navigate the current tab, with independent Back and
+Forward history. The **+** button opens a new tab. Up to ten tabs stay in memory,
+including their loaded documents while you switch between them.
+
+The reader shows descriptions, issue and pull-request discussion comments,
+commit comments, published inline PR review comments with file/line and diff
+context, and expandable file diffs. Comment timestamps link to their source on
+GitHub. Markdown images and standalone HTML image attachments display inline;
+full-size links remain available when an image cannot load. Inline image
+requests omit cross-origin credentials and referrers, so the image host must
+support anonymous CORS. Scripts and embedded app widgets never run in these
+documents.
+
+The resizable panel is read-only and supports public repositories. Long
+discussions and large patches are bounded and marked as incomplete. Refresh
+fetches the current item again. On phones, the reader follows the shared panel’s
+responsive layout and expansion controls. Use **Open on GitHub** for the full page, private repositories, or
+actions such as posting a comment and merging. Cmd/Ctrl-click and middle-click
+on document links retain normal browser behavior; middle-clicking a tab closes
+it. Connections that do not advertise the detail capability keep opening links
+normally.

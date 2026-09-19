@@ -5,6 +5,7 @@ import { decodeHtmlEntities } from "../../shared/html-entities.js";
 import { visitObjectContentBlocks } from "../../shared/message-content-blocks.js";
 import type { StreamFn } from "../runtime/index.js";
 import type { MutableAssistantMessageEventStream } from "../stream-compat.js";
+import { mapAssistantMessageStream } from "./run/stream-wrapper.js";
 
 /**
  * Decodes HTML entities inside streamed tool-call arguments before downstream execution.
@@ -91,13 +92,8 @@ function wrapStreamMessageObjects(
 
 /** Wraps a stream function so tool-call arguments are decoded before consumers inspect them. */
 export function createHtmlEntityToolCallArgumentDecodingWrapper(baseStreamFn: StreamFn): StreamFn {
-  return (model, context, options) => {
-    const maybeStream = baseStreamFn(model, context, options);
-    if (maybeStream && typeof maybeStream === "object" && "then" in maybeStream) {
-      return Promise.resolve(maybeStream).then((stream) =>
-        wrapStreamMessageObjects(stream, decodeToolCallArgumentsHtmlEntitiesInMessage),
-      );
-    }
-    return wrapStreamMessageObjects(maybeStream, decodeToolCallArgumentsHtmlEntitiesInMessage);
-  };
+  return (model, context, options) =>
+    mapAssistantMessageStream(baseStreamFn(model, context, options), (stream) =>
+      wrapStreamMessageObjects(stream, decodeToolCallArgumentsHtmlEntitiesInMessage),
+    );
 }

@@ -1,4 +1,12 @@
-import type { TranscriptSessionDescriptor } from "./provider-types.js";
+import type { TranscriptSessionDescriptor, TranscriptUtterance } from "./provider-types.js";
+
+export type TranscriptSummarySnapshot = {
+  inputRevision: string;
+  nextSequence: number;
+  stoppedAt?: string;
+  summaryRevision: string;
+  utterances: TranscriptUtterance[];
+};
 
 export type TranscriptsSessionEntry = {
   session: TranscriptSessionDescriptor;

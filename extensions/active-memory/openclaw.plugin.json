@@ -10,6 +10,68 @@
   },
   "name": "Active Memory",
   "description": "Runs bounded pre-reply memory retrieval and implements per-agent Remember across conversations for eligible private conversations.",
+  "configGroups": [
+    {
+      "id": "memory-recall",
+      "title": "Memory recall",
+      "order": 10,
+      "properties": ["enabled", "mode"]
+    },
+    {
+      "id": "conversations",
+      "title": "Conversations",
+      "order": 20,
+      "properties": ["agents", "allowedChatTypes", "allowedChatIds", "deniedChatIds"]
+    },
+    {
+      "id": "recall-model",
+      "title": "Recall model",
+      "order": 30,
+      "properties": ["model", "modelFallback", "modelFallbackPolicy", "thinking", "fastMode"]
+    },
+    {
+      "id": "recall-prompt",
+      "title": "Recall prompt",
+      "order": 40,
+      "properties": [
+        "queryMode",
+        "promptStyle",
+        "toolsAllow",
+        "promptOverride",
+        "promptAppend",
+        "maxSummaryChars"
+      ]
+    },
+    {
+      "id": "conversation-context",
+      "title": "Conversation context",
+      "order": 50,
+      "properties": [
+        "recentUserTurns",
+        "recentAssistantTurns",
+        "recentUserChars",
+        "recentAssistantChars"
+      ]
+    },
+    {
+      "id": "timeouts-and-caching",
+      "title": "Timeouts and caching",
+      "order": 60,
+      "properties": [
+        "timeoutMs",
+        "setupGraceTimeoutMs",
+        "cacheTtlMs",
+        "circuitBreakerMaxTimeouts",
+        "circuitBreakerCooldownMs"
+      ]
+    },
+    {
+      "id": "diagnostics",
+      "title": "Diagnostics",
+      "order": 70,
+      "properties": ["logging", "persistTranscripts", "transcriptDir"]
+    }
+  ],
   "configSchema": {
     "type": "object",
     "additionalProperties": false,

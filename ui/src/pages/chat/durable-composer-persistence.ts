@@ -74,6 +74,7 @@ export function chatAttachmentDraftSignature(
     attachments.map((attachment) => [
       attachment.id,
       attachment.mimeType,
+      attachment.origin ?? null,
       attachment.fileName ?? "",
       attachment.sizeBytes ?? -1,
       attachment.browserAnnotation ?? null,
@@ -112,6 +113,7 @@ export function captureDurableChatAttachments(
     stored.push({
       blob,
       mimeType: attachment.mimeType,
+      ...(attachment.origin ? { origin: attachment.origin } : {}),
       ...(attachment.fileName ? { fileName: attachment.fileName } : {}),
       ...(typeof attachment.sizeBytes === "number" ? { sizeBytes: attachment.sizeBytes } : {}),
       ...(attachment.browserAnnotation

@@ -64,6 +64,12 @@ start of the key's trailing UUID, with UUID dashes omitted. Longer prefixes up
 to all 32 hexadecimal characters are accepted. The row's rotating `sessionId`
 is not part of the URL identity.
 
+The Control UI generates links with all 32 UUID characters by default, so a
+selected session keeps its identity even when another session shares its prefix
+and display name. Existing shorter links still resolve, and the disambiguation
+view can offer the shortest unique prefix. Resolving a literal or display-name
+link to a UUID session also keeps the full UUID in its canonical URL.
+
 Every other key uses the literal-key form. Each colon-delimited segment after
 `agent:<agentId>:` becomes one URL-encoded path segment. For example,
 `agent:main:telegram:12345` becomes `/chat/main/telegram/12345`, and
@@ -495,6 +501,12 @@ run. A missing job shows the Gateway's lookup error.
 Settings routes that use schema-backed deep links accept `?section=<section>`,
 `?advanced=1`, and `#<setting-id>`. These values select content within the page;
 they do not change the route identity.
+
+Links to Settings sections that moved to another page replace the old URL with
+the current destination while keeping the setting anchor. Back returns to the
+page before the link, and Forward returns to the current destination.
+
+Model setup links with `?firstRun=1` or `?firstRun=explicit` retain the first-run onboarding flow. Without either marker, `/settings/model-setup` and `/model-setup` redirect to `/settings/model-providers?connect=1`, which opens the connection dialog on Models. The Models page otherwise stays in place while connecting a provider or reviewing Gateway discovery.
 
 The retired General route and its `/config` alias are replaced once with
 `/settings/appearance?section=__appearance__#settings-language`. The historical

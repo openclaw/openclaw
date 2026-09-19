@@ -24,6 +24,7 @@ import {
   withAgentRuntimeExecutionLineageRedemption,
 } from "./agent-runtime-execution-lineage.js";
 import type { AgentRuntimeSessionSpawnContext } from "./agent-runtime-session-spawn-context.js";
+import { hasCronCreatorGrantProvenance } from "./cron-creator-authority-grant.js";
 import type { CronCreatorAuthorityGrant } from "./cron-creator-authority-grant.types.js";
 import {
   resolveMessageActionTurnCapability,
@@ -143,6 +144,12 @@ const spawnModelAutoSelectionSchema = z.object({
 const sessionSpawnContextSchema = z
   .object({
     completionOwnerSessionKey: normalizedRequiredStringSchema.optional(),
+    resolvedModel: z
+      .object({
+        provider: normalizedRequiredStringSchema,
+        model: normalizedRequiredStringSchema,
+      })
+      .optional(),
     inheritedToolPolicy: z.object({
       version: z.literal(1),
       allow: stringListSchema,
@@ -155,6 +162,7 @@ const sessionSpawnContextSchema = z
       ? { completionOwnerSessionKey: context.completionOwnerSessionKey }
       : {}),
     inheritedToolPolicy: context.inheritedToolPolicy,
+    ...(context.resolvedModel ? { resolvedModel: context.resolvedModel } : {}),
     ...(context.spawnModelAutoSelection
       ? { spawnModelAutoSelection: context.spawnModelAutoSelection }
       : {}),
@@ -380,7 +388,7 @@ function parsePayload(value: unknown, nowMs: number): AgentRuntimeIdentityTokenP
     const cronToolsAllowCapture = raw.cronToolsAllowCapture;
     const cronExecToolTarget = cronToolsAllowCapture ? raw.cronExecToolTarget : undefined;
     const cronCreatorAuthorityGrant = raw.cronCreatorAuthorityGrant;
-    if (cronCreatorAuthorityGrant && !cronToolsAllowCapture) {
+    if (!hasCronCreatorGrantProvenance(raw, operationalRunId)) {
       return undefined;
     }
     let executionIdentity: ExecutionIdentityAdmissionToken | undefined;
@@ -492,11 +500,10 @@ function prepareAgentRuntimeIdentityTokenPayload(
   const delegatedAuthority: AgentRuntimeDelegatedAuthority = params.workerTurnClaim
     ? { kind: "worker", ...approvalAuthority, turnClaim: params.workerTurnClaim }
     : { kind: "local", ...approvalAuthority };
-  if (
-    params.cronCreatorAuthorityGrant &&
-    params.cronToolsAllowCapture !== "final-executable-surface"
-  ) {
-    throw new Error("cron creator authority grants require final tool-surface provenance");
+  if (!hasCronCreatorGrantProvenance(params, operationalRunId)) {
+    throw new Error(
+      "cron creator authority grants require tool-surface or authenticated-requester provenance",
+    );
   }
   if (
     params.messageActionContext?.sourceReplyFinal === true &&
@@ -639,6 +646,8 @@ function resolveAgentRuntimeIdentityPayload(
   if (payload.executionLineageHandoffId && !handoff) {
     return undefined;
   }
+  const executionIdentity = handoff?.executionIdentity ?? payload.executionIdentity;
+  const sessionSpawnContext = handoff?.sessionSpawnContext ?? payload.sessionSpawnContext;
   const identity: AgentRuntimeIdentity = {
     kind: "agentRuntime",
     agentId: payload.agentId,
@@ -648,11 +657,7 @@ function resolveAgentRuntimeIdentityPayload(
     ...(payload.approvalOwnerPluginId
       ? { approvalOwnerPluginId: payload.approvalOwnerPluginId }
       : {}),
-    ...(handoff?.executionIdentity
-      ? { executionIdentity: handoff.executionIdentity }
-      : payload.executionIdentity
-        ? { executionIdentity: payload.executionIdentity }
-        : {}),
+    ...(executionIdentity ? { executionIdentity } : {}),
     ...(payload.turnSourceChannel ? { turnSourceChannel: payload.turnSourceChannel } : {}),
     ...(payload.turnSourceLocal === true ? { turnSourceLocal: true } : {}),
     ...(payload.turnSourceTo ? { turnSourceTo: payload.turnSourceTo } : {}),
@@ -675,11 +680,7 @@ function resolveAgentRuntimeIdentityPayload(
     ...(payload.cronCreatorAuthorityGrant
       ? { cronCreatorAuthorityGrant: payload.cronCreatorAuthorityGrant }
       : {}),
-    ...(handoff?.sessionSpawnContext
-      ? { sessionSpawnContext: handoff.sessionSpawnContext }
-      : payload.sessionSpawnContext
-        ? { sessionSpawnContext: payload.sessionSpawnContext }
-        : {}),
+    ...(sessionSpawnContext ? { sessionSpawnContext } : {}),
   };
   return handoff
     ? withAgentRuntimeExecutionLineageRedemption(identity, handoff.redemption)

@@ -74,6 +74,24 @@ attachment policy and context limits. The Codex plugin owns that native input
 path: update its artifact alongside the Gateway. An intentionally pinned older
 plugin does not acquire the fix from a core-only update.
 
+A detached harness completion that has entered a parent turn with an outbound
+channel route can retain an exact task, terminal outcome, and requester-session claim. After a crash, main-session recovery
+continues that admitted turn without starting the child again. The original
+completion identity remains distinct from the recovery run. A retained final
+receipt settles the task even if the old native monitor no longer exists; a
+pending recovery claim is not a delivered result. A later task outcome cannot authorize
+the earlier completion input or settle its receipt. Cancellation, session replacement,
+and missing or contradictory task identities do not authorize replay. A real held admission or a still-valid admitted input keeps recovery pending. Rejected input retains the task but releases the process monitor; it does not poll indefinitely. Native parent rotation must preserve the current connection and requester identity checks. Cold task reconstruction requires the saved native history owner. A later parent registration cannot supply missing historical ownership.
+
+This applies to newly recorded channel-delivery claims. Route-less, transcript-only
+and Control UI parents are not covered by this recovery change. Nor does it recover
+every older native completion or a completion that never reached parent admission. Progress messages, empty or
+truncated receipts, and uncertain sends cannot establish final delivery. The
+Gateway and Codex plugin must both be updated for recovery joining. Older builds
+may discard the added receipt fields while rewriting session metadata, even
+without a SQL schema change. Finish pending completion recovery before downgrading;
+do not delete consumed inputs or change source IDs to force another delivery.
+
 Pending delivery rows drain or retry after restart. When a delivery exhausts its
 retry budget, recovery reclaims expired producer custody. An active producer
 keeps ownership. Failed deliveries cannot send again, but retain the information
@@ -109,11 +127,69 @@ On Linux, the systemd unit must use `KillMode=mixed` so the initial stop signal
 reaches only the Gateway. Systemd still kills remaining child processes when the
 Gateway exits or its stop deadline expires. Older `KillMode=control-group` units
 signal child runtimes immediately, which can interrupt a turn before drain finishes.
+The spawn broker stays available while its Gateway connection is alive, even if
+it receives the stop signal too, so cleanup can still launch commands and observe
+child exits. This does not protect other child runtimes; `KillMode=mixed` remains
+required.
 After upgrading, run `openclaw gateway install --force` for the same profile to
 rewrite and restart the managed unit. Ordinary updates leave existing Linux
 service definitions unchanged. Doctor reports incompatible effective settings.
 Operator-owned drop-ins must be inspected and updated separately because reinstalling
 the base unit preserves them. See [Linux services](/platforms/linux).
+
+### Systemd stop deadlines
+
+At startup, the Gateway reads its running systemd unit's effective
+`TimeoutStopUSec`, including drop-ins. It logs the source and reconciled stop
+budget at startup and again when shutdown begins. Active-work drain uses at most
+315 seconds, with 10 seconds reserved for final chat writes and server cleanup
+and another 5 seconds before systemd's deadline. A unit with the default
+90-second stop timeout therefore gets a 75-second drain and an 85-second Gateway
+shutdown deadline. A shorter supervisor timeout also caps requested restart waits.
+The drained work, ordering, and interruption behavior stay the same.
+
+Service-child cleanup uses the remaining Gateway shutdown budget, leaving time
+for final exit bookkeeping. A forced restart skips active-work drain but retains
+the 10-second cleanup reserve; it does not start a fresh 85-second wait. Ordinary
+cancellation keeps its five-second grace before forced termination. During
+shutdown, a relay that needs forced termination after its owned processes are
+confirmed gone produces a warning. Completed cleanup leaves the Gateway's exit
+status at zero; an unconfirmed process cleanup boundary still reports failure.
+
+The process's cgroup selects the system or user manager, independently of the
+account running the Gateway or its restart owner. This also covers hand-written
+system units with `User=openclaw` and externally managed deployments. Reading
+the system unit's timeout does not require sudo or notification support.
+
+If the unit cannot be inspected, the Gateway warns with the manager, unit, and
+failure reason and uses systemd's 90-second default as a conservative fallback.
+An explicitly unlimited timeout keeps the normal Gateway budget. The startup reading is retained for that
+process; restart the Gateway after changing its unit settings.
+
+An already-installed old unit benefits from the clamp as soon as the new Gateway
+starts, without a service rewrite. This leaves time for orderly shutdown instead
+of spending the entire stop window in drain. Work that cannot settle still uses
+the existing interruption and recovery path; the shorter budget cannot guarantee
+that arbitrary cleanup completes. CLI installs and guided Doctor service repairs
+render `TimeoutStopSec=330` from the same policy as the Gateway. Doctor reports
+an effective stop timeout below that requirement. Operator-owned drop-ins remain
+the operator's responsibility.
+
+For hand-written system units, allow at least **drain + 15 seconds**. With the
+current maximum drain, create
+`/etc/systemd/system/openclaw-gateway.service.d/stop-timeout.conf`:
+
+```ini
+[Service]
+TimeoutStopSec=330
+```
+
+Run `sudo systemctl daemon-reload` and verify with
+`systemctl show openclaw-gateway.service -p TimeoutStopUSec`. Restart through your
+service's deployment owner to refresh the Gateway's startup reading. For a user
+unit, use `systemctl --user edit openclaw-gateway.service` and the corresponding
+`--user` reload/show commands. Retain `KillMode=mixed` as described above; a longer
+timeout does not protect children from `KillMode=control-group`'s initial signal.
 
 Replies to pending node commands remain accepted during the drain, including
 worker cleanup started by shutdown. Each reply must still match its live
@@ -207,8 +283,7 @@ candidate recognizes the existing update marker and, once the managed process is
 running, uses the five-minute startup watchdog instead of the standalone
 60-second deadline. Migration, listener, and health transitions do not reset this
 bound. The old updater's subprocess timeout also remains in force. An exhausted
-wait reports the last observed startup phase. Standalone restart deadlines are
-unchanged.
+wait reports the last observed startup phase. Standalone restarts use the [progress-gated readiness wait](/cli/gateway/restart-and-supervision#restart-the-gateway).
 Verification facts and measured downtime are retained in the
 [update run report](/cli/update#run-history-and-reports).
 

@@ -183,9 +183,10 @@ function resetSharedDocumentBody(): void {
     body.removeAttribute(attribute);
   }
   // jsdom can retain detached shadow focus even after the fixture removes its DOM.
-  // Native body focus clears that state; blur cannot reach an already-detached target.
+  // Focus body to clear it, then blur while focusable to restore fresh-document state.
   body.tabIndex = -1;
   body.focus();
+  body.blur();
   body.removeAttribute("tabindex");
 }
 

@@ -217,15 +217,6 @@ export class PluginDiscoveryController {
     return intent === "all" && category === null && !query;
   }
 
-  ensureInitial(): void {
-    if (!this.gateway.isConnected() || !this.gateway.getClient()) {
-      return;
-    }
-    if (this.browseTask.status === TaskStatus.INITIAL && !this.result && !this.error) {
-      void this.refresh();
-    }
-  }
-
   invalidate(): void {
     // Reconnects reload the latest input without replaying its manual observation.
     this.disconnect();

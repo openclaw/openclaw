@@ -205,6 +205,11 @@ export function createWorkerDesktopTunnels(deps: {
   };
 
   async function acquire(request: DesktopAcquireRequest): Promise<DesktopAcquireResult> {
+    if (request.desktop.username) {
+      throw new Error(
+        "Managed desktop account authentication requires the worker node transport; reprovision with node enrollment",
+      );
+    }
     if (platform === "win32") {
       throw new WorkerDesktopUnsupportedError();
     }

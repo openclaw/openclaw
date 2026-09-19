@@ -16,10 +16,14 @@ let state: BrowserServerState | null = null;
 let owner: BrowserControlOwner | null = null;
 let lifecycleTail = Promise.resolve();
 let completedEffectiveStops = 0;
+let pendingLifecycles = 0;
 
 /** Serialize complete Browser runtime start/stop workflows. */
 function enqueueBrowserControlLifecycle<T>(run: () => Promise<T>): Promise<T> {
-  const result = lifecycleTail.then(run, run);
+  pendingLifecycles += 1;
+  const result = lifecycleTail.then(run, run).finally(() => {
+    pendingLifecycles -= 1;
+  });
   lifecycleTail = result.then(
     () => {},
     () => {},
@@ -43,6 +47,11 @@ export function withBrowserControlStart<T>(run: () => Promise<T>): Promise<T> {
 
 export function getBrowserControlState(): BrowserServerState | null {
   return state && isBrowserRuntimeRunning(state) ? state : null;
+}
+
+export function hasBrowserControlWork(): boolean {
+  // Retained profiles own browser processes, relays, hooks, and tab cleanup between requests.
+  return state !== null || pendingLifecycles > 0;
 }
 
 /** Create a route context bound to the current shared browser runtime. */

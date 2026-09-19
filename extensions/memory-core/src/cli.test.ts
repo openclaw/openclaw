@@ -2471,15 +2471,15 @@ describe("memory cli", () => {
     });
   });
 
-  it("accepts --query for memory search", async () => {
+  it.each(["deployment notes", "   "])("accepts --query %j for memory search", async (query) => {
     const close = vi.fn(async () => {});
     const search = vi.fn(async () => []);
     mockManager({ search, close });
 
     const log = spyRuntimeLogs(defaultRuntime);
-    await runMemoryCli(["search", "--query", "deployment notes"]);
+    await runMemoryCli(["search", "--query", query]);
 
-    expect(search).toHaveBeenCalledWith("deployment notes", {
+    expect(search).toHaveBeenCalledWith(query, {
       maxResults: undefined,
       minScore: undefined,
       sessionKey: "agent:main:cli:direct:memory-search",
@@ -2505,9 +2505,14 @@ describe("memory cli", () => {
     expect(close).toHaveBeenCalled();
   });
 
-  it.each([false, true])("rejects queryless search before acquisition (json=%s)", async (json) => {
+  it.each([
+    { json: false, args: [] },
+    { json: true, args: [] },
+    { json: false, args: ["positional", "--query", ""] },
+    { json: true, args: ["positional", "--query", ""] },
+  ])("rejects queryless search before acquisition ($json, $args)", async ({ json, args }) => {
     const writeJson = spyRuntimeJson(defaultRuntime);
-    await expect(runMemoryCli(["search", ...(json ? ["--json"] : [])])).rejects.toThrow(
+    await expect(runMemoryCli(["search", ...args, ...(json ? ["--json"] : [])])).rejects.toThrow(
       "Missing search query. Provide a positional query or use --query <text>.",
     );
     expect(getMemorySearchManager).not.toHaveBeenCalled();
@@ -2522,7 +2527,7 @@ describe("memory cli", () => {
       message: "Memory promote-explain requires a non-empty selector.",
     },
     {
-      args: ["promote-explain", "unmatched fixture"],
+      args: ["promote-explain", "  unmatched fixture  "],
       acquires: true,
       message: 'No promotion candidate matched "unmatched fixture".',
     },
@@ -2750,7 +2755,7 @@ describe("memory cli", () => {
       });
 
       const writeJson = spyRuntimeJson(defaultRuntime);
-      await runMemoryCli(["promote-explain", "router", "--json", "--include-promoted"]);
+      await runMemoryCli(["promote-explain", "  router  ", "--json", "--include-promoted"]);
 
       const payload = firstWrittenJsonArg<{ candidate?: { snippet?: string } }>(writeJson);
       expect(payload?.candidate?.snippet).toContain("Configured VLAN 10");

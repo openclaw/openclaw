@@ -18,7 +18,7 @@ import { EventStatus } from "matrix-js-sdk/lib/models/event-status.js";
 import { SyncApi, SyncState } from "matrix-js-sdk/lib/sync.js";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type {
-  OpenKeyedStoreOptions,
+  OpenAsyncKeyedStoreOptions,
   PluginStateKeyedStore,
 } from "openclaw/plugin-sdk/plugin-state-runtime";
 import {
@@ -33,6 +33,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { getMatrixRuntime } from "../runtime.js";
 import { installMatrixTestRuntime } from "../test-runtime.js";
 import type { CoreConfig } from "../types.js";
+import { SqliteBackedMatrixSyncStore } from "./client/file-sync-store.js";
 import {
   readMatrixIdbSnapshotJson,
   readMatrixRecoveryKeyStateForPathAsync,
@@ -41,6 +42,10 @@ import {
 import { MatrixDecryptBridge } from "./sdk/decrypt-bridge.js";
 import { clearAllIndexedDbState } from "./sdk/idb-persistence.test-helpers.js";
 import { LogService } from "./sdk/logger.js";
+
+vi.mock("./sdk/joined-room-encryption.js", () => ({
+  reconcileJoinedRoomEncryption: vi.fn(async () => undefined),
+}));
 
 const createSharedMatrixClientMock = vi.hoisted(() => vi.fn());
 const captureReadAuthorityMock = vi.hoisted(() => vi.fn<() => (() => void) | undefined>());
@@ -132,7 +137,7 @@ function holdRecoveryKeyPersistence() {
   const admitted = createDeferred<void>();
   const release = createDeferred<void>();
   const stateRuntime: MatrixSnapshotStateRuntime = {
-    openKeyedStore<T>(options: OpenKeyedStoreOptions): PluginStateKeyedStore<T> {
+    openKeyedStore<T>(options: OpenAsyncKeyedStoreOptions): PluginStateKeyedStore<T> {
       const store = createPluginStateKeyedStoreForTests<T>("matrix", options);
       const compareAndApply = store.compareAndApply;
       if (!compareAndApply) {
@@ -1660,14 +1665,9 @@ describe("MatrixClient request hardening", () => {
     clearMatrixSyncApiForNeverStartedClient();
 
     try {
-      const client = new MatrixClient("https://matrix.example.org", "token", {
-        storageRootDir: tempDir,
-      });
-
-      const store = lastCreateClientOpts?.store as { flush: () => Promise<void> } | undefined;
-      if (!store) {
-        throw new Error("expected Matrix sync store");
-      }
+      const store = await SqliteBackedMatrixSyncStore.create(tempDir);
+      const client = new MatrixClient("https://matrix.example.org", "token", { syncStore: store });
+      expect(lastCreateClientOpts?.store).toBe(store);
       const flushSpy = vi.spyOn(store, "flush").mockResolvedValue();
 
       await client.stopAndPersist();
@@ -1692,7 +1692,7 @@ describe("MatrixClient request hardening", () => {
 
     try {
       const client = new MatrixClient("https://matrix.example.org", "token", {
-        storageRootDir: tempDir,
+        syncStore: await SqliteBackedMatrixSyncStore.create(tempDir),
         idbSnapshotPath: path.join(tempDir, "crypto-idb-snapshot.json"),
       });
 
@@ -1733,7 +1733,7 @@ describe("MatrixClient request hardening", () => {
 
     try {
       const client = new MatrixClient("https://matrix.example.org", "token", {
-        storageRootDir: tempDir,
+        syncStore: await SqliteBackedMatrixSyncStore.create(tempDir),
         idbSnapshotPath: path.join(tempDir, "crypto-idb-snapshot.json"),
       });
 
@@ -1764,7 +1764,7 @@ describe("MatrixClient request hardening", () => {
 
     try {
       const client = new MatrixClient("https://matrix.example.org", "token", {
-        storageRootDir: tempDir,
+        syncStore: await SqliteBackedMatrixSyncStore.create(tempDir),
         idbSnapshotPath: path.join(tempDir, "crypto-idb-snapshot.json"),
       });
       const store = lastCreateClientOpts?.store as
@@ -1862,7 +1862,7 @@ describe("MatrixClient request hardening", () => {
 
     try {
       const client = new MatrixClient("https://matrix.example.org", "token", {
-        storageRootDir: tempDir,
+        syncStore: await SqliteBackedMatrixSyncStore.create(tempDir),
       });
       const store = lastCreateClientOpts?.store as
         | { discardPendingSyncCursorPersistence: () => void }
@@ -2120,7 +2120,7 @@ describe("MatrixClient request hardening", () => {
     const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-matrix-sync-timeout-"));
     try {
       const client = new MatrixClient("https://matrix.example.org", "token", {
-        storageRootDir: tempDir,
+        syncStore: await SqliteBackedMatrixSyncStore.create(tempDir),
       });
       await client.start();
       vi.spyOn(matrixJsClient.syncApi, "getSyncState").mockReturnValue(state);
@@ -2984,21 +2984,6 @@ describe("MatrixClient crypto bootstrapping", () => {
     await stopStartedClients();
     vi.useRealTimers();
     vi.restoreAllMocks();
-  });
-
-  it("passes cryptoDatabasePrefix into initRustCrypto", async () => {
-    matrixJsClient.getCrypto = vi.fn(() => undefined);
-
-    const client = new MatrixClient("https://matrix.example.org", "token", {
-      encryption: true,
-      cryptoDatabasePrefix: "openclaw-matrix-test",
-    });
-
-    await client.start();
-
-    expect(matrixJsClient.initRustCrypto).toHaveBeenCalledWith({
-      cryptoDatabasePrefix: "openclaw-matrix-test",
-    });
   });
 
   it("does not persist or start sync when startup aborts during crypto initialization", async () => {

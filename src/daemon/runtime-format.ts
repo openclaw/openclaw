@@ -3,6 +3,9 @@ import { formatRuntimeStatusWithDetails } from "../infra/runtime-status.ts";
 import { getSystemdCgroupHygieneSummary, type GatewayServiceRuntime } from "./service-runtime.js";
 
 export function formatServiceLabel(label: string, runtime?: GatewayServiceRuntime): string {
+  if (runtime?.inspectionReason === "service-manager-unavailable") {
+    return "no supported service manager detected";
+  }
   return runtime?.systemd?.scope ? `systemd ${runtime.systemd.scope}` : label;
 }
 

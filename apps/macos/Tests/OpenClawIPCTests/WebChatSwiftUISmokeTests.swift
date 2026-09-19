@@ -186,7 +186,7 @@ struct WebChatSwiftUISmokeTests {
 
     @Test(arguments: [false, true])
     func `hiding retains the window and its draft while removing it from the Dock and Window menu`(
-        minimized: Bool) throws
+        minimized: Bool) async throws
     {
         let controller = WebChatSwiftUIWindowController(
             sessionKey: "main",
@@ -195,10 +195,24 @@ struct WebChatSwiftUISmokeTests {
         defer { controller.close() }
         let window = try #require(controller._testWindow)
         controller.show()
-        if minimized { window.miniaturize(nil) }
+        if minimized {
+            try await AppKitTestSupport.performWindowTransition(
+                window, notification: NSWindow.didMiniaturizeNotification)
+            {
+                window.miniaturize(nil)
+            }
+        }
         #expect(controller.isWindowOpen)
 
-        controller.hide()
+        if minimized {
+            try await AppKitTestSupport.performWindowTransition(
+                window, notification: NSWindow.didDeminiaturizeNotification)
+            {
+                controller.hide()
+            }
+        } else {
+            controller.hide()
+        }
         #expect(controller._testWindow === window)
         #expect(!controller.isWindowOpen)
         #expect(!window.isVisible)
@@ -207,6 +221,19 @@ struct WebChatSwiftUISmokeTests {
         #expect(controller._testDraft == "Keep this draft")
 
         controller.show()
+        if minimized {
+            try await AppKitTestSupport.performWindowTransition(
+                window, notification: NSWindow.didMiniaturizeNotification)
+            {
+                window.miniaturize(nil)
+            }
+            try await AppKitTestSupport.performWindowTransition(
+                window, notification: NSWindow.didDeminiaturizeNotification)
+            {
+                controller.hide()
+                controller.show()
+            }
+        }
         #expect(controller._testWindow === window)
         #expect(controller.isWindowOpen)
         #expect(!window.isExcludedFromWindowsMenu)

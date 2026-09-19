@@ -73,7 +73,7 @@ import {
 import { handleInlineActions } from "./get-reply-inline-actions.js";
 import { maybeResolveNativeSlashCommandFastReply } from "./get-reply-native-slash-fast-path.js";
 import { runPreparedReply } from "./get-reply-run.js";
-import type { InternalGetReplyOptions as BaseInternalGetReplyOptions } from "./get-reply.types.js";
+import type { InternalGetReplyOptions } from "./get-reply.types.js";
 import { finalizeInboundContext } from "./inbound-context.js";
 import {
   hasInboundAudio,
@@ -105,10 +105,6 @@ import { isStaleHeartbeatAutoFallbackOverride } from "./stored-model-override.js
 import { createTypingController } from "./typing.js";
 
 type ResetCommandAction = "new" | "reset";
-
-type RuntimeInternalGetReplyOptions = BaseInternalGetReplyOptions & {
-  extractedFileImages?: ExtractedFileImage[];
-};
 
 function classifyHeartbeatPendingFinalDelivery(text: string, ackMaxChars: number) {
   const stripped = stripHeartbeatToken(text, {
@@ -263,9 +259,9 @@ function collectStagedAttachmentPaths(ctx: MsgContext): ReadonlyMap<number, stri
 }
 
 function withExtractedFileImages(
-  opts: RuntimeInternalGetReplyOptions | undefined,
+  opts: InternalGetReplyOptions | undefined,
   extractedFileImages: ExtractedFileImage[] | undefined,
-): RuntimeInternalGetReplyOptions | undefined {
+): InternalGetReplyOptions | undefined {
   if (!extractedFileImages || extractedFileImages.length === 0) {
     return opts;
   }
@@ -408,9 +404,7 @@ export async function getReplyFromConfig(
   );
   const optsWithSkillFilter =
     mergedSkillFilter !== undefined ? { ...opts, skillFilter: mergedSkillFilter } : opts;
-  const internalOptsWithSkillFilter = optsWithSkillFilter as
-    | RuntimeInternalGetReplyOptions
-    | undefined;
+  const internalOptsWithSkillFilter = optsWithSkillFilter as InternalGetReplyOptions | undefined;
   let extractedFileImages: ExtractedFileImage[] | undefined;
   let enableLocalPathSelfServe: ApplyMediaUnderstandingResult["enableLocalPathSelfServe"];
   const agentCfg = cfg.agents?.defaults;
@@ -747,8 +741,7 @@ export async function getReplyFromConfig(
   // session first, then keep it completely outside model-locked native runs.
   const admittedSessionSettings =
     // SAFETY: Gateway dispatch owns this internal extension and forwards the same options object here.
-    (optsWithCommandQueueOverride as RuntimeInternalGetReplyOptions | undefined)
-      ?.admittedSessionSettings;
+    (optsWithCommandQueueOverride as InternalGetReplyOptions | undefined)?.admittedSessionSettings;
   const turnToolOverrides = admittedSessionSettings
     ? admittedSessionSettings.toolOverrides
     : sessionEntry.toolOverrides;
@@ -762,7 +755,7 @@ export async function getReplyFromConfig(
     opts: optsWithSessionSkillOverrides,
     disabled: sessionModelSelectionLocked,
   });
-  const internalResolvedOpts = resolvedOpts as RuntimeInternalGetReplyOptions | undefined;
+  const internalResolvedOpts = resolvedOpts as InternalGetReplyOptions | undefined;
   let { abortedLastRun } = sessionState;
   resolverTimingSessionKey = sessionKey ?? resolverTimingSessionKey;
   internalResolvedOpts?.onSessionPrepared?.({
@@ -987,7 +980,6 @@ export async function getReplyFromConfig(
     return directiveResult.reply;
   }
   const {
-    commandSource,
     command,
     allowTextCommands,
     skillCommands,
@@ -995,14 +987,8 @@ export async function getReplyFromConfig(
     elevatedAllowed,
     elevatedFailures,
     defaultActivation,
-    resolvedFastMode,
-    resolvedFastModeAutoOnSeconds,
-    resolvedFastModeOverride,
-    resolvedFastModeAutoOnSecondsOverride,
     resolvedVerboseLevel,
     resolvedElevatedLevel,
-    execOverrides,
-    blockStreamingEnabled,
     blockReplyChunking,
     resolvedBlockStreamingBreak,
     provider: resolvedProvider,
@@ -1013,8 +999,6 @@ export async function getReplyFromConfig(
     contextTokens,
     inlineStatusRequested,
     directiveAck,
-    perMessageQueueMode,
-    perMessageQueueOptions,
   } = directiveResult.result;
   let { directives, cleanedBody } = directiveResult.result;
   provider = resolvedProvider;
@@ -1253,6 +1237,7 @@ export async function getReplyFromConfig(
   logResolverTiming("milestone", "before_run_prepared_reply");
   const replyResult = await traceGetReplyPhase("reply.run_prepared_reply", () =>
     runPreparedReply({
+      ...directiveResult.result,
       ctx,
       sessionCtx,
       conversation,
@@ -1262,25 +1247,9 @@ export async function getReplyFromConfig(
       agentCfg,
       sessionCfg,
       commandAuthorized,
-      command,
-      commandSource,
-      allowTextCommands,
       directives,
-      defaultActivation,
       resolvedThinkLevel,
-      resolvedFastMode,
-      resolvedFastModeAutoOnSeconds,
-      resolvedFastModeOverride,
-      resolvedFastModeAutoOnSecondsOverride,
-      resolvedVerboseLevel,
       resolvedReasoningLevel,
-      resolvedElevatedLevel,
-      execOverrides,
-      elevatedEnabled,
-      elevatedAllowed,
-      blockStreamingEnabled,
-      blockReplyChunking,
-      resolvedBlockStreamingBreak,
       modelState: runModelState,
       provider: runProvider,
       model: runModel,
@@ -1292,8 +1261,6 @@ export async function getReplyFromConfig(
       requestedRouteResolution: runAutoFallbackPrimaryProbe
         ? runModelState.requestedRouteResolution
         : requestedRouteResolution,
-      perMessageQueueMode,
-      perMessageQueueOptions,
       typing,
       opts: queueModeOverride ? { ...preparedReplyOpts, queueModeOverride } : preparedReplyOpts,
       defaultModel,

@@ -226,11 +226,11 @@ describe("WorktreesPage lifecycle", () => {
     const link = [...page.querySelectorAll("a")].find((anchor) =>
       anchor.getAttribute("href")?.includes("12345678"),
     );
-    expect(link?.getAttribute("href")).toBe("/chat/main/12345678");
+    expect(link?.getAttribute("href")).toBe("/chat/main/1234567890abcdef1234567890abcdef");
     link?.dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
 
     expect(context.navigate).toHaveBeenCalledWith("chat", {
-      pathname: "/chat/main/12345678",
+      pathname: "/chat/main/1234567890abcdef1234567890abcdef",
       search: `?${SESSION_FACE_PREFERENCE_PARAM}=1`,
     });
   });

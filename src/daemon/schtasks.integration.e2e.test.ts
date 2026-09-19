@@ -4,8 +4,13 @@ import { createServer, type AddressInfo } from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { PassThrough } from "node:stream";
-import { describe, expect, it } from "vitest";
-import { closeOpenClawStateDatabaseByPath } from "../state/openclaw-state-db-cache.js";
+import { fileURLToPath } from "node:url";
+import { afterEach, describe, expect, it } from "vitest";
+import { findVitestResourceOwner } from "../../scripts/lib/vitest-resource-ownership.mts";
+import { nativeSchtasksIntegrationEnabled } from "../../scripts/lib/vitest-worker-declarations.mts";
+import { createFixtureLifetime } from "../../test/helpers/fixture-lifetime.js";
+import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
+import { closeOpenClawStateDatabaseByPathAsync } from "../state/openclaw-state-db-cache.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { resolveGatewayWindowsTaskName } from "./constants.js";
@@ -25,6 +30,8 @@ import {
   sanitizeVerboseQuery,
   TASK_LOGON_INTERACTIVE_TOKEN,
   TASK_RUNLEVEL_LEAST_PRIVILEGE,
+  waitForCompletedScheduledTaskRun,
+  waitForRuntimeStatus,
   type ScheduledTaskPrincipal,
   type WindowsProcessDiagnostic,
 } from "./schtasks.integration-observation.test-support.js";
@@ -46,7 +53,6 @@ import {
   waitForProcessExit,
   writeGatewayTaskSupervisorProbe,
 } from "./schtasks.task-supervisor.native-test-support.js";
-import type { GatewayServiceRuntime } from "./service-runtime.js";
 import type { GatewayServiceEnv } from "./service-types.js";
 import { resolveGatewayService } from "./service.js";
 
@@ -79,32 +85,6 @@ async function sleep(delayMs = WAIT_INTERVAL_MS): Promise<void> {
   await new Promise((resolve) => {
     setTimeout(resolve, delayMs);
   });
-}
-
-async function waitForRuntimeStatus(
-  readRuntime: () => Promise<GatewayServiceRuntime>,
-  expected: "running" | "stopped",
-  expectedPid?: number,
-): Promise<void> {
-  const deadline = Date.now() + WAIT_TIMEOUT_MS;
-  let lastStatus = "unknown";
-  let lastDetail = "";
-  let lastPid: number | undefined;
-  while (Date.now() < deadline) {
-    const runtime = await readRuntime();
-    lastStatus = runtime.status ?? "unknown";
-    lastDetail = runtime.detail ?? "";
-    lastPid = runtime.pid;
-    if (runtime.status === expected && (expectedPid === undefined || runtime.pid === expectedPid)) {
-      return;
-    }
-    await sleep();
-  }
-  throw new Error(
-    `Timed out waiting for Scheduled Task status=${expected}${
-      expectedPid === undefined ? "" : ` pid=${expectedPid}`
-    }; observed ${lastStatus}${lastPid === undefined ? "" : ` pid=${lastPid}`}: ${lastDetail}`,
-  );
 }
 
 async function reserveLoopbackPort(): Promise<number> {
@@ -144,38 +124,6 @@ async function waitForLoopbackPortRelease(port: number): Promise<void> {
     await sleep();
   }
   throw new Error(`Timed out waiting for Scheduled Task loopback port ${port} to be reusable`);
-}
-
-async function waitForCompletedScheduledTaskRun(
-  taskName: string,
-  exitCode: number,
-): Promise<ScheduledTaskPrincipal> {
-  const deadline = Date.now() + WAIT_TIMEOUT_MS;
-  let lastPrincipal: ScheduledTaskPrincipal | null = null;
-  let lastError: unknown;
-  while (Date.now() < deadline) {
-    try {
-      lastPrincipal = readTaskPrincipal(taskName);
-      if (
-        lastPrincipal.taskState === TASK_STATE_READY &&
-        lastPrincipal.lastTaskResult === exitCode &&
-        !Number.isNaN(Date.parse(lastPrincipal.lastRunTime)) &&
-        Date.parse(lastPrincipal.lastRunTime) > 0
-      ) {
-        return lastPrincipal;
-      }
-    } catch (error) {
-      lastError = error;
-    }
-    await sleep();
-  }
-  throw new Error(
-    `Timed out waiting for Scheduled Task ${taskName} to finish with exit ${exitCode}; ${
-      lastPrincipal
-        ? `observed state=${lastPrincipal.taskState} result=${lastPrincipal.lastTaskResult}`
-        : `last inspection failed: ${lastError instanceof Error ? lastError.message : String(lastError)}`
-    }`,
-  );
 }
 
 async function readTaskDefinitionSnapshot(taskName: string): Promise<TaskDefinitionSnapshot> {
@@ -403,11 +351,21 @@ async function cleanupNativeTask(params: {
       ),
     );
   }
+  const remaining = readRelatedProcessDiagnostics([
+    params.scriptPath,
+    params.probePath,
+    params.eventsPath,
+  ]);
+  if (!remaining.ok || remaining.truncated) {
+    cleanupErrors.push(new Error("Could not verify Scheduled Task process cleanup"));
+  } else if (remaining.processes.length > 0) {
+    cleanupErrors.push(new Error("Scheduled Task cleanup left related processes alive"));
+  }
   try {
     // Service guards observe config in this test process. Native child exit does
     // not close that parent-held database; release only this fixture before unlink.
     const databasePath = resolveOpenClawStateSqlitePath({ OPENCLAW_STATE_DIR: params.stateDir });
-    const cachedStateHandleClosed = closeOpenClawStateDatabaseByPath(databasePath);
+    const cachedStateHandleClosed = await closeOpenClawStateDatabaseByPathAsync(databasePath);
     console.log(`[windows-schtasks-cleanup] ${JSON.stringify({ cachedStateHandleClosed })}`);
   } catch (error) {
     cleanupErrors.push(error);
@@ -527,11 +485,18 @@ describe("schtasks Windows integration principal assertion", () => {
   });
 });
 
-const nativeIntegrationEnabled =
-  process.platform === "win32" && process.env.CI_WINDOWS_SCHTASKS_INTEGRATION === "1";
+const nativeEntrypoints = nativeSchtasksIntegrationEnabled
+  ? (await import("./schtasks-native-entrypoints.test-support.js")).schtasksNativeEntrypoints
+  : undefined;
 
-describe.runIf(nativeIntegrationEnabled)("schtasks Windows integration", () => {
-  it("isolates and completes the native Scheduled Task lifecycle", async () => {
+describe.runIf(nativeSchtasksIntegrationEnabled)("schtasks Windows integration", () => {
+  let nativeLifetime: ReturnType<typeof createFixtureLifetime> | undefined;
+  afterEach(() => nativeLifetime?.cleanup());
+
+  async function runNativeLifecycle(
+    moduleUrls: { taskSupervisor: URL; hostedStop: URL; startupFallback: URL },
+    lifetime: ReturnType<typeof createFixtureLifetime>,
+  ): Promise<void> {
     const id = resolveTestId();
     const configuredRoot = process.env.CI_WINDOWS_SCHTASKS_ROOT?.trim();
     const rootDir = await createIntegrationRoot(configuredRoot, id);
@@ -569,9 +534,13 @@ describe.runIf(nativeIntegrationEnabled)("schtasks Windows integration", () => {
     const scriptPath = resolveTaskScriptPath(env);
     const launcherPath = resolveTaskLauncherScriptPath(env, scriptPath);
 
-    // Source workers resolve tsx from the task cwd; give the isolated fixture its dependencies.
-    await fs.symlink(path.resolve("node_modules"), path.join(rootDir, "node_modules"), "junction");
-    await writeGatewayTaskSupervisorProbe({ activePidPath, eventsPath, probe });
+    await writeGatewayTaskSupervisorProbe({
+      activePidPath,
+      eventsPath,
+      moduleUrls,
+      probe,
+      stateDir,
+    });
 
     let testFailed = false;
     let testError: unknown;
@@ -592,17 +561,20 @@ describe.runIf(nativeIntegrationEnabled)("schtasks Windows integration", () => {
         OPENCLAW_STATE_DIR: stateDir,
         OPENCLAW_CONFIG_PATH: path.join(stateDir, "openclaw.json"),
         OPENCLAW_GATEWAY_PORT: String(gatewayPort),
+        OPENCLAW_WINDOWS_TASK_NAME: taskName,
         OPENCLAW_SERVICE_KIND: "gateway",
         OPENCLAW_SERVICE_MARKER: "openclaw",
-        // Source aliases belong to the checkout, even when the task runs outside it.
-        TSX_TSCONFIG_PATH: path.resolve("tsconfig.json"),
       },
     };
     try {
       await fs.mkdir(stateDir);
       await fs.writeFile(path.join(stateDir, "openclaw.json"), "{}\n");
       pendingProof = await withEnvAsync(env, async () => {
-        const startupFallbackProof = await proof.proveNativeStartupFallbackLaunch({ env, rootDir });
+        const startupFallbackProof = await proof.proveNativeStartupFallbackLaunch({
+          env,
+          rootDir,
+          runtimeModuleUrl: moduleUrls.startupFallback,
+        });
         const defaultTaskBefore = await readTaskDefinitionSnapshot("OpenClaw Gateway");
         const service = resolveGatewayService();
         const readRuntime = () => service.readRuntime(env);
@@ -646,6 +618,7 @@ describe.runIf(nativeIntegrationEnabled)("schtasks Windows integration", () => {
         expect(command?.programArguments).toEqual(programArguments);
         expect(command?.environment?.OPENCLAW_GATEWAY_PORT).toBe(String(gatewayPort));
         expect(command?.environment?.OPENCLAW_SERVICE_KIND).toBe("gateway");
+        expect(command?.environment?.OPENCLAW_WINDOWS_TASK_NAME).toBe(taskName);
         // An executed exit 23 need not trigger Scheduler retry. Request recovery only
         // after failure cleanup; IgnoreNew prevents overlap if Scheduler also retries.
         const recoveryMutations: string[] = [];
@@ -744,7 +717,6 @@ describe.runIf(nativeIntegrationEnabled)("schtasks Windows integration", () => {
         const startedRun = await proof.waitForExactProbeRun(eventsPath, 3);
         const startedPid = startedRun.pid;
         const startedProcesses = await waitForGatewayTaskSupervisorProcesses({ probe });
-        expect(lifecyclePids).not.toContain(startedPid);
         expectProbeProcessAlive(startedPid);
         expectProbeProcessAlive(startedProcesses.childPid);
         expectGatewayTaskSupervisorProcessAlive(startedProcesses.supervisorPid, probe.probePath);
@@ -773,7 +745,6 @@ describe.runIf(nativeIntegrationEnabled)("schtasks Windows integration", () => {
         const restartedPid = restartedRun.pid;
         const restartedProcesses = await waitForGatewayTaskSupervisorProcesses({ probe });
         lifecyclePids.push(startedPid, restartedPid);
-        expect(new Set(lifecyclePids).size).toBe(lifecyclePids.length);
         expectProbeProcessAlive(restartedPid);
         expectProbeProcessAlive(restartedProcesses.childPid);
         expectGatewayTaskSupervisorProcessAlive(restartedProcesses.supervisorPid, probe.probePath);
@@ -804,7 +775,6 @@ describe.runIf(nativeIntegrationEnabled)("schtasks Windows integration", () => {
         const hostedRestartPid = hostedRestart.gatewayPid;
         const hostedRestartProcesses = hostedRestart.processes;
         lifecyclePids.push(hostedRestartPid);
-        expect(new Set(lifecyclePids).size).toBe(lifecyclePids.length);
         await waitForRuntimeStatus(readRuntime, "running", hostedRestartPid);
         expect(readTaskPrincipal(taskName).taskState).toBe(TASK_STATE_RUNNING);
 
@@ -857,6 +827,7 @@ describe.runIf(nativeIntegrationEnabled)("schtasks Windows integration", () => {
           (candidate) => candidate.phase === "bounded-environment",
         )) {
           expect(event.keys?.length).toBeGreaterThan(0);
+          expect(event.keys).toContain("OPENCLAW_WINDOWS_TASK_NAME");
           expect(
             event.keys?.some((key) =>
               /TOKEN|SECRET|PASSWORD|CREDENTIAL|(^|_)(KEY|KEYS)$|ACTIONS_|GITHUB_|AZURE_|AWS_/u.test(
@@ -932,7 +903,6 @@ describe.runIf(nativeIntegrationEnabled)("schtasks Windows integration", () => {
           waitForLoopbackPortRelease,
         });
         lifecyclePids.push(startupFallbackControlProof.gatewayPid);
-        expect(new Set(lifecyclePids).size).toBe(lifecyclePids.length);
         const proofPath = process.env.CI_WINDOWS_SCHTASKS_PROOF_PATH?.trim();
         if (proofPath) {
           const proofHead = process.env.CI_WINDOWS_SCHTASKS_HEAD?.trim();
@@ -999,28 +969,25 @@ describe.runIf(nativeIntegrationEnabled)("schtasks Windows integration", () => {
       testError = error;
     }
 
-    let cleanupFailed = false;
-    let cleanupError: unknown;
     try {
-      await cleanupNativeTask({
-        activePidPath,
-        eventsPath,
-        preserveEvidence: testFailed,
-        probePath: probe.probePath,
-        rootDir,
-        scriptPath,
-        serviceOutput,
-        stateDir,
-        taskName,
-      });
-    } catch (error) {
-      cleanupFailed = true;
-      cleanupError = error;
-    }
-    if (cleanupFailed) {
+      await lifetime.verifyCleanup(() =>
+        cleanupNativeTask({
+          activePidPath,
+          eventsPath,
+          preserveEvidence: testFailed,
+          probePath: probe.probePath,
+          rootDir,
+          scriptPath,
+          serviceOutput,
+          stateDir,
+          taskName,
+        }),
+      );
+    } catch (cleanupError) {
       throw new AggregateError(
         testFailed ? [testError, cleanupError] : [cleanupError],
         "Native Scheduled Task cleanup failed",
+        { cause: cleanupError },
       );
     }
     if (testFailed) {
@@ -1031,5 +998,28 @@ describe.runIf(nativeIntegrationEnabled)("schtasks Windows integration", () => {
       await fs.mkdir(path.dirname(pendingProof.path), { recursive: true });
       await fs.writeFile(pendingProof.path, pendingProof.content, "utf8");
     }
+  }
+
+  it("isolates and completes the native Scheduled Task lifecycle", () => {
+    if (!nativeEntrypoints) {
+      throw new Error("Native Scheduled Task integration requires compiled subprocess entrypoints");
+    }
+    const moduleUrls = {
+      taskSupervisor: resolveRuntimeWorkerUrl(nativeEntrypoints.taskSupervisor),
+      hostedStop: resolveRuntimeWorkerUrl(nativeEntrypoints.hostedStop),
+      startupFallback: resolveRuntimeWorkerUrl(nativeEntrypoints.startupFallback),
+    };
+    if (Object.values(moduleUrls).some((url) => !url.pathname.endsWith(".js"))) {
+      throw new Error("Run native Scheduled Task integration through scripts/run-vitest.mjs");
+    }
+    const generationOwner = findVitestResourceOwner(
+      fileURLToPath(new URL(".", moduleUrls.taskSupervisor)),
+    );
+    if (!generationOwner) {
+      throw new Error("Native Scheduled Task compiled generation has no resource owner");
+    }
+    const lifetime = createFixtureLifetime(generationOwner.root);
+    nativeLifetime = lifetime;
+    return lifetime.run(() => runNativeLifecycle(moduleUrls, lifetime));
   }, 240_000);
 });

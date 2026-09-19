@@ -8,7 +8,11 @@ import { resolveSessionAgentId } from "../../agents/agent-scope.js";
 import type { ModelCatalogEntry } from "../../agents/model-catalog.js";
 import { splitTrailingAuthProfile } from "../../agents/model-ref-profile.js";
 import { preparePublishedModelRuntimeChoice } from "../../agents/model-runtime-choice.js";
-import { resolveAllowedModelRef } from "../../agents/model-selection.js";
+import {
+  getModelRefStatus,
+  resolveAllowedModelRef,
+  type ModelRef,
+} from "../../agents/model-selection.js";
 import { resolveSessionModelRef } from "../../agents/session-model-ref.js";
 import { persistStickyModelSelectionBestEffort } from "../../agents/sticky-model-selection.js";
 import { resolveEffectiveAgentRuntime } from "../../agents/thinking-runtime.js";
@@ -97,17 +101,41 @@ export function resolveSessionPatchModelSelection(params: {
   defaultProvider: string;
   defaultModel: string;
   subagentModelHint?: string;
+  preparedModelSelection?: ModelRef;
 }):
   | { ok: true; provider: string; model: string; profile?: string; isDefault: boolean }
   | { ok: false; error: string } {
   const { model: modelWithoutProfile, profile } = splitTrailingAuthProfile(params.raw);
+  if (params.preparedModelSelection) {
+    const ref = params.preparedModelSelection;
+    if (modelWithoutProfile !== `${ref.provider}/${ref.model}`) {
+      return { ok: false, error: "Resolved spawn model does not match the requested model." };
+    }
+    const status = getModelRefStatus({
+      cfg: params.cfg,
+      agentId: params.agentId,
+      catalog: params.catalog,
+      ref,
+      defaultProvider: params.defaultProvider,
+      defaultModel: params.subagentModelHint ?? {
+        provider: params.defaultProvider,
+        model: params.defaultModel,
+      },
+    });
+    return status.allowed
+      ? { ok: true, ...ref, ...(profile ? { profile } : {}), isDefault: false }
+      : { ok: false, error: `model not allowed: ${status.key}` };
+  }
   const resolved = resolveAllowedModelRef({
     cfg: params.cfg,
     agentId: params.agentId,
     catalog: params.catalog,
     raw: modelWithoutProfile,
     defaultProvider: params.defaultProvider,
-    defaultModel: params.subagentModelHint ?? params.defaultModel,
+    defaultModel: params.subagentModelHint ?? {
+      provider: params.defaultProvider,
+      model: params.defaultModel,
+    },
   });
   if ("error" in resolved) {
     return { ok: false, error: resolved.error };

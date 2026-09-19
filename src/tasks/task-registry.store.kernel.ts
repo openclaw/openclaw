@@ -12,6 +12,7 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
   prepareSqliteQuerySync,
+  sqliteStringSet,
 } from "../infra/kysely-sync.js";
 import { assertSqliteTableIntegrity } from "../infra/sqlite-integrity.js";
 import { coerceRequiredSqliteNumber, normalizeSqliteNumber } from "../infra/sqlite-number.js";
@@ -19,6 +20,8 @@ import { runSqliteDeferredTransactionSync } from "../infra/sqlite-transaction.js
 import { ensureTaskExecutionOwnerSchema } from "../state/openclaw-state-db-schema-additive.js";
 import { tableExists, tableHasColumns } from "../state/openclaw-state-db-schema-helpers.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
+import { filterCurrentTaskRunBackings } from "./task-backing-records.js";
+import { readTaskFlowViewRecordInDatabase } from "./task-flow-registry.store.kernel.js";
 import {
   compareTasksForRunIdLookup,
   getTaskRelatedSessionIndexKeys,
@@ -495,7 +498,18 @@ export function findTaskRecordByRunIdForViewInDatabase(
   const read = (queries.viewRunId ??= prepareSqliteQuerySync<string, TaskRegistryRow>(
     db,
     (parameter) =>
-      taskViewQuery(db)
+      getTaskRegistryKysely(db)
+        .selectFrom("task_runs")
+        .select(TASK_VIEW_SELECT_COLUMNS)
+        .select((expression) =>
+          expression
+            .case()
+            .when("runtime", "=", "acp")
+            .then(expression.ref("detail_json"))
+            .else(null)
+            .end()
+            .as("detail_json"),
+        )
         .where(
           "run_id",
           "=",
@@ -503,8 +517,17 @@ export function findTaskRecordByRunIdForViewInDatabase(
         )
         .orderBy("task_id", "asc"),
   ));
-  const records = read(runId).rows.map(rowToTaskRecord);
-  return records.toSorted(compareTasksForRunIdLookup)[0];
+  const records = filterCurrentTaskRunBackings(
+    read(runId).rows.map(rowToTaskRecord),
+    (flowId) => readTaskFlowViewRecordInDatabase(db, flowId)?.syncMode === "task_mirrored",
+  );
+  const selected = records.toSorted(compareTasksForRunIdLookup)[0];
+  if (!selected) {
+    return undefined;
+  }
+  // Backing markers are selection inputs, never part of the public task view.
+  const { detail: _detail, ...view } = selected;
+  return view;
 }
 
 function selectTaskDeliveryStateRows(db: DatabaseSync): TaskDeliveryStateRow[] {
@@ -607,7 +630,7 @@ export function readTaskRegistryMutationSnapshotInDatabase(
       kysely
         .selectFrom("task_delivery_state")
         .select(TASK_DELIVERY_STATE_SELECT_COLUMNS)
-        .where("task_id", "in", selected.select("task_id"))
+        .where("task_id", "in", sqliteStringSet(taskRows.map((row) => row.task_id)))
         .orderBy("task_id", "asc"),
     ).rows;
     return {

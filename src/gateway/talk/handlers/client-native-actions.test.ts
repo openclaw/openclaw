@@ -1,7 +1,7 @@
 import { setImmediate as nextEventLoopTurn } from "node:timers/promises";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { createAssistantMessageEventStream } from "openclaw/plugin-sdk/llm";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 import { extractText } from "../../../../ui/src/lib/chat/message-extract.ts";
 import * as admission from "../../../agents/admitted-run-context.js";
 import {
@@ -9,6 +9,7 @@ import {
   ACTIVE_EMBEDDED_RUNS,
   ACTIVE_EMBEDDED_RUNS_BY_RUN_ID,
 } from "../../../agents/embedded-agent-runner/run-state.js";
+import * as embeddedRuns from "../../../agents/embedded-agent-runner/runs.js";
 import { guardSessionManager } from "../../../agents/session-tool-result-guard-wrapper.js";
 import {
   createAssistant,
@@ -38,6 +39,7 @@ import {
 } from "../../../talk/client-voice-session.js";
 import { projectChatDisplayMessages } from "../../chat-display-projection.js";
 import { createTranscriptUpdateBroadcastHandler } from "../../server-session-events.js";
+import { createSessionRowProjection } from "../../session-row-projection.js";
 import { readSessionPreviewItemsFromTranscript } from "../../session-transcript-preview.js";
 import { readSessionMessagesAsync } from "../../session-transcript-readers.js";
 import { closeTalkClientGatewayControlSession } from "../client-gateway-control.js";
@@ -182,9 +184,13 @@ describe("native Talk action ownership through public plugin registration", () =
         sessionKey: SESSION_KEY,
         storePath: resolveOpenClawAgentSqlitePath({ agentId: AGENT_ID }),
       };
+      const rowProjection = await createSessionRowProjection({
+        cfg: { agents: { entries: { [AGENT_ID]: {} } } },
+      });
       const publications: Promise<void>[] = [];
       const published = vi.fn();
       const publish = createTranscriptUpdateBroadcastHandler({
+        getSessionRowProjection: () => rowProjection,
         broadcastToConnIds: published,
         sessionEventSubscribers: { getAll: () => new Set([CONNECTION_ID]) },
         sessionMessageSubscribers: { get: () => new Set([CONNECTION_ID]) },
@@ -329,6 +335,7 @@ describe("native Talk action ownership through public plugin registration", () =
         await modelRun;
         await Promise.all(publications);
         unsubscribe();
+        rowProjection.dispose();
       }
     });
   });
@@ -388,6 +395,38 @@ describe("native Talk action ownership through public plugin registration", () =
       );
     });
   });
+
+  it(
+    "releases the provider when registration readiness never publishes",
+    { timeout: 10_000 },
+    async () => {
+      const { session } = await createTestSession();
+      const providerStream = createAssistantMessageEventStream();
+      const answer = createAssistant(testModel, [{ type: "text", text: "Task finished." }]);
+      const finish = vi.fn(() => {
+        providerStream.push({ type: "done", reason: "stop", message: answer });
+        providerStream.end();
+      });
+      // Keep the deliberately broken pre-fix fixture from leaking after this test times out.
+      onTestFinished(finish);
+      streamMocks.streamSimple.mockImplementation(() => providerStream);
+      const publish = vi.spyOn(embeddedRuns, "setActiveEmbeddedRun").mockImplementation(() => {});
+      const assertions = vi.fn(async () => {});
+
+      await expect(
+        withParkedNativeTask(assertions, "Keep working until I cancel.", session, finish),
+      ).rejects.toThrow(/registration readiness not observed within 1000 ms; last phase: \S/);
+      expect(assertions).not.toHaveBeenCalled();
+      expect(finish).toHaveBeenCalledOnce();
+      expect(publish).toHaveBeenCalledOnce();
+      expect(streamMocks.streamSimple).toHaveBeenCalledOnce();
+      expect(await providerStream.result()).toBe(answer);
+      expect(session.isStreaming).toBe(false);
+      expect(ACTIVE_EMBEDDED_RUNS.has(SESSION_ID)).toBe(false);
+      const runId = upstream.runEmbeddedAgent.mock.calls[0]![0].runId;
+      expect(ACTIVE_EMBEDDED_RUNS_BY_RUN_ID.has(runId)).toBe(false);
+    },
+  );
 
   it.each([
     ["open", "open"],
@@ -497,13 +536,15 @@ describe("native Talk action ownership through public plugin registration", () =
             expect.soft(session.getSteeringMessages()).toEqual(transition === "open" ? [text] : []);
             expect(session.agent.hasQueuedMessages()).toBe(transition === "open");
           } finally {
-            providerStream.push({ type: "done", reason: "stop", message: answer });
-            providerStream.end();
             await closing;
           }
         },
         "Keep working until I cancel.",
         session,
+        () => {
+          providerStream.push({ type: "done", reason: "stop", message: answer });
+          providerStream.end();
+        },
       );
     },
   );

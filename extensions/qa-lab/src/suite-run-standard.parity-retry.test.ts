@@ -20,6 +20,9 @@ import type { runQaFlowSuiteCleanupPlan } from "./suite.js";
 import { createTempDirHarness } from "./temp-dir.test-helper.js";
 
 const mocks = vi.hoisted(() => ({
+  captureTransportArtifacts: vi.fn(async () => ({
+    artifacts: [{ kind: "channel-driver-smoke" as const, path: "readiness.json" }],
+  })),
   captureRuntimeParityCell: vi.fn(async (params: { runtime: "codex"; wallClockMs: number }) => ({
     runtime: params.runtime,
     transcriptBytes: "",
@@ -38,6 +41,7 @@ const mocks = vi.hoisted(() => ({
     wallClockMs: params.wallClockMs,
     bootStateLines: [],
   })),
+  createRuntimePreloads: vi.fn(() => ["file:///qa-transport-preload.mjs"]),
   startQaGatewayChild: vi.fn(async (_params: unknown) => ({
     baseUrl: "http://127.0.0.1:18789",
     token: "qa-test-token",
@@ -89,7 +93,11 @@ vi.mock("./suite.js", async (importOriginal) => ({
   buildQaSuiteRuntimeMetrics: vi.fn(() => ({ wallMs: 1 })),
   captureGatewayHeapSnapshotCheckpoint: vi.fn(async () => undefined),
   createQaSuiteTransportAdapter: vi.fn(async () => ({
-    adapter: { id: "qa-channel" },
+    adapter: {
+      id: "qa-channel",
+      captureArtifacts: mocks.captureTransportArtifacts,
+      createRuntimePreloads: mocks.createRuntimePreloads,
+    },
     cleanupBeforeGatewayStop: vi.fn(async () => {}),
     cleanupAfterGatewayStop: vi.fn(async () => {}),
   })),
@@ -231,8 +239,12 @@ describe("QA suite Control UI ownership", () => {
     );
 
     expect(mocks.startQaGatewayChild).toHaveBeenCalledWith(
-      expect.objectContaining({ controlUiEnabled: testCase.enabled }),
+      expect.objectContaining({
+        controlUiEnabled: testCase.enabled,
+        runtimePreloads: ["file:///qa-transport-preload.mjs"],
+      }),
     );
+    expect(mocks.createRuntimePreloads).toHaveBeenCalledOnce();
     if (testCase.enabled) {
       expect(lab.setControlUi).toHaveBeenCalledWith({
         controlUiProxyTarget: "http://127.0.0.1:18789",
@@ -574,6 +586,17 @@ describe("QA runtime parity scenario retry isolation", () => {
         ),
       });
       expect(runScenario).toHaveBeenCalledTimes(finishedCount);
+      expect(mocks.captureTransportArtifacts).toHaveBeenCalledOnce();
+      expect(mocks.captureTransportArtifacts.mock.invocationCallOrder[0]).toBeLessThan(
+        mocks.runQaFlowSuiteCleanupPlan.mock.invocationCallOrder[0]!,
+      );
+      expect(mocks.writeQaSuiteArtifacts).toHaveBeenCalledWith(
+        expect.objectContaining({
+          transportArtifacts: {
+            artifacts: [{ kind: "channel-driver-smoke", path: "readiness.json" }],
+          },
+        }),
+      );
       expect(mocks.writeQaSuiteArtifacts.mock.invocationCallOrder[0]).toBeLessThan(
         vi.mocked(lab.setLatestReport).mock.invocationCallOrder[0]!,
       );

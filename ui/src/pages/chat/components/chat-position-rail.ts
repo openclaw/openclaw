@@ -13,6 +13,7 @@ import { normalizeMessage } from "../../../lib/chat/message-normalizer.ts";
 import { captureChatSessionScrollPosition, type ChatSessionScrollPosition } from "../scroll.ts";
 import { renderChatAuthorAvatar } from "./chat-author-avatar.ts";
 import type { ChatPositionIndex } from "./chat-position-projection.ts";
+import { subscribeTranscriptScroll } from "./chat-transcript-scroll-events.ts";
 import type { ChatTranscriptSession } from "./chat-transcript-session.ts";
 
 const PREVIEW_LENGTH = 140;
@@ -47,6 +48,7 @@ class ChatPositionRailDirective extends AsyncDirective {
   private transcriptElement: HTMLElement | undefined;
   private intersectionObserver: IntersectionObserver | undefined;
   private mutationObserver: MutationObserver | undefined;
+  private stopTranscriptScroll: (() => void) | undefined;
   private readonly observedMessages = new Map<
     Element,
     { id: string; messageId: string; visible: boolean }
@@ -91,6 +93,8 @@ class ChatPositionRailDirective extends AsyncDirective {
   }
 
   private disconnectVisibility() {
+    this.stopTranscriptScroll?.();
+    this.stopTranscriptScroll = undefined;
     this.intersectionObserver?.disconnect();
     this.mutationObserver?.disconnect();
     this.intersectionObserver = undefined;
@@ -118,11 +122,16 @@ class ChatPositionRailDirective extends AsyncDirective {
     if (root !== this.transcriptElement) {
       this.disconnectVisibility();
       this.transcriptElement = root;
-      // The composer covers this part of the scrollport; it is not visible text.
-      const underlap =
-        Number.parseFloat(
-          getComputedStyle(root).getPropertyValue("--chat-transcript-composer-underlap"),
-        ) || 0;
+      this.stopTranscriptScroll = subscribeTranscriptScroll(root, (observation) => {
+        if (observation.type === "input") {
+          if (this.followingResize) {
+            this.followActive = true;
+            this.scheduleLayout();
+          }
+          this.followingResize = false;
+          this.resizeScrollTarget = undefined;
+        }
+      });
       // Publish the first visible pixel after an initially zero-area edge touch.
       this.intersectionObserver = new IntersectionObserver(
         (entries, observer) => {
@@ -137,7 +146,7 @@ class ChatPositionRailDirective extends AsyncDirective {
           }
           this.syncVisibleMarks();
         },
-        { root, rootMargin: `0px 0px -${underlap}px 0px`, threshold: [0, Number.EPSILON, 1] },
+        { root, threshold: [0, Number.EPSILON, 1] },
       );
       // Virtualization replaces message nodes without replacing the rail.
       // Streaming descendants keep the same observed bubble targets.
@@ -220,10 +229,15 @@ class ChatPositionRailDirective extends AsyncDirective {
       };
       const previous = this.readerViewport;
       if (previous && viewport.height !== previous.height) {
-        // The transcript can publish intersections before its resize scroll compensation.
-        // Neither update is a request to navigate the rail.
+        // Intersections can precede resize compensation. Preserve the reader's
+        // rail offset while keeping any keyboard-focused marker in view.
         this.followingResize = true;
-        this.followActive = false;
+        this.followActive =
+          this.markerElements.get(this.interaction.focusedId ?? "")?.matches(":focus-visible") ??
+          false;
+        if (this.followActive) {
+          this.scheduleLayout();
+        }
         const atEnd = this.resizeScrollTarget?.atEnd ?? previous.anchorToEnd;
         const maxOffset = Math.max(0, root.scrollHeight - viewport.height);
         this.resizeScrollTarget = {
@@ -231,17 +245,22 @@ class ChatPositionRailDirective extends AsyncDirective {
           atEnd,
         };
       } else if (previous && viewport.scrollTop !== previous.scrollTop) {
-        if (
-          !this.resizeScrollTarget ||
-          Math.abs(viewport.scrollTop - this.resizeScrollTarget.offset) > 1
-        ) {
+        const target = this.resizeScrollTarget?.offset;
+        // Smooth resize compensation crosses intermediate offsets before its target.
+        // The transcript input owner above retires it when the reader takes over.
+        const compensating =
+          target !== undefined &&
+          (Math.abs(viewport.scrollTop - target) <= 1 ||
+            (viewport.scrollTop >= Math.min(previous.scrollTop, target) &&
+              viewport.scrollTop <= Math.max(previous.scrollTop, target)));
+        if (!compensating) {
           if (this.followingResize) {
             this.followActive = true;
             this.scheduleLayout();
           }
           this.followingResize = false;
+          this.resizeScrollTarget = undefined;
         }
-        this.resizeScrollTarget = undefined;
       }
       this.readerViewport = viewport;
     }
@@ -319,9 +338,10 @@ class ChatPositionRailDirective extends AsyncDirective {
     this.syncTabStop();
     if (initialize || this.followActive) {
       this.followActive = false;
-      const current = this.markerElements.get(
-        (initialize ? this.interaction.focusedId : null) ?? this.activeId ?? "",
-      );
+      const focused = this.markerElements.get(this.interaction.focusedId ?? "");
+      const current =
+        (initialize || focused?.matches(":focus-visible") ? focused : undefined) ??
+        this.markerElements.get(this.activeId ?? "");
       if (current) {
         this.revealMarker(current);
       }
@@ -414,11 +434,11 @@ class ChatPositionRailDirective extends AsyncDirective {
     this.previewElement?.ownerDocument.defaultView?.removeEventListener(
       "keydown",
       this.dismissPreview,
-      true,
     );
     this.previewElement = element instanceof HTMLElement ? element : undefined;
     this.scheduleLayout();
-    element?.ownerDocument.defaultView?.addEventListener("keydown", this.dismissPreview, true);
+    // Focused markers handle Escape before the window fallback dismisses hover-only previews.
+    element?.ownerDocument.defaultView?.addEventListener("keydown", this.dismissPreview);
   };
 
   protected override disconnected() {

@@ -1,4 +1,4 @@
-// Session artifact filename classifiers and archive timestamp helpers.
+// Session artifact paths, filename classifiers, and archive timestamp helpers.
 // Cleanup, disk-budget, and usage accounting use these predicates to avoid deleting live transcripts.
 
 import { timestampMsToIsoFileStamp } from "@openclaw/normalization-core/number-coercion";
@@ -113,6 +113,18 @@ function isTrajectoryRuntimeArtifactName(fileName: string): boolean {
 /** Returns true for trajectory pointer artifacts. */
 function isTrajectoryPointerArtifactName(fileName: string): boolean {
   return fileName.endsWith(".trajectory-path.json");
+}
+
+export function resolveTrajectoryPath(transcriptPath: string): string | undefined {
+  return transcriptPath.endsWith(".jsonl")
+    ? `${transcriptPath.slice(0, -".jsonl".length)}.trajectory.jsonl`
+    : undefined;
+}
+
+export function resolveTrajectoryPointerPath(transcriptPath: string): string | undefined {
+  return transcriptPath.endsWith(".jsonl")
+    ? `${transcriptPath.slice(0, -".jsonl".length)}.trajectory-path.json`
+    : undefined;
 }
 
 /** Returns true for any trajectory-related session artifact. */

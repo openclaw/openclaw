@@ -98,7 +98,18 @@ export async function execContainerRaw(
   const stderr = Buffer.from(result.stderr);
   const exitCode = result.exitCode ?? (result.failed ? 1 : 0);
   if (exitCode !== 0 && !opts?.allowFailure) {
-    const message = stderr.length > 0 ? stderr.toString("utf8").trim() : "";
+    let message = stderr.length > 0 ? stderr.toString("utf8").trim() : "";
+    if (
+      engine.id === "podman" &&
+      args[0] === "create" &&
+      /^(?:Error: )?(?:lookup init binary|container-init binary not found on the host):/mu.test(
+        message,
+      )
+    ) {
+      // Podman owns init resolution, including helpers outside PATH and inside Podman Machine.
+      message +=
+        "\nInstall catatonit on the Podman engine host, or repair its configured init_path/helper_binaries_dir in containers.conf, then retry. The init executable must be available to the engine, not only inside the sandbox image. Keep --init and sandboxing enabled so orphaned processes are reaped.";
+    }
     const error: ExecDockerRawError = Object.assign(
       new Error(message || `${engine.displayName} command failed (exit ${exitCode})`),
       { code: exitCode, stdout, stderr },

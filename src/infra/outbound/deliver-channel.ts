@@ -79,8 +79,8 @@ async function loadBootstrappedChannelPlugin(params: {
     // surface. A second lookup could attach another plugin's send lifecycle.
     return { plugin, pluginRegistry: scopedRegistry };
   }
-  const { bootstrapOutboundChannelPlugin } = await loadChannelBootstrapRuntime();
-  const pluginRegistry = bootstrapOutboundChannelPlugin({
+  const { bootstrapOutboundChannelPluginAsync } = await loadChannelBootstrapRuntime();
+  const pluginRegistry = await bootstrapOutboundChannelPluginAsync({
     channel: params.channel,
     cfg: params.cfg,
     agentId: params.agentId,
@@ -402,13 +402,14 @@ function createPluginHandler(
         }
       : undefined,
     pinDeliveredMessage: outbound?.pinDeliveredMessage
-      ? async ({ target, messageId, pin, gatewayClientScopes }) =>
+      ? async ({ target, messageId, pin, gatewayClientScopes, assertDirectAdapterHandoff }) =>
           outbound.pinDeliveredMessage!({
             cfg: params.cfg,
             target,
             messageId,
             pin,
             gatewayClientScopes,
+            assertDirectAdapterHandoff,
           })
       : undefined,
     afterDeliverPayload: outbound?.afterDeliverPayload

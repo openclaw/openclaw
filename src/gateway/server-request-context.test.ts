@@ -7,16 +7,10 @@ import {
   GATEWAY_CLIENT_IDS,
   GATEWAY_CLIENT_MODES,
 } from "../../packages/gateway-protocol/src/client-info.js";
-import { listSystemPresence } from "../infra/system-presence.js";
-import { trackAsyncWork } from "../shared/async-work-scope.js";
-import * as userProfiles from "../state/user-profiles.js";
-import {
-  ensureProfileForEmail,
-  getUserProfileDisplay,
-  linkEmail,
-  resolveUserProfileId,
-} from "../state/user-profiles.js";
+import * as userProfileCatalog from "../state/user-profile-list.js";
+import { ensureProfileForEmail, linkEmail } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { captureGatewayDeviceRevocation } from "./device-revocation.js";
 import { prepareGatewayRecipientProfile } from "./expected-profile.js";
 import { createGatewayBroadcaster } from "./server-broadcast.js";
 import {
@@ -24,16 +18,17 @@ import {
   createSessionEventSubscriberRegistry,
   createSessionMessageSubscriberRegistry,
 } from "./server-chat-state.js";
-import type { GatewayServerLiveState } from "./server-live-state.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
 import { createGatewayRequestContext } from "./server-request-context.js";
+import {
+  makeContextParams,
+  makeCronState,
+  makeGatewayClient,
+  type RequestRuntime,
+} from "./server-request-context.test-support.js";
 import { startGatewayEventSubscriptions } from "./server-runtime-subscriptions.js";
 import { GatewayClientRegistry } from "./server/client-registry.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
-
-type GatewayRequestContextParams = Parameters<typeof createGatewayRequestContext>[0];
-type TestCronState = GatewayServerLiveState["cronState"];
-type RequestRuntime = GatewayRequestContextParams["runtime"];
 
 vi.mock("./server/health-state.js", () => ({
   getHealthCache: vi.fn(() => null),
@@ -41,171 +36,11 @@ vi.mock("./server/health-state.js", () => ({
   incrementPresenceVersion: vi.fn(() => 1),
 }));
 
-function makeCronState(overrides: Partial<TestCronState> = {}): TestCronState {
+function makeDeviceClient(connId: string, deviceId: string, role = "primary") {
   return {
-    cron: { start: vi.fn(), stop: vi.fn() } as never,
-    storePath: "/tmp/cron",
-    cronEnabled: true,
-    reconcileExitWatchers: vi.fn(async () => {}),
-    reconcileStreamWatchers: vi.fn(async () => {}),
-    stopStreamWatchers: vi.fn(async () => {}),
-    reconcileSystemJobs: vi.fn(async () => "converged" as const),
-    ...overrides,
-  };
-}
-
-function makeContextParams(overrides: Partial<RequestRuntime> = {}): GatewayRequestContextParams {
-  const config = {} as never;
-  return {
-    runtime: {
-      connectionWork: { track: trackAsyncWork },
-      deps: {} as never,
-      runtimeState: {
-        cronState: makeCronState(),
-        configReloader: { isConfigReloadSettled: vi.fn(() => true) },
-      },
-      lifecycle: { closePreludeStarted: false },
-      getAttachedGatewayMethodRegistry: vi.fn(() => ({}) as never),
-      gatewayTls: { enabled: false },
-      sessionCompanion: {} as never,
-      sessionObserver: { removeConnection: vi.fn() } as never,
-      mentionInbox: undefined,
-      transportBridge: {
-        getPortalService: vi.fn(() => undefined),
-        getMcpAppSandboxPort: vi.fn(() => undefined),
-        ensureSandboxHostPort: vi.fn(async () => 18790),
-      },
-      terminalLaunchPolicy: {
-        resolve: vi.fn(() => ({ ok: false as const, block: { kind: "disabled" as const } })),
-        isEnabled: vi.fn(() => false),
-      },
-      execApprovalManager: undefined,
-      questionManager: undefined,
-      cancelRunBoundApprovals: undefined,
-      forwardPluginApprovalRequest: undefined,
-      approvalWebPushDelivery: undefined,
-      pluginApprovalIosPushDelivery: undefined,
-      pluginApprovalManager: undefined,
-      placementStandingGrants: undefined,
-      systemAgentApprovalManager: undefined,
-      approvalSessionEvents: { replay: undefined },
-      validateAgentRuntimeApprovalAuthority: () => false,
-      loadGatewayModelCatalog: vi.fn(async () => []),
-      loadGatewayModelCatalogSnapshot: vi.fn(async () => ({
-        agentId: "main",
-        agentDir: "/tmp/model-catalog-agent",
-        catalogComplete: false,
-        workspaceDir: "/tmp/model-catalog-workspace",
-        config,
-        entries: [],
-        routeVariants: [],
-      })),
-      readPreparedGatewayModelCatalog: undefined,
-      refreshGatewayHealthSnapshotWithRuntime: vi.fn(async () => ({}) as never),
-      broadcast: vi.fn(),
-      broadcastToConnIds: vi.fn(),
-      nodeSendToSession: vi.fn(),
-      nodeSendToAllSubscribed: vi.fn(),
-      nodeSubscribe: vi.fn(),
-      nodeUnsubscribe: vi.fn(),
-      nodeUnsubscribeAll: vi.fn(),
-      hasTalkNodeConnected: vi.fn(async () => false),
-      clients: new Set(),
-      isConnectionActive: vi.fn(() => false),
-      watchNodeHttpRuntime: {
-        invalidateSessionsForDevice: vi.fn(),
-        disconnectSessionsForDevice: vi.fn(),
-      },
-      sharedGatewaySessionGenerationState: {} as never,
-      resolveSharedGatewaySessionGenerationForRuntimeSnapshot: vi.fn(() => undefined),
-      nodeRegistry: { invalidateConnectionForPairingChange: vi.fn() } as never,
-      nodeDesktopService: undefined,
-      workerEnvironmentService: undefined,
-      hostDesktopService: undefined,
-      workerEnvironmentStartup: undefined,
-      workerPlacementRuntime: undefined,
-      workerPlacementControlAvailable: undefined,
-      githubPublicationService: undefined,
-      terminalSessions: undefined,
-      agentRunSeq: new Map(),
-      chatAbortControllers: new Map(),
-      chatQueuedTurns: new Map(),
-      chatRunState: createChatRunState(),
-      addChatRun: vi.fn(),
-      removeChatRun: vi.fn(),
-      sessionEventSubscribers: {
-        subscribe: vi.fn(),
-        unsubscribe: vi.fn(),
-        getAll: vi.fn(() => new Set<string>()),
-      },
-      subscribeSessionMessageEvents: vi.fn(),
-      unsubscribeSessionMessageEvents: vi.fn(),
-      sessionMessageSubscribers: { unsubscribeAll: vi.fn() },
-      toolEventRecipients: { add: vi.fn() },
-      dedupe: new Map(),
-      wizardSessions: new Map(),
-      systemAgentSessions: new Map(),
-      findRunningWizard: vi.fn(() => null),
-      purgeWizardSession: vi.fn(),
-      getRuntimeSnapshot: vi.fn(() => ({}) as never),
-      readinessEventLoopHealth: { snapshot: vi.fn(() => undefined) },
-      startChannel: vi.fn(async () => new Map()),
-      stopChannel: vi.fn(async () => undefined),
-      markChannelLoggedOut: vi.fn(),
-      wizardRunner: vi.fn(async () => undefined),
-      channelWizardRunner: vi.fn(async () => undefined),
-      broadcastVoiceWakeChanged: vi.fn(),
-      broadcastVoiceWakeRoutingChanged: vi.fn(),
-      kernel: {
-        applyPluginLifecycleChange: vi.fn(async () => ({
-          operationId: "fixture",
-          generation: 1,
-          pluginIds: [],
-        })),
-        getConfigReloaderHotReloadStatus: vi.fn(() => undefined),
-      },
-      unavailableGatewayMethods: new Set(),
-      ...overrides,
-    },
-    chatMetadataLifecycle: {
-      read: vi.fn(async () => ({ swarmEnabled: false })),
-      readStartup: undefined,
-    },
-    logHealth: { error: vi.fn() },
-    log: { warn: vi.fn(), info: vi.fn(), error: vi.fn() } as never,
-    configRevisionProjector: {
-      projectRawHash: (hash) => hash,
-      projectResolvedHash: (hash) => hash,
-    },
-  };
-}
-
-function makeGatewayClient(params: {
-  connId: string;
-  clientId: (typeof GATEWAY_CLIENT_IDS)[keyof typeof GATEWAY_CLIENT_IDS];
-  mode?: (typeof GATEWAY_CLIENT_MODES)[keyof typeof GATEWAY_CLIENT_MODES];
-  scopes?: string[];
-  caps?: string[];
-  approvalRuntime?: boolean;
-  invalidated?: boolean;
-}) {
-  return {
-    connId: params.connId,
-    connect: {
-      minProtocol: 1,
-      maxProtocol: 1,
-      client: {
-        id: params.clientId,
-        version: "test",
-        platform: "test",
-        mode: params.mode ?? GATEWAY_CLIENT_MODES.CLI,
-      },
-      scopes: params.scopes ?? [],
-      caps: params.caps ?? [],
-    },
-    socket: { close: vi.fn(), readyState: 1 },
-    ...(params.approvalRuntime ? { internal: { approvalRuntime: true } } : {}),
-    ...(params.invalidated ? { invalidated: true } : {}),
+    connId,
+    connect: { device: { id: deviceId }, role },
+    socket: { close: vi.fn() },
   };
 }
 
@@ -289,7 +124,7 @@ describe("createGatewayRequestContext", () => {
         expect(frames.some((frame) => frame.event === "sessions.changed")).toBe(true);
         const authenticated = peers.map((peer) => peer.authenticatedUserProfile);
         const resolve = vi
-          .spyOn(userProfiles, "resolveUserProfileId")
+          .spyOn(userProfileCatalog, "readUserProfileIdentity")
           .mockImplementationOnce(() => {
             throw new Error("fixture storage unavailable");
           });
@@ -466,385 +301,6 @@ describe("createGatewayRequestContext", () => {
     expect(context.getApprovalClientConnIds?.({ approvalKind: "plugin" })).toEqual(new Set());
   });
 
-  it("refreshes every live connection and presence row for a changed user profile", () => {
-    const makeProfileClient = (
-      connId: string,
-      email: string,
-      profile: Partial<NonNullable<GatewayWsClient["authenticatedUserProfile"]>> = {},
-    ) => ({
-      ...makeGatewayClient({
-        connId,
-        clientId: GATEWAY_CLIENT_IDS.CONTROL_UI,
-      }),
-      authenticatedUserId: email,
-      authenticatedUserProfile: {
-        profileId: "profile-ada",
-        displayName: "Ada",
-        avatarRevision: "avatar-old-png",
-        hasAvatar: true,
-        updatedAt: 1,
-        ...profile,
-      },
-      presenceKey: `profile-refresh-${connId}`,
-    });
-    const first = makeProfileClient("ada-one", "ada@example.test");
-    const second = makeProfileClient("ada-two", "ada@work.test");
-    const unrelated = makeProfileClient("grace", "grace@example.test", {
-      profileId: "profile-grace",
-      displayName: "Grace",
-      avatarRevision: "1",
-      hasAvatar: false,
-    });
-    const params = makeContextParams({ clients: new Set([first, second, unrelated]) as never });
-    const context = createGatewayRequestContext(params);
-    const capturedFirstProfile = first.authenticatedUserProfile;
-    const readCapturedDisplayName = () => capturedFirstProfile.displayName;
-
-    const revisions = ["avatar-new-png", "avatar-newer-png"];
-    for (const avatarRevision of revisions) {
-      context.refreshConnectedUserProfile?.({
-        id: "profile-ada",
-        displayName: "Augusta Ada",
-        avatarRevision,
-        hasAvatar: true,
-        updatedAt: 2,
-      });
-    }
-
-    expect(first.authenticatedUserProfile).toEqual({
-      profileId: "profile-ada",
-      displayName: "Augusta Ada",
-      avatarRevision: "avatar-newer-png",
-      hasAvatar: true,
-      updatedAt: 2,
-    });
-    expect(first.authenticatedUserProfile).toBe(capturedFirstProfile);
-    expect(readCapturedDisplayName()).toBe("Augusta Ada");
-    expect(second.authenticatedUserProfile).toEqual(first.authenticatedUserProfile);
-    expect(unrelated.authenticatedUserProfile.displayName).toBe("Grace");
-    for (const [index, avatarRevision] of revisions.entries()) {
-      expect(params.runtime.broadcast).toHaveBeenNthCalledWith(
-        index + 1,
-        "presence",
-        {
-          presence: expect.arrayContaining(
-            ["ada@example.test", "ada@work.test"].map((email) =>
-              expect.objectContaining({
-                user: {
-                  id: "profile-ada",
-                  identity: { type: "profile", id: "profile-ada" },
-                  email,
-                  name: "Augusta Ada",
-                  avatarUrl: `/api/users/profile-ada/avatar?v=${avatarRevision}`,
-                },
-              }),
-            ),
-          ),
-        },
-        { dropIfSlow: true, stateVersion: { presence: 1, health: 1 } },
-      );
-    }
-  });
-
-  it("canonicalizes a connected profile after its durable identity is merged", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      const source = ensureProfileForEmail("merge-source@example.test");
-      const target = ensureProfileForEmail("merge-target@example.test");
-      const unrelatedProfile = ensureProfileForEmail("merge-unrelated@example.test");
-      const sourceClient = {
-        ...makeGatewayClient({
-          connId: "merge-source",
-          clientId: GATEWAY_CLIENT_IDS.CONTROL_UI,
-        }),
-        authenticatedUserId: "merge-source@example.test",
-        authenticatedUserProfile: {
-          profileId: source.id,
-          displayName: source.displayName,
-          avatarRevision: String(source.updatedAt),
-          hasAvatar: false,
-          updatedAt: source.updatedAt,
-        },
-        presenceKey: "profile-refresh-merge-source",
-        personPresence: { onlineSince: 1_000, lastActivityAt: 2_000 },
-      };
-      const targetClient = {
-        ...sourceClient,
-        connId: "merge-target",
-        authenticatedUserId: "merge-target@example.test",
-        authenticatedUserProfile: {
-          ...sourceClient.authenticatedUserProfile,
-          profileId: target.id,
-        },
-        presenceKey: "profile-refresh-merge-target",
-        personPresence: { onlineSince: 1_500, lastActivityAt: 3_000 },
-      };
-      const unrelatedClient = {
-        ...makeGatewayClient({
-          connId: "merge-unrelated",
-          clientId: GATEWAY_CLIENT_IDS.CONTROL_UI,
-        }),
-        authenticatedUserId: "merge-unrelated@example.test",
-        authenticatedUserProfile: {
-          profileId: unrelatedProfile.id,
-          displayName: unrelatedProfile.displayName,
-          avatarRevision: String(unrelatedProfile.updatedAt),
-          hasAvatar: false,
-          updatedAt: unrelatedProfile.updatedAt,
-        },
-        presenceKey: "profile-refresh-merge-unrelated",
-      };
-      const capturedProfile = sourceClient.authenticatedUserProfile;
-      const params = makeContextParams({
-        clients: new Set([sourceClient, targetClient, unrelatedClient]) as never,
-      });
-      const context = createGatewayRequestContext(params);
-
-      const linked = linkEmail("merge-source@example.test", target.id);
-      expect(resolveUserProfileId(source.id)).toBe(target.id);
-      const display = getUserProfileDisplay(linked.id);
-      context.refreshConnectedUserProfile?.({
-        ...display,
-        updatedAt: linked.updatedAt,
-      });
-
-      expect(sourceClient.authenticatedUserProfile).toBe(capturedProfile);
-      expect(sourceClient.authenticatedUserProfile).toEqual({
-        profileId: target.id,
-        displayName: target.displayName,
-        avatarRevision: display.avatarRevision,
-        hasAvatar: false,
-        updatedAt: linked.updatedAt,
-      });
-      expect(unrelatedClient.authenticatedUserProfile.profileId).toBe(unrelatedProfile.id);
-      for (const email of ["merge-source@example.test", "merge-target@example.test"]) {
-        expect(listSystemPresence().find((entry) => entry.user?.email === email)).toMatchObject({
-          user: { id: target.id, identity: { type: "profile", id: target.id } },
-          onlineSince: 1_000,
-          lastActivityAt: 3_000,
-        });
-      }
-      const presence = vi.mocked(params.runtime.broadcast).mock.calls[0]?.[1] as {
-        presence?: Array<{ user?: { id?: string; email?: string; avatarUrl?: string } }>;
-      };
-      expect(
-        presence.presence?.find((entry) => entry.user?.email === "merge-source@example.test")?.user,
-      ).toEqual({
-        id: target.id,
-        identity: { type: "profile", id: target.id },
-        email: "merge-source@example.test",
-        name: target.displayName,
-        avatarUrl: `/api/users/${target.id}/avatar?v=${display.avatarRevision}`,
-      });
-      expect(presence.presence?.some((entry) => entry.user?.id === unrelatedProfile.id)).toBe(
-        false,
-      );
-    });
-  });
-
-  it("publishes an owner rename to every tab without inventing an email", () => {
-    const ownerClients = [];
-    for (const tab of ["one", "two"]) {
-      ownerClients.push({
-        ...makeGatewayClient({
-          connId: `owner-${tab}`,
-          clientId: GATEWAY_CLIENT_IDS.CONTROL_UI,
-        }),
-        authenticatedUserProfile: {
-          profileId: "profile-owner",
-          displayName: "Ada",
-          avatarRevision: "1",
-          hasAvatar: false,
-          updatedAt: 1,
-        },
-        presenceKey: `profile-owner-${tab}`,
-        personPresence: { onlineSince: 1_000 },
-      });
-    }
-    const params = makeContextParams({ clients: new Set(ownerClients) as never });
-    createGatewayRequestContext(params).refreshConnectedUserProfile?.({
-      id: "profile-owner",
-      displayName: "Augusta Ada",
-      avatarRevision: "2",
-      hasAvatar: false,
-      updatedAt: 2,
-    });
-
-    for (const client of ownerClients) {
-      expect(client.authenticatedUserProfile.displayName).toBe("Augusta Ada");
-    }
-    const ownerRows = listSystemPresence().filter((entry) => entry.user?.id === "profile-owner");
-    expect(ownerRows).toHaveLength(2);
-    for (const entry of ownerRows) {
-      expect(entry.user).toEqual({
-        id: "profile-owner",
-        identity: { type: "profile", id: "profile-owner" },
-        name: "Augusta Ada",
-        avatarUrl: "/api/users/profile-owner/avatar?v=2",
-      });
-    }
-    expect(params.runtime.broadcast).toHaveBeenCalledExactlyOnceWith(
-      "presence",
-      { presence: expect.arrayContaining(ownerRows) },
-      { dropIfSlow: true, stateVersion: { presence: 1, health: 1 } },
-    );
-  });
-
-  it("publishes only server-stamped activity from the exact live client", () => {
-    const now = vi.spyOn(Date, "now").mockReturnValue(10_000);
-    onTestFinished(() => now.mockRestore());
-    const client: GatewayWsClient = {
-      ...makeGatewayClient({ connId: "activity-live", clientId: GATEWAY_CLIENT_IDS.CONTROL_UI }),
-      socket: { readyState: 1 } as GatewayWsClient["socket"],
-      usesSharedGatewayAuth: false,
-      presenceKey: "activity-live",
-      authenticatedUserId: "live@activity.test",
-      personPresence: { onlineSince: 9_000 },
-    };
-    const clients = new Set([client]);
-    const params = makeContextParams({ clients });
-    const context = createGatewayRequestContext(params);
-    context.recordClientActivity?.({ ...client });
-    expect(params.runtime.broadcast).not.toHaveBeenCalled();
-    context.recordClientActivity?.(client);
-    expect(params.runtime.broadcast).toHaveBeenCalledExactlyOnceWith(
-      "presence",
-      {
-        presence: expect.arrayContaining([
-          expect.objectContaining({
-            user: { id: "live@activity.test", email: "live@activity.test" },
-            onlineSince: 9_000,
-            lastActivityAt: 10_000,
-          }),
-        ]),
-      },
-      { dropIfSlow: true, stateVersion: { presence: 1, health: 1 } },
-    );
-    now.mockReturnValue(11_000);
-    clients.delete(client);
-    context.recordClientActivity?.(client);
-    expect(params.runtime.broadcast).toHaveBeenCalledOnce();
-  });
-
-  it.each(["removed", "invalidated", "closing"] as const)(
-    "does not refresh a %s profile connection or resurrect its presence",
-    (state) => {
-      const client: GatewayWsClient = {
-        ...makeGatewayClient({
-          connId: `profile-${state}`,
-          clientId: GATEWAY_CLIENT_IDS.CONTROL_UI,
-        }),
-        socket: { readyState: state === "closing" ? 2 : 1 } as GatewayWsClient["socket"],
-        usesSharedGatewayAuth: false,
-        authenticatedUserId: `${state}@profile.test`,
-        authenticatedUserProfile: {
-          profileId: `inactive-${state}`,
-          displayName: "Before",
-          avatarRevision: "1",
-          hasAvatar: false,
-          updatedAt: 1,
-        },
-        presenceKey: `profile-${state}`,
-        invalidated: state === "invalidated",
-      };
-      const params = makeContextParams({ clients: new Set(state === "removed" ? [] : [client]) });
-      createGatewayRequestContext(params).refreshConnectedUserProfile?.({
-        id: `inactive-${state}`,
-        displayName: "After",
-        avatarRevision: "2",
-        hasAvatar: false,
-        updatedAt: 2,
-      });
-      expect(client.authenticatedUserProfile?.displayName).toBe("Before");
-      expect(params.runtime.broadcast).not.toHaveBeenCalled();
-      expect(
-        listSystemPresence().some((entry) => entry.user?.email === `${state}@profile.test`),
-      ).toBe(false);
-    },
-  );
-
-  it("preserves the Gravatar-backed route when a changed profile has no upload", () => {
-    const client = {
-      ...makeGatewayClient({
-        connId: "ada-avatar-removed",
-        clientId: GATEWAY_CLIENT_IDS.CONTROL_UI,
-      }),
-      authenticatedUserId: "ada@example.test",
-      authenticatedUserProfile: {
-        profileId: "profile-ada-avatar-removed",
-        displayName: "Ada",
-        avatarRevision: "avatar-upload-png",
-        hasAvatar: true,
-        updatedAt: 1,
-      },
-      presenceKey: "profile-refresh-ada-avatar-removed",
-    };
-    const params = makeContextParams({ clients: new Set([client]) as never });
-    const context = createGatewayRequestContext(params);
-
-    context.refreshConnectedUserProfile?.({
-      id: "profile-ada-avatar-removed",
-      displayName: "Ada",
-      avatarRevision: "profile-updated-2",
-      hasAvatar: false,
-      updatedAt: 2,
-    });
-
-    expect(client.authenticatedUserProfile.hasAvatar).toBe(false);
-    const presence = vi.mocked(params.runtime.broadcast).mock.calls[0]?.[1] as {
-      presence?: Array<{ user?: { id?: string; avatarUrl?: string } }>;
-    };
-    expect(
-      presence.presence?.find((entry) => entry.user?.id === "profile-ada-avatar-removed")?.user,
-    ).toEqual({
-      id: "profile-ada-avatar-removed",
-      identity: { type: "profile", id: "profile-ada-avatar-removed" },
-      email: "ada@example.test",
-      name: "Ada",
-      avatarUrl: "/api/users/profile-ada-avatar-removed/avatar?v=profile-updated-2",
-    });
-  });
-
-  it("keeps Tailscale provider identities out of refreshed presence email", () => {
-    const client = {
-      ...makeGatewayClient({
-        connId: "ada-tailscale",
-        clientId: GATEWAY_CLIENT_IDS.CONTROL_UI,
-      }),
-      authenticatedUserId: "ada@github",
-      authenticatedUserIsTailscaleProvider: true,
-      authenticatedUserProfile: {
-        profileId: "profile-ada-tailscale",
-        displayName: "Ada",
-        avatarRevision: "avatar-tailscale-png",
-        hasAvatar: true,
-        updatedAt: 1,
-      },
-      presenceKey: "profile-refresh-ada-tailscale",
-    };
-    const params = makeContextParams({ clients: new Set([client]) as never });
-    const context = createGatewayRequestContext(params);
-
-    context.refreshConnectedUserProfile?.({
-      id: "profile-ada-tailscale",
-      displayName: "Augusta Ada",
-      avatarRevision: "avatar-tailscale-new-png",
-      hasAvatar: true,
-      updatedAt: 2,
-    });
-
-    const presence = vi.mocked(params.runtime.broadcast).mock.calls[0]?.[1] as {
-      presence?: Array<{ user?: { id?: string; email?: string } }>;
-    };
-    expect(
-      presence.presence?.find((entry) => entry.user?.id === "profile-ada-tailscale")?.user,
-    ).toEqual({
-      id: "profile-ada-tailscale",
-      identity: { type: "profile", id: "profile-ada-tailscale" },
-      name: "Augusta Ada",
-      avatarUrl: "/api/users/profile-ada-tailscale/avatar?v=avatar-tailscale-new-png",
-    });
-  });
-
   it("preserves only clients that handle each approval kind", () => {
     const clients = new Set([
       makeGatewayClient({
@@ -922,16 +378,8 @@ describe("createGatewayRequestContext", () => {
   });
 
   it("invalidateClientsForDevice sets the flag on matching clients without closing the socket", () => {
-    const target = {
-      connId: "conn-target",
-      connect: { device: { id: "device-1" }, role: "primary" },
-      socket: { close: vi.fn() },
-    };
-    const unrelated = {
-      connId: "conn-unrelated",
-      connect: { device: { id: "device-2" }, role: "primary" },
-      socket: { close: vi.fn() },
-    };
+    const target = makeDeviceClient("conn-target", "device-1");
+    const unrelated = makeDeviceClient("conn-unrelated", "device-2");
     const clients = new Set([target, unrelated]) as never;
     const invalidateDeviceTransports = vi.fn();
     const invalidateConnectionForPairingChange = vi.fn();
@@ -946,7 +394,11 @@ describe("createGatewayRequestContext", () => {
         nodeRegistry: { invalidateConnectionForPairingChange } as never,
       }),
     );
+    const detached = captureGatewayDeviceRevocation(context, { deviceId: "device-1" }, () => true);
+    onTestFinished(detached.release);
+    expect(detached.isCurrent()).toBe(true);
     context.invalidateClientsForDevice?.("device-1", { reason: "device-token-rotated" });
+    expect(detached.isCurrent()).toBe(false);
 
     expect((target as { invalidated?: boolean }).invalidated).toBe(true);
     expect((target as { invalidatedReason?: string }).invalidatedReason).toBe(
@@ -966,11 +418,7 @@ describe("createGatewayRequestContext", () => {
   });
 
   it("disconnectClientsForDevice also marks the invalidated flag before closing", () => {
-    const target = {
-      connId: "conn-target",
-      connect: { device: { id: "device-1" }, role: "primary" },
-      socket: { close: vi.fn() },
-    };
+    const target = makeDeviceClient("conn-target", "device-1");
     const clients = new Set([target]) as never;
     const disconnectDeviceTransports = vi.fn();
 
@@ -983,7 +431,11 @@ describe("createGatewayRequestContext", () => {
         },
       }),
     );
+    const detached = captureGatewayDeviceRevocation(context, { deviceId: "device-1" }, () => true);
+    onTestFinished(detached.release);
+    expect(detached.isCurrent()).toBe(true);
     context.disconnectClientsForDevice?.("device-1");
+    expect(detached.isCurrent()).toBe(false);
 
     expect((target as { invalidated?: boolean }).invalidated).toBe(true);
     expect((target as { invalidatedReason?: string }).invalidatedReason).toBe("device-removed");
@@ -1040,16 +492,8 @@ describe("createGatewayRequestContext", () => {
   });
 
   it("invalidateClientsForDevice filters by role when provided", () => {
-    const primary = {
-      connId: "conn-primary",
-      connect: { device: { id: "device-1" }, role: "primary" },
-      socket: { close: vi.fn() },
-    };
-    const secondary = {
-      connId: "conn-secondary",
-      connect: { device: { id: "device-1" }, role: "secondary" },
-      socket: { close: vi.fn() },
-    };
+    const primary = makeDeviceClient("conn-primary", "device-1");
+    const secondary = makeDeviceClient("conn-secondary", "device-1", "secondary");
     const clients = new Set([primary, secondary]) as never;
 
     const context = createGatewayRequestContext(makeContextParams({ clients }));

@@ -210,41 +210,40 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
       expect(
         await page.getByText("Connect OpenClaw to Matrix rooms and direct messages.").count(),
       ).toBe(1);
-      const detailTabs = page.locator("wa-tab-group.plugin-catalog-detail__tabs");
-      const detailMain = page.locator(".plugin-catalog-detail__hero main");
+      const detailPanel = page.locator(".plugin-catalog-detail__panel");
+      const detailReadme = page.locator(".plugin-catalog-detail__readme");
       const detailSidebar = page.locator(".plugin-catalog-detail__sidebar");
-      await detailTabs.waitFor();
-      expect(
-        (await detailTabs.locator("wa-tab").allTextContents())
-          .map((text) => text.trim())
-          .toSorted(),
-      ).toEqual(["Advanced", "Compatibility", "Configuration", "README", "Skills", "Versions"]);
-      const [mainBox, tabsBox, sidebarBox] = await Promise.all([
-        detailMain.boundingBox(),
-        detailTabs.boundingBox(),
+      await detailPanel.getByText("Matrix messaging", { exact: true }).waitFor();
+      await detailReadme
+        .getByText("Connect OpenClaw to Matrix rooms and direct messages.")
+        .waitFor();
+      expect(await page.locator(".plugin-catalog-detail [role=tablist]").count()).toBe(0);
+      const [panelBox, readmeBox, sidebarBox] = await Promise.all([
+        detailPanel.boundingBox(),
+        detailReadme.boundingBox(),
         detailSidebar.boundingBox(),
       ]);
-      expect(mainBox).not.toBeNull();
-      expect(tabsBox).not.toBeNull();
+      expect(panelBox).not.toBeNull();
+      expect(readmeBox).not.toBeNull();
       expect(sidebarBox).not.toBeNull();
-      expect(tabsBox!.x + tabsBox!.width).toBeLessThanOrEqual(sidebarBox!.x);
-      expect(tabsBox!.y - (mainBox!.y + mainBox!.height)).toBeLessThanOrEqual(24);
+      expect(panelBox!.x + panelBox!.width).toBeLessThanOrEqual(sidebarBox!.x);
+      expect(readmeBox!.x + readmeBox!.width).toBeLessThanOrEqual(sidebarBox!.x);
       expect(await page.getByText("52.2k", { exact: true }).count()).toBe(1);
-      expect(await page.getByText("Pass", { exact: true }).count()).toBe(1);
+      expect(await detailSidebar.getByText("Clean", { exact: true }).count()).toBe(1);
       expect(await page.getByText("Type", { exact: true }).count()).toBe(0);
       expect(await page.getByText("code-plugin", { exact: true }).count()).toBe(0);
-      expect(await page.getByRole("link", { name: "openclaw/openclaw", exact: true }).count()).toBe(
-        0,
-      );
+      expect(
+        await detailSidebar
+          .getByRole("link", { name: "openclaw/openclaw", exact: true })
+          .getAttribute("href"),
+      ).toBe("https://github.com/openclaw/openclaw");
       expect(
         await page.getByRole("link", { name: "@openclaw", exact: true }).getAttribute("href"),
       ).toBe("https://clawhub.ai/openclaw");
       expect(await page.getByRole("link", { name: "Security audit" }).getAttribute("href")).toBe(
         "https://clawhub.ai/openclaw/plugins/matrix/security-audit",
       );
-      expect(await page.getByRole("link", { name: "View on ClawHub" }).getAttribute("href")).toBe(
-        "https://clawhub.ai/openclaw/plugins/matrix",
-      );
+      expect(await page.getByRole("link", { name: "View on ClawHub" }).count()).toBe(0);
       expect(await page.getByRole("tab", { name: "Plugins", exact: true }).count()).toBe(0);
       expect(
         await page.getByRole("button", { name: "Install", exact: true }).evaluate((button) => {
@@ -257,9 +256,7 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
         }),
       ).toBe(true);
 
-      await detailTabs.getByRole("tab", { name: "Versions" }).click();
-      expect(await page.getByText("2.1.0", { exact: true }).count()).toBe(1);
-      expect(await page.getByText("Current release", { exact: true }).count()).toBe(1);
+      expect(await detailSidebar.getByText("2.1.0", { exact: true }).count()).toBe(1);
     } finally {
       await context.close();
     }
@@ -543,10 +540,9 @@ describeControlUiE2e("Control UI Plugins mocked Gateway E2E", () => {
       expect(await page.getByText("@openclaw", { exact: true }).count()).toBe(0);
       expect(await page.getByText("Security", { exact: true }).count()).toBe(0);
       await page
-        .locator("wa-tab-group.plugin-catalog-detail__tabs")
-        .getByRole("tab", { name: "Skills" })
-        .click();
-      expect(await page.getByText("Calendar planning", { exact: true }).count()).toBe(1);
+        .locator(".plugin-capabilities")
+        .getByText("Calendar planning", { exact: true })
+        .waitFor();
     } finally {
       await context.close();
     }

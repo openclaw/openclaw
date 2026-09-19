@@ -106,7 +106,7 @@ export const callGatewayMock = createMock();
 export const hasUsableWebSearchProviderMock = createMock();
 export const readSessionMessagesAsyncMock = createMock();
 
-const resolveBootstrapWarningSignaturesSeenMock = createMock();
+const resolveBootstrapWarningSignaturesSeenMock = vi.fn<() => string[]>();
 const resolveCronStyleNowMock = createMock();
 export const resolveCronAgentLaneMock = createMock();
 const resolveAgentTimeoutMsMock = createMock();
@@ -147,7 +147,16 @@ vi.mock("./run.runtime.js", async () => ({
   resolveCronStyleNow: resolveCronStyleNowMock,
   DEFAULT_CONTEXT_TOKENS: 128000,
   isCliProvider: isCliProviderMock,
-  resolveThinkingDefault: resolveThinkingDefaultMock,
+  resolveThinkingSelection: (params: { level?: string }) => {
+    const requestedLevel = params.level ?? resolveThinkingDefaultMock(params);
+    const policy = { ...params, level: requestedLevel };
+    const supported = isThinkingLevelSupportedMock(policy);
+    return {
+      requestedLevel,
+      level: supported ? requestedLevel : resolveSupportedThinkingLevelMock(policy),
+      supported,
+    };
+  },
   resolveEffectiveAgentRuntime: resolveEffectiveAgentRuntimeMock,
   resolveSessionRuntimeOverrideForProvider: (
     await vi.importActual<typeof import("../../agents/session-runtime-compat.js")>(
@@ -164,8 +173,6 @@ vi.mock("./run.runtime.js", async () => ({
   DEFAULT_IDENTITY_FILENAME: "IDENTITY.md",
   ensureAgentWorkspace: ensureAgentWorkspaceMock,
   normalizeThinkLevel: normalizeThinkLevelMock,
-  isThinkingLevelSupported: isThinkingLevelSupportedMock,
-  resolveSupportedThinkingLevel: resolveSupportedThinkingLevelMock,
   supportsXHighThinking: supportsXHighThinkingMock,
   resolveSessionTranscriptPath: resolveSessionTranscriptPathMock,
   setSessionRuntimeModel: setSessionRuntimeModelMock,
@@ -281,26 +288,6 @@ vi.mock("./run-execution.runtime.js", () => ({
   getCliSessionBinding: getCliSessionBindingMock,
   runCliAgent: runCliAgentMock,
   resolveFastModeState: resolveFastModeStateMock,
-  resolveCandidateThinkingLevel: (params: {
-    provider: string;
-    modelId: string;
-    level?: string;
-    catalog?: unknown[];
-  }) => {
-    if (!params.level) {
-      return undefined;
-    }
-    const policy = {
-      provider: params.provider,
-      model: params.modelId,
-      level: params.level,
-      catalog: params.catalog,
-      agentRuntime: resolveEffectiveAgentRuntimeMock(params),
-    };
-    return isThinkingLevelSupportedMock(policy)
-      ? params.level
-      : resolveSupportedThinkingLevelMock(policy);
-  },
   resolveCronAgentLane: resolveCronAgentLaneMock,
   LiveSessionModelSwitchError,
   isCliProvider: isCliProviderMock,
@@ -613,7 +600,7 @@ function resetRunConfigMocks(): void {
 
 function resetRunExecutionMocks(): void {
   isCliProviderMock.mockReturnValue(false);
-  resolveBootstrapWarningSignaturesSeenMock.mockReturnValue(new Set());
+  resolveBootstrapWarningSignaturesSeenMock.mockReturnValue([]);
   resolveFastModeStateMock.mockImplementation((params) => resolveFastModeStateImpl(params));
   resolveCronAgentLaneMock.mockReturnValue(undefined);
   normalizeVerboseLevelMock.mockImplementation((value: unknown) => value ?? "off");
@@ -732,7 +719,7 @@ function resetRunOutcomeMocks(): void {
       sourceDeliveryOutcome,
       resolvedDelivery,
     }) => ({
-      result: undefined,
+      disposition: undefined,
       delivered: Boolean(
         sourceDeliveryOutcome?.verifiedMessageToolDelivery ||
         (deliveryRequested &&

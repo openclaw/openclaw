@@ -7,7 +7,11 @@ import type { UpdateCheckResult } from "../infra/update-check.js";
 import { runExec } from "../process/exec.js";
 import { createEmptyTaskAuditSummary } from "../tasks/task-registry.audit.shared.js";
 import { createEmptyTaskRegistrySummary } from "../tasks/task-registry.summary.js";
-import { buildTailscaleHttpsUrl, resolveGatewayProbeSnapshot } from "./status.scan.shared.js";
+import {
+  buildTailscaleHttpsUrl,
+  resolveGatewayProbeSnapshot,
+  type GatewayProbeSnapshot,
+} from "./status.scan.shared.js";
 
 function buildColdStartUpdateResult(): UpdateCheckResult {
   return {
@@ -76,6 +80,7 @@ type StatusScanCoreBootstrapParams<TAgentStatus> = {
   includeRegistryUpdate?: boolean;
   includeLocalStatusRpcFallback?: boolean;
   gatewayProbeTimeoutMs?: number;
+  gatewaySnapshot?: GatewayProbeSnapshot;
   getTailnetHostname: (runner: StatusScanExecRunner) => Promise<string | null>;
   getUpdateCheckResult: (params: {
     timeoutMs: number;
@@ -119,24 +124,26 @@ export async function createStatusScanCoreBootstrap<TAgentStatus>(
   const agentStatusPromise = skipColdStartNetworkChecks
     ? Promise.resolve(buildColdStartAgentLocalStatuses() as TAgentStatus)
     : params.getAgentLocalStatuses(params.cfg);
-  const gatewayProbePromise = measureCliCommandStartup(
-    "status.gateway-probe",
-    () =>
-      resolveGatewayProbeSnapshot({
-        cfg: params.cfg,
-        configPath: params.configPath,
-        env: params.env,
-        opts: {
-          ...params.opts,
-          ...(params.gatewayProbeTimeoutMs !== undefined
-            ? { timeoutMs: params.gatewayProbeTimeoutMs }
-            : {}),
-          ...(skipColdStartNetworkChecks ? { skipProbe: true } : {}),
-          localStatusRpcFallback: params.includeLocalStatusRpcFallback !== false,
-        },
-      }),
-    { config: params.cfg, env: params.env },
-  );
+  const gatewayProbePromise = params.gatewaySnapshot
+    ? Promise.resolve(params.gatewaySnapshot)
+    : measureCliCommandStartup(
+        "status.gateway-probe",
+        () =>
+          resolveGatewayProbeSnapshot({
+            cfg: params.cfg,
+            configPath: params.configPath,
+            env: params.env,
+            opts: {
+              ...params.opts,
+              ...(params.gatewayProbeTimeoutMs !== undefined
+                ? { timeoutMs: params.gatewayProbeTimeoutMs }
+                : {}),
+              ...(skipColdStartNetworkChecks ? { skipProbe: true } : {}),
+              localStatusRpcFallback: params.includeLocalStatusRpcFallback !== false,
+            },
+          }),
+        { config: params.cfg, env: params.env },
+      );
 
   return {
     tailscaleMode,

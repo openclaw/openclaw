@@ -37,6 +37,8 @@ type OpenClawStateLeaseOptions = {
   database: OpenClawStateLeaseDatabase;
   leaseMs: number;
   waitMs: number;
+  /** False keeps occupied leases fail-fast; waitMs bounds only storage-contention retries. */
+  waitForLease?: boolean;
   signal?: AbortSignal;
   /** Maintenance prepares normal storage before waiting for its operation lease. */
   prepareDatabase?: boolean;
@@ -164,12 +166,27 @@ function validateOptions(options: OpenClawStateLeaseOptions) {
       MAX_TIMER_TIMEOUT_MS,
     ),
     waitMs: validateDuration(options.waitMs, `${leaseLabel} waitMs`, 0, MAX_TIMER_TIMEOUT_MS),
+    waitForLease: options.waitForLease !== false,
     signal: options.signal,
     prepareDatabase: options.prepareDatabase === true,
     heartbeat: options.heartbeat,
     leaseLabel,
     operationLabel,
   };
+}
+
+function acquisitionRefusal(
+  options: ReturnType<typeof validateOptions>,
+  message: string,
+  cause?: unknown,
+): OpenClawStateLeaseError {
+  if (options.waitForLease) {
+    return leaseError(
+      "OPENCLAW_STATE_LEASE_TIMEOUT",
+      `timed out waiting for ${options.leaseLabel} ${options.scope}/${options.key}`,
+    );
+  }
+  return leaseError("STATE_LEASE_BUSY", message, cause);
 }
 
 type LeaseIdentity = {
@@ -309,6 +326,7 @@ export async function withOpenClawStateLease<T>(
   let attempt = 0;
   let confirmedExpiresAt: number | undefined;
   while (confirmedExpiresAt === undefined) {
+    let storageContention: unknown;
     if (validated.signal?.aborted) {
       throw abortError(validated.signal, "acquisition", validated.leaseLabel);
     }
@@ -340,10 +358,16 @@ export async function withOpenClawStateLease<T>(
           error,
         );
       }
+      storageContention = error;
     }
     const now = performance.now();
     if (confirmedExpiresAt !== undefined) {
-      if (validated.signal?.aborted || (validated.waitMs > 0 && now >= deadline)) {
+      // Storage-only waits must not reject a slow but uncontended first acquisition.
+      const boundedAdmission = validated.waitForLease || attempt > 0;
+      if (
+        validated.signal?.aborted ||
+        (boundedAdmission && validated.waitMs > 0 && now >= deadline)
+      ) {
         await releaseBestEffort({
           database: validated.database,
           operationLabel: validated.operationLabel,
@@ -355,17 +379,21 @@ export async function withOpenClawStateLease<T>(
         if (validated.signal?.aborted) {
           throw abortError(validated.signal, "acquisition", validated.leaseLabel);
         }
-        throw leaseError(
-          "OPENCLAW_STATE_LEASE_TIMEOUT",
-          `timed out waiting for ${validated.leaseLabel} ${validated.scope}/${validated.key}`,
+        throw acquisitionRefusal(
+          validated,
+          `could not finish acquiring ${validated.leaseLabel} ${validated.scope}/${validated.key} within the ${validated.waitMs} ms wait budget. Retry the operation.`,
         );
       }
       break;
     }
-    if (now >= deadline) {
-      throw leaseError(
-        "OPENCLAW_STATE_LEASE_TIMEOUT",
-        `timed out waiting for ${validated.leaseLabel} ${validated.scope}/${validated.key}`,
+    if (now >= deadline || (!validated.waitForLease && storageContention === undefined)) {
+      const reason = storageContention
+        ? "shared-state database is busy"
+        : "another operation holds the lease";
+      throw acquisitionRefusal(
+        validated,
+        `could not acquire ${validated.leaseLabel} ${validated.scope}/${validated.key} (wait budget ${validated.waitMs} ms): ${reason}. Retry after the current operation finishes.`,
+        storageContention,
       );
     }
     attempt += 1;
@@ -528,6 +556,21 @@ export async function withOpenClawStateLease<T>(
     void workerHeartbeat?.stop();
     void startingHeartbeat?.stop();
   };
+  const renewForHandoff = () => {
+    const params = { ...identity, database: validated.database };
+    try {
+      return renew({
+        ...params,
+        operationLabel: validated.operationLabel,
+        leaseMs: validated.leaseMs,
+      });
+    } catch (error) {
+      if (!isLeaseWriteContention(error)) {
+        throw error;
+      }
+      return verifyLeaseOwnership(params);
+    }
+  };
   const startWorker = async (expiresAt: number) => {
     const started = startOpenClawStateLeaseHeartbeat({
       path: resolveLeaseDatabasePath(validated.database),
@@ -537,6 +580,10 @@ export async function withOpenClawStateLease<T>(
       heartbeatMs,
       expiresAt,
       onLost: abortLost,
+      renewDuringStartup: () => {
+        assertActive();
+        return renewForHandoff();
+      },
     });
     startingHeartbeat = started;
     try {
@@ -583,6 +630,8 @@ export async function withOpenClawStateLease<T>(
       return expiresAt;
     },
     pause: async () => {
+      // Give drainage a current lease before freezing its durable expiry for capture.
+      confirmedExpiresAt = renewForHandoff();
       stopTimers();
       await workerHeartbeat?.stop();
       workerHeartbeat = undefined;
@@ -658,6 +707,11 @@ export async function withOpenClawStateLease<T>(
               fileExclusion.assertIfExcluded()
             ) {
               throw new Error("This lease mode does not support worker writes");
+            }
+            // A delayed expiry timer must not admit another synchronous effect.
+            if (confirmedExpiresAt === undefined || Date.now() >= confirmedExpiresAt) {
+              abortLost();
+              assertActive();
             }
           },
         });

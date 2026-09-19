@@ -53,6 +53,7 @@ export class NodeWorkerCapacity {
   private readonly waiters = new Set<() => void>();
   private readonly closeAbort = new AbortController();
   private publishedCapacity: NodeWorkerCapacitySnapshot;
+  private initialized = false;
 
   constructor(
     private readonly store: NodeWorkerLaunchStore,
@@ -100,6 +101,11 @@ export class NodeWorkerCapacity {
     }
     this.store.pruneExpiredTerminal();
     this.refresh(true);
+    this.initialized = true;
+  }
+
+  isInitialized(): boolean {
+    return this.initialized;
   }
 
   async claim(
@@ -166,6 +172,9 @@ export class NodeWorkerCapacity {
   }
 
   private changed(): void {
+    if (!this.initialized) {
+      return;
+    }
     this.wake();
     try {
       this.refresh();

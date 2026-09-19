@@ -3,7 +3,6 @@ import type OpenAI from "openai";
 import { getEnvApiKey } from "../env-api-keys.js";
 import { clampThinkingLevel } from "../model-utils.js";
 import { reasoningTagTextPolicy, type OpenAICompletionsOptions } from "../provider-options.js";
-// OpenAI completions provider adapts chat completions to the agent runtime.
 import { createAssistantOutput } from "../transports/assistant-output.js";
 import {
   resolveOpenAICompletionsCompat,
@@ -231,12 +230,11 @@ export const streamSimpleOpenAICompletions: StreamFunction<
   const clampedReasoning = options?.reasoning
     ? clampThinkingLevel(model, options.reasoning)
     : undefined;
-  const reasoningEffort = clampedReasoning === "off" ? undefined : clampedReasoning;
   const toolChoice = (options as OpenAICompletionsOptions | undefined)?.toolChoice;
 
   return streamOpenAICompletions(model, context, {
     ...base,
-    reasoningEffort,
+    reasoningEffort: clampedReasoning,
     toolChoice,
   } satisfies OpenAICompletionsOptions);
 };

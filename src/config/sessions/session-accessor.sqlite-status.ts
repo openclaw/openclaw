@@ -23,7 +23,10 @@ import {
 import { projectCanonicalSessionEntryShape } from "./store-entry-shape.js";
 import type { SessionEntry } from "./types.js";
 
-type SessionStatusDatabase = Pick<OpenClawAgentKyselyDatabase, "session_nodes">;
+// SQLite's implicit rowid is queryable but absent from generated declared-column types.
+type SessionStatusDatabase = {
+  session_nodes: OpenClawAgentKyselyDatabase["session_nodes"] & { rowid: number };
+};
 
 // Metadata readers do not own prompt snapshots. Strip those bytes before JS allocation;
 // Malformed/overdepth JSON reaches the parser unchanged. Requiring an identity keeps

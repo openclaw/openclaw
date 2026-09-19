@@ -1,8 +1,8 @@
 import { expectDefined } from "@openclaw/normalization-core";
 // @vitest-environment node
-import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it } from "vitest";
 import { expectObjectFields } from "../../../../src/test-utils/mock-call-assertions.js";
+import { createRequireRecord } from "../../../../test/helpers/record.js";
 import {
   buildFallbackSlashCommands,
   buildSlashCommandsFromEntries,

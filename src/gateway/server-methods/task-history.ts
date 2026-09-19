@@ -1,10 +1,12 @@
 import { createHash } from "node:crypto";
 import { expectDefined } from "@openclaw/normalization-core";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { Value } from "typebox/value";
 import {
   ErrorCodes,
   errorShape,
   validateTasksHistoryParams,
+  TasksHistoryResultSchema,
   type ErrorCode,
   type TasksHistoryResult,
 } from "../../../packages/gateway-protocol/src/index.js";
@@ -128,6 +130,7 @@ export const taskHistoryHandler: GatewayRequestHandler = async (opts) => {
     assertCurrent();
     const result: TasksHistoryResult = {
       messages: page.messages,
+      ...(page.activity ? { activity: page.activity } : {}),
       ...(page.nextCursor
         ? {
             nextCursor: Buffer.from(JSON.stringify([binding, page.nextCursor])).toString(
@@ -195,12 +198,17 @@ export const taskHistoryHandler: GatewayRequestHandler = async (opts) => {
           if (!Array.isArray(page?.messages)) {
             throw new Error("Task transcript returned no messages");
           }
-          publish({
+          const result = {
             messages: page.messages,
+            ...(page.activity ? { activity: page.activity } : {}),
             ...(page.hasMore === true && typeof page.nextOffset === "number"
               ? { nextCursor: String(page.nextOffset) }
               : {}),
-          });
+          };
+          if (!Value.Check(TasksHistoryResultSchema, result)) {
+            throw new Error("Task transcript returned an invalid page");
+          }
+          publish(result);
         },
       });
     } else if (harness?.taskHistory) {

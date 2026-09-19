@@ -16,8 +16,12 @@ describe("buildEmbeddedAttemptToolRunContext", () => {
       sessionId: "source-session",
       runId: "source-run",
       onYield: () => undefined,
+      provider: "custom",
+      modelId: "alias",
+      model: { provider: "custom", id: "resolved-model", headers: { "x-private": "fixture" } },
     };
     const context = buildEmbeddedAttemptToolRunContext(input);
+    input.model.id = "next-model";
 
     expect(context).toMatchObject({
       clientCaps: ["inline-widgets"],
@@ -29,9 +33,10 @@ describe("buildEmbeddedAttemptToolRunContext", () => {
       taskSuggestionDeliveryMode: "gateway",
       nativeChannelId: "native-conversation",
     });
-    for (const ownedField of ["sessionKey", "sessionId", "runId", "onYield"]) {
+    for (const ownedField of ["sessionKey", "sessionId", "runId", "onYield", "model"]) {
       expect(context).not.toHaveProperty(ownedField);
     }
+    expect(context.requesterModel).toEqual({ provider: "custom", model: "resolved-model" });
   });
 
   it("carries runtime toolsAllow into coding tool construction", () => {

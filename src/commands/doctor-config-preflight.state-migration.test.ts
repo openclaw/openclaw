@@ -632,55 +632,79 @@ describe("runDoctorConfigPreflight state migration", () => {
     expect(recordSuccessfulStartupMigrations).not.toHaveBeenCalled();
   });
 
-  it("records a missing plugin migration as deferred without blocking startup", async () => {
-    readMigrationCheckpointStatus.mockReturnValue("stale");
-    const snapshot = makePreflightConfigSnapshot({
-      gateway: { mode: "local", port: 19091 },
-      plugins: { entries: { discord: { enabled: true } } },
-    });
-    runPostCorePluginConvergence.mockResolvedValueOnce(
-      makeStartupConvergenceResult({
-        errored: true,
-        warnings: [
-          {
-            pluginId: "discord",
-            reason: "missing-install-path: install path missing",
-            message: 'Plugin "discord" has no install path.',
-            guidance: ["Run `openclaw update repair` to retry plugin repair."],
-          },
-        ],
-        smokeFailures: [
-          {
-            pluginId: "discord",
-            reason: "missing-install-path",
-            detail: "install path missing",
-          },
-        ],
-      }),
-    );
+  it.each([false, true])(
+    "starts degraded with a missing plugin (host-link warning=%s)",
+    async (hostLinkWarning) => {
+      readMigrationCheckpointStatus.mockReturnValue("stale");
+      const snapshot = makePreflightConfigSnapshot({
+        gateway: { mode: "local", port: 19091 },
+        plugins: { entries: { discord: { enabled: true } } },
+      });
+      runPostCorePluginConvergence.mockResolvedValueOnce(
+        makeStartupConvergenceResult({
+          errored: true,
+          warnings: [
+            ...(hostLinkWarning
+              ? [
+                  {
+                    reason: "Failed to repair installed OpenClaw host peer links: EACCES",
+                    message: "Failed to repair installed OpenClaw host peer links: EACCES",
+                    guidance: ["Run `openclaw doctor --fix` to retry plugin repair."],
+                  },
+                ]
+              : []),
+            {
+              pluginId: "discord",
+              reason: "missing-install-path: install path missing",
+              message: 'Plugin "discord" has no install path.',
+              guidance: ["Run `openclaw update repair` to retry plugin repair."],
+            },
+          ],
+          smokeFailures: [
+            {
+              pluginId: "discord",
+              reason: "missing-install-path",
+              detail: "install path missing",
+            },
+          ],
+        }),
+      );
 
-    await readConfigFileSnapshot.withImplementation(
-      async () => snapshot,
-      async () => {
-        const result = await runDoctorConfigPreflight(startupCheckpointOptions);
-        expect(result.stateMigrationStepReceipts).toContainEqual(
-          expect.objectContaining({
-            id: "plugin:discord",
-            outcome: "deferred",
-            warnings: [expect.stringContaining('Run "openclaw update repair"')],
-          }),
+      await readConfigFileSnapshot.withImplementation(
+        async () => snapshot,
+        async () => {
+          const result = await runDoctorConfigPreflight(startupCheckpointOptions);
+          expect(result.stateMigrationStepReceipts).toContainEqual(
+            expect.objectContaining({
+              id: "plugin:discord",
+              outcome: "deferred",
+              warnings: [expect.stringContaining('Run "openclaw update repair"')],
+            }),
+          );
+        },
+      );
+
+      expect(recordDeferredPluginMigrations).toHaveBeenCalledWith({
+        env: acquireStartupMigrationLeaseWithWait.mock.calls[0]?.[0]?.env,
+        pending: [expect.objectContaining({ pluginId: "discord" })],
+        expectedPending: [],
+      });
+      expect(listActiveDegradedPlugins()).toMatchObject([
+        {
+          pluginId: "discord",
+          state: "configured-unavailable",
+          diagnostic: { reason: "missing-install-path" },
+        },
+      ]);
+      expect(readStartupMigrationWarning()).toContain('Plugin "discord"');
+      if (hostLinkWarning) {
+        expect(readStartupMigrationWarning()).toContain(
+          "Failed to repair installed OpenClaw host peer links: EACCES",
         );
-      },
-    );
-
-    expect(recordDeferredPluginMigrations).toHaveBeenCalledWith({
-      env: acquireStartupMigrationLeaseWithWait.mock.calls[0]?.[0]?.env,
-      pending: [expect.objectContaining({ pluginId: "discord" })],
-      expectedPending: [],
-    });
-    expect(listActiveDegradedPlugins()).toEqual([]);
-    expect(recordSuccessfulStartupMigrations).not.toHaveBeenCalled();
-  });
+      }
+      expect(recordSuccessfulStartupMigrations).not.toHaveBeenCalled();
+    },
+  );
 
   it("preserves verified plugin quarantine while an older writable parent defers repair", async () => {
     readMigrationCheckpointStatus.mockReturnValue("stale");
@@ -878,7 +902,7 @@ describe("runDoctorConfigPreflight state migration", () => {
   });
 
   it.each([undefined, "discord"])(
-    "defers named plugin repair warnings while preserving unowned failures (plugin=%s)",
+    "records plugin repair warnings without blocking startup (plugin=%s)",
     async (pluginId) => {
       readMigrationCheckpointStatus.mockReturnValue("stale");
       const snapshot = makePreflightConfigSnapshot({
@@ -892,18 +916,14 @@ describe("runDoctorConfigPreflight state migration", () => {
       await readConfigFileSnapshot.withImplementation(
         async () => snapshot,
         async () => {
+          const result = await runDoctorConfigPreflight(startupCheckpointOptions);
           if (pluginId) {
-            const result = await runDoctorConfigPreflight(startupCheckpointOptions);
             expect(result.stateMigrationStepReceipts).toContainEqual(
               expect.objectContaining({ id: `plugin:${pluginId}`, outcome: "deferred" }),
             );
-            expect(autoMigrateLegacyState).toHaveBeenCalledOnce();
-          } else {
-            await expect(runDoctorConfigPreflight(startupCheckpointOptions)).rejects.toThrow(
-              "npm package not found",
-            );
-            expect(autoMigrateLegacyState).not.toHaveBeenCalled();
           }
+          expect(autoMigrateLegacyState).toHaveBeenCalledOnce();
+          expect(readStartupMigrationWarning()).toContain("npm package not found");
         },
       );
 

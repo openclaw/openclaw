@@ -1,4 +1,5 @@
 name: Plugin ClawHub Release
+run-name: "plugin-clawhub-release.yml [${{ inputs.release_tag || inputs.ref }}] ${{ inputs.dry_run && 'validation' || 'publish' }} parent=${{ inputs.release_publish_run_id || 'manual' }}/${{ inputs.release_publish_run_attempt || '1' }}"
 
 on:
   workflow_dispatch:

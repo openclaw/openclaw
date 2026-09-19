@@ -36,15 +36,29 @@ describe("package lifecycle completion", () => {
         }
       });
 
-      const first = completePendingPackageLifecycle({ packageRoot, runScript });
-      await firstPreinstall;
-      const second = completePendingPackageLifecycle({ packageRoot, runScript });
-      releasePreinstall?.();
+      const callers: Promise<boolean>[] = [];
+      const startCaller = () => {
+        const caller = completePendingPackageLifecycle({ packageRoot, runScript });
+        void caller.catch(() => {});
+        callers.push(caller);
+      };
+      startCaller();
+      try {
+        await firstPreinstall;
+        startCaller();
+        await new Promise<void>((resolve) => {
+          setTimeout(resolve, 250);
+        });
+        expect(calls).toEqual(["preinstall"]);
+        startCaller();
+        releasePreinstall();
 
-      await expect(Promise.all([first, second])).resolves.toSatisfy(
-        (results: boolean[]) => results.filter(Boolean).length === 1,
-      );
-      expect(calls).toEqual(["preinstall", "postinstall"]);
+        await expect(Promise.all(callers)).resolves.toEqual([true, false, false]);
+        expect(calls).toEqual(["preinstall", "postinstall"]);
+      } finally {
+        releasePreinstall();
+        await Promise.allSettled(callers);
+      }
     });
   });
 
@@ -80,18 +94,10 @@ describe("package lifecycle completion", () => {
   ])("records the %s lifecycle budget on its lock", async (_name, scriptTimeoutMs) => {
     await withTestDir({ prefix: "openclaw-package-lifecycle-lock-" }, async (packageRoot) => {
       const markerPath = await markModernLifecyclePending(packageRoot);
-      let releasePreinstall: (() => void) | undefined;
-      let preinstallCalls = 0;
-      const preinstallBlocked = new Promise<void>((resolve) => {
-        releasePreinstall = resolve;
-      });
+      const { promise: preinstallBlocked, resolve: releasePreinstall } = createDeferred();
       const { promise: firstPreinstall, resolve: firstPreinstallStarted } = createDeferred();
       const runScript = async (script: { name: string }) => {
         if (script.name === "preinstall") {
-          preinstallCalls += 1;
-          if (preinstallCalls > 1) {
-            throw new Error("concurrent lifecycle execution");
-          }
           firstPreinstallStarted?.();
           await preinstallBlocked;
         } else {
@@ -105,26 +111,18 @@ describe("package lifecycle completion", () => {
         runScript,
         timeoutMs: scriptTimeoutMs,
       });
-      await firstPreinstall;
-      const lockStat = await fs.stat(path.join(packageRoot, ".openclaw-lifecycle-lock"));
-      expect(lockStat.mtimeMs).toBeGreaterThanOrEqual(startedAt + scriptTimeoutMs * 2 - 1_000);
-      const second = completePendingPackageLifecycle({
-        packageRoot,
-        runScript,
-        timeoutMs: scriptTimeoutMs,
-      });
-      const secondResult = second.then(
-        (value) => ({ value }),
-        (error: unknown) => ({ error }),
-      );
-      await new Promise<void>((resolve) => {
-        setTimeout(resolve, 250);
-      });
-
-      expect(preinstallCalls).toBe(1);
-      releasePreinstall?.();
-      await expect(first).resolves.toBe(true);
-      await expect(secondResult).resolves.toEqual({ value: false });
+      const completion = Promise.allSettled([first]);
+      try {
+        await firstPreinstall;
+        const lockStat = await fs.stat(path.join(packageRoot, ".openclaw-lifecycle-lock"));
+        expect(lockStat.mtimeMs).toBeGreaterThanOrEqual(startedAt + scriptTimeoutMs * 2 - 1_000);
+        releasePreinstall();
+        await expect(first).resolves.toBe(true);
+        await expect(fs.access(markerPath)).rejects.toMatchObject({ code: "ENOENT" });
+      } finally {
+        releasePreinstall();
+        await completion;
+      }
     });
   });
 

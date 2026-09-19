@@ -7,6 +7,7 @@ import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { getFreePort } from "../src/test-utils/ports.ts";
 import { assertPrebuiltUiE2eRuntime } from "../test/vitest/vitest.ui-e2e-prebuilt.global-setup.ts";
+import { desktopReadinessLines } from "./lib/desktop-readiness-proof.mts";
 import {
   type DesktopProofSourceStatus,
   desktopProofSshdFailure,
@@ -608,6 +609,16 @@ async function main() {
               try {
                 diagnostic.report = await readDesktopProofTestReport(reportFile);
                 diagnostic.status = "available";
+                for (const file of diagnostic.report.files) {
+                  for (const test of file.assertions) {
+                    for (const line of desktopReadinessLines(
+                      carrier,
+                      (test.gatewayReadiness ?? []).filter((entry) => entry.outcome === "ready"),
+                    )) {
+                      console.log(line);
+                    }
+                  }
+                }
               } catch (error) {
                 diagnostic.status =
                   error instanceof Error && "code" in error && error.code === "ENOENT"
@@ -739,7 +750,20 @@ async function main() {
     }
   }
   if (!receipt.complete) {
-    throw new Error(`Desktop proof incomplete at ${receipt.phase}`);
+    const reasons = receipt.testDiagnostics.flatMap(
+      ({ carrier, report }) =>
+        report?.files.flatMap((file) =>
+          file.assertions.flatMap((test) =>
+            desktopReadinessLines(
+              carrier,
+              (test.gatewayReadiness ?? []).filter((entry) => entry.outcome !== "ready"),
+            ),
+          ),
+        ) ?? [],
+    );
+    throw new Error([`Desktop proof incomplete at ${receipt.phase}`, ...reasons].join("\n"), {
+      cause: failure,
+    });
   }
 }
 

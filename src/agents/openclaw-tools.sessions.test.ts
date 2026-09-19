@@ -2,10 +2,8 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { createAssistantMessageEventStream, type Model } from "openclaw/plugin-sdk/llm";
 import { Value } from "typebox/value";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import {
   configureExecutionDecisionWorkSink,
@@ -14,6 +12,7 @@ import {
 import { createExecutionIdentityAdmissionToken } from "../audit/execution-identity-admission.js";
 import type { ChannelMessagingAdapter } from "../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import {
   appendTranscriptMessage,
   listSessionParticipantsReadOnly,
@@ -33,6 +32,7 @@ import {
   resetGatewayWorkAdmission,
 } from "../process/gateway-work-admission.js";
 import { runWithGatewayRootWorkAdmissionForTest } from "../process/gateway-work-admission.test-helpers.js";
+import { isCompletionReportInputProvenance } from "../sessions/input-provenance.js";
 import { disposeOpenClawAgentDatabaseByPath } from "../state/openclaw-agent-db.js";
 import { createTestRegistry } from "../test-utils/channel-plugins.js";
 
@@ -63,21 +63,8 @@ vi.mock("../config/config.js", () => ({
 import "./test-helpers/fast-openclaw-tools-sessions.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { createOperationalRunInstanceRef } from "./admitted-run-context.js";
-import { steerActiveSessionWithOptionalDeliveryWait } from "./embedded-agent-runner/run/attempt-queue-message.js";
-import {
-  setActiveEmbeddedRun,
-  type EmbeddedAgentQueueMessageOptions,
-} from "./embedded-agent-runner/runs.js";
+import { setActiveEmbeddedRun } from "./embedded-agent-runner/runs.js";
 import { testing as embeddedRunsTesting } from "./embedded-agent-runner/runs.test-support.js";
-import { guardSessionManager } from "./session-tool-result-guard-wrapper.js";
-import {
-  createAssistant,
-  createAssistantResultStream,
-  createTestSession,
-  registerAgentSessionLoopTestLifecycle,
-  streamMocks,
-} from "./sessions/agent-session-loop-correctness.test-support.js";
-import { SessionManager } from "./sessions/session-manager.js";
 import { subagentRuns } from "./subagents/registry/subagent-registry-memory.js";
 import { addSubagentRunForTests } from "./subagents/registry/subagent-registry.test-helpers.js";
 import { textAssistant } from "./test-helpers/sparse-transcript.test-support.js";
@@ -256,6 +243,7 @@ type AgentCallParams = {
     sourceSessionKey?: string;
     sourceChannel?: string;
     sourceTool?: string;
+    sourceRole?: string;
   };
 };
 
@@ -298,8 +286,6 @@ function expectInterSessionAgentCall(call: { params?: unknown }): void {
 function sessionsSendDetails(details: unknown): SessionsSendDetails {
   return details as SessionsSendDetails;
 }
-
-registerAgentSessionLoopTestLifecycle();
 
 describe("sessions tools", () => {
   beforeEach(() => {
@@ -1635,13 +1621,11 @@ describe("sessions tools", () => {
   ])(
     "records exactly one cross-agent contribution at the original prompt time only after admission (timeoutSeconds: $timeoutSeconds, admitted: $admitted)",
     async ({ timeoutSeconds, admitted }) => {
-      const storePath = path.join(
+      const storeTemplate = path.join(
         tempDirs.make("openclaw-session-send-participant-"),
-        "agents",
-        "research",
-        "agent",
-        "openclaw-agent.sqlite",
+        "agents/{agentId}/agent/openclaw-agent.sqlite",
       );
+      const storePath = resolveSessionStorePathCore(storeTemplate, { agentId: "research" });
       const scope = { agentId: "research", sessionKey: "agent:research:main", storePath };
       const sessionId = "participant-target";
       const promptedAt = 1_000;
@@ -1668,7 +1652,7 @@ describe("sessions tools", () => {
         const tool = createSessionsSendTool({
           agentSessionKey: "agent:main:main",
           expectedTargetSessionId: sessionId,
-          config: { ...TEST_CONFIG, session: { ...TEST_CONFIG.session, store: storePath } },
+          config: { ...TEST_CONFIG, session: { ...TEST_CONFIG.session, store: storeTemplate } },
           callGateway: callGatewayMock,
         });
         const result = await tool.execute("participant-send", {
@@ -1789,35 +1773,21 @@ describe("sessions tools", () => {
     const calls: Array<{ method?: string; params?: unknown }> = [];
     let agentCallCount = 0;
     const replyByRunId = new Map<string, string>();
-    const requesterKey = "discord:group:req";
-    const targetKey = "discord:group:target";
-    let sendParams: { to?: string; channel?: string; message?: string } = {};
+    const requesterKey = "agent:main:whatsapp:group:req";
+    const targetKey = "agent:director1:discord:group:target";
     callGatewayMock.mockImplementation(async (opts: unknown) => {
       const request = opts as { method?: string; params?: unknown };
       calls.push(request);
       if (request.method === "agent") {
         agentCallCount += 1;
         const runId = `run-${agentCallCount}`;
-        const params = request.params as
-          | {
-              message?: string;
-              sessionKey?: string;
-              extraSystemPrompt?: string;
-            }
-          | undefined;
+        const params = agentParams(request);
         let reply = "initial";
-        if (params?.extraSystemPrompt?.includes("Agent-to-agent reply step")) {
+        if (params.extraSystemPrompt?.includes("Agent-to-agent reply step")) {
           reply = params.sessionKey === requesterKey ? "pong-1" : "pong-2";
         }
-        if (params?.extraSystemPrompt?.includes("Agent-to-agent announce step")) {
-          reply = "announce now";
-        }
         replyByRunId.set(runId, reply);
-        return {
-          runId,
-          status: "accepted",
-          acceptedAt: 2000 + agentCallCount,
-        };
+        return { runId, status: "accepted" };
       }
       if (request.method === "agent.wait") {
         const params = request.params as { runId?: string } | undefined;
@@ -1827,17 +1797,6 @@ describe("sessions tools", () => {
           status: "ok",
           terminalReply: { disposition: "visible", text: replyByRunId.get(runId) },
         };
-      }
-      if (request.method === "send") {
-        const params = request.params as
-          | { to?: string; channel?: string; message?: string }
-          | undefined;
-        sendParams = {
-          to: params?.to,
-          channel: params?.channel,
-          message: params?.message,
-        };
-        return { messageId: "m-announce" };
       }
       return {};
     });
@@ -1850,7 +1809,7 @@ describe("sessions tools", () => {
 
     const tool = getSessionTool("sessions_send", {
       agentSessionKey: requesterKey,
-      agentChannel: "discord",
+      agentChannel: "whatsapp",
     });
 
     const waited = await tool.execute("call7", {
@@ -1861,12 +1820,7 @@ describe("sessions tools", () => {
     const waitedDetails = sessionsSendDetails(waited.details);
     expect(waitedDetails.status).toBe("ok");
     expect(waitedDetails.reply).toBe("initial");
-    await vi.waitFor(
-      () => {
-        expect(countMatching(calls, (call) => call.method === "agent")).toBe(6);
-      },
-      { timeout: 2_000, interval: 5 },
-    );
+    await waitForCalls(() => countMatching(calls, (call) => call.method === "send"), 1);
 
     const agentCalls = calls.filter((call) => call.method === "agent");
     expect(agentCalls).toHaveLength(6);
@@ -1875,36 +1829,125 @@ describe("sessions tools", () => {
       expect(params.lane).toMatch(/^nested(?::|$)/);
       expect(params.channel).toBe("webchat");
       expect(params.inputProvenance?.kind).toBe("inter_session");
+      expect(params.inputProvenance?.sourceRole).toBeUndefined();
     }
 
-    const replySteps = calls.filter(
-      (call) =>
-        call.method === "agent" &&
-        typeof (call.params as { extraSystemPrompt?: string })?.extraSystemPrompt === "string" &&
-        (call.params as { extraSystemPrompt?: string })?.extraSystemPrompt?.includes(
-          "Agent-to-agent reply step",
-        ),
+    const replySteps = agentCalls.filter((call) =>
+      agentParams(call).extraSystemPrompt?.includes("Agent-to-agent reply step"),
     );
     expect(replySteps).toHaveLength(5);
-    expect(sendParams.to).toBe("group:target");
-    expect(sendParams.channel).toBe("discord");
-    expect(sendParams.message).toBe("announce now");
+    const requesterStep = {
+      agentId: "main",
+      sessionKey: requesterKey,
+      inputProvenance: {
+        sourceSessionKey: targetKey,
+        sourceChannel: "discord",
+        sourceTool: "sessions_send",
+      },
+      extraSystemPrompt: expect.stringContaining("Current agent: Agent 1 (requester)."),
+    };
+    const targetStep = {
+      agentId: "director1",
+      sessionKey: targetKey,
+      inputProvenance: {
+        sourceSessionKey: requesterKey,
+        sourceChannel: "whatsapp",
+        sourceTool: "sessions_send",
+      },
+      extraSystemPrompt: expect.stringContaining("Current agent: Agent 2 (target)."),
+    };
+    expect(replySteps.map((step) => step.params)).toMatchObject([
+      { ...requesterStep, message: expect.stringContaining("initial") },
+      { ...targetStep, message: expect.stringContaining("pong-1") },
+      { ...requesterStep, message: expect.stringContaining("pong-2") },
+      { ...targetStep, message: expect.stringContaining("pong-1") },
+      { ...requesterStep, message: expect.stringContaining("pong-2") },
+    ]);
+    const announcements = calls.filter((call) => call.method === "send");
+    expect(announcements).toHaveLength(1);
+    expect(announcements[0]?.params).toMatchObject({
+      to: "group:target",
+      channel: "discord",
+      message: "announce now",
+    });
   });
 
-  it.each([
+  it.each<{
+    targetKind: string;
+    targetKey: string;
+    spawned: boolean;
+    timeoutSeconds?: number;
+    pendingError?: boolean;
+    failure?: string;
+    stopReason?: string;
+    cronRequester?: boolean;
+  }>([
     { targetKind: "peer", targetKey: "agent:director1:main", spawned: false },
     { targetKind: "visible child", targetKey: "agent:director1:dashboard:child", spawned: true },
     { targetKind: "hidden child", targetKey: "agent:director1:subagent:child", spawned: true },
+    {
+      targetKind: "nonblocking child",
+      targetKey: "agent:director1:subagent:child",
+      spawned: true,
+      timeoutSeconds: 0,
+    },
+    {
+      targetKind: "retrying child",
+      targetKey: "agent:director1:subagent:child",
+      spawned: true,
+      pendingError: true,
+    },
+    {
+      targetKind: "failed child",
+      targetKey: "agent:director1:subagent:child",
+      spawned: true,
+      failure: "child run failed",
+    },
+    {
+      targetKind: "failed retrying child",
+      targetKey: "agent:director1:subagent:child",
+      spawned: true,
+      pendingError: true,
+      failure: "child retry exhausted",
+    },
+    {
+      targetKind: "cancelled child",
+      targetKey: "agent:director1:subagent:child",
+      spawned: true,
+      failure: "child run cancelled",
+      stopReason: "aborted",
+    },
+    ...["dashboard", "subagent"].flatMap((kind) =>
+      [0, 1].flatMap((timeoutSeconds) =>
+        [false, true].map((failed) => ({
+          targetKind: `${kind} child of Cron, timeout=${timeoutSeconds}, failed=${failed}`,
+          targetKey: `agent:director1:${kind}:child`,
+          spawned: true,
+          cronRequester: true,
+          timeoutSeconds,
+          failure: failed ? "Cron child run failed" : undefined,
+        })),
+      ),
+    ),
   ])(
     "sessions_send delivers the late reply from a $targetKind after the parent root releases",
-    async ({ targetKey, spawned }) => {
+    async ({
+      targetKey,
+      spawned,
+      timeoutSeconds = 1,
+      pendingError,
+      failure,
+      stopReason,
+      cronRequester = false,
+    }) => {
       const calls: Array<{ method?: string; params?: unknown }> = [];
-      const requesterKey = "agent:main:main";
-      loadSessionEntryByKeyMock.mockImplementation((sessionKey: string) =>
-        spawned && sessionKey === targetKey
-          ? { sessionId: "child-session", updatedAt: 1, spawnedBy: requesterKey, spawnDepth: 1 }
-          : undefined,
-      );
+      const requesterKey = cronRequester ? "agent:main:cron:job:run:once" : "agent:main:main";
+      if (spawned) {
+        await upsertSessionEntryCore(
+          { agentId: "director1", sessionKey: targetKey },
+          { sessionId: "child-session", updatedAt: 1, spawnedBy: requesterKey, spawnDepth: 1 },
+        );
+      }
       let targetWaitCount = 0;
       let releaseDelayedWait = () => {};
       const delayedWaitGate = new Promise<void>((resolve) => {
@@ -1935,10 +1978,17 @@ describe("sessions tools", () => {
           const params = request.params as { runId?: string } | undefined;
           if (params?.runId === "run-target") {
             targetWaitCount += 1;
-            if (targetWaitCount === 1) {
-              return { runId: "run-target", status: "timeout" };
+            if (timeoutSeconds !== 0 && targetWaitCount === 1) {
+              return {
+                runId: "run-target",
+                status: "timeout",
+                ...(pendingError ? { pendingError: true, error: "retrying provider" } : {}),
+              };
             }
             await delayedWaitGate;
+            if (failure) {
+              return { runId: "run-target", status: "error", error: failure, stopReason };
+            }
             return {
               runId: "run-target",
               status: "ok",
@@ -1956,7 +2006,9 @@ describe("sessions tools", () => {
         return {};
       });
       agentStepTesting.setDepsForTest({
-        agentCommandFromIngress: async () => {
+        agentCommandFromIngress: async (opts) => {
+          expect(opts.sessionKey).toBe(targetKey);
+          expect(opts.extraSystemPrompt).toContain("Agent-to-agent announce step");
           finalAnnounceAdmissionClosed = isGatewaySubordinateWorkAdmissionClosed();
           if (finalAnnounceAdmissionClosed) {
             throw new GatewayDrainingError();
@@ -1979,51 +2031,71 @@ describe("sessions tools", () => {
         tool.execute("call-delayed", {
           sessionKey: targetKey,
           message: "ping",
-          timeoutSeconds: 1,
+          timeoutSeconds,
         }),
       );
       const details = sessionsSendDetails(result.details);
-      expect(details.status).toBe("accepted");
+      expect(details.status).toBe(pendingError ? "timeout" : "accepted");
       expect(details.sessionKey).toBe(targetKey);
-      expect(details.targetDisposition).toBe("queued");
+      if (!pendingError) {
+        expect(details.targetDisposition).toBe("queued");
+      }
       expect(details.delivery?.status).toBe("pending");
       expect(details.delivery?.mode).toBe("announce");
       expect(getActiveGatewayRootWorkCount()).toBe(1);
       expect(requesterProviderStarts).toBe(0);
       releaseDelayedWait();
 
-      await vi.waitFor(
-        () => {
-          expect(requesterAdmissionClosed).toBe(false);
-        },
-        { timeout: 2_000, interval: 5 },
-      );
-      expect(requesterProviderStarts).toBe(3);
+      if (!cronRequester) {
+        await vi.waitFor(
+          () => {
+            expect(requesterAdmissionClosed).toBe(false);
+          },
+          { timeout: 2_000, interval: 5 },
+        );
+      }
+      await vi.waitFor(() => {
+        expect(getActiveGatewayRootWorkCount()).toBe(0);
+      });
+      expect(requesterProviderStarts).toBe(cronRequester ? 0 : spawned ? 1 : 3);
 
       const requesterReplyCall = calls.find(
         (call) =>
           call.method === "agent" &&
           (call.params as { sessionKey?: string } | undefined)?.sessionKey === requesterKey,
       );
-      const replyParams = requesterReplyCall?.params as
-        | {
-            extraSystemPrompt?: string;
-            inputProvenance?: { sourceSessionKey?: string };
-            message?: string;
-            sessionKey?: string;
-          }
-        | undefined;
-      expect(replyParams?.sessionKey).toBe(requesterKey);
-      expect(replyParams?.inputProvenance?.sourceSessionKey).toBe(targetKey);
-      expect(replyParams?.message).toContain("late director reply");
-      expect(replyParams?.extraSystemPrompt).toContain("Agent-to-agent reply step");
-      expect(replyParams?.extraSystemPrompt).toContain("Current agent: Agent 1 (requester)");
+      if (cronRequester) {
+        expect(requesterReplyCall).toBeUndefined();
+        expect(requesterAdmissionClosed).toBeUndefined();
+        expect(calls.filter((call) => call.method === "agent")).toHaveLength(1);
+      } else {
+        const replyParams = requesterReplyCall?.params as
+          | {
+              extraSystemPrompt?: string;
+              inputProvenance?: { sourceSessionKey?: string; sourceRole?: string };
+              message?: string;
+              sessionKey?: string;
+            }
+          | undefined;
+        expect(replyParams?.sessionKey).toBe(requesterKey);
+        expect(replyParams?.inputProvenance?.sourceSessionKey).toBe(targetKey);
+        expect(replyParams?.message).toContain(failure ?? "late director reply");
+        expect(replyParams?.inputProvenance?.sourceRole).toBe(spawned ? "subagent" : undefined);
+        expect(
+          isCompletionReportInputProvenance(replyParams?.inputProvenance),
+          "requested child results use the completion boundary so parent answers remain visible",
+        ).toBe(spawned);
+        if (spawned) {
+          expect(replyParams?.extraSystemPrompt).not.toContain("REPLY_SKIP");
+        } else {
+          expect(replyParams?.extraSystemPrompt).toContain("Agent-to-agent reply step");
+          expect(replyParams?.extraSystemPrompt).toContain("Current agent: Agent 1 (requester)");
+        }
+      }
       expect(calls.find((call) => call.method === "send")).toBeUndefined();
-      await vi.waitFor(() => {
-        expect(finalAnnounceAdmissionClosed).toBe(false);
-        expect(finalAnnounceProviderStarts).toBe(1);
-        expect(getActiveGatewayRootWorkCount()).toBe(0);
-      });
+      const announces = !spawned || (cronRequester && !failure);
+      expect(finalAnnounceAdmissionClosed).toBe(announces ? false : undefined);
+      expect(finalAnnounceProviderStarts).toBe(announces ? 1 : 0);
     },
   );
 
@@ -2185,6 +2257,19 @@ describe("sessions tools", () => {
     const requesterKey = "agent:main:cron:source-job:run:source-run";
     const runScopedCallerKey = "agent:leasing-ops:cron:monthly-utility:run:run-fast";
     const durableCronCallerKey = "agent:leasing-ops:cron:monthly-utility";
+    const dir = tempDirs.make("openclaw-cron-fallback-stores-");
+    const parentScope = {
+      agentId: "leasing-ops",
+      sessionKey: durableCronCallerKey,
+      storePath: resolveSessionStorePathCore(undefined, { agentId: "leasing-ops" }),
+    };
+    const runScope = {
+      ...parentScope,
+      sessionKey: runScopedCallerKey,
+      storePath: path.join(dir, "agents", "leasing-ops", "sessions", "sessions.json"),
+    };
+    await upsertSessionEntryCore(parentScope, { sessionId: "durable-parent", updatedAt: 1 });
+    await upsertSessionEntryCore(runScope, { sessionId: "caller-active-session", updatedAt: 1 });
     const queueMessage = vi.fn(async () => {});
     setActiveEmbeddedRun(
       "caller-active-session",
@@ -2217,7 +2302,10 @@ describe("sessions tools", () => {
     const tool = getSessionTool("sessions_send", {
       agentSessionKey: requesterKey,
       agentChannel: "telegram",
-      config: cloneTestConfig(),
+      config: {
+        ...cloneTestConfig(),
+        session: { store: path.join(dir, "agents", "{agentId}", "sessions", "sessions.json") },
+      },
     });
 
     const result = await tool.execute("call-run-scoped-caller", {
@@ -2243,6 +2331,14 @@ describe("sessions tools", () => {
     });
     expect(calls.filter((call) => call.method === "chat.history")).toHaveLength(0);
     expect(calls.filter((call) => call.method === "agent")).toHaveLength(1);
+    expect
+      .soft(listSessionParticipantsReadOnly(parentScope).get(durableCronCallerKey))
+      .toEqual([
+        expect.objectContaining({ identity: { type: "agent", id: "main" }, contributionCount: 1 }),
+      ]);
+    expect
+      .soft(listSessionParticipantsReadOnly(runScope).get(durableCronCallerKey) ?? [])
+      .toEqual([]);
   });
 
   it("sessions_send never reroutes an exact-incarnation grant to a Cron parent", async () => {
@@ -2359,141 +2455,6 @@ describe("sessions tools", () => {
     expect(queueMessage).not.toHaveBeenCalled();
     expect(calls.some((call) => call.method === "agent")).toBe(false);
   });
-
-  it.each([
-    { supportsTranscriptCommitWait: true },
-    { supportsTranscriptCommitWait: false },
-    { supportsTranscriptCommitWait: true, mode: "steer" as const },
-  ])(
-    "sessions_send persists steered provenance with transcript wait support $supportsTranscriptCommitWait and mode $mode",
-    async ({ supportsTranscriptCommitWait, mode }) => {
-      const calls: Array<{ method?: string }> = [];
-      const runScopedCallerKey =
-        mode === "steer"
-          ? "agent:leasing-ops:dashboard:active-target"
-          : "agent:leasing-ops:cron:monthly-utility:run:run-fast";
-      const requesterKey = "agent:re-portal:main";
-      const dir = tempDirs.make("openclaw-sessions-steered-provenance-");
-      const scope = {
-        agentId: "leasing-ops",
-        sessionId: "caller-active-session",
-        sessionKey: runScopedCallerKey,
-        storePath: path.join(dir, "sessions.json"),
-      };
-      await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: Date.now() });
-      const sessionManager = SessionManager.open(scope, dir);
-      guardSessionManager(sessionManager);
-      const { session } = await createTestSession({ sessionManager });
-      let finishInitialResponse: (() => void) | undefined;
-      let closing = false;
-      const initialResponseStarted = createDeferred();
-      const queued = createDeferred();
-      const unsubscribe = session.subscribe((event) => {
-        if (event.type === "queue_update") {
-          queued.resolve();
-        }
-      });
-      streamMocks.streamSimple.mockImplementation((model: Model) => {
-        if (finishInitialResponse || closing) {
-          return createAssistantResultStream(
-            createAssistant(model, [{ type: "text", text: "received" }]),
-          );
-        }
-        const stream = createAssistantMessageEventStream();
-        finishInitialResponse = () => {
-          stream.push({
-            type: "done",
-            reason: "stop",
-            message: createAssistant(model, [{ type: "text", text: "ready" }]),
-          });
-          stream.end();
-        };
-        initialResponseStarted.resolve();
-        return stream;
-      });
-      const prompt = session.prompt("wait for another session");
-      const pending: Promise<unknown>[] = [prompt];
-      try {
-        // Dispatch can await transport initialization; synchronize on provider entry.
-        await Promise.race([initialResponseStarted.promise, prompt]);
-        expect(streamMocks.streamSimple).toHaveBeenCalledOnce();
-        const queueMessage = vi.fn((text: string, options?: EmbeddedAgentQueueMessageOptions) =>
-          steerActiveSessionWithOptionalDeliveryWait(session, text, options, runScopedCallerKey),
-        );
-        setActiveEmbeddedRun(
-          "caller-active-session",
-          {
-            queueMessage,
-            isStreaming: () => true,
-            isCompacting: () => false,
-            supportsTranscriptCommitWait,
-            sourceReplyDeliveryMode: mode === "steer" ? "automatic" : "message_tool_only",
-            abort: () => {},
-          },
-          runScopedCallerKey,
-        );
-        callGatewayMock.mockImplementation(async (opts: unknown) => {
-          const request = opts as { method?: string };
-          calls.push(request);
-          if (request.method === "agent") {
-            throw new Error("fallback agent should not start");
-          }
-          return {};
-        });
-
-        const tool = getSessionTool("sessions_send", {
-          agentSessionKey: requesterKey,
-          agentChannel: "telegram",
-          config: { ...TEST_CONFIG, session: { ...TEST_CONFIG.session, store: scope.storePath } },
-        });
-
-        const send = tool.execute("call-run-scoped-caller", {
-          mode,
-          sessionKey: runScopedCallerKey,
-          message: "[TASK-COMPLETE] re-portal occupancy ready",
-          timeoutSeconds: 0,
-        });
-        pending.push(send);
-        await Promise.race([queued.promise, send, prompt]);
-        expect(session.pendingMessageCount).toBe(1);
-        finishInitialResponse?.();
-        const [result] = await Promise.all([send, prompt]);
-
-        const details = sessionsSendDetails(result.details);
-        expect(details.status).toBe("accepted");
-        expect(details.sessionKey).toBe(runScopedCallerKey);
-        expect(details.targetDisposition).toBe("steered");
-        expect(details.delivery?.status).toBe("skipped");
-        expect(details.delivery?.mode).toBe("announce");
-        expect(queueMessage).toHaveBeenCalledOnce();
-        expect(queueMessage.mock.calls[0]?.[1]?.waitForTranscriptCommit).toBe(
-          supportsTranscriptCommitWait ? true : undefined,
-        );
-        expect(SessionManager.open(scope, dir).getEntries()).toContainEqual(
-          expect.objectContaining({
-            type: "message",
-            message: expect.objectContaining({
-              role: "user",
-              provenance: {
-                kind: "inter_session",
-                sourceSessionKey: requesterKey,
-                sourceChannel: "telegram",
-                sourceTool: "sessions_send",
-              },
-            }),
-          }),
-        );
-        expect(calls.some((call) => call.method === "agent")).toBe(false);
-      } finally {
-        // Release even a late provider callback, then join work before fixture teardown.
-        closing = true;
-        unsubscribe();
-        finishInitialResponse?.();
-        await session.abort();
-        await Promise.allSettled(pending);
-      }
-    },
-  );
 
   it("sessions_send reports run-scoped queue admission failures without gateway fallback", async () => {
     const runScopedCallerKey = "agent:leasing-ops:cron:monthly-utility:run:run-fast";
@@ -2614,149 +2575,6 @@ describe("sessions tools", () => {
     expect(details.error).toBe("agent failed");
     expect(details.sentBeforeError).toBe(true);
     expect(details.sessionKey).toBe(targetKey);
-  });
-
-  it("sessions_send skips duplicate A2A delivery for waited parent-owned native subagents", async () => {
-    const calls: Array<{ method?: string; params?: unknown }> = [];
-    const requesterKey = "agent:main:discord:direct:parent";
-    const targetKey = "agent:main:subagent:child";
-    loadSessionEntryByKeyMock.mockImplementation((sessionKey: string) =>
-      sessionKey === targetKey
-        ? {
-            sessionId: "child-session",
-            updatedAt: 1,
-            spawnedBy: requesterKey,
-            deliveryContext: {
-              channel: "discord",
-              to: "direct:parent",
-            },
-          }
-        : undefined,
-    );
-    callGatewayMock.mockImplementation(async (opts: unknown) => {
-      const request = opts as { method?: string; params?: unknown };
-      calls.push(request);
-      if (request.method === "agent") {
-        return { runId: "run-child", status: "accepted", acceptedAt: 2000 };
-      }
-      if (request.method === "agent.wait") {
-        return {
-          runId: "run-child",
-          status: "ok",
-          terminalReply: { disposition: "visible", text: "child reply" },
-        };
-      }
-      return {};
-    });
-
-    const tool = getSessionTool("sessions_send", {
-      agentSessionKey: requesterKey,
-      agentChannel: "discord",
-    });
-
-    const waited = await tool.execute("call-parent-owned-native-subagent", {
-      sessionKey: targetKey,
-      message: "ping",
-      timeoutSeconds: 1,
-    });
-
-    const waitedDetails = sessionsSendDetails(waited.details);
-    expect(waitedDetails.status).toBe("ok");
-    expect(waitedDetails.reply).toBe("child reply");
-    expect(waitedDetails.delivery?.status).toBe("skipped");
-    expect(waitedDetails.delivery?.mode).toBe("announce");
-    expect(countMatching(calls, (call) => call.method === "agent")).toBe(1);
-    const replyPromptAgentCalls = calls.filter(
-      (call) =>
-        call.method === "agent" &&
-        typeof (call.params as { extraSystemPrompt?: string })?.extraSystemPrompt === "string" &&
-        (call.params as { extraSystemPrompt?: string }).extraSystemPrompt?.includes(
-          "Agent-to-agent reply step",
-        ),
-    );
-    expect(replyPromptAgentCalls).toStrictEqual([]);
-    expect(calls.some((call) => call.method === "send")).toBe(false);
-  });
-
-  it("sessions_send skips duplicate A2A delivery for waited visible spawn children on dashboard keys", async () => {
-    const calls: Array<{ method?: string; params?: unknown }> = [];
-    const requesterKey = "agent:main:dashboard:parent-uuid";
-    const targetKey = "agent:penny:dashboard:child-uuid";
-    loadSessionEntryByKeyMock.mockImplementation((sessionKey: string) =>
-      sessionKey === targetKey
-        ? {
-            sessionId: "child-session",
-            updatedAt: 1,
-            spawnedBy: requesterKey,
-            parentSessionKey: requesterKey,
-            spawnDepth: 1,
-          }
-        : undefined,
-    );
-    callGatewayMock.mockImplementation(async (opts: unknown) => {
-      const request = opts as { method?: string; params?: unknown };
-      calls.push(request);
-      if (request.method === "agent") {
-        return { runId: "run-child", status: "accepted", acceptedAt: 2000 };
-      }
-      if (request.method === "agent.wait") {
-        return {
-          runId: "run-child",
-          status: "ok",
-          terminalReply: { disposition: "visible", text: "child reply" },
-        };
-      }
-      return {};
-    });
-
-    const tool = getSessionTool("sessions_send", { agentSessionKey: requesterKey });
-
-    const waited = await tool.execute("call-parent-owned-dashboard-child", {
-      sessionKey: targetKey,
-      message: "ping",
-      timeoutSeconds: 1,
-    });
-
-    const waitedDetails = sessionsSendDetails(waited.details);
-    expect(waitedDetails.status).toBe("ok");
-    expect(waitedDetails.reply).toBe("child reply");
-    expect(waitedDetails.delivery?.status).toBe("skipped");
-    expect(countMatching(calls, (call) => call.method === "agent")).toBe(1);
-  });
-
-  it("sessions_send keeps the A2A flow for dashboard threads that were not spawned by the requester", async () => {
-    const requesterKey = "agent:main:dashboard:parent-uuid";
-    const targetKey = "agent:main:dashboard:thread-uuid";
-    loadSessionEntryByKeyMock.mockImplementation((sessionKey: string) =>
-      sessionKey === targetKey
-        ? { sessionId: "thread-session", updatedAt: 1, parentSessionKey: requesterKey }
-        : undefined,
-    );
-    callGatewayMock.mockImplementation(async (opts: unknown) => {
-      const request = opts as { method?: string };
-      if (request.method === "agent") {
-        return { runId: "run-thread", status: "accepted", acceptedAt: 2000 };
-      }
-      if (request.method === "agent.wait") {
-        return {
-          runId: "run-thread",
-          status: "ok",
-          terminalReply: { disposition: "visible", text: "thread reply" },
-        };
-      }
-      return {};
-    });
-
-    const tool = getSessionTool("sessions_send", { agentSessionKey: requesterKey });
-    const waited = await tool.execute("call-dashboard-thread", {
-      sessionKey: targetKey,
-      message: "ping",
-      timeoutSeconds: 1,
-    });
-
-    const waitedDetails = sessionsSendDetails(waited.details);
-    expect(waitedDetails.reply).toBe("thread reply");
-    expect(waitedDetails.delivery?.status).toBe("pending");
   });
 
   it("sessions_send preserves threadId when announce target is hydrated via sessions.list", async () => {

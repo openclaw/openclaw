@@ -1050,6 +1050,35 @@ class TalkModeManagerTest {
     }
 
   @Test
+  fun nativeTalkKeepsRecognitionOpenFromEndOfSpeechUntilResults() =
+    runBlocking {
+      withNativeTalk { proof, sends ->
+        val recognizer = currentRecognizer()
+        val session = recognizer.lastRecognizerIntent
+        recognizer.triggerOnReadyForSpeech(Bundle())
+        // Google's recognizer delivers the final hypothesis as a partial at end of speech and
+        // reports onResults only when the session closes, after the Talk silence window.
+        recognizer.triggerOnPartialResults(recognitionResults("Synthetic end-of-speech phrase"))
+        recognizer.triggerOnEndOfSpeech()
+        advanceTalkSilence(proof)
+        awaitTalkWork(proof) { sends.isNotEmpty() }
+
+        assertSame(
+          "End of speech must not cancel and restart the session before its results arrive",
+          session,
+          recognizer.lastRecognizerIntent,
+        )
+        assertTrue(
+          sends
+            .single()
+            .getValue("message")
+            .jsonPrimitive.content
+            .endsWith("Synthetic end-of-speech phrase"),
+        )
+      }
+    }
+
+  @Test
   fun nativeStopThenStartKeepsReplacementAndRejectsRetiredResults() =
     runBlocking {
       withNativeTalk { proof, sends ->

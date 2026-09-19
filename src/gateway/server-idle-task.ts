@@ -8,10 +8,11 @@ export type GatewayIdleTaskHandle = {
   stop: () => void | Promise<void>;
 };
 
-/** Schedules one low-priority task, retrying until the gateway has no active request roots. */
+/** Runs low-priority work while idle, optionally repeating after completed passes. */
 export function scheduleGatewayIdleTask(params: {
   delayMs: number;
   retryDelayMs: number;
+  repeatDelayMs?: number;
   isClosing: () => boolean;
   isBusy: () => boolean;
   run: () => Promise<void>;
@@ -31,6 +32,9 @@ export function scheduleGatewayIdleTask(params: {
       schedule(params.retryDelayMs);
     } else {
       await params.run();
+      if (params.repeatDelayMs !== undefined) {
+        schedule(params.repeatDelayMs);
+      }
     }
   };
   const schedule = (delayMs: number) => {

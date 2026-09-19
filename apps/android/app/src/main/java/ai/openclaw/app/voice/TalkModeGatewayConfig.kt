@@ -50,9 +50,14 @@ internal object TalkModeGatewayConfigParser {
       speechLocale = normalizeSpeechLocaleTag(talk?.get("speechLocale").asStringOrNull()),
       interruptOnSpeech = talk?.get("interruptOnSpeech").asBooleanOrNull(),
       silenceTimeoutMs = resolvedSilenceTimeoutMs(talk),
+      // gateway-relay carries only realtime sessions; stt-tts runs as native Talk
+      // (device STT, chat.send, talk.speak) so the configured Talk voice is used.
       realtimeRelayModelSupported =
-        realtimeClientHints?.get("gatewayRelaySupported").asBooleanOrNull()
-          ?: isAndroidRealtimeRelayModelSupported(realtimeModel),
+        realtime?.get("mode").asStringOrNull() != "stt-tts" &&
+          (
+            realtimeClientHints?.get("gatewayRelaySupported").asBooleanOrNull()
+              ?: isAndroidRealtimeRelayModelSupported(realtimeModel)
+          ),
     )
   }
 

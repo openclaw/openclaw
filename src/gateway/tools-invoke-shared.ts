@@ -354,6 +354,7 @@ async function invokeGatewayToolWithSignal(
       allowGatewaySubagentBinding: true,
       allowMediaInvokeCommands: true,
       surface: "http",
+      assertInvocationCurrent: () => params.signal.throwIfAborted(),
       disablePluginTools,
       gatewayRequestedTools,
     });

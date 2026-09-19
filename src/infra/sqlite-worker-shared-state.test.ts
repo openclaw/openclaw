@@ -3,6 +3,7 @@ import type { DatabaseSync } from "node:sqlite";
 import { Worker } from "node:worker_threads";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { writeConfigMachineState } from "../state/config-machine-state-write.js";
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseByPathAsync,
@@ -25,6 +26,7 @@ import * as nodeSqlite from "./node-sqlite.js";
 import { runtimeProcessEntrypoints } from "./runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
 import { SqliteSchemaVersionError } from "./sqlite-user-version.js";
+import { registerSharedStateWorkerAdmissionTests } from "./sqlite-worker-shared-state-admission.test-support.js";
 import { closeUnclaimedSharedStateSqliteWorkers } from "./sqlite-worker-store.js";
 import { acquireGatewayLifecycleCoordinator } from "./state-database-coordinator.js";
 
@@ -177,6 +179,52 @@ describe("canonical shared-state worker admission", () => {
     },
   );
 
+  it("keeps metadata inspection and the first Web Push operation in the same actor", async () => {
+    const captured = context();
+    const value = { generation: "prepared-metadata", plugins: [] };
+    writeConfigMachineState("plugins.installedIndex", value, {
+      path: captured.admission.databasePath,
+      env: captured.environment,
+    });
+    await closeOpenClawStateDatabaseAsync();
+    const reopened = captureOpenClawStateWorkerContext({
+      path: captured.admission.databasePath,
+      env: captured.environment,
+    });
+    const messages = vi.spyOn(Worker.prototype, "postMessage");
+    await runOpenClawStateWorkerOperation(
+      reopened,
+      async (scope) => {
+        expect(
+          await scope.execute({
+            type: "plugins.metadata.read",
+            input: { selector: "installed-index", artifactPreservingReadOnly: true },
+          }),
+        ).toEqual({ value_json: JSON.stringify(value) });
+        const metadataWorker = messages.mock.contexts[0];
+        expect(metadataWorker).toBeInstanceOf(Worker);
+        messages.mockClear();
+        expect(
+          await scope.execute({
+            type: "webPush.listTerminalWebPushApprovalDeliveryIds",
+            input: {},
+          }),
+        ).toEqual({ approvalIds: [], nextAfterApprovalId: null, throughApprovalId: null });
+        expect(messages.mock.contexts.length).toBeGreaterThan(0);
+        expect(messages.mock.contexts.every((worker) => worker === metadataWorker)).toBe(true);
+        expect(
+          await scope.execute({
+            type: "plugins.metadata.read",
+            input: { selector: "installed-index", artifactPreservingReadOnly: true },
+          }),
+        ).toEqual({ value_json: JSON.stringify(value) });
+      },
+      { existingOnly: true },
+    );
+    await closeOpenClawStateDatabaseAsync();
+    messages.mockRestore();
+  });
+
   it("leaves a missing database absent for existing-only inspection", async () => {
     const captured = context();
     const inspect = vi.fn(async () => "inspected");
@@ -291,7 +339,7 @@ describe("canonical shared-state worker admission", () => {
     },
   );
 
-  it("opens a fresh actor for a new call after the previous worker exits", async () => {
+  it("opens a fresh actor for the first new call after the previous worker exits", async () => {
     const captured = context();
     const messages = vi.spyOn(Worker.prototype, "postMessage");
     await executeOpenClawStateWorker(captured, {
@@ -309,7 +357,7 @@ describe("canonical shared-state worker admission", () => {
         type: "flows.list",
         input: { ownerKey: "agent:main:main" },
       }),
-    ).rejects.toThrow();
+    ).resolves.toEqual([]);
     expect(
       await executeOpenClawStateWorker(captured, {
         type: "flows.list",
@@ -355,3 +403,5 @@ describe("canonical shared-state worker admission", () => {
     }
   });
 });
+
+registerSharedStateWorkerAdmissionTests(context);

@@ -111,6 +111,7 @@ export type GitCommandOptions = Pick<
   | "timeoutMs"
   | "signal"
   | "killProcessTree"
+  | "killGraceMs"
   | "maxOutputBytes"
   | "terminateOnOutputLimit"
 > & {

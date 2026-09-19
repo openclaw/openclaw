@@ -44,6 +44,7 @@ export function resolveWorkerSessionTarget(
     key: selection.sessionKey,
     agentId,
     clone: false,
+    exactRead: true,
   });
   const entry = resolveCanonicalSessionEntryFromStoreKeys(target.store, target.storeKeys);
   if (!entry || entry.sessionId !== sessionId) {

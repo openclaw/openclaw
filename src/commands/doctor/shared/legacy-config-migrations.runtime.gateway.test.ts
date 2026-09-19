@@ -14,7 +14,10 @@ describe("retired Control UI tool-title preference", () => {
       });
       expect(validateConfigObject(raw).ok).toBe(false);
 
-      const result = applyLegacyDoctorMigrations(raw, undefined, { pluginContracts: false });
+      const result = applyLegacyDoctorMigrations(raw, {
+        sourceConfigBeforeMigrations: raw,
+        pluginContracts: false,
+      });
       expect(result.next).toEqual({ gateway: { controlUi: { enabled: true } } });
       expect(result.changes).toContain(
         "Removed retired gateway.controlUi.toolTitles; tool activity descriptions are automatic and make no utility-model calls.",
@@ -22,7 +25,10 @@ describe("retired Control UI tool-title preference", () => {
       expect(validateConfigObject(result.next).ok).toBe(true);
       expect(findLegacyConfigIssues(result.next)).toEqual([]);
       expect(
-        applyLegacyDoctorMigrations(result.next, undefined, { pluginContracts: false }),
+        applyLegacyDoctorMigrations(result.next, {
+          sourceConfigBeforeMigrations: result.next,
+          pluginContracts: false,
+        }),
       ).toEqual({ next: null, changes: [] });
       expect(raw.gateway.controlUi.toolTitles).toBe(toolTitles);
     },

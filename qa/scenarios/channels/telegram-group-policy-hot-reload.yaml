@@ -88,7 +88,7 @@ flow:
                   await mutate(scope, { groupPolicy: 'allowlist', groupAllowFrom: allowed });
                   await command('Identity');
                   await mutate(scope, { groupAllowFrom: denied });
-                  await command('not authorized');
+                  await command(null);
                   await mutate(scope, { groupPolicy: 'disabled' });
                   await command(null);
                   await mutate(scope, { groupPolicy: 'allowlist', groupAllowFrom: allowed });

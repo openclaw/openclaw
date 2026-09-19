@@ -1311,11 +1311,11 @@ describe("discoverOpenClawPlugins", () => {
       const env = buildDiscoveryEnv(stateDir);
       const raw = discoverConfiguredPluginLoadPaths({ env, loadPaths });
       expect(raw.candidates.map((candidate) => candidate.source)).toEqual(loadPaths.slice(0, 2));
-      expect(raw.diagnostics).toEqual(
+      expect(raw.diagnostics).toMatchObject(
         [missing, missing].map((source) => ({
-          level: "error",
+          level: "warn",
           source,
-          message: `plugin path not found: ${source}`,
+          code: "configured-plugin-path-unavailable",
         })),
       );
       const registry = loadPluginManifestRegistryCore({ discovery: raw, installRecords: {}, env });

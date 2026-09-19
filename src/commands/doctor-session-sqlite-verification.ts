@@ -168,7 +168,7 @@ export function verifyHistoricalMigrationArtifact(params: {
             false,
             readTranscriptFingerprint(move.archivePath),
             move.sourcePath,
-          )((event) => stage.append(0, seq++, JSON.stringify(event), null));
+          )((event) => stage.append(0, seq++, JSON.stringify(event)));
           const repair = stage.repairLegacyTranscript(0);
           // Old metadata cannot prove that a now-discarded branch was deliberately retired then.
           if (repair.repaired || !repair.recognized) {

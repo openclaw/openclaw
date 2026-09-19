@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
+import { sessionChanges } from "../sessions/session-row-changes.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { closeOpenClawStateDatabaseByPath } from "./openclaw-state-db-cache.js";
 import {
@@ -190,4 +191,51 @@ it("reopens the accepted owner and deletes only its own artifacts", async () => 
   });
   expect(reopened.get(sibling.workspaceId)).toEqual(sibling);
   expect((await fs.stat(reopened.artifactPath(sibling.workspaceId))).isDirectory()).toBe(true);
+});
+
+it("publishes repository row changes only after committed creation, revisions, and deletion", async () => {
+  const { database, store } = await fixture();
+  const changed = vi.fn();
+  const unsubscribe = sessionChanges.subscribe(changed);
+  try {
+    expect(() =>
+      runOpenClawStateWriteTransaction(
+        () => {
+          store.create(source);
+          expect(changed).not.toHaveBeenCalled();
+          throw new Error("rollback repository");
+        },
+        { database },
+      ),
+    ).toThrow("rollback repository");
+    expect(changed).not.toHaveBeenCalled();
+    const initial = store.create(source);
+    expect(changed).toHaveBeenCalledExactlyOnceWith({
+      agentId: source.agentId,
+      sessionKey: source.sessionKey,
+    });
+    const bound = store.bindBase({
+      workspaceId: initial.workspaceId,
+      expectedRevision: initial.revision,
+      baseCommit,
+      baseManifestHash,
+      assertCurrent,
+    });
+    store.acceptCheckpoint({
+      workspaceId: bound.workspaceId,
+      expectedRevision: bound.revision,
+      checkpointRef: "refs/openclaw/worker-results/row-signal",
+      manifestHash: baseManifestHash,
+      assertCurrent,
+    });
+    await store.delete({ workspaceId: initial.workspaceId, assertCurrent });
+    expect(changed).toHaveBeenCalledTimes(4);
+    expect(
+      changed.mock.calls.every(
+        ([change]) => change.agentId === source.agentId && change.sessionKey === source.sessionKey,
+      ),
+    ).toBe(true);
+  } finally {
+    unsubscribe();
+  }
 });

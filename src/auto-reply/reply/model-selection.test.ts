@@ -16,6 +16,7 @@ import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metada
 import * as activeThinkingPolicy from "../../plugins/provider-thinking-active.js";
 import { prepareModelCatalogThinkingPolicies } from "../../plugins/provider-thinking.js";
 import { isThinkingLevelSupported } from "../thinking.js";
+import { prepareModelSelectionRuntime } from "./model-runtime-normalization.js";
 import { createModelSelectionState, resolveContextTokens } from "./model-selection.js";
 
 type PersistReplySessionEntry =
@@ -164,6 +165,24 @@ const makeConfiguredModel = (overrides: Record<string, unknown> = {}) => ({
 });
 
 describe("createModelSelectionState catalog loading", () => {
+  function createInitialState(
+    cfg: OpenClawConfig,
+    provider: string,
+    model: string,
+    options: Partial<Parameters<typeof createModelSelectionState>[0]> = {},
+  ) {
+    return createModelSelectionState({
+      cfg,
+      agentCfg: cfg.agents?.defaults,
+      defaultProvider: provider,
+      defaultModel: model,
+      provider,
+      model,
+      hasModelDirective: false,
+      ...options,
+    });
+  }
+
   it.each([false, true])(
     "retains automatic-primary reasoning from prepared=%s metadata outside manual policy",
     async (prepared) => {
@@ -194,16 +213,14 @@ describe("createModelSelectionState catalog loading", () => {
         },
       };
       vi.mocked(loadProviderScopedThinkingCatalog).mockResolvedValue([automatic]);
-      const state = await createModelSelectionState({
+      const state = await createInitialState(
         cfg,
-        agentCfg: cfg.agents?.defaults,
-        defaultProvider: "fixture",
-        defaultModel: "automatic",
-        provider: "fixture",
-        model: "automatic",
-        hasModelDirective: false,
-        ...(prepared ? { preparedModelCatalog: { entries: [automatic], routeVariants: [] } } : {}),
-      });
+        "fixture",
+        "automatic",
+        prepared
+          ? { preparedModelCatalog: { entries: [automatic], routeVariants: [] } }
+          : undefined,
+      );
       expect(state.modelPolicy.allows({ provider: "fixture", model: "automatic" })).toBe(false);
       expect(
         isThinkingLevelSupported({
@@ -238,15 +255,7 @@ describe("createModelSelectionState catalog loading", () => {
       },
     } as OpenClawConfig;
 
-    const state = await createModelSelectionState({
-      cfg,
-      agentCfg: cfg.agents?.defaults,
-      defaultProvider: "openai",
-      defaultModel: "gpt-5.4",
-      provider: "openai",
-      model: "gpt-5.4",
-      hasModelDirective: false,
-    });
+    const state = await createInitialState(cfg, "openai", "gpt-5.4");
 
     expect(state.allowedModelKeys.has("openai/gpt-5.4")).toBe(true);
     await expect(state.resolveDefaultThinkingLevel()).resolves.toBe("low");
@@ -254,42 +263,49 @@ describe("createModelSelectionState catalog loading", () => {
     expect(loadModelCatalogLocal).not.toHaveBeenCalled();
   });
 
-  it.each(["high", "ultra"] as const)(
-    "prefers per-model params.thinking=%s over global thinkingDefault",
-    async (thinking) => {
+  it.each([
+    { thinking: "high", agentThinking: undefined, expected: "high" },
+    { thinking: "ultra", agentThinking: undefined, expected: "ultra" },
+    { thinking: "high", agentThinking: false, expected: "off" },
+    { thinking: "low", agentThinking: "high", expected: "high" },
+    { thinking: "low", agentThinking: "extra-high", expected: "xhigh" },
+  ] as const)(
+    "resolves per-model thinking (shared=$thinking, agent=$agentThinking) ahead of global defaults",
+    async ({ thinking, agentThinking, expected }) => {
       vi.mocked(loadModelCatalogLocal).mockClear();
       const cfg = {
         agents: {
           defaults: {
             thinkingDefault: "low",
             models: {
-              "openai-codex/gpt-5.4": {
+              "fixture/reasoning-model": {
                 params: { thinking },
+              },
+            },
+          },
+          entries: {
+            alpha: {
+              models: {
+                "fixture/reasoning-model": { params: { thinking: agentThinking } },
               },
             },
           },
         },
         models: {
           providers: {
-            "openai-codex": {
-              baseUrl: "https://api.openai.com/v1",
-              models: [makeConfiguredModel()],
+            fixture: {
+              baseUrl: "https://fixture.invalid/v1",
+              models: [makeConfiguredModel({ id: "reasoning-model" })],
             },
           },
         },
       } as OpenClawConfig;
 
-      const state = await createModelSelectionState({
-        cfg,
-        agentCfg: cfg.agents?.defaults,
-        defaultProvider: "openai-codex",
-        defaultModel: "gpt-5.4",
-        provider: "openai-codex",
-        model: "gpt-5.4",
-        hasModelDirective: false,
+      const state = await createInitialState(cfg, "fixture", "reasoning-model", {
+        agentId: "alpha",
       });
 
-      await expect(state.resolveDefaultThinkingLevel()).resolves.toBe(thinking);
+      await expect(state.resolveDefaultThinkingLevel()).resolves.toBe(expected);
       expect(loadModelCatalogLocal).not.toHaveBeenCalled();
     },
   );
@@ -317,15 +333,7 @@ describe("createModelSelectionState catalog loading", () => {
       },
     } as OpenClawConfig;
 
-    const state = await createModelSelectionState({
-      cfg,
-      agentCfg: cfg.agents?.defaults,
-      defaultProvider: "deepseek",
-      defaultModel: "deepseek-v4-pro",
-      provider: "deepseek",
-      model: "deepseek-v4-pro",
-      hasModelDirective: false,
-    });
+    const state = await createInitialState(cfg, "deepseek", "deepseek-v4-pro");
 
     await expect(state.resolveDefaultThinkingLevel()).resolves.toBe("off");
     expect(loadModelCatalogLocal).not.toHaveBeenCalled();
@@ -351,61 +359,105 @@ describe("createModelSelectionState catalog loading", () => {
       },
     } as OpenClawConfig;
 
-    const state = await createModelSelectionState({
-      cfg,
-      agentCfg: cfg.agents?.defaults,
-      defaultProvider: "openai",
-      defaultModel: "gpt-5.4",
-      provider: "openai",
-      model: "gpt-5.4",
-      hasModelDirective: false,
-    });
+    const state = await createInitialState(cfg, "openai", "gpt-5.4");
 
     await expect(state.resolveDefaultThinkingLevel()).resolves.toBe("medium");
     expect(loadModelCatalogLocal).not.toHaveBeenCalled();
   });
 
-  it("hydrates runtime catalog metadata when the configured allowlist entry lacks reasoning", async () => {
-    vi.mocked(loadModelCatalogLocal).mockClear();
-    vi.mocked(loadProviderScopedThinkingCatalog).mockResolvedValueOnce([
-      { provider: "openai", id: "gpt-5.4", name: "GPT-5.4", reasoning: true },
-    ]);
-    const cfg = {
-      agents: {
-        defaults: {
-          models: {
-            "openai/gpt-5.4": {},
+  it.each([
+    { reasoning: undefined, agentRuntime: undefined },
+    { reasoning: false, agentRuntime: "codex" },
+  ])(
+    "hydrates thinking for its runtime (reasoning=$reasoning, runtime=$agentRuntime)",
+    async ({ reasoning, agentRuntime }) => {
+      vi.mocked(loadModelCatalogLocal).mockClear();
+      vi.mocked(loadProviderScopedThinkingCatalog).mockResolvedValueOnce([
+        { provider: "openai", id: "gpt-5.4", name: "GPT-5.4", reasoning: true },
+      ]);
+      const cfg = {
+        agents: {
+          defaults: {
+            models: {
+              "openai/gpt-5.4": { agentRuntime: { id: "openclaw" } },
+            },
           },
         },
-      },
-      models: {
-        providers: {
-          openai: {
-            baseUrl: "https://api.openai.com/v1",
-            models: [makeConfiguredModel({ reasoning: undefined })],
+        models: {
+          providers: {
+            openai: {
+              baseUrl: "https://api.openai.com/v1",
+              models: [makeConfiguredModel({ reasoning: undefined })],
+            },
           },
         },
+      } as OpenClawConfig;
+
+      const state = await createInitialState(cfg, "openai", "gpt-5.4", {
+        preparedModelCatalog: agentRuntime
+          ? {
+              entries: [{ provider: "openai", id: "gpt-5.4", name: "GPT-5.4", reasoning }],
+              routeVariants: [],
+            }
+          : undefined,
+      });
+
+      if (agentRuntime) {
+        await state.resolveThinkingCatalog({
+          provider: "openai",
+          model: "gpt-5.4",
+          agentRuntime: "openclaw",
+        });
+      }
+      await expect(
+        state.resolveDefaultThinkingLevel({ provider: "openai", model: "gpt-5.4", agentRuntime }),
+      ).resolves.toBe("medium");
+      expect(loadModelCatalogLocal).not.toHaveBeenCalled();
+      expect(loadProviderScopedThinkingCatalog).toHaveBeenCalledWith({
+        config: cfg,
+        agentId: undefined,
+        provider: "openai",
+        model: "gpt-5.4",
+        agentRuntime: agentRuntime ?? "openclaw",
+      });
+    },
+  );
+
+  it("reloads embedded thinking metadata when clearing a native runtime pin", async () => {
+    const embedded = {
+      provider: "openai",
+      id: "gpt-5.4",
+      name: "GPT-5.4",
+      api: "openai-responses" as const,
+      baseUrl: "https://api.openai.com/v1",
+      reasoning: false,
+    };
+    const sessionEntry = { agentRuntimeOverride: "codex" };
+    vi.mocked(loadProviderScopedThinkingCatalog).mockResolvedValueOnce([embedded]);
+
+    const prepared = await prepareModelSelectionRuntime({
+      cfg: {
+        agents: {
+          defaults: { models: { "openai/gpt-5.4": { agentRuntime: { id: "openclaw" } } } },
+        },
       },
-    } as OpenClawConfig;
-
-    const state = await createModelSelectionState({
-      cfg,
-      agentCfg: cfg.agents?.defaults,
-      defaultProvider: "openai",
-      defaultModel: "gpt-5.4",
+      agentId: "main",
       provider: "openai",
       model: "gpt-5.4",
-      hasModelDirective: false,
+      rawRuntime: "default",
+      sessionEntry,
+      catalog: [{ ...embedded, nativeRuntime: "codex", reasoning: true }],
     });
 
-    await expect(state.resolveDefaultThinkingLevel()).resolves.toBe("medium");
-    expect(loadModelCatalogLocal).not.toHaveBeenCalled();
-    expect(loadProviderScopedThinkingCatalog).toHaveBeenCalledWith({
-      config: cfg,
-      agentId: undefined,
-      provider: "openai",
-      model: "gpt-5.4",
-    });
+    expect(prepared).toMatchObject({ status: "ready", runtime: { kind: "clear" } });
+    if (prepared.status !== "ready") {
+      throw new Error(prepared.message);
+    }
+    expect(prepared.catalog).toEqual([embedded]);
+    expect(sessionEntry.agentRuntimeOverride).toBe("codex");
+    expect(loadProviderScopedThinkingCatalog).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ agentId: "main", agentRuntime: "openclaw" }),
+    );
   });
 
   it.each([
@@ -437,14 +489,7 @@ describe("createModelSelectionState catalog loading", () => {
       const cfg: OpenClawConfig = {
         agents: { defaults: { models: { [`${provider}/shared-model`]: {} } } },
       };
-      const state = await createModelSelectionState({
-        cfg,
-        agentCfg: cfg.agents?.defaults,
-        defaultProvider: provider,
-        defaultModel: "shared-model",
-        provider,
-        model: "shared-model",
-        hasModelDirective: false,
+      const state = await createInitialState(cfg, provider, "shared-model", {
         preparedModelCatalog: { entries, routeVariants: entries, authoritative: true },
       });
       expect(
@@ -493,14 +538,7 @@ describe("createModelSelectionState catalog loading", () => {
         },
       };
       const entries = [{ provider: "unrelated", id: "other", name: "Other" }];
-      const state = await createModelSelectionState({
-        cfg,
-        agentCfg: cfg.agents?.defaults,
-        defaultProvider: "fixture",
-        defaultModel: model,
-        provider: "fixture",
-        model,
-        hasModelDirective: false,
+      const state = await createInitialState(cfg, "fixture", model, {
         preparedModelCatalog: { entries, routeVariants: entries, authoritative: true },
       });
 
@@ -544,14 +582,7 @@ describe("createModelSelectionState catalog loading", () => {
       },
     } as OpenClawConfig;
 
-    const state = await createModelSelectionState({
-      cfg,
-      agentCfg: cfg.agents?.defaults,
-      defaultProvider: "openai",
-      defaultModel: "gpt-5.4",
-      provider: "openai",
-      model: "gpt-5.4",
-      hasModelDirective: false,
+    const state = await createInitialState(cfg, "openai", "gpt-5.4", {
       preparedModelCatalog: {
         entries: [{ provider: "openai", id: "gpt-5.4", name: "GPT-5.4", reasoning: true }],
         routeVariants: [],
@@ -591,14 +622,7 @@ describe("createModelSelectionState catalog loading", () => {
       },
     } as OpenClawConfig;
 
-    const state = await createModelSelectionState({
-      cfg,
-      agentCfg: cfg.agents?.defaults,
-      defaultProvider: "anthropic",
-      defaultModel: "claude-mythos-5",
-      provider: "anthropic",
-      model: "claude-mythos-5",
-      hasModelDirective: false,
+    const state = await createInitialState(cfg, "anthropic", "claude-mythos-5", {
       preparedModelCatalog: {
         entries: [
           {
@@ -678,13 +702,7 @@ describe("createModelSelectionState catalog loading", () => {
         .spyOn(activeThinkingPolicy, "resolveActiveProviderThinkingProfile")
         .mockReturnValue({ levels: [{ id: "off" }], defaultLevel: "off" });
       try {
-        const state = await createModelSelectionState({
-          cfg,
-          agentCfg: cfg.agents?.defaults,
-          defaultProvider: provider,
-          defaultModel: model,
-          provider,
-          model,
+        const state = await createInitialState(cfg, provider, model, {
           hasModelDirective,
           preparedModelCatalog,
         });
@@ -714,15 +732,7 @@ describe("createModelSelectionState catalog loading", () => {
       },
     } as OpenClawConfig;
 
-    const state = await createModelSelectionState({
-      cfg,
-      agentCfg: cfg.agents?.defaults,
-      defaultProvider: "openai",
-      defaultModel: "gpt-5.5",
-      provider: "openai",
-      model: "gpt-5.5",
-      hasModelDirective: false,
-    });
+    const state = await createInitialState(cfg, "openai", "gpt-5.5");
 
     await expect(state.resolveThinkingCatalog()).resolves.toEqual([
       expect.objectContaining({ provider: "openai", id: "gpt-5.5", reasoning: true }),
@@ -761,15 +771,7 @@ describe("createModelSelectionState catalog loading", () => {
       },
     } as OpenClawConfig;
 
-    const state = await createModelSelectionState({
-      cfg,
-      agentCfg: cfg.agents?.defaults,
-      defaultProvider: "vllm",
-      defaultModel: "Qwen/Qwen3-8B",
-      provider: "vllm",
-      model: "Qwen/Qwen3-8B",
-      hasModelDirective: false,
-    });
+    const state = await createInitialState(cfg, "vllm", "Qwen/Qwen3-8B");
 
     await expect(state.resolveThinkingCatalog()).resolves.toEqual([
       expect.objectContaining({
@@ -817,13 +819,7 @@ describe("createModelSelectionState catalog loading", () => {
       },
     } as OpenClawConfig;
 
-    const state = await createModelSelectionState({
-      cfg,
-      agentCfg: cfg.agents?.defaults,
-      defaultProvider: "vllm",
-      defaultModel: "Qwen/Qwen3-8B",
-      provider: "vllm",
-      model: "Qwen/Qwen3-8B",
+    const state = await createInitialState(cfg, "vllm", "Qwen/Qwen3-8B", {
       hasModelDirective: true,
     });
 
@@ -859,15 +855,8 @@ describe("createModelSelectionState catalog loading", () => {
       },
     } as OpenClawConfig;
 
-    const state = await createModelSelectionState({
-      cfg,
+    const state = await createInitialState(cfg, "openai", "gpt-5.4", {
       agentId: "alpha",
-      agentCfg: cfg.agents?.defaults,
-      defaultProvider: "openai",
-      defaultModel: "gpt-5.4",
-      provider: "openai",
-      model: "gpt-5.4",
-      hasModelDirective: false,
     });
 
     await expect(state.resolveDefaultThinkingLevel()).resolves.toBe("minimal");
@@ -885,13 +874,7 @@ describe("createModelSelectionState catalog loading", () => {
       },
     } as OpenClawConfig;
 
-    const state = await createModelSelectionState({
-      cfg,
-      agentCfg: cfg.agents?.defaults,
-      defaultProvider: "openai",
-      defaultModel: "gpt-4o",
-      provider: "openai",
-      model: "gpt-4o",
+    const state = await createInitialState(cfg, "openai", "gpt-4o", {
       hasModelDirective: true,
     });
 
@@ -959,15 +942,7 @@ describe("createModelSelectionState catalog loading", () => {
         },
       } as OpenClawConfig;
 
-      const state = await createModelSelectionState({
-        cfg,
-        agentCfg: cfg.agents?.defaults,
-        defaultProvider,
-        defaultModel,
-        provider: defaultProvider,
-        model: defaultModel,
-        hasModelDirective: false,
-      });
+      const state = await createInitialState(cfg, defaultProvider, defaultModel);
 
       expect(state.provider).toBe("openai");
       expect(state.model).toBe(selectedModel);
@@ -989,13 +964,7 @@ describe("createModelSelectionState catalog loading", () => {
       },
     } as OpenClawConfig;
 
-    const state = await createModelSelectionState({
-      cfg,
-      agentCfg: cfg.agents?.defaults,
-      defaultProvider: "anthropic",
-      defaultModel: "claude-opus-4-5",
-      provider: "anthropic",
-      model: "claude-opus-4-5",
+    const state = await createInitialState(cfg, "anthropic", "claude-opus-4-5", {
       hasModelDirective: true,
     });
 
@@ -1028,14 +997,7 @@ describe("createModelSelectionState catalog loading", () => {
     };
     const sessionStore = { main: sessionEntry };
 
-    const state = await createModelSelectionState({
-      cfg,
-      agentCfg: cfg.agents?.defaults,
-      defaultProvider: "anthropic",
-      defaultModel: "claude-opus-4-5",
-      provider: "anthropic",
-      model: "claude-opus-4-5",
-      hasModelDirective: false,
+    const state = await createInitialState(cfg, "anthropic", "claude-opus-4-5", {
       sessionEntry,
       sessionStore,
       sessionKey: "main",
@@ -1681,15 +1643,10 @@ describe("createModelSelectionState respects session model override", () => {
       config: cfg,
       includeSetupRegistry: true,
     };
-    expect(cliBackendsMocks.resolveCliRuntimeCanonicalProvider).toHaveBeenCalledTimes(2);
-    expect(cliBackendsMocks.resolveCliRuntimeCanonicalProvider).toHaveBeenNthCalledWith(
-      1,
-      expectedCanonicalProviderRequest,
-    );
-    expect(cliBackendsMocks.resolveCliRuntimeCanonicalProvider).toHaveBeenNthCalledWith(
-      2,
-      expectedCanonicalProviderRequest,
-    );
+    expect(cliBackendsMocks.resolveCliRuntimeCanonicalProvider).toHaveBeenCalled();
+    for (const [request] of cliBackendsMocks.resolveCliRuntimeCanonicalProvider.mock.calls) {
+      expect(request).toEqual(expectedCanonicalProviderRequest);
+    }
   });
 
   it("keeps ordinary provider overrides off the CLI setup-registry path", async () => {
@@ -1916,7 +1873,7 @@ describe("createModelSelectionState respects session model override", () => {
 
     expect(state.provider).toBe("openai");
     expect(state.model).toBe("gpt-added-after-startup");
-    expect(state.requestedRouteResolution).toBe("raw");
+    expect(state.requestedRouteResolution).toBe("resolved");
     expect(state.resetModelOverride).toBe(false);
     expect(sessionStore[sessionKey]?.providerOverride).toBe("openai");
     expect(sessionStore[sessionKey]?.modelOverride).toBe("gpt-added-after-startup");
@@ -2473,7 +2430,7 @@ describe("createModelSelectionState auto-failover overrides", () => {
 
     expect(state.provider).toBe("openrouter");
     expect(state.model).toBe("minimax/minimax-m2.7");
-    expect(state.requestedRouteResolution).toBe("raw");
+    expect(state.requestedRouteResolution).toBe("resolved");
     expect(sessionStore[sessionKey]?.modelOverride).toBe("minimax/minimax-m2.7");
     expect(state.resetModelOverride).toBe(false);
   });

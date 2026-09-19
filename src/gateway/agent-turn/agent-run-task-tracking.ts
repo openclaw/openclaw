@@ -3,6 +3,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { InputProvenance } from "../../sessions/input-provenance.js";
+import { findTaskViewByRunIdAsync } from "../../tasks/runtime-internal.js";
 import { readInProcessSubagentResume } from "../in-process-subagent-resume.js";
 import type { AgentRunRequest } from "../server-methods/agent-request-types.js";
 import {
@@ -46,6 +47,11 @@ export async function prepareAgentRunTaskTracking(params: {
       }),
     };
   }
+  const existingTask =
+    !params.isOneShotModelRun && params.resolvedSessionKey?.trim() && params.runId.trim()
+      ? await findTaskViewByRunIdAsync(params.runId, params.assertResumeAdmissionCurrent)
+      : undefined;
+  params.assertResumeAdmissionCurrent();
   const taskTrackingMode = resolveGatewayAgentTaskTrackingMode({
     client: params.client,
     sessionKey: params.resolvedSessionKey,
@@ -59,10 +65,11 @@ export async function prepareAgentRunTaskTracking(params: {
       logGateway: params.context.logGateway,
     }),
     modelRun: params.isOneShotModelRun,
-    runId: params.runId,
+    existingTask,
   });
   if (taskTrackingMode === "plugin_subagent" && params.resolvedSessionKey) {
     try {
+      params.assertResumeAdmissionCurrent();
       await registerPluginSubagentRunFromGateway({
         cfg: params.cfg,
         runId: params.runId,

@@ -68,6 +68,8 @@ export const TaskSuggestionsAcceptParamsSchema = closedObject({
   taskId: TaskIdSchema,
   mode: Type.Optional(TaskSuggestionAcceptanceModeSchema),
   cloudProfileId: Type.Optional(Type.String({ minLength: 1, maxLength: 128 })),
+  /** Explicit repository correction when starting a new worktree. */
+  cwd: Type.Optional(TaskCwdSchema),
 });
 
 export const TaskSuggestionsAcceptResultSchema = closedObject({

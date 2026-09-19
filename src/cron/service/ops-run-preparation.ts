@@ -543,7 +543,7 @@ export async function activatePreparedManualRun(
       publicRunId: prepared.runId,
     });
     const taskRunId = taskRun?.runId;
-    const activeJobMarker = markManualCronJobActive(state, job);
+    const activeJobMarker = markManualCronJobActive(state, activatedJob, activation.runReceipt);
     // Immediate delivery belongs to the accepted request, not an old timed slot.
     // Keep execution overrides separate from the admitted cadence and trigger.
     const admittedJob = structuredClone(activatedJob);

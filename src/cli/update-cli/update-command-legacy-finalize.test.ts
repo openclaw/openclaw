@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { afterEach, expect, it, vi } from "vitest";
 import { createVitestResourceOwner } from "../../../scripts/lib/vitest-resource-ownership.mts";
@@ -21,12 +22,14 @@ import {
 } from "../../node-host/node-worker-process-identity.js";
 import * as commandRunner from "../../process/exec.js";
 import * as stateDatabase from "../../state/openclaw-state-db.js";
+import { resolveTestNodeExecPath } from "../../test-utils/node-process.js";
 import { updateExecutorNativeEntrypoints } from "./update-command-executor-native-runtime.test-support.js";
 import { legacyFinalizeEntrypoint } from "./update-command-legacy-finalize-entrypoint.test-support.js";
 
 // Vitest cancellation ends its wrapper before the body unwinds. Keep the
 // authority database and scratch inputs until that original body has joined.
 const fixture = createFixtureLifetime();
+const testNodeExecPath = resolveTestNodeExecPath();
 afterEach(() => fixture.cleanup());
 
 async function closeLegacyFixture(
@@ -61,6 +64,7 @@ const scenarios = [
   "grantless-scratch-owned",
   "grantless-scratch-owned-incumbent",
   "grantless-scratch-owned-parent-git",
+  "grantless-scratch-owned-parent-completed",
   "grantless-scratch-owned-parent-npm",
   "grantless-scratch-owned-parent-pnpm-root-move",
   "grantless-scratch-owned-parent-git-root-switch",
@@ -103,6 +107,7 @@ function runLegacyFinalizationScenario(scenario: (typeof scenarios)[number], sig
     const ownedEnvironment = scenario.includes("-owned");
     const incumbent = scenario.endsWith("-incumbent");
     const legacyParent = scenario.includes("-parent-");
+    const completedByGateway = scenario.endsWith("-completed");
     const refusedParent = scenario.includes("-wrong-") || scenario.endsWith("-registered-child");
     const normalTemp = path.join(scratch, "normal-temp");
     const workerTemp = path.join(scratch, "openclaw-update-migrated-fixture");
@@ -123,6 +128,7 @@ function runLegacyFinalizationScenario(scenario: (typeof scenarios)[number], sig
       OPENCLAW_CONFIG_PATH: configPath,
       OPENCLAW_UPDATE_IN_PROGRESS: "1",
       OPENCLAW_TEST_RUNTIME_LOG: "1",
+      ...(completedByGateway ? { OPENCLAW_TEST_COMPLETED_TERMINAL: "1" } : {}),
       ...(scratchEnvironment
         ? {
             TMPDIR: ownedEnvironment ? workerTemp : normalTemp,
@@ -145,6 +151,19 @@ function runLegacyFinalizationScenario(scenario: (typeof scenarios)[number], sig
     try {
       fs.writeFileSync(configPath, JSON.stringify({ plugins: { enabled: false } }));
       const runId = createUpdateRun({ trigger: "cli" }, { env }).runId;
+      if (completedByGateway) {
+        const candidateState = new DatabaseSync(path.join(scratch, "state", "openclaw.sqlite"), {
+          readOnly: true,
+        });
+        try {
+          // The shipped v2026.9.3 producer supports state schema 16. The real
+          // candidate below must own all access to this genuinely newer state.
+          const version = candidateState.prepare("PRAGMA user_version").get()?.user_version;
+          expect(version).toBeGreaterThan(16);
+        } finally {
+          candidateState.close();
+        }
+      }
       if (legacyParent) {
         env.OPENCLAW_UPDATE_RUN_HANDOFF = "1";
         env.OPENCLAW_UPDATE_RUN_ID = runId;
@@ -286,6 +305,9 @@ function runLegacyFinalizationScenario(scenario: (typeof scenarios)[number], sig
           opts: { json: true, yes: true, run: { runId, env } },
           result: {
             status: "ok",
+            ...(completedByGateway
+              ? { after: { version: "2026.9.5", buildId: "verified-migrated-candidate" } }
+              : {}),
             mode: switchedRoot || scenario.endsWith("-git") ? "git" : movedRoot ? "pnpm" : "npm",
             ...(legacyParent
               ? {
@@ -311,7 +333,7 @@ function runLegacyFinalizationScenario(scenario: (typeof scenarios)[number], sig
             : null,
           preUpdatePluginInstallRecords: {},
           startedAt: Date.now(),
-          packageUpdateNodeRunner: process.execPath,
+          packageUpdateNodeRunner: testNodeExecPath,
           updateStepTimeoutMs: 20000,
           rollbackBlockedReason:
             scenario === "rollback-state-unverified" ? scenario : "state-migrated-no-rollback",
@@ -319,8 +341,11 @@ function runLegacyFinalizationScenario(scenario: (typeof scenarios)[number], sig
       };
       command = commandRunner.runUtf8CommandWithTimeout(
         [
-          process.execPath,
-          ...resolveRuntimeWorkerArgv(resolveRuntimeWorkerUrl(legacyFinalizeEntrypoint)),
+          testNodeExecPath,
+          ...resolveRuntimeWorkerArgv(
+            resolveRuntimeWorkerUrl(legacyFinalizeEntrypoint),
+            testNodeExecPath,
+          ),
           JSON.stringify(runtimeProcessEntrypoints.sqliteReadOnly),
         ],
         {

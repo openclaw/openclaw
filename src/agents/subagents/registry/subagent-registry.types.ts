@@ -50,6 +50,7 @@ export type SubagentRestartRecoveryReceipt = {
   sessionId: string;
   sessionMarker: string;
   sessionLifecycleRevision?: string;
+  sessionLifecycleRunId?: string;
   idempotencyKey: string;
   phase: "reserved" | "attempted" | "consumed" | "accepted" | "abandoned";
   lifecycleGeneration?: string;
@@ -115,6 +116,8 @@ export type RequesterSettleWakeState = {
   afterRequesterYield?: true;
   /** Monotonic process generation protecting a newer yield from stale completion. */
   rearmGeneration?: number;
+  /** Reference to the conversation receipt for this presentation, not completion credit. */
+  progressOperationId?: string;
   /** Number of times this batch has been deferred due to unsettled descendants. */
   deferralCount?: number;
   lastError?: string | null;
@@ -189,6 +192,9 @@ export type SubagentRunRecord = Omit<SubagentRunReadRecord, "execution" | "colle
   deleteCleanupDispatchedAt?: number;
   /** Durable top-level requester wake obligation, replayed after restart. */
   requesterSettleWake?: RequesterSettleWakeState;
+  /** Generated identity under the host-owned per-agent attachment root. */
+  attachmentId?: string;
+  /** Legacy persisted absolute paths are never used for cleanup. */
   attachmentsDir?: string;
   attachmentsRootDir?: string;
   retainAttachmentsOnKeep?: boolean;
@@ -253,6 +259,7 @@ export type RegisterSubagentRunParams = {
   completionTarget?: "parent";
   completionRequesterSessionId?: string;
   spawnMode?: "run" | "session";
+  attachmentId?: string;
   attachmentsDir?: string;
   attachmentsRootDir?: string;
   retainAttachmentsOnKeep?: boolean;

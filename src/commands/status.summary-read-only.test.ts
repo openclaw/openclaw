@@ -33,7 +33,7 @@ describe("getStatusSummary read-only session access", () => {
   const previousRegistry = getActivePluginRegistry();
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-  beforeEach(() => {
+  function registerTelegramFixture() {
     const telegram = createOutboundTestPlugin({
       id: "telegram",
       outbound: createDirectOutboundTestAdapter({ channel: "telegram" }),
@@ -51,6 +51,10 @@ describe("getStatusSummary read-only session access", () => {
     setActivePluginRegistry(
       createTestRegistry([{ pluginId: "telegram", plugin: telegram, source: "test" }]),
     );
+  }
+
+  beforeEach(() => {
+    setActivePluginRegistry(createTestRegistry());
   });
 
   afterEach(() => {
@@ -85,6 +89,7 @@ describe("getStatusSummary read-only session access", () => {
   it.each([undefined, "owner"])(
     "resolves the configured owner DM without writing session state for target %s",
     async (target) => {
+      registerTelegramFixture();
       const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-status-owner-"));
       const databasePath = path.join(tempDir, "openclaw-agent.sqlite");
 

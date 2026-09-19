@@ -7,7 +7,7 @@ import {
   GATEWAY_EVENT_UPDATE_AVAILABLE,
   GATEWAY_EVENT_UPDATE_RUN_CHANGED,
 } from "./events.js";
-import { listCoreAdvertisedGatewayMethodNames } from "./methods/core-descriptors.js";
+import { listCoreAdvertisedGatewayMethodNames } from "./methods/core-method-policy.js";
 
 type GatewayMethodChannelPlugin = {
   gatewayMethods?: readonly string[];

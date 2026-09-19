@@ -487,6 +487,9 @@ export abstract class MemoryManagerSyncBase extends MemoryManagerDatabaseContext
           this.vector.dims = persistedMeta.vectorDims;
         }
         this.ensureVectorTable(dimensions);
+        if (persistedMeta && !persistedMeta.vectorDims && !this.hasIndexedChunks()) {
+          this.writeMeta({ ...persistedMeta, vectorDims: dimensions });
+        }
       });
     }
     return ready;

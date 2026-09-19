@@ -146,7 +146,10 @@ export function countTranscriptEventsForPath(
     }
     return { status: "ok", events };
   } catch (err) {
-    return { status: "malformed", message: String(err) };
+    return {
+      status: "malformed",
+      message: `${transcriptPath}: ${String(err)}. Only the readable prefix can be imported; the original remains protected for recovery.`,
+    };
   }
 }
 

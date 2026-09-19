@@ -26,6 +26,7 @@ beforeAll(async () => {
 });
 
 afterAll(async () => {
+  await cleanupSessionStateForTest({ stateDir: testWorkspaceDir });
   await fs.rm(testWorkspaceDir, {
     recursive: true,
     force: true,

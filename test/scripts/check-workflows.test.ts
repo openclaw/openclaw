@@ -355,7 +355,8 @@ describe("check-workflows", () => {
       "persist-credentials": false,
     });
     expect(native.steps.find((step) => step.name === "Setup Node.js")?.env).toMatchObject({
-      REQUESTED_NODE_VERSION: "24.x",
+      REQUESTED_NODE_VERSION:
+        "${{ inputs.installed_startup_package != '' && inputs.startup_node_version || '24.x' }}",
     });
     expect(native.steps.find((step) => step.name === "Setup pnpm")?.uses).toBe(
       "./.github/actions/setup-pnpm-store-cache",
@@ -363,6 +364,57 @@ describe("check-workflows", () => {
     expect(native.steps.find((step) => step.name === "Install dependencies")?.run).toContain(
       "pnpm install --frozen-lockfile --prefer-offline",
     );
+  });
+
+  it("keeps installed startup measurement opt-in and binds the package independently from tooling", () => {
+    const { workflow, probe, native } = readWindowsProbe();
+    expect(workflow.on.workflow_dispatch.inputs.installed_startup_package).toMatchObject({
+      default: "",
+      type: "string",
+    });
+    expect(workflow.on.workflow_dispatch.inputs.startup_node_version?.default).toBe("26.8.2");
+    expect(workflow.on.workflow_dispatch.inputs.installed_startup_cpu_diagnostic).toMatchObject({
+      default: false,
+      type: "boolean",
+    });
+    const validation = probe.steps.find((step) => step.id === "startup_input")!;
+    expect(validation.env).toMatchObject({
+      STARTUP_PACKAGE: "${{ inputs.installed_startup_package }}",
+      CPU_DIAGNOSTIC: "${{ inputs.installed_startup_cpu_diagnostic }}",
+    });
+    expect(validation.run).toContain("$producer.run_attempt");
+    expect(validation.run).toContain("$artifact.digest");
+    const install = probe.steps.find((step) => step.name === "Install and bind startup candidate")!;
+    expect(install.run).toContain(
+      "scripts/resolve-openclaw-package-candidate.mts --source artifact",
+    );
+    expect(install.run).toContain(
+      "npm install --prefix $installRoot --no-audit --no-fund --ignore-scripts=false",
+    );
+    expect(install.run).toContain("npm rebuild --prefix $installRoot --ignore-scripts=false");
+    expect(install.run).toContain(".openclaw-lifecycle-pending");
+    expect(install.run).toContain("dist/openclaw-install-guard");
+    const measure = probe.steps.find((step) => step.name === "Measure installed startup cohort")!;
+    expect(measure.if).toBe("${{ inputs.installed_startup_package != '' }}");
+    expect(measure.run).toContain("scripts/bench-gateway-startup.ts --installed-cohort");
+    expect(measure.env).toMatchObject({
+      CPU_DIAGNOSTIC: "${{ inputs.installed_startup_cpu_diagnostic }}",
+    });
+    expect(measure.run).toContain('if ($env:CPU_DIAGNOSTIC -eq "true")');
+    expect(measure.run).toContain('@("--installed-cpu-diagnostic")');
+    expect(native.steps).not.toContainEqual(measure);
+    const upload = probe.steps.find((step) => step.name === "Upload installed startup evidence")!;
+    expect(upload.if).toBe("${{ always() && inputs.installed_startup_package != '' }}");
+    expect(upload.with?.path).toBe(
+      [
+        ".artifacts/windows-installed-startup/*.json",
+        ".artifacts/windows-installed-startup/*.log",
+        ".artifacts/windows-installed-startup/results.json.profiles/*.cpuprofile",
+        ".artifacts/windows-installed-startup/results.json.profiles/*.json",
+        "",
+      ].join("\n"),
+    );
+    expect(upload.with?.["if-no-files-found"]).toBe("error");
   });
 
   it("retains exact-source native proof and cleanup evidence even on failure", () => {

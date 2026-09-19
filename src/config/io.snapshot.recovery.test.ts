@@ -146,6 +146,45 @@ describe("prepared config recovery", () => {
     },
   );
 
+  it.each(["async", "sync"] as const)(
+    "%s recovery tolerates an unreadable backup stat",
+    async (mode) => {
+      const { root, configPath, backup, env } = fixture();
+      const backupPath = `${configPath}.bak`;
+      const statError = Object.assign(new Error("EACCES: stat denied"), { code: "EACCES" });
+      const io = createConfigIO({
+        env,
+        configPath,
+        homedir: () => root,
+        logger: { warn: vi.fn(), error: vi.fn() },
+        fs: {
+          ...fs,
+          promises: {
+            ...fs.promises,
+            stat: ((target: fs.PathLike) =>
+              target === backupPath
+                ? Promise.reject(statError)
+                : fs.promises.stat(target)) as typeof fs.promises.stat,
+          },
+          statSync: ((target: fs.PathLike, options?: { throwIfNoEntry?: boolean }) => {
+            if (target === backupPath) {
+              throw statError;
+            }
+            return fs.statSync(target, options);
+          }) as typeof fs.statSync,
+        },
+      });
+
+      const recovered =
+        mode === "async"
+          ? (await io.readConfigFileSnapshot({ recoverSuspicious: true })).config
+          : io.loadConfig();
+
+      expect(recovered.gateway?.mode).toBe("local");
+      expect(fs.readFileSync(configPath, "utf8")).toBe(backup);
+    },
+  );
+
   it("keeps backup-based prepared recovery available when health reads are unavailable", async () => {
     const capture = healthOwner.captureConfigHealthStateStore;
     const unavailable = (store: ReturnType<typeof capture>): ReturnType<typeof capture> => ({

@@ -188,6 +188,7 @@ describe("plugins cli policy mutations", () => {
     { command: "enable", ids: ["alpha"], acceptCapabilities: false },
     { command: "enable", ids: ["beta", "alpha"], acceptCapabilities: true },
     { command: "disable", ids: ["alpha"], acceptCapabilities: false },
+    { command: "disable", ids: ["beta", "alpha", "beta"], acceptCapabilities: false },
   ])(
     "applies online $command for $ids through the running owner without a local config write",
     async ({ command, ids, acceptCapabilities }) => {
@@ -233,20 +234,25 @@ describe("plugins cli policy mutations", () => {
   );
 
   it.each([
-    { mode: undefined, json: false, acceptCapabilities: true },
-    { mode: "OPENCLAW_CONFIG_READONLY", json: false, acceptCapabilities: true },
-    { mode: "OPENCLAW_NIX_MODE", json: false, acceptCapabilities: true },
-    { mode: undefined, json: true, acceptCapabilities: false },
-    { mode: undefined, json: true, acceptCapabilities: true },
+    { mode: undefined, json: false, acceptCapabilities: true, ids: ["alpha"] },
+    {
+      mode: "OPENCLAW_CONFIG_READONLY",
+      json: false,
+      acceptCapabilities: true,
+      ids: ["alpha", "beta"],
+    },
+    { mode: "OPENCLAW_NIX_MODE", json: false, acceptCapabilities: true, ids: ["alpha", "beta"] },
+    { mode: undefined, json: true, acceptCapabilities: false, ids: ["alpha", "beta"] },
+    { mode: undefined, json: true, acceptCapabilities: true, ids: ["alpha", "beta"] },
   ])(
-    "reloads one CLI-selected plugin (mode=$mode, json=$json, accept=$acceptCapabilities)",
-    async ({ mode, json, acceptCapabilities }) => {
+    "reloads CLI-selected $ids in one generation (mode=$mode, json=$json, accept=$acceptCapabilities)",
+    async ({ mode, json, acceptCapabilities, ids }) => {
       resolvePluginLifecycleGatewayMock.mockResolvedValue(pluginLifecycleGatewayMock);
       const receipt = {
         ok: true,
-        pluginIds: ["alpha"],
+        pluginIds: ids,
         restartRequired: false,
-        runtime: { operationId: "reload-alpha", generation: 2, pluginIds: ["alpha"] },
+        runtime: { operationId: "reload-selected", generation: 2, pluginIds: ids },
       };
       const review = buildPluginCapabilityConsentReview({
         pluginId: "alpha",
@@ -272,6 +278,7 @@ describe("plugins cli policy mutations", () => {
           const reload = runPluginsCommand([
             "plugins",
             "reload",
+            ...ids,
             "alpha",
             ...(json ? ["--json"] : []),
             ...(acceptCapabilities ? ["--accept-capabilities"] : []),
@@ -287,7 +294,7 @@ describe("plugins cli policy mutations", () => {
       }
       expect(pluginLifecycleGatewayMock).toHaveBeenCalledExactlyOnceWith(
         "plugins.reload",
-        { plugins: [{ pluginId: "alpha" }] },
+        { plugins: ids.map((pluginId) => ({ pluginId })) },
         acceptCapabilities ? expect.any(Function) : undefined,
       );
       expect(promptYesNoMock).not.toHaveBeenCalled();
@@ -298,7 +305,11 @@ describe("plugins cli policy mutations", () => {
           expect(pluginsCliRuntimeLogs).toEqual([]);
         }
       } else {
-        expect(pluginsCliRuntimeLogs).toContain('Reloaded plugin "alpha" (generation 2).');
+        expect(pluginsCliRuntimeLogs).toContain(
+          ids.length === 1
+            ? 'Reloaded plugin "alpha" (generation 2).'
+            : 'Reloaded plugins "alpha", "beta" (generation 2).',
+        );
       }
       expect(configWriteMock).not.toHaveBeenCalled();
     },
@@ -347,24 +358,48 @@ describe("plugins cli policy mutations", () => {
     expect(runtimeErrors).toEqual([]);
   });
 
-  it("enables each requested plugin in order using the previously committed config", async () => {
-    mockCurrentConfig();
-    mockPluginRegistry(["alpha", "beta"]);
+  it.each(["enable", "disable"])(
+    "applies %s in order using the previously committed config",
+    async (command) => {
+      const enabled = command === "enable";
+      mockCurrentConfig({
+        plugins: { entries: { alpha: { enabled: !enabled }, beta: { enabled: !enabled } } },
+      });
+      mockPluginRegistry(["alpha", "beta"]);
 
-    await runPluginsCommand(["plugins", "enable", "beta", "alpha"]);
+      await runPluginsCommand(["plugins", command, "beta", "alpha"]);
 
-    expect(configWriteMock.mock.calls).toEqual([
-      [{ plugins: { entries: { beta: { enabled: true } } } }],
-      [{ plugins: { entries: { beta: { enabled: true }, alpha: { enabled: true } } } }],
-    ]);
-    expect(refreshPluginRegistryMock).toHaveBeenNthCalledWith(
-      1,
-      expect.objectContaining({ policyPluginIds: ["beta"] }),
-    );
-    expect(refreshPluginRegistryMock).toHaveBeenNthCalledWith(
-      2,
-      expect.objectContaining({ policyPluginIds: ["alpha"] }),
-    );
+      expect(configWriteMock.mock.calls).toEqual([
+        [{ plugins: { entries: { alpha: { enabled: !enabled }, beta: { enabled } } } }],
+        [{ plugins: { entries: { alpha: { enabled }, beta: { enabled } } } }],
+      ]);
+      expect(refreshPluginRegistryMock).toHaveBeenNthCalledWith(
+        1,
+        expect.objectContaining({ policyPluginIds: ["beta"] }),
+      );
+      expect(refreshPluginRegistryMock).toHaveBeenNthCalledWith(
+        2,
+        expect.objectContaining({ policyPluginIds: ["alpha"] }),
+      );
+    },
+  );
+
+  it("stops disabling at a missing plugin while retaining earlier changes", async () => {
+    mockCurrentConfig({
+      plugins: { entries: { alpha: { enabled: true }, gamma: { enabled: true } } },
+    });
+    mockPluginRegistry(["alpha", "gamma"]);
+
+    await expect(
+      runPluginsCommand(["plugins", "disable", "alpha", "missing", "gamma"]),
+    ).rejects.toThrow("__exit__:1");
+
+    expect(configWriteMock).toHaveBeenCalledOnce();
+    expect(requireFirstWrittenConfig().plugins?.entries).toEqual({
+      alpha: { enabled: false },
+      gamma: { enabled: true },
+    });
+    expect(runtimeErrors.at(-1)).toContain("Plugin not found: missing");
   });
 
   it.each(["missing", "blocked"])(

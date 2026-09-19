@@ -132,7 +132,6 @@ button.session-hovercard__attribution-others:is(:hover, :focus-visible) {
   color: var(--text);
 }
 
-.session-hovercard__no-pr,
 .session-hovercard__more {
   color: var(--muted);
   font-size: var(--control-ui-text-sm);
@@ -407,18 +406,6 @@ button.session-hovercard__attribution-others:is(:hover, :focus-visible) {
 
 .session-hovercard__deletions {
   color: var(--danger);
-}
-
-.session-hovercard__no-pr a {
-  color: var(--accent);
-  text-decoration: underline;
-  text-decoration-color: color-mix(in srgb, currentcolor 45%, transparent);
-  text-underline-offset: 2px;
-}
-
-.session-hovercard__branch-row + .session-hovercard__no-pr {
-  margin-top: var(--space-2);
-  padding-left: calc(var(--session-hovercard-context-icon-size) + var(--space-2));
 }
 
 .session-hovercard__excerpt {

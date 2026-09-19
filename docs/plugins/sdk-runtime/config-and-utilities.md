@@ -82,9 +82,29 @@ to `execPolicy.resolveExecModePolicy`, selecting the returned fields they need.
 
 Native command probes should use `runCommandWithTimeout` from
 `openclaw/plugin-sdk/process-runtime` with `timeoutMs`, the caller's `signal`, and
-`killProcessTree: true`. Await its result so timeout or cancellation cleanup finishes
-before returning. For commands whose output is always UTF-8, such as JSON status
-probes, use `runUtf8CommandWithTimeout` from the same subpath.
+`killProcessTree: true`. For commands whose output is always UTF-8, such as JSON status
+probes, use `runUtf8CommandWithTimeout` from the same subpath. A bounded command result
+can return before canceled remote startup delivers its PID. When a command owns a
+session reservation or temporary output, await `withCommandProcessScope` from the
+same subpath around execution before releasing those resources. The scope joins
+late startup and process cleanup; uncertain cleanup remains an error.
+
+Interactive process adapters can use `spawnTerminalPty` from the same subpath.
+It owns platform-specific terminal creation, including the Node helper on Bun.
+Pass the caller's construction signal and current-authority check through its
+second argument. The caller owns output subscriptions, termination, and waiting
+for the terminal's exit before releasing its backend resources.
+
+Sandbox command adapters retain the sandbox owner's per-stream output bound,
+`SANDBOX_COMMAND_MAX_BUFFER_BYTES`, from `openclaw/plugin-sdk/sandbox`.
+
+`WorkerTaskPool` from `openclaw/plugin-sdk/process-runtime` retains workers and
+unconsumed inputs when termination fails. Retry `close()` on that same pool;
+dispose dependent files only after closure is acknowledged. The optional
+`onRetirementFailure(error)` observer runs synchronously when termination fails.
+It may return `void` or `Promise<void>`; observer throws and rejections do not
+replace the termination error or release custody, and closure does not wait for
+the observer.
 
 When launching an isolated Gateway child that your plugin owns, remove
 `SUPERVISOR_HINT_ENV_VARS` from its environment after applying caller overrides.

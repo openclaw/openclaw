@@ -8,39 +8,34 @@ import { extractCompanionCommandQuestion } from "../../lib/chat/companion-questi
 import { resolveCurrentUserIdentity } from "../../lib/chat/current-user-identity.ts";
 import type { ControlUiFollowUpMode } from "../../lib/chat/follow-up-mode.ts";
 import { trimHumanMentions } from "../../lib/chat/human-mentions.ts";
-import { sameQueuedDeliveryVersion } from "../../lib/chat/outbox-store-codec.ts";
 import { captureChatOutboxAdmission } from "../../lib/chat/outbox-store.ts";
 import { scopedAgentIdForSession, visibleSessionMatches } from "../../lib/sessions/index.ts";
 import { resolveUiConversationIdentity } from "../../lib/sessions/session-key.ts";
-import { releaseChatAttachmentPayloads } from "./attachment-payload-store.ts";
+import { generateUUID } from "../../lib/uuid.ts";
 import { composeBrowserAnnotationContext } from "./browser-annotation-context.ts";
 import {
   dispatchChatSlashCommand,
   requireChatSessionAction,
   shouldQueueLocalSlashCommand,
 } from "./chat-commands.ts";
+import { loadChatBranches } from "./chat-history-branches.ts";
 import { isInitialChatHistoryUnavailable } from "./chat-history-state.ts";
 import { loadChatHistory } from "./chat-history.ts";
 import {
   admitQueuedMessageForSession,
   admitQueuedMessageForSessionResult,
   enqueueChatMessage,
-  excludeComposerAttachments,
   removeQueuedMessageWithoutReleasing,
   readQueuedMessageById,
 } from "./chat-queue.ts";
-import { isTerminalFailureChatSendAck } from "./chat-send-ack.ts";
-import { sendChatMessageWithGeneratedRunId } from "./chat-send-actions.ts";
+import { isTerminalFailureChatSendAck, type ChatSendAck } from "./chat-send-ack.ts";
 import {
   captureChatCommandComposerRecovery,
   cancelChatDelivery,
   chatSubmitKey,
-  clearOwnedCommandComposerFallback,
   clearSubmittedComposerState,
-  commandComposerFallbackRetainsAttachments,
-  restoreFailedCommandComposer,
+  settleChatCommandComposer,
   snapshotChatAttachments,
-  submittedCommandConnectionIsCurrent,
   submittedCommandScopeIsVisible,
   type ChatCommandComposerRecovery,
 } from "./chat-send-composer.ts";
@@ -54,7 +49,11 @@ import {
   setChatError,
   waitForPendingChatSettings,
 } from "./chat-send-queue-state.ts";
-import { resolveDisplayedLeafEntryId } from "./chat-send-request.ts";
+import {
+  isActiveLeafChangedError,
+  requestChatSend,
+  resolveDisplayedLeafEntryId,
+} from "./chat-send-request.ts";
 import {
   chatSendHoldReason,
   formatTerminalChatSendAckError,
@@ -65,7 +64,8 @@ import {
 } from "./chat-send-support.ts";
 import { recordChatSendTiming } from "./chat-send-timing.ts";
 import { getPendingChatPickerPatch } from "./chat-session.ts";
-import { withChatSubmitGuard, yieldChatSubmitToInput } from "./chat-submit-guard.ts";
+import { withChatSubmitGuard, withChatSubmitHandoff } from "./chat-submit-guard.ts";
+import { formatConnectError } from "./connect-error.ts";
 import {
   recordNonTranscriptInputHistory,
   resetChatInputHistoryNavigation,
@@ -116,32 +116,38 @@ async function sendDetachedCommandMessage(
   opts: {
     attachments?: ChatAttachment[];
     recovery: ChatCommandComposerRecovery;
-    runId?: string;
   },
 ) {
-  const ack = await sendChatMessageWithGeneratedRunId(host, message, opts?.attachments, {
-    canApplyError: () => submittedCommandScopeIsVisible(host, opts.recovery),
-    runId: opts.runId,
-  });
-  const sendAck = ack && !("kind" in ack) ? ack : null;
-  const ok =
-    sendAck?.status === "ok" || sendAck?.status === "started" || sendAck?.status === "in_flight";
-  if (!ok && !restoreFailedCommandComposer(host, opts.recovery)) {
-    releaseChatAttachmentPayloads(excludeComposerAttachments(host, opts.attachments));
-  }
-  if (
-    isTerminalFailureChatSendAck(sendAck) &&
-    submittedCommandScopeIsVisible(host, opts.recovery)
-  ) {
-    setChatError(host, formatTerminalChatSendAckError(sendAck, "detached"));
-  }
-  if (ok) {
-    if (submittedCommandConnectionIsCurrent(host, opts.recovery)) {
-      clearOwnedCommandComposerFallback(host, opts.recovery);
+  let ack: ChatSendAck | null = null;
+  if (host.client && host.connected && (message.trim() || opts.attachments?.length)) {
+    if (submittedCommandScopeIsVisible(host, opts.recovery)) {
+      setChatError(host, null);
     }
-    if (!commandComposerFallbackRetainsAttachments(host, opts.recovery)) {
-      releaseChatAttachmentPayloads(excludeComposerAttachments(host, opts.attachments));
+    try {
+      ack = await requestChatSend(host, {
+        message: message.trim(),
+        attachments: opts.attachments,
+        runId: generateUUID(),
+        expectedLeafEntryId: resolveDisplayedLeafEntryId(host),
+      });
+    } catch (err) {
+      if (submittedCommandScopeIsVisible(host, opts.recovery)) {
+        const activeLeafChanged = isActiveLeafChangedError(err);
+        setChatError(
+          host,
+          activeLeafChanged ? t("chat.sendErrors.activeLeafChanged") : formatConnectError(err),
+        );
+        if (activeLeafChanged) {
+          void Promise.all([loadChatHistory(host), loadChatBranches(host)]);
+        }
+      }
     }
+  }
+  const completed =
+    ack?.status === "ok" || ack?.status === "started" || ack?.status === "in_flight";
+  settleChatCommandComposer(host, opts.recovery, completed, opts.attachments);
+  if (isTerminalFailureChatSendAck(ack) && submittedCommandScopeIsVisible(host, opts.recovery)) {
+    setChatError(host, formatTerminalChatSendAckError(ack, "detached"));
   }
 }
 
@@ -472,20 +478,9 @@ export async function handleSendChat(
           }
         }
         if (dispatchResult === "failed" || dispatchResult === "cancelled") {
-          if (!restoreFailedCommandComposer(host, recovery)) {
-            releaseChatAttachmentPayloads(
-              excludeComposerAttachments(host, recovery.composer?.attachments),
-            );
-          }
+          settleChatCommandComposer(host, recovery, false, recovery.composer?.attachments);
         } else if (dispatchResult === "completed") {
-          if (submittedCommandConnectionIsCurrent(host, recovery)) {
-            clearOwnedCommandComposerFallback(host, recovery);
-          }
-          if (!commandComposerFallbackRetainsAttachments(host, recovery)) {
-            releaseChatAttachmentPayloads(
-              excludeComposerAttachments(host, recovery.composer?.attachments),
-            );
-          }
+          settleChatCommandComposer(host, recovery, true, recovery.composer?.attachments);
         }
       };
       if (waitsForPicker) {
@@ -589,6 +584,7 @@ export async function handleSendChat(
         normalizeChatFollowUpModeOverride(host.settings?.chatFollowUpMode));
     const activeRunQueueMode =
       !intent && applyRunPolicy && followUpMode !== "queue" ? followUpMode : undefined;
+    const allowActiveRunSend = Boolean(intent || (applyRunPolicy && followUpMode !== "queue"));
     const submission = createPendingSendMessage(
       host,
       effectiveMessage,
@@ -691,31 +687,21 @@ export async function handleSendChat(
     }
     setChatError(host, null);
     opts?.onOutboxAdmitted?.();
-    let deliveryItem: typeof queued | null = queued;
-    if (admittedDurably && submissionAction && typeof MessageChannel !== "undefined") {
-      // The outbox now owns the prompt across reloads. Return control before
-      // delivery work so the browser can accept the operator's next input.
-      await yieldChatSubmitToInput();
-      const current =
-        submissionOwnerIsCurrent() &&
-        visibleSessionMatches(host, queued.sessionKey!, queued.agentId)
-          ? readQueuedMessageById(host, queued.id)
-          : null;
-      // Input may retire this admission or another drain may advance it. Only
-      // position changes preserve the handoff; the drain owns ordering/edit holds.
-      deliveryItem =
-        current && sameQueuedDeliveryVersion(queued, { ...current, orderKey: queued.orderKey })
-          ? current
-          : null;
-    }
-    const sendResult = deliveryItem
-      ? await deliverChatQueueItem(host, deliveryItem, {
+    const sendResult = await withChatSubmitHandoff(
+      host,
+      queued,
+      {
+        yieldToInput: admittedDurably && Boolean(submissionAction),
+        isCurrent: submissionOwnerIsCurrent,
+        allowActiveRunSend,
+        pendingSettings,
+      },
+      (deliveryItem) =>
+        deliverChatQueueItem(host, deliveryItem, {
           previousDraft: cleared.previousDraft,
           previousAttachments: cleared.previousAttachments,
           previousMentions: cleared.previousMentions,
-          ...(intent || (applyRunPolicy && followUpMode !== "queue")
-            ? { allowActiveRunSend: true }
-            : {}),
+          ...(allowActiveRunSend ? { allowActiveRunSend: true } : {}),
           ...(expectedLeafEntryId !== undefined ? { expectedLeafEntryId } : {}),
           ...(pendingSettings ? { pendingSettings } : {}),
           restoreAttachments: Boolean(messageOverride && opts?.restoreDraft),
@@ -723,8 +709,8 @@ export async function handleSendChat(
           restoreOnTerminalFailure: Boolean(rawParsedCommand || intent),
           routingSessionKey: submittedSessionKey,
           storageMode: canSendFromMemory ? "memory" : "durable",
-        })
-      : "pending";
+        }),
+    );
     const pending = readQueuedMessageById(host, queued.id);
     accepted = sendResult !== "failed";
     const pendingBusySend =

@@ -35,7 +35,10 @@ const log = createSubsystemLogger("sessions/canonical-validation");
 /** Certify dirty persisted rows before startup maintenance reads their full entries. */
 export async function certifySessionCanonicalValidationPending(
   options: OpenClawAgentDatabaseOptions,
+  withWorker = withSqliteReclamationWorker,
+  assertCurrentOwner?: () => void,
 ): Promise<void> {
+  assertCurrentOwner?.();
   const sourceEnv = options.env ?? process.env;
   const pathname = resolveOpenClawAgentSqlitePath(options);
   if (isIncognitoOpenClawAgentSqlitePath(pathname, options)) {
@@ -71,16 +74,18 @@ export async function certifySessionCanonicalValidationPending(
           let contendedBatches = 0;
           let validation = getOpenClawAgentDatabaseValidation(database);
           while (true) {
+            assertCurrentOwner?.();
             assertReadinessCurrent();
             claim.assertCurrent();
             const result = await withSqliteMutationWorkerLifetime(
               databaseOptions,
               async ({ assertCurrent, commitGate }) =>
-                await withSqliteReclamationWorker(
+                await withWorker(
                   databaseOptions,
                   claim,
                   async (worker) => {
                     const assertCommitAllowed = () => {
+                      assertCurrentOwner?.();
                       assertReadinessCurrent();
                       assertCurrent();
                       worker.assertCurrent(databaseOptions, claim);
@@ -120,12 +125,14 @@ export async function certifySessionCanonicalValidationPending(
                     );
                   },
                   () => {
+                    assertCurrentOwner?.();
                     assertReadinessCurrent();
                     assertCurrent();
                     claim.assertCurrent();
                   },
                 ),
             );
+            assertCurrentOwner?.();
             assertReadinessCurrent();
             claim.assertCurrent();
             const currentValidation = getOpenClawAgentDatabaseValidation(database);

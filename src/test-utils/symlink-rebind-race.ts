@@ -3,6 +3,7 @@ import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { vi } from "vitest";
+import { configureFsSafeNative, getFsSafeNativeConfig } from "../infra/fs-safe-defaults.js";
 
 /** Repoints a symlink or junction to a new target for realpath race tests. */
 export async function createRebindableDirectoryAlias(params: {
@@ -25,6 +26,12 @@ export async function withRealpathSymlinkRebindRace<T>(params: {
 }): Promise<T> {
   const realRealpath = fs.realpath.bind(fs);
   const realNativeRealpath = fsSync.realpathSync.native.bind(fsSync.realpathSync);
+  const nativeMode = getFsSafeNativeConfig().mode;
+  // fs-safe routes Bun realpath through its N-API workaround until oven-sh/bun#42374.
+  // Use node:fs here so this helper's spy remains the single race injection owner.
+  if (process.versions.bun) {
+    configureFsSafeNative({ mode: "off" });
+  }
   let flipped = false;
   const rebindSync = () => {
     const aliasPath = path.resolve(params.symlinkPath);
@@ -83,5 +90,8 @@ export async function withRealpathSymlinkRebindRace<T>(params: {
     return await params.run();
   } finally {
     realpathSpy.mockRestore();
+    if (process.versions.bun) {
+      configureFsSafeNative({ mode: nativeMode });
+    }
   }
 }

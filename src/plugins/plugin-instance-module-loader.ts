@@ -1,10 +1,15 @@
+import fs from "node:fs";
 import Module, { createRequire, isBuiltin } from "node:module";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import type { JitiOptions, JitiResolveOptions } from "jiti";
 import { toSafeImportPath } from "../shared/import-specifier.js";
 import { createJiti } from "./jiti-factory.js";
-import { isJavaScriptModulePath, isPluginSourceModulePath } from "./native-module-require.js";
+import {
+  isJavaScriptModulePath,
+  isPluginSourceModulePath,
+  supportsBunRuntimeOnResolveTargets,
+} from "./native-module-require.js";
 import type { PluginModuleLoader } from "./plugin-cache-artifacts.js";
 import {
   bindPluginCacheRoot,
@@ -27,7 +32,12 @@ import {
   type PluginSourceFile,
   type PluginSourceLoadMode,
 } from "./plugin-source-build.js";
-import { preparePluginLoaderAliases, isPluginSdkAliasSpecifier } from "./sdk-alias.js";
+import { inspectPluginTypeScriptExecutionFacts } from "./plugin-source-references.js";
+import {
+  preparePluginLoaderAliases,
+  isPluginSdkAliasSpecifier,
+  resolvePluginLoaderTryNative,
+} from "./sdk-alias.js";
 
 // Compiled recovery shares process code identity without closing over the
 // binder's predecessor instance or source-graph state.
@@ -84,11 +94,6 @@ export function bindPluginInstanceModuleLoader(params: PluginInstanceModuleLoade
     return;
   }
   const nativeHooks = typeof Module.registerHooks === "function";
-  if (!nativeHooks && params.expectedSourceDigest !== undefined) {
-    throw new Error(
-      "Source-validated plugin reload requires Node.js module hooks; run the Gateway with Node.js.",
-    );
-  }
   const sourceBuilds = new Map<string, ReturnType<typeof buildPluginTypeScriptSource>>();
   const sourceForOutput = (filename: string): PluginSourceFile => {
     for (const build of sourceBuilds.values()) {
@@ -118,9 +123,7 @@ export function bindPluginInstanceModuleLoader(params: PluginInstanceModuleLoade
     );
   }
   bindPluginCacheRoot(params.rootDir, artifact.sourceRoot);
-  if (nativeHooks) {
-    params.instance.sourceDigest = artifact.sourceDigest;
-  }
+  params.instance.sourceDigest = artifact.sourceDigest;
   params.instance.onModuleDispose(artifact.disposeAsync);
   const bindModuleLoader = preparePluginModuleLoaderRecovery(
     params,
@@ -139,9 +142,6 @@ export function bindPluginInstanceModuleLoader(params: PluginInstanceModuleLoade
   if (nativeAliases?.packageRoot) {
     artifact.linkHost(nativeAliases.packageRoot);
   }
-  if (nativeAliases) {
-    artifact.prepareNativeScopes();
-  }
   installOpenClawPluginSdkNativeResolver({
     moduleUrl: import.meta.url,
     pluginModulePath: params.source,
@@ -149,11 +149,41 @@ export function bindPluginInstanceModuleLoader(params: PluginInstanceModuleLoade
     allowedParentRoots: [artifact.boundaryRoot],
   });
   if (nativeAliases) {
+    const capturedSource = artifact.resolve(params.source);
+    artifact.prepareModule(capturedSource);
+    const bunSourceFacts =
+      process.versions.bun && isPluginSourceModulePath(params.source)
+        ? inspectPluginTypeScriptExecutionFacts(
+            params.source,
+            fs.readFileSync(params.source, "utf8"),
+            createJiti(params.source, { fsCache: false, moduleCache: false, tryNative: false }),
+          )
+        : undefined;
+    for (const { specifier } of bunSourceFacts?.staticImports ?? []) {
+      if (path.isAbsolute(specifier) || specifier.startsWith("file:")) {
+        artifact.captureModule(capturedSource, specifier, ["node", "import"]);
+      }
+    }
+    const bunNeedsNativeSource =
+      Boolean(process.versions.bun) &&
+      supportsBunRuntimeOnResolveTargets() &&
+      (bunSourceFacts?.hasComputedImport === true ||
+        bunSourceFacts?.staticImports.some(
+          ({ specifier, sideEffect }) => sideEffect && /\.cjs(?:[?#].*)?$/u.test(specifier),
+        ) === true);
+    const tryNative =
+      process.env.JITI_JSX === "1" || process.env.JITI_JSX === "true"
+        ? false
+        : (process.versions.bun && artifact.boundaryRoot.includes("\\")) || bunNeedsNativeSource
+          ? true
+          : undefined;
+    const effectiveTryNative = tryNative ?? resolvePluginLoaderTryNative(params.source);
     const loader = getCachedPluginModuleLoader({
       modulePath: params.source,
       importerUrl: import.meta.url,
       devSourceRoot: params.devSourceRoot,
       pluginSdkResolution: params.pluginSdkResolution,
+      tryNative,
       aliasMap: {
         ...nativeAliases.getAliasMap(),
         ...artifact.sourceAliases,
@@ -165,6 +195,7 @@ export function bindPluginInstanceModuleLoader(params: PluginInstanceModuleLoade
       artifact,
       loader,
       nativeAliases.sdkRoots,
+      !effectiveTryNative,
     );
     return;
   }

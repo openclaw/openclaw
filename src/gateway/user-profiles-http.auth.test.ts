@@ -1,4 +1,5 @@
-import { createServer, type Server } from "node:http";
+import { createServer, IncomingMessage, ServerResponse, type Server } from "node:http";
+import { Socket } from "node:net";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { resolveControlUiAuthCandidates } from "../../ui/src/app/control-ui-auth.ts";
@@ -10,10 +11,18 @@ import { approveDevicePairing } from "../infra/device-pairing-approval.js";
 import { ensureDeviceToken, revokeDeviceToken } from "../infra/device-pairing-tokens.js";
 import { requestDevicePairing } from "../infra/device-pairing.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
-import { ensureGatewayOwnerProfile, setAvatar } from "../state/user-profiles.js";
+import * as userProfiles from "../state/user-profiles.js";
+import {
+  ensureGatewayOwnerProfile,
+  linkEmail,
+  setAvatar,
+  setUserProfileRole,
+  syncGitHubIdentity,
+} from "../state/user-profiles.js";
 import { createAuthRateLimiter, type AuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
 import { authorizeGatewayHttpRequestOrReply } from "./http-auth-utils.js";
+import { invalidateOperatorRolePolicy } from "./operator-role-policy.js";
 import { resolveSharedGatewaySessionGeneration } from "./server/ws-shared-generation.js";
 import { handleUserProfileAvatarHttpRequest } from "./user-profiles-http.js";
 
@@ -23,8 +32,9 @@ const PNG = Buffer.from(
 );
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-// Only config is substituted: requests cross real HTTP, auth, device pairing,
-// profile storage and (in the reported path) the UI's credential picker/loader.
+// Most cases cross real HTTP, auth, device pairing, profile storage and the UI loader.
+// Provider-backed cases use in-memory HTTP transport and stub external identity responses,
+// while retaining the production authorization handler, profile store and observed byte reader.
 describe("personal avatar HTTP authentication", () => {
   let server: Server;
   let origin: string;
@@ -156,6 +166,124 @@ describe("personal avatar HTTP authentication", () => {
       expect(Buffer.from(await image.arrayBuffer())).toEqual(PNG);
     },
   );
+
+  it("checks linked-account authority before avatar I/O, including revocation and alias reassignment", async () => {
+    vi.stubEnv("GH_TOKEN", undefined);
+    vi.stubEnv("GITHUB_TOKEN", undefined);
+    const accessOrigin = "https://team.cloudflareaccess.com";
+    const identity = { id: 510, email: "personal@example.test" };
+    const trustedProxy = {
+      userHeader: "cf-access-authenticated-user-email",
+      requiredHeaders: ["cf-access-jwt-assertion"],
+      allowLoopback: true,
+    };
+    auth = { mode: "trusted-proxy", trustedProxy, allowTailscale: false };
+    cfg = {
+      gateway: {
+        auth: { mode: "trusted-proxy", trustedProxy },
+        trustedProxies: ["127.0.0.1"],
+        roles: {
+          default: "guest",
+          definitions: {
+            reader: { agents: "*", sessions: { others: "view" }, scopes: ["operator.read"] },
+            guest: { agents: [], sessions: { others: "none" }, scopes: [] },
+          },
+        },
+      },
+    };
+    const nativeFetch = globalThis.fetch;
+    const metadata = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({
+            id: identity.id,
+            login: identity.id === 510 ? "person" : "person-work",
+          }),
+        ),
+    );
+    vi.spyOn(globalThis, "fetch").mockImplementation((input, init) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
+      if (url.startsWith(accessOrigin)) {
+        return Promise.resolve(
+          new Response(JSON.stringify({ ...identity, idp: { type: "github" } })),
+        );
+      }
+      if (url.startsWith("https://api.github.com/")) {
+        return metadata();
+      }
+      return nativeFetch(input, init);
+    });
+    const primary = syncGitHubIdentity({
+      identity: { accountId: 510, login: "person" },
+      authenticationAlias: { kind: "email", email: "personal@example.test" },
+    });
+    syncGitHubIdentity({
+      identity: { accountId: 511, login: "person-work" },
+      authenticationAlias: { kind: "email", email: "work@example.test" },
+    });
+    linkEmail("work@example.test", primary.id);
+    setAvatar(primary.id, PNG, "image/png");
+    setUserProfileRole(primary.id, "reader");
+    avatarPath = "/api/users/" + primary.id + "/avatar";
+    const readAvatar = vi.spyOn(userProfiles, "getProfileAvatar");
+    const send = async (email = identity.email) => {
+      const req = new IncomingMessage(new Socket());
+      Object.defineProperty(req.socket, "remoteAddress", { value: "127.0.0.1" });
+      req.method = "GET";
+      req.url = avatarPath;
+      req.headers = {
+        "cf-access-authenticated-user-email": email,
+        "cf-access-jwt-assertion":
+          "header." +
+          Buffer.from(JSON.stringify({ iss: accessOrigin })).toString("base64url") +
+          ".signature",
+        "x-forwarded-for": "203.0.113.10",
+        "x-openclaw-scopes": "operator.read,operator.admin",
+      };
+      const res = new ServerResponse(req);
+      let bytes = Buffer.alloc(0);
+      vi.spyOn(res, "end").mockImplementation((chunk?: unknown) => {
+        if (typeof chunk === "string") {
+          bytes = Buffer.from(chunk);
+        } else if (chunk instanceof Uint8Array) {
+          bytes = Buffer.from(chunk);
+        }
+        return res;
+      });
+      try {
+        await handleUserProfileAvatarHttpRequest(req, res, avatarPath, { auth });
+        return { status: res.statusCode, bytes };
+      } finally {
+        req.destroy();
+      }
+    };
+    for (const account of [
+      { id: 510, email: "personal@example.test" },
+      { id: 511, email: "work@example.test" },
+    ]) {
+      Object.assign(identity, account);
+      const response = await send();
+      expect(response.status, response.bytes.toString()).toBe(200);
+      expect(response.bytes).toEqual(PNG);
+    }
+    expect(metadata).toHaveBeenCalledTimes(2);
+    expect(readAvatar).toHaveBeenCalledTimes(2);
+    readAvatar.mockClear();
+    setUserProfileRole(primary.id, null);
+    invalidateOperatorRolePolicy(primary.id);
+    expect((await send()).status).toBe(403);
+    expect(metadata).toHaveBeenCalledTimes(2);
+    expect(readAvatar).not.toHaveBeenCalled();
+    setUserProfileRole(primary.id, "reader");
+    invalidateOperatorRolePolicy(primary.id);
+    identity.id = 512;
+    expect((await send()).status).toBe(403);
+    expect(metadata).toHaveBeenCalledTimes(3);
+    expect(readAvatar).not.toHaveBeenCalled();
+    identity.email = "mismatched@example.test";
+    expect((await send("work@example.test")).status).toBe(401);
+    expect(readAvatar).not.toHaveBeenCalled();
+  });
 
   it("allows device-only clients and authenticates HEAD and ETag revalidation", async () => {
     const { token } = await pairDevice();

@@ -146,10 +146,13 @@ export async function resolveCommandAppServerContext(
           agentDir,
           config: ctx.config,
         });
-  const connection = resolveCodexBindingAppServerConnection({
+  const connection = await resolveCodexBindingAppServerConnection({
     binding,
     authProfileId,
     pluginConfig,
+    agentDir,
+    config: ctx.config,
+    assertCurrent: authority.assertCurrent,
   });
   const scope: CommandAppServerScope = {
     agentId: target?.agentId ?? fallback.agentId,

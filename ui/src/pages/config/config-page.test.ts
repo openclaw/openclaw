@@ -5,12 +5,16 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred as deferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext } from "../../app/context.ts";
+import { createServerPrefsWriter } from "../../app/server-prefs.test-support.ts";
 import {
+  applyServerUiPrefs,
   changedServerUiPrefs,
+  flushServerUiPrefs,
+  pushServerUiPrefs,
   refreshProfileAppearancePrefs,
   resetServerUiPrefsSync,
 } from "../../app/server-prefs.ts";
-import { loadSettings } from "../../app/settings.ts";
+import { loadSettings, patchSettings } from "../../app/settings.ts";
 import {
   installDialogPolyfill,
   nextFrame,
@@ -51,7 +55,7 @@ describe("extractQuickSettingsSecurity", () => {
     expect(extractQuickSettingsSecurity({})).toMatchObject({
       browserEnabled: true,
       browserEnabledOverridden: false,
-      toolProfile: "full",
+      toolProfile: "",
       toolProfileOverridden: false,
     });
   });
@@ -168,6 +172,90 @@ describe("ConfigPage synced preference provenance", () => {
     expect(page.settings.theme).toBe("dash");
     expect(changedServerUiPrefs(beforeReset, page.settings)).toEqual({ theme: null });
   });
+
+  it.each([
+    ["loading", "#123456", true],
+    ["loading", "#55bb77", true],
+    ["loading", undefined, true],
+    ["disconnected", "#123456", true],
+    ["disconnected", "#55bb77", true],
+    ["disconnected", undefined, true],
+    ["before-load-disconnect", "#55bb77", true],
+    ["before-load-disconnect", "#123456", true],
+    ["disconnected", "#123456", false],
+    ["disconnected", "#55bb77", false],
+    ["before-load-disconnect", undefined, false],
+  ] as const)(
+    "reconciles the returned accent after a %s reset with server value %s (edited: %s)",
+    async (connection, returnedAccent, edited) => {
+      const profileId = "profile-viewer";
+      const scope = "ws://profile.test";
+      const configObject = { ui: { prefs: { accent: "#abcdef" } } };
+      const saved = { status: "ok", entries: { "ui.accent": "#123456" } };
+      const initial = createServerPrefsWriter(
+        vi.fn(async () => saved),
+        scope,
+      );
+      const options = { profileId, configObject, scope, onApplied: vi.fn() };
+      patchSettings({ gatewayUrl: scope });
+      await refreshProfileAppearancePrefs({ ...options, client: initial.state.client! });
+      resetServerUiPrefsSync();
+      flushServerUiPrefs(initial, { profileId, canWrite: false });
+      if (edited) {
+        patchSettings({ accent: "#654321" });
+        pushServerUiPrefs(initial, { accent: "#654321" }, { profileId, canWrite: false });
+      }
+
+      const delayed = deferred<unknown>();
+      const request = vi.fn((_method: string) => delayed.promise);
+      const writer = createServerPrefsWriter(request, scope);
+      const connected = connection === "loading";
+      let pending: Promise<boolean> | undefined;
+      if (connection !== "before-load-disconnect") {
+        applyServerUiPrefs(configObject, options);
+        pending = refreshProfileAppearancePrefs({ ...options, client: writer.state.client! });
+        await vi.waitFor(() => expect(request).toHaveBeenCalledOnce());
+      }
+      const page = new ConfigPage() as unknown as {
+        context: ApplicationContext;
+        settings: ReturnType<typeof loadSettings>;
+        resetSyncedAppearancePref: (key: "accent") => void;
+      };
+      page.context = {
+        gateway: {
+          connection: { gatewayUrl: scope },
+          snapshot: {
+            selfUser: connected ? { id: profileId } : null,
+            hello: { auth: { role: "operator", scopes: ["operator.read"] } },
+          },
+        },
+        runtimeConfig: {
+          state: { connected, configSnapshot: connected ? { config: configObject } : null },
+          canPatch: false,
+        },
+        theme: { refresh: vi.fn() },
+      } as unknown as ApplicationContext;
+      const previous = loadSettings();
+      page.settings = previous;
+      page.resetSyncedAppearancePref("accent");
+      expect(page.settings.accent).toBe("#123456");
+      expect(changedServerUiPrefs(previous, page.settings)).toBeNull();
+
+      const reconnected = connected
+        ? undefined
+        : refreshProfileAppearancePrefs({
+            ...options,
+            client: createServerPrefsWriter(request, scope).state.client!,
+          });
+      delayed.resolve({
+        status: "ok",
+        entries: returnedAccent ? { "ui.accent": returnedAccent } : {},
+      });
+      await Promise.all([pending, reconnected]);
+      expect(loadSettings().accent).toBe(returnedAccent ?? "#abcdef");
+      expect(request.mock.calls.every(([method]) => method === "users.prefs.get")).toBe(true);
+    },
+  );
 
   it.each(["fontUi", "fontChat"] as const)(
     "resets the %s profile override when its picker sentinel is selected",
@@ -319,88 +407,6 @@ describe("ConfigPage header", () => {
     expect(container.querySelector(".page-subtitle")?.textContent?.trim()).toBe(
       "Messages, text-to-speech, and meeting capture settings.",
     );
-  });
-});
-
-describe("ConfigPage moved section routes", () => {
-  it.each([
-    ["communications", "channels", "channels", ""],
-    ["communications", "broadcast", "advanced", "?section=broadcast"],
-    ["communications", "talk", "talk", "?section=talk"],
-    ["appearance", "wizard", "advanced", "?section=wizard"],
-    [
-      "advanced",
-      "transcripts",
-      "communications",
-      "?section=transcripts&advanced=1",
-      "#config-section-transcripts",
-    ],
-  ])("redirects the former %s %s section", (pageId, section, routeId, search, hash = "") => {
-    const navigate = vi.fn();
-    const page = new ConfigPage();
-    const state = page as unknown as {
-      context: { navigate: typeof navigate };
-      pageId: string;
-      routeData: {
-        pathname: string;
-        search: string;
-        hash: string;
-        section: string;
-        advanced: boolean;
-        tab: string | null;
-        targetBlockId: string | null;
-      };
-      syncRouteData: () => void;
-    };
-    state.context = { navigate };
-    state.pageId = pageId;
-    state.routeData = {
-      pathname: `/settings/${pageId}`,
-      search: `?section=${section}`,
-      hash,
-      section,
-      advanced: false,
-      tab: null,
-      targetBlockId: null,
-    };
-
-    state.syncRouteData();
-
-    expect(navigate).toHaveBeenCalledWith(routeId, { search, hash });
-  });
-
-  it("redirects the former Agent Defaults models section", () => {
-    const navigate = vi.fn();
-    const page = new ConfigPage();
-    const state = page as unknown as {
-      context: { navigate: typeof navigate };
-      pageId: "ai-agents";
-      routeData: {
-        pathname: string;
-        search: string;
-        hash: string;
-        section: string;
-        advanced: boolean;
-        tab: string | null;
-        targetBlockId: string | null;
-      };
-      syncRouteData: () => void;
-    };
-    state.context = { navigate };
-    state.pageId = "ai-agents";
-    state.routeData = {
-      pathname: "/settings/ai-agents",
-      search: "?section=models",
-      hash: "",
-      section: "models",
-      advanced: false,
-      tab: null,
-      targetBlockId: null,
-    };
-
-    state.syncRouteData();
-
-    expect(navigate).toHaveBeenCalledWith("model-providers", { search: "", hash: "" });
   });
 });
 

@@ -13,7 +13,11 @@ import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
 import { parse } from "yaml";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { resolveWorkflowBash } from "../helpers/workflow-bash.js";
 
+let cachedWorkflowBash: string | undefined;
+const workflowBash = () =>
+  process.platform === "darwin" ? (cachedWorkflowBash ??= resolveWorkflowBash()) : "bash";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const repoRoot = fileURLToPath(new URL("../../", import.meta.url));
 const collectorPath = path.join(repoRoot, "scripts/qa/qa-profile-run-status.mjs");
@@ -205,12 +209,12 @@ describe("QA profile failure diagnostics", () => {
       if (failure === "timeout") {
         f.writeShard(1, { ...f.status(1), exitCode: 124, timedOut: true, timeoutOutcome: "term" });
       }
-      const aggregate = spawnSync("bash", ["-c", aggregateScript], {
+      const aggregate = spawnSync(workflowBash(), ["-c", aggregateScript], {
         cwd: f.selected,
         env: f.env,
         encoding: "utf8",
       });
-      expect(aggregate.status).toBe(1);
+      expect(aggregate.status, aggregate.stderr).toBe(1);
       expect(aggregate.stderr).toContain(
         failure === "missing"
           ? "Expected 2 completed status and evidence files"
@@ -272,7 +276,7 @@ describe("QA profile failure diagnostics", () => {
         encoding: "utf8",
       }).stdout.trim();
       for (const expected of ["", "not-a-sha", "f".repeat(40), head]) {
-        const run = spawnSync("bash", ["-c", script], {
+        const run = spawnSync(workflowBash(), ["-c", script], {
           cwd: repoRoot,
           env: { ...f.env, EXPECTED_WORKFLOW_SHA: expected },
           encoding: "utf8",
@@ -308,10 +312,14 @@ describe("QA profile failure diagnostics", () => {
           ],
           { env, encoding: "utf8" },
         );
-        const current = spawnSync("bash", ["-c", `status_paths=("$STATUS_PATH")\n${admission}`], {
-          env,
-          encoding: "utf8",
-        });
+        const current = spawnSync(
+          workflowBash(),
+          ["-c", `status_paths=("$STATUS_PATH")\n${admission}`],
+          {
+            env,
+            encoding: "utf8",
+          },
+        );
         expect(current.status).toBe(prior.status);
         expect(current.status === 0).toBe(
           code !== "oops" &&
@@ -353,7 +361,7 @@ describe("QA profile failure diagnostics", () => {
         f.writeShard();
         f.writeShard(1);
         f.collect({ QA_EXIT_CODE: code });
-        const gate = spawnSync("bash", ["-c", finalGateScript], {
+        const gate = spawnSync(workflowBash(), ["-c", finalGateScript], {
           env: { ...f.env, QA_EXIT_CODE: code, ALLOW_FAILURES: allowFailures },
           encoding: "utf8",
         });
@@ -472,8 +480,12 @@ describe("QA profile failure diagnostics", () => {
       const script = consumer.jobs.publish.steps.find(
         (step: { name: string }) => step.name === "Require one QA evidence file",
       ).run;
-      const run = spawnSync("bash", ["-c", script], { cwd: f.root, env: f.env, encoding: "utf8" });
-      expect(run.status).toBe(1);
+      const run = spawnSync(workflowBash(), ["-c", script], {
+        cwd: f.root,
+        env: f.env,
+        encoding: "utf8",
+      });
+      expect(run.status, run.stderr).toBe(1);
       expect(run.stderr).toContain("Expected exactly one aggregate QA evidence manifest, found 0");
     },
   );

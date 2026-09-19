@@ -8,11 +8,8 @@ import { logVerbose } from "../../globals.js";
 import { markReplyPayloadForSourceSuppressionDelivery } from "../reply-payload.js";
 import type { ReplyPayload } from "../types.js";
 import type { RunReplyAgentParams } from "./agent-runner-core.js";
-import {
-  admitFollowupRunLifecycle,
-  completeFollowupRunLifecycle,
-  resolveFollowupAbortSignal,
-} from "./queue/types.js";
+import { admitFollowupRunLifecycle, completeFollowupRunLifecycle } from "./queue/lifecycle.js";
+import { resolveFollowupAbortSignal } from "./queue/types.js";
 import { resolveReplyOperationRunState } from "./reply-operation-run-state.js";
 import { resolveInboundReplyToolAuthorityOverlay } from "./reply-tool-authority.js";
 

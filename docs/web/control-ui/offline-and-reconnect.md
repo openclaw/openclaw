@@ -59,6 +59,10 @@ is not replayed because newer work may start in that session before the connecti
 
 Queued messages follow the order shown in the queue, including moves made while
 attachment bytes are loading after reconnect. A message already being sent keeps its place.
+If another pane is editing a message, finish or cancel that edit before moving
+messages across it. A successful retry clears that edit-conflict notice.
+Opening a queued-message editor after the other pane releases its edit clears the earlier
+edit-conflict notice.
 
 Editing an unsent queued message remains safe if the connection drops mid-edit.
 Open queued-message edits stay available when you switch conversations, even after
@@ -102,6 +106,10 @@ If chat history times out, its **Retry** action reloads the saved conversation a
 its live session subscription, including approval updates.
 
 Once the Gateway confirms that a message is in the transcript, reconnecting retires its temporary browser copy even when the original message is outside the latest history page. Loading older history shows the saved message in its original position without adding a second copy.
+
+Retiring a delivered attachment does not discard the run's completion. If the browser misses
+that completion, a queue recovery read that confirms the same session and run have finished
+clears the stale running indicator and resumes queued input.
 
 Queued attachments use binary Blobs in the browser's IndexedDB; the outbox keeps only delivery
 metadata and payload references in session storage. Attachment bytes stay with the queued input;
@@ -149,6 +157,8 @@ commands keep their retry/discard queue controls.
 If the Gateway reports that a `/steer` or `/redirect` message failed to start, the Control UI
 restores the submitted draft when the composer is still empty. It preserves newer text and
 attachments. If you switched conversations, recovery stays with the original conversation.
+If you moved Home between the page and its dock while the command was pending, recovery
+follows the current Home composer and preserves any newer draft entered there.
 
 Queued messages and drafts keep the conversation and agent selected when they were created.
 Switching agents, opening a split pane, or reloading does not move them to another destination.

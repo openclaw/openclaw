@@ -65,7 +65,7 @@ export class PortaledHovercardController {
     }
     // A portal is outside its trigger's tab sequence. Enter at the first link,
     // then let native Tab traversal own the links inside the card.
-    if (event.key !== "Tab" || event.shiftKey || event.target !== this.trigger) {
+    if (event.key !== "Tab" || event.shiftKey || event.composedPath()[0] !== this.trigger) {
       return;
     }
     const first = this.focusables()[0];
@@ -349,7 +349,19 @@ function mountPortaledHovercard(params: {
 }): () => void {
   // A modal drawer makes body siblings inert. Keep its card inside the same
   // dialog, then use the existing menu top layer to escape clipping and stacking.
-  const owner = params.anchor.closest("openclaw-modal-dialog") ?? document.body;
+  let ancestor: Element | null = params.anchor;
+  let owner: Element = document.body;
+  while (ancestor) {
+    if (ancestor.localName === "openclaw-modal-dialog") {
+      owner = ancestor;
+      break;
+    }
+    const root = ancestor.getRootNode();
+    ancestor =
+      ancestor.assignedSlot ??
+      ancestor.parentElement ??
+      (root instanceof ShadowRoot ? root.host : null);
+  }
   owner.append(params.card);
   promoteToPopoverTopLayer(params.card);
   params.trigger.setAttribute("aria-controls", params.card.id);

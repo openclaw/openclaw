@@ -307,6 +307,7 @@ function runReleaseInputCapture(params: {
       "scripts/lib/docker-e2e-scenarios.mts",
       "scripts/lib/official-external-channel-catalog.json",
       "scripts/lib/upgrade-survivor-policy.mjs",
+      "scripts/lib/upgrade-survivor-scenarios.json",
       "scripts/lib/release-version.mjs",
       "scripts/lib/frozen-target-compat.sh",
       "scripts/resolve-frozen-codex-live-suite.mjs",

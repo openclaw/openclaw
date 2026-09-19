@@ -2,8 +2,10 @@ import { sortUniqueStrings } from "@openclaw/normalization-core/string-normaliza
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
 import type { PluginAutoEnableResult } from "../config/plugin-auto-enable.js";
+import { makeEmptyPluginMetadataOwners } from "./current-plugin-metadata.test-support.js";
 import type { PluginManifestRecord } from "./manifest-registry.js";
 import type { OpenClawPackageManifest } from "./manifest.js";
+import { buildPluginMetadataProviderFacts } from "./plugin-metadata-provider-facts.js";
 import type { PluginMetadataSnapshot } from "./plugin-metadata-snapshot.types.js";
 import type { PluginRegistrySnapshot } from "./plugin-registry.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
@@ -192,8 +194,9 @@ function createMetadataSnapshotFixture(
     },
     byPluginId: new Map(plugins.map((plugin) => [plugin.id, plugin])),
     owners: {
-      channels: ownerMap([]),
-      channelConfigs: ownerMap([]),
+      ...makeEmptyPluginMetadataOwners(),
+      providerAuthContributions:
+        buildPluginMetadataProviderFacts(plugins).providerAuthContributions,
       providers: ownerMap(
         plugins.flatMap((plugin) =>
           plugin.providers.map((providerId) => [providerId, [plugin.id]] as const),
@@ -213,10 +216,6 @@ function createMetadataSnapshotFixture(
           ),
         ),
       ),
-      setupProviders: ownerMap([]),
-      commandAliases: ownerMap([]),
-      contracts: ownerMap([]),
-      modelIdNormalizationPolicies: new Map(),
     },
   };
 }

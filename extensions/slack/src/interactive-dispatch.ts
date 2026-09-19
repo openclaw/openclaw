@@ -1,4 +1,3 @@
-// Slack plugin module implements interactive dispatch behavior.
 import {
   createChannelInteractiveDispatcher,
   type PluginConversationBinding,

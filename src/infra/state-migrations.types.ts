@@ -88,6 +88,7 @@ export type LegacyStateDetection = {
     sessionPath: string;
     hasLegacy: boolean;
   };
+  pairingStores: { sourcePaths: string[]; hasLegacy: boolean };
   voiceWake: {
     triggersPath: string;
     routingPath: string;
@@ -205,6 +206,8 @@ export type MigrationMessages = {
   }>;
   /** Every blocking warning is an ownership refusal confined to these agent databases. */
   refusedAgentDatabasePaths?: readonly string[];
+  /** Wrong-owner copies successfully quarantined by this pass, after verifying the original. */
+  recoveredAgentDatabasePaths?: readonly string[];
 };
 
 export const LEGACY_STATE_MIGRATION_PLAN_SCHEMA_VERSION =
@@ -236,8 +239,11 @@ export type LegacyStateMigrationStepReceipt = Omit<LegacyStateMigrationStepPlan,
   warnings: string[];
   notices?: string[];
   refusedAgentDatabasePaths?: readonly string[];
+  recoveredAgentDatabasePaths?: readonly string[];
   rehearsal?: MigrationMessages["rehearsal"];
   refusal?: { code: string; message: string };
+  /** The first refused step that prevented this step from running. */
+  originatingRefusal?: { stepId: string; code: string; message: string };
 };
 
 export type PlannedPluginDoctorAction = {
@@ -277,4 +283,14 @@ export type LegacyStateMigrationPlan = {
   };
   steps: LegacyStateMigrationStepPlan[];
   planDigest: string;
+};
+
+export type LegacyStateMigrationStep = Omit<LegacyStateMigrationStepPlan, "outcome"> & {
+  runWithoutFileDetection?: boolean;
+  collectNotices?: boolean;
+  deferredExecution?: {
+    kind: "post-session-plugin";
+    plannedActions: readonly PlannedPluginDoctorAction[];
+  };
+  run: () => MigrationMessages | Promise<MigrationMessages>;
 };

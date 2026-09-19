@@ -101,6 +101,8 @@ export type SubagentRunReadRecord = {
   requesterSessionKey: string;
   /** Effective requester agent, including cron/hook overrides not encoded in the session key. */
   requesterAgentId?: string;
+  requesterStorePath?: string;
+  controllerStorePath?: string;
   model?: string;
   /** Monotonic ownership generation within one child session. */
   generation?: number;

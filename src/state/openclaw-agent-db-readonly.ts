@@ -10,7 +10,7 @@ import {
 import { withCommittedOpenClawAgentDatabaseReadOnly } from "./openclaw-agent-db-readonly-companion.js";
 import {
   openOpenClawAgentDatabaseReadOnly,
-  readOpenClawAgentDatabaseReadOnly,
+  readOpenClawAgentDatabase,
   type OpenClawAgentDatabaseReadOnlyResult,
   type OpenClawAgentReadOnlyDatabase,
 } from "./openclaw-agent-db-readonly-open.js";
@@ -96,7 +96,7 @@ export function withOpenClawAgentDatabaseReadOnly<T>(
       throw new Error("Extension-capable read-only access is unavailable for incognito databases.");
     }
     return database
-      ? { found: true, value: operation(database) }
+      ? readOpenClawAgentDatabase(database, operation)
       : { found: false, reason: "database-missing" };
   }
   // Borrow only outside a transaction so readers see committed rows.
@@ -105,12 +105,10 @@ export function withOpenClawAgentDatabaseReadOnly<T>(
     ? undefined
     : findOpenAgentDatabase({ ...options, agentId });
   if (processOpened?.db.isTransaction) {
-    return withCommittedOpenClawAgentDatabaseReadOnly(
-      processOpened,
-      operation,
-      { ...options, agentId },
-      behavior,
-    );
+    return withCommittedOpenClawAgentDatabaseReadOnly(processOpened, operation, {
+      ...options,
+      agentId,
+    });
   }
   const reusable = processOpened && !processOpened.db.isTransaction ? processOpened : undefined;
   if (!reusable) {
@@ -123,5 +121,5 @@ export function withOpenClawAgentDatabaseReadOnly<T>(
   // Share only this admission's fresh value; a later read must check again.
   const userVersion = assertSupportedAgentSchemaVersion(reusable.db, pathname);
   assertCanonicalAgentPersistenceVersion(reusable.db, pathname, userVersion);
-  return readOpenClawAgentDatabaseReadOnly(reusable, operation, behavior);
+  return readOpenClawAgentDatabase(reusable, operation);
 }

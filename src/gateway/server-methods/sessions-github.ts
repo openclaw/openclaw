@@ -14,6 +14,7 @@ import { GitHubPublicationKnownFailure } from "../github-publication-failure.js"
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import { SessionMutationAuthorizationChangedError } from "../session-sharing.js";
 import { loadGatewaySessionEntryReadOnly } from "../session-utils.js";
+import { SessionWorkspaceReservationBusyError } from "../worker-environments/placement-workspace-reservation.js";
 import {
   prepareGitHubPublicationOptionsRead,
   preparePersonalGitHubSessionAction,
@@ -51,6 +52,7 @@ function defineSessionGitHubMethod<Method extends SessionGitHubMethod>(
       return await handler(options);
     } catch (error) {
       const publishing = method === "sessions.github.publish";
+      const busy = error instanceof SessionWorkspaceReservationBusyError;
       if (publishing && error instanceof SessionMutationAuthorizationChangedError) {
         throw error;
       }
@@ -58,14 +60,16 @@ function defineSessionGitHubMethod<Method extends SessionGitHubMethod>(
         false,
         undefined,
         errorShape(
-          publishing ? ErrorCodes.UNAVAILABLE : ErrorCodes.FORBIDDEN,
+          publishing || busy ? ErrorCodes.UNAVAILABLE : ErrorCodes.FORBIDDEN,
           error instanceof Error ? error.message : sessionGitHubFailureMessages[method],
-          publishing &&
-            error instanceof GitHubPublicationKnownFailure &&
-            "idempotencyKey" in options.params &&
-            error.rejection?.idempotencyKey === options.params.idempotencyKey
-            ? { details: error.rejection }
-            : undefined,
+          busy
+            ? { retryable: true }
+            : publishing &&
+                error instanceof GitHubPublicationKnownFailure &&
+                "idempotencyKey" in options.params &&
+                error.rejection?.idempotencyKey === options.params.idempotencyKey
+              ? { details: error.rejection }
+              : undefined,
         ),
       );
     }

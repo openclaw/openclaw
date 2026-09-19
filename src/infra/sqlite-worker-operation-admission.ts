@@ -1,6 +1,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { MessageChannel, receiveMessageOnPort, type MessagePort } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { SqliteWorkerError } from "./sqlite-worker-contract.js";
 import type { RetainedWorkerTransactionAdmission } from "./sqlite-worker-operation-settlement.js";
 
@@ -10,7 +11,7 @@ const REFUSED = 2;
 const ADMISSION_TIMEOUT_MS = 5_000;
 
 type SqliteWorkerAdmissionRequest = {
-  stage: "open" | "prepare" | "transaction";
+  stage: "open" | "prepare" | "transaction" | "commit";
   facts: unknown;
 };
 
@@ -50,7 +51,10 @@ export function createSqliteWorkerOperationAdmission(
       !isRecord(message) ||
       !(message.decision instanceof SharedArrayBuffer) ||
       message.decision.byteLength !== Int32Array.BYTES_PER_ELEMENT ||
-      (message.stage !== "open" && message.stage !== "prepare" && message.stage !== "transaction")
+      (message.stage !== "open" &&
+        message.stage !== "prepare" &&
+        message.stage !== "transaction" &&
+        message.stage !== "commit")
     ) {
       failure ??= new SqliteWorkerError(
         "SQLite worker admission request is invalid",
@@ -117,7 +121,12 @@ type WorkerAdmissionScope = {
   port: MessagePort;
   active: boolean;
 };
-const currentAdmission = new AsyncLocalStorage<WorkerAdmissionScope>();
+// Source brokers and built plugin backends can load separate module copies in
+// one Worker. Share the carrier, while each operation still owns its private port.
+const currentAdmission = resolveGlobalSingleton(
+  Symbol.for("openclaw.sqliteWorkerOperationAdmission"),
+  () => new AsyncLocalStorage<WorkerAdmissionScope>(),
+);
 
 /** Install only the private port belonging to the broker's currently executing operation. */
 export function withSqliteWorkerOperationAdmission<T>(port: MessagePort, operation: () => T): T {

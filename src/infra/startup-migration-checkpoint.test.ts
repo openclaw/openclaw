@@ -625,14 +625,29 @@ describe("startup migration checkpoint", () => {
       OPENCLAW_STATE_DIR: startupMigrationTempDirs.make("openclaw-startup-migration-"),
     };
     const lease = acquireStartupMigrationLease({ env, nowMs: 1000, owner: "first" });
+    const onActivity = vi.fn();
+    expect(hasActiveStartupMigrationLease({ env, nowMs: 1001, onActivity })).toBe(true);
+    expect(onActivity).toHaveBeenLastCalledWith({
+      owner: "first",
+      pid: process.pid,
+      heartbeatAt: 1000,
+    });
 
     lease.heartbeat({ nowMs: 300_000 });
+    expect(hasActiveStartupMigrationLease({ env, nowMs: 301_001, onActivity })).toBe(true);
+    expect(onActivity).toHaveBeenLastCalledWith({
+      owner: "first",
+      pid: process.pid,
+      heartbeatAt: 300_000,
+    });
 
     expect(() => acquireStartupMigrationLease({ env, nowMs: 301_001, owner: "second" })).toThrow(
       "OpenClaw startup migrations are already running",
     );
 
     lease.release();
+    expect(hasActiveStartupMigrationLease({ env, nowMs: 301_002, onActivity })).toBe(false);
+    expect(onActivity).toHaveBeenCalledTimes(2);
   });
 
   it("does not checkpoint startup migrations after the lease is lost", () => {

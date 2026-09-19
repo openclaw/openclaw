@@ -79,6 +79,13 @@ describe("user preference protocol schemas", () => {
     expect(validateUsersPrefsGetParams({})).toBe(true);
     expect(validateUsersPrefsGetParams({ keys: Object.keys(entries) })).toBe(true);
     expect(validateUsersPrefsSetParams({ entries })).toBe(true);
+    expect(validateUsersPrefsSetParams({ entries: {}, expectedEntries: entries })).toBe(true);
+    expect(validateUsersPrefsSetParams({ entries: {}, expectedEntries: { missing: null } })).toBe(
+      true,
+    );
+    expect(
+      validateUsersPrefsSetParams({ entries: {}, expectedEntries: { ...entries, overflow: true } }),
+    ).toBe(false);
     expect(validateUsersPrefsSetParams({ entries: { deleted: null } })).toBe(true);
     expect(validateUsersPrefsGetParams({ keys: [...Object.keys(entries), "overflow"] })).toBe(
       false,
@@ -110,6 +117,7 @@ describe("user preference protocol schemas", () => {
       Value.Check(UsersPrefsGetResultSchema, { status: "ok", entries: { theme: "claw" } }),
     ).toBe(true);
     expect(Value.Check(UsersPrefsSetResultSchema, { status: "ok" })).toBe(true);
+    expect(Value.Check(UsersPrefsSetResultSchema, { status: "conflict" })).toBe(true);
     expect(Value.Check(UsersPrefsSetResultSchema, { status: "no_durable_identity" })).toBe(true);
   });
 

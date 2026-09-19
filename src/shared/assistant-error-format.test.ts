@@ -94,7 +94,7 @@ describe("extractErrorHttpStatus", () => {
 });
 
 describe("HTTP status consumers", () => {
-  it.each(["500 ", "500: ", "HTTP 502: "])(
+  it.each(["", "error: ", "500 ", "500: ", "HTTP 502: "])(
     "preserves distinct validation type and code after %s",
     (prefix) => {
       const error = {

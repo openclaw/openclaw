@@ -1213,10 +1213,10 @@ enum GatewayDiagnostics {
         return String(collapsed[..<end]) + "..."
     }
 
-    private static func isoTimestamp() -> String {
+    private static func isoTimestamp(_ date: Date) -> String {
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
-        return formatter.string(from: Date())
+        return formatter.string(from: date)
     }
 
     private static var fileURL: URL? {
@@ -1274,10 +1274,11 @@ enum GatewayDiagnostics {
     }
 
     static func bootstrap() {
-        guard let url = fileURL else { return }
+        let date = Date()
         self.queue.async {
+            guard let url = fileURL else { return }
             self.truncateLogIfNeeded(url: url)
-            let timestamp = self.isoTimestamp()
+            let timestamp = self.isoTimestamp(date)
             let line = "[\(timestamp)] gateway diagnostics started\n"
             if let data = line.data(using: .utf8) {
                 self.appendToLog(url: url, data: data)
@@ -1287,12 +1288,12 @@ enum GatewayDiagnostics {
     }
 
     static func log(_ message: String) {
-        let timestamp = self.isoTimestamp()
-        let line = "[\(timestamp)] \(message)"
-        self.logger.info("\(line, privacy: .public)")
-
-        guard let url = fileURL else { return }
+        // Developer log transport can block; preserve occurrence time without blocking callers.
+        let date = Date()
         self.queue.async {
+            let line = "[\(self.isoTimestamp(date))] \(message)"
+            self.logger.info("\(line, privacy: .public)")
+            guard let url = fileURL else { return }
             let shouldTruncate = self.logWritesSinceCheck.withLock { count in
                 count += 1
                 if count >= self.logSizeCheckEveryWrites {

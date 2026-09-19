@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { importSqliteSessionRows } from "../../../../src/config/sessions/session-accessor.sqlite-import.js";
+import { importSqliteSessionRows } from "../../../../src/config/sessions/session-accessor.sqlite-import.test-support.js";
 import {
   loadTranscriptEventsSync,
   readTranscriptStatsSync,

@@ -103,7 +103,7 @@ export function readLegacySessionStoreEntries(
       if (!isSessionEntry(value)) {
         issues.push({
           code: "entry_invalid",
-          message: "Session entry is missing a valid sessionId.",
+          message: `${target.storePath}: session entry is missing a valid sessionId; skipped while preserving the original index for recovery.`,
           sessionKey,
         });
         continue;

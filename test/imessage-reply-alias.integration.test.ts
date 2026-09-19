@@ -1,7 +1,10 @@
 import { createHash } from "node:crypto";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createPluginRuntimeMock } from "../src/plugin-sdk/test-helpers/plugin-runtime-mock.js";
-import type { OpenKeyedStoreOptions } from "../src/plugin-state/plugin-state-store.js";
+import type {
+  OpenAsyncKeyedStoreOptions,
+  OpenKeyedStoreOptions,
+} from "../src/plugin-state/plugin-state-store.js";
 import { createTestRegistry } from "../src/test-utils/channel-plugins.js";
 import { withOpenClawTestState } from "../src/test-utils/openclaw-test-state.js";
 
@@ -47,7 +50,7 @@ describe("iMessage persisted alias matching through the registered adapter", () 
         const runtime = createPluginRuntimeMock({
           state: {
             resolveStateDir: () => state.stateDir,
-            openKeyedStore: <T>(options: OpenKeyedStoreOptions) =>
+            openKeyedStore: <T>(options: OpenAsyncKeyedStoreOptions) =>
               createPluginStateKeyedStore<T>("imessage", { ...options, env: state.env }),
             openSyncKeyedStore: <T>(options: OpenKeyedStoreOptions) =>
               createPluginStateSyncKeyedStore<T>("imessage", { ...options, env: state.env }),

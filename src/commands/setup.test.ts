@@ -462,7 +462,9 @@ describe("setupCommand", () => {
         await setupCommand(json ? { json: true } : undefined, runtime, deps);
 
         expect(runtime.exit).toHaveBeenCalledWith(1);
-        expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("openclaw doctor"));
+        expect(runtime.error).toHaveBeenCalledWith(
+          expect.stringContaining("openclaw doctor --fix"),
+        );
         if (json) {
           expect(runtime.log).toHaveBeenCalledOnce();
           expect(JSON.parse(String(runtime.log.mock.calls[0]?.[0]))).toEqual({
@@ -506,7 +508,9 @@ describe("setupCommand", () => {
         await setupCommand(undefined, runtime, deps);
 
         expect(runtime.exit).toHaveBeenCalledWith(1);
-        expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("openclaw doctor"));
+        expect(runtime.error).toHaveBeenCalledWith(
+          expect.stringContaining("openclaw doctor --fix"),
+        );
         expect(await fs.readFile(configPath, "utf-8")).toBe(raw);
         expect(deps.replaceConfigFile).not.toHaveBeenCalled();
         expect(deps.ensureAgentWorkspace).not.toHaveBeenCalled();

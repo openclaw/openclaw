@@ -2,7 +2,7 @@
  * Shared display and chunking types for embedded-agent subscription handlers.
  */
 import type { AgentCommandOutputEventFields } from "../infra/agent-activity-events.js";
-import type { BlockReplyChunking } from "./embedded-agent-block-chunker.js";
+export type { BlockReplyChunking } from "./embedded-agent-block-chunker.js";
 
 /** Rendering mode for completed tool results in subscribed replies. */
 export type ToolResultFormat = "markdown" | "plain";
@@ -22,5 +22,3 @@ export type EmbeddedAgentEvent = {
     };
   sessionKey?: string;
 };
-
-export type { BlockReplyChunking };

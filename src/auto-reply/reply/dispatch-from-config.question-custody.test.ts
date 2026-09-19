@@ -7,27 +7,33 @@ import {
   withAgentQuestionAnswerAuthority,
 } from "../../agents/harness/host-private-capabilities.js";
 import { clearAgentHarnesses } from "../../agents/harness/registry.js";
+import { resolveReplyCompletion } from "../../agents/reply-completion.js";
+import type { OpenClawConfig } from "../../config/config.js";
 import { EmbeddedQuestionBroker } from "../../infra/embedded-question-broker.js";
 import type { MsgContext } from "../templating.js";
-import type { GetReplyOptions } from "../types.js";
+import type { GetReplyOptions, ReplyPayload } from "../types.js";
 import { runReplyQuestionInput } from "./agent-runner-question-input.js";
 import {
   createDispatcher,
   diagnosticMocks,
+  emptyConfig,
   sessionStoreMocks,
 } from "./dispatch-from-config.shared.test-harness.js";
 import {
   automaticDirectReplyConfig,
+  automaticGroupReplyConfig,
   createReplyOperation,
   describe0BeforeEach0,
   dispatchReplyFromConfig,
   globalBeforeAll0,
+  firstToolResultPayload,
   replyRunRegistry,
+  requireToolResultHandler,
   setNoAbort,
 } from "./dispatch-from-config.test-harness.js";
 import { resetInboundDedupe } from "./inbound-dedupe.js";
 import { createQueueTestRun } from "./queue.test-helpers.js";
-import { admitFollowupRunLifecycle, completeFollowupRunLifecycle } from "./queue/types.js";
+import { admitFollowupRunLifecycle, completeFollowupRunLifecycle } from "./queue/lifecycle.js";
 import { resolveReplyOperationRunState } from "./reply-operation-run-state.js";
 import { testing as replyRunTesting } from "./reply-run-registry.test-support.js";
 import { buildTestCtx } from "./test-ctx.js";
@@ -41,6 +47,86 @@ afterEach(() => {
   replyRunTesting.resetReplyRunRegistry();
   resetInboundDedupe();
   clearAgentHarnesses();
+});
+it.each(["native commands", "groups"] as const)(
+  "delivers deterministic exec approval tool payloads in %s with progress suppression",
+  async (kind) => {
+    setNoAbort();
+    const cfg = kind === "groups" ? automaticGroupReplyConfig : emptyConfig;
+    const dispatcher = createDispatcher();
+    const ctx = buildTestCtx(
+      kind === "groups"
+        ? { Provider: "telegram", ChatType: "group" }
+        : { Provider: "telegram", CommandSource: "native" },
+    );
+
+    const replyResolver = async (
+      _ctx: MsgContext,
+      opts?: GetReplyOptions,
+      _cfg?: OpenClawConfig,
+    ) => {
+      await opts?.onToolResult?.({
+        text: "Approval required.\n\n```txt\n/approve 117ba06d allow-once\n```",
+        channelData: {
+          execApproval: {
+            approvalId: "117ba06d-1111-2222-3333-444444444444",
+            approvalSlug: "117ba06d",
+            allowedDecisions: ["allow-once", "allow-always", "deny"],
+          },
+        },
+      });
+      const runState = resolveReplyOperationRunState(opts);
+      if (!runState) {
+        throw new Error("expected reply operation run state");
+      }
+      runState.replyCompletion = resolveReplyCompletion(
+        runState.replyCompletion?.expectation ?? "required",
+        "blocked",
+      );
+      return { text: "NO_REPLY" } satisfies ReplyPayload;
+    };
+
+    await dispatchReplyFromConfig({
+      ctx,
+      cfg,
+      dispatcher,
+      replyResolver,
+      replyOptions: { suppressDefaultToolProgressMessages: true },
+    });
+
+    expect(dispatcher.sendToolResult).toHaveBeenCalledTimes(1);
+    expect(firstToolResultPayload(dispatcher)?.channelData).toStrictEqual({
+      execApproval: {
+        approvalId: "117ba06d-1111-2222-3333-444444444444",
+        approvalSlug: "117ba06d",
+        allowedDecisions: ["allow-once", "allow-always", "deny"],
+      },
+    });
+    expect(await dispatcher.waitForIdle()).toMatchObject({
+      counts: { tool: { delivered: 1 }, final: { delivered: 0 } },
+    });
+  },
+);
+it("delivers approval-unavailable notices when verbose tool progress is disabled", async () => {
+  setNoAbort();
+  const payload = {
+    text: "Exec approval is unavailable.",
+    channelData: {
+      execApprovalUnavailable: { reason: "no-approval-route" },
+    },
+  } satisfies ReplyPayload;
+  const finalReply = { text: "The command could not run without an approval route." };
+  const dispatcher = createDispatcher();
+  const ctx = buildTestCtx({ Provider: "telegram", ChatType: "direct" });
+  const replyResolver = async (_ctx: MsgContext, opts?: GetReplyOptions, _cfg?: OpenClawConfig) => {
+    await requireToolResultHandler(opts?.onToolResult)(payload);
+    return finalReply;
+  };
+
+  await dispatchReplyFromConfig({ ctx, cfg: emptyConfig, dispatcher, replyResolver });
+
+  expect(dispatcher.sendToolResult).toHaveBeenCalledWith(payload);
+  expect(dispatcher.sendFinalReply).toHaveBeenCalledExactlyOnceWith(finalReply);
 });
 
 function createQuestionDispatch(name: string) {

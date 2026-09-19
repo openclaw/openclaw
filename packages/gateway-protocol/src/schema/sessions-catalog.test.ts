@@ -124,6 +124,13 @@ describe("SessionsCatalogStartTerminal schemas", () => {
 });
 
 describe("SessionsCatalogListParamsSchema", () => {
+  it("accepts only boolean metadata selection while retaining full-list defaults", () => {
+    for (const params of [{}, { metadataOnly: false }, { metadataOnly: true }]) {
+      expect(Value.Check(SessionsCatalogListParamsSchema, params)).toBe(true);
+    }
+    expect(Value.Check(SessionsCatalogListParamsSchema, { metadataOnly: "true" })).toBe(false);
+  });
+
   it("accepts an optional progressive stream id without a catalog selector", () => {
     expect(
       Value.Check(SessionsCatalogListParamsSchema, {

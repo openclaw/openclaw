@@ -90,7 +90,10 @@ describe("Codex one-shot cleanup receipts", () => {
           if (request.method === "turn/interrupt") {
             send({
               method: "turn/completed",
-              params: { threadId: "thread-1", turn: { id: "turn-1", status: "interrupted" } },
+              params: {
+                threadId: "thread-1",
+                turn: { id: "turn-1", status: "interrupted", items: [] },
+              },
             });
           }
         },
@@ -109,7 +112,10 @@ describe("Codex one-shot cleanup receipts", () => {
         } else {
           harness.send({
             method: "turn/completed",
-            params: { threadId: "thread-1", turn: { id: "turn-1", status: "completed" } },
+            params: {
+              threadId: "thread-1",
+              turn: { id: "turn-1", status: "completed", items: [] },
+            },
           });
           expect(readAttemptTerminal(await run)).toMatchObject({ aborted: false, timedOut: false });
         }
@@ -147,7 +153,7 @@ describe("Codex one-shot cleanup receipts", () => {
         }
         harness.send({
           method: "turn/completed",
-          params: { threadId: "thread-1", turn: { id: "turn-1", status: "completed" } },
+          params: { threadId: "thread-1", turn: { id: "turn-1", status: "completed", items: [] } },
         });
         const terminals = await waitForHarnessRequest(harness, "thread/backgroundTerminals/list");
         harness.send({ id: terminals.id, result: { data: [], nextCursor: null } });
@@ -217,7 +223,7 @@ createInterface({ input: process.stdin }).on("line", (line) => {
   const request = JSON.parse(line);
   if (request.method === "test/complete") {
     ${shutdown === "retired-command" ? 'send({ method: "item/completed", params: { threadId: "thread-1", turnId: "turn-1", item: { type: "commandExecution", id: "retired-command", command: "fixture", cwd: process.cwd(), status: "completed", exitCode: 0, aggregatedOutput: "" } } });' : ""}
-    send({ method: "turn/completed", params: { threadId: "thread-1", turn: { id: "turn-1", status: "completed" } } });
+    send({ method: "turn/completed", params: { threadId: "thread-1", turn: { id: "turn-1", status: "completed", items: [] } } });
   } else if (request.id !== undefined) {
     send({ id: request.id, result: results[request.method] ?? {} });
     if (request.method === "turn/start") {

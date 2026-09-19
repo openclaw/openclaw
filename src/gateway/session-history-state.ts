@@ -15,11 +15,16 @@ import {
   createCurrentUserProfileMessageProjector,
 } from "./chat-display-projection.core.js";
 import { DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS } from "./chat-display-projection.helpers.js";
+import {
+  createSubagentCoordinationHistoryProjection,
+  projectForwardedMessages,
+} from "./chat-display-projection.history.js";
 import { resolveCurrentUserProfileDisplay } from "./current-user-profile-display.js";
 import {
   buildPaginatedSessionHistory,
   readSessionHistorySnapshotKernel,
 } from "./session-history-snapshot.js";
+import { createSessionHistorySubagentProjection } from "./session-history-subagent-projection.js";
 import { readChatHistoryMessageSeq as resolveMessageSeq } from "./session-history-tail.js";
 import {
   readTranscriptMessageIdempotencyKey,
@@ -34,10 +39,6 @@ type InlineSessionHistoryAppend = {
   shouldRefresh?: boolean;
 };
 
-function isMessageToolMirrorMessage(message: SessionHistoryMessage): boolean {
-  return message.openclawMessageToolMirror !== undefined;
-}
-
 export async function readSessionHistorySnapshotAsync(
   params: SessionHistoryReadParams,
 ): Promise<SessionHistorySnapshot> {
@@ -46,10 +47,12 @@ export async function readSessionHistorySnapshotAsync(
     params.target.sessionEntry?.incognito ||
     isIncognitoSessionKey(params.target.sessionKey)
   ) {
-    return readSessionHistorySnapshotKernel(params, {
+    const snapshot = await readSessionHistorySnapshotKernel(params, {
       readers: sessionTranscriptReaders,
       resolveCurrentUserProfileDisplay,
     });
+    const messages = projectForwardedMessages(snapshot.history.messages);
+    return { ...snapshot, history: { ...snapshot.history, items: messages, messages } };
   }
   const { readSessionHistoryPageInWorker } =
     await import("../config/sessions/session-history-worker-runtime.js");
@@ -71,7 +74,7 @@ export async function readSessionHistorySnapshotAsync(
     },
   });
   const project = createCurrentUserProfileMessageProjector(resolveCurrentUserProfileDisplay);
-  const messages = snapshot.history.messages.map(project);
+  const messages = projectForwardedMessages(snapshot.history.messages).map(project);
   return { ...snapshot, history: { ...snapshot.history, items: messages, messages } };
 }
 
@@ -143,12 +146,21 @@ export class SessionHistorySseState {
       this.rawTranscriptSeq += 1;
     }
     const idempotencyKey = readTranscriptMessageIdempotencyKey(update.message);
-    const nextMessage = attachOpenClawTranscriptMeta(update.message, {
+    let nextMessage = attachOpenClawTranscriptMeta(update.message, {
       ...(typeof update.messageId === "string" ? { id: update.messageId } : {}),
       ...(idempotencyKey ? { idempotencyKey } : {}),
       seq: this.rawTranscriptSeq,
     });
     const hadPendingTurnBoundary = this.turnBoundaryPending;
+    const subagentCoordination =
+      this.target.storePath &&
+      !this.target.sessionEntry?.incognito &&
+      !isIncognitoSessionKey(this.target.sessionKey)
+        ? createSessionHistorySubagentProjection(this.target, { deferSources: true })
+        : undefined;
+    nextMessage = createSubagentCoordinationHistoryProjection(subagentCoordination)([
+      nextMessage,
+    ])[0];
     const nextProjection = projectChatDisplayMessagesWithState([nextMessage], {
       includeCommentaryFallbacks: true,
       maxChars: this.maxChars,
@@ -174,6 +186,7 @@ export class SessionHistorySseState {
         resolveCurrentUserProfileDisplay,
       },
     );
+    subagentCoordination?.assertCurrent?.();
     const projectedPrefix = projectedMessages.slice(0, this.sentHistory.messages.length);
     if (
       projectedMessages.length > this.sentHistory.messages.length &&
@@ -206,7 +219,6 @@ export class SessionHistorySseState {
       }
       const projectedMessage = expectDefined(addedMessages[0], "projected inline message");
       const emittedMessage: SessionHistoryMessage =
-        isMessageToolMirrorMessage(projectedMessage) ||
         resolveMessageSeq(projectedMessage) === undefined
           ? (attachOpenClawTranscriptMeta(projectedMessage, {
               seq: this.rawTranscriptSeq,

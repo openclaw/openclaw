@@ -30,6 +30,7 @@ export function runRespawnChildWithSignalBridge(params: {
     stdio: "inherit",
     env,
     detached: detachForProcessTree,
+    windowsHide: !stdioIsTerminal,
   });
 
   // Let the child honor forwarded signals first; then terminate it so the

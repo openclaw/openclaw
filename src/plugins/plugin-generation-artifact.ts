@@ -71,6 +71,11 @@ export function capturePluginGenerationArtifact(
     executableEntry = false,
   ): string => {
     const boundary = root;
+    // Recovery packages are themselves captures; omit output only when it is nested in this source.
+    const outputRoot =
+      sourceCapture.outputRoot && isPathInside(boundary, sourceCapture.outputRoot)
+        ? sourceCapture.outputRoot
+        : undefined;
     const existing = packages.get(root);
     if (existing) {
       if (!metadataOnly) {
@@ -141,6 +146,9 @@ export function capturePluginGenerationArtifact(
         throw new Error(
           `Plugin source link leaves its package: ${path.relative(root, source)}. Declare shared code as a package dependency.`,
         );
+      }
+      if (outputRoot && isPathInside(outputRoot, real)) {
+        return;
       }
       const stat = fs.statSync(real, { bigint: true });
       const captured = capturedPaths.get(real);
@@ -265,6 +273,9 @@ export function capturePluginGenerationArtifact(
         const real = fs.realpathSync(source);
         if (!isPathInside(boundary, real)) {
           throw new Error("Standalone plugin input leaves its source directory");
+        }
+        if (outputRoot && isPathInside(outputRoot, real)) {
+          return;
         }
         if (fs.statSync(source).isDirectory()) {
           if (scannedDirectories.has(real)) {
@@ -584,10 +595,7 @@ export function capturePluginGenerationArtifact(
       capturePluginModuleSource(filename, (root, source) => copyPackage(root, source, false, true)),
     );
   const packageForFile = (filename: string) =>
-    // Every captured package root and dependency link belongs to this artifact.
-    isPathInside(directory, filename)
-      ? findPluginCapturedPackage(packages.values(), filename)?.owner
-      : undefined;
+    findPluginCapturedPackage(packages, filename, directory)?.owner;
 
   try {
     const sourceRoot = fs.realpathSync(rootDir);
@@ -681,7 +689,7 @@ export function capturePluginGenerationArtifact(
           return known;
         }
         return captureAdmitted(() => {
-          const captured = findPluginCapturedPackage(packages.values(), filename);
+          const captured = findPluginCapturedPackage(packages, filename, directory);
           // import.meta.url can name a deferred peer through a private dependency link.
           const original = captured
             ? path.join(captured.owner.sourceRoot, path.relative(captured.root, filename))

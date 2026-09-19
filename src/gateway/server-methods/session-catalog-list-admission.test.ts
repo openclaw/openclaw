@@ -1,25 +1,16 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { performance } from "node:perf_hooks";
 import { describe, expect, it, vi } from "vitest";
+import { createDeferredCore } from "../../shared/deferred.js";
 import {
   SessionCatalogListAdmission,
   type SessionCatalogListTiming,
 } from "./session-catalog-list-admission.js";
 
-function deferred<T>() {
-  let resolve!: (value: T) => void;
-  let reject!: (reason: unknown) => void;
-  const promise = new Promise<T>((resolvePromise, rejectPromise) => {
-    resolve = resolvePromise;
-    reject = rejectPromise;
-  });
-  return { promise, reject, resolve };
-}
-
 describe("SessionCatalogListAdmission", () => {
   it("starts at most the configured number of provider lists", async () => {
     const admission = new SessionCatalogListAdmission(2, 2);
-    const gates = Array.from({ length: 4 }, () => deferred<number>());
+    const gates = Array.from({ length: 4 }, () => createDeferredCore<number>());
     const tasks = gates.map((gate) => vi.fn(() => gate.promise));
     const pending = tasks.map((task) => admission.run(task));
 
@@ -36,7 +27,7 @@ describe("SessionCatalogListAdmission", () => {
 
   it("releases a slot after rejection and preserves FIFO order", async () => {
     const admission = new SessionCatalogListAdmission(1, 2);
-    const active = deferred<void>();
+    const active = createDeferredCore();
     const order: string[] = [];
     const first = admission.run(() => active.promise);
     const second = admission.run(async () => {
@@ -56,7 +47,7 @@ describe("SessionCatalogListAdmission", () => {
 
   it("rejects overflow without starting the provider", async () => {
     const admission = new SessionCatalogListAdmission(1, 1);
-    const active = deferred<void>();
+    const active = createDeferredCore();
     const first = admission.run(() => active.promise);
     const queued = admission.run(async () => undefined);
     const overflowTask = vi.fn(async () => undefined);
@@ -70,10 +61,10 @@ describe("SessionCatalogListAdmission", () => {
 
   it("reserves a continuing operation behind all 32 waiters before admitting new arrivals", async () => {
     const admission = new SessionCatalogListAdmission(4, 32);
-    const firstPage = deferred<void>();
-    const otherActive = Array.from({ length: 3 }, () => deferred<void>());
-    const oldestStarted = deferred<void>();
-    const oldestPage = deferred<void>();
+    const firstPage = createDeferredCore();
+    const otherActive = Array.from({ length: 3 }, () => createDeferredCore());
+    const oldestStarted = createDeferredCore();
+    const oldestPage = createDeferredCore();
     const order: string[] = [];
     let page = 0;
     let lateArrival: Promise<unknown> | undefined;
@@ -119,7 +110,7 @@ describe("SessionCatalogListAdmission", () => {
   it("retires an active operation only after its page settles and never starts its next page", async () => {
     const admission = new SessionCatalogListAdmission(1, 1);
     const controller = new AbortController();
-    const page = deferred<void>();
+    const page = createDeferredCore();
     const step = vi.fn(async () => {
       await page.promise;
       return { done: false as const };
@@ -142,9 +133,9 @@ describe("SessionCatalogListAdmission", () => {
     async (mode) => {
       const admission = new SessionCatalogListAdmission(1, 2);
       const controller = new AbortController();
-      const page = deferred<void>();
-      const successorStarted = deferred<void>();
-      const successorPage = deferred<void>();
+      const page = createDeferredCore();
+      const successorStarted = createDeferredCore();
+      const successorPage = createDeferredCore();
       const step = vi.fn(async () => {
         await page.promise;
         return { done: false as const };
@@ -177,7 +168,7 @@ describe("SessionCatalogListAdmission", () => {
 
   it("preserves FIFO over repeated handoffs and releases a failed resumed step", async () => {
     const admission = new SessionCatalogListAdmission(1, 1);
-    const firstPage = deferred<void>();
+    const firstPage = createDeferredCore();
     const order: string[] = [];
     let firstPages = 0;
     let secondPages = 0;
@@ -208,11 +199,11 @@ describe("SessionCatalogListAdmission", () => {
   it("restores the initial caller context and records waiting separately from admitted steps", async () => {
     const admission = new SessionCatalogListAdmission(1, 1);
     const context = new AsyncLocalStorage<string>();
-    const firstPage = deferred<void>();
-    const secondPage = deferred<void>();
-    const otherStarted = deferred<void>();
-    const otherPage = deferred<void>();
-    const secondStarted = deferred<void>();
+    const firstPage = createDeferredCore();
+    const secondPage = createDeferredCore();
+    const otherStarted = createDeferredCore();
+    const otherPage = createDeferredCore();
+    const secondStarted = createDeferredCore();
     const timing: SessionCatalogListTiming = {};
     const seen: Array<string | undefined> = [];
     let clock = 0;

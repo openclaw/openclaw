@@ -13,6 +13,8 @@ export type LegacyConfigUpdatePlan = {
   snapshot: ConfigSnapshot;
   config: OpenClawConfig;
   nextConfig: OpenClawConfig;
+  changes: string[];
+  warnings?: string[];
   includeIdentity: Pick<
     ConfigWriteOptions,
     "includeFileHashesForWrite" | "includeFileTargetsForWrite"
@@ -25,17 +27,23 @@ export function planLegacyConfigForUpdateChannel(
   includeIdentity: LegacyConfigUpdatePlan["includeIdentity"] = {},
 ): LegacyConfigUpdatePlan | undefined {
   const hasAuthoredIncludes = containsAuthoredInclude(configSnapshot.parsed);
-  const migrated = migrateLegacyConfig(configSnapshot.sourceConfig);
-  if (!migrated.config) {
+  const migrated = migrateLegacyConfig(configSnapshot.sourceConfig, {
+    sourceConfigBeforeMigrations: configSnapshot.sourceConfigBeforeMigrations,
+    context: {
+      authoredRaw: configSnapshot.parsed,
+      resolvedRaw: configSnapshot.sourceConfig,
+    },
+  });
+  if (!migrated.config && !migrated.warnings?.length) {
     return undefined;
   }
 
-  const validated = validateConfigObjectRawWithPlugins(migrated.config);
+  const nextConfig = migrated.sourceConfig ?? migrated.config ?? configSnapshot.sourceConfig;
+  const validated = validateConfigObjectRawWithPlugins(migrated.config ?? nextConfig);
   if (!validated.ok) {
     return undefined;
   }
 
-  const nextConfig = migrated.sourceConfig ?? migrated.config;
   if (
     hasAuthoredIncludes &&
     !resolveConfigIncludeWriteBoundary({ snapshot: configSnapshot, nextConfig })
@@ -47,6 +55,8 @@ export function planLegacyConfigForUpdateChannel(
     snapshot: configSnapshot,
     config: validated.config,
     nextConfig,
+    changes: migrated.changes,
+    ...(migrated.warnings?.length ? { warnings: migrated.warnings } : {}),
     // Snapshot-for-write exposes canonical hashes/targets without performing a write.
     // Only these data fields cross admission, never its live writer callbacks.
     includeIdentity: {
@@ -66,10 +76,14 @@ export async function repairLegacyConfigForUpdateChannel(params: {
   plan?: LegacyConfigUpdatePlan;
   configWriteOptions?: ConfigWriteOptions;
   jsonMode: boolean;
-}): Promise<{ snapshot: ConfigSnapshot; repaired: boolean }> {
+}): Promise<{ snapshot: ConfigSnapshot; repaired: boolean; warnings?: string[] }> {
   const plan = params.plan ?? planLegacyConfigForUpdateChannel(params.configSnapshot);
   if (!plan) {
     return { snapshot: params.configSnapshot, repaired: false };
+  }
+  const diagnostics = plan.warnings?.length ? { warnings: plan.warnings } : {};
+  if (plan.changes.length === 0) {
+    return { snapshot: params.configSnapshot, repaired: false, ...diagnostics };
   }
   if (params.plan && containsAuthoredInclude(plan.snapshot.parsed)) {
     const paths = plan.snapshot.includedPaths ?? [];
@@ -100,5 +114,5 @@ export async function repairLegacyConfigForUpdateChannel(params: {
   });
 
   const snapshot = await readConfigFileSnapshot();
-  return { snapshot, repaired: snapshot.valid };
+  return { snapshot, repaired: snapshot.valid, ...diagnostics };
 }

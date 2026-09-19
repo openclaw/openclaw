@@ -193,13 +193,14 @@ describe("orphan SQLite sidecar admission", () => {
     }
   });
 
-  it("uses a unique suffix instead of overwriting an existing quarantine", () => {
+  it("preserves a same-size quarantine with different contents and copies to a unique suffix", () => {
     const { databasePath, env } = prepareCase("state");
     const sourcePath = `${databasePath}-wal`;
     const epochMs = 1_786_738_000_000;
     const existingQuarantinePath = `${sourcePath}.orphaned-${epochMs}`;
     const newQuarantinePath = `${existingQuarantinePath}-1`;
-    const existingContents = Buffer.from("previously quarantined WAL");
+    const existingContents = Buffer.from(walFixture.withFrames);
+    existingContents.writeUInt8(existingContents.readUInt8(32) ^ 0xff, 32);
     fs.writeFileSync(sourcePath, walFixture.withFrames);
     fs.writeFileSync(existingQuarantinePath, existingContents);
     vi.spyOn(Date, "now").mockReturnValue(epochMs);

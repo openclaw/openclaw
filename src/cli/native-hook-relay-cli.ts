@@ -263,7 +263,7 @@ function createNativeHookRelayDeadline(timeoutMs: number): NativeHookRelayDeadli
   const timer = setSafeTimeout(() => controller.abort(), timeoutMs);
   timer.unref?.();
   return {
-    expiresAtMs: Date.now() + timeoutMs,
+    expiresAtMs: performance.now() + timeoutMs,
     signal: controller.signal,
     timeoutMs,
     dispose: () => clearTimeout(timer),
@@ -281,7 +281,7 @@ function isNativeHookRelayDeadlineError(error: unknown): error is NativeHookRela
 }
 
 function remainingNativeHookRelayDeadlineMs(deadline: NativeHookRelayDeadline): number {
-  const remainingMs = deadline.expiresAtMs - Date.now();
+  const remainingMs = deadline.expiresAtMs - performance.now();
   if (remainingMs <= 0 || deadline.signal.aborted) {
     throw createNativeHookRelayDeadlineError(deadline);
   }
@@ -322,6 +322,11 @@ async function withNativeHookRelayDeadline<T>(
         if (settled) {
           return;
         }
+        // Promise reactions can run before an overdue timer after an event-loop stall.
+        if (deadline.signal.aborted || deadline.expiresAtMs <= performance.now()) {
+          abort();
+          return;
+        }
         settled = true;
         cleanup();
         resolve(value);
@@ -335,7 +340,7 @@ async function withNativeHookRelayDeadline<T>(
         reject(error instanceof Error ? error : new Error(String(error)));
       },
     );
-    if (deadline.signal.aborted || deadline.expiresAtMs <= Date.now()) {
+    if (deadline.signal.aborted || deadline.expiresAtMs <= performance.now()) {
       abort();
     }
   });

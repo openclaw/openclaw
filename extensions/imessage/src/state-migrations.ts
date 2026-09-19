@@ -1,4 +1,3 @@
-// Imessage plugin module implements state migrations behavior.
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";

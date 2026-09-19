@@ -583,9 +583,8 @@ describe("minimal npm extended-stable workflow", () => {
     );
     expect(verify.env?.RUN_KIND).toBe("plugin");
     expect(verify.run).toContain(
-      "--json workflowName,displayTitle,headBranch,headSha,event,status,conclusion,url",
+      "node trusted-workflow/scripts/openclaw-npm-extended-stable-release.mjs verify-run",
     );
-    expect(verify.run).toContain("openclaw-npm-extended-stable-release.mjs verify-run");
   });
 
   it("captures selector fail closed, publishes extended-stable, retries, and summarizes", () => {

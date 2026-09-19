@@ -8,8 +8,11 @@ import {
 import { createUsageAggregateAccumulator } from "../../../../src/shared/usage-aggregates.js";
 import { renderSettingsSection } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
+import { registerUsageEnglish } from "../../i18n/locales/en-usage.ts";
 import { formatCompactTokenCount } from "../../lib/format.ts";
 import type { UsageSessionEntry, UsageTotals, UsageAggregates } from "./types.ts";
+
+registerUsageEnglish();
 
 const CHARS_PER_TOKEN = 4;
 const DAY_MS = 86_400_000;

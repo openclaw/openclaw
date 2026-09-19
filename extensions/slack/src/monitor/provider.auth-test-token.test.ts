@@ -3,7 +3,7 @@ import { createServer } from "node:http";
 import type { AddressInfo } from "node:net";
 import { WebClient } from "@slack/web-api";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import type { OpenKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
+import type { OpenAsyncKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { createPluginStateKeyedStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { assertSlackDetachedTargetAllowed } from "../detached-target-admission.js";
@@ -386,13 +386,17 @@ describe("auth.test boot call", () => {
     client.conversations.info.mockResolvedValueOnce({
       channel: { name: "general", is_channel: true },
     });
-    const { replyMock, sendMock } = getSlackTestState();
+    const { replyMock, sendMock, appStartMock } = getSlackTestState();
     replyMock.mockResolvedValue({ text: "identity preserved" });
+    const started = new Promise<void>((resolve) => {
+      appStartMock.mockImplementationOnce(async () => resolve());
+    });
 
     const monitor = startSlackMonitor(monitorSlackProvider, {
       appToken: "xapp-1-A1-opaque",
     });
-    await vi.waitFor(() => expect(getSlackTestState().appStartMock).toHaveBeenCalledTimes(1));
+    await started;
+    expect(appStartMock).toHaveBeenCalledTimes(1);
     expect([...getSlackTestState().interactionRegistrations].toSorted()).toEqual([
       "action",
       "command",
@@ -473,7 +477,7 @@ describe("presence polling transport", () => {
       enterprise_id: "E1",
       is_enterprise_install: true,
     });
-    getSlackRuntime().state.openKeyedStore = <T>(options: OpenKeyedStoreOptions) =>
+    getSlackRuntime().state.openKeyedStore = <T>(options: OpenAsyncKeyedStoreOptions) =>
       createPluginStateKeyedStoreForTests<T>("slack", {
         ...options,
         env: options.env ?? process.env,
@@ -510,7 +514,7 @@ describe("presence polling transport", () => {
         },
       },
     });
-    getSlackRuntime().state.openKeyedStore = <T>(options: OpenKeyedStoreOptions) =>
+    getSlackRuntime().state.openKeyedStore = <T>(options: OpenAsyncKeyedStoreOptions) =>
       createPluginStateKeyedStoreForTests<T>("slack", {
         ...options,
         env: options.env ?? process.env,
@@ -921,36 +925,47 @@ describe("connected identity health", () => {
 
   it("fails closed until auth.test recovery establishes a workspace install", async () => {
     const client = getSlackClient();
-    const recoveredAuth = createDeferred<{
-      app_id: string;
-      user_id: string;
-      bot_id: string;
-      team_id: string;
-      is_enterprise_install: false;
-    }>();
-    client.auth.test
-      .mockRejectedValueOnce(new Error("request_timeout"))
-      .mockReturnValueOnce(recoveredAuth.promise);
-    const setStatus = vi.fn();
-
-    const monitor = startSlackMonitor(monitorSlackProvider, { setStatus });
-    await vi.waitFor(() => expect(getSlackInstallationKind("default")).toBe("degraded"));
-    expect(() => assertSlackDetachedTargetAllowed("default")).toThrow(
-      "unsupported_enterprise_slack_delivery",
-    );
-    expect(() => assertSlackDetachedTargetAllowed("default", "T_RECOVERED")).not.toThrow();
-
-    recoveredAuth.resolve({
+    const workspaceAuth = {
       app_id: "A_WORKSPACE",
       user_id: "UWORKSPACE",
       bot_id: "BWORKSPACE",
       team_id: "T_WORKSPACE",
       is_enterprise_install: false,
+    };
+    const recoveredAuth = createDeferred<typeof workspaceAuth>();
+    const recoveryStarted = createDeferred<void>();
+    const ready = createDeferred<void>();
+    client.auth.test
+      .mockRejectedValueOnce(new Error("request_timeout"))
+      .mockImplementationOnce(() => {
+        recoveryStarted.resolve();
+        return recoveredAuth.promise;
+      });
+    const setStatus = vi.fn((next: Record<string, unknown>) => {
+      if (next.lifecycle === "ready") {
+        ready.resolve();
+      }
     });
-    await vi.waitFor(() => expect(getSlackInstallationKind("default")).toBe("workspace"));
-    expect(client.auth.test).toHaveBeenCalledTimes(2);
-    expect(() => assertSlackDetachedTargetAllowed("default")).not.toThrow();
-    await stopSlackMonitor(monitor);
+
+    const monitor = startSlackMonitor(monitorSlackProvider, { setStatus });
+    try {
+      await Promise.race([recoveryStarted.promise, monitor.run]);
+      expect(getSlackInstallationKind("default")).toBe("degraded");
+      expect(() => assertSlackDetachedTargetAllowed("default")).toThrow(
+        "unsupported_enterprise_slack_delivery",
+      );
+      expect(() => assertSlackDetachedTargetAllowed("default", "T_RECOVERED")).not.toThrow();
+
+      recoveredAuth.resolve(workspaceAuth);
+      await Promise.race([ready.promise, monitor.run]);
+      expect(getSlackInstallationKind("default")).toBe("workspace");
+      expect(client.auth.test).toHaveBeenCalledTimes(2);
+      expect(() => assertSlackDetachedTargetAllowed("default")).not.toThrow();
+    } finally {
+      // Aborting the monitor cannot settle a test-owned auth request after an assertion fails.
+      recoveredAuth.resolve(workspaceAuth);
+      await stopSlackMonitor(monitor);
+    }
 
     expect(setStatus).toHaveBeenCalledWith({
       running: true,

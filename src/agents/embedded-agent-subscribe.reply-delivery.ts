@@ -5,7 +5,7 @@ import {
   setReplyPayloadMetadata,
 } from "../auto-reply/reply-payload.js";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
-import { emitAgentEvent } from "../infra/agent-events.js";
+import { emitAgentEventIfCurrent } from "../infra/agent-events.js";
 import { normalizeTextForComparison } from "./embedded-agent-helpers.js";
 import type { BlockReplyPayload } from "./embedded-agent-payloads.js";
 import { runBestEffortCallback } from "./embedded-agent-subscribe.callback.js";
@@ -20,6 +20,7 @@ import type {
   AssistantStreamData,
   EmbeddedAgentSubscribeContext,
 } from "./embedded-agent-subscribe.handlers.types.js";
+import type { EmbeddedAgentEvent } from "./embedded-agent-subscribe.shared-types.js";
 import type { SubscribeEmbeddedAgentSessionParams } from "./embedded-agent-subscribe.types.js";
 import type { AgentMessage } from "./runtime/index.js";
 
@@ -54,7 +55,6 @@ type ReplyDeliveryParams = {
 export function createReplyDelivery({ params, state, log }: ReplyDeliveryParams) {
   const assistantTexts = state.assistantTexts;
   const deferredAssistantScopes: AssistantStreamScope[] = [];
-  const provisionalAssistantBlocks = new Set<number>();
   const lastEmittedCommentaryByItem = new Map<string, string>();
   const pendingBlockReplyTasks = new Set<Promise<void>>();
   const pendingPartialReplyTasks = new Set<Promise<void>>();
@@ -96,6 +96,24 @@ export function createReplyDelivery({ params, state, log }: ReplyDeliveryParams)
   let prefix = "";
   let streamedText = "";
   let finalized = false;
+  const publishAgentEvent = (event: EmbeddedAgentEvent) => {
+    if (
+      !emitAgentEventIfCurrent({
+        runId: params.runId,
+        lifecycleGeneration: params.lifecycleGeneration,
+        ...event,
+      })
+    ) {
+      return;
+    }
+    if (params.onAgentEvent) {
+      runBestEffortCallback({
+        label: "assistant agent event",
+        log,
+        callback: () => params.onAgentEvent?.(event),
+      });
+    }
+  };
   const emitAssistantStreamDataSafely = (scope: AssistantStreamScope) => {
     if (!scope.delivery || scope.emitted || state.unsubscribed) {
       return;
@@ -133,14 +151,7 @@ export function createReplyDelivery({ params, state, log }: ReplyDeliveryParams)
       if (event.stream === "item") {
         lastEmittedCommentaryByItem.set(itemId, commentarySignature);
       }
-      emitAgentEvent({ runId: params.runId, ...event });
-      if (params.onAgentEvent) {
-        runBestEffortCallback({
-          label: "assistant agent event",
-          log,
-          callback: () => params.onAgentEvent?.(event),
-        });
-      }
+      publishAgentEvent(event);
     }
     drainPartialReply(scope);
   };
@@ -193,6 +204,17 @@ export function createReplyDelivery({ params, state, log }: ReplyDeliveryParams)
         }
         streamedText = text;
         finalized = options?.finalMessage === true;
+      }
+      if (options?.finalMessage && state.lastAssistant?.stopReason === "error") {
+        const itemId = assistantItemId;
+        const text = streamedText;
+        params.assistantErrorTranscript?.bindStream(state.lastAssistant, (visible) => {
+          clearAssistantStream();
+          publishAgentEvent({
+            stream: "assistant",
+            data: { itemId, text: visible ? text : "", delta: "", replace: true },
+          });
+        });
       }
     }
     // Capture both coordinate domains before any callback can advance message state.
@@ -258,26 +280,10 @@ export function createReplyDelivery({ params, state, log }: ReplyDeliveryParams)
     streamScope.delivery = undefined;
     streamScope = {};
     deferredAssistantScopes.length = 0;
-    provisionalAssistantBlocks.clear();
   };
-  const noteLastAssistant = (msg: AgentMessage, options?: { hasToolResults: boolean }) => {
-    if (msg.role !== "assistant") {
-      return;
-    }
-    state.lastAssistant = msg;
-    if (
-      state.deferBlockReplyDelivery &&
-      (msg.stopReason === "toolUse" || options?.hasToolResults)
-    ) {
-      // Async tools can leave a normal-stop tail after their tool-use fragment.
-      // The response's tool results, not its text phase, establish continuation.
-      for (
-        let index = state.assistantMessageStartIndex;
-        index <= state.assistantMessageIndex;
-        index++
-      ) {
-        provisionalAssistantBlocks.add(index);
-      }
+  const noteLastAssistant = (msg: AgentMessage) => {
+    if (msg.role === "assistant") {
+      state.lastAssistant = msg;
     }
   };
   const deferredToolMediaReplies = new WeakMap<
@@ -395,9 +401,13 @@ export function createReplyDelivery({ params, state, log }: ReplyDeliveryParams)
     // A later answer supersedes deferred tool-turn text, not completed answers
     // to earlier user inputs, media, or reasoning. Reconcile both presentation
     // lanes before callbacks can advance the current message boundary.
-    const messageStartIndex = state.assistantMessageStartIndex;
-    const isSuperseded = (index: number | undefined) =>
-      index !== undefined && index < messageStartIndex && provisionalAssistantBlocks.has(index);
+    const isSuperseded = (index: number | undefined) => {
+      if (index === undefined) {
+        return false;
+      }
+      const segment = state.answerSegments.find((candidate) => index <= candidate.messageEnd);
+      return index < (segment?.finalMessageStart ?? state.assistantMessageStartIndex);
+    };
     for (const scope of deferredAssistantScopes) {
       const delivery = scope.delivery;
       if (delivery && isSuperseded(delivery.blockIndex)) {
@@ -419,7 +429,6 @@ export function createReplyDelivery({ params, state, log }: ReplyDeliveryParams)
         setReplyPayloadMetadata(payload, { blockSourceText: undefined });
       }
     }
-    provisionalAssistantBlocks.clear();
     state.deferBlockReplyDelivery = false;
     flushAssistantStream();
     for (const payload of replies) {

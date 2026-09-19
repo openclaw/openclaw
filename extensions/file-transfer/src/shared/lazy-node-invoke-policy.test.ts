@@ -36,7 +36,13 @@ describe("lazy file-transfer node invoke policy", () => {
 
     const policy = createLazyFileTransferNodeInvokePolicy(loadPolicy);
 
-    expect(policy.commands).toEqual(["file.fetch", "dir.list", "dir.fetch", "file.write"]);
+    expect(policy.commands).toEqual([
+      "file.fetch",
+      "file.stat",
+      "dir.list",
+      "dir.fetch",
+      "file.write",
+    ]);
     expect(loadPolicy).not.toHaveBeenCalled();
   });
 

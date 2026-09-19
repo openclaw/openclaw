@@ -109,6 +109,23 @@ describe("portal tool", () => {
     expect(Value.Check(tool.outputSchema!, closed.details)).toBe(true);
   });
 
+  it("keeps attached-environment portal operations on the selected machine", async () => {
+    const recorded = recorder();
+    const tool = createPortalTool(recorded);
+    await tool.execute("open", { action: "open", port: 3000, environmentId: "worker:preview" });
+    await tool.execute("list", { action: "list", environmentId: "worker:preview" });
+    await tool.execute("close", {
+      action: "close",
+      id: portal.id,
+      environmentId: "worker:preview",
+    });
+    expect(recorded.calls).toEqual([
+      ["portal.open", { port: 3000, environmentId: "worker:preview" }],
+      ["portal.list", { environmentId: "worker:preview" }],
+      ["portal.close", { id: portal.id, environmentId: "worker:preview" }],
+    ]);
+  });
+
   it("rejects action-specific missing and malformed fields before RPC", async () => {
     const recorded = recorder();
     const tool = createPortalTool({

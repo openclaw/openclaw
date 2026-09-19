@@ -954,12 +954,14 @@ describe("chat pane embedded panels", () => {
   it("enumerates a structural loading variant for every side-panel tab", async () => {
     const expected = {
       browser: "browser",
+      "link-reader": "files",
       companion: "chat",
       conversation: "chat",
       dashboard: "board",
       desktop: "desktop",
       detail: "review",
       discussion: "discussion",
+      portal: "browser",
       tasks: "tasks",
       terminal: "terminal",
       workspace: "files",
@@ -971,6 +973,8 @@ describe("chat pane embedded panels", () => {
       "detail",
       "terminal",
       "browser",
+      "link-reader",
+      "portal",
       "workspace",
       "companion",
       "tasks",

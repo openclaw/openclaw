@@ -1,4 +1,3 @@
-// Msteams plugin module implements feedback reflection behavior.
 import {
   DEFAULT_CHANNEL_FEEDBACK_REFLECTION_COOLDOWN_MS,
   runChannelFeedbackReflection,

@@ -10,8 +10,8 @@ import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import type { SkillStatusEntry } from "../../api/types.ts";
 import { renderHubTabs } from "../../components/hub-tabs.ts";
 import { icons } from "../../components/icons.ts";
-import "../../components/modal-dialog.ts";
 import { handleMarkdownCodeBlockClick } from "../../components/markdown-code-blocks.ts";
+import "../../components/modal-dialog.ts";
 import { toSanitizedMarkdownHtml } from "../../components/markdown.ts";
 import {
   renderSettingsEmpty,
@@ -22,6 +22,7 @@ import {
 } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
 import { registerSkillLibraryEnglish } from "../../i18n/locales/en-skill-library.ts";
+import { registerSkillsBrowserEnglish } from "../../i18n/locales/en-skills-browser.ts";
 import { formatUiExternalText } from "../../lib/format-error.ts";
 import { clampText } from "../../lib/format.ts";
 import { resolveSafeExternalUrl } from "../../lib/open-external-url.ts";
@@ -39,6 +40,7 @@ import { renderSkillDiscovery } from "./discovery-view.ts";
 import { renderSkillStateStatus, verdictForSkill } from "./skill-status.ts";
 import type { SkillDetailTab, SkillsProps, SkillsStatusFilter } from "./view-types.ts";
 
+registerSkillsBrowserEnglish();
 registerSkillLibraryEnglish();
 
 function safeExternalHref(raw?: string): string | null {

@@ -1,5 +1,6 @@
 [
   "core",
+  "control-ui-link-reader",
   "provider-setup",
   "sandbox",
   "routing",
@@ -129,6 +130,7 @@
   "agent-harness-exec-review-runtime",
   "agent-harness-registration",
   "agent-harness-runtime",
+  "agent-workspace-runtime",
   "agent-harness-tool-runtime",
   "hook-runtime",
   "html-entity-runtime",
@@ -238,6 +240,7 @@
   "session-transcript-runtime",
   "sqlite-runtime",
   "sqlite-runtime-testing",
+  "sqlite-worker-runtime",
   "session-transcript-hit",
   "session-visibility",
   "ssrf-dispatcher",

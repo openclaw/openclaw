@@ -24,7 +24,7 @@ export function bindChatPageSession(
   const agentId = parseAgentSessionKey(routeKey)?.agentId ?? routeAgentId?.trim();
   if (parseCatalogSessionKey(routeKey)) {
     if (agentId) {
-      context.agentSelection.set(agentId);
+      context.agentSelection.set(agentId, { background: true });
     }
     return;
   }
@@ -43,6 +43,7 @@ export function bindChatPageSession(
       gateway: context.gateway,
       sessionKey,
       agentId,
+      background: true,
     });
   }
 }

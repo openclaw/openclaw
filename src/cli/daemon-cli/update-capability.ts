@@ -3,7 +3,11 @@ import { GATEWAY_UPDATE_EXECUTOR_CONTRACT } from "../../daemon/service-update-au
 
 export async function writeGatewayServiceUpdateCapability(): Promise<void> {
   process.stdout.write(
-    JSON.stringify({ updateExecutor: GATEWAY_UPDATE_EXECUTOR_CONTRACT, targetRootBinding: true }),
+    JSON.stringify({
+      updateExecutor: GATEWAY_UPDATE_EXECUTOR_CONTRACT,
+      targetRootBinding: true,
+      definitionBackup: true,
+    }),
   );
   // The parent closes stdin only after binding this child's PID and start identity.
   await finished(process.stdin.resume(), { cleanup: true });

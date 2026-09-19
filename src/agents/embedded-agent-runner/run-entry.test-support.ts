@@ -96,3 +96,11 @@ export function makeResult(params: {
     },
   };
 }
+
+export function createDirectHarness() {
+  return {
+    workspaceDir: "/tmp/workspace",
+    preparation: { kind: "direct" as const },
+    resolveRuntimeOverride: () => undefined,
+  };
+}

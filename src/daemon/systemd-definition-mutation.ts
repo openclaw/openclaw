@@ -9,7 +9,11 @@ import { sha256Hex } from "../infra/crypto-digest.js";
 import { hasErrnoCode } from "../infra/errno.js";
 import { withFileLock } from "../infra/file-lock.js";
 import { canonicalPathFromExistingAncestor, findExistingAncestor } from "../infra/fs-safe.js";
-import { readServiceFileState, type GatewayServiceStagedFiles } from "./service-stage.js";
+import {
+  readServiceFileState,
+  type GatewayServiceDefinitionTransactionHooks,
+  type GatewayServiceStagedFiles,
+} from "./service-stage.js";
 import {
   assertServiceDefinitionWritable,
   type GatewayServiceEnv,
@@ -33,6 +37,7 @@ type SystemdDefinitionMutation = {
   assertCurrent: () => Promise<void>;
   publish: (file: string, contents: string | Buffer, mode: number) => Promise<void>;
   restore: (file: string, snapshot: Snapshot) => Promise<void>;
+  remove: (file: string) => Promise<void>;
 };
 const identity = (stat: Stats, contents?: Buffer) =>
   [stat.dev, stat.ino, stat.uid, stat.gid, stat.mode, contents && sha256Hex(contents)].join(":");
@@ -258,7 +263,10 @@ export async function withSystemdDefinitionMutation<T>(
   env: GatewayServiceEnv,
   environment: GatewayServiceEnv,
   run: (mutation: SystemdDefinitionMutation) => Promise<T>,
-  options?: { timeoutMs?: number },
+  options?: {
+    timeoutMs?: number;
+    definitionTransaction?: GatewayServiceDefinitionTransactionHooks;
+  },
 ): Promise<T> {
   const deadlineAt =
     options?.timeoutMs && options.timeoutMs > 0 ? performance.now() + options.timeoutMs : undefined;
@@ -314,6 +322,7 @@ export async function withSystemdDefinitionMutation<T>(
       if (!allowed.has(file)) {
         throw new Error("Not a managed service publication target.");
       }
+      await options?.definitionTransaction?.beforeWrite();
       await refresh(true);
       const previous = initial.snapshots.get(file) ?? null;
       const before = await readServiceFileState(file);
@@ -334,10 +343,14 @@ export async function withSystemdDefinitionMutation<T>(
           await temporaryHandle.close();
         }
         const written = await fs.lstat(temporary);
+        if (file === unit || file === generated) {
+          await options?.definitionTransaction?.filePrepared(file, temporary);
+        }
         await refresh(true);
         // Locks coordinate OpenClaw writers, not external editors: POSIX rename
         // has no expected-inode check. Quiesce administrative edits during installation.
         assertGatewayServiceUpdateCurrent();
+        options?.definitionTransaction?.assertCurrent();
         await fs.rename(temporary, file);
         // Re-read every artifact against this inode/payload. Canonical temp paths
         // keep cleanup in the original directory even if the publication alias moves.
@@ -358,9 +371,12 @@ export async function withSystemdDefinitionMutation<T>(
           }
           await refresh(true);
           stagedFiles.push({ sourcePath: file, before, after });
+          if (file === unit || file === generated) {
+            await options?.definitionTransaction?.fileWritten(file, contents);
+          }
         } catch (error) {
-          // Roll back only our unchanged publication; a failing rollback must not recurse.
-          if (rollback) {
+          // Receipt recovery owns ordering across files; standalone rollback must not recurse.
+          if (rollback && !options?.definitionTransaction) {
             await restore(file, previous);
           }
           throw error;
@@ -368,6 +384,20 @@ export async function withSystemdDefinitionMutation<T>(
       } finally {
         await fs.unlink(temporary).catch(() => undefined);
       }
+    };
+    const remove = async (file: string) => {
+      if (file !== generated) {
+        throw new Error("Only a generated environment file can be retired during restoration.");
+      }
+      await options?.definitionTransaction?.beforeWrite();
+      await refresh(true);
+      await options?.definitionTransaction?.filePrepared(file, null);
+      assertGatewayServiceUpdateCurrent();
+      options?.definitionTransaction?.assertCurrent();
+      await fs.unlink(file);
+      initial.fingerprint.set(file, "missing");
+      await options?.definitionTransaction?.fileWritten(file, null);
+      await refresh(true);
     };
     const restore = async (file: string, snapshot: Snapshot) => {
       if (!allowed.has(file) && snapshot) {
@@ -385,6 +415,8 @@ export async function withSystemdDefinitionMutation<T>(
       initial = current;
       if (snapshot) {
         await publish(file, snapshot.contents, snapshot.mode, false);
+      } else if (file === generated) {
+        await remove(file);
       } else {
         await refresh(true);
         assertGatewayServiceUpdateCurrent();
@@ -408,6 +440,7 @@ export async function withSystemdDefinitionMutation<T>(
       },
       publish,
       restore,
+      remove,
     });
   };
   const lockOptions = () => {

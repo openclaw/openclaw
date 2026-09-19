@@ -6,7 +6,10 @@ import {
   terminateCodexAppServerDescendants,
   terminateCodexAppServerOrphan,
 } from "./transport-process-containment.js";
-import { prepareCodexAppServerProcessRegistration } from "./transport-process-registration.js";
+import {
+  prepareCodexAppServerProcessRegistration,
+  waitForCodexAppServerProcessRegistrationCleanup,
+} from "./transport-process-registration.js";
 import { RegistrationTestChildProcess } from "./transport-process-registration.test-support.js";
 import { readCodexAppServerProcessSnapshot } from "./transport-process-snapshot.js";
 
@@ -223,6 +226,7 @@ describe("Codex registration procfs boundary", () => {
       ]);
       expect(kill).not.toHaveBeenCalled();
       spawned.emit("exit", 0, null);
+      await waitForCodexAppServerProcessRegistrationCleanup(spawned);
       expect(store.entries()).toEqual([]);
     },
   );

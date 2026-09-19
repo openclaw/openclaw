@@ -5,6 +5,7 @@ import {
   createSqliteLifecycleAggregateError,
   runWithSqliteCoordinator,
 } from "./sqlite-coordinator.js";
+import { withSqliteInspectionOperation } from "./sqlite-error-diagnostics.js";
 import { acquireStateDatabaseHandleLease } from "./state-database-coordinator.js";
 
 // A failed native close cannot let GC retire its admission before child exit.
@@ -25,12 +26,15 @@ export function withSqliteSourceHandle<T>(pathname: string, operation: () => T):
  * another connection's process-wide POSIX locks. Failed close retains admission. */
 export function withSqliteSourceReadDatabase<T>(
   pathname: string,
+  inspectionOperation: "source" | "snapshot",
   operation: (database: DatabaseSync) => T,
 ): T {
   const lease = acquireStateDatabaseHandleLease({ databasePath: pathname, busyTimeoutMs: 0 });
   let database: DatabaseSync | undefined;
   try {
-    database = openNodeSqliteDatabase(pathname, { readOnly: true });
+    database = withSqliteInspectionOperation(inspectionOperation, () =>
+      openNodeSqliteDatabase(pathname, { readOnly: true }),
+    );
     return operation(database);
   } finally {
     try {
@@ -69,4 +73,10 @@ export async function withSqliteSourceHandleAsync<T>(
   }
   lease.release();
   return result;
+}
+
+/** Revalidate every caller before it can join process-global snapshot work. */
+export function assertSqliteSourceReadAllowed(pathname: string): void {
+  const lease = acquireStateDatabaseHandleLease({ databasePath: pathname, busyTimeoutMs: 0 });
+  lease.release();
 }

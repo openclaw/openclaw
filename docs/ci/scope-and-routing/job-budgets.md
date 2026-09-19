@@ -56,6 +56,16 @@ Type-aware lint on CI runners with fewer than 8 CPUs or 24 GiB of RAM uses the
 existing Go compiler memory policy (`GOGC=30`, `GOMEMLIMIT=3GiB`) to reduce swap
 pressure. Explicit Go settings remain authoritative. The limit is soft and
 applies only to the lint child; declaration preparation retains its own policy.
+Explicit core-stripe invocations keep `src/agents`, `src/gateway`, `src/infra`, and `ui` in separate lint
+processes from their stripe's remaining targets. Their semantic caches can exceed the Go
+soft limit when combined with neighboring targets. Constrained runners execute
+these processes serially and release each process tree before starting the next.
+The five stripe assignments, workflow rows, lint rules, and file coverage stay
+unchanged; this adds no runner registrations.
+Automatic full lint (`pnpm lint`) retains its original five aggregated core
+Programs, including when it inherits CI environment variables. Published Git
+updaters call this full pipeline with a fixed 20-minute command deadline; the
+explicit stripe caller must not add compiler startups to that preflight.
 
 Regular Android PR/main CI and PR `release_gate` dispatches use four rows: Play and Wear-shared unit tests/lint, third-party unit tests/lint, Wear unit tests/lint, and Kotlin lint for all four modules. Each phone flavor has its own source set and `SensitiveFeatureConfig`; `apps/android/app/src/thirdParty/AndroidManifest.xml` declares additional permissions and components. The Kotlin-lint row also compiles the benchmark when benchmark or Android build/dependency inputs change; missing or unusable changed-path data keeps that build.
 

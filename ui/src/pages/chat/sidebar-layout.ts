@@ -31,6 +31,7 @@ export {
   sidebarActivePanel,
   isSidebarSlotVisible,
   fitSidebarLayout,
+  initializeBrowserSidebarWidth,
   isSidebarRegionCollapsed,
   SIDEBAR_MIN_WIDTH_PX,
   SIDEBAR_MIN_HEIGHT_PX,
@@ -49,6 +50,7 @@ function createSidebarColumn(): SidebarColumn {
     activePanelId: "",
     height: SIDEBAR_DEFAULT_HEIGHT_PX,
     width: SIDEBAR_DEFAULT_WIDTH_PX,
+    browserWidthPending: true,
   };
 }
 
@@ -296,6 +298,7 @@ export function resizeSidebarPanel(
       column.height = clampHeight(size);
     } else {
       column.width = clampWidth(size);
+      delete column.browserWidthPending;
     }
   }
   return next;

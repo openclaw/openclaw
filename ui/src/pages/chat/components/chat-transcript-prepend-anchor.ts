@@ -1,4 +1,5 @@
-import type { Virtualizer } from "@tanstack/virtual-core";
+import type { Range, Virtualizer } from "@tanstack/virtual-core";
+import { extractTranscriptRange } from "./chat-transcript-range.ts";
 
 type ChatTranscriptPrependAnchor = { messageKey: string; rowKey: string | null; top: number };
 type TranscriptMessageKeys = Pick<ReadonlySet<string>, "keys" | "has">;
@@ -6,6 +7,7 @@ type TranscriptMessageKeys = Pick<ReadonlySet<string>, "keys" | "has">;
 /** Own the message anchor across projection capture, measurement, and restoration. */
 export class TranscriptPrependAnchor {
   messageKeys: TranscriptMessageKeys = new Set();
+  committedMessageRows: ReadonlyMap<string, string> = new Map();
   private firstMessageKey: string | undefined;
   private pending: (ChatTranscriptPrependAnchor & { measured: boolean }) | null = null;
 
@@ -17,6 +19,18 @@ export class TranscriptPrependAnchor {
   /** Keep the retained row mounted while virtual and native offsets reconcile. */
   get rowKey(): string | null {
     return this.pending?.rowKey ?? null;
+  }
+
+  /** Keep the retained bubble mounted against the committed, not candidate, row map. */
+  extractRange(
+    range: Range,
+    indexes: ReadonlyMap<string, number>,
+    focusedRowKey: string | null,
+  ): number[] {
+    const messageKey = this.messageKey;
+    const rowKey =
+      (messageKey === null ? null : this.committedMessageRows.get(messageKey)) ?? this.rowKey;
+    return extractTranscriptRange(range, indexes, [focusedRowKey, rowKey]);
   }
 
   /** Whether the next projection inserts history before the committed first message. */
@@ -75,6 +89,7 @@ export class TranscriptPrependAnchor {
     this.clear();
     this.firstMessageKey = undefined;
     this.messageKeys = new Set();
+    this.committedMessageRows = new Map();
   }
 }
 

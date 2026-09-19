@@ -27,6 +27,19 @@ async function git(cwd: string, ...args: string[]): Promise<string> {
   return stdout.trim();
 }
 
+/** Commits both sides of a modify/delete conflict for a tracked `entry` file. */
+async function commitConflictedParent(repo: string): Promise<void> {
+  await fs.writeFile(path.join(repo, "entry"), "base\n");
+  await git(repo, "add", "entry");
+  await git(repo, "commit", "-m", "add tracked parent");
+  await git(repo, "checkout", "-q", "-b", "theirs");
+  await fs.writeFile(path.join(repo, "entry"), "modified\n");
+  await git(repo, "commit", "-am", "modify parent");
+  await git(repo, "checkout", "-q", "main");
+  await git(repo, "rm", "-q", "entry");
+  await git(repo, "commit", "-m", "delete parent");
+}
+
 async function initializeNestedRepository(root: string, name: string): Promise<string> {
   const nested = path.join(root, name);
   await fs.mkdir(nested, { recursive: true });
@@ -130,6 +143,168 @@ describe("ManagedWorktreeService garbage collection", () => {
         code: "ENOENT",
       });
     } finally {
+      capped.mockRestore();
+    }
+  });
+
+  async function capUntrackedListing(checkoutPath: string) {
+    const realRun = worktreeGit.runGitBuffered;
+    return vi
+      .spyOn(worktreeGit, "runGitBuffered")
+      .mockImplementation(async (cwd, args, options) => {
+        return await realRun(
+          cwd,
+          args,
+          cwd === checkoutPath &&
+            args[0] === "ls-files" &&
+            args.includes("--others") &&
+            !args.includes("--ignored")
+            ? { ...options, maxOutputBytes: 256 }
+            : options,
+        );
+      });
+  }
+
+  it("garbage collects untracked trees over the Git output cap and restores them", async () => {
+    await fs.writeFile(path.join(repo, ".gitignore"), "cache/\n");
+    await git(repo, "add", ".gitignore");
+    await git(repo, "commit", "-m", "ignore caches");
+    const created = await materializeRunOwnedFixture("bounded-untracked", "workboard");
+    const generated = path.join(created.path, "generated", "package");
+    await fs.mkdir(path.join(generated, "cache"), { recursive: true });
+    for (let index = 0; index < 64; index++) {
+      await fs.writeFile(path.join(generated, `generated-untracked-file-${index}.txt`), "");
+    }
+    await fs.writeFile(path.join(generated, "cache", "rebuildable.txt"), "ignored\n");
+    await fs.writeFile(path.join(created.path, "README.md"), "preserve local edit\n");
+    now += IDLE_GC_MS + 1;
+    const capped = await capUntrackedListing(created.path);
+    const warnLogs = createWarnLogCapture("openclaw-worktree-gc-bounded-untracked");
+    try {
+      expect((await service.gc()).removed).toEqual([created.id]);
+      expect(await warnLogs.findText(`idle cleanup failed for ${created.id}`)).toBeUndefined();
+      const restored = await service.restore({ id: created.id });
+      expect(await fs.readFile(path.join(restored.path, "README.md"), "utf8")).toBe(
+        "preserve local edit\n",
+      );
+      const restoredGenerated = path.join(restored.path, "generated", "package");
+      expect((await fs.readdir(restoredGenerated)).filter((name) => name !== "cache")).toHaveLength(
+        64,
+      );
+      await expect(fs.stat(path.join(restoredGenerated, "cache"))).rejects.toMatchObject({
+        code: "ENOENT",
+      });
+    } finally {
+      warnLogs.cleanup();
+      capped.mockRestore();
+    }
+  });
+
+  it.each([
+    ["assume-unchanged", "--assume-unchanged"],
+    ["skip-worktree", "--skip-worktree"],
+  ])(
+    "snapshots untracked children of a directory replacing a %s tracked file",
+    async (_label, flag) => {
+      await fs.writeFile(path.join(repo, "entry"), "original file\n");
+      await git(repo, "add", "entry");
+      await git(repo, "commit", "-m", "add tracked parent");
+      const created = await materializeRunOwnedFixture(`replaced-${_label}`, "workboard");
+      // Git skips its worktree comparison for flagged entries, so neither the collapsed
+      // listing nor diff-files reports the directory that replaced this tracked file.
+      await git(created.path, "update-index", flag, "entry");
+      const parentPath = path.join(created.path, "entry");
+      await fs.rm(parentPath);
+      await fs.mkdir(parentPath);
+      await fs.writeFile(path.join(parentPath, "child.txt"), "discovered child\n");
+      now += IDLE_GC_MS + 1;
+      const warnLogs = createWarnLogCapture(`openclaw-worktree-gc-replaced-${_label}`);
+      try {
+        expect((await service.gc()).removed).toEqual([created.id]);
+        expect(await warnLogs.findText(`idle cleanup failed for ${created.id}`)).toBeUndefined();
+        const restored = await service.restore({ id: created.id });
+        expect(await fs.readFile(path.join(restored.path, "entry", "child.txt"), "utf8")).toBe(
+          "discovered child\n",
+        );
+      } finally {
+        warnLogs.cleanup();
+      }
+    },
+  );
+
+  it("detects a nested repository inside a directory replacing a conflicted tracked file", async () => {
+    await commitConflictedParent(repo);
+    const created = await materializeRunOwnedFixture("replaced-conflicted", "workboard");
+    // A modify/delete conflict leaves index stages 1 and 3 without stage 2, which
+    // diff-files reports as unmerged rather than deleted, and which keeps the
+    // replacement directory out of the collapsed untracked listing.
+    await expect(
+      execFileAsync("git", ["-C", created.path, "merge", "theirs"]),
+    ).rejects.toBeTruthy();
+    const parentPath = path.join(created.path, "entry");
+    await fs.rm(parentPath, { force: true });
+    await fs.mkdir(parentPath);
+    const nested = await initializeNestedRepository(created.path, "entry/nested");
+    await fs.writeFile(path.join(nested, "local.txt"), "nested state\n");
+    now += IDLE_GC_MS + 1;
+    const warnLogs = createWarnLogCapture("openclaw-worktree-gc-replaced-conflicted");
+    try {
+      expect((await service.gc()).removed).toEqual([]);
+      expect(await warnLogs.findText(`idle cleanup failed for ${created.id}`)).toBeUndefined();
+      expect(getRegistryWorktree(env, created.id)?.removedAt).toBeUndefined();
+      expect(await fs.readFile(path.join(nested, "local.txt"), "utf8")).toBe("nested state\n");
+    } finally {
+      warnLogs.cleanup();
+    }
+  });
+
+  it("garbage collects a directory replacing a conflicted tracked file and restores it", async () => {
+    await commitConflictedParent(repo);
+    const created = await materializeRunOwnedFixture("collected-conflicted", "workboard");
+    await expect(
+      execFileAsync("git", ["-C", created.path, "merge", "theirs"]),
+    ).rejects.toBeTruthy();
+    // Stages 1 and 3 without stage 2, and no blob in HEAD: the snapshot index has
+    // no stage 0 entry Git could drop by name when the path becomes a directory.
+    expect(
+      (await git(created.path, "ls-files", "--stage", "--", "entry"))
+        .split("\n")
+        .map((line) => line.split("\t")[0]?.split(" ").at(-1)),
+    ).toEqual(["1", "3"]);
+    expect(await git(created.path, "ls-tree", "HEAD", "--", "entry")).toBe("");
+    const parentPath = path.join(created.path, "entry");
+    await fs.rm(parentPath, { force: true });
+    await fs.mkdir(parentPath);
+    await fs.writeFile(path.join(parentPath, "child.txt"), "replacement\n");
+    now += IDLE_GC_MS + 1;
+
+    expect((await service.gc()).removed).toEqual([created.id]);
+    await expect(fs.stat(created.path)).rejects.toMatchObject({ code: "ENOENT" });
+    const restored = await service.restore({ id: created.id });
+    expect(await fs.readFile(path.join(restored.path, "entry", "child.txt"), "utf8")).toBe(
+      "replacement\n",
+    );
+  });
+
+  it("protects a nested repository inside an untracked tree over the Git output cap", async () => {
+    const created = await materializeRunOwnedFixture("bounded-nested", "workboard");
+    const generated = path.join(created.path, "generated", "package");
+    await fs.mkdir(generated, { recursive: true });
+    for (let index = 0; index < 64; index++) {
+      await fs.writeFile(path.join(generated, `generated-untracked-file-${index}.txt`), "");
+    }
+    const nested = await initializeNestedRepository(created.path, "generated/package/nested");
+    await fs.writeFile(path.join(nested, "local.txt"), "nested state\n");
+    now += IDLE_GC_MS + 1;
+    const capped = await capUntrackedListing(created.path);
+    const warnLogs = createWarnLogCapture("openclaw-worktree-gc-bounded-nested");
+    try {
+      expect((await service.gc()).removed).toEqual([]);
+      expect(await warnLogs.findText(`idle cleanup failed for ${created.id}`)).toBeUndefined();
+      expect(getRegistryWorktree(env, created.id)?.removedAt).toBeUndefined();
+      expect(await fs.readFile(path.join(nested, "local.txt"), "utf8")).toBe("nested state\n");
+    } finally {
+      warnLogs.cleanup();
       capped.mockRestore();
     }
   });

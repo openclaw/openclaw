@@ -125,7 +125,12 @@ describe("committed session mutation authorization", () => {
 
         // The target remains valid, but the newly committed contract invalidates another row.
         inWriterTransaction(owner.db, () => {
-          expect(() => authorization.assertCurrent()).toThrow("session changed before chat.send");
+          expect(() => authorization.assertCurrent()).toThrow(
+            expect.objectContaining({
+              code: "SESSION_CANONICAL_KEY_MIGRATION_REQUIRED",
+              message: expect.stringContaining("non-canonical persisted row"),
+            }),
+          );
         });
         setCanonicalSqliteSessionMainKey(owner, "main");
         inWriterTransaction(owner.db, () => {

@@ -1,4 +1,3 @@
-// Discord plugin module implements error body behavior.
 import { redactToolPayloadText } from "openclaw/plugin-sdk/logging-core";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 

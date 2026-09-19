@@ -1,5 +1,6 @@
 import type { Result } from "@openclaw/normalization-core/result";
 import type { AmbientEnvTriggerPolicy } from "../channels/config-presence.js";
+import type { ConfigSnapshotPreparation } from "../config/io.snapshot-preparation.types.js";
 import type { GatewaySuspendHandoffOwner } from "../infra/gateway-suspend-coordinator.js";
 import type { GatewayRestartEmitter } from "../infra/restart.js";
 import type { GatewayTailscaleIngressEndpoint } from "./ingress-attribution.js";
@@ -38,6 +39,8 @@ export type GatewayServer = {
 };
 
 export type GatewayServerOptions = {
+  /** Internal native-host operation; direct readers retain their own execution owner. */
+  prepareConfigSnapshot?: ConfigSnapshotPreparation;
   /** Internal, closure-bound host authority. Direct servers have no native lifecycle owner. */
   hostLifecycle?: GatewayHostLifecycle;
   /** Internal startup ownership; direct callers own their awaited startup work. */

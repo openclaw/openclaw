@@ -194,7 +194,7 @@ it.each(["import queue", "in-place queue", "cleanup queue", "ledger"] as const)(
         migration = migrateLegacyMainSessionKeys({
           cfg,
           env: state.env,
-          mode: "automatic",
+          mode: "doctor-fix",
           beforePersistentApply,
         }).then(
           (result) => ({ result }),
@@ -235,7 +235,7 @@ it.each(["import queue", "in-place queue", "cleanup queue", "ledger"] as const)(
         const recovered = await migrateLegacyMainSessionKeys({
           cfg,
           env: state.env,
-          mode: "automatic",
+          mode: "doctor-fix",
         });
         expect(recovered.complete).toBe(true);
         expect(readClaim(sourceAgentId, sourcePath, "agent:main:chat")).toBeUndefined();
@@ -292,7 +292,7 @@ async function runCleanupRace(
     const result = await migrateLegacyMainSessionKeys({
       cfg: { agents: { entries: { ops: {} } } },
       env,
-      mode: "automatic",
+      mode: "doctor-fix",
     });
     return { mainPath, opsPath, result };
   } finally {

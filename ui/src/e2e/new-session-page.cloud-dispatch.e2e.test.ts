@@ -5,6 +5,7 @@ import { expect, it } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { CLOUD_PROFILE_RETRY_DELAYS_MS } from "../pages/new-session/cloud-profile-discovery.ts";
 import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
+import { navigateToControlUiSession } from "../test-helpers/control-ui-e2e.ts";
 import { tooltipTitleText } from "./control-ui-e2e-suite.test-support.ts";
 import {
   ONE_PIXEL_PNG_B64,
@@ -93,6 +94,14 @@ suite.define(() => {
       await page.getByRole("button", { name: "Start session" }).click();
       const dispatch = await gateway.waitForRequest("sessions.dispatch");
       expect(dispatch.params).toEqual({ key: sessionKey, agentId: "main", profileId: "machine0" });
+      await pollLocatorText(page.locator(".chat-thread")).toContain(
+        "Use the configured machine size",
+      );
+      await pollLocatorText(
+        page.locator('.chat-thread .chat-working-indicator[role="status"]'),
+      ).toContain("Provisioning environment…");
+      expect(await page.locator(".agent-chat__composer-status-band").count()).toBe(0);
+      await captureUiProof(suite, page, "cloud-provisioning.png");
     });
   });
 
@@ -247,6 +256,9 @@ suite.define(() => {
       const checkoutTrigger = page.locator("#new-session-checkout-trigger");
       const checkout = page.locator("wa-popover.new-session-page__checkout-popover");
       await expect.poll(() => checkoutTrigger.getAttribute("data-worktree")).toBe("true");
+      await pollLocatorText(checkoutTrigger.locator(".new-session-page__trigger-label")).toBe(
+        "From main",
+      );
       await checkoutTrigger.click();
       const currentCheckout = checkout.locator('[data-value="checkout"]');
       expect(await currentCheckout.isDisabled()).toBe(true);
@@ -302,10 +314,14 @@ suite.define(() => {
       await page.getByRole("button", { name: "Use this folder" }).click();
       await expect.poll(() => trigger.getAttribute("data-cloud-profile")).toBe("aws");
       await checkoutTrigger.click();
-      await expect.poll(() => checkout.getByLabel("From").inputValue()).toBe("main");
-      await checkout.getByLabel("From").fill("release");
-      await expect.poll(() => checkout.getByLabel("From").inputValue()).toBe("release");
-      await checkout.getByLabel("From").fill("main");
+      const baseRef = checkout.getByLabel("From", { exact: true });
+      await expect.poll(() => baseRef.inputValue()).toBe("main");
+      await baseRef.fill("release");
+      await expect.poll(() => baseRef.inputValue()).toBe("release");
+      await pollLocatorText(checkoutTrigger.locator(".new-session-page__trigger-label")).toBe(
+        "From release",
+      );
+      await baseRef.fill("main");
       await pollLocatorText(checkout.locator(".new-session-page__menu-note").last()).toContain(
         "Syncs target-repo to the selected runner",
       );
@@ -468,6 +484,7 @@ suite.define(() => {
         gateway,
         sessionKey,
       );
+      await pollLocatorText(page.locator(".chat-thread")).toContain(message);
       runtimeLoad.resolve();
       const dispatch = await gateway.waitForRequest("sessions.dispatch");
       expect(dispatch.params).toMatchObject({
@@ -560,9 +577,7 @@ suite.define(() => {
       );
       expect(childReads.length).toBeGreaterThan(0);
       expect(childReads.length).toBeLessThanOrEqual(expectedParentReads);
-      const neutralRow = page.locator('[data-session-key="agent:cloud:neutral-e2e"] a');
-      await neutralRow.waitFor();
-      await neutralRow.click();
+      await navigateToControlUiSession(page, "agent:cloud:neutral-e2e");
       await expect.poll(() => page.url()).toContain("neutral-e2e");
       await page.evaluate((pathname) => {
         const app = document.querySelector("openclaw-app") as HTMLElement & {

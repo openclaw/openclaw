@@ -96,9 +96,14 @@ export function createGatewayActiveWorkTracker(options: {
     return omitted > 0 ? `${shown.join("; ")}; +${omitted} more` : shown.join("; ");
   };
   const formatDeferredWorkStatus = (status: "active" | "still active") => {
-    const details = formatActiveDetails(getActiveCounts()).join(", ");
-    const taskBlockers = formatTaskBlockers();
-    return `${details} ${status}${taskBlockers ? ` (${taskBlockers})` : ""}`;
+    try {
+      const details = formatActiveDetails(getActiveCounts()).join(", ");
+      const taskBlockers = formatTaskBlockers();
+      return `${details} ${status}${taskBlockers ? ` (${taskBlockers})` : ""}`;
+    } catch (err) {
+      // Diagnostics must not prevent the existing timeout from forcing a restart.
+      return `pending work unknown (${String(err)})`;
+    }
   };
   const waitForActiveWorkBeforeChannelReload = async (
     channels: Iterable<ChannelKind>,

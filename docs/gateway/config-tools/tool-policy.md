@@ -14,17 +14,32 @@ The policy layers that decide which tools a run may call: `tools.profile`, tool 
 `tools.profile` sets a base allowlist before `tools.allow`/`tools.deny`:
 
 <Note>
-Local onboarding defaults new local configs to `tools.profile: "coding"` when unset (existing explicit profiles are preserved).
+Local onboarding sets `tools.profile: "full"` when no profile is configured,
+including when onboarding runs again on an existing unprofiled config.
+Explicit `minimal`, `coding`, `messaging`, and `full` profiles and other tool
+policies remain unchanged. Existing configs are not automatically migrated.
 </Note>
+
+Full selects tools; it does not grant **Full Access** execution permissions.
+The chat **Execution permissions** menu controls what available tools may do in
+that session. Global, agent, provider, allow/deny, owner, filesystem, sandbox, and
+execution restrictions still apply. A catalog entry does not mean a tool or plugin
+is configured, connected, or authorized in the current session.
 
 | Profile     | Includes                                                                                                                                                                                                                                                                         |
 | ----------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `minimal`   | `session_status`, `gateway` (update only)                                                                                                                                                                                                                                        |
 | `coding`    | `group:fs`, `group:runtime`, `group:web`, `group:sessions`, `group:memory`, `cron`, `gateway` (update only), `get_goal`, `create_goal`, `update_goal`, `progress_card`, `ask_user`, `skill_workshop`, `view_image`, `image_generate`, `music_generate`, `video_generate`         |
 | `messaging` | `group:messaging`, `sessions`, `sessions_list`, `sessions_history`, `sessions_search`, `conversations_list`, `conversations_send`, `conversations_turn`, `sessions_send`, `sessions_spawn`, `sessions_yield`, `subagents`, `session_status`, `gateway` (update only), `ask_user` |
-| `full`      | No restriction (same as unset)                                                                                                                                                                                                                                                   |
+| `full`      | No core profile filtering; selects optional plugin tools too                                                                                                                                                                                                                     |
 
-`coding` and `messaging` also implicitly allow `bundle-mcp` (configured MCP servers).
+`coding` and `messaging` also include the [theme tool](/tools/theme) and implicitly
+allow `bundle-mcp` (configured MCP servers).
+
+An unset profile also leaves core tools unfiltered, but does not itself opt into
+optional plugin tools. Explicit `full` contributes a wildcard to plugin tool
+selection, including optional tools from enabled plugins. Plugin configuration,
+availability, and independent policy restrictions still apply.
 
 The `minimal`, `coding`, and `messaging` profiles include `gateway` with only the
 `update.run` action. This lets owners request an OpenClaw update through the
@@ -49,8 +64,8 @@ whether the tool is available. Subagent and non-owner restrictions still apply.
 | `group:sessions`   | `sessions`, `sessions_list`, `sessions_history`, `sessions_search`, `conversations_list`, `conversations_send`, `conversations_turn`, `sessions_send`, `sessions_spawn`, `sessions_yield`, `subagents`, `session_status`, `suggest_task`, `dismiss_task` |
 | `group:memory`     | `memory_search`, `memory_get`                                                                                                                                                                                                                            |
 | `group:web`        | `web_search`, `x_search`, `web_fetch`                                                                                                                                                                                                                    |
-| `group:ui`         | `browser`, `screen`, `dashboard`, `terminal`, `portal`, `canvas`, `show_widget`                                                                                                                                                                          |
-| `group:automation` | `heartbeat_respond`, `cron`, `gateway`                                                                                                                                                                                                                   |
+| `group:ui`         | `browser`, `screen`, `theme`, `dashboard`, `terminal`, `portal`, `canvas`, `show_widget`                                                                                                                                                                 |
+| `group:automation` | `heartbeat_respond`, `automations` (`cron` alias), `gateway`, `plugins`, `openclaw`                                                                                                                                                                      |
 | `group:messaging`  | `message`                                                                                                                                                                                                                                                |
 | `group:nodes`      | `nodes`, `computer`                                                                                                                                                                                                                                      |
 | `group:agents`     | `agents_list`, `get_goal`, `create_goal`, `update_goal`, `progress_card`, `ask_user`, `skill_workshop`                                                                                                                                                   |
@@ -61,6 +76,13 @@ whether the tool is available. Subagent and non-owner restrictions still apply.
 `suggest_task` lets an agent propose confirmed follow-up work without starting it. The working directory must be absolute, but does not need to be a Git checkout. Local debugging and non-code tasks are supported. The Control UI shows the title and summary as an actionable chip; a Gateway-backed TUI shows an equivalent interactive prompt. **Start in a new session** opens a normal session in that directory and sends the full task prompt. The new session is instructed to ask the user before creating or switching to a worktree if isolation becomes necessary. There is no up-front worktree or execution-destination choice. `dismiss_task` withdraws a still-pending suggestion by the ephemeral `task_id` returned from `suggest_task`.
 
 The tools are offered only when the initiating operator surface can receive and action Gateway task-suggestion events. Channel sessions and local/embedded TUI sessions do not receive them; channel transports need a portable typed task action before they can safely expose this flow. Suggestions are process-local and disappear when the Gateway restarts. Both tools remain in the `coding` profile and `group:sessions`, so normal `tools.allow` and `tools.deny` policy configures them automatically when the surface supports them.
+
+`openclaw` delegates OpenClaw setup and repair. It belongs to both
+`group:automation` and `group:openclaw`, so existing group allows and denies now
+include this helper. Group denies override an explicit `openclaw` allow. The
+helper is not added to `minimal`, `coding`, or `messaging`; use `tools.alsoAllow`
+to select it with a restricted profile. Catalog discovery does not bypass its
+owner, sandbox, direct-call, or execution permission checks.
 
 `pdf` belongs to both `group:media` and `group:openclaw`. Group denies also cover PDF and override an explicit `pdf` allow entry. If an existing configuration should keep PDF access, remove or narrow the conflicting group deny. Group grants do not bypass [PDF model and authentication requirements](/tools/pdf).
 

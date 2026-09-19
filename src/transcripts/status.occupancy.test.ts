@@ -99,10 +99,8 @@ describe("configured transcript occupancy diagnostics", () => {
       const service = createTranscriptsAutoStartService(f.ctx);
       try {
         service.start();
-        await vi.waitFor(async () =>
-          expect(
-            (await f.read()).configuredSources.map((source) => source.startDiagnostic),
-          ).toEqual(entries.map(() => "retrying")),
+        expect((await f.read()).configuredSources.map((source) => source.startDiagnostic)).toEqual(
+          entries.map(() => "retrying"),
         );
         vi.mocked(providerRegistry.getTranscriptSourceProvider).mockReturnValue(f.provider);
         await vi.advanceTimersByTimeAsync(5_000);

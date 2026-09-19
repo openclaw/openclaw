@@ -1,4 +1,3 @@
-// Telegram plugin module implements delivery.resolve media behavior.
 import path from "node:path";
 import { GrammyError } from "grammy";
 import { root as fsRoot } from "openclaw/plugin-sdk/file-access-runtime";
@@ -25,6 +24,13 @@ const TELEGRAM_GET_FILE_RETRY_DEADLINE_MS = 20 * 60_000;
 const TELEGRAM_GET_FILE_RETRY_ATTEMPTS = 3;
 const GrammyErrorCtor: typeof GrammyError | undefined =
   typeof GrammyError === "function" ? GrammyError : undefined;
+
+type TelegramMediaContext = Pick<TelegramContext, "getFile" | "me"> & {
+  message: Pick<
+    TelegramContext["message"],
+    "photo" | "video" | "video_note" | "document" | "audio" | "voice" | "sticker" | "animation"
+  >;
+};
 
 function buildTelegramMediaSsrfPolicy(apiRoot?: string, dangerouslyAllowPrivateNetwork?: boolean) {
   const hostnames = ["api.telegram.org"];
@@ -95,7 +101,7 @@ interface MediaMetadata {
   mimeType?: string;
 }
 
-function resolveMediaMetadata(msg: TelegramContext["message"]): MediaMetadata {
+function resolveMediaMetadata(msg: TelegramMediaContext["message"]): MediaMetadata {
   return {
     fileRef:
       msg.photo?.[msg.photo.length - 1] ??
@@ -119,7 +125,7 @@ function resolveMediaMetadata(msg: TelegramContext["message"]): MediaMetadata {
 }
 
 async function resolveTelegramFileWithRetry(
-  ctx: TelegramContext,
+  ctx: Pick<TelegramContext, "getFile">,
   abortSignal?: AbortSignal,
 ): Promise<{ file_path?: string }> {
   const deadline = new AbortController();
@@ -367,8 +373,8 @@ async function downloadAndSaveTelegramFile(params: {
 }
 
 async function resolveStickerMedia(params: {
-  msg: TelegramContext["message"];
-  ctx: TelegramContext;
+  msg: TelegramMediaContext["message"];
+  ctx: TelegramMediaContext;
   maxBytes: number;
   token: string;
   transport?: TelegramTransport;
@@ -459,7 +465,7 @@ async function resolveStickerMedia(params: {
 }
 
 export async function resolveMedia(params: {
-  ctx: TelegramContext;
+  ctx: TelegramMediaContext;
   maxBytes: number;
   token: string;
   transport?: TelegramTransport;

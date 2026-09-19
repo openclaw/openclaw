@@ -952,6 +952,22 @@ enum class GatewayMethod(
   TalkVoiceGet("talk.voice.get"),
   TalkVoiceSet("talk.voice.set"),
   TalkVoiceComplete("talk.voice.complete"),
+  PluginsCredentialsInspect("plugins.credentials.inspect"),
+  PluginsSkillsRead("plugins.skills.read"),
+  DiagnosticsHeapProfile("diagnostics.heapProfile"),
+  DesktopRelease("desktop.release"),
+  McpAuthLogin("mcp.authLogin"),
+  EnvironmentsSessionStatus("environments.session.status"),
+  EnvironmentsSessionCreate("environments.session.create"),
+  EnvironmentsSessionDestroy("environments.session.destroy"),
+  EnvironmentsSessionExec("environments.session.exec"),
+  SessionsSetInvolvement("sessions.setInvolvement"),
+  TranscriptsSummarize("transcripts.summarize"),
+  ControlUiLinkPreview("controlUi.linkPreview"),
+  ThemesList("themes.list"),
+  ThemesGet("themes.get"),
+  ThemesSet("themes.set"),
+  ThemesImport("themes.import"),
 }
 
 enum class GatewayEvent(

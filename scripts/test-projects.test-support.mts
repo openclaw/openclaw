@@ -2430,6 +2430,7 @@ const EXACT_TOOLING_TARGETS = new Map<string, string[]>([
   ["scripts/openclaw-npm-prepublish-verify.ts", ["test/openclaw-npm-prepublish-verify.test.ts"]],
   ["scripts/lib/docker-e2e-scenarios.mts", [dockerE2e, pluginPrerelease]],
   ["scripts/lib/upgrade-survivor-policy.mjs", [dockerE2e]],
+  ["scripts/lib/upgrade-survivor-scenarios.json", [dockerE2e]],
   ["scripts/e2e/kitchen-sink-rpc-walk.mts", ["kitchen-sink-rpc-walk", pluginPrerelease]],
   [
     "scripts/e2e/agents-delete-shared-workspace-docker.sh",
@@ -2748,12 +2749,30 @@ const SEMANTIC_TOOLING_TARGET_PATTERNS: Array<[RegExp, string[]]> = [
   [/^scripts\/native-app-i18n\.ts$/u, ["native-app-i18n", workflowGuards]],
   [
     /^scripts\/github\/(?:dependency-guard|guard-shared)\.mjs$/u,
-    ["dependency-guard-script", "dependency-guard-workflow"],
+    ["dependency-guard-script", "security-review-workflow"],
   ],
   [
     /^scripts\/github\/(?:security-sensitive-guard|guard-shared)\.mjs$/u,
-    ["security-sensitive-guard-script", "security-sensitive-guard-workflow"],
+    ["security-sensitive-guard-script", "security-review-workflow"],
   ],
+  [
+    /^\.github\/workflows\/security-review\.yml$/u,
+    ["security-review-workflow", "security-review-event", "security-review-script", workflowGuards],
+  ],
+  [
+    /^scripts\/github\/(?:security-review|security-review-rollout)\.mjs$/u,
+    ["security-review-script", "security-review-rollout"],
+  ],
+  [
+    /^scripts\/github\/(?:guard-review|security-review-policy)\.mjs$/u,
+    [
+      "dependency-guard-script",
+      "security-sensitive-guard-script",
+      "security-review-script",
+      "security-review-rollout",
+    ],
+  ],
+  [/^scripts\/github\/guard-shared\.mjs$/u, ["security-review-script", "security-review-event"]],
   [/^scripts\/plugin-clawhub-release-check\.ts$/u, ["release-wrapper-scripts"]],
   [
     /^scripts\/generate-runtime-sidecar-paths-baseline\.ts$/u,

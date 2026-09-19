@@ -1,4 +1,3 @@
-// Imessage plugin module implements inbound processing behavior.
 import {
   buildChannelInboundEventContext,
   buildMentionRegexes,

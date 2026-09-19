@@ -14,7 +14,6 @@ import type {
 import type { SessionAgentAttentionIconId } from "../../../packages/gateway-protocol/src/session-agent-status.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { SessionRunStatus } from "../api/types.ts";
-import type { RouteId } from "../app-route-paths.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import type { BoardFace } from "../lib/board/settings.ts";
 import type { SessionWorkContext } from "../lib/session-display.ts";
@@ -142,6 +141,7 @@ export type SidebarRecentSession = {
   /** ACP-backed harness session; lands in the Coding zone with work sessions. */
   acpSession?: boolean;
   worktreeId?: string;
+  workspaceKind?: "worktree" | "checkout";
   execNode?: string;
   placementState?: SessionPlacementState;
   placementProviderId?: string;
@@ -155,14 +155,26 @@ export type SidebarRecentSession = {
   outboxAttentionCount?: number;
   hasComposerDraft?: boolean;
   unread: boolean;
+  hiddenFromInvolvingMe?: boolean;
   lastMessagePreview?: string;
   lastReadAt?: number;
   attention: SidebarSessionAttention;
-  /** Own attention remains distinct from the collapsed-tree projection. */
+  /** Own state remains distinct from the collapsed-tree projection. */
   ownAttention?: SidebarSessionAttention;
+  ownWorkspaceConflictCount?: number;
   childAttention?: readonly SidebarSessionAttention[];
   unreadChildCount?: number;
   queuedChildCount?: number;
+  /** Hidden run state remains visible when persistent children are expanded. */
+  subagentSummary?: Pick<
+    SidebarRecentSession,
+    | "childAttention"
+    | "unreadChildCount"
+    | "queuedChildCount"
+    | "runningChildCount"
+    | "failedChildCount"
+    | "workspaceConflictCount"
+  >;
   agentStatusNote?: string;
   observerDigest?: Pick<
     SessionObserverDigest,
@@ -178,6 +190,8 @@ export type SidebarRecentSession = {
   runtimeMs?: number;
   runtimeSampledAt?: number;
   childSessionKeys: readonly string[];
+  /** Detail queries retain their original parents when hidden runs are skipped. */
+  childLoadParentKeys?: readonly string[];
   children: readonly SidebarRecentSession[];
   isChild: boolean;
   loadingChildren: boolean;
@@ -278,8 +292,8 @@ export type SidebarSectionDropTarget = {
 
 export type SidebarSessionMutationScope = {
   epoch: number;
-  context: ApplicationContext<RouteId>;
-  gateway: ApplicationContext<RouteId>["gateway"];
+  context: ApplicationContext;
+  gateway: ApplicationContext["gateway"];
   sessions: SessionCapability;
   client: GatewayBrowserClient;
   selectedAgentId: string;

@@ -120,6 +120,7 @@ export type ClawHubPackageSecurityResponse = {
     version?: string | null;
   } | null;
   overview: string;
+  verdict?: string;
   securityAuditUrl: string;
   trust: ClawHubPackageSecurityTrust;
 };
@@ -329,6 +330,10 @@ export function parseClawHubPackageSecurityResponse(
     trust: parsedTrust,
   };
   const parsedPackage = parseOptionalSecurityPackage(value.package);
+  const verdict = readClawHubStringField(value, "verdict", "security response");
+  if (verdict) {
+    result.verdict = verdict;
+  }
   const parsedRelease = parseOptionalSecurityRelease(value.release);
   if (parsedPackage !== undefined) {
     result.package = parsedPackage;

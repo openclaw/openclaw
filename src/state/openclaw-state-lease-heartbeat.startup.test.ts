@@ -42,6 +42,45 @@ afterEach(() => {
 });
 
 describe("state lease heartbeat startup diagnostics", () => {
+  it.each(["ready", "deadline"] as const)(
+    "renews a live lease during delayed startup until %s",
+    async (ending) => {
+      const onLost = vi.fn();
+      const heartbeat = startOpenClawStateLeaseHeartbeat({
+        path: "/synthetic-private-state/lease.sqlite",
+        identity: { scope: "test:startup", key: "delayed", owner: "live-owner" },
+        leaseMs: 1_000,
+        heartbeatMs: 333,
+        expiresAt: Date.now() + 1_000,
+        renewDuringStartup: () => Date.now() + 1_000,
+        onLost,
+      });
+      const outcome = heartbeat.ready.then(
+        () => "ready",
+        (error: unknown) => error,
+      );
+      try {
+        // Withhold worker readiness while the live host can still renew the exact owner.
+        await vi.advanceTimersByTimeAsync(1_250);
+        expect(onLost).not.toHaveBeenCalled();
+        if (ending === "ready") {
+          const worker = workers[0];
+          assert(worker);
+          Atomics.store(worker.shared, state.status, state.ready);
+          worker.emit("message", null);
+          expect(await outcome).toBe("ready");
+        } else {
+          await vi.advanceTimersByTimeAsync(3_750);
+          expect(String(await outcome)).toMatch(/elapsedMs=5000, timeoutMs=5000/);
+          expect(onLost).toHaveBeenCalledOnce();
+        }
+        expect(vi.getTimerCount()).toBe(0);
+      } finally {
+        await heartbeat.stop();
+      }
+    },
+  );
+
   it.each([
     { status: "starting", trigger: "timeout", remainingMs: 60_000, elapsedMs: 5_000 },
     { status: "lost", trigger: "timeout", remainingMs: 60_000, elapsedMs: 5_000 },

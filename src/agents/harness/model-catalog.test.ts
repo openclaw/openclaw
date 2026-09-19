@@ -98,9 +98,15 @@ function registryWithCatalog(loadModelCatalog: () => Promise<readonly never[]>) 
 }
 
 describe("agent harness model catalog", () => {
-  it.each(["openclaw", "native-one"])(
-    "keeps selected-only thinking reads on %s without acquiring picker alternatives",
-    async (baseRuntime) => {
+  it.each([
+    { baseRuntime: "openclaw", agentRuntime: undefined, observedRuntime: undefined },
+    { baseRuntime: "native-one", agentRuntime: undefined, observedRuntime: "native-one" },
+    { baseRuntime: "openclaw", agentRuntime: "native-one", observedRuntime: "native-one" },
+    { baseRuntime: "native-one", agentRuntime: "openclaw", observedRuntime: undefined },
+    { baseRuntime: "native-one", agentRuntime: "native-two", observedRuntime: "native-two" },
+  ])(
+    "observes only the selected runtime with configured=$baseRuntime selected=$agentRuntime",
+    async ({ baseRuntime, agentRuntime, observedRuntime }) => {
       const config: OpenClawConfig = {
         agents: {
           defaults: {
@@ -114,9 +120,15 @@ describe("agent harness model catalog", () => {
           },
         },
       };
-      const initial: ModelCatalogSnapshot = { entries: [], routeVariants: [] };
-      const loadOne = vi.fn(async () => []);
-      const loadTwo = vi.fn(async () => []);
+      const host: ModelCatalogEntry = {
+        provider: "fixture",
+        id: "model",
+        name: "Host model",
+        reasoning: true,
+      };
+      const initial: ModelCatalogSnapshot = { entries: [host], routeVariants: [host] };
+      const loadOne = vi.fn(async () => [{ ...host, nativeRuntime: "native-one" }]);
+      const loadTwo = vi.fn(async () => [{ ...host, nativeRuntime: "native-two" }]);
       const registry = createEmptyPluginRegistry();
       for (const [id, loadModelCatalog] of [
         ["native-one", loadOne],
@@ -134,18 +146,20 @@ describe("agent harness model catalog", () => {
           },
         });
       }
-      await augmentModelCatalogWithAgentHarness({
+      const result = await augmentModelCatalogWithAgentHarness({
         cfg: config,
         agentId: "main",
         agentDir: "/tmp/picker-agent",
         workspaceDir: "/tmp/picker-workspace",
         defaultProvider: "fixture",
         defaultModel: "fixture/model",
+        agentRuntime,
         snapshot: initial,
         pluginRegistry: registry,
       });
-      expect(loadOne).toHaveBeenCalledTimes(baseRuntime === "openclaw" ? 0 : 1);
-      expect(loadTwo).not.toHaveBeenCalled();
+      expect(loadOne).toHaveBeenCalledTimes(observedRuntime === "native-one" ? 1 : 0);
+      expect(loadTwo).toHaveBeenCalledTimes(observedRuntime === "native-two" ? 1 : 0);
+      expect(result.entries[0]?.nativeRuntime).toBe(observedRuntime);
     },
   );
 

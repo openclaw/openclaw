@@ -1,4 +1,3 @@
-// Matrix plugin module implements http client behavior.
 import type { PinnedDispatcherPolicy } from "openclaw/plugin-sdk/ssrf-dispatcher";
 import type { SsrFPolicy } from "openclaw/plugin-sdk/ssrf-runtime";
 import { buildHttpError } from "./event-helpers.js";
@@ -10,6 +9,7 @@ type MatrixAuthedHttpClientParams = {
   ssrfPolicy?: SsrFPolicy;
   dispatcherPolicy?: PinnedDispatcherPolicy;
   captureRequestAuthority?: () => (() => void) | undefined;
+  captureSendCurrentness?: () => (() => void) | undefined;
   signal?: AbortSignal;
 };
 
@@ -19,6 +19,7 @@ export class MatrixAuthedHttpClient {
   private readonly ssrfPolicy?: SsrFPolicy;
   private readonly dispatcherPolicy?: PinnedDispatcherPolicy;
   private readonly captureRequestAuthority?: () => (() => void) | undefined;
+  private readonly captureSendCurrentness?: () => (() => void) | undefined;
   private readonly signal?: AbortSignal;
 
   constructor(params: MatrixAuthedHttpClientParams) {
@@ -27,6 +28,7 @@ export class MatrixAuthedHttpClient {
     this.ssrfPolicy = params.ssrfPolicy;
     this.dispatcherPolicy = params.dispatcherPolicy;
     this.captureRequestAuthority = params.captureRequestAuthority;
+    this.captureSendCurrentness = params.captureSendCurrentness;
     this.signal = params.signal;
   }
 
@@ -50,6 +52,7 @@ export class MatrixAuthedHttpClient {
       dispatcherPolicy: this.dispatcherPolicy,
       allowAbsoluteEndpoint: params.allowAbsoluteEndpoint,
       assertCurrent: this.captureRequestAuthority?.(),
+      assertSendCurrent: this.captureSendCurrentness?.(),
       signal: this.signal,
     });
     if (!response.ok) {
@@ -95,6 +98,7 @@ export class MatrixAuthedHttpClient {
       dispatcherPolicy: this.dispatcherPolicy,
       allowAbsoluteEndpoint: params.allowAbsoluteEndpoint,
       assertCurrent: this.captureRequestAuthority?.(),
+      assertSendCurrent: this.captureSendCurrentness?.(),
       signal: this.signal,
     });
     if (!response.ok) {

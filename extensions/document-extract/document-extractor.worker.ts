@@ -14,16 +14,19 @@ export type DocumentExtractorWorkerReply = { imageErrors: Error[] } & (
   | { status: "failed"; error: Error }
 );
 
-serveWorkerTasks<DocumentExtractorWorkerReply>(async (input) => {
+serveWorkerTasks<DocumentExtractorWorkerReply>(async (input, _progress, control) => {
   // SAFETY: The plugin-owned pool sends this private request shape; both sides are built together.
   const request = input as DocumentExtractorWorkerRequest;
   const imageErrors: Error[] = [];
   try {
-    const result = await extractPdfContent({
-      ...request,
-      onImageExtractionError: (error) =>
-        imageErrors.push(error instanceof Error ? error : new Error(String(error))),
-    });
+    const result = await extractPdfContent(
+      {
+        ...request,
+        onImageExtractionError: (error) =>
+          imageErrors.push(error instanceof Error ? error : new Error(String(error))),
+      },
+      control,
+    );
     return { status: "ok", result, imageErrors };
   } catch (error) {
     return {

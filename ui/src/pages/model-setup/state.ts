@@ -19,6 +19,20 @@ export type ModelSetupPageState =
   | { phase: "ready"; result: SystemAgentSetupDetectResult }
   | { phase: "detect-error"; message: string };
 
+export function preparedModelPageState(
+  result: SystemAgentSetupDetectResult,
+  modelTarget?: "utility",
+): ModelSetupPageState {
+  // Preparation may persist an unverified model; hide only the prepared role.
+  return {
+    phase: "ready",
+    result:
+      modelTarget === "utility"
+        ? { ...result, utilityModel: undefined, setupModel: undefined }
+        : { ...result, configuredModel: undefined, setupComplete: false },
+  };
+}
+
 export type ModelSetupActivationState =
   | { phase: "idle" }
   | { phase: "testing"; targetId: string }
@@ -28,14 +42,20 @@ export type ModelSetupActivationState =
       status: Exclude<NonNullable<SystemAgentSetupActivateResult["status"]>, "ok">;
       error: string;
     }
-  | { phase: "success"; modelRef: string; latencyMs?: number; warning?: string };
+  | {
+      phase: "success";
+      modelRef: string;
+      modelTarget?: "utility";
+      latencyMs?: number;
+      warning?: string;
+    };
 
 type ModelSetupVerifyFailure = Extract<SystemAgentSetupVerifyResult, { ok: false }>;
 
 export type ModelSetupVerifyState =
   | { phase: "idle" }
   | { phase: "checking" }
-  | { phase: "ok"; modelRef: string; latencyMs?: number }
+  | { phase: "ok"; modelRef: string; modelTarget?: "utility"; latencyMs?: number }
   | { phase: "failed"; status: ModelSetupVerifyFailure["status"]; error: string };
 
 export type ModelSetupWizardResult =
@@ -58,6 +78,20 @@ type ModelSetupWizardPhase =
   | { phase: "error"; message: string };
 
 export type ModelSetupWizardState = ModelSetupWizardPhase & { authLabel?: string };
+export type ModelSetupWizardDraft = { stepId: string | null; value: unknown };
+
+export function updateModelSetupWizardDraft(
+  draft: ModelSetupWizardDraft,
+  state: ModelSetupWizardState,
+): ModelSetupWizardDraft {
+  if (state.phase === "idle") {
+    return { stepId: null, value: undefined };
+  }
+  if (state.phase === "step" && state.step.id !== draft.stepId) {
+    return { stepId: state.step.id, value: initialWizardValue(state.step) };
+  }
+  return draft;
+}
 
 export function activationTimeoutForKind(kind: string): number {
   // Match the Gateway-owned provider-auth wizard lifetime, including user sign-in.
@@ -89,6 +123,7 @@ export function mapActivationResult(params: {
     return {
       phase: "success",
       modelRef: result.modelRef,
+      ...(result.modelTarget ? { modelTarget: result.modelTarget } : {}),
       ...(typeof result.latencyMs === "number" ? { latencyMs: result.latencyMs } : {}),
       ...(warning ? { warning } : {}),
     };
@@ -106,6 +141,7 @@ export function mapVerifyResult(result: SystemAgentSetupVerifyResult): ModelSetu
     return {
       phase: "ok",
       modelRef: result.modelRef,
+      ...(result.modelTarget ? { modelTarget: result.modelTarget } : {}),
       ...(typeof result.latencyMs === "number" ? { latencyMs: result.latencyMs } : {}),
     };
   }

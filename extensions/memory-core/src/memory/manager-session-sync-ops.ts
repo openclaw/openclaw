@@ -399,17 +399,18 @@ export abstract class MemoryManagerSessionSyncOps extends MemoryManagerWatchOps 
       return files;
     }
     const corpusEntries = knownCorpusEntries ?? (await this.listSessionCorpusEntries());
+    const normalizedAgentId = normalizeAgentId(this.agentId);
     for (const rawSession of targets) {
       const sessionId = rawSession.sessionId.trim();
       const agentId = rawSession.agentId?.trim() || this.agentId;
-      if (!sessionId || normalizeAgentId(agentId) !== normalizeAgentId(this.agentId)) {
+      if (!sessionId || normalizeAgentId(agentId) !== normalizedAgentId) {
         continue;
       }
       const sessionKey = rawSession.sessionKey?.trim();
       const matchingEntries = corpusEntries.filter(
         (entry) =>
-          normalizeAgentId(entry.agentId) === normalizeAgentId(this.agentId) &&
           entry.sessionId === sessionId &&
+          normalizeAgentId(entry.agentId) === normalizedAgentId &&
           (!sessionKey || entry.sessionKey === sessionKey),
       );
       for (const entry of matchingEntries) {

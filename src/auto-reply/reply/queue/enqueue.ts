@@ -12,14 +12,15 @@ import {
   countPendingQueueItems,
   shouldSkipQueueItem,
 } from "../../../utils/queue-helpers.js";
+import { resolveFollowupDeliveryContextKey } from "./delivery-context.js";
 import {
   clearFollowupDrainCallback,
   createOverflowSummaryRetrySource,
   dropAbortedFollowups,
   kickFollowupDrainIfIdle,
   rememberFollowupDrainCallback,
-  resolveFollowupDeliveryContextKey,
 } from "./drain.js";
+import { completeFollowupRunLifecycle, markFollowupRunEnqueued } from "./lifecycle.js";
 import {
   peekRecentQueueMessageId,
   recordRecentQueueMessageId,
@@ -32,9 +33,7 @@ import {
   trimSummaryElisionsToCap,
 } from "./state.js";
 import {
-  completeFollowupRunLifecycle,
   isFollowupRunAborted,
-  markFollowupRunEnqueued,
   resolveFollowupAbortSignal,
   type EnqueueFollowupRunOptions,
   type FollowupRun,

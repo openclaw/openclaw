@@ -14,7 +14,7 @@ it.each(["work", "dashboard:incognito-work"])(
   "resolves the exact %s session without enumerating unrelated rows",
   async (key) => {
     await withOpenClawTestState({ label: "command-exact-session" }, async (state) => {
-      const storePath = state.path("sessions.sqlite");
+      const storePath = state.statePath("sessions.sqlite");
       const sessionKey = `agent:main:${key}`;
       const incognito = key.startsWith("dashboard:incognito-");
       const cfg = {
@@ -89,7 +89,7 @@ it.each([
   "agent:main:matrix:channel:!Room:Example.org:thread:$Event",
 ])("reuses the persisted session for explicit key %s", async (sessionKey) => {
   await withOpenClawTestState({ label: "command-uppercase-tail-session" }, async (state) => {
-    const storePath = state.path("sessions.sqlite");
+    const storePath = state.statePath("sessions.sqlite");
     const cfg = {
       agents: { defaults: {} },
       session: { store: storePath, reset: { mode: "idle", idleMinutes: 60 } },
@@ -113,7 +113,7 @@ it.each([
 
 it("does not provision a missing incognito lookup or select a hidden run-owned entry", async () => {
   await withOpenClawTestState({ label: "command-private-session" }, async (state) => {
-    const storePath = state.path("sessions.sqlite");
+    const storePath = state.statePath("sessions.sqlite");
     const cfg = { agents: { defaults: {} }, session: { store: storePath } };
     const incognitoPath = resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main" });
     expect(

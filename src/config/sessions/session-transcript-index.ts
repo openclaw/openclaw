@@ -649,37 +649,45 @@ export function listSessionsNeedingTranscriptIndexReconcile(db: DatabaseSync): s
   return rows.flatMap((row) => (typeof row.session_id === "string" ? [row.session_id] : []));
 }
 
+const transcriptIndexTables = [
+  "session_transcript_active_events",
+  "session_transcript_fts",
+  "session_transcript_index_state",
+] as const;
+
+/** Orphan-only cleanup is independent of live sessions' projection watermarks. */
+export function hasOrphanedTranscriptIndexRows(db: DatabaseSync): boolean {
+  const kysely = getIndexKysely(db);
+  return transcriptIndexTables.some(
+    (table) =>
+      executeSqliteQueryTakeFirstSync(
+        db,
+        kysely
+          .selectFrom(table)
+          .select("session_id")
+          .where(
+            "session_id",
+            "not in",
+            kysely.selectFrom("transcript_events").select("session_id").distinct(),
+          )
+          .limit(1),
+      ) !== undefined,
+  );
+}
+
 /** Drops index rows for sessions whose transcript rows are gone. */
 export function deleteOrphanedTranscriptIndexRowsInTransaction(db: DatabaseSync): void {
   const kysely = getIndexKysely(db);
-  executeSqliteQuerySync(
-    db,
-    kysely
-      .deleteFrom("session_transcript_active_events")
-      .where(
-        "session_id",
-        "not in",
-        kysely.selectFrom("transcript_events").select("session_id").distinct(),
-      ),
-  );
-  executeSqliteQuerySync(
-    db,
-    kysely
-      .deleteFrom("session_transcript_fts")
-      .where(
-        "session_id",
-        "not in",
-        kysely.selectFrom("transcript_events").select("session_id").distinct(),
-      ),
-  );
-  executeSqliteQuerySync(
-    db,
-    kysely
-      .deleteFrom("session_transcript_index_state")
-      .where(
-        "session_id",
-        "not in",
-        kysely.selectFrom("transcript_events").select("session_id").distinct(),
-      ),
-  );
+  for (const table of transcriptIndexTables) {
+    executeSqliteQuerySync(
+      db,
+      kysely
+        .deleteFrom(table)
+        .where(
+          "session_id",
+          "not in",
+          kysely.selectFrom("transcript_events").select("session_id").distinct(),
+        ),
+    );
+  }
 }

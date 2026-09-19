@@ -145,7 +145,7 @@ suite.define(() => {
         .toBe("Cloud worker");
       await page.screenshot({ path: path.join(artifacts, "machine-inventory.png") });
       expect(await inventory.getByRole("button", { name: /worker history/ }).count()).toBe(0);
-      expect(await inventory.locator(".systems-sidebar__header > span").textContent()).toBe("2");
+      expect(await inventory.locator(".systems-group__count").allTextContents()).toEqual(["1"]);
       await page.locator('.sidebar-nav a[href$="/dashboards"]').click();
       await expect.poll(() => page.locator(".systems-sidebar").count()).toBe(0);
       await page.locator('.sidebar-nav a[href$="/systems"]').click();
@@ -183,7 +183,7 @@ suite.define(() => {
       await page.setViewportSize({ width: 1440, height: 900 });
       await inventory.getByRole("button", { name: "Refresh machines" }).click();
       await expect.poll(() => inventory.locator(".systems-machine").count()).toBe(1);
-      expect(await inventory.locator(".systems-sidebar__header > span").textContent()).toBe("1");
+      expect(await inventory.locator(".systems-group__count").allTextContents()).toEqual([]);
       await page.setViewportSize({ width: 640, height: 900 });
       expect(await picker.locator('option[value="worker-one"]').count()).toBe(0);
     } finally {

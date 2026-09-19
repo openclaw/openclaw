@@ -112,15 +112,15 @@ verified backup. An interrupted or refused restore is not a successful rollback.
 If a newly activated package fails verification, `openclaw update` compares the
 shared and affected per-agent SQLite `user_version` values with their
 pre-activation values and checks that the config file still matches the content
-reported by the candidate’s activation Doctor writer.
+reported by the new version’s activation Doctor writer.
 Databases first created during activation or verification are
-schema-neutral when their version matches the candidate's supported version for
+schema-neutral when their version matches the new version's supported version for
 that database kind. A changed schema version or missing pre-existing database,
 or a new database at a foreign version, still blocks rollback. Before restoring
 code, the updater also checks that the previous package supports any new database;
 unknown or incompatible support refuses rollback with `rollback-state-unverified`.
 When both checks pass and the retained previous package was verified before the
-update, it stops the candidate and restores the previous generation: package,
+update, it stops the new version and restores the previous generation: package,
 command shim, service definition, and exact pre-activation config bytes, including
 the previous writer stamp. Config replacements use owner-only permissions (`0600`);
 unchanged config needs no write. Owned, writable
@@ -130,7 +130,7 @@ identity, plugins, channels, and `/readyz` again. Update verification does not u
 model inference: the managed service must be running and own its port, and the
 Gateway hello handshake must match the expected artifact.
 
-The candidate’s own Doctor migrations in the main config file do not block rollback, including on
+The new version’s Doctor migrations in the main config file do not block rollback, including on
 a fresh install’s first update. The updater retains the config immediately before
 Doctor and verifies that Doctor consumed those captured bytes before making changes.
 It also checks the current file against the output hash reported by Doctor’s writer.
@@ -148,11 +148,22 @@ Successful recovery leaves the previous Gateway running and finishes the run as
 measured from service stop through verified recovery. The headline is
 `↩️ OpenClaw update rolled back to <previous>: <reason>`, retaining the original
 verification failure. The command still exits nonzero; recovery does not turn a
-rejected candidate into a successful update.
+rejected version into a successful update.
+
+Recovery reports distinguish restored package files from a healthy Gateway.
+A verified rollback names the version serving after recovery, including when
+an additional repair was needed. If the restored service fails its health check,
+the result records `recovery.service: "failed"`; the report says health failed
+and includes the recorded recovery reason. Health is reported as unverified only
+when verification could not run or complete, such as a readiness timeout. Both
+outcomes direct you to `openclaw gateway status --deep` to check the serving version
+and readiness. Rollback uses the same startup allowance as the update's activation check.
+Restart notifications retain the recovery fields understood by the restored runtime.
+Detailed recovery reasons remain in the update result, status diagnostics, and failure report.
 
 Use `openclaw update status` for the recorded reason and `openclaw triage` to
 diagnose a failed check. Recovery guidance reports whether the Gateway is running
-or stopped from the latest service observation, even when a running candidate did
+or stopped from the latest service observation, even when the new version is running but did
 not pass verification. A restored Gateway must pass its own verification checks
 before the run can finish as `rolled-back`.
 Automatic triage never follows a verified rollback; it runs only when the update
@@ -168,20 +179,20 @@ not schema-neutral, rollback is refused with
 `state-migrated-no-rollback`. For config edits, the next action names the file
 whose changes blocked restoration. The updater attempts
 [bounded unattended repair](/install/updating#unattended-repair-on-your-own-inference)
-on the installed candidate, preserving migrated state. The same repair slot can
+on the newly installed version, preserving migrated state. The same repair slot can
 run if rollback itself fails, targeting the previous release if its package was
 already restored. If repair cannot pass verification, the update
 fails with the original reason and recorded repair attempts. Use `openclaw triage`
 or the printed repair command before considering an older version.
 Automatic rollback restores code and the captured config, not a full state snapshot.
-The candidate's temporary migration-rehearsal snapshots are removed after
+The temporary snapshots used to check migrations are removed after
 validation and do not replace your backup.
 If the schema comparison cannot be completed, automatic rollback is refused
-(`rollback-state-unverified`). The freshly installed candidate owns final
+(`rollback-state-unverified`). The newly installed version owns final
 verification and reporting after migration,
 preserving the same run ID and recorded activation steps.
 
-For pnpm and Bun, changes to sibling global packages after staging refuse automatic rollback (`rollback-project-changed`) without restoring the shared project; keep a reachable candidate installed, otherwise keep the Gateway stopped and follow the report’s repair command.
+For pnpm and Bun, changes to sibling global packages after staging refuse automatic rollback (`rollback-project-changed`) without restoring the shared project; keep a reachable version installed, otherwise keep the Gateway stopped and follow the report’s repair command.
 A refusal before the live swap restarts the unchanged Gateway and preserves the sibling changes.
 
 ### Before updating: create a verified backup
@@ -244,7 +255,7 @@ from the updated installation. A restart accepted by the service owner can still
 fail readiness checks; inspect `openclaw gateway status --deep` before retrying.
 
 Keep a stopped, unverified Gateway stopped and preserve migrated state during
-repair. A reachable candidate retained after a schema migration can continue
+repair. A reachable version retained after a schema migration can continue
 serving while you diagnose it.
 The failed update retains its nonzero exit code even if the agent repairs it.
 
@@ -254,26 +265,26 @@ The failed update retains its nonzero exit code even if the agent repairs it.
 
 ### Unattended repair on your own inference
 
-The updater enters the optional `repairing` phase when candidate Doctor lint,
-config validation, plugin resolution, or canary startup fails. It repairs the
-staged candidate and reruns the failed check while the old Gateway keeps serving.
+The updater enters the optional `repairing` phase when Doctor health checks,
+config validation, plugin resolution, or test startup fails. It repairs the
+staged update and reruns the failed check while the old Gateway keeps serving.
 Only a passing validation allows activation; otherwise the update fails and
-discards the candidate without stopping the service.
-Before activation, repair shares one disposable rehearsal state/config snapshot
-across its turns and validation, then independently validates surviving candidate
+discards the staged update without stopping the service.
+Before activation, repair shares one disposable state/config snapshot for update checks
+across its turns and validation, then independently validates surviving update
 changes before activation. Successful repair can proceed when Doctor migrations
 change the copied config. Activation reruns update-mode Doctor against the
 captured live input, using the normal config writer, backup, and requester checks;
-it never copies rehearsal paths, canary settings, or inference edits into operator config.
+it never copies temporary validation paths, test Gateway settings, or inference edits into operator config.
 Optional repairs excluded during updates, such as disabling unavailable skills,
 remain excluded. The run ledger and update summary identify changed top-level
 keys and migration messages; the warning log retains the full messages.
 If the writer refuses promotion, `repair-requires-config-change` names the keys
 and the refusal reason. Revoked chat authority remains `requester-revoked`.
-Older candidates without guarded Doctor support continue through their normal
-activation Doctor. When candidate validation changes config, the ledger and
-summary warn with the changed keys that promotion receipts are unavailable for
-that candidate version.
+Older versions without guarded Doctor support continue through their normal
+activation Doctor. When update checks change config, the ledger and
+summary list the changed keys and ask you to check those settings after the update,
+because this version cannot verify that they were applied.
 Repairs owned entirely by one internal include file use the existing include
 writer after requester and captured-root checks. The ledger, summary, and warning
 log name the affected keys and report `promotion unavailable for include-owned
@@ -286,7 +297,7 @@ Ledger entries and summaries retain their existing diagnostic limits; the warnin
 log retains full migration messages.
 
 Git source updates keep the selected source revision. Repair may restore
-dependencies, generated runtime files, or state, but a candidate with changed
+dependencies, generated runtime files, or state, but a staged update with changed
 tracked source fails before the Gateway stops; fix the source revision before retrying.
 
 After activation, the updater can also enter `repairing` when verification fails
@@ -294,7 +305,7 @@ and config edits after the activation Doctor pass or a schema migration prevent 
 when rollback itself fails. This repair targets the runtime that remains
 installed and preserves migrated state. After each turn, the updater starts or
 restarts a stopped or unhealthy service once, then reruns the service, version,
-and `/readyz` checks. A verified candidate repair allows the run to succeed. If
+and `/readyz` checks. A verified repair of the new version allows the run to succeed. If
 rollback already restored the previous release, successful repair finishes
 `rolled-back` and the command still exits nonzero. Otherwise the original failure
 and repair summary remain in the final report.
@@ -311,7 +322,7 @@ skipping models without tool support and routes without usable authentication.
 It reports unavailable inference instead of waiting for a login or approval
 prompt. Operator-owned updates and explicit repair requests
 replace interactive exec approval with a prompt-free run scoped to the installation
-or staged candidate root (`fs.workspaceOnly: true`), preserving safe-bin and tool
+or staged update root (`fs.workspaceOnly: true`), preserving safe-bin and tool
 allowlists and refusing explicit exec or repair-tool denies with `exec-denied-by-policy`
 and an `openclaw triage` external handoff.
 
@@ -327,8 +338,8 @@ budget is reached, or a turn fails to improve the result; a regression is
 reported as unrepaired. The model's `REPAIR_RESULT` summary does not replace
 these checks.
 
-The agent may diagnose and repair the target install or staged candidate and
-its OpenClaw state, including running Doctor lint, `doctor --fix`, and health
+The agent may diagnose and repair the target install or staged update and
+its OpenClaw state, including running Doctor health checks, `doctor --fix`, and health
 checks. Its repair contract forbids changing credentials or auth stores,
 deleting state or databases, package-manager writes outside the target root,
 and service or Gateway lifecycle commands. The orchestrator retains control of
@@ -339,8 +350,8 @@ records retain the `repair` attempt list. Repairing stays hidden in the Control
 UI when the run never entered that phase.
 
 For an explicit repair using configured inference, run `openclaw triage --run`
-in a terminal on the Gateway host. Interactive triage checks Doctor lint, runs
-up to one embedded repair turn with time and tool-call limits, and checks Doctor
+in a terminal on the Gateway host. Interactive triage runs Doctor health checks, attempts
+up to one embedded repair turn with time and tool-call limits, and runs Doctor
 again. A saved activation or recovery failure additionally requires recorded updater
 completion and current installation and Gateway verification. An attributed
 Doctor/config blocker can be resolved by fresh Doctor checks and the recorded

@@ -53,30 +53,33 @@ export function hasOwnKey(target: JsonRecord, key: string): boolean {
 }
 
 /** Delete a nested retired config path, with `*` matching record entries. */
-export function deleteRetiredPath(owner: unknown, path: readonly string[], index = 0): boolean {
-  if (!isRecord(owner)) {
-    return false;
-  }
-  const key = path[index];
-  if (!key) {
+export function deleteRetiredPath(
+  owner: unknown,
+  path: readonly string[],
+  removed?: string[],
+  prefix = "",
+): boolean {
+  const [key, ...rest] = path;
+  if (!isRecord(owner) || !key) {
     return false;
   }
   if (key === "*") {
     let changed = false;
-    for (const value of Object.values(owner)) {
-      changed = deleteRetiredPath(value, path, index + 1) || changed;
+    for (const [entry, value] of Object.entries(owner)) {
+      changed = deleteRetiredPath(value, rest, removed, `${prefix}${entry}.`) || changed;
     }
     return changed;
   }
-  if (index === path.length - 1) {
+  if (rest.length === 0) {
     if (!Object.hasOwn(owner, key)) {
       return false;
     }
     delete owner[key];
+    removed?.push(`${prefix}${key}`);
     return true;
   }
   const child = owner[key];
-  if (!isRecord(child) || !deleteRetiredPath(child, path, index + 1)) {
+  if (!isRecord(child) || !deleteRetiredPath(child, rest, removed, `${prefix}${key}.`)) {
     return false;
   }
   if (Object.keys(child).length === 0) {

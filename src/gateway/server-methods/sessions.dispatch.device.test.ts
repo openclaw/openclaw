@@ -37,7 +37,6 @@ import type { WorkerPlacementDispatchService } from "../worker-environments/plac
 import type { WorkerSessionPlacementRecord } from "../worker-environments/placement-store.js";
 import { createWorkerSessionPlacementStore } from "../worker-environments/placement-store.js";
 import { deriveEnvironmentIntent } from "../worker-environments/service-contract.js";
-import * as environmentMethods from "./environments.js";
 import {
   dispatchTestSessionId,
   dispatchTestSessionKey,
@@ -49,6 +48,8 @@ import {
   makeSessionTarget,
 } from "./sessions-dispatch.test-support.js";
 
+// Install session-store fixtures before environment handlers load their session accessors.
+const environmentMethods = await import("./environments.js");
 const dispatchTestMocks = getDispatchTestMocks();
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -103,7 +104,11 @@ function connectedNode(deviceId: string, available: number) {
     clientId: GATEWAY_CLIENT_IDS.NODE_HOST,
     clientMode: GATEWAY_CLIENT_MODES.NODE,
     protocolFeature: NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE,
-    workerHost: { enabled: true, capacity: { total: Math.max(2, available), available } },
+    workerHost: {
+      enabled: true,
+      capacity: { total: Math.max(2, available), available },
+      capturedExecPolicy: true,
+    },
     commands: ["system.run"],
   } satisfies NodeWorkerSupervisorNodeProof;
 }
@@ -173,6 +178,7 @@ describe("sessions.dispatch device targets", () => {
       }),
       expect.any(Function),
       undefined,
+      undefined,
     );
     expect(respond).toHaveBeenCalledWith(
       true,
@@ -236,6 +242,7 @@ describe("sessions.dispatch device targets", () => {
       expect(dispatch).toHaveBeenCalledWith(
         expect.objectContaining({ profileId: "device:largest", deviceId: "largest" }),
         expect.any(Function),
+        undefined,
         undefined,
       );
       expect(respond).toHaveBeenCalledWith(
@@ -418,6 +425,7 @@ describe("sessions.dispatch device targets", () => {
         expect(dispatch).toHaveBeenCalledWith(
           expect.objectContaining({ profileId: "device:second", deviceId: "second" }),
           expect.any(Function),
+          undefined,
           undefined,
         );
         expect(respond).toHaveBeenCalledWith(
@@ -891,6 +899,7 @@ describe("sessions.dispatch device targets", () => {
           }),
           expect.any(Function),
           undefined,
+          undefined,
         );
       } else {
         expect(dispatch).not.toHaveBeenCalled();
@@ -932,6 +941,7 @@ describe("sessions.dispatch device targets", () => {
           },
         }),
         expect.any(Function),
+        undefined,
         undefined,
       );
       expect(respond).toHaveBeenCalledWith(

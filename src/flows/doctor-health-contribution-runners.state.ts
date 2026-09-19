@@ -79,7 +79,7 @@ export async function runDiskSpaceHealth(): Promise<void> {
 
 export async function runDatabaseBloatHealth(): Promise<void> {
   const { noteSqliteDatabaseBloat } = await import("../commands/doctor-db-bloat.js");
-  noteSqliteDatabaseBloat();
+  await noteSqliteDatabaseBloat();
 }
 
 export async function runAgentMemorySchemaHealth(ctx: DoctorHealthFlowContext): Promise<void> {

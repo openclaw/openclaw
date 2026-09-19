@@ -2,6 +2,10 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, test, vi } from "vitest";
+import {
+  getProcessCleanupBudget,
+  runWithProcessCleanupBudget,
+} from "../process/supervisor/cleanup-budget.js";
 import { writeSecretStoreEntry } from "../secrets/store/secret-store.js";
 import {
   closeOpenClawStateDatabaseForTest,
@@ -85,6 +89,18 @@ describe("gateway lifetime sidecars", () => {
     expect(metadataListener.stop).toHaveBeenCalledOnce();
     expect(sessionChange.stop).toHaveBeenCalledOnce();
     expect(worker.stop).toHaveBeenCalledOnce();
+  });
+
+  test("retains the shutdown budget for sidecars published later from startup", async () => {
+    const owner = createGatewaySidecarStopOwner();
+    const budget = { deadline: 10_000, warn: vi.fn() };
+    await runWithProcessCleanupBudget(budget, () => owner.stop());
+    const stopped = vi.fn(async () => {
+      expect(getProcessCleanupBudget()).toBe(budget);
+    });
+    owner.publish({ stop: stopped });
+    await owner.sealAndJoin();
+    expect(stopped).toHaveBeenCalledOnce();
   });
 
   test("owns standalone GitHub publication recovery when worker placement is unavailable", async () => {

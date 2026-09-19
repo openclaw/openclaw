@@ -24,6 +24,7 @@ import type {
   TranscriptReadWindow,
   TranscriptReadWindowOptions,
 } from "../sessions/transcript-read-window.js";
+import type { SubagentCoordinationDisplayResolver } from "./chat-display-projection.history.js";
 import {
   ArchivedTranscriptReader,
   type ReadRecentSessionMessagesOptions,
@@ -363,4 +364,6 @@ export function createSessionTranscriptReader(access: SessionTranscriptReadAcces
     readSessionMessagesAroundIdWithStatsAsync,
   };
 }
-export type SessionTranscriptReader = ReturnType<typeof createSessionTranscriptReader>;
+export type SessionTranscriptReader = ReturnType<typeof createSessionTranscriptReader> & {
+  subagentCoordination?: SubagentCoordinationDisplayResolver;
+};

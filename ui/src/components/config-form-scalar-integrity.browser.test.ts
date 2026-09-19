@@ -187,7 +187,7 @@ describe("config form scalar integrity", () => {
     );
     expect(textInput.value).toBe("");
     expect(textInput.placeholder).toBe("Default: balanced");
-    expect(container.textContent).toContain("Using default: balanced");
+    expect(container.textContent).not.toContain("Using default:");
     expect(onPatch).not.toHaveBeenCalled();
     expect(onRemove).not.toHaveBeenCalled();
 
@@ -204,7 +204,7 @@ describe("config form scalar integrity", () => {
     );
     expect(numberInput.value).toBe("");
     expect(numberInput.placeholder).toBe("Default: 3");
-    expect(container.textContent).toContain("Using default: 3");
+    expect(container.textContent).not.toContain("Using default:");
 
     const arrowUp = new KeyboardEvent("keydown", {
       bubbles: true,

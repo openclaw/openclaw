@@ -16,16 +16,15 @@ import { validateConfigObjectRaw } from "./validation-core.js";
 import {
   validatePreparedConfigWithPlugins,
   type ValidateConfigWithPluginsParams,
-  type ValidateConfigWithPluginsResult,
 } from "./validation-plugin-rules.js";
+import type { PreparedPluginSchemaValidations } from "./validation-prepared.js";
+import type {
+  PreparedConfigValidationPluginMetadata,
+  ValidateConfigWithPluginsResult,
+} from "./validation.types.js";
 
 export { validateConfigObject, validateConfigObjectRaw } from "./validation-core.js";
 export { collectUnsupportedSecretRefPolicyIssues } from "./validation-issues.js";
-
-export type PreparedConfigValidationPluginMetadata = {
-  manifestRegistry: PluginManifestRegistry;
-  installedPluginRecordIds: ReadonlySet<string>;
-};
 
 export type ValidateConfigWithPluginsAsyncParams = Omit<
   ValidateConfigWithPluginsParams,
@@ -46,6 +45,22 @@ export function validateConfigObjectWithPlugins(
 export async function validateConfigObjectWithPluginsAsync(
   raw: unknown,
   params: ValidateConfigWithPluginsAsyncParams,
+): Promise<ValidateConfigWithPluginsResult> {
+  return validateConfigObjectWithPluginsAsyncInternal(raw, params, false);
+}
+
+/** Explicit validation prepares source facts without changing ordinary snapshot reads. */
+export async function validateConfigObjectWithStrictFactsAsync(
+  raw: unknown,
+  params: ValidateConfigWithPluginsAsyncParams,
+): Promise<ValidateConfigWithPluginsResult> {
+  return validateConfigObjectWithPluginsAsyncInternal(raw, params, true);
+}
+
+async function validateConfigObjectWithPluginsAsyncInternal(
+  raw: unknown,
+  params: ValidateConfigWithPluginsAsyncParams,
+  prepareStrictValidation: boolean,
 ): Promise<ValidateConfigWithPluginsResult> {
   const { loadPluginMetadataSnapshotAsync, ...validationParams } = params;
   const prepared = prepareConfigObjectWithPlugins(raw, validationParams);
@@ -68,12 +83,35 @@ export async function validateConfigObjectWithPluginsAsync(
     ),
   };
   const metadata = await loadPluginMetadataSnapshotAsync(pending.parsedConfig);
-  return finishConfigObjectWithPlugins(
+  const strictConfig = prepareStrictValidation
+    ? inheritLegacyDefaultAgentId(
+        pending.parsedConfig,
+        cloneConfigWithResolutionFacts(pending.parsedConfig),
+      )
+    : undefined;
+  const schemaValidations: PreparedPluginSchemaValidations | undefined = strictConfig
+    ? new Map()
+    : undefined;
+  const preparedParams = { ...validationParams, pluginMetadataSnapshot: metadata };
+  const result = finishConfigObjectWithPlugins(
     pending,
-    { ...validationParams, pluginMetadataSnapshot: metadata },
+    preparedParams,
     true,
     metadata.installedPluginRecordIds,
+    schemaValidations,
   );
+  if (!result.ok || !strictConfig) {
+    return result;
+  }
+  const strict = validatePreparedConfigWithPlugins(pending.migrated, strictConfig, {
+    ...preparedParams,
+    applyDefaults: false,
+    pluginValidation: "full",
+    semanticValidation: "strict",
+    installedPluginRecordIds: metadata.installedPluginRecordIds,
+    schemaValidations,
+  });
+  return { ...result, strictIssues: strict.ok ? [] : strict.issues };
 }
 
 export function validateConfigObjectRawWithPlugins(
@@ -131,12 +169,14 @@ function finishConfigObjectWithPlugins(
   params: ValidateConfigWithPluginsParams | undefined,
   applyDefaults: boolean,
   installedPluginRecordIds?: ReadonlySet<string>,
+  schemaValidations?: PreparedPluginSchemaValidations,
 ): ValidateConfigWithPluginsResult {
   let manifestRegistry = params?.pluginMetadataSnapshot?.manifestRegistry;
   const result = validatePreparedConfigWithPlugins(migrated, parsedConfig, {
     ...params,
     applyDefaults,
     installedPluginRecordIds,
+    schemaValidations,
     pluginValidation: params?.pluginValidation ?? "full",
     semanticValidation: params?.semanticValidation ?? "runtime",
     onManifestRegistryResolved: (registry) => {

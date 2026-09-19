@@ -1,4 +1,3 @@
-// Discord plugin module implements message handler.process behavior.
 import type { APIAllowedMentions } from "discord-api-types/v10";
 import { resolveAgentConfig, resolveHumanDelayConfig } from "openclaw/plugin-sdk/agent-runtime";
 import {
@@ -196,9 +195,11 @@ export async function processDiscordMessage(
     resolvedBlockStreamingEnabled,
   } = replyRuntime;
   let deliverChannelId = initialDeliverChannelId;
+  let deliverThreadId = ctxPayload.MessageThreadId;
   activeThreadRoute.bindThreadAdoption(async (threadId) => {
     deliverTarget = `channel:${threadId}`;
     deliverChannelId = threadId;
+    deliverThreadId = threadId;
     await draftPreview.retarget(threadId);
   });
   let finalReplyStartNotified = false;
@@ -365,6 +366,7 @@ export async function processDiscordMessage(
     const finalText =
       isFinal && !ctxPayload.GroupThread && typeof payload.text === "string"
         ? await resolveTranscriptBackedChannelFinalText({
+            payload,
             finalText: payload.text,
             resolveCandidateText: resolveCurrentTurnTranscriptFinalText,
           })
@@ -383,6 +385,19 @@ export async function processDiscordMessage(
         }),
       );
       return { visibleReplySent: false };
+    }
+    if (
+      await draftPreview.adoptProgressContinuation(deliverablePayload, info, {
+        to: isDirectMessage
+          ? (ctxPayload.OriginatingTo ?? ctxPayload.To ?? deliverTarget)
+          : deliverTarget,
+        threadId: deliverThreadId,
+      })
+    ) {
+      notifyFinalReplyStart();
+      markFinalReplyDelivered();
+      replyReference.markSent();
+      return { visibleReplySent: true };
     }
     if (isFinal && !replyLifecycleStarted && !isRoomEvent && configuredTypingMode !== "never") {
       // Fast replies can bypass the normal resolver lifecycle. Start feedback

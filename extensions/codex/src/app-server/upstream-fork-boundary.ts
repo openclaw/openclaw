@@ -88,6 +88,15 @@ function resolveCodexUpstreamForkBoundaryFromTurns(params: {
       }
       const isSteer = userMessagesInTurn > 0;
       userMessagesInTurn += 1;
+      const local = params.localPrefix[localIndex];
+      const identity = local && readMirrorIdentity(local.message);
+      // Imports retain a bounded tail. Locate its recorded start before checking
+      // content omitted from that mirror; repeated text cannot identify the boundary.
+      const matchesIdentity =
+        identity === `${turn.id}:${item.id}` || (!isSteer && identity === `${turn.id}:prompt`);
+      if (!matchedPrefix && !matchesIdentity) {
+        continue;
+      }
       // Display placeholders are not evidence of attachment identity.
       const nativeText = textOnlyMessage(item.content);
       if (nativeText === undefined) {
@@ -96,20 +105,11 @@ function resolveCodexUpstreamForkBoundaryFromTurns(params: {
           "A message before the fork point contains images or attachments that cannot be verified across OpenClaw and Codex. Fork from a text-only span instead.",
         );
       }
-      const local = params.localPrefix[localIndex];
       const upstreamText = local && readUpstreamUserText(local.message);
       // Harness evidence binds the complete submitted text, not the trimmed/truncated
       // display projection that legacy imported mirrors retain.
       const text = upstreamText ? nativeText : projectCodexUserItemText(item);
       if (!text) {
-        continue;
-      }
-      const identity = local && readMirrorIdentity(local.message);
-      // Imports retain a bounded tail. Locate its recorded start, then verify every
-      // retained user in order; repeated text must never choose an earlier native turn.
-      const matchesIdentity =
-        identity === `${turn.id}:${item.id}` || (!isSteer && identity === `${turn.id}:prompt`);
-      if (!matchedPrefix && !matchesIdentity) {
         continue;
       }
       matchedPrefix = true;

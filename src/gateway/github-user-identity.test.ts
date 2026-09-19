@@ -11,7 +11,7 @@ import {
 } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { buildAuthenticatedPresenceUser } from "./authenticated-presence-user.js";
-import { ControlUiGitHubError } from "./control-ui-github-api.js";
+import type { ControlUiGitHubError } from "./github-public-api.js";
 import { createAuthenticatedGitHubIdentitySync } from "./github-user-identity.js";
 
 function githubResponse(body: unknown, status = 200, headers: Record<string, string> = {}) {

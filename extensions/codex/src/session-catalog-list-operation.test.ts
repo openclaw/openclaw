@@ -44,13 +44,13 @@ function observe<T>(promise: Promise<T>) {
   return { state, done };
 }
 
-function fixture(homeCount = 1) {
+async function fixture(homeCount = 1) {
   const { runtime } = createRuntime();
   const base = createCodexSessionCatalogControlFactory({
     getPluginConfig: () => ({ supervision: { enabled: true } }),
     getRuntimeConfig: () => config,
   });
-  const primary = base.homesForAgent("main")[0]!;
+  const primary = (await base.homesForAgent("main"))[0]!;
   const homes = Array.from({ length: homeCount }, (_, index) => ({
     ...primary,
     sourceHomeId: `home-${index}`,
@@ -74,7 +74,7 @@ function fixture(homeCount = 1) {
     bindingStore,
     control: {
       ...base,
-      homesForAgent: () => homes,
+      homesForAgent: async () => homes,
       forRequest: (_agentId, source) =>
         createControl({
           listPage: (params) => listPage(source!.sourceHomeId, params),
@@ -107,7 +107,7 @@ function fixture(homeCount = 1) {
 
 describe("Codex catalog list operation", () => {
   it("yields an inert exclusion checkpoint and retains filled rows, limits and cursors", async () => {
-    const f = fixture();
+    const f = await fixture();
     f.listPage
       .mockResolvedValueOnce({
         ...page(["keep-one"], "next"),
@@ -151,7 +151,7 @@ describe("Codex catalog list operation", () => {
   });
 
   it("closes uninitialized and paused operations without starting or reviving source work", async () => {
-    const f = fixture();
+    const f = await fixture();
     const untouched = f.start();
     expect(untouched.close()).toBeUndefined();
     await expect(untouched.next()).rejects.toThrow();
@@ -175,7 +175,7 @@ describe("Codex catalog list operation", () => {
   });
 
   it("joins a held control page after active abort before allowing closure", async () => {
-    const f = fixture();
+    const f = await fixture();
     const held = createDeferred<CodexSessionCatalogPage>();
     const started = createDeferred<void>();
     f.listPage.mockImplementation(() => {
@@ -207,7 +207,7 @@ describe("Codex catalog list operation", () => {
   it.each(["resolve", "reject"] as const)(
     "leaves an asynchronous %s publication tail with waitUntil",
     async (outcome) => {
-      const f = fixture();
+      const f = await fixture();
       const publication = createDeferred<void>();
       const published = createDeferred<void>();
       const operation = f.start({
@@ -252,7 +252,7 @@ describe("Codex catalog list operation", () => {
   );
 
   it("lets a fast home refill and publish while another home's first page stays active", async () => {
-    const f = fixture(2);
+    const f = await fixture(2);
     const first = createDeferred<CodexSessionCatalogPage>();
     const slow = createDeferred<CodexSessionCatalogPage>();
     let slowStarted = false;
@@ -299,7 +299,7 @@ describe("Codex catalog list operation", () => {
   });
 
   it("continues inline during unknown discovery and yields only after an actual empty selection", async () => {
-    const f = fixture();
+    const f = await fixture();
     const discovery = createDeferred<{ nodes: [] }>();
     const second = createDeferred<CodexSessionCatalogPage>();
     let secondStarted = false;
@@ -340,7 +340,7 @@ describe("Codex catalog list operation", () => {
   it.each(["terminal-only", "offline"] as const)(
     "yields before the next local page after a completed %s node placeholder",
     async (route) => {
-      const f = fixture();
+      const f = await fixture();
       const firstPage = createDeferred<CodexSessionCatalogPage>();
       const nodePublished = createDeferred<void>();
       const refillStarted = createDeferred<void>();
@@ -413,7 +413,7 @@ describe("Codex catalog list operation", () => {
   );
 
   it("keeps the filled operation inline after failed discovery", async () => {
-    const f = fixture();
+    const f = await fixture();
     f.listPage.mockImplementation(async (_home, params) =>
       params.cursor ? page(["visible"]) : page(["managed"], "next"),
     );
@@ -440,8 +440,8 @@ describe("Codex catalog list operation", () => {
   it.each(["resolve", "reject", "no waitUntil"] as const)(
     "keeps refill inline until a timed-out node's invocation and publication %s",
     async (outcome) => {
+      const f = await fixture();
       vi.useFakeTimers();
-      const f = fixture();
       const first = createDeferred<CodexSessionCatalogPage>();
       const second = createDeferred<CodexSessionCatalogPage>();
       const third = createDeferred<CodexSessionCatalogPage>();
@@ -551,8 +551,8 @@ describe("Codex catalog list operation", () => {
   );
 
   it("returns a complete local list at the node response deadline while its publication stays owned", async () => {
+    const f = await fixture();
     vi.useFakeTimers();
-    const f = fixture();
     const invoked = createDeferred<void>();
     const invokeResult = createDeferred<unknown>();
     vi.mocked(f.runtime.nodes.invoke).mockImplementation(() => {
@@ -602,7 +602,7 @@ describe("Codex catalog list operation", () => {
   });
 
   it("joins a started node sibling before rejecting a fatal publication failure", async () => {
-    const f = fixture();
+    const f = await fixture();
     const held = createDeferred<unknown>();
     const started = createDeferred<void>();
     vi.mocked(f.runtime.nodes.invoke).mockImplementation(() => {
@@ -652,7 +652,7 @@ describe("Codex catalog list operation", () => {
   });
 
   it("disables intermediate handoff after a local page fails", async () => {
-    const f = fixture(2);
+    const f = await fixture(2);
     const surviving = createDeferred<CodexSessionCatalogPage>();
     const survivorStarted = createDeferred<void>();
     f.listPage.mockImplementation(async (home, params) => {

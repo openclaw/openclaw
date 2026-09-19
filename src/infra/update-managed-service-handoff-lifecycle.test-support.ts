@@ -27,6 +27,7 @@ export type ManagedServiceManagerBoundaryOptions = {
   launchdFault?: "wrong-parent" | "missing-restored-pid" | "dead-restored-pid";
   launchdTeardown?: {
     bootoutDelayMs?: number;
+    waitForNativeTimeout?: boolean;
     clockEachCommandMs?: number;
     loadedPrints?: number;
     pendingBootstrapFailures?: number;
@@ -411,7 +412,10 @@ if (${JSON.stringify(kind)} === "systemd") {
 }
   `,
   )};
-  if (action === "bootout" && ${options?.launchdTeardown?.bootoutDelayMs ?? 0}) {
+  if (action === "bootout" && ${Boolean(options?.launchdTeardown?.bootoutDelayMs || options?.launchdTeardown?.waitForNativeTimeout)}) {
+    if (${options?.launchdTeardown?.waitForNativeTimeout === true}) {
+      while (!fs.existsSync(${JSON.stringify(statePath + ".native-timeout")})) sleep(5);
+    }
     await new Promise((resolve) => setTimeout(resolve, ${options?.launchdTeardown?.bootoutDelayMs ?? 0}));
     ${managedServiceStateUpdateScript(statePath, "state.bootoutCompleted = true")};
   }

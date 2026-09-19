@@ -23,6 +23,7 @@ type AgentToolSurfacePlanParams = {
   modelProvider?: string;
   modelId?: string;
   codeModeOverride?: boolean | "auto";
+  disableToolSearch?: true;
   toolsEnabled: boolean;
   disableTools?: boolean;
   isRawModelRun: boolean;
@@ -49,13 +50,18 @@ export function resolveAgentToolSurfacePlan(params: AgentToolSurfacePlanParams) 
       : undefined,
   );
   codeModeConfig.enabled = params.codeModeOverride ?? codeModeConfig.enabled;
-  const toolSearchRuntimeConfig = resolveAgentToolSearchRuntimeConfig({
+  const selectedToolConfig = resolveAgentToolSearchRuntimeConfig({
     config: params.config,
     agentId: params.agentId,
     sessionKey: params.sessionKey,
     completionPrivateMessageOnly,
     model: params.model,
   });
+  // Apply invocation restrictions after selecting the current runtime snapshot;
+  // config rebinding must not put an auxiliary direct-tool run back behind discovery.
+  const toolSearchRuntimeConfig = params.disableToolSearch
+    ? { ...selectedToolConfig, tools: { ...selectedToolConfig?.tools, toolSearch: false as const } }
+    : selectedToolConfig;
   const toolSearchConfig = resolveToolSearchConfig(toolSearchRuntimeConfig);
   const toolsAvailable =
     params.toolsEnabled &&

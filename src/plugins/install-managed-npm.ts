@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { resolveInstallWorkTimeoutMs } from "../infra/install-mode-options.js";
 import {
   installPackageDir,
   requestDeferredPackageDirInstall,
@@ -87,6 +88,7 @@ export async function installPluginFromManagedNpmRoot(
     extensionsDir?: string;
     npmDir?: string;
     timeoutMs?: number;
+    workTimeoutMs?: number | null;
     signal?: AbortSignal;
     logger?: PluginInstallLogger;
     mode?: "install" | "update";
@@ -99,7 +101,7 @@ export async function installPluginFromManagedNpmRoot(
   },
 ): Promise<InstallPluginResult> {
   const runtime = await loadPluginInstallRuntime();
-  const { logger, timeoutMs, mode, dryRun } = runtime.resolveTimedInstallModeOptions(
+  const { logger, timeoutMs, workTimeoutMs, mode, dryRun } = runtime.resolveTimedInstallModeOptions(
     params,
     defaultLogger,
   );
@@ -185,6 +187,7 @@ export async function installPluginFromManagedNpmRoot(
       const repairedOpenClawPeer = await repairManagedNpmRootOpenClawPeer({
         npmRoot,
         timeoutMs,
+        workTimeoutMs,
         signal: params.signal,
         logger,
       });
@@ -222,6 +225,7 @@ export async function installPluginFromManagedNpmRoot(
             managedOverrides,
             omitNpmAliasOverrides,
             timeoutMs,
+            workTimeoutMs,
             signal: params.signal,
           }),
         };
@@ -256,7 +260,7 @@ export async function installPluginFromManagedNpmRoot(
     ];
     const npmInstallOptions = {
       cwd: npmRoot,
-      timeoutMs: Math.max(timeoutMs, 300_000),
+      timeoutMs: resolveInstallWorkTimeoutMs(workTimeoutMs, Math.max(timeoutMs, 300_000)),
       signal: params.signal,
       killProcessTree: true,
       env: createSafeNpmInstallEnv(process.env, {
@@ -437,6 +441,7 @@ export async function installPluginFromManagedNpmRoot(
       const repairedOpenClawPeer = await repairManagedNpmRootOpenClawPeer({
         npmRoot,
         timeoutMs,
+        workTimeoutMs,
         signal: params.signal,
         logger,
       });

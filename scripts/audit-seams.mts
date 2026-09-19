@@ -827,7 +827,7 @@ export function describeSeamKinds(relativePath: string, source: string) {
   }
   if (
     isReplyDeliveryPath &&
-    /blockStreamingEnabled|directlySentBlockKeys|resolveSendableOutboundReplyParts/.test(source) &&
+    /blockStreamingEnabled|directBlockDeliveries|resolveSendableOutboundReplyParts/.test(source) &&
     /\bmediaUrl\b|\bmediaUrls\b/.test(source)
   ) {
     seamKinds.push("streaming-media-handoff");

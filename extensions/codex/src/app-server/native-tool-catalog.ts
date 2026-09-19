@@ -107,7 +107,7 @@ export async function loadCodexNativeToolCatalog(params: {
   if (
     !hasCodexNativeToolCatalog(binding) ||
     !binding.dynamicToolsFingerprint ||
-    appServer.start.transport !== "stdio" ||
+    (appServer.start.transport !== "stdio" && appServer.start.transport !== "unix") ||
     appServer.remoteWorkspaceRoot ||
     !actualHome ||
     path.resolve(actualHome) !== path.resolve(home) ||

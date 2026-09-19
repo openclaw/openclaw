@@ -35,7 +35,7 @@ const [
   { SessionManager: PersistentSessionManager },
   safetyTimeout,
   realSafetyTimeout,
-  { compactionCheckpointStore },
+  checkpointOwner,
   { resolveGatewaySessionStoreTarget },
   { markRuntimeCompactionDelegate },
 ] = await Promise.all([
@@ -47,7 +47,7 @@ const [
   vi.importActual<typeof import("./compaction-safety-timeout.js")>(
     "./compaction-safety-timeout.js",
   ),
-  import("./compaction-checkpoint.js"),
+  import("../../gateway/session-compaction-checkpoints.js"),
   import("../../gateway/session-utils.js"),
   import("../../context-engine/compaction-watchdog.js"),
 ]);
@@ -364,7 +364,7 @@ describe("queued compaction successor ownership", () => {
         expect(hookRunner.runAfterCompaction).not.toHaveBeenCalled();
         expect(maybeCompactAgentHarnessSessionMock).not.toHaveBeenCalled();
       });
-      const persistCheckpoint = vi.spyOn(compactionCheckpointStore, "persistCheckpoint");
+      const persistCheckpoint = vi.spyOn(checkpointOwner, "persistSessionCompactionCheckpoint");
       const pending = compact(compactParams(controller.signal), {
         onCommitted,
         onHostCompactionCommitted,
@@ -748,14 +748,13 @@ describe("queued compaction successor ownership", () => {
         });
         const entered = createDeferred();
         const release = createDeferred();
-        const persistCheckpoint =
-          compactionCheckpointStore.persistCheckpoint.bind(compactionCheckpointStore);
+        const persistCheckpoint = checkpointOwner.persistSessionCompactionCheckpoint;
         const observed = createDeferred<
           | { kind: "returned"; checkpoint: Awaited<ReturnType<typeof persistCheckpoint>> }
           | { kind: "threw"; error: unknown }
         >();
         const persist = vi
-          .spyOn(compactionCheckpointStore, "persistCheckpoint")
+          .spyOn(checkpointOwner, "persistSessionCompactionCheckpoint")
           .mockImplementation(async (params) => {
             entered.resolve();
             await release.promise;

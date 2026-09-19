@@ -87,13 +87,14 @@ function selectGatewayConfigGetResult(snapshot: unknown, path: string | undefine
 }
 
 function createGatewayConfigGetToolResult(result: unknown) {
-  const text = JSON.stringify({ ok: true, result }, null, 2);
+  const payload = { ok: true, result };
+  const text = JSON.stringify(payload, null, 2);
   if (text.length > MAX_GATEWAY_CONFIG_GET_TEXT_CHARS) {
     throw new ToolInputError(
       "config.get response is too large; use path to request a narrower config subtree",
     );
   }
-  return textResult(text, { ok: true });
+  return textResult(text, payload);
 }
 
 function isConfigSchemaPathNotFoundError(error: unknown): boolean {

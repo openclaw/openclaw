@@ -104,35 +104,6 @@ type PersistSessionCompactionCheckpointParams = {
   createdAt?: number;
 };
 
-/**
- * Storage boundary for compaction checkpoint capture, persistence, branch,
- * restore, and cleanup operations.
- */
-type CompactionCheckpointStore = {
-  /** Captures the pre-compaction transcript identity without copying rows/files. */
-  captureSnapshot: typeof captureCompactionCheckpointSnapshotAsync;
-  /** Persists checkpoint metadata and prunes checkpoint artifacts owned by this store. */
-  persistCheckpoint: (
-    params: PersistSessionCompactionCheckpointParams,
-  ) => Promise<SessionCompactionCheckpoint | null>;
-  /** Cleans unpersisted legacy snapshot artifacts after failed persistence. */
-  cleanupSnapshot: typeof cleanupCompactionCheckpointSnapshot;
-  /**
-   * Creates a checkpoint branch and records its session entry in one logical
-   * store mutation.
-   */
-  branchCheckpointSession: (
-    params: BranchCheckpointSessionParams,
-  ) => Promise<CompactionCheckpointSessionMutationResult>;
-  /**
-   * Restores a checkpoint and replaces the current session entry in one logical
-   * store mutation.
-   */
-  restoreCheckpointSession: (
-    params: RestoreCheckpointSessionParams,
-  ) => Promise<CompactionCheckpointSessionMutationResult>;
-};
-
 function checkpointSnapshotPath(checkpoint: SessionCompactionCheckpoint): string | undefined {
   return checkpoint.preCompaction.sessionFile?.trim() || undefined;
 }
@@ -526,7 +497,7 @@ function findCheckpoint(entry: SessionEntry | undefined, checkpointId: string) {
   );
 }
 
-async function branchCheckpointSessionFromStoredBoundary(
+export async function branchCheckpointSessionFromStoredBoundary(
   params: BranchCheckpointSessionParams,
 ): Promise<CompactionCheckpointSessionMutationResult> {
   const entry = loadSessionEntry({
@@ -550,7 +521,7 @@ async function branchCheckpointSessionFromStoredBoundary(
   });
 }
 
-async function restoreCheckpointSessionFromStoredBoundary(
+export async function restoreCheckpointSessionFromStoredBoundary(
   params: RestoreCheckpointSessionParams,
 ): Promise<CompactionCheckpointSessionMutationResult> {
   const entry = loadSessionEntry({
@@ -573,28 +544,11 @@ async function restoreCheckpointSessionFromStoredBoundary(
 }
 
 /**
- * Creates the current file-backed compaction checkpoint domain store.
- *
- * The branch/restore operations own the transcript fork plus session entry
- * update so a SQLite implementation can copy transcript rows and update
- * `session_nodes.entry_json` inside one write transaction.
- */
-export function createFileBackedCompactionCheckpointStore(): CompactionCheckpointStore {
-  return {
-    captureSnapshot: captureCompactionCheckpointSnapshotAsync,
-    persistCheckpoint: persistSessionCompactionCheckpoint,
-    cleanupSnapshot: cleanupCompactionCheckpointSnapshot,
-    branchCheckpointSession: branchCheckpointSessionFromStoredBoundary,
-    restoreCheckpointSession: restoreCheckpointSessionFromStoredBoundary,
-  };
-}
-
-/**
  * Capture the stable pre-compaction identity without duplicating the transcript.
  * Branch/restore uses the compacted successor transcript, while legacy
  * checkpoints that already have a snapshot file keep working.
  */
-async function captureCompactionCheckpointSnapshotAsync(params: {
+export async function captureCompactionCheckpointSnapshotAsync(params: {
   sessionManager?: SessionManagerCheckpointView;
   sessionFile: string;
   sessionTarget?: SessionTranscriptRuntimeTarget;
@@ -654,7 +608,7 @@ async function captureCompactionCheckpointSnapshotAsync(params: {
   };
 }
 
-async function cleanupCompactionCheckpointSnapshot(
+export async function cleanupCompactionCheckpointSnapshot(
   snapshot: CapturedCompactionCheckpointSnapshot | null | undefined,
 ): Promise<void> {
   if (!snapshot?.sessionFile) {
@@ -701,7 +655,7 @@ async function cleanupTrimmedCompactionCheckpointFiles(params: {
   }
 }
 
-async function persistSessionCompactionCheckpoint(
+export async function persistSessionCompactionCheckpoint(
   params: PersistSessionCompactionCheckpointParams,
 ): Promise<SessionCompactionCheckpoint | null> {
   const target = params.sessionTarget;

@@ -367,7 +367,7 @@ export function createChannelIngressDrain<
       },
       onDeferredHeartbeat: () => {
         // A cleared watchdog marks adoption finalization or retired ownership.
-        if (state.phase === "deferred" && state.stallTimer) {
+        if ((state.phase === "dispatching" || state.phase === "deferred") && state.stallTimer) {
           armStallWatchdog(state);
         }
       },

@@ -196,10 +196,12 @@ export function prepareSystemAgentRunAdmission(
   runId: string,
   agentId: string,
   boundary: string,
+  assertSourceCurrent?: () => void,
 ): PreparedAgentRunAdmission {
   return prepareAgentRunAdmission({
     cfg,
     operationalRunInstance: createOperationalRunInstanceRef(runId),
+    assertSourceCurrent,
     facts: {
       runId,
       agentId,

@@ -39,11 +39,11 @@ import { resolveCodexNativeHookRelayEvents } from "./native-hook-relay.js";
 import { isCodexAppServerProfilerEnabled } from "./profiler-flag.js";
 import { ensureCodexWorkspaceDirOnce } from "./run-attempt-lifecycle.js";
 import type { CodexRunAttemptInput } from "./run-attempt-types.js";
+import { scopeCodexRunBindingStore } from "./session-binding-scope.js";
 import {
   createCodexSessionGenerationSupersededError,
   resolveCodexSessionBinding,
   resolveCodexRunSessionBindingAuthority,
-  scopeCodexRunBindingStore,
   sessionBindingIdentity,
   type CodexAppServerBindingIdentity,
   type CodexAppServerThreadBinding,
@@ -231,22 +231,25 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
       "Codex supervision is disabled; refusing to open a native user-home supervised session",
     );
   }
-  const resolveRuntimeOptionsForBinding = (
+  const resolveRuntimeOptionsForBinding = async (
     binding: CodexAppServerThreadBinding | undefined,
     selection: { modelProvider?: string; model?: string },
   ) =>
-    resolveCodexBindingAppServerConnection({
-      binding,
-      pluginConfig,
-      execPolicy,
-      modelProvider: selection.modelProvider,
-      model: selection.model,
-      config: params.config,
-      agentDir,
-      requirementsToml,
-      openClawSandboxActive: sandbox?.enabled === true,
-      sessionPermissionMode: params.permissionMode,
-    }).appServer;
+    (
+      await resolveCodexBindingAppServerConnection({
+        binding,
+        pluginConfig,
+        execPolicy,
+        modelProvider: selection.modelProvider,
+        model: selection.model,
+        config: params.config,
+        agentDir,
+        requirementsToml,
+        openClawSandboxActive: sandbox?.enabled === true,
+        sessionPermissionMode: params.permissionMode,
+        assertCurrent,
+      })
+    ).appServer;
   const initialStartupBindingHadInactiveThreadBootstrap =
     isInactiveThreadBootstrapBinding(startupBinding);
   const appServerHomeScope = resolveCodexAppServerHomeScope({
@@ -315,7 +318,7 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
   };
   let reviewerPolicyContext = resolveReviewerPolicyContext(startupBinding);
   preDynamicStartupStages.mark("auth-profile");
-  let configuredAppServer = resolveRuntimeOptionsForBinding(startupBinding, {
+  let configuredAppServer = await resolveRuntimeOptionsForBinding(startupBinding, {
     modelProvider: reviewerPolicyContext.modelProvider,
     model: reviewerPolicyContext.model,
   });
@@ -428,9 +431,8 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
       binding: startupBinding,
       bindingStore,
       identity: bindingIdentity,
-      sessionFile: params.sessionFile,
       agentDir,
-      codexHome: appServer.start.env?.CODEX_HOME,
+      codexHome: appServer.start.codexHome ?? appServer.start.env?.CODEX_HOME,
       config: params.config,
       contextEngineActive: Boolean(activeContextEngine),
       expectedSessionRuntimeOwnership: params.expectedSessionRuntimeOwnership,
@@ -443,7 +445,7 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
     // cleared or replaced native thread changes its model, policy, or connection.
     if (startupBinding !== startupBindingBeforeRotation) {
       reviewerPolicyContext = resolveReviewerPolicyContext(startupBinding);
-      configuredAppServer = resolveRuntimeOptionsForBinding(startupBinding, {
+      configuredAppServer = await resolveRuntimeOptionsForBinding(startupBinding, {
         modelProvider: reviewerPolicyContext.modelProvider,
         model: reviewerPolicyContext.model,
       });
@@ -473,12 +475,12 @@ export async function prepareCodexAttemptConnection({ params, options }: CodexRu
       // best available sample for sizing the fresh thread's continuity projection.
       continuityCalibration: startupBindingBeforeRotation?.continuityCalibration,
     };
-    const resolveRuntimeOptionsForCurrentBinding = (selection: {
+    const resolveRuntimeOptionsForCurrentBinding = async (selection: {
       modelProvider?: string;
       model?: string;
     }) =>
       resolveFinalAppServer(
-        resolveRuntimeOptionsForBinding(mutable.startupBinding, selection),
+        await resolveRuntimeOptionsForBinding(mutable.startupBinding, selection),
         selection,
       ).appServer;
     assertCurrent();

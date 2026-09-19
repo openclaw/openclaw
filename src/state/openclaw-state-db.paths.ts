@@ -1,7 +1,21 @@
 // State database path helpers resolve shared OpenClaw state DB paths.
+import { statSync } from "node:fs";
 import path from "node:path";
 import { resolveStateDir } from "../config/paths.js";
+import { hasErrnoCode } from "../infra/errno.js";
 import { normalizeWindowsPathPreservingCase } from "../infra/path-guards.js";
+
+export function existingPathOrUndefined(pathname: string): string | undefined {
+  try {
+    statSync(pathname);
+    return pathname;
+  } catch (error) {
+    if (hasErrnoCode(error, "ENOENT")) {
+      return undefined;
+    }
+    throw error;
+  }
+}
 
 /** Resolve the directory that contains the shared state SQLite file. */
 export function resolveOpenClawStateSqliteDir(env: NodeJS.ProcessEnv = process.env): string {

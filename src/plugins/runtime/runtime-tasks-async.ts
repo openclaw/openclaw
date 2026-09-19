@@ -20,13 +20,13 @@ import {
   type ManagedTaskFlowMutation,
 } from "../../tasks/task-flow-registry.records.js";
 import {
-  ensureTaskFlowRegistryReady,
+  ensureTaskFlowRegistryReadyAsync,
   runTaskFlowRegistryWorkerMutation,
 } from "../../tasks/task-flow-runtime-internal.js";
 import { canOwnerAccessTaskAsync } from "../../tasks/task-owner-access.js";
 import {
   runTaskRegistryWorkerMutation,
-  ensureTaskRegistryReady,
+  ensureTaskRegistryReadyAsync,
 } from "../../tasks/task-registry-state.js";
 import type { TaskRecord } from "../../tasks/task-registry.types.js";
 import { normalizeDeliveryContext } from "../../utils/delivery-context.shared.js";
@@ -60,11 +60,11 @@ async function readStore(includeTasks: boolean, includeFlows: boolean) {
   });
   if (includeFlows) {
     context.admission.assertCurrent();
-    ensureTaskFlowRegistryReady({ refreshProjection: false });
+    await ensureTaskFlowRegistryReadyAsync(context);
   }
   if (includeTasks) {
     context.admission.assertCurrent();
-    ensureTaskRegistryReady({ refreshProjection: false });
+    await ensureTaskRegistryReadyAsync(context);
   }
   const store = await import("../../state/openclaw-state-worker-store.js");
   context.admission.assertCurrent();
@@ -240,11 +240,19 @@ function bindManagedFlows(params: Binding): BoundAsyncManagedTaskFlowsRuntime {
         runId: taskInput.runId?.trim(),
         childSessionKey: taskInput.childSessionKey?.trim(),
       };
+      let publicationTask: TaskRecord | undefined;
       const result = await store.runOpenClawStateWorkerOperation(context, (worker) =>
         runTaskRegistryWorkerMutation(
-          { scope, admission: context.admission },
-          () =>
-            worker.execute({
+          {
+            scope,
+            admission: context.admission,
+            publicationRecords: () =>
+              new Map<string, TaskRecord>(
+                publicationTask ? [[publicationTask.taskId, publicationTask]] : [],
+              ),
+          },
+          async () => {
+            const receipt = await worker.execute({
               type: "flows.runTask",
               input: {
                 callerOwnerKey: binding.sessionKey,
@@ -252,7 +260,12 @@ function bindManagedFlows(params: Binding): BoundAsyncManagedTaskFlowsRuntime {
                 taskId: scope.taskId,
                 now: Date.now(),
               },
-            }),
+            });
+            if (receipt.taskMutation === "created" || receipt.taskMutation === "updated") {
+              publicationTask = receipt.task;
+            }
+            return receipt;
+          },
           () => worker.execute({ type: "tasks.mutationSnapshot", input: scope }),
         ),
       );

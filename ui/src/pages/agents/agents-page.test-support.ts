@@ -12,7 +12,7 @@ import { createGatewayMetadataObserver } from "../../app/gateway-observers.ts";
 import type { PanelRefreshStatus } from "../../components/panel-refresh-status.ts";
 import type { AgentsPanel } from "../../lib/agents/panels.ts";
 import { invalidateChatMetadataStore } from "../../lib/chat/chat-metadata-cache.ts";
-import type { CronState } from "../../lib/cron/index.ts";
+import type { CronState } from "../../lib/cron/types.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import type { AgentsRouteData } from "./route.ts";
 

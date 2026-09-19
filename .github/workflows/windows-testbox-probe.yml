@@ -42,6 +42,21 @@ on:
         required: false
         default: false
         type: boolean
+      installed_startup_package:
+        description: "Optional Package Acceptance binding, or {baseline, candidate} bindings for a matched comparison"
+        required: false
+        default: ""
+        type: string
+      startup_node_version:
+        description: "Exact Node version for installed startup only"
+        required: false
+        default: "26.8.2"
+        type: string
+      installed_startup_cpu_diagnostic:
+        description: "Capture one established CPU profile after a fresh prime instead of a timing cohort"
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -54,6 +69,9 @@ jobs:
     name: Windows probe
     runs-on: ${{ inputs.runner_label }}
     timeout-minutes: 75
+    permissions:
+      contents: read
+      actions: read
     defaults:
       run:
         shell: pwsh
@@ -65,6 +83,80 @@ jobs:
           ref: ${{ inputs.target_ref || github.ref }}
           persist-credentials: false
           submodules: false
+
+      - name: Validate installed startup inputs
+        id: startup_input
+        if: ${{ inputs.installed_startup_package != '' || inputs.installed_startup_cpu_diagnostic }}
+        env:
+          STARTUP_PACKAGE: ${{ inputs.installed_startup_package }}
+          STARTUP_NODE_VERSION: ${{ inputs.startup_node_version }}
+          TARGET_REF: ${{ inputs.target_ref }}
+          RUN_WINDOWS_CI: ${{ inputs.run_windows_ci }}
+          CPU_DIAGNOSTIC: ${{ inputs.installed_startup_cpu_diagnostic }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          if ([string]::IsNullOrEmpty($env:STARTUP_PACKAGE)) { throw "CPU diagnostics require an installed package binding." }
+          if ($env:RUN_WINDOWS_CI -eq "true") { throw "Installed startup and Windows CI are separate runs." }
+          if ($env:TARGET_REF -cnotmatch '^[0-9a-f]{40}$') { throw "Installed startup requires an exact tooling target_ref." }
+          if ($env:STARTUP_NODE_VERSION -notmatch '^\d+\.\d+\.\d+$') { throw "Installed startup requires an exact Node version." }
+          $toolingSha = (git rev-parse HEAD).Trim()
+          if ($LASTEXITCODE -ne 0 -or $toolingSha -cne $env:TARGET_REF) { throw "Tooling checkout differs from target_ref." }
+          $selection = $env:STARTUP_PACKAGE | ConvertFrom-Json
+          $paired = $selection.PSObject.Properties.Name -contains "baseline" -or $selection.PSObject.Properties.Name -contains "candidate"
+          if ($paired -and $env:CPU_DIAGNOSTIC -eq "true") { throw "CPU diagnostics require one package, not a comparison." }
+          $packages = [ordered]@{ baseline = $selection }
+          if ($paired) {
+            if (-not $selection.baseline -or -not $selection.candidate) { throw "Comparison requires both baseline and candidate bindings." }
+            $packages = [ordered]@{ baseline = $selection.baseline; candidate = $selection.candidate }
+          }
+          $evidence = Join-Path $env:GITHUB_WORKSPACE ".artifacts/windows-installed-startup"
+          New-Item -ItemType Directory -Path $evidence | Out-Null
+          foreach ($arm in $packages.Keys) {
+            $binding = $packages[$arm]
+            foreach ($field in @("runId", "runAttempt", "artifactId")) {
+              if ([string]$binding.$field -notmatch '^[1-9][0-9]*$') { throw "Invalid package identity field: $field" }
+            }
+            foreach ($field in @("sourceSha", "workflowSha")) {
+              if ([string]$binding.$field -cnotmatch '^[0-9a-f]{40}$') { throw "Invalid package identity field: $field" }
+            }
+            if ($binding.packageSha256 -cnotmatch '^[0-9a-f]{64}$' -or $binding.artifactDigest -cnotmatch '^sha256:[0-9a-f]{64}$') { throw "Invalid package digest." }
+            $producerRaw = gh api "repos/$env:GITHUB_REPOSITORY/actions/runs/$($binding.runId)"
+            if ($LASTEXITCODE -ne 0) { throw "Cannot inspect package producer." }
+            $producer = ($producerRaw -join "`n") | ConvertFrom-Json
+            if ($producer.run_attempt -ne $binding.runAttempt -or $producer.head_sha -cne $binding.workflowSha -or $producer.conclusion -ne "success" -or $producer.path -ne ".github/workflows/package-acceptance.yml") { throw "Package Acceptance producer does not match the binding." }
+            $artifactRaw = gh api "repos/$env:GITHUB_REPOSITORY/actions/artifacts/$($binding.artifactId)"
+            if ($LASTEXITCODE -ne 0) { throw "Cannot inspect package artifact." }
+            $artifact = ($artifactRaw -join "`n") | ConvertFrom-Json
+            if ($artifact.expired -or $artifact.digest -cne $binding.artifactDigest -or $artifact.workflow_run.id -ne $binding.runId -or $artifact.name -cne "package-under-test-$($binding.runId)-$($binding.runAttempt)") { throw "Package artifact does not match the binding." }
+            $prefix = if ($paired) { "$arm-" } else { "" }
+            $binding | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Join-Path $evidence "${prefix}package-binding.json")
+            $producer | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath (Join-Path $evidence "${prefix}producer.json")
+            $artifact | ConvertTo-Json -Depth 20 | Set-Content -LiteralPath (Join-Path $evidence "${prefix}artifact.json")
+            $outputPrefix = if ($arm -eq "candidate") { "comparison_" } else { "" }
+            "${outputPrefix}artifact_id=$($binding.artifactId)" >> $env:GITHUB_OUTPUT
+            "${outputPrefix}run_id=$($binding.runId)" >> $env:GITHUB_OUTPUT
+          }
+          $packages | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Join-Path $evidence "packages.json")
+          "tooling_sha=$toolingSha" >> $env:GITHUB_OUTPUT
+
+      - name: Download installed startup package
+        if: ${{ inputs.installed_startup_package != '' }}
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          artifact-ids: ${{ steps.startup_input.outputs.artifact_id }}
+          run-id: ${{ steps.startup_input.outputs.run_id }}
+          github-token: ${{ github.token }}
+          path: ${{ runner.temp }}/startup-package-input
+
+      - name: Download comparison startup package
+        if: ${{ steps.startup_input.outputs.comparison_artifact_id != '' }}
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        with:
+          artifact-ids: ${{ steps.startup_input.outputs.comparison_artifact_id }}
+          run-id: ${{ steps.startup_input.outputs.comparison_run_id }}
+          github-token: ${{ github.token }}
+          path: ${{ runner.temp }}/startup-package-comparison-input
 
       - name: Probe native Windows
         env:
@@ -226,10 +318,10 @@ jobs:
 
       - &windows_node
         name: Setup Node.js
-        if: ${{ inputs.run_windows_ci }}
+        if: ${{ inputs.run_windows_ci || inputs.installed_startup_package != '' }}
         shell: bash
         env:
-          REQUESTED_NODE_VERSION: "24.x"
+          REQUESTED_NODE_VERSION: ${{ inputs.installed_startup_package != '' && inputs.startup_node_version || '24.x' }}
         run: |
           set -euo pipefail
           source .github/actions/setup-pnpm-store-cache/ensure-node.sh
@@ -237,15 +329,15 @@ jobs:
 
       - &windows_pnpm
         name: Setup pnpm
-        if: ${{ inputs.run_windows_ci }}
+        if: ${{ inputs.run_windows_ci || inputs.installed_startup_package != '' }}
         uses: ./.github/actions/setup-pnpm-store-cache
         with:
           cache-mode: restore
-          node-version: 24.x
+          node-version: ${{ inputs.installed_startup_package != '' && inputs.startup_node_version || '24.x' }}
 
       - &windows_versions
         name: Runtime versions
-        if: ${{ inputs.run_windows_ci }}
+        if: ${{ inputs.run_windows_ci || inputs.installed_startup_package != '' }}
         shell: bash
         run: |
           node -v
@@ -254,7 +346,7 @@ jobs:
 
       - &windows_node_path
         name: Capture node path
-        if: ${{ inputs.run_windows_ci }}
+        if: ${{ inputs.run_windows_ci || inputs.installed_startup_package != '' }}
         shell: bash
         run: |
           node_bin="$(dirname "$(node -p 'process.execPath')")"
@@ -265,7 +357,7 @@ jobs:
 
       - &windows_install
         name: Install dependencies
-        if: ${{ inputs.run_windows_ci }}
+        if: ${{ inputs.run_windows_ci || inputs.installed_startup_package != '' }}
         shell: bash
         env:
           CI: true
@@ -275,6 +367,90 @@ jobs:
           node -v
           pnpm -v
           pnpm install --frozen-lockfile --prefer-offline --config.ignore-scripts=false --config.engine-strict=false --config.enable-pre-post-scripts=true --config.side-effects-cache=true || pnpm install --frozen-lockfile --prefer-offline --config.ignore-scripts=false --config.engine-strict=false --config.enable-pre-post-scripts=true --config.side-effects-cache=true
+
+      - name: Prove installed benchmark lifecycle
+        if: ${{ inputs.installed_startup_package != '' }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          node scripts/run-vitest.mjs test/scripts/bench-gateway-installed.test.ts
+          if ($LASTEXITCODE -ne 0) { throw "Installed benchmark lifecycle proof failed." }
+
+      - name: Install and bind startup candidate
+        if: ${{ inputs.installed_startup_package != '' }}
+        env:
+          TOOLING_SHA: ${{ steps.startup_input.outputs.tooling_sha }}
+          STARTUP_NODE_VERSION: ${{ inputs.startup_node_version }}
+          WORKFLOW_SHA: ${{ github.workflow_sha }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          $evidence = Join-Path $env:GITHUB_WORKSPACE ".artifacts/windows-installed-startup"
+          $packages = Get-Content -LiteralPath (Join-Path $evidence "packages.json") -Raw | ConvertFrom-Json -AsHashtable
+          $paired = $packages.Contains("candidate")
+          $records = [ordered]@{}
+          $nodePath = (node -p 'process.execPath').Trim()
+          $nodeVersion = (node --version).Trim()
+          if ($nodeVersion -cne "v$env:STARTUP_NODE_VERSION") { throw "Installed startup Node version differs." }
+          foreach ($arm in $packages.Keys) {
+            $binding = $packages[$arm]
+            $prefix = if ($paired) { "$arm-" } else { "" }
+            $armRoot = if ($paired) { Join-Path $env:RUNNER_TEMP "startup-comparison/$arm" } else { $env:RUNNER_TEMP }
+            $candidateDir = Join-Path $armRoot "startup-package-resolved"
+            $artifactDir = Join-Path $env:RUNNER_TEMP $(if ($arm -eq "candidate") { "startup-package-comparison-input" } else { "startup-package-input" })
+            node --import ./scripts/tsx.mjs scripts/resolve-openclaw-package-candidate.mts --source artifact --artifact-dir $artifactDir --package-sha256 $binding.packageSha256 --output-dir $candidateDir --metadata (Join-Path $candidateDir "package-candidate.json")
+            if ($LASTEXITCODE -ne 0) { throw "Canonical package resolution failed." }
+            $candidate = Get-Content -LiteralPath (Join-Path $candidateDir "package-candidate.json") -Raw | ConvertFrom-Json
+            if ($candidate.packageSourceSha -cne $binding.sourceSha -or $candidate.sha256 -cne $binding.packageSha256) { throw "Resolved source or package bytes differ." }
+            Copy-Item -LiteralPath (Join-Path $candidateDir "package-candidate.json") -Destination (Join-Path $evidence "${prefix}package-candidate.json")
+            $tarball = (Resolve-Path -LiteralPath $candidate.tarball).Path
+            $installRoot = Join-Path $armRoot "startup-package-installed"
+            New-Item -ItemType Directory -Path $installRoot | Out-Null
+            npm install --prefix $installRoot --no-audit --no-fund --ignore-scripts=false $tarball
+            if ($LASTEXITCODE -ne 0) { throw "Normal npm installation failed." }
+            npm rebuild --prefix $installRoot --ignore-scripts=false
+            if ($LASTEXITCODE -ne 0) { throw "Normal npm rebuild failed." }
+            $packageRoot = Join-Path $installRoot "node_modules/openclaw"
+            foreach ($marker in @(".openclaw-lifecycle-pending", "dist/openclaw-install-guard")) {
+              if (Test-Path -LiteralPath (Join-Path $packageRoot $marker)) { throw "Installed lifecycle has not settled: $marker" }
+            }
+            $packageLock = Join-Path $installRoot "package-lock.json"
+            $packageLockHash = (Get-FileHash -LiteralPath $packageLock -Algorithm SHA256).Hash.ToLowerInvariant()
+            Copy-Item -LiteralPath $packageLock -Destination (Join-Path $evidence "${prefix}installed-package-lock.json")
+            $records[$arm] = [ordered]@{
+              sourceSha = $binding.sourceSha; toolingSha = $env:TOOLING_SHA
+              tarball = $tarball; candidate = $candidate; installRoot = $installRoot
+              stateRoot = (Join-Path $armRoot "startup-cohort-state")
+              runtime = @{ version = $nodeVersion; sha256 = (Get-FileHash -LiteralPath $nodePath -Algorithm SHA256).Hash.ToLowerInvariant() }
+              artifact = @{ id = $binding.artifactId; runId = $binding.runId; runAttempt = $binding.runAttempt; workflowSha = $binding.workflowSha; digest = $binding.artifactDigest }
+            }
+            @{ workflowSha = $env:WORKFLOW_SHA; toolingSha = $env:TOOLING_SHA; packageSourceSha = $binding.sourceSha; installedPackageLockSha256 = $packageLockHash; runner = $env:RUNNER_NAME; node = $nodeVersion; nodePath = $nodePath } | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $evidence "${prefix}execution.json")
+          }
+          $inputRecord = $records.baseline
+          if ($paired) { $inputRecord.comparison = $records.candidate }
+          $inputRecord | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath (Join-Path $evidence "input.json")
+
+      - name: Measure installed startup cohort
+        if: ${{ inputs.installed_startup_package != '' }}
+        env:
+          CPU_DIAGNOSTIC: ${{ inputs.installed_startup_cpu_diagnostic }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          $diagnosticArgs = @()
+          if ($env:CPU_DIAGNOSTIC -eq "true") { $diagnosticArgs = @("--installed-cpu-diagnostic") }
+          node --import ./scripts/tsx.mjs scripts/bench-gateway-startup.ts --installed-cohort .artifacts/windows-installed-startup/input.json --output .artifacts/windows-installed-startup/results.json @diagnosticArgs 2>&1 | Tee-Object -FilePath .artifacts/windows-installed-startup/cohort.log
+          if ($LASTEXITCODE -ne 0) { throw "Installed startup cohort failed; retain every sample and cleanup result." }
+
+      - name: Upload installed startup evidence
+        if: ${{ always() && inputs.installed_startup_package != '' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: windows-installed-startup-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            .artifacts/windows-installed-startup/*.json
+            .artifacts/windows-installed-startup/*.log
+            .artifacts/windows-installed-startup/results.json.profiles/*.cpuprofile
+            .artifacts/windows-installed-startup/results.json.profiles/*.json
+          if-no-files-found: error
+          retention-days: 7
 
       - name: Run Windows CI tests
         if: ${{ inputs.run_windows_ci }}

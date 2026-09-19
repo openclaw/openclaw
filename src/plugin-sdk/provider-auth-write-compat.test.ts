@@ -1,10 +1,11 @@
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, describe, expect, expectTypeOf, it } from "vitest";
+import { afterEach, describe, expect, expectTypeOf, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { loadPersistedAuthProfileStore } from "../agents/auth-profiles/persisted.js";
 import { resolveAuthProfileDatabasePath } from "../agents/auth-profiles/sqlite.js";
 import { saveAuthProfileStore } from "../agents/auth-profiles/store-runtime.js";
+import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
@@ -26,7 +27,7 @@ afterEach(() => {
 });
 
 describe("provider auth write compatibility", () => {
-  it("keeps the shipped upsert parameter fields on both SDK subpaths", () => {
+  it("keeps the shipped write parameter contracts on both SDK subpaths", () => {
     type ShippedFields = "profileId" | "credential" | "agentDir" | "stateDir";
     expectTypeOf<
       keyof Parameters<typeof upsertAuthProfileWithLock>[0]
@@ -37,6 +38,28 @@ describe("provider auth write compatibility", () => {
     expectTypeOf<
       keyof Parameters<typeof upsertAuthProfileWithLockOrThrow>[0]
     >().toEqualTypeOf<ShippedFields>();
+    expectTypeOf<
+      Parameters<Parameters<typeof updateAuthProfileStoreWithLock>[0]["updater"]>
+    >().toEqualTypeOf<[AuthProfileStore]>();
+  });
+
+  it("passes only the auth store to the public updater callback", async () => {
+    const root = tempDirs.make("openclaw-provider-auth-callback-");
+    const agentDir = path.join(root, "agents", "work", "agent");
+    fs.mkdirSync(agentDir, { recursive: true });
+    const updater = vi.fn((store: AuthProfileStore) => {
+      store.profiles["sample:new"] = { type: "api_key", provider: "sample", key: "synthetic-key" };
+      return true;
+    });
+    await updateAuthProfileStoreWithLock({ agentDir, updater });
+    expect(updater).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ version: 1, profiles: expect.any(Object) }),
+    );
+    expect(loadPersistedAuthProfileStore(agentDir)?.profiles["sample:new"]).toEqual({
+      type: "api_key",
+      provider: "sample",
+      key: "synthetic-key",
+    });
   });
 
   it.each([

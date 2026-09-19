@@ -472,9 +472,19 @@ describe("plugin management Featured authority", () => {
   });
 
   it.each([
-    { id: "workboard", name: "Workboard", packageName: "@openclaw/workboard" },
-    { id: "memory-wiki", name: "Memory Wiki", packageName: "@openclaw/memory-wiki" },
-  ])("keeps local curation for private bundled-only $name", async (plugin) => {
+    {
+      id: "workboard",
+      name: "Workboard",
+      packageName: "@openclaw/workboard",
+      featured: true,
+    },
+    {
+      id: "memory-wiki",
+      name: "Memory Wiki",
+      packageName: "@openclaw/memory-wiki",
+      featured: false,
+    },
+  ])("resolves bundled $name curation from its publication state", async (plugin) => {
     mocks.metadata.mockReturnValue(metadataSnapshot(plugin));
     mocks.officialCatalog.mockResolvedValue(
       hostedCatalog([
@@ -495,7 +505,7 @@ describe("plugin management Featured authority", () => {
         id: plugin.id,
         name: plugin.name,
         packageName: plugin.packageName,
-        featured: true,
+        featured: plugin.featured,
         order: 10,
       }),
     ]);

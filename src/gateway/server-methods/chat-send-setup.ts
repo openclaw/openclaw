@@ -13,10 +13,16 @@ export async function prepareAndAdmitChatSend(
     respond,
     context,
     client,
+    hasCurrentClientAuthority,
     sessionMutationAuthorization,
   }: Pick<
     GatewayRequestHandlerOptions,
-    "params" | "respond" | "context" | "client" | "sessionMutationAuthorization"
+    | "params"
+    | "respond"
+    | "context"
+    | "client"
+    | "hasCurrentClientAuthority"
+    | "sessionMutationAuthorization"
   >,
   onAdmissionOwned?: () => Promise<boolean>,
   options?: {
@@ -24,6 +30,15 @@ export async function prepareAndAdmitChatSend(
     goalResume?: SessionGoalOperation & { action: "resume" };
   },
 ) {
+  const assertCurrent =
+    sessionMutationAuthorization || hasCurrentClientAuthority
+      ? () => {
+          sessionMutationAuthorization?.assertCurrent();
+          if (hasCurrentClientAuthority?.() === false) {
+            throw new Error("Gateway caller authority is no longer active.");
+          }
+        }
+      : undefined;
   const normalizedRequest = normalizeChatSendRequest({
     params,
     client,
@@ -84,7 +99,7 @@ export async function prepareAndAdmitChatSend(
     respond,
     context,
     client,
-    assertCurrent: sessionMutationAuthorization?.assertCurrent,
+    assertCurrent,
   });
   if (!shouldAdmit) {
     return undefined;
@@ -96,7 +111,8 @@ export async function prepareAndAdmitChatSend(
     context,
     client,
     onAdmissionOwned,
-    assertCurrent: sessionMutationAuthorization?.assertCurrent,
+    hasCurrentClientAuthority,
+    assertCurrent,
   });
   if (!admitted.ok) {
     return undefined;

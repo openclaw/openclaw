@@ -217,9 +217,10 @@ def establish_ancestry():
             if result is not None:
                 return result
         current_count = reachable_commit_count(source_sha, target_sha)
-        if current_count < previous_count or (
-            current_count == previous_count and current_boundaries == previous_boundaries
-        ):
+        # Deepening merged history can replace shallow cuts and temporarily
+        # hide previously visible commits. A changed frontier is progress even
+        # when its reachable count shrinks; only unchanged cuts can be stuck.
+        if current_count <= previous_count and current_boundaries == previous_boundaries:
             print("::error::Release ancestry fetch completed without ancestry progress.", flush=True)
             return 125
         previous_count = current_count

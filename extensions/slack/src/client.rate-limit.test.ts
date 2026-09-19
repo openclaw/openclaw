@@ -212,6 +212,34 @@ describe("Slack explicit rate-limit recovery", () => {
     },
   );
 
+  it("revalidates direct-delivery authority before a refused write is retried", async () => {
+    let authorized = true;
+    let attempts = 0;
+    const client = createSlackWriteClient(
+      "synthetic-live-authority-fixture",
+      {
+        fetch: async () => {
+          attempts += 1;
+          authorized = false;
+          return new Response("rate limited", {
+            status: 429,
+            headers: { "retry-after": "0" },
+          });
+        },
+      },
+      () => {
+        if (!authorized) {
+          throw new Error("direct delivery is no longer active");
+        }
+      },
+    );
+
+    await expect(
+      client.apiCall("chat.postMessage", { channel: "CFIXTURE", text: "answer" }),
+    ).rejects.toThrow("direct delivery is no longer active");
+    expect(attempts).toBe(1);
+  });
+
   it.each([
     { header: "0", calls: 3 },
     { header: "invalid", calls: 1 },

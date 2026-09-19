@@ -8,6 +8,7 @@ import { findChatChannelMeta } from "../channels/chat-meta.js";
 import { normalizeChatChannelId } from "../channels/ids.js";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
 import { normalizePluginsConfig } from "../plugins/config-state.js";
+import { findUninspectedPluginDiagnostic } from "../plugins/discovery-availability.js";
 import { hasExplicitManifestOwnerTrust } from "../plugins/manifest-owner-policy.js";
 import type { PluginManifestRegistry } from "../plugins/manifest-registry.types.js";
 import { isNativeSessionCatalogOptOutOnly } from "../plugins/native-session-catalog-config.js";
@@ -280,7 +281,10 @@ export function materializePluginAutoEnableCandidatesInternal(params: {
   const changes: string[] = [];
   const autoEnabledReasons = new Map<string, string[]>();
 
-  if (next.plugins?.enabled === false) {
+  if (
+    next.plugins?.enabled === false ||
+    findUninspectedPluginDiagnostic(params.manifestRegistry.diagnostics)
+  ) {
     return { config: next, changes, autoEnabledReasons: {} };
   }
 

@@ -1,7 +1,11 @@
 import type { MemoryEntryProvenance } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { applyImportanceMultiplier } from "./importance.js";
 import { applyMMRToHybridResults, type MMRConfig, DEFAULT_MMR_CONFIG } from "./mmr.js";
-import { applyProjectRanking, projectScoreMultiplier } from "./project-ranking.js";
+import {
+  applyProjectRanking,
+  prepareActiveProjectKeys,
+  projectScoreMultiplier,
+} from "./project-ranking.js";
 import {
   applyTemporalDecayToHybridResults,
   type TemporalDecayConfig,
@@ -238,23 +242,23 @@ export async function mergeHybridResults<TSource extends HybridSource>(params: {
     sessionSourceMtimes: params.sessionSourceMtimes,
     nowMs: params.nowMs,
   });
-  const rankable = applyProjectRanking(
-    applyImportanceMultiplier(decayed),
-    params.activeProjectKeys,
-  ).map((entry) => {
-    // Exact tiers and recall-only LIKE hits keep their public confidence;
-    // their private ranking score still includes every weighting pass.
-    const rankingScore = entry.score;
-    return Object.assign(entry, {
-      rankingScore,
-      score:
-        entry.exactPathSpecificity > 0
-          ? projectScoreMultiplier(entry.projectKey, params.activeProjectKeys)
-          : entry.contentScore === 0
-            ? 0
-            : entry.score,
-    });
-  });
+  const activeProjects = prepareActiveProjectKeys(params.activeProjectKeys);
+  const rankable = applyProjectRanking(applyImportanceMultiplier(decayed), activeProjects).map(
+    (entry) => {
+      // Exact tiers and recall-only LIKE hits keep their public confidence;
+      // their private ranking score still includes every weighting pass.
+      const rankingScore = entry.score;
+      return Object.assign(entry, {
+        rankingScore,
+        score:
+          entry.exactPathSpecificity > 0
+            ? projectScoreMultiplier(entry.projectKey, activeProjects)
+            : entry.contentScore === 0
+              ? 0
+              : entry.score,
+      });
+    },
+  );
   const compareRankingScores = (a: (typeof rankable)[number], b: (typeof rankable)[number]) =>
     b.rankingScore - a.rankingScore ||
     b.lexicalRank - a.lexicalRank ||
@@ -276,7 +280,7 @@ export async function mergeHybridResults<TSource extends HybridSource>(params: {
       mmrConfig,
     ).map((entry) =>
       Object.assign(entry, {
-        score: projectScoreMultiplier(entry.projectKey, params.activeProjectKeys),
+        score: projectScoreMultiplier(entry.projectKey, activeProjects),
       }),
     );
   };

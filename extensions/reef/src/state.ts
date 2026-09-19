@@ -1,26 +1,15 @@
-import { createHash, randomUUID } from "node:crypto";
-import { gcm } from "@noble/ciphers/aes.js";
-import { concatBytes, randomBytes } from "@noble/hashes/utils.js";
+import { randomBytes } from "@noble/hashes/utils.js";
 import type { PluginRuntime } from "openclaw/plugin-sdk/core";
 import type {
+  OpenKeyedStoreOptions,
   PluginStateKeyedStore,
   PluginStateSyncKeyedStore,
 } from "openclaw/plugin-sdk/plugin-state-runtime";
 // Import from defining modules, not the protocol barrel: index.js re-exports
 // guard-adapters, whose provider-http graph doctor enumeration must not cold-load.
-import { canonicalBytes } from "../protocol/canonical.js";
-import { base64, base64url, decodeUtf8, fromBase64, fromBase64url } from "../protocol/encoding.js";
-import {
-  REEF_ENVELOPE_MAX_AGE_SECONDS,
-  validateMessageBody,
-  type CompletedReplay,
-  type MessageBody,
-  type ReplayClaim,
-  type ReplayStore,
-} from "../protocol/envelope.js";
+import { base64url, fromBase64url } from "../protocol/encoding.js";
 import { generateIdentity } from "../protocol/identity.js";
 import type { ReviewApproval, ReviewRequest } from "../protocol/pipeline.js";
-import type { SignedReceipt } from "../protocol/receipts.js";
 import { openReefAuditStore } from "./audit-state.js";
 import {
   parseReefIdentityBinding,
@@ -29,6 +18,7 @@ import {
   REEF_REGISTRATION_MAX_ENTRIES,
   type ReefIdentityBinding,
 } from "./registration-state.js";
+import { ReefSqliteReplayStore, REEF_REPLAY_TTL_MS } from "./replay-store.js";
 import type { ReefKeys } from "./types.js";
 
 export * from "./audit-state.js";
@@ -43,9 +33,6 @@ export const REEF_KEYS_MIGRATION_MAX_ENTRIES = 1;
 export const REEF_DURABLE_MIGRATION_NAMESPACE = "durable-migration";
 export const REEF_DURABLE_MIGRATION_KEY = "legacy-files";
 export const REEF_DURABLE_MIGRATION_MAX_ENTRIES = 1;
-export const REEF_REPLAY_NAMESPACE = "replay";
-export const REEF_REPLAY_MAX_ENTRIES = 3_000;
-export const REEF_REPLAY_TTL_MS = (REEF_ENVELOPE_MAX_AGE_SECONDS + 24 * 60 * 60) * 1_000;
 export const REEF_REVIEWS_NAMESPACE = "reviews";
 export const REEF_REVIEWS_MAX_ENTRIES = 2_000;
 export const REEF_DELIVERED_NAMESPACE = "delivered";
@@ -54,19 +41,6 @@ export const REEF_DELIVERED_TTL_MS = REEF_REPLAY_TTL_MS;
 const REEF_INBOX_CURSOR_NAMESPACE = "inbox-cursor";
 const REEF_INBOX_CURSOR_KEY = "current";
 const REEF_INBOX_CURSOR_MAX_ENTRIES = 1;
-
-export type ReefReplayRecord = {
-  peer: string;
-  id: string;
-  envelopeHash: string;
-  state: "available" | "in_flight" | "completed" | "consumed";
-  claimOwner?: string;
-  claimExpiresAt?: number;
-  receipt?: SignedReceipt;
-  body?: { enc: string };
-};
-
-const REEF_REPLAY_CLAIM_LEASE_MS = 5 * 60_000;
 
 export type ReefReviewRecord = { review: ReviewRequest; approved?: boolean };
 
@@ -172,257 +146,9 @@ export async function loadKeys(runtime: PluginRuntime): Promise<ReefKeys> {
   return parseReefKeys(value);
 }
 
-export function reefReplayStoreKey(peer: string, id: string): string {
-  return `binding:${createHash("sha256")
-    .update(JSON.stringify([peer, id]))
-    .digest("hex")}`;
-}
-
-function parseReplayRecord(value: ReefReplayRecord | undefined): ReefReplayRecord | undefined {
-  if (!value) {
-    return undefined;
-  }
-  if (
-    typeof value.peer !== "string" ||
-    typeof value.id !== "string" ||
-    typeof value.envelopeHash !== "string" ||
-    !["available", "in_flight", "completed", "consumed"].includes(value.state) ||
-    (value.state === "in_flight" &&
-      (typeof value.claimOwner !== "string" ||
-        value.claimOwner.length === 0 ||
-        !Number.isSafeInteger(value.claimExpiresAt) ||
-        (value.claimExpiresAt ?? 0) <= 0))
-  ) {
-    throw new Error("invalid Reef replay state");
-  }
-  return value;
-}
-
-function encryptReplayBody(
-  body: MessageBody,
-  key: Uint8Array,
-  rng: (length: number) => Uint8Array,
-): { enc: string } {
-  validateMessageBody(body);
-  const nonce = rng(12);
-  if (nonce.length !== 12) {
-    throw new Error("replay body rng returned invalid nonce");
-  }
-  return { enc: base64(concatBytes(nonce, gcm(key, nonce).encrypt(canonicalBytes(body)))) };
-}
-
-function decryptReplayBody(body: { enc: string }, key: Uint8Array): MessageBody {
-  const packed = fromBase64(body.enc);
-  if (packed.length < 28) {
-    throw new Error("invalid encrypted replay body");
-  }
-  const value = JSON.parse(
-    decodeUtf8(gcm(key, packed.slice(0, 12)).decrypt(packed.slice(12))),
-  ) as unknown;
-  validateMessageBody(value);
-  return value;
-}
-
-function validateReplayCompletion(receipt: SignedReceipt, body: MessageBody | undefined): void {
-  if ((receipt.status === "accepted") !== (body !== undefined)) {
-    throw new Error("accepted replay completion requires body; rejected completion forbids body");
-  }
-}
-
-class ReefSqliteReplayStore implements ReplayStore {
-  readonly #bodyKey: Uint8Array;
-  readonly #rng: (length: number) => Uint8Array;
-  readonly #store: PluginStateSyncKeyedStore<ReefReplayRecord>;
-  readonly #claimOwners = new Map<string, string>();
-
-  constructor(
-    runtime: PluginRuntime,
-    bodyKey: Uint8Array,
-    rng: (length: number) => Uint8Array = randomBytes,
-    maxEntries = REEF_REPLAY_MAX_ENTRIES,
-  ) {
-    if (bodyKey.length !== 32) {
-      throw new Error("replay body key must be 32 bytes");
-    }
-    this.#bodyKey = bodyKey.slice();
-    this.#rng = rng;
-    this.#store = runtime.state.openSyncKeyedStore<ReefReplayRecord>({
-      namespace: REEF_REPLAY_NAMESPACE,
-      maxEntries,
-      overflowPolicy: "reject-new",
-      // Once this expires, the protocol rejects the original envelope by age.
-      // The margin covers clock skew and delayed local processing.
-      defaultTtlMs: REEF_REPLAY_TTL_MS,
-    });
-  }
-
-  #update(
-    peer: string,
-    id: string,
-    updateValue: (current: ReefReplayRecord | undefined) => ReefReplayRecord | undefined,
-  ): boolean {
-    const update = this.#store.update;
-    if (!update) {
-      throw new Error("Reef replay state requires atomic plugin-state updates");
-    }
-    return update(reefReplayStoreKey(peer, id), (current) =>
-      updateValue(parseReplayRecord(current)),
-    );
-  }
-
-  async claim(peer: string, id: string, envelopeHash: string): Promise<ReplayClaim> {
-    const key = reefReplayStoreKey(peer, id);
-    let result: ReplayClaim = "new";
-    const owner = randomUUID();
-    const claimExpiresAt = Date.now() + REEF_REPLAY_CLAIM_LEASE_MS;
-    this.#update(peer, id, (existing) => {
-      if (!existing) {
-        return {
-          peer,
-          id,
-          envelopeHash,
-          state: "in_flight",
-          claimOwner: owner,
-          claimExpiresAt,
-        };
-      }
-      if (existing.peer !== peer || existing.id !== id || existing.envelopeHash !== envelopeHash) {
-        result = "mismatch";
-        return existing;
-      }
-      if (existing.state === "completed" || existing.state === "consumed") {
-        result = "duplicate";
-        return existing;
-      }
-      if (existing.state === "in_flight" && (existing.claimExpiresAt ?? 0) > Date.now()) {
-        result = "in_flight";
-        return existing;
-      }
-      return {
-        ...existing,
-        state: "in_flight",
-        claimOwner: owner,
-        claimExpiresAt,
-      };
-    });
-    if (result === "new") {
-      this.#claimOwners.set(key, owner);
-    }
-    return result;
-  }
-
-  async refresh(peer: string, id: string): Promise<void> {
-    const key = reefReplayStoreKey(peer, id);
-    const owner = this.#claimOwners.get(key);
-    let refreshed = false;
-    if (owner) {
-      this.#update(peer, id, (existing) => {
-        if (existing?.state !== "in_flight" || existing.claimOwner !== owner) {
-          return existing;
-        }
-        refreshed = true;
-        return { ...existing, claimExpiresAt: Date.now() + REEF_REPLAY_CLAIM_LEASE_MS };
-      });
-    }
-    if (!refreshed) {
-      this.#claimOwners.delete(key);
-      throw new Error("replay claim is not in flight");
-    }
-  }
-
-  async complete(
-    peer: string,
-    id: string,
-    receipt: SignedReceipt,
-    body?: MessageBody,
-  ): Promise<void> {
-    if (receipt.id !== id) {
-      throw new Error("receipt id does not match replay claim");
-    }
-    validateReplayCompletion(receipt, body);
-    const key = reefReplayStoreKey(peer, id);
-    const owner = this.#claimOwners.get(key);
-    let completed = false;
-    this.#update(peer, id, (existing) => {
-      if (existing?.state !== "in_flight" || existing.claimOwner !== owner) {
-        return existing;
-      }
-      completed = true;
-      const { claimOwner: _claimOwner, claimExpiresAt: _claimExpiresAt, ...rest } = existing;
-      return {
-        ...rest,
-        state: "completed",
-        receipt: structuredClone(receipt),
-        ...(body ? { body: encryptReplayBody(body, this.#bodyKey, this.#rng) } : {}),
-      };
-    });
-    if (!completed) {
-      throw new Error("replay claim is not in flight");
-    }
-    this.#claimOwners.delete(key);
-  }
-
-  async consume(peer: string, id: string): Promise<void> {
-    const key = reefReplayStoreKey(peer, id);
-    const owner = this.#claimOwners.get(key);
-    let consumed = false;
-    this.#update(peer, id, (existing) => {
-      if (existing?.state !== "in_flight" || existing.claimOwner !== owner) {
-        return existing;
-      }
-      consumed = true;
-      const {
-        receipt: _receipt,
-        body: _body,
-        claimOwner: _claimOwner,
-        claimExpiresAt: _claimExpiresAt,
-        ...rest
-      } = existing;
-      return { ...rest, state: "consumed" };
-    });
-    if (!consumed) {
-      throw new Error("replay claim is not in flight");
-    }
-    this.#claimOwners.delete(key);
-  }
-
-  async release(peer: string, id: string): Promise<void> {
-    const key = reefReplayStoreKey(peer, id);
-    const owner = this.#claimOwners.get(key);
-    this.#update(peer, id, (existing) =>
-      existing?.state === "in_flight" && existing.claimOwner === owner
-        ? {
-            peer: existing.peer,
-            id: existing.id,
-            envelopeHash: existing.envelopeHash,
-            state: "available",
-          }
-        : existing,
-    );
-    this.#claimOwners.delete(key);
-  }
-
-  async completed(peer: string, id: string): Promise<CompletedReplay | undefined> {
-    const existing = parseReplayRecord(this.#store.lookup(reefReplayStoreKey(peer, id)));
-    if (
-      existing?.peer !== peer ||
-      existing.id !== id ||
-      existing.state !== "completed" ||
-      !existing.receipt
-    ) {
-      return undefined;
-    }
-    return existing.body
-      ? {
-          receipt: structuredClone(existing.receipt),
-          body: decryptReplayBody(existing.body, this.#bodyKey),
-        }
-      : { receipt: structuredClone(existing.receipt) };
-  }
-}
-
 export class ReviewApprovalStore {
   readonly #store: PluginStateSyncKeyedStore<ReefReviewRecord>;
+  readonly #reader: PluginStateKeyedStore<ReefReviewRecord>;
   readonly #maxEntries: number;
 
   constructor(
@@ -431,11 +157,14 @@ export class ReviewApprovalStore {
     private readonly authoritySignal?: AbortSignal,
   ) {
     this.#maxEntries = maxEntries;
-    this.#store = runtime.state.openSyncKeyedStore<ReefReviewRecord>({
+    const options: OpenKeyedStoreOptions = {
       namespace: REEF_REVIEWS_NAMESPACE,
       maxEntries,
       overflowPolicy: "reject-new",
-    });
+    };
+    // Mutations must remain uninterrupted after the live channel-authority check.
+    this.#store = runtime.state.openSyncKeyedStore<ReefReviewRecord>(options);
+    this.#reader = runtime.state.openKeyedStore<ReefReviewRecord>(options);
   }
 
   #makeRoomForPendingReview(): void {
@@ -484,7 +213,8 @@ export class ReviewApprovalStore {
     approvalDigest: string,
   ): Promise<"none" | "pending" | { approved: boolean }> {
     this.authoritySignal?.throwIfAborted();
-    const current = this.#store.lookup(approvalDigest);
+    const current = await this.#reader.lookup(approvalDigest);
+    this.authoritySignal?.throwIfAborted();
     if (!current) {
       return "none";
     }
@@ -510,18 +240,19 @@ export class ReviewApprovalStore {
 
   async list(): Promise<ReviewRequest[]> {
     this.authoritySignal?.throwIfAborted();
-    return this.#store
-      .entries()
+    const entries = await this.#reader.entries();
+    this.authoritySignal?.throwIfAborted();
+    return entries
       .filter((entry) => entry.value.approved === undefined)
       .map((entry) => structuredClone(entry.value.review));
   }
 }
 
 export class ReefDeliveredStore {
-  readonly #delivered: PluginStateSyncKeyedStore<{ id: string }>;
+  readonly #delivered: PluginStateKeyedStore<{ id: string }>;
 
   constructor(runtime: PluginRuntime, maxEntries = REEF_DELIVERED_MAX_ENTRIES) {
-    this.#delivered = runtime.state.openSyncKeyedStore<{ id: string }>({
+    this.#delivered = runtime.state.openKeyedStore<{ id: string }>({
       namespace: REEF_DELIVERED_NAMESPACE,
       maxEntries,
       overflowPolicy: "reject-new",
@@ -532,16 +263,16 @@ export class ReefDeliveredStore {
   }
 
   async has(id: string): Promise<boolean> {
-    return this.#delivered.lookup(id)?.id === id;
+    return (await this.#delivered.lookup(id))?.id === id;
   }
 
   async status(id: string): Promise<"delivered" | undefined> {
-    return this.#delivered.lookup(id)?.id === id ? "delivered" : undefined;
+    return (await this.#delivered.lookup(id))?.id === id ? "delivered" : undefined;
   }
 
   async confirm(id: string): Promise<void> {
-    const inserted = this.#delivered.registerIfAbsent(id, { id });
-    if (!inserted && this.#delivered.lookup(id)?.id !== id) {
+    const inserted = await this.#delivered.registerIfAbsent(id, { id });
+    if (!inserted && (await this.#delivered.lookup(id))?.id !== id) {
       throw new Error("Failed persisting Reef delivered marker");
     }
   }

@@ -37,7 +37,7 @@ type SkillCollectionReviewResult = {
   dropped: Array<{ name: string; reason: string }>;
 };
 
-export type SkillCollectionReviewStatus = {
+type SkillCollectionReviewStatus = {
   attemptedAtMs: number;
   succeededAtMs?: number;
   error?: string;
@@ -56,9 +56,12 @@ function experienceReviewKey(agentId: string, workspaceDir: string): string {
   return sha256Hex(`${agentId}\0${path.resolve(workspaceDir)}`);
 }
 
-export function readSkillReviewOutcomes(options: OpenClawStateDatabaseOptions = {}) {
+export function readSkillCuratorReviewStatus(options: OpenClawStateDatabaseOptions = {}) {
   const state = readConfigMachineState<SkillCuratorState>("skills.curatorState", options);
   return {
+    lastAttemptAtMs: state?.lastAttemptAtMs ?? null,
+    lastSuccessAtMs: state?.lastSuccessAtMs ?? null,
+    lastError: state?.lastError ?? null,
     collectionReviews: state?.lastResult.collectionReviews ?? {},
     experienceReviews: state?.lastResult.experienceReviews ?? {},
   };

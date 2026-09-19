@@ -15,6 +15,20 @@
       "sensitive": true
     }
   },
+  "configGroups": [
+    {
+      "id": "cloudflare-access",
+      "title": "Cloudflare Access",
+      "order": 10,
+      "properties": ["accountId", "appId", "apiToken", "policyName"]
+    },
+    {
+      "id": "visitor-grants",
+      "title": "Visitor grants",
+      "order": 20,
+      "properties": ["defaultTtlDays", "maxVisitors"]
+    }
+  ],
   "configSchema": {
     "type": "object",
     "additionalProperties": false,

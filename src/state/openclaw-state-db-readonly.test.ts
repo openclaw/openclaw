@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import { once } from "node:events";
 import fs from "node:fs";
 import fsp from "node:fs/promises";
+import { syncBuiltinESMExports } from "node:module";
 import path from "node:path";
 import { constants, DatabaseSync } from "node:sqlite";
 import { expectDefined } from "@openclaw/normalization-core";
@@ -16,11 +17,13 @@ import {
   clearOpenClawDatabaseQuarantine,
   recordOpenClawDatabaseQuarantine,
 } from "./openclaw-quarantine-store.js";
+import { StateDatabaseReadAdmissionInvalidatedError } from "./openclaw-state-db-async-lifecycle.js";
 import {
   acquireOpenClawStateDatabaseFileExclusion,
   recordOpenClawStateDatabaseOpenFailure,
 } from "./openclaw-state-db-cache.js";
 import {
+  isOpenClawStateDatabaseDefinitelyAbsent,
   withSynchronousArtifactPreservingStateSnapshot,
   isArtifactPreservingStateRead,
   iterateOpenClawStateDatabaseReadOnly,
@@ -47,6 +50,56 @@ afterEach(() => {
   vi.restoreAllMocks();
   closeOpenClawStateDatabaseForTest();
 });
+
+it("keeps retained readers authoritative over an absent-path observation", async () => {
+  await withTempDir("openclaw-state-availability-", async (root) => {
+    const options = createOptions(root);
+    expect(isOpenClawStateDatabaseDefinitelyAbsent(options.env)).toBe(true);
+    openOpenClawStateDatabase(options);
+    const observeMissingPath = (retained: boolean) => {
+      const probe = vi.spyOn(fs, "lstatSync").mockImplementation(() => {
+        throw Object.assign(new Error("synthetic missing-path observation"), { code: "ENOENT" });
+      });
+      syncBuiltinESMExports();
+      try {
+        expect(isOpenClawStateDatabaseDefinitelyAbsent(options.env)).toBe(!retained);
+        expect(probe).toHaveBeenCalledTimes(retained ? 0 : 1);
+      } finally {
+        probe.mockRestore();
+        syncBuiltinESMExports();
+      }
+    };
+    observeMissingPath(true);
+    closeOpenClawStateDatabaseForTest();
+    await withOpenClawStateDatabaseReadSnapshot(async () => observeMissingPath(true), options);
+    withArtifactPreservingStateReads(() =>
+      withSynchronousArtifactPreservingStateSnapshot(() => {
+        withExistingOpenClawStateDatabaseReadOnly(() => observeMissingPath(true), options);
+      }),
+    );
+    observeMissingPath(false);
+    expect(fs.existsSync(options.path)).toBe(true);
+  });
+});
+
+it.each(["EACCES", "ENOTDIR"])(
+  "keeps uncertain state availability on %s with the reader",
+  async (code) => {
+    await withTempDir("openclaw-state-availability-error-", async (root) => {
+      const probe = vi.spyOn(fs, "lstatSync").mockImplementation(() => {
+        throw Object.assign(new Error("synthetic filesystem observation"), { code });
+      });
+      syncBuiltinESMExports();
+      try {
+        expect(isOpenClawStateDatabaseDefinitelyAbsent(createOptions(root).env)).toBe(false);
+        expect(probe).toHaveBeenCalledOnce();
+      } finally {
+        probe.mockRestore();
+        syncBuiltinESMExports();
+      }
+    });
+  },
+);
 
 it("keeps fresh synchronous read callbacks from returning asynchronous work", async () => {
   await withTempDir("openclaw-state-sync-read-", async (root) => {
@@ -309,7 +362,7 @@ describe.each(["admission", "explicit", "async"] as const)("%s read-only state r
         expect(await read(inner)).not.toBe(inner.path);
         expect(await read(outer)).toBe(outer.path);
         released.resolve();
-        expect(await descendant).not.toBe(inner.path);
+        await expect(descendant).rejects.toBeInstanceOf(StateDatabaseReadAdmissionInvalidatedError);
       });
       expect(await read(outer)).not.toBe(outer.path);
       expect(fs.readFileSync(source.path)).toEqual(sourceBefore);

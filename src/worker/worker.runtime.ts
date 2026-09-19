@@ -10,6 +10,7 @@ import type { ComputerContextEpoch } from "../agents/tools/computer-tool.js";
 import { isPathInside } from "../infra/path-guards.js";
 import { registerSecretValueForRedaction } from "../logging/secret-redaction-registry.js";
 import { getProcessSupervisor } from "../process/supervisor/index.js";
+import { supportsNodeWorkerProcessOwner } from "../process/supervisor/service-child-protocol.js";
 import { closeOpenClawStateDatabaseByPathAsync } from "../state/openclaw-state-db-cache.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import type { WorkerBrowserRuntime } from "./browser-runtime.js";
@@ -39,6 +40,7 @@ export type WorkerRuntimeResult =
   | { status: "fenced"; reason: "credential-replaced" | "owner-epoch-mismatch" };
 
 const WORKER_REMOTE_CANCEL_GRACE_MS = 1_000;
+declare const WORKER_DEPLOY_BUILD: boolean;
 
 function toWorkerRuntimeError(value: unknown, fallback: string): Error {
   return value instanceof Error ? value : new Error(fallback, { cause: value });
@@ -70,10 +72,15 @@ export async function createWorkerRuntimeEnvironment(sessionId: string) {
   const previousStateDir = process.env.OPENCLAW_STATE_DIR;
   const previousConfigPath = process.env.OPENCLAW_CONFIG_PATH;
   const scopeKey = `worker:${sessionId}`;
-  // Worker state owns command completion and exec finalizers; its parent owns
-  // process placement. This lease does not infer remote or PTY tree extinction.
+  // Portable POSIX workers need command owners that survive worker loss.
+  // Native PTY and external backends retain their transport cleanup contracts.
   const cleanupScope = getProcessSupervisor().acquireScopeCleanup(scopeKey, {
-    processTree: "transport-only",
+    processTree:
+      typeof WORKER_DEPLOY_BUILD === "boolean" &&
+      WORKER_DEPLOY_BUILD &&
+      supportsNodeWorkerProcessOwner()
+        ? "owned-only"
+        : "transport-only",
   });
   process.env.OPENCLAW_STATE_DIR = stateDir;
   process.env.OPENCLAW_CONFIG_PATH = path.join(stateDir, "openclaw.json");
@@ -282,6 +289,7 @@ export async function runWorkerDescriptor(
           (name) =>
             name !== "portal" || hello.protocolFeatures.includes(WORKER_PORTAL_PROTOCOL_FEATURE),
         ),
+        execAuthority: descriptor.assignment.toolAuthority.exec,
         ...(descriptor.assignment.browser ? { browser: descriptor.assignment.browser } : {}),
         ...(descriptor.assignment.computer
           ? {

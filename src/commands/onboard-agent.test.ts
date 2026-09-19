@@ -32,7 +32,7 @@ describe("onboarding main-agent creation", () => {
       bootstrapPending: true,
       configHash: "hash-after-create",
     });
-    mocks.migrateLegacyMainSessionKeys.mockResolvedValue({});
+    mocks.migrateLegacyMainSessionKeys.mockResolvedValue({ warnings: [] });
     mocks.readConfigFileSnapshot
       .mockResolvedValueOnce({
         exists: false,
@@ -83,7 +83,7 @@ describe("onboarding main-agent creation", () => {
     });
   });
 
-  it("stages a normalized named first agent and runs legacy-session convergence", async () => {
+  it("stages a normalized named first agent and detects pending legacy-session repairs", async () => {
     mocks.createAgent.mockResolvedValueOnce({
       status: "created",
       agentId: "robby",
@@ -105,7 +105,7 @@ describe("onboarding main-agent creation", () => {
     );
     expect(mocks.migrateLegacyMainSessionKeys).toHaveBeenCalledWith({
       cfg: expect.objectContaining({ agents: expect.any(Object) }),
-      mode: "automatic",
+      mode: "detect",
     });
   });
 
@@ -166,11 +166,11 @@ describe("onboarding main-agent creation", () => {
     expect(mocks.createAgent).not.toHaveBeenCalled();
   });
 
-  it("surfaces an incomplete legacy-session migration with a doctor recovery hint", async () => {
+  it("surfaces pending detection outcomes even when inspection is complete", async () => {
     mocks.migrateLegacyMainSessionKeys.mockResolvedValueOnce({
       armed: true,
-      complete: false,
-      warnings: ["database is locked"],
+      complete: true,
+      warnings: ["retained legacy main sessions require repair; run openclaw doctor --fix"],
     });
 
     const result = await ensureOnboardingAgent({
@@ -180,7 +180,9 @@ describe("onboarding main-agent creation", () => {
     });
 
     expect(result.sessionMigrationWarnings).toEqual([
-      expect.stringMatching(/database is locked.*openclaw doctor --fix/),
+      expect.stringContaining(
+        "retained legacy main sessions require repair; run openclaw doctor --fix",
+      ),
     ]);
   });
 

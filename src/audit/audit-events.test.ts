@@ -1,4 +1,4 @@
-import { afterAll, afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
 import type { AgentEventPayload } from "../infra/agent-events.js";
 import {
@@ -10,6 +10,7 @@ import {
 } from "../infra/diagnostic-events.js";
 import {
   closeOpenClawStateDatabaseForTest,
+  closeOpenClawStateDatabaseAsync,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
 import { createAgentEventAuditRecorder } from "./agent-event-audit.js";
@@ -118,7 +119,8 @@ beforeEach(() => {
   currentAuditTestRunId = `run-test-${++auditTestRunSequence}`;
 });
 
-afterEach(() => {
+afterEach(async () => {
+  await closeOpenClawStateDatabaseAsync();
   closeOpenClawStateDatabaseForTest();
   resetDiagnosticEventsForTest();
 });
@@ -128,7 +130,26 @@ afterAll(() => {
 });
 
 describe("audit event persistence", () => {
-  it("persists stable ordering, filters, and cursor pagination across reopen", () => {
+  it("captures caller filters and the retention clock before the worker wait", async () => {
+    const database = createDatabaseOptions();
+    const now = Date.now();
+    recordAuditEvent(auditInput({ occurredAt: now, runId: "run-1" }), database);
+    const filters = { runId: "run-1" };
+    const pending = listAuditEvents({ database, filters, limit: 10 });
+    filters.runId = "run-2";
+    expect((await pending).events.map((event) => event.runId)).toEqual(["run-1"]);
+
+    const clock = vi
+      .spyOn(Date, "now")
+      .mockReturnValue(now + AUDIT_EVENT_RETENTION_MS_CONTRACT + 1);
+    try {
+      expect((await listAuditEvents({ database, limit: 10 })).events).toEqual([]);
+    } finally {
+      clock.mockRestore();
+    }
+  });
+
+  it("persists stable ordering, filters, and cursor pagination across reopen", async () => {
     const database = createDatabaseOptions();
     const now = Date.now();
     const oldest = recordAuditEvent(auditInput({ occurredAt: now, sourceSequence: 1 }), database);
@@ -159,17 +180,18 @@ describe("audit event persistence", () => {
       database,
     );
 
-    const first = listAuditEvents({ database, limit: 2 });
+    const first = await listAuditEvents({ database, limit: 2 });
     expect(first.events.map((event) => event.sourceSequence)).toEqual([3, 2]);
     expect(first.nextCursor).toBe(first.events[1]?.sequence);
 
+    await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
-    const second = listAuditEvents({ database, limit: 2, cursor: first.nextCursor });
+    const second = await listAuditEvents({ database, limit: 2, cursor: first.nextCursor });
     expect(second.events.map((event) => event.sourceSequence)).toEqual([1]);
     expect(second.events[0]?.eventId).toBe(oldest?.eventId);
     expect(second.nextCursor).toBeUndefined();
 
-    const filtered = listAuditEvents({
+    const filtered = await listAuditEvents({
       database,
       limit: 10,
       filters: {
@@ -190,26 +212,26 @@ describe("audit event persistence", () => {
     });
   });
 
-  it("deduplicates replayed source events", () => {
+  it("deduplicates replayed source events", async () => {
     const database = createDatabaseOptions();
     const input = auditInput();
     expect(recordAuditEvent(input, database)).toBeDefined();
     expect(recordAuditEvent(input, database)).toBeUndefined();
-    expect(listAuditEvents({ database, limit: 10 }).events).toHaveLength(1);
+    expect((await listAuditEvents({ database, limit: 10 })).events).toHaveLength(1);
   });
 
-  it("rejects persisted run lifecycle tuples outside the closed contract", () => {
+  it("rejects persisted run lifecycle tuples outside the closed contract", async () => {
     const database = createDatabaseOptions();
     recordAuditEvent(auditInput(), database);
     const { db } = openOpenClawStateDatabase(database);
     db.prepare("UPDATE audit_events SET status = ? WHERE kind = 'agent_run'").run("failed");
 
-    expect(() => listAuditEvents({ database, limit: 10 })).toThrow(
+    await expect(listAuditEvents({ database, limit: 10 })).rejects.toThrow(
       "corrupt audit event row 1: invalid status",
     );
   });
 
-  it("caps actual rows without treating dedupe sequence gaps as retained records", () => {
+  it("caps actual rows without treating dedupe sequence gaps as retained records", async () => {
     const database = createDatabaseOptions();
     const occurredAt = Date.now();
     recordAuditEvent(auditInput({ occurredAt }), database);
@@ -220,7 +242,7 @@ describe("audit event persistence", () => {
 
     recordAuditEvent(auditInput({ occurredAt: occurredAt + 1, sourceSequence: 2 }), database);
 
-    expect(listAuditEvents({ database, limit: 10 }).events).toHaveLength(2);
+    expect((await listAuditEvents({ database, limit: 10 })).events).toHaveLength(2);
   });
 
   it("prunes row overflow in batches instead of scanning the full cap per insert", () => {
@@ -270,15 +292,15 @@ describe("audit event persistence", () => {
     expect(db.prepare("SELECT COUNT(*) AS count FROM audit_events").get()).toEqual({ count: 0 });
   });
 
-  it("keeps reused run ids distinct across actual event timestamps", () => {
+  it("keeps reused run ids distinct across actual event timestamps", async () => {
     const database = createDatabaseOptions();
     const occurredAt = Date.now();
     expect(recordAuditEvent(auditInput({ occurredAt }), database)).toBeDefined();
     expect(recordAuditEvent(auditInput({ occurredAt: occurredAt + 1 }), database)).toBeDefined();
-    expect(listAuditEvents({ database, limit: 10 }).events).toHaveLength(2);
+    expect((await listAuditEvents({ database, limit: 10 })).events).toHaveLength(2);
   });
 
-  it("excludes and physically prunes records outside the fixed retention window", () => {
+  it("excludes and physically prunes records outside the fixed retention window", async () => {
     const database = createDatabaseOptions();
     const occurredAt = Date.now();
     const { db } = openOpenClawStateDatabase(database);
@@ -294,7 +316,7 @@ describe("audit event persistence", () => {
     }
     const expiredAt = occurredAt + AUDIT_EVENT_RETENTION_MS_CONTRACT + 1;
 
-    expect(listAuditEvents({ database, limit: 10, now: expiredAt }).events).toEqual([]);
+    expect((await listAuditEvents({ database, limit: 10, now: expiredAt })).events).toEqual([]);
     expect(pruneExpiredAuditEvents({ database, now: expiredAt })).toBe(
       AUDIT_EVENT_PRUNE_BATCH_ROWS_CONTRACT,
     );

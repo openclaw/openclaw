@@ -386,6 +386,9 @@ export function startNodeHostConnection({
               ...(gatewayCapabilities.has(GATEWAY_SERVER_CAPS.NODE_WORKER_ENVIRONMENT_SESSION)
                 ? { environmentSession: NODE_WORKER_ENVIRONMENT_SESSION_VERSION }
                 : {}),
+              ...(gatewayCapabilities.has(GATEWAY_SERVER_CAPS.NODE_WORKER_CAPTURED_EXEC_POLICY)
+                ? { capturedExecPolicy: true }
+                : {}),
             }
           : { enabled: false },
       },

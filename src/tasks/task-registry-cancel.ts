@@ -9,6 +9,12 @@ import {
   hasAuthoritativeTaskBacking,
   readTaskBackingInstance,
 } from "./task-backing-authority.js";
+import { sameTaskBackingInstance } from "./task-backing-records.js";
+import {
+  prepareTaskCancellationControl,
+  withTaskCancellationControl,
+  type TaskCancellationControl,
+} from "./task-cancellation-context.js";
 import { isProvisionalSubagentKillTask } from "./task-cancellation-state.js";
 import { maybeDeliverTaskTerminalUpdate } from "./task-registry-delivery.js";
 import { ensureLinkedTaskFlowRegistryReady } from "./task-registry-flow-link.js";
@@ -53,6 +59,7 @@ type PreparedTaskCancellation =
       managedBacking: ReturnType<typeof getManagedTaskBackingInstance>;
       subagentBacking: ReturnType<typeof readTaskBackingInstance>;
       isProvisionalSubagentKill: boolean;
+      control: TaskCancellationControl | undefined;
     };
 
 export async function cancelTaskById(params: {
@@ -91,6 +98,8 @@ export async function cancelTaskById(params: {
         };
       }
       try {
+        const control = prepareTaskCancellationControl(task);
+        control?.assertCurrent();
         if (!hasAuthoritativeTaskBacking(task)) {
           return {
             result: {
@@ -104,7 +113,7 @@ export async function cancelTaskById(params: {
         const managedBacking = getManagedTaskBackingInstance(task);
         const subagentBacking = managedBacking ?? readTaskBackingInstance(task.detail);
         ensureTaskCancellationReady(task);
-        return { task, managedBacking, subagentBacking, isProvisionalSubagentKill };
+        return { task, managedBacking, subagentBacking, isProvisionalSubagentKill, control };
       } catch (error) {
         return {
           result: {
@@ -128,7 +137,7 @@ export async function cancelTaskById(params: {
   if ("result" in prepared) {
     return prepared.result;
   }
-  const { task, managedBacking, subagentBacking } = prepared;
+  const { task, managedBacking, subagentBacking, control } = prepared;
   let isProvisionalSubagentKill = prepared.isProvisionalSubagentKill;
   const notCancelled = (reason: string) =>
     withTaskRegistryMutation(
@@ -146,11 +155,23 @@ export async function cancelTaskById(params: {
       () => {
         const eventAt = Date.now();
         const current = tasks.get(task.taskId) ?? task;
+        if (task.runtime === "acp") {
+          const currentBacking =
+            getManagedTaskBackingInstance(current) ?? readTaskBackingInstance(current.detail);
+          if (
+            !hasAuthoritativeTaskBacking(current) ||
+            (subagentBacking &&
+              (!currentBacking || !sameTaskBackingInstance(subagentBacking, currentBacking)))
+          ) {
+            return notCancelled("Task backing changed while cancellation was in progress.");
+          }
+        }
         const endedAt = isProvisionalSubagentKill ? (current.endedAt ?? eventAt) : eventAt;
         const updated =
           (task.runtime === "acp" || task.runtime === "subagent") && task.runId?.trim()
             ? (updateTaskStateByRunId({
                 runId: task.runId,
+                ...(task.runtime === "acp" ? { taskId: task.taskId } : {}),
                 runtime: task.runtime,
                 sessionKey: childSessionKey,
                 status: "cancelled",
@@ -182,6 +203,7 @@ export async function cancelTaskById(params: {
     if (isBackgroundExecTask(task)) {
       const processSessionId = task.sourceId?.trim();
       const { cancelBackgroundExecSession } = await loadTaskRegistryControlRuntime();
+      control?.assertCurrent();
       if (!processSessionId || !cancelBackgroundExecSession?.(processSessionId)) {
         return notCancelled("Background command has no active cancellation handle.");
       }
@@ -192,13 +214,16 @@ export async function cancelTaskById(params: {
           "Task has no live run owner. Use openclaw tasks audit to inspect its state.",
         );
       }
-      const result = await owner.cancel(cancellationError);
+      const result = await withTaskCancellationControl(control, () =>
+        owner.cancel(cancellationError),
+      );
       return result.ok
         ? { found: true, cancelled: true, task: result.value }
         : notCancelled(result.error);
     } else {
       if (task.runtime === "cron") {
         const { cancelActiveCronTaskRun } = await loadTaskRegistryControlRuntime();
+        control?.assertCurrent();
         if (
           !cancelActiveCronTaskRun({
             runId: task.runId,
@@ -223,16 +248,22 @@ export async function cancelTaskById(params: {
         );
       } else if (task.runtime === "acp") {
         const { getAcpSessionManager } = await loadTaskRegistryControlRuntime();
-        await getAcpSessionManager().cancelSession({
-          cfg: params.cfg,
-          sessionKey: childSessionKey,
-          agentId: task.agentId,
-          reason: params.reason?.trim() || "task-cancel",
-          expectedRunId: task.runId,
-          ...(managedBacking?.runtime === "acp"
-            ? { expectedInstanceId: managedBacking.instanceId, expectedOwnerKey: task.ownerKey }
-            : {}),
-        });
+        if (subagentBacking?.runtime !== "acp") {
+          return notCancelled(
+            "ACP task execution cannot be verified. Select its current task or use ACP session controls.",
+          );
+        }
+        await withTaskCancellationControl(control, () =>
+          getAcpSessionManager().cancelSession({
+            cfg: params.cfg,
+            sessionKey: childSessionKey,
+            agentId: task.agentId,
+            reason: params.reason?.trim() || "task-cancel",
+            expectedRunId: task.runId,
+            expectedInstanceId: subagentBacking.instanceId,
+            ...(managedBacking?.runtime === "acp" ? { expectedOwnerKey: task.ownerKey } : {}),
+          }),
+        );
         // The run owns terminal outcomes published while backend cancellation waits.
         const settled = withTaskRegistryMutation(
           () => {
@@ -325,18 +356,20 @@ export async function cancelTaskById(params: {
         let cancellation: ReturnType<typeof reconcile> = notCancelled(
           "Subagent cancellation result was not published.",
         );
-        await killSubagentRunAdmin({
-          cfg: params.cfg,
-          sessionKey: childSessionKey,
-          expectedTaskRunId: task.runId,
-          expectedOwnerKey: task.ownerKey,
-          ...(subagentBacking?.runtime === "subagent"
-            ? { expectedGeneration: subagentBacking.generation }
-            : {}),
-          onResult: (result) => {
-            cancellation = reconcile(result);
-          },
-        });
+        await withTaskCancellationControl(control, () =>
+          killSubagentRunAdmin({
+            cfg: params.cfg,
+            sessionKey: childSessionKey,
+            expectedTaskRunId: task.runId,
+            expectedOwnerKey: task.ownerKey,
+            ...(subagentBacking?.runtime === "subagent"
+              ? { expectedGeneration: subagentBacking.generation }
+              : {}),
+            onResult: (result) => {
+              cancellation = reconcile(result);
+            },
+          }),
+        );
         return cancellation;
       } else {
         return notCancelled("Task runtime does not support cancellation yet.");

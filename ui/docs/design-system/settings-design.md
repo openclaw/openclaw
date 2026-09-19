@@ -22,6 +22,7 @@ Every settings surface (the `/settings` takeover pages plus the Plugins/Skills h
 
 ## Rules
 
+- **Do not narrate unchanged defaults.** Controls and placeholders show the effective value. Omit repetitive “Using default” descriptions; keep useful help, scope, reset controls, and default references for customized values.
 - **No status pills.** Status is `renderSettingsStatus` — a dot + plain text (`● Connected`). Badges (`.settings-count`) exist only for genuine counts.
 - **Spacing uses `--space-*` tokens** (`base.css`); no hardcoded paddings/gaps.
 - **Motion budget:** color/background transitions only. No enter animations, staggered reveals, or hover glows.

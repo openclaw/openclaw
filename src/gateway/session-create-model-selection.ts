@@ -6,7 +6,7 @@ import {
   type SessionsCreateParams,
 } from "../../packages/gateway-protocol/src/index.js";
 import { normalizeOptionalAgentRuntimeId } from "../agents/agent-runtime-id.js";
-import { resolveDefaultModelForAgent } from "../agents/model-selection.js";
+import { resolveDefaultModelForAgent, type ModelRef } from "../agents/model-selection.js";
 import { inheritSessionSelection } from "../config/sessions/session-entry-selection.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -18,6 +18,7 @@ export function resolveSessionCreateModelSelection(
   agentId: string,
   input: string | { model: string; agentRuntime?: string } | undefined,
   parentEntry?: SessionEntry,
+  preparedModelSelection?: ModelRef,
 ): GatewaySessionTitleModelSelection | null {
   const model = normalizeOptionalString(typeof input === "string" ? input : input?.model);
   if (!model) {
@@ -39,6 +40,7 @@ export function resolveSessionCreateModelSelection(
     raw: model,
     defaultProvider: defaults.provider,
     defaultModel: defaults.model,
+    preparedModelSelection,
   });
   if (!resolved.ok) {
     return null;

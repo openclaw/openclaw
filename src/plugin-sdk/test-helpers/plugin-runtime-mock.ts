@@ -1,5 +1,4 @@
 // Plugin runtime mock helpers build minimal runtime doubles for plugin SDK tests.
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { vi } from "vitest";
 import { resolveModelRuntimePolicy } from "../../agents/model-runtime-policy.js";
 import type { InboundDebounceCreateParams } from "../../auto-reply/inbound-debounce.js";
@@ -21,6 +20,10 @@ import {
   implicitMentionKindWhen,
   resolveInboundMentionDecision,
 } from "../channel-mention-gating.js";
+import {
+  mergePluginRuntimeMockOverrides,
+  type PluginRuntimeMockOverrides,
+} from "./plugin-runtime-mock-overrides.js";
 import { createPluginTasksRuntimeMock } from "./plugin-runtime-tasks-mock.js";
 
 type InboundDebounceFlush = ReturnType<InboundDebounceCreateParams<unknown>["onFlush"]>;
@@ -44,16 +47,6 @@ export const createTestInboundDebounceFlush: InboundDebounceFlushFactory = (para
 const DEFAULT_PROVIDER = "openai";
 const DEFAULT_MODEL = "gpt-6-astra";
 
-type DeepPartial<T> = {
-  [K in keyof T]?: T[K] extends (...args: never[]) => unknown
-    ? T[K]
-    : T[K] extends ReadonlyArray<unknown>
-      ? T[K]
-      : T[K] extends object
-        ? DeepPartial<T[K]>
-        : T[K];
-};
-
 type BuildContextParams = Parameters<PluginRuntime["channel"]["inbound"]["buildContext"]>[0];
 type BuildContextResult = ReturnType<PluginRuntime["channel"]["inbound"]["buildContext"]>;
 type ChannelStructuredContextEntries = NonNullable<
@@ -71,22 +64,6 @@ function createGenericMock<T extends GenericMockProcedure>(
   implementation?: T | GenericMockProcedure,
 ): T {
   return (implementation ? vi.fn(implementation) : vi.fn()) as ReturnType<typeof vi.fn> & T;
-}
-
-function mergeDeep<T>(base: T, overrides: DeepPartial<T>): T {
-  const result: Record<string, unknown> = { ...(base as Record<string, unknown>) };
-  for (const [key, overrideValue] of Object.entries(overrides as Record<string, unknown>)) {
-    if (overrideValue === undefined) {
-      continue;
-    }
-    const baseValue = result[key];
-    if (isRecord(baseValue) && isRecord(overrideValue)) {
-      result[key] = mergeDeep(baseValue, overrideValue);
-      continue;
-    }
-    result[key] = overrideValue;
-  }
-  return result as T;
 }
 
 function normalizeUntrustedGroupPrompt(value: unknown): string | undefined {
@@ -172,7 +149,7 @@ export function createPluginRuntimeMediaMock(
   };
 }
 
-export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = {}): PluginRuntime {
+export function createPluginRuntimeMock(overrides: PluginRuntimeMockOverrides = {}): PluginRuntime {
   const runtimeContexts = createChannelRuntimeContextRegistry();
   const runEmbeddedAgentMock = vi
     .fn<PluginRuntime["agent"]["runEmbeddedAgent"]>()
@@ -479,6 +456,13 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
     updateLastRoute: vi.fn<PluginRuntime["channel"]["session"]["updateLastRoute"]>(),
     resolveEntryResetFreshness: vi.fn(resolveSessionEntryResetFreshness),
   };
+  const inboundRuntime = {
+    run: runChannelTurnMock,
+    dispatch: dispatchChannelTurnPlanMock,
+    dispatchReply: dispatchAssembledChannelTurnMock,
+    buildContext: buildChannelInboundEventContextMock,
+    runPreparedReply: runPreparedChannelTurnMock,
+  } satisfies PluginRuntime["channel"]["inbound"];
   const base: PluginRuntime = {
     version: "1.0.0-test",
     gateway: {
@@ -908,13 +892,8 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
       outbound: {
         loadAdapter: vi.fn<PluginRuntime["channel"]["outbound"]["loadAdapter"]>(),
       },
-      inbound: {
-        run: runChannelTurnMock,
-        dispatch: dispatchChannelTurnPlanMock,
-        dispatchReply: dispatchAssembledChannelTurnMock,
-        buildContext: buildChannelInboundEventContextMock,
-        runPreparedReply: runPreparedChannelTurnMock,
-      },
+      inbound: inboundRuntime,
+      turn: inboundRuntime,
       threadBindings: {
         setIdleTimeoutBySessionKey:
           vi.fn<PluginRuntime["channel"]["threadBindings"]["setIdleTimeoutBySessionKey"]>(),
@@ -1043,7 +1022,7 @@ export function createPluginRuntimeMock(overrides: DeepPartial<PluginRuntime> = 
     },
   };
 
-  const mergedRuntime = mergeDeep(base, overrides);
+  const mergedRuntime = mergePluginRuntimeMockOverrides(base, overrides);
   return mergedRuntime;
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

@@ -1,4 +1,5 @@
-import type { PreparedSessionHistoryReadTarget } from "../../gateway/session-history-readonly-reader.js";
+import type { PreparedSessionHistoryReadTarget } from "../../gateway/session-history-read.types.js";
+import { prepareGatewaySessionStoreReadSources } from "../../gateway/session-utils-store-sources.js";
 import {
   DEFAULT_WORKER_PENDING_BYTES,
   DEFAULT_WORKER_PENDING_TASKS,
@@ -6,11 +7,14 @@ import {
 import { WorkerTaskError } from "../../infra/worker-task-pool.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
+import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
+import { getRuntimeConfig } from "../config.js";
 import type { SessionTranscriptReadScope } from "./session-accessor.js";
 import {
   resolveSqliteTranscriptReadScope,
   resolveSqliteScope,
   toDatabaseOptions,
+  type SessionSqliteTargetResolutionCache,
 } from "./session-accessor.sqlite-scope.js";
 import { prepareSessionTranscriptReadTargetCore } from "./session-accessor.transcript-read-target.js";
 import { readRestoredSessionTranscript } from "./session-cold-storage-read.js";
@@ -27,7 +31,7 @@ import {
   withSessionHistoryWorkerDatabase,
   type SessionHistoryWorkerDatabase,
 } from "./session-transcript-worker-runtime.js";
-import type { SessionTranscriptHistoryWorkerInput } from "./session-transcript.worker.js";
+import type { SessionTranscriptHistoryWorkerInput } from "./session-transcript-worker.types.js";
 
 type QueuedHistoryRead = {
   promise: Promise<SessionHistoryWorkerResult>;
@@ -100,11 +104,12 @@ export async function readSessionHistoryPageInWorker(
           storePath: request.params.storePath,
         }
       : request.params.target;
-  const resolved = resolveSqliteTranscriptReadScope(scope);
+  const targetCache: SessionSqliteTargetResolutionCache = new Map();
+  const resolved = resolveSqliteTranscriptReadScope(scope, targetCache);
   const admission = resolveSessionTranscriptReadFence(resolved);
   const bound = prepareSessionTranscriptReadTargetCore(scope);
   const entryValidationKey = bound.entryValidationScope
-    ? resolveSqliteScope(bound.entryValidationScope).sessionKey
+    ? resolveSqliteScope(bound.entryValidationScope, targetCache).sessionKey
     : undefined;
   const sessionKey = entryValidationKey ?? bound.sessionKey;
   const transcript = {
@@ -113,8 +118,25 @@ export async function readSessionHistoryPageInWorker(
     ...(sessionKey ? { sessionKey } : {}),
     storePath: bound.storePath,
   };
-  const readScope = resolveSqliteTranscriptReadScope(transcript);
+  const readScope = resolveSqliteTranscriptReadScope(transcript, targetCache);
   const databaseOptions = toDatabaseOptions(resolved);
+  const currentSource = {
+    agentId: databaseOptions.agentId,
+    path: resolveOpenClawAgentSqlitePath(databaseOptions),
+  };
+  const stateContext = captureOpenClawStateWorkerContext();
+  const sourceReads = prepareGatewaySessionStoreReadSources({
+    cfg: getRuntimeConfig(),
+    currentSource,
+    env: process.env,
+    registryPath: stateContext.admission.databasePath,
+  });
+  const assertStateCurrent = () => {
+    stateContext.maintenanceScope?.assertAdmission();
+    stateContext.admission.assertCurrent();
+    sourceReads.assertCurrent();
+  };
+  assertStateCurrent();
   const target: Omit<PreparedSessionHistoryReadTarget, "database"> = {
     transcript: {
       agentId: readScope.agentId,
@@ -124,15 +146,18 @@ export async function readSessionHistoryPageInWorker(
       // Projection/fence identity is normalized; archive and presentation hints retain their input.
       sessionFile: sessionKey ?? scope.sessionId,
     },
+    stateDatabase: {
+      path: stateContext.admission.databasePath,
+      environment: stateContext.environment,
+      coordinatorRuntime: stateContext.coordinatorRuntime,
+    },
+    sourceDatabases: sourceReads.sources,
     ...(entryValidationKey ? { entryValidationKey } : {}),
   };
 
   const input: SessionTranscriptHistoryWorkerInput = {
     kind: "history-page",
-    database: {
-      agentId: databaseOptions.agentId,
-      path: resolveOpenClawAgentSqlitePath(databaseOptions),
-    },
+    database: currentSource,
     request,
     target,
     ...(admission ? { admission: { ...admission } } : {}),
@@ -152,10 +177,14 @@ export async function readSessionHistoryPageInWorker(
     const result = await withSessionHistoryWorkerDatabase(input.database, (owner) =>
       readRestoredSessionTranscript(
         scope,
-        () => readQueuedPage(input, `${owner.generation}:${key}`, owner, signal),
+        () => {
+          assertStateCurrent();
+          return readQueuedPage(input, `${owner.generation}:${key}`, owner, signal);
+        },
         { assertCurrent: owner.assertCurrent },
       ),
     );
+    assertStateCurrent();
     if (result.kind !== request.kind) {
       throw new Error("Session history worker returned the wrong page type");
     }
@@ -163,7 +192,7 @@ export async function readSessionHistoryPageInWorker(
   } catch (error) {
     if (isSessionTranscriptProjectionUnavailableError(error)) {
       startSessionTranscriptIndexReconcile({
-        ...toDatabaseOptions(resolved),
+        ...databaseOptions,
         preferredSessionId: resolved.sessionId,
       });
     }

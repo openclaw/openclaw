@@ -4,11 +4,10 @@ import { describe, expect, it, vi } from "vitest";
 import {
   canonicalBytes,
   generateIdentity,
-  MemoryAuditStore,
-  MemoryReplayStore,
   PipelineError,
   REEF_MAX_PLAINTEXT_BYTES,
 } from "../protocol/index.js";
+import { MemoryAuditStore, MemoryReplayStore } from "../protocol/memory-stores.test-support.js";
 import { ReefMessageFlow } from "./flow.js";
 import {
   allow,

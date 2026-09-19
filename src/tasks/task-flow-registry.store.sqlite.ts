@@ -9,6 +9,7 @@ import {
   deferSqlitePostCommitPublication,
   stageSqliteTransactionState,
 } from "../infra/sqlite-post-commit.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import { withExistingOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-readonly.js";
 import {
   closeOpenClawStateDatabase,
@@ -16,15 +17,18 @@ import {
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabaseOptions,
 } from "../state/openclaw-state-db.js";
+import type { TaskFlowSyncInput } from "./task-flow-registry.records.js";
 import {
   bindTaskFlowExecutionInDatabase,
   bindTaskFlowRecord,
   deleteTaskFlowRowInDatabase,
   readTaskFlowRegistrySnapshot,
+  syncTaskMirroredFlowRecordInDatabase,
   updateTaskFlowRecordInDatabase,
   upsertTaskFlowRowInDatabase,
 } from "./task-flow-registry.store.kernel.js";
 import type {
+  TaskFlowRegistryMirroredSync,
   TaskFlowRegistryObservedUpdate,
   TaskFlowRegistryStoreSnapshot,
   TaskFlowRegistryUpdate,
@@ -32,6 +36,8 @@ import type {
   TaskFlowRegistryUpdateResult,
 } from "./task-flow-registry.store.types.js";
 import type { TaskFlowRecord } from "./task-flow-registry.types.js";
+
+const log = createSubsystemLogger("tasks/task-flow-registry");
 
 type FlowRegistryDatabase = {
   db: DatabaseSync;
@@ -80,6 +86,39 @@ export function upsertTaskFlowRegistryRecordToSqlite(flow: TaskFlowRecord) {
   withWriteTransaction(({ db }) => {
     upsertTaskFlowRowInDatabase(db, bindTaskFlowRecord(flow));
   });
+}
+
+export function syncTaskMirroredFlowInSqlite(
+  task: TaskFlowSyncInput,
+  preparePublication: (result: TaskFlowRegistryMirroredSync) => TaskFlowRegistryUpdatePublication,
+): TaskFlowRegistryMirroredSync {
+  let committed: TaskFlowRegistryMirroredSync | undefined;
+  try {
+    return runOpenClawStateWriteTransaction(({ db }) => {
+      const result = syncTaskMirroredFlowRecordInDatabase(db, task);
+      const publication = preparePublication(result);
+      stageSqliteTransactionState(db, {
+        stage: publication.stage,
+        rollback: publication.rollback,
+        commit: () => {
+          committed = result;
+          publication.commit();
+        },
+      });
+      deferSqlitePostCommitPublication(db, publication.publish);
+      return result;
+    });
+  } catch (error) {
+    if (!committed) {
+      throw error;
+    }
+    log.warn("Task-mirrored flow committed before cleanup failed", {
+      taskId: task.taskId,
+      flowId: task.parentFlowId,
+      error,
+    });
+    return committed;
+  }
 }
 
 export function updateTaskFlowRegistryRecordInSqlite(

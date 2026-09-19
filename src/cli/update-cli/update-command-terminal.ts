@@ -27,9 +27,17 @@ import {
   writeControlPlaneUpdateRestartSentinelBestEffort,
 } from "./update-command-result.js";
 import { completeUpdateCommandRun } from "./update-command-run.js";
+import {
+  readUpdateCommandTerminalRecord,
+  type UpdateCommandTerminalRecord,
+} from "./update-command-terminal-record.js";
 
 type Run = NonNullable<UpdateCommandOptions["run"]>;
-type Publisher = (failure?: unknown) => Promise<UpdateRunResult>;
+type PublishedRecord = (record: UpdateCommandTerminalRecord["record"]) => void;
+type Publisher = (
+  failure?: unknown,
+  onTerminalRecord?: PublishedRecord,
+) => Promise<UpdateRunResult>;
 const terminalOwners = new WeakMap<Run, { publish?: Publisher }>();
 
 /** Finalization prepares a report; the outer invocation owns its publication. */
@@ -52,7 +60,10 @@ export function hasDeferredUpdateCommandTerminalResult(run: Run): boolean {
 /** Enclose the real executor so its final checks and release precede terminal output. */
 export async function withUpdateCommandTerminalResult<T>(
   operation: (registerRun: (run: Run) => void) => Promise<T>,
-  opts: Pick<UpdateCommandOptions, "json"> = {},
+  opts: Pick<UpdateCommandOptions, "json" | "onResult"> & {
+    /** Internal candidate-worker output, never a serialized continuation grant. */
+    onTerminalRecord?: PublishedRecord;
+  } = {},
 ): Promise<T> {
   const owner: { publish?: Publisher } = {};
   let run: Run | undefined;
@@ -101,7 +112,11 @@ export async function withUpdateCommandTerminalResult<T>(
     };
   }
   if (owner.publish) {
-    const result = await owner.publish("error" in outcome ? outcome.error : undefined);
+    const result = await owner.publish(
+      "error" in outcome ? outcome.error : undefined,
+      opts.onTerminalRecord,
+    );
+    opts.onResult?.(result);
     if ("error" in outcome) {
       const failure = outcome.error;
       if (
@@ -137,7 +152,12 @@ export async function resolveSettledUpdateCommandResult(
   params: Pick<FinishUpdateParams, "opts" | "ownedManagedUpdateEnv" | "root">,
   pendingResult: UpdateRunResult,
   failure?: unknown,
-): Promise<{ result: UpdateRunResult; settlementFailed: boolean }> {
+  captured?: UpdateCommandTerminalRecord,
+): Promise<{
+  result: UpdateRunResult;
+  settlementFailed: boolean;
+  captured?: UpdateCommandTerminalRecord;
+}> {
   const settlementFailed =
     failure !== undefined &&
     (!(failure instanceof UpdateCommandFailure) ||
@@ -145,22 +165,23 @@ export async function resolveSettledUpdateCommandResult(
   const activationTimeout = collectNestedErrorCandidates(failure).find(
     (error): error is UpdateActivationTimeoutError => error instanceof UpdateActivationTimeoutError,
   );
-  const result: UpdateRunResult = settlementFailed
+  const failedStep: UpdateStepResult | undefined = settlementFailed
+    ? {
+        name: "update executor settlement",
+        command: "openclaw update",
+        cwd: pendingResult.root ?? params.root,
+        durationMs: 0,
+        exitCode: 1,
+        stderrTail: activationTimeout?.message ?? formatErrorMessage(failure),
+      }
+    : undefined;
+  const result: UpdateRunResult = failedStep
     ? {
         ...pendingResult,
         status: "error",
         reason: activationTimeout?.reason ?? "update-executor-settlement-failed",
-        steps: [
-          ...pendingResult.steps,
-          {
-            name: "update executor settlement",
-            command: "openclaw update",
-            cwd: pendingResult.root ?? params.root,
-            durationMs: 0,
-            exitCode: 1,
-            stderrTail: activationTimeout?.message ?? formatErrorMessage(failure),
-          },
-        ],
+        failedStep,
+        steps: [...pendingResult.steps, failedStep],
       }
     : failure instanceof UpdateCommandFailure
       ? failure.result
@@ -168,6 +189,10 @@ export async function resolveSettledUpdateCommandResult(
   // The mutation owner is now closed. This is diagnostic publication only,
   // never authority to reopen displaced state or replace another terminal row.
   try {
+    if (failure === undefined && captured) {
+      readUpdateCommandTerminalRecord(params, result, captured);
+      return { result, settlementFailed, captured };
+    }
     const env = params.ownedManagedUpdateEnv ?? params.opts.run?.env;
     // Keep the first target stable if selectors change during admission.
     const targetPath = resolveOpenClawStateSqlitePath(env);
@@ -251,7 +276,7 @@ export async function recordUpdatePackageCompletion(
     // A caller's successful activation does not establish recovery/cleanup safety.
     // Unknown exceptions and unqualified completion refusals must fail the command.
     return new UpdateCommandFailure(
-      { ...result, status: "error", reason: "package-backup-retention-failed" },
+      { ...result, status: "error", reason: "package-backup-retention-failed", failedStep: step },
       1,
       step.stderrTail ?? "Package backup completion was not verified.",
       { cause: cleanupFailure },
@@ -309,6 +334,9 @@ export async function reportPreMutationUpdateResult(
         }
       : {}),
   }));
+  if (!params.opts.run && params.opts.dryRun && params.reason === "invalid-dev-target") {
+    return exitCliAfterOutput(defaultRuntime, 1);
+  }
   throw new UpdateCommandFailure(
     result,
     params.status === "skipped" ? 0 : resolveManagedServiceUpdateFailureExitCode(result),
@@ -326,35 +354,41 @@ async function publishPreMutationUpdateOutcome(
     recordUpdateRunPhase(
       run.runId,
       active.phase,
-      { origin: { nextAction: params.message } },
+      {
+        origin: { nextAction: params.message },
+        ...(params.installKind !== "unknown" ? { target: { kind: params.installKind } } : {}),
+      },
       { env: run.env },
     );
   }
   const outcome = await prepareOutcome();
+  const failedStep: UpdateStepResult | undefined =
+    outcome.status === "error" || params.failureFacts?.length
+      ? {
+          // A skipped admission adds facts to its phase, not evidence of update work.
+          name: outcome.status === "skipped" ? (active?.phase ?? "requested") : params.reason,
+          command: "openclaw update",
+          cwd: params.root,
+          durationMs: 0,
+          exitCode: outcome.status === "error" ? 1 : 0,
+          stderrTail: params.message,
+          ...(params.recoverySteps ? { recoverySteps: params.recoverySteps } : {}),
+          failureFacts: normalizeUpdateFailureFacts(
+            params.failureFacts ?? [
+              { check: params.reason, code: params.reason, message: params.message },
+            ],
+            run?.env,
+          ),
+        }
+      : undefined;
   const result = completeUpdateCommandRun(
     {
       ...outcome,
-      mode: params.installKind === "git" ? "git" : "unknown",
+      mode: params.mode ?? (params.installKind === "git" ? "git" : "unknown"),
       root: params.root,
       reason: params.reason,
-      steps:
-        outcome.status === "error"
-          ? [
-              {
-                name: params.reason,
-                command: "openclaw update",
-                cwd: params.root,
-                durationMs: 0,
-                exitCode: 1,
-                failureFacts: normalizeUpdateFailureFacts(
-                  params.failureFacts ?? [
-                    { check: params.reason, code: params.reason, message: params.message },
-                  ],
-                  run?.env,
-                ),
-              },
-            ]
-          : [],
+      failedStep: outcome.status === "error" ? failedStep : undefined,
+      steps: failedStep ? [failedStep] : [],
       ...(outcome.status === "skipped"
         ? { before: { version: await readPackageVersion(params.root) } }
         : {}),
@@ -370,6 +404,11 @@ async function publishPreMutationUpdateOutcome(
       env: run?.env,
     });
   }
+  // Existing runs and dry runs keep the legacy stderr-only target refusal.
+  if ((run || params.opts.dryRun) && params.reason === "invalid-dev-target" && params.message) {
+    defaultRuntime.error(params.message);
+    return result;
+  }
   if (params.opts.json && params.message) {
     defaultRuntime.error(params.message);
   }
@@ -381,10 +420,29 @@ async function publishPreMutationUpdateOutcome(
 export function publishUpdateCommandTerminalResult(
   params: Pick<FinishUpdateParams, "opts" | "coreAlreadyCurrent" | "ownedManagedUpdateEnv">,
   input: UpdateRunResult,
-  outcome: { rolledBack: boolean; downtimeMs?: number },
+  outcome: {
+    rolledBack: boolean;
+    downtimeMs?: number;
+    captured?: UpdateCommandTerminalRecord;
+  },
+  onTerminalRecord?: PublishedRecord,
 ): UpdateRunResult {
-  const nextAction = recordUpdateResultNextAction(params, input);
-  const result = completeUpdateCommandRun(input, params.opts.run, outcome);
-  printResult(result, params.opts, { nextAction });
+  let record: UpdateCommandTerminalRecord["record"] | undefined;
+  if (outcome.captured) {
+    try {
+      // Sentinel delivery may have yielded since settlement checked this identity.
+      record = readUpdateCommandTerminalRecord(params, input, outcome.captured);
+    } catch (cause) {
+      throw new UpdateCommandPendingRecoveryFailure(input, formatErrorMessage(cause), { cause });
+    }
+  }
+  const nextAction = recordUpdateResultNextAction(params, input, record);
+  const result = record
+    ? { ...input, runId: record.runId }
+    : completeUpdateCommandRun(input, params.opts.run, outcome);
+  printResult(result, params.opts, { nextAction, record });
+  if (record) {
+    onTerminalRecord?.(record);
+  }
   return result;
 }

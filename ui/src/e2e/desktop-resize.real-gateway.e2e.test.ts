@@ -18,7 +18,10 @@ import {
 import { getFreePort } from "../../../src/test-utils/ports.ts";
 import { startSkillLibraryNodeProcess } from "../../../test/e2e/qa-lab/runtime/skill-library-node-process.ts";
 import { SkillLibraryWireClient } from "../../../test/e2e/qa-lab/runtime/skill-library-wire-fixture.ts";
-import { createOpenClawTestInstance } from "../../../test/helpers/openclaw-test-instance.ts";
+import {
+  createOpenClawTestInstance,
+  type GatewayReadinessDiagnostic,
+} from "../../../test/helpers/openclaw-test-instance.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
 import { captureControlUiE2eFailureDiagnostics } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -44,6 +47,7 @@ declare module "vitest" {
   interface TaskMeta {
     desktopProofPhase?: DesktopProofPhase;
     desktopViewerResizeFailure?: DesktopViewerResizeFailure;
+    desktopGatewayReadiness?: GatewayReadinessDiagnostic[];
   }
 }
 
@@ -110,6 +114,18 @@ async function framebuffer(canvas: Locator) {
   return await canvas.evaluate((element) => {
     const surface = element as HTMLCanvasElement;
     return { width: surface.width, height: surface.height };
+  });
+}
+
+async function sampledFramebufferColors(canvas: Locator): Promise<number> {
+  return canvas.evaluate((element) => {
+    const surface = element as HTMLCanvasElement;
+    const pixels = surface.getContext("2d")!.getImageData(0, 0, surface.width, surface.height).data;
+    const colors = new Set<number>();
+    for (let index = 0; index < pixels.length; index += 128) {
+      colors.add((pixels[index]! << 16) | (pixels[index + 1]! << 8) | pixels[index + 2]!);
+    }
+    return colors.size;
   });
 }
 
@@ -280,7 +296,12 @@ suite.define(() => {
           phase("gateway-start");
           // /readyz waits for the full worker/plugin sidecars. The unrelated
           // subagent-restoration tail is not a desktop readiness requirement.
-          await gateway.startGateway();
+          try {
+            await gateway.startGateway();
+          } finally {
+            // Keep the probe's outcome even when startup rollback also fails.
+            context.task.meta.desktopGatewayReadiness = [...gateway.readiness];
+          }
           context.signal.throwIfAborted();
           if (fixture.carrier === "node") {
             const endpoint = {
@@ -581,9 +602,21 @@ suite.define(() => {
           expect(await resized.result).toBe(0);
           await resizeWindow(observer, 700, 700);
           expect(await guest.geometry()).toEqual(fitted);
+          const formerControllerCanvas = await canvas.elementHandle();
+          if (!formerControllerCanvas) {
+            throw new Error("Desktop controller canvas is unavailable before handoff");
+          }
           await observerPanel.getByRole("button", { name: "Take control", exact: true }).click();
           await expect.poll(() => observerPanel.locator('option[value="match"]').count()).toBe(1);
           await expect.poll(() => panel.locator('option[value="match"]').count()).toBe(0);
+          // Losing control starts a new read-only connection; the flag alone is not readiness.
+          // Wait for pixels from that replacement before the sequential resize matrix:
+          // TigerVNC can close a peer resized before its encodings have been negotiated.
+          await expect
+            .poll(() => formerControllerCanvas.evaluate((element) => element.isConnected))
+            .toBe(false);
+          await expect.poll(() => framebuffer(canvas)).toEqual(fitted);
+          await expect.poll(() => sampledFramebufferColors(canvas)).toBeGreaterThan(8);
           await observerPanel.getByRole("combobox", { name: "Desktop size" }).selectOption("match");
           for (const [stage, width, height] of [
             ["05-portrait", 390, 900],
@@ -597,17 +630,7 @@ suite.define(() => {
               await observerPanel.locator(".desktop-touch-action, .desktop-sizing").count(),
             ).toBe(5);
           }
-          const colorCount = await observerCanvas.evaluate((element) => {
-            const surface = element as HTMLCanvasElement;
-            const pixels = surface
-              .getContext("2d")!
-              .getImageData(0, 0, surface.width, surface.height).data;
-            const colors = new Set<number>();
-            for (let index = 0; index < pixels.length; index += 128) {
-              colors.add((pixels[index]! << 16) | (pixels[index + 1]! << 8) | pixels[index + 2]!);
-            }
-            return colors.size;
-          });
+          const colorCount = await sampledFramebufferColors(observerCanvas);
           expect(colorCount).toBeGreaterThan(8);
           await guest.run(["rm", "-f", "/tmp/openclaw-desktop-resize-input"]);
           await guest.run([

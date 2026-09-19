@@ -13,6 +13,7 @@ export type ChatRouteData =
   | {
       kind: "session";
       sessionKey: string;
+      creation?: Readonly<{ admitted: boolean }>;
       agentId?: string;
       draft?: string;
       focusComposer?: boolean;

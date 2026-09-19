@@ -149,6 +149,8 @@ export async function deliverSubagentAnnouncement(params: {
   sourceRunId?: string;
   sourceTool?: string;
   isSourceSessionEffectsAllowed?: () => boolean;
+  /** Additional source guard released by the accepting Gateway or injection owner. */
+  isSourceSessionAdmissionAllowed?: () => boolean;
   isCompletionOwnedByRequesterYield?: () => boolean;
   targetRequesterSessionKey: string;
   requesterIsSubagent: boolean;
@@ -163,7 +165,9 @@ export async function deliverSubagentAnnouncement(params: {
   signal?: AbortSignal;
   resolveGatewayContext?: import("../../../gateway/server-methods/types.js").GatewayContextResolver;
 }): Promise<SubagentAnnounceDeliveryResult> {
-  const sourceOwnerChanged = () => params.isSourceSessionEffectsAllowed?.() === false;
+  const sourceOwnerChanged = () =>
+    params.isSourceSessionEffectsAllowed?.() === false ||
+    params.isSourceSessionAdmissionAllowed?.() === false;
   if (sourceOwnerChanged()) {
     return sourceOwnerChangedResult();
   }
@@ -307,6 +311,7 @@ export async function deliverSubagentAnnouncement(params: {
         createUserTurnTranscriptRecorder: createCompletionUserTurnTranscriptRecorder,
         signal: params.signal,
         isSourceSessionEffectsAllowed: params.isSourceSessionEffectsAllowed,
+        isSourceSessionAdmissionAllowed: params.isSourceSessionAdmissionAllowed,
       });
     },
     direct: async () => {
@@ -327,6 +332,7 @@ export async function deliverSubagentAnnouncement(params: {
         sourceSessionKey: params.sourceSessionKey,
         sourceTool: params.sourceTool,
         isSourceSessionEffectsAllowed: params.isSourceSessionEffectsAllowed,
+        isSourceSessionAdmissionAllowed: params.isSourceSessionAdmissionAllowed,
         isCompletionOwnedByRequesterYield: params.isCompletionOwnedByRequesterYield,
         requesterIsSubagent: params.requesterIsSubagent,
         completionTarget: params.completionTarget,

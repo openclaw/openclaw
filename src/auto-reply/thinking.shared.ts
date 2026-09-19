@@ -11,16 +11,18 @@ export { normalizeFastMode };
 export type { FastMode };
 
 /** Canonical thinking level values accepted by chat commands and session state. */
-export type ThinkLevel =
-  | "off"
-  | "minimal"
-  | "low"
-  | "medium"
-  | "high"
-  | "xhigh"
-  | "adaptive"
-  | "max"
-  | "ultra";
+const ALL_THINKING_LEVELS = [
+  "off",
+  "minimal",
+  "low",
+  "medium",
+  "high",
+  "xhigh",
+  "adaptive",
+  "max",
+  "ultra",
+] as const;
+export type ThinkLevel = (typeof ALL_THINKING_LEVELS)[number];
 export type VerboseLevel = "off" | "on" | "full";
 export type TraceLevel = "off" | "on" | "raw";
 export type ElevatedLevel = "off" | "on" | "ask" | "full";
@@ -30,6 +32,7 @@ type UsageDisplayLevel = "off" | "tokens" | "full";
 export type ThinkingCatalogEntry = {
   provider: string;
   id: string;
+  nativeRuntime?: string;
   api?: string;
   baseUrl?: string;
   contextWindow?: number;
@@ -43,22 +46,12 @@ export type ThinkingCatalogEntry = {
   params?: Record<string, unknown>;
   compat?: {
     thinkingFormat?: string;
+    supportsReasoningEffort?: boolean;
     supportedReasoningEfforts?: readonly string[] | null;
+    reasoningEffortMap?: Record<string, string>;
   } | null;
 };
 
-/** Complete canonical level set accepted by user-facing thinking controls. */
-const ALL_THINKING_LEVELS: readonly ThinkLevel[] = [
-  "off",
-  "minimal",
-  "low",
-  "medium",
-  "high",
-  "xhigh",
-  "adaptive",
-  "max",
-  "ultra",
-];
 export const THINKING_LEVELS_HELP = ALL_THINKING_LEVELS.join("|");
 export const BASE_THINKING_LEVELS: ThinkLevel[] = ["off", "minimal", "low", "medium", "high"];
 export const THINKING_LEVEL_RANKS: Record<ThinkLevel, number> = {
@@ -108,7 +101,7 @@ export function normalizeThinkLevel(raw?: string | null): ThinkLevel | undefined
   if (["mid", "med", "medium", "thinkharder", "think-harder", "harder"].includes(key)) {
     return "medium";
   }
-  if (["high", "ultrathink", "think-hard", "thinkhardest", "highest"].includes(key)) {
+  if (["high", "ultrathink", "thinkhardest", "highest"].includes(key)) {
     return "high";
   }
   if (["think"].includes(key)) {
@@ -124,18 +117,6 @@ export function isSessionDefaultDirectiveValue(raw?: string | null): boolean {
     return false;
   }
   return ["default", "inherit", "inherited", "clear", "reset", "unpin"].includes(key);
-}
-
-/** Chooses the default thinking level for one provider/model catalog entry. */
-export function resolveThinkingDefaultForModelCore(params: {
-  provider: string;
-  model: string;
-  catalog?: readonly ThinkingCatalogEntry[];
-}): ThinkLevel {
-  const candidate = params.catalog?.find(
-    (entry) => entry.provider === params.provider && entry.id === params.model,
-  );
-  return candidate?.reasoning ? "low" : "off";
 }
 
 type OnOffFullLevel = "off" | "on" | "full";

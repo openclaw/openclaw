@@ -1,10 +1,11 @@
 // E2E Mock Config Limits tests cover e2e mock config limits script behavior.
-import { type ChildProcess, execFile, spawn, spawnSync } from "node:child_process";
+import { ChildProcess, execFile, spawn, spawnSync } from "node:child_process";
 import { once } from "node:events";
 import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import net from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { PassThrough } from "node:stream";
 import { setTimeout as delay } from "node:timers/promises";
 import { promisify } from "node:util";
 import { asOptionalRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
@@ -12,6 +13,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { validateToolArguments } from "../../packages/llm-core/src/validation.js";
 import { execSchema } from "../../src/agents/bash-tools.schemas.js";
 import { writeJsonAtomic } from "../../src/infra/json-files.js";
+import { redactSensitiveText } from "../../src/logging/redact.js";
 import { captureFullEnv } from "../../src/test-utils/env.js";
 import { createOpenClawTestState } from "../../src/test-utils/openclaw-test-state.js";
 import { getFreePort } from "../../src/test-utils/ports.js";
@@ -82,15 +84,21 @@ function runScript(scriptPath: string, env: Record<string, string>) {
   });
 }
 
-async function waitForListening(child: ChildProcess, port: number, output: () => string) {
+async function waitForListening(
+  child: ChildProcess,
+  port: number,
+  output: () => string,
+  stderr: () => string,
+) {
   return await new Promise<number>((resolve, reject) => {
     let settled = false;
+    let exited = false;
+    const failure = (message: string) =>
+      new Error(
+        `${message}\nstdout tail:\n${redactSensitiveText(output(), { mode: "tools" }).slice(-4_096)}\nstderr tail:\n${redactSensitiveText(stderr(), { mode: "tools" }).slice(-4_096)}`,
+      );
     const timeout = setTimeout(() => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      reject(new Error(`mock server did not listen on ${port}: ${output()}`));
+      finish(failure(`mock server did not listen on ${port}`));
     }, 3_000);
     const finish = (error?: Error, boundPort = port) => {
       if (settled) {
@@ -98,6 +106,9 @@ async function waitForListening(child: ChildProcess, port: number, output: () =>
       }
       settled = true;
       clearTimeout(timeout);
+      child.stdout?.off("data", checkListening);
+      child.off("exit", onExit);
+      child.off("close", onClose);
       if (error) {
         reject(error);
         return;
@@ -105,6 +116,9 @@ async function waitForListening(child: ChildProcess, port: number, output: () =>
       resolve(boundPort);
     };
     const checkListening = () => {
+      if (exited) {
+        return;
+      }
       const match = /(?:^|\n)mock-openai listening on ([1-9]\d{0,4})(?: \(HTTPS?\))?\r?\n/u.exec(
         output(),
       );
@@ -115,11 +129,17 @@ async function waitForListening(child: ChildProcess, port: number, output: () =>
         }
       }
     };
-    checkListening();
+    const onExit = () => {
+      exited = true;
+    };
+    const onClose = (code: number | null, signal: NodeJS.Signals | null) => {
+      finish(failure(`mock server exited before listening: code=${code} signal=${signal}`));
+    };
     child.stdout?.on("data", checkListening);
-    child.once("exit", (code, signal) => {
-      finish(new Error(`mock server exited before listening: code=${code} signal=${signal}`));
-    });
+    child.once("exit", onExit);
+    // Close follows stdio drain; exit can arrive before the final diagnostic chunk.
+    child.once("close", onClose);
+    checkListening();
   });
 }
 
@@ -153,7 +173,7 @@ async function withMockServer(
     },
   ) => Promise<void>,
 ) {
-  const port = env.MOCK_PORT === undefined ? await getFreePort() : Number(env.MOCK_PORT);
+  const port = Number(env.MOCK_PORT ?? "0");
   let stderr = "";
   let stdout = "";
   const child = spawn(process.execPath, [scriptPath], {
@@ -169,7 +189,12 @@ async function withMockServer(
     stderr += chunk;
   });
   try {
-    const boundPort = await waitForListening(child, port, () => stdout);
+    const boundPort = await waitForListening(
+      child,
+      port,
+      () => stdout,
+      () => stderr,
+    );
     await run(`http://127.0.0.1:${boundPort}`, {
       stderr: () => stderr,
       stdout: () => stdout,
@@ -179,6 +204,64 @@ async function withMockServer(
   }
 }
 
+describe("mock server readiness diagnostics", () => {
+  it("includes bounded, redacted output after startup pipes close", async () => {
+    const child = new ChildProcess();
+    const stdout = new PassThrough();
+    child.stdout = stdout;
+    const secret = `synthetic-${"PRIVATE_TOKEN_SEGMENT".repeat(300)}-tail`;
+    let output = `${"s".repeat(6_000)}\nstdout-tail`;
+    let stderr = `${"e".repeat(6_000)}\nAuthorization: Bearer ${secret}\ninitial failure`;
+    const result = waitForListening(
+      child,
+      12_345,
+      () => output,
+      () => stderr,
+    ).then(
+      () => {
+        throw new Error("mock unexpectedly became ready");
+      },
+      (error: unknown) => {
+        if (!(error instanceof Error)) {
+          throw error;
+        }
+        return error;
+      },
+    );
+    let settled = false;
+    void result.then(
+      () => {
+        settled = true;
+      },
+      () => {
+        settled = true;
+      },
+    );
+    try {
+      child.emit("exit", 1, null);
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
+      const settledBeforeClose = settled;
+      output += "\nmock-openai listening on 12345\n";
+      stdout.emit("data", "late readiness marker");
+      stderr += "\nlate stderr cause";
+      child.emit("close", 1, null);
+      const error = await result;
+      expect(error.message).toContain("mock server exited before listening: code=1 signal=null");
+      expect(error.message).toContain("late stderr cause");
+      expect(error.message).toContain("stdout-tail");
+      expect(error.message).not.toContain("PRIVATE_TOKEN_SEGMENT");
+      expect(error.message.length).toBeLessThanOrEqual(8_300);
+      expect(settledBeforeClose).toBe(false);
+    } finally {
+      child.emit("close", 1, null);
+      stdout.destroy();
+      await result.catch(() => undefined);
+    }
+  });
+});
+
 describe("mock OpenAI response markers", () => {
   it.concurrent.for(
     [
@@ -186,7 +269,7 @@ describe("mock OpenAI response markers", () => {
       { api: "responses", stream: true },
       { api: "chat/completions", stream: false },
       { api: "chat/completions", stream: true },
-    ].flatMap((row) => [false, true].map((modelMap) => ({ ...row, modelMap }))),
+    ].flatMap(({ api, stream }) => [false, true].map((modelMap) => ({ api, stream, modelMap }))),
   )(
     "emits native exec draft-proof calls from $api (stream=$stream, modelMap=$modelMap)",
     async ({ api, stream, modelMap }, { expect: taskExpect }) => {
@@ -856,6 +939,107 @@ describe("mock OpenAI response markers", () => {
     }
   });
 
+  it("resumes the MCP Code Mode fixture until the latest result completes", async () => {
+    await withMockServer(mockOpenAiPath, {}, async (baseUrl) => {
+      const input: Record<string, unknown>[] = [
+        { content: "mcp code mode api file qa check", role: "user" },
+      ];
+      const request = async () => {
+        const response = await fetch(`${baseUrl}/v1/responses`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            input,
+            stream: false,
+            tools: ["exec", "wait"].map((name) => ({
+              name,
+              parameters: { type: "object" },
+              type: "function",
+            })),
+          }),
+        });
+        expect(response.status).toBe(200);
+        return await response.json();
+      };
+      const first = await request();
+      expect(first.output?.[0]).toMatchObject({ name: "exec", type: "function_call" });
+      expect(JSON.parse(first.output[0].arguments)).toMatchObject({
+        language: "javascript",
+        code: expect.stringContaining('MCP.fixture.lookupNote({ id: "alpha" })'),
+      });
+
+      for (const reason of ["pending_tools", "yield"]) {
+        input.push({
+          output: JSON.stringify({ status: "waiting", runId: "cm_fixture", reason, output: [] }),
+          type: "function_call_output",
+        });
+        const pending = await request();
+        expect(pending.output?.[0]).toMatchObject({
+          arguments: JSON.stringify({ runId: "cm_fixture" }),
+          name: "wait",
+          type: "function_call",
+        });
+      }
+
+      input.push({
+        output: JSON.stringify({
+          status: "completed",
+          value: {
+            marker: "MCP_CODE_MODE_FILE_TOOL_RESULT",
+            resultText: "fixture-note-alpha",
+          },
+        }),
+        type: "function_call_output",
+      });
+      const completed = await request();
+      expect(completed.output?.[0]?.content?.[0]?.text).toContain(
+        "MCP_CODE_MODE_FILE_OK note=fixture-note-alpha",
+      );
+
+      input.push({ output: "fixture call failed", type: "function_call_output" });
+      const failed = await request();
+      expect(failed.output?.[0]?.content?.[0]?.text).toBe(
+        "MCP_CODE_MODE_FILE_FAIL unclear=code-mode-exec-did-not-return-fixture-note",
+      );
+    });
+  });
+
+  it.each([
+    { output: { status: "waiting", runId: "cm_fixture" }, tools: ["exec"] },
+    { output: { status: "waiting", runId: "" }, tools: ["exec", "wait"] },
+    { output: { status: "waiting", runId: 42 }, tools: ["exec", "wait"] },
+    {
+      output: { value: { status: "waiting", runId: "nested-operation" } },
+      tools: ["exec", "wait"],
+    },
+    { output: "not JSON", tools: ["exec", "wait"] },
+    { output: "", tools: ["exec", "wait"] },
+    { output: undefined, tools: ["exec", "wait"] },
+  ])("rejects an unusable MCP Code Mode continuation: $output", async ({ output, tools }) => {
+    await withMockServer(mockOpenAiPath, {}, async (baseUrl) => {
+      const response = await fetch(`${baseUrl}/v1/responses`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          input: [
+            { content: "mcp code mode api file qa check", role: "user" },
+            {
+              output: typeof output === "string" ? output : JSON.stringify(output),
+              type: "function_call_output",
+            },
+          ],
+          stream: false,
+          tools: tools.map((name) => ({ name, parameters: { type: "object" }, type: "function" })),
+        }),
+      });
+      expect(response.status).toBe(200);
+      const body = await response.json();
+      expect(body.output?.[0]?.content?.[0]?.text).toBe(
+        "MCP_CODE_MODE_FILE_FAIL unclear=code-mode-exec-did-not-return-fixture-note",
+      );
+    });
+  });
+
   it("drives the MCP App fixture tool before returning the visible marker", async () => {
     await withMockServer(mockOpenAiPath, {}, async (baseUrl) => {
       const first = await fetch(`${baseUrl}/v1/responses`, {
@@ -964,8 +1148,9 @@ describe("mock OpenAI response markers", () => {
 });
 
 describe("e2e mock and config helper numeric limits", () => {
-  it("reports the actual OS-assigned port for MOCK_PORT=0", async () => {
-    await withMockServer(mockOpenAiPath, { MOCK_PORT: "0" }, async (baseUrl, output) => {
+  it.each([undefined, "0"])("reports the bound port for MOCK_PORT=%s", async (port) => {
+    const env: Record<string, string> = port === undefined ? {} : { MOCK_PORT: port };
+    await withMockServer(mockOpenAiPath, env, async (baseUrl, output) => {
       expect(Number(new URL(baseUrl).port)).toBeGreaterThan(0);
       expect(output.stdout()).not.toContain("mock-openai listening on 0\n");
       const response = await fetch(`${baseUrl}/v1/responses`, {
@@ -1090,6 +1275,7 @@ describe("e2e mock and config helper numeric limits", () => {
       await withMockServer(
         webSearchMockPath,
         {
+          MOCK_PORT: String(await getFreePort()),
           MOCK_REQUEST_LOG: requestLogDirectory,
           RAW_SCHEMA_ERROR: "400 schema rejected",
           SUCCESS_MARKER: "OPENCLAW_SCHEMA_E2E_OK",

@@ -4,13 +4,14 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { resolveSystemEventOwnerAgentId } from "../../infra/system-event-ownership.js";
 import {
   getActiveGatewayRootWorkCount,
   isGatewaySubordinateWorkAdmissionClosed,
   resetGatewayWorkAdmission,
   tryBeginGatewayRootWorkAdmission,
 } from "../../process/gateway-work-admission.js";
+import { getSpawnBroker, runWithSpawnBroker } from "../../process/spawn-broker/context.js";
+import { useSpawnBrokerTestFixture } from "../../process/spawn-broker/host.test-support.js";
 
 const enqueueSystemEventMock = vi.fn();
 const requestHeartbeatMock = vi.fn();
@@ -78,6 +79,7 @@ vi.mock("./hooks-request-handler.js", () => ({
 }));
 
 const { createGatewayHooksRequestHandler } = await import("./hooks.js");
+const createBroker = useSpawnBrokerTestFixture(afterEach);
 
 function waitForFast<T>(
   callback: () => T | Promise<T>,
@@ -88,8 +90,7 @@ function waitForFast<T>(
 
 function expectOwnedSystemEvent(text: string, ownerAgentId: string): void {
   const call = enqueueSystemEventMock.mock.calls.find(([queuedText]) => queuedText === text);
-  expect(call?.[1]).toEqual({ sessionKey: "global" });
-  expect(resolveSystemEventOwnerAgentId(call?.[1] as object)).toBe(ownerAgentId);
+  expect(call?.[1]).toEqual({ sessionKey: `agent:${ownerAgentId}:global` });
 }
 
 function buildMinimalParams(overrides: { agentStartAdmissionTimeoutMs?: number } = {}) {
@@ -284,23 +285,28 @@ describe("dispatchAgentHook trust handling", () => {
     await waitForFast(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
   });
 
-  it("gives a queued hook run a resolvable gateway context", async () => {
+  it("gives a queued hook run its owning Gateway context and broker", async () => {
+    const broker = await createBroker();
     const gatewayContext = {
       terminalSessions: {},
       resolveGatewayContext: () => gatewayContext,
     } as never;
     let observed: unknown = "never-ran";
     let observedClient: unknown = "never-ran";
+    let observedBroker: unknown = "never-ran";
     runCronIsolatedAgentTurnMock.mockImplementationOnce(async () => {
       const scope = getPluginRuntimeGatewayRequestScope();
       observed = scope?.resolveGatewayContext?.();
       observedClient = scope?.client;
+      observedBroker = getSpawnBroker();
       return { status: "ok", summary: "done", delivered: false };
     });
-    createGatewayHooksRequestHandler({
-      ...buildMinimalParams(),
-      resolveGatewayContext: () => gatewayContext,
-    });
+    runWithSpawnBroker(broker, () =>
+      createGatewayHooksRequestHandler({
+        ...buildMinimalParams(),
+        resolveGatewayContext: () => gatewayContext,
+      }),
+    );
 
     await withPluginRuntimeGatewayRequestScope({ client: { id: "retired-request" } } as never, () =>
       dispatchAgentHook(buildAgentPayload("Gateway context")),
@@ -308,6 +314,7 @@ describe("dispatchAgentHook trust handling", () => {
 
     expect(observed).toBe(gatewayContext);
     expect(observedClient).toBeUndefined();
+    expect(observedBroker).toBe(broker);
     await waitForFast(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
   });
 

@@ -146,6 +146,8 @@ type GatewayHttpRequestStage = () => Promise<boolean> | boolean;
 
 /** Creates the gateway HTTP/HTTPS server and ordered request-stage router. */
 export function createGatewayHttpServer(opts: {
+  /** Pre-bound listener supplied by the internal test transport. */
+  testListener?: HttpServer;
   clients: Set<GatewayWsClient>;
   controlUiEnabled?: boolean;
   controlUiBasePath: string;
@@ -220,9 +222,10 @@ export function createGatewayHttpServer(opts: {
       }
     });
   };
-  const httpServer: HttpServer = opts.tlsOptions
-    ? createHttpsServer(opts.tlsOptions, handleServerRequest)
-    : createHttpServer(handleServerRequest);
+  const httpServer =
+    opts.testListener ??
+    (opts.tlsOptions ? createHttpsServer(opts.tlsOptions) : createHttpServer());
+  httpServer.on("request", handleServerRequest);
   // Node otherwise sends interim/expectation responses before application admission.
   httpServer.on("checkContinue", (req, res) => handleServerRequest(req, res, "continue"));
   httpServer.on("checkExpectation", (req, res) => handleServerRequest(req, res, "reject"));

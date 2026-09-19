@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import type { DatabaseSync } from "node:sqlite";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { TranscriptEvent } from "../config/sessions/session-accessor.sqlite-contract.js";
@@ -27,7 +28,11 @@ import {
 } from "./kysely-sync.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { runSqliteImmediateTransactionSync } from "./sqlite-transaction.js";
-import { resolveAgentDatabaseMigrationTargets } from "./state-migrations.media-persistence-targets.js";
+import {
+  resolveAgentDatabaseMigrationTargets,
+  type AgentDatabaseMigrationTarget,
+  type PreparedAgentDatabaseMigrationDiscovery,
+} from "./state-migrations.media-persistence-targets.js";
 import {
   migrateTranscriptDirectiveArchives,
   TRANSCRIPT_DIRECTIVE_MIGRATION_BATCH_SIZE,
@@ -419,6 +424,8 @@ function agentDatabaseNeedsTranscriptDirectiveMigration(params: {
 export async function migrateHistoricalTranscriptDirectives(
   params: {
     configuredAgentDatabaseTargets?: readonly { agentId: string; path: string }[];
+    preparedDiscovery?: PreparedAgentDatabaseMigrationDiscovery;
+    preparedTargets?: readonly AgentDatabaseMigrationTarget[];
     env?: NodeJS.ProcessEnv;
   } = {},
 ): Promise<MigrationMessages> {
@@ -427,16 +434,20 @@ export async function migrateHistoricalTranscriptDirectives(
   const warnings: string[] = [];
   let recoverableWarningCount = 0;
   try {
-    const discovery = resolveAgentDatabaseMigrationTargets({
-      changes,
-      configuredAgentDatabaseTargets: params.configuredAgentDatabaseTargets ?? [],
-      env,
-      warnings,
-    });
+    const discovery = params.preparedTargets
+      ? { targets: params.preparedTargets, recoverableWarningCount: 0 }
+      : resolveAgentDatabaseMigrationTargets({
+          changes,
+          configuredAgentDatabaseTargets: params.configuredAgentDatabaseTargets ?? [],
+          env,
+          warnings,
+          preparedDiscovery: params.preparedDiscovery,
+        });
     recoverableWarningCount = discovery.recoverableWarningCount;
-    const targets: typeof discovery.targets = [];
+    const targets: AgentDatabaseMigrationTarget[] = [];
     for (const target of discovery.targets) {
       try {
+        assertMigrationTargetPathCurrent(target);
         if (
           agentDatabaseNeedsTranscriptDirectiveMigration({
             agentId: target.agentId,
@@ -454,8 +465,11 @@ export async function migrateHistoricalTranscriptDirectives(
     }
     if (targets.length > 0) {
       await withAgentDatabaseMaintenanceLease({ env }, async (maintenance) => {
-        for (const target of targets) {
+        for (const target of targets.toSorted(
+          (a, b) => a.agentId.localeCompare(b.agentId) || a.path.localeCompare(b.path),
+        )) {
           try {
+            assertMigrationTargetPathCurrent(target);
             const result = await migrateAgentDatabase(
               { agentId: target.agentId, pathname: target.path },
               maintenance,
@@ -483,4 +497,10 @@ export async function migrateHistoricalTranscriptDirectives(
       ? { warningDisposition: "recoverable" as const }
       : {}),
   };
+}
+
+function assertMigrationTargetPathCurrent(target: AgentDatabaseMigrationTarget): void {
+  if (fs.realpathSync.native(target.path) !== target.realPath) {
+    throw new Error(`Agent database path changed since migration discovery: ${target.path}`);
+  }
 }

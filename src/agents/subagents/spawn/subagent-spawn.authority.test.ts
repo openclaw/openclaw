@@ -1,3 +1,4 @@
+import "./subagent-spawn-model.mocks.shared.js";
 /** Registered native children retain their own lifecycle after spawn handoff. */
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
@@ -26,6 +27,7 @@ import {
   beginSessionWorkAdmission,
   consumeSessionWorkAdmissionHandoff,
 } from "../../../sessions/session-lifecycle-admission.js";
+import { observeSessionWorkAdmissionDrain } from "../../../sessions/session-lifecycle-admission.test-support.js";
 import { cancelTaskById, findTaskByRunId, getTaskById } from "../../../tasks/task-registry.js";
 import { configureTaskRegistryRuntime } from "../../../tasks/task-registry.store.js";
 import {
@@ -77,7 +79,6 @@ describe("pending spawn invocation authority", () => {
       clearConfigCache();
       clearRuntimeConfigSnapshot();
       const { cfg, storePath, context, admission, parent } = await createBoundParent();
-      const sessionLifecycle = await import("../../../sessions/session-lifecycle-admission.js");
       const key = (id: string) => `agent:main:subagent:${id}`;
       const ids = slowBranch === "sibling" ? ["a", "b"] : ["a", "b", "d"];
       const slowId = slowBranch === "sibling" ? "a" : "d";
@@ -134,18 +135,13 @@ describe("pending spawn invocation authority", () => {
         assertAllowed: () => {},
         onInterrupt: () => slow.release(),
       });
-      const interrupt = sessionLifecycle.interruptSessionWorkAdmissions;
-      const drain = vi
-        .spyOn(sessionLifecycle, "interruptSessionWorkAdmissions")
-        .mockImplementation(async (params) => {
-          const released = await interrupt(params);
-          if (params.scope === storePath && Array.from(params.identities).includes(key(slowId))) {
-            expect(released).toBe(true);
-            entered.resolve();
-            await resume.promise;
-          }
-          return released;
-        });
+      const restoreDrain = observeSessionWorkAdmissionDrain(async (params, released) => {
+        if (params.scope === storePath && Array.from(params.identities).includes(key(slowId))) {
+          expect(released).toBe(true);
+          entered.resolve();
+          await resume.promise;
+        }
+      });
       const cancellation = invokeChatAbortHandler({
         handler: handleChatAbortRequest,
         context,
@@ -273,7 +269,7 @@ describe("pending spawn invocation authority", () => {
         try {
           await cancellation;
         } finally {
-          drain.mockRestore();
+          restoreDrain();
           releaseSwarmRun("late-spawn-blocker");
           freshAdmission.close();
           admission.close();

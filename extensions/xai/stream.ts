@@ -1,4 +1,3 @@
-// Xai plugin module implements stream behavior.
 import type { StreamFn } from "openclaw/plugin-sdk/agent-core";
 import { streamSimple } from "openclaw/plugin-sdk/llm";
 import type { ProviderWrapStreamFnContext } from "openclaw/plugin-sdk/plugin-entry";
@@ -45,14 +44,6 @@ function createXaiGrokOAuthHeadersWrapper(
       headers: Object.fromEntries(headers.entries()),
     });
   };
-}
-
-function supportsReasoningControls(model: { compat?: unknown; reasoning?: unknown }): boolean {
-  const compat =
-    model.compat && typeof model.compat === "object"
-      ? (model.compat as { supportsReasoningEffort?: unknown })
-      : undefined;
-  return model.reasoning === true && compat?.supportsReasoningEffort !== false;
 }
 
 const XAI_REASONING_ENCRYPTED_CONTENT_INCLUDE = "reasoning.encrypted_content";
@@ -210,7 +201,7 @@ function normalizeXaiResponsesToolResultPayload(
 function createXaiToolPayloadCompatibilityWrapper(baseStreamFn: StreamFn | undefined): StreamFn {
   return createPayloadPatchStreamWrapper(baseStreamFn, ({ payload, model }) => {
     normalizeXaiResponsesToolResultPayload(payload, model);
-    if (!supportsReasoningControls(model)) {
+    if (!model.reasoning || asOptionalRecord(model.compat)?.supportsReasoningEffort === false) {
       // Only current flagship Grok models advertise configurable effort.
       delete payload.reasoning;
       delete payload.reasoningEffort;

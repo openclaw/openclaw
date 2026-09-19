@@ -8,6 +8,7 @@ export function applyControlUiPresentation(params: {
   environment: ControlUiEnvironment | null;
   seamColor?: string;
 }): void {
+  invalidateControlUiFaviconPalette();
   applyControlUiOperatorSeamColor(params.seamColor);
   const root = document.documentElement;
   const environment = params.environment;
@@ -52,11 +53,19 @@ export function applyControlUiPresentation(params: {
 type ControlUiFaviconStatus = "attention" | "working" | "done" | "disconnected" | "idle";
 
 let faviconStatus: ControlUiFaviconStatus = "idle";
+let faviconPalette: ReturnType<typeof resolveFaviconPalette> | undefined;
 const faviconSources = new Map<string, Promise<FaviconSource>>();
 const faviconRequests = new WeakMap<HTMLLinkElement, { signature: string }>();
 
+export function invalidateControlUiFaviconPalette(): void {
+  faviconPalette = undefined;
+}
+
 export function applyControlUiFaviconStatus(status: ControlUiFaviconStatus): void {
-  faviconStatus = status;
+  if (faviconStatus !== status) {
+    faviconStatus = status;
+    invalidateControlUiFaviconPalette();
+  }
   syncControlUiFavicon();
 }
 
@@ -73,7 +82,7 @@ function restoreFavicon(icon: HTMLLinkElement, original: [string | null, string 
   }
 }
 
-function syncControlUiFavicon(): void {
+function resolveFaviconPalette() {
   const root = document.documentElement;
   const style = getComputedStyle(root);
   const environmentValue = root.getAttribute(CONTROL_UI_ENVIRONMENT_ATTRIBUTE);
@@ -96,6 +105,11 @@ function syncControlUiFavicon(): void {
   }[faviconStatus];
   const color = token ? style.getPropertyValue(token).trim() : "";
   const ring = style.getPropertyValue("--bg").trim();
+  return { environmentSvg, color, ring };
+}
+
+function syncControlUiFavicon(): void {
+  const { environmentSvg, color, ring } = (faviconPalette ??= resolveFaviconPalette());
   if (!color) {
     faviconSources.clear();
   }

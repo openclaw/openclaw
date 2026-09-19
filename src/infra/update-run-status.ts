@@ -9,6 +9,7 @@ import {
   LEGACY_UPDATE_RUN_ADVISORY,
   LEGACY_UPDATE_RUN_EXPIRED_REASON,
 } from "./update-run-legacy-expiry.js";
+import { isAcknowledgedAbandonedUpdateRun } from "./update-run-record.js";
 
 /** Status heals the bounded legacy defect while other recovery keeps its existing owner. */
 export function readUpdateRunStatus() {
@@ -34,7 +35,7 @@ export function readUpdateRunStatus() {
       ...(abandonment && abandonment !== LEGACY_UPDATE_RUN_EXPIRED_REASON && activeRun
         ? { abandonedRun: { runId: activeRun.runId, rule: abandonment } }
         : {}),
-      ...(expired
+      ...(expired && !isAcknowledgedAbandonedUpdateRun(expired)
         ? {
             advisories: [
               {

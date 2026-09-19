@@ -12,6 +12,7 @@ import {
   validateMessageBody,
   type Envelope,
   type MessageBody,
+  type ReplayStore,
 } from "./envelope.js";
 import {
   admitVerdict,
@@ -22,7 +23,6 @@ import {
 } from "./guard.js";
 import { parseHandleEpoch } from "./identity.js";
 import { signReceipt, type SignedReceipt } from "./receipts.js";
-import type { ReplayStore } from "./replay.js";
 
 export interface ReviewRequest {
   id: string;
@@ -185,9 +185,12 @@ export async function composeInbound(options: ComposeInboundOptions): Promise<In
   const refreshClaim = async () => {
     await options.replayStore.refresh?.(peer, options.envelope.id);
   };
+  const pendingRefreshes = new Set<Promise<void>>();
   const heartbeat = options.replayStore.refresh
     ? setInterval(() => {
-        void refreshClaim().catch(() => undefined);
+        const pending = refreshClaim().catch(() => undefined);
+        pendingRefreshes.add(pending);
+        void pending.then(() => pendingRefreshes.delete(pending));
       }, REPLAY_CLAIM_HEARTBEAT_MS)
     : undefined;
   heartbeat?.unref?.();
@@ -320,6 +323,7 @@ export async function composeInbound(options: ComposeInboundOptions): Promise<In
     if (heartbeat) {
       clearInterval(heartbeat);
     }
+    await Promise.all(pendingRefreshes);
   }
 }
 

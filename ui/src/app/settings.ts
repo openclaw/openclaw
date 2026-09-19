@@ -169,6 +169,7 @@ export const UI_APPEARANCE_DEFAULTS = {
   textScale: 100,
   sidebarLiveActivity: true,
   chatMessageMaxWidth: "48rem",
+  chatShowTaskProgress: true,
   chatCollapseTaskProgress: false,
   chatSendShortcut: "enter",
   catalogOpenTarget: "viewer",
@@ -194,6 +195,8 @@ export type UiSettings = {
   chatShowThinking: boolean;
   chatShowToolCalls: boolean;
   chatPersistCommentary?: boolean;
+  // Browser-local composer visibility; saved progress and other placements are unchanged.
+  chatShowTaskProgress?: boolean;
   // Browser-local presentation preference; false preserves active-card auto-expand.
   chatCollapseTaskProgress?: boolean;
   chatSendShortcut?: ChatSendShortcut;
@@ -471,6 +474,7 @@ export function loadUiPreferences(
     chatShowThinking: true,
     chatShowToolCalls: true,
     chatPersistCommentary: true,
+    chatShowTaskProgress: UI_APPEARANCE_DEFAULTS.chatShowTaskProgress,
     chatCollapseTaskProgress: UI_APPEARANCE_DEFAULTS.chatCollapseTaskProgress,
     chatSendShortcut: UI_APPEARANCE_DEFAULTS.chatSendShortcut,
     catalogOpenTarget: UI_APPEARANCE_DEFAULTS.catalogOpenTarget,
@@ -538,6 +542,10 @@ export function loadUiPreferences(
         typeof parsed.chatPersistCommentary === "boolean"
           ? parsed.chatPersistCommentary
           : defaults.chatPersistCommentary,
+      chatShowTaskProgress:
+        typeof parsed.chatShowTaskProgress === "boolean"
+          ? parsed.chatShowTaskProgress
+          : defaults.chatShowTaskProgress,
       chatCollapseTaskProgress:
         typeof parsed.chatCollapseTaskProgress === "boolean"
           ? parsed.chatCollapseTaskProgress
@@ -695,6 +703,7 @@ function persistSettings(next: UiSettings, options: { selectGateway?: boolean } 
     chatShowThinking: next.chatShowThinking,
     chatShowToolCalls: next.chatShowToolCalls,
     chatPersistCommentary: next.chatPersistCommentary ?? true,
+    ...(next.chatShowTaskProgress === false ? { chatShowTaskProgress: false } : {}),
     ...(next.chatCollapseTaskProgress === true ? { chatCollapseTaskProgress: true } : {}),
     ...(normalizeChatSendShortcut(next.chatSendShortcut) === "modifier-enter"
       ? { chatSendShortcut: "modifier-enter" as const }

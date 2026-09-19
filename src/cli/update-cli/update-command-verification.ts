@@ -133,12 +133,10 @@ export function recordUpdateGatewayHealth(
       port,
       runningVersion: health.gatewayVersion ?? undefined,
       runningBuildId: health.gatewayBuildId ?? undefined,
-      ...(health.expectedVersion
-        ? {
-            versionMatch:
-              health.gatewayVersion === health.expectedVersion && !health.buildIdMismatch,
-          }
-        : {}),
+      versionMatch:
+        health.expectedVersion && health.gatewayVersion != null
+          ? health.gatewayVersion === health.expectedVersion && !health.buildIdMismatch
+          : undefined,
       pluginErrors: [
         ...(health.activatedPluginErrors?.map((error) => JSON.stringify(error)) ?? []),
         ...(health.unavailablePlugins?.map((error) => JSON.stringify(error)) ?? []),
@@ -209,6 +207,9 @@ type UpdateGatewayReadinessParams = {
 };
 
 function gatewayReadinessPending(health: GatewayRestartSnapshot): boolean {
+  if (health.waitOutcome === "still-starting") {
+    return true;
+  }
   return (
     health.waitOutcome === "timeout" &&
     health.runtime.status === "running" &&
@@ -446,7 +447,8 @@ export async function verifyUpdatedGateway(
       ok: false,
       score: 0,
       summary: "Gateway is still starting; readiness remains unverified.",
-      stopReason: "gateway-readiness-pending",
+      stopReason:
+        health.waitOutcome === "still-starting" ? "still-starting" : "gateway-readiness-pending",
     };
   }
   const httpFailed = http !== undefined && !readyz;

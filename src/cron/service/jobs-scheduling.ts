@@ -5,7 +5,6 @@ import { asDateTimestampMs } from "@openclaw/normalization-core/number-coercion"
 import { formatErrorMessageWithCode } from "../../infra/errors.js";
 import { pruneMapToMaxSize } from "../../infra/map-size.js";
 import { isCronJobActive } from "../active-jobs.js";
-import { parseAbsoluteTimeMs } from "../parse.js";
 import { coerceFiniteScheduleNumber } from "../schedule-number.js";
 import { computeNextRunAtMs, computePreviousRunAtMs } from "../schedule.js";
 import { resolveCronStaggerMs } from "../stagger.js";
@@ -14,6 +13,11 @@ import { createCronStreamSourceIdentity, resolveCronStreamBatching } from "../st
 import type { CronJob, CronSchedule } from "../types.js";
 import { autoDisableCronJob } from "./auto-disable.js";
 import { normalizePayloadToSystemText } from "./normalize.js";
+import {
+  computeOneShotNextRunAtMs,
+  clearInvalidForcePreservedNextRun,
+  resolveForcePreservedOneShotAtMs,
+} from "./one-shot-schedule.js";
 import type { CronServiceState, DeferredCronNotifications } from "./state.js";
 import { hasPendingCronTriggerInterval } from "./trigger-interval.js";
 
@@ -236,7 +240,7 @@ export function isStaleFutureCronSlot(job: CronJob, nowMs: number): boolean {
   } catch {
     return false;
   }
-  if (!isFiniteTimestamp(naturalNext)) {
+  if (!isFiniteTimestamp(naturalNext) || nextRun === naturalNext) {
     return false;
   }
   let isScheduledSlot;
@@ -251,10 +255,6 @@ export function isStaleFutureCronSlot(job: CronJob, nowMs: number): boolean {
   if (nextRun < naturalNext) {
     return job.payload.kind !== "agentTurn";
   }
-  if (nextRun === naturalNext) {
-    return false;
-  }
-
   let followingNaturalNext: number | undefined;
   try {
     followingNaturalNext = computeStaggeredCronNextRunAtMs(job, naturalNext);
@@ -344,16 +344,7 @@ export function computeJobNextRunAtMs(job: CronJob, nowMs: number): number | und
     return isFiniteTimestamp(next) ? next : undefined;
   }
   if (job.schedule.kind === "at") {
-    const atMs = parseAbsoluteTimeMs(job.schedule.at);
-    // One-shot jobs stay due until they successfully finish, but if the
-    // schedule was updated to a time after the last run, re-arm the job.
-    if (resolveJobLastRunStatus(job) === "ok" && job.state.lastRunAtMs) {
-      if (atMs !== null && Number.isFinite(atMs) && atMs > job.state.lastRunAtMs) {
-        return atMs;
-      }
-      return undefined;
-    }
-    return atMs !== null && Number.isFinite(atMs) ? atMs : undefined;
+    return computeOneShotNextRunAtMs(job, resolveJobLastRunStatus(job));
   }
   const next = computeStaggeredCronNextRunAtMs(job, nowMs);
   if (next === undefined && job.schedule.kind === "cron") {
@@ -453,6 +444,12 @@ function normalizeJobTickState(params: { state: CronServiceState; job: CronJob; 
   // Event schedules cannot retain a timed slot, including one preserved by a force run.
   if (!isJobEnabled(job) || !isTimeScheduledJob(job)) {
     for (const key of TIME_SCHEDULE_STATE_FIELDS) {
+      if (
+        key === "forcePreservedNextRunAtMs" &&
+        resolveForcePreservedOneShotAtMs(job) !== undefined
+      ) {
+        continue;
+      }
       if (job.state[key] !== undefined) {
         job.state[key] = undefined;
         changed = true;
@@ -484,15 +481,7 @@ function normalizeJobTickState(params: { state: CronServiceState; job: CronJob; 
     changed = true;
   }
 
-  const forcePreservedNextRunAtMs = job.state.forcePreservedNextRunAtMs;
-  if (
-    forcePreservedNextRunAtMs !== undefined &&
-    (!isFiniteTimestamp(forcePreservedNextRunAtMs) ||
-      forcePreservedNextRunAtMs !== job.state.nextRunAtMs)
-  ) {
-    job.state.forcePreservedNextRunAtMs = undefined;
-    changed = true;
-  }
+  changed = clearInvalidForcePreservedNextRun(job) || changed;
 
   const queuedAt = job.state.queuedAtMs;
   if (

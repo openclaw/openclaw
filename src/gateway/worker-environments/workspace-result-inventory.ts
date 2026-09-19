@@ -34,6 +34,29 @@ export type StagedWorkerWorkspaceInventory = {
   objectsByPath: Map<string, { mode: string; objectId: string }>;
 };
 
+export const STAGED_WORKSPACE_READ_MAX_ENTRIES = 256;
+export const STAGED_WORKSPACE_READ_MAX_BYTES = 8 * 1024 * 1024;
+
+export type StagedWorkerWorkspaceReadEntry = {
+  object: { mode: string; objectId: string };
+  entry: WorkerWorkspaceManifestEntry;
+};
+
+export function stagedWorkspaceEntryBytes(entry: WorkerWorkspaceManifestEntry): number {
+  return entry.type === "file" ? entry.size : Buffer.byteLength(entry.target);
+}
+
+export function resolveStagedWorkspaceReadEntry(
+  objectsByPath: StagedWorkerWorkspaceInventory["objectsByPath"],
+  entry: WorkerWorkspaceManifestEntry,
+): StagedWorkerWorkspaceReadEntry {
+  const object = objectsByPath.get(entry.path);
+  if (!object) {
+    throw new Error(`Cloud workspace result has no payload for ${entry.path}`);
+  }
+  return { object, entry };
+}
+
 export type StagedWorkerArtifactInventory = {
   baseManifestRef: string;
   currentManifestRef: string;

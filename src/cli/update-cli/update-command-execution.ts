@@ -2,7 +2,6 @@ import path from "node:path";
 import { resolveStateDir } from "../../config/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { ScheduledTaskAutoStartRecoveryError } from "../../daemon/schtasks-update-recovery.js";
-import { formatErrorMessage } from "../../infra/errors.js";
 import { tryReadJson } from "../../infra/json-files.js";
 import type { PackageUpdateTransaction } from "../../infra/package-update-steps.js";
 import { validateUpdateCandidateCanary } from "../../infra/update-candidate-canary.js";
@@ -21,6 +20,7 @@ import { UpdateRequesterRevokedError } from "../../infra/update-requester-author
 import { recordUpdateRunPhase } from "../../infra/update-run-ledger.js";
 import { readCurrentGitUpdateRecovery } from "../../infra/update-runner-git-recovery.js";
 import type { UpdateRunResult } from "../../infra/update-runner.js";
+import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
 import { defaultRuntime } from "../../runtime.js";
 import {
   parsePackageOpenClawSchemaVersions,
@@ -63,7 +63,7 @@ import {
 import { assertUpdateCommandRecovery } from "./update-command-recovery.js";
 import { runUpdateCommandRepair } from "./update-command-repair.js";
 import {
-  createUpdateCommandFailureResult,
+  resolveMutableUpdateFailure,
   type MutableUpdateExecutionResult,
 } from "./update-command-result.js";
 import { isUpdatedInstallGatewayExecutorSupported } from "./update-command-service-command.js";
@@ -387,7 +387,7 @@ export async function executeMutableUpdate(
         if (!executor) {
           throw new UpdatePreMutationError(
             "target-native-unsupported",
-            "Native candidate admission requires its original update executor.",
+            "Starting the update requires its original update process.",
           );
         }
         const supported = await isUpdatedInstallGatewayExecutorSupported({
@@ -433,7 +433,7 @@ export async function executeMutableUpdate(
         candidateSchemaVersions = validation.candidateSchemaVersions;
         doctorConfigWrites = validation.doctorConfigWrites === true;
         observedGatewayStartupMs = validation.steps.find(
-          (step) => step.name === "candidate gateway canary" && step.exitCode === 0,
+          (step) => step.name === "Checking Gateway startup" && step.exitCode === 0,
         )?.durationMs;
       }
       return validation;
@@ -465,7 +465,7 @@ export async function executeMutableUpdate(
             score: repairValidation.steps.filter((step) => step.exitCode === 0).length,
             summary:
               repairValidation.status === "ok"
-                ? "Candidate validation passed."
+                ? "Update checks passed."
                 : repairValidation.logTail.join("\n"),
           };
         },
@@ -498,7 +498,7 @@ export async function executeMutableUpdate(
     ) {
       throw new UpdatePreMutationError(
         "invalid-config",
-        "Config changed during candidate validation; rerun the update before activating.",
+        "Config changed during update checks; rerun the update before activating.",
       );
     }
     const config = snapshot.config;
@@ -652,7 +652,7 @@ export async function executeMutableUpdate(
           if (failed) {
             throw new UpdatePreMutationError(
               failed.name,
-              failed.stderrTail ?? "Candidate validation failed.",
+              failed.stderrTail ?? "Update checks failed.",
               { failureFacts: failed.failureFacts },
             );
           }
@@ -662,7 +662,6 @@ export async function executeMutableUpdate(
             ? createBeforeGitMutation({
                 updateRun: opts.run,
                 roots: gitMutationRoots ?? [params.root],
-                shouldRestart: params.shouldRestart,
                 stopManagedService: beforeActivate,
                 getPreManagedServiceStop: () => preManagedServiceStop,
                 checkTargetSchemas: recheckSchemas,
@@ -670,7 +669,6 @@ export async function executeMutableUpdate(
                   params.prepareMutableUpdate(
                     ownedManagedUpdateContext?.env ?? admission?.managedEnv,
                   ),
-                switchToGit: params.switchToGit,
               })
             : undefined,
         allowGatewayServiceRepair: false,
@@ -679,23 +677,17 @@ export async function executeMutableUpdate(
     }
   } catch (err) {
     params.stop();
-    if (err instanceof UpdateCommandAbort) {
+    if (err instanceof UpdateCommandAbort && !hasCommandProcessCleanupError(err)) {
       return null;
     }
-    const preMutationFailure = err instanceof UpdatePreMutationError;
-    failure = { cause: err, detail: formatErrorMessage(err) };
-    defaultRuntime.error(failure.detail);
-    // Only explicit pre-mutation refusal permits original-runtime recovery.
-    // Mutable exceptions retain an unsafe outcome through cleanup/reporting.
-    result = createUpdateCommandFailureResult({
+    ({ result, failure } = await resolveMutableUpdateFailure({
+      cause: err,
       durationMs: Date.now() - params.startedAt,
       mode,
       root: params.root,
-      recovery: preMutationFailure
-        ? await originalRecovery()
-        : { serviceRestartSafe: false, reason: "runtime-verification-failed" },
-      failure,
-    });
+      originalRecovery,
+      run: params.opts.run,
+    }));
   }
 
   if (candidateFailureReason && result.status === "error") {

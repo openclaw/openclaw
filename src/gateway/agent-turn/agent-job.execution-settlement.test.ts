@@ -4,8 +4,9 @@ import { createAgentCommandLifecycle } from "../../agents/command/lifecycle.js";
 import { AgentHarnessPreflightError } from "../../agents/harness/errors.js";
 import { createAgentLifecycleTerminalBackstop } from "../../auto-reply/reply/agent-lifecycle-terminal.js";
 import { emitAgentEvent, getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
+import { clearAgentRunContext, registerAgentRunContext } from "../../infra/agent-run-registry.js";
 import type { DedupeEntry } from "../server-shared.js";
-import { setGatewayDedupeEntry, waitForAgentJob } from "./agent-job.js";
+import { getAgentJobSession, setGatewayDedupeEntry, waitForAgentJob } from "./agent-job.js";
 
 let runSequence = 0;
 
@@ -136,6 +137,9 @@ describe("waitForAgentJob settled execution", () => {
         emitAgentEvent({
           runId,
           stream: "lifecycle",
+          sessionKey: "agent:main:original",
+          sessionId: "original-session",
+          agentId: "main",
           data: { phase: "end", executionSettled: true, endedAt: 100, ...outcome, terminalReply },
         });
       const waiter = lifecycleFirst
@@ -144,17 +148,30 @@ describe("waitForAgentJob settled execution", () => {
       if (lifecycleFirst) {
         recordLifecycle();
       }
-      setGatewayDedupeEntry({
-        dedupe: new Map<string, DedupeEntry>(),
-        key: `chat:${runId}`,
-        entry: { ts: Date.now(), ok: true, payload: { runId, status: "ok", endedAt: 200 } },
+      registerAgentRunContext(runId, {
+        sessionKey: "agent:main:replacement",
+        sessionId: "replacement-session",
+        agentId: "main",
       });
+      try {
+        setGatewayDedupeEntry({
+          dedupe: new Map<string, DedupeEntry>(),
+          key: `chat:${runId}`,
+          entry: { ts: Date.now(), ok: true, payload: { runId, status: "ok", endedAt: 200 } },
+        });
+      } finally {
+        clearAgentRunContext(runId);
+      }
       if (!lifecycleFirst) {
         recordLifecycle();
       }
       if (waiter) {
         await expect(waiter).resolves.toMatchObject({ ...outcome, terminalReply });
       }
+      expect(getAgentJobSession(runId)).toMatchObject({
+        sessionKey: "agent:main:original",
+        sessionId: "original-session",
+      });
       await expect(waitForAgentJob({ runId, source: "chat", timeoutMs: 0 })).resolves.toMatchObject(
         {
           ...outcome,
@@ -200,6 +217,107 @@ describe("waitForAgentJob settled execution", () => {
           livenessState: status === "ok" ? "paused" : undefined,
         },
       );
+    },
+  );
+
+  it.each(["different session", "unbound"] as const)(
+    "keeps companion evidence with its selected session when the other producer is %s",
+    async (otherBinding) => {
+      const runId = `terminal-companion-binding-${runSequence++}`;
+      const session = {
+        sessionKey: "agent:main:original",
+        sessionId: "original-session",
+        agentId: "main",
+        lifecycleGeneration: getAgentEventLifecycleGeneration(),
+      };
+      const dedupe = new Map<string, DedupeEntry>();
+      setGatewayDedupeEntry({
+        dedupe,
+        key: `agent:${runId}`,
+        session,
+        entry: {
+          ts: 100,
+          ok: false,
+          payload: { runId, status: "timeout", stopReason: "timeout", timeoutPhase: "provider" },
+        },
+      });
+      setGatewayDedupeEntry({
+        dedupe,
+        key: `chat:${runId}`,
+        session:
+          otherBinding === "unbound"
+            ? undefined
+            : { ...session, sessionKey: "agent:main:other", sessionId: "other-session" },
+        entry: {
+          ts: 200,
+          ok: true,
+          payload: {
+            runId,
+            status: "ok",
+            terminalReply: { disposition: "visible", text: "Other producer's reply" },
+          },
+        },
+      });
+      const selected = await waitForAgentJob({ runId, timeoutMs: 0 });
+      expect(selected).toMatchObject({ status: "timeout", session });
+      expect(selected?.terminalReply).toBeUndefined();
+    },
+  );
+
+  it.each(["live registration", "selected cache entry"] as const)(
+    "keeps terminal session facts when a later attempt replaces the %s",
+    async (replacement) => {
+      const runId = `terminal-session-binding-${runSequence++}`;
+      const original = {
+        sessionKey: "agent:main:original",
+        sessionId: "original-session",
+        agentId: "main",
+        lifecycleGeneration: getAgentEventLifecycleGeneration(),
+      };
+      const successor = {
+        ...original,
+        sessionKey: "agent:main:successor",
+        sessionId: "successor-session",
+      };
+      const dedupe = new Map<string, DedupeEntry>();
+      const key = `agent:${runId}`;
+      const session = { ...original };
+      registerAgentRunContext(runId, replacement === "live registration" ? successor : original);
+      try {
+        setGatewayDedupeEntry({
+          dedupe,
+          key,
+          session,
+          entry: { ts: Date.now(), ok: true, payload: { runId, status: "ok", endedAt: 100 } },
+        });
+        if (replacement === "live registration") {
+          expect(getAgentJobSession(runId)).toEqual(original);
+        }
+        const selected = waitForAgentJob({ runId, timeoutMs: 0 });
+        if (replacement === "selected cache entry") {
+          registerAgentRunContext(runId, successor);
+          setGatewayDedupeEntry({
+            dedupe,
+            key,
+            startNewAttempt: true,
+            entry: { ts: Date.now(), ok: true, payload: { runId, status: "accepted" } },
+          });
+          setGatewayDedupeEntry({
+            dedupe,
+            key,
+            session: successor,
+            entry: { ts: Date.now(), ok: true, payload: { runId, status: "ok", endedAt: 200 } },
+          });
+          expect(getAgentJobSession(runId)).toEqual(successor);
+        }
+        await expect(selected).resolves.toMatchObject({
+          status: "ok",
+          endedAt: 100,
+          session: original,
+        });
+      } finally {
+        clearAgentRunContext(runId);
+      }
     },
   );
 

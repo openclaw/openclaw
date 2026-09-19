@@ -286,6 +286,7 @@ describe("filtered sidebar session event refresh", () => {
       vi.useFakeTimers();
       const {
         controller,
+        context,
         list,
         selectMembership,
         selectAgent,
@@ -336,6 +337,21 @@ describe("filtered sidebar session event refresh", () => {
           expect.objectContaining({ agentId: "research", involvingMe: true }),
         );
         expect(controller.sessionsResult?.sessions).toHaveLength(pageSize);
+
+        // A mutation of the previous agent can settle after this selection.
+        const outcome = await context.sessions.reconcileMutation("main");
+        expect(outcome.status).toBe("refreshed");
+        expect(list).toHaveBeenLastCalledWith(expect.objectContaining({ agentId: "main" }));
+        const readsAfterMutation = list.mock.calls.length;
+        await controller.refreshSidebarSessions("main");
+        controller.hostUpdated();
+        expect(list).toHaveBeenCalledTimes(readsAfterMutation);
+        expect(controller.sessionsAgentId).toBe("research");
+        await controller.loadMoreSidebarSessions();
+        expect(list).toHaveBeenLastCalledWith(
+          expect.objectContaining({ agentId: "research", involvingMe: true, offset: pageSize }),
+        );
+        expect(controller.sessionsResult?.sessions).toHaveLength(pageSize * 2);
 
         await selectMembership({ ownerId: "profile-ada", involvingMe: false });
         expect(list).toHaveBeenLastCalledWith(expect.objectContaining({ ownerId: "profile-ada" }));

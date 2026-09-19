@@ -10,12 +10,12 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { sha256HexPrefixCore } from "../../infra/crypto-digest.js";
-import {
-  registerClonedProjectRegistry,
-  registerProjectRegistry,
-} from "../../projects/project-registry.js";
+import { requireNodeSqlite } from "../../infra/node-sqlite.js";
+import { registerProjectRegistry } from "../../projects/project-registry.js";
+import { registerClonedProjectRegistry } from "../../projects/project-registry.test-support.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { getSessionRepositoryWorkspaceStore } from "../../state/session-repository-workspaces.js";
+import { retainUserProfileCatalog } from "../../state/user-profile-list.js";
 import { ensureProfileForEmail, linkEmail } from "../../state/user-profiles.js";
 import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { createProjectsHandlers } from "./projects.js";
@@ -236,11 +236,13 @@ test("projects.remove returns INVALID_REQUEST for an unknown id", async () => {
 
 test("projects.list returns only the caller's deterministic resolved recents", async () => {
   const state = await createOpenClawTestState({ layout: "state-only", prefix: "projects-rpc-" });
+  let releaseCatalog: (() => void) | undefined;
   try {
     const repo = await initializeRepository(state.root);
     const project = await registerProjectRegistry({ path: repo, name: "Registered" });
     const sourceProfile = ensureProfileForEmail("source@example.test");
     const targetProfile = ensureProfileForEmail("target@example.test");
+    const foreignProfile = ensureProfileForEmail("foreign@example.test");
     const actor = { type: "human" as const, source: "profile" as const, id: sourceProfile.id };
     const repository = getSessionRepositoryWorkspaceStore().create({
       agentId: "main",
@@ -291,6 +293,7 @@ test("projects.list returns only the caller's deterministic resolved recents", a
     );
     const cfg = { agents: { list: [{ id: "main", default: true, workspace: "/workspace" }] } };
     linkEmail("source@example.test", targetProfile.id);
+    releaseCatalog = retainUserProfileCatalog();
     const readResult = await invokeProjectMethod(
       "projects.list",
       {},
@@ -323,7 +326,24 @@ test("projects.list returns only the caller's deterministic resolved recents", a
     ]);
     const anonymous = await invokeProjectMethod("projects.list", {}, cfg, ["operator.read"]);
     expect(anonymous?.payload).not.toHaveProperty("recents");
+    const external = new (requireNodeSqlite().DatabaseSync)(openOpenClawStateDatabase().path);
+    try {
+      external
+        .prepare("UPDATE user_profiles SET merged_into = ? WHERE id = ?")
+        .run(foreignProfile.id, sourceProfile.id);
+    } finally {
+      external.close();
+    }
+    const afterAliasChange = await invokeProjectMethod(
+      "projects.list",
+      {},
+      cfg,
+      ["operator.write"],
+      targetProfile.id,
+    );
+    expect(afterAliasChange?.payload).toMatchObject({ recents: [] });
   } finally {
+    releaseCatalog?.();
     await state.cleanup();
   }
 });

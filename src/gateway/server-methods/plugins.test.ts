@@ -2,6 +2,7 @@
 
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { emptyInstalledPluginComponents } from "../../plugins/installed-plugin-components.js";
 import { ManagedPluginLifecycleError } from "../../plugins/management-lifecycle-error.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { withPluginRuntimeRegistryScope } from "../../plugins/runtime/gateway-request-scope.js";
@@ -267,15 +268,7 @@ describe("plugin management Gateway handlers", () => {
         skills: [],
         dangerousConfigFlags: [],
       },
-      components: {
-        mapped: [],
-        skills: [],
-        mcpServers: [],
-        commands: [],
-        hooks: [],
-        lspServers: [],
-        unavailable: { capabilities: [], mcpServers: [], lspServers: [] },
-      },
+      components: emptyInstalledPluginComponents(),
       grants: {
         hooks: {
           allowPromptInjection: { effective: false },
@@ -592,8 +585,14 @@ describe("plugin management Gateway handlers", () => {
         mutationAllowed: true,
       });
       managementMocks.inspect.mockResolvedValue({
-        declared: { mcpServers: [], skills: ["Local planning"] },
-        components: { skills: ["Local planning"] },
+        declared: { mcpServers: ["workboard", "unsupported"], skills: ["Local planning"] },
+        components: {
+          ...emptyInstalledPluginComponents(),
+          mapped: ["skills", "mcpServers"],
+          skills: ["Local planning"],
+          mcpServers: ["workboard"],
+          unavailable: { capabilities: [], mcpServers: ["unsupported"], lspServers: [] },
+        },
       });
       catalogMocks.detail.mockRejectedValue(new Error("ClawHub offline"));
 
@@ -603,7 +602,11 @@ describe("plugin management Gateway handlers", () => {
       if (matches) {
         expect(result.response).toMatchObject({
           plugin: { local: { pluginId: "workboard", installed: true, action: "manage" } },
-          detail: { origin: "local", skills: [{ name: "Local planning" }] },
+          detail: {
+            origin: "local",
+            mcpServers: ["workboard"],
+            skills: [{ name: "Local planning" }],
+          },
         });
       } else {
         expect(result.response).toBeUndefined();
@@ -806,7 +809,7 @@ describe("plugin management Gateway handlers", () => {
         skills: ["Workboard planning"],
         dangerousConfigFlags: [],
       },
-      components: { skills: ["Workboard planning"] },
+      components: emptyInstalledPluginComponents(),
       grants: {
         hooks: {
           allowPromptInjection: { effective: false },
@@ -836,8 +839,8 @@ describe("plugin management Gateway handlers", () => {
       detail: {
         origin: "local",
         packageName: "@openclaw/workboard",
-        mcpServers: ["workboard"],
-        skills: [{ name: "Workboard planning" }],
+        mcpServers: [],
+        skills: [],
       },
     });
   });

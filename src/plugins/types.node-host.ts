@@ -60,6 +60,8 @@ type OpenClawPluginNodeHostCommandBase = {
   ) => (() => void) | void;
   /** Release command-owned state when the active Gateway connection closes. */
   onDisconnect?: () => Promise<void> | void;
+  /** Return false only when retained work and cleanup are idle; an absent hook defers auto-update. */
+  hasActiveWork?: () => boolean;
   /** Optional Computer Use declaration published with this command's node manifest. */
   computerUse?: (context: OpenClawPluginNodeHostCommandAvailabilityContext) => unknown;
   agentTool?: {

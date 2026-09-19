@@ -9,6 +9,7 @@ export type SessionWorkspaceFilter = "all" | "changed" | "read" | "artifacts";
 
 export type SessionWorkspaceProps = {
   filter: SessionWorkspaceFilter;
+  browserPath: string;
   browserSearch: string;
   collapsed: boolean;
   sessionKey: string;

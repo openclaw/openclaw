@@ -49,7 +49,12 @@ With the tunnel up, `openclaw health` and `openclaw status --deep` reach the rem
 To replace per-client SSH tunnels with one private `wss://` endpoint while keeping the Gateway on loopback, follow [Give your Gateway a stable HTTPS URL](/gateway/stable-https-url).
 
 <Note>
-Replace `18789` with your configured `gateway.port` (or `--port` / `OPENCLAW_GATEWAY_PORT`).
+The first port is local; the final port is the remote Gateway destination. To keep
+the local URL above, replace only the remote destination with your
+configured `gateway.port` (or `--port` / `OPENCLAW_GATEWAY_PORT`). For example,
+`ssh -N -L 18789:127.0.0.1:29443 user@gateway-host` reaches a Gateway on remote port
+`29443` through the same local URL. Discovery and onboarding use the resolved
+Gateway service port for this destination.
 </Note>
 
 <Warning>

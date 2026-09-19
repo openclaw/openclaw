@@ -7,7 +7,7 @@ import chalk from "chalk";
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import { isVerbose } from "../globals.js";
 import { stringifyNonErrorCause } from "../infra/errors.js";
-import { getDefaultRedactPatterns, redactSensitiveText } from "../logging/redact.js";
+import { redactSensitiveText } from "../logging/redact.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { DEFAULT_WS_SLOW_MS, getGatewayWsLogStyle } from "./ws-logging.js";
@@ -19,7 +19,6 @@ const LOG_VALUE_LIMIT = 240;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 const WS_LOG_REDACT_OPTIONS = {
   mode: "tools" as const,
-  patterns: getDefaultRedactPatterns(),
 };
 
 let wsLastCompactConnId: string | undefined;
@@ -191,7 +190,11 @@ function renderErrorChainForLog(error: Error): string {
 }
 
 function compactPreview(input: string, maxLen = 160): string {
-  const oneLine = input.replace(/\s+/g, " ").trim();
+  const prefixLength = maxLen * 2;
+  let oneLine = input.slice(0, prefixLength).replace(/\s+/g, " ").trim();
+  if (oneLine.length <= maxLen && input.length > prefixLength) {
+    oneLine = input.replace(/\s+/g, " ").trim();
+  }
   if (oneLine.length <= maxLen) {
     return oneLine;
   }
@@ -237,7 +240,7 @@ export function summarizeAgentEventForWsLog(payload: unknown): Record<string, un
 
   if (stream === "assistant") {
     const text = readStringValue(data.text);
-    if (text?.trim()) {
+    if (text?.trimStart()) {
       extra.text = compactPreview(text);
     }
     const mediaCount = resolveSendableOutboundReplyParts({
@@ -278,7 +281,7 @@ export function summarizeAgentEventForWsLog(payload: unknown): Record<string, un
       extra.aborted = data.aborted;
     }
     const error = typeof data.error === "string" ? data.error : undefined;
-    if (error?.trim()) {
+    if (error?.trimStart()) {
       extra.error = compactPreview(error, 120);
     }
     return extra;

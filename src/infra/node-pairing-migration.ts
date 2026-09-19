@@ -1,7 +1,7 @@
 // One-time migration of the retired standalone node pairing store.
 // Older gateways kept approved node surfaces (and a per-node token) in
 // <state>/nodes/{paired,pending}.json; the surface now lives on the paired
-// device record. Runs at gateway startup: folds rows into device records,
+// device record. Doctor folds rows into device records,
 // drops orphans that no longer map to a node-role device (they cannot pass
 // the WS handshake anyway), and archives the legacy files so the migration
 // never repeats. Pending rows are 5-minute transients and are not migrated;

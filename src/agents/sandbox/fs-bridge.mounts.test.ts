@@ -3,7 +3,7 @@ import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { resolveSandboxDockerConfig } from "./config.js";
 import { resolveSandboxFileIdentity } from "./file-mutation-identity.js";
 import { SandboxFsPathGuard } from "./fs-bridge-path-safety.js";
@@ -223,22 +223,34 @@ describe("sandbox effective filesystem mounts", () => {
         });
         const open = mockedOpenRootFile.getMockImplementation()!;
         let fd: number | undefined;
-        mockedOpenRootFile.mockImplementationOnce(async (request) => {
-          await fs.unlink(path.join(workspaceDir, target));
-          await fs.symlink(other, path.join(workspaceDir, target));
-          const result = await open(request);
-          if (result.ok) {
-            fd = result.fd;
-          }
-          return result;
-        });
-        await expect(
-          bridge.readFile({ filePath: path.join(workspaceDir, target) }),
-        ).rejects.toThrow("hidden by another mount");
-        expect(fd).toBeDefined();
-        expect(() => fsSync.fstatSync(fd!)).toThrow(expect.objectContaining({ code: "EBADF" }));
-        expect(await fs.readFile(path.join(workspaceDir, other), "utf8")).toBe("HIDDEN");
-        expectOnlyCanonicalPathCommands();
+        let closeCallOffset = 0;
+        const close = vi.spyOn(fsSync, "closeSync");
+        try {
+          mockedOpenRootFile.mockImplementationOnce(async (request) => {
+            await fs.unlink(path.join(workspaceDir, target));
+            await fs.symlink(other, path.join(workspaceDir, target));
+            const result = await open(request);
+            if (result.ok) {
+              fd = result.fd;
+              closeCallOffset = close.mock.calls.length;
+            }
+            return result;
+          });
+          await expect(
+            bridge.readFile({ filePath: path.join(workspaceDir, target) }),
+          ).rejects.toThrow("hidden by another mount");
+          expect(fd).toBeDefined();
+          // A released descriptor number can already identify another resource.
+          const closeIndex = close.mock.calls.findIndex(
+            ([descriptor], index) => index >= closeCallOffset && descriptor === fd,
+          );
+          expect(closeIndex).toBeGreaterThanOrEqual(closeCallOffset);
+          expect(close.mock.results[closeIndex]).toEqual({ type: "return", value: undefined });
+          expect(await fs.readFile(path.join(workspaceDir, other), "utf8")).toBe("HIDDEN");
+          expectOnlyCanonicalPathCommands();
+        } finally {
+          close.mockRestore();
+        }
       });
     },
   );

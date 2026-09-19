@@ -1,4 +1,4 @@
-import { DatabaseSync, StatementSync } from "node:sqlite";
+import { DatabaseSync } from "node:sqlite";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type {
   PluginStateCompareResult,
@@ -6,7 +6,10 @@ import type {
 } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { createPluginStateKeyedStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
-import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
+import {
+  closeOpenClawStateDatabaseAsync,
+  observeHostDataSql,
+} from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { signalReplyAuthorState, type SignalReplyContextRecord } from "./reply-authors-state.js";
@@ -273,13 +276,8 @@ it("persists and reloads merged reply context with zero parent-thread SQL", asyn
     },
   });
   vi.spyOn(runtimeModule, "getOptionalSignalRuntime").mockReturnValue(runtime);
-  const counters = [
-    vi.spyOn(DatabaseSync.prototype, "prepare"),
-    vi.spyOn(DatabaseSync.prototype, "exec"),
-    ...(["get", "all", "run", "iterate"] as const).map((method) =>
-      vi.spyOn(StatementSync.prototype, method),
-    ),
-  ];
+  const observation = observeHostDataSql(env);
+  const counters = observation.calls;
   const calibration = new DatabaseSync(":memory:");
   try {
     calibration.exec("CREATE TABLE counter (value INTEGER)");

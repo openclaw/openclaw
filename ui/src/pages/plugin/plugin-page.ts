@@ -10,7 +10,6 @@ import {
   resolveControlUiPluginTabPathname,
 } from "../../../../src/gateway/control-ui-plugin-frame-contract.js";
 import type { GatewayBrowserClient, GatewayControlUiPluginTab } from "../../api/gateway.ts";
-import type { RouteId } from "../../app-route-paths.ts";
 import { applicationContext, type ApplicationContext } from "../../app/context.ts";
 import { hasOperatorApprovalsAccess } from "../../app/operator-access.ts";
 import {
@@ -43,7 +42,7 @@ type BundledPluginTabView = {
     client: GatewayBrowserClient | null;
     connected: boolean;
     embed?: {
-      embedSandboxMode: ApplicationContext<RouteId>["config"]["current"]["embedSandboxMode"];
+      embedSandboxMode: ApplicationContext["config"]["current"]["embedSandboxMode"];
       allowExternalEmbedUrls: boolean;
     };
     onRequestUpdate: () => void;
@@ -106,14 +105,14 @@ export class PluginPage extends OpenClawLightDomContentsElement {
   @property({ attribute: false }) params: Readonly<Record<string, string>> = {};
 
   @consume({ context: applicationContext, subscribe: true })
-  private context?: ApplicationContext<RouteId>;
+  private context?: ApplicationContext;
 
   @state() private bundledViewState: BundledPluginTabViewState = { status: "idle" };
   @state() private externalAuthReadyKey: string | null = null;
   @state() private externalAuthUnavailableKey: string | null = null;
 
   private bundledViewHost: object = {};
-  private gatewaySource?: ApplicationContext<RouteId>["gateway"];
+  private gatewaySource?: ApplicationContext["gateway"];
   private gatewayClient: GatewayBrowserClient | null = null;
   private gatewayConnected = false;
   private externalAuthTargetKey: string | null = null;
@@ -585,7 +584,7 @@ export class PluginPage extends OpenClawLightDomContentsElement {
     this.bundledViewHost = {};
   }
 
-  private updateGatewaySource(gateway: ApplicationContext<RouteId>["gateway"]) {
+  private updateGatewaySource(gateway: ApplicationContext["gateway"]) {
     const { client } = gateway.snapshot;
     const connected = gateway.snapshot.phase === "connected";
     if (

@@ -302,7 +302,7 @@ export function applyJobPatch(
     defaultAgentId?: string;
     scheduleValidationNowMs?: number;
     cronConfig?: CronConfig;
-    scheduledToolPolicy?: CronScheduledToolPolicy;
+    scheduledToolPolicy?: CronScheduledToolPolicy | null;
     toolsAllowProvenance?: CronToolsAllowProvenance;
     toolsAllowExecTarget?: CronToolsAllowExecTarget;
   } & DeliveryValidationOptions,

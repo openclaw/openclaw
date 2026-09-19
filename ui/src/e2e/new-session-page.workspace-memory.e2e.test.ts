@@ -773,6 +773,7 @@ suite.define(() => {
           "new-session.v1:agent32": { workspace: WORKSPACE, folder: WORKSPACE },
           "new-session.migration.v1": true,
         },
+        expectedEntries: { "new-session.v1:agent32": null, "new-session.migration.v1": null },
       });
       await expect.poll(async () => (await gateway.getRequests("users.prefs.set")).length).toBe(1);
     });

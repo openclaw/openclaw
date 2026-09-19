@@ -1,5 +1,6 @@
 /** Prunes expired per-run cron sessions and archives unreferenced transcripts. */
 import path from "node:path";
+import { hasDescendantRunAwaitingSettle } from "../agents/subagents/registry/subagent-registry-read.js";
 import { parseDurationMs } from "../cli/parse-duration.js";
 import {
   applySessionEntryLifecycleMutation,
@@ -175,7 +176,7 @@ export async function sweepCronRunSessions(params: {
         // Build one unordered snapshot only when an expired continuation needs it.
         // Fresh rows and stores without continuations never touch the task registry.
         pendingMediaSessionKeys ??= buildPendingGeneratedMediaSessionKeySet();
-        if (pendingMediaSessionKeys.has(sessionKey)) {
+        if (pendingMediaSessionKeys.has(sessionKey) || hasDescendantRunAwaitingSettle(sessionKey)) {
           continue;
         }
       }
@@ -205,6 +206,19 @@ export async function sweepCronRunSessions(params: {
         agentId: params.agentId,
         storePath,
         removals,
+        beforeCommitInTransaction: () => {
+          // Descendants can acquire the continuation while deletion preparation awaits.
+          for (const removal of removals) {
+            if (
+              removal.expectedEntry?.cronRunContinuation &&
+              hasDescendantRunAwaitingSettle(removal.sessionKey)
+            ) {
+              throw new Error(
+                `Cannot prune cron run continuation while subagents await settlement for ${removal.sessionKey}`,
+              );
+            }
+          }
+        },
         ...(archiveRetentionMs == null
           ? {}
           : {

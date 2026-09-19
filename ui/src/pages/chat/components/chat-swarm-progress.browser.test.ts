@@ -43,7 +43,7 @@ describeBrowserLayout("chat swarm progress browser layout", () => {
       .map((file) => readStyleSheet(file))
       .join("\n");
     await page.setContent(`<!doctype html><html><head><style>${styles}</style></head><body>
-      <section class="card chat">
+      <section class="chat">
         <div class="chat-workbench">
           <div class="chat-workbench__main">
             <div class="chat-split-container">

@@ -35,8 +35,10 @@ import {
 } from "../diagnostic-events.js";
 import { retryAsync } from "../retry.js";
 import { resolvePreferredOpenClawTmpDir } from "../tmp-openclaw-dir.js";
+import * as channelResolution from "./channel-resolution.js";
 import { prepareOutboundPayloadBatch } from "./deliver-prepare.js";
 import { countPhysicalOutboundSends, PlatformMessageNotDispatchedError } from "./deliver-types.js";
+import { matrixOutboundForTest, type MatrixSendFn } from "./deliver.matrix.test-support.js";
 import { createOutboundPayloadPlan, projectOutboundPayloadPlanForOutbound } from "./payloads.js";
 import { createUnmodifiedPreparedOutboundBatch } from "./prepared-batch.js";
 
@@ -264,24 +266,10 @@ const matrixChunkConfig: OpenClawConfig = {
   channels: { matrix: { textChunkLimit: 4000 } } as OpenClawConfig["channels"],
 };
 
-const expectedPreferredTmpRoot = resolvePreferredOpenClawTmpDir();
+const expectedPreferredTmpRoot = await fsPromises.realpath(resolvePreferredOpenClawTmpDir());
 
 type DeliverOutboundArgs = Parameters<DeliverModule["deliverOutboundPayloads"]>[0];
 type DeliverOutboundPayload = DeliverOutboundArgs["payloads"][number];
-type MatrixSendFn = (
-  to: string,
-  text: string,
-  options?: Record<string, unknown>,
-) => Promise<{ messageId: string } & Record<string, unknown>>;
-
-function resolveMatrixSender(deps: DeliverOutboundArgs["deps"]): MatrixSendFn {
-  const sender = deps?.matrix;
-  if (typeof sender !== "function") {
-    throw new Error("missing matrix sender");
-  }
-  return sender as MatrixSendFn;
-}
-
 function requireMockCallArg<TArgs extends unknown[]>(
   mockFn: { mock: { calls: TArgs[] } },
   label: string,
@@ -308,13 +296,6 @@ function requireMockCall<T extends unknown[] = unknown[]>(
 
 function requireMatrixSendCall(sendMatrix: ReturnType<typeof vi.fn>, index = 0): unknown[] {
   return requireMockCall(sendMatrix as { mock: { calls: unknown[][] } }, "matrix send", index);
-}
-
-function withMatrixChannel(result: Awaited<ReturnType<MatrixSendFn>>) {
-  return {
-    channel: "matrix" as const,
-    ...result,
-  };
 }
 
 function createNetworkError(message: string, code: string, syscall?: string) {
@@ -448,43 +429,6 @@ function installMatrixTextMessageAdapter(params: {
   );
   return messageSendText;
 }
-
-const matrixOutboundForTest: ChannelOutboundAdapter = {
-  deliveryMode: "direct",
-  chunker: chunkText,
-  chunkerMode: "text",
-  textChunkLimit: 4000,
-  sanitizeText: ({ text }) => (text === "<br>" || text === "<br><br>" ? "" : text),
-  sendText: async ({ cfg, to, text, accountId, deps, gifPlayback }) =>
-    withMatrixChannel(
-      await resolveMatrixSender(deps)(to, text, {
-        cfg,
-        accountId: accountId ?? undefined,
-        gifPlayback,
-      }),
-    ),
-  sendMedia: async ({
-    cfg,
-    to,
-    text,
-    mediaUrl,
-    mediaLocalRoots,
-    mediaReadFile,
-    accountId,
-    deps,
-    gifPlayback,
-  }) =>
-    withMatrixChannel(
-      await resolveMatrixSender(deps)(to, text, {
-        cfg,
-        mediaUrl,
-        mediaLocalRoots,
-        mediaReadFile,
-        accountId: accountId ?? undefined,
-        gifPlayback,
-      }),
-    ),
-};
 
 type MatrixDeliveryArgs = Omit<DeliverOutboundArgs, "cfg" | "channel" | "to" | "payloads"> &
   Partial<Pick<DeliverOutboundArgs, "cfg" | "to" | "payloads">>;
@@ -5514,35 +5458,56 @@ describe("deliverOutboundPayloads", () => {
     },
   );
 
-  it("emits a terminal failure without queueing when preparation is aborted", async () => {
-    hookMocks.runner.hasHooks.mockImplementation((name?: string) => name === "message_sent");
-    const sendMatrix = vi.fn().mockResolvedValue({ messageId: "m1", roomId: "!room:example" });
-    const abortController = new AbortController();
-    abortController.abort();
-    const cfg: OpenClawConfig = {};
+  it.each(["aborted", "metadata rejected"] as const)(
+    "emits one terminal failure without queueing when preparation is %s",
+    async (failure) => {
+      hookMocks.runner.hasHooks.mockImplementation((name?: string) => name === "message_sent");
+      const sendMatrix = vi.fn().mockResolvedValue({ messageId: "m1", roomId: "!room:example" });
+      const abortController = new AbortController();
+      const errorMessage = failure === "aborted" ? "Operation aborted" : "metadata unavailable";
+      const resolutionSpy =
+        failure === "metadata rejected"
+          ? vi
+              .spyOn(channelResolution, "resolveOutboundChannelMessageAdapter")
+              .mockRejectedValueOnce(new Error(errorMessage))
+          : undefined;
+      if (failure === "aborted") {
+        abortController.abort();
+      }
+      const cfg: OpenClawConfig = {};
+      const events: TrustedMessageAuditEvent[] = [];
+      const unsubscribe = onTrustedMessageAuditEvent((event) => events.push(event));
 
-    await expect(
-      deliverMatrix({
-        cfg,
-        payloads: [{ text: "a" }],
-        deps: { matrix: sendMatrix },
-        abortSignal: abortController.signal,
-      }),
-    ).rejects.toThrow("Operation aborted");
+      try {
+        await expect(
+          deliverMatrix({
+            cfg,
+            payloads: [{ text: "a" }],
+            deps: { matrix: sendMatrix },
+            abortSignal: abortController.signal,
+          }),
+        ).rejects.toThrow(errorMessage);
 
-    expect(queueMocks.enqueueDelivery).not.toHaveBeenCalled();
-    expect(queueMocks.ackDelivery).not.toHaveBeenCalled();
-    expect(queueMocks.failDelivery).not.toHaveBeenCalled();
-    expect(sendMatrix).not.toHaveBeenCalled();
-    expect(hookMocks.runner.runMessageSent).toHaveBeenCalledWith(
-      expect.objectContaining({
-        content: "a",
-        error: expect.stringContaining("Operation aborted"),
-        success: false,
-      }),
-      expect.objectContaining({ channelId: "matrix" }),
-    );
-  });
+        expect(queueMocks.enqueueDelivery).not.toHaveBeenCalled();
+        expect(queueMocks.ackDelivery).not.toHaveBeenCalled();
+        expect(queueMocks.failDelivery).not.toHaveBeenCalled();
+        expect(sendMatrix).not.toHaveBeenCalled();
+        expect(events.map((event) => event.outcome)).toEqual(["failed"]);
+        expect(hookMocks.runner.runMessageSent).toHaveBeenCalledOnce();
+        expect(hookMocks.runner.runMessageSent).toHaveBeenCalledWith(
+          expect.objectContaining({
+            content: "a",
+            error: expect.stringContaining(errorMessage),
+            success: false,
+          }),
+          expect.objectContaining({ channelId: "matrix" }),
+        );
+      } finally {
+        unsubscribe();
+        resolutionSpy?.mockRestore();
+      }
+    },
+  );
 
   it("passes normalized payload to onError", async () => {
     const sendMatrix = vi.fn().mockRejectedValue(new Error("boom"));

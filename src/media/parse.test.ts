@@ -94,6 +94,24 @@ describe("splitMediaFromOutput", () => {
     expectAcceptedMediaPathCase(expectedPath, input);
   });
 
+  it.each([",", '"', "'", "\\", ")", "}", "]", "`"])(
+    "preserves quoted URL suffix %s while cleaning ordinary unquoted punctuation",
+    (suffix) => {
+      const base = "https://example.com/video.mp4?token=ends";
+      const mediaUrl = `${base}${suffix}`;
+      for (const quote of ['"', "'"]) {
+        expectAcceptedMediaPathCase(mediaUrl, `MEDIA:${quote}${mediaUrl}${quote}`);
+      }
+      expectAcceptedMediaPathCase(base, `MEDIA:${mediaUrl}`);
+    },
+  );
+
+  it("does not shorten a rejected quoted URL into an accepted media reference", () => {
+    const prefix = "https://example.com/video.mp4?token=";
+    const mediaUrl = `${prefix}${"a".repeat(4096 - prefix.length)},`;
+    expectRejectedRemoteMediaUrlCase(`MEDIA:"${mediaUrl}"`);
+  });
+
   const nativeFilePath = path.resolve("media", "café 100% image.png");
   const nativeFileUrl = pathToFileURL(nativeFilePath).href;
   it.each([
@@ -181,6 +199,7 @@ describe("splitMediaFromOutput", () => {
   it.each([
     "MEDIA:../../../etc/passwd",
     "MEDIA:../../.env",
+    'MEDIA:"../../.env)"',
     "MEDIA:~user/Pictures/My File.png",
     "MEDIA:~/Pictures/../../.ssh/id_rsa",
     "MEDIA:./foo/../../../etc/shadow",
@@ -203,13 +222,16 @@ describe("splitMediaFromOutput", () => {
 
   it.each([
     "MEDIA:http://example.com/a.png",
+    'MEDIA:"http://example.com/a.png)"',
     "MEDIA:https://intranet/a.png",
     "MEDIA:https://printer/a.png",
     "MEDIA:https://localhost/a.png",
     "MEDIA:https://localhost../a.png",
     "MEDIA:https://127.0.0.1/a.png",
+    'MEDIA:"https://127.0.0.1/a.png)"',
     "MEDIA:https://127.0.0.1../a.png",
     "MEDIA:https://169.254.169.254/latest/meta-data",
+    'MEDIA:"https://169.254.169.254/a.png)"',
     "MEDIA:https://[::1]/a.png",
     "MEDIA:https://metadata.google.internal/a.png",
     "MEDIA:https://metadata.google.internal../a.png",

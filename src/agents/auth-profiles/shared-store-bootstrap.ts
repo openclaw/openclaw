@@ -17,6 +17,7 @@ import { resolveUserPath } from "../../utils.js";
 import { listLegacyAuthProfileSources } from "./legacy-source-files.js";
 import {
   noteCommittedSharedAuthStoreOwnership,
+  resolveSharedAuthStorePath,
   resolveSharedAuthStoreOwnership,
   SHARED_AUTH_STORE_STATE_KEY,
   type SharedAuthStoreOwnership,
@@ -29,6 +30,21 @@ const SHARED_AUTH_STORE_MIGRATION_KIND = "shared-auth-store-state-db";
 // Ownership objects are process-stable per state root. Doctor replaces the cached object
 // after relocation, so legacy inspection is memoized only for that ownership generation.
 const inspectedLegacySharedAuthOwnerships = new WeakSet<SharedAuthStoreOwnership>();
+
+type FreshSharedAuthStoreHandoff = {
+  previousSharedDatabasePath: string;
+  sharedDatabasePath: string;
+  env: NodeJS.ProcessEnv;
+};
+const freshSharedAuthStoreHandoffs = new Set<(handoff: FreshSharedAuthStoreHandoff) => void>();
+
+/** Runtime views follow only this producer's proven empty-store relocation. */
+export function registerFreshSharedAuthStoreHandoff(
+  handoff: (receipt: FreshSharedAuthStoreHandoff) => void,
+): () => void {
+  freshSharedAuthStoreHandoffs.add(handoff);
+  return () => freshSharedAuthStoreHandoffs.delete(handoff);
+}
 
 type SourceAuthDatabase = Pick<
   OpenClawAgentKyselyDatabase,
@@ -200,6 +216,14 @@ function initializeFreshSharedAuthStore(env: NodeJS.ProcessEnv): void {
   }
   writeConfigMachineState(SHARED_AUTH_STORE_STATE_KEY, { location: "state-db" }, { env });
   noteCommittedSharedAuthStoreOwnership({ location: "state-db" }, env);
+  const handoff = {
+    previousSharedDatabasePath: sourcePath,
+    sharedDatabasePath: resolveSharedAuthStorePath(env),
+    env,
+  };
+  for (const publish of freshSharedAuthStoreHandoffs) {
+    publish(handoff);
+  }
 }
 
 export function prepareFreshSharedAuthStoreWrite(params: {

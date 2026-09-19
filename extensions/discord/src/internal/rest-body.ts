@@ -1,4 +1,3 @@
-// Discord plugin module implements rest body behavior.
 type RequestData = {
   body?: unknown;
   multipartStyle?: "message" | "form";

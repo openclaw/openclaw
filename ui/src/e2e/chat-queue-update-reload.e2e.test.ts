@@ -82,6 +82,15 @@ suite.define(() => {
         await page
           .locator('[data-session-key="agent:main:other"] a.sidebar-recent-session__link')
           .click();
+        await page.waitForURL((url) => url.pathname.endsWith("/other"));
+        // Reconnect can hide the edit before navigation replaces the active pane.
+        await expect
+          .poll(() =>
+            page
+              .locator("openclaw-chat-pane.chat-pane-cache__pane--active")
+              .evaluate((element) => (element as HTMLElement & { sessionKey: string }).sessionKey),
+          )
+          .toBe("agent:main:other");
         await expect
           .poll(() =>
             page.locator(".chat-pane-cache__pane--active .chat-queue__edit-input").count(),

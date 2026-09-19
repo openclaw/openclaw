@@ -1,6 +1,11 @@
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import type { AddressInfo } from "node:net";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { ChatEvent } from "../packages/gateway-protocol/src/schema/logs-chat.js";
+import type {
+  TasksGetResult,
+  TasksListResult,
+} from "../packages/gateway-protocol/src/schema/tasks.js";
 import { writeSubagentSessionEntry } from "../src/agents/subagents/registry/subagent-registry.persistence.test-support.js";
 import {
   loadSubagentRegistryFromSqlite,
@@ -11,6 +16,7 @@ import { getSessionKysely } from "../src/config/sessions/session-accessor.sqlite
 import type { OpenClawConfig } from "../src/config/types.openclaw.js";
 import { connectGatewayClient, disconnectGatewayClient } from "../src/gateway/test-helpers.e2e.js";
 import { executeSqliteQuerySync } from "../src/infra/kysely-sync.js";
+import { extractFirstTextBlock } from "../src/shared/chat-message-content.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../src/state/openclaw-agent-db-readonly.js";
 import { closeOpenClawStateDatabaseForTest } from "../src/state/openclaw-state-db.js";
 import {
@@ -21,7 +27,8 @@ import {
   createOpenClawTestInstance,
   type OpenClawTestInstance,
 } from "./helpers/openclaw-test-instance.js";
-import { createDeferred } from "./helpers/promise.js";
+import { createDeferred, withTestTimeout } from "./helpers/promise.js";
+import { runQaGatewayFixture } from "./helpers/qa-gateway-cleanup.js";
 
 const TEST_TIMEOUT_MS = 180_000;
 const MODEL_REF = "requester-owner/synthetic";
@@ -62,6 +69,261 @@ afterEach(async () => {
 });
 
 describe("REQUESTER-OWNER requester agent id survives completion dispatch", () => {
+  it(
+    "answers status through WebSocket while parent and child provider requests are held",
+    { timeout: TEST_TIMEOUT_MS },
+    async () => {
+      const parentGate = createDeferred();
+      const childGate = createDeferred();
+      const modelServer = await startProofModelServer({
+        yieldAfterSpawn: parentGate.promise,
+        childReply: childGate.promise,
+      });
+      modelServers.push(modelServer);
+      const instance = await createOpenClawTestInstance({
+        name: "requester-owner-busy-status",
+        config: createTestConfig(modelServer.url),
+        env: { OPENCLAW_SKIP_PROVIDERS: undefined, OPENCLAW_TEST_MINIMAL_GATEWAY: undefined },
+      });
+      instances.push(instance);
+      instance.state.applyEnv();
+      await instance.startGateway();
+      const sessionKey = `agent:${REQUESTER_AGENT_ID}:${REQUESTER_KEY}`;
+      const statusRunId = "busy-parent-status";
+      const statusReply = createDeferred<ChatEvent>();
+      const client = await connectGatewayClient({
+        url: instance.url,
+        token: instance.gatewayToken,
+        onEvent: (event) => {
+          if (event.event !== "chat") {
+            return;
+          }
+          const chat = event.payload as ChatEvent;
+          if (
+            chat.runId === statusRunId &&
+            (chat.state === "final" || chat.state === "error" || chat.state === "aborted")
+          ) {
+            statusReply.resolve(chat);
+          }
+        },
+      });
+      let parent: Promise<unknown> | undefined;
+      let parentSettled = false;
+      try {
+        parent = client.request(
+          "agent",
+          {
+            sessionKey: REQUESTER_KEY,
+            agentId: REQUESTER_AGENT_ID,
+            idempotencyKey: "busy-status-parent-turn",
+            message: PARENT_PROMPT,
+            deliver: false,
+          },
+          { expectFinal: true },
+        );
+        void parent.then(
+          () => {
+            parentSettled = true;
+          },
+          () => {
+            parentSettled = true;
+          },
+        );
+        await vi.waitFor(
+          () => {
+            expect(modelServer.requestCount(), instance.logs()).toBe(3);
+            expect(
+              modelServer
+                .bodies()
+                .filter(
+                  (body) => body.includes(PARENT_PROMPT) && body.includes("function_call_output"),
+                ),
+            ).toHaveLength(1);
+            expect(
+              modelServer
+                .bodies()
+                .filter(
+                  (body) => body.includes(CHILD_TASK) && !body.includes("function_call_output"),
+                ),
+            ).toHaveLength(1);
+          },
+          { interval: 50, timeout: 60_000 },
+        );
+        const runs = [...loadSubagentRegistryFromSqlite().values()];
+        expect(runs, instance.logs()).toHaveLength(1);
+        const run = runs[0]!;
+        expect(run).toMatchObject({
+          requesterAgentId: REQUESTER_AGENT_ID,
+          requesterSessionKey: sessionKey,
+          requesterTurnRunId: "busy-status-parent-turn",
+          completionTarget: "parent",
+        });
+        expect(run.childSessionKey).toMatch(/^agent:beta:subagent:/);
+        const listed = await client.request<TasksListResult>("tasks.list", {
+          sessionKey,
+          agentId: REQUESTER_AGENT_ID,
+        });
+        const children = listed.tasks.filter((task) => task.runtime === "subagent");
+        expect(children).toHaveLength(1);
+        const child = children[0]!;
+        expect(child).toMatchObject({
+          runId: run.taskRunId ?? run.runId,
+          childSessionKey: run.childSessionKey,
+          agentId: REQUESTER_AGENT_ID,
+          sessionKey,
+          status: "running",
+          deliveryStatus: "pending",
+          execution: { state: "running" },
+        });
+        // A held HTTP response is not a tool call or an explicit execution wait.
+        expect(child.execution?.currentTool).toBeUndefined();
+        expect(child.execution?.wait).toBeUndefined();
+        const detail = await client.request<TasksGetResult>("tasks.get", { taskId: child.id });
+        expect(detail.task).toMatchObject({
+          id: child.id,
+          runId: child.runId,
+          sessionKey,
+          childSessionKey: run.childSessionKey,
+          prompt: CHILD_TASK,
+          status: "running",
+          execution: { state: "running" },
+          deliveryStatus: "pending",
+        });
+        expect(detail.task.execution?.currentTool).toBeUndefined();
+        expect(detail.task.execution?.wait).toBeUndefined();
+        expect(
+          await client.request<TasksListResult>("tasks.list", {
+            sessionKey: `agent:${OTHER_AGENT_ID}:${REQUESTER_KEY}`,
+            agentId: OTHER_AGENT_ID,
+          }),
+        ).toEqual({ tasks: [] });
+
+        const requestsBeforeStatus = modelServer.requestCount();
+        expect(
+          await client.request("chat.send", {
+            sessionKey,
+            agentId: REQUESTER_AGENT_ID,
+            message: "/status",
+            idempotencyKey: statusRunId,
+          }),
+        ).toMatchObject({ runId: statusRunId });
+        const reply = await withTestTimeout(
+          statusReply.promise,
+          30_000,
+          "status did not finish while the parent provider was held",
+        );
+        expect(reply, instance.logs()).toMatchObject({
+          state: "final",
+          runId: statusRunId,
+          sessionKey,
+        });
+        const statusText = "message" in reply ? extractFirstTextBlock(reply.message) : undefined;
+        const childLine = statusText
+          ?.split("\n")
+          .find((line) => line.includes("requester-owner-child"));
+        expect(childLine).toMatch(/\brunning\b/);
+        expect(childLine).not.toMatch(/\b(waiting|approval|unknown|unavailable)\b/i);
+        expect(statusText).not.toContain(CHILD_MARKER);
+        expect(parentSettled).toBe(false);
+        expect(modelServer.requestCount()).toBe(requestsBeforeStatus);
+
+        childGate.resolve();
+        await vi.waitFor(
+          () => {
+            expect(loadSubagentRegistryFromSqlite().get(run.runId), instance.logs()).toMatchObject({
+              execution: { status: "terminal", outcome: { status: "ok" } },
+              completion: { resultText: CHILD_MARKER },
+              delivery: { status: "pending" },
+            });
+          },
+          { interval: 50, timeout: 30_000 },
+        );
+        const finished = await client.request<TasksGetResult>("tasks.get", { taskId: child.id });
+        expect(finished.task).toMatchObject({
+          id: child.id,
+          runId: child.runId,
+          agentId: REQUESTER_AGENT_ID,
+          sessionKey,
+          childSessionKey: run.childSessionKey,
+          status: "completed",
+          execution: { state: "finished" },
+          deliveryStatus: "pending",
+        });
+        expect(finished.task.execution?.currentTool).toBeUndefined();
+        expect(finished.task.execution?.wait).toBeUndefined();
+        expect(parentSettled).toBe(false);
+        expect(modelServer.requestCount()).toBe(requestsBeforeStatus);
+        expect(modelServer.countRequestsContaining(CHILD_MARKER)).toBe(0);
+
+        parentGate.resolve();
+        expect(await parent, instance.logs()).toMatchObject({ status: "ok" });
+        await vi.waitFor(
+          async () => {
+            const delivered = await client.request<TasksGetResult>("tasks.get", {
+              taskId: child.id,
+            });
+            expect(delivered.task, instance.logs()).toMatchObject({
+              status: "completed",
+              execution: { state: "finished" },
+              deliveryStatus: "delivered",
+            });
+          },
+          { interval: 50, timeout: 30_000 },
+        );
+        const history = await client.request<{
+          messages: Array<{ role?: string; content?: unknown }>;
+        }>("chat.history", { sessionKey, agentId: REQUESTER_AGENT_ID, limit: 30 });
+        const visible = history.messages.map((message) => ({
+          role: message.role,
+          text: extractFirstTextBlock(message),
+        }));
+        expect(
+          visible.filter(({ role, text }) => role === "user" && text === "/status"),
+        ).toHaveLength(1);
+        expect(
+          visible.filter(({ role, text }) => role === "assistant" && text === statusText),
+        ).toHaveLength(1);
+        const statusIndex = visible.findIndex(
+          ({ role, text }) => role === "user" && text === "/status",
+        );
+        expect(visible[statusIndex + 1]).toEqual({ role: "assistant", text: statusText });
+        expect(
+          visible.filter(({ role, text }) => role === "assistant" && text === CHILD_MARKER),
+        ).toHaveLength(1);
+        expect(JSON.stringify(history.messages)).not.toContain("This turn ended before a reply");
+        const laterModelText = modelServer
+          .bodies()
+          .slice(requestsBeforeStatus)
+          .flatMap((body) => {
+            const request = JSON.parse(body) as {
+              input: Array<{ role?: string; content?: unknown }>;
+            };
+            return request.input
+              .filter(({ role }) => role === "user" || role === "assistant")
+              .map(extractFirstTextBlock);
+          });
+        expect(laterModelText.some((text) => text?.includes(PARENT_PROMPT))).toBe(true);
+        expect(laterModelText).not.toContain("/status");
+        expect(laterModelText).not.toContain(statusText);
+      } finally {
+        childGate.resolve();
+        parentGate.resolve();
+        await runQaGatewayFixture(
+          async () => {
+            await withTestTimeout(
+              Promise.allSettled(parent ? [parent] : []),
+              30_000,
+              "parent request did not settle after releasing provider gates",
+            );
+          },
+          () => disconnectGatewayClient(client),
+          () => instance.stopGateway(),
+          () => closeOpenClawStateDatabaseForTest(),
+        );
+      }
+    },
+  );
+
   it(
     "delivers a private result once when the child finishes before the parent yields",
     { timeout: TEST_TIMEOUT_MS },
@@ -405,6 +667,7 @@ describe("REQUESTER-OWNER requester agent id survives completion dispatch", () =
 
 function createTestConfig(baseUrl: string): OpenClawConfig {
   return {
+    logging: { file: "${OPENCLAW_STATE_DIR}/logs/requester-owner-e2e.log" },
     plugins: { enabled: false },
     agents: {
       ownership: "explicit",
@@ -494,6 +757,7 @@ function buildToolCallEvents(name: string, args: Record<string, unknown>): SseEv
 
 async function startProofModelServer(options?: {
   yieldAfterSpawn: Promise<void>;
+  childReply?: Promise<void>;
 }): Promise<ProofModelServer> {
   const requestBodies: string[] = [];
   let parentCheckedChildren = false;
@@ -546,6 +810,9 @@ async function startProofModelServer(options?: {
     }
 
     if (body.includes(CHILD_TASK) && !body.includes("function_call_output")) {
+      if (options?.childReply) {
+        await options.childReply;
+      }
       writeOpenAiResponsesText(response, {
         text: CHILD_MARKER,
         responseId: `response-${++responseSequence}`,

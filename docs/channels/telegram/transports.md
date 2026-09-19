@@ -65,6 +65,15 @@ The documented durability boundary is successful completion of the SQLite
 transaction, not a separate per-event fsync guarantee. Use a persistent state
 directory; deleting it loses both queued updates and the saved polling offset.
 
+### Shutdown
+
+Long polling and webhook accounts wait for already-admitted replay commits or
+rollbacks even after their 15-second ingress shutdown grace expires. Accepted
+group introductions remain tracked through their existing 60-second agent-turn
+budget and the following dedupe commit before account shutdown completes.
+Cancellation before an introduction is accepted prevents it from starting.
+Ordinary handler and bot shutdown grace periods remain unchanged.
+
 ### Plugin hooks
 
 No plugin hook can defer Telegram's transport acknowledgment until plugin-owned

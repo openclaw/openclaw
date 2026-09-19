@@ -42,6 +42,7 @@ export const uiE2eRealGatewayTestFiles = [
   "ui/src/e2e/chat-tts-supplement.real-gateway.e2e.test.ts",
   "ui/src/e2e/chat-widget-sandbox.real-gateway.e2e.test.ts",
   "ui/src/e2e/command-palette-catalog.real-gateway.e2e.test.ts",
+  "ui/src/e2e/command-palette-search.real-gateway.e2e.test.ts",
   "ui/src/e2e/control-ui-auth-transports.e2e.test.ts",
   "ui/src/e2e/cron-duration-save.real-gateway.e2e.test.ts",
   "ui/src/e2e/device-alias-rename.real-gateway.e2e.test.ts",
@@ -63,6 +64,7 @@ export const uiE2eRealGatewayTestFiles = [
 // Keep any shared source-module optimizer cache under one worker.
 export const uiE2ePrivateServerTestFiles = [
   "ui/src/e2e/agent-file-lifecycle.real-gateway.e2e.test.ts",
+  "ui/src/e2e/agent-switch-roster.e2e.test.ts",
   "ui/src/e2e/approval-bootstrap.e2e.test.ts",
   "ui/src/e2e/browser-auth-recovery.e2e.test.ts",
   "ui/src/e2e/build-info-unicode.e2e.test.ts",
@@ -79,6 +81,7 @@ export const uiE2ePrivateServerTestFiles = [
   "ui/src/e2e/chat-widget-sandbox.real-gateway.e2e.test.ts",
   "ui/src/e2e/child-session-load-errors.e2e.test.ts",
   "ui/src/e2e/command-palette-catalog.real-gateway.e2e.test.ts",
+  "ui/src/e2e/command-palette-search.real-gateway.e2e.test.ts",
   "ui/src/e2e/community-invite-showing.e2e.test.ts",
   "ui/src/e2e/composer-draft-store.e2e.test.ts",
   "ui/src/e2e/composer-recovery-fences.e2e.test.ts",
@@ -103,8 +106,10 @@ export const uiE2ePrivateServerTestFiles = [
   "ui/src/e2e/provider-browser-login.real-gateway.e2e.test.ts",
   "ui/src/e2e/quota-reset-status.real-gateway.e2e.test.ts",
   "ui/src/e2e/session-management.delete.e2e.test.ts",
+  "ui/src/e2e/session-mention-involvement.e2e.test.ts",
   "ui/src/e2e/settings-loading-skeletons.e2e.test.ts",
   "ui/src/e2e/sidebar-account-footer.e2e.test.ts",
+  "ui/src/e2e/sidebar-cached-list-stability.e2e.test.ts",
   "ui/src/e2e/terminal-runtime.e2e.test.ts",
 ];
 

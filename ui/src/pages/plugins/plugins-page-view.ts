@@ -1,4 +1,5 @@
 import { html, nothing } from "lit";
+import type { PluginsSkillsReadParams } from "../../../../packages/gateway-protocol/src/schema/plugin-skills.ts";
 import {
   pathForPluginCatalogEntry,
   pathForPluginSettings,
@@ -15,7 +16,7 @@ import type {
   PluginListResult,
   PluginsInspectResult,
 } from "../../lib/plugins/index.ts";
-import { renderPluginCatalogDetail, type PluginCatalogDetailTab } from "./catalog-detail.ts";
+import { renderPluginCatalogDetail } from "./catalog-detail.ts";
 import { renderPluginCatalogResults } from "./catalog-results.ts";
 import { renderPluginConsentDialog } from "./consent-dialog.ts";
 import type { InstalledPluginDetailTab } from "./detail-tabs.ts";
@@ -26,11 +27,13 @@ import {
 } from "./install-wizard-model.ts";
 import { renderPluginInstallWizard } from "./install-wizard.ts";
 import type { PluginDiscoveryController } from "./plugin-discovery-controller.ts";
-import type { PluginRowMessage } from "./plugin-row-message.ts";
+import type { PluginHelpController } from "./plugin-help-controller.ts";
+import { renderPluginRowMessage, type PluginRowMessage } from "./plugin-row-message.ts";
 import type { PluginsConsentController } from "./plugins-consent-controller.ts";
 import { renderPluginsHubHeader } from "./plugins-hub-header.ts";
 import { PLUGINS_HUB_PANEL_ID, type PluginsHubTab } from "./plugins-hub.ts";
 import type { PluginsRouteData } from "./route-data.ts";
+import type { PluginSettingsEditor } from "./settings-editor.ts";
 import {
   pluginAdvancedSchema,
   pluginConfigSchema,
@@ -41,6 +44,11 @@ import {
   renderPluginSettingsInventory,
   type PluginSettingsTab,
 } from "./settings-view.ts";
+import {
+  renderPluginSkillPreview,
+  renderPluginSkillsSection,
+  type PluginPreviewController,
+} from "./skill-preview.ts";
 
 type CatalogDetailState = {
   id: string;
@@ -49,17 +57,19 @@ type CatalogDetailState = {
 };
 
 type InstalledDetailState = {
+  tools?: Array<{ name: string; description?: string }>;
   pluginId: string;
   inspection: PluginsInspectResult | null;
   error: string | null;
 };
 
 type PluginsPageViewActions = {
+  openTool: (name: string) => void;
+  openSkill: (request: PluginsSkillsReadParams) => void;
   selectHubTab: (tab: PluginsHubTab) => void;
   closeCatalogDetail: () => void;
   retryCatalogDetail: () => void;
   installCatalogEntry: (id: string) => void;
-  selectCatalogDetailTab: (tab: PluginCatalogDetailTab) => void;
   setQuery: (query: string) => void;
   refreshCatalog: () => void;
   openPluginSettings: (pluginId: string | null, fromDiscovery: boolean) => void;
@@ -67,8 +77,8 @@ type PluginsPageViewActions = {
   updateEnabled: (pluginId: string, enabled: boolean, rowKey: string) => void;
   uninstall: (pluginId: string, rowKey: string) => void;
   reload: (pluginId: string, rowKey: string) => void;
-  patchConfig: (path: Array<string | number>, value: unknown) => void;
-  removeConfig: (path: Array<string | number>) => void;
+  patchConfig: (path: Array<string | number>, value: unknown) => boolean | void;
+  removeConfig: (path: Array<string | number>) => boolean | void;
   reloadConfig: () => void;
   retryConfigRead: () => void;
   retryConfigWrite: () => void;
@@ -79,6 +89,8 @@ type PluginsPageViewActions = {
 };
 
 export type PluginsPageViewModel = {
+  renderCredential?: PluginSettingsEditor["renderCredential"];
+  help?: PluginHelpController;
   context: ApplicationContext;
   routeData?: PluginsRouteData;
   surface: "discovery" | "settings";
@@ -95,7 +107,6 @@ export type PluginsPageViewModel = {
   catalogIconUrls: Record<string, string>;
   pageNotice: PluginRowMessage | null;
   catalogDetail: CatalogDetailState | null;
-  catalogDetailTab: PluginCatalogDetailTab;
   installedDetailTab: InstalledPluginDetailTab;
   installWizard: PluginInstallWizardState | null;
   mutationBlockedReason: string | null;
@@ -106,9 +117,13 @@ export type PluginsPageViewModel = {
   consentController: PluginsConsentController;
   installWizardController: InstallWizardController;
   actions: PluginsPageViewActions;
+  skillPreview: PluginPreviewController;
 };
 
 export function renderPluginsPage(model: PluginsPageViewModel) {
+  model.help?.update(model);
+  const ask = model.help?.available ? model.help.ask : undefined;
+  const onAskPlugin = ask ? () => void ask() : undefined;
   const {
     actions,
     catalogDetail,
@@ -124,6 +139,19 @@ export function renderPluginsPage(model: PluginsPageViewModel) {
   const installWizardConfigSchema = installWizard?.pluginId
     ? pluginConfigSchema(configAnalysis.schema, installWizard.pluginId)
     : null;
+  const catalog = catalogDetail?.result;
+  const catalogVersion = catalog?.plugin.catalog.latestVersion;
+  const catalogSkillsSection =
+    catalog && catalogVersion && catalog.detail.skills.length
+      ? renderPluginSkillsSection(catalog.detail.skills, (skillName) =>
+          actions.openSkill({
+            source: "catalog",
+            catalogId: catalog.plugin.id,
+            version: catalogVersion,
+            skillName,
+          }),
+        )
+      : undefined;
   const detailPluginId = detail?.pluginId ?? null;
   const settingsParentRoute =
     new URLSearchParams(model.routeData?.location.search ?? "").get("from") === "plugins"
@@ -136,12 +164,11 @@ export function renderPluginsPage(model: PluginsPageViewModel) {
     error: model.error,
     busy: model.busy,
     messages: model.messages,
-    pageNotice: model.pageNotice,
     iconUrls: model.iconUrls,
     canMutate: model.canMutate,
     reloadBlockedReason: model.reloadBlockedReason,
     mutationBlockedReason: model.mutationBlockedReason,
-    configBusy: configState.configLoading || configState.configSaving,
+    configBusy: configState.configLoading,
     configError: configState.lastError,
     canEditConfig: model.canEditConfig,
     configValue: configState.configForm,
@@ -158,6 +185,55 @@ export function renderPluginsPage(model: PluginsPageViewModel) {
     onConfigReadRetry: actions.retryConfigRead,
     onConfigWriteRetry: actions.retryConfigWrite,
     onRefresh: actions.refreshCatalog,
+    onAskPlugin,
+    onAskSetting: ask,
+  };
+
+  const renderInstalled = (pluginId: string) => {
+    const components = detail?.inspection?.components;
+    const skills = components?.skillDetails ?? components?.skills.map((name) => ({ name })) ?? [];
+    const current = model.routeData?.location;
+    const search = new URLSearchParams(current?.search);
+    search.set("view", "settings");
+    const settings = model.installedDetailTab === "configuration";
+    const backSearch = new URLSearchParams(current?.search);
+    backSearch.delete("view");
+    const overviewHref = `${current?.pathname ?? ""}${backSearch.size ? `?${backSearch}` : ""}`;
+    return renderPluginSettingsDetail({
+      ...settingsShared,
+      pluginId,
+      inspection: detail?.inspection ?? null,
+      inspectionError: detail?.error ?? null,
+      renderCredential: model.renderCredential,
+      tools: detail?.tools,
+      onOpenTool: actions.openTool,
+      skillsSection: skills.length
+        ? renderPluginSkillsSection(skills, (skillName) =>
+            actions.openSkill({ source: "installed", pluginId, skillName }),
+          )
+        : undefined,
+      settingsHref: `${current?.pathname ?? ""}?${search}`,
+      configSchema: pluginConfigSchema(configAnalysis.schema, pluginId),
+      hostControlsSchema: pluginHostControlsSchema(configAnalysis.schema, pluginId),
+      backHref: settings
+        ? overviewHref
+        : pathForRoute(
+            model.surface === "discovery" ? "plugins" : settingsParentRoute,
+            context.basePath,
+          ),
+      backLabel:
+        model.surface === "discovery" || settingsParentRoute === "plugins"
+          ? t("tabs.plugins")
+          : t("nav.settings"),
+      tab: model.installedDetailTab,
+      onBack: settings
+        ? () => actions.selectInstalledDetailTab("readme")
+        : model.surface === "discovery"
+          ? actions.closeCatalogDetail
+          : () => actions.closeSettingsDetail(settingsParentRoute),
+      onRetryInspection: () => actions.retrySettingsDetail(pluginId),
+      onTabChange: actions.selectInstalledDetailTab,
+    });
   };
 
   return html`
@@ -176,6 +252,7 @@ export function renderPluginsPage(model: PluginsPageViewModel) {
     }
     ${renderSettingsWorkspace(html`
       <openclaw-plugin-manager></openclaw-plugin-manager>
+      ${renderPluginRowMessage(model.pageNotice ?? undefined)}
       ${
         model.surface === "discovery"
           ? html`<wa-tab-panel
@@ -185,29 +262,31 @@ export function renderPluginsPage(model: PluginsPageViewModel) {
               aria-labelledby="plugins-tab-plugins"
               >${
                 catalogDetail
-                  ? renderPluginCatalogDetail({
-                      connected: model.connected,
-                      result: catalogDetail.result,
-                      error: catalogDetail.error,
-                      tab: model.catalogDetailTab,
-                      backHref: pathForRoute("plugins", context.basePath),
-                      onBack: actions.closeCatalogDetail,
-                      onRetry: actions.retryCatalogDetail,
-                      onTabChange: actions.selectCatalogDetailTab,
-                      canInstall:
-                        model.canMutate &&
-                        Boolean(
-                          catalogDetail.result &&
-                          installRequestForDiscoveryDetail(catalogDetail.result),
-                        ),
-                      installBlockedReason: model.mutationBlockedReason,
-                      onInstall: () => {
-                        if (catalogDetail.result) {
-                          installWizardController.open(catalogDetail.result);
-                        }
-                      },
-                      iconUrls: model.catalogIconUrls,
-                    })
+                  ? detailPluginId
+                    ? renderInstalled(detailPluginId)
+                    : renderPluginCatalogDetail({
+                        onAskPlugin,
+                        connected: model.connected,
+                        skillsSection: catalogSkillsSection,
+                        result: catalogDetail.result,
+                        error: catalogDetail.error,
+                        backHref: pathForRoute("plugins", context.basePath),
+                        onBack: actions.closeCatalogDetail,
+                        onRetry: actions.retryCatalogDetail,
+                        canInstall:
+                          model.canMutate &&
+                          Boolean(
+                            catalogDetail.result &&
+                            installRequestForDiscoveryDetail(catalogDetail.result),
+                          ),
+                        installBlockedReason: model.mutationBlockedReason,
+                        onInstall: () => {
+                          if (catalogDetail.result) {
+                            installWizardController.open(catalogDetail.result);
+                          }
+                        },
+                        iconUrls: model.catalogIconUrls,
+                      })
                   : renderSettingsPage(
                       renderPluginCatalogResults({
                         connected: model.connected,
@@ -245,21 +324,7 @@ export function renderPluginsPage(model: PluginsPageViewModel) {
               }</wa-tab-panel
             >`
           : detailPluginId
-            ? renderPluginSettingsDetail({
-                ...settingsShared,
-                pluginId: detailPluginId,
-                inspection: detail?.inspection ?? null,
-                inspectionError: detail?.error ?? null,
-                configSchema: pluginConfigSchema(configAnalysis.schema, detailPluginId),
-                hostControlsSchema: pluginHostControlsSchema(configAnalysis.schema, detailPluginId),
-                backHref: pathForRoute(settingsParentRoute, context.basePath),
-                backLabel:
-                  settingsParentRoute === "plugins" ? t("tabs.plugins") : t("nav.settings"),
-                tab: model.installedDetailTab,
-                onBack: () => actions.closeSettingsDetail(settingsParentRoute),
-                onRetryInspection: () => actions.retrySettingsDetail(detailPluginId),
-                onTabChange: actions.selectInstalledDetailTab,
-              })
+            ? renderInstalled(detailPluginId)
             : renderPluginSettingsInventory({
                 ...settingsShared,
                 tab: model.settingsTab,
@@ -298,6 +363,7 @@ export function renderPluginsPage(model: PluginsPageViewModel) {
           })
         : nothing
     }
+    ${renderPluginSkillPreview(model.skillPreview)}
     ${
       consentController.consent
         ? renderPluginConsentDialog({

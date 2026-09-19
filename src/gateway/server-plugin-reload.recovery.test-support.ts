@@ -127,6 +127,7 @@ export async function createPluginReloadRecoveryFixture(
     },
   });
   const candidateStop = vi.fn(async () => await options.candidateStop?.());
+  const rollbackConfigEffects = vi.fn(async () => {});
   const candidates: ReturnType<typeof createBuilder>[] = [];
   const recoveries: ReturnType<typeof createBuilder>[] = [];
   const preparePlugins = ({
@@ -315,7 +316,7 @@ export async function createPluginReloadRecoveryFixture(
           sourceConfig: nextConfig,
           changedPaths,
           checkpoint: options.checkpoint,
-          prepareConfigEffects: options.prepareConfigEffects ?? (() => async () => {}),
+          prepareConfigEffects: options.prepareConfigEffects ?? (() => rollbackConfigEffects),
           pluginLifecycle: {
             reason: "reload",
             operationId: "service-recovery",
@@ -348,6 +349,7 @@ export async function createPluginReloadRecoveryFixture(
     siblingStart,
     siblingStop,
     candidateStop,
+    rollbackConfigEffects,
     candidates,
     lifetime,
   };

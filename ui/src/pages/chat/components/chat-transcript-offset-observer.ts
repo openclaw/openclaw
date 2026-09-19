@@ -1,4 +1,4 @@
-import { observeElementOffset, type Virtualizer } from "@tanstack/virtual-core";
+import { elementScroll, observeElementOffset, type Virtualizer } from "@tanstack/virtual-core";
 import { isTranscriptScrollKey } from "../chat-scroll-input.ts";
 import { maxTranscriptScrollOffset } from "./chat-transcript-geometry.ts";
 import type { ChatTranscriptInteractionAnchor } from "./chat-transcript-interaction-anchor.ts";
@@ -17,10 +17,10 @@ type TranscriptOffsetState = {
     | null;
   touching: boolean;
   touchScrolling: boolean;
-  measurementScrollOffset: number | null;
+  maintenanceScrollOffset: number | null;
   pendingInteractionAnchor: ChatTranscriptInteractionAnchor | null;
   syncNativeOffset: (() => void) | null;
-  recordProgrammaticScroll: ((before: number, after: number) => void) | null;
+  recordProgrammaticScroll: ((before: number, after: number, maintenance: boolean) => void) | null;
 };
 
 /** Create the state shared by native input observation and transcript commands. */
@@ -30,11 +30,37 @@ export function createTranscriptOffsetState(): TranscriptOffsetState {
     scrollCommand: null,
     touching: false,
     touchScrolling: false,
-    measurementScrollOffset: null,
+    maintenanceScrollOffset: null,
     pendingInteractionAnchor: null,
     syncNativeOffset: null,
     recordProgrammaticScroll: null,
   };
+}
+
+export function isTranscriptMaintenanceScroll(
+  state: TranscriptOffsetState,
+  element: HTMLDivElement | null,
+): boolean {
+  return (
+    element !== null &&
+    state.maintenanceScrollOffset !== null &&
+    Math.min(state.maintenanceScrollOffset, maxTranscriptScrollOffset(element) ?? 0) ===
+      element.scrollTop
+  );
+}
+
+export function scrollTranscriptOffset(
+  state: TranscriptOffsetState,
+  offset: number,
+  options: Parameters<typeof elementScroll>[1],
+  instance: Virtualizer<HTMLDivElement, HTMLElement>,
+): void {
+  const element = instance.scrollElement;
+  const before = element?.scrollTop ?? 0;
+  elementScroll(offset, options, instance);
+  // TanStack omits behavior for measurement, anchor sync, and compensation retries.
+  // Explicit commands carry their resolved behavior.
+  state.recordProgrammaticScroll?.(before, element?.scrollTop ?? 0, options.behavior === undefined);
 }
 
 type OffsetOwner = {
@@ -67,7 +93,7 @@ export function observeTranscriptOffset(
   const publishInput = (event: Event) => {
     publish({ type: "input", event, touching: owner.state.touching });
   };
-  const recordProgrammaticScroll = (before: number, after: number) => {
+  const recordProgrammaticScroll = (before: number, after: number, maintenance: boolean) => {
     const delta = before - nativeOffset;
     nativeOffset = after;
     publish({
@@ -77,6 +103,13 @@ export function observeTranscriptOffset(
       touching: owner.state.touching,
       programmatic: owner.isProgrammaticScroll(),
     });
+    // Measurement and clamped retries can run during an outstanding end command.
+    // Keep their provenance after publishing any preceding native input.
+    if (!maintenance && (owner.state.scrollCommand || owner.state.pendingScrollOffset)) {
+      owner.state.maintenanceScrollOffset = null;
+    } else if (before !== after) {
+      owner.state.maintenanceScrollOffset = after;
+    }
   };
   owner.state.recordProgrammaticScroll = recordProgrammaticScroll;
   const publishOffset = (offset: number, scrolling: boolean) => {
@@ -90,12 +123,21 @@ export function observeTranscriptOffset(
     }
     const delta = offset - nativeOffset;
     nativeOffset = offset;
+    if (owner.state.maintenanceScrollOffset !== null) {
+      const target = Math.min(
+        owner.state.maintenanceScrollOffset,
+        maxTranscriptScrollOffset(element) ?? 0,
+      );
+      const actualOffset = element?.scrollTop;
+      owner.state.maintenanceScrollOffset = actualOffset === target ? actualOffset : null;
+    }
+    const programmatic = owner.isProgrammaticScroll();
     publish({
       type: "offset",
       delta,
       scrolling,
       touching: owner.state.touching,
-      programmatic: owner.isProgrammaticScroll(),
+      programmatic,
     });
     const changed = offset !== instance.scrollOffset;
     callback(offset, scrolling);
@@ -163,7 +205,7 @@ export function observeTranscriptOffset(
       touchY = localTouchY(event);
     }
     owner.state.pendingInteractionAnchor = null;
-    owner.state.measurementScrollOffset = null;
+    owner.state.maintenanceScrollOffset = null;
     // Native scrolling may precede input delivery. Attribute the gesture before
     // cancellation or offset synchronization publishes that consumed movement.
     publishInput(event);
@@ -235,6 +277,7 @@ export function observeTranscriptOffset(
     }
     if (owner.state.recordProgrammaticScroll === recordProgrammaticScroll) {
       owner.state.recordProgrammaticScroll = null;
+      owner.state.maintenanceScrollOffset = null;
     }
     cleanup?.();
     contactIds.clear();

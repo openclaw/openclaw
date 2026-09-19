@@ -15,7 +15,11 @@ import { runAgentHarnessBeforeMessageWriteHook } from "../../agents/harness/hook
 import type { SessionEntry } from "../../config/sessions.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { deleteMediaBuffer } from "../../media/store.js";
-import type { InputProvenance } from "../../sessions/input-provenance.js";
+import {
+  isCompletionReportInputProvenance,
+  isSubagentCoordinationInputProvenance,
+  type InputProvenance,
+} from "../../sessions/input-provenance.js";
 import { recordSessionParticipantBestEffort } from "../../sessions/session-participant-recording.js";
 import {
   buildRunUserTurnIdempotencyKey,
@@ -243,7 +247,11 @@ export async function prepareAgentRunUserTurn(params: {
         entry.imageKind ? [{ kind: entry.imageKind, factIndex }] : [],
       );
       const input: UserTurnInput = {
-        ...(params.privateCompletion ? { display: false as const } : {}),
+        ...(params.privateCompletion ||
+        isCompletionReportInputProvenance(params.inputProvenance) ||
+        isSubagentCoordinationInputProvenance(params.inputProvenance)
+          ? { display: false as const }
+          : {}),
         text:
           persistedMedia.omission === "inline-image-save-failed"
             ? [effectiveTranscriptInputText, INLINE_IMAGE_DURABLE_OMISSION_MARKER]
@@ -397,13 +405,14 @@ export function releasePreparedAgentRunUserTurn(
   }
 }
 
-/** Cancels rejected input while preserving both admission and settlement failures. */
+/** Settles failed input while preserving both admission and settlement failures. */
 export function releasePreparedAgentRunUserTurnAfterFailure(
   prepared: PreparedAgentRunUserTurn,
   error: unknown,
+  disposition: "cancelled" | "interrupted" = "cancelled",
 ): unknown {
   try {
-    releasePreparedAgentRunUserTurn(prepared, "cancelled");
+    releasePreparedAgentRunUserTurn(prepared, disposition);
     return error;
   } catch (cleanupError) {
     return new AggregateError(

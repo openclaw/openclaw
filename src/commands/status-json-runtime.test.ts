@@ -85,6 +85,34 @@ describe("status-json-runtime", () => {
     });
   });
 
+  it("records requested local inspections as not collected for online JSON", async () => {
+    const scan = createScan();
+    scan.collection = {
+      source: "gateway",
+      notCollected: [{ fields: ["memory"], reason: "local inspection skipped" }],
+    };
+    const result = await resolveStatusJsonOutput({
+      scan,
+      opts: {},
+      includeSecurityAudit: true,
+      includePluginCompatibility: true,
+    });
+
+    expect(mocks.resolveStatusRuntimeSnapshot).toHaveBeenCalledWith(
+      expect.objectContaining({ includeSecurityAudit: false }),
+    );
+    expect(requireStatusPayloadInput().securityAudit).toMatchObject({ collected: false });
+    expect(result.pluginCompatibility).toEqual({
+      count: 0,
+      warnings: [],
+      collected: false,
+      reason: "Local plugin inspection is not collected in online status.",
+    });
+    expect(result.collection?.notCollected).toEqual(
+      expect.arrayContaining([expect.objectContaining({ fields: ["securityAudit"] })]),
+    );
+  });
+
   it("builds the full json output for status --json", async () => {
     const scan = createScan();
     const result = await resolveStatusJsonOutput({

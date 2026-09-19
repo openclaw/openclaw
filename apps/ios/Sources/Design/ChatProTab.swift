@@ -451,8 +451,10 @@ struct ChatProTab: View {
 
     private var dictationControl: OpenClawChatDictationControl {
         OpenClawChatDictationControl(
-            isActive: self.appModel.isChatDictationActive,
-            isAvailable: !self.appModel.isTalkCaptureActive || self.appModel.isChatDictationActive,
+            phase: self.appModel.chatDictationPhase,
+            isAvailable: !self.appModel.isTalkCaptureActive || self.appModel.chatDictationPhase != .idle,
+            partialTranscript: self.appModel.chatDictationPartialTranscript,
+            level: self.appModel.chatDictationLevel,
             start: {
                 try await self.appModel.transcribeChatDraft()
             },

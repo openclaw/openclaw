@@ -233,6 +233,19 @@ export function resolveAssistantAttachmentAvailability(
   return refreshingAvailability ?? { status: "checking" };
 }
 
+export async function loadAssistantAttachmentAvailability(
+  source: string,
+  options: ImageRenderOptions = {},
+): Promise<AssistantAttachmentAvailability | null> {
+  const availability = resolveAssistantAttachmentAvailability(source, options);
+  if (availability.status !== "checking") {
+    return availability;
+  }
+  const resource = observeAssistantAttachment(source, options);
+  await resource.pending;
+  return isChatMediaResourceCurrent(resource) ? (resource.value ?? null) : null;
+}
+
 export function retryAssistantAttachmentAvailability(
   source: string,
   options: ImageRenderOptions = {},

@@ -112,7 +112,10 @@ describeControlUiE2e("Control UI Markdown table interactions", () => {
         await page.goto(`${server.baseUrl}chat`);
         if (surface === "assistant panel") {
           await page.locator(".sidebar-brand__search").click();
-          await page.getByPlaceholder("Search chats and commands…").fill("Ask OpenClaw");
+          await page
+            .locator("openclaw-command-palette")
+            .getByPlaceholder("Search or start a task…")
+            .fill("Ask OpenClaw");
           await page.getByRole("option", { name: "Ask OpenClaw", exact: true }).click();
         }
         const bubble = page.locator(
@@ -323,6 +326,9 @@ describeControlUiE2e("Control UI Markdown table interactions", () => {
         const hovercard = page.locator(".session-progress-hovercard");
         const sourceLink = beta.locator(`a[data-session-key="${alphaKey}"]`);
         if (overlay === "expanded table") {
+          // The parked pointer can open Beta's backlink card over the table controls.
+          await page.mouse.move(8, 8);
+          await expect.poll(() => hovercard.count()).toBe(0);
           await beta.getByRole("button", { name: "Expand table" }).click();
           await dialog.waitFor({ state: "visible" });
           expect(await dialog.textContent()).toContain("Beta table");

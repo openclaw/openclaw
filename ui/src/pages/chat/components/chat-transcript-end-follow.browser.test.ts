@@ -5,12 +5,14 @@ import "../../../styles.css";
 import "../../../styles/chat.ts";
 import { ChatTranscriptController } from "./chat-transcript-controller.ts";
 import type { TranscriptRow } from "./chat-transcript-layout.ts";
+import { subscribeTranscriptScroll } from "./chat-transcript-scroll-events.ts";
 
 class EndFollowFixture extends LitElement {
   followEnabled = true;
   readonly transcript = new ChatTranscriptController(this, {
     canFollowEnd: () => this.followEnabled,
   });
+  earlierRowHeight = 400;
   lastRowHeight = 900;
 
   protected override createRenderRoot() {
@@ -19,7 +21,11 @@ class EndFollowFixture extends LitElement {
 
   protected override render() {
     const rows: TranscriptRow[] = [
-      { kind: "content", key: "earlier", content: html`<div style="height: 400px">Earlier</div>` },
+      {
+        kind: "content",
+        key: "earlier",
+        content: html`<div style=${`height: ${this.earlierRowHeight}px`}>Earlier</div>`,
+      },
       {
         kind: "content",
         key: "growing-run",
@@ -174,6 +180,32 @@ it("keeps a reader observed at the end pinned when a row grows without a follow"
   expect(host.transcript.isProgrammaticScroll).toBe(false);
 });
 
+it.each([
+  { deltaY: 120, follows: true },
+  { deltaY: -120, follows: false },
+])(
+  "preserves wheel intent when content grows at the end ($deltaY)",
+  async ({ deltaY, follows }) => {
+    const { host, thread, sizer, row, dock, distance } = await mountEndFollowFixture();
+    host.transcript.scrollToEnd();
+    await expect.poll(distance).toBe(0);
+    await settleFrames();
+
+    await commitTask(host, () => {
+      thread.dispatchEvent(new WheelEvent("wheel", { deltaY }));
+      host.lastRowHeight += 200;
+    });
+    await expect.poll(() => sizer.offsetHeight).toBe(1500);
+    await settleFrames();
+    expect(distance()).toBe(follows ? 0 : 200);
+    if (follows) {
+      expect(row.getBoundingClientRect().bottom).toBeLessThanOrEqual(
+        dock.getBoundingClientRect().top,
+      );
+    }
+  },
+);
+
 it("does not turn a resize-clamped reader into permission to follow", async () => {
   const { host, thread, sizer, distance } = await mountEndFollowFixture();
   host.transcript.scrollToEnd();
@@ -198,4 +230,52 @@ it("does not turn a resize-clamped reader into permission to follow", async () =
   expect(host.transcript.scrollToEnd({ source: "manual" })).toBe(true);
   host.followEnabled = true;
   await expect.poll(distance).toBe(0);
+});
+
+it("preserves compensation provenance for later native scroll listeners", async () => {
+  const { host, thread, sizer, distance } = await mountEndFollowFixture();
+  host.transcript.scrollToEnd();
+  await expect.poll(distance).toBe(0);
+  await settleFrames();
+  const readerIdle = new Promise<void>((resolve) => {
+    let moved = false;
+    const unsubscribe = subscribeTranscriptScroll(thread, (observation) => {
+      if (observation.type !== "offset") {
+        return;
+      }
+      moved ||= observation.scrolling && observation.delta !== 0;
+      if (moved && !observation.scrolling) {
+        unsubscribe();
+        resolve();
+      }
+    });
+  });
+  await commitTask(host, () => {
+    host.followEnabled = false;
+    thread.dispatchEvent(new WheelEvent("wheel", { deltaY: -32 }));
+    thread.scrollTop -= 32;
+    thread.style.height = "600px";
+  });
+  await readerIdle;
+  await expect.poll(distance).toBe(0);
+  await settleFrames();
+  expect(host.transcript.isProgrammaticScroll).toBe(false);
+
+  const observations: Array<{ trusted: boolean; programmatic: boolean }> = [];
+  // Mount already installed the offset observer. Native dispatch has no outer
+  // JavaScript stack, so microtasks may run before this later listener.
+  thread.addEventListener("scroll", (event) => {
+    observations.push({
+      trusted: event.isTrusted,
+      programmatic: host.transcript.isProgrammaticScroll,
+    });
+  });
+  await commitTask(host, () => {
+    host.earlierRowHeight += 48;
+  });
+  await expect.poll(() => sizer.offsetHeight).toBe(1348);
+  await expect.poll(() => observations.length).toBeGreaterThan(0);
+  expect(observations[0]).toEqual({ trusted: true, programmatic: true });
+  thread.dispatchEvent(new WheelEvent("wheel", { deltaY: -1 }));
+  expect(host.transcript.isProgrammaticScroll).toBe(false);
 });

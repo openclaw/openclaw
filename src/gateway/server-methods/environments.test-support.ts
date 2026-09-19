@@ -113,6 +113,21 @@ export function workerRecord(overrides: Partial<TestWorkerRecord> = {}): TestWor
 }
 
 export const workerService = (overrides: Partial<TestWorkerService> = {}) => ({
+  getSessionAttachment: vi.fn(() => undefined),
+  findSessionAttachment: vi.fn(() => undefined),
+  getSessionAttachmentStatus: vi.fn(() => undefined),
+  assertSessionAttachment: vi.fn(),
+  touchSessionAttachment: vi.fn(),
+  createSessionAttachment: vi.fn(async () => {
+    throw new Error("No conversation attachment fixture");
+  }),
+  destroySessionAttachment: vi.fn(async () => undefined),
+  execSessionAttachment: vi.fn(async () => {
+    throw new Error("No attached execution fixture");
+  }),
+  openNodePortal: vi.fn(async () => {
+    throw new Error("No attached portal fixture");
+  }),
   list: vi.fn(() => []),
   get: vi.fn(() => undefined),
   inventoryVersion: vi.fn(() => 0),

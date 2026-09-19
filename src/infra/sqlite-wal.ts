@@ -1,6 +1,6 @@
 // Configures SQLite WAL and related pragmas for local stores.
 import { AsyncLocalStorage } from "node:async_hooks";
-import fs, { type BigIntStats } from "node:fs";
+import fs from "node:fs";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
 import type { DatabaseSync } from "node:sqlite";
@@ -8,7 +8,6 @@ import { decodeMountInfoPath } from "@openclaw/normalization-core/mountinfo-path
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import type { Result } from "@openclaw/normalization-core/result";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { hasErrnoCode } from "./errno.js";
 import { normalizeSqliteNonNegativeInteger } from "./sqlite-busy-timeout.js";
 import { createSqliteLifecycleAggregateError } from "./sqlite-coordinator.js";
 import { isSqliteLockError } from "./sqlite-error-diagnostics.js";
@@ -19,6 +18,11 @@ import {
   type SqliteWalCheckpointOptions,
   type SqliteWalHealth,
 } from "./sqlite-wal-checkpoint.js";
+import {
+  detectSqliteWalSplitBrain,
+  terminateForSqliteWalSplitBrain,
+  type SqliteWalSplitBrainEvent,
+} from "./sqlite-wal-split-brain.js";
 import {
   cancelSqliteWalWriteAdmission,
   createSqliteWalMaintenanceScheduler,
@@ -51,15 +55,12 @@ const NETWORK_FILESYSTEM_TYPES = new Set(["cifs", "smbfs", "smb2", "smb3"]);
 const CROSS_VM_FILESYSTEM_TYPES = new Set(["virtiofs", "fuse.virtiofs", "9p", "9p2000.l"]);
 const JOURNAL_MODE_RETRY_INTERVAL_MS = 10;
 const JOURNAL_MODE_RETRY_SLEEP = new Int32Array(new SharedArrayBuffer(4));
-const PROC_SELF_FD_PATH = "/proc/self/fd";
-const SQLITE_WAL_SPLIT_BRAIN_FATAL_MESSAGE =
-  "SQLite WAL sidecar identity mismatch; terminating without SQLite cleanup";
 
 const log = createSubsystemLogger("infra/sqlite-wal");
 
 // Gateway bootstrap loads the database owner before admitting turns. Long-lived
 // maintenance timers must not retain the context of a turn that opens a database.
-const runInSqliteMaintenanceContext = AsyncLocalStorage.snapshot();
+export const runInSqliteMaintenanceContext = AsyncLocalStorage.snapshot();
 
 type IntervalHandle = ReturnType<typeof setInterval> & {
   unref?: () => void;
@@ -68,20 +69,12 @@ type IntervalHandle = ReturnType<typeof setInterval> & {
 type SqliteFilesystemJournalPolicy = "rollback" | "unsupported" | "wal";
 type MountEntry = { mountPoint: string; fsType: string; source?: string };
 
-type SqliteWalSplitBrainEvent = {
-  event: "sqlite_wal_sidecar_identity_mismatch";
-  databasePath: string;
-  descriptorDevice: string;
-  descriptorInode: string;
-  sidecarPath: string;
-  targetDevice?: string;
-  targetInode?: string;
-};
-
 export type SqliteWalMaintenance = {
   /** Last maintenance observation; reading it never checkpoints or probes storage. */
   readonly health?: SqliteWalHealth;
   checkpoint: () => boolean;
+  /** Inspect this retained WAL connection, independently of checkpoint completion elsewhere. */
+  inspectIdle?: () => "healthy" | "retire";
   close: (options?: { checkpointMode?: SqliteWalCheckpointMode }) => boolean;
 };
 
@@ -377,126 +370,6 @@ function hasInMemoryMainDatabase(db: DatabaseSync): boolean {
   return main?.file === "";
 }
 
-function statSqliteSidecarTarget(pathname: string): BigIntStats | undefined {
-  try {
-    return fs.statSync(pathname, { bigint: true });
-  } catch (error) {
-    if (hasErrnoCode(error, "ENOENT")) {
-      return undefined;
-    }
-    throw error;
-  }
-}
-
-function isSqliteWalSidecarSplitBrain(
-  descriptor: BigIntStats,
-  target: BigIntStats | undefined,
-): boolean {
-  return (
-    descriptor.nlink === 0n ||
-    !target ||
-    descriptor.dev !== target.dev ||
-    descriptor.ino !== target.ino
-  );
-}
-
-function detectSqliteWalSplitBrain(databasePath: string): SqliteWalSplitBrainEvent | undefined {
-  let descriptors: string[];
-  try {
-    descriptors = fs.readdirSync(PROC_SELF_FD_PATH);
-  } catch (error) {
-    if (hasErrnoCode(error, "ENOENT")) {
-      return undefined;
-    }
-    throw error;
-  }
-  const sidecarPaths = [`${databasePath}-wal`, `${databasePath}-shm`];
-  for (const descriptorName of descriptors) {
-    const descriptorPath = path.join(PROC_SELF_FD_PATH, descriptorName);
-    let linkedPath: string;
-    try {
-      linkedPath = fs.readlinkSync(descriptorPath);
-    } catch (error) {
-      if (hasErrnoCode(error, "ENOENT")) {
-        continue;
-      }
-      throw error;
-    }
-    const sidecarPath = sidecarPaths.find(
-      (candidate) => linkedPath === candidate || linkedPath === `${candidate} (deleted)`,
-    );
-    if (!sidecarPath) {
-      continue;
-    }
-    let descriptor: BigIntStats;
-    try {
-      descriptor = fs.fstatSync(Number(descriptorName), { bigint: true });
-    } catch (error) {
-      if (hasErrnoCode(error, "EBADF") || hasErrnoCode(error, "ENOENT")) {
-        continue;
-      }
-      throw error;
-    }
-    try {
-      if (fs.readlinkSync(descriptorPath) !== linkedPath) {
-        continue;
-      }
-    } catch (error) {
-      if (hasErrnoCode(error, "ENOENT")) {
-        continue;
-      }
-      throw error;
-    }
-    const target = statSqliteSidecarTarget(sidecarPath);
-    if (!isSqliteWalSidecarSplitBrain(descriptor, target)) {
-      continue;
-    }
-    return {
-      event: "sqlite_wal_sidecar_identity_mismatch",
-      databasePath,
-      descriptorDevice: descriptor.dev.toString(),
-      descriptorInode: descriptor.ino.toString(),
-      sidecarPath,
-      ...(target
-        ? {
-            targetDevice: target.dev.toString(),
-            targetInode: target.ino.toString(),
-          }
-        : {}),
-    };
-  }
-  return undefined;
-}
-
-function terminateForSqliteWalSplitBrain(
-  splitBrain: SqliteWalSplitBrainEvent,
-  databaseLabel: string | undefined,
-): never {
-  try {
-    // Worker stderr has no fd; write to the process sink before fatal containment.
-    fs.writeSync(
-      2,
-      `${JSON.stringify({
-        level: "fatal",
-        subsystem: "infra/sqlite-wal",
-        message: SQLITE_WAL_SPLIT_BRAIN_FATAL_MESSAGE,
-        ...splitBrain,
-        databaseLabel,
-        pid: process.pid,
-      })}\n`,
-    );
-  } catch {
-    // Containment must proceed even when the diagnostic sink is unavailable.
-  }
-  // SIGKILL bypasses Node exit hooks that close SQLite caches. process.exit()
-  // would re-enter the exact stale-handle cleanup this containment prevents.
-  try {
-    process.kill(process.pid, "SIGKILL");
-  } finally {
-    process.abort();
-  }
-}
-
 function requireRollbackJournalMode(db: DatabaseSync, options: SqliteWalMaintenanceOptions): void {
   const row = db.prepare("PRAGMA journal_mode = DELETE;").get();
   const journalMode = readJournalModeResult(row);
@@ -733,6 +606,12 @@ export function configureSqliteWalMaintenance(
       return checkpointOwner.health;
     },
     checkpoint,
+    inspectIdle: () =>
+      runMaintenance(() =>
+        checkpointOwner.inspectIdle(db.prepare("PRAGMA wal_checkpoint(PASSIVE);").get()),
+      )
+        ? "healthy"
+        : "retire",
     close: (closeOptions) => {
       clearInterval(timer ?? undefined);
       timer = null;

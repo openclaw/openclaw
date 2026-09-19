@@ -108,6 +108,96 @@ describe("AgentsPage routing", () => {
     selection.dispose();
   });
 
+  it.each([
+    { pendingUpdate: false, newerIntent: false },
+    { pendingUpdate: true, newerIntent: false },
+    { pendingUpdate: false, newerIntent: true },
+    { pendingUpdate: true, newerIntent: true },
+  ])(
+    "preserves Files while a reused page awaits route data (updated: $pendingUpdate, newer intent: $newerIntent)",
+    async ({ pendingUpdate, newerIntent }) => {
+      const listeners = new Set<() => void>();
+      const request = vi.fn(async () => ({ models: [] }));
+      const client = { request } as unknown as GatewayBrowserClient;
+      const currentGateway = gateway(snapshot(client));
+      const agents = agentsCapability(async () => files("main", "main"));
+      agents.state.agentsList = roster;
+      agents.ensureFiles = vi.fn(async (agentId) => files(agentId, agentId));
+      agents.subscribe = (listener) => {
+        const notify = () => listener(agents.state);
+        listeners.add(notify);
+        return () => listeners.delete(notify);
+      };
+      const selection = createAgentSelectionCapability(
+        {
+          connection: { gatewayUrl: "ws://settings.test" },
+          snapshot: { assistantAgentId: "main" },
+          subscribe: () => () => undefined,
+        },
+        agents,
+        undefined,
+        undefined,
+        { requireConfiguredAgent: true },
+      );
+      const page = document.createElement("openclaw-agents-page") as TestAgentsPage;
+      const context = pageContext(currentGateway, agents);
+      page.context = {
+        ...context,
+        settingsAgentSelection: selection,
+        runtimeConfig: {
+          ...context.runtimeConfig,
+          state: { configSnapshot: {}, configLoading: false },
+        },
+      } as unknown as ApplicationContext;
+      page.routeData = agentsRouteData(currentGateway, roster, "main", selection);
+      setPageGateway(page, client);
+      page.subscriptions.hostConnected();
+      try {
+        page.willUpdate(new Map([["routeData", undefined]]));
+        await waitForFast(() => expect(page.agentFilesList?.workspace).toBe("main"));
+
+        agents.state.agentsList = null;
+        listeners.forEach((listener) => listener());
+        expect(selection.state.selectedId).toBeNull();
+        const nextData = agentsRouteData(currentGateway, roster, "research", selection);
+        // The transient outlet reuses this element while the next loader has no data.
+        page.routeData = undefined;
+        if (pendingUpdate) {
+          page.willUpdate(new Map([["routeData", nextData]]));
+        }
+        agents.state.agentsList = roster;
+        listeners.forEach((listener) => listener());
+
+        expect(selection.state.selectedId).toBe("main");
+        expect(page.context.navigate).not.toHaveBeenCalled();
+        expect(request).not.toHaveBeenCalled();
+        if (newerIntent) {
+          selection.set("main");
+        }
+        page.routeData = nextData;
+        page.willUpdate(new Map([["routeData", undefined]]));
+
+        const expectedAgentId = newerIntent ? "main" : "research";
+        expect(selection.state.selectedId).toBe(expectedAgentId);
+        expect(page.agentsPanel).toBe("files");
+        await waitForFast(() => expect(page.agentFilesList?.workspace).toBe(expectedAgentId));
+        expect(page.context.navigate).not.toHaveBeenCalled();
+        if (newerIntent) {
+          expect(page.context.replace).toHaveBeenCalledWith("agents", {
+            pathname: "/settings/agents/main/files",
+            search: "",
+            hash: "",
+          });
+        } else {
+          expect(page.context.replace).not.toHaveBeenCalled();
+        }
+      } finally {
+        page.subscriptions.hostDisconnected();
+        selection.dispose();
+      }
+    },
+  );
+
   it("does not restore a preloaded agent after a newer sidebar choice, including an ABA change", () => {
     const currentGateway = gateway(snapshot(null, false));
     const selection = settingsSelection(roster, "main");

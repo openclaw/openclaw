@@ -6,14 +6,14 @@ import { createNoopThreadBindingManager } from "./thread-bindings.manager.js";
 
 describe("cleanupDiscordProviderStartup", () => {
   it.each([false, true])(
-    "joins presence work when message-handler cleanup fails=%s",
+    "joins listener work when message-handler cleanup fails=%s",
     async (fails) => {
       const ready = createDeferred<void>();
       const entered = createDeferred<void>();
       const failure = new Error("message-handler cleanup failed");
       let settled = false;
       const cleanup = cleanupDiscordProviderStartup({
-        stopPresenceListener: () => {
+        stopMonitorListeners: () => {
           entered.resolve();
           return ready.promise;
         },

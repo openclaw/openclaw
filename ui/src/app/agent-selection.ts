@@ -41,7 +41,7 @@ export type AgentSelectionCapability = {
   readonly state: AgentSelectionState;
   /** Changes on explicit selection intent or Gateway replacement, including same-id intent. */
   readonly intentRevision: number;
-  set: (agentId: string | null) => void;
+  set: (agentId: string | null, options?: { background?: boolean }) => void;
   setScope: (agentId: string | null) => void;
   subscribe: (listener: (state: AgentSelectionState) => void) => () => void;
 };
@@ -54,10 +54,15 @@ export function selectApplicationSession(params: {
   gateway: { setSessionKey: (sessionKey: string) => void };
   sessionKey: string;
   agentId?: string | null;
+  background?: boolean;
 }): void {
   const agentId = params.agentId?.trim() || parseAgentSessionKey(params.sessionKey)?.agentId;
   if (agentId) {
-    params.selection.set(normalizeAgentId(agentId));
+    if (params.background) {
+      params.selection.set(normalizeAgentId(agentId), { background: true });
+    } else {
+      params.selection.set(normalizeAgentId(agentId));
+    }
   }
   params.gateway.setSessionKey(params.sessionKey);
 }
@@ -285,8 +290,11 @@ export function createAgentSelectionCapability(
     }
   });
 
-  const setSelectedId = (agentId: string | null) => {
-    intentRevision += 1;
+  const setSelectedId = (agentId: string | null, intent?: { background?: boolean }) => {
+    // Route hydration binds ownership without promoting its roster above the transcript.
+    if (!intent?.background) {
+      intentRevision += 1;
+    }
     const selectedId = agentId?.trim() ? normalizeAgentId(agentId) : null;
     pendingConfiguredId =
       options.requireConfiguredAgent && !roster.state.agentsList ? selectedId : null;

@@ -2,7 +2,7 @@ import { setTimeout as sleep } from "node:timers/promises";
 
 /** Retry only acquisition, keeping the deadline independent of wall-clock changes. */
 export async function acquireWithWait<T>(params: {
-  acquire: () => T;
+  acquire: () => T | Promise<T>;
   shouldRetry: (error: unknown) => boolean;
   deadlineMs: number;
   pollIntervalMs: number;
@@ -14,7 +14,7 @@ export async function acquireWithWait<T>(params: {
   let delayMs = params.pollIntervalMs;
   for (;;) {
     try {
-      return params.acquire();
+      return await params.acquire();
     } catch (error) {
       if (!params.shouldRetry(error)) {
         throw error;

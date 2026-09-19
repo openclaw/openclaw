@@ -100,6 +100,7 @@ function prepareNativeSessionRuntime(
 }
 
 export async function resolveEmbeddedRunModelSetup(params: {
+  assertCurrent: () => void;
   runParams: RunEmbeddedAgentInternalParams;
   sessionAdmission?: ReturnType<typeof assertAgentHarnessRunAdmission>;
   provider: string;
@@ -212,6 +213,8 @@ export async function resolveEmbeddedRunModelSetup(params: {
       workspaceDir: params.workspaceDir,
     });
     const tieredResolution = await resolveTieredModel({
+      abortSignal: runParams.abortSignal,
+      assertCurrent: params.assertCurrent,
       provider: selectedRuntimeProvider,
       ...(selectedRuntimeProvider !== provider ? { fallbackProvider: provider } : {}),
       modelId,

@@ -825,6 +825,10 @@ suite.define(() => {
           (request) => (request.params as { offset?: number } | undefined)?.offset,
         ),
       ).toEqual([2, 6, 22]);
+      for (const request of await gateway.getRequests("chat.history")) {
+        expect(request.params).toMatchObject({ limit: 1000 });
+        expect(request.params).not.toHaveProperty("maxBytes");
+      }
     } finally {
       await suite.closeBrowserContext(context);
       if (artifactDir && proofVideo) {

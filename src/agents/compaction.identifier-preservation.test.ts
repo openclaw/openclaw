@@ -76,6 +76,7 @@ describe("compaction identifier-preservation instructions", () => {
     expect(firstSummaryInstructions()).toContain("ports");
     expect(firstSummaryInstructions()).not.toContain("tokens");
     expect(firstSummaryInstructions()).not.toContain("API keys");
+    expect(firstSummaryInstructions()).not.toContain("Additional focus:");
   });
 
   it("keeps identifier-preservation guidance when custom instructions are provided", async () => {
@@ -149,6 +150,7 @@ describe("compaction identifier policy", () => {
       },
     });
 
+    expect(mockGenerateSummary).toHaveBeenCalledOnce();
     const built = mockGenerateSummary.mock.calls[0]?.[6];
     expect(built).toContain("Keep ticket IDs unchanged.");
     expect(built).not.toContain("Preserve all opaque identifiers exactly as written");
@@ -161,6 +163,7 @@ describe("compaction identifier policy", () => {
         identifierInstructions: "   ",
       },
     });
+    expect(mockGenerateSummary).toHaveBeenCalledOnce();
     expect(mockGenerateSummary.mock.calls[0]?.[6]).toContain(
       "Preserve all opaque identifiers exactly as written",
     );
@@ -172,6 +175,7 @@ describe("compaction identifier policy", () => {
       summarizationInstructions: { identifierPolicy: "off" },
     });
 
+    expect(mockGenerateSummary).toHaveBeenCalledOnce();
     expect(mockGenerateSummary.mock.calls[0]?.[6]).toBe(
       "Additional focus:\nTrack release blockers.",
     );

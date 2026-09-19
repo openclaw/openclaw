@@ -23,8 +23,8 @@ import {
   type ExecutionIdentityAdmissionToken,
 } from "./execution-identity-admission.js";
 import {
-  countOutboundMessageAuditEventsForRun,
-  pageOutboundMessageAuditEventsForRun,
+  countOutboundMessageAuditEventsForRunInDatabase,
+  pageOutboundMessageAuditEventsForRunInDatabase,
 } from "./message-delivery-audit-store.js";
 import {
   pruneExpiredOutboundMessageProgress,
@@ -153,7 +153,11 @@ describe("outbound message progress companion", () => {
     expect(tableExists(opened.db, "outbound_message_progress")).toBe(false);
     expect(tableExists(opened.db, "outbound_message_execution_bindings")).toBe(false);
 
-    expect(countOutboundMessageAuditEventsForRun({ runId: "missing", database })).toBe(0);
+    expect(
+      countOutboundMessageAuditEventsForRunInDatabase(openOpenClawStateDatabase(database).db, {
+        runId: "missing",
+      }),
+    ).toBe(0);
     expect(tableExists(opened.db, "outbound_message_progress")).toBe(false);
 
     recordAuditEvent(terminalInput(), database);
@@ -221,38 +225,35 @@ describe("outbound message progress companion", () => {
     );
     recordAuditEvent(terminalInput({ occurredAt }), database);
 
-    const first = pageOutboundMessageAuditEventsForRun({
-      runId: "run-progress",
-      database,
-      now: occurredAt,
-      limit: 1,
-    });
+    const first = pageOutboundMessageAuditEventsForRunInDatabase(
+      openOpenClawStateDatabase(database).db,
+      { runId: "run-progress", now: occurredAt, limit: 1 },
+    );
     expect(first.entries).toHaveLength(1);
     expect(first.nextCursor).toBeDefined();
     closeOpenClawStateDatabaseForTest();
 
-    const second = pageOutboundMessageAuditEventsForRun({
-      runId: "run-progress",
-      database,
-      now: occurredAt,
-      after: first.nextCursor,
-      limit: 2,
-    });
+    const second = pageOutboundMessageAuditEventsForRunInDatabase(
+      openOpenClawStateDatabase(database).db,
+      { runId: "run-progress", now: occurredAt, after: first.nextCursor, limit: 2 },
+    );
     const allEntries = [...first.entries, ...second.entries];
     const all = allEntries.map((entry) => entry.event);
     expect(all.map((event) => event.outcome)).toEqual(["queued", "platform_started", "sent"]);
     expect(new Set(all.map((event) => event.eventId)).size).toBe(3);
     expect(new Set(allEntries.map((entry) => entry.rowId)).size).toBe(3);
     expect(
-      pageOutboundMessageAuditEventsForRun({
+      pageOutboundMessageAuditEventsForRunInDatabase(openOpenClawStateDatabase(database).db, {
         runId: "run-progress",
-        database,
         now: occurredAt,
         limit: 3,
       }).entries,
     ).toEqual(allEntries);
     expect(
-      countOutboundMessageAuditEventsForRun({ runId: "run-progress", database, now: occurredAt }),
+      countOutboundMessageAuditEventsForRunInDatabase(openOpenClawStateDatabase(database).db, {
+        runId: "run-progress",
+        now: occurredAt,
+      }),
     ).toBe(3);
   });
 
@@ -402,9 +403,8 @@ describe("outbound message progress companion", () => {
     });
     expect(reopened.prepare("PRAGMA quick_check").get()).toEqual({ quick_check: "ok" });
     expect(
-      pageOutboundMessageAuditEventsForRun({
+      pageOutboundMessageAuditEventsForRunInDatabase(openOpenClawStateDatabase(database).db, {
         runId: "run-progress",
-        database,
         now: occurredAt,
         limit: 10,
       }).entries.map((entry) => entry.event.outcome),
@@ -453,13 +453,10 @@ describe("outbound message progress companion", () => {
       throw error;
     }
 
-    const page = pageOutboundMessageAuditEventsForRun({
-      runId: "run-progress",
-      database,
-      now: occurredAt,
-      offset: 510,
-      limit: 4,
-    });
+    const page = pageOutboundMessageAuditEventsForRunInDatabase(
+      openOpenClawStateDatabase(database).db,
+      { runId: "run-progress", now: occurredAt, offset: 510, limit: 4 },
+    );
     expect(page.entries.map((entry) => entry.event.outcome)).toEqual([
       "queued",
       "platform_started",
@@ -468,9 +465,8 @@ describe("outbound message progress companion", () => {
     ]);
     expect(page.nextCursor).toBeDefined();
     expect(
-      pageOutboundMessageAuditEventsForRun({
+      pageOutboundMessageAuditEventsForRunInDatabase(openOpenClawStateDatabase(database).db, {
         runId: "run-progress",
-        database,
         now: occurredAt,
         after: page.nextCursor,
         limit: 2,
@@ -486,12 +482,10 @@ describe("outbound message progress companion", () => {
       progressInput("message.outbound.queued", { occurredAt }),
       database,
     );
-    const first = pageOutboundMessageAuditEventsForRun({
-      runId: "run-progress",
-      database,
-      now: occurredAt,
-      limit: 2,
-    });
+    const first = pageOutboundMessageAuditEventsForRunInDatabase(
+      openOpenClawStateDatabase(database).db,
+      { runId: "run-progress", now: occurredAt, limit: 2 },
+    );
     const progress = first.entries.find((entry) => entry.event.outcome === "queued");
     expect(progress).toBeDefined();
     const progressCursor = {
@@ -501,18 +495,16 @@ describe("outbound message progress companion", () => {
     openOpenClawStateDatabase(database).db.prepare("DELETE FROM outbound_message_progress").run();
 
     expect(() =>
-      pageOutboundMessageAuditEventsForRun({
+      pageOutboundMessageAuditEventsForRunInDatabase(openOpenClawStateDatabase(database).db, {
         runId: "run-progress",
-        database,
         now: occurredAt,
         after: progressCursor,
         limit: 1,
       }),
     ).toThrow("cursor is no longer retained");
     expect(
-      pageOutboundMessageAuditEventsForRun({
+      pageOutboundMessageAuditEventsForRunInDatabase(openOpenClawStateDatabase(database).db, {
         runId: "run-progress",
-        database,
         now: occurredAt,
         limit: 10,
       }).entries.map((entry) => entry.event.outcome),

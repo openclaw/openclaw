@@ -8,6 +8,7 @@ import {
 import * as toast from "../lib/toast.ts";
 import { PendingSessionPlacementRecoveryState } from "../pages/new-session/session-placement-recovery-state.ts";
 import {
+  blockStorageWrites,
   createPlacementStartupHarness,
   flushStartupMicrotasks,
 } from "./session-placement-startup.test-support.ts";
@@ -85,18 +86,7 @@ it.each(["Incognito", "failed pause write"])(
       startup.start(memoryInput);
       await flushStartupMicrotasks();
       if (cause === "failed pause write") {
-        const storage = sessionStorage;
-        vi.stubGlobal("sessionStorage", {
-          get length() {
-            return storage.length;
-          },
-          key: storage.key.bind(storage),
-          getItem: storage.getItem.bind(storage),
-          removeItem: storage.removeItem.bind(storage),
-          setItem: () => {
-            throw new Error("quota");
-          },
-        });
+        const storage = blockStorageWrites();
         startup.pause(privateKey, "Stopped before startup", {
           readSessionPlacementRecovery,
           pauseSessionPlacementRecovery,

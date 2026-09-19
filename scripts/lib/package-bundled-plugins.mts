@@ -6,11 +6,11 @@ import {
   composePackagePlugins,
   type DistributionPackageManifest,
 } from "../../src/infra/package-plugin-composition.ts";
+import { NON_PACKAGED_BUNDLED_PLUGIN_DIRS } from "../../src/shared/non-packaged-plugin-dirs.ts";
 import {
   collectBundledPluginBuildEntries,
   collectRootPackageExcludedExtensionDirs,
   DOCKER_SELECTED_PLUGIN_BUILD_IDS_ENV,
-  NON_PACKAGED_BUNDLED_PLUGIN_DIRS,
 } from "./bundled-plugin-build-entries.mjs";
 import { assertRealOutputRoot } from "./output-root-guard.mjs";
 import { PACKAGE_DIST_INVENTORY_RELATIVE_PATH } from "./package-dist-inventory-contract.mts";

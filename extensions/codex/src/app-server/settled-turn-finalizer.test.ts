@@ -359,8 +359,8 @@ describe("runCodexSettledTurnFinalization", () => {
     },
   );
 
-  it.each([" ", "NO_REPLY"])(
-    "returns completed-empty output with native attribution for %j without transcript mutation",
+  it.each([" ", "NO_REPLY", " NO_REPLY\n", "no_reply"])(
+    "preserves non-visible output with native attribution for %j without transcript mutation",
     async (text) => {
       mocks.runBounded.mockResolvedValue({ ...boundedResult(), text });
 
@@ -373,7 +373,7 @@ describe("runCodexSettledTurnFinalization", () => {
         assistant: {
           provider: "openai",
           model: "synthetic-summary-model",
-          content: [{ type: "text", text: "" }],
+          content: [{ type: "text", text: text.trim() }],
         },
       });
       expect(mocks.runBounded).toHaveBeenCalledOnce();
@@ -417,6 +417,7 @@ describe("runCodexSettledTurnFinalization", () => {
     async (type) => {
       mocks.runBounded.mockResolvedValue({
         ...boundedResult(),
+        managedHooksEnabled: true,
         items: [{ id: "item-1", type }],
       });
 
@@ -426,6 +427,88 @@ describe("runCodexSettledTurnFinalization", () => {
           {},
         ),
       ).rejects.toThrow(`unexpected native item: ${type}`);
+      expect(mocks.mirror).not.toHaveBeenCalled();
+    },
+  );
+
+  it("accepts an attested managed Stop-hook continuation before mirroring the revised answer", async () => {
+    const attempt = createAttempt();
+    mocks.runBounded.mockResolvedValue({
+      ...boundedResult(),
+      managedHooksEnabled: true,
+      items: [
+        { id: "draft", type: "agentMessage", text: "An earlier draft." },
+        {
+          id: "hook",
+          type: "hookPrompt",
+          fragments: [{ text: "Revise the answer.", hookRunId: "managed-stop-1" }],
+        },
+        { id: "answer", type: "agentMessage", text: "The update was sent successfully." },
+      ],
+    });
+
+    await expect(
+      runCodexSettledTurnFinalization({ attempt, settledAttempt: createSettledAttempt() }, {}),
+    ).resolves.toMatchObject({ assistantTranscriptOwned: true });
+    expect(mocks.mirror).toHaveBeenCalledOnce();
+  });
+
+  it.each(["NO_REPLY", " "])(
+    "preserves %j after an attested managed Stop-hook continuation without mirroring",
+    async (text) => {
+      mocks.runBounded.mockResolvedValue({
+        ...boundedResult(),
+        text,
+        managedHooksEnabled: true,
+        items: [
+          { id: "draft", type: "agentMessage", text: "An earlier draft." },
+          {
+            id: "hook",
+            type: "hookPrompt",
+            fragments: [{ text: "Revise the answer.", hookRunId: "managed-stop-1" }],
+          },
+          { id: "answer", type: "agentMessage", text },
+        ],
+      });
+
+      await expect(
+        runCodexSettledTurnFinalization(
+          { attempt: createAttempt(), settledAttempt: createSettledAttempt() },
+          {},
+        ),
+      ).resolves.toMatchObject({
+        assistant: {
+          provider: "openai",
+          model: "synthetic-summary-model",
+          content: [{ type: "text", text: text.trim() }],
+        },
+      });
+      expect(mocks.runBounded).toHaveBeenCalledOnce();
+      expect(mocks.mirror).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([undefined, false])(
+    "rejects unattested hook continuations before transcript mutation (%s)",
+    async (managedHooksEnabled) => {
+      mocks.runBounded.mockResolvedValue({
+        ...boundedResult(),
+        managedHooksEnabled,
+        items: [
+          {
+            id: "hook",
+            type: "hookPrompt",
+            fragments: [{ text: "Revise the answer.", hookRunId: "hook-1" }],
+          },
+        ],
+      });
+
+      await expect(
+        runCodexSettledTurnFinalization(
+          { attempt: createAttempt(), settledAttempt: createSettledAttempt() },
+          {},
+        ),
+      ).rejects.toThrow("unexpected native item: hookPrompt");
       expect(mocks.mirror).not.toHaveBeenCalled();
     },
   );

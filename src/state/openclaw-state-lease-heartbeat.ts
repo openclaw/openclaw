@@ -5,6 +5,7 @@ import {
   acquireStateDatabaseHandleLease,
   retainHeldStateDatabaseCoordinator,
 } from "../infra/state-database-coordinator.js";
+import { runInDetachedAsyncContext } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import {
   leaseHeartbeatState as state,
@@ -18,10 +19,13 @@ export function startOpenClawStateLeaseHeartbeat(
   params: Omit<LeaseHeartbeatWorkerData, "shared" | "parentCoordinatorRetained"> & {
     expiresAt: number;
     onLost: (error: Error) => void;
+    /** The live host renews until the worker can take over; never revives an expired owner. */
+    renewDuringStartup?: () => number;
   },
 ) {
   const startedAt = performance.now();
-  const shared = new BigInt64Array(new SharedArrayBuffer(3 * BigInt64Array.BYTES_PER_ELEMENT));
+  const shared = new BigInt64Array(new SharedArrayBuffer(4 * BigInt64Array.BYTES_PER_ELEMENT));
+  Atomics.store(shared, state.expiresAt, BigInt(params.expiresAt));
   const url = resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.stateLeaseHeartbeat);
   // Retain a parent-owned physical lease through native worker teardown. A forced
   // Worker.terminate() need not run JS cleanup; the exit event does attest that
@@ -43,27 +47,30 @@ export function startOpenClawStateLeaseHeartbeat(
   };
   let worker: Worker;
   try {
-    worker = new Worker(url, {
-      workerData: {
-        path: params.path,
-        existingOnly: params.existingOnly,
-        ...(coordinator ? { parentCoordinatorRetained: true as const } : {}),
-        identity: {
-          scope: params.identity.scope,
-          key: params.identity.key,
-          owner: params.identity.owner,
-        },
-        leaseMs: params.leaseMs,
-        expiresAt: params.expiresAt,
-        heartbeatMs: params.heartbeatMs,
-        processOwner: params.processOwner,
-        shared: shared.buffer,
-      } satisfies LeaseHeartbeatWorkerData,
-      env: {},
-      execArgv: resolveRuntimeWorkerArgv(url).slice(0, -1),
-      stdout: true,
-      stderr: true,
-    });
+    // Native stdio ports can outlive termination and retain their creation context.
+    worker = runInDetachedAsyncContext(
+      () =>
+        new Worker(url, {
+          workerData: {
+            path: params.path,
+            existingOnly: params.existingOnly,
+            ...(coordinator ? { parentCoordinatorRetained: true as const } : {}),
+            identity: {
+              scope: params.identity.scope,
+              key: params.identity.key,
+              owner: params.identity.owner,
+            },
+            leaseMs: params.leaseMs,
+            heartbeatMs: params.heartbeatMs,
+            processOwner: params.processOwner,
+            shared: shared.buffer,
+          } satisfies LeaseHeartbeatWorkerData,
+          env: {},
+          execArgv: resolveRuntimeWorkerArgv(url).slice(0, -1),
+          stdout: true,
+          stderr: true,
+        }),
+    );
   } catch (error) {
     release();
     throw error;
@@ -84,18 +91,38 @@ export function startOpenClawStateLeaseHeartbeat(
   worker.stdout.resume();
   worker.stderr.resume();
   const ready = createDeferredCore();
+  let startupRenewal: ReturnType<typeof setTimeout> | undefined;
+  const clearStartupTimers = () => {
+    clearTimeout(startTimer);
+    clearTimeout(startupRenewal);
+    startupRenewal = undefined;
+  };
   const fail = (error: Error) => {
     if (Atomics.load(shared, state.status) === state.closed) {
       return;
     }
     Atomics.store(shared, state.status, state.lost);
     Atomics.notify(shared, state.ack);
-    clearTimeout(startTimer);
+    clearStartupTimers();
     ready.reject(error);
     params.onLost(error);
   };
   const settleStartup = (trigger: "timeout" | "message") => {
     clearTimeout(startTimer);
+    if (trigger === "timeout" && Atomics.load(shared, state.status) === state.starting) {
+      const elapsedMs = performance.now() - startedAt;
+      const remainingMs = Math.min(
+        LEASE_HEARTBEAT_START_TIMEOUT_MS - elapsedMs,
+        Number(Atomics.load(shared, state.expiresAt)) - Date.now(),
+      );
+      if (remainingMs > 0) {
+        // A committed host renewal changes the lease bound, never the startup cap.
+        startupTimeoutMs = Math.round(elapsedMs + remainingMs);
+        startTimer = setTimeout(() => settleStartup("timeout"), remainingMs);
+        return;
+      }
+    }
+    clearStartupTimers();
     // Readiness precedes notification delivery. A delayed parent must not
     // overwrite ready; callback entry still requires a fresh acknowledgement.
     const observedStatus = Atomics.compareExchange(
@@ -121,11 +148,35 @@ export function startOpenClawStateLeaseHeartbeat(
       );
     }
   };
-  const startupTimeoutMs = Math.max(
+  let startupTimeoutMs = Math.max(
     1,
     Math.min(LEASE_HEARTBEAT_START_TIMEOUT_MS, params.expiresAt - Date.now()),
   );
-  const startTimer = setTimeout(() => settleStartup("timeout"), startupTimeoutMs);
+  let startTimer = setTimeout(() => settleStartup("timeout"), startupTimeoutMs);
+  const renewDuringStartup = params.renewDuringStartup;
+  const renewStartup = () => {
+    startupRenewal = undefined;
+    if (Atomics.load(shared, state.status) !== state.starting || !renewDuringStartup) {
+      return;
+    }
+    try {
+      const expiresAt = renewDuringStartup();
+      if (Atomics.load(shared, state.status) !== state.starting) {
+        return;
+      }
+      Atomics.store(shared, state.expiresAt, BigInt(expiresAt));
+      startupRenewal = setTimeout(renewStartup, params.heartbeatMs);
+    } catch (error) {
+      fail(
+        error instanceof Error
+          ? error
+          : new Error("state lease startup renewal failed", { cause: error }),
+      );
+    }
+  };
+  if (renewDuringStartup) {
+    startupRenewal = setTimeout(renewStartup, params.heartbeatMs);
+  }
   worker.once("error", fail);
   worker.once("exit", () => fail(new Error("state lease heartbeat exited")));
   worker.once("message", () => settleStartup("message"));
@@ -133,7 +184,7 @@ export function startOpenClawStateLeaseHeartbeat(
   const close = () => {
     Atomics.store(shared, state.status, state.closed);
     Atomics.notify(shared, state.ack);
-    clearTimeout(startTimer);
+    clearStartupTimers();
     ready.reject(new Error("state lease heartbeat closed"));
   };
   return {

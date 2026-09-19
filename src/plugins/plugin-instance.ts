@@ -40,6 +40,8 @@ export class PluginInstance {
   private captureModuleRecovery?: () => PluginModuleLoaderRecovery;
   private moduleSourceExists?: false | ((source: string) => boolean);
   private accepting = true;
+  private replacementReserved = false;
+  private readonly retainedWork = new Set<object>();
   private readonly calls = new Map<object, PluginRegistry | undefined>();
   private timedOutCalls?: {
     remaining: Set<object>;
@@ -47,7 +49,12 @@ export class PluginInstance {
   };
   private readonly consumers = new Map<
     object,
-    { active: boolean; completion: Promise<void>; registry?: PluginRegistry }
+    {
+      active: boolean;
+      completion: Promise<void>;
+      registry?: PluginRegistry;
+      kind: "work" | "custody";
+    }
   >();
   private readonly cleanups = new Map<() => void | Promise<void>, "plugin" | "module">();
   private readonly waiters = new Set<() => void>();
@@ -171,18 +178,58 @@ export class PluginInstance {
     return this.consumers.size > 0;
   }
 
+  /** Track finite host work without granting invocation authority or joining disposal. */
+  retainWork(): () => void {
+    if (this.replacementReserved) {
+      throw new Error(`Plugin ${this.pluginId} replacement is in progress`);
+    }
+    const token = {};
+    this.retainedWork.add(token);
+    return () => void this.retainedWork.delete(token);
+  }
+
+  /** Reserve replacement atomically before host owners invalidate or stop this instance. */
+  reserveReplacement(): () => void {
+    if (this.hasActiveCall) {
+      throw new Error(
+        `Plugin ${this.pluginId} cannot replace itself from its own active call; retry after the call finishes.`,
+      );
+    }
+    if (
+      this.retainedWork.size ||
+      [...this.consumers.values()].some(({ kind }) => kind === "work")
+    ) {
+      throw new Error(
+        `Plugin ${this.pluginId} still has active retained work; retry after the work finishes.`,
+      );
+    }
+    if (this.replacementReserved) {
+      throw new Error(`Plugin ${this.pluginId} replacement is in progress`);
+    }
+    this.replacementReserved = true;
+    let released = false;
+    return () => {
+      if (!released) {
+        released = true;
+        this.replacementReserved = false;
+      }
+    };
+  }
+
+  /** Retain executable use or idle donor custody through its physical completion. */
   retainConsumer(
     invoke?: <T>(run: () => T) => T,
     registry?: PluginRegistry,
+    kind: "work" | "custody" = "work",
   ): PluginInstanceConsumer {
     const current = this.activeCall();
     const parent = current && this.consumers.get(current.token);
     // Only an exact live retained consumer can derive admission after ordinary closure.
-    if ((!this.accepting || this.owner?.revoked) && !parent?.active) {
+    if (this.replacementReserved || ((!this.accepting || this.owner?.revoked) && !parent?.active)) {
       throw new Error(`Plugin ${this.pluginId} is retiring`);
     }
     const released = createDeferredCore();
-    const token = { active: true, completion: released.promise, registry };
+    const token = { active: true, completion: released.promise, registry, kind };
     this.consumers.set(token, token);
     let closing: Promise<void> | undefined;
     const release = () => {

@@ -38,6 +38,11 @@ import {
 } from "../../shared/worker-bundle-hash.js";
 import { MAX_WORKER_BUNDLE_ARCHIVE_BYTES } from "../../shared/worker-bundle-limits.js";
 import { runTasksWithConcurrency } from "../../utils/run-with-concurrency.js";
+import {
+  copyNodeBootstrapPrebuiltArchive,
+  NODE_BOOTSTRAP_PREBUILT_ARCHIVE,
+} from "./node-bootstrap-prebuilt.js";
+import { resolveNodeBootstrapRuntimeChunks } from "./node-bootstrap-runtime-chunks.js";
 
 const BOOTSTRAP_LAUNCHER_FILES = [
   "openclaw.mjs",
@@ -45,6 +50,7 @@ const BOOTSTRAP_LAUNCHER_FILES = [
   "node-sqlite.mjs",
   "node-runtime-update.mjs",
   "node-runtime-recovery.mjs",
+  "node-host-launcher.mjs",
 ];
 const READ_CONCURRENCY = 16;
 const IGNORED_PLUGIN_DIRECTORIES = new Set(["node_modules", "src", "test", "tests"]);
@@ -189,6 +195,7 @@ async function resolvePlugins(options: ArtifactOptions, packageRoot: string) {
 async function prepareNodeBootstrapArtifact(
   options: ArtifactOptions,
   temporaryRoot: string,
+  usePrebuilt = true,
 ): Promise<NodeBootstrapArtifact> {
   const packageRoot = await fs.realpath(options.packageRoot);
   const sourcePackage = await readPackageManifest(packageRoot);
@@ -284,7 +291,7 @@ async function prepareNodeBootstrapArtifact(
   const externalPluginPrefixes = plugins
     .filter((plugin) => !plugin.bundled)
     .map(({ id }) => `dist/extensions/${id}/`);
-  const files = (
+  const publicFiles = (
     await collectPackageDistInventory(packageRoot, { packageManifest: packageJson })
   ).filter(
     // The Gateway serves Control UI assets; nodes install their worker bundle separately.
@@ -294,21 +301,22 @@ async function prepareNodeBootstrapArtifact(
       !relative.startsWith("dist/control-ui/") &&
       !externalPluginPrefixes.some((prefix) => relative.startsWith(prefix)),
   );
+  const scripts = (sourcePackage.files ?? []).filter(
+    (relative) =>
+      relative.startsWith("scripts/") && !relative.includes("*") && !relative.endsWith("/"),
+  );
+  const { files, sourceFacts } = await resolveNodeBootstrapRuntimeChunks(
+    packageRoot,
+    [...BOOTSTRAP_LAUNCHER_FILES, ...publicFiles, ...scripts].filter(
+      (relative) => relative !== LEGACY_PACKAGE_INSTALL_GUARD_RELATIVE_PATH,
+    ),
+  );
   if (!files.includes("dist/entry.js") && !files.includes("dist/entry.mjs")) {
     throw new Error(
       "Cloud bootstrap is missing its built CLI entry; run pnpm build and restart the Gateway",
     );
   }
-  const scripts = (sourcePackage.files ?? []).filter(
-    (relative) =>
-      relative.startsWith("scripts/") && !relative.includes("*") && !relative.endsWith("/"),
-  );
-  addFiles(
-    packageRoot,
-    [...BOOTSTRAP_LAUNCHER_FILES, ...files, ...scripts].filter(
-      (relative) => relative !== LEGACY_PACKAGE_INSTALL_GUARD_RELATIVE_PATH,
-    ),
-  );
+  addFiles(packageRoot, files);
   // Keep real install guards/pruning, but source-only prepare/prepack commands must not run on a node.
   packageJson.scripts = Object.fromEntries(
     Object.entries(packageJson.scripts ?? {}).filter(([name]) =>
@@ -411,19 +419,26 @@ async function prepareNodeBootstrapArtifact(
       entry.scope.files.push(relative.slice(entry.scope.prefix.length));
     }
   }
-  const tarballPath = path.join(temporaryRoot, "node-runtime.tgz");
+  const tarballPath = path.join(temporaryRoot, NODE_BOOTSTRAP_PREBUILT_ARCHIVE);
+  const prebuiltManifest = usePrebuilt
+    ? await copyNodeBootstrapPrebuiltArchive(packageRoot, temporaryRoot)
+    : undefined;
   let entryConsumed = Promise.resolve();
-  const pack = new tar.Pack({
-    gzip: true,
-    noMtime: true,
-    portable: true,
-    strict: true,
-    onWriteEntry(entry) {
-      entryConsumed = finished(entry, { readable: true, writable: false, cleanup: true });
-      void entryConsumed.catch(() => undefined);
-    },
-  });
-  const archiveDone = pipeline(pack, createWriteStream(tarballPath, { flags: "wx" }));
+  const pack = prebuiltManifest
+    ? undefined
+    : new tar.Pack({
+        gzip: true,
+        noMtime: true,
+        portable: true,
+        strict: true,
+        onWriteEntry(entry) {
+          entryConsumed = finished(entry, { readable: true, writable: false, cleanup: true });
+          void entryConsumed.catch(() => undefined);
+        },
+      });
+  const archiveDone = pack
+    ? pipeline(pack, createWriteStream(tarballPath, { flags: "wx" }))
+    : Promise.resolve();
   // Observe output errors immediately, but join the pipeline after in-flight reads drain.
   void archiveDone.catch(() => undefined);
   const manifest: WorkerBundleHashEntry[] = [];
@@ -448,19 +463,27 @@ async function prepareNodeBootstrapArtifact(
         const [relative, entry] = batch[index]!;
         const { contents, mode } = read.results[index]!;
         const importerPath = relative.slice(entry.scope.prefix.length);
-        entry.scope.imports.push(
-          ...collectPackageDistImports({
-            files: [importerPath],
-            readText: () => contents.toString("utf8"),
-          }),
-        );
         const identity = {
           path: `package/${relative}`,
           size: contents.byteLength,
           mode: process.platform === "win32" ? WORKER_BUNDLE_ARTIFACT_MODE : mode,
           sha256: createHash("sha256").update(contents).digest("hex"),
         };
+        const inspected = sourceFacts.get(relative);
+        if (inspected && identity.sha256 !== inspected.sha256) {
+          throw new Error(`Node distribution changed after import inspection: ${relative}`);
+        }
+        entry.scope.imports.push(
+          ...(inspected?.imports ??
+            collectPackageDistImports({
+              files: [importerPath],
+              readText: () => contents.toString("utf8"),
+            })),
+        );
         manifest.push(identity);
+        if (!pack) {
+          continue;
+        }
         const input = new tar.ReadEntry(
           new tar.Header({
             path: identity.path,
@@ -494,14 +517,14 @@ async function prepareNodeBootstrapArtifact(
         "Gateway build changed while preparing cloud bootstrap; restart the Gateway and retry",
       );
     }
-    pack.end();
+    pack?.end();
     await archiveDone;
   } catch (error) {
     // Minipass needs an error event; argumentless destroy does not settle Node's pipeline.
-    pack.destroy(
+    pack?.destroy(
       error instanceof Error ? error : new Error("Node bootstrap archive failed", { cause: error }),
     );
-    pack.zip?.destroy();
+    pack?.zip?.destroy();
     await archiveDone.catch(() => undefined);
     throw error;
   }
@@ -509,11 +532,16 @@ async function prepareNodeBootstrapArtifact(
   if (tarballBytes > MAX_WORKER_BUNDLE_ARCHIVE_BYTES) {
     throw new Error("Node bootstrap archive exceeds the transfer limit");
   }
-  const archiveManifest = await readWorkerBundleArchiveManifest(
-    tarballPath,
-    DEFAULT_WORKER_BUNDLE_ARCHIVE_LIMITS,
-  );
+  const archiveManifest =
+    prebuiltManifest ??
+    (await readWorkerBundleArchiveManifest(tarballPath, DEFAULT_WORKER_BUNDLE_ARCHIVE_LIMITS));
   if (hashWorkerBundleManifest(manifest) !== hashWorkerBundleManifest(archiveManifest)) {
+    if (prebuiltManifest) {
+      // Different builds or execution modes can select different plugin bytes. Re-enter the
+      // canonical builder once with fresh source checks; never trust an adjacent checksum.
+      await fs.rm(tarballPath);
+      return await prepareNodeBootstrapArtifact(options, temporaryRoot, false);
+    }
     throw new Error("Node bootstrap archive does not match the verified distribution");
   }
   const hash = createHash("sha256");

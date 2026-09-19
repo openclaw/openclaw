@@ -1,7 +1,14 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { GatewayErrorDetailCodes } from "../../packages/gateway-protocol/src/index.js";
+import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
+import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
+import { ensureProfileForEmail } from "../state/user-profiles.js";
+import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { SessionCompanionAskError } from "./session-companion-ask.js";
 import { sessionCompanionHandlers } from "./session-companion-rpc.js";
+import { roleClient, rolePolicyConfig } from "./session-sharing.test-utils.js";
+
+afterEach(() => closeOpenClawAgentDatabasesForTest());
 
 async function invoke(
   method: keyof typeof sessionCompanionHandlers,
@@ -40,6 +47,7 @@ describe("session companion RPC", () => {
       sessionKey: "agent:main:main",
       question: "What is happening?",
       connId: "conn-1",
+      assertSourceCurrent: expect.any(Function),
     });
     expect(respond).toHaveBeenCalledWith(true, {
       answer: "It is checking the fix.",
@@ -63,6 +71,7 @@ describe("session companion RPC", () => {
       sessionKey: "agent:main:main",
       question: "Who owns this ask?",
       connId: "conn-1",
+      assertSourceCurrent: expect.any(Function),
       signal: controller.signal,
     });
     expect(respond.mock.calls).toEqual([[true, { answer: "Bound to this connection.", ts: 124 }]]);
@@ -164,6 +173,43 @@ describe("session companion RPC", () => {
       expect.objectContaining({ code: "INVALID_REQUEST" }),
     );
   });
+
+  it.each(["sessions.companion.ask", "sessions.companion.state"] as const)(
+    "hides a foreign draft before dispatching %s",
+    async (method) => {
+      await withOpenClawTestState({ scenario: "minimal" }, async () => {
+        const owner = ensureProfileForEmail("owner@example.test");
+        const sessionKey = "agent:main:owner-private";
+        await upsertSessionEntryCore(
+          { agentId: "main", sessionKey },
+          {
+            sessionId: "owner-private-session",
+            updatedAt: 1,
+            visibility: "draft",
+            createdActor: { type: "human", source: "profile", id: owner.id },
+          },
+        );
+        const ask = vi.fn(async () => ({ answer: "private", ts: 1 }));
+        const state = vi.fn(() => ({ exchanges: [] }));
+        const respond = await invoke(
+          method,
+          { sessionKey, ...(method === "sessions.companion.ask" ? { question: "Why?" } : {}) },
+          { ask, state },
+          { ...roleClient("view", "foreign-viewer"), connId: "viewer-connection" },
+          undefined,
+          rolePolicyConfig(),
+        );
+
+        expect(ask).not.toHaveBeenCalled();
+        expect(state).not.toHaveBeenCalled();
+        expect(respond).toHaveBeenCalledWith(
+          false,
+          undefined,
+          expect.objectContaining({ code: "INVALID_REQUEST" }),
+        );
+      });
+    },
+  );
 
   it("resets and validates one session thread", async () => {
     const reset = vi.fn();

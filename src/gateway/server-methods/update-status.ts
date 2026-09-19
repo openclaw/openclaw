@@ -16,11 +16,10 @@ import {
   reconcileAbandonedUpdateRunsAsync,
 } from "../../infra/update-run-ledger.js";
 import {
-  getUpdateAvailable,
   getUpdateEffectiveChannel,
-  getUpdateSchedule,
   refreshGatewayUpdateStatus,
 } from "../../infra/update-startup.js";
+import { getUpdateAvailable, getUpdateSchedule } from "../../infra/update-status-state.js";
 import { formatControlPlaneActor, resolveControlPlaneActor } from "../control-plane-audit.js";
 import {
   getLatestUpdateRestartSentinel,

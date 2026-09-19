@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { REDACTED_SENTINEL, restoreRedactedValues } from "../config/redact-snapshot.js";
 import { makeSnapshot } from "../config/redact-snapshot.test-helpers.js";
 import { buildRuntimeConfigSchemaFromRegistry } from "../config/runtime-schema.js";
+import { hashRuntimeConfigValue } from "../config/runtime-snapshot.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.openclaw.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 
@@ -63,6 +64,17 @@ afterEach(() => {
 });
 
 describe("config.get response cache", () => {
+  it("keeps applied revision equality for valid fresh-install defaults", async () => {
+    const snapshot = { ...makeSnapshot({ gateway: { port: 19_001 } }), exists: false, raw: null };
+    mocks.readConfigFileSnapshot.mockResolvedValue(snapshot);
+    mocks.appliedConfigHash = hashRuntimeConfigValue(snapshot.sourceConfig);
+
+    const response = await readConfigGetResponse({ loadUiHints: () => undefined });
+
+    expect(response.configRevisionHash).toEqual(expect.any(String));
+    expect(response.configRevisionHash).toBe(response.appliedConfigHash);
+  });
+
   it("round-trips wildcard plugin SecretRefs through an unrelated form save", async () => {
     const secretRef = {
       source: "store" as const,

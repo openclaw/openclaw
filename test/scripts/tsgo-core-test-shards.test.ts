@@ -41,17 +41,36 @@ describe("tsgo core test shards", () => {
         .map((file) => path.relative(process.cwd(), file).replaceAll(path.sep, "/"));
     };
 
+    const shards = TSGO_CORE_TEST_SHARDS.map((shard) => ({
+      name: shard.name,
+      roots: roots(shard.config),
+    }));
     expect(
       findTsgoCoreTestShardViolations({
         canonicalRoots: roots("test/tsconfig/tsconfig.core.test.json"),
         // Rebalance before the runner's 720-root cap blocks unrelated test-only PRs.
         maxRoots: 700,
-        shards: TSGO_CORE_TEST_SHARDS.map((shard) => ({
-          name: shard.name,
-          roots: roots(shard.config),
-        })),
+        shards,
       }),
     ).toEqual([]);
+    for (const [file, owner] of [
+      ["src/commands/doctor-session-worktree-workspace.test.ts", "commands-doctor"],
+      ["src/commands/doctor/repair-sequencing.test.ts", "commands-doctor"],
+      ["src/commands/oauth-tls-preflight.doctor.test.ts", "commands-doctor"],
+      ["src/commands/onboard-agent.test.ts", "commands"],
+      ["src/agents/command/session-store.test.ts", "commands"],
+      ["src/tui/tui-plugin-approvals.test.ts", "commands"],
+      ["src/wizard/setup.test.ts", "commands"],
+      ["src/cli/cron-cli.test.ts", "services"],
+      ["src/cli/cron-output.process.test.ts", "services"],
+      ["src/cli/cron-cli/register.cron-edit.test.ts", "services"],
+      ["src/cli/update-cli/update-command-config-fence.test.ts", "config-cli"],
+    ] as const) {
+      expect(
+        shards.filter((shard) => shard.roots.includes(file)).map((shard) => shard.name),
+        file,
+      ).toEqual([owner]);
+    }
   });
 
   it("stripes partition the full shard list exactly once", () => {

@@ -128,6 +128,7 @@ openclaw doctor --lint --only core/doctor/gateway-config --json
 
 JSON output fields:
 
+- `schemaVersion`: version of the machine-readable lint envelope; branch on this before parsing other fields
 - `ok`: whether any finding met the selected severity threshold
 - `checksRun` / `checksSkipped`: counts (skipped by profile, `--only`, or `--skip`)
 - `findings`: structured diagnostics with `checkId`, `severity`, `message`, and optional `path`, `line`, `column`, `ocPath`, `source`, `target`, `requirement`, `fixHint`
@@ -141,6 +142,11 @@ Exit codes:
 | `2`  | command/runtime failure before findings could be emitted |
 
 These threshold-based exit codes belong to explicit `--lint` mode, with or without `--json`. Bare `openclaw doctor --json` preserves ordinary Doctor's advisory exit `0` after producing its payload; machine consumers should read `ok` and `findings`. Fatal errors before output remain nonzero.
+
+During `openclaw update`, failure to remove Doctor's disposable lint snapshot is
+recorded as an update warning and does not block the update. Standalone
+`doctor --lint` still reports that cleanup failure as an error. The update keeps
+the checks' actual findings; cleanup warnings do not hide other failures.
 
 Flags:
 

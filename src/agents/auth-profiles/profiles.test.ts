@@ -4,7 +4,6 @@
  * imports, and credential normalization.
  */
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { resolveOAuthDir } from "../../config/paths.js";
@@ -14,7 +13,7 @@ import {
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
-import { withEnvAsync } from "../../test-utils/env.js";
+import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { AUTH_STORE_VERSION } from "./constants.js";
 import { createApiKeyCredential, oauthCred } from "./credential-fixtures.test-support.js";
 import { testing as externalAuthTesting } from "./external-auth.test-support.js";
@@ -104,26 +103,15 @@ async function withAuthProfileTestState<T>(
   run: (state: AuthProfileTestState) => Promise<T> | T,
   options: { clearOAuthDir?: boolean } = {},
 ): Promise<T> {
-  const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
-  const agentDirFor = (agentId: string) => path.join(stateDir, "agents", agentId, "agent");
-  try {
-    return await withEnvAsync(
-      {
-        OPENCLAW_STATE_DIR: stateDir,
-        ...(options.clearOAuthDir ? { OPENCLAW_OAUTH_DIR: undefined } : {}),
-      },
-      async () =>
-        await run({
-          stateDir,
-          agentDir: agentDirFor("main"),
-          agentDirFor,
-        }),
-    );
-  } finally {
-    closeOpenClawAgentDatabasesForTest();
-    closeOpenClawStateDatabaseForTest();
-    fs.rmSync(stateDir, { recursive: true, force: true });
-  }
+  return withOpenClawTestState(
+    {
+      prefix,
+      layout: "state-only",
+      env: options.clearOAuthDir ? { OPENCLAW_OAUTH_DIR: undefined } : undefined,
+    },
+    async (state) =>
+      run({ stateDir: state.stateDir, agentDir: state.agentDir(), agentDirFor: state.agentDir }),
+  );
 }
 
 function expectOAuthCredentialFields(

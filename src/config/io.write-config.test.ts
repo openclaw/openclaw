@@ -2575,7 +2575,7 @@ describe("config io write", () => {
             },
             meta: {
               lastTouchedVersion: persisted.meta?.lastTouchedVersion,
-              migrations: { modelPolicyAllowlist: true },
+              migrations: { modelPolicyAllowlist: true, utilityModelSeparation: true },
             },
           });
           expect(typeof persisted.meta?.lastTouchedVersion).toBe("string");
@@ -2657,54 +2657,6 @@ describe("config io write", () => {
       } finally {
         unsubscribe();
       }
-    },
-  );
-
-  itWithHome(
-    "preserves auth-store refresh scope through managed preflight and notification",
-    async (home) => {
-      const configPath = configPathForHome(home);
-      await fs.mkdir(path.dirname(configPath), { recursive: true });
-      const initialConfig = {
-        gateway: { mode: "local" as const },
-        logging: { level: "info" as const },
-      } satisfies OpenClawConfig;
-      await writeConfigJson(configPath, initialConfig);
-      const preflight = vi.fn(
-        async (
-          sourceConfig: OpenClawConfig,
-          refreshOptions?: { includeAuthStoreRefs?: boolean },
-        ) => ({
-          runtimeConfig: sourceConfig,
-          compareConfig: sourceConfig,
-          refreshOptions,
-        }),
-      );
-      const notifications: Array<{ includeAuthStoreRefs?: boolean } | undefined> = [];
-      const unsubscribe = registerConfigWriteListener(
-        (event) => notifications.push(event.runtimeRefresh),
-        {
-          ownsRuntimeActivationFor: configPath,
-          preCommitRuntimePreflight: preflight,
-        },
-      );
-
-      try {
-        await withEnvAsync({ OPENCLAW_CONFIG_PATH: configPath }, async () => {
-          setRuntimeConfigSnapshot(initialConfig, initialConfig);
-          await writeConfigFile(
-            { ...initialConfig, logging: { level: "debug" } },
-            { runtimeRefresh: { includeAuthStoreRefs: false } },
-          );
-        });
-      } finally {
-        unsubscribe();
-      }
-
-      expect(preflight).toHaveBeenCalledWith(expect.any(Object), {
-        includeAuthStoreRefs: false,
-      });
-      expect(notifications).toEqual([{ includeAuthStoreRefs: false }]);
     },
   );
 

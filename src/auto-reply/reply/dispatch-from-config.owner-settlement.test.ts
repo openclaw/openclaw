@@ -3,6 +3,7 @@ import { AsyncResource } from "node:async_hooks";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { clearAgentHarnesses } from "../../agents/harness/registry.js";
+import { resolveReplyCompletion } from "../../agents/reply-completion.js";
 import { PlatformMessageNotDispatchedError } from "../../infra/outbound/deliver-types.js";
 import {
   interruptSessionWorkAdmissions,
@@ -32,6 +33,7 @@ import {
   setNoAbort,
 } from "./dispatch-from-config.test-harness.js";
 import { createReplyDispatcher } from "./reply-dispatcher.js";
+import { resolveReplyOperationRunState } from "./reply-operation-run-state.js";
 import { buildTestCtx } from "./test-ctx.js";
 
 let getActiveReplyRunCount: typeof import("./reply-run-registry.registry.js").getActiveReplyRunCount;
@@ -118,6 +120,107 @@ describe("dispatchReplyFromConfig owner settlement", () => {
       await dispatcher.waitForIdle();
       await operation?.ownerSettlement;
       vi.useRealTimers();
+    }
+  });
+
+  it("suppresses superseded output and awaits the successor delivery receipt", async () => {
+    setNoAbort();
+    const entered = createDeferred();
+    const releaseOld = createDeferred();
+    const deliveryStarted = createDeferred();
+    const releaseDelivery = createDeferred();
+    const successorFinished = createDeferred();
+    const delivered: string[] = [];
+    const oldDispatcher = createReplyDispatcher({
+      deliver: async (payload) => {
+        delivered.push(payload.text ?? "");
+      },
+    });
+    const nextDispatcher = createReplyDispatcher({
+      deliver: async (payload) => {
+        deliveryStarted.resolve();
+        await releaseDelivery.promise;
+        delivered.push(payload.text ?? "");
+      },
+    });
+    const sessionKey = "agent:main:superseded-delivery";
+    let predecessor: ReturnType<typeof createReplyOperation> | undefined;
+    let successor: ReturnType<typeof createReplyOperation> | undefined;
+    let nextDispatch: Promise<unknown> | undefined;
+    const oldDispatch = dispatchReplyFromConfig({
+      ctx: buildTestCtx({
+        Provider: "discord",
+        Surface: "discord",
+        SessionKey: sessionKey,
+        MessageSid: "old-turn",
+      }),
+      cfg: emptyConfig,
+      dispatcher: oldDispatcher,
+      replyResolver: async (_ctx, opts) => {
+        predecessor = opts?.replyOperation;
+        entered.resolve();
+        await releaseOld.promise;
+        await opts?.onBlockReply?.({ text: "stale block" });
+        return { text: "stale final" };
+      },
+    });
+    try {
+      await entered.promise;
+      if (!predecessor) {
+        throw new Error("missing predecessor owner");
+      }
+      runAfterReplyOperationClear(predecessor, () => {
+        nextDispatch = dispatchReplyFromConfig({
+          ctx: buildTestCtx({
+            Provider: "discord",
+            Surface: "discord",
+            SessionKey: sessionKey,
+            MessageSid: "next-turn",
+          }),
+          cfg: emptyConfig,
+          dispatcher: nextDispatcher,
+          replyResolver: async (_ctx, opts) => {
+            successor = opts?.replyOperation;
+            return { text: "successor answer" };
+          },
+        });
+        void nextDispatch.then(() => successorFinished.resolve(), successorFinished.reject);
+      });
+      predecessor.supersede();
+      releaseOld.resolve();
+      await oldDispatch;
+      await deliveryStarted.promise;
+      expect(predecessor.result).toMatchObject({
+        kind: "aborted",
+        code: "aborted_for_supersession",
+      });
+      expect(delivered).toEqual([]);
+      if (!successor) {
+        throw new Error("missing successor owner");
+      }
+      const settled = vi.fn();
+      void successor.ownerSettlement?.then(settled);
+      await Promise.resolve();
+      expect(settled).not.toHaveBeenCalled();
+      releaseDelivery.resolve();
+      await successorFinished.promise;
+      nextDispatcher.markComplete();
+      const receipt = await nextDispatcher.waitForIdle();
+      await successor.ownerSettlement;
+      expect(receipt?.counts.final.delivered).toBe(1);
+      expect(delivered).toEqual(["successor answer"]);
+      expect(settled).toHaveBeenCalledOnce();
+      expect(getActiveReplyRunCount()).toBe(0);
+    } finally {
+      releaseOld.resolve();
+      releaseDelivery.resolve();
+      oldDispatcher.markComplete();
+      nextDispatcher.markComplete();
+      await Promise.allSettled([oldDispatch, nextDispatch]);
+      await oldDispatcher.waitForIdle();
+      await nextDispatcher.waitForIdle();
+      await predecessor?.ownerSettlement;
+      await successor?.ownerSettlement;
     }
   });
 
@@ -300,7 +403,14 @@ describe("dispatchReplyFromConfig owner settlement", () => {
             retained = opts;
             await opts?.onBlockReply?.({ text: "initial reply" });
             if (phase === "cancelled block and tool-only reply") {
-              opts?.onDeliberateSilentTerminalReply?.();
+              const runState = resolveReplyOperationRunState(opts);
+              if (!runState) {
+                throw new Error("expected reply operation run state");
+              }
+              runState.replyCompletion = resolveReplyCompletion(
+                runState.replyCompletion?.expectation ?? "required",
+                "blocked",
+              );
             }
             resolverEntered.resolve();
             if (phase === "aborted progress") {
@@ -428,7 +538,14 @@ describe("dispatchReplyFromConfig owner settlement", () => {
             replyOptions: { onQueuedFollowupSettled },
             replyResolver: async (_ctx, opts) => {
               retained = opts;
-              opts?.onDeliberateSilentTerminalReply?.();
+              const runState = resolveReplyOperationRunState(opts);
+              if (!runState) {
+                throw new Error("expected reply operation run state");
+              }
+              runState.replyCompletion = resolveReplyCompletion(
+                runState.replyCompletion?.expectation ?? "required",
+                "blocked",
+              );
               return undefined;
             },
           });

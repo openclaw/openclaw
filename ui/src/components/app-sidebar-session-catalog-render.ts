@@ -14,11 +14,7 @@ import { withSidebarNavCollapseIntent } from "../app-session-route-paths.ts";
 import type { ApplicationNavigationOptions } from "../app/context.ts";
 import { t } from "../i18n/index.ts";
 import { formatUiError } from "../lib/format-error.ts";
-import {
-  restartHoverMarqueeIfHovered,
-  startHoverMarqueeFromEvent,
-  stopHoverMarqueeFromEvent,
-} from "../lib/hover-marquee.ts";
+import { renderHoverMarquee } from "../lib/hover-marquee.ts";
 import { handleContextMenuEvent } from "../lib/keyboard-shortcuts.ts";
 import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
 import { isSessionRunActive } from "../lib/session-run-state.ts";
@@ -262,9 +258,7 @@ export function renderSessionCatalogGroups(params: SessionCatalogGroupsParams) {
                   >${collapsed ? icons.chevronRight : icons.chevronDown}</span
                 >
               </span>
-              <span class="sidebar-recent-sessions__label-text hover-marquee"
-                >${catalog.label}</span
-              >
+              ${renderHoverMarquee(catalog.label, "sidebar-recent-sessions__label-text")}
               ${renderCatalogHeaderStatus(hasActiveRun, hasUnread)}
               <span class="sidebar-session-catalog-action-reserve" aria-hidden="true"></span>
               ${
@@ -509,6 +503,7 @@ function renderCatalogSessionRow(
     catalogId: catalog.id,
     hostId: host.hostId,
     threadId: session.threadId,
+    ...(session.sourceHomeId ? { sourceHomeId: session.sourceHomeId } : {}),
   } satisfies CatalogSessionKey;
   const identityKey = buildCatalogSessionKey(catalogKey);
   const key = session.sessionKey ?? buildCatalogSessionKey(catalogKey, params.newSessionAgentId);
@@ -562,11 +557,7 @@ function renderCatalogSessionRow(
     );
   const marqueeLabel = keyed(
     JSON.stringify([label, session.status, session.pullRequest]),
-    html`<span
-      ${ref(restartHoverMarqueeIfHovered)}
-      class="sidebar-recent-session__name hover-marquee"
-      >${label}</span
-    >`,
+    renderHoverMarquee(label, "sidebar-recent-session__name"),
   );
   return html`
     <div
@@ -583,8 +574,6 @@ function renderCatalogSessionRow(
       role="listitem"
       @contextmenu=${openMenuFromEvent}
       @keydown=${openMenuFromEvent}
-      @mouseenter=${startHoverMarqueeFromEvent}
-      @mouseleave=${stopHoverMarqueeFromEvent}
     >
       <a
         href=${withSidebarNavCollapseIntent(href)}

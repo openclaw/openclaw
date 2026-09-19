@@ -48,6 +48,8 @@ import { loadedCronStoreFromRows, loadCronRows } from "./row-codec.js";
 type CronRunReceiptDatabase = Pick<OpenClawStateDatabase, "cron_run_receipts">;
 type CronRunReceiptRow = Selectable<CronRunReceiptDatabase["cron_run_receipts"]>;
 
+export type CronRunReceiptSettlementDisposition = "owner-unavailable";
+
 export type CronRunReceiptStatus =
   | "running"
   | "ok"
@@ -609,13 +611,14 @@ export function activateCronRunReceiptInDatabase(params: {
   return { ...params.handle, startedAtMs: params.startedAtMs };
 }
 
-export function assertCronRunReceiptCurrent(params: {
+/** Reads the canonical definition under the same exact receipt check used by execution. */
+export function readCronRunReceiptCurrentJob(params: {
   handle: CronRunReceiptHandle;
   resolveAgentId: ResolveReceiptAgentId;
   isAgentAvailable?: (agentId: string) => boolean;
   allowMissingJob?: boolean;
   env?: NodeJS.ProcessEnv;
-}): void {
+}): CronJob | undefined {
   if (params.isAgentAvailable && !params.isAgentAvailable(params.handle.agentId)) {
     throw new CronRunReceiptRevisionError(
       params.handle.receiptId,
@@ -623,14 +626,20 @@ export function assertCronRunReceiptCurrent(params: {
       "owner-unavailable",
     );
   }
-  withReceiptWrite(
+  return withReceiptWrite(
     "cron.run-receipt.assert-current",
     params.env ? { env: params.env } : {},
-    (database) =>
-      params.allowMissingJob
-        ? assertCronRunReceiptOwnedInDatabase({ database, handle: params.handle })
-        : assertCronRunReceiptCurrentInDatabase({ database, ...params }),
+    (database) => {
+      assertCronRunReceiptOwnedInDatabase({ database, handle: params.handle });
+      return params.allowMissingJob ? undefined : validateCurrentJob({ database, ...params });
+    },
   );
+}
+
+export function assertCronRunReceiptCurrent(
+  params: Parameters<typeof readCronRunReceiptCurrentJob>[0],
+): void {
+  readCronRunReceiptCurrentJob(params);
 }
 
 /** Keeps the durable lease live when timeout/cancel returns before the runner. */

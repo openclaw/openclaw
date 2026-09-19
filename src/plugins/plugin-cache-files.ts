@@ -60,13 +60,10 @@ export function pluginCacheExistsSync(targetPath: string): boolean {
 
 function resolveRealpath(targetPath: string): string {
   const absolute = path.resolve(targetPath);
-  try {
-    if (absolute === targetPath && fs.realpathSync.native(targetPath) === targetPath) {
-      return targetPath;
-    }
-  } catch {
-    // The JavaScript resolver supports paths that the native resolver may reject.
+  if (absolute === targetPath && pluginCacheRealpathSync(targetPath, true) === targetPath) {
+    return targetPath;
   }
+  // The JavaScript resolver supports paths that the native resolver may reject.
   return fs.realpathSync(targetPath);
 }
 
@@ -90,15 +87,21 @@ export function refreshPluginCacheStat(targetPath: string): fs.Stats | null {
   return pluginCacheStatSync(targetPath);
 }
 
-export function pluginCacheStatSync(targetPath: string): fs.Stats | null {
+export function pluginCacheStatSync(targetPath: string, throwOnError = false): fs.Stats | null {
   const facts = pathFacts(targetPath);
   if (facts.stat === undefined) {
+    facts.statError = undefined;
     try {
       facts.stat = fs.statSync(targetPath);
       facts.exists = true;
-    } catch {
+    } catch (error) {
+      materializePluginCacheError(error);
+      facts.statError = error;
       facts.stat = null;
     }
+  }
+  if (facts.stat === null && throwOnError) {
+    throw facts.statError;
   }
   return facts.stat;
 }

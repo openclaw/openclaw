@@ -91,6 +91,21 @@ export async function clearCommandRecoveryClaim(params: {
           shouldPersistRestartRecoveryCleanup(current, params.runOwnedSessionId, runId),
       });
     }
+    // Finalization may already have cleared the active claim before this finally.
+    // Its durable receipt, not the transient monitor waiter, settles the task.
+    if (
+      (sessionStore[sessionKey] ?? entry)?.restartRecoveryTerminalDeliveryEvidence?.some(
+        (receipt) => receipt.harnessCompletion,
+      )
+    ) {
+      const { reconcileSessionHarnessCompletionDeliveries } =
+        await import("../agent-harness-completion-delivery.js");
+      reconcileSessionHarnessCompletionDeliveries({
+        agentId: params.prepared.sessionAgentId,
+        sessionKey,
+        storePath,
+      });
+    }
   } catch (error) {
     log.warn(
       `failed to clear restart recovery delivery context for ${sessionKey}: ${coerceErrorMessage(error)}`,
@@ -284,6 +299,7 @@ export async function finalizeEmbeddedAgentCommand(params: {
         const transcriptResult = await attemptExecutionRuntime.persistCliTurnTranscript({
           body,
           transcriptBody,
+          inputProvenance: params.opts.inputProvenance,
           result,
           sessionId: effectiveSessionId,
           sessionKey: internalSessionTarget?.sessionKey ?? sessionKey ?? effectiveSessionId,
@@ -523,6 +539,7 @@ export async function finalizeEmbeddedAgentCommand(params: {
       result,
       payloads,
       assertDeliveryCurrent: () => {
+        params.opts.assertSourceCurrent?.();
         params.opts.abortSignal?.throwIfAborted();
         assertAgentRunLifecycleGenerationCurrent(lifecycleGeneration);
       },

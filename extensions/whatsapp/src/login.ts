@@ -1,4 +1,3 @@
-// Whatsapp plugin module implements login behavior.
 import { formatCliCommand } from "openclaw/plugin-sdk/cli-runtime";
 import { logInfo } from "openclaw/plugin-sdk/logging-core";
 import { getRuntimeConfig } from "openclaw/plugin-sdk/runtime-config-snapshot";

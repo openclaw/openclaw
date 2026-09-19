@@ -1,4 +1,5 @@
 import { setImmediate } from "node:timers/promises";
+import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { WorkerProvider } from "openclaw/plugin-sdk/plugin-entry";
 import type { SpawnResult } from "openclaw/plugin-sdk/process-runtime";
@@ -38,6 +39,39 @@ function notSubmittedReceipt(leaseId: string) {
 }
 
 describe("Crabbox project snapshot provisioning", () => {
+  it.each([false, true])(
+    "reports the checkpoint rejection while retaining capture recovery (cleanup fails=%s)",
+    async (cleanupFails) => {
+      const diagnostic =
+        'coordinator POST /v1/checkpoints: http 429: {"error":"checkpoint_limit_exceeded","message":"checkpoint admission limit exceeded: scope=owner observed=10 limit=10"}';
+      const { options } = projectOptions([]);
+      const { provider, calls } = createWarmProvider(({ argv }) => {
+        if (argv[2] === "create") {
+          return commandResult({ code: 5, stderr: diagnostic });
+        }
+        if (cleanupFails && argv[1] === "stop") {
+          return commandResult({ code: 2, stderr: "source has unresolved checkpoint chk_quota" });
+        }
+        return undefined;
+      });
+
+      const failure = await provider
+        .provision(PROFILE, "quota-rejection", options)
+        .catch((error: unknown) => error);
+      const message = formatErrorMessage(failure);
+      expect(message).toContain(diagnostic);
+      expect(message).toContain("capture is unresolved");
+      const capture = (await listCrabboxWarmImages(crabboxState))[0]?.capture;
+      expect(capture).toMatchObject({ phase: "uncertain" });
+      expect(message).toContain(`--recover ${capture!.selector}`);
+      if (cleanupFails) {
+        expect(message).toContain("source has unresolved checkpoint chk_quota");
+      }
+      expect(options.beginNodeEnrollment).not.toHaveBeenCalled();
+      expect(calls.filter(({ argv }) => argv[1] === "stop")).toHaveLength(1);
+    },
+  );
+
   it.each([false, true])(
     "clears only its own rejected capture and still stops the source (replaced=%s)",
     async (replaced) => {
@@ -661,6 +695,7 @@ describe("Crabbox project snapshot provisioning", () => {
     });
     await expect(
       provider.provision({ ...PROFILE, warmImage: false }, "closed-enrollment", {
+        assertCurrent: () => {},
         beginNodeEnrollment,
       }),
     ).rejects.toMatchObject({ name: "AbortError" });

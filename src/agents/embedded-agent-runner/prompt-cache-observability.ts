@@ -17,6 +17,7 @@ type PromptCacheChangeCode =
   | "model"
   | "streamStrategy"
   | "systemPrompt"
+  | "systemPromptSuffix"
   | "tools"
   | "transport";
 
@@ -45,6 +46,8 @@ type PromptCacheSnapshot = {
   streamStrategy: string;
   transport?: string;
   systemPromptDigest: string;
+  /** Digest of the volatile suffix below the cache boundary; undefined when the prompt has none. */
+  systemPromptSuffixDigest?: string;
   toolDigest: string;
   toolCount: number;
   toolNames: string[];
@@ -218,6 +221,15 @@ function diffSnapshots(
       detail: "system prompt digest changed",
     });
   }
+  // OpenAI Responses routes send the suffix inline in `instructions`, so a
+  // suffix change re-caches from that point; Anthropic-style checkpoints lose
+  // the later conversation checkpoint. Track it separately from the prefix.
+  if (previous.systemPromptSuffixDigest !== next.systemPromptSuffixDigest) {
+    changes.push({
+      code: "systemPromptSuffix",
+      detail: "system prompt suffix digest changed",
+    });
+  }
   if (previous.toolDigest !== next.toolDigest) {
     changes.push({
       code: "tools",
@@ -285,6 +297,7 @@ export function beginPromptCacheObservation(params: {
 }): PromptCacheObservationStart {
   const key = buildTrackerKey(params);
   const tools = sortPromptCacheToolsByName(params.tools);
+  const splitSystemPrompt = splitSystemPromptCacheBoundary(params.systemPrompt);
   const snapshot: PromptCacheSnapshot = {
     provider: params.provider,
     modelId: params.modelId,
@@ -292,9 +305,10 @@ export function beginPromptCacheObservation(params: {
     cacheRetention: params.cacheRetention,
     streamStrategy: params.streamStrategy,
     transport: params.transport,
-    systemPromptDigest: digestText(
-      splitSystemPromptCacheBoundary(params.systemPrompt)?.stablePrefix ?? params.systemPrompt,
-    ),
+    systemPromptDigest: digestText(splitSystemPrompt?.stablePrefix ?? params.systemPrompt),
+    ...(splitSystemPrompt
+      ? { systemPromptSuffixDigest: digestText(splitSystemPrompt.dynamicSuffix) }
+      : {}),
     toolDigest: buildToolDigest(tools),
     toolCount: tools.length,
     toolNames: tools.map((tool) => tool.name),

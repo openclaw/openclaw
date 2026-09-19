@@ -24,6 +24,7 @@ import { redactToolPayloadText } from "../browser-redact.ts";
 import type { ToolCard, ToolCardOutcome } from "./chat-types.ts";
 import { extractTextCached } from "./message-extract.ts";
 import { isToolResultMessage } from "./message-normalizer.ts";
+import { readPreparedActivity } from "./tool-call-grouping.ts";
 
 export type ToolPreview = NonNullable<ToolCard["preview"]>;
 export type CanvasToolPreview = Extract<ToolPreview, { kind: "canvas" }>;
@@ -111,7 +112,22 @@ function readToolExitCode(...values: unknown[]): number | undefined {
   return undefined;
 }
 
+export function isToolCardSkipped(card: ToolCard): boolean {
+  const details = readRecord(card.details);
+  return (
+    (card.live !== true || card.completed === true) &&
+    details?.status === "skipped" &&
+    details.deniedReason === "steering"
+  );
+}
+
 export function isToolCardError(card: ToolCard): boolean {
+  if (isToolCardSkipped(card)) {
+    return false;
+  }
+  if (card.activity) {
+    return card.activity.status === "failed";
+  }
   // Progress can contain error-shaped text; only a result may imply failure.
   const canInferFailure = card.live !== true || card.completed === true;
   return card.isError ?? (canInferFailure && isToolErrorOutput(card.outputText));
@@ -121,6 +137,22 @@ export function resolveToolCardOutcome(
   card: ToolCard,
   runActive: boolean | undefined,
 ): ToolCardOutcome {
+  if (isToolCardSkipped(card)) {
+    return "skipped";
+  }
+  if (card.activity) {
+    switch (card.activity.status) {
+      case "failed":
+      case "blocked":
+        return card.activity.status;
+      case "completed":
+        return "succeeded";
+      case "running":
+        return runActive === true && card.live === true ? "running" : "unknown";
+      default:
+        return "unknown";
+    }
+  }
   if (isToolCardError(card)) {
     return "failed";
   }
@@ -458,8 +490,17 @@ function extractToolCards(message: unknown): ToolCard[] {
     });
   }
 
+  const activityByCall = new Map(
+    readPreparedActivity(message)
+      .filter((item) => !item.suppressChannelProgress)
+      .map((item) => [item.toolCallId ?? item.itemId, item]),
+  );
   let revision: number | undefined;
   for (const [index, card] of cards.entries()) {
+    const activity = card.callId ? activityByCall.get(card.callId) : undefined;
+    if (activity) {
+      card.activity = activity;
+    }
     if (!card.browserTab || card.callId || card.messageId) {
       continue;
     }

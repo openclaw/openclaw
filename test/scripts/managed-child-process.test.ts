@@ -27,6 +27,7 @@ import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import { waitForChildClose, waitForDead, waitForPidFile } from "../helpers/process-wait.js";
 import { startProcessWatchdogFixture } from "../helpers/process-watchdog.js";
 import { runQaGatewayFixture } from "../helpers/qa-gateway-cleanup.js";
+import { exitedDescendantReaper } from "./exited-descendant-reaper.test-support.js";
 import { createScriptTestHarness } from "./test-helpers.js";
 
 const testNodeExecPath = resolveTestNodeExecPath();
@@ -135,31 +136,10 @@ process.exitCode = await runManagedCommand({
       );
       // Linux may reap orphaned tool services after the leader's close. Adopt
       // them here and defer reaping until the real supervisor has settled.
-      const reaper = `
-import ctypes, os, subprocess, sys
-if ctypes.CDLL(None, use_errno=True).prctl(36, 1, 0, 0, 0) != 0:
-    raise OSError(ctypes.get_errno(), "PR_SET_CHILD_SUBREAPER failed")
-try:
-    result = subprocess.run(sys.argv[1:])
-finally:
-    reaped = 0
-    while True:
-        try:
-            pid, code = os.waitpid(-1, os.WNOHANG)
-        except ChildProcessError:
-            break
-        if pid == 0 or code != 0:
-            raise RuntimeError("tool descendant did not exit successfully")
-        reaped += 1
-    print("successfully reaped:", reaped)
-    if reaped == 0:
-        raise RuntimeError("fixture did not retain an exited descendant")
-sys.exit(result.returncode)
-`;
       let output = "";
       const code = await runManagedCommand({
         bin: "python3",
-        args: ["-c", reaper, process.execPath, runnerPath],
+        args: ["-c", exitedDescendantReaper, process.execPath, runnerPath],
         stdio: ["ignore", "pipe", "pipe"],
         timeoutMs: 10_000,
         onReady(child) {
@@ -496,7 +476,7 @@ setInterval(() => {}, 1_000);
       });
       expect(runTaskkill).toHaveBeenNthCalledWith(1, taskkillPath, ["/PID", "12345", "/T"], {
         killSignal: "SIGKILL",
-        stdio: "ignore",
+        stdio: ["ignore", "pipe", "pipe"],
         timeout: 10_000,
       });
 
@@ -506,7 +486,7 @@ setInterval(() => {}, 1_000);
       });
       expect(runTaskkill).toHaveBeenNthCalledWith(2, taskkillPath, ["/PID", "12345", "/T", "/F"], {
         killSignal: "SIGKILL",
-        stdio: "ignore",
+        stdio: ["ignore", "pipe", "pipe"],
         timeout: 10_000,
       });
       expect(child.kill).not.toHaveBeenCalled();
@@ -542,7 +522,7 @@ setInterval(() => {}, 1_000);
     withDefaultWindowsSystemRoot(() => {
       const child = {
         kill: vi.fn(),
-        pid: 12345,
+        pid: process.pid,
       };
       const runTaskkill = vi
         .fn()
@@ -554,23 +534,33 @@ setInterval(() => {}, 1_000);
         runTaskkill,
       });
 
-      expect(runTaskkill).toHaveBeenNthCalledWith(1, taskkillPath, ["/PID", "12345", "/T"], {
-        killSignal: "SIGKILL",
-        stdio: "ignore",
-        timeout: 10_000,
-      });
-      expect(runTaskkill).toHaveBeenNthCalledWith(2, taskkillPath, ["/PID", "12345", "/T", "/F"], {
-        killSignal: "SIGKILL",
-        stdio: "ignore",
-        timeout: 10_000,
-      });
+      expect(runTaskkill).toHaveBeenNthCalledWith(
+        1,
+        taskkillPath,
+        ["/PID", String(child.pid), "/T"],
+        {
+          killSignal: "SIGKILL",
+          stdio: ["ignore", "pipe", "pipe"],
+          timeout: 10_000,
+        },
+      );
+      expect(runTaskkill).toHaveBeenNthCalledWith(
+        2,
+        taskkillPath,
+        ["/PID", String(child.pid), "/T", "/F"],
+        {
+          killSignal: "SIGKILL",
+          stdio: ["ignore", "pipe", "pipe"],
+          timeout: 10_000,
+        },
+      );
       expect(child.kill).not.toHaveBeenCalled();
     });
   });
 
   it("preserves stdio-only taskkill and falls back after both trusted attempts fail", () => {
     withDefaultWindowsSystemRoot(() => {
-      const child = { kill: vi.fn(() => true), pid: 12345 };
+      const child = { kill: vi.fn(() => true), pid: process.pid };
       const runTaskkill = vi.fn(() => ({ error: undefined, status: 1 }));
 
       expect(
@@ -579,13 +569,23 @@ setInterval(() => {}, 1_000);
           runTaskkill,
           taskkillTimeoutMs: null,
         }),
-      ).toEqual({ processTreeState: "indeterminate" });
-      expect(runTaskkill).toHaveBeenNthCalledWith(1, taskkillPath, ["/PID", "12345", "/T"], {
-        stdio: "ignore",
-      });
-      expect(runTaskkill).toHaveBeenNthCalledWith(2, taskkillPath, ["/PID", "12345", "/T", "/F"], {
-        stdio: "ignore",
-      });
+      ).toEqual({ processTreeState: "indeterminate", error: expect.any(Error) });
+      expect(runTaskkill).toHaveBeenNthCalledWith(
+        1,
+        taskkillPath,
+        ["/PID", String(child.pid), "/T"],
+        {
+          stdio: ["ignore", "pipe", "pipe"],
+        },
+      );
+      expect(runTaskkill).toHaveBeenNthCalledWith(
+        2,
+        taskkillPath,
+        ["/PID", String(child.pid), "/T", "/F"],
+        {
+          stdio: ["ignore", "pipe", "pipe"],
+        },
+      );
       expect(child.kill).toHaveBeenCalledWith("SIGTERM");
     });
   });
@@ -638,7 +638,7 @@ setInterval(() => {}, 1_000);
     }
   });
 
-  it("preserves distinct group permission policies and verifies the leader when requested", () => {
+  it("preserves indeterminate group state after the leader exits", () => {
     const permissionError = Object.assign(new Error("group signal denied"), { code: "EPERM" });
     const child = { exitCode: null, pid: 12345, signalCode: null };
     const kill = vi.spyOn(process, "kill").mockImplementation((pid) => {
@@ -656,15 +656,12 @@ setInterval(() => {}, 1_000);
         inspectManagedProcessGroup(child, { errorPolicy: "indeterminate", platform: "linux" }),
       ).toBe("indeterminate");
       expect(
-        inspectManagedProcessGroup(child, { errorPolicy: "verify-leader", platform: "linux" }),
-      ).toBe("live");
-      expect(kill).toHaveBeenCalledWith(12345, 0);
-      expect(
         inspectManagedProcessGroup(
           { ...child, exitCode: 0 },
-          { errorPolicy: "verify-leader", platform: "linux" },
+          { errorPolicy: "indeterminate", platform: "linux" },
         ),
-      ).toBe("dead");
+      ).toBe("indeterminate");
+      expect(kill).not.toHaveBeenCalledWith(12345, 0);
     } finally {
       kill.mockRestore();
     }
@@ -675,7 +672,7 @@ setInterval(() => {}, 1_000);
 
     expect(
       inspectManagedProcessGroup(child, { errorPolicy: "alive-on-eperm", platform: "win32" }),
-    ).toBe("dead");
+    ).toBe("indeterminate");
     expect(
       inspectManagedProcessGroup(child, {
         errorPolicy: "alive-on-eperm",
@@ -716,14 +713,13 @@ setInterval(() => {}, 1_000);
       policy: "indeterminate",
       expected: "indeterminate",
     },
-    { snapshot: "empty", afterSnapshot: "EPERM", policy: "verify-leader", expected: "dead" },
     {
       snapshot: "empty",
       afterSnapshot: "EIO",
       policy: "indeterminate",
       expected: "indeterminate",
     },
-    { snapshot: "empty", afterSnapshot: "EIO", expected: "dead" },
+    { snapshot: "empty", afterSnapshot: "EIO", expected: "indeterminate" },
     { snapshot: "zombie", afterSnapshot: null, platform: "darwin", expected: "live" },
     { snapshot: "zombie", afterSnapshot: null, running: true, expected: "live" },
     {
@@ -1342,7 +1338,7 @@ setInterval(() => {}, 1_000);
         ["/PID", String(childPid), "/T", "/F"],
         {
           killSignal: "SIGKILL",
-          stdio: "ignore",
+          stdio: ["ignore", "pipe", "pipe"],
           timeout: 10_000,
         },
       );

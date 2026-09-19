@@ -227,6 +227,39 @@ export async function acquirePreparedModelRuntimeLeaseFromOwners(
         );
       }
     }
+    if (
+      provenance === "run" &&
+      context.getGatewayLifecycleActive() &&
+      options.catalogMode === "static" &&
+      !options.pluginGeneration &&
+      !options.pluginMetadataSnapshot &&
+      !input.readOnly &&
+      !input.loadRuntimePlugins &&
+      !input.skipCredentials
+    ) {
+      const configuredOwner = resolveConfiguredOwner(context.owners, input);
+      const configuredSnapshot = configuredOwner?.snapshot;
+      const generation = configuredOwner?.pluginGeneration;
+      if (
+        configuredOwner &&
+        configuredSnapshot &&
+        generation &&
+        !configuredOwner.pending &&
+        !configuredOwner.needsRefresh &&
+        !configuredOwner.refreshError &&
+        configuredSnapshot.isCurrent() &&
+        configuredSnapshot.config === input.config &&
+        ownerKey({ ...configuredOwner.input, runtimePluginSelections: undefined }) ===
+          ownerKey({ ...input, runtimePluginSelections: undefined }) &&
+        (!pluginMetadataSnapshot || pluginMetadataSnapshot === generation.pluginMetadataSnapshot) &&
+        preparedPluginGenerationSupportsSelections(generation, input)
+      ) {
+        // Covered selections share the configured generation; the lease retains it before yielding.
+        owner = configuredOwner;
+        snapshot = configuredSnapshot;
+        break;
+      }
+    }
     const existing = context.owners.get(key);
     const staleDynamicOwner =
       existing?.needsRefresh &&

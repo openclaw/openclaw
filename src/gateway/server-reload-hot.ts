@@ -199,10 +199,9 @@ export function createGatewayReloadHandlers(params: GatewayReloadHandlerParams) 
           params
             .getPluginRegistry()
             .services.filter(
-              (entry) =>
-                plan.restartServices?.has(entry.service.id) && !pluginIds.has(entry.pluginId),
+              (entry) => plan.restartServices?.has(entry.id) && !pluginIds.has(entry.pluginId),
             )
-            .map((entry) => entry.service.id),
+            .map((entry) => entry.id),
         ),
       };
       assertIrreversibleReloadPlanHasRecoveryOwner(remainingPlan, restartRecoveryAvailable);

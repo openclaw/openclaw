@@ -29,7 +29,10 @@ vi.mock("../entry.compile-cache.js", () => ({
   respawnWithoutOpenClawCompileCacheIfNeeded: async () => false,
 }));
 vi.mock("../entry.respawn.js", () => ({ buildCliRespawnPlan: () => null }));
-vi.mock("../infra/openclaw-exec-env.js", () => ({ ensureOpenClawExecMarkerOnProcess() {} }));
+vi.mock("../infra/openclaw-exec-env.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/openclaw-exec-env.js")>()),
+  ensureOpenClawExecMarkerOnProcess() {},
+}));
 vi.mock("../infra/warning-filter.js", () => ({ installProcessWarningFilter() {} }));
 vi.mock("../infra/unhandled-rejections.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../infra/unhandled-rejections.js")>()),

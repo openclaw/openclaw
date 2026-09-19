@@ -8,6 +8,7 @@ import type {
 import type { CronDeliveryPreview, CronJob } from "../../cron/types.js";
 import type { GatewayRpcOpts } from "../gateway-rpc.js";
 import { callGatewayFromCli } from "../gateway-rpc.js";
+import { createCronAmbiguousNameError } from "./shared.js";
 
 const CRON_LIST_PAGE_SIZE = 200;
 const CRON_LIST_MAX_PAGES = 50;
@@ -240,8 +241,17 @@ export async function findCronJobByIdOrName(
     { allowLegacyUnversionedPagination },
   );
   const needle = normalizeLowercaseStringOrEmpty(idOrName);
-  const job =
-    inventory.jobs.find((candidate) => normalizeLowercaseStringOrEmpty(candidate.id) === needle) ??
-    inventory.jobs.find((candidate) => normalizeLowercaseStringOrEmpty(candidate.name) === needle);
+  let job = inventory.jobs.find(
+    (candidate) => normalizeLowercaseStringOrEmpty(candidate.id) === needle,
+  );
+  if (!job) {
+    const matches = inventory.jobs.filter(
+      (candidate) => normalizeLowercaseStringOrEmpty(candidate.name) === needle,
+    );
+    if (matches.length > 1) {
+      throw createCronAmbiguousNameError(matches);
+    }
+    job = matches[0];
+  }
   return { job, deliveryPreview: job ? inventory.deliveryPreviews?.[job.id] : undefined };
 }

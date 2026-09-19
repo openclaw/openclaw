@@ -12,6 +12,7 @@ import { createApplicationOverlays } from "./overlays.ts";
 
 vi.mock("./control-ui-environment-presentation.runtime.ts", () => ({
   applyControlUiFaviconStatus: vi.fn(),
+  invalidateControlUiFaviconPalette: vi.fn(),
 }));
 const cleanups: Array<() => void> = [];
 

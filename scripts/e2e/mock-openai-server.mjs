@@ -5,6 +5,7 @@ import http from "node:http";
 import { setTimeout as delay } from "node:timers/promises";
 import { escapeRegExp } from "../lib/regexp.mjs";
 import { readPositiveIntEnv, readTcpPortEnv } from "./lib/env-limits.mjs";
+import { summarizeMockInferenceRequest } from "./lib/mock-inference-facts.ts";
 import {
   boundedRequestLogBody,
   isRequestBodyTooLargeError,
@@ -769,8 +770,10 @@ function mcpCodeModeApiFileEvents(body, bodyText) {
   if (!/mcp code mode api file qa check/i.test(allText)) {
     return null;
   }
-  const toolOutput = collectFunctionCallOutputText(body);
-  if (!toolOutput) {
+  const input = Array.isArray(body?.input) ? body.input : [];
+  const latestOutput = input.findLast((item) => item?.type === "function_call_output");
+  const toolOutput = stringifyFunctionCallOutput(latestOutput?.output) ?? "";
+  if (!latestOutput) {
     if (!hasDeclaredTool(bodyText, "exec")) {
       return null;
     }
@@ -796,9 +799,23 @@ function mcpCodeModeApiFileEvents(body, bodyText) {
       ].join("\n"),
     });
   }
+  let toolJson;
+  try {
+    toolJson = JSON.parse(toolOutput);
+  } catch {
+    // Non-JSON output still follows the fixture's failure checks below.
+  }
   if (
-    !/MCP_CODE_MODE_FILE_TOOL_RESULT/.test(toolOutput) ||
-    !/fixture-note-alpha/.test(toolOutput)
+    toolJson?.status === "waiting" &&
+    typeof toolJson.runId === "string" &&
+    toolJson.runId.length > 0 &&
+    hasDeclaredTool(bodyText, "wait")
+  ) {
+    return toolCallEvents("wait", { runId: toolJson.runId });
+  }
+  if (
+    !toolOutput.includes("MCP_CODE_MODE_FILE_TOOL_RESULT") ||
+    !toolOutput.includes("fixture-note-alpha")
   ) {
     return responseEvents(
       "MCP_CODE_MODE_FILE_FAIL unclear=code-mode-exec-did-not-return-fixture-note",
@@ -915,8 +932,10 @@ const server = http.createServer((req, res) => {
           seq: (requestLogSeq += 1),
           method: req.method,
           path: url.pathname,
+          requestBytes: Buffer.byteLength(bodyText),
           body: boundedRequestLogBody(requestLogBody, requestLogBody),
           ...summarizeRequestContent(body),
+          ...(scriptedRoute ? { inferenceFacts: summarizeMockInferenceRequest(body) } : {}),
           ...(selectedResponse?.scriptEntry ? { scriptEntry: selectedResponse.scriptEntry } : {}),
         },
       })

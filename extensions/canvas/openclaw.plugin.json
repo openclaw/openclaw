@@ -32,6 +32,14 @@
       "advanced": true
     }
   },
+  "configGroups": [
+    {
+      "id": "canvas-hosting",
+      "title": "Canvas hosting",
+      "order": 10,
+      "properties": ["host"]
+    }
+  ],
   "configSchema": {
     "type": "object",
     "additionalProperties": false,

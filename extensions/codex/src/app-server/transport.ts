@@ -4,6 +4,7 @@
  */
 import { finished } from "node:stream/promises";
 import { terminateCodexAppServerDescendants } from "./transport-process-containment.js";
+import { waitForCodexAppServerProcessRegistrationCleanup } from "./transport-process-registration.js";
 
 export type CodexAppServerCloseResult =
   | { exited: true; cleanup: "closed" | "uncertain" }
@@ -159,6 +160,9 @@ export async function closeCodexAppServerTransportAndWait(
     options.exitTimeoutMs ?? 2_000,
     drained,
   );
+  if (settled) {
+    await waitForCodexAppServerProcessRegistrationCleanup(child);
+  }
   closure.naturalExit = containment === "natural" && settled;
   if (options.drainStdio) {
     // Share the existing exit budget with pipe draining. A timed-out drain is

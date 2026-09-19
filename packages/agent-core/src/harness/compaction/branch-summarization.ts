@@ -19,7 +19,7 @@ import {
   ok,
   type Result,
 } from "../types.js";
-import { SUMMARIZATION_SYSTEM_PROMPT } from "./compaction.js";
+import { SUMMARIZATION_SYSTEM_PROMPT } from "./summarization-prompts.js";
 import {
   computeFileLists,
   createFileOps,

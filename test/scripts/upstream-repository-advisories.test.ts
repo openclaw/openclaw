@@ -206,6 +206,64 @@ describe("published upstream repository advisories", () => {
   );
 
   it.each([
+    {
+      name: "caps the fallback at the patch",
+      versions: ["1.19.0", "1.20.0", "1.21.0"],
+      matched: ["1.19.0"],
+    },
+    {
+      name: "retains partial coverage when only patched versions are installed",
+      versions: ["1.20.0"],
+      matched: [],
+    },
+    {
+      name: "lets reviewed ranges override the cap",
+      versions: ["1.20.0"],
+      matched: ["1.20.0"],
+      reviewed: true,
+    },
+    {
+      name: "ignores ambiguous patch metadata",
+      versions: ["1.20.0"],
+      matched: ["1.20.0"],
+      patched: ">=1.20",
+    },
+    {
+      name: "preserves affected sibling ranges",
+      versions: ["1.20.0"],
+      matched: ["1.20.0"],
+      sibling: true,
+    },
+  ])("$name", async ({ versions, matched, reviewed, patched, sibling }) => {
+    const source = createSourceFetch({
+      page: () =>
+        Response.json([
+          advisory(">= 1.13.0", {
+            vulnerabilities: [
+              { ...vulnerability(">= 1.13.0"), patched_versions: patched ?? ">=1.20.0" },
+              ...(sibling ? [vulnerability(">= 1.19.0, < 1.21.0")] : []),
+            ],
+          }),
+        ]),
+      ...(reviewed ? {} : { reviewed: () => new Response(null, { status: 404 }) }),
+    });
+    const report = await scan(source.fetchImpl, { fixture: versions });
+    expect(report.advisories.flatMap((entry) => entry.matchedVersions)).toEqual(matched);
+    if (matched.length > 0 && !reviewed && !patched && !sibling) {
+      expect(report.advisories[0]?.vulnerable_versions).toBe(">=1.13.0");
+    }
+    if (reviewed) {
+      expect(report.coverage.reconciliations).toMatchObject([
+        { repositoryRange: ">=1.13.0", matchedVersions: ["1.20.0"] },
+      ]);
+    }
+    expect(report.coverage).toMatchObject({
+      status: reviewed ? "checked" : "partial",
+      issues: reviewed ? [] : [{ subject: `fixture#${ADVISORY_ID}`, reason: "request-failed" }],
+    });
+  });
+
+  it.each([
     { name: "unavailable", response: null },
     { name: "wrong identity", response: { ghsa_id: "GHSA-5555-6666-7777" } },
     { name: "unreviewed", response: { github_reviewed_at: null } },

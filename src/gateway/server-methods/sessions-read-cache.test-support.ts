@@ -1,19 +1,84 @@
-import { expect, vi } from "vitest";
+import { afterEach, expect, vi } from "vitest";
 import type { SessionsListParams } from "../../../packages/gateway-protocol/src/index.js";
+import { listAgentIds } from "../../agents/agent-scope-config.js";
 import {
   loadSessionEntry,
   replaceSessionEntry,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { onUserProfilesChanged } from "../../state/user-profile-events.js";
+import {
+  getUserProfileRole,
+  readUserProfileAliases,
+  resolveUserProfileId,
+} from "../../state/user-profiles.js";
+import {
+  bindSessionRowProjection,
+  getSessionRowProjection,
+} from "../session-row-projection-access.js";
+import {
+  createSessionRowProjection,
+  type SessionRowProjection,
+} from "../session-row-projection.js";
 import type { GatewaySessionRow } from "../session-utils.types.js";
+import { readPreparedServerMethodModelCatalogs } from "./optional-model-catalog.js";
 import { sessionReadHandlers } from "./sessions-read.js";
 import type { GatewayClient, GatewayRequestContext, RespondFn } from "./types.js";
 
 export { sessionReadHandlers };
+const projections = new Set<SessionRowProjection>();
+const profileSubscriptions = new Set<() => void>();
+const initializing = new WeakMap<GatewayRequestContext, Promise<void>>();
+export function disposeSessionReadContexts() {
+  for (const projection of projections) {
+    projection.dispose();
+  }
+  for (const stop of profileSubscriptions) {
+    stop();
+  }
+  projections.clear();
+  profileSubscriptions.clear();
+}
+afterEach(disposeSessionReadContexts);
+export function initializeSessionReadContext(context: GatewayRequestContext) {
+  if (getSessionRowProjection(context)) {
+    return Promise.resolve();
+  }
+  let pending = initializing.get(context);
+  if (!pending) {
+    const placements = context.workerSessionPlacementService;
+    pending = createSessionRowProjection({
+      cfg: context.getRuntimeConfig(),
+      getConfig: context.getRuntimeConfig,
+      getModelCatalog: () =>
+        readPreparedServerMethodModelCatalogs(context, listAgentIds(context.getRuntimeConfig())),
+      context,
+      placementFactsReader: placements
+        ? {
+            getProjectionFacts(sessionId) {
+              return {
+                placement: placements.getMany([sessionId]).get(sessionId),
+                move: placements.getPlacementMoves?.([sessionId]).get(sessionId),
+                workspaceResultReconciling:
+                  placements
+                    .getWorkspaceResultReconcilingSessionIds?.([sessionId])
+                    .has(sessionId) ?? false,
+              };
+            },
+          }
+        : undefined,
+    }).then((projection) => {
+      projections.add(projection);
+      bindSessionRowProjection(context, () => projection);
+    });
+    initializing.set(context, pending);
+  }
+  return pending;
+}
 
 export function identifiedClient(profileId: string): GatewayClient {
-  return {
+  const client: GatewayClient = {
     connect: {
       minProtocol: 1,
       maxProtocol: 1,
@@ -28,6 +93,19 @@ export function identifiedClient(profileId: string): GatewayClient {
       updatedAt: 1,
     },
   };
+  const refresh = () => {
+    const identity = client.authenticatedUserProfile?.profileId ?? profileId;
+    const resolved = resolveUserProfileId(identity);
+    const canonical = resolved ?? identity;
+    client.preparedSessionProfile = {
+      profileId: canonical,
+      aliases: readUserProfileAliases(canonical),
+      role: resolved ? getUserProfileRole(canonical) : null,
+    };
+  };
+  refresh();
+  profileSubscriptions.add(onUserProfilesChanged(refresh));
+  return client;
 }
 
 export function requestContext(config: OpenClawConfig): GatewayRequestContext {
@@ -45,6 +123,7 @@ export async function listSessions(params: {
   context: GatewayRequestContext;
   request: SessionsListParams;
 }) {
+  await initializeSessionReadContext(params.context);
   const responses: Parameters<RespondFn>[] = [];
   await sessionReadHandlers["sessions.list"]?.({
     req: { type: "req", id: "session-list-test", method: "sessions.list" },

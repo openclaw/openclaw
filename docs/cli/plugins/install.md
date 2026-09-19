@@ -70,12 +70,23 @@ package name matches an official plugin. This exemption does not grant OAuth,
 operating-system, or runtime tool permissions. See
 [capability consent](/plugins/manage-plugins#capability-consent).
 
+Local copies selected through `plugins.load.paths`, including `--link` installs,
+do not inherit official package trust. `--force` does not change that boundary.
+If a channel requires trusted plugin state, such as its durable ingress queue,
+startup records the refusal and leaves the channel blocked without automatic
+retries. Doctor and `openclaw update status` show the running Gateway's recorded
+failure, including the source and remedy. Install the official npm package or
+ClawHub listing and remove the local override from `plugins.load.paths`, then
+restart the channel.
+
 `plugins search` queries ClawHub for installable `code-plugin` and
 `bundle-plugin` packages (not skills; use `openclaw skills search` for those).
 Default `--limit` is 20, capped at 100. It only reads the remote catalog: no
 local state inspection, config mutation, package install, or plugin runtime
 load. Results include the ClawHub package name, family, channel, version,
 summary, and an install hint such as `openclaw plugins install clawhub:<package>`.
+Human output adds `v` only to numeric version labels, preserving existing prefixes
+and build names. JSON output keeps the original version values.
 
 <Note>
 Default official installs follow the catalog's declared source order.
@@ -300,6 +311,10 @@ Each plugin keeps its own policy and capability-consent checks. The command stop
 at the first failure; earlier successful enables remain committed, and later IDs
 are not processed. With a local Gateway running, it applies each change through
 that Gateway. Otherwise, changes are saved for the next Gateway start.
+
+`openclaw plugins disable <ids...>` follows the same input order and stops at
+the first failure, keeping earlier changes. Both commands preserve repeated IDs;
+each operation sees the config committed by the previous one.
 
 `plugins enable` respects global disablement, the denylist, and restrictive
 allowlists whether the Gateway is running or stopped. Policy rejection happens

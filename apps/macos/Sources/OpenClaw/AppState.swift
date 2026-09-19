@@ -1310,6 +1310,7 @@ extension AppState {
         }
     }
 
+    @MainActor
     struct PrimaryGatewaySnapshot {
         let root: [String: Any]
         fileprivate let routingGeneration: UInt64

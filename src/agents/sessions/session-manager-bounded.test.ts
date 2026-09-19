@@ -1,5 +1,6 @@
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
+import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { makeUserMessage } from "../../../test/helpers/user-message.js";
 import {
@@ -193,10 +194,43 @@ it("accepts a prepared assistant whose parent is the admitted user", async () =>
     throw new Error("missing admission anchor");
   }
 
-  runWithSessionTranscriptReadFence(
-    { ...admitted.anchor, logicalTurnId: "current", role: "user" },
-    () => expect(() => manager.appendMessage(buildAssistantMessage("reply"))).not.toThrow(),
+  const database = openOpenClawAgentDatabase({
+    agentId: scope.agentId,
+    path: resolveSessionTranscriptDatabasePath(scope),
+  });
+  const reads = trackSqliteStatementExecutions(database.db, ["identity"], (sql) =>
+    /^select\b/iu.test(sql) &&
+    /from "transcript_event_identities" where/iu.test(sql) &&
+    /"event_id" = \?/u.test(sql)
+      ? "identity"
+      : null,
   );
+  const reply = buildAssistantMessage("reply");
+  let replyId: string;
+  try {
+    replyId = runWithSessionTranscriptReadFence(
+      { ...admitted.anchor, logicalTurnId: "current", role: "user" },
+      () => manager.appendMessage(reply),
+    );
+  } finally {
+    reads.restore();
+  }
+
+  expect(manager.getBranch().map((entry) => entry.id)).toEqual([admitted.entryId, replyId]);
+  closeOpenClawAgentDatabasesForTest(dir);
+  const reopened = SessionManager.open(scope, dir);
+  expect(reopened.getBranch().map((entry) => entry.id)).toEqual([admitted.entryId, replyId]);
+  expect(reopened.getEntry(replyId)).toMatchObject({
+    type: "message",
+    parentId: admitted.entryId,
+    message: reply,
+  });
+  expect(reopened.buildSessionContext().messages).toMatchObject([
+    { role: "user", content: "current", timestamp: 1 },
+    reply,
+  ]);
+  expect(reads.counts.identity).toBeGreaterThan(0);
+  expect(reads.counts.identity).toBeLessThanOrEqual(2);
 });
 
 it("keeps a fenced assistant after rebasing over a concurrent assistant", async () => {

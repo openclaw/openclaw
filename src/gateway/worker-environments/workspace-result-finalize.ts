@@ -7,6 +7,7 @@ import { resolveSandboxToolPolicyForAgent } from "../../agents/sandbox/tool-poli
 import type { SessionPlacementTurnParams } from "../../agents/session-placement-admission.js";
 import { withSessionPlacementComputer } from "../../agents/session-placement-computer.js";
 import { withSessionSkillResources } from "../../agents/session-placement-skill-resources.js";
+import { withSessionManagerWrite } from "../../agents/sessions/session-manager-write-admission.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
 import {
   attachErrorDiagnostic,
@@ -139,11 +140,12 @@ export async function reconcileWorkspaceAfterTurn(params: {
   turnClaim: WorkerSessionTurnClaim;
   workspaceOperations: WorkerWorkspaceOperationCoordinator;
   workspace: WorkerSessionWorkspace;
-  transcriptTarget: Parameters<typeof SessionManager.open>[0];
+  transcriptTarget: ReturnType<typeof resolveWorkerTurnTranscriptTarget>;
   tunnel: WorkerTunnelHandle;
   prepareAcceptedWorkspacePublication?: (claim: WorkerSessionTurnClaim) => Promise<void>;
   publishAcceptedWorkspace?: (claim: WorkerSessionTurnClaim) => Promise<void>;
 }): Promise<WorkspaceConflictReport | undefined> {
+  const transcriptTarget = { ...params.transcriptTarget };
   const currentPlacement = params.placements.get(params.placement.sessionId);
   const generationMatches =
     currentPlacement?.state === "active"
@@ -159,7 +161,7 @@ export async function reconcileWorkspaceAfterTurn(params: {
   ) {
     throw new Error("Cloud worker placement changed before workspace reconciliation");
   }
-  const completed = SessionManager.open(params.transcriptTarget);
+  const completed = SessionManager.open(transcriptTarget);
   const priorWorkspaceConflict =
     currentPlacement.workspaceResultConflict ??
     latestDurableWorkspaceConflict(completed.getBranch());
@@ -240,32 +242,43 @@ export async function reconcileWorkspaceAfterTurn(params: {
           stagedResultRef: recordedStagedResultRef,
           workspace: params.workspace,
           report: async (report) => {
-            if ("cleared" in report) {
-              SessionManager.open(params.transcriptTarget).appendCustomMessageEntry(
-                WORKSPACE_CONFLICT_CLEARED_TRANSCRIPT_TYPE,
-                "A later cloud workspace result superseded the previous conflict.",
-                false,
+            const manager = SessionManager.open(transcriptTarget);
+            await withSessionManagerWrite(manager, () => {
+              // Execution may have ended; the exact pending result still owns settlement.
+              if (!params.placements.validateWorkspaceResultClaim(params.turnClaim)) {
+                throw new Error("Cloud worker workspace result lost its placement owner");
+              }
+              resolveWorkerTurnTranscriptTarget({
+                ...transcriptTarget,
+                sessionTarget: transcriptTarget,
+              });
+              if ("cleared" in report) {
+                manager.appendCustomMessageEntry(
+                  WORKSPACE_CONFLICT_CLEARED_TRANSCRIPT_TYPE,
+                  "A later cloud workspace result superseded the previous conflict.",
+                  false,
+                );
+                return;
+              }
+              workspaceConflict = {
+                ...report,
+                summary: formatWorkspaceConflictSummary(
+                  report.paths,
+                  report.stagedResultRef,
+                  report.totalCount,
+                ),
+              };
+              manager.appendCustomMessageEntry(
+                WORKSPACE_CONFLICT_TRANSCRIPT_TYPE,
+                workspaceConflict.summary,
+                true,
+                {
+                  paths: workspaceConflict.paths,
+                  stagedResultRef: workspaceConflict.stagedResultRef,
+                  totalCount: workspaceConflict.totalCount,
+                },
               );
-              return;
-            }
-            workspaceConflict = {
-              ...report,
-              summary: formatWorkspaceConflictSummary(
-                report.paths,
-                report.stagedResultRef,
-                report.totalCount,
-              ),
-            };
-            SessionManager.open(params.transcriptTarget).appendCustomMessageEntry(
-              WORKSPACE_CONFLICT_TRANSCRIPT_TYPE,
-              workspaceConflict.summary,
-              true,
-              {
-                paths: workspaceConflict.paths,
-                stagedResultRef: workspaceConflict.stagedResultRef,
-                totalCount: workspaceConflict.totalCount,
-              },
-            );
+            });
           },
         });
         await params.publishAcceptedWorkspace?.(params.turnClaim);

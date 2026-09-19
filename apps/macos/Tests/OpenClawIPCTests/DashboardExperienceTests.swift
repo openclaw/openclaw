@@ -25,11 +25,21 @@ struct DashboardExperienceTests {
         try await saved.webView.evaluateJavaScript("window.fixtureDraft = 'Keep this draft'")
         let savedWindow = try #require(saved.window)
         let primaryWindow = try #require(primary.window)
-        primaryWindow.miniaturize(nil)
+        try await AppKitTestSupport.performWindowTransition(
+            primaryWindow, notification: NSWindow.didMiniaturizeNotification)
+        {
+            primaryWindow.miniaturize(nil)
+        }
         saved.show()
         #expect(manager.hasVisibleWindows)
 
-        manager.hideWindows()
+        try await AppKitTestSupport.performWindowTransition(
+            primaryWindow, notification: NSWindow.didDeminiaturizeNotification)
+        {
+            manager.hideWindows()
+            await manager.handleEndpointState(.ready(
+                mode: .remote, url: server.websocketURL(), token: "renewed", password: nil, routeRevision: 2))
+        }
 
         #expect(!manager.hasVisibleWindows)
         #expect(!primaryWindow.isVisible && !primaryWindow.isMiniaturized)
@@ -48,12 +58,32 @@ struct DashboardExperienceTests {
         #expect(try await saved.webView.evaluateJavaScript("window.fixtureDraft") as? String == "Keep this draft")
 
         manager.hideWindows()
-        await manager.handleEndpointState(.ready(
-            mode: .remote, url: server.websocketURL(), token: "renewed", password: nil, routeRevision: 2))
         let renewed = try #require(primaryWindow.windowController as? DashboardWindowController)
         #expect(renewed.auth.token == "renewed")
         #expect(renewed.isHiddenForExperience)
         #expect(!primaryWindow.isVisible && primaryWindow.isExcludedFromWindowsMenu)
+
+        // Native ordering must not promote a window the experience owner has hidden.
+        primaryWindow.orderFront(nil)
+        #expect(!renewed.isWindowOpen)
+        #expect(manager.frontmostDashboard() == nil)
+        manager.hideWindows()
+
+        renewed.show()
+        try await AppKitTestSupport.performWindowTransition(
+            primaryWindow, notification: NSWindow.didMiniaturizeNotification)
+        {
+            primaryWindow.miniaturize(nil)
+        }
+        try await AppKitTestSupport.performWindowTransition(
+            primaryWindow, notification: NSWindow.didDeminiaturizeNotification)
+        {
+            manager.hideWindows()
+            renewed.show()
+        }
+        #expect(primaryWindow.windowController === renewed)
+        #expect(!renewed.isHiddenForExperience)
+        #expect(primaryWindow.isVisible && !primaryWindow.isExcludedFromWindowsMenu)
     }
 
     @Test(arguments: ["navigation", "new-window", "focus", "picker"])

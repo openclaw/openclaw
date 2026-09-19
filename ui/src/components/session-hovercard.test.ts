@@ -25,7 +25,8 @@ function row(overrides: Partial<SidebarRecentSession> = {}): SidebarRecentSessio
     workContext: {
       kind: "project",
       name: "openclaw",
-      path: "/work/openclaw",
+      path: "/repo/openclaw",
+      cwd: "/work/openclaw",
       branch: "feature/session-hovercard",
     },
     children: [],
@@ -151,7 +152,14 @@ describe("renderSessionHovercard", () => {
       [...container.querySelectorAll(".session-hovercard__context-text")].map((node) =>
         node.textContent?.trim(),
       ),
-    ).toEqual(["openclaw"]);
+    ).toEqual(["openclaw", "feature/session-hovercard"]);
+    expect(
+      container
+        .querySelector('[aria-label="Branch: feature/session-hovercard"]')
+        ?.getAttribute("title"),
+    ).toBe("/work/openclaw");
+    expect(container.textContent).not.toContain("/work/openclaw");
+    expect(container.textContent).not.toContain("Worktree");
     expect(
       [...container.querySelectorAll(".session-hovercard__section")].map((section) =>
         [...section.classList].find((name) => name.startsWith("session-hovercard__section--")),
@@ -343,6 +351,29 @@ describe("renderSessionHovercard", () => {
     expect(container.querySelector(".session-hovercard__section--header")).toBeNull();
   });
 
+  it("does not invent a directory for a repository-only context", () => {
+    const container = document.createElement("div");
+    render(
+      renderSessionHovercard({
+        row: row({
+          workContext: {
+            kind: "project",
+            name: "project",
+            path: "https://github.com/example/project",
+            branch: "feature/ui",
+          },
+        }),
+      }),
+      container,
+    );
+    expect(container.querySelector('[aria-label="Project: project"]')?.getAttribute("title")).toBe(
+      "Project: https://github.com/example/project",
+    );
+    expect(
+      container.querySelector('[aria-label="Branch: feature/ui"]')?.hasAttribute("title"),
+    ).toBe(false);
+  });
+
   it("does not present a node-only subtitle as project metadata", () => {
     const container = document.createElement("div");
     render(
@@ -375,7 +406,7 @@ describe("renderSessionHovercard", () => {
     expect(context?.textContent).toContain("release-notes");
   });
 
-  it("renders a compact create-PR row without exposing the branch name", () => {
+  it("keeps the branch identity separate from the compact create-PR action", () => {
     const container = document.createElement("div");
     render(
       renderSessionHovercard({

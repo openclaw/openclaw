@@ -241,7 +241,7 @@ export function createTalkRealtimeRelaySession(
     audioSink: {
       isOpen: () => Boolean(getActiveRelay()),
       sendAudio: (audio) => {
-        if (!getActiveRelay() || outputOwnership.phase === "cancelling") {
+        if (!getActiveRelay() || outputOwnership.suppressingOutput) {
           return;
         }
         const outputTurnId = outputOwnership.resolve(true);
@@ -306,10 +306,7 @@ export function createTalkRealtimeRelaySession(
         continuityResetActive = true;
         ready = false;
         currentOutputItemId = undefined;
-        outputOwnership.outputGeneration += 1;
-        outputOwnership.drain?.resolve();
-        outputOwnership.phase = "unowned";
-        outputOwnership.turnId = outputOwnership.responseId = undefined;
+        outputOwnership.resetContinuity();
         const activeTurnId = relay.harness.talk.activeTurnId;
         // Queued audio A and active turn B need distinct clears. Emit A before cancelling B
         // so the Talk event sequence and client cancellation fence retain their ordering.
@@ -419,7 +416,7 @@ export function createTalkRealtimeRelaySession(
       if (!relay || relay.voiceSessionClose) {
         return;
       }
-      if (!relay.closing && role === "assistant" && outputOwnership.phase === "cancelling") {
+      if (role === "assistant" && outputOwnership.suppressingOutput) {
         return;
       }
       if (!relay.closing && role === "user" && !final) {
@@ -470,7 +467,7 @@ export function createTalkRealtimeRelaySession(
     },
     onToolCall: (toolCall) => {
       const relay = getActiveRelay();
-      if (!relay || outputOwnership.phase === "cancelling") {
+      if (!relay || outputOwnership.suppressingOutput) {
         return;
       }
       const outputTurnId = outputOwnership.resolve(true);

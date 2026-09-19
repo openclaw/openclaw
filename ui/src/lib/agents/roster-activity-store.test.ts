@@ -68,6 +68,195 @@ function createStore(load: (params: unknown) => Promise<SessionsListResult>) {
 }
 
 describe("roster activity lifecycle", () => {
+  it("recovers failed membership refreshes on the next keyed snapshot", async () => {
+    vi.useFakeTimers();
+    const held: GatewaySessionRow = {
+      key: "agent:main:main",
+      kind: "direct",
+      sessionId: "held",
+      updatedAt: 1,
+    };
+    const updated = { ...held, updatedAt: 2 };
+    const added: GatewaySessionRow = {
+      key: "agent:main:new",
+      kind: "direct",
+      sessionId: "new",
+      updatedAt: 3,
+    };
+    const load = vi
+      .fn()
+      .mockResolvedValueOnce({ ...result(""), sessions: [held] })
+      .mockRejectedValueOnce(new Error("List unavailable"))
+      .mockResolvedValue({ ...result(""), count: 2, sessions: [added, updated] });
+    const { store, emit } = createStore(load);
+    const stop = store.subscribe(() => {});
+    try {
+      await vi.advanceTimersByTimeAsync(0);
+      emit({ type: "event", event: "sessions.changed", payload: { reason: "stores" } });
+      await vi.advanceTimersByTimeAsync(200);
+      expect(store.snapshot.error).toBe("List unavailable");
+      emit({
+        type: "event",
+        event: "sessions.changed",
+        payload: { reason: "patch", session: updated },
+      });
+      await vi.advanceTimersByTimeAsync(20_000);
+      expect(load).toHaveBeenCalledTimes(3);
+      expect(store.snapshot.error).toBeNull();
+      expect(store.snapshot.result?.sessions).toEqual([added, updated]);
+    } finally {
+      stop();
+      vi.useRealTimers();
+    }
+  });
+
+  it("patches a broadcast row for 28 viewers without rereading their 300-row windows", async () => {
+    vi.useFakeTimers();
+    const rows: GatewaySessionRow[] = Array.from({ length: 300 }, (_, index) => ({
+      key: `agent:main:row-${index}`,
+      sessionId: `session-${index}`,
+      kind: "direct",
+      updatedAt: 300 - index,
+      ...(index === 0 ? { pinned: true, pinnedAt: 1 } : {}),
+    }));
+    const load = vi.fn(async (params: unknown) => {
+      const offset = Number(Reflect.get(params as object, "offset") ?? 0);
+      return {
+        ...result(""),
+        sessions: rows.slice(offset, offset + 100),
+        count: 100,
+        totalCount: 400,
+        hasMore: true,
+        nextOffset: offset + 100,
+      };
+    });
+    const viewers = Array.from({ length: 28 }, () => createStore(load));
+    const detach = viewers.map(({ store }) => store.subscribe(() => {}));
+    try {
+      await vi.advanceTimersByTimeAsync(0);
+      expect(load).toHaveBeenCalledTimes(84);
+      const updated = { ...rows[200]!, updatedAt: 500, lastMessagePreview: "New activity" };
+      for (const { emit, store } of viewers) {
+        emit({
+          type: "event",
+          event: "sessions.changed",
+          payload: { sessionKey: updated.key, reason: "patch", session: updated },
+        });
+        expect(store.snapshot.result?.sessions.slice(0, 2)).toEqual([rows[0], updated]);
+      }
+      await vi.advanceTimersByTimeAsync(20_000);
+      expect(load).toHaveBeenCalledTimes(84);
+    } finally {
+      detach.forEach((stop) => stop());
+      vi.useRealTimers();
+    }
+  });
+
+  it.each([
+    "groups",
+    "cleanup",
+    "stores",
+    "catalogChanged",
+    "missing",
+    "enter",
+    "unpin",
+    "archive",
+    "restore",
+    "older",
+    "involvingMe",
+  ])("coalesces uncertain %s membership into one authoritative window refresh", async (change) => {
+    vi.useFakeTimers();
+    const row: GatewaySessionRow = {
+      key: "agent:main:main",
+      kind: "direct",
+      sessionId: "held",
+      updatedAt: 10,
+      ...(change === "unpin" ? { pinned: true, pinnedAt: 1 } : {}),
+      ...(change === "restore" ? { archived: true } : {}),
+    };
+    const next = {
+      ...row,
+      updatedAt: change === "older" ? 5 : 20,
+      ...(change === "enter" ? { key: "agent:main:new", sessionId: "new" } : {}),
+      ...(change === "archive" ? { archived: true } : {}),
+      ...(change === "restore" ? { archived: false } : {}),
+      ...(change === "unpin" ? { pinned: false, pinnedAt: undefined } : {}),
+    };
+    const load = vi
+      .fn()
+      .mockResolvedValueOnce({ ...result(""), sessions: [row] })
+      .mockResolvedValue({ ...result(""), sessions: [next] });
+    const { store, emit } = createStore(load);
+    store.setInvolvingMe(change === "involvingMe");
+    const stop = store.subscribe(() => {});
+    try {
+      await vi.advanceTimersByTimeAsync(0);
+      const broad = ["groups", "cleanup", "stores"].includes(change);
+      const payload = broad
+        ? { reason: change }
+        : {
+            reason: "patch",
+            sessionKey: next.key,
+            ...(change === "missing" ? {} : { session: next }),
+            ...(change === "catalogChanged" ? { catalogChanged: true } : {}),
+          };
+      for (let index = 0; index < 10; index += 1) {
+        emit({ type: "event", event: "sessions.changed", payload });
+      }
+      await vi.advanceTimersByTimeAsync(20_000);
+      expect(load).toHaveBeenCalledTimes(2);
+      expect(store.snapshot.result?.sessions).toEqual([next]);
+    } finally {
+      stop();
+      vi.useRealTimers();
+    }
+  });
+
+  it("does not let an in-flight window replace a newer broadcast row", async () => {
+    vi.useFakeTimers();
+    const row: GatewaySessionRow = {
+      key: "agent:main:main",
+      kind: "direct",
+      sessionId: "held",
+      updatedAt: 1,
+    };
+    const updated = { ...row, updatedAt: 2, lastMessagePreview: "Current" };
+    const stale = createDeferred<SessionsListResult>();
+    const load = vi
+      .fn()
+      .mockResolvedValueOnce({ ...result(""), sessions: [row] })
+      .mockReturnValueOnce(stale.promise)
+      .mockResolvedValue({ ...result(""), sessions: [updated] });
+    const { store, emit } = createStore(load);
+    const stop = store.subscribe(() => {});
+    try {
+      await vi.advanceTimersByTimeAsync(0);
+      const refresh = store.refresh();
+      await vi.advanceTimersByTimeAsync(0);
+      emit({
+        type: "event",
+        event: "sessions.changed",
+        payload: {
+          reason: "patch",
+          sessionKey: row.key,
+          session: updated,
+        },
+      });
+      expect(store.snapshot.result?.sessions[0]).toEqual(updated);
+      await vi.advanceTimersByTimeAsync(200);
+      stale.resolve({ ...result("Stale"), sessions: [row] });
+      await refresh;
+      await vi.advanceTimersByTimeAsync(20_000);
+      expect(load).toHaveBeenCalledTimes(3);
+      expect(store.snapshot.result?.sessions[0]).toEqual(updated);
+      expect(store.snapshot.loading).toBe(false);
+    } finally {
+      stale.resolve(result(""));
+      stop();
+      vi.useRealTimers();
+    }
+  });
+
   it("paces sustained invalidation from actual roster read settlement", async () => {
     vi.useFakeTimers();
     let reads = 0;

@@ -4,6 +4,7 @@ import { afterEach, expect, it } from "vitest";
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite, tooltipTitleText } from "./control-ui-e2e-suite.test-support.ts";
 import { openNewSessionPlusMenu, replaceGatewayClient } from "./new-session-page.test-support.ts";
+import { sessionsList } from "./session-ownership-fixtures.test-support.ts";
 import {
   avatarLabelCenterDelta,
   captureSessionOwnerPageProof,
@@ -30,53 +31,6 @@ async function selectMenuValue(menu: Locator, value: string) {
       }),
     );
   }, value);
-}
-
-function sessionsList(owners: [string, string], withAvatars = false) {
-  const ada = {
-    type: "human" as const,
-    id: owners[0],
-    identity: { type: "profile" as const, id: owners[0] },
-    label: "Ada",
-  };
-  const bob = {
-    type: "human" as const,
-    id: owners[1],
-    identity: { type: "profile" as const, id: owners[1] },
-    label: owners[1] === owners[0] ? "Ada" : "Bob",
-  };
-  const ownerFacet = owners[1] === owners[0] ? [ada] : [ada, bob];
-  return {
-    count: 2,
-    owners: ownerFacet.map((actor) =>
-      withAvatars
-        ? Object.assign({}, actor, { avatarUrl: `/api/users/${actor.id}/avatar?v=1` })
-        : actor,
-    ),
-    defaults: { contextTokens: null, model: null, modelProvider: null },
-    path: "",
-    sessions: [
-      {
-        key: "agent:main:ada",
-        kind: "direct",
-        label: "Ada research",
-        category: "Research",
-        createdActor: ada,
-        owner: { actor: ada },
-        updatedAt: 2,
-      },
-      {
-        key: "agent:main:bob",
-        kind: "direct",
-        label: "Bob operations",
-        category: "Operations",
-        createdActor: bob,
-        owner: { actor: bob },
-        updatedAt: 1,
-      },
-    ],
-    ts: 1,
-  };
 }
 
 function draftSessionsList() {
@@ -464,6 +418,46 @@ suite.define(() => {
       "true",
     );
     await captureSessionOwnerProof(suite, currentPage, "03-involving-me-after-active-event.png");
+  });
+
+  it("hides owner avatars with one human and agents, then reveals them for another human", async () => {
+    const context = await suite.browser.newContext({ viewport: { height: 800, width: 1200 } });
+    const currentPage = await context.newPage();
+    page = currentPage;
+    const solo = sessionsList(["profile-ada", "profile-ada"]);
+    const agent = {
+      type: "agent" as const,
+      id: "research",
+      identity: { type: "agent" as const, id: "research" },
+      label: "Research",
+    };
+    const result = {
+      ...solo,
+      owners: [...solo.owners, agent],
+      sessions: solo.sessions.map((session) =>
+        Object.assign({}, session, {
+          participants: [{ identity: agent.identity, label: agent.label }],
+          participantCount: 5,
+        }),
+      ),
+    };
+    const gateway = await installMockGateway(currentPage, {
+      sessionKey: "agent:main:ada",
+      presenceUsers: [{ self: true, id: "profile-ada", name: "Ada" }],
+      historyMessages: [{ role: "assistant", content: [{ type: "text", text: "Ready." }] }],
+      methodResponses: { "sessions.list": result },
+    });
+    await currentPage.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:ada"));
+    const row = currentPage.locator('[data-session-key="agent:main:ada"]');
+    await expectBrowser(row).toBeVisible();
+    await currentPage.getByText("Ready.", { exact: true }).waitFor();
+    await captureSessionOwnerProof(suite, currentPage, "one-human-with-agents.png");
+    await expectBrowser(row.locator("openclaw-session-owner-chip")).toHaveCount(0);
+
+    await gateway.setMethodResponse("sessions.list", sessionsList(["profile-ada", "profile-bob"]));
+    await gateway.emitGatewayEvent("sessions.changed", {});
+    await expectBrowser(row.locator("openclaw-session-owner-chip")).toHaveCount(1);
+    await captureSessionOwnerProof(suite, currentPage, "multiple-humans.png");
   });
 
   it("renders zero ownership chrome for a single owner", async () => {

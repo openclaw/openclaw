@@ -142,12 +142,12 @@ export function buildUserSource(
   prelude = "",
   language?: CodeModeLanguage,
 ): { source: string; location: SourceLocation } {
-  const prefix = `globalThis.__openclawResult = (async () => {\n${prelude}`;
+  const prefix = `globalThis.__openclawResult = __openclawRunCell(async () => {\n${prelude}`;
   const before = sourceExtent(prefix);
   const body = sourceExtent(code);
   const columnOffset = before.lastColumn - 1;
   return {
-    source: `${prefix}${code}\n})()`,
+    source: `${prefix}${code}\n})`,
     location: {
       file: language === "typescript" ? GENERATED_SOURCE_FILE : USER_SOURCE_FILE,
       lineOffset: before.lines - 1,

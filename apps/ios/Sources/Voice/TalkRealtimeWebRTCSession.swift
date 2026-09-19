@@ -417,7 +417,6 @@ final class TalkRealtimeWebRTCSession: NSObject {
 
     private func trace(_ message: String) {
         GatewayDiagnostics.log("talk.timeline realtime +\(self.elapsedMs())ms \(message)")
-        Self.logger.info("timeline +\(self.elapsedMs(), privacy: .public)ms \(message, privacy: .public)")
     }
 
     private func cancelActiveToolCalls(preserveRuns: Bool = false) {

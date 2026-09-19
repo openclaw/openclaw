@@ -1,4 +1,8 @@
 import { isDeepStrictEqual } from "node:util";
+import {
+  collectNestedErrorCandidates,
+  extractErrorCode,
+} from "@openclaw/normalization-core/error-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { createSqliteLifecycleAggregateError } from "../infra/sqlite-coordinator.js";
 import { SqliteWorkerError } from "../infra/sqlite-worker-contract.js";
@@ -53,24 +57,25 @@ export function createOpenClawStateLeaseWorkerOwner(params: {
     params.assertCurrent();
   };
   const rethrowIfUncertain = (failure: unknown, authorityError: unknown): void => {
-    if (!uncertain) {
+    const uncertainty =
+      uncertain?.error ??
+      collectNestedErrorCandidates(failure).find(
+        (candidate) => extractErrorCode(candidate) === "outcome-unknown",
+      );
+    if (uncertainty === undefined) {
       return;
     }
     const errors = [
-      ...new Set([
-        uncertain.error,
-        failure,
-        ...(authorityError === undefined ? [] : [authorityError]),
-      ]),
+      ...new Set([uncertainty, failure, ...(authorityError === undefined ? [] : [authorityError])]),
     ];
     if (errors.length === 1) {
-      throw uncertain.error;
+      throw uncertainty instanceof Error ? uncertainty : unknownOutcome(uncertainty);
     }
     throw unknownOutcome(
       createSqliteLifecycleAggregateError(
         errors,
         "state lease operation has an unknown write outcome",
-        uncertain.error,
+        uncertainty,
       ),
     );
   };

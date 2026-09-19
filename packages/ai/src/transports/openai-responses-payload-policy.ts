@@ -40,6 +40,7 @@ type OpenAIResponsesEndpointClass =
 type OpenAIResponsesPayloadPolicy = {
   allowsServiceTier: boolean;
   compactThreshold: number | undefined;
+  defaultManagedReasoningEffort: "none" | undefined;
   explicitContinuationOptIn: boolean;
   explicitStore: boolean | undefined;
   shouldStripDisabledReasoningPayload: boolean;
@@ -310,7 +311,11 @@ export function resolveOpenAIResponsesPayloadPolicy(
   const isResponsesApi = isOpenAIResponsesApi(normalizeOptionalLowercaseString(model.api));
   const shouldStripDisabledReasoningPayload =
     isResponsesApi &&
-    (!capabilities.usesKnownNativeOpenAIRoute || !supportsOpenAIReasoningEffort(model, "none"));
+    // Custom endpoints need an explicit capability; model-name hints describe native routes.
+    !supportsOpenAIReasoningEffort(
+      capabilities.usesKnownNativeOpenAIRoute ? model : { compat: model.compat },
+      "none",
+    );
   // Strict OpenAI-compatible Responses endpoints reject output-only fields
   // such as `status` on replayed input items. Strip them for non-native routes.
   const shouldStripInputStatus = isResponsesApi && !capabilities.usesKnownNativeOpenAIRoute;
@@ -327,6 +332,13 @@ export function resolveOpenAIResponsesPayloadPolicy(
   return {
     allowsServiceTier: capabilities.allowsOpenAIServiceTier,
     compactThreshold: serverCompactionPlan.threshold,
+    // Managed proxies inherit their provider default; explicit none is a separate capability.
+    defaultManagedReasoningEffort:
+      capabilities.usesKnownNativeOpenAIRoute &&
+      !shouldStripDisabledReasoningPayload &&
+      model.provider !== "github-copilot"
+        ? "none"
+        : undefined,
     explicitContinuationOptIn: capabilities.explicitContinuationOptIn,
     explicitStore,
     shouldStripDisabledReasoningPayload,

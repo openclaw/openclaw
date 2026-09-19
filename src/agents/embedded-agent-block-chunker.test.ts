@@ -455,6 +455,73 @@ describe("EmbeddedBlockChunker", () => {
     scanSpy.mockRestore();
   });
 
+  it.each(["open", "closed"])(
+    "bounds paragraph candidate scans while streaming a long %s fence",
+    (kind) => {
+      const maxChars = 1_200;
+      const chunker = new EmbeddedBlockChunker({
+        minChars: 1,
+        maxChars,
+        breakPreference: "newline",
+        flushOnParagraph: true,
+      });
+      const code = "code\n\n".repeat(600);
+      const closing = "```\n\nAfter";
+      const initial = `\`\`\`txt\n${code}${kind === "closed" ? closing : ""}`;
+      const completed = `\`\`\`txt\n${code}${closing}`;
+      const chunks: string[] = [];
+      const sources: string[] = [];
+      const emit = (chunk: string, options?: { sourceText: string }) => {
+        chunks.push(chunk);
+        sources.push(options?.sourceText ?? "");
+      };
+      chunker.append(initial);
+      let candidates = 0;
+      // Capture before spying; every invocation explicitly supplies the original RegExp receiver.
+      // oxlint-disable-next-line typescript/unbound-method
+      const nativeExec = RegExp.prototype.exec;
+      const paragraphPattern = /\n[\t ]*\n+/g;
+      const spy = vi.spyOn(RegExp.prototype, "exec").mockImplementation(function (
+        this: RegExp,
+        text: string,
+      ) {
+        const result = nativeExec.call(this, text);
+        if (result && this.source === paragraphPattern.source && this.flags === "g") {
+          candidates++;
+        }
+        return result;
+      });
+      try {
+        chunker.drain({ force: false, emit });
+      } finally {
+        spy.mockRestore();
+      }
+      const streamedCount = chunks.length;
+      expect(streamedCount).toBeGreaterThan(1);
+      expect(chunker.sourceLength).toBe(initial.length);
+      if (kind === "open") {
+        chunker.append(closing);
+      }
+      chunker.drain({ force: true, emit });
+
+      expect(sources.join("")).toBe(completed);
+      expect(chunker.consumedLength).toBe(completed.length);
+      expect(chunker.sourceLength).toBe(completed.length);
+      expect(chunker.bufferedText).toBe("");
+      expectChunksWithinLength(chunks, maxChars);
+      for (const chunk of chunks.filter((text) => text.startsWith("```"))) {
+        expect(chunk.startsWith("```txt\n")).toBe(true);
+        expect(chunk.trimEnd().endsWith("```")).toBe(true);
+      }
+      const rendered = chunks
+        .flatMap((chunk) => chunk.split("\n").filter((line) => !line.startsWith("```")))
+        .join("")
+        .replace(/\s/g, "");
+      expect(rendered).toBe(`${"code".repeat(600)}After`);
+      expect(candidates).toBeLessThanOrEqual(3 * (streamedCount + 1));
+    },
+  );
+
   it("does not split inside the closing fence marker when clamping at maxChars", () => {
     // Clamp-based splitting rewraps fenced chunks so no partial closing marker
     // leaks into the stream.

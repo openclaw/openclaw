@@ -3,8 +3,9 @@ import path from "node:path";
 import { expect, it, vi } from "vitest";
 import { deleteSessionEntryLifecycle } from "../config/sessions/session-accessor.js";
 import { loadExactSessionEntry } from "../config/sessions/session-accessor.sqlite-entry.js";
-import { importSqliteSessionRows } from "../config/sessions/session-accessor.sqlite-import.js";
+import { importSqliteSessionRows } from "../config/sessions/session-accessor.sqlite-import.test-support.js";
 import { searchSessionTranscripts } from "../config/sessions/session-transcript-search.js";
+import * as sessionTargets from "../config/sessions/targets.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
@@ -45,6 +46,33 @@ function transcript(id: string, phrase: string) {
       .join("\n") + "\n"
   );
 }
+
+it.each(["dry-run", "import", "validate"] as const)(
+  "%s carries one fleet discovery into legacy archive coverage",
+  async (mode) => {
+    await withOpenClawTestState({ label: "doctor-fleet-discovery" }, async (state) => {
+      const agentIds = ["first", "second", "third"];
+      for (const agentId of agentIds) {
+        const sessions = state.sessionsDir(agentId);
+        fs.mkdirSync(sessions, { recursive: true });
+        fs.writeFileSync(path.join(sessions, "sessions.json"), "{}");
+      }
+      const discovery = vi.spyOn(sessionTargets, "resolveAllAgentSessionStoreCandidateTargetsSync");
+      try {
+        const report = await runDoctorSessionSqlite({
+          mode,
+          allAgents: true,
+          cfg: {},
+          env: state.env,
+        });
+        expect(report.targets.map((target) => target.agentId).toSorted()).toEqual(agentIds);
+        expect(discovery).toHaveBeenCalledTimes(1);
+      } finally {
+        discovery.mockRestore();
+      }
+    });
+  },
+);
 
 it.each([{ allAgents: true }, { agent: "retired" }])(
   "admits transcript-only retired agents through the public selector %j",

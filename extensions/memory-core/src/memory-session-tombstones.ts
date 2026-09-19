@@ -3,7 +3,7 @@ import {
   executeSqliteQuerySync,
   getNodeSqliteKysely,
   tableExists,
-} from "openclaw/plugin-sdk/sqlite-runtime";
+} from "openclaw/plugin-sdk/sqlite-worker-runtime";
 
 type TombstoneDatabase = {
   memory_session_tombstones: { session_id: string; agent_id: string };

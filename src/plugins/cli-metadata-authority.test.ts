@@ -35,7 +35,8 @@ it.each(["retained-agent", "install-roots", "install-state"] as const)(
     }
     const cfg: OpenClawConfig = {
       agents: {
-        ownership: "explicit",
+        // Retained provenance selects only legacy rosters, never explicit fleet ownership.
+        ownership: kind === "retained-agent" ? undefined : "explicit",
         entries: {
           alpha: { workspace: path.join(root, "alpha") },
           beta: { workspace: path.join(root, "beta") },

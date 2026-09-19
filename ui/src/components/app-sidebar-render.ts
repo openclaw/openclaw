@@ -18,6 +18,7 @@ import { t } from "../i18n/index.ts";
 import { normalizeAgentLabel, resolveAgentTextAvatar } from "../lib/agents/display.ts";
 import { resolveAgentAvatarUrl } from "../lib/avatar.ts";
 import { redactLoginFailureError } from "../lib/connection-hints.ts";
+import { renderHoverMarquee } from "../lib/hover-marquee.ts";
 import {
   formatKeyboardShortcutCombo,
   KEYBOARD_SHORTCUT_COMBOS,
@@ -169,7 +170,7 @@ function renderSidebarWorkspaceHeader(host: AppSidebarRenderHost) {
         />
         <span class="sidebar-agent-card__text">
           <span class="sidebar-agent-card__name">
-            <span class="sidebar-agent-card__name-text">${name}</span>
+            ${renderHoverMarquee(name, "sidebar-agent-card__name-text", { loop: true, delay: 300, speed: 35 })}
             <span class="sidebar-agent-card__chevron" aria-hidden="true"
               >${icons.chevronsUpDown}</span
             >
@@ -255,18 +256,27 @@ export function renderAppSidebarHomeRow(host: AppSidebarRenderHost) {
   const agentId = host.expandedAgentId();
   const mainKey = host.selectedAgentMainSessionKey(agentId);
   const mainRow = host.mainSessionRow(agentId);
-  const attention = host.resolveHomeSessionAttention(mainKey, mainRow);
+  const session = mainRow ? host.projectHomeSession(mainRow, agentId) : null;
+  const attention = session?.attention ?? host.resolveHomeSessionAttention(mainKey, mainRow);
   const attentionLabel = sessionAttentionTooltipLabel(attention);
   const outboxAttentionCount = host.outboxAttentionCountForSession(mainKey);
   const active =
     isSessionRouteId(host.activeRouteId) &&
     areUiSessionKeysEquivalent(host.getRouteSessionKey(), mainKey);
   const hasComposerDraft = host.hasSessionDraft(mainKey);
-  const running = mainRow ? isSessionRunActive(mainRow) : false;
-  const queued = running && mainRow?.status === "queued";
-  const unread = mainRow?.unread === true && !active;
+  const ownRun = mainRow ? isSessionRunActive(mainRow) : false;
+  const subagentsWorking = (session?.runningChildCount ?? 0) > 0;
+  const running = ownRun || subagentsWorking;
+  const queued = ownRun && mainRow?.status === "queued" && !subagentsWorking;
+  const unread = (mainRow?.unread === true || (session?.unreadChildCount ?? 0) > 0) && !active;
   const activeRunLabel = running
-    ? t(queued ? "sessionsView.statusQueued" : "sessionsView.activeRun")
+    ? t(
+        subagentsWorking && (!ownRun || mainRow?.status === "queued")
+          ? "sessionsView.subagentsWorking"
+          : queued
+            ? "sessionsView.statusQueued"
+            : "sessionsView.activeRun",
+      )
     : "";
   const unreadLabel = unread ? t("sessionsView.unread") : "";
   const homeDescription =
@@ -280,6 +290,7 @@ export function renderAppSidebarHomeRow(host: AppSidebarRenderHost) {
         : renderSessionAttentionIcon(attention, true),
     running,
     queued,
+    runningLabel: activeRunLabel,
     badge: unread && !running ? renderSessionUnreadBadge() : nothing,
   });
   return html`
@@ -389,7 +400,7 @@ export function renderAppSidebarOnline(host: AppSidebarRenderHost) {
                 >${collapsed ? icons.chevronRight : icons.chevronDown}</span
               >
             </span>
-            <span class="sidebar-recent-sessions__label-text hover-marquee">${label}</span>
+            ${renderHoverMarquee(label, "sidebar-recent-sessions__label-text")}
             ${
               collapsed
                 ? html`<span class="sidebar-online__facepile">
@@ -496,7 +507,7 @@ export function renderAppSidebarFooterBar(host: AppSidebarRenderHost) {
       >
         <openclaw-viewer-avatar .user=${avatarUser} variant="footer"></openclaw-viewer-avatar>
         <span class="sidebar-identity-card__text">
-          <span class="sidebar-identity-card__name">${selfLabel}</span>
+          ${renderHoverMarquee(selfLabel, "sidebar-identity-card__name", { loop: true, delay: 300, speed: 35 })}
           ${
             gateway
               ? html`<span class="sidebar-identity-card__gateway" aria-hidden="true">

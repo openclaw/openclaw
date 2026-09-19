@@ -38,7 +38,7 @@ export function appendActiveSqliteTranscriptFileIssues(
       if (transcriptPath && !retainedPaths?.has(canonicalMigrationFilePath(transcriptPath))) {
         report.issues.push({
           code: "active_sqlite_transcript_jsonl",
-          message: `SQLite-backed session still has an active JSONL transcript file: ${transcriptPath}`,
+          message: `SQLite-backed session still has an unverified active JSONL transcript file: ${transcriptPath}. It may contain history absent from SQLite. Preserve this file, inspect openclaw update status --json, then run openclaw doctor --session-sqlite recover --session-sqlite-all-agents with the Gateway stopped.`,
           sessionKey,
         });
       }
@@ -134,6 +134,8 @@ export function summarizeDoctorSessionSqliteReport(
 ): DoctorSessionSqliteReport {
   const sum = (value: (target: DoctorSessionSqliteTargetReport) => number) =>
     sumDoctorSessionSqliteTargets(targets, value);
+  const archives = (paths: (target: DoctorSessionSqliteTargetReport) => string[]) =>
+    new Set(targets.flatMap(paths)).size;
   return {
     ...(activeRun
       ? {
@@ -152,9 +154,9 @@ export function summarizeDoctorSessionSqliteReport(
     mode,
     targets,
     totals: createDoctorSessionSqliteTotals(targets, {
-      archivedLegacyStoreFiles: sum((target) => target.archivedLegacyStoreFiles?.length ?? 0),
-      archivedTranscriptFiles: sum((target) => target.archivedTranscriptFiles.length),
-      archivedUnreferencedJsonlFiles: sum((target) => target.archivedUnreferencedJsonlFiles.length),
+      archivedLegacyStoreFiles: archives((target) => target.archivedLegacyStoreFiles ?? []),
+      archivedTranscriptFiles: archives((target) => target.archivedTranscriptFiles),
+      archivedUnreferencedJsonlFiles: archives((target) => target.archivedUnreferencedJsonlFiles),
       importedEntries: sum((target) => target.importedEntries),
       importedTranscriptEvents: sum((target) => target.importedTranscriptEvents),
       legacyEntries: sum((target) => target.legacyEntries),

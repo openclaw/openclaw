@@ -87,7 +87,7 @@ export type IrcClient = {
   isReady: () => boolean;
   sendRaw: (line: string) => void;
   join: (channel: string) => void;
-  sendPrivmsg: (target: string, text: string) => void;
+  sendPrivmsg: (target: string, text: string, replyTo?: string) => void;
   quit: (reason?: string) => void;
   close: () => void;
 };
@@ -238,15 +238,16 @@ export async function connectIrcClient(options: IrcClientOptions): Promise<IrcCl
     sendRaw(`JOIN ${target}`);
   };
 
-  const sendPrivmsg = (target: string, text: string) => {
+  const sendPrivmsg = (target: string, text: string, replyTo?: string) => {
     const normalizedTarget = sanitizeIrcTarget(target);
     const cleaned = sanitizeIrcOutboundText(text);
     if (!cleaned) {
-      return;
+      throw new Error("Message must be non-empty for IRC sends");
     }
     const lineOverheadBytes = Buffer.byteLength(`PRIVMSG ${normalizedTarget} :\r\n`, "utf8");
     const maxChunkBytes = IRC_MAX_LINE_BYTES - lineOverheadBytes;
-    let remaining = cleaned;
+    // Encode the original text with the reference so escapes are not decoded twice.
+    let remaining = replyTo ? sanitizeIrcOutboundText(`${text}\n\n[reply:${replyTo}]`) : cleaned;
     while (remaining.length > 0) {
       const chunk = takeIrcPrivmsgChunk(remaining, messageChunkMaxChars, maxChunkBytes).trim();
       sendRaw(`PRIVMSG ${normalizedTarget} :${chunk}`);

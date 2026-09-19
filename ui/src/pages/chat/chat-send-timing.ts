@@ -239,6 +239,7 @@ function shouldRecordPendingSendPaint(item: ChatQueueItem): boolean {
     typeof item.sendSubmittedAtMs === "number" &&
     (item.sendState === "waiting-model" ||
       item.sendState === "waiting-idle" ||
+      item.sendState === "submitting" ||
       item.sendState === "sending" ||
       item.sendState === "waiting-reconnect")
   );

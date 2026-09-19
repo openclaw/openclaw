@@ -3,13 +3,13 @@ import { lstatSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { sha256Hex } from "../../infra/crypto-digest.js";
-import { resolveWorkspaceSkillInstallDir } from "./archive-install.js";
 import { resolveClawHubSkillStatusLinkSync } from "./clawhub-status.js";
 import {
   formatClawHubSkillRef,
   parseRequestedClawHubSkillRef,
   untrackClawHubSkill,
 } from "./clawhub-store.js";
+import { resolveWorkspaceSkillInstallDir } from "./install-paths.js";
 import {
   dispatchCommittedSkillChangeBestEffort,
   hasCommittedSkillChangeHooks,

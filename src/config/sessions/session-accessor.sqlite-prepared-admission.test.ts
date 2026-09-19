@@ -2,6 +2,7 @@ import type { ChildProcess } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { setImmediate as yieldToEventLoop } from "node:timers/promises";
+import type { Worker, WorkerOptions } from "node:worker_threads";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
@@ -18,6 +19,7 @@ import { createPluginRecord } from "../../plugins/status.test-helpers.js";
 import { invalidateOpenClawAgentDatabaseValidation } from "../../state/openclaw-agent-db-validation-cache.js";
 import {
   closeOpenClawAgentDatabaseByPath,
+  closeOpenClawAgentDatabaseByPathAsync,
   closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
   getOpenClawAgentDatabaseIfOpen,
@@ -34,6 +36,7 @@ import {
   replaceTranscriptEventsSync,
 } from "./session-accessor.js";
 import type { SessionEntryLifecycleMutationResult } from "./session-accessor.sqlite-contract.js";
+import { withWorkerSqliteIntegrityCounter } from "./session-accessor.sqlite-integrity-counter.test-support.js";
 import {
   applySessionEntryMaintenance,
   finalizeSessionEntryMaintenancePlansAfterWriterReleaseBestEffort,
@@ -53,7 +56,39 @@ import {
 const hooks = vi.hoisted(() => ({
   fork: undefined as ((child: ChildProcess) => void) | undefined,
   afterMaterialize: undefined as (() => Promise<void>) | undefined,
+  integrityChecks: undefined as SharedArrayBuffer | undefined,
+  integrityRelease: undefined as SharedArrayBuffer | undefined,
+  worker: undefined as ((worker: Worker) => void) | undefined,
 }));
+vi.mock("node:worker_threads", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:worker_threads")>();
+  return {
+    ...actual,
+    Worker: class extends actual.Worker {
+      constructor(filename: string | URL, options?: WorkerOptions) {
+        const workerData: unknown = options?.workerData;
+        const reclamation =
+          workerData !== null &&
+          typeof workerData === "object" &&
+          "operation" in workerData &&
+          workerData.operation === "reclaim";
+        super(
+          filename,
+          reclamation
+            ? withWorkerSqliteIntegrityCounter(
+                options,
+                hooks.integrityChecks,
+                hooks.integrityRelease,
+              )
+            : options,
+        );
+        if (reclamation) {
+          hooks.worker?.(this);
+        }
+      }
+    },
+  };
+});
 vi.mock("node:child_process", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:child_process")>();
   return {
@@ -100,6 +135,9 @@ afterEach(async () => {
   closeOpenClawStateDatabaseForTest();
   hooks.fork = undefined;
   hooks.afterMaterialize = undefined;
+  hooks.integrityChecks = undefined;
+  hooks.integrityRelease = undefined;
+  hooks.worker = undefined;
   vi.restoreAllMocks();
   vi.unstubAllEnvs();
   resetConfigRuntimeState();
@@ -242,6 +280,59 @@ function observeAdmission(databasePath: string, hold = false) {
           phases: ["opening", "checking", "closing"],
         });
       }
+    },
+  };
+}
+
+function observeWorkerAdmission(databasePath: string, hold: boolean) {
+  const parent = observeAdmission(databasePath);
+  const entered = createDeferred();
+  const counts = new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT);
+  const release = new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT);
+  const resume = () => {
+    Atomics.store(new Int32Array(release), 0, 1);
+    Atomics.notify(new Int32Array(release), 0);
+  };
+  releases.push(resume);
+  if (!hold) {
+    resume();
+  }
+  hooks.integrityChecks = counts;
+  hooks.integrityRelease = release;
+  const workers: Worker[] = [];
+  let completed = 0;
+  hooks.worker = (worker) => {
+    workers.push(worker);
+    worker.on("message", (message: { type?: string; phase?: string }) => {
+      if (message.type !== "test-integrity-check") {
+        return;
+      }
+      if (message.phase === "checking") {
+        entered.resolve();
+      } else if (message.phase === "checked") {
+        completed += 1;
+      }
+    });
+  };
+  return {
+    release: { resolve: resume },
+    async expectPending(operation: Promise<unknown>) {
+      expect(
+        await Promise.race([
+          entered.promise.then(() => "worker"),
+          operation.then(
+            () => "completed",
+            () => "failed",
+          ),
+        ]),
+      ).toBe("worker");
+    },
+    async expectHealthy(count: number) {
+      parent.expectHealthy(0);
+      expect(Atomics.load(new Int32Array(counts), 0)).toBe(count);
+      expect(completed).toBe(count);
+      await closeOpenClawAgentDatabaseByPathAsync(databasePath);
+      expect(workers.every((worker) => worker.threadId === -1)).toBe(true);
     },
   };
 }
@@ -711,7 +802,7 @@ it.each(
   "keeps $owner maintenance finalization in the writer FIFO (cold: $cold)",
   async ({ owner, cold }) => {
     const f = maintenanceFixture();
-    const probe = observeAdmission(f.databasePath, cold);
+    const probe = observeWorkerAdmission(f.databasePath, cold);
     let preparationWriterRan = false;
     hooks.afterMaterialize = async () => {
       await runExclusiveSqliteSessionWrite(
@@ -784,7 +875,7 @@ it.each(
     expect(preparationWriterRan).toBe(true);
     expect(loadSessionEntryReadOnly(f.input)?.label).toBe("kept");
     expectMaintenanceArchived(f);
-    probe.expectHealthy(cold ? 1 : 0);
+    await probe.expectHealthy(cold ? 1 : 0);
   },
 );
 
@@ -803,7 +894,7 @@ function maintenancePlan(f: ReturnType<typeof maintenanceFixture>) {
 it("rechecks maintenance lifetime after cold finalizer admission", async () => {
   const f = maintenanceFixture();
   const plan = maintenancePlan(f);
-  const probe = observeAdmission(f.databasePath, true);
+  const probe = observeWorkerAdmission(f.databasePath, true);
   hooks.afterMaterialize = async () => {
     expect(closeOpenClawAgentDatabaseByPath(f.databasePath)).toBe(true);
     invalidateOpenClawAgentDatabaseValidation(f.databasePath);
@@ -818,9 +909,10 @@ it("rechecks maintenance lifetime after cold finalizer admission", async () => {
   current = false;
   probe.release.resolve();
   await expect(work).resolves.toMatchObject({ capped: 0, archivedTranscripts: [] });
+  // The transcript postcondition reopens a writable reader and may validate on the caller.
+  await probe.expectHealthy(1);
   expect(loadSessionEntryReadOnly(f.stale)?.sessionId).toBe("old");
   expect(loadTranscriptEventsSync(f.stale)).toEqual(f.events);
-  probe.expectHealthy(1);
 });
 
 it.each([false, true])(

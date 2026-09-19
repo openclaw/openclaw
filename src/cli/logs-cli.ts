@@ -569,7 +569,7 @@ export function registerLogsCli(program: Command) {
     let lastSourceIdentity: string | undefined;
     const jsonMode = Boolean(opts.json);
     const pretty = !jsonMode && process.stdout.isTTY && !opts.plain;
-    const rich = isRich() && opts.color !== false;
+    const rich = isRich() && opts.color !== false && !opts.plain;
     const localTime = !opts.utc;
 
     const startGatewayRecoveryProbe = () => {

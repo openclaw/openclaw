@@ -12,7 +12,6 @@ import type {
   ControlUiSurface,
 } from "../../../src/plugin-sdk/control-ui.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
-import type { RouteId } from "../app-route-paths.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import { readGatewayOperatorAccess } from "../app/operator-access.ts";
 import { hasSameOriginGatewayTransport } from "../dev-gateway.ts";
@@ -56,7 +55,7 @@ export class ControlUiPluginRuntime implements ControlUiPluginCapability {
   private diagnostics: PluginControlUiDiagnostic[] = [];
   private grantTimer: ReturnType<typeof setInterval> | null = null;
 
-  constructor(private readonly getContext: () => ApplicationContext<RouteId>) {}
+  constructor(private readonly getContext: () => ApplicationContext) {}
 
   get errors(): readonly PluginControlUiDiagnostic[] {
     return this.diagnostics;

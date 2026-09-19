@@ -1,8 +1,8 @@
-import { html, nothing, type PropertyValues } from "lit";
+import { html, nothing, type PropertyValues, type TemplateResult } from "lit";
 import { property, state } from "lit/decorators.js";
-import { cache } from "lit/directives/cache.js";
 import { keyed } from "lit/directives/keyed.js";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
+import { renderCopyButton } from "../../../components/copy-button.ts";
 import { icons } from "../../../components/icons.ts";
 import { markdownBlocks } from "../../../components/markdown-blocks.ts";
 import { toSanitizedMarkdownHtml } from "../../../components/markdown.ts";
@@ -43,6 +43,8 @@ export function isTextAttachment(rawMimeType: string, filename: string): boolean
 
 class ChatTextAttachment extends OpenClawLightDomContentsElement {
   @property({ type: Boolean }) compact = false;
+  @property({ type: Boolean }) plainText = false;
+  @property({ attribute: false }) actions: TemplateResult | typeof nothing = nothing;
   @property() embedSandboxMode: EmbedSandboxMode = "scripts";
   @property() src = "";
   @property() sourceIdentity = "";
@@ -75,7 +77,15 @@ class ChatTextAttachment extends OpenClawLightDomContentsElement {
     }
     if (changed.has("src") || changed.has("sourceIdentity") || changed.has("sizeBytes")) {
       this.cancelLoad();
-      this.text = null;
+      // Ticket refreshes must not detach a focused reader of the same attachment.
+      if (
+        !this.src ||
+        !this.sourceIdentity ||
+        changed.has("sourceIdentity") ||
+        changed.has("sizeBytes")
+      ) {
+        this.text = null;
+      }
       this.failed = false;
       if (this.src) {
         void this.loadText();
@@ -100,6 +110,7 @@ class ChatTextAttachment extends OpenClawLightDomContentsElement {
       }
     } catch {
       if (version === this.loadVersion && this.isConnected) {
+        this.text = null;
         this.failed = true;
       }
     } finally {
@@ -109,14 +120,21 @@ class ChatTextAttachment extends OpenClawLightDomContentsElement {
     }
   }
 
+  private retry() {
+    this.cancelLoad();
+    this.text = null;
+    this.failed = false;
+    void this.loadText();
+  }
+
   override render() {
-    const htmlDocument = isHtmlDocument(this.mimeType, this.label);
+    const htmlDocument = !this.plainText && isHtmlDocument(this.mimeType, this.label);
     const mimeType = this.mimeType.split(";", 1)[0]?.trim().toLowerCase();
     const markdown =
-      mimeType === "text/markdown" ||
-      mimeType === "text/x-markdown" ||
-      /\.(?:md|markdown)$/i.test(this.label);
-    // Cache detaches the reader before identity or validated-text changes replace it.
+      !this.plainText &&
+      (mimeType === "text/markdown" ||
+        mimeType === "text/x-markdown" ||
+        /\.(?:md|markdown)$/i.test(this.label));
     const reader =
       this.text === null
         ? renderAttachmentPreviewSkeleton()
@@ -169,6 +187,9 @@ ${this.text}</pre>`,
               >
               ${this.sizeBytes === undefined ? nothing : html`<span>${formatBytes(this.sizeBytes)}</span>`}
               <span class="sidebar-file-toolbar__actions">
+                ${this.text !== null && !this.failed ? keyed(this.loadVersion, renderCopyButton(this.text, t("common.copy"))) : nothing}
+                ${this.actions}
+                ${this.failed ? html`<button class="btn btn--sm" type="button" @click=${() => this.retry()}>${t("common.retry")}</button>` : nothing}
                 ${
                   (markdown || htmlDocument) && this.text !== null
                     ? html`<button
@@ -206,7 +227,7 @@ ${this.text}</pre>`,
       ${
         this.failed
           ? html`<p class="muted" role="status">${t("chat.attachments.textPreviewUnavailable")}</p>`
-          : cache(reader)
+          : reader
       }
     `;
   }

@@ -102,208 +102,54 @@ describe("groupToolCards", () => {
 });
 
 describe("summarizeToolGroup", () => {
-  it.each<[string, ToolGroupSummaryInput[], string]>([
-    ["a single command", [{ name: "bash", args: { command: "ls" } }], "Ran a command"],
-    [
-      "the operations inside a wrapper, without counting the wrapper twice",
-      [
-        { name: "exec", callId: "outer", runId: "run", args: { title: "Inspect project" } },
-        {
-          name: "read",
-          callId: "child",
-          parentToolCallId: "outer",
-          runId: "run",
-          args: { path: "README.md" },
-        },
-      ],
-      "Read a file",
-    ],
-    [
-      "unrelated runs that reuse a call id",
-      [
-        { name: "exec", callId: "outer", runId: "previous" },
-        {
-          name: "read",
-          callId: "child",
-          parentToolCallId: "outer",
-          runId: "current",
-          args: { path: "README.md" },
-        },
-      ],
-      "Ran a command, read a file",
-    ],
-    [
-      "a failed wrapper even when its child succeeded",
-      [
-        { name: "exec", callId: "outer", runId: "run", isError: true },
-        {
-          name: "read",
-          callId: "child",
-          parentToolCallId: "outer",
-          runId: "run",
-          args: { path: "README.md" },
-        },
-      ],
-      "Ran a command, read a file",
-    ],
-    [
-      "ambiguous wrapper identities without hiding their operations",
-      [
-        { name: "exec", callId: "outer", runId: "run" },
-        { name: "exec", callId: "outer", runId: "run" },
-        {
-          name: "read",
-          callId: "child",
-          parentToolCallId: "outer",
-          runId: "run",
-          args: { path: "README.md" },
-        },
-      ],
-      "Ran 2 commands, read a file",
-    ],
-    [
-      "cyclic operations alongside an unrelated call",
-      [
-        { name: "exec", callId: "a", parentToolCallId: "b", runId: "run" },
-        { name: "exec", callId: "b", parentToolCallId: "a", runId: "run" },
-        { name: "read", args: { path: "README.md" } },
-      ],
-      "Ran 2 commands, read a file",
-    ],
-    [
-      "named tools in original activity order across nested operations",
-      [
-        { name: "exec", callId: "outer", runId: "run" },
-        { name: "alpha", callId: "child", parentToolCallId: "outer", runId: "run" },
-        { name: "beta", callId: "parallel", runId: "run" },
-      ],
-      "Used Alpha, Beta",
-    ],
-    [
-      "an ordinary exec with code-shaped arguments",
-      [{ name: "exec", args: { code: "a business value", command: "echo ok" } }],
-      "Ran a command",
-    ],
-    [
-      "distinct paths over call count",
-      [
-        { name: "read", args: { path: "/repo/a.ts" } },
-        { name: "read", args: { path: "/repo/a.ts" } },
-        { name: "read", args: { path: "/repo/b.ts" } },
-      ],
-      "Read 2 files",
-    ],
-    [
-      "call count when reads carry no paths",
-      [
-        { name: "read", args: {} },
-        { name: "read", args: {} },
-      ],
-      "Read 2 files",
-    ],
-    [
-      "multiple searches",
-      [
-        { name: "grep", args: { pattern: "a" } },
-        { name: "glob", args: { pattern: "b" } },
-      ],
-      "Ran 2 searches",
-    ],
-    [
-      "command-discriminated text editor calls",
-      [
-        {
-          name: "str_replace_editor",
-          args: { command: "view", file_path: "/repo/a.ts", view_range: [1, 20] },
-        },
-        {
-          name: "str_replace_based_edit_tool",
-          args: {
-            command: "str_replace",
-            file: "/repo/a.ts",
-            old_str: "old",
-            new_str: "new",
-          },
-        },
-        {
-          name: "str_replace_editor",
-          args: { command: "insert", filepath: "/repo/a.ts", insert_text: "line" },
-        },
-        {
-          name: "str_replace_based_edit_tool",
-          args: { command: "create", filename: "/repo/new.ts", file_text: "new" },
-        },
-      ],
-      "Read a file, edited a file, created a file",
-    ],
-    [
-      "text editor calls without a recognized command",
-      [
-        { name: "str_replace_editor", args: { path: "/repo/a.ts" } },
-        { name: "str_replace_based_edit_tool", args: { command: "rename" } },
-      ],
-      "Used Str Replace Editor, Str Replace Based Edit Tool",
-    ],
-    [
-      "multi-file apply_patch targets",
-      [
-        {
-          name: "apply_patch",
-          args: {
-            patch: [
-              "*** Begin Patch",
-              "*** Update File: src/a.ts",
-              "@@",
-              "-old",
-              "+new",
-              "*** Add File: src/b.ts",
-              "+new",
-              "*** End Patch",
-            ].join("\n"),
-          },
-        },
-      ],
-      "Edited a file, created a file",
-    ],
-    [
-      "structured Codex change targets",
-      [
-        {
-          name: "apply_patch",
-          args: {
-            changes: [
-              { path: "src/a.ts", kind: { type: "update" } },
-              { path: "src/b.ts", kind: { type: "add" } },
-            ],
-          },
-        },
-      ],
-      "Edited a file, created a file",
-    ],
-    [
-      "deleted Codex targets",
-      [
-        {
-          name: "apply_patch",
-          args: {
-            changes: [{ path: "src/obsolete.ts", kind: { type: "delete" } }],
-          },
-        },
-      ],
-      "Deleted a file",
-    ],
-    ["one generic tool by name", [{ name: "mcp__linear" }], "Used Mcp Linear"],
-    [
-      "repeat generic tool with a multiplier",
-      [{ name: "heartbeat_respond" }, { name: "heartbeat_respond" }],
-      "Used Heartbeat Respond ×2",
-    ],
-    [
-      "many distinct generic tools as a count",
-      [{ name: "alpha" }, { name: "beta" }, { name: "gamma" }],
-      "Used 3 tools",
-    ],
-  ])("summarizes %s", (_label, cards, expected) => {
-    expect(summarizeToolGroup(cards)).toBe(expected);
+  const prepared = (
+    itemId: string,
+    title: string,
+    extra: Partial<ToolGroupSummaryInput> = {},
+  ): ToolGroupSummaryInput => ({
+    itemId,
+    title,
+    kind: "tool",
+    phase: "end",
+    status: "completed",
+    ...extra,
+  });
+
+  it("uses prepared titles, preserves order, and groups repeated work", () => {
+    expect(
+      summarizeToolGroup([
+        prepared("first", "Check samples", { name: "custom_tool" }),
+        prepared("second", "Edit report"),
+        prepared("third", "Check samples"),
+      ]),
+    ).toBe("Check samples ×2, Edit report");
+  });
+
+  it("replaces running state with the same operation's outcome without counting suppressed siblings", () => {
+    expect(
+      summarizeToolGroup([
+        prepared("tool:call", "Inspect", { toolCallId: "call", status: "running", phase: "start" }),
+        prepared("tool:call", "Inspect", { toolCallId: "call", status: "failed" }),
+        prepared("command:call", "Command", { toolCallId: "call", suppressChannelProgress: true }),
+      ]),
+    ).toBe("Inspect (failed)");
+  });
+
+  it("keeps failure, approval, and unknown outcomes while quiet work stays out", () => {
+    expect(
+      summarizeToolGroup([
+        prepared("quiet", "Wait", { hideFromChannelProgress: true }),
+        prepared("failure", "Check process", { status: "failed" }),
+        prepared("approval", "Write report", { status: "blocked" }),
+        prepared("unknown", "Outcome unknown", { status: undefined }),
+      ]),
+    ).toBe("Check process (failed), Write report (blocked), Outcome unknown");
+  });
+
+  it("keeps the diagnostic disclosure label when all prepared work is quiet", () => {
+    expect(summarizeToolGroup([])).toBe(
+      summarizeToolGroup([prepared("quiet", "Wait", { hideFromChannelProgress: true })]),
+    );
+    expect(summarizeToolGroup([])).not.toBe("");
   });
 });

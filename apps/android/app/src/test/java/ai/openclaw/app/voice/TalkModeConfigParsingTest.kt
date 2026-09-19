@@ -120,6 +120,24 @@ class TalkModeConfigParsingTest {
   }
 
   @Test
+  fun routesSttTtsModeToNativeTalkEvenWhenRelayIsSupported() {
+    val sttTts =
+      json
+        .parseToJsonElement(
+          """{"talk":{"realtime":{"mode":"stt-tts","model":"gpt-realtime-2.1"}},"clientHints":{"realtime":{"gatewayRelaySupported":true}}}""",
+        ).jsonObject
+    val explicitRealtime =
+      json
+        .parseToJsonElement(
+          """{"talk":{"realtime":{"mode":"realtime"}},"clientHints":{"realtime":{"gatewayRelaySupported":true}}}""",
+        ).jsonObject
+
+    // gateway-relay carries only realtime sessions, so stt-tts must use device STT plus talk.speak.
+    assertFalse(TalkModeGatewayConfigParser.parse(sttTts).realtimeRelayModelSupported)
+    assertTrue(TalkModeGatewayConfigParser.parse(explicitRealtime).realtimeRelayModelSupported)
+  }
+
+  @Test
   fun gatesAndroidRealtimeRelayFromProviderLevelModel() {
     val providerLevelBrowserOnly =
       json

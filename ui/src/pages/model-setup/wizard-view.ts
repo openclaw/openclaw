@@ -10,6 +10,7 @@ type WizardViewProps = {
   mode: "auth" | "prepare" | "activate";
   state: ModelSetupWizardState;
   refreshWarning: string | null;
+  doneMessage?: string;
   cancellationNotice?: string | null;
   value: unknown;
   onValueChange: (value: unknown) => void;
@@ -69,7 +70,7 @@ export function renderModelSetupWizard(props: WizardViewProps): TemplateResult |
                 </div>`
               : props.state.phase === "done"
                 ? html`<div role="status">
-                    ${t(props.mode === "auth" ? "modelSetup.wizard.connected" : "modelSetup.wizard.checking")}
+                    ${props.doneMessage ?? t(props.mode === "auth" ? "modelSetup.wizard.connected" : "modelSetup.wizard.checking")}
                   </div>`
                 : props.state.phase === "error" || props.state.phase === "cancelled"
                   ? html`<div class="callout danger" role="alert">

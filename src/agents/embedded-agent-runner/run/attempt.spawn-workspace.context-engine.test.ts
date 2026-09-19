@@ -15,6 +15,7 @@ import { clearMemoryPluginState } from "../../../plugins/memory-state.test-fixtu
 import { createUserTurnTranscriptRecorder } from "../../../sessions/user-turn-transcript.js";
 import { projectAgentRunAttemptTerminal } from "../../agent-run-terminal-outcome.js";
 import { makeAgentAssistantMessage } from "../../test-helpers/agent-message-fixtures.js";
+import { sumToolResultTextChars } from "../tool-result-context-guard.test-support.js";
 import type { AttemptContextEngine } from "./attempt-context-engine-helpers.js";
 import {
   cleanupTempPaths,
@@ -61,34 +62,6 @@ const requireRecord = createRequireRecord("object", "expected-label");
 function requireRecords(value: unknown, label: string): Array<Record<string, unknown>> {
   expect(value, label).toBeInstanceOf(Array);
   return value as Array<Record<string, unknown>>;
-}
-
-function sumToolResultTextChars(messages: AgentMessage[]): number {
-  // Context-engine budget tests need deterministic text size accounting for
-  // toolResult blocks.
-  return messages.reduce((sum, message) => {
-    if (message.role !== "toolResult") {
-      return sum;
-    }
-    const content = (message as { content?: unknown }).content;
-    if (!Array.isArray(content)) {
-      return sum;
-    }
-    return (
-      sum +
-      content.reduce((blockSum, block) => {
-        if (
-          block &&
-          typeof block === "object" &&
-          (block as { type?: unknown }).type === "text" &&
-          typeof (block as { text?: unknown }).text === "string"
-        ) {
-          return blockSum + (block as { text: string }).text.length;
-        }
-        return blockSum;
-      }, 0)
-    );
-  }, 0);
 }
 
 function findRecord(
@@ -2272,54 +2245,60 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
     expect(result.preflightRecovery).toBeUndefined();
   });
 
-  it("preserves pipeline history when owning context engine assembly mutates then fails", async () => {
-    let sawPrompt = false;
-    let preassemblyMessages: AgentMessage[] = [];
-    let providerMessages: AgentMessage[] = [];
-    const hugeHistory = "large raw history ".repeat(2_000);
+  it.each(["throws", "returns malformed context"] as const)(
+    "preserves pipeline history when owning context engine assembly mutates then %s",
+    async (failure) => {
+      let sawPrompt = false;
+      let preassemblyMessages: AgentMessage[] = [];
+      let providerMessages: AgentMessage[] = [];
+      const hugeHistory = "large raw history ".repeat(2_000);
 
-    const result = await createContextEngineAttemptRunner({
-      contextEngine: createTestContextEngine({
-        info: {
-          id: "test-context-engine",
-          name: "Test Context Engine",
-          version: "0.0.1",
-          ownsCompaction: true,
+      const result = await createContextEngineAttemptRunner({
+        contextEngine: createTestContextEngine({
+          info: {
+            id: "test-context-engine",
+            name: "Test Context Engine",
+            version: "0.0.1",
+            ownsCompaction: true,
+          },
+          assemble: async ({ messages }) => {
+            preassemblyMessages = messages.slice();
+            messages.reverse();
+            messages.pop();
+            if (failure === "throws") {
+              throw new Error("assembly failed");
+            }
+            return { estimatedTokens: 0 } as never;
+          },
+        }),
+        sessionKey,
+        tempPaths,
+        sessionMessages: [{ role: "user", content: hugeHistory, timestamp: 1 }] as AgentMessage[],
+        attemptOverrides: {
+          contextTokenBudget: 500,
         },
-        assemble: async ({ messages }) => {
-          preassemblyMessages = messages.slice();
-          messages.reverse();
-          messages.pop();
-          throw new Error("assembly failed");
+        sessionPrompt: async (session) => {
+          sawPrompt = true;
+          providerMessages = session.messages.slice() as AgentMessage[];
+          session.messages = [
+            ...session.messages,
+            { role: "assistant", content: "done", timestamp: 2 },
+          ];
         },
-      }),
-      sessionKey,
-      tempPaths,
-      sessionMessages: [{ role: "user", content: hugeHistory, timestamp: 1 }] as AgentMessage[],
-      attemptOverrides: {
-        contextTokenBudget: 500,
-      },
-      sessionPrompt: async (session) => {
-        sawPrompt = true;
-        providerMessages = session.messages.slice() as AgentMessage[];
-        session.messages = [
-          ...session.messages,
-          { role: "assistant", content: "done", timestamp: 2 },
-        ];
-      },
-    });
+      });
 
-    expect(sawPrompt).toBe(true);
-    expect(providerMessages).toEqual(preassemblyMessages);
-    for (const [index, message] of providerMessages.entries()) {
-      expect(message).toBe(preassemblyMessages[index]);
-    }
-    expect(projectAgentRunAttemptTerminal(result.terminal).promptError).toBeNull();
-    expect(projectAgentRunAttemptTerminal(result.terminal).promptErrorSource).toBeNull();
-    expect(result.preflightRecovery).toBeUndefined();
-    expect(hoisted.preemptiveCompactionCalls).toHaveLength(1);
-    expect(hoisted.preemptiveCompactionCalls.at(-1)?.unwindowedMessages).toBeUndefined();
-  });
+      expect(sawPrompt).toBe(true);
+      expect(providerMessages).toEqual(preassemblyMessages);
+      for (const [index, message] of providerMessages.entries()) {
+        expect(message).toBe(preassemblyMessages[index]);
+      }
+      expect(projectAgentRunAttemptTerminal(result.terminal).promptError).toBeNull();
+      expect(projectAgentRunAttemptTerminal(result.terminal).promptErrorSource).toBeNull();
+      expect(result.preflightRecovery).toBeUndefined();
+      expect(hoisted.preemptiveCompactionCalls).toHaveLength(1);
+      expect(hoisted.preemptiveCompactionCalls.at(-1)?.unwindowedMessages).toBeUndefined();
+    },
+  );
 
   it("repairs tool-result pairing after context engine assembly", async () => {
     let promptMessages: AgentMessage[] = [];

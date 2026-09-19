@@ -115,7 +115,10 @@ export class PluginRegistryInspectionResources {
       physical = donorSource.retain();
       this.#dependencies.add(donorSource);
     }
-    this.#adoptedInvocations = new PluginInvocationScope(registry, borrowed, { retained: true });
+    this.#adoptedInvocations = new PluginInvocationScope(registry, borrowed, {
+      retained: true,
+      kind: "custody",
+    });
   }
 
   wrapAdoptedValue<T>(value: T): T {

@@ -17,7 +17,6 @@ export function createNativeCommandTestParams(
 ): RegisterTelegramNativeCommandsParams {
   const log = vi.fn();
   return {
-    cancelPendingInbound: params.cancelPendingInbound ?? vi.fn(),
     bot:
       params.bot ??
       ({

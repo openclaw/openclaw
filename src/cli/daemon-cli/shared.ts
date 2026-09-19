@@ -7,24 +7,26 @@ import {
   resolveGatewayWindowsTaskName,
 } from "../../daemon/constants.js";
 import { resolveDaemonContainerContext } from "../../daemon/container-context.js";
-import { formatRuntimeStatus } from "../../daemon/runtime-format.js";
+import "../../daemon/runtime-format.js";
 import { buildPlatformServiceStartHints } from "../../daemon/runtime-hints.js";
 import type { GatewayServiceCommandConfig } from "../../daemon/service-types.js";
 import { hasSudoToRootSystemdUserManagerMismatch } from "../../daemon/systemd-user-transport.js";
 import { resolveGatewayServiceMutationError } from "../../infra/gateway-supervision.js";
 import { formatCliCommand } from "../command-format.js";
-import { parsePort } from "../shared/parse-port.js";
+import "../shared/parse-port.js";
 import { createDaemonActionContext } from "./response.js";
-
-export { formatRuntimeStatus };
-export { parsePort };
+export { formatRuntimeStatus } from "../../daemon/runtime-format.js";
+export { parsePort } from "../shared/parse-port.js";
 
 /** Create install action context with JSON flag normalization. */
-export function createDaemonInstallActionContext(jsonFlag: unknown) {
+export function createDaemonInstallActionContext(
+  jsonFlag: unknown,
+  definitionBackup?: Parameters<typeof createDaemonActionContext>[0]["definitionBackup"],
+) {
   const json = Boolean(jsonFlag);
   return {
     json,
-    ...createDaemonActionContext({ action: "install", json }),
+    ...createDaemonActionContext({ action: "install", json, definitionBackup }),
   };
 }
 

@@ -11,7 +11,7 @@ import {
   getActiveDiagnosticTraceContext,
   runWithDiagnosticTraceContext,
 } from "../../../infra/diagnostic-trace-context.js";
-import { isCoreGatewayMethodClassified } from "../../methods/core-descriptors.js";
+import { isCoreGatewayMethodClassified } from "../../methods/core-method-policy.js";
 import type { GatewayMethodRegistry } from "../../methods/registry.js";
 import type { GatewayRequestHandlers } from "../../server-methods/types.js";
 

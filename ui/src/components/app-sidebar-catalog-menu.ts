@@ -50,7 +50,8 @@ export class SidebarCatalogMenuController {
     return (
       openKey?.catalogId === key.catalogId &&
       openKey.hostId === key.hostId &&
-      openKey.threadId === key.threadId
+      openKey.threadId === key.threadId &&
+      openKey.sourceHomeId === key.sourceHomeId
     );
   }
 

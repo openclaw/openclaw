@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, vi } from "vitest";
+import { vi } from "vitest";
 import type {
   SessionCatalogPullRequestSummary,
   SessionsCatalogListResult,
@@ -30,17 +30,12 @@ import {
 import { reconcileSessionHistory } from "../lib/sessions/reconcile.ts";
 import { createSessionArchiveState } from "../lib/sessions/session-archive-state.ts";
 import { createSessionRowProvenance } from "../lib/sessions/session-row-provenance.ts";
-import {
-  createSidebarContextLifecycle,
-  disposeSidebarContextLifecycles,
-} from "./app-sidebar-context-lifecycle.ts";
+import { createSidebarContextLifecycle } from "./app-sidebar-context-lifecycle.ts";
 import {
   createApplicationContextProvider,
   hiddenScopeUpgradeCapability,
 } from "./application-context.ts";
 import { gatewayHelloForMethods, SESSION_MUTATION_TEST_METHODS } from "./gateway-methods.ts";
-import { settleLitElements } from "./lit-settle.ts";
-import { createStorageMock } from "./storage.ts";
 
 // The attention widget owns independent health RPC tests. Keep those requests
 // out of sidebar client call-order assertions.
@@ -249,15 +244,16 @@ export function createSessionsHarness(agentId: string, keys: string[]) {
   let state = createSessionState(agentId, keys);
   let canonicalListRevision = 1;
   const listeners = new Set<(next: SessionState) => void>();
+  const notify = () => {
+    for (const listener of listeners) {
+      listener(state);
+    }
+  };
   const pullRequestSummaries = new Map<string, SessionCatalogPullRequestSummary>();
   const archiveProvenance = createSessionRowProvenance();
   const archiveState = createSessionArchiveState(
     (key) => state.result?.sessions.find((row) => row.key === key),
-    () => {
-      for (const listener of listeners) {
-        listener(state);
-      }
-    },
+    notify,
     archiveProvenance,
   );
   const groupsPut = vi.fn(() => Promise.resolve<SessionGroupMutationResult>("completed"));
@@ -281,6 +277,9 @@ export function createSessionsHarness(agentId: string, keys: string[]) {
     Promise.resolve(),
   );
   const refreshReplacement = vi.fn(() => Promise.resolve(state.result));
+  const reconcileMutation = vi.fn<SessionCapability["reconcileMutation"]>(async () => ({
+    status: "refreshed",
+  }));
   const patchMany = vi.fn(
     async (
       targets: SessionsPatchManyParams["targets"],
@@ -308,9 +307,7 @@ export function createSessionsHarness(agentId: string, keys: string[]) {
       return false;
     }
     state = { ...state, result };
-    for (const listener of listeners) {
-      listener(state);
-    }
+    notify();
     return true;
   });
   let scopedSessions: SessionCapability | null = null;
@@ -328,9 +325,7 @@ export function createSessionsHarness(agentId: string, keys: string[]) {
         ),
       },
     };
-    for (const listener of listeners) {
-      listener(state);
-    }
+    notify();
     return assigned;
   });
   const sessions = {
@@ -360,9 +355,7 @@ export function createSessionsHarness(agentId: string, keys: string[]) {
       } else {
         pullRequestSummaries.delete(key);
       }
-      for (const listener of listeners) {
-        listener(state);
-      }
+      notify();
     },
     groupsLoad: () => Promise.resolve(),
     groupsGeneration: () => 0,
@@ -427,6 +420,7 @@ export function createSessionsHarness(agentId: string, keys: string[]) {
     invalidate: (...args: Parameters<SessionCapability["invalidate"]>) =>
       scopedSessions!.invalidate(...args),
     refreshReplacement,
+    reconcileMutation,
     subscribeMessages,
     unsubscribeMessages,
   } as unknown as SessionCapability;
@@ -492,9 +486,7 @@ export function createSessionsHarness(agentId: string, keys: string[]) {
   });
   const publish = (statePatch: Partial<SessionState>) => {
     state = { ...state, ...statePatch };
-    for (const listener of listeners) {
-      listener(state);
-    }
+    notify();
   };
   return {
     sessions,
@@ -510,6 +502,7 @@ export function createSessionsHarness(agentId: string, keys: string[]) {
     reconcile,
     refresh,
     refreshReplacement,
+    reconcileMutation,
     subscribeMessages,
     unsubscribeMessages,
     publish,
@@ -546,7 +539,7 @@ export function createContext(
     invalidate: () => undefined,
     subscribe: () => () => undefined,
   },
-): ApplicationContext<RouteId> {
+): ApplicationContext {
   const selectedAgentId = sessions.state.agentId ?? "main";
   const agents = {
     state: {
@@ -580,7 +573,7 @@ export function createContext(
       snapshot: { approvalQueue },
       subscribe: () => () => undefined,
     } as unknown as ApplicationOverlays,
-  } as unknown as ApplicationContext<RouteId>;
+  } as unknown as ApplicationContext;
 }
 
 export async function mountSidebar(
@@ -596,7 +589,7 @@ export async function mountSidebar(
 }
 
 export async function mountSidebarContext(
-  context: ApplicationContext<RouteId>,
+  context: ApplicationContext,
   variant: SidebarLifecycleState["variant"] = "panel",
   activeRouteId?: RouteId,
 ) {
@@ -691,39 +684,3 @@ export const catalogErrorPage = (
     },
   ],
 });
-
-export function setupSidebarTest() {
-  let originalLocalStorage: PropertyDescriptor | undefined;
-
-  beforeEach(() => {
-    originalLocalStorage = Object.getOwnPropertyDescriptor(globalThis, "localStorage");
-    Object.defineProperty(globalThis, "localStorage", {
-      configurable: true,
-      value: createStorageMock(),
-    });
-    // Coding defaults to compact; most cases assert expanded contents, so start
-    // expanded. Collapse tests override this value.
-    localStorage.setItem("openclaw:sidebar:sessions:collapsed-sections", JSON.stringify([]));
-  });
-
-  afterEach(async () => {
-    vi.useRealTimers();
-    await vi.dynamicImportSettled();
-    // Removing a prompt's DOM does not settle its promise or release its reentrancy guard.
-    for (const modal of document.body.querySelectorAll("openclaw-modal-dialog")) {
-      modal.dispatchEvent(new CustomEvent("modal-cancel", { cancelable: true }));
-    }
-    await vi.dynamicImportSettled();
-    const sidebars =
-      document.body.querySelectorAll<AppSidebarSessionNavigationElement>("openclaw-app-sidebar");
-    document.body.replaceChildren();
-    disposeSidebarContextLifecycles();
-    // Disconnection queues Lit updates; finish them before retiring the DOM globals.
-    await settleLitElements(sidebars);
-    if (originalLocalStorage) {
-      Object.defineProperty(globalThis, "localStorage", originalLocalStorage);
-    } else {
-      Reflect.deleteProperty(globalThis, "localStorage");
-    }
-  });
-}

@@ -3,6 +3,17 @@ import { spawn } from "node:child_process";
 import { once } from "node:events";
 import { expectDefined } from "@openclaw/normalization-core";
 import { toErrorObject } from "../infra/errors.js";
+import { getSpawnBroker } from "./spawn-broker/context.js";
+import { brokerSpawnOptions } from "./spawn-broker/host.js";
+
+/** Select the process-scoped native spawn transport without changing launch options. */
+export function spawnProcess(command: string, args: string[], options: SpawnOptions): ChildProcess {
+  const broker = getSpawnBroker();
+  // Anonymous secret pipes and inherited numeric descriptors belong to this process.
+  return broker && brokerSpawnOptions(options)
+    ? broker.spawn(command, args, options)
+    : spawn(command, args, options);
+}
 
 type SpawnWithFallbackResult = {
   child: ChildProcess;
@@ -41,7 +52,7 @@ async function spawnAndWaitForSpawn(
 export async function spawnWithFallback(
   params: SpawnWithFallbackParams,
 ): Promise<SpawnWithFallbackResult> {
-  const spawnImpl = params.spawnImpl ?? spawn;
+  const spawnImpl = params.spawnImpl ?? spawnProcess;
   const baseOptions = { ...params.options };
   const fallbacks = params.fallbacks ?? [];
   const attempts = [baseOptions, ...fallbacks.map((options) => ({ ...baseOptions, ...options }))];

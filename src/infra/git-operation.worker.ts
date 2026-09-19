@@ -37,8 +37,9 @@ serveWorkerTasks<GitWorkerReply<GitWorkerResult>>(
           case "workspace.manifest.pair":
           case "workspace.manifest.staged":
           case "workspace.manifest.stage-input":
-          case "workspace.manifest.entry":
+          case "workspace.manifest.entries":
           case "workspace.manifest.file":
+          case "workspace.manifest.nodes":
           case "workspace.reconcile.preflight":
             return import("../gateway/worker-environments/workspace-manifest-computation.runtime.js").then(
               ({ executeWorkspaceManifestComputation }) =>

@@ -1,5 +1,5 @@
 // @vitest-environment node
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { GatewayRequestError } from "../../api/gateway.ts";
 import type { ChatAttachment } from "../../lib/chat/chat-types.ts";
@@ -8,12 +8,8 @@ import {
   readStoredOutboxStore,
   storageTargetForGateway,
 } from "../../lib/chat/outbox-store.ts";
-import { createStorageMock } from "../../test-helpers/storage.ts";
-import {
-  getChatAttachmentDataUrl,
-  registerChatAttachmentPayload,
-  releaseChatAttachmentPayloads,
-} from "./attachment-payload-store.ts";
+import { getChatAttachmentDataUrl } from "./attachment-payload-store.ts";
+import { createStagedAttachment } from "./chat-delivery-attachments.test-support.ts";
 import { handleChatGatewayEvent } from "./chat-gateway.ts";
 import type { ChatHistoryResult } from "./chat-history-snapshot.ts";
 import { loadChatHistory } from "./chat-history.ts";
@@ -24,47 +20,17 @@ import {
   makeChatHost,
 } from "./chat-host.test-support.ts";
 import { syncVisibleChatQueueProjection } from "./chat-queue.ts";
-import { retryQueuedChatMessage, retryReconnectableQueuedChatSends } from "./chat-send-actions.ts";
+import { retryQueuedChatMessage, resumeStoredChatOutboxes } from "./chat-send-actions.ts";
 import type { ChatHost } from "./chat-send-contract.ts";
 import { handleSendChat } from "./chat-send-submit.ts";
 import { formatChatWorkContext } from "./chat-work-context.ts";
 import { getChatSessionProjection } from "./history-merge.ts";
-import { installOutboxBrowserStorage } from "./outbox-browser.test-support.ts";
+import { useChatSendBrowserFixture } from "./outbox-browser.test-support.ts";
 import { reconcileChatRunLifecycle } from "./run-lifecycle.ts";
 
-const attachmentsToRelease: ChatAttachment[] = [];
 const attachmentDataUrl = "data:application/pdf;base64,JVBERi0xLjQK";
 
-beforeEach(() => {
-  installOutboxBrowserStorage();
-  vi.stubGlobal("sessionStorage", createStorageMock());
-  vi.stubGlobal("requestAnimationFrame", () => 1);
-  vi.stubGlobal("cancelAnimationFrame", () => undefined);
-});
-
-afterEach(async () => {
-  releaseChatAttachmentPayloads(attachmentsToRelease);
-  attachmentsToRelease.length = 0;
-  await Promise.resolve();
-  vi.restoreAllMocks();
-  vi.unstubAllGlobals();
-});
-
-function createStagedAttachment(id: string): ChatAttachment {
-  const file = new File(["%PDF-1.4\n"], "brief.pdf", { type: "application/pdf" });
-  const attachment = registerChatAttachmentPayload({
-    attachment: {
-      id,
-      mimeType: "application/pdf",
-      fileName: "brief.pdf",
-      sizeBytes: file.size,
-    },
-    dataUrl: attachmentDataUrl,
-    file,
-  });
-  attachmentsToRelease.push(attachment);
-  return attachment;
-}
+useChatSendBrowserFixture();
 
 describe("structured Goal admission", () => {
   const intent = { kind: "session-goal-start", version: 1, issuedAtMs: 1_788_000_000_000 } as const;
@@ -605,7 +571,7 @@ describe("handleSendChat session ownership", () => {
     const originalId = host.chatQueue[0]!.sendRunId;
     host.connected = true;
     readiness.mockReturnValue(true);
-    const drain = retryReconnectableQueuedChatSends(host);
+    const drain = resumeStoredChatOutboxes(host);
     const loading = loadChatHistory(host);
     await vi.waitFor(() =>
       expect(host.request).toHaveBeenCalledWith("chat.history", expect.anything()),
@@ -630,10 +596,10 @@ describe("handleSendChat session ownership", () => {
     ]);
     pending = true;
     readiness.mockReturnValue(true);
-    await retryReconnectableQueuedChatSends(host);
+    await resumeStoredChatOutboxes(host);
     expect(host.request).not.toHaveBeenCalledWith("chat.send", expect.anything());
     pending = false;
-    await retryReconnectableQueuedChatSends(host);
+    await resumeStoredChatOutboxes(host);
     expect(host.chatRunError).toBeNull();
     expect(findChatSendPayload(host)).toMatchObject({
       message: "offline later turn",

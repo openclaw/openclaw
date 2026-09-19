@@ -18,6 +18,7 @@ export type ComposerProgressRunLifecycle = {
   activeRunId?: string | null;
   completedRunId?: string | null;
   readingHistory?: boolean;
+  onManipulate?: () => void;
 };
 
 type DisclosureInput = [
@@ -33,7 +34,8 @@ type ScrollGesture = {
   distancePx: number;
 };
 
-const manualChoicesByGateway = new WeakMap<object, Map<string, boolean>>();
+type RememberedChoice = boolean | { extent: number; runId: string };
+const manualChoicesByGateway = new WeakMap<object, Map<string, RememberedChoice>>();
 
 class ProgressDisclosureController {
   private state: ProgressDisclosureState;
@@ -44,7 +46,13 @@ class ProgressDisclosureController {
   private disposed = false;
   private settleTimer: ReturnType<typeof setTimeout> | undefined;
   private scrollSettled = false;
-  private settleFrame: number | undefined;
+  private lifecycle?: ComposerProgressRunLifecycle;
+  private summary?: HTMLElement;
+  private body?: HTMLElement;
+  private listeners?: AbortController;
+  private resizeObserver?: ResizeObserver;
+  private drag?: { id: number; x: number; y: number; extent: number; active: boolean };
+  private suppressClick = false;
   private lastWheelAt: number | undefined;
   private gesture: ScrollGesture | undefined;
   private touching = false;
@@ -57,27 +65,26 @@ class ProgressDisclosureController {
     this.sessionKey = input[0];
     this.gatewayScope = input[3]?.gatewayScope;
     this.state = this.mount(input);
-    this.element.addEventListener("click", this.handleClick);
+    this.element.addEventListener("click", this.click);
   }
 
   private mount([sessionKey, initialOpen, , lifecycle]: DisclosureInput): ProgressDisclosureState {
     this.resetScrollInput();
-    if (this.settleFrame !== undefined) {
-      cancelAnimationFrame(this.settleFrame);
-    }
-    this.element.classList.add("session-progress-card--settling");
-    this.settleFrame = requestAnimationFrame(() => {
-      this.settleFrame = requestAnimationFrame(() => {
-        this.settleFrame = undefined;
-        this.element.classList.remove("session-progress-card--settling");
-      });
-    });
+    this.cancelDrag();
+    const remembered = this.gatewayScope
+      ? manualChoicesByGateway.get(this.gatewayScope)?.get(sessionKey)
+      : undefined;
+    const runId = lifecycle?.activeRunId ?? lifecycle?.completedRunId;
+    const manualOpen =
+      typeof remembered === "object"
+        ? remembered.runId === runId
+          ? remembered.extent
+          : undefined
+        : remembered;
     return resolveProgressDisclosure(undefined, {
       type: "mount",
       open: initialOpen,
-      manualOpen: this.gatewayScope
-        ? manualChoicesByGateway.get(this.gatewayScope)?.get(sessionKey)
-        : undefined,
+      manualOpen,
       activeRunId: lifecycle?.activeRunId ?? null,
       completedRunId: lifecycle?.completedRunId ?? null,
       readingHistory: lifecycle?.readingHistory === true,
@@ -86,6 +93,7 @@ class ProgressDisclosureController {
 
   update(input: DisclosureInput): void {
     const [sessionKey, , collapseByDefault, lifecycle] = input;
+    this.lifecycle = lifecycle;
     if (sessionKey !== this.sessionKey || lifecycle?.gatewayScope !== this.gatewayScope) {
       this.sessionKey = sessionKey;
       this.gatewayScope = lifecycle?.gatewayScope;
@@ -93,6 +101,7 @@ class ProgressDisclosureController {
     }
     if (lifecycle?.activeRunId && lifecycle.activeRunId !== this.state.activeRunId) {
       this.resetScrollInput();
+      this.cancelDrag();
       this.dispatch({ type: "run", runId: lifecycle.activeRunId, open: !collapseByDefault });
     }
     const readingHistory = lifecycle?.readingHistory === true;
@@ -105,9 +114,17 @@ class ProgressDisclosureController {
     if (lifecycle?.completedRunId) {
       this.dispatch({ type: "complete", runId: lifecycle.completedRunId });
     }
-    this.element.open = this.state.open;
+    this.connectHeader();
+    this.apply();
     // Lit attaches the surrounding transcript after committing this element part.
-    queueMicrotask(() => this.connectTranscript());
+    queueMicrotask(() => {
+      if (this.disposed) {
+        return;
+      }
+      this.connectHeader();
+      this.connectTranscript();
+      this.apply();
+    });
   }
 
   private dispatch(event: ProgressDisclosureEvent): void {
@@ -116,13 +133,29 @@ class ProgressDisclosureController {
     if (!this.gatewayScope) {
       return;
     }
+    const choices =
+      manualChoicesByGateway.get(this.gatewayScope) ?? new Map<string, RememberedChoice>();
     if (event.type === "click") {
-      const choices = manualChoicesByGateway.get(this.gatewayScope) ?? new Map<string, boolean>();
       choices.set(this.sessionKey, this.state.open);
       manualChoicesByGateway.set(this.gatewayScope, choices);
+    } else if (
+      (event.type === "extent" || event.type === "clamp") &&
+      typeof this.state.manualOpen === "number"
+    ) {
+      const runId = this.state.activeRunId ?? this.state.completedRunId;
+      if (runId) {
+        choices.set(this.sessionKey, { extent: this.state.manualOpen, runId });
+        manualChoicesByGateway.set(this.gatewayScope, choices);
+      }
     } else if (event.type === "settle" && previous.open && !this.state.open) {
-      const choices = manualChoicesByGateway.get(this.gatewayScope);
-      if (choices?.get(this.sessionKey) === true) {
+      const remembered = choices.get(this.sessionKey);
+      // Do not erase a newer choice made in another pane.
+      if (
+        remembered === true ||
+        (typeof remembered === "object" &&
+          remembered.runId === this.state.activeRunId &&
+          remembered.extent === previous.manualOpen)
+      ) {
         choices.delete(this.sessionKey);
       }
     }
@@ -167,7 +200,7 @@ class ProgressDisclosureController {
     this.flushGesture();
     if (this.state.distancePx > 0) {
       this.dispatch({ type: "settle" });
-      this.element.open = this.state.open;
+      this.apply();
     }
   }
 
@@ -228,19 +261,6 @@ class ProgressDisclosureController {
     }
   };
 
-  private readonly handleClick = (event: MouseEvent) => {
-    if (
-      event.defaultPrevented ||
-      !(event.target instanceof Element) ||
-      event.target.closest("summary")?.parentElement !== this.element
-    ) {
-      return;
-    }
-    // Let native summary activation apply the toggle, including Enter and Space.
-    this.resetScrollInput();
-    this.dispatch({ type: "click", open: !this.element.open });
-  };
-
   private connectTranscript(): void {
     if (this.disposed) {
       return;
@@ -258,15 +278,239 @@ class ProgressDisclosureController {
       : undefined;
   }
 
+  private connectHeader(): void {
+    if (this.disposed) {
+      return;
+    }
+    this.summary ??= this.element.querySelector<HTMLElement>("summary") ?? undefined;
+    this.body ??=
+      this.element.querySelector<HTMLElement>(".session-progress-card__body") ?? undefined;
+    if (!this.summary || this.listeners) {
+      return;
+    }
+    this.listeners = new AbortController();
+    const signal = this.listeners.signal;
+    this.summary.addEventListener("wheel", this.wheel, { passive: false, signal });
+    this.summary.addEventListener("pointerdown", this.pointerDown, { signal });
+    this.summary.addEventListener("pointermove", this.pointerMove, { signal });
+    this.summary.addEventListener("pointerup", this.pointerEnd, { signal });
+    this.summary.addEventListener("pointercancel", this.pointerEnd, { signal });
+    this.summary.addEventListener("lostpointercapture", this.pointerEnd, { signal });
+    this.summary.ownerDocument.addEventListener("pointerdown", this.otherPointer, {
+      capture: true,
+      signal,
+    });
+    this.summary.ownerDocument.defaultView?.addEventListener("blur", this.cancelDrag, { signal });
+    // Only viewport changes can clamp a retained manual extent. Streamed card
+    // revisions cannot resize it, even when the revised note is shorter.
+    this.summary.ownerDocument.defaultView?.addEventListener("resize", this.clampExtent, {
+      signal,
+    });
+    if (typeof ResizeObserver !== "undefined" && this.body) {
+      this.resizeObserver = new ResizeObserver(this.clampExtent);
+      this.resizeObserver.observe(this.body);
+    }
+  }
+
+  private disconnectHeader(): void {
+    this.cancelDrag();
+    this.listeners?.abort();
+    this.listeners = undefined;
+    this.resizeObserver?.disconnect();
+    this.resizeObserver = undefined;
+  }
+
+  private chosen(): boolean | number {
+    return this.state.manualOpen ?? this.state.open;
+  }
+
+  private limit(): number {
+    return this.body ? Number.parseFloat(getComputedStyle(this.body).maxHeight) || 300 : 300;
+  }
+
+  private extent(): number {
+    const chosen = this.chosen();
+    return typeof chosen === "number"
+      ? Math.min(chosen, this.limit())
+      : chosen
+        ? (this.body?.getBoundingClientRect().height ?? 0)
+        : 0;
+  }
+
+  private apply(): void {
+    this.body ??=
+      this.element.querySelector<HTMLElement>(".session-progress-card__body") ?? undefined;
+    const chosen = this.chosen();
+    const partial = typeof chosen === "number";
+    const extent = partial ? Math.min(chosen, this.limit()) : 0;
+    this.element.open = partial ? extent > 0 : chosen;
+    if (this.body) {
+      this.body.style.height = partial ? extent + "px" : "";
+      this.body.style.minHeight = partial ? extent + "px" : "";
+    }
+    this.element.dataset.reveal = partial ? "partial" : chosen ? "open" : "closed";
+  }
+
+  private readonly clampExtent = () => {
+    if (typeof this.state.manualOpen === "number" && this.state.manualOpen > this.limit()) {
+      this.dispatch({ type: "clamp", limit: this.limit() });
+      this.cancelDrag();
+    }
+    this.apply();
+  };
+
+  private isControl(event: Event): boolean {
+    return (
+      event.target instanceof Element &&
+      Boolean(event.target.closest("button, a, input, select, textarea"))
+    );
+  }
+
+  private readonly click = (event: MouseEvent) => {
+    if (
+      event.defaultPrevented ||
+      this.isControl(event) ||
+      !(event.target instanceof Element) ||
+      event.target.closest("summary")?.parentElement !== this.element
+    ) {
+      return;
+    }
+    event.preventDefault();
+    if (this.suppressClick && event.detail !== 0) {
+      this.suppressClick = false;
+      return;
+    }
+    this.cancelDrag();
+    // Partial sheets expand first, but a gesture can already reveal the full
+    // viewport (or all short content) without choosing the boolean open state.
+    const chosen = this.chosen();
+    const fullyRevealed =
+      (typeof chosen === "boolean" && this.element.open) ||
+      (typeof chosen === "number" &&
+        chosen > 0 &&
+        (chosen >= this.limit() ||
+          Boolean(
+            this.body &&
+            this.body.clientHeight > 0 &&
+            this.body.scrollHeight <= this.body.clientHeight + 1,
+          )));
+    this.resetScrollInput();
+    this.dispatch({ type: "click", open: !fullyRevealed });
+    this.apply();
+  };
+
+  private move(extent: number): void {
+    this.takeover();
+    this.dispatch({ type: "extent", extent: Math.max(0, Math.min(this.limit(), extent)) });
+    this.lifecycle?.onManipulate?.();
+    this.apply();
+  }
+
+  private takeover(): void {
+    this.resetScrollInput();
+    this.dispatch({ type: "takeover" });
+  }
+
+  private readonly wheel = (event: WheelEvent) => {
+    if (
+      event.defaultPrevented ||
+      this.isControl(event) ||
+      this.drag ||
+      event.ctrlKey ||
+      event.metaKey ||
+      event.shiftKey ||
+      !Number.isFinite(event.deltaY) ||
+      !Number.isFinite(event.deltaX) ||
+      !event.deltaY ||
+      Math.abs(event.deltaX) >= Math.abs(event.deltaY)
+    ) {
+      return;
+    }
+    const unit =
+      event.deltaMode === WheelEvent.DOM_DELTA_LINE
+        ? Number.parseFloat(getComputedStyle(this.summary!).lineHeight) || 18
+        : event.deltaMode === WheelEvent.DOM_DELTA_PAGE
+          ? this.limit()
+          : 1;
+    const extent = this.extent();
+    const next = Math.max(0, Math.min(this.limit(), extent - event.deltaY * unit));
+    // The header is the only wheel target. Body and transcript scrolling stay native.
+    event.preventDefault();
+    // Accepted input owns the panel even when its extent is already clamped.
+    this.move(next);
+  };
+
+  private readonly pointerDown = (event: PointerEvent) => {
+    if (!event.isPrimary || event.button !== 0 || this.isControl(event) || event.defaultPrevented) {
+      return;
+    }
+    this.suppressClick = false;
+    this.drag = {
+      id: event.pointerId,
+      x: event.clientX,
+      y: event.clientY,
+      extent: this.extent(),
+      active: false,
+    };
+    this.summary?.setPointerCapture(event.pointerId);
+  };
+
+  private readonly pointerMove = (event: PointerEvent) => {
+    const drag = this.drag;
+    if (!drag || drag.id !== event.pointerId) {
+      return;
+    }
+    const dx = event.clientX - drag.x;
+    const dy = event.clientY - drag.y;
+    if (!drag.active) {
+      if (Math.max(Math.abs(dx), Math.abs(dy)) < 3) {
+        return;
+      }
+      if (Math.abs(dx) >= Math.abs(dy)) {
+        this.cancelDrag();
+        return;
+      }
+      this.takeover();
+      drag.active = true;
+      this.suppressClick = true;
+    }
+    event.preventDefault();
+    const requested = drag.extent - dy;
+    this.move(requested);
+    // Discard excess travel at a hard boundary so reversal responds immediately.
+    if (requested < 0 || requested > this.limit()) {
+      drag.extent = this.extent();
+      drag.y = event.clientY;
+    }
+  };
+
+  private readonly otherPointer = (event: PointerEvent) => {
+    if (this.drag && event.pointerId !== this.drag.id) {
+      this.cancelDrag();
+    }
+  };
+
+  private readonly pointerEnd = (event: PointerEvent) => {
+    if (event.pointerId === this.drag?.id) {
+      this.cancelDrag();
+    }
+  };
+
+  private readonly cancelDrag = () => {
+    const drag = this.drag;
+    this.drag = undefined;
+    if (drag && this.summary?.hasPointerCapture(drag.id)) {
+      this.summary.releasePointerCapture(drag.id);
+    }
+  };
+
   dispose(): void {
     this.disposed = true;
     this.unsubscribeTranscript?.();
     this.unsubscribeTranscript = undefined;
-    this.element.removeEventListener("click", this.handleClick);
+    this.element.removeEventListener("click", this.click);
+    this.disconnectHeader();
     this.resetScrollInput();
-    if (this.settleFrame !== undefined) {
-      cancelAnimationFrame(this.settleFrame);
-    }
   }
 }
 

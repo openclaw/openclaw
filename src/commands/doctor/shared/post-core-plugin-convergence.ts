@@ -301,8 +301,7 @@ async function runPostCorePluginConvergenceWithLease(
     left.packageDir.localeCompare(right.packageDir),
   )) {
     // A typed smoke failure owns this exact package and startup quarantines it.
-    // Re-emitting the repair error without that owner would turn it back into
-    // an unknown warning and incorrectly block gateway readiness.
+    // Keep the typed diagnostic instead of duplicating it as an unowned warning.
     const packageDir = path.resolve(failure.packageDir);
     const hasTypedFailure = smokeFailureInstallPaths.has(packageDir);
     const belongsToInactivePlugin =

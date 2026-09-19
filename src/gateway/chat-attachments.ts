@@ -1,6 +1,6 @@
 // Gateway chat attachment parser.
 // Normalizes image attachments, offloads large media, and reports unsupported payloads.
-import { estimateBase64DecodedBytes } from "@openclaw/media-core/base64";
+import { estimateBase64DecodedBytes, isValidBase64 } from "@openclaw/media-core/base64";
 import { MAX_IMAGE_BYTES, type MediaKind } from "@openclaw/media-core/constants";
 import {
   extensionForMime,
@@ -8,7 +8,6 @@ import {
   mimeTypeFromFilePath,
   normalizeMimeType,
 } from "@openclaw/media-core/mime";
-import { expectDefined } from "@openclaw/normalization-core";
 import { formatErrorMessage, formatUncaughtError } from "../infra/errors.js";
 import type { SubsystemLogger } from "../logging/subsystem.js";
 import type { MediaFact } from "../media/media-facts.js";
@@ -24,6 +23,7 @@ export type ChatAttachment = {
   type?: string;
   mimeType?: string;
   fileName?: string;
+  origin?: MediaFact["origin"];
   content?: unknown;
   sizeBytes?: number;
   durationMs?: number;
@@ -45,6 +45,7 @@ export type OffloadedRef = {
   kind: MediaKind;
   mimeType: string;
   label: string;
+  origin?: MediaFact["origin"];
   sizeBytes: number;
   sourceIndex: number;
   durationMs?: number;
@@ -190,6 +191,7 @@ export async function persistInboundImagesForTranscript(params: {
       contentType: ref.mimeType,
       kind: ref.kind,
       fileName: ref.label,
+      ...(ref.origin ? { origin: ref.origin } : {}),
       sizeBytes: ref.sizeBytes,
       ...(ref.durationMs !== undefined ? { durationMs: ref.durationMs } : {}),
       ...(ref.width !== undefined ? { width: ref.width } : {}),
@@ -234,40 +236,6 @@ export class MediaOffloadError extends Error {
 
 function isGenericContainerMime(mime?: string): boolean {
   return mime === "application/zip" || mime === "application/octet-stream";
-}
-
-function isBase64DataCharCode(code: number): boolean {
-  return (
-    (code >= 0x41 && code <= 0x5a) ||
-    (code >= 0x61 && code <= 0x7a) ||
-    (code >= 0x30 && code <= 0x39) ||
-    code === 0x2b ||
-    code === 0x2f
-  );
-}
-
-export function isValidAttachmentBase64(value: string): boolean {
-  if (value.length === 0 || value.length % 4 !== 0) {
-    return false;
-  }
-
-  let padding = 0;
-  let sawPadding = false;
-  for (let i = 0; i < value.length; i += 1) {
-    const code = value.charCodeAt(i);
-    if (code === 0x3d) {
-      padding += 1;
-      if (padding > 2) {
-        return false;
-      }
-      sawPadding = true;
-      continue;
-    }
-    if (sawPadding || !isBase64DataCharCode(code)) {
-      return false;
-    }
-  }
-  return true;
 }
 
 function verifyDecodedSize(buffer: Buffer, estimatedBytes: number, label: string): void {
@@ -334,9 +302,10 @@ function normalizeAttachment(
 
   let base64 = content.trim();
   if (opts.stripDataUrlPrefix) {
-    const dataUrlMatch = /^data:[^;]+;base64,(.*)$/.exec(base64);
-    if (dataUrlMatch) {
-      base64 = expectDefined(dataUrlMatch[1], "data url match capture group 1");
+    // Inspect metadata only; never capture a multi-megabyte payload in a regex.
+    const commaIndex = base64.indexOf(",");
+    if (commaIndex >= 0 && /^data:[^;,]+;base64$/.test(base64.slice(0, commaIndex))) {
+      base64 = base64.slice(commaIndex + 1);
     }
   }
   return { label, mime, base64 };
@@ -402,7 +371,7 @@ export async function parseMessageWithAttachments(
       if (b64.length === 0) {
         throw new UnsupportedAttachmentError("empty-payload", `attachment ${label}: empty payload`);
       }
-      if (!isValidAttachmentBase64(b64)) {
+      if (!isValidBase64(b64)) {
         throw new Error(`attachment ${label}: invalid base64 content`);
       }
 
@@ -518,6 +487,7 @@ export async function parseMessageWithAttachments(
         label,
         sizeBytes,
         sourceIndex: idx,
+        ...(att.origin === "paste" || att.origin === "file" ? { origin: att.origin } : {}),
         ...(typeof att.durationMs === "number" &&
         Number.isFinite(att.durationMs) &&
         att.durationMs >= 0
@@ -556,6 +526,7 @@ export async function parseMessageWithAttachments(
       contentType: ref.mimeType,
       kind: ref.kind,
       fileName: ref.label,
+      ...(ref.origin ? { origin: ref.origin } : {}),
       sizeBytes: ref.sizeBytes,
       ...(ref.durationMs ? { durationMs: ref.durationMs } : {}),
       ...(ref.width ? { width: ref.width } : {}),

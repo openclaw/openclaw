@@ -16,6 +16,7 @@ import {
   renderSettingsValue,
 } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
+import { registerGitHubEnglish } from "../../i18n/locales/en-github.ts";
 import { currentConfigObject } from "../../lib/config/config-state-model.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { PROFILE_SETTINGS_TARGET_IDS } from "../../pages/config/settings-targets.ts";
@@ -409,3 +410,5 @@ export class GitHubConnections extends OpenClawLightDomElement {
 if (!customElements.get("openclaw-github-connections")) {
   customElements.define("openclaw-github-connections", GitHubConnections);
 }
+
+registerGitHubEnglish();

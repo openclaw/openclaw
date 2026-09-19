@@ -2,7 +2,7 @@ import { html, nothing, type TemplateResult } from "lit";
 import type { NavigationRouteId } from "../app-navigation.ts";
 import { pathForRoute } from "../app-route-paths.ts";
 import type { ApplicationContext } from "../app/context.ts";
-import { ScopeUpgradeController } from "../app/device-scope-upgrade-controller.runtime.ts";
+import "../app/device-scope-upgrade-controller.runtime.ts";
 import type { ExecApprovalDecision } from "../app/exec-approval.ts";
 import type { MentionsCapability } from "../app/mentions.ts";
 import { isMobileNavLayout } from "../app/mobile-nav-layout.ts";
@@ -28,10 +28,9 @@ import {
 } from "./sidebar-issue-item.ts";
 import { ISSUE_TABS, issueTabLabel, type IssueTab } from "./sidebar-issues-tabs.ts";
 import "./menu-surface.ts";
-
 // Keep request orchestration behind the same lazy boundary as its Inbox UI;
 // ApplicationContext retains the activated controller across presenters.
-export { ScopeUpgradeController };
+export { ScopeUpgradeController } from "../app/device-scope-upgrade-controller.runtime.ts";
 
 export type SidebarAttentionPanelPosition = { left: number } & (
   | { anchor: "top"; top: number }

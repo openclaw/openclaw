@@ -401,6 +401,7 @@ export function resolveCodexAppServerStartOptionsForAgent(params: {
   }
   const nativeComputerUseEnabled = codexConfigEnablesNativeComputerUse({
     agentDir: params.agentDir,
+    codexHome: startOptions.codexHome,
     codexConfigToml: params.codexConfigToml,
     env: params.env,
     homeScope: "agent",
@@ -555,7 +556,10 @@ export function codexAppServerStartOptionsKey(
     headers: Object.entries(options.headers)
       .toSorted(([left], [right]) => left.localeCompare(right))
       .map(([key, value]) => [key, hashSecretForKey(value, `header:${key}`)]),
-    env: Object.entries(options.env ?? {})
+    env: Object.entries({
+      ...options.env,
+      ...(options.codexHome ? { CODEX_HOME: options.codexHome } : {}),
+    })
       .toSorted(([left], [right]) => left.localeCompare(right))
       .map(([key, value]) => [key, hashSecretForKey(value, `env:${key}`)]),
     clearEnv: [...(options.clearEnv ?? [])].toSorted(),

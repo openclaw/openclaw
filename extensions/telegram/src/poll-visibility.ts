@@ -1,4 +1,3 @@
-// Telegram plugin module implements poll visibility behavior.
 export function resolveTelegramPollVisibility(params: {
   pollAnonymous?: boolean;
   pollPublic?: boolean;

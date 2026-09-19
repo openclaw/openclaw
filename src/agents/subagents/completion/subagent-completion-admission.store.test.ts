@@ -17,6 +17,7 @@ import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
+  repairOpenClawStateDatabaseSchema,
   type OpenClawStateDatabase,
 } from "../../../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
@@ -32,6 +33,7 @@ import { subagentRuns } from "../registry/subagent-registry-memory.js";
 import { onSubagentRegistryPersisted } from "../registry/subagent-registry-state.js";
 import { loadSubagentRegistryFromSqlite } from "../registry/subagent-registry.store.sqlite.js";
 import type { SubagentRunRecord } from "../registry/subagent-registry.types.js";
+import { resolveSubagentAttachmentDir } from "../subagent-attachment-paths.js";
 import {
   admitSubagentCompletionDelivery,
   blockSubagentCompletionDelivery,
@@ -54,8 +56,6 @@ import {
 
 const resumeSubagentRun = vi.hoisted(() => vi.fn());
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-const discardTerminalDelivery = (entry: SubagentRunRecord, completedAt: number) =>
-  SubagentLifecycleController.discardTerminalDelivery(entry, completedAt);
 
 vi.mock("../registry/subagent-registry.js", () => ({ resumeSubagentRun }));
 
@@ -796,7 +796,7 @@ describe("atomic subagent completion admission store", () => {
     });
   });
 
-  it("reloads a blocked text completion from SQLite before canonical owner redrive", async () => {
+  it("repairs a blocked legacy text completion with Doctor before canonical owner redrive", async () => {
     await withEnvAsync({ OPENCLAW_STATE_DIR: tempDir }, async () => {
       closeOpenClawStateDatabaseForTest();
       database = openOpenClawStateDatabase();
@@ -862,6 +862,7 @@ describe("atomic subagent completion admission store", () => {
       resetTaskRegistryForTests({ persist: false });
       subagentRuns.clear();
       closeOpenClawStateDatabaseForTest();
+      expect(repairOpenClawStateDatabaseSchema().warnings).toEqual([]);
       database = openOpenClawStateDatabase();
       queueContext = captureOpenClawStateWorkerContext({
         path: database.path,
@@ -942,18 +943,17 @@ describe("atomic subagent completion admission store", () => {
       });
 
       const cappedSubagent = structuredClone(subagentRuns.get(input.subagent.runId)!);
-      const attachmentsRootDir = path.join(tempDir, "attachments");
-      const attachmentsDir = path.join(attachmentsRootDir, "completion-run");
+      const { childSessionKey } = cappedSubagent;
+      const attachmentId = "2d4a8398-4d5a-4c20-9c16-0a5f6627cf92";
+      const attachmentsDir = resolveSubagentAttachmentDir("main", childSessionKey, attachmentId);
       await fs.mkdir(attachmentsDir, { recursive: true });
       await fs.writeFile(path.join(attachmentsDir, "result.txt"), "retained result");
-      cappedSubagent.attachmentsRootDir = attachmentsRootDir;
-      cappedSubagent.attachmentsDir = attachmentsDir;
-      Object.assign(cappedSubagent.delivery!, {
-        status: "suspended",
-        generation: 10,
-        suspendedAt: now,
-        suspendedReason: "expiry",
-      });
+      cappedSubagent.attachmentId = attachmentId;
+      const delivery = cappedSubagent.delivery!;
+      delivery.status = "suspended";
+      delivery.generation = 10;
+      delivery.suspendedAt = now;
+      delivery.suspendedReason = "expiry";
       const cappedTask: TaskRecord = {
         ...result.task!,
         deliveryStatus: "failed",
@@ -977,7 +977,7 @@ describe("atomic subagent completion admission store", () => {
       expect(resumeSubagentRun).not.toHaveBeenCalled();
       const discardInsideTransaction = vi.fn((entry: SubagentRunRecord, completedAt: number) => {
         expect(database.db.isTransaction).toBe(true);
-        discardTerminalDelivery(entry, completedAt);
+        SubagentLifecycleController.discardTerminalDelivery(entry, completedAt);
       });
       database.db.exec(`
         CREATE TRIGGER fail_dismissed_task_persist

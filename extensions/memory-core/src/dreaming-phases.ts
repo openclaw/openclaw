@@ -1,4 +1,3 @@
-// Memory Core plugin module implements dreaming phases behavior.
 import { createHash } from "node:crypto";
 import type { Dirent } from "node:fs";
 import fs from "node:fs/promises";

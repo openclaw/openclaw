@@ -159,9 +159,12 @@ vi.mock("../../infra/update-runner.js", () => ({
   runGatewayUpdatePreflight: runGatewayUpdatePreflightMock,
 }));
 
-vi.mock("../../infra/update-startup.js", () => ({
+vi.mock("../../infra/update-status-state.js", () => ({
   getUpdateAvailable: () => null,
   getUpdateSchedule: () => updateSchedule,
+}));
+
+vi.mock("../../infra/update-startup.js", () => ({
   initializeGatewayUpdateStatus: initializeGatewayUpdateStatusMock,
 }));
 

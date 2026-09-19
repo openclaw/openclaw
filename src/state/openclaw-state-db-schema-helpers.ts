@@ -46,3 +46,14 @@ export function ensureColumn(db: DatabaseSync, tableName: string, columnSql: str
   db.exec(`ALTER TABLE ${tableName} ADD COLUMN ${columnSql};`);
   return true;
 }
+
+/** Missing runtime tables are empty only before state grows beyond checkpoint bootstrap. */
+export function hasOpenClawStateTablesBeyondStartupCheckpoint(db: DatabaseSync): boolean {
+  return (
+    /* sqlite-allow-raw -- Read-only startup-checkpoint schema discriminator. */ db
+      .prepare(
+        "SELECT 1 FROM main.sqlite_schema WHERE type = 'table' AND name NOT IN ('schema_meta', 'state_leases') LIMIT 1",
+      )
+      .get() !== undefined
+  );
+}

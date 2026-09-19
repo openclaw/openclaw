@@ -8,6 +8,7 @@ import { toSanitizedMarkdownHtml, toStreamingMarkdownParts } from "../../../comp
 import { t } from "../../../i18n/index.ts";
 import { registerChatMessageMetadataEnglish } from "../../../i18n/locales/en-chat-message-metadata.ts";
 import { detectTextDirection } from "../../../lib/text-direction.ts";
+import { findMessageDisclosureLine, type MessageTextRect } from "./chat-message-disclosure.ts";
 import { renderMarkdownMedia, type MarkdownMedia } from "./chat-message-media-markdown.ts";
 
 registerChatMessageMetadataEnglish();
@@ -76,6 +77,8 @@ export function renderMessageJson(
 // Character length owns normal disclosure; this high line cap only bounds newline-heavy prompts.
 const USER_MESSAGE_COLLAPSED_CHAR_LIMIT = 1_200;
 const USER_MESSAGE_COLLAPSED_LINE_LIMIT = 40;
+const USER_MESSAGE_PREVIEW_LINES = 5;
+const MESSAGE_PREVIEW_FADE_START_FRACTION = 0.24;
 
 function shouldCollapseUserMessage(markdown: string): boolean {
   return (
@@ -85,7 +88,9 @@ function shouldCollapseUserMessage(markdown: string): boolean {
   );
 }
 
-function userMessageOverflowRef(expanded: boolean) {
+const FORWARDED_MESSAGE_COLLAPSE_LINE_LIMIT = 3;
+
+function messageOverflowRef(expanded: boolean, forwarded: boolean) {
   let resizeObserver: ResizeObserver | null = null;
   return (element: Element | undefined) => {
     resizeObserver?.disconnect();
@@ -101,12 +106,102 @@ function userMessageOverflowRef(expanded: boolean) {
       if (!disclosure || !toggle) {
         return;
       }
-      toggle.hidden = !expanded && element.scrollHeight <= element.clientHeight + 1;
+      let clamp: string | undefined;
+      let fadeSize: string | undefined;
+      const text = element.querySelector<HTMLElement>(":scope > .chat-text");
+      // Test the full preview before a partial-line cut can create its own overflow.
+      element.style.removeProperty("--chat-disclosure-clamp");
+      const overflows = element.scrollHeight > element.clientHeight + 1;
+      if (!forwarded && !expanded && overflows && text && element.clientWidth > 0) {
+        const origin = element.getBoundingClientRect().top - element.scrollTop;
+        const defaultLineHeight = Number.parseFloat(getComputedStyle(text).lineHeight);
+        const walker = document.createTreeWalker(text, NodeFilter.SHOW_TEXT);
+        const range = document.createRange();
+        const rects: MessageTextRect[] = [];
+        for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+          if (
+            !node.textContent?.trim() ||
+            !node.parentElement?.checkVisibility() ||
+            // Escaped HTML can be direct body text; the closed details itself stays visible.
+            node.parentElement.matches("details:not([open])")
+          ) {
+            continue;
+          }
+          const lineHeight =
+            Number.parseFloat(getComputedStyle(node.parentElement).lineHeight) || defaultLineHeight;
+          range.selectNodeContents(node);
+          for (const rect of range.getClientRects()) {
+            // Range bounds cover glyphs; account for the line's rounded half-leading.
+            const leading = Math.floor((lineHeight - rect.height) / 2);
+            rects.push({
+              top: rect.top - origin - leading,
+              glyphTop: rect.top - origin,
+              bottom: rect.bottom - origin - leading,
+              width: rect.width,
+              lineHeight,
+            });
+          }
+        }
+        // Native fallback summaries live in a closed shadow tree, outside the text walker.
+        for (const details of text.querySelectorAll("details:not(:has(> summary))")) {
+          if (!details.checkVisibility()) {
+            continue;
+          }
+          const style = getComputedStyle(details);
+          const lineHeight = Number.parseFloat(style.lineHeight) || defaultLineHeight;
+          const bounds = details.getBoundingClientRect();
+          const top =
+            bounds.top -
+            origin +
+            Number.parseFloat(style.borderTopWidth) +
+            Number.parseFloat(style.paddingTop);
+          rects.push({
+            top,
+            glyphTop: top,
+            bottom: top + lineHeight,
+            width: bounds.width,
+            lineHeight,
+          });
+        }
+        const lastLine = findMessageDisclosureLine(rects, USER_MESSAGE_PREVIEW_LINES);
+        if (lastLine) {
+          clamp = `${lastLine.clamp}px`;
+          fadeSize = `${lastLine.clamp - lastLine.top - lastLine.lineHeight * MESSAGE_PREVIEW_FADE_START_FRACTION}px`;
+        }
+      }
+      for (const [property, value] of [
+        ["--chat-disclosure-clamp", clamp],
+        ["--chat-disclosure-fade-size", fadeSize],
+      ] as const) {
+        if (value === undefined) {
+          element.style.removeProperty(property);
+        } else if (element.style.getPropertyValue(property) !== value) {
+          element.style.setProperty(property, value);
+        }
+      }
+      const threshold =
+        forwarded && text
+          ? Number.parseFloat(getComputedStyle(text).lineHeight) *
+            FORWARDED_MESSAGE_COLLAPSE_LINE_LIMIT
+          : element.clientHeight;
+      toggle.hidden = !expanded && element.scrollHeight <= threshold + 1;
     };
     // Lit resolves refs while siblings are still committing. Measure after the
     // toggle exists; it renders visible so collapsing never shifts row height,
     // and only content that fits the clamp hides it.
-    queueMicrotask(update);
+    queueMicrotask(() => {
+      update();
+      const text = element.querySelector(":scope > .chat-text");
+      if (text) {
+        resizeObserver?.observe(text);
+      }
+      // Font metrics can change without resizing tightly spaced text.
+      void document.fonts?.ready.then(() => {
+        if (resizeObserver) {
+          update();
+        }
+      });
+    });
     if (typeof ResizeObserver === "function") {
       resizeObserver = new ResizeObserver(update);
       resizeObserver.observe(element);
@@ -120,6 +215,7 @@ export function renderMessageMarkdown(
   opts: {
     role: string;
     isStreaming: boolean;
+    isForwarded?: boolean;
     isUserMessageExpanded?: (messageId: string) => boolean;
     onToggleUserMessageExpanded?: (messageId: string) => void;
     assistantMessageDisclosure?: AssistantMessageDisclosure;
@@ -159,18 +255,24 @@ export function renderMessageMarkdown(
     `;
   }
   if (
-    opts.role !== "user" ||
     !opts.onToggleUserMessageExpanded ||
-    !shouldCollapseUserMessage(markdown)
+    (opts.isForwarded
+      ? opts.isStreaming
+      : opts.role !== "user" || !shouldCollapseUserMessage(markdown))
   ) {
     return text;
   }
 
-  const disclosureId = `user-message:${messageKey}`;
+  const disclosureId = `${opts.isForwarded ? "forwarded" : "user"}-message:${messageKey}`;
   const expanded = opts.isUserMessageExpanded?.(disclosureId) ?? false;
   return html`
-    <div class="chat-message-disclosure ${expanded ? "is-expanded" : ""}">
-      <div class="chat-message-disclosure__content" ${ref(userMessageOverflowRef(expanded))}>
+    <div
+      class="chat-message-disclosure ${opts.isForwarded ? "chat-message-disclosure--forwarded" : ""} ${expanded ? "is-expanded" : ""}"
+    >
+      <div
+        class="chat-message-disclosure__content"
+        ${ref(messageOverflowRef(expanded, Boolean(opts.isForwarded)))}
+      >
         ${text}
       </div>
       <button

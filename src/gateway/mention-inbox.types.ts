@@ -9,6 +9,7 @@ import type { GatewayClient } from "./server-methods/client-types.js";
 
 export type MentionCommittedInput = {
   sourceId: string;
+  committedSource: { generation: string; sequence: number; timestamp: number };
   sessionKey: string;
   agentId?: string;
   sessionId: string;
@@ -23,7 +24,8 @@ export type MentionInbox = {
   mentionable: (
     client: GatewayClient | null,
     input: UsersMentionableParams,
-  ) => Result<UsersMentionableResult, ErrorShape>;
+    publish: (result: Result<UsersMentionableResult, ErrorShape>) => undefined,
+  ) => Promise<void>;
   validateRecipients: (
     client: GatewayClient | null,
     input: UsersMentionableParams,

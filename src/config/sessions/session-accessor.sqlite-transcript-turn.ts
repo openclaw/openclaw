@@ -37,6 +37,7 @@ import {
 } from "./session-accessor.sqlite-scope.js";
 import { appendTranscriptMessageInTransaction } from "./session-accessor.sqlite-transcript-message-append.js";
 import { rememberCommittedTranscriptMessageSequencesInTransaction } from "./session-accessor.sqlite-transcript-sequences.js";
+import type { SessionTranscriptTurnPersistOptions } from "./session-accessor.types.js";
 import type {
   SessionLifecycleRevisionExpectation,
   SessionTranscriptTurnExpectedState,
@@ -69,6 +70,7 @@ export async function appendExpectedSessionTranscriptTurn(
     expectedSessionId: string;
     initialSessionEntry?: SessionEntry;
     messages: readonly SessionTranscriptTurnMessageAppend[];
+    onMessageCommitted?: SessionTranscriptTurnPersistOptions["onMessageCommitted"];
     sessionLifecyclePatch?: SessionTranscriptTurnLifecyclePatch;
     sessionTurnMutation?: SessionTranscriptTurnMutation;
     sessionFile: string;
@@ -324,6 +326,10 @@ export async function appendExpectedSessionTranscriptTurn(
         return publishIdentity;
       }, toDatabaseOptions(resolved));
       publish?.();
+      // Complete committed custody before cancellation can run at an async return.
+      for (const message of result.appendedMessages) {
+        options.onMessageCommitted?.(message);
+      }
       return result;
     },
     "session.transcript.turn",

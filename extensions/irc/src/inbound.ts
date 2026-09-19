@@ -136,7 +136,7 @@ export async function handleIrcInbound(params: {
   message: IrcInboundMessage;
   account: ResolvedIrcAccount;
   config: CoreConfig;
-  runtime: RuntimeEnv;
+  runtime: Pick<RuntimeEnv, "error" | "log">;
   connectedNick?: string;
   turnAdoptionLifecycle?: IrcIngressLifecycle;
   sendReply?: (target: string, text: string, replyToId?: string) => Promise<void>;

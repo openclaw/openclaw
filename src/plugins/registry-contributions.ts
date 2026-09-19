@@ -1,4 +1,5 @@
 import { projectPluginHttpRoutes } from "./http-route-owner.js";
+import { invalidateProviderRegistryIndex } from "./provider-registry-index.js";
 import { pluginArrays, pluginMaps } from "./registry-empty.js";
 import type { PluginRecord, PluginRegistry } from "./registry-types.js";
 
@@ -43,6 +44,7 @@ export function projectPluginContributions(
   for (const key of pluginArrays) {
     projectArray<{ pluginId?: string }>(source[key], target?.[key], owns);
   }
+  invalidateProviderRegistryIndex((target ?? source).providers);
   for (const key of pluginMaps) {
     projectMap<string, { pluginId: string }>(source[key], target?.[key], owns);
   }

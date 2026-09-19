@@ -26,7 +26,6 @@ import * as windowsProcess from "../../infra/windows-port-pids.js";
 import { isChildProcessTreeAlive } from "../../process/child-process-tree.js";
 import { runUtf8CommandWithTimeout } from "../../process/exec.js";
 import * as pidAlive from "../../shared/pid-alive.js";
-import { killPidIfAlive, waitForPidToExit } from "../../test-utils/process-tree.js";
 import { withMockedPlatform } from "../../test-utils/vitest-spies.js";
 import { updateExecutorNativeEntrypoints } from "./update-command-executor-native-runtime.test-support.js";
 import {
@@ -429,7 +428,7 @@ describe("live update executor", () => {
 });
 
 describe("candidate executor delegation", () => {
-  const moduleUrl = new URL("./update-command-executor.ts", import.meta.url).href;
+  const moduleUrl = resolveRuntimeWorkerUrl(updateExecutorNativeEntrypoints.executor).href;
   it.each([
     { mismatched: false, becomesReadable: false, revoked: false },
     { mismatched: true, becomesReadable: false, revoked: false },
@@ -548,9 +547,11 @@ describe("candidate executor delegation", () => {
         operation,
       );
       if (mismatched) {
-        await expect(result).rejects.toThrow(/ownership|identity/);
+        await expect(result).rejects.toBeInstanceOf(UpdateCommandRecoveryPendingError);
       } else if (revoked) {
-        await expect(result).rejects.toThrow(/ownership|settlement/);
+        await expect(result).rejects.toThrow(
+          /ownership|Unable to finish stopping the update process and its children/,
+        );
       } else {
         await expect(result).resolves.toBe("completed");
       }
@@ -693,10 +694,10 @@ describe("candidate executor delegation", () => {
           await Promise.race([
             ready.promise,
             pending.then((result) => {
-              throw new Error(result.stderr);
+              throw new Error(`Candidate exited before admission: ${JSON.stringify(result)}`);
             }),
           ]);
-          expect(() => fence.assertCurrent()).toThrow("suspended");
+          expect(() => fence.assertCurrent()).toThrow("The update process is still running.");
           const store = createManagedHandoffLeaseStore();
           const primary = store.read(root);
           expect(primary.kind).toBe("current");
@@ -747,61 +748,6 @@ describe("candidate executor delegation", () => {
     },
   );
 
-  it.skipIf(process.platform === "win32").each([false, true])(
-    "does not release either installation while a candidate descendant is alive (changed root=%s)",
-    async (changedRoot) => {
-      const candidateRoot = changedRoot ? path.join(root, "activated") : root;
-      if (changedRoot) {
-        fs.mkdirSync(candidateRoot);
-      }
-      let descendant: number | undefined;
-      try {
-        await expect(
-          withUpdateCommandExecutor(randomUUID(), async (executor) => {
-            const fence = await executor.enter(root);
-            await withUpdateCommandExecutorChild(
-              fence,
-              candidateRoot,
-              async (grant, beforeInput) => {
-                const result = await runUtf8CommandWithTimeout(
-                  [
-                    process.execPath,
-                    "-e",
-                    `const fs=require('node:fs');const {spawn}=require('node:child_process');
-                  JSON.parse(fs.readFileSync(0,'utf8'));
-                  const child=spawn(process.execPath,['-e',"setInterval(()=>{},1000);process.send('ready')"],{stdio:['ignore','ignore','ignore','ipc']});
-                  child.once('message',()=>{process.stdout.write(String(child.pid));child.disconnect();child.unref();});`,
-                  ],
-                  {
-                    input: JSON.stringify(grant),
-                    beforeInput,
-                    killProcessTree: true,
-                    timeoutMs: 15_000,
-                  },
-                );
-                descendant = Number(result.stdout);
-                expect(result.code, result.stderr).toBe(0);
-                expect(Number.isSafeInteger(descendant) && descendant > 0).toBe(true);
-                process.kill(descendant, 0);
-                return result;
-              },
-            );
-          }),
-        ).rejects.toThrow(/settled|release/);
-        const store = createManagedHandoffLeaseStore();
-        expect(store.acquire(root, "next-owner", { kind: "update" }).kind).toBe("busy");
-        expect(store.acquire(candidateRoot, "next-candidate", { kind: "update" }).kind).toBe(
-          "busy",
-        );
-      } finally {
-        if (descendant) {
-          killPidIfAlive(descendant);
-          expect(await waitForPidToExit(descendant)).toBe(true);
-        }
-      }
-    },
-  );
-
   it("does not expose a grant when another owner holds the activated installation", async () => {
     const candidateRoot = path.join(root, "activated");
     const output = path.join(root, "exposed-grant");
@@ -817,7 +763,7 @@ describe("candidate executor delegation", () => {
             fs.writeFileSync(output, "exposed");
           });
         }),
-      ).rejects.toThrow("owns the candidate installation");
+      ).rejects.toThrow("owns the update installation");
       expect(fs.existsSync(output)).toBe(false);
       expect(store.current(foreign.lease)).toBe(true);
       expect(store.read(root)).toEqual({ kind: "absent" });

@@ -19,6 +19,7 @@ import {
   AGENT_HARNESS_SESSION_KEY_RESERVED_MESSAGE,
   isAgentHarnessSessionKey,
 } from "../../sessions/agent-harness-session-key.js";
+import type { InputProvenance } from "../../sessions/input-provenance.js";
 import {
   beginSessionWorkAdmission,
   type SessionWorkAdmissionLease,
@@ -83,10 +84,8 @@ import {
   resolveEffectiveAgentRuntime,
   resolveCronStyleNow,
   resolveHookExternalContentSource,
-  isThinkingLevelSupported,
-  resolveSupportedThinkingLevel,
   resolveSessionRuntimeOverrideForProvider,
-  resolveThinkingDefault,
+  resolveThinkingSelection,
 } from "./run.runtime.js";
 import type { RunCronAgentTurnResult } from "./run.types.js";
 import { resolveCronAgentSessionKey } from "./session-key.js";
@@ -108,6 +107,7 @@ export type PreparedCronRunContext = {
   workspaceDir: string;
   executionRoot?: RunCronAgentTurnParams["executionRoot"];
   commandBody: string;
+  inputProvenance?: InputProvenance;
   cronSession: MutableCronSession;
   sessionWorkAdmission: SessionWorkAdmissionLease;
   persistSessionEntry: PersistCronSessionEntry;
@@ -410,15 +410,6 @@ export async function prepareCronRunContext(params: {
       };
     }
     const { provider, model, modelFallbacksOverride, runtimePluginCandidates } = preflight;
-    const thinkingSelection = await resolveCronThinkingSelection({
-      cfg: cfgWithAgentDefaults,
-      owner: modelOwner,
-      provider,
-      model,
-      jobThinking: input.job.payload.kind === "agentTurn" ? input.job.payload.thinking : undefined,
-      hookThinking: isGmailHook ? runtimeCfg.hooks?.gmail?.thinking : undefined,
-      sessionThinking: cronSession.sessionEntry.thinkingLevel,
-    });
     const effectiveAgentRuntime = resolveEffectiveAgentRuntime({
       cfg: cfgWithAgentDefaults,
       provider,
@@ -427,38 +418,33 @@ export async function prepareCronRunContext(params: {
       sessionKey: agentSessionKey,
       sessionEntry: cronSession.sessionEntry,
     });
-    let requestedThinkLevel = thinkingSelection.requestedThinkLevel;
-    if (!requestedThinkLevel) {
-      requestedThinkLevel = resolveThinkingDefault({
-        cfg: cfgWithAgentDefaults,
-        agentId: modelOwner.agentId,
-        provider,
-        model,
-        catalog: thinkingSelection.catalog,
-        agentRuntime: effectiveAgentRuntime,
-      });
-    }
-    if (
-      !isThinkingLevelSupported({
-        provider,
-        model,
-        level: requestedThinkLevel,
-        catalog: thinkingSelection.catalog,
-        agentRuntime: effectiveAgentRuntime,
-      })
-    ) {
-      const fallbackThinkLevel = resolveSupportedThinkingLevel({
-        provider,
-        model,
-        level: requestedThinkLevel,
-        catalog: thinkingSelection.catalog,
-        agentRuntime: effectiveAgentRuntime,
-      });
-      if (fallbackThinkLevel !== requestedThinkLevel) {
-        logWarn(
-          `[cron:${input.job.id}] Thinking level "${requestedThinkLevel}" is not supported for ${provider}/${model}; using "${fallbackThinkLevel}" for this candidate.`,
-        );
-      }
+    const thinkingSelection = await resolveCronThinkingSelection({
+      cfg: cfgWithAgentDefaults,
+      owner: modelOwner,
+      provider,
+      model,
+      agentRuntime: effectiveAgentRuntime,
+      jobThinking: input.job.payload.kind === "agentTurn" ? input.job.payload.thinking : undefined,
+      hookThinking: isGmailHook ? runtimeCfg.hooks?.gmail?.thinking : undefined,
+      sessionThinking: cronSession.sessionEntry.thinkingLevel,
+    });
+    const {
+      requestedLevel: requestedThinkLevel,
+      level: fallbackThinkLevel,
+      supported: thinkingLevelSupported,
+    } = resolveThinkingSelection({
+      cfg: cfgWithAgentDefaults,
+      agentId: modelOwner.agentId,
+      provider,
+      model,
+      level: thinkingSelection.requestedThinkLevel,
+      catalog: thinkingSelection.catalog,
+      agentRuntime: effectiveAgentRuntime,
+    });
+    if (!thinkingLevelSupported && fallbackThinkLevel !== requestedThinkLevel) {
+      logWarn(
+        `[cron:${input.job.id}] Thinking level "${requestedThinkLevel}" is not supported for ${provider}/${model}; using "${fallbackThinkLevel}" for this candidate.`,
+      );
     }
 
     preparedModelRuntimeLease = await acquireAgentRunPreparedModelRuntime(
@@ -539,7 +525,8 @@ export async function prepareCronRunContext(params: {
     const message = currentConversationContext
       ? `${currentConversationContext}\n\n${resolveCronAgentTurnMessage(input)}`
       : resolveCronAgentTurnMessage(input);
-    const base = `[cron:${input.job.id} ${input.job.name}] ${message}`.trim();
+    const sourcePromptPrefix = `[cron:${input.job.id} ${input.job.name}]`;
+    const base = `${sourcePromptPrefix} ${message}`.trim();
     const isExternalHook =
       hookExternalContentSource !== undefined || isExternalHookSession(baseSessionKey);
     const allowUnsafeExternalContent =
@@ -678,6 +665,17 @@ export async function prepareCronRunContext(params: {
         workspaceDir,
         executionRoot: input.executionRoot,
         commandBody,
+        inputProvenance:
+          agentPayload && !isExternalHook
+            ? {
+                kind: "internal_system",
+                sourceTool: "cron",
+                sourcePromptPrefix,
+                jobId: input.job.id,
+                runId: runSessionId,
+                sourceSessionKey: runSessionKey,
+              }
+            : undefined,
         cronSession,
         sessionWorkAdmission,
         persistSessionEntry,

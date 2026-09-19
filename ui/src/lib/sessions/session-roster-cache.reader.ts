@@ -86,6 +86,7 @@ export function stripVolatileSessionRowFields(row: GatewaySessionRow): GatewaySe
   delete result.status;
   delete result.runtimeMs;
   delete result.runtimeSampledAt;
+  delete result.snapshotAt;
   delete result.agentStatus;
   delete result.observerDigest;
   delete result.swarmPhase;

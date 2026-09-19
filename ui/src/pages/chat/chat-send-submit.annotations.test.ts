@@ -1,14 +1,10 @@
 // @vitest-environment node
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { ChatAttachment } from "../../lib/chat/chat-types.ts";
-import { createStorageMock } from "../../test-helpers/storage.ts";
-import {
-  getChatAttachmentDataUrl,
-  registerChatAttachmentPayload,
-  releaseChatAttachmentPayloads,
-} from "./attachment-payload-store.ts";
+import { getChatAttachmentDataUrl } from "./attachment-payload-store.ts";
 import { composeBrowserAnnotationContext } from "./browser-annotation-context.ts";
+import { createStagedAttachment } from "./chat-delivery-attachments.test-support.ts";
 import {
   createBrowserAnnotationAttachment,
   findChatSendPayload,
@@ -16,41 +12,11 @@ import {
 } from "./chat-host.test-support.ts";
 import { retryQueuedChatMessage } from "./chat-send-actions.ts";
 import { handleSendChat } from "./chat-send-submit.ts";
-import { installOutboxBrowserStorage } from "./outbox-browser.test-support.ts";
+import { useChatSendBrowserFixture } from "./outbox-browser.test-support.ts";
 
-const attachmentsToRelease: ChatAttachment[] = [];
 const attachmentDataUrl = "data:application/pdf;base64,JVBERi0xLjQK";
 
-beforeEach(() => {
-  installOutboxBrowserStorage();
-  vi.stubGlobal("sessionStorage", createStorageMock());
-  vi.stubGlobal("requestAnimationFrame", () => 1);
-  vi.stubGlobal("cancelAnimationFrame", () => undefined);
-});
-
-afterEach(async () => {
-  releaseChatAttachmentPayloads(attachmentsToRelease);
-  attachmentsToRelease.length = 0;
-  await Promise.resolve();
-  vi.restoreAllMocks();
-  vi.unstubAllGlobals();
-});
-
-function createStagedAttachment(id: string): ChatAttachment {
-  const file = new File(["%PDF-1.4\n"], "brief.pdf", { type: "application/pdf" });
-  const attachment = registerChatAttachmentPayload({
-    attachment: {
-      id,
-      mimeType: "application/pdf",
-      fileName: "brief.pdf",
-      sizeBytes: file.size,
-    },
-    dataUrl: attachmentDataUrl,
-    file,
-  });
-  attachmentsToRelease.push(attachment);
-  return attachment;
-}
+useChatSendBrowserFixture();
 
 describe("composeBrowserAnnotationContext", () => {
   it("preserves attachment order across two annotations", () => {

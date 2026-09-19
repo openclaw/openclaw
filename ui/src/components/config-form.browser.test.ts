@@ -493,7 +493,7 @@ describe("config form renderer", () => {
     expect(label.textContent?.trim()).toBe("Plugin Enabled");
   });
 
-  it("renders tags from uiHints metadata", () => {
+  it("filters by authored metadata tags without rendering field chips", () => {
     const onPatch = vi.fn();
     const container = document.createElement("div");
     const analysis = rootAnalysis;
@@ -505,10 +505,7 @@ describe("config form renderer", () => {
       onPatch,
     });
 
-    const tags = Array.from(container.querySelectorAll(".cfg-tag")).map((node) =>
-      node.textContent?.trim(),
-    );
-    expect(tags).toEqual(["security", "secret"]);
+    expect(container.querySelector(".cfg-tag")).toBeNull();
 
     renderAnalyzedFormFixture(container, analysis, {
       uiHints: {

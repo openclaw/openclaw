@@ -18,6 +18,7 @@ import {
   materializePreparedModelCatalog,
   prepareFullCatalogFacts,
 } from "./prepared-model-runtime.full-catalog.js";
+import { discardPreparedPluginGeneration } from "./prepared-model-runtime.plugin-lifetime.js";
 import type {
   PreparedModelRuntimeCatalogMode,
   PreparedModelRuntimeInput,
@@ -38,6 +39,9 @@ async function prepareScopedReadOnlyModelCatalogWithMode(
     catalogMode,
     { providerDiscoveryProviderIds },
   );
+  await using _ = {
+    [Symbol.asyncDispose]: () => discardPreparedPluginGeneration(pluginGeneration),
+  };
   const agentFactsForInput = agentFacts[0];
   if (!agentFactsForInput) {
     throw new Error("scoped prepared model catalog facts are missing");

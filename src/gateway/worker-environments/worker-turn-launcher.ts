@@ -74,6 +74,16 @@ export function createWorkerSessionTurnPlacementProvider(options: WorkerTurnLaun
       workspaceDir: string;
     }): Promise<SandboxContext | null>;
   } = {
+    resolveRuntimeOverride(identity) {
+      const placement = options.placements.get(identity.sessionId);
+      return placement &&
+        placement.state !== "local" &&
+        placement.executionMode === "worker-turn" &&
+        (identity.agentId === undefined || placement.agentId === identity.agentId) &&
+        (identity.sessionKey === undefined || placement.sessionKey === identity.sessionKey)
+        ? "openclaw"
+        : undefined;
+    },
     assertCompactionSuccessorAllowed({ currentTarget }) {
       const placement = options.placements.get(currentTarget.sessionId);
       // Remote-exec has a local turn claim but still owns remote workspace state.

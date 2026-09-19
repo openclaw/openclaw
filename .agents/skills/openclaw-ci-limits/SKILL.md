@@ -190,13 +190,18 @@ These are intentionally guarded by `test/scripts/ci-workflow-guards.test.ts`:
 - `ci-gate` always uses `ubuntu-24.04` for its Bash-only result aggregation,
   without checkout or dependency setup. This removes one Blacksmith registration
   from previously eligible runs; hosted assignment can still delay completion.
-  `preflight` uses GitHub-hosted Ubuntu in hybrid mode; its logical planner
-  profile and cache trust stay unchanged. Default Blacksmith preflight routing
-  remains intact. `security-fast` stays hosted outside eligible hybrid first
-  attempts and when the bounded optional hosted plan is admitted. Security hooks use pinned installed packages
+  Trusted automatic hybrid first-attempt `preflight` requests the existing
+  16-class after hosted assignment stalled across three nearby runs while
+  Blacksmith security jobs succeeded. Its logical planner profile, cache trust,
+  and 20-minute deadline stay unchanged. Default Blacksmith preflight keeps the
+  4-class; hybrid retries, manual dispatches, untrusted/noncanonical contexts,
+  and the `github` override retain hosted routing. `security-fast` stays hosted
+  outside eligible hybrid first attempts and when the bounded hosted plan is admitted. Security hooks use pinned installed packages
   and local hook definitions, without remote Git initialization. The `github`
-  outage override remains intact. Budget one control-job registration per eligible
-  Blacksmith run or eligible hybrid first attempt with optional hosted admission closed.
+  outage override remains intact. Budget two control-job registrations per eligible
+  hybrid first attempt when optional hosted admission is closed, one when admitted,
+  and one per normal Blacksmith run. Both jobs already occur in the retained
+  conservative non-Node inventory, preserving the 4,776-registration cap model.
   The aggregate uses `!cancelled()` to report failed prerequisites without
   holding a superseded run open after workflow cancellation.
 - Automatic canonical hybrid first attempts count every selected hosted row in
@@ -323,7 +328,7 @@ These are intentionally guarded by `test/scripts/ci-workflow-guards.test.ts`:
   execution and two-worker pins. This adds no jobs and does not promote hosted
   or hybrid tooling. The native two-CPU/8-GB tails require a larger-host timing
   comparison; capacity alone is not a measured speedup.
-- The Docker seed job requests `blacksmith-32vcpu-ubuntu-2404`; its weighted
+- The Docker seed job requests `blacksmith-16vcpu-ubuntu-2404`; its weighted
   scheduler and serial declaration compiler policy stay unchanged.
   Canonical PRs and `main` share `resolveChangedDockerSeedLanes` owner-path
   selection; unknown paths retain the published survivor. Canonical manual CI
@@ -337,17 +342,18 @@ These are intentionally guarded by `test/scripts/ci-workflow-guards.test.ts`:
   ownership. Test-only files and unrelated runtime changes omit this lane;
   manual runs, unknown paths and older planners retain coverage. Preserve the
   target's existing performance-script capability checks.
-- Eligible Control UI E2E rows request the 32-vCPU class with unchanged live
-  backend/event/contributor routing and two/one-worker project limits. Targets
-  with the named-project contract use six shards on non-frozen Blacksmith and
-  hybrid first attempts; other fresh plans retain twelve. Historical targets without
-  that contract retain four total rows on Blacksmith or fourteen on GitHub/hybrid,
-  including the browser-extension row. Failed-job-only PR and hybrid push retries
-  retain the six-shard width on hosted Ubuntu with the existing 25-minute timeout.
-  The browser-extension row stays on 8 unless the bounded hybrid plan admits
-  it to hosted Ubuntu. Twelve rows finished by 4:38 in run
-  33695337496; the reduced width needs native timing proof and does not refresh
-  stale timing weights.
+- Eligible Control UI E2E rows request the 16-vCPU class with unchanged live
+  backend/event/contributor routing and two/one-worker project limits. Every fresh
+  plan for a target with the named-project contract uses twelve Control UI shards
+  plus one browser-extension row, across backend profiles, attempts and frozen
+  targets. Historical targets without that contract retain four total rows on
+  Blacksmith or fourteen on GitHub/hybrid. Failed-job-only retries retain their
+  previously emitted matrix, including older six-shard Control UI plans; PR and
+  hybrid push retries use hosted Ubuntu. The 25-minute timeout, max-parallel 14
+  and conservative registration ceiling stay unchanged. The browser-extension row
+  stays on 8 unless the bounded hybrid plan admits it to hosted Ubuntu. The twelve-row 4:38 result in historical run 33695337496 used the
+  32-class with eight reported CPUs; it does not prove timing on the current
+  16-class route or refresh stale timing weights.
 - Eligible real-Gateway jobs request the existing 32-class for the private artifact
   build's two canonical SDK cache misses. Overlap requires at least two available
   CPUs and 25.5 GiB of observed remaining memory for unchanged 12-GiB heaps plus
@@ -359,7 +365,7 @@ These are intentionally guarded by `test/scripts/ci-workflow-guards.test.ts`:
 - Current-target `build-artifacts` uses the existing 16-class after a complete
   four-CPU/15.42-GiB compute proof, including the unchanged parallel verifier wave.
   The SDK memory owner keeps declarations serial when two heaps do not fit.
-  Frozen or unclassified targets retain 32-class; hosted fallbacks, job counts,
+  Eligible frozen or unclassified targets also request 16-class; hosted fallbacks, job counts,
   concurrency and deadlines stay unchanged. Measured compute fit does not prove
   queue savings; observe the next exact-head CI cycle.
 - Normal canonical hybrid first attempts use the existing four-part QA smoke
@@ -385,8 +391,9 @@ These are intentionally guarded by `test/scripts/ci-workflow-guards.test.ts`:
   row; other matrix rows keep running. Pure Blacksmith and targets without
   stripe support retain the full central path. Measure the combined jobs
   natively; fewer registrations alone do not prove the eight-minute target.
-- CPU-heavy test-type, core test-type stripe, runtime-topology, and npm preflight
-  jobs request `blacksmith-32vcpu-ubuntu-2404`. The 2026-09-01 x64 probe
+- CPU-heavy test-type, core test-type stripe, and runtime-topology jobs in `ci.yml`
+  request `blacksmith-16vcpu-ubuntu-2404`. The separate `openclaw-npm-preflight.yml`
+  jobs retain `blacksmith-32vcpu-ubuntu-2404`. The 2026-09-01 x64 probe
   [run 33538827388](https://github.com/openclaw/openclaw/actions/runs/33538827388)
   measured requested 8/16/32 labels delivering 2/4/8 CPUs respectively. Treat
   larger requests as a measured capacity workaround, never as worker counts.

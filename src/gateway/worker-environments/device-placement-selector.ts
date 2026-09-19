@@ -15,6 +15,7 @@ export async function selectDevicePlacementCandidates(params: {
   environmentService: object | undefined;
   requirement: DevicePlacementRequirement | undefined;
   runtimeId: string;
+  executionMode: "worker-turn" | "remote-exec";
   config: OpenClawConfig;
   getPendingDispatchCount?: (deviceId: string) => number;
   getAdmittedSessionCounts?: () => ReadonlyMap<string, number> | undefined;
@@ -70,6 +71,7 @@ export async function selectDevicePlacementCandidates(params: {
           environmentService: params.environmentService,
           deviceId,
           runtimeId: params.runtimeId,
+          executionMode: params.executionMode,
           requirement,
           config: params.config,
           currentNode: params.nodeRegistry.get(deviceId),
@@ -113,6 +115,10 @@ export async function selectDevicePlacementCandidates(params: {
   }
   if (attempts.length === 0 && outdatedError) {
     return { ok: false, error: outdatedError };
+  }
+  const updateRequired = attempts.find(({ eligibility }) => !eligibility.ok && eligibility.issue);
+  if (updateRequired && !updateRequired.eligibility.ok) {
+    return { ok: false, error: updateRequired.eligibility.error };
   }
   const atCapacity =
     requirement.consumesWorkerSlot && attempts.every(({ availableSlots }) => availableSlots === 0);

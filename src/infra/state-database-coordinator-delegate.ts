@@ -130,10 +130,20 @@ export async function attachLifecycleCoordinatorDelegate(
       const scope = { active: true, assertCurrent: delegate.assertCurrent };
       const scopes = new Map(lifecycleScopes.getStore());
       scopes.set(identity.coordinatorPath, scope);
-      try {
-        return lifecycleScopes.run(scopes, operation);
-      } finally {
+      const settled = () => {
         scope.active = false;
+      };
+      try {
+        const result = lifecycleScopes.run(scopes, operation);
+        if (result instanceof Promise) {
+          void result.then(settled, settled);
+        } else {
+          settled();
+        }
+        return result;
+      } catch (error) {
+        settled();
+        throw error;
       }
     },
     close: delegate.close,

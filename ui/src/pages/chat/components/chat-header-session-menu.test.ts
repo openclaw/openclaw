@@ -3,13 +3,13 @@
 import { html, render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../../api/gateway.ts";
-import type { RouteId } from "../../../app-route-paths.ts";
 import type { ApplicationContext } from "../../../app/context.ts";
 import type { UiSettings } from "../../../app/settings.ts";
 import { icons } from "../../../components/icons.ts";
 import type { SessionMenuData } from "../../../components/session-menu-actions.ts";
 import type { SessionOwnerOption } from "../../../components/session-owner-chip.ts";
 import { createApplicationContextProvider } from "../../../test-helpers/application-context.ts";
+import { gatewayHelloForMethods } from "../../../test-helpers/gateway-methods.ts";
 import {
   clearNativeGatewayTestState,
   setNativeGatewayTestState,
@@ -75,7 +75,7 @@ async function mountMenu(
     panelActions?: HeaderMenuQuickAction[];
     layoutActions?: HeaderMenuQuickAction[];
     sharing?: ChatSessionSharingProps | null;
-    context?: ApplicationContext<RouteId>;
+    context?: ApplicationContext;
     currentOwner?: SessionOwnerOption | null;
     actionDisabledReasons?: Partial<Record<HeaderMenuActionKind, string>>;
     forkDisabled?: boolean;
@@ -166,6 +166,29 @@ function select(menu: ParentNode, value: string) {
 }
 
 describe("chat header session menu", () => {
+  it.each([false, true])(
+    "gates personal visibility for hidden=%s on multiple identities",
+    async (hidden) => {
+      const owner = createSessionOwnerMenuHarness();
+      const onAction = vi.fn();
+      const menu = await mountMenu({
+        context: owner.context,
+        session: { hiddenFromInvolvingMe: hidden },
+        onAction,
+      });
+      for (const multiple of [false, true, false]) {
+        owner.publish({
+          hello: {
+            ...gatewayHelloForMethods(["sessions.setInvolvement"]),
+            policy: { hasMultipleSessionSharingIdentities: multiple },
+          },
+        });
+        await menu.updateComplete;
+        expect(menu.querySelector('[value="toggle-involving-me"]') !== null).toBe(multiple);
+      }
+    },
+  );
+
   it.each([
     { name: "plain browser", nativeGateway: null, offered: false },
     { name: "native local gateway", nativeGateway: "local", offered: true },

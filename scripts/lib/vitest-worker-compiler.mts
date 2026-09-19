@@ -5,6 +5,7 @@ import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { resolveBuildInfo } from "../write-build-info.ts";
 import { createManagedHandoffBuildConfig } from "./managed-handoff-build-config.mts";
+import { collectRuntimeImportClosure } from "./runtime-import-closure.mts";
 import {
   sharedRuntimeProcessBuildEntries,
   shouldBundleRuntimeSqliteDependency,
@@ -20,7 +21,10 @@ import {
   legacyFinalizerBuildSources,
   vitestWorkerBuildEntries,
 } from "./vitest-worker-build-entries.mts";
-import { vitestWorkerDeclarationEntries } from "./vitest-worker-declarations.mts";
+import {
+  vitestWorkerDeclarationEntries,
+  vitestWorkerRuntimeAssets,
+} from "./vitest-worker-declarations.mts";
 
 const root = fileURLToPath(new URL("../../", import.meta.url));
 const require = createRequire(import.meta.url);
@@ -49,26 +53,16 @@ async function compileVitestWorkerArtifacts(directory: string): Promise<void> {
     "tsconfig.json",
     "package.json",
     "pnpm-lock.yaml",
-    "scripts/lib/vitest-worker-artifacts.mts",
-    "scripts/lib/vitest-worker-declarations.mts",
-    "scripts/lib/managed-handoff-build-config.mts",
-    "scripts/lib/vitest-worker-run.mts",
-    "scripts/lib/vitest-worker-compiler.mts",
-    "scripts/lib/managed-child-process.mts",
-    "scripts/lib/vitest-resource-ownership.mts",
-    "scripts/lib/windows-taskkill.mjs",
-    "scripts/windows-cmd-helpers.mjs",
-    "scripts/lib/runtime-process-build-entries.mts",
-    "scripts/lib/runtime-process-core-build-entries.mts",
-    "scripts/lib/vitest-worker-build-entries.mts",
-    "scripts/lib/state-schema-inline-plugin.mts",
-    "scripts/write-build-info.ts",
-    "scripts/lib/direct-run.mjs",
-    "ui/src/build-info-normalizers.ts",
-    "packages/normalization-core/src/record-coerce.ts",
-    "packages/normalization-core/src/string-coerce.ts",
-    "packages/normalization-core/src/utf16-slice.ts",
-    "scripts/lib/vitest-cli-mode.mts",
+    // Pin compiler, lifetime, and source-versus-compiled selection code, including lazy platforms.
+    ...collectRuntimeImportClosure(
+      root,
+      [
+        "scripts/lib/vitest-worker-compiler.mts",
+        "scripts/lib/vitest-worker-run.mts",
+        "scripts/lib/vitest-cli-mode.mts",
+      ],
+      { includeDynamicImports: true },
+    ),
   ]) {
     recordInput(path.join(root, name));
   }
@@ -199,6 +193,16 @@ async function compileVitestWorkerArtifacts(directory: string): Promise<void> {
   }
   for (const name of Object.keys(entry)) {
     fs.accessSync(path.join(directory, "dist", `${name}.js`));
+  }
+  for (const asset of vitestWorkerRuntimeAssets) {
+    const source = path.join(root, asset);
+    const destination = path.join(directory, asset);
+    const contents = fs.readFileSync(source);
+    const hash = hashVitestWorkerArtifact(contents);
+    inputs[source] ??= hash;
+    fs.writeFileSync(destination, contents, { flag: "wx" });
+    // Output paths stay relative to dist, including package-root runtime assets.
+    outputs[path.relative(outDir, destination).replaceAll("\\", "/")] = hash;
   }
   // Version consumers need the built source identity without making this
   // disposable generation a competing OpenClaw installation root.

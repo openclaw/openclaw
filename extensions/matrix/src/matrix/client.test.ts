@@ -1,4 +1,5 @@
 import { expectDefined } from "@openclaw/normalization-core";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 // Matrix tests cover client plugin behavior.
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -39,12 +40,16 @@ vi.mock("./client/config-secret-input.runtime.js", () => ({
 const authClientMocks = vi.hoisted(() => {
   const ensureMatrixSdkLoggingConfigured = vi.fn();
   const matrixDoRequest = vi.fn();
+  const stopWithoutPersist = vi.fn(async () => {});
   class MatrixClient {
     async doRequest(...args: unknown[]) {
       return await matrixDoRequest(...args);
     }
+    stopWithoutPersist() {
+      return stopWithoutPersist();
+    }
   }
-  return { ensureMatrixSdkLoggingConfigured, matrixDoRequest, MatrixClient };
+  return { ensureMatrixSdkLoggingConfigured, matrixDoRequest, stopWithoutPersist, MatrixClient };
 });
 const ensureMatrixSdkLoggingConfiguredMock = authClientMocks.ensureMatrixSdkLoggingConfigured;
 const matrixDoRequestMock = authClientMocks.matrixDoRequest;
@@ -152,6 +157,7 @@ describe("resolveMatrixAuth", () => {
     resolveConfiguredSecretInputStringMock.mockReset().mockResolvedValue({});
     ensureMatrixSdkLoggingConfiguredMock.mockReset();
     matrixDoRequestMock.mockReset();
+    authClientMocks.stopWithoutPersist.mockReset().mockResolvedValue(undefined);
   });
 
   afterEach(() => {
@@ -663,6 +669,92 @@ describe("resolveMatrixAuth", () => {
     expect(repairCurrentTokenStorageMetaDeviceIdMock).not.toHaveBeenCalled();
     expect(deviceId).toBe("DEVICE123");
   });
+
+  it("preserves request and cleanup failures when identity lookup is cancelled", async () => {
+    const abort = new AbortController();
+    const requestError = new Error("synthetic request failure");
+    const cleanupError = new Error("synthetic cleanup failure");
+    matrixDoRequestMock.mockImplementation(async () => {
+      abort.abort();
+      throw requestError;
+    });
+    authClientMocks.stopWithoutPersist.mockRejectedValue(cleanupError);
+    await expect(
+      backfillMatrixAuthDeviceIdAfterStartup({
+        auth: {
+          accountId: "default",
+          homeserver: "https://matrix.example.org",
+          userId: "@bot:example.org",
+          accessToken: "tok-123",
+        },
+        abortSignal: abort.signal,
+      }),
+    ).rejects.toMatchObject({ errors: [requestError, cleanupError] });
+    expect(saveBackfilledMatrixDeviceIdMock).not.toHaveBeenCalled();
+  });
+
+  it.each([null, { user_id: 7 }, { device_id: false }])(
+    "rejects malformed whoami identity fields before backfill persistence (%j)",
+    async (identity) => {
+      matrixDoRequestMock.mockResolvedValue(identity);
+      await expect(
+        backfillMatrixAuthDeviceIdAfterStartup({
+          auth: {
+            accountId: "default",
+            homeserver: "https://matrix.example.org",
+            userId: "@bot:example.org",
+            accessToken: "tok-123",
+          },
+        }),
+      ).rejects.toThrow("Matrix whoami returned an invalid identity");
+      expect(saveBackfilledMatrixDeviceIdMock).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(["aborted", "replaced"])(
+    "does not publish credentials when backfill is %s during metadata persistence",
+    async (reason) => {
+      matrixDoRequestMock.mockResolvedValue({
+        user_id: "@bot:example.org",
+        device_id: "DEVICE123",
+      });
+      const metadata = createDeferred<boolean>();
+      repairCurrentTokenStorageMetaDeviceIdMock.mockReturnValue(metadata.promise);
+      const abortController = new AbortController();
+      const backfill = backfillMatrixAuthDeviceIdAfterStartup({
+        auth: {
+          accountId: "default",
+          homeserver: "https://matrix.example.org",
+          userId: "@bot:example.org",
+          accessToken: "tok-123",
+        },
+        env: {},
+        abortSignal: abortController.signal,
+      });
+      try {
+        await vi.waitFor(() =>
+          expect(repairCurrentTokenStorageMetaDeviceIdMock).toHaveBeenCalled(),
+        );
+        expect(saveBackfilledMatrixDeviceIdMock).not.toHaveBeenCalled();
+        if (reason === "aborted") {
+          abortController.abort();
+        } else {
+          vi.mocked(credentialsReadModule.loadMatrixCredentialsAsync).mockResolvedValue({
+            homeserver: "https://matrix.example.org",
+            userId: "@bot:example.org",
+            accessToken: "newer-token",
+            createdAt: "2026-09-01T00:00:00.000Z",
+          });
+        }
+        metadata.resolve(true);
+        await expect(backfill).resolves.toBeUndefined();
+        expect(saveBackfilledMatrixDeviceIdMock).not.toHaveBeenCalled();
+      } finally {
+        metadata.resolve(true);
+        await backfill;
+      }
+    },
+  );
 
   it("fails before saving repaired credentials when storage metadata repair fails", async () => {
     matrixDoRequestMock.mockResolvedValue({

@@ -11,6 +11,7 @@ import {
 describe("OpenAI reasoning effort support", () => {
   it.each([
     { api: "openai-completions", expected: "xhigh", compat: undefined },
+    { api: "openclaw-openai-completions-transport", expected: "xhigh", compat: undefined },
     { api: "openai-responses", expected: "max", compat: undefined },
     {
       api: "openai-completions",
