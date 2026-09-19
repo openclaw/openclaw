@@ -12,6 +12,10 @@ function completedBeforeOrAtTimeout(params: {
   );
 }
 
+function isFailureTerminalReason(reason: AgentRunTerminalOutcome["reason"]): boolean {
+  return reason === "failed" || reason === "blocked" || reason === "abandoned";
+}
+
 /** Merges observations without overwriting a proven cancellation or hard timeout. */
 export function mergeAgentRunTerminalOutcome(
   current: AgentRunTerminalOutcome | undefined,
@@ -53,6 +57,14 @@ export function mergeAgentRunTerminalOutcome(
     return completedBeforeOrAtTimeout({ completed: current, timeout: incoming })
       ? current
       : incoming;
+  }
+  // A soft wait/queue timeout represents wait-layer uncertainty and must not overwrite
+  // an authoritative execution failure (e.g. provider failure, blocked, abandoned).
+  if (current.reason === "timed_out" && isFailureTerminalReason(incoming.reason)) {
+    return incoming;
+  }
+  if (incoming.reason === "timed_out" && isFailureTerminalReason(current.reason)) {
+    return current;
   }
   return incoming;
 }
