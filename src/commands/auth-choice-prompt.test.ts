@@ -256,7 +256,7 @@ describe("promptAuthChoiceGrouped", () => {
         providerOptions = params.options;
         return "__more";
       }
-      if (params.message === "Model/auth provider") {
+      if (params.searchable) {
         moreProviderOptions = params.options;
         return "minimax";
       }
@@ -326,7 +326,7 @@ describe("promptAuthChoiceGrouped", () => {
     });
     const providerPrompts: Array<Array<{ value: unknown; label: string }>> = [];
     const prompter = createPromptHarness(async (params) => {
-      if (params.message !== "Model/auth provider") {
+      if (params.message !== "Model/auth provider" && !params.searchable) {
         throw new Error(`unexpected prompt ${params.message}`);
       }
       providerPrompts.push(params.options);
