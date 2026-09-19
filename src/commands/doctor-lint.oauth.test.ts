@@ -35,6 +35,7 @@ vi.mock("../plugins/provider-runtime.js", () => ({
 vi.mock("../agents/mcp-http-fetch.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../agents/mcp-http-fetch.js")>()),
   buildMcpHttpFetch: () => mocks.fetch,
+  buildMcpOAuthHttpFetch: () => mocks.fetch,
 }));
 
 const ISSUER = "https://oauth.example.test";
