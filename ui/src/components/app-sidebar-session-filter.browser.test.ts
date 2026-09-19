@@ -16,6 +16,7 @@ import {
   loadStoredSidebarSessionsShowSystem,
 } from "./app-sidebar-session-types.ts";
 import "../test-helpers/load-styles.ts";
+import "../styles/settings-controls.css";
 import "./app-sidebar.ts";
 
 setupSidebarTest();
@@ -80,20 +81,45 @@ describe.runIf("__vitest_browser__" in globalThis)("sidebar session filter popov
         expect(bounds.bottom).toBeLessThanOrEqual(innerHeight);
         expect(bounds.left).toBeGreaterThanOrEqual(0);
         expect(bounds.right).toBeLessThanOrEqual(innerWidth);
+        const rows = [...menu.querySelectorAll<HTMLElement>(".sidebar-session-menu-row")];
+        const controls = rows.map((row) => row.lastElementChild!.getBoundingClientRect());
+        for (const [index, row] of rows.entries()) {
+          expect(row.scrollWidth).toBeLessThanOrEqual(row.clientWidth);
+          expect(row.getBoundingClientRect().height).toBe(32);
+          expect(controls[index]!.left).toBeCloseTo(controls[0]!.left, 1);
+          expect(controls[index]!.right).toBeCloseTo(controls[0]!.right, 1);
+        }
       };
       await trigger.click();
       await expect.element(active).toHaveFocus();
       await expect.poll(() => occlusion).toEqual([false, true]);
       await expectFits();
-      await userEvent.keyboard(direction === "rtl" ? "{ArrowLeft}" : "{ArrowRight}");
+      await userEvent.keyboard("{ArrowRight}");
       await expect
         .element(page.getByRole("radio", { name: "Archived", exact: true }))
         .toHaveFocus();
       expect(loadStoredSidebarSessionStatusFilter()).toBe("archived");
       await userEvent.tab();
+      await expect.element(page.getByRole("button", { name: /^Owners:/ })).toHaveFocus();
+      await userEvent.keyboard("{Enter}");
       await expect
-        .element(page.getByRole("combobox", { name: "Owners", exact: true }))
+        .element(page.getByRole("listbox", { name: "Owners", exact: true }))
+        .toBeVisible();
+      await expect
+        .element(page.getByRole("option", { name: "All owners", exact: true }))
+        .toBeVisible();
+      await expect
+        .element(page.getByRole("option", { name: "Involving me", exact: true }))
+        .toBeVisible();
+      await expect
+        .element(page.getByRole("option", { name: "Ada (You)", exact: true }))
+        .toBeVisible();
+      await expect.element(page.getByRole("option", { name: "Bob", exact: true })).toBeVisible();
+      await userEvent.keyboard("{Escape}");
+      await expect
+        .element(page.getByRole("button", { name: "Owners: All owners", exact: true }))
         .toHaveFocus();
+      await expectFits();
       await userEvent.tab();
       await expect
         .element(page.getByRole("checkbox", { name: "Automation", exact: true }))
@@ -104,10 +130,26 @@ describe.runIf("__vitest_browser__" in globalThis)("sidebar session filter popov
         .toHaveFocus();
       await userEvent.tab();
       await expect
-        .element(page.getByRole("radio", { name: "Custom groups", exact: true }))
+        .element(page.getByRole("button", { name: "Group by: Custom groups", exact: true }))
         .toHaveFocus();
-      await userEvent.keyboard(direction === "rtl" ? "{ArrowLeft}" : "{ArrowRight}");
-      expect(loadStoredSidebarSessionsGrouping()).toBe("project");
+      await userEvent.keyboard("{Enter}{ArrowDown}{Enter}");
+      await expect.poll(loadStoredSidebarSessionsGrouping).toBe("project");
+      await userEvent.tab();
+      await expect.element(page.getByRole("radio", { name: "Created", exact: true })).toHaveFocus();
+      await userEvent.keyboard("{ArrowRight}");
+      await expect.poll(loadStoredSidebarSessionSortMode).toBe("updated");
+      await userEvent.tab();
+      await expect
+        .element(page.getByRole("radio", { name: "When filtering", exact: true }))
+        .toHaveFocus();
+      await userEvent.tab();
+      await expect
+        .element(page.getByRole("checkbox", { name: "Show message preview", exact: true }))
+        .toHaveFocus();
+      await userEvent.tab();
+      await expect
+        .element(page.getByRole("link", { name: "Session sources…", exact: true }))
+        .toHaveFocus();
       await userEvent.keyboard("{Escape}");
       await expect.element(trigger).toHaveFocus();
       expect(sidebar.querySelector(".sidebar-session-sort-menu")).toBeNull();
@@ -139,17 +181,17 @@ describe.runIf("__vitest_browser__" in globalThis)("sidebar session filter popov
       expect(sidebar.querySelector("#sidebar-sessions-reset") !== null).toBe(count > 0);
     };
     await expectFilterCount(0);
-    for (const [group, choice, expected, read] of [
-      ["Group by", "Person", "person", loadStoredSidebarSessionsGrouping],
-      ["Sort by", "Owners", "people", loadStoredSidebarSessionSortMode],
-      ["Status", "All", "all", loadStoredSidebarSessionStatusFilter],
+    await page.getByRole("button", { name: "Group by: Custom groups", exact: true }).click();
+    await page.getByRole("option", { name: "Person", exact: true }).click();
+    expect(loadStoredSidebarSessionsGrouping()).toBe("person");
+    await expectFilterCount(0);
+    for (const [choice, expected, read] of [
+      ["Owners", "people", loadStoredSidebarSessionSortMode],
+      ["All", "all", loadStoredSidebarSessionStatusFilter],
     ] as const) {
-      await page
-        .getByRole("radiogroup", { name: group, exact: true })
-        .getByRole("radio", { name: choice, exact: true })
-        .click();
+      await page.getByRole("radio", { name: choice, exact: true }).click();
       expect(read()).toBe(expected);
-      await expectFilterCount(group === "Status" ? 1 : 0);
+      await expectFilterCount(choice === "All" ? 1 : 0);
       expect(sidebar.querySelector(".sidebar-session-sort-menu")).toBe(menu);
     }
     for (const [name, read] of [
@@ -162,18 +204,17 @@ describe.runIf("__vitest_browser__" in globalThis)("sidebar session filter popov
       expect(read()).toBe(!before);
       await expectFilterCount(name === "Show message preview" ? 1 : name === "Automation" ? 2 : 3);
     }
-    const owner = page.getByRole("combobox", { name: "Owners", exact: true });
-    await owner.selectOptions("involving-me");
+    const owner = page.getByRole("button", { name: /^Owners:/ });
+    await owner.click();
+    await page.getByRole("option", { name: "Involving me", exact: true }).click();
     expect(sessions.list).toHaveBeenCalledWith(expect.objectContaining({ involvingMe: true }));
     await expectFilterCount(4);
-    await owner.selectOptions("owner:profile-bob");
+    await owner.click();
+    await page.getByRole("option", { name: "Bob", exact: true }).click();
     expect(sidebar.sessionOwnerFilterId).toBe("profile-bob");
     await expectFilterCount(4);
     expect(sessions.list).toHaveBeenCalledWith(expect.objectContaining({ ownerId: "profile-bob" }));
-    await page
-      .getByRole("radiogroup", { name: "Hide empty groups", exact: true })
-      .getByRole("radio", { name: "Never", exact: true })
-      .click();
+    await page.getByRole("radio", { name: "Never", exact: true }).click();
     await page.getByRole("button", { name: "Reset", exact: true }).click();
     expect(loadStoredSidebarSessionStatusFilter()).toBe("active");
     expect(sidebar.sessionOwnerFilterId).toBeNull();
@@ -186,7 +227,8 @@ describe.runIf("__vitest_browser__" in globalThis)("sidebar session filter popov
     await expectFilterCount(0);
     await expect.element(page.getByRole("radio", { name: "Active", exact: true })).toHaveFocus();
     expect(sidebar.querySelector(".sidebar-session-sort-menu")).toBe(menu);
-    await page.getByRole("radio", { name: "Custom groups", exact: true }).click();
+    await page.getByRole("button", { name: "Group by: Person", exact: true }).click();
+    await page.getByRole("option", { name: "Custom groups", exact: true }).click();
     await page.getByRole("radio", { name: "Always", exact: true }).click();
     expect(sidebar.querySelector('[data-session-section="category:Empty"]')).toBeNull();
     await page.getByRole("radio", { name: "Never", exact: true }).click();

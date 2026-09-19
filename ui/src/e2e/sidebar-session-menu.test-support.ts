@@ -16,18 +16,33 @@ export async function chooseSidebarMenuOption(
   option: string,
 ) {
   const menu = await openSidebarMenu(page);
-  if (label === "Owners") {
-    await menu.locator("#sidebar-sessions-owner").selectOption({ label: option });
+  if (label === "Owners" || label === "Group by") {
+    await menu
+      .locator(label === "Owners" ? "#sidebar-sessions-owner" : "#sidebar-sessions-group")
+      .click();
+    await menu.getByRole("option", { name: option, exact: true }).click();
     return;
   }
   await menu
-    .getByRole("radiogroup", { name: label, exact: true })
+    .locator(
+      label === "Status"
+        ? "#sidebar-sessions-status"
+        : label === "Sort by"
+          ? "#sidebar-sessions-sort"
+          : "#sidebar-sessions-empty",
+    )
     .getByRole("radio", { name: option, exact: true })
-    .check();
+    .click();
 }
 
 export async function closeSidebarMenu(page: Page) {
   const menu = page.locator(".sidebar-session-sort-menu");
   await page.keyboard.press("Escape");
   await menu.waitFor({ state: "detached" });
+}
+
+export async function chooseSidebarOwner(page: Page, value: string) {
+  const menu = await openSidebarMenu(page);
+  await menu.locator("#sidebar-sessions-owner").click();
+  await menu.locator(`[role="option"][data-value="${value}"]`).click();
 }

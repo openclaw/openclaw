@@ -1,3 +1,4 @@
+import type WaRadioGroup from "@awesome.me/webawesome/dist/components/radio-group/radio-group.js";
 import { expect } from "vitest";
 import type { SidebarLifecycleState } from "./app-sidebar.ts";
 import { waitForFast } from "./wait-for.ts";
@@ -10,8 +11,13 @@ export function sessionMenuChoice(menu: Element, value: string) {
     status: "status",
     "empty-groups": "empty",
   };
-  return menu.querySelector<HTMLInputElement>(
-    `#sidebar-sessions-${ids[kind!]} input[value="${option}"]`,
+  if (kind === "grouping") {
+    return menu.querySelector<HTMLElement>(
+      `[role="listbox"][aria-label="Group by"] [data-value="${option}"]`,
+    );
+  }
+  return menu.querySelector<HTMLElement>(
+    `#sidebar-sessions-${ids[kind!]} wa-radio[value="${option}"]`,
   );
 }
 
@@ -29,10 +35,27 @@ export async function openSessionMenu(sidebar: SidebarLifecycleState): Promise<H
 
 export async function activateSessionMenuValue(sidebar: SidebarLifecycleState, value: string) {
   const menu = await openSessionMenu(sidebar);
-  if (value === "involving-me" || value.startsWith("owner:")) {
-    const select = menu.querySelector<HTMLSelectElement>("#sidebar-sessions-owner")!;
-    select.value = value === "owner:" ? "all" : value;
-    select.dispatchEvent(new Event("change", { bubbles: true }));
+  if (value === "involving-me" || value.startsWith("owner:") || value.startsWith("grouping:")) {
+    const grouping = value.startsWith("grouping:");
+    const id = grouping ? "group" : "owner";
+    const selected = grouping
+      ? value.slice("grouping:".length)
+      : value === "owner:"
+        ? "all"
+        : value;
+    menu.querySelector<HTMLButtonElement>(`#sidebar-sessions-${id}`)!.click();
+    await waitForFast(() =>
+      expect(menu.querySelector(`#sidebar-sessions-${id}`)?.getAttribute("aria-expanded")).toBe(
+        "true",
+      ),
+    );
+    const option = [...menu.querySelectorAll<HTMLElement>('[role="option"]')].find(
+      (item) => item.dataset.value === selected,
+    );
+    if (!option) {
+      throw new Error(`Expected session choice ${value}`);
+    }
+    option.click();
   } else if (value.startsWith("show-")) {
     const ids: Record<string, string> = {
       "show-preview": "preview",
@@ -45,7 +68,15 @@ export async function activateSessionMenuValue(sidebar: SidebarLifecycleState, v
     if (!input) {
       throw new Error(`Expected session choice ${value}`);
     }
-    input.click();
+    const group = input.closest<WaRadioGroup>("wa-radio-group");
+    if (!group) {
+      throw new Error(`Expected radio group for ${value}`);
+    }
+    // Lit's Node export disables Web Awesome's click listener in jsdom.
+    // Browser tests cover that listener; this harness drives its change boundary.
+    group.value = input.getAttribute("value");
+    await group.updateComplete;
+    group.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
   }
   await sidebar.updateComplete;
 }

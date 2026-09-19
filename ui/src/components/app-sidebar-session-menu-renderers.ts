@@ -16,16 +16,18 @@ import {
 } from "./app-sidebar-session-types.ts";
 import "@awesome.me/webawesome/dist/components/switch/switch.js";
 import { icons } from "./icons.ts";
-import "./sidebar-session-filter-popover.ts";
+import { renderPicker } from "./select-picker.ts";
 import {
   renderCompactSessionMenuFrame,
   renderCompactSessionMenuNavigationItem,
 } from "./session-menu-compact.ts";
+import "./sidebar-session-filter-popover.ts";
 import {
   renderSessionOwnerAvatar,
   renderSessionOwnerChip,
   type SessionOwnerOption,
 } from "./session-owner-chip.ts";
+import { renderSettingsSegmented } from "./settings-ui.ts";
 import type { SidebarFilterMenuView } from "./sidebar-menus-controller.ts";
 import {
   consumeDropdownKeyboardDismissal,
@@ -351,28 +353,22 @@ export function renderSidebarSessionSortMenu(params: {
     : params.ownerFilterId !== null
       ? `owner:${params.ownerFilterId}`
       : "all";
-  const radios = <T extends string>(
+  const segmented = <T extends string>(
     id: string,
     label: string,
     value: T,
     options: ReadonlyArray<{ value: T; label: string }>,
     onChange: (value: T) => void,
-  ) => html`<div id=${id} class="sidebar-session-menu-choice" role="radiogroup" aria-label=${label}>
-    <div class="sidebar-session-menu-choice__label" aria-hidden="true">${label}</div>
-    <div class="sidebar-session-menu-options">
-      ${options.map(
-        (option) => html`<label class="sidebar-session-menu-radio">
-          <input
-            type="radio"
-            name=${id}
-            value=${option.value}
-            .checked=${value === option.value}
-            @change=${() => onChange(option.value)}
-          />
-          <span>${option.label}</span>
-        </label>`,
-      )}
-    </div>
+    visibleLabel = label,
+  ) => html`<div id=${id} class="sidebar-session-menu-row">
+    <span aria-hidden="true" title=${label}>${visibleLabel}</span>
+    ${renderSettingsSegmented({
+      value,
+      options: options.map((option) => ({ ...option, title: option.label })),
+      ariaLabel: label,
+      className: "sidebar-session-menu-segmented",
+      onChange,
+    })}
   </div>`;
   const switchItem = (
     id: string,
@@ -404,8 +400,30 @@ export function renderSidebarSessionSortMenu(params: {
           class="sidebar-session-menu-section"
           aria-labelledby="sidebar-sessions-filters-label"
         >
-          <h3 id="sidebar-sessions-filters-label">${t("chat.sidebar.menuFilters")}</h3>
-          ${radios(
+          <div class="sidebar-session-menu-heading">
+            <h3 id="sidebar-sessions-filters-label">${t("chat.sidebar.menuFilters")}</h3>
+            ${
+              params.activeFilterCount > 0
+                ? html`<button
+                    type="button"
+                    id="sidebar-sessions-reset"
+                    class="sidebar-session-menu-reset"
+                    @click=${(event: Event) => {
+                      (event.currentTarget as HTMLElement)
+                        .closest(".sidebar-session-filter-panel")
+                        ?.querySelector<HTMLElement>(
+                          '#sidebar-sessions-status wa-radio[value="active"]',
+                        )
+                        ?.focus();
+                      params.onResetFilters();
+                    }}
+                  >
+                    ${t("common.reset")}
+                  </button>`
+                : nothing
+            }
+          </div>
+          ${segmented(
             "sidebar-sessions-status",
             t("sessionsView.status"),
             params.statusFilter,
@@ -422,36 +440,36 @@ export function renderSidebarSessionSortMenu(params: {
           )}
           ${
             ownerVisible
-              ? html`<label class="sidebar-session-menu-owner">
-                  <span>${t("sessionsView.owners")}</span>
-                  <select
-                    id="sidebar-sessions-owner"
-                    .value=${ownerValue}
-                    @change=${(event: Event) => {
-                      const value = (event.currentTarget as HTMLSelectElement).value;
+              ? html`<div class="sidebar-session-menu-row">
+                  <label for="sidebar-sessions-owner">${t("sessionsView.owners")}</label>
+                  ${renderPicker({
+                    id: "sidebar-sessions-owner",
+                    label: t("sessionsView.owners"),
+                    value: ownerValue,
+                    searchable: true,
+                    showOptionTooltips: false,
+                    options: [
+                      { value: "all", label: t("sessionsView.allOwners") },
+                      { value: "involving-me", label: t("sessionsView.involvingMe") },
+                      ...params.owners.map((owner) => ({
+                        value: `owner:${owner.id}`,
+                        label:
+                          owner.id === params.selfOwnerId
+                            ? t("sessionsView.ownerYou", { name: owner.label ?? owner.id })
+                            : (owner.label ?? owner.id),
+                      })),
+                      ...(params.ownerFilterId !== null &&
+                      !params.owners.some((owner) => owner.id === params.ownerFilterId)
+                        ? [{ value: `owner:${params.ownerFilterId}`, label: params.ownerFilterId }]
+                        : []),
+                    ],
+                    onChange: (value) =>
                       params.onOwnerFilterChange(
                         value.startsWith("owner:") ? value.slice("owner:".length) : null,
                         value === "involving-me",
-                      );
-                    }}
-                  >
-                    <option value="all" ?selected=${ownerValue === "all"}>
-                      ${t("sessionsView.allOwners")}
-                    </option>
-                    <option value="involving-me" ?selected=${ownerValue === "involving-me"}>
-                      ${t("sessionsView.involvingMe")}
-                    </option>
-                    ${
-                      params.ownerFilterId !== null &&
-                      !params.owners.some((owner) => owner.id === params.ownerFilterId)
-                        ? html`<option value=${ownerValue} selected>
-                            ${params.ownerFilterId}
-                          </option>`
-                        : nothing
-                    }
-                    ${params.owners.map((owner) => html`<option value=${`owner:${owner.id}`} ?selected=${ownerValue === `owner:${owner.id}`}>${owner.id === params.selfOwnerId ? t("sessionsView.ownerYou", { name: owner.label ?? owner.id }) : (owner.label ?? owner.id)}</option>`)}
-                  </select>
-                </label>`
+                      ),
+                  })}
+                </div>`
               : nothing
           }
           ${switchItem("sidebar-sessions-cron", t("chat.sidebar.automationIncluded"), params.showCron, params.onShowCronChange)}
@@ -461,39 +479,47 @@ export function renderSidebarSessionSortMenu(params: {
           class="sidebar-session-menu-section"
           aria-labelledby="sidebar-sessions-display-label"
         >
-          <h3 id="sidebar-sessions-display-label">${t("chat.sidebar.menuDisplay")}</h3>
+          <div class="sidebar-session-menu-heading">
+            <h3 id="sidebar-sessions-display-label">${t("chat.sidebar.menuDisplay")}</h3>
+          </div>
           ${
             params.rosterMode
               ? nothing
-              : radios(
-                  "sidebar-sessions-group",
-                  t("sessionsView.groupBy"),
-                  params.grouping,
-                  [
-                    { value: "category", label: t("sessionsView.groupByCategory") },
-                    { value: "project", label: t("chat.sidebar.catalogGroupByProject") },
-                    ...(params.peopleSortAvailable
-                      ? [{ value: "person" as const, label: t("sessionsView.groupByPerson") }]
-                      : []),
-                    { value: "none", label: t("sessionsView.groupByNone") },
-                  ],
-                  params.onGroupingChange,
-                )
+              : html`<div class="sidebar-session-menu-row">
+                  <label for="sidebar-sessions-group">${t("sessionsView.groupBy")}</label>
+                  ${renderPicker({
+                    id: "sidebar-sessions-group",
+                    label: t("sessionsView.groupBy"),
+                    value: params.grouping,
+                    showOptionTooltips: false,
+                    options: [
+                      { value: "category", label: t("sessionsView.groupByCategory") },
+                      { value: "project", label: t("chat.sidebar.catalogGroupByProject") },
+                      ...(params.peopleSortAvailable
+                        ? [{ value: "person", label: t("sessionsView.groupByPerson") }]
+                        : []),
+                      { value: "none", label: t("sessionsView.groupByNone") },
+                    ],
+                    onChange: (value) => params.onGroupingChange(value as SidebarSessionsGrouping),
+                  })}
+                </div>`
           }
-          ${radios(
+          ${segmented(
             "sidebar-sessions-sort",
             t("chat.sidebar.sortBy"),
             params.sortMode,
             SIDEBAR_SESSION_SORT_OPTIONS.filter(
               (option) => option.mode !== "people" || params.peopleSortAvailable,
-            ).map((option) => ({ value: option.mode, label: t(option.labelKey) })),
+            ).map((option) => ({
+              value: option.mode,
+              label: option.mode === "updated" ? t("sessionsView.updated") : t(option.labelKey),
+            })),
             params.onSortModeChange,
           )}
-          ${switchItem("sidebar-sessions-preview", t("sessionsView.showSessionPreview"), params.showPreview, params.onShowPreviewChange)}
           ${
             params.rosterMode
               ? nothing
-              : radios(
+              : segmented(
                   "sidebar-sessions-empty",
                   t("sessionsView.hideEmptyGroups"),
                   params.emptyGroupsMode,
@@ -502,8 +528,12 @@ export function renderSidebarSessionSortMenu(params: {
                     label: t(option.labelKey),
                   })),
                   params.onEmptyGroupsModeChange,
+                  t("chat.sidebar.hideEmpty"),
                 )
           }
+          ${switchItem("sidebar-sessions-preview", t("sessionsView.showSessionPreview"), params.showPreview, params.onShowPreviewChange)}
+        </section>
+        <footer class="sidebar-session-menu-footer">
           <a
             id="sidebar-sessions-sources"
             class="sidebar-session-filter-footer"
@@ -517,28 +547,7 @@ export function renderSidebarSessionSortMenu(params: {
           >
             <span aria-hidden="true">${icons.settings}</span>${t("chat.sidebar.sessionSources")}
           </a>
-        </section>
-        ${
-          params.activeFilterCount > 0
-            ? html`<div class="sidebar-session-menu-reset">
-                <button
-                  type="button"
-                  id="sidebar-sessions-reset"
-                  @click=${(event: Event) => {
-                    (event.currentTarget as HTMLElement)
-                      .closest(".sidebar-session-filter-panel")
-                      ?.querySelector<HTMLInputElement>(
-                        '#sidebar-sessions-status input[value="active"]',
-                      )
-                      ?.focus();
-                    params.onResetFilters();
-                  }}
-                >
-                  ${t("common.reset")}
-                </button>
-              </div>`
-            : nothing
-        }
+        </footer>
       `}
     ></openclaw-sidebar-session-filter-popover>`,
   );

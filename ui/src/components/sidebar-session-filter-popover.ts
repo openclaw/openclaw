@@ -58,7 +58,9 @@ class SidebarSessionFilterPopover extends OpenClawLightDomContentsElement {
   private readonly focusInitialControl = () => {
     if (!this.focused) {
       this.focused = true;
-      this.querySelector<HTMLInputElement>('input[type="radio"]:checked')?.focus({
+      this.querySelector<HTMLElement>(
+        "#sidebar-sessions-status .settings-segmented__btn--active",
+      )?.focus({
         preventScroll: true,
       });
     }

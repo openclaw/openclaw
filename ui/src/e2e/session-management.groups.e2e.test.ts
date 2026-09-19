@@ -705,7 +705,7 @@ suite.define(() => {
       await expect.poll(() => showAutomationSessions.getAttribute("aria-checked")).toBe("true");
       await expect.poll(() => filterAndSortButton.getAttribute("aria-expanded")).toBe("true");
       await openSidebarMenu(page);
-      const groupBy = page.getByRole("radio", { name: "Custom groups", exact: true });
+      const groupBy = page.getByRole("button", { name: "Group by: Custom groups", exact: true });
       await groupBy.waitFor();
       await captureUiProof(suite, page, "sidebar-groupby-sort-menu.png");
       await filterAndSortButton.click();

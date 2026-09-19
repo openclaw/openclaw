@@ -60,7 +60,7 @@ describe("AppSidebar session ownership filtering", () => {
     await sidebar.updateComplete;
 
     const menu = await openSessionMenu(sidebar);
-    expect(menu?.querySelector('[value="owner:profile:channel:opaque"]')).not.toBeNull();
+    expect(menu?.querySelector('[data-value="owner:profile:channel:opaque"]')).not.toBeNull();
     expect(menu?.textContent).toContain("Channel Keeper");
     expect(
       sidebar.querySelector(
@@ -77,15 +77,17 @@ describe("AppSidebar session ownership filtering", () => {
         '[data-session-key="agent:main:session-principal"] openclaw-session-owner-chip',
       ),
     ).toBeNull();
-    expect(menu?.querySelector('[value="owner:discord:channel:123"]')).toBeNull();
-    expect(menu?.querySelector('[value="owner:agent:roboclaw:discord:channel:456"]')).toBeNull();
+    expect(menu?.querySelector('[data-value="owner:discord:channel:123"]')).toBeNull();
+    expect(
+      menu?.querySelector('[data-value="owner:agent:roboclaw:discord:channel:456"]'),
+    ).toBeNull();
 
     result.owners = undefined;
     harness.publishList({ result, agentId: "main" });
     await sidebar.updateComplete;
 
     const unavailableMenu = sidebar.querySelector("#sidebar-sessions-owner");
-    expect(unavailableMenu?.querySelector('[value^="owner:"]') ?? null).toBeNull();
+    expect(unavailableMenu?.querySelector('[data-value^="owner:"]') ?? null).toBeNull();
     expect(unavailableMenu?.textContent ?? "").not.toContain("Channel Keeper");
   });
 

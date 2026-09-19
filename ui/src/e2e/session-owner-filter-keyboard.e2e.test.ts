@@ -7,7 +7,7 @@ import {
   installMockGateway,
   sessionsListResponse,
 } from "./session-management.test-support.ts";
-import { openSidebarMenu } from "./sidebar-session-menu.test-support.ts";
+import { chooseSidebarOwner, openSidebarMenu } from "./sidebar-session-menu.test-support.ts";
 
 const suite = createSessionManagementE2eSuite();
 
@@ -20,7 +20,7 @@ function largeOwnerList(count: number) {
 }
 
 suite.define(() => {
-  it("navigates linear filters and display controls with Tab, arrows, Space, and Escape", async () => {
+  it("navigates session filters and display controls with Tab, arrows, Space, and Escape", async () => {
     const context = await suite.browser.newContext({ viewport: { height: 800, width: 1200 } });
     const page = await context.newPage();
     const gateway = await installMockGateway(page, {
@@ -59,8 +59,12 @@ suite.define(() => {
       await page.keyboard.press("Tab");
       const owners = menu.locator("#sidebar-sessions-owner");
       await expectBrowser(owners).toBeFocused();
-      await expectBrowser(owners.locator('option[value^="owner:"]')).toHaveCount(5);
-      await owners.selectOption("owner:profile-ada");
+      await page.keyboard.press("Enter");
+      await expectBrowser(menu.locator('[role="option"][data-value^="owner:"]')).toHaveCount(5);
+      await page.keyboard.press("ArrowDown");
+      await page.keyboard.press("ArrowDown");
+      await page.keyboard.press("ArrowDown");
+      await page.keyboard.press("Enter");
       await expect
         .poll(async () =>
           (await gateway.getRequests("sessions.list")).some(
@@ -69,7 +73,7 @@ suite.define(() => {
           ),
         )
         .toBe(true);
-      await expectBrowser(owners).toHaveValue("owner:profile-ada");
+      await expectBrowser(owners).toHaveAccessibleName("Owners: Ada Lovelace Byron");
       await owners.focus();
       await page.keyboard.press("Tab");
       const automation = menu.getByRole("checkbox", { name: "Automation", exact: true });
@@ -82,32 +86,32 @@ suite.define(() => {
       await page.keyboard.press("Space");
       await expectBrowser(system).toHaveAttribute("aria-checked", "true");
       await page.keyboard.press("Tab");
-      await expectBrowser(
-        menu.getByRole("radio", { name: "Custom groups", exact: true }),
-      ).toBeFocused();
-      await page.keyboard.press("ArrowRight");
-      await expectBrowser(menu.getByRole("radio", { name: "Project", exact: true })).toBeChecked();
+      const grouping = menu.locator("#sidebar-sessions-group");
+      await expectBrowser(grouping).toBeFocused();
+      await page.keyboard.press("Enter");
+      await page.keyboard.press("ArrowDown");
+      await page.keyboard.press("Enter");
+      await expectBrowser(grouping).toHaveAccessibleName("Group by: Project");
       await page.keyboard.press("Tab");
-      await expectBrowser(menu.locator("#sidebar-sessions-sort input:checked")).toBeFocused();
+      await expectBrowser(menu.getByRole("radio", { name: "Created", exact: true })).toBeFocused();
+      await page.keyboard.press("Tab");
+      await expectBrowser(
+        menu.getByRole("radio", { name: "When filtering", exact: true }),
+      ).toBeFocused();
       await page.keyboard.press("Tab");
       const preview = menu.getByRole("checkbox", { name: "Show message preview", exact: true });
       await expectBrowser(preview).toBeFocused();
       await page.keyboard.press("Space");
       await expectBrowser(preview).toHaveAttribute("aria-checked", "true");
-      await page.keyboard.press("Tab");
-      await expectBrowser(
-        menu.getByRole("radio", { name: "When filtering", exact: true }),
-      ).toBeFocused();
       await page.keyboard.press("Escape");
       await expectBrowser(menu).toHaveCount(0);
       await expectBrowser(trigger).toBeFocused();
       await page.keyboard.press("Enter");
       await expectBrowser(active).toBeFocused();
-      await expectBrowser(owners).toHaveValue("owner:profile-ada");
+      await expectBrowser(owners).toHaveAccessibleName("Owners: Ada Lovelace Byron");
+      await page.keyboard.press("Shift+Tab");
+      await expectBrowser(menu.getByRole("button", { name: "Reset", exact: true })).toBeFocused();
       await menu.getByRole("link", { name: "Session sources…", exact: true }).focus();
-      await page.keyboard.press("Tab");
-      const reset = menu.getByRole("button", { name: "Reset", exact: true });
-      await expectBrowser(reset).toBeFocused();
       await page.keyboard.press("Tab");
       await expectBrowser(menu).toHaveCount(0);
     } finally {
@@ -151,10 +155,24 @@ suite.define(() => {
         expect(menuBounds!.x + menuBounds!.width).toBeLessThanOrEqual(viewport.width);
         expect(menuBounds!.y + menuBounds!.height).toBeLessThanOrEqual(viewport.height);
         const owners = menu.locator("#sidebar-sessions-owner");
-        await expectBrowser(owners.locator('option[value^="owner:"]')).toHaveCount(ownerCount);
-        await owners.selectOption(`owner:${ownerOptions.at(-1)!.id}`);
+        await owners.click();
+        await expectBrowser(menu.locator('[role="option"][data-value^="owner:"]')).toHaveCount(
+          ownerCount,
+        );
+        const list = menu.getByRole("listbox", { name: "Owners", exact: true });
+        const listBounds = await list.boundingBox();
+        expect(listBounds).not.toBeNull();
+        expect(listBounds!.x).toBeGreaterThanOrEqual(0);
+        expect(listBounds!.y).toBeGreaterThanOrEqual(0);
+        expect(listBounds!.x + listBounds!.width).toBeLessThanOrEqual(viewport.width);
+        expect(listBounds!.y + listBounds!.height).toBeLessThanOrEqual(viewport.height);
+        await menu
+          .getByRole("combobox", { name: "Search", exact: true })
+          .fill(ownerOptions.at(-1)!.id);
+        await expectBrowser(list.getByRole("option")).toHaveCount(1);
+        await list.getByRole("option").click();
         await expectBrowser(menu.getByRole("dialog")).toBeVisible();
-        await expectBrowser(owners).toHaveValue(`owner:${ownerOptions.at(-1)!.id}`);
+        await expectBrowser(owners).toHaveAccessibleName(`Owners: ${ownerOptions.at(-1)!.id}`);
         const selectedBounds = await owners.boundingBox();
         expect(selectedBounds).not.toBeNull();
         expect(selectedBounds!.x + selectedBounds!.width).toBeLessThanOrEqual(viewport.width);
@@ -164,7 +182,7 @@ suite.define(() => {
     },
   );
 
-  it("keeps native owner selection and radio navigation usable in RTL", async () => {
+  it("keeps owner selection and radio navigation usable in RTL", async () => {
     const context = await suite.browser.newContext({ viewport: { height: 650, width: 390 } });
     const page = await context.newPage();
     await installMockGateway(page, {
@@ -185,11 +203,11 @@ suite.define(() => {
       await openSidebarMenu(page);
       const menu = page.locator(".sidebar-session-sort-menu");
       const owners = menu.locator("#sidebar-sessions-owner");
-      await owners.selectOption("owner:profile-0");
-      await expectBrowser(owners).toHaveValue("owner:profile-0");
+      await chooseSidebarOwner(page, "owner:profile-0");
+      await expectBrowser(owners).toHaveAccessibleName("Owners: Owner 1");
       const active = menu.getByRole("radio", { name: "Active", exact: true });
       await active.focus();
-      await page.keyboard.press("ArrowLeft");
+      await page.keyboard.press("ArrowRight");
       await expectBrowser(menu.getByRole("radio", { name: "Archived", exact: true })).toBeChecked();
       await page.keyboard.press("Escape");
       await expectBrowser(menu).toHaveCount(0);

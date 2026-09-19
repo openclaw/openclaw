@@ -3578,6 +3578,7 @@ export const en: TranslationMap & {
       sortCreated: "Created",
       menuFilters: "Filters",
       menuDisplay: "Display",
+      hideEmpty: "Hide empty",
       automationIncluded: "Automation",
       systemIncluded: "System",
       activeFilterCount: "Active filters: {count}",
