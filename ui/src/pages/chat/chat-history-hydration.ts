@@ -63,7 +63,10 @@ import {
   pruneHistoryReplacedStreamSegments,
   prunePersistedToolStreamMessages,
 } from "./stream-segment-pruning.ts";
-import { reconcileAuthoritativeTerminalHistory } from "./terminal-message-identity.ts";
+import {
+  armPendingAuthoritativeTerminalForHistory,
+  reconcileAuthoritativeTerminalHistory,
+} from "./terminal-message-identity.ts";
 import { persistedCurrentToolStreamIds } from "./tool-stream-identity.ts";
 
 function recordChatHistoryTiming(
@@ -235,6 +238,7 @@ export async function hydrateChatHistory(
     const nextPagination = resolveChatHistoryPagination(res);
     const nextSessionId = historySessionId(res);
     const visibleMessages = visibleChatHistoryMessages(messages);
+    armPendingAuthoritativeTerminalForHistory({ host: state, sessionKey, visibleMessages });
     const previousTerminalMessages = reconcileAuthoritativeTerminalHistory({
       host: state,
       previousMessages,
