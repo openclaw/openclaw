@@ -1,0 +1,177 @@
+title: Microsoft Teams debounced channel thread replies isolate by thread root
+
+scenario:
+  id: msteams-debounce-thread-root-isolation
+  surface: channels
+  coverage:
+    primary:
+      - channels.native-threads-thread-isolation
+    secondary:
+      - channels.outbound-delivery-and-reply-pipeline
+      - channels.session-routing
+  objective: Verify the real Microsoft Teams Gateway debounce key includes the channel thread root, so replies in distinct thread roots dispatch separately (two agent turns, replies placed in each thread) while replies in the same thread root still batch into one dispatch.
+  gatewayConfigPatch:
+    messages:
+      inbound:
+        debounceMs: 1500
+  successCriteria:
+    - Two channel messages in distinct thread roots sent inside one debounce window produce two isolated agent dispatches, and each marker reply is placed in its own thread root.
+    - Two channel messages in the same thread root sent inside one debounce window still batch into a single dispatch (one reply on that thread root).
+  regressionRefs:
+    - https://github.com/openclaw/openclaw/issues/149303
+  docsRefs:
+    - docs/channels/msteams.md
+  codeRefs:
+    - extensions/msteams/src/monitor-handler/message-handler.ts
+  execution:
+    kind: flow
+    channel: msteams
+    suiteIsolation: isolated
+    isolationReason: Seeds multiple native Teams thread roots and asserts reply placement across debounced turns.
+    summary: Run cross-thread and same-thread debounce isolation through a real Gateway, the Teams plugin, a loopback Bot Framework connector, and the mock provider.
+    config:
+      requiredProviderMode: mock-openai
+      debounceMs: 1500
+      settleMs: 6000
+      promptSnippet: qa msteams debounce thread root isolation
+
+flow:
+  steps:
+    - name: isolates distinct thread roots and preserves same-root batching
+      actions:
+        - assert:
+            expr: "env.providerMode === config.requiredProviderMode"
+            message: this seeded scenario is mock-openai only
+        - call: waitForGatewayHealthy
+          args:
+            - ref: env
+            - 60000
+        - call: waitForTransportReady
+          args:
+            - ref: env
+            - 60000
+        - call: reset
+
+        # Establish two distinct thread roots on the same channel conversation.
+        - sendInbound:
+            conversation: { id: debounce-channel, kind: channel, title: Debounce Channel }
+            senderId: driver
+            senderName: Teams QA Driver
+            text: "@openclaw Reply exactly: QA-DEB-THREAD-A-ROOT"
+          saveAs: threadARoot
+        - waitForOutbound:
+            conversation: { id: debounce-channel, kind: channel }
+            textIncludes: QA-DEB-THREAD-A-ROOT
+            timeoutMs:
+              expr: liveTurnTimeoutMs(env, 90000)
+        - sendInbound:
+            conversation: { id: debounce-channel, kind: channel, title: Debounce Channel }
+            senderId: driver
+            senderName: Teams QA Driver
+            text: "@openclaw Reply exactly: QA-DEB-THREAD-B-ROOT"
+          saveAs: threadBRoot
+        - waitForOutbound:
+            conversation: { id: debounce-channel, kind: channel }
+            textIncludes: QA-DEB-THREAD-B-ROOT
+            timeoutMs:
+              expr: liveTurnTimeoutMs(env, 90000)
+
+        # Cross-thread isolation: two messages in DIFFERENT thread roots within
+        # one debounce window must produce two separate dispatches, each reply
+        # placed in its own thread root (fix #149303).
+        - set: crossStart
+          value:
+            expr: state.getSnapshot().messages.length
+        - set: crossThreadARoot
+          value:
+            expr: threadARoot.id
+        - set: crossThreadBRoot
+          value:
+            expr: threadBRoot.id
+        - sendInbound:
+            conversation: { id: debounce-channel, kind: channel, title: Debounce Channel }
+            senderId: driver
+            senderName: Teams QA Driver
+            threadId:
+              ref: crossThreadARoot
+            text: "@openclaw qa msteams debounce isolation. reply exactly: QA-DEB-THREAD-A-OK"
+        - sendInbound:
+            conversation: { id: debounce-channel, kind: channel, title: Debounce Channel }
+            senderId: driver
+            senderName: Teams QA Driver
+            threadId:
+              ref: crossThreadBRoot
+            text: "@openclaw qa msteams debounce isolation. reply exactly: QA-DEB-THREAD-B-OK"
+        - call: waitForCondition
+          args:
+            - lambda:
+                async: true
+                params: []
+                expr: "(state.getSnapshot().messages.slice(crossStart).filter((message) => message.direction === 'outbound' && message.conversation.id === 'debounce-channel' && String(message.text ?? '').includes('QA-DEB-THREAD-A-OK')).length >= 1 && state.getSnapshot().messages.slice(crossStart).filter((message) => message.direction === 'outbound' && message.conversation.id === 'debounce-channel' && String(message.text ?? '').includes('QA-DEB-THREAD-B-OK')).length >= 1) || null"
+            - expr: liveTurnTimeoutMs(env, 180000)
+            - 500
+        - call: sleep
+          args:
+            - expr: config.settleMs
+        - set: crossOutbound
+          value:
+            expr: "state.getSnapshot().messages.slice(crossStart).filter((message) => message.direction === 'outbound' && message.conversation.id === 'debounce-channel')"
+        - set: crossA
+          value:
+            expr: "crossOutbound.filter((message) => String(message.text ?? '').includes('QA-DEB-THREAD-A-OK'))"
+        - set: crossB
+          value:
+            expr: "crossOutbound.filter((message) => String(message.text ?? '').includes('QA-DEB-THREAD-B-OK'))"
+        - assert:
+            expr: "crossA.length === 1 && crossB.length === 1 && crossA[0]?.threadId && crossB[0]?.threadId && crossA[0].threadId !== crossB[0].threadId"
+            message:
+              expr: "`expected one isolated marker per distinct thread root with distinct placement; saw A=${JSON.stringify(crossA)} B=${JSON.stringify(crossB)}; transcript=${formatTransportTranscript(state, { conversationId: 'debounce-channel' })}`"
+
+        # Same-thread batching preserved: two messages in the SAME thread root
+        # within one debounce window must still batch into a single dispatch.
+        - sendInbound:
+            conversation: { id: debounce-channel, kind: channel, title: Debounce Channel }
+            senderId: driver
+            senderName: Teams QA Driver
+            text: "@openclaw Reply exactly: QA-DEB-THREAD-Z-ROOT"
+          saveAs: threadZRoot
+        - waitForOutbound:
+            conversation: { id: debounce-channel, kind: channel }
+            textIncludes: QA-DEB-THREAD-Z-ROOT
+            timeoutMs:
+              expr: liveTurnTimeoutMs(env, 90000)
+        - set: sameStart
+          value:
+            expr: state.getSnapshot().messages.length
+        - sendInbound:
+            conversation: { id: debounce-channel, kind: channel, title: Debounce Channel }
+            senderId: driver
+            senderName: Teams QA Driver
+            threadId:
+              ref: threadZRoot.id
+            text: "@openclaw qa msteams debounce same-root. reply exactly: QA-DEB-THREAD-Z1-OK"
+        - sendInbound:
+            conversation: { id: debounce-channel, kind: channel, title: Debounce Channel }
+            senderId: driver
+            senderName: Teams QA Driver
+            threadId:
+              ref: threadZRoot.id
+            text: "@openclaw qa msteams debounce same-root. reply exactly: QA-DEB-THREAD-Z2-OK"
+        - call: waitForCondition
+          args:
+            - lambda:
+                async: true
+                params: []
+                expr: "(state.getSnapshot().messages.slice(sameStart).filter((message) => message.direction === 'outbound' && message.conversation.id === 'debounce-channel' && (String(message.text ?? '').includes('QA-DEB-THREAD-Z1-OK') || String(message.text ?? '').includes('QA-DEB-THREAD-Z2-OK'))).length >= 1) || null"
+            - expr: liveTurnTimeoutMs(env, 180000)
+            - 500
+        - call: sleep
+          args:
+            - expr: config.settleMs
+        - set: sameOutbound
+          value:
+            expr: "state.getSnapshot().messages.slice(sameStart).filter((message) => message.direction === 'outbound' && message.conversation.id === 'debounce-channel' && (String(message.text ?? '').includes('QA-DEB-THREAD-Z1-OK') || String(message.text ?? '').includes('QA-DEB-THREAD-Z2-OK')))"
+        - assert:
+            expr: "sameOutbound.length === 1 && sameOutbound[0]?.threadId"
+            message:
+              expr: "`expected one merged same-thread marker; saw ${JSON.stringify(sameOutbound)}; transcript=${formatTransportTranscript(state, { conversationId: 'debounce-channel' })}`"

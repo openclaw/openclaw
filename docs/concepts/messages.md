@@ -32,7 +32,7 @@ Channels can redeliver the same message after a reconnect. OpenClaw keeps an in-
 
 ## Inbound debouncing
 
-Rapid consecutive text messages from the same sender can be batched into one agent turn via `messages.inbound`. Debouncing is scoped per channel + conversation and uses the most recent message for reply threading/IDs.
+Rapid consecutive text messages from the same sender can be batched into one agent turn via `messages.inbound`. Debouncing is scoped per channel + conversation and uses the most recent message for reply threading/IDs. Channels that route thread replies to per-thread sessions (for example, Microsoft Teams thread replies) include the thread root in the debounce key, so replies in different threads are never batched into one turn.
 
 ```json5
 {

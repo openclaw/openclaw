@@ -26,6 +26,31 @@ import { getRuntimeApiMockState } from "./message-handler-mock-support.test-supp
 import { createMSTeamsMessageHandler } from "./message-handler.js";
 import { buildChannelActivity, createMessageHandlerDeps } from "./message-handler.test-support.js";
 
+// Thread replies route to per-thread-root session keys and would otherwise
+// fetch parent/history context over Graph; stub those lookups so channel thread
+// tests stay deterministic and network-free.
+const fetchChannelMessageMock = vi.hoisted(() => vi.fn());
+const fetchThreadRepliesMock = vi.hoisted(() => vi.fn(async () => []));
+const fetchChatMessageTextMock = vi.hoisted(() => vi.fn(async () => undefined));
+const resolveTeamGroupIdMock = vi.hoisted(() =>
+  vi.fn<() => Promise<string | undefined>>(async () => "group-1"),
+);
+
+vi.mock("../graph-thread.js", () => {
+  const stripHtmlFromTeamsMessage = (html: string) => html;
+  return {
+    stripHtmlFromTeamsMessage,
+    fetchChannelMessage: fetchChannelMessageMock,
+    fetchThreadReplies: fetchThreadRepliesMock,
+    fetchChatMessageText: fetchChatMessageTextMock,
+    buildThreadContext: () => [],
+  };
+});
+
+vi.mock("../team-identity.js", () => ({
+  resolveTeamGroupId: resolveTeamGroupIdMock,
+}));
+
 const runtimeApiMockState = getRuntimeApiMockState();
 
 function createLifecycle(): MSTeamsIngressLifecycle & {
@@ -264,6 +289,58 @@ describe("Microsoft Teams drain claim ownership", () => {
     await vi.waitFor(() => expect(lifecycle.adoptedCount()).toBe(1), { timeout: 5_000 });
     expect(runtimeApiMockState.dispatchReplyWithBufferedBlockDispatcher).not.toHaveBeenCalled();
     expect(lifecycle.abandonedCount()).toBe(0);
+  });
+
+  it("keeps debounced channel thread replies isolated by thread root", async () => {
+    const handler = createHandler({
+      messages: { inbound: { debounceMs: 40 } },
+      channels: {
+        msteams: { groupPolicy: "open", requireMention: false },
+      },
+    } as OpenClawConfig);
+    const dispatch = runtimeApiMockState.dispatchReplyWithBufferedBlockDispatcher;
+
+    const channelThreadActivity = (id: string, text: string, threadRoot: string) =>
+      context({
+        ...buildChannelActivity({
+          id,
+          text,
+          conversation: {
+            id: `19:general@thread.tacv2;messageid=${threadRoot}`,
+            conversationType: "channel",
+          },
+          channelData: { team: { id: "team-1", aadGroupId: "group-1" } },
+        }),
+      } as MSTeamsTurnContext["activity"]);
+
+    await handler(
+      channelThreadActivity("thread-a-1", "message in thread A", "root-a"),
+      createLifecycle(),
+    );
+    await handler(
+      channelThreadActivity("thread-b-1", "message in thread B", "root-b"),
+      createLifecycle(),
+    );
+
+    await vi.waitFor(
+      () => {
+        expect(dispatch).toHaveBeenCalledTimes(2);
+      },
+      { timeout: 5_000 },
+    );
+    const bodies = dispatch.mock.calls.map(
+      (call) => (call[0] as { ctx?: { BodyForAgent?: string } })?.ctx?.BodyForAgent ?? "",
+    );
+    expect(bodies).toContain("message in thread A");
+    expect(bodies).toContain("message in thread B");
+    // Correctly routed replies: each turn resolves to a distinct per-thread-root
+    // session key through the real resolveMSTeamsRouteSessionKey path.
+    const routeKeys = dispatch.mock.calls.map(
+      (call) => (call[0] as { ctx?: { SessionKey?: string } })?.ctx?.SessionKey ?? "",
+    );
+    expect(new Set(routeKeys).size).toBe(2);
+    expect(routeKeys).toContainEqual(expect.stringContaining(":thread:root-a"));
+    expect(routeKeys).toContainEqual(expect.stringContaining(":thread:root-b"));
   });
 
   it("preserves abandon retry accounting, backoff, threshold, and restart behavior", async () => {

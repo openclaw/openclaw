@@ -12,7 +12,11 @@ import {
 import { createRuntimeConfigReader } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import { formatUnknownError } from "../errors.js";
-import { normalizeMSTeamsConversationId, parseMSTeamsActivityTimestamp } from "../inbound.js";
+import {
+  extractMSTeamsConversationMessageId,
+  normalizeMSTeamsConversationId,
+  parseMSTeamsActivityTimestamp,
+} from "../inbound.js";
 import type { MSTeamsMessageHandlerDeps } from "../monitor-handler.types.js";
 import type { MSTeamsIngressLifecycle } from "../msteams-ingress.js";
 import { resolveMSTeamsReplyPolicy } from "../policy.js";
@@ -298,15 +302,27 @@ export function createMSTeamsMessageHandler(deps: MSTeamsMessageHandlerDeps) {
     debounceMs: resolveDebounceMs(),
     resolveDebounceMs,
     buildKey: (entry) => {
-      const conversationId = normalizeMSTeamsConversationId(
-        entry.context.activity.conversation?.id ?? "",
-      );
-      const senderId =
-        entry.context.activity.from?.aadObjectId ?? entry.context.activity.from?.id ?? "";
+      const activity = entry.context.activity;
+      const rawConversationId = activity.conversation?.id ?? "";
+      const conversationId = normalizeMSTeamsConversationId(rawConversationId);
+      const senderId = activity.from?.aadObjectId ?? activity.from?.id ?? "";
       if (!senderId || !conversationId) {
         return null;
       }
-      return `msteams:${appId}:${conversationId}:${senderId}`;
+      // Channel thread replies route to distinct per-thread session keys
+      // (resolveMSTeamsRouteSessionKey appends the thread root). Keep that root
+      // in the debounce key too, so replies in different thread roots are never
+      // batched into one agent turn inside a quiet window (#149303). The root
+      // mirrors session routing: the `;messageid=` root when present, else the
+      // replyToId, and only for channel conversations.
+      const conversationMessageId = extractMSTeamsConversationMessageId(rawConversationId);
+      const threadRoot =
+        activity.conversation?.conversationType === "channel"
+          ? (conversationMessageId ?? activity.replyToId ?? undefined)
+          : undefined;
+      return threadRoot
+        ? `msteams:${appId}:${conversationId}:${senderId}:${threadRoot}`
+        : `msteams:${appId}:${conversationId}:${senderId}`;
     },
     shouldDebounce: (entry) => {
       if (!entry.text.trim()) {
