@@ -1,8 +1,6 @@
 import { formatUiError } from "../../../lib/format-error.ts";
 import { readFileDraft } from "./chat-file-drafts.ts";
 import {
-  clearSessionWorkspaceError,
-  setSessionWorkspaceError,
   isCurrentSessionWorkspace,
   openSessionWorkspacePreview,
   requestWorkspaceUpdate,
@@ -91,14 +89,12 @@ export function openWorkspaceItem<T>(
     if (!isCurrent()) {
       return;
     }
-    setSessionWorkspaceError(workspace, message, read);
     const unavailable = { kind: "unavailable" as const, message };
     preview.content = unavailable;
     read.published = capturePreview(preview);
     workspace.previews = [...workspace.previews];
   };
   void (async () => {
-    setSessionWorkspaceError(workspace, null);
     try {
       const result = await load();
       const content = result == null ? null : render(result);
@@ -147,9 +143,6 @@ export function openWorkspaceItem<T>(
             canReplacePreview(canonical, snapshot)
           ) {
             updatePreviewContent(canonical, content, label);
-            if (currentRead) {
-              clearSessionWorkspaceError(workspace, currentRead);
-            }
             // Even unchanged bytes settle newer intent and retire older alias reads.
             read.published = capturePreview(canonical);
             previewReads.set(canonical, read);

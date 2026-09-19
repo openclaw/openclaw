@@ -597,7 +597,7 @@ describe("session workspace artifacts", () => {
     });
   });
 
-  it("reports malformed base64 artifact data as a visible workspace error", async () => {
+  it("reports malformed base64 artifact data in its unavailable preview", async () => {
     const { handleOpenSidebar, state } = createArtifactHost({
       data: "not-base64!",
       mimeType: "text/plain",
@@ -606,12 +606,13 @@ describe("session workspace artifacts", () => {
     createSessionWorkspaceProps(state).onOpenArtifact("artifact-1");
 
     await vi.waitFor(() =>
-      expect(createSessionWorkspaceProps(state).error).toMatch(/InvalidCharacterError|invalid/i),
+      expect(state.sessionWorkspaceState?.previews.at(-1)?.content).toMatchObject({
+        kind: "unavailable",
+        message: expect.stringMatching(/InvalidCharacterError|invalid/i),
+      }),
     );
+    expect(createSessionWorkspaceProps(state).error).toBeNull();
     expect(handleOpenSidebar).toHaveBeenCalledOnce();
-    expect(state.sessionWorkspaceState?.previews.at(-1)?.content).toMatchObject({
-      kind: "unavailable",
-    });
   });
 });
 
@@ -905,15 +906,13 @@ describe("openSessionWorkspaceFile", () => {
     openSessionWorkspaceFile(state, { path: "screenshots/result.png" });
 
     await vi.waitFor(() =>
-      expect(createSessionWorkspaceProps(state).error).toBe(
-        "Failed to load screenshots/result.png",
-      ),
+      expect(state.sessionWorkspaceState?.previews.at(-1)?.content).toEqual({
+        kind: "unavailable",
+        message: "Failed to load screenshots/result.png",
+      }),
     );
+    expect(createSessionWorkspaceProps(state).error).toBeNull();
     expect(handleOpenSidebar).toHaveBeenCalledOnce();
-    expect(state.sessionWorkspaceState?.previews.at(-1)?.content).toEqual({
-      kind: "unavailable",
-      message: "Failed to load screenshots/result.png",
-    });
   });
 
   it("does not render base64 content as text when the preview discriminator disagrees", async () => {
@@ -944,13 +943,13 @@ describe("openSessionWorkspaceFile", () => {
     openSessionWorkspaceFile(state, { path: "notes.txt" });
 
     await vi.waitFor(() =>
-      expect(createSessionWorkspaceProps(state).error).toBe("Failed to load notes.txt"),
+      expect(state.sessionWorkspaceState?.previews.at(-1)?.content).toEqual({
+        kind: "unavailable",
+        message: "Failed to load notes.txt",
+      }),
     );
+    expect(createSessionWorkspaceProps(state).error).toBeNull();
     expect(handleOpenSidebar).toHaveBeenCalledOnce();
-    expect(state.sessionWorkspaceState?.previews.at(-1)?.content).toEqual({
-      kind: "unavailable",
-      message: "Failed to load notes.txt",
-    });
   });
 
   it("keeps a rejected file open as an unavailable file tab", async () => {
@@ -976,7 +975,7 @@ describe("openSessionWorkspaceFile", () => {
         message: "session file not found",
       }),
     );
-    expect(createSessionWorkspaceProps(state).error).toBe("session file not found");
+    expect(createSessionWorkspaceProps(state).error).toBeNull();
     expect(handleOpenSidebar).toHaveBeenCalledOnce();
   });
 

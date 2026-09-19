@@ -114,21 +114,6 @@ export function requestWorkspaceUpdate(state: SessionWorkspaceHost) {
   state.requestUpdate?.();
 }
 
-export function setSessionWorkspaceError(
-  workspace: SessionWorkspaceState,
-  message: string | null,
-  owner?: object,
-) {
-  workspace.error = message;
-  workspace.errorOwner = owner;
-}
-
-export function clearSessionWorkspaceError(workspace: SessionWorkspaceState, owner: object) {
-  if (workspace.errorOwner === owner) {
-    setSessionWorkspaceError(workspace, null);
-  }
-}
-
 export function loadSessionWorkspace(
   state: SessionWorkspaceHost,
   workspace: SessionWorkspaceState,
@@ -144,7 +129,7 @@ export function loadSessionWorkspace(
     return;
   }
   workspace.loading = true;
-  setSessionWorkspaceError(workspace, null);
+  workspace.error = null;
   if (force) {
     workspace.list = null;
   }
@@ -189,7 +174,7 @@ export function loadSessionWorkspace(
       };
     } catch (error) {
       if (isCurrentListing()) {
-        setSessionWorkspaceError(workspace, formatUiError(error));
+        workspace.error = formatUiError(error);
       }
     } finally {
       if (isCurrentSessionWorkspace(state, workspace)) {

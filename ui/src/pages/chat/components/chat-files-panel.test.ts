@@ -14,7 +14,12 @@ import {
   getSessionWorkspace,
   loadSessionWorkspace,
 } from "./chat-session-workspace-state.ts";
-import { openSessionWorkspaceFile, type SessionWorkspaceHost } from "./chat-session-workspace.ts";
+import {
+  createSessionWorkspaceProps,
+  openSessionWorkspaceFile,
+  renderSessionWorkspaceRail,
+  type SessionWorkspaceHost,
+} from "./chat-session-workspace.ts";
 import "./chat-files-panel.ts";
 
 function host(): SessionWorkspaceHost {
@@ -32,6 +37,148 @@ function host(): SessionWorkspaceHost {
 }
 afterEach(() => document.body.replaceChildren());
 describe("workspace file tabs", () => {
+  it.each(["A fails first", "B succeeds first"])(
+    "keeps the Files browser usable when overlapping reads settle: %s",
+    async (order) => {
+      const state = host();
+      const a = Promise.withResolvers<SessionWorkspaceGetResult>();
+      const b = Promise.withResolvers<SessionWorkspaceGetResult>();
+      const getFile = vi.fn().mockReturnValueOnce(a.promise).mockReturnValueOnce(b.promise);
+      state.sessions.getFile = getFile;
+      state.sessions.listFiles = vi.fn().mockResolvedValue({
+        sessionKey: state.sessionKey,
+        root: "/workspace",
+        files: [],
+        browser: {
+          path: "",
+          entries: ["A.md", "B.md"].map((name) => ({ kind: "file", name, path: name })),
+        },
+      });
+      const panel = document.createElement("openclaw-chat-files-panel");
+      panel.onSelect = (id) => selectSessionWorkspacePreview(state, id);
+      state.requestUpdate = () => {
+        const workspace = getSessionWorkspace(state);
+        panel.previews = workspace.previews;
+        panel.activeId = workspace.activePreviewId;
+        panel.browser = renderSessionWorkspaceRail(createSessionWorkspaceProps(state), {
+          embedded: true,
+        });
+      };
+      document.body.append(panel);
+      createSessionWorkspaceProps(state).onRefresh();
+      await vi.waitFor(() => expect(panel.querySelectorAll('[role="listitem"]')).toHaveLength(2));
+      panel.querySelector<HTMLButtonElement>('button[aria-label="A.md"]')!.click();
+      panel.selectHostedTab("browse");
+      await panel.updateComplete;
+      panel.querySelector<HTMLButtonElement>('button[aria-label="B.md"]')!.click();
+      const workspace = getSessionWorkspace(state);
+      const [previewA, previewB] = workspace.previews;
+      const failA = async () => {
+        a.reject(new Error("A was removed"));
+        await vi.waitFor(() => expect(previewA?.content.kind).toBe("unavailable"));
+      };
+      const succeedB = async () => {
+        b.resolve({
+          sessionKey: state.sessionKey,
+          root: "/workspace",
+          file: { name: "B.md", path: "B.md", kind: "read", missing: false, content: "B" },
+        });
+        await vi.waitFor(() => expect(previewB?.content.kind).toBe("file"));
+      };
+      if (order === "A fails first") {
+        await failA();
+        await succeedB();
+      } else {
+        await succeedB();
+        await failA();
+      }
+      expect(workspace.activePreviewId).toBe(previewB?.id);
+      panel.selectHostedTab(previewA!.id);
+      await panel.updateComplete;
+      expect(panel.querySelector('[role="alert"]')?.textContent).toContain("A was removed");
+      panel.selectHostedTab("browse");
+      await panel.updateComplete;
+      expect(panel.querySelectorAll('[role="listitem"]')).toHaveLength(2);
+      expect(panel.querySelector(".chat-workspace-rail__state--error")).toBeNull();
+      const contentB = previewB?.content;
+      getFile.mockResolvedValue({
+        sessionKey: state.sessionKey,
+        root: "/workspace",
+        file: { name: "A.md", path: "A.md", kind: "read", missing: false, content: "Restored A" },
+      });
+      panel.querySelector<HTMLButtonElement>('button[aria-label="A.md"]')!.click();
+      await vi.waitFor(() => expect(previewA?.content).toMatchObject({ content: "Restored A" }));
+      expect(workspace.previews).toEqual([previewA, previewB]);
+      expect(previewB?.content).toBe(contentB);
+      expect(state.sessions.listFiles).toHaveBeenCalledOnce();
+      closeSessionWorkspacePreview(state, previewA!.id);
+      panel.selectHostedTab("browse");
+      await panel.updateComplete;
+      expect(panel.querySelectorAll('[role="listitem"]')).toHaveLength(2);
+    },
+  );
+
+  it.each(["file", "artifact"] as const)(
+    "keeps a failed listing visible while a %s preview loads and succeeds",
+    async (kind) => {
+      const state = host();
+      const pending = Promise.withResolvers<SessionWorkspaceGetResult>();
+      state.sessions.getFile = vi.fn().mockReturnValue(pending.promise);
+      state.client = createGatewayBrowserClientFixture({
+        request: (method) =>
+          method === "artifacts.download"
+            ? pending.promise.then(() => ({
+                artifact: { title: "Report", mimeType: "text/plain" },
+                url: "https://example.com/report",
+              }))
+            : { artifacts: [] },
+      });
+      state.sessions.listFiles = vi.fn().mockRejectedValueOnce(new Error("Listing failed"));
+      const props = createSessionWorkspaceProps(state);
+      props.onRefresh();
+      await vi.waitFor(() =>
+        expect(createSessionWorkspaceProps(state).error).toBe("Listing failed"),
+      );
+      if (kind === "file") {
+        props.onOpenFile("notes.md", "session");
+      } else {
+        props.onOpenArtifact("report");
+      }
+      expect(createSessionWorkspaceProps(state).error).toBe("Listing failed");
+      pending.resolve({
+        sessionKey: state.sessionKey,
+        file: {
+          name: "notes.md",
+          path: "notes.md",
+          kind: "read",
+          missing: false,
+          content: "Notes",
+        },
+      });
+      await vi.waitFor(() =>
+        expect(getSessionWorkspace(state).previews[0]?.content.kind).toBe(
+          kind === "file" ? "file" : "markdown",
+        ),
+      );
+      const panel = document.createElement("openclaw-chat-files-panel");
+      panel.browser = renderSessionWorkspaceRail(createSessionWorkspaceProps(state), {
+        embedded: true,
+      });
+      document.body.append(panel);
+      await panel.updateComplete;
+      expect(panel.querySelector(".chat-workspace-rail__state--error")?.textContent).toContain(
+        "Listing failed",
+      );
+      vi.mocked(state.sessions.listFiles).mockResolvedValue({
+        sessionKey: state.sessionKey,
+        files: [],
+      });
+      props.onRefresh();
+      await vi.waitFor(() => expect(createSessionWorkspaceProps(state).loading).toBe(false));
+      expect(createSessionWorkspaceProps(state).error).toBeNull();
+    },
+  );
+
   it("revalidates a clean file on explicit reopen without replacing its tab", async () => {
     const state = host();
     const getFile = vi.fn().mockResolvedValue({
