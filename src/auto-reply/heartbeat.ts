@@ -55,6 +55,26 @@ function stripHeartbeatHtmlComments(content: string): string[] {
   return content.split("\n").map((line) => stripLeadingHtmlCommentScaffolding(line, state));
 }
 
+const LEGACY_HEARTBEAT_FENCED_RELATED_TEMPLATE = [
+  "```markdown",
+  "# Keep this file empty (or with only comments) to skip heartbeat API calls.",
+  "# Add tasks below when you want the agent to check something periodically.",
+  "```",
+  "## Related",
+  "- [Heartbeat config](/gateway/config-agents)",
+] as const;
+
+function isLegacyHeartbeatFencedRelatedTemplate(content: string): boolean {
+  const lines = content
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0);
+  return (
+    lines.length === LEGACY_HEARTBEAT_FENCED_RELATED_TEMPLATE.length &&
+    lines.every((line, index) => line === LEGACY_HEARTBEAT_FENCED_RELATED_TEMPLATE[index])
+  );
+}
+
 /**
  * Check if heartbeat scratch is "effectively empty" - meaning it has no actionable tasks.
  * This allows skipping heartbeat API calls when no tasks are configured.
@@ -75,6 +95,13 @@ export function isHeartbeatContentEffectivelyEmpty(content: string | undefined |
   }
   if (typeof content !== "string") {
     return false;
+  }
+
+  // Older migrated templates included a documentation footer after the
+  // otherwise comment-only fenced body. Keep this exact legacy shape quiet,
+  // while leaving arbitrary Markdown links and genuine edits actionable.
+  if (isLegacyHeartbeatFencedRelatedTemplate(content)) {
+    return true;
   }
 
   for (const line of stripHeartbeatHtmlComments(content)) {

@@ -1515,6 +1515,7 @@ describe("runHeartbeatOnce", () => {
     | "empty"
     | "actionable"
     | "fenced-empty"
+    | "legacy-fenced-related-empty"
     | "fenced-actionable"
     | "missing";
 
@@ -1544,16 +1545,27 @@ describe("runHeartbeatOnce", () => {
 # Add tasks below when you want the agent to check something periodically.
 \`\`\`
 `
-          : params.fileState === "actionable"
-            ? "# Heartbeat scratch\n\n- Check server logs\n- Review pending PRs\n"
-            : params.fileState === "fenced-actionable"
-              ? `\`\`\`markdown
+          : params.fileState === "legacy-fenced-related-empty"
+            ? `\`\`\`markdown
+# Keep this file empty (or with only comments) to skip heartbeat API calls.
+
+# Add tasks below when you want the agent to check something periodically.
+\`\`\`
+
+## Related
+
+- [Heartbeat config](/gateway/config-agents)
+`
+            : params.fileState === "actionable"
+              ? "# Heartbeat scratch\n\n- Check server logs\n- Review pending PRs\n"
+              : params.fileState === "fenced-actionable"
+                ? `\`\`\`markdown
 # Keep this empty when you want to skip.
 
 - Check server logs
 \`\`\`
 `
-              : null;
+                : null;
 
     const cfg: OpenClawConfig = {
       agents: {
@@ -1794,8 +1806,25 @@ tasks:
         expectedReplyCalls: 0,
       },
       {
+        name: "legacy fenced template with docs footer + interval skips",
+        fileState: "legacy-fenced-related-empty",
+        expectedStatus: "skipped",
+        expectedSkipReason: "empty-heartbeat-file",
+        expectedSendCalls: 0,
+        expectedReplyCalls: 0,
+      },
+      {
         name: "empty file + wake runs",
         fileState: "empty",
+        reason: "wake",
+        expectedStatus: "ran",
+        expectedSendCalls: 1,
+        expectedReplyCalls: 1,
+        replyText: "wake event processed",
+      },
+      {
+        name: "legacy fenced template with docs footer + wake runs",
+        fileState: "legacy-fenced-related-empty",
         reason: "wake",
         expectedStatus: "ran",
         expectedSendCalls: 1,

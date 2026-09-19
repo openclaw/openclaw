@@ -246,6 +246,35 @@ Keep this scratch empty unless you want a tiny checklist. Keep it small.
     expect(isHeartbeatContentEffectivelyEmpty(content)).toBe(true);
   });
 
+  it("returns true for the legacy fenced template with its docs footer", () => {
+    const content = `\`\`\`markdown
+# Keep this file empty (or with only comments) to skip heartbeat API calls.
+
+# Add tasks below when you want the agent to check something periodically.
+\`\`\`
+
+## Related
+
+- [Heartbeat config](/gateway/config-agents)
+`;
+    expect(isHeartbeatContentEffectivelyEmpty(content)).toBe(true);
+  });
+
+  it("keeps a user edit to the legacy fenced template actionable", () => {
+    const content = `\`\`\`markdown
+# Keep this file empty (or with only comments) to skip heartbeat API calls.
+
+# Add tasks below when you want the agent to check something periodically.
+\`\`\`
+
+## Related
+
+- [Heartbeat config](/gateway/config-agents)
+- Check email
+`;
+    expect(isHeartbeatContentEffectivelyEmpty(content)).toBe(false);
+  });
+
   it("returns false when fenced heartbeat content includes a real task", () => {
     const content = `\`\`\`markdown
 # Keep this scratch empty when you want to skip.
