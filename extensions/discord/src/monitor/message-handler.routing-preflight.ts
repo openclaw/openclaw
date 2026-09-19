@@ -6,6 +6,7 @@ import { resolveDiscordConversationBindingRoute } from "./conversation-binding-r
 import type { DiscordMessagePreflightParams } from "./message-handler.preflight.types.js";
 import {
   buildDiscordRoutePeer,
+  isDiscordRuntimeAcpThreadBinding,
   resolveDiscordConversationRoute,
   resolveDiscordEffectiveRoute,
 } from "./route-resolution.js";
@@ -59,8 +60,11 @@ export async function resolveDiscordPreflightRoute(params: {
   const boundSessionKey = conversationRuntime.isPluginOwnedSessionBindingRecord(threadBinding)
     ? ""
     : (runtimeRoute.boundSessionKey ?? threadBinding?.targetSessionKey?.trim());
+  const isRuntimeAcpBinding = isDiscordRuntimeAcpThreadBinding(runtimeRoute.bindingRecord);
   const effectiveRoute = runtimeRoute.boundSessionKey
-    ? runtimeRoute.route
+    ? isRuntimeAcpBinding
+      ? route
+      : runtimeRoute.route
     : resolveDiscordEffectiveRoute({
         route,
         boundSessionKey,
@@ -74,7 +78,9 @@ export async function resolveDiscordPreflightRoute(params: {
     configuredBinding,
     boundSessionKey,
     effectiveRoute,
-    boundAgentId: boundSessionKey ? effectiveRoute.agentId : undefined,
+    boundAgentId: boundSessionKey
+      ? (runtimeRoute.boundAgentId ?? effectiveRoute.agentId)
+      : undefined,
     baseSessionKey: effectiveRoute.sessionKey,
   };
 }

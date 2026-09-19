@@ -6,6 +6,7 @@ import {
   createDirectMessageContextOverrides,
   createDiscordDraftStream,
   createNoQueuedDispatchResult,
+  deliverDiscordReply,
   dispatchInboundMessageForTest as dispatchInboundMessage,
   getLastDispatchCtx,
   getLastDispatchReplyOptions,
@@ -416,6 +417,52 @@ describe("processDiscordMessage session routing", () => {
       to: "channel:c1",
       accountId: "default",
     });
+  });
+
+  it("dispatches runtime ACP thread messages with the Discord source owner and session", async () => {
+    const sourceSessionKey = "agent:worker:discord:channel:thread-1";
+    const targetSessionKey = "agent:claude:acp:runtime:discord-thread";
+    dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
+      await params?.dispatcher.sendFinalReply({ text: "ACP reply" });
+      return { queuedFinal: true, counts: { final: 1, tool: 0, block: 0 } };
+    });
+    const ctx = await createBaseContext({
+      baseSessionKey: sourceSessionKey,
+      boundSessionKey: targetSessionKey,
+      threadBinding: {
+        bindingId: "runtime-acp-thread",
+        targetSessionKey,
+        targetKind: "session",
+        conversation: {
+          channel: "discord",
+          accountId: "default",
+          conversationId: "thread-1",
+          parentConversationId: "channel-1",
+        },
+        status: "active",
+        boundAt: 1,
+      },
+      route: {
+        agentId: "worker",
+        channel: "discord",
+        accountId: "default",
+        sessionKey: sourceSessionKey,
+        mainSessionKey: "agent:worker:main",
+      },
+    });
+
+    await runProcessDiscordMessage(ctx);
+
+    expectRecordFields(requireRecord(getLastDispatchCtx(), "dispatch context"), {
+      AgentId: "worker",
+      SessionKey: sourceSessionKey,
+    });
+    expect(deliverDiscordReply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionKey: targetSessionKey,
+        target: "channel:c1",
+      }),
+    );
   });
 
   it("marks explicit message-tool guild replies as message-tool-only and disables source streaming", async () => {
