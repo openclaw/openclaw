@@ -2234,6 +2234,16 @@ importers:
         specifier: workspace:*
         version: link:../../packages/plugin-sdk
 
+  extensions/typesafe:
+    dependencies:
+      typebox:
+        specifier: 1.3.30
+        version: 1.3.30
+    devDependencies:
+      '@openclaw/plugin-sdk':
+        specifier: workspace:*
+        version: link:../../packages/plugin-sdk
+
   extensions/vault:
     devDependencies:
       '@openclaw/plugin-sdk':

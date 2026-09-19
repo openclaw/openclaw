@@ -4866,5 +4866,17 @@
   {
     "source": "Decision models",
     "target": "决策模型"
+  },
+  {
+    "source": "TypeSafe AI",
+    "target": "TypeSafe AI"
+  },
+  {
+    "source": "Typesafe plugin reference",
+    "target": "TypeSafe 插件参考"
+  },
+  {
+    "source": "typesafe",
+    "target": "typesafe"
   }
 ]
