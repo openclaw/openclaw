@@ -178,6 +178,12 @@ export function renderAgentChannels(params: {
   const lastSuccessLabel = params.lastSuccess
     ? formatRelativeTimestamp(params.lastSuccess)
     : t("common.never");
+  // The load hint and the empty state both describe a settled, successful read.
+  // An in-flight read already shows `common.refreshing` on the section button,
+  // and a failed one shows the error callout, so neither message belongs yet.
+  const readSettled = !params.loading && !params.error;
+  const showLoadHint = !params.snapshot && readSettled;
+  const showEmptyState = entries.length === 0 && readSettled;
   return html`
     ${renderAgentContextSection(
       params.context,
@@ -186,7 +192,7 @@ export function renderAgentChannels(params: {
     )}
     ${params.error ? html`<div class="callout danger">${params.error}</div>` : nothing}
     ${
-      !params.snapshot
+      showLoadHint
         ? html`<div class="callout info">${t("agents.channels.loadHint")}</div>`
         : nothing
     }
@@ -201,7 +207,7 @@ export function renderAgentChannels(params: {
           </button>
         `,
       },
-      entries.length === 0
+      showEmptyState
         ? renderSettingsEmpty(t("agents.channels.empty"))
         : entries.map((entry) => {
             const summary = summarizeChannelAccounts(entry.accounts);
