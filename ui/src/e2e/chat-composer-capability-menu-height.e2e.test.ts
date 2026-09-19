@@ -11,7 +11,7 @@ const suite = createControlUiE2eSuite({
 });
 
 function skill(index: number) {
-  const name = `Skill ${String(index).padStart(2, "0")}`;
+  const name = `transcript-search-design-investigation-and-release-validation-${String(index).padStart(2, "0")}`;
   return {
     name,
     description: `${name} skill`,
@@ -79,7 +79,7 @@ function toolsEffectiveResponse() {
           const number = String(index + 1).padStart(2, "0");
           return {
             id: `mcp_connector_00_tool_${number}`,
-            label: `Project tool ${number}`,
+            label: `Project resource ${number} with a long customer-facing release evidence description`,
             description: `Operate on project resource ${number}`,
             rawDescription: `Operate on project resource ${number}`,
             source: "mcp",
@@ -93,8 +93,13 @@ function toolsEffectiveResponse() {
 }
 
 suite.define(() => {
-  it("caps every long capability view at 420px and keeps keyboard focus visible", async () => {
-    await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
+  it.each([
+    { width: 1280, height: 900 },
+    { width: 390, height: 844 },
+    { width: 320, height: 640 },
+    { width: 844, height: 390 },
+  ])("keeps menu geometry at $width×$height", async (viewport) => {
+    await suite.withPage({ viewport, reducedMotion: "reduce" }, async ({ page }) => {
       const gateway = await installMockGateway(page, {
         featureMethods: ["chat.metadata", "chat.startup", "sessions.patch", "tools.effective"],
         historyMessages: [
@@ -139,6 +144,19 @@ suite.define(() => {
       const attach = composer.locator("button.agent-chat__input-btn--attach");
       await expect.poll(() => attach.isVisible()).toBe(true);
       await attach.click();
+      const panel = dropdown.locator('[part="menu"]');
+      const expectedWidth = Math.min(400, viewport.width - 24);
+      const assertWidth = async () => {
+        await expect
+          .poll(() => panel.evaluate((el) => el.getBoundingClientRect().width))
+          .toBe(expectedWidth);
+        const box = (await panel.boundingBox())!;
+        expect(box.x).toBeGreaterThanOrEqual(0);
+        expect(box.y).toBeGreaterThanOrEqual(0);
+        expect(box.x + box.width).toBeLessThanOrEqual(viewport.width);
+        expect(box.y + box.height).toBeLessThanOrEqual(viewport.height);
+      };
+      await assertWidth();
       await dropdown.locator('[value="open-skills"]').click();
       await expect.poll(() => dropdown.getAttribute("data-view")).toBe("skills");
 
@@ -171,6 +189,25 @@ suite.define(() => {
       };
 
       const inspectView = async (view: string) => {
+        await assertWidth();
+        const overflow = await dropdown
+          .locator(".agent-chat__capability-menu-label")
+          .evaluateAll((labels) =>
+            Math.max(
+              0,
+              ...labels.map((label) => {
+                const row = label.closest("wa-dropdown-item") ?? label.parentElement!;
+                const text = label.getBoundingClientRect();
+                const bounds = row.getBoundingClientRect();
+                const toggle = row.querySelector("wa-switch")?.getBoundingClientRect();
+                return Math.max(
+                  text.height - bounds.height,
+                  text.right - (toggle?.left ?? bounds.right),
+                );
+              }),
+            ),
+          );
+        expect(overflow).toBeLessThanOrEqual(1);
         const layout = await dropdown.evaluate((node) => {
           const menu = node.shadowRoot?.querySelector<HTMLElement>('[part="menu"]');
           const composerElement = node.closest<HTMLElement>(".agent-chat__input");
@@ -211,6 +248,7 @@ suite.define(() => {
           document.documentElement.dataset.themeMode = mode;
         }, theme);
         await interactionTarget.scrollIntoViewIfNeeded();
+        const before = (await interactionTarget.boundingBox())!;
 
         if (state === "hover") {
           await interactionTarget.hover();
@@ -232,6 +270,10 @@ suite.define(() => {
             )
             .toBe(true);
         }
+
+        const after = (await interactionTarget.boundingBox())!;
+        expect(after.width).toBe(before.width);
+        expect(after.height).toBe(before.height);
 
         await expect
           .poll(() =>
@@ -289,6 +331,7 @@ suite.define(() => {
       await captureInteraction("focus", "light");
 
       await back.click();
+      await assertWidth();
       await dropdown.locator('[value="open-connectors"]').click();
       await expect.poll(() => dropdown.getAttribute("data-view")).toBe("connectors");
       layouts.push(await inspectView("connectors"));
@@ -297,6 +340,14 @@ suite.define(() => {
       await expect.poll(() => dropdown.getAttribute("data-view")).toBe("tools:connector-00");
       await expect.poll(() => dropdown.getByText("28 of 28 tools on").isVisible()).toBe(true);
       layouts.push(await inspectView("tool-access"));
+
+      await back.click();
+      await assertWidth();
+      await back.click();
+      await assertWidth();
+      expect(await gateway.getRequests("sessions.patch")).toHaveLength(0);
+      await page.keyboard.press("Escape");
+      await expect.poll(() => attach.evaluate((el) => document.activeElement === el)).toBe(true);
 
       if (artifactDir && captureStage) {
         await fs.writeFile(
@@ -307,7 +358,7 @@ suite.define(() => {
 
       for (const layout of layouts) {
         const compactHeightCap = Math.min(layout.token, 420, layout.viewportHeight * 0.5);
-        expect(compactHeightCap).toBe(420);
+        expect(compactHeightCap).toBeGreaterThan(0);
         expect(layout.scrollHeight).toBeGreaterThan(layout.clientHeight);
         expect(layout.scrollTop).toBeGreaterThan(0);
         expect(layout.maxHeight).toBeGreaterThanOrEqual(compactHeightCap - 1);

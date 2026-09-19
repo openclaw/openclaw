@@ -279,22 +279,20 @@
     50dvh,
     var(--chat-composer-popover-max-height, calc(100dvh - 116px))
   );
-  width: 272px;
-  min-width: 272px;
-  max-width: min(272px, calc(100vw - 24px));
+  /* Root and every nested capability view share this viewport-clamped width. */
+  width: min(400px, calc(100vw - 24px));
+  min-width: 0;
+  max-width: calc(100vw - 24px);
   padding: 4px;
   overflow-y: auto;
   overscroll-behavior: contain;
   scrollbar-gutter: stable;
 }
 
-.agent-chat__capability-menu[data-view="root"]::part(menu) {
-  /* Wide enough that "Web search" plus its trailing switch stays one line. */
-  width: 208px;
-  min-width: 208px;
-  max-width: min(208px, calc(100vw - 24px));
-  overflow-y: visible;
-  scrollbar-gutter: auto;
+/* The capped flex column must scroll, not shrink wrapped labels into other rows.
+   Include status and divider rows as well as interactive items. */
+.agent-chat__capability-menu > :not([slot="trigger"]) {
+  flex-shrink: 0;
 }
 
 .agent-chat__capability-menu-item[value="back"] {

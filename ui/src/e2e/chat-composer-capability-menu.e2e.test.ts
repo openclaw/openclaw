@@ -630,11 +630,13 @@ suite.define(() => {
         const docs = menu.getByRole("menuitem", { name: /^Docs/ });
         await expect.poll(() => docs.isDisabled()).toBe(true);
         await expect.poll(() => tooltipTitleText(docs)).toContain("operator.admin access");
-        // Leave disabled-row hints before the next click's hit test. Returning to
-        // the root can put Web search under the pointer that clicked Back.
-        await composer.locator("textarea").hover();
+        // The wider menu covers the textarea center. Leave disabled-row hints
+        // at its uncovered right edge before the next menu click.
+        const textarea = composer.locator("textarea");
+        const outside = { x: (await textarea.boundingBox())!.width - 8, y: 8 };
+        await textarea.hover({ position: outside });
         await menu.getByRole("menuitem", { name: "Back" }).click();
-        await composer.locator("textarea").hover();
+        await textarea.hover({ position: outside });
         await menu.getByRole("menuitem", { name: /^Connectors/ }).click();
         await expect
           .poll(() => menu.getByRole("menuitem", { name: /^github/ }).isDisabled())
