@@ -389,7 +389,7 @@ async function withOfflineGatewayLock<T>(
 async function callSkillCurator<T>(
   method: "status" | "pin" | "restore" | "unpin",
   params: { skill?: string },
-  loadLocal: (config: ResolvedSkillsWorkspace["config"]) => T,
+  loadLocal: (config: ResolvedSkillsWorkspace["config"]) => T | Promise<T>,
 ): Promise<T> {
   const config = getRuntimeConfig();
   try {

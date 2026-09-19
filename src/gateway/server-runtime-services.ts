@@ -101,8 +101,8 @@ export async function clearGatewayMaintenanceHandles(
   clearInterval(maintenance.healthInterval);
   clearInterval(maintenance.dedupeCleanup);
   clearInterval(maintenance.worktreeCleanup);
-  maintenance.skillUsageCleanup();
   await Promise.all([
+    maintenance.skillUsageCleanup(),
     maintenance.stopTelemetryChecks(),
     maintenance.stopSessionColdStorageMaintenance(),
     maintenance.stopMediaCleanup(),

@@ -81,6 +81,10 @@ import {
   recordSessionStateEventInDatabase,
 } from "../sessions/session-state-events.kernel.js";
 import { listWatchedSessionUpstreamLinksInDatabase } from "../sessions/session-upstream-links.kernel.js";
+import {
+  readSkillCuratorStateInDatabase,
+  recordSkillUsageInDatabase,
+} from "../skills/workshop/curator.kernel.js";
 import { isTaskRegistryWorkerCommand } from "../tasks/task-registry.worker-contract.js";
 import { executeTaskRegistryCommand } from "../tasks/task-registry.worker.js";
 import { ensureMeetingTranscriptsSchema } from "../transcripts/sqlite-schema.js";
@@ -359,6 +363,15 @@ function createSharedStateWorkerBackend(
           : read(open().db);
       }
       const database = open();
+      if (command.type === "skills.curator.read") {
+        return readSkillCuratorStateInDatabase(database, command.input.skillFiles);
+      }
+      if (command.type === "skills.usage.record") {
+        return runOpenClawStateWriteTransaction(
+          (current) => recordSkillUsageInDatabase(current, command.input),
+          { database, path: context.databasePath, env: getSqliteWorkerStateContext().environment },
+        );
+      }
       if (command.type === "deviceAuth.list") {
         return deviceAuth.readDeviceAuthTokensFromDatabase(database.db, command.input);
       }

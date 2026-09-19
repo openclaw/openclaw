@@ -39,9 +39,13 @@ function roundTrip(error: Error): Error {
 }
 
 describe("shared-state worker error transport", () => {
-  it.each([false, true])("preserves RangeError identity with aggregate=%s", (aggregate) => {
+  it.each(
+    [RangeError, SyntaxError, TypeError].flatMap((ErrorType) =>
+      [false, true].map((aggregate) => ({ ErrorType, name: ErrorType.name, aggregate })),
+    ),
+  )("preserves $name identity with aggregate=$aggregate", ({ ErrorType, aggregate }) => {
     const original = Object.assign(
-      new RangeError("Synthetic integer cannot be decoded safely", {
+      new ErrorType("Synthetic state cannot be decoded safely", {
         cause: new Error("Synthetic decoding cause"),
       }),
       { code: "ERR_OUT_OF_RANGE" },
@@ -51,9 +55,9 @@ describe("shared-state worker error transport", () => {
       : original;
     const decoded = roundTrip(root);
     const restored = aggregate ? decoded.cause : decoded;
-    expect(restored).toBeInstanceOf(RangeError);
+    expect(restored).toBeInstanceOf(ErrorType);
     expect(restored).toMatchObject({
-      name: "RangeError",
+      name: ErrorType.name,
       message: original.message,
       code: original.code,
       cause: { message: "Synthetic decoding cause" },
@@ -409,6 +413,8 @@ describe("shared-state worker error transport", () => {
     for (const error of [
       new Error("ordinary"),
       Object.assign(new Error("range imitation"), { name: "RangeError", code: "ERR_OUT_OF_RANGE" }),
+      Object.assign(new Error("syntax imitation"), { name: "SyntaxError" }),
+      Object.assign(new Error("type imitation"), { name: "TypeError" }),
       imitation,
       new AggregateError([imitation], "ordinary aggregate"),
       { cause: new OpenClawStateOwnershipError("nested object") },

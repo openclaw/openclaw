@@ -118,7 +118,7 @@ export function startGatewayMaintenanceTimers(params: {
   stopSessionColdStorageMaintenance: () => Promise<void>;
   stopTelemetryChecks: () => Promise<void>;
   worktreeCleanup: ReturnType<typeof setInterval>;
-  skillUsageCleanup: () => void;
+  skillUsageCleanup: () => Promise<void>;
 } {
   setBroadcastHealthUpdate((snap: HealthSummary) => {
     params.broadcast("health", snap, {

@@ -721,7 +721,7 @@ describe("private subagent completion processing receipts", () => {
         clearInterval(timers.healthInterval);
         clearInterval(timers.dedupeCleanup);
         clearInterval(timers.worktreeCleanup);
-        timers.skillUsageCleanup();
+        await timers.skillUsageCleanup();
         await timers.stopMediaCleanup();
         await timers.stopSessionColdStorageMaintenance();
         vi.useRealTimers();

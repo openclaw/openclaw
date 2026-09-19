@@ -76,7 +76,7 @@ export function createGatewayCloseTestDepsFactory(mocks: GatewayCloseFixtureMock
         stopSessionColdStorageMaintenance: vi.fn(async () => {}),
         stopTelemetryChecks: vi.fn(async () => {}),
         worktreeCleanup: setInterval(() => undefined, 60_000),
-        skillUsageCleanup: vi.fn(),
+        skillUsageCleanup: vi.fn(async () => {}),
       },
       stopMediaCleanup: vi.fn(async () => "drained" as const),
       agentUnsub: null,

@@ -8,22 +8,25 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-it("joins telemetry admitted before post-ready maintenance cleanup", async () => {
-  vi.useFakeTimers();
-  const maintenance = createMaintenanceHandles();
-  const stopped = createDeferredCore();
-  maintenance.stopTelemetryChecks.mockImplementation(() => stopped.promise);
-  let cleared = false;
-  const clearing = clearGatewayMaintenanceHandles(maintenance).then(() => {
-    cleared = true;
-  });
-  try {
-    expect(maintenance.stopTelemetryChecks).toHaveBeenCalledOnce();
-    await Promise.resolve();
-    expect(cleared).toBe(false);
-  } finally {
-    stopped.resolve();
-    await clearing;
-  }
-  expect(cleared).toBe(true);
-});
+it.each(["stopTelemetryChecks", "skillUsageCleanup"] as const)(
+  "joins %s admitted before post-ready maintenance cleanup",
+  async (owner) => {
+    vi.useFakeTimers();
+    const maintenance = createMaintenanceHandles();
+    const stopped = createDeferredCore();
+    maintenance[owner].mockImplementation(() => stopped.promise);
+    let cleared = false;
+    const clearing = clearGatewayMaintenanceHandles(maintenance).then(() => {
+      cleared = true;
+    });
+    try {
+      expect(maintenance[owner]).toHaveBeenCalledOnce();
+      await Promise.resolve();
+      expect(cleared).toBe(false);
+    } finally {
+      stopped.resolve();
+      await clearing;
+    }
+    expect(cleared).toBe(true);
+  },
+);

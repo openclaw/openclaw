@@ -28,7 +28,17 @@ type ErrorValue =
   | { undefined: true };
 
 type ErrorIdentity =
-  | { type: "error" | "aggregate" | "ownership" | "newer-schema" | "coordinator" | "range-error" }
+  | {
+      type:
+        | "error"
+        | "aggregate"
+        | "ownership"
+        | "newer-schema"
+        | "coordinator"
+        | "range-error"
+        | "syntax-error"
+        | "type-error";
+    }
   | { type: "coordinator-contention"; family: CoordinatorFamily }
   | { type: "ownership-metadata"; databasePath: string }
   | { type: "external-ownership"; databasePath: string; managerId: string }
@@ -96,6 +106,12 @@ function identifyError(error: Error): ErrorIdentity {
   }
   if (error instanceof RangeError) {
     return { type: "range-error" };
+  }
+  if (error instanceof SyntaxError) {
+    return { type: "syntax-error" };
+  }
+  if (error instanceof TypeError) {
+    return { type: "type-error" };
   }
   return { type: error instanceof AggregateError ? "aggregate" : "error" };
 }
@@ -186,6 +202,8 @@ function parseIdentity(node: Record<string, unknown>): ErrorIdentity | undefined
     case "newer-schema":
     case "coordinator":
     case "range-error":
+    case "syntax-error":
+    case "type-error":
       return { type: node.type };
     case "coordinator-contention":
       return node.family === "gateway-lifecycle" ||
@@ -304,6 +322,10 @@ function createError(node: ErrorNode): Error {
       return new Error(node.message);
     case "range-error":
       return new RangeError(node.message);
+    case "syntax-error":
+      return new SyntaxError(node.message);
+    case "type-error":
+      return new TypeError(node.message);
     case "aggregate":
       return new AggregateError([], node.message);
     case "coordinator":
