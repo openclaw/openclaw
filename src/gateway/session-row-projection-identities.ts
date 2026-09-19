@@ -1,5 +1,6 @@
 import type { SessionSharingIdentity } from "../../packages/gateway-protocol/src/index.js";
 import { listSessionEntriesReadOnly } from "../config/sessions/session-accessor.sqlite-entry.js";
+import { sessionCreatorProfileId } from "../config/sessions/session-entry-provenance.js";
 import { isIncognitoSessionKey } from "../routing/session-key.js";
 import { readAgentDatabaseAdmissionRefusal } from "../state/agent-database-admission.js";
 import { listOpenIncognitoAgentDatabases } from "../state/openclaw-agent-db.js";
@@ -22,8 +23,13 @@ export function createSessionRowCreatorIndex() {
   }
   return {
     update(previous: Row | undefined, next?: Row) {
-      const before = previous?.entry?.createdActor;
-      const after = next?.entry?.createdActor;
+      // Only a profile-sourced human creator may become a sharing identity. A
+      // channel/unknown human or an agent/system creator is not an account the
+      // operator can grant access to, so admitting it offers a target that
+      // cannot be authorized. Filtered at ingest because `list()` drops
+      // `source` when it projects to SessionSharingIdentity.
+      const before = shareableCreator(previous);
+      const after = shareableCreator(next);
       if (
         Boolean(previous?.entry) === Boolean(next?.entry) &&
         before?.id === after?.id &&
@@ -128,6 +134,18 @@ export function createSessionRowCreatorIndex() {
   };
 }
 
+/** A row's creator, unless it is a human whose identity is not a Gateway profile. */
+function shareableCreator(row: Row | undefined) {
+  const actor = row?.entry?.createdActor;
+  if (!actor) {
+    return undefined;
+  }
+  // Agent and system creators stay eligible; only a *human* creator needs a
+  // profile, because a channel/unknown human id is a chat handle rather than
+  // an account the operator can grant access to.
+  return actor.type !== "human" || sessionCreatorProfileId(actor) ? actor : undefined;
+}
+
 /** Incognito creators preserve the existing picker scope without entering resident memory. */
 function listOpenIncognitoSessionCreators() {
   return listOpenIncognitoAgentDatabases().flatMap((target) => {
@@ -136,7 +154,10 @@ function listOpenIncognitoSessionCreators() {
     }
     return listSessionEntriesReadOnly({ ...target, projection: "list", clone: false }).flatMap(
       ({ sessionKey, entry }) =>
-        isIncognitoSessionKey(sessionKey) && entry.incognito === true && entry.createdActor?.id
+        isIncognitoSessionKey(sessionKey) &&
+        entry.incognito === true &&
+        entry.createdActor?.id &&
+        (entry.createdActor.type !== "human" || sessionCreatorProfileId(entry.createdActor))
           ? [entry.createdActor]
           : [],
     );
