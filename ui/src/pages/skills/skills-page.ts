@@ -24,6 +24,7 @@ import {
   loadSkills,
   refreshSkills,
   reconcileSkillsAgentId,
+  resetSkillCardState,
   saveSkillApiKey,
   setSkillsAgentId,
   updateSkillEdit,
@@ -88,6 +89,7 @@ class SkillsPage extends OpenClawLightDomElement {
   @state() clawhubVerdictsLoading = false;
   @state() clawhubVerdictsError: string | null = null;
   @state() skillCardContents: Record<string, string> = {};
+  skillCardRevision = 0;
   @state() skillCardContentKeys: Record<string, string> = {};
   @state() skillCardLoadingKey: string | null = null;
   @state() skillCardErrors: Record<string, string> = {};
@@ -254,10 +256,7 @@ class SkillsPage extends OpenClawLightDomElement {
     this.clawhubVerdicts = {};
     this.clawhubVerdictsLoading = false;
     this.clawhubVerdictsError = null;
-    this.skillCardContents = {};
-    this.skillCardContentKeys = {};
-    this.skillCardLoadingKey = null;
-    this.skillCardErrors = {};
+    resetSkillCardState(this);
     this.clawhubIcons.reset();
   }
 
@@ -340,7 +339,15 @@ class SkillsPage extends OpenClawLightDomElement {
   }
 
   private async refreshPage() {
-    await Promise.all([refreshSkills(this, () => this.loadAgents()), this.library.load()]);
+    await Promise.all([
+      refreshSkills(this, () => this.loadAgents()).then(async (completed) => {
+        // The reader can open or change tabs while inventory Refresh is pending.
+        if (completed && this.skillsDetailTab === "card" && this.skillsDetailKey) {
+          await loadSkillCard(this, this.skillsDetailKey);
+        }
+      }),
+      this.library.load(),
+    ]);
   }
 
   private changeClawHubQuery(query: string) {
