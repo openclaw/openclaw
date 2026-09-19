@@ -1,11 +1,20 @@
 import { vi } from "vitest";
+import { createMessageReceiptFromOutboundResults } from "../../channels/message/receipt.js";
 import type { sendPoll } from "./message.js";
 
 type SendPollParams = Parameters<typeof sendPoll>[0];
 
 export function createPollDeliveryFixture() {
   const order: string[] = [];
-  const evidence = { channel: "demo-outbound", messageId: "poll-1" };
+  const evidence = {
+    channel: "demo-outbound",
+    messageId: "poll-1",
+    receipt: createMessageReceiptFromOutboundResults({
+      results: [{ messageId: "poll-1" }],
+      kind: "poll",
+      sentAt: 1,
+    }),
+  };
   const onSendAccepted = vi.fn(async () => {
     order.push("route");
   });
