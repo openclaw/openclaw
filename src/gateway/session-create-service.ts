@@ -357,10 +357,16 @@ export async function createGatewaySession(params: {
   const requestedToolOverrides = params.toolOverrides !== undefined;
   const explicitAgentId = params.agentId;
   const explicitKeyAgentId = parseAgentSessionKey(requestedKey)?.agentId;
+  const parentKeyAgentId = parseAgentSessionKey(parentSessionKey)?.agentId;
   const selectedAgent = resolveRequestedSessionAgentId(
     params.cfg,
-    requestedKey ?? (explicitAgentId === undefined ? "main" : undefined),
-    explicitAgentId ?? explicitKeyAgentId,
+    requestedKey ??
+      (explicitAgentId === undefined &&
+      explicitKeyAgentId === undefined &&
+      parentKeyAgentId === undefined
+        ? "main"
+        : undefined),
+    explicitAgentId ?? explicitKeyAgentId ?? parentKeyAgentId,
   );
   if (!selectedAgent.ok) {
     return selectedAgent;
