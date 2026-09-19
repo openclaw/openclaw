@@ -10,18 +10,19 @@ const components = [
   ...readFileSync("scripts/pr-lib/wrapper-components.txt", "utf8").trim().split("\n"),
 ];
 
-it.each(["src/state/openclaw-state.worker.ts", "src/infra/sqlite-store.worker.ts"])(
-  "retains %s and its eager runtime dependencies in the wrapper inventory",
-  (entrypoint) => {
-    const closure = collectRuntimeImportClosure(process.cwd(), [entrypoint]);
-    expect(
-      closure.filter(
-        (file) =>
-          !components.some((component) => file === component || file.startsWith(`${component}/`)),
-      ),
-    ).toEqual([]);
-  },
-);
+it.each([
+  "src/state/openclaw-state.worker.ts",
+  "src/state/openclaw-state-worker-runtime.ts",
+  "src/infra/sqlite-store.worker.ts",
+])("retains %s and its eager runtime dependencies in the wrapper inventory", (entrypoint) => {
+  const closure = collectRuntimeImportClosure(process.cwd(), [entrypoint]);
+  expect(
+    closure.filter(
+      (file) =>
+        !components.some((component) => file === component || file.startsWith(`${component}/`)),
+    ),
+  ).toEqual([]);
+});
 
 it.each([
   "src/infra/sqlite-coordinator.ts",

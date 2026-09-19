@@ -1328,6 +1328,7 @@ src/state/openclaw-state-schema.sql
 src/state/openclaw-state-schema.ts
 src/state/openclaw-state-worker-context.ts
 src/state/openclaw-state-worker-error.ts
+src/state/openclaw-state-worker-runtime.ts
 src/state/openclaw-state-worker-store.ts
 src/state/openclaw-state.worker.ts
 src/state/openclaw-update-schema-refusal.ts
