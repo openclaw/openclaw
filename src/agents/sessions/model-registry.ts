@@ -22,6 +22,7 @@ import type {
 } from "../../llm/types.js";
 import type { OAuthProviderInterface } from "../../llm/utils/oauth/types.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { isLikelySensitiveModelProviderHeaderName } from "../../secrets/model-provider-header-policy.js";
 import { normalizeOptionalSecretInput } from "../../utils/normalize-secret-input.js";
 import { getAgentDir } from "../config.js";
 import { sanitizeModelHeaders } from "../embedded-agent-runner/model.inline-provider.js";
@@ -93,6 +94,19 @@ function captureInventoryProvider(
   };
 }
 
+function sanitizeFallbackRequestHeaders(
+  headers: Record<string, string> | undefined,
+): Record<string, string> | undefined {
+  const sanitized = sanitizeModelHeaders(headers, { stripSecretRefMarkers: true });
+  if (!sanitized) {
+    return undefined;
+  }
+  const safe = Object.fromEntries(
+    Object.entries(sanitized).filter(([name]) => !isLikelySensitiveModelProviderHeaderName(name)),
+  );
+  return Object.keys(safe).length > 0 ? safe : undefined;
+}
+
 interface ProviderRequestConfig {
   baseUrls?: readonly string[];
   apiKey?: string;
@@ -126,6 +140,7 @@ type ModelRegistryOptions = {
   config?: OpenClawConfig;
   includePluginCatalogs?: boolean;
   modelsJsonContents?: string | null;
+  modelsJsonSanitizedFallback?: boolean;
   pluginCatalogs?: readonly PersistedPluginModelCatalog[];
   staticProviderConfigs?: Readonly<Record<string, ModelProviderConfig>>;
   pluginMetadataSnapshot?: PluginModelCatalogMetadataSnapshot;
@@ -191,6 +206,7 @@ export class ModelRegistry {
   readonly authStorage: AuthStorage;
   private modelsJsonPath: string | undefined;
   private modelsJsonContents: string | null | undefined;
+  private modelsJsonSanitizedFallback = false;
   private pluginCatalogs: readonly PersistedPluginModelCatalog[] | undefined;
   private staticProviderConfigs: Readonly<Record<string, ModelProviderConfig>> | undefined;
   private pluginMetadataSnapshot: PluginModelCatalogMetadataSnapshot | undefined;
@@ -237,6 +253,7 @@ export class ModelRegistry {
     }
     this.modelsJsonPath = modelsJsonPath;
     this.modelsJsonContents = options.modelsJsonContents;
+    this.modelsJsonSanitizedFallback = options.modelsJsonSanitizedFallback === true;
     this.pluginCatalogs = options.pluginCatalogs;
     this.staticProviderConfigs = options.staticProviderConfigs;
     this.pluginMetadataSnapshot = resolveModelPluginMetadataSnapshot({
@@ -442,6 +459,9 @@ export class ModelRegistry {
       });
     }
     let combined = this.parseModels(providers);
+    if (this.modelsJsonSanitizedFallback) {
+      this.applySanitizedFallbackRequestHeaders(customResult.providers, combined);
+    }
 
     // Let OAuth providers modify their models (e.g., update baseUrl)
     for (const oauthProvider of this.authStorage.getOAuthProviders()) {
@@ -452,6 +472,48 @@ export class ModelRegistry {
     }
 
     this.models = combined;
+  }
+
+  private applySanitizedFallbackRequestHeaders(
+    fallbackProviders: RegistryProviderSources,
+    models: readonly Model[],
+  ): void {
+    for (const model of models) {
+      const fallbackProvider = fallbackProviders[model.provider];
+      const fallbackModel = fallbackProvider?.models?.find(
+        (candidate) => candidate.id === model.id && modelTransportRoutesMatch(candidate, model),
+      );
+      if (!fallbackProvider || !fallbackModel) {
+        continue;
+      }
+
+      const fallbackHeaders = {
+        ...sanitizeFallbackRequestHeaders(fallbackProvider.headers),
+        ...sanitizeFallbackRequestHeaders(fallbackModel.headers),
+      };
+      if (Object.keys(fallbackHeaders).length === 0) {
+        continue;
+      }
+
+      const key = this.getModelRequestKey(model.provider, model.id);
+      const currentProviderHeaders = this.providerRequestConfigs.get(model.provider)?.headers;
+      const currentModelHeaders = this.modelRequestHeaders.get(key);
+      const currentHeaderNames = new Set(
+        [
+          ...Object.keys(currentProviderHeaders ?? {}),
+          ...Object.keys(currentModelHeaders ?? {}),
+        ].map((name) => name.toLowerCase()),
+      );
+      const inheritedHeaders = Object.fromEntries(
+        Object.entries(fallbackHeaders).filter(
+          ([name]) => !currentHeaderNames.has(name.toLowerCase()),
+        ),
+      );
+      this.storeModelHeaders(model.provider, model.id, {
+        ...inheritedHeaders,
+        ...currentModelHeaders,
+      });
+    }
   }
 
   private mergeProviderSources(

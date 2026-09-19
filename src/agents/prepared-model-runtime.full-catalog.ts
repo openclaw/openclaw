@@ -117,6 +117,7 @@ export async function prepareFullCatalogFacts(
       ...(catalogMode === "static" ? { normalizeModels: false } : {}),
       includePluginCatalogs: true,
       modelsJsonContents: catalogSource.modelsJsonContents,
+      modelsJsonSanitizedFallback: catalogSource.modelsJsonSanitizedFallback,
       pluginCatalogs: catalogSource.pluginCatalogs,
       staticProviderConfigs: Object.fromEntries(
         Object.entries(resolvePreparedProviderStaticConfigs(preparedStaticProviderCatalog)).filter(

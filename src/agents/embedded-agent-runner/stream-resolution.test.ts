@@ -734,6 +734,39 @@ describe("resolveEmbeddedAgentStream", () => {
     expect(providerStreamFn).toHaveBeenCalledTimes(1);
   });
 
+  it("injects registry request headers without overriding caller headers", async () => {
+    const providerStreamFn = vi.fn(async (_model, _context, options) => options);
+    const { streamFn } = resolveEmbeddedAgentStream({
+      currentStreamFn: undefined,
+      providerStreamFn,
+      sessionId: "session-1",
+      model: {
+        api: "openai-responses",
+        provider: "custom-openai",
+        id: "custom-model",
+      } as never,
+      requestHeaders: {
+        "X-Catalog-Route": "provider-route",
+        "X-Request-Owner": "registry",
+      },
+    });
+
+    const result = await expectStreamResultRecord(
+      streamFn({ provider: "custom-openai", id: "custom-model" } as never, {} as never, {
+        headers: {
+          "X-Model-Route": "model-route",
+          "X-Request-Owner": "caller",
+        },
+      }),
+      "provider-owned headers result",
+    );
+    expect(result.headers).toEqual({
+      "X-Catalog-Route": "provider-route",
+      "X-Model-Route": "model-route",
+      "X-Request-Owner": "caller",
+    });
+  });
+
   it("propagates prompt cache identity separately from the session id", async () => {
     // Cron and shared runs can use a stable prompt cache key while keeping each
     // run's session id distinct for transcripts and aborts.

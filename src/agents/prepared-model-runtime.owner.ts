@@ -5,6 +5,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { PluginInstanceUnavailableError } from "../plugins/plugin-instance-error.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { isReservedSystemAgentId } from "../system-agent/agent-id.js";
+import { resolveAgentDir, tryResolveAmbientOwnerAgentId } from "./agent-scope-config.js";
 import {
   resolveSelectedAgentHarnessRuntime,
   type AgentHarnessPluginSelection,
@@ -166,6 +167,7 @@ export function rebindInputToCommittedConfiguredOwner(
     ...input,
     ...(agentId ? { agentId } : {}),
     agentDir: owner.input.agentDir,
+    fallbackAgentDir: owner.input.fallbackAgentDir,
     config: owner.input.config,
     inheritedAuthDir: owner.input.inheritedAuthDir,
     env: owner.input.env,
@@ -224,6 +226,7 @@ export function normalizePreparedModelRuntimeInput(
   input: PreparedModelRuntimeInput,
 ): PreparedModelRuntimeInput {
   const {
+    fallbackAgentDir: _fallbackAgentDir,
     inheritedAuthDir: _inheritedAuthDir,
     readOnly,
     runtimePluginSelections: _runtimePluginSelections,
@@ -231,6 +234,16 @@ export function normalizePreparedModelRuntimeInput(
     workspaceDir: _workspaceDir,
     ...rest
   } = input;
+  const agentDir = path.resolve(input.agentDir);
+  const fallbackAgentId = tryResolveAmbientOwnerAgentId(input.config);
+  const resolvedFallbackAgentDir = normalizeOptionalDir(
+    input.fallbackAgentDir ??
+      (fallbackAgentId ? resolveAgentDir(input.config, fallbackAgentId, input.env) : undefined),
+  );
+  const fallbackAgentDir =
+    resolvedFallbackAgentDir && resolvedFallbackAgentDir !== agentDir
+      ? resolvedFallbackAgentDir
+      : undefined;
   const inheritedAuthDir = normalizeOptionalDir(
     input.inheritedAuthDir ?? resolveLegacyInheritedAuthDir(input.config, input.env),
   );
@@ -250,7 +263,8 @@ export function normalizePreparedModelRuntimeInput(
   );
   return {
     ...rest,
-    agentDir: path.resolve(input.agentDir),
+    agentDir,
+    ...(fallbackAgentDir ? { fallbackAgentDir } : {}),
     ...(inheritedAuthDir ? { inheritedAuthDir } : {}),
     ...(readOnly === true ? { readOnly: true } : {}),
     ...(skipCredentials === true ? { skipCredentials: true } : {}),
@@ -273,6 +287,7 @@ export function ownerKey(input: PreparedModelRuntimeInput): string {
   return JSON.stringify({
     agentId: input.agentId,
     agentDir: input.agentDir,
+    fallbackAgentDir: input.fallbackAgentDir,
     inheritedAuthDir: input.inheritedAuthDir,
     readOnly: input.readOnly === true,
     loadRuntimePlugins: input.loadRuntimePlugins === true,
@@ -398,6 +413,7 @@ export function hasSameLifecycleInput(
   return (
     left.config === right.config &&
     left.agentId === right.agentId &&
+    left.fallbackAgentDir === right.fallbackAgentDir &&
     left.inheritedAuthDir === right.inheritedAuthDir &&
     left.readOnly === right.readOnly &&
     left.loadRuntimePlugins === right.loadRuntimePlugins &&
