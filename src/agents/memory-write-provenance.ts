@@ -3,6 +3,7 @@ import { isMissingPathError } from "../infra/errors.js";
 import { canonicalPathFromExistingAncestor } from "../infra/fs-safe.js";
 import { logWarn } from "../logger.js";
 import {
+  claimMemoryArtifactCreateProvenance,
   clearMemoryArtifactProvenance,
   normalizeMemoryArtifactRelativePath,
   recordMemoryArtifactWriteProvenance,
@@ -18,6 +19,14 @@ export type MemoryWriteProvenanceObserver = {
     commit: () => Promise<void>;
   }) => Promise<void>;
   clearAfterDelete: (absolutePath: string, contentBefore: string) => Promise<void>;
+};
+
+export type MemoryExclusiveCreateObserver = {
+  createExclusive: (params: {
+    absolutePath: string;
+    contentAfter: string;
+    commit: () => Promise<void>;
+  }) => Promise<"created" | "occupied">;
 };
 
 type ProvenanceWriteOperations = {
@@ -108,7 +117,7 @@ export function createMemoryWriteProvenanceObserver(params: {
   sessionId?: string;
   sessionKey?: string;
   now?: () => number;
-}): MemoryWriteProvenanceObserver {
+}): MemoryWriteProvenanceObserver & MemoryExclusiveCreateObserver {
   const now = params.now ?? Date.now;
   const resolvePath = params.resolvePath ?? canonicalPathFromExistingAncestor;
   const resolveRelativePath = async (absolutePath: string) => {
@@ -151,6 +160,43 @@ export function createMemoryWriteProvenanceObserver(params: {
         }
         throw error;
       }
+    },
+    createExclusive: async ({ absolutePath, contentAfter, commit }) => {
+      const relativePath = await resolveRelativePath(absolutePath);
+      if (!relativePath) {
+        await commit();
+        return "created";
+      }
+      const claim = await claimMemoryArtifactCreateProvenance({
+        workspaceDir: params.workspaceDir,
+        relativePath,
+        contentAfter,
+        originClass: params.resolveOriginClass(),
+        observedAt: now(),
+        sessionId: params.sessionId,
+        sessionKey: params.sessionKey,
+      });
+      if (claim.status === "occupied") {
+        return "occupied";
+      }
+      if (claim.status === "unclassified") {
+        await commit();
+        return "created";
+      }
+      try {
+        await commit();
+      } catch (error) {
+        try {
+          await claim.rollback();
+        } catch (rollbackError) {
+          throw new Error(
+            `File create failed and memory provenance rollback also failed: ${String(error)}`,
+            { cause: rollbackError },
+          );
+        }
+        throw error;
+      }
+      return "created";
     },
     clearAfterDelete: async (absolutePath, contentBefore) => {
       const relativePath = await resolveRelativePath(absolutePath);

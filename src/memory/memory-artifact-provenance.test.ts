@@ -7,6 +7,7 @@ import { resetPluginStateStoreForTests } from "../plugin-state/plugin-state-stor
 import { createDeferredCore } from "../shared/deferred.js";
 import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
 import {
+  claimMemoryArtifactCreateProvenance,
   clearMemoryArtifactProvenance,
   listMemoryArtifactProvenance,
   normalizeMemoryArtifactRelativePath,
@@ -182,6 +183,52 @@ describe("memory artifact provenance", () => {
         originClass: "agent",
         observedAt: 2,
       });
+    });
+  });
+
+  it("grants one exclusive create claim per path and rolls back only its own record", async () => {
+    await withStateDirEnv("openclaw-memory-artifact-", async ({ tempRoot }) => {
+      const address = { workspaceDir: tempRoot, relativePath: "memory/2026-03-04-rollover.md" };
+      const claim = (contentAfter: string, observedAt: number, sessionId: string) =>
+        claimMemoryArtifactCreateProvenance({
+          ...address,
+          contentAfter,
+          originClass: "agent",
+          observedAt,
+          sessionId,
+        });
+
+      const winner = await claim("winner", 1, "winner-session");
+      expect(winner.status).toBe("claimed");
+      for (const loser of ["first-loser", "second-loser"]) {
+        expect(await claim(loser, 2, `${loser}-session`)).toEqual({ status: "occupied" });
+      }
+      await expect(readMemoryArtifactProvenance(address)).resolves.toMatchObject({
+        sessionId: "winner-session",
+        observedAt: 1,
+      });
+
+      const superseding = await claimMemoryArtifactCreateProvenance({
+        ...address,
+        relativePath: "memory/2026-03-04-rollover-2.md",
+        contentAfter: "next",
+        originClass: "agent",
+        observedAt: 3,
+        sessionId: "next-session",
+      });
+      expect(superseding.status).toBe("claimed");
+      if (superseding.status === "claimed") {
+        await superseding.rollback();
+      }
+      await expect(readMemoryArtifactProvenance(address)).resolves.toMatchObject({
+        sessionId: "winner-session",
+      });
+      await expect(
+        readMemoryArtifactProvenance({
+          workspaceDir: tempRoot,
+          relativePath: "memory/2026-03-04-rollover-2.md",
+        }),
+      ).resolves.toBeUndefined();
     });
   });
 

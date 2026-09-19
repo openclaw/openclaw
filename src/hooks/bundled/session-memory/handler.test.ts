@@ -34,6 +34,9 @@ const loggerMocks = vi.hoisted(() => ({
 
 const memoryProvenanceMocks = vi.hoisted(() => ({
   recordMemoryArtifactWriteProvenance: vi.fn().mockResolvedValue(undefined),
+  claimMemoryArtifactCreateProvenance: vi
+    .fn()
+    .mockResolvedValue({ status: "claimed", rollback: async () => {} }),
 }));
 
 vi.mock("../../../logging/subsystem.js", () => ({
@@ -43,6 +46,7 @@ vi.mock("../../../logging/subsystem.js", () => ({
 vi.mock("../../../memory/memory-artifact-provenance.js", () => ({
   normalizeMemoryArtifactRelativePath: (relativePath: string) => relativePath,
   recordMemoryArtifactWriteProvenance: memoryProvenanceMocks.recordMemoryArtifactWriteProvenance,
+  claimMemoryArtifactCreateProvenance: memoryProvenanceMocks.claimMemoryArtifactCreateProvenance,
   clearMemoryArtifactProvenance: vi.fn(),
 }));
 
@@ -307,21 +311,20 @@ describe("session-memory hook", () => {
       expectedOrigin: "untrusted",
     },
   ] as const)("records $name provenance before committing the file", async (testCase) => {
-    memoryProvenanceMocks.recordMemoryArtifactWriteProvenance.mockClear();
+    memoryProvenanceMocks.claimMemoryArtifactCreateProvenance.mockClear();
     let observedWrite:
       | {
           workspaceDir: string;
           relativePath: string;
-          contentBefore: string;
           contentAfter: string;
           originClass: "agent" | "untrusted";
         }
       | undefined;
-    memoryProvenanceMocks.recordMemoryArtifactWriteProvenance.mockImplementationOnce(
+    memoryProvenanceMocks.claimMemoryArtifactCreateProvenance.mockImplementationOnce(
       async (write) => {
         observedWrite = write;
         await expectPathMissing(path.join(write.workspaceDir, write.relativePath));
-        return undefined;
+        return { status: "claimed", rollback: async () => {} };
       },
     );
     const sessionContent = [
@@ -355,18 +358,17 @@ describe("session-memory hook", () => {
     const filename = expectDefined(files[0], "session memory file");
 
     expect(files).toHaveLength(1);
-    expect(memoryProvenanceMocks.recordMemoryArtifactWriteProvenance).toHaveBeenCalledOnce();
+    expect(memoryProvenanceMocks.claimMemoryArtifactCreateProvenance).toHaveBeenCalledOnce();
     expect(observedWrite).toMatchObject({
       workspaceDir: tempDir,
       relativePath: `memory/${filename}`,
-      contentBefore: "",
       contentAfter: memoryContent,
       originClass: testCase.expectedOrigin,
     });
   });
 
   it("does not commit session memory when provenance recording fails", async () => {
-    memoryProvenanceMocks.recordMemoryArtifactWriteProvenance.mockRejectedValueOnce(
+    memoryProvenanceMocks.claimMemoryArtifactCreateProvenance.mockRejectedValueOnce(
       new Error("provenance unavailable"),
     );
     const sessionContent = [
