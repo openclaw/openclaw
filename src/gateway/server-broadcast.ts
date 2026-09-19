@@ -232,9 +232,9 @@ const MAX_RECIPIENT_PROFILE_FIELD_BYTES =
   Buffer.byteLength(',"recipientProfileId":""') + USER_PROFILE_ID_MAX_LENGTH * 6;
 
 function frameWithSequence(
-  base: FrameBase,
+  base: Pick<FrameBase, "eventJSON" | "stateVersionFragment">,
   seq: number,
-  payload = base.payloadFragment,
+  payload: string,
   recipientProfileId?: string,
 ): string {
   const recipient =
@@ -388,19 +388,21 @@ export function createGatewayBroadcaster(params: {
     let lastFrameRecipientProfileId: string | undefined;
     let lastFrame: string | undefined;
     let frameBase: FrameBase | undefined = retained?.base;
-    let frameFields: Omit<FrameBase, "payloadFragment"> | undefined;
+    let frameFields: Pick<FrameBase, "eventJSON" | "stateVersionFragment"> | undefined;
     // Private coalescers preserve inputs; identical pending histories can share this merge.
     let mergedFrames: Map<unknown, { payload: unknown; base: FrameBase }> | undefined;
-    const frameBaseFor = (value: unknown): FrameBase => {
-      frameFields ??= {
-        eventJSON: JSON.stringify(event),
+    const getFrameFields = () =>
+      (frameFields ??= {
+        eventJSON: retained?.base.eventJSON ?? JSON.stringify(event),
         stateVersionFragment:
-          opts?.stateVersion === undefined
+          retained?.base.stateVersionFragment ??
+          (opts?.stateVersion === undefined
             ? ""
-            : serializeFrameField("stateVersion", opts.stateVersion),
-      };
+            : serializeFrameField("stateVersion", opts.stateVersion)),
+      });
+    const frameBaseFor = (value: unknown): FrameBase => {
       return {
-        ...frameFields,
+        ...getFrameFields(),
         payloadFragment: presencePayload ? "" : serializeFrameField("payload", value),
       };
     };
@@ -547,7 +549,9 @@ export function createGatewayBroadcaster(params: {
           // Reserve the complete frame and maximum sequence width once per serialized base;
           // unrelated sends can advance the sequence while this entry is waiting to drain.
           const bytes = (base.reservedBytes ??=
-            Buffer.byteLength(frameWithSequence(base, Number.MAX_SAFE_INTEGER)) +
+            Buffer.byteLength(
+              frameWithSequence(base, Number.MAX_SAFE_INTEGER, base.payloadFragment),
+            ) +
             MAX_SERVER_FRAME_HEADER_BYTES +
             MAX_RECIPIENT_PROFILE_FIELD_BYTES);
           if (bufferedBytes(state) - (previous?.bytes ?? 0) + bytes <= MAX_BUFFERED_BYTES) {
@@ -607,8 +611,8 @@ export function createGatewayBroadcaster(params: {
       // detector at once — a synchronized reconnect storm with no evidence.
       let frame: string;
       try {
-        const base = getFrameBase();
-        let payloadFragment = base.payloadFragment;
+        const base = getFrameFields();
+        let payloadFragment = "";
         if (presencePayload) {
           // Presence contains session references. Only the connection owner's
           // recipient projection may cross this boundary; never send the raw roster.
@@ -634,6 +638,8 @@ export function createGatewayBroadcaster(params: {
             continue;
           }
           payloadFragment = serializeFrameField("payload", projected);
+        } else if (!presencePayload) {
+          payloadFragment = getFrameBase().payloadFragment;
         }
         // A drained write can refresh the recipient; cache only the profile at this send.
         const recipientProfileId =

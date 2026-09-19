@@ -82,29 +82,67 @@ afterEach(() => {
 });
 
 describe("broadcast serialization failures", () => {
-  it("keeps recipient session permissions separate at the same sequence and profile", () => {
-    const first = makeClient("first");
-    const second = makeClient("second");
-    for (const peer of [first, second]) {
-      peer.client.preparedRecipientProfileId = "same-profile";
-    }
-    const { broadcast } = createGatewayBroadcaster({
-      clients: new GatewayClientRegistry([first.client, second.client]),
-      prepareSessionEventProjection: () => (client) => ({
+  it.each(["sessions.changed", "session.message"])(
+    "serializes only delivered %s payloads while keeping recipient permissions separate",
+    (event) => {
+      const first = makeClient("first");
+      const second = makeClient("second");
+      for (const peer of [first, second]) {
+        peer.client.preparedRecipientProfileId = "same-profile";
+      }
+      const message = { role: "assistant", content: [{ type: "text", text: "shared message" }] };
+      const serializeMessage = vi.fn(() => message);
+      const payload = {
         sessionKey: "agent:main:chat",
-        session: {
-          key: "agent:main:chat",
-          sharingRole: client === first.client ? "owner" : "viewer",
-        },
-      }),
+        message: { toJSON: serializeMessage },
+      };
+      const { broadcast } = createGatewayBroadcaster({
+        clients: new GatewayClientRegistry([first.client, second.client]),
+        prepareSessionEventProjection: () => (client) => ({
+          ...payload,
+          session: {
+            key: payload.sessionKey,
+            sharingRole: client === first.client ? "owner" : "viewer",
+          },
+        }),
+      });
+      broadcast(event, payload);
+      for (const [peer, sharingRole] of [
+        [first, "owner"],
+        [second, "viewer"],
+      ] as const) {
+        expect(JSON.parse(peer.socket.send.mock.calls[0]![0])).toEqual({
+          type: "event",
+          event,
+          payload: {
+            sessionKey: payload.sessionKey,
+            message,
+            session: { key: payload.sessionKey, sharingRole },
+          },
+          seq: 1,
+          recipientProfileId: "same-profile",
+        });
+      }
+      expect(serializeMessage.mock.calls).toEqual([["message"], ["message"]]);
+    },
+  );
+
+  it("does not serialize a suppressed session projection or consume its sequence", () => {
+    const peer = makeClient("suppressed");
+    const serializeMessage = vi.fn(() => "unused");
+    const { broadcast } = createGatewayBroadcaster({
+      clients: new GatewayClientRegistry([peer.client]),
+      prepareSessionEventProjection: (event) =>
+        event === "session.message" ? () => undefined : undefined,
     });
-    broadcast("sessions.changed", { sessionKey: "agent:main:chat" });
-    expect(JSON.parse(first.socket.send.mock.calls[0]![0]).payload.session.sharingRole).toBe(
-      "owner",
-    );
-    expect(JSON.parse(second.socket.send.mock.calls[0]![0]).payload.session.sharingRole).toBe(
-      "viewer",
-    );
+    broadcast("session.message", {
+      sessionKey: "agent:main:chat",
+      message: { toJSON: serializeMessage },
+    });
+    expect(peer.socket.send).not.toHaveBeenCalled();
+    expect(serializeMessage).not.toHaveBeenCalled();
+    broadcast("skills.changed", { reason: "next" });
+    expect(peer.socket.frames).toEqual([{ event: "skills.changed", seq: 1 }]);
   });
 
   it("keeps reentrant targeted frames separate from an in-progress fanout at the same sequence", () => {
@@ -298,29 +336,35 @@ describe("broadcast serialization failures", () => {
     }
   });
 
-  it("drops the event without consuming seqs when the payload cannot serialize", () => {
-    warnSpy.mockClear();
-    const first = makeClient("first");
-    const second = makeClient("second");
-    const clients = new GatewayClientRegistry([first.client, second.client]);
-    const { broadcast } = createGatewayBroadcaster({ clients });
+  it.each([false, true])(
+    "does not consume seqs on serialization failure (projected=%s)",
+    (projected) => {
+      warnSpy.mockClear();
+      const first = makeClient("first");
+      const second = makeClient("second");
+      const clients = new GatewayClientRegistry([first.client, second.client]);
+      const { broadcast } = createGatewayBroadcaster({
+        clients,
+        prepareSessionEventProjection: projected ? (_event, payload) => () => payload : undefined,
+      });
 
-    const circular: Record<string, unknown> = {};
-    circular.self = circular;
-    broadcast("skills.changed", circular);
+      const circular: Record<string, unknown> = {};
+      circular.self = circular;
+      broadcast("skills.changed", circular);
 
-    // Neither socket saw the bad frame, and the failure is recorded once.
-    expect(first.socket.send).not.toHaveBeenCalled();
-    expect(second.socket.send).not.toHaveBeenCalled();
-    expect(warnSpy).toHaveBeenCalledTimes(1);
-    expect(String(warnSpy.mock.calls[0]?.[0])).toContain("skills.changed");
+      // Neither socket saw the bad frame, and the failure is recorded once.
+      expect(first.socket.send).not.toHaveBeenCalled();
+      expect(second.socket.send).not.toHaveBeenCalled();
+      expect(warnSpy).toHaveBeenCalledTimes(1);
+      expect(String(warnSpy.mock.calls[0]?.[0])).toContain("skills.changed");
 
-    // The next good broadcast starts at seq 1 for every client: the dropped
-    // event consumed no seq, so no gap detector fires.
-    broadcast("skills.changed", { reason: "recovered" });
-    expect(first.socket.frames).toEqual([{ event: "skills.changed", seq: 1 }]);
-    expect(second.socket.frames).toEqual([{ event: "skills.changed", seq: 1 }]);
-  });
+      // The next good broadcast starts at seq 1 for every client: the dropped
+      // event consumed no seq, so no gap detector fires.
+      broadcast("skills.changed", { reason: "recovered" });
+      expect(first.socket.frames).toEqual([{ event: "skills.changed", seq: 1 }]);
+      expect(second.socket.frames).toEqual([{ event: "skills.changed", seq: 1 }]);
+    },
+  );
 
   it("does not inspect agent log summaries for an ineligible outbound broadcast", () => {
     setVerbose(true);
