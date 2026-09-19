@@ -380,6 +380,14 @@ export type ChannelMessageDurableFinalAdapter = {
   admitDeferredDelivery?: (
     ctx: ChannelMessageDeferredDeliveryAdmissionContext,
   ) => ChannelMessageDeferredDeliveryAdmissionResult;
+  /**
+   * Synchronous, read-only transport readiness for queued recovery. A deferred
+   * result preserves custody and retry counts; it does not authorize replay of
+   * an unknown send. Omit this hook when the channel has no readiness gate.
+   */
+  getRecoveryReadiness?: (
+    ctx: Omit<ChannelMessageDeferredDeliveryAdmissionContext, "phase">,
+  ) => { status: "ready" } | { status: "deferred"; reason: string };
   /** Send shapes for which reconciliation can prove the complete durable intent. */
   reconcileUnknownSendKinds?: Partial<Record<UnknownSendReconciliationKind, boolean>>;
   reconcileUnknownSend?: (

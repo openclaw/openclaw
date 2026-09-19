@@ -720,6 +720,142 @@ describe("delivery-queue recovery", () => {
       closeOpenClawAgentDatabasesForTest();
     }
   });
+  it("defers only the disconnected account without consuming retry budget", async () => {
+    const blockedId = await enqueueRecoveryDelivery({ accountId: "connecting" });
+    await enqueueRecoveryDelivery({ accountId: "connected" });
+    const before = readQueuedEntry(tmpDir(), blockedId);
+    let ready = false;
+    const getRecoveryReadiness = vi.fn(({ accountId }: { accountId?: string }) =>
+      accountId === "connecting" && !ready
+        ? { status: "deferred", reason: "connecting" }
+        : { status: "ready" },
+    );
+    resolveOutboundChannelMessageAdapterMock.mockReturnValue({
+      durableFinal: { getRecoveryReadiness },
+    });
+    const deliver = vi.fn(async () => []);
+    const { result } = await runRecovery({ deliver });
+    expect(result).toMatchObject({ recovered: 1, failed: 0 });
+    expect(deliver).toHaveBeenCalledOnce();
+    expect(mockCallRecord(deliver).accountId).toBe("connected");
+    expect(readQueuedEntry(tmpDir(), blockedId)).toEqual(before);
+    ready = true;
+    await runRecovery({ deliver });
+    await runRecovery({ deliver });
+    expect(deliver).toHaveBeenCalledTimes(2);
+    expect(await loadPendingDeliveries(tmpDir())).toEqual([]);
+  });
+  it("keeps an unknown send unchanged while disconnected and still requires reconciliation", async () => {
+    const id = await enqueueUnknownRecovery({ text: "possibly sent" });
+    const before = readQueuedEntry(tmpDir(), id);
+    let ready = false;
+    const reconcile = installUnknownSendResult(
+      { status: "unresolved", error: "no authoritative receipt" },
+      {
+        getRecoveryReadiness: () =>
+          ready ? { status: "ready" } : { status: "deferred", reason: "offline" },
+      },
+    );
+    const deliver = vi.fn();
+    await runRecovery({ deliver });
+    expect(readQueuedEntry(tmpDir(), id)).toEqual(before);
+    expect(reconcile).not.toHaveBeenCalled();
+    expect(deliver).not.toHaveBeenCalled();
+    ready = true;
+    await runRecovery({ deliver });
+    expect(reconcile).toHaveBeenCalledOnce();
+    expect(deliver).not.toHaveBeenCalled();
+  });
+  it("does not use readiness to extend an already exhausted retry budget", async () => {
+    const id = await enqueueRecoveryDelivery();
+    setQueuedEntryState(tmpDir(), id, { retryCount: MAX_RETRIES });
+    resolveOutboundChannelMessageAdapterMock.mockReturnValue({
+      durableFinal: {
+        getRecoveryReadiness: () => ({ status: "deferred", reason: "offline" }),
+      },
+    });
+    const deliver = vi.fn();
+    const { result } = await runRecovery({ deliver });
+    expect(result.skippedMaxRetries).toBe(1);
+    expect(deliver).not.toHaveBeenCalled();
+    expect(await loadPendingDeliveries(tmpDir())).toEqual([]);
+  });
+  it("rechecks channel readiness after replay pacing", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-04-23T00:00:00.000Z"));
+    try {
+      const firstId = await enqueueRecoveryDelivery({ to: "first" });
+      const secondId = await enqueueRecoveryDelivery({ to: "second" });
+      setQueuedEntryState(tmpDir(), firstId, { retryCount: 0, enqueuedAt: Date.now() });
+      setQueuedEntryState(tmpDir(), secondId, { retryCount: 0, enqueuedAt: Date.now() + 1 });
+      const before = readQueuedEntry(tmpDir(), secondId);
+      let ready = true;
+      resolveOutboundChannelMessageAdapterMock.mockReturnValue({
+        durableFinal: {
+          getRecoveryReadiness: () =>
+            ready
+              ? { status: "ready" }
+              : { status: "deferred", reason: "disconnected during pacing" },
+        },
+      });
+      sleepMock.mockImplementation(async () => {
+        ready = false;
+      });
+      const deliver = vi.fn(async () => []);
+      await runRecovery({ deliver });
+      expect(sleepMock).toHaveBeenCalled();
+      expect(deliver).toHaveBeenCalledOnce();
+      expect(readQueuedEntry(tmpDir(), secondId)).toEqual(before);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+  it("restores a reserved attempt when readiness closes before the first dispatch", async () => {
+    const id = await enqueueRecoveryDelivery();
+    const before = readQueuedEntry(tmpDir(), id);
+    let ready = true;
+    resolveOutboundChannelMessageAdapterMock.mockReturnValue({
+      durableFinal: {
+        getRecoveryReadiness: () =>
+          ready
+            ? { status: "ready" }
+            : { status: "deferred", reason: "disconnected during preparation" },
+      },
+    });
+    const platformSend = vi.fn();
+    const deliver = vi.fn(async (params: Parameters<DeliverFn>[0]) => {
+      expect(readQueuedEntry(tmpDir(), id).attemptCount).toBe(1);
+      ready = false;
+      await params.onPlatformSendDispatch?.();
+      platformSend();
+      return [];
+    });
+    const { result } = await runRecovery({ deliver });
+    expect(platformSend).not.toHaveBeenCalled();
+    expect(result).toMatchObject({ recovered: 0, failed: 0 });
+    expect(readQueuedEntry(tmpDir(), id)).toEqual(before);
+  });
+  it("keeps an admitted fanout under ordinary failure accounting after disconnect", async () => {
+    const id = await enqueueDemoRecoveryDelivery(["first", "second"]);
+    let ready = true;
+    resolveOutboundChannelMessageAdapterMock.mockReturnValue({
+      durableFinal: {
+        getRecoveryReadiness: () =>
+          ready
+            ? { status: "ready" }
+            : { status: "deferred", reason: "disconnected after dispatch" },
+      },
+    });
+    const deliver = vi.fn(async (params: Parameters<DeliverFn>[0]) => {
+      await params.onPlatformSendDispatch?.();
+      ready = false;
+      await params.onPlatformSendDispatch?.();
+      throw new Error("transport failed after dispatch");
+    });
+    const { result } = await runRecovery({ deliver });
+    expect(result.failed).toBe(1);
+    expect(readQueuedEntry(tmpDir(), id)).toMatchObject({ retryCount: 1, attemptCount: 1 });
+  });
   it.each([
     ["permanently rejects provider-blocked rows before backoff or reconciliation", false],
     ["checks bounded provider admission before replaying a reconciliable platform attempt", true],
