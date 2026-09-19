@@ -12,6 +12,7 @@ import {
   parseCronIntegerOption,
   parseCronNoOutputTimeoutOption,
   parseCronStringList,
+  parseCronThinkingOption,
 } from "./shared.js";
 import { parseCronThreadIdOption } from "./thread-id-shared.js";
 import { readCronPayloadScript } from "./trigger-options.js";
@@ -214,7 +215,7 @@ export async function resolveCronEditPayloadDeliveryPatch(
     if (opts.clearThinking) {
       payload.thinking = null;
     } else {
-      assignIf(payload, "thinking", thinking, Boolean(thinking));
+      assignIf(payload, "thinking", parseCronThinkingOption(thinking), Boolean(thinking));
     }
     assignIf(payload, "timeoutSeconds", timeoutSeconds, hasTimeoutSeconds);
     assignIf(payload, "lightContext", opts.lightContext, typeof opts.lightContext === "boolean");

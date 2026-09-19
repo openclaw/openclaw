@@ -13,6 +13,7 @@ import { readCronJobNotFoundError } from "../../../packages/gateway-protocol/src
 import { truncateToVisibleWidth, visibleWidth } from "../../../packages/terminal-core/src/ansi.js";
 import { sanitizeTerminalText } from "../../../packages/terminal-core/src/safe-text.js";
 import { colorize, isRich, theme } from "../../../packages/terminal-core/src/theme.js";
+import { normalizeThinkLevel, THINKING_LEVELS_HELP } from "../../auto-reply/thinking.shared.js";
 import { listChannelPlugins } from "../../channels/plugins/index.js";
 import { parseAbsoluteTimeMs } from "../../cron/parse.js";
 import { resolveCronStaggerMs } from "../../cron/stagger.js";
@@ -37,6 +38,15 @@ import { isJsonOutputModeActive } from "../json-output-mode.js";
 import { exitCliAfterOutput } from "../one-shot-exit.js";
 import { parseDurationMs as parseSharedDurationMs } from "../parse-duration.js";
 import { CronCliError, type CronCliJobMatch } from "./cron-cli-error.js";
+
+export function parseCronThinkingOption(value: unknown): string | undefined {
+  const thinking = normalizeOptionalString(value);
+  if (thinking && !normalizeThinkLevel(thinking)) {
+    throw new CronCliError(`Invalid --thinking. Use one of: ${THINKING_LEVELS_HELP}.`);
+  }
+  // Preserve accepted spellings; the runtime owns model-specific thinking selection.
+  return thinking;
+}
 
 export function parseCronIntegerOption(
   value: unknown,
