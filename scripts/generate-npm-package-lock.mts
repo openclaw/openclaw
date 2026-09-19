@@ -566,6 +566,12 @@ function packageJsonForNpmLock(
   delete normalized.bundleDependencies;
   delete normalized.bundledDependencies;
   delete normalized.devDependencies;
+  // The generated lock mirrors dependency resolution and must be reproducible on
+  // every CI host. Preserve platform constraints in the published package.json,
+  // but do not let npm reject this temporary lock-generation manifest.
+  delete normalized.os;
+  delete normalized.cpu;
+  delete normalized.libc;
   for (const field of ["dependencies", "optionalDependencies", "peerDependencies"]) {
     const dependencies = recordAt(normalized, field);
     if (!dependencies) {
