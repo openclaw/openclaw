@@ -14,14 +14,17 @@ const lookupTool: Tool = {
   description: "Look up a file by path.",
   parameters: {
     type: "object",
-    properties: { path: { type: "string" } },
+    properties: { path: { type: "string" }, record_id: { type: ["integer", "string"] } },
     required: ["path"],
     additionalProperties: false,
   },
 };
-const streamedArguments = '{"path":"README.md"}';
+const streamedArguments = '{"path":"README.md","record_id":9007199254740993}';
 const staleArguments = '{"path":"READ"}';
-const completeArguments = { path: "README.md" };
+const completeArguments = {
+  path: "README.md",
+  record_id: "9007199254740993",
+};
 const scenarios = [
   {
     name: "stale-done-snapshot",

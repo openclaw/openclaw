@@ -664,18 +664,17 @@ export async function processResponsesStream<TApi extends Api>(
           // unreliable by an unrouteable delta), and parses as complete JSON;
           // otherwise fall back to the done snapshot.
           const streamedArguments = streamingToolCall?.block.partialJson || "";
-          const preferredArguments =
+          const parsedStreamedArguments =
             streamingToolCall?.argumentStreamReliable &&
             streamingToolCall?.argumentsStreamed &&
             streamedArguments.length > 0 &&
             completedArguments !== undefined &&
-            streamedArguments !== completedArguments &&
-            parseJsonObjectPreservingUnsafeIntegers(streamedArguments) !== null
-              ? streamedArguments
-              : completedArguments || streamedArguments;
+            streamedArguments !== completedArguments
+              ? parseJsonObjectPreservingUnsafeIntegers(streamedArguments)
+              : null;
           const validated = resolveCompletedResponsesToolCall(item, {
             name: streamingToolCall?.block.name,
-            arguments: preferredArguments,
+            arguments: parsedStreamedArguments ?? (completedArguments || streamedArguments),
           });
 
           finalizeToolCall(item, readResponsesOutputIndex(event), streamingToolCall, validated);
