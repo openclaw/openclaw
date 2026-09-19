@@ -2196,3 +2196,216 @@ try {
     expectBatchedPowerShellCase("terminal-code-success");
   });
 });
+
+describe("install.ps1 stale Winget repair", () => {
+  const { createTempDir } = createScriptTestHarness();
+  const source = readFileSync(SCRIPT_PATH, "utf8");
+  const powershell = findPowerShell();
+  const runIfPowerShell = powershell ? it : it.skip;
+  const cases = [
+    {
+      name: "repairs stale registration after a probe overwrites LASTEXITCODE",
+      afterInstall: "text",
+      afterRepair: "healthy",
+      repair: true,
+      success: true,
+    },
+    {
+      name: "discovers Node after repairing a missing runtime",
+      afterInstall: "missing",
+      afterRepair: "healthy",
+      repair: true,
+      success: true,
+    },
+    {
+      name: "accepts a normal successful install without repair",
+      installExit: 0,
+      afterInstall: "healthy",
+      success: true,
+    },
+    {
+      name: "accepts a healthy no-upgrade result without repair",
+      afterInstall: "healthy",
+      success: true,
+    },
+    { name: "does not repair generic Winget failure", installExit: 1 },
+    { name: "does not repair another HRESULT", installExit: -1978335188 },
+    { name: "does not repair successful install with missing Node", installExit: 0 },
+    { name: "rejects unsupported repair", repairExit: -1978335174, repair: true },
+    {
+      name: "rejects failed repair even if Node becomes healthy",
+      repairExit: 1,
+      afterRepair: "healthy",
+      repair: true,
+    },
+    { name: "rejects repair that leaves Node missing", repair: true },
+    { name: "rejects old Node after repair", afterRepair: "old-node", repair: true },
+    { name: "rejects old SQLite after repair", afterRepair: "old-sqlite", repair: true },
+    ...["text", "blob", "json", "probe-error"].map((capability) => ({
+      name: `rejects broken SQLite ${capability} after repair`,
+      afterRepair: capability,
+      repair: true,
+    })),
+  ];
+
+  runIfPowerShell.each(cases)("$name", (testCase) => {
+    if (!powershell) {
+      throw new Error("PowerShell is not available");
+    }
+    const fixtureNode = join(createTempDir("openclaw-winget-node-"), "node.ps1");
+    writeFileSync(fixtureNode, "$input | Invoke-FixtureNode @args\n");
+    const options = {
+      installExit: -1978335189,
+      repairExit: 0,
+      afterInstall: "missing",
+      afterRepair: "missing",
+      repair: false,
+      success: false,
+      ...testCase,
+    };
+    const functions = [
+      "Fail-Install",
+      "Test-BooleanSuccessResult",
+      "Test-NodeVersionSupported",
+      "Test-NodeSqliteSupported",
+      "Check-Node",
+      "Install-Node",
+      "Main",
+    ]
+      .map((name) => `function ${name} {\n${extractFunctionBody(source, name)}}`)
+      .join("\n");
+    const fixture = [
+      "$ErrorActionPreference = 'Stop'",
+      `$fixtureNode = ${toPowerShellSingleQuotedLiteral(fixtureNode)}`,
+      functions,
+      `$case = ${toPowerShellSingleQuotedLiteral(JSON.stringify(options))} | ConvertFrom-Json`,
+      String.raw`
+function Reset-Fixture {
+    $global:State = 'missing'
+    $global:PendingState = 'missing'
+    $global:Events = New-Object 'System.Collections.Generic.List[string]'
+    $global:WingetCalls = New-Object 'System.Collections.Generic.List[object]'
+    $global:InstallExitCode = 0
+    $global:Advanced = 0
+    $global:ProbeCount = 0
+    $global:LASTEXITCODE = 0
+}
+function Get-Command {
+    [CmdletBinding()]
+    param([string]$Name, [string]$CommandType)
+    if ($Name -eq 'winget') { return $true }
+    if ($Name -eq 'node') {
+        $global:Events.Add("check:$global:State")
+        if ($global:State -eq 'missing') { throw 'fixture Node is missing' }
+        return [pscustomobject]@{ Source = $fixtureNode }
+    }
+    throw "unexpected command lookup: $Name"
+}
+function Invoke-FixtureNode {
+    $global:LASTEXITCODE = 0
+    if ($args[0] -eq '-v') {
+        if ($global:State -eq 'old-node') { return 'v22.15.0' }
+        return 'v26.1.0'
+    }
+    $probe = @($input) -join [Environment]::NewLine
+    if (-not $probe.Contains('CREATE TABLE probe') -or -not $probe.Contains('a\u0000b\u0000')) {
+        throw 'current SQLite capability probe was not executed'
+    }
+    $global:ProbeCount++
+    if ($global:State -eq 'probe-error') { $global:LASTEXITCODE = 1; return }
+    $version = if ($global:State -eq 'old-sqlite') { '3.50.6' } else { '3.51.3' }
+    return (@{ available = $true; version = $version; text = ($global:State -ne 'text'); blob = ($global:State -ne 'blob'); json = ($global:State -ne 'json') } | ConvertTo-Json -Compress)
+}
+function winget {
+    $global:Events.Add($args[0])
+    $global:WingetCalls.Add(@($args))
+    if ($args[0] -eq 'install') {
+        $global:LASTEXITCODE = $case.installExit
+        $global:PendingState = $case.afterInstall
+    } elseif ($args[0] -eq 'repair') {
+        $global:LASTEXITCODE = $case.repairExit
+        $global:PendingState = $case.afterRepair
+    } else { throw "unexpected Winget command: $args" }
+    Write-Output 'native command output must not become a Boolean result'
+}
+function Refresh-ProcessPath { $global:Events.Add('refresh') }
+function Add-InstalledNodeToProcessPath {
+    $global:Events.Add('discover')
+    $global:State = $global:PendingState
+    return $true
+}
+function Install-PortableNode { throw 'unexpected portable install' }
+function Check-ExistingOpenClaw { return $false }
+function Test-PreviousGitWrapper { return $false }
+function Get-NpmCommandPath { return 'fixture-npm' }
+function Get-WindowsCommandSafeDirectory { return $env:USERPROFILE }
+function Invoke-NpmCommand { return $env:USERPROFILE }
+function Install-OpenClaw { $global:Advanced++; return $true }
+function Ensure-OpenClawOnPath { return $false }
+function Refresh-GatewayServiceIfLoaded { throw 'unexpected service mutation' }
+$env:USERPROFILE = [System.IO.Path]::GetTempPath()
+$InstallMethod = 'npm'
+Reset-Fixture
+$result = @(Install-Node)
+if ($result.Count -ne 1 -or $result[0] -isnot [bool]) { throw "Install-Node output leaked: $result" }
+$direct = @{ success = $result[0]; events = $global:Events.ToArray(); calls = $global:WingetCalls.ToArray(); probes = $global:ProbeCount }
+Reset-Fixture
+$null = Main
+$main = @{ advanced = $global:Advanced; exit = $global:InstallExitCode; events = $global:Events.ToArray(); calls = $global:WingetCalls.ToArray(); probes = $global:ProbeCount }
+Reset-Fixture
+$global:State = 'healthy'
+$null = Main
+$healthy = @{ advanced = $global:Advanced; calls = $global:WingetCalls.Count }
+Write-Output ('RESULT:' + (@{ direct = $direct; main = $main; healthy = $healthy } | ConvertTo-Json -Depth 8 -Compress))
+`,
+    ].join("\n");
+    const result = spawnSync(
+      powershell,
+      ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", fixture],
+      { encoding: "utf8" },
+    );
+    expect(result.status, result.stderr || result.stdout).toBe(0);
+    const line = result.stdout.split(/\r?\n/u).find((value) => value.startsWith("RESULT:"));
+    expect(line, result.stdout).toBeDefined();
+    const proof = JSON.parse(line!.slice("RESULT:".length));
+    expect(proof.direct.success).toBe(options.success);
+    expect(proof.main.advanced).toBe(options.success ? 1 : 0);
+    expect(proof.main.exit).toBe(options.success ? 0 : 1);
+    expect(proof.healthy).toEqual({ advanced: 1, calls: 0 });
+    const installArgs = [
+      "install",
+      "OpenJS.NodeJS.LTS",
+      "--source",
+      "winget",
+      "--accept-package-agreements",
+      "--accept-source-agreements",
+    ];
+    const repairArgs = [
+      "repair",
+      "--id",
+      "OpenJS.NodeJS.LTS",
+      "--exact",
+      "--source",
+      "winget",
+      "--accept-package-agreements",
+      "--accept-source-agreements",
+    ];
+    for (const run of [proof.direct, proof.main]) {
+      expect(run.calls).toEqual(options.repair ? [installArgs, repairArgs] : [installArgs]);
+      const events = run === proof.main ? run.events.slice(1) : run.events;
+      expect(events.slice(0, 4)).toEqual([
+        "install",
+        "refresh",
+        "discover",
+        `check:${options.afterInstall}`,
+      ]);
+      if (options.repair) {
+        expect(events.slice(4, 7)).toEqual(["repair", "refresh", "discover"]);
+      }
+      if (options.success) {
+        expect(events.at(-1)).toBe("check:healthy");
+        expect(run.probes).toBeGreaterThan(0);
+      }
+    }
+  });
+});

@@ -694,6 +694,7 @@ function Install-Node {
     if (Get-Command winget -ErrorAction SilentlyContinue) {
         Write-Host "  Using winget..." -ForegroundColor Gray
         winget install OpenJS.NodeJS.LTS --source winget --accept-package-agreements --accept-source-agreements | Out-Host
+        $wingetInstallExitCode = $LASTEXITCODE
 
         # Refresh PATH
         Refresh-ProcessPath
@@ -701,6 +702,20 @@ function Install-Node {
         if (Check-Node) {
             Write-Host "[OK] Node.js installed via winget" -ForegroundColor Green
             return $true
+        }
+        # Winget can report no applicable upgrade for a stale registration. Keep
+        # its exit code because Check-Node also invokes native commands.
+        if ($wingetInstallExitCode -eq -1978335189) { # 0x8A15002B
+            Write-Host "  Repairing the existing winget Node.js registration..." -ForegroundColor Gray
+            winget repair --id OpenJS.NodeJS.LTS --exact --source winget --accept-package-agreements --accept-source-agreements | Out-Host
+            $wingetRepairExitCode = $LASTEXITCODE
+            Refresh-ProcessPath
+            Add-InstalledNodeToProcessPath | Out-Null
+            $nodeReady = Check-Node
+            if ($wingetRepairExitCode -eq 0 -and $nodeReady) {
+                Write-Host "[OK] Node.js repaired via winget" -ForegroundColor Green
+                return $true
+            }
         }
         Write-Host "[!] winget completed, but Node.js is still unavailable in this shell" -ForegroundColor Yellow
         Write-Host "Restart PowerShell and re-run the installer if Node.js was installed successfully." -ForegroundColor Yellow
