@@ -425,6 +425,8 @@ async function runSystemAgentTurnWithDeps(
         model: plan.model,
         agentDir: plan.agentDir,
         agentHarnessRuntimeOverride: plan.agentHarnessRuntimeOverride,
+        // Session reuse must keep the exact inference owner that admission verified.
+        modelFallbacksOverride: [],
         sandboxSessionKey: policySessionKey,
         ...(expectedAgentHarnessRuntimeArtifact ? { expectedAgentHarnessRuntimeArtifact } : {}),
         ...(plan.authProfileId

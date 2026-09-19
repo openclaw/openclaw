@@ -165,6 +165,15 @@ export class SetupInferenceOwnerDriftError extends Error {
   override name = "SetupInferenceOwnerDriftError";
 }
 
+export type SetupTurnFailure = { ok: false; status: SetupInferenceFailureStatus; error: string };
+
+export type SetupTurnSuccess = {
+  ok: true;
+  latencyMs: number;
+  text: string;
+  auth: AgentExecutionAuthBinding;
+};
+
 export type VerifySetupInferenceResult =
   | {
       ok: true;

@@ -7,6 +7,7 @@ import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.opencla
 import { normalizeAgentId } from "../routing/session-key.js";
 import type { RuntimeEnv } from "../runtime.js";
 import {
+  resolveSystemAgentConfiguredFallbackRefs,
   resolveSystemAgentConfiguredRouteFromConfig,
   type SystemAgentConfiguredRoute,
 } from "./inference-route.js";
@@ -35,12 +36,14 @@ type InferenceFallbackDeps = {
   resolveRoute?: (
     config: OpenClawConfig,
     agentId: string,
+    fallbackModelRef?: string,
   ) => Promise<SystemAgentConfiguredRoute | null>;
   hasAuth?: typeof hasAvailableAuthForProvider;
   verify?: (params: {
     runtime: RuntimeEnv;
     bindSession: true;
     agentId: string;
+    fallbackModelRef?: string;
   }) => Promise<BoundVerifySetupInferenceResult>;
 };
 
@@ -91,8 +94,13 @@ export async function verifySystemAgentInferenceWithFallback(
   ]);
   const resolveRoute =
     deps.resolveRoute ??
-    ((candidateConfig: OpenClawConfig, agentId: string) =>
-      resolveSystemAgentConfiguredRouteFromConfig(candidateConfig, agentId, {}, snapshot));
+    ((candidateConfig: OpenClawConfig, agentId: string, fallbackModelRef?: string) =>
+      resolveSystemAgentConfiguredRouteFromConfig(
+        candidateConfig,
+        agentId,
+        { fallbackModelRef },
+        snapshot,
+      ));
   const routes: Array<{ agentId: string; provider: string; route: SystemAgentConfiguredRoute }> =
     [];
   for (const agentId of candidateAgentIds) {
@@ -128,7 +136,32 @@ export async function verifySystemAgentInferenceWithFallback(
           ),
         )
       ).flat()
-    : orderedOwners;
+    : (
+        await Promise.all(
+          orderedOwners.map(async (owner) => {
+            if (owner.route.modelTarget === "utility") {
+              return [owner];
+            }
+            const provider = owner.route.modelLabel.slice(0, owner.route.modelLabel.indexOf("/"));
+            const refs = await resolveSystemAgentConfiguredFallbackRefs(config, owner.agentId, {
+              provider,
+              model: owner.route.model,
+            });
+            const candidates = [owner];
+            for (const ref of refs) {
+              const route = await resolveRoute(config, owner.agentId, ref);
+              if (route) {
+                candidates.push({
+                  agentId: owner.agentId,
+                  provider: normalizeProviderId(route.provider),
+                  route,
+                });
+              }
+            }
+            return candidates;
+          }),
+        )
+      ).flat();
   const hasAuth = deps.hasAuth ?? hasAvailableAuthForProvider;
   const verify = deps.verify ?? verifySetupInference;
   let lastFailure: Extract<VerifySetupInferenceResult, { ok: false }> | undefined;
@@ -145,7 +178,7 @@ export async function verifySystemAgentInferenceWithFallback(
       candidate.provider,
       candidate.route.authProfileId ?? null,
       candidate.route.agentDir ?? null,
-      ...(routePolicy ? [candidate.route.model] : []),
+      candidate.route.model,
     ]);
     if (attemptedOwners.has(ownerKey)) {
       continue;
@@ -178,6 +211,9 @@ export async function verifySystemAgentInferenceWithFallback(
         runtime: params.runtime,
         bindSession: true,
         agentId: candidate.agentId,
+        ...(candidate.route.fallbackModelRef !== undefined
+          ? { fallbackModelRef: candidate.route.fallbackModelRef }
+          : {}),
       });
       if (result.ok) {
         return result;
