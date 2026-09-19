@@ -610,7 +610,7 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
               }),
           })
         : null;
-      if (preserveHistory && !refresh) {
+      if (!isCurrent() || (preserveHistory && !refresh)) {
         return false;
       }
       const messages = refresh?.messages ?? latestPageMessages;

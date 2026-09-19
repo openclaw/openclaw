@@ -1,13 +1,37 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { SessionsCatalogReadResult } from "../../../../packages/gateway-protocol/src/index.js";
-import { nativeHistoryMessageIdentity } from "../../lib/chat/history-message-identity.ts";
 import { catalogMessageId } from "./catalog-message-id.ts";
 
 const CATALOG_REFRESH_MAX_PAGES = 20;
 const CATALOG_REFRESH_MAX_MESSAGES = 1_000;
 
+function catalogProjectionIdentity(message: unknown): string | null {
+  if (!isRecord(message)) {
+    return null;
+  }
+  if (message.role !== "user" && message.role !== "assistant") {
+    return null;
+  }
+  const content = message.content;
+  if (typeof content !== "string" && !Array.isArray(content)) {
+    return null;
+  }
+  const metadata = isRecord(message.__openclaw) ? message.__openclaw : undefined;
+  try {
+    return `projection:${JSON.stringify([
+      message.role,
+      content,
+      typeof message.timestamp === "number" ? message.timestamp : null,
+      typeof metadata?.senderId === "string" ? metadata.senderId : null,
+    ])}`;
+  } catch {
+    return null;
+  }
+}
+
 function catalogRefreshIdentity(message: unknown): string | null {
   const messageId = catalogMessageId(message);
-  return messageId ? `id:${messageId}` : nativeHistoryMessageIdentity(message);
+  return messageId ? `id:${messageId}` : catalogProjectionIdentity(message);
 }
 
 function catalogRefreshStart(current: unknown[], refreshed: unknown[]): number | null {
