@@ -1,5 +1,5 @@
 // @vitest-environment node
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { SessionGoal } from "../../api/types.ts";
 import { createSessionsListResult } from "../../test-helpers/chat-model.ts";
@@ -22,15 +22,35 @@ const goal: SessionGoal = {
 afterEach(() => vi.restoreAllMocks());
 
 function goalHost(requestHandlers: Record<string, unknown>) {
-  return makeChatHost({
+  const host = makeChatHost({
     currentSessionId: "session-a",
     chatMessage: "Unrelated draft",
     sessionsResult: {
       ...createSessionsListResult(),
-      sessions: [{ key: "agent:main", kind: "direct", updatedAt: 2, goal }],
+      sessions: [
+        {
+          key: "agent:main",
+          agentId: "main",
+          sessionId: "session-a",
+          kind: "direct",
+          updatedAt: 2,
+          goal,
+        },
+      ],
     },
     requestHandlers,
   });
+  const projectSessions = (state: typeof host.sessions.state) => {
+    host.sessionsResult = state.result;
+    host.sessionsResultAgentId = state.agentId;
+  };
+  projectSessions(host.sessions.state);
+  const stop = host.sessions.subscribe(projectSessions);
+  onTestFinished(() => {
+    stop();
+    host.sessions.dispose();
+  });
+  return host;
 }
 
 describe("Goal control requests", () => {

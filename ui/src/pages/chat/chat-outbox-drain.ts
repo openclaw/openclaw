@@ -3,6 +3,7 @@ import type { ChatAttachment, ChatQueueItem } from "../../lib/chat/chat-types.ts
 import { sameQueuedDeliveryVersion } from "../../lib/chat/outbox-store-codec.ts";
 import {
   listStoredChatOutboxes,
+  readStoredChatOutbox,
   type StoredChatOutbox,
 } from "../../lib/chat/outbox-store-projection.ts";
 import {
@@ -26,11 +27,6 @@ import {
   type ChatCommandTarget,
   type ChatCommandResetOptions,
 } from "./chat-commands.ts";
-import {
-  isInterruptedChatInput,
-  readCurrentStoredChatHistory,
-  readStoredChatOutbox,
-} from "./chat-outbox-receipts.ts";
 import {
   consumeChatOutboxRetry,
   scheduleChatOutboxRetry,
@@ -167,6 +163,22 @@ async function reconcileStoredChatOutboxHead(
     connectionEpoch,
     (delayMs: number) => scheduleStoredChatOutboxRetry(host, outbox, delayMs, dependencies),
   ] as const;
+  const isCurrent = () =>
+    host.connected && host.client === client && host.connectionEpoch === connectionEpoch;
+  let recovery: typeof import("./chat-outbox-receipts.ts");
+  try {
+    recovery = await import("./chat-outbox-receipts.ts");
+  } catch (error) {
+    if (isCurrent()) {
+      surfaceChatDeliveryFailure(host, outbox.sessionKey, outbox.agentId, formatUiError(error));
+      host.requestUpdate?.();
+    }
+    return "blocked";
+  }
+  if (!isCurrent()) {
+    return "blocked";
+  }
+  const { readCurrentStoredChatHistory, isInterruptedChatInput } = recovery;
   const history = await readCurrentStoredChatHistory(...historyArgs);
   if (
     typeof history !== "string" &&

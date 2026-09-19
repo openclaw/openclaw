@@ -1,4 +1,5 @@
 import type { GatewaySessionRow } from "../../api/types.ts";
+import type { SessionPatch } from "./patch.ts";
 import {
   normalizeAgentId,
   parseAgentSessionKey,
@@ -23,6 +24,17 @@ type PendingRowPatch<T> = {
   canonical: T;
 };
 export type SessionPinFields = { pinned: boolean; pinnedAt: number | undefined };
+type SessionFastModeFields = Pick<GatewaySessionRow, "fastMode" | "effectiveFastMode">;
+export const optimisticSessionRowFields = [
+  "pinned",
+  "pinnedAt",
+  "unread",
+  "category",
+  "thinkingLevel",
+  "fastMode",
+  "effectiveFastMode",
+  "contextWindow",
+] as const;
 type SessionReadFields = {
   unread: boolean;
   lastReadAt: number | undefined;
@@ -45,6 +57,7 @@ export type SessionPatchRowFact = {
     | SessionReadFields
     | (SessionPinFields & SessionReadFields)
     | SessionArchiveFields
+    | Pick<GatewaySessionRow, "fastMode">
     | Pick<
         GatewaySessionRow,
         | "model"
@@ -101,10 +114,31 @@ export function pendingRowIdentity(
   return resolvePendingConversation(snapshot, row.key, ownerAgentId)?.identity ?? null;
 }
 
+/** Resolve the physical row from the captured conversation before an operation can queue. */
+export function resolvePendingRowTarget(
+  host: Pick<PendingRowHost, "findRow">,
+  snapshot: UiSessionDefaultsHost,
+  conversation: Omit<PendingRowTarget, "sessionId"> | null,
+  expectedSessionId?: string,
+): PendingRowTarget | null {
+  const sessionId = conversation
+    ? expectedSessionId !== undefined
+      ? expectedSessionId.trim()
+      : host
+          .findRow(
+            (row, sourceAgentId) =>
+              pendingRowIdentity(snapshot, row, sourceAgentId) === conversation.identity,
+          )
+          ?.sessionId?.trim()
+    : undefined;
+  return conversation && sessionId ? { ...conversation, sessionId } : null;
+}
+
 export function createOptimisticRowPatches<T>(
   host: PendingRowHost,
   fields: {
     read: (row: GatewaySessionRow) => T;
+    canonical?: (previous: T, next: T) => T;
     write: (row: GatewaySessionRow, next: T) => GatewaySessionRow;
     observe: (previous: T, row: GatewaySessionRow, names: readonly string[]) => T;
   },
@@ -124,12 +158,14 @@ export function createOptimisticRowPatches<T>(
       const token = Symbol("session-row-patch");
       const current = pending.get(target.identity);
       const next = nextValue(row);
+      const previous =
+        current?.sessionId === target.sessionId ? current.previous : fields.read(row);
       pending.set(target.identity, {
         token,
         sessionId: target.sessionId,
-        previous: current?.sessionId === target.sessionId ? current.previous : fields.read(row),
+        previous,
         next,
-        canonical: next,
+        canonical: fields.canonical ? fields.canonical(previous, next) : next,
       });
       host.redecorateLists();
       return token;
@@ -186,5 +222,102 @@ export function createOptimisticRowPatches<T>(
     },
     hasPending: () => pending.size > 0,
     clear: () => pending.clear(),
+  };
+}
+
+type SessionSettingsPatch = Pick<SessionPatch, "thinkingLevel" | "fastMode" | "contextWindow">;
+
+/** Settings share the row-intent owner; their token group is captured before queued dispatch. */
+export function createOptimisticSettingsPatches(
+  host: PendingRowHost & {
+    copyRow: (row: GatewaySessionRow, patch: Partial<GatewaySessionRow>) => GatewaySessionRow;
+  },
+) {
+  const thinking = createOptimisticRowPatches(host, {
+    read: (row) => row.thinkingLevel,
+    write: (row, thinkingLevel) =>
+      row.thinkingLevel === thinkingLevel ? row : host.copyRow(row, { thinkingLevel }),
+    observe: (previous, row, names) =>
+      names.includes("thinkingLevel") ? row.thinkingLevel : previous,
+  });
+  const fastMode = createOptimisticRowPatches(host, {
+    read: (row): SessionFastModeFields => ({
+      fastMode: row.fastMode,
+      effectiveFastMode: row.effectiveFastMode,
+    }),
+    // An override ACK does not confirm the preview's effective mode.
+    canonical: (previous, next) => ({ ...previous, fastMode: next.fastMode }),
+    write: (row, next) =>
+      row.fastMode === next.fastMode && row.effectiveFastMode === next.effectiveFastMode
+        ? row
+        : host.copyRow(row, next),
+    observe: (previous, row, names) => ({
+      fastMode: names.includes("fastMode") ? row.fastMode : previous.fastMode,
+      effectiveFastMode: names.includes("effectiveFastMode")
+        ? row.effectiveFastMode
+        : previous.effectiveFastMode,
+    }),
+  });
+  const contextWindow = createOptimisticRowPatches(host, {
+    read: (row) => row.contextWindow,
+    write: (row, next) =>
+      row.contextWindow === next ? row : host.copyRow(row, { contextWindow: next }),
+    observe: (previous, row, names) =>
+      names.includes("contextWindow") ? row.contextWindow : previous,
+  });
+  const owners = [thinking, fastMode, contextWindow];
+  return {
+    hasFields: (patch: SessionSettingsPatch) =>
+      patch.thinkingLevel !== undefined ||
+      patch.fastMode !== undefined ||
+      patch.contextWindow !== undefined,
+    start(target: PendingRowTarget | null, patch: SessionSettingsPatch) {
+      if (!target) {
+        return undefined;
+      }
+      const tokens = [
+        [
+          thinking,
+          patch.thinkingLevel !== undefined
+            ? thinking.start(target, () => patch.thinkingLevel?.trim() || undefined)
+            : null,
+        ],
+        [
+          fastMode,
+          patch.fastMode !== undefined
+            ? fastMode.start(target, () => ({
+                fastMode: patch.fastMode ?? undefined,
+                effectiveFastMode: patch.fastMode ?? undefined,
+              }))
+            : null,
+        ],
+        [
+          contextWindow,
+          patch.contextWindow !== undefined
+            ? contextWindow.start(target, () => patch.contextWindow?.trim() || undefined)
+            : null,
+        ],
+      ] as const;
+      return (completed: boolean, connectionCurrent: boolean) => {
+        for (const [owner, token] of tokens) {
+          if (token) {
+            owner.settle(target, token, completed, connectionCurrent);
+          }
+        }
+      };
+    },
+    applyRow: (row: GatewaySessionRow, sourceAgentId?: string | null): GatewaySessionRow =>
+      owners.reduce((current, owner) => owner.applyRow(current, sourceAgentId), row),
+    observe(row: GatewaySessionRow, names: readonly string[], sourceAgentId?: string | null) {
+      for (const owner of owners) {
+        owner.observe(row, names, sourceAgentId);
+      }
+    },
+    hasPending: () => owners.some((owner) => owner.hasPending()),
+    clear() {
+      for (const owner of owners) {
+        owner.clear();
+      }
+    },
   };
 }

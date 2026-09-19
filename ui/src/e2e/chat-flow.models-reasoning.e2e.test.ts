@@ -52,6 +52,7 @@ suite.define(() => {
     ];
     const session = {
       key: sessionKey,
+      sessionId: "session-a-context-window",
       kind: "direct",
       label: "Session A",
       model: "claude-fable-5",

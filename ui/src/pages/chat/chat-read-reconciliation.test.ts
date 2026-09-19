@@ -189,8 +189,15 @@ it.each(
   "joins a passive reader for $peerSession at epoch $peerEpoch and preserves events (changed: $changed)",
   async ({ changed, peerEpoch, peerSession }) => {
     const first = createDeferred<ChatHistoryResult>();
+    const firstReadStarted = createDeferred();
     let reads = 0;
-    const host = outboxHost(() => (++reads === 1 ? first.promise : activeHistory()));
+    const host = outboxHost(() => {
+      if (++reads === 1) {
+        firstReadStarted.resolve();
+        return first.promise;
+      }
+      return activeHistory();
+    });
     const peer = makeChatHost({
       client: host.client,
       sessions: host.sessions,
@@ -203,6 +210,12 @@ it.each(
     const b = resumeStoredChatOutboxes(peer, event);
     const fresh = changed ? resumeStoredChatOutboxes(peer, sessionEvent(queued)) : undefined;
     try {
+      await Promise.race([
+        firstReadStarted.promise,
+        a.then(() => {
+          throw new Error("Recovery completed before its first history read");
+        }),
+      ]);
       expect(reads).toBe(1);
     } finally {
       first.resolve(activeHistory());

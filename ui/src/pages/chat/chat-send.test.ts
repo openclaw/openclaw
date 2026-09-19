@@ -303,13 +303,7 @@ function admitHostQueueItems(host: TestChatHost): void {
 }
 
 function createSessionsResult(sessions: GatewaySessionRow[]): SessionsListResult {
-  return {
-    ts: 0,
-    path: "",
-    count: sessions.length,
-    defaults: { modelProvider: null, model: null, contextTokens: null },
-    sessions,
-  };
+  return { ...sessionListFixture(sessions, 0), path: "" };
 }
 
 function row(key: string, overrides?: Partial<GatewaySessionRow>): GatewaySessionRow {
@@ -989,12 +983,8 @@ describe("refreshChat", () => {
         hasActiveRun: true,
         status: "running",
       });
-      const host = makeChatHost({
-        sessionKey: "agent:work:main",
-        agentsList: { defaultId: "main", mainKey: "main", scope: "global" },
-        sessionsResult: createSessionsResult([row("agent:main:main")]),
-        sessionsResultAgentId: "main",
-        requestHandlers: {
+      const client = clientWithRequest(
+        makeRequestMock({
           "sessions.list": createSessionsResult([current]),
           "chat.history": {
             messages: [],
@@ -1007,20 +997,30 @@ describe("refreshChat", () => {
               totalTokens: 90_000,
             },
           },
-        },
+        }),
+      );
+      const { gateway, emitEvent } = createGatewayHarness(client);
+      const host = makeChatHost({
+        client,
+        sessions: createTestSessionCapability(gateway),
+        sessionKey: "agent:work:main",
+        agentsList: { defaultId: "main", mainKey: "main", scope: "global" },
+        sessionsResult: createSessionsResult([row("agent:main:main")]),
+        sessionsResultAgentId: "main",
       });
       host.sessions.reconcile(row("agent:main:main"), undefined, { resultAgentId: "main" });
       await host.sessions.list({ agentId: "work" });
       if (generation === "deleted") {
-        host.sessions.reconcileChanged(
-          {
+        emitEvent({
+          type: "event",
+          event: "sessions.changed",
+          payload: {
             sessionKey: "global",
             agentId: "work",
             sessionId: current.sessionId,
             reason: "delete",
           },
-          { resultAgentId: "main" },
-        );
+        });
       }
       const primary = host.sessions.state.result;
       const pane = host.sessionsResult;
@@ -1142,8 +1142,9 @@ describe("refreshChat", () => {
     admitHostQueueItems(host);
 
     await refreshPageChat(asChatPageHost(host), { scheduleScroll: false });
-    await new Promise<void>((resolve) => {
-      setImmediate(resolve);
+    await waitForFast(() => {
+      expect(host.request).toHaveBeenCalledWith("chat.send", expect.objectContaining(expectedSend));
+      expect(host.chatQueue).toEqual([]);
     });
 
     if (expectedSend.sessionKey === "global") {
@@ -1161,8 +1162,6 @@ describe("refreshChat", () => {
     } else {
       expect(host.sessionsResult).toBe(host.sessions.state.result);
     }
-    expect(host.request).toHaveBeenCalledWith("chat.send", expect.objectContaining(expectedSend));
-    expect(host.chatQueue).toEqual([]);
   });
 
   it("keeps a timed-out startup settled through an outbox wake until explicit history retry", async () => {

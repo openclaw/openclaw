@@ -8,7 +8,11 @@ import { t } from "../../i18n/index.ts";
 import type { ChatGoalAction, ChatGoalDraft } from "../../lib/chat/chat-types.ts";
 import { storageTargetForGateway } from "../../lib/chat/outbox-store.ts";
 import { formatUiError } from "../../lib/format-error.ts";
-import { scopedAgentIdForSession, visibleSessionMatches } from "../../lib/sessions/index.ts";
+import {
+  scopedAgentIdForSession,
+  scopedAgentListParamsForSession,
+  visibleSessionMatches,
+} from "../../lib/sessions/index.ts";
 import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
 import { generateUUID } from "../../lib/uuid.ts";
 import type { ChatHost } from "./chat-send-contract.ts";
@@ -79,6 +83,7 @@ export async function mutateChatGoal(
   const sessionKey = host.sessionKey;
   const agentId = scopedAgentIdForSession(host, sessionKey);
   const sessionId = host.currentSessionId ?? undefined;
+  const rowAgentId = scopedAgentListParamsForSession(host, sessionKey).agentId;
   const epoch = host.connectionEpoch;
   const targetIsCurrent = () =>
     host.client === client &&
@@ -144,15 +149,24 @@ export async function mutateChatGoal(
         );
         return true;
       }
-      const row = host.sessions.state.result?.sessions.find((entry) =>
-        areUiSessionKeysEquivalent(entry.key, sessionKey),
+      const row = host.sessionsResult?.sessions.find(
+        (entry) =>
+          areUiSessionKeysEquivalent(entry.key, sessionKey) &&
+          entry.sessionId === sessionId &&
+          (entry.agentId === undefined || entry.agentId === rowAgentId),
       );
       // A newer event or a replacement goal wins over a delayed mutation response.
       if (
         row?.goal?.id === action.goalId &&
         (!result.goal || result.goal.updatedAt >= row.goal.updatedAt)
       ) {
-        host.sessions.patchRowLocal(row.key, { goal: result.goal });
+        if (rowAgentId && sessionId) {
+          host.sessions.patchRowLocal(
+            row.key,
+            { goal: result.goal },
+            { agentId: rowAgentId, sessionId },
+          );
+        }
       }
       if (result.status === "started" && result.runId) {
         adoptStartedChatRun(host, result.runId, Date.now());

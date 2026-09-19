@@ -145,6 +145,7 @@ suite.define(() => {
     });
     const page = await context.newPage();
     const sessionKey = "agent:main:cloned-project-e2e";
+    const sessionId = "cloned-project-session";
     const runId = "run-cloned-project-e2e";
     const message = "inspect the cloned project";
     let releaseChatModule!: () => void;
@@ -199,9 +200,11 @@ suite.define(() => {
     };
     const history = {
       messages: [],
-      sessionId: "cloned-project-session",
+      sessionId,
       sessionInfo: {
         key: sessionKey,
+        sessionId,
+        kind: "direct",
         hasActiveRun: true,
         activeRunIds: [runId],
         status: "running",
@@ -246,6 +249,8 @@ suite.define(() => {
         hasActiveRun: true,
         activeRunIds: [runId],
         key: sessionKey,
+        sessionId,
+        kind: "direct",
         status: "running",
       },
       featureMethods: [
@@ -267,7 +272,7 @@ suite.define(() => {
           defaultBranch: "main",
           repositoryStatus: "git",
         },
-        "sessions.create": { key: sessionKey, runStarted: true, runId },
+        "sessions.create": { key: sessionKey, sessionId, runStarted: true, runId },
         "chat.startup": history,
         "chat.history": history,
       },

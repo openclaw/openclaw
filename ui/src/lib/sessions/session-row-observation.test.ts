@@ -9,6 +9,7 @@ import {
   createTestSessionCapability,
   sessionsResult,
 } from "./session-capability.test-support.ts";
+import type { SessionRowEventListener } from "./session-capability.ts";
 
 type DescribeResult = { session: GatewaySessionRow | null };
 
@@ -160,8 +161,10 @@ describe("session row observations", () => {
     );
     const sessions = createTestSessionCapability(gateway);
     const invalidated = vi.fn();
+    const delivered = vi.fn<SessionRowEventListener>();
     const observation = sessions.observeRow({ key: "global", agentId: "work" }, () => undefined, {
       onInvalidate: invalidated,
+      onEvent: delivered,
     });
     try {
       expect(observation.captureReconcile()(workRow)).toMatchObject({ status: "current" });
@@ -174,6 +177,10 @@ describe("session row observations", () => {
       emitEvent(event("main"));
       emitEvent(event("work", "agent:work:unrelated"));
       expect(invalidated).not.toHaveBeenCalled();
+      expect(delivered.mock.calls).toEqual([
+        [event("main"), { applied: false }],
+        [event("work", "agent:work:unrelated"), { applied: false }],
+      ]);
       await sessions.refresh({ agentId: "main", force: true });
       expect(invalidated).not.toHaveBeenCalled();
       emitEvent(event("work"));
@@ -183,15 +190,148 @@ describe("session row observations", () => {
       expect(invalidated).toHaveBeenCalledTimes(1);
       expect(pending(workRow)).toEqual({ status: "invalidated" });
       expect(observation.captureReconcile()(workRow)).toMatchObject({ status: "current" });
+      expect(delivered).toHaveBeenCalledTimes(4);
       publish(false);
       emitEvent(event("work"));
       expect(invalidated).toHaveBeenCalledTimes(1);
+      expect(delivered).toHaveBeenCalledTimes(4);
     } finally {
       observation.dispose();
       sessions.dispose();
       vi.useRealTimers();
     }
   });
+
+  it.each(["primary", "row", "event", "between frames"] as const)(
+    "delivers repeated-payload frames only after descriptor registration (%s)",
+    async (source) => {
+      vi.useFakeTimers();
+      const { gateway, emitEvent } = createGatewayHarness(
+        createTestGatewayClient(async () => sessionsResult([mainRow], mainRow.updatedAt ?? 0)),
+      );
+      const sessions = createTestSessionCapability(gateway);
+      const target = { key: mainRow.key, agentId: "main" };
+      const delivered = vi.fn<SessionRowEventListener>();
+      let armed = false;
+      let late: SessionRowObservation | undefined;
+      const register = () => {
+        if (armed && !late) {
+          late = sessions.observeRow(target, () => undefined, { onEvent: delivered });
+        }
+      };
+      const stop = sessions.subscribe(() => {
+        if (source === "primary") {
+          register();
+        }
+      });
+      await sessions.refresh({ agentId: "main", force: true });
+      const earlyDelivered = vi.fn<SessionRowEventListener>(() => {
+        if (source === "event") {
+          register();
+        }
+      });
+      const early = sessions.observeRow(
+        target,
+        () => {
+          if (source === "row") {
+            register();
+          }
+        },
+        { onEvent: earlyDelivered },
+      );
+      try {
+        armed = true;
+        const first = {
+          type: "event" as const,
+          event: "sessions.changed",
+          payload: { agentId: "main", session: { ...mainRow, updatedAt: 1_000 } },
+          seq: 1,
+        };
+        emitEvent(first);
+        if (source === "between frames") {
+          register();
+        }
+        expect(late?.row).toMatchObject({ sessionId: mainRow.sessionId, updatedAt: 1_000 });
+        expect(delivered).not.toHaveBeenCalled();
+
+        const next = { ...first, seq: 2 };
+        emitEvent(next);
+        expect(earlyDelivered.mock.calls.map(([event]) => event)).toEqual([first, next]);
+        expect(delivered).toHaveBeenCalledExactlyOnceWith(
+          next,
+          expect.objectContaining({
+            applied: true,
+            admittedRow: expect.objectContaining({ updatedAt: 1_000 }),
+          }),
+        );
+      } finally {
+        late?.dispose();
+        early.dispose();
+        stop();
+        sessions.dispose();
+        vi.useRealTimers();
+      }
+    },
+  );
+
+  it.each(["row", "event"] as const)(
+    "keeps raw delivery when an earlier %s listener supersedes the frame's row facts",
+    async (source) => {
+      vi.useFakeTimers();
+      const { gateway, emitEvent } = createGatewayHarness(
+        createTestGatewayClient(async () => sessionsResult([mainRow], mainRow.updatedAt ?? 0)),
+      );
+      const sessions = createTestSessionCapability(gateway);
+      await sessions.refresh({ agentId: "main", force: true });
+      const target = { key: mainRow.key, agentId: "main" };
+      const newer = { ...mainRow, label: "Newer descriptor", updatedAt: 1_001 };
+      const delivered = vi.fn<SessionRowEventListener>();
+      let armed = false;
+      const supersede = () => {
+        if (armed) {
+          armed = false;
+          later?.captureReconcile()(newer);
+        }
+      };
+      const early = sessions.observeRow(
+        target,
+        () => {
+          if (source === "row") {
+            supersede();
+          }
+        },
+        {
+          onEvent: () => {
+            if (source === "event") {
+              supersede();
+            }
+          },
+        },
+      );
+      const later = sessions.observeRow(target, () => undefined, { onEvent: delivered });
+      try {
+        armed = true;
+        const frame = {
+          type: "event" as const,
+          event: "session.message",
+          payload: {
+            agentId: "main",
+            session: { ...mainRow, label: "Older frame", updatedAt: 1_000 },
+          },
+        };
+        emitEvent(frame);
+
+        expect(delivered).toHaveBeenCalledExactlyOnceWith(frame, { applied: false });
+        expect(later.row).toMatchObject(newer);
+        expect(sessions.state.result?.sessions[0]).toMatchObject(newer);
+      } finally {
+        later?.dispose();
+        early.dispose();
+        sessions.dispose();
+        vi.useRealTimers();
+      }
+    },
+  );
 
   it.each(["primary", "managed", "supplemental", "event"] as const)(
     "notifies a retired descriptor after its admitted %s successor is published",

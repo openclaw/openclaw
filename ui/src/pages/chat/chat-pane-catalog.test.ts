@@ -17,6 +17,7 @@ import { createRefreshChatPane } from "./chat-pane-history.test-support.ts";
 import { consumePaneSessionHandoff } from "./chat-pane-shared.ts";
 import {
   createGatewayBrowserClientFixture,
+  createSessionCapabilityFixture,
   createSessionContext,
   createTestChatPane,
 } from "./chat-pane.test-support.ts";
@@ -109,7 +110,7 @@ describe("chat pane catalog session lifecycle", () => {
     (sessionKey) => {
       const client = { request: vi.fn() } as unknown as GatewayBrowserClient;
       const retireModelOverride = vi.fn();
-      const sessions = { retireModelOverride } as unknown as SessionCapability;
+      const sessions = createSessionCapabilityFixture({ retireModelOverride });
       const { pane, state } = createTestChatPane({ client, sessions });
       pane.sessionKey = state.sessionKey = sessionKey;
       pane.context.agentSelection.set("other");

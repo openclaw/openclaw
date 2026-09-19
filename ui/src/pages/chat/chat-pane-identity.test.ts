@@ -7,7 +7,6 @@ import type { GatewayBrowserClient, GatewayEventFrame } from "../../api/gateway.
 import type { GatewaySessionRow } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { t } from "../../i18n/index.ts";
-import type { SessionCapability } from "../../lib/sessions/index.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { setChatHistoryLoad } from "./chat-history-state.ts";
 import { ChatPaneBase } from "./chat-pane-base.ts";
@@ -28,7 +27,10 @@ import { projectSessionApprovalReplay } from "./session-approval-projection.ts";
 describe("chat pane assistant identity snapshots", () => {
   it("keeps an explicitly owned global Home pane on its agent across work selection", () => {
     const client = { request: vi.fn(async () => ({})) } as unknown as GatewayBrowserClient;
-    const { pane, state } = createTestChatPane({ client, sessions: {} as SessionCapability });
+    const { pane, state } = createTestChatPane({
+      client,
+      sessions: createSessionCapabilityFixture(),
+    });
     (pane as TestChatPane & { agentId: string }).agentId = "personal";
     pane.sessionKey = "global";
     state.sessionKey = "global";
@@ -198,7 +200,7 @@ describe("chat pane assistant identity snapshots", () => {
 
   it("keeps a session-specific assistant identity across ordinary gateway snapshots", () => {
     const client = createGatewayBrowserClientFixture();
-    const { pane } = createTestChatPane({ client, sessions: {} as SessionCapability });
+    const { pane } = createTestChatPane({ client, sessions: createSessionCapabilityFixture() });
     const state = (pane as unknown as { state: ChatPageHost }).state;
     state.client = client;
     state.connected = true;
@@ -215,7 +217,10 @@ describe("chat pane assistant identity snapshots", () => {
   it("resets a session-specific identity when the logical connection changes", () => {
     const client = createGatewayBrowserClientFixture();
     const nextClient = createGatewayBrowserClientFixture();
-    const { pane, state } = createTestChatPane({ client, sessions: {} as SessionCapability });
+    const { pane, state } = createTestChatPane({
+      client,
+      sessions: createSessionCapabilityFixture(),
+    });
     state.assistantName = "Session Agent";
 
     pane.applyGatewaySnapshot({

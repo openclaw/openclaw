@@ -16,14 +16,11 @@ import { projectSessionResultRows } from "./reconcile.ts";
 import { createSessionArchiveState, projectSessionArchiveFields } from "./session-archive-state.ts";
 import type {
   SessionCapability,
-  SessionConnectionOwner,
   SessionCreateReconciliation,
   SessionRefreshOutcome,
   SessionResetOptions,
   SessionResetResult,
-  SessionState,
 } from "./session-capability.ts";
-import { areUiSessionKeysEquivalent } from "./session-key.ts";
 import {
   createSessionMutationRefresh,
   isRejectedSessionMutation,
@@ -31,7 +28,9 @@ import {
 import { projectSessionPatchRowFields } from "./session-patch-row-facts.ts";
 import {
   createOptimisticRowPatches,
+  createOptimisticSettingsPatches,
   resolvePendingConversation,
+  resolvePendingRowTarget,
   pendingRowIdentity,
   type PendingRowHost,
   type PendingRowTarget,
@@ -44,35 +43,36 @@ import {
   requestSessionPatchMany,
   requestSessionReset,
 } from "./session-requests.ts";
+import {
+  createSessionRowLocalPatch,
+  type SessionRowLocalPatchHost,
+} from "./session-row-local-patch.ts";
 import type { createSessionRowProvenance } from "./session-row-provenance.ts";
 
-type SessionMutationsHost = PendingRowHost & {
-  connection: SessionConnectionOwner;
-  readState: () => SessionState;
-  publish: (state: SessionState, errorSource?: "session-observer" | "operation") => void;
-  copyRow: (row: GatewaySessionRow, patch: Partial<GatewaySessionRow>) => GatewaySessionRow;
-  capturePatchFields: (
-    target: Pick<PendingRowTarget, "key" | "agentId" | "sessionId">,
-  ) => (fact: SessionPatchRowFact) => void;
-  reconcileMutation: (
-    agentId?: string | null,
-    isErrorCurrent?: () => boolean,
-  ) => Promise<SessionRefreshOutcome>;
-  publishedRow: (key: string) => GatewaySessionRow | undefined;
-  archiveFields: Pick<
-    ReturnType<typeof createSessionRowProvenance>,
-    "fieldObservation" | "observeFields" | "inheritRow" | "mergeRow"
-  >;
-  readRevision: () => number;
-  notifyCreated: (key: string, entry?: SessionCreateOutcome["entry"], agentId?: string) => void;
-  clearThink: (key: string, agentId?: string | null) => void;
-  claimPermissionProjection: (
-    key: string,
-    agentId?: string | null,
-    expectedSessionId?: string,
-  ) => SessionPermissionClaim;
-  retirePullRequestSummary: (key: string) => void;
-};
+type SessionMutationsHost = PendingRowHost &
+  SessionRowLocalPatchHost & {
+    capturePatchFields: (
+      target: Pick<PendingRowTarget, "key" | "agentId" | "sessionId">,
+    ) => (fact: SessionPatchRowFact) => void;
+    reconcileMutation: (
+      agentId?: string | null,
+      isErrorCurrent?: () => boolean,
+    ) => Promise<SessionRefreshOutcome>;
+    publishedRow: (key: string) => GatewaySessionRow | undefined;
+    archiveFields: Pick<
+      ReturnType<typeof createSessionRowProvenance>,
+      "fieldObservation" | "observeFields" | "inheritRow" | "mergeRow"
+    >;
+    readRevision: () => number;
+    notifyCreated: (key: string, entry?: SessionCreateOutcome["entry"], agentId?: string) => void;
+    clearThink: (key: string, agentId?: string | null) => void;
+    claimPermissionProjection: (
+      key: string,
+      agentId?: string | null,
+      expectedSessionId?: string,
+    ) => SessionPermissionClaim;
+    retirePullRequestSummary: (key: string) => void;
+  };
 
 export function createSessionMutations(host: SessionMutationsHost) {
   const pendingModelPatches = new Map<
@@ -127,31 +127,7 @@ export function createSessionMutations(host: SessionMutationsHost) {
     host.publish({ ...state, modelOverrides });
   };
 
-  const patchRowLocal = (
-    key: string,
-    patch: Partial<GatewaySessionRow>,
-    expectedSessionId?: string,
-  ) => {
-    const state = host.readState();
-    const normalizedKey = key.trim();
-    if (!state.result || !normalizedKey) {
-      return;
-    }
-    let changed = false;
-    const sessions = state.result.sessions.map((row) => {
-      if (
-        !areUiSessionKeysEquivalent(row.key, normalizedKey) ||
-        (expectedSessionId !== undefined && row.sessionId !== expectedSessionId)
-      ) {
-        return row;
-      }
-      changed = true;
-      return host.copyRow(row, patch);
-    });
-    if (changed) {
-      host.publish({ ...state, result: { ...state.result, sessions } });
-    }
-  };
+  const patchRowLocal = createSessionRowLocalPatch(host);
 
   // The Gateway derives `pinned` from `pinnedAt` and both row comparators order
   // by `pinnedAt` inside each pin group, so an optimistic write has to move the
@@ -180,12 +156,16 @@ export function createSessionMutations(host: SessionMutationsHost) {
     write: (row, unread) => (row.unread === unread ? row : host.copyRow(row, { unread })),
     observe: (previous, row, names) => (names.includes("unread") ? row.unread : previous),
   });
+  const settingsPatches = createOptimisticSettingsPatches(host);
   const applyPendingRow = (
     row: GatewaySessionRow,
     sourceAgentId?: string | null,
   ): GatewaySessionRow =>
-    optimisticCategories.applyRow(
-      optimisticUnread.applyRow(optimisticPins.applyRow(row, sourceAgentId), sourceAgentId),
+    settingsPatches.applyRow(
+      optimisticCategories.applyRow(
+        optimisticUnread.applyRow(optimisticPins.applyRow(row, sourceAgentId), sourceAgentId),
+        sourceAgentId,
+      ),
       sourceAgentId,
     );
 
@@ -266,10 +246,12 @@ export function createSessionMutations(host: SessionMutationsHost) {
       return null;
     }
     const managesModelOverride = Object.hasOwn(patchParams, "model");
+    const hasSettingsPatch = settingsPatches.hasFields(patchParams);
     const normalizedKey = key.trim();
     const patchSnapshot = host.snapshot();
     const pendingConversation =
       managesModelOverride ||
+      hasSettingsPatch ||
       patchParams.category !== undefined ||
       patchParams.pinned !== undefined ||
       patchParams.unread === false ||
@@ -277,22 +259,13 @@ export function createSessionMutations(host: SessionMutationsHost) {
       patchParams.boardPresentation !== undefined
         ? resolvePendingConversation(patchSnapshot, normalizedKey, options.agentId)
         : null;
-    const pendingSessionId = pendingConversation
-      ? options.expectedSessionId !== undefined
-        ? options.expectedSessionId.trim()
-        : host
-            .findRow(
-              (row, sourceAgentId) =>
-                pendingRowIdentity(patchSnapshot, row, sourceAgentId) ===
-                pendingConversation.identity,
-            )
-            ?.sessionId?.trim()
-      : undefined;
-    // Queued intents keep their observed incarnation even if selection changes before dispatch.
-    const pendingTarget: PendingRowTarget | null =
-      pendingConversation && pendingSessionId
-        ? { ...pendingConversation, sessionId: pendingSessionId }
-        : null;
+    const pendingTarget = resolvePendingRowTarget(
+      host,
+      patchSnapshot,
+      pendingConversation,
+      options.expectedSessionId,
+    );
+    const settleSettings = settingsPatches.start(pendingTarget, patchParams);
     let rowPatchConfirmed = false;
     let writeConfirmed = false;
     let modelPatchStarted = false;
@@ -424,6 +397,7 @@ export function createSessionMutations(host: SessionMutationsHost) {
           host.connection.isCurrent(scope),
         );
       }
+      settleSettings?.(completed && rowPatchConfirmed, host.connection.isCurrent(scope));
     };
     try {
       if (options.waitFor) {
@@ -442,7 +416,14 @@ export function createSessionMutations(host: SessionMutationsHost) {
         );
       }
       const confirmFields = pendingTarget ? host.capturePatchFields(pendingTarget) : undefined;
-      const result = await requestSessionPatch(scope.client, key, patchParams, options);
+      const result = await requestSessionPatch(
+        scope.client,
+        key,
+        patchParams,
+        hasSettingsPatch && pendingTarget
+          ? { ...options, expectedSessionId: pendingTarget.sessionId }
+          : options,
+      );
       writeConfirmed = true;
       if (!host.connection.isCurrent(scope)) {
         settleOptimisticPatch(false);
@@ -481,7 +462,8 @@ export function createSessionMutations(host: SessionMutationsHost) {
         }
         // The successful RPC is the first durable acknowledgement; events may
         // drop and the follow-up list may fail, so record its fenced fact now.
-        if (confirmation === "confirmed") {
+        const confirmedTarget = resolvePendingConversation(patchSnapshot, key, options.agentId);
+        if (confirmation === "confirmed" && confirmedTarget && result.entry?.sessionId) {
           patchRowLocal(
             key,
             {
@@ -490,7 +472,7 @@ export function createSessionMutations(host: SessionMutationsHost) {
                 ? {}
                 : { updatedAt: result.entry.updatedAt }),
             },
-            result.entry?.sessionId,
+            { agentId: confirmedTarget.agentId, sessionId: result.entry.sessionId },
           );
         }
       }
@@ -641,6 +623,18 @@ export function createSessionMutations(host: SessionMutationsHost) {
     if (!scope) {
       return null;
     }
+    const snapshot = host.snapshot();
+    const conversation = resolvePendingConversation(snapshot, key, options.agentId);
+    const row =
+      conversation &&
+      host.findRow(
+        (candidate, agentId) =>
+          pendingRowIdentity(snapshot, candidate, agentId) === conversation.identity,
+      );
+    const target =
+      conversation && row?.sessionId
+        ? { agentId: conversation.agentId, sessionId: row.sessionId }
+        : undefined;
     try {
       const result = await scope.client.request<SessionsAssignOwnerResult>("sessions.assignOwner", {
         key,
@@ -650,7 +644,9 @@ export function createSessionMutations(host: SessionMutationsHost) {
       if (!host.connection.isCurrent(scope)) {
         return null;
       }
-      patchRowLocal(result.key, { owner: result.owner });
+      if (target) {
+        patchRowLocal(result.key, { owner: result.owner }, target);
+      }
       return result.owner;
     } catch (error) {
       if (host.connection.isCurrent(scope)) {
@@ -687,6 +683,7 @@ export function createSessionMutations(host: SessionMutationsHost) {
       optimisticCategories.observe(row, names, sourceAgentId);
       optimisticPins.observe(row, names, sourceAgentId);
       optimisticUnread.observe(row, names, sourceAgentId);
+      settingsPatches.observe(row, names, sourceAgentId);
     },
     applyPendingRows(
       result: SessionsListResult | null,
@@ -696,7 +693,8 @@ export function createSessionMutations(host: SessionMutationsHost) {
         !result ||
         (!optimisticPins.hasPending() &&
           !optimisticUnread.hasPending() &&
-          !optimisticCategories.hasPending())
+          !optimisticCategories.hasPending() &&
+          !settingsPatches.hasPending())
       ) {
         return result;
       }
@@ -733,6 +731,7 @@ export function createSessionMutations(host: SessionMutationsHost) {
       optimisticCategories.clear();
       optimisticPins.clear();
       optimisticUnread.clear();
+      settingsPatches.clear();
       archiveState.clearAll();
       preparedWorkSessionKeys.clear();
       const state = host.readState();
@@ -744,6 +743,7 @@ export function createSessionMutations(host: SessionMutationsHost) {
       optimisticCategories.clear();
       optimisticPins.clear();
       optimisticUnread.clear();
+      settingsPatches.clear();
       archiveState.clearAll();
       preparedWorkSessionKeys.clear();
     },

@@ -228,7 +228,14 @@ export async function setSessionInvolvement(
     if (!host.sessionData.isSessionMutationScopeCurrent(scope)) {
       return;
     }
-    scope.sessions.patchRowLocal(session.key, { hiddenFromInvolvingMe: hidden });
+    scope.sessions.patchRowLocal(
+      session.key,
+      { hiddenFromInvolvingMe: hidden },
+      {
+        agentId,
+        sessionId: session.sessionId,
+      },
+    );
     await host.sessionData.refreshSidebarSessions(agentId);
   } catch (error) {
     if (host.sessionData.isSessionMutationScopeCurrent(scope)) {
