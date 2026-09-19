@@ -273,7 +273,7 @@ export async function handleEmbeddedPromptFailure(input: {
   }
   if (failoverDecision.action === "fallback_model") {
     const fallbackReason = failoverDecision.reason;
-    const status = resolveFailoverStatus(fallbackReason);
+    const status = resolveFailoverStatus(fallbackReason, promptErrorDetails.code);
     input.traceAttempts.push({
       provider: input.provider,
       model: input.modelId,

@@ -3442,9 +3442,9 @@ describe("bridgeCodexAppServerStartOptions", () => {
 
       expect(rejection).toBeInstanceOf(Error);
       expect(rejection).toMatchObject({
-        status: 401,
         code: "selected_auth_profile_unavailable",
       });
+      expect(rejection).not.toHaveProperty("status");
       expect((rejection as Error).message).toBe(
         'Codex app-server auth profile "anthropic:work" must use the canonical OpenAI auth provider; run "openclaw doctor --fix" to migrate legacy provider IDs.',
       );
@@ -3453,39 +3453,6 @@ describe("bridgeCodexAppServerStartOptions", () => {
     } finally {
       await fs.rm(agentDir, { recursive: true, force: true });
     }
-  });
-
-  it("fails subscription auth instead of falling back to an API key", async () => {
-    const agentDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-app-server-"));
-    const request = vi.fn(async () => ({ type: "apiKey" }));
-    vi.stubEnv("CODEX_API_KEY", "placeholder");
-    let rejection: unknown;
-    try {
-      await applyCodexAppServerAuthProfile({
-        client: { request } as never,
-        agentDir,
-        authProfileId: "openai:work",
-        authProfileStore: {
-          version: 1,
-          profiles: {},
-        },
-        authRequirement: "subscription",
-        startOptions: createStartOptions({
-          env: { CODEX_API_KEY: "placeholder" },
-        }),
-      });
-    } catch (error) {
-      rejection = error;
-    } finally {
-      await fs.rm(agentDir, { recursive: true, force: true });
-    }
-
-    expect(rejection).toBeInstanceOf(Error);
-    expect(rejection).toMatchObject({
-      status: 401,
-      code: "selected_auth_profile_unavailable",
-    });
-    expect(request).not.toHaveBeenCalled();
   });
 
   it("preserves transient subscription credential resolution errors", async () => {

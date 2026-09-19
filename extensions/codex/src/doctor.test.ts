@@ -259,13 +259,15 @@ console.log("codex-cli ${CODEX_APP_SERVER_VERSION}");
     "bounds a native version probe that ignores SIGTERM",
     async () => {
       const directory = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-codex-version-"));
+      const pidPath = path.join(directory, "probe.pid");
       try {
         const command = path.join(directory, "codex");
         await fs.writeFile(
           command,
           `#!${process.execPath}
+require("node:fs").writeFileSync(${JSON.stringify(pidPath)}, String(process.pid));
 process.on("SIGTERM", () => {});
-setTimeout(() => process.exit(0), 10_000);
+setInterval(() => {}, 1000);
 `,
           { mode: 0o755 },
         );
@@ -274,19 +276,24 @@ setTimeout(() => process.exit(0), 10_000);
           resolveNativeCommand: () => command,
           runVersionCommand: undefined,
         });
-        const startedAt = performance.now();
         const findings = await check.detect(context(config()));
 
-        expect(performance.now() - startedAt).toBeLessThan(7_000);
         expect(findings).toEqual([
           expect.objectContaining({
             checkId: CODEX_MANAGED_APP_SERVER_CHECK_ID,
             path: command,
-            message: expect.stringContaining("Managed Codex app-server version check failed:"),
+            message:
+              "Managed Codex app-server version check failed: Version probe timed out after 5000 ms",
             requirement: `Codex ${CODEX_APP_SERVER_VERSION} must report its version within 5000 ms`,
           }),
         ]);
+        const probePid = Number(await fs.readFile(pidPath, "utf8"));
+        expect(() => process.kill(probePid, 0)).toThrow(expect.objectContaining({ code: "ESRCH" }));
       } finally {
+        const probePid = Number(await fs.readFile(pidPath, "utf8").catch(() => ""));
+        if (probePid > 0) {
+          killProcessTree(probePid, { force: true });
+        }
         await fs.rm(directory, { recursive: true, force: true });
       }
     },

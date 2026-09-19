@@ -456,6 +456,7 @@ export function createEmbeddedRunAuthController(params: {
     const messageForReason =
       failoverParams.message?.trim() ||
       (failoverParams.error ? formatErrorMessage(failoverParams.error).trim() : "");
+    const code = failoverParams.error ? getFailoverErrorCode(failoverParams.error) : undefined;
     const reason = resolveAuthProfileFailoverReason({
       allInCooldown: failoverParams.allInCooldown,
       message: messageForReason,
@@ -463,6 +464,7 @@ export function createEmbeddedRunAuthController(params: {
     });
     const message =
       failoverParams.message?.trim() ||
+      (code === "selected_auth_profile_unavailable" ? messageForReason : undefined) ||
       renderAuthProfileFailoverCopy({
         reason,
         provider,
@@ -495,8 +497,8 @@ export function createEmbeddedRunAuthController(params: {
         provider,
         model: modelId,
         authMode,
-        status: resolveFailoverStatus(reason),
-        code: failoverParams.error ? getFailoverErrorCode(failoverParams.error) : undefined,
+        status: resolveFailoverStatus(reason, code),
+        code,
         authProfileFailure: { allInCooldown: failoverParams.allInCooldown },
         cause: failoverParams.error,
       });
