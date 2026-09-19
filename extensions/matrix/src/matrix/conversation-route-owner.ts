@@ -1,6 +1,5 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
-import { resolveMatrixAccount } from "./accounts.js";
 import { resolveMatrixInboundRoute } from "./monitor/route.js";
 
 export function resolveMatrixConversationRouteOwner(params: {
@@ -27,7 +26,6 @@ export function resolveMatrixConversationRouteOwner(params: {
     roomId,
     senderId: conversation.peerId,
     isDirectMessage,
-    dmSessionScope: resolveMatrixAccount({ cfg, accountId }).config.dm?.sessionScope,
     threadId: conversation.threadId,
     resolveAgentRoute,
   });
