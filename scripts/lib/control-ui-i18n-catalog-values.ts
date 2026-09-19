@@ -1,9 +1,9 @@
-import { createHash } from "node:crypto";
+import { hash } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import type { TranslationMap, TranslationMemoryEntry } from "./control-ui-i18n-sync-plan.ts";
 
 export function hashControlUiTranslationText(text: string): string {
-  return createHash("sha256").update(text.trim().split(/\s+/).join(" ")).digest("hex");
+  return hash("sha256", text.trim().split(/\s+/).join(" "), "hex");
 }
 
 export function mergeControlUiTranslationMaps(
