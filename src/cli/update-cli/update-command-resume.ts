@@ -22,7 +22,7 @@ import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
 import { withCommandProcessScope } from "../../process/exec-spawn.js";
 import { defaultRuntime } from "../../runtime.js";
 import { VERSION } from "../../version.js";
-import { readPackageVersion, type UpdateCommandOptions } from "./shared.js";
+import { parseUpdateTimeoutMs, readPackageVersion, type UpdateCommandOptions } from "./shared.js";
 import {
   preparePostCorePluginConfig,
   persistValidatedDowngradeConfig,
@@ -305,6 +305,7 @@ export async function convergePostCoreUpdatePlugins(params: {
       json: params.opts.json,
       acceptCapabilities: params.opts.acceptCapabilities,
       timeoutMs: params.timeoutMs,
+      workTimeoutMs: parseUpdateTimeoutMs(params.opts.timeout) ?? null,
       pluginInstallRecords,
       assertCurrent,
     });

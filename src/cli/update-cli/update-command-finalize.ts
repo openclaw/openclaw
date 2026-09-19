@@ -32,6 +32,7 @@ import { exitCliAfterOutput } from "../one-shot-exit.js";
 import { retainCliProcessJobUntilExit } from "../runtime-cleanup-scope.js";
 import {
   parseTimeoutMsOrExit,
+  parseUpdateTimeoutMs,
   readPackageVersion,
   resolveUpdateRoot,
   tryResolveInvocationCwd,
@@ -356,6 +357,7 @@ async function updateFinalizeCommandInternal(
                 json: opts.json,
                 acceptCapabilities: opts.acceptCapabilities,
                 timeoutMs: lifecycle.budget("plugins"),
+                workTimeoutMs: parseUpdateTimeoutMs(opts.timeout) ?? null,
                 pluginInstallRecords,
                 assertCurrent: phase.assertCurrent,
                 runtime: createNonExitingRuntime(),

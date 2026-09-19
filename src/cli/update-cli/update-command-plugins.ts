@@ -95,6 +95,7 @@ export async function updatePluginsAfterCoreUpdate(params: {
   configChanged?: boolean;
   restoredAuthoredChannels?: unknown;
   timeoutMs: number;
+  workTimeoutMs?: number | null;
   pluginInstallRecords?: Record<string, PluginInstallRecord>;
   json?: boolean;
   acceptCapabilities?: boolean;
@@ -231,6 +232,7 @@ export async function updatePluginsAfterCoreUpdate(params: {
     coreVersion: coreVersion ?? undefined,
     versionBoundPluginIds: VERSION_BOUND_RUNTIME_PLUGIN_IDS,
     timeoutMs: params.timeoutMs,
+    workTimeoutMs: params.workTimeoutMs,
     workspaceDir: params.root,
     externalizedBundledPluginBridges,
     beforePersistentEffect: params.assertCurrent,
@@ -273,6 +275,8 @@ export async function updatePluginsAfterCoreUpdate(params: {
   );
   const convergence = await runPostCorePluginConvergence({
     cfg: pluginConfig,
+    timeoutMs: params.timeoutMs,
+    workTimeoutMs: params.workTimeoutMs,
     env: process.env,
     compatibilityHostVersion: coreVersion ?? undefined,
     baselineInstallRecords: convergenceBaselineRecords,

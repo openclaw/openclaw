@@ -44,6 +44,7 @@ export async function convergePluginReleaseCohort(params: {
   coreVersion?: string;
   versionBoundPluginIds?: ReadonlySet<string>;
   timeoutMs: number;
+  workTimeoutMs?: number | null;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
   externalizedBundledPluginBridges?: readonly ExternalizedBundledPluginBridge[];
@@ -112,6 +113,8 @@ async function convergePluginReleaseCohortWithLease(
   const sync = await syncPluginsForUpdateChannel({
     config: params.config,
     channel: params.channel,
+    timeoutMs: params.timeoutMs,
+    workTimeoutMs: params.workTimeoutMs,
     coreVersion: params.coreVersion,
     skipIds: operatorManagedIds,
     workspaceDir: params.workspaceDir,
@@ -177,6 +180,7 @@ async function convergePluginReleaseCohortWithLease(
       config,
       pluginIds: [...repairedMissingPayloadIds],
       timeoutMs: params.timeoutMs,
+      workTimeoutMs: params.workTimeoutMs,
       updateChannel: params.channel,
       coreVersion: params.coreVersion,
       versionBoundPluginIds: params.versionBoundPluginIds,
@@ -199,6 +203,7 @@ async function convergePluginReleaseCohortWithLease(
   const update = await updateNpmInstalledPlugins({
     config,
     timeoutMs: params.timeoutMs,
+    workTimeoutMs: params.workTimeoutMs,
     updateChannel: params.channel,
     coreVersion: params.coreVersion,
     skipIds: new Set([

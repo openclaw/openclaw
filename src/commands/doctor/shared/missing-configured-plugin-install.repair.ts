@@ -88,6 +88,8 @@ type RepairMissingPluginInstallsResult = {
 export async function repairMissingConfiguredPluginInstalls(params: {
   cfg: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
+  timeoutMs?: number;
+  workTimeoutMs?: number | null;
   onCapabilityConsent?: PluginCapabilityConsentHandler;
   onWarning?: (warning: PluginInstallRepairWarning) => void;
   beforePersistentEffect?: () => void | Promise<void>;
@@ -102,6 +104,8 @@ export async function repairMissingConfiguredPluginInstalls(params: {
 }): Promise<RepairMissingPluginInstallsResult> {
   return repairMissingPluginInstalls({
     cfg: params.cfg,
+    timeoutMs: params.timeoutMs,
+    workTimeoutMs: params.workTimeoutMs,
     env: params.env,
     pluginIds: collectConfiguredPluginIds(params.cfg, params.env),
     channelIds: collectConfiguredChannelIds(params.cfg, params.env),
@@ -120,6 +124,8 @@ export async function repairMissingPluginInstallsForIds(params: {
   channelIds?: Iterable<string>;
   blockedPluginIds?: Iterable<string>;
   env?: NodeJS.ProcessEnv;
+  timeoutMs?: number;
+  workTimeoutMs?: number | null;
   baselineRecords?: Record<string, PluginInstallRecord>;
   onCapabilityConsent?: PluginCapabilityConsentHandler;
   onWarning?: (warning: PluginInstallRepairWarning) => void;
@@ -127,6 +133,8 @@ export async function repairMissingPluginInstallsForIds(params: {
 }): Promise<RepairMissingPluginInstallsResult> {
   return repairMissingPluginInstalls({
     cfg: params.cfg,
+    timeoutMs: params.timeoutMs,
+    workTimeoutMs: params.workTimeoutMs,
     env: params.env,
     pluginIds: new Set(
       [...params.pluginIds].map((pluginId) => pluginId.trim()).filter((pluginId) => pluginId),
@@ -154,6 +162,8 @@ async function repairMissingPluginInstalls(params: {
   channelIds: ReadonlySet<string>;
   blockedPluginIds?: ReadonlySet<string>;
   env?: NodeJS.ProcessEnv;
+  timeoutMs?: number;
+  workTimeoutMs?: number | null;
   baselineRecords?: Record<string, PluginInstallRecord>;
   onCapabilityConsent?: PluginCapabilityConsentHandler;
   onWarning?: (warning: PluginInstallRepairWarning) => void;
@@ -337,6 +347,8 @@ async function repairMissingPluginInstallsWithLease(
           },
         },
         pluginIds: missingRecordedPluginIds,
+        timeoutMs: params.timeoutMs,
+        workTimeoutMs: params.workTimeoutMs,
         skipDisabledPlugins: true,
         updateChannel,
         coreVersion: resolveCompatibilityHostVersion(env),
@@ -445,6 +457,8 @@ async function repairMissingPluginInstallsWithLease(
       copyPluginInstallTransactionRequest(params, {
         candidate,
         config: params.cfg,
+        timeoutMs: params.timeoutMs,
+        workTimeoutMs: params.workTimeoutMs,
         records: nextRecords,
         env,
         updateChannel,

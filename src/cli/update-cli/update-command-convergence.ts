@@ -13,7 +13,7 @@ import { loadInstalledPluginIndexInstallRecords } from "../../plugins/installed-
 import { withPluginLifecycleLease } from "../../plugins/plugin-lifecycle-lease.js";
 import { defaultRuntime } from "../../runtime.js";
 import { VERSION } from "../../version.js";
-import { readPackageVersion, type UpdateCommandOptions } from "./shared.js";
+import { parseUpdateTimeoutMs, readPackageVersion, type UpdateCommandOptions } from "./shared.js";
 import { preparePostCorePluginConfig } from "./update-command-config.js";
 import { completePostCorePluginUpdate } from "./update-command-fresh-doctor.js";
 import {
@@ -251,6 +251,7 @@ export async function convergeUpdatePlugins(params: {
             json: params.opts.json,
             acceptCapabilities: params.opts.acceptCapabilities,
             timeoutMs: params.updateStepTimeoutMs,
+            workTimeoutMs: parseUpdateTimeoutMs(params.opts.timeout) ?? null,
             pluginInstallRecords,
             assertCurrent,
           });

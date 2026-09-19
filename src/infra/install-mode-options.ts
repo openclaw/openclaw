@@ -7,7 +7,7 @@ type InstallModeOptions<TLogger> = {
   dryRun?: boolean;
 };
 
-type TimedInstallModeOptions<TLogger> = InstallModeOptions<TLogger> & {
+export type TimedInstallModeOptions<TLogger> = InstallModeOptions<TLogger> & {
   timeoutMs?: number;
   /** Resolved work policy: null is unbounded; omission retains install defaults. */
   workTimeoutMs?: number | null;
