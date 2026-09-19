@@ -22,7 +22,10 @@ export function projectPendingInputMessage(
   maxChars: number,
   projectProfile = createCurrentUserProfileMessageProjector(resolveCurrentUserProfileDisplay),
 ) {
-  const projected = projectChatDisplayMessage(input.message, { maxChars });
+  const projected = projectChatDisplayMessage(input.message, {
+    maxChars,
+    redactInlineMedia: true,
+  });
   const message = projected ? projectProfile(projected) : undefined;
   if (!message) {
     return undefined;

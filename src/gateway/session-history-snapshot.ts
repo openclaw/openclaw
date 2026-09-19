@@ -47,6 +47,7 @@ export async function readSessionHistorySnapshotKernel(
       subagentCoordination: options.readers.subagentCoordination,
       includeCommentaryFallbacks: true,
       maxChars: params.maxChars ?? DEFAULT_CHAT_HISTORY_TEXT_MAX_CHARS,
+      redactInlineMedia: true,
       resolveCronJobName: options.resolveCronJobName,
       ...(options.deferProfileDisplay
         ? {}

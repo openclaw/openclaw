@@ -430,7 +430,7 @@ export function resolveMessageGroupSenderLabel(
 }
 
 function isActivityMessageGroup(group: MessageGroup): boolean {
-  if (normalizeRoleForGrouping(group.role) !== "tool") {
+  if (normalizeRoleForGrouping(group.role) !== "tool" || group.visibleContent === "non-text") {
     return false;
   }
   const cards = group.messages.flatMap((item) => extractToolCardsCached(item.message));
@@ -492,7 +492,11 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
   // Aggregate usage/cost/model across all messages in the group
   const meta = extractGroupMeta(group, opts.contextWindow ?? null);
 
-  if (normalizedRole === "tool" && opts.showToolCalls === false) {
+  if (
+    normalizedRole === "tool" &&
+    opts.showToolCalls === false &&
+    group.visibleContent !== "non-text"
+  ) {
     return nothing;
   }
 

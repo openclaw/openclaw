@@ -196,6 +196,7 @@ async function readChatHistoryPageLocal(params: ChatHistoryPageParams): Promise<
                   subagentCoordination,
                   includeCommentaryFallbacks: true,
                   maxChars: effectiveMaxChars,
+                  redactInlineMedia: true,
                   resolveCurrentUserProfileDisplay,
                 },
               );

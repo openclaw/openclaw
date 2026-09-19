@@ -33,6 +33,7 @@ export function projectSessionMessagePayload(params: {
   transcriptPosition?: TranscriptDisplayPosition;
   projectionState?: SessionMessageProjectionState;
   projectCurrentUserProfile?: (message: Record<string, unknown>) => Record<string, unknown>;
+  redactInlineMedia?: boolean;
   runId?: string;
   sessionKey: string;
   sessionSnapshot?: Record<string, unknown>;
@@ -56,6 +57,7 @@ export function projectSessionMessagePayload(params: {
         ...params.projectionState,
         subagentCoordination: params.subagentCoordination,
         includeCommentaryFallbacks: true,
+        redactInlineMedia: params.redactInlineMedia,
         activity: false,
       })
     : undefined;
@@ -81,6 +83,7 @@ export function projectSessionMessagePayload(params: {
       ? historyProjection
       : params.projectionState
         ? projectChatDisplayMessagesWithState([rawMessage], {
+            redactInlineMedia: params.redactInlineMedia,
             assistantErrorPending: params.projectionState.assistantErrorPending,
             turnBoundaryPending: params.projectionState.turnBoundaryPending,
             activity: false,
@@ -89,6 +92,7 @@ export function projectSessionMessagePayload(params: {
         : {
             messages: [
               projectChatDisplayMessage(rawMessage, {
+                redactInlineMedia: params.redactInlineMedia,
                 subagentCoordination: params.subagentCoordination,
               }),
             ],

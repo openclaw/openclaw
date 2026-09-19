@@ -168,6 +168,7 @@ export class SessionHistorySseState {
     const nextProjection = projectChatDisplayMessagesWithState([nextMessage], {
       includeCommentaryFallbacks: true,
       maxChars: this.maxChars,
+      redactInlineMedia: true,
       turnBoundaryPending: hadPendingTurnBoundary,
       assistantErrorPending: this.assistantErrorPending,
     });
@@ -187,6 +188,7 @@ export class SessionHistorySseState {
       {
         includeCommentaryFallbacks: true,
         maxChars: this.maxChars,
+        redactInlineMedia: true,
         resolveCurrentUserProfileDisplay,
       },
     );
