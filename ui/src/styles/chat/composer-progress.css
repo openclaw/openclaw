@@ -69,6 +69,10 @@
   margin-bottom: calc(0px - var(--chat-composer-shell-gap) - var(--chat-progress-underlap));
 }
 
+.agent-chat__progress-float[hidden] {
+  display: none;
+}
+
 /* Reserve the collapsed card slot without delaying the real composer or transcript. */
 .agent-chat__progress-float--loading {
   min-height: calc(42px + var(--chat-progress-underlap) + 1px);

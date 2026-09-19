@@ -1,7 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { expectDefined } from "@openclaw/normalization-core";
-import { html, nothing, render } from "lit";
+import { html, nothing, render, type ReactiveController } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { makeChatHost } from "../chat-host.test-support.ts";
 import { stubAnimationFrames } from "../chat-view.test-helpers.ts";
@@ -23,6 +23,95 @@ import {
 describe("chat transcript scroll ownership", () => {
   beforeEach(installTranscriptDomMocks);
   afterEach(resetTranscriptTestDom);
+
+  it.each(["following", "reading", "wheel", "key", "pointer", "touch"] as const)(
+    "preserves %s ownership across an intermediate footer clamp and late row growth",
+    async (intent) => {
+      const flushFrames = stubAnimationFrames();
+      const policy = makeChatHost({ chatHasAutoScrolled: true });
+      const transcript = new ChatTranscriptController(
+        {
+          addController: vi.fn(),
+          removeController: vi.fn(),
+          requestUpdate: vi.fn(),
+          updateComplete: Promise.resolve(true),
+        },
+        {
+          canFollowEnd: () => !policy.chatFollowLocked,
+          onReaderScroll: (towardEnd) => handleChatScrollTakeover(policy, towardEnd),
+        },
+      );
+      const rows: TestContentRow[] = Array.from({ length: 12 }, (_, index) => ({
+        kind: "content",
+        key: `row:${index}`,
+        content: html`<div>row ${index}</div>`,
+      }));
+      const { container } = await mountTestTranscript(`footer-${intent}`, rows, transcript);
+      try {
+        Object.defineProperties(container, {
+          clientHeight: { configurable: true, value: 400 },
+          scrollHeight: { configurable: true, value: 2000 },
+        });
+        container.scrollTop = 1600;
+        policy.chatLastScrollTop = 1600;
+        policy.chatScrollElement = () => container;
+        policy.chatIsProgrammaticScroll = () => transcript.isProgrammaticScroll;
+        policy.chatIsMaintenanceScroll = () => transcript.isMaintenanceScroll;
+        container.addEventListener("scroll", (event) => handleChatScroll(policy, event));
+        if (intent === "reading") {
+          policy.chatFollowLocked = true;
+          policy.chatReadingHistory = true;
+        }
+        const controller: ReactiveController = transcript;
+        controller.hostUpdate?.();
+        // The empty footer briefly enlarges the viewport. The browser clamps
+        // against that geometry before the final footer and row sizes commit.
+        Object.defineProperty(container, "clientHeight", { configurable: true, value: 650 });
+        container.scrollTop = 1350;
+        Object.defineProperties(container, {
+          clientHeight: { configurable: true, value: 600 },
+          scrollHeight: { configurable: true, value: 2087 },
+        });
+        if (intent === "wheel") {
+          container.dispatchEvent(new WheelEvent("wheel", { deltaY: -100 }));
+        } else if (intent === "key") {
+          container.dispatchEvent(new KeyboardEvent("keydown", { key: "PageUp" }));
+        } else if (intent === "pointer") {
+          container.dispatchEvent(new PointerEvent("pointerdown"));
+        } else if (intent === "touch") {
+          const touch: Touch = {
+            identifier: 1,
+            target: container,
+            clientX: 0,
+            clientY: 100,
+            pageX: 0,
+            pageY: 100,
+            screenX: 0,
+            screenY: 100,
+            radiusX: 1,
+            radiusY: 1,
+            rotationAngle: 0,
+            force: 1,
+          };
+          container.dispatchEvent(
+            new TouchEvent("touchstart", {
+              touches: [touch],
+              changedTouches: [touch],
+            }),
+          );
+        }
+        container.dispatchEvent(new Event("scroll"));
+        expect(policy.chatFollowLocked).toBe(intent !== "following");
+        expect(policy.chatReadingHistory).toBe(intent !== "following");
+        transcript.hostUpdated();
+        flushFrames();
+        expect(policy.chatFollowLocked).toBe(intent !== "following");
+        expect(policy.chatReadingHistory).toBe(intent !== "following");
+      } finally {
+        transcript.hostDisconnected();
+      }
+    },
+  );
 
   it("preserves reader policy when row measurement clamps a positive adjustment to the end", async () => {
     transcriptDomState.measuredRowHeight = 120;

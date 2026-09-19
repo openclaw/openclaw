@@ -13,6 +13,7 @@ import {
 } from "./session-progress-disclosure.ts";
 
 export type ComposerProgressRunLifecycle = {
+  presented?: boolean;
   gatewayScope?: object;
   sessionIdentity?: string;
   activeRunId?: string | null;
@@ -113,6 +114,12 @@ class ProgressDisclosureController {
     }
     if (lifecycle?.completedRunId) {
       this.dispatch({ type: "complete", runId: lifecycle.completedRunId });
+    }
+    // A question retains the card but takes over its input surface. Hidden
+    // transcript gestures must not change the disclosure restored afterward.
+    if (lifecycle?.presented === false) {
+      this.takeover();
+      this.disconnectHeader();
     }
     this.connectHeader();
     this.apply();
@@ -266,7 +273,9 @@ class ProgressDisclosureController {
       return;
     }
     const transcript =
-      this.element.closest(".chat-main")?.querySelector<HTMLElement>(".chat-thread") ?? null;
+      this.lifecycle?.presented === false
+        ? null
+        : (this.element.closest(".chat-main")?.querySelector<HTMLElement>(".chat-thread") ?? null);
     if (transcript === this.transcript) {
       return;
     }
@@ -279,7 +288,7 @@ class ProgressDisclosureController {
   }
 
   private connectHeader(): void {
-    if (this.disposed) {
+    if (this.disposed || this.lifecycle?.presented === false) {
       return;
     }
     this.summary ??= this.element.querySelector<HTMLElement>("summary") ?? undefined;
