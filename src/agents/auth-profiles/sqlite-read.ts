@@ -6,7 +6,6 @@ import { cloneEnvWithPlatformSemantics } from "../../config/config-env-vars.js";
 import type { PreparedSqliteReadOnlyLocation } from "../../infra/sqlite-readonly-location.types.js";
 import { runSqliteReadOnlyWorker } from "../../infra/sqlite-readonly-worker.js";
 import { prepareSqliteReadOnlyLocation } from "../../infra/sqlite-snapshot-source.js";
-import { withSqliteSourceHandleAsync } from "../../infra/sqlite-source-handle.js";
 import { withSqliteWorkerCleanupFailure } from "../../infra/sqlite-worker-broker-reply.js";
 import { inspectDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
 import {
@@ -232,16 +231,14 @@ export function prepareAgentAuthProfileRowsRead(options: {
           if (!sourceIdentity?.key.startsWith("file:")) {
             throw new Error("Auth profile read source no longer identifies its file");
           }
-          const rows = await withSqliteSourceHandleAsync(sourcePath, () =>
-            runSqliteReadOnlyWorker(sourcePath, {
-              mode: "auth-profile-rows",
-              source: snapshot ? "snapshot" : "canonical",
-              expectedIdentity: sourceIdentity.key,
-              env,
-              coordinatorRuntime: root.coordinatorRuntime,
-              signal: controller.signal,
-            }),
-          );
+          const rows = await runSqliteReadOnlyWorker(sourcePath, {
+            mode: "auth-profile-rows",
+            source: snapshot ? "snapshot" : "canonical",
+            expectedIdentity: sourceIdentity.key,
+            env,
+            coordinatorRuntime: root.coordinatorRuntime,
+            signal: controller.signal,
+          });
           controller.signal.throwIfAborted();
           assertCurrent();
           if (!isInspection(rows.store) || !isInspection(rows.state)) {
