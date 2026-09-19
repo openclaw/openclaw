@@ -234,6 +234,62 @@ describe("kysely sync helpers", () => {
     },
   );
 
+  it.each(["eager", "first"])("completes prepared writes returning rows (%s)", (mode) => {
+    database = new DatabaseSync(":memory:");
+    database.exec("create table items (id integer primary key, name text not null)");
+    database.exec("insert into items values (1, 'Ada'), (2, 'Grace')");
+    const db = getNodeSqliteKysely<SyncHelperTestDatabase>(database);
+    const build: Parameters<
+      typeof prepareSqliteQuerySync<string, { id: number; name: string }>
+    >[1] = (parameter) =>
+      db
+        .updateTable("items")
+        .set({ name: parameter((name) => name) })
+        .returningAll();
+    const update =
+      mode === "first"
+        ? prepareSqliteQueryTakeFirstSync(database, build)
+        : prepareSqliteQuerySync(database, build);
+    for (const name of ["Lin", "Katherine"]) {
+      const rows = [
+        { id: 1, name },
+        { id: 2, name },
+      ];
+      expect(update(name)).toEqual(mode === "first" ? rows[0] : { rows });
+      expect(
+        executeSqliteQuerySync(database, db.selectFrom("items").selectAll().orderBy("id")).rows,
+      ).toEqual(rows);
+    }
+  });
+
+  it.each(["eager", "first"])("leaves the database usable after a binding failure (%s)", (mode) => {
+    database = new DatabaseSync(":memory:");
+    const db = getNodeSqliteKysely<SyncHelperTestDatabase>(database);
+    const failure = new Error("binding rejected");
+    const observed: unknown[] = [];
+    registerNodeSqliteKyselyQueryErrorHandler(database, (error) => observed.push(error));
+    const build: Parameters<typeof prepareSqliteQuerySync<string, { value: string }>>[1] = (
+      parameter,
+    ) =>
+      db.selectNoFrom(
+        parameter((value) => {
+          if (value === "reject") {
+            throw failure;
+          }
+          return value;
+        }).as("value"),
+      );
+    const read =
+      mode === "first"
+        ? prepareSqliteQueryTakeFirstSync(database, build)
+        : prepareSqliteQuerySync(database, build);
+    expect(captureError(() => read("reject"))).toBe(failure);
+    expect(observed).toEqual([]);
+    expect(read("accepted")).toEqual(
+      mode === "first" ? { value: "accepted" } : { rows: [{ value: "accepted" }] },
+    );
+  });
+
   it("returns identical results while repeated statements move from cold to warm", () => {
     database = new DatabaseSync(":memory:");
     database.exec(

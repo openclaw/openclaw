@@ -84,8 +84,8 @@ function executeCompiledSqliteQuerySync<Row>(
   db: DatabaseSync,
   compiledQuery: CompiledQuery<Row>,
   firstRowOnly = false,
+  parameters = compiledQuery.parameters as SQLInputValue[],
 ): QueryResult<Row> {
-  const parameters = compiledQuery.parameters as SQLInputValue[];
   try {
     const sql = compiledQuery.sql;
     installStatementInvalidation(db);
@@ -195,11 +195,7 @@ export function prepareSqliteQuerySync<Params, Row = unknown>(
   build: SqliteQueryBindingBuilder<Params, Row>,
 ): (params: Params) => QueryResult<Row> {
   const { compiled, bind } = compileSqliteQueryBindings(build);
-  return (params) =>
-    executeCompiledSqliteQuerySync(db, {
-      ...compiled,
-      parameters: bind(params),
-    });
+  return (params) => executeCompiledSqliteQuerySync(db, compiled, false, bind(params));
 }
 
 /** Compile a fixed first-row read once and bind fresh values on every execution. */
@@ -208,9 +204,7 @@ export function prepareSqliteQueryTakeFirstSync<Params, Row = unknown>(
   build: SqliteQueryBindingBuilder<Params, Row>,
 ): (params: Params) => Row | undefined {
   const { compiled, bind } = compileSqliteQueryBindings(build);
-  return (params) =>
-    executeCompiledSqliteQuerySync<Row>(db, { ...compiled, parameters: bind(params) }, true)
-      .rows[0];
+  return (params) => executeCompiledSqliteQuerySync<Row>(db, compiled, true, bind(params)).rows[0];
 }
 
 /** Compile once and capture fresh bindings before lazily opening each private iterator. */
