@@ -71,17 +71,36 @@ export function findMatchingApiKeyProfile(
   return undefined;
 }
 
+function avoidInheritedProfileId(
+  profileId: string,
+  store: AuthProfileStore,
+  targetStore: AuthProfileStore,
+): string {
+  if (!store.profiles[profileId] || targetStore.profiles[profileId]) {
+    return profileId;
+  }
+  const base = `${profileId}-import`;
+  let candidate = base;
+  for (let suffix = 2; store.profiles[candidate]; suffix += 1) {
+    candidate = `${base}-${suffix}`;
+  }
+  return candidate;
+}
+
 export function itemProfileTarget(
   credential: CodexAuthCredential,
   store: AuthProfileStore,
   ctx: MigrationProviderContext,
   source: { codexHome: string },
+  localStore?: AuthProfileStore,
 ): { profileId: string; matchedExisting: boolean } {
+  const targetStore = localStore ?? store;
   if (credential.kind === "oauth") {
     const profile = credential.result.profiles[0];
     const matched =
       profile?.credential.type === "oauth"
-        ? findMatchingOAuthProfile(store, profile.credential)
+        ? (findMatchingOAuthProfile(targetStore, profile.credential) ??
+          findMatchingOAuthProfile(store, profile.credential))
         : undefined;
     if (matched) {
       return { profileId: matched, matchedExisting: true };
@@ -95,6 +114,8 @@ export function itemProfileTarget(
       source.codexHome === defaultCodexHome() &&
       profile?.credential.type === "oauth" &&
       oauthSubject(profile.credential) !== undefined &&
+      (!store.profiles[LEGACY_CODEX_PROFILE_ID] ||
+        Boolean(targetStore.profiles[LEGACY_CODEX_PROFILE_ID])) &&
       !Object.entries(store.profiles).some(
         ([id, existing]) =>
           id !== LEGACY_CODEX_PROFILE_ID &&
@@ -102,10 +123,15 @@ export function itemProfileTarget(
           existing.provider === OPENAI_PROVIDER_ID,
       );
     return {
-      profileId: preserveLegacyProfile ? LEGACY_CODEX_PROFILE_ID : credential.profileId,
+      profileId: preserveLegacyProfile
+        ? avoidInheritedProfileId(LEGACY_CODEX_PROFILE_ID, store, targetStore)
+        : avoidInheritedProfileId(credential.profileId, store, targetStore),
       matchedExisting: false,
     };
   }
-  const matched = findMatchingApiKeyProfile(store, credential.provider, credential.key);
-  return { profileId: matched ?? credential.profileId, matchedExisting: Boolean(matched) };
+  const matched = findMatchingApiKeyProfile(targetStore, credential.provider, credential.key);
+  return {
+    profileId: matched ?? avoidInheritedProfileId(credential.profileId, store, targetStore),
+    matchedExisting: Boolean(matched),
+  };
 }

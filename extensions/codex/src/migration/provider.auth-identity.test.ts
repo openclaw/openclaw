@@ -12,6 +12,7 @@ import {
 } from "./provider.test-support.js";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import {
   clearRuntimeAuthProfileStoreSnapshots,
   loadAuthProfileStoreForSecretsRuntime,
@@ -24,8 +25,43 @@ import {
 import { describe, expect, it, vi } from "vitest";
 import { buildCodexMigrationProvider } from "./provider.js";
 
+async function readAuthSqliteShape(fixture: { stateDir: string }) {
+  const databasePaths = [
+    path.join(fixture.stateDir, "state", "openclaw.sqlite"),
+    path.join(targetAgentDir(fixture), "openclaw-agent.sqlite"),
+  ];
+  const shapes = [];
+  for (const databasePath of databasePaths) {
+    if (!(await fs.stat(databasePath).catch(() => undefined))) {
+      continue;
+    }
+    const database = new DatabaseSync(databasePath, { readOnly: true });
+    try {
+      const objects = database
+        .prepare(
+          `SELECT type, name, tbl_name, sql
+             FROM sqlite_schema
+            WHERE name IN ('auth_profile_store', 'auth_profile_state', 'config_machine_state')
+               OR tbl_name IN ('auth_profile_store', 'auth_profile_state', 'config_machine_state')
+            ORDER BY type, name`,
+        )
+        .all();
+      if (objects.length > 0) {
+        shapes.push({
+          path: path.relative(fixture.stateDir, databasePath),
+          userVersion: database.prepare("PRAGMA user_version").get(),
+          objects,
+        });
+      }
+    } finally {
+      database.close();
+    }
+  }
+  return shapes;
+}
+
 describe("Codex migration auth identity and inherited profiles", () => {
-  it("does not reuse another user's OAuth profile in the same ChatGPT workspace", async () => {
+  it("preserves an existing auth SQLite schema while importing another workspace user", async () => {
     const fixture = await createCodexFixture();
     const jwt = (user: string) =>
       fakeJwt({
@@ -48,6 +84,7 @@ describe("Codex migration auth identity and inherited profiles", () => {
       credential: existing,
       agentDir: targetAgentDir(fixture),
     });
+    const sqliteBefore = await readAuthSqliteShape(fixture);
     await writeFile(
       path.join(fixture.codexHome, "auth.json"),
       JSON.stringify({
@@ -69,11 +106,23 @@ describe("Codex migration auth identity and inherited profiles", () => {
       providerOptions: { credentialKind: "oauth", configPatchMode: "none" },
     });
     const plan = await provider.plan(ctx);
-    expect(findItem(plan.items, "auth:openai").status).toBe("conflict");
-    await provider.apply(ctx, plan);
-    expect(loadTargetAuthStore(fixture).profiles["openai:account-shared-workspace"]).toEqual(
-      existing,
-    );
+    expect(findItem(plan.items, "auth:openai")).toMatchObject({
+      status: "planned",
+      details: { profileId: "openai:account-shared-workspace-import" },
+    });
+    const result = await provider.apply(ctx, plan);
+    expect(findItem(result.items, "auth:openai")).toMatchObject({
+      status: "migrated",
+      details: { profileId: "openai:account-shared-workspace-import" },
+    });
+    const migratedStore = loadTargetAuthStore(fixture);
+    expect(migratedStore.profiles["openai:account-shared-workspace"]).toEqual(existing);
+    expect(migratedStore.profiles["openai:account-shared-workspace-import"]).toMatchObject({
+      type: "oauth",
+      provider: "openai",
+      accountId: "shared-workspace",
+    });
+    expect(await readAuthSqliteShape(fixture)).toEqual(expect.arrayContaining(sqliteBefore));
   });
 
   it.each([
@@ -451,14 +500,123 @@ describe("Codex migration auth identity and inherited profiles", () => {
     expect(await fs.readFile(path.join(fixture.codexHome, "auth.json"), "utf8")).toBe(nativeAuth);
   });
 
+  it("keeps auth preview read-only when the target agent database is missing", async () => {
+    const fixture = await createCodexFixture();
+    await writeFile(
+      path.join(fixture.codexHome, "auth.json"),
+      JSON.stringify({
+        auth_mode: "apikey",
+        OPENAI_API_KEY: "fixture-preview-key",
+      }),
+    );
+    const agentId = "research";
+    const databasePath = path.join(targetAgentDir(fixture, agentId), "openclaw-agent.sqlite");
+    const ctx = makeContext({
+      source: fixture.codexHome,
+      stateDir: fixture.stateDir,
+      workspaceDir: fixture.workspaceDir,
+      targetAgentId: agentId,
+      itemKinds: ["auth"],
+      providerOptions: { credentialKind: "api_key", configPatchMode: "none" },
+      config: {
+        agents: {
+          defaults: { workspace: fixture.workspaceDir },
+          list: [{ id: "main", default: true }, { id: agentId }],
+        },
+      },
+    });
+    const provider = buildCodexMigrationProvider();
+
+    const plan = await provider.plan(ctx);
+
+    expect(findItem(plan.items, "auth:openai:api-key").status).toBe("skipped");
+    await expect(fs.access(databasePath)).rejects.toThrow();
+  });
+
+  it("preserves an inherited OAuth refresh owner for a secondary agent import", async () => {
+    const fixture = await createCodexFixture();
+    credentialStorage.accountType = "chatgpt";
+    const claims = {
+      chatgpt_account_id: "shared-account",
+      chatgpt_user_id: "shared-user",
+    };
+    const access = fakeJwt({
+      exp: 2_100_000_000,
+      "https://api.openai.com/auth": claims,
+    });
+    const profileId = "openai:shared-owner";
+    const inherited = {
+      type: "oauth" as const,
+      provider: "openai",
+      access,
+      refresh: "shared-refresh",
+      expires: 2_100_000_000_000,
+      accountId: "shared-account",
+    };
+    upsertAuthProfile({ profileId, credential: inherited });
+    await writeFile(
+      path.join(fixture.codexHome, "auth.json"),
+      JSON.stringify({
+        auth_mode: "chatgpt",
+        tokens: {
+          access_token: access,
+          refresh_token: "shared-refresh",
+          account_id: "shared-account",
+        },
+      }),
+    );
+    const ctx = makeContext({
+      source: fixture.codexHome,
+      stateDir: fixture.stateDir,
+      workspaceDir: fixture.workspaceDir,
+      targetAgentId: "research",
+      includeSecrets: true,
+      itemKinds: ["auth"],
+      providerOptions: { credentialKind: "oauth", configPatchMode: "none" },
+      config: {
+        agents: {
+          defaults: { workspace: fixture.workspaceDir },
+          list: [{ id: "main", default: true }, { id: "research" }],
+        },
+      },
+    });
+    const provider = buildCodexMigrationProvider();
+
+    const plan = await provider.plan(ctx);
+    expect(findItem(plan.items, "auth:openai")).toMatchObject({
+      status: "planned",
+      details: { profileId, matchedExistingProfile: true },
+    });
+
+    const result = await provider.apply(ctx, plan);
+
+    expect(findItem(result.items, "auth:openai")).toMatchObject({
+      status: "migrated",
+      details: { profileId, wroteAuthProfile: false },
+    });
+    await updateAuthProfileStoreWithLock({
+      agentDir: targetAgentDir(fixture, "research"),
+      stateDir: fixture.stateDir,
+      updater: (localStore) => {
+        expect(localStore.profiles).toEqual({});
+        return false;
+      },
+    });
+    clearRuntimeAuthProfileStoreSnapshots();
+    expect(loadAuthProfileStoreForSecretsRuntime().profiles[profileId]).toEqual(inherited);
+    expect(loadTargetAuthStore(fixture, "research").profiles[profileId]).toEqual(inherited);
+    expect(loadTargetAuthStore(fixture, "research").profiles).not.toHaveProperty(
+      "openai:shared-owner-import",
+    );
+  });
+
   it.each([
     {
       state: "usable",
       expires: 2_100_000_000_000,
-      status: "migrated",
     },
-    { state: "expired", expires: 1_000, status: "skipped" },
-  ])("checks inherited matching OAuth after planning ($state)", async ({ expires, status }) => {
+    { state: "expired", expires: 1_000 },
+  ])("rejects inherited matching OAuth added after planning ($state)", async ({ expires }) => {
     const fixture = await createCodexFixture();
     vi.stubEnv("CODEX_HOME", fixture.codexHome);
     credentialStorage.accountType = "chatgpt";
@@ -506,7 +664,7 @@ describe("Codex migration auth identity and inherited profiles", () => {
 
     const result = await provider.apply(ctx, plan);
 
-    expect(findItem(result.items, "auth:openai").status).toBe(status);
+    expect(findItem(result.items, "auth:openai").status).toBe("conflict");
     await updateAuthProfileStoreWithLock({
       agentDir: targetAgentDir(fixture),
       stateDir: fixture.stateDir,

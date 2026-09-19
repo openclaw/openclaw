@@ -8,7 +8,7 @@ authoring dates (2026), not package publication dates.
 
 ## Unreleased
 
-No changes outside the dated history below.
+- Add nullable `authProfileId` to `sessions.patch` and `sessions.patchMany`; `null` clears the saved session account selection and returns it to automatic account resolution.
 
 ## Deferred to the next wire version
 

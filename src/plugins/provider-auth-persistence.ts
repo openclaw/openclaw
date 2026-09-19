@@ -415,6 +415,7 @@ async function stageProviderAuthProfileBatchCore(
       ...(params.resetFailureState ? { resetFailureState: true } : {}),
       allowOAuthGenerationReplacement: true,
       beforeWrite: params.beforeWrite,
+      validateCurrentCredential: params.validateCurrentCredential,
     });
   } catch (error) {
     try {

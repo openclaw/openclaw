@@ -1,7 +1,15 @@
 import path from "node:path";
 import { describe, expect, it } from "vitest";
+import { getStatusSummary as getStatusSummaryFromOwner } from "../status/summary.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { collectStatusLocalSnapshot } from "./status.agent-local.js";
+import { getStatusSummary as getStatusSummaryFromCommandFacade } from "./status.js";
+
+describe("status command public API", () => {
+  it("preserves the shipped summary builder export", () => {
+    expect(getStatusSummaryFromCommandFacade).toBe(getStatusSummaryFromOwner);
+  });
+});
 
 describe("collectStatusLocalSnapshot", () => {
   it("does not project the gateway's compatibility id as an explicit fleet default", async () => {

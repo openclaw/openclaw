@@ -643,6 +643,15 @@ describe("setup activation credentials and configuration", () => {
       pluginId: "openai",
     });
 
+    const stagedStore = loadAuthProfileStoreWithoutExternalProfiles(setup.agentDir);
+    expect(stagedStore.profiles["openai:original"]).toEqual({
+      ...credential,
+      key: "original-key",
+    });
+    expect(stagedStore.profiles[saved.profile.profileId]).toMatchObject({
+      setup: expect.objectContaining({ replacement: true }),
+    });
+
     const result = await setup.activate(
       `saved-auth:${encodeURIComponent(saved.profile.profileId)}`,
       true,
@@ -650,6 +659,9 @@ describe("setup activation credentials and configuration", () => {
 
     expect(result).toMatchObject({ ok: true });
     expect(setup.readProfile()).toEqual([saved.profile.profileId, credential]);
+    expect(
+      loadAuthProfileStoreWithoutExternalProfiles(setup.agentDir).profiles["openai:original"],
+    ).toEqual({ ...credential, key: "original-key" });
     const snapshot = await readConfigFileSnapshot();
     expect(snapshot.sourceConfig.models?.providers?.openai?.models).toEqual([
       { id: "gpt-5.4-mini", name: "Sparse saved model" },

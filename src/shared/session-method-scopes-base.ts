@@ -15,6 +15,7 @@ const SESSIONS_PATCH_WRITE_SCOPE_MUTATIONS: ReadonlySet<string> = new Set([
   "archived",
   "unread",
   "model",
+  "authProfileId",
   "agentRuntime",
   "thinkingLevel",
   "fastMode",

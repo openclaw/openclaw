@@ -64,7 +64,7 @@ export function refreshSessionPatchQueuedSelection(params: {
   agentId: string;
   catalog?: ModelCatalogEntry[];
 }): void {
-  if (!("agentRuntime" in params.patch)) {
+  if (!("agentRuntime" in params.patch) && !("authProfileId" in params.patch)) {
     return;
   }
   const { cfg, entry, sessionKey, agentId } = params;

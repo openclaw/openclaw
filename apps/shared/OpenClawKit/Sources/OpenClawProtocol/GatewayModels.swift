@@ -17458,6 +17458,7 @@ public struct SessionsPatchMutation: Codable, Sendable {
     public let execnode: AnyCodable?
     public let permissionmode: AnyCodable?
     public let model: AnyCodable?
+    public let authprofileid: AnyCodable?
     public let agentruntime: AnyCodable?
     public let completionownersessionkey: AnyCodable?
     public let inheritedtoolpolicyversion: AnyCodable?
@@ -17495,6 +17496,7 @@ public struct SessionsPatchMutation: Codable, Sendable {
         execnode: AnyCodable? = nil,
         permissionmode: AnyCodable? = nil,
         model: AnyCodable? = nil,
+        authprofileid: AnyCodable? = nil,
         agentruntime: AnyCodable? = nil,
         completionownersessionkey: AnyCodable? = nil,
         inheritedtoolpolicyversion: AnyCodable? = nil,
@@ -17531,6 +17533,7 @@ public struct SessionsPatchMutation: Codable, Sendable {
         self.execnode = execnode
         self.permissionmode = permissionmode
         self.model = model
+        self.authprofileid = authprofileid
         self.agentruntime = agentruntime
         self.completionownersessionkey = completionownersessionkey
         self.inheritedtoolpolicyversion = inheritedtoolpolicyversion
@@ -17569,6 +17572,7 @@ public struct SessionsPatchMutation: Codable, Sendable {
         case execnode = "execNode"
         case permissionmode = "permissionMode"
         case model
+        case authprofileid = "authProfileId"
         case agentruntime = "agentRuntime"
         case completionownersessionkey = "completionOwnerSessionKey"
         case inheritedtoolpolicyversion = "inheritedToolPolicyVersion"
@@ -17615,6 +17619,7 @@ public struct SessionsPatchParams: Codable, Sendable {
     public let execnode: AnyCodable?
     public let permissionmode: AnyCodable?
     public let model: AnyCodable?
+    public let authprofileid: AnyCodable?
     public let agentruntime: AnyCodable?
     public let completionownersessionkey: AnyCodable?
     public let inheritedtoolpolicyversion: AnyCodable?
@@ -17659,6 +17664,7 @@ public struct SessionsPatchParams: Codable, Sendable {
         execnode: AnyCodable? = nil,
         permissionmode: AnyCodable? = nil,
         model: AnyCodable? = nil,
+        authprofileid: AnyCodable? = nil,
         agentruntime: AnyCodable? = nil,
         completionownersessionkey: AnyCodable? = nil,
         inheritedtoolpolicyversion: AnyCodable? = nil,
@@ -17702,6 +17708,7 @@ public struct SessionsPatchParams: Codable, Sendable {
         self.execnode = execnode
         self.permissionmode = permissionmode
         self.model = model
+        self.authprofileid = authprofileid
         self.agentruntime = agentruntime
         self.completionownersessionkey = completionownersessionkey
         self.inheritedtoolpolicyversion = inheritedtoolpolicyversion
@@ -17747,6 +17754,7 @@ public struct SessionsPatchParams: Codable, Sendable {
         case execnode = "execNode"
         case permissionmode = "permissionMode"
         case model
+        case authprofileid = "authProfileId"
         case agentruntime = "agentRuntime"
         case completionownersessionkey = "completionOwnerSessionKey"
         case inheritedtoolpolicyversion = "inheritedToolPolicyVersion"

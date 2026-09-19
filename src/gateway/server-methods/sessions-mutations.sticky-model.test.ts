@@ -189,6 +189,21 @@ async function patchSession(
   return responses[0]!;
 }
 
+async function patchManySessions(params: Record<string, unknown>, scopes = ["operator.admin"]) {
+  const responses: Parameters<RespondFn>[] = [];
+  const requestClient = client(scopes);
+  await sessionMutationHandlers["sessions.patchMany"]?.({
+    req: { type: "req", id: "sticky-model-patch-many", method: "sessions.patchMany", params },
+    params,
+    client: requestClient,
+    context: context() as unknown as GatewayRequestContext,
+    isWebchatConnect: () => true,
+    respond: (...response: Parameters<RespondFn>) => responses.push(response),
+  });
+  expect(responses).toHaveLength(1);
+  return responses[0]!;
+}
+
 function queueRuntimeSelection(sessionKey: string) {
   const queue = getFollowupQueue(sessionKey, { mode: "followup" });
   const queued = {
@@ -201,6 +216,8 @@ function queueRuntimeSelection(sessionKey: string) {
     config: cfg,
     provider: "anthropic",
     model: "claude-opus-4-6",
+    authProfileId: undefined as string | undefined,
+    authProfileIdSource: undefined as "auto" | "user" | undefined,
     timeoutMs: 30_000,
     blockReplyBreak: "message_end" as const,
   };
@@ -470,6 +487,66 @@ describe("sessions.patch sticky model persistence", () => {
 });
 
 describe("sessions.patch personal model-account ownership", () => {
+  it("clears persisted and queued account selections and requests a live retry", async () => {
+    const sessionKey = "agent:main:dm:clear-account-selection";
+    await upsertSessionEntryCore(
+      { agentId: "main", sessionKey },
+      {
+        sessionId: "clear-account-selection",
+        updatedAt: 1,
+        authProfileOverride: personalAuthProfileId,
+        authProfileOverrideSource: "user",
+      },
+    );
+    const queued = queueRuntimeSelection(sessionKey);
+    queued.authProfileId = personalAuthProfileId;
+    queued.authProfileIdSource = "user";
+    try {
+      expect((await patchSession({ key: sessionKey, authProfileId: null }))[0]).toBe(true);
+      expect(queued.authProfileId).toBeUndefined();
+      expect(queued.authProfileIdSource).toBeUndefined();
+    } finally {
+      clearFollowupQueue(sessionKey);
+    }
+    expect(loadSessionEntry({ agentId: "main", sessionKey })).toMatchObject({
+      liveModelSwitchPending: true,
+    });
+    expect(loadSessionEntry({ agentId: "main", sessionKey })).not.toHaveProperty(
+      "authProfileOverride",
+    );
+  });
+
+  it("clears account selections for every sessions.patchMany target", async () => {
+    const sessionKeys = ["agent:main:dm:clear-many-one", "agent:main:dm:clear-many-two"];
+    for (const sessionKey of sessionKeys) {
+      await upsertSessionEntryCore(
+        { agentId: "main", sessionKey },
+        {
+          sessionId: sessionKey,
+          updatedAt: 1,
+          authProfileOverride: personalAuthProfileId,
+          authProfileOverrideSource: "user",
+          authProfileOverrideCompactionCount: 2,
+        },
+      );
+    }
+
+    const response = await patchManySessions({
+      targets: sessionKeys.map((key) => ({ key })),
+      patch: { authProfileId: null },
+    });
+
+    expect(response[0]).toBe(true);
+    expect(response[1]).toMatchObject({ outcomes: [{ ok: true }, { ok: true }] });
+    for (const sessionKey of sessionKeys) {
+      const entry = loadSessionEntry({ agentId: "main", sessionKey });
+      expect(entry).toMatchObject({ liveModelSwitchPending: true });
+      expect(entry).not.toHaveProperty("authProfileOverride");
+      expect(entry).not.toHaveProperty("authProfileOverrideSource");
+      expect(entry).not.toHaveProperty("authProfileOverrideCompactionCount");
+    }
+  });
+
   it("lets the connected human select a saved personal account for this session", async () => {
     const sessionKey = "agent:main:dm:personal-selection-owner";
     await upsertSessionEntryCore(

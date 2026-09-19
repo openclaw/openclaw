@@ -27,6 +27,7 @@ import { resolveDefaultModelForAgent } from "../model-selection.js";
 import { resolveModelCatalogIdentityKey } from "../openai-model-routes.js";
 import { listOpenAIAuthProfileProvidersForAgentRuntime } from "../openai-routing.js";
 import { resolveProviderModelRouteAuthRequirement } from "../provider-model-route-auth.js";
+import { authProfilesLog } from "./constants.js";
 import { createSelectedAuthProfileUnavailableError } from "./selection-error.js";
 import { ensureAuthProfileStore } from "./store-runtime.js";
 
@@ -365,6 +366,16 @@ async function resolveSessionAuthProfileOverride(params: {
         }),
       )
     ) {
+      authProfilesLog.warn(
+        "selected session auth profile is unavailable; explicit pin remains strict",
+        {
+          event: "session_auth_profile_unavailable",
+          sessionKey,
+          profileId: currentProfileId,
+          recovery: "clear the session account selection or reconnect using this exact profile id",
+          tags: ["auth_profiles", "session_recovery"],
+        },
+      );
       return { profileId: currentProfileId, store };
     }
     await clearSessionAuthProfileOverride({ sessionEntry, sessionStore, sessionKey, storePath });

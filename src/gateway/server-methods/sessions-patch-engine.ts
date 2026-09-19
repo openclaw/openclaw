@@ -42,7 +42,6 @@ import {
   type SessionPatchCatalogResult,
 } from "./sessions-patch-catalog-preparation.js";
 import type { SessionPatchDiagnostics } from "./sessions-patch-diagnostics.js";
-import { publishSessionPatchEffects } from "./sessions-patch-effects.js";
 import {
   invalidSessionPatchOutcome,
   sessionChangedError,
@@ -53,6 +52,7 @@ import {
   prepareSessionPatchRuntimeSelection,
   refreshSessionPatchQueuedSelection,
 } from "./sessions-patch-model-selection.js";
+import { finalizeSessionPatchMutationEffects } from "./sessions-patch-mutation-finalization.js";
 import type {
   GroupAdmissionResult,
   GroupMutationOperation,
@@ -646,7 +646,11 @@ export async function executeSessionPatchMutations(params: {
                   for (const [groupIndex, target] of group.entries()) {
                     const outcome = groupOutcomes[groupIndex]!;
                     outcomes[target.index] = outcome;
-                    if (outcome.ok && outcome.applied && "agentRuntime" in target.fullPatch) {
+                    if (
+                      outcome.ok &&
+                      outcome.applied &&
+                      ("agentRuntime" in target.fullPatch || "authProfileId" in target.fullPatch)
+                    ) {
                       refreshSessionPatchQueuedSelection({
                         cfg,
                         entry: outcome.entry,
@@ -704,26 +708,17 @@ export async function executeSessionPatchMutations(params: {
   }
 
   timing?.mark("effects");
-  await publishSessionPatchEffects({
+  await finalizeSessionPatchMutationEffects({
     cfg,
     context: params.context,
     callerScopes,
     callerCanManageCron,
     category: params.patch.category,
-    targets: prepared.flatMap((target) => {
-      const outcome = outcomes[target.index];
-      return outcome?.ok && outcome.applied
-        ? [{ target, entry: outcome.entry, accessChanged: outcome.accessChanged }]
-        : [];
-    }),
+    targets: prepared,
+    outcomes,
+    permissionErrors,
   });
   timing?.finish();
-
-  // Runtime application can fail after commit. Publish every saved field's
-  // normal effects before returning the application error to the caller.
-  for (const [index, error] of permissionErrors) {
-    outcomes[index] = { ok: false, error };
-  }
   return {
     ok: true,
     cfg,

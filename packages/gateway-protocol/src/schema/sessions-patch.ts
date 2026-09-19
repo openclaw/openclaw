@@ -69,6 +69,8 @@ const SessionsPatchMutationProperties = {
   execNode: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
   permissionMode: Type.Optional(Type.Union([SessionPermissionModeSchema, Type.Null()])),
   model: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
+  /** Clear the session's saved model-account selection and return to automatic selection. */
+  authProfileId: Type.Optional(Type.Null()),
   /** Explicit runtime for the selected model; null follows configured routing. */
   agentRuntime: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),
   completionOwnerSessionKey: Type.Optional(Type.Union([NonEmptyString, Type.Null()])),

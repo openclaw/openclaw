@@ -92,6 +92,58 @@ describe("provider auth protected persistence", () => {
     });
   });
 
+  it("forwards profile identity validation into the transactional credential writer", async () => {
+    const rootDir = tempDirs.make("openclaw-provider-auth-identity-guard-");
+    const stateDir = path.join(rootDir, "state");
+    const agentDir = path.join(stateDir, "agents", "main", "agent");
+    const env = { ...process.env, OPENCLAW_STATE_DIR: stateDir };
+    const profileId = "openai:pinned";
+    const reassigned = {
+      type: "oauth",
+      provider: "openai",
+      access: "reassigned-access",
+      refresh: "reassigned-refresh",
+      expires: Date.now() + 60_000,
+      accountId: "account-b",
+    } satisfies OAuthCredential;
+    saveAuthProfileStore({ version: 1, profiles: { [profileId]: reassigned } }, agentDir);
+    const validateCurrentCredential = vi.fn((candidateProfileId: string, current: unknown) => {
+      expect(candidateProfileId).toBe(profileId);
+      expect(current).toEqual(reassigned);
+      throw new Error("The existing auth profile identity changed during sign-in.");
+    });
+
+    await expect(
+      persistProviderAuthProfilesAfterLogin({
+        profiles: [
+          {
+            profileId,
+            credential: {
+              type: "oauth",
+              provider: "openai",
+              access: "account-a-access",
+              refresh: "account-a-refresh",
+              expires: Date.now() + 60_000,
+              accountId: "account-a",
+            },
+          },
+        ],
+        config: {},
+        env,
+        stateDir,
+        agentDir,
+        validateCurrentCredential,
+      }),
+    ).rejects.toThrow("existing auth profile identity changed during sign-in");
+
+    expect(validateCurrentCredential).toHaveBeenCalledOnce();
+    expect(
+      ensureAuthProfileStore(agentDir, { readOnly: true, syncExternalCli: false }).profiles[
+        profileId
+      ],
+    ).toEqual(reassigned);
+  });
+
   it("stores a provider-minted token behind a resolvable ref without an audit finding", async () => {
     const rootDir = tempDirs.make("openclaw-provider-auth-store-");
     const stateDir = path.join(rootDir, "state");

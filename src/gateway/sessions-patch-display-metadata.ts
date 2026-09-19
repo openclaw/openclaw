@@ -9,14 +9,19 @@ import {
 } from "../../packages/gateway-protocol/src/session-agent-status.js";
 import type { InternalSessionEntry } from "../config/sessions/types.js";
 import { parseSessionLabel, SESSION_LABEL_MAX_LENGTH } from "../sessions/session-label.js";
+import { applySessionsPatchAccountSelection } from "./sessions-patch-account-selection.js";
 
-/** Applies display-metadata patch fields onto the next entry; returns an error message on invalid input. */
+/** Applies early display and account-selection fields; returns an error message on invalid input. */
 export function applySessionsPatchDisplayMetadata(params: {
   patch: SessionsPatchParams;
   next: InternalSessionEntry;
   isLabelInUse: (label: string) => boolean;
 }): string | undefined {
   const { patch, next } = params;
+  const accountSelectionError = applySessionsPatchAccountSelection({ next, patch });
+  if (accountSelectionError) {
+    return accountSelectionError;
+  }
 
   if ("autoLabel" in patch) {
     if (patch.autoLabel === null) {

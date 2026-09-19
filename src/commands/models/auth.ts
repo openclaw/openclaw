@@ -84,7 +84,15 @@ import {
   withoutProviderModelPolicy,
   type PreparedProviderModelAccess,
 } from "./auth-model-policy.js";
-import { refreshRunningGatewayAuthState, type ModelAuthRefreshOutcome } from "./auth-refresh.js";
+import {
+  refreshProviderAuthAfterLogin,
+  refreshRunningGatewayAuthState,
+  type ModelAuthRefreshOutcome,
+} from "./auth-refresh.js";
+import {
+  resolveReloginProfileIdentity,
+  snapshotReloginAuthProfiles,
+} from "./auth-relogin-identity.js";
 import {
   loadValidConfigSnapshotOrThrow,
   resolveModelsTargetAgent,
@@ -392,27 +400,6 @@ async function pickProviderTokenMethod(params: {
     .then((id) => tokenMethods.find((method) => method.id === id) ?? null);
 }
 
-async function refreshProviderAuthAfterLogin(
-  params: Pick<
-    ModelsAuthLoginFlowOptions,
-    "refreshAfterLogin" | "runtime" | "signal" | "assertCurrent"
-  > & {
-    agentId: string;
-  },
-): Promise<ModelAuthRefreshOutcome> {
-  if (!params.refreshAfterLogin) {
-    return refreshRunningGatewayAuthState(params.agentId, "login", params.runtime);
-  }
-  try {
-    await params.refreshAfterLogin(params.agentId);
-    return "refreshed";
-  } catch {
-    params.signal?.throwIfAborted();
-    params.assertCurrent?.();
-    return "gateway-rejected";
-  }
-}
-
 async function persistProviderAuthResult(params: {
   result: ProviderAuthResult;
   profiles?: ProviderAuthResult["profiles"];
@@ -425,6 +412,10 @@ async function persistProviderAuthResult(params: {
   setDefault?: boolean;
   env?: NodeJS.ProcessEnv;
   beforePersistentEffect?: () => void | Promise<void>;
+  validateCurrentCredential?: (
+    profileId: string,
+    credential: AuthProfileCredential | undefined,
+  ) => void;
   assertCurrent?: () => void;
   signal?: AbortSignal;
   refreshAfterLogin?: ModelsAuthLoginFlowOptions["refreshAfterLogin"];
@@ -466,6 +457,7 @@ async function persistProviderAuthResult(params: {
       const persisted = await persistProviderAuthProfilesAfterLogin({
         profiles: [candidate],
         beforeWrite: params.assertCurrent,
+        validateCurrentCredential: params.validateCurrentCredential,
         config: params.config,
         env: params.env,
         agentDir: params.agentDir,
@@ -620,6 +612,8 @@ async function runProviderAuthMethod(params: {
   beforePersistentEffect?: () => void | Promise<void>;
   refreshAfterLogin?: ModelsAuthLoginFlowOptions["refreshAfterLogin"];
   onModelAccessRequested?: (request: PreparedProviderModelAccess) => void;
+  existingProfiles?: Readonly<Record<string, AuthProfileCredential>>;
+  allowMissingReusedProfile?: boolean;
 }): Promise<{
   result: ProviderAuthResult;
   profiles: ProviderAuthResult["profiles"];
@@ -666,10 +660,14 @@ async function runProviderAuthMethod(params: {
           : {}),
       }
     : result;
-  const profiles = resolveLoginProfiles({
-    result: connectionResult,
+  const resolvedIdentity = resolveReloginProfileIdentity({
+    profiles: connectionResult.profiles,
     requestedProfileId: params.profileId,
+    existingProfiles: params.existingProfiles,
+    matchesPersonalAccount: params.method.matchesPersonalAccount,
+    allowMissingReusedProfile: params.allowMissingReusedProfile,
   });
+  const profiles = resolvedIdentity.profiles;
 
   const { profiles: persistedProfiles, authRefresh } = await persistProviderAuthResult({
     result: connectionResult,
@@ -685,6 +683,7 @@ async function runProviderAuthMethod(params: {
     setDefault: params.setDefault,
     env: params.env ?? process.env,
     beforePersistentEffect: params.beforePersistentEffect,
+    validateCurrentCredential: resolvedIdentity.validateCurrentCredential,
     refreshAfterLogin: params.refreshAfterLogin,
   });
   if (persistedProfiles.length > 0) {
@@ -1057,26 +1056,6 @@ function credentialMode(credential: AuthProfileCredential): "api_key" | "oauth" 
   return "oauth";
 }
 
-/** Applies an optional profile-id override to a single returned login profile. */
-function resolveLoginProfiles(params: {
-  result: ProviderAuthResult;
-  requestedProfileId?: string;
-}): ProviderAuthResult["profiles"] {
-  const requestedProfileId = params.requestedProfileId?.trim();
-  if (!requestedProfileId) {
-    return params.result.profiles;
-  }
-
-  if (params.result.profiles.length !== 1) {
-    throw new Error(
-      "--profile-id requires exactly one returned auth profile from the selected auth method.",
-    );
-  }
-
-  const [profile] = params.result.profiles;
-  return [{ ...expectDefined(profile, "auth profile"), profileId: requestedProfileId }];
-}
-
 function maybeLogOpenAICodexNativeSearchTip(runtime: RuntimeEnv, providerId: string) {
   if (providerId !== "openai") {
     return;
@@ -1195,6 +1174,12 @@ async function runModelsAuthLoginFlow(
     provider: selectedProvider.id,
     providerLabel: selectedProvider.label,
   });
+  // Snapshot before --force removes cached credentials. Provider-owned identity
+  // matching may safely keep the old profile id for the same authenticated account.
+  const existingProfiles = snapshotReloginAuthProfiles({
+    agentDir: context.agentDir,
+    matchesPersonalAccount: chosenMethod.matchesPersonalAccount,
+  });
   const imported =
     !opts.credentialOnly && !opts.force && !opts.profileId && !opts.setDefault
       ? await tryImportProviderCredential({
@@ -1246,6 +1231,7 @@ async function runModelsAuthLoginFlow(
     };
   }
 
+  let forcePurgedProviderProfiles = false;
   if (opts.force) {
     await opts.beforePersistentEffect?.();
     // Purge existing profiles for this provider only after we have a valid
@@ -1267,6 +1253,7 @@ async function runModelsAuthLoginFlow(
           "auth store is busy; close other OpenClaw commands using this state directory and retry",
         );
       }
+      forcePurgedProviderProfiles = true;
       opts.runtime.log(
         `Removed cached auth profiles for provider "${selectedProvider.id}" (--force). Running fresh auth flow.`,
       );
@@ -1302,6 +1289,8 @@ async function runModelsAuthLoginFlow(
     beforePersistentEffect: opts.beforePersistentEffect,
     refreshAfterLogin: opts.refreshAfterLogin,
     onModelAccessRequested: opts.onModelAccessRequested,
+    existingProfiles,
+    allowMissingReusedProfile: forcePurgedProviderProfiles,
   });
   maybeLogOpenAICodexNativeSearchTip(opts.runtime, selectedProvider.id);
   return {

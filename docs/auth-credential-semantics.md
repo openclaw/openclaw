@@ -167,6 +167,8 @@ Do not write `type: "aws-sdk"` into the credential store; stored credentials are
 
 When a selected stored profile is removed, credential-scoped model discovery reports `selected_auth_profile_unavailable` before consulting dynamic model metadata. Restore the credential or select another configured profile; registering the model does not repair missing authentication. Config-only AWS SDK profiles remain valid without a stored credential. Chat admission and agent commands retain an explicit same-provider selection when its credential disappears so authentication can report recovery. Stale automatic selections and selections for incompatible providers are still cleared.
 
+OAuth re-authentication preserves an existing profile id only when the provider's account-identity matcher proves that the new credential belongs to the same account. A different or ambiguous account keeps the provider's new profile id, so explicit session pins do not cross account boundaries. Legacy unavailable pins remain strict and emit a session-scoped warning. Operators can return a session to automatic account selection with `sessions.patch` (or `sessions.patchMany`) using `authProfileId: null`; this clears the profile id, source, and compaction marker together.
+
 ## Explicit auth order filtering
 
 - When `auth.order.<provider>` or the auth-store order override is set for a provider, `models status --probe` only probes profile ids that remain in the resolved auth order for that provider. The stored override wins over `auth.order` config.
