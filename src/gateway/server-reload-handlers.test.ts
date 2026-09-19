@@ -5946,7 +5946,6 @@ describe("gateway Gmail hot reload handlers", () => {
   });
 
   it("does not emit a restart after shared-generation ownership rejects the candidate", async () => {
-    vi.useFakeTimers();
     const harness = await createManagedRestartSequenceHarness({
       invalidateGenerationOnReconcile: true,
     });
@@ -5954,7 +5953,6 @@ describe("gateway Gmail hot reload handlers", () => {
     try {
       const reloadError = harness.nextReloadError();
       harness.writeConfig(harness.deferredConfig, "stale-generation-restart", 1);
-      await vi.runAllTimersAsync();
 
       await expect(reloadError).resolves.toBe(
         "config restart failed: GatewayHotReloadStaleSecretsError: runtime secrets changed while config hot reload was deferred",
@@ -6460,7 +6458,6 @@ describe("gateway Gmail hot reload handlers", () => {
   });
 
   it("retries managed hot reload when secrets change before publication", async () => {
-    vi.useFakeTimers();
     const writeListenerRef = createConfigWriteListenerRef();
     const initialConfig = {
       gateway: { reload: {} },
@@ -6554,10 +6551,8 @@ describe("gateway Gmail hot reload handlers", () => {
         "source-hot-reload-next",
       ),
     );
-    await vi.runAllTimersAsync();
-    expect(await reloadOutcome).toEqual({ status: "promoted" });
-
     try {
+      expect(await reloadOutcome).toEqual({ status: "promoted" });
       expect(activateRuntimeSecrets).toHaveBeenCalledTimes(2);
       expect(activatePreparedSnapshotIfCurrent).toHaveBeenCalledOnce();
       expect(activatePreparedSnapshotIfCurrent.mock.calls[0]?.[1]).toBeGreaterThan(
