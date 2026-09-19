@@ -96,4 +96,53 @@ describe("discordOutbound poll delivery", () => {
     );
     expect(onDeliveryResult.mock.calls[0]?.[0]).not.toHaveProperty("channel");
   });
+
+  it("records an acknowledged poll when a later caption send fails", async () => {
+    const onDeliveryResult = vi.fn();
+    const markInboundEventDelivered = vi.fn();
+    const end = discordInboundEventDelivery.begin(
+      "agent:main:discord:channel:parent-1",
+      {
+        outboundTo: "thread-1",
+        outboundAccountId: "default",
+        markInboundEventDelivered,
+      },
+      { inboundEventKind: "room_event" },
+    );
+    const pollResult = {
+      messageId: "poll-1",
+      channelId: "thread-1",
+      receipt: createDiscordSendReceipt({
+        platformMessageIds: ["poll-1"],
+        channelId: "thread-1",
+        kind: "poll",
+        threadId: "thread-1",
+      }),
+    };
+    hoisted.sendPollDiscordMock.mockImplementationOnce(async (_to, _poll, options) => {
+      await options?.onDeliveryResult?.(pollResult);
+      throw new Error("caption tail rejected");
+    });
+
+    try {
+      await expect(
+        discordOutbound.sendPoll?.({
+          cfg: {},
+          to: "channel:parent-1",
+          poll: { question: "Best snack?", options: ["banana", "apple"] },
+          content: "Vote now",
+          accountId: "default",
+          threadId: "thread-1",
+          sessionKey: "agent:main:discord:channel:parent-1",
+          inboundEventKind: "room_event",
+          onDeliveryResult,
+        }),
+      ).rejects.toThrow("caption tail rejected");
+    } finally {
+      end();
+    }
+
+    expect(markInboundEventDelivered).toHaveBeenCalledOnce();
+    expect(onDeliveryResult).toHaveBeenCalledOnce();
+  });
 });

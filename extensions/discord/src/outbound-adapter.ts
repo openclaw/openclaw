@@ -79,14 +79,15 @@ function resolveDiscordPollDeliveryOptions(
     DiscordPollContext,
     "onPlatformSendDispatch" | "assertDirectAdapterHandoff" | "onDeliveryResult"
   >,
+  onAcknowledgedDelivery: () => void,
 ) {
   return {
     onPlatformSendDispatch: params.onPlatformSendDispatch,
     assertPlatformSendAuthorized: params.assertDirectAdapterHandoff,
-    onDeliveryResult: params.onDeliveryResult
-      ? async (result: DiscordSendResult) =>
-          params.onDeliveryResult?.(toDiscordOutboundDeliveryResult(result))
-      : undefined,
+    onDeliveryResult: async (result: DiscordSendResult) => {
+      onAcknowledgedDelivery();
+      await params.onDeliveryResult?.(toDiscordOutboundDeliveryResult(result));
+    },
   };
 }
 
@@ -271,6 +272,19 @@ export const discordOutbound: ChannelOutboundAdapter = {
         throw new Error("Discord polls are disabled.");
       }
       const outboundTo = resolveDiscordAttachedOutboundTarget({ to, threadId });
+      let acknowledgedDelivery = false;
+      const notifyAcknowledgedDelivery = () => {
+        if (acknowledgedDelivery) {
+          return;
+        }
+        acknowledgedDelivery = true;
+        discordInboundEventDelivery.notify({
+          sessionKey,
+          inboundEventKind,
+          to: outboundTo,
+          accountId,
+        });
+      };
       const result = await (
         await loadDiscordSendRuntime()
       ).sendPollDiscord(outboundTo, poll, {
@@ -279,18 +293,16 @@ export const discordOutbound: ChannelOutboundAdapter = {
         threadId: threadId ?? undefined,
         silent: silent ?? undefined,
         cfg,
-        ...resolveDiscordPollDeliveryOptions({
-          onPlatformSendDispatch,
-          assertDirectAdapterHandoff,
-          onDeliveryResult,
-        }),
+        ...resolveDiscordPollDeliveryOptions(
+          {
+            onPlatformSendDispatch,
+            assertDirectAdapterHandoff,
+            onDeliveryResult,
+          },
+          notifyAcknowledgedDelivery,
+        ),
       });
-      discordInboundEventDelivery.notify({
-        sessionKey,
-        inboundEventKind,
-        to: outboundTo,
-        accountId,
-      });
+      notifyAcknowledgedDelivery();
       return result;
     },
   }),
