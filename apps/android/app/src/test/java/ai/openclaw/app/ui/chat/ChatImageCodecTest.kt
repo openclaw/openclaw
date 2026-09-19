@@ -134,6 +134,8 @@ class ChatImageCodecTest {
     val attachment = loadProviderImage(displayName = "vacation-photo.png")
 
     assertEquals("vacation-photo.jpg", attachment.fileName)
+    assertEquals("image/jpeg", attachment.mimeType)
+    assertTrue(requireNotNull(decodeBase64Bitmap(attachment.base64)).width > 0)
   }
 
   @Test
@@ -191,7 +193,7 @@ class ChatImageCodecTest {
     val provider = TestImageContentProvider(image, displayName, failQuery)
     provider.attachInfo(RuntimeEnvironment.getApplication(), ProviderInfo().apply { this.authority = authority })
     ShadowContentResolver.registerProviderInternal(authority, provider)
-    return loadSizedImageAttachment(
+    return loadPickedMediaOrDocumentAttachment(
       RuntimeEnvironment.getApplication().contentResolver,
       Uri.parse("content://$authority/images/42"),
     )
