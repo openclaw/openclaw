@@ -108,7 +108,7 @@ function resolveUsageDateRangeOrRespond(
 export type { SessionUsageEntry, SessionsUsageAggregates, SessionsUsageResult };
 
 export const usageHandlers: GatewayRequestHandlers = {
-  "usage.status": async ({ respond, context, client }) => {
+  "usage.status": async ({ respond, params, context, client }) => {
     // Only clients with bounded retry machinery may receive an incomplete cold result.
     // In-process dispatch reuses the originating request's client, capabilities
     // included, so a plugin proxying this method inside a capable UI request
@@ -120,9 +120,13 @@ export const usageHandlers: GatewayRequestHandlers = {
     )
       ? ("refresh-marker" as const)
       : undefined;
+    // Quota windows belong to the auth profile the agent resolves, so a viewer
+    // scoped to one agent must not be served the default agent's numbers.
+    const agentId = normalizeOptionalString(params?.agentId);
     const summary = await loadUsageStatusStaleWhileRevalidate({
       config: context.getRuntimeConfig(),
       coldRead,
+      ...(agentId ? { agentId } : {}),
     });
     respond(true, summary, undefined);
   },
