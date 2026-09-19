@@ -52,6 +52,10 @@ async function fixture(shadow = false) {
   ];
   await dropdown.updateComplete;
   await Promise.all(items.map((entry) => entry.updateComplete));
+  const { page } = await import("vitest/browser");
+  // A pointer inherited over the submenu can reenter during its hide animation.
+  // Own its initial position so only each test's requested input changes menus.
+  await page.elementLocator(outside).hover();
   dropdown.open = true;
   await expect.poll(() => root.querySelector("wa-dropdown")?.open).toBe(true);
   await expect.poll(() => focused()).toBe(first);
