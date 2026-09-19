@@ -2,7 +2,7 @@ import { calculateUsageCost, type ModelCostConfig } from "@openclaw/llm-core";
 import { asFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { NormalizedUsage, UsageLike } from "../agents/usage.js";
-import { normalizeUsage } from "../agents/usage.js";
+import { hasRecordedUsageCost, normalizeUsage } from "../agents/usage.js";
 import { countToolResults, extractToolCallNames } from "../utils/transcript-tools.js";
 import type {
   CostBreakdown,
@@ -164,32 +164,6 @@ export const applyCostTotal = (
   totals.totalCost += costTotal;
 };
 
-// A resolved cost config only counts as "known" pricing when it carries at least one
-// positive per-token rate (or tiered pricing). An all-zero config is indistinguishable
-// from "pricing unknown": e.g. codex models ship cost {input:0,output:0,...} in the
-// generated models.json because the Codex backend exposes no per-token price. Treating
-// such a config as a real $0 makes usage-cost report confident zero spend, which
-// silently blinds every budget/spike safeguard that keys off totalCost.
-const isModelPricingKnown = (cost: ModelCostConfig | undefined): boolean => {
-  if (!cost) {
-    return false;
-  }
-  if (cost.tieredPricing && cost.tieredPricing.length > 0) {
-    return true;
-  }
-  return cost.input > 0 || cost.output > 0 || cost.cacheRead > 0 || cost.cacheWrite > 0;
-};
-
-const shouldPreserveRecordedZeroCost = (costBreakdown: CostBreakdown | undefined): boolean =>
-  costBreakdown?.total === 0 &&
-  (costBreakdown.totalOrigin === "provider-billed" ||
-    [
-      costBreakdown.input,
-      costBreakdown.output,
-      costBreakdown.cacheRead,
-      costBreakdown.cacheWrite,
-    ].some((value) => value !== undefined && value !== 0));
-
 export type UsageCostResolver = (params: {
   provider?: string;
   model?: string;
@@ -203,11 +177,7 @@ export function needsUsageCostEstimate(
   // Recorded estimates include request-time service tiers the current catalog cannot recover.
   return (
     Boolean(entry?.usage) &&
-    !(
-      (entry?.costTotal ?? 0) > 0 ||
-      entry?.costBreakdown?.totalOrigin === "provider-billed" ||
-      shouldPreserveRecordedZeroCost(entry?.costBreakdown)
-    )
+    !((entry?.costTotal ?? 0) > 0 || hasRecordedUsageCost(entry?.costBreakdown))
   );
 }
 
@@ -217,7 +187,7 @@ export function applyUsageCostEstimate(
 ): ParsedTranscriptEntry {
   const cost = resolveCost({ provider: entry.provider, model: entry.model });
   const { totalTokens } = computeUsageTokenTotals(entry.usage);
-  if (!isModelPricingKnown(cost) && totalTokens > 0) {
+  if (!cost && totalTokens > 0) {
     entry.costTotal = undefined;
     entry.costBreakdown = undefined;
   } else if (entry.costTotal === undefined || totalTokens > 0) {

@@ -501,7 +501,10 @@ describe("subscribeEmbeddedAgentSession model state", () => {
           ...(priorCall ? [{ usage: makeUsage({ input: 100, output: 20, cost: priorCost }) }] : []),
           { usage },
         ]);
-        expect(subscription.getUsageTotals()?.cost).toEqual({ total: priorCost + costTotal });
+        expect(subscription.getUsageTotals()?.cost).toEqual({
+          total: priorCost + costTotal,
+          ...(priorCall ? {} : { totalOrigin: "provider-billed" }),
+        });
         const lastCallUsage = subscription.getLastAssistantUsage();
         if (priorCall) {
           expect(lastCallUsage).toMatchObject({ input: 100, output: 20, total: 120 });

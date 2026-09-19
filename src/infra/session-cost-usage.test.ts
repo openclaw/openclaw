@@ -758,9 +758,10 @@ describe("session cost usage", () => {
   });
 
   it.each([
-    { name: "unconfigured", config: undefined },
+    { name: "unconfigured", config: undefined, missingCostEntries: 1 },
     {
       name: "configured all-zero",
+      missingCostEntries: 0,
       config: {
         models: {
           providers: {
@@ -781,7 +782,7 @@ describe("session cost usage", () => {
         },
       } satisfies OpenClawConfig,
     },
-  ])("counts token usage for $name pricing as missing", async ({ config }) => {
+  ])("reports cost availability for $name pricing", async ({ config, missingCostEntries }) => {
     const root = await makeSessionCostRoot("cost-zero-pricing");
     const sessionsDir = path.join(root, "agents", "main", "sessions");
     await fs.mkdir(sessionsDir, { recursive: true });
@@ -809,12 +810,11 @@ describe("session cost usage", () => {
       "utf-8",
     );
 
-    // Config defaults cannot distinguish omitted pricing from explicit zero rates.
     await withStateDir(root, async () => {
       const summary = await loadCostUsageSummary({ config });
       expect(summary.totals.totalTokens).toBe(23287);
       expect(summary.totals.totalCost).toBe(0);
-      expect(summary.totals.missingCostEntries).toBe(1);
+      expect(summary.totals.missingCostEntries).toBe(missingCostEntries);
     });
   });
 
@@ -1199,11 +1199,9 @@ describe("session cost usage", () => {
         "expected appended usage rollup",
       );
       const appendedRollup = JSON.parse(appendedRow.valueJson) as {
-        version: number;
         rollup: { untimestamped: { totals: { totalTokens: number } } };
       };
       expect(appendedRollup.rollup.untimestamped.totals.totalTokens).toBe(1_000);
-      expect(appendedRollup.version).toBe(5);
 
       const allTime = await loadSessionCostSummariesFromCache({
         sessions: [session],

@@ -4,7 +4,7 @@ import type { SessionUsageRollupData } from "./session-cost-usage-rollup.js";
 
 // Cache data is rebuildable. Semantic changes get a new version; old rows are
 // ignored and rebuilt instead of normalized through a runtime compatibility path.
-export const USAGE_COST_ROLLUP_VERSION = 5;
+export const USAGE_COST_ROLLUP_VERSION = 6;
 
 export type UsageCostJsonlCheckpoint = {
   kind: "jsonl";
@@ -61,7 +61,7 @@ export function decodeUsageCostRollup(
     ) {
       return undefined;
     }
-    // SAFETY: The v5 producer owns nested shapes; the reader validates the persisted envelope.
+    // SAFETY: The current producer owns nested shapes; the reader validates the persisted envelope.
     return record as UsageCostRollupEntry;
   } catch {
     // Rebuildable cache row. The refresh path replaces it.

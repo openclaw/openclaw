@@ -6,7 +6,10 @@ import {
   projectSessionCostSummaries,
   type UsageCostRollupRowSource,
 } from "./session-cost-usage-projection.js";
-import type { UsageCostRollupEntry } from "./session-cost-usage-rollup-codec.js";
+import {
+  USAGE_COST_ROLLUP_VERSION,
+  type UsageCostRollupEntry,
+} from "./session-cost-usage-rollup-codec.js";
 import {
   appendSessionUsageRollupContribution,
   createSessionUsageRollupData,
@@ -33,6 +36,7 @@ function createRow(
   file: UsageCostTranscriptFile,
   contributions: Array<{ timestamp?: number; cost: number }>,
   scannedAt = 100,
+  version = USAGE_COST_ROLLUP_VERSION,
 ): SessionCostUsageRollupRow {
   const rollup = createSessionUsageRollupData();
   for (const contribution of contributions) {
@@ -51,7 +55,7 @@ function createRow(
     });
   }
   const entry: UsageCostRollupEntry = {
-    version: 5,
+    version,
     pricingFingerprint,
     checkpoint: {
       kind: "jsonl",
@@ -84,6 +88,22 @@ function createSource(
 }
 
 describe("usage cache projections", () => {
+  it("requests a refresh for rollups computed before pricing availability was preserved", () => {
+    const file = createFile("old-pricing");
+    const rows = [createRow(file, [{ timestamp: dayStart, cost: 0 }], 100, 5)];
+    const result = projectSessionCostSummaries({
+      ...createSource(rows, [file]),
+      sessions: [{ sessionId: "old-pricing", sessionFile: file.filePath }],
+      files: [file],
+      pricingFingerprint,
+      dayBucket: utcDayBucket,
+      refreshing: false,
+    });
+    expect(result.summaries).toEqual([null]);
+    expect(result.staleSessionFiles).toEqual([file.sourcePath]);
+    expect(result.cacheStatus.cachedFiles).toBe(0);
+  });
+
   it("preserves file-major and timestamp-major addition, including duplicate files", () => {
     const largeFile = createFile("large");
     const smallFile = createFile("small");
