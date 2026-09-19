@@ -494,4 +494,135 @@ describe("update run report", () => {
     expect(legacy.markdown).toContain("Failed: build");
     expect(legacy.markdown).not.toContain("private legacy");
   });
+
+  it("uses the failed finalize step instead of unknown reason when reason is missing", () => {
+    const report = renderUpdateRunReport(
+      run({
+        status: "failed",
+        reason: null,
+        steps: [
+          { step: "requested", status: "failed", startedAtMs: 1, endedAtMs: 2 },
+          { step: "finalize:doctor", status: "failed", startedAtMs: 1, endedAtMs: 2 },
+        ],
+      }),
+    );
+    expect(report.headline).toContain("finalize:doctor");
+    expect(report.headline).not.toContain("unknown reason");
+  });
+
+  it.each([
+    {
+      reason: " saved-doctor-error ",
+      failedSteps: ["finalize:doctor"],
+      expected: "saved-doctor-error",
+    },
+    { reason: null, failedSteps: [], expected: "unknown reason" },
+    { reason: null, failedSteps: ["requested"], expected: "unknown reason" },
+  ])("preserves the update status headline for $expected", ({ reason, failedSteps, expected }) => {
+    const report = renderUpdateRunReport(
+      run({
+        status: "failed",
+        reason,
+        steps: [
+          { step: "staging", status: "completed" },
+          ...failedSteps.map((step) => ({ step, status: "failed" as const })),
+        ],
+      }),
+    );
+    expect(report.headline).toBe(`⚠️ OpenClaw update failed: ${expected}.`);
+  });
+
+  it.each(["skipped", "rolled-back"] as const)(
+    "keeps a missing reason unchanged for a %s update with a failed child",
+    (status) => {
+      const record = run({ status, reason: null });
+      const before = renderUpdateRunReport(record).headline;
+      const report = renderUpdateRunReport({
+        ...record,
+        steps: [{ step: "finalize:doctor", status: "failed" }],
+      });
+      expect(report.headline).toBe(before);
+      expect(report.headline).toContain("unknown reason");
+    },
+  );
+
+  describe("current-main failed-step fallback interactions", () => {
+    it("uses the first meaningful failure without changing saved JSON or notice semantics", () => {
+      const record = run({
+        status: "failed",
+        reason: "  ",
+        steps: [
+          { step: "requested", status: "failed" },
+          { step: "staging", status: "completed" },
+          { step: "finalize:doctor", status: "failed" },
+          { step: "finalize:plugins", status: "failed" },
+        ],
+      });
+      const saved = JSON.stringify(record);
+      record.steps.forEach(Object.freeze);
+      Object.freeze(record.steps);
+      Object.freeze(record);
+
+      const report = renderUpdateRunReport(record);
+      expect(report.headline).toBe("⚠️ OpenClaw update failed: finalize:doctor.");
+      expect(renderUpdateRunNotice(record, "finished")).toBe(report.markdown);
+      expect(JSON.stringify(record)).toBe(saved);
+    });
+
+    it.each([
+      { reason: "abandoned", reconciled: true },
+      { reason: "legacy-driver-expired", reconciled: true },
+      { reason: null, reconciled: false },
+      { reason: "  ", reconciled: false },
+    ])("keeps acknowledgement tied to the saved reason $reason", ({ reason, reconciled }) => {
+      const record = run({
+        status: "failed",
+        reason,
+        origin: { doctorHint: "Run openclaw doctor --fix", nextAction: "Run openclaw triage" },
+        steps: [
+          { step: "requested", status: "failed" },
+          { step: "finalize:doctor", status: "failed" },
+          { step: "reconcile:acknowledged", status: "completed", endedAtMs: 301 },
+        ],
+      });
+      const saved = JSON.stringify(record);
+      const report = renderUpdateRunReport(record);
+      expect(report.headline).toBe(
+        reconciled
+          ? "ℹ️ OpenClaw abandoned update reconciled."
+          : "⚠️ OpenClaw update failed: finalize:doctor.",
+      );
+      expect(report.lines).toContain("Failed: finalize:doctor");
+      expect(report.markdown.includes("Run openclaw")).toBe(!reconciled);
+      expect(JSON.stringify(record)).toBe(saved);
+    });
+
+    it("bounds an inferred phase at a surrogate boundary without changing the record", () => {
+      const phase = `${"x".repeat(238)}🦞${"y".repeat(300)}`;
+      const record = run({ status: "failed", steps: [{ step: phase, status: "failed" }] });
+      const saved = JSON.stringify(record);
+      const report = renderUpdateRunReport(record);
+      expect(report.headline).toBe(`⚠️ OpenClaw update failed: ${"x".repeat(238)}….`);
+      expect(report.headline.length).toBeLessThanOrEqual(500);
+      expect(report.markdown.length).toBeLessThanOrEqual(1500);
+      expect(Buffer.from(report.markdown).toString("utf8")).toBe(report.markdown);
+      expect(JSON.stringify(record)).toBe(saved);
+    });
+
+    it.each([
+      { status: "succeeded" as const, reason: null },
+      { status: "running" as const, reason: null },
+      { status: "skipped" as const, reason: "gateway-readiness-unverified" },
+      { status: "skipped" as const, reason: "still-starting" },
+    ])("keeps the $status headline when a historical child failed", ({ status, reason }) => {
+      const record = run({ status, reason, phase: "verifying" });
+      const before = renderUpdateRunReport(record).headline;
+      const report = renderUpdateRunReport({
+        ...record,
+        steps: [{ step: "finalize:doctor", status: "failed" }],
+      });
+      expect(report.headline).toBe(before);
+      expect(report.headline).not.toContain("finalize:doctor");
+    });
+  });
 });

@@ -2774,7 +2774,8 @@ jobs:
             # Install the managed browser revision pinned by the selected target instead.
             pnpm --dir ui exec playwright install chromium
           elif [[ -f scripts/ensure-playwright-chromium.mts ]]; then
-            node --import tsx scripts/ensure-playwright-chromium.mts
+            # A cache miss must not substitute the runner image's unrelated Chromium revision.
+            node --import tsx scripts/ensure-playwright-chromium.mts --require-playwright-chromium
           elif [[ "$FROZEN_TARGET" == "true" && -f scripts/ensure-playwright-chromium.mjs ]]; then
             node scripts/ensure-playwright-chromium.mjs
           else
@@ -2802,7 +2803,7 @@ jobs:
           else
             # Three workers deliberately exercise stable non-default file packing so
             # isolate:false mock-registry leaks fail close to the introducing change.
-            DEBUG=vitest:browser:pool node --import tsx scripts/ci-run-node-test-shard.mts
+            DEBUG=vitest:browser:*,pw:browser node --import tsx scripts/ci-run-node-test-shard.mts
           fi
 
       - name: Upload Control UI timeout diagnostics

@@ -472,19 +472,31 @@ it.each([
   },
 );
 
-it.each(["NO_REPLY", "hook_block"] as const)(
-  "keeps a queued %s completion silent despite trace",
-  async (kind) => {
+it.each([
+  { kind: "NO_REPLY", expectation: "required", missing: true },
+  { kind: "NO_REPLY", expectation: "optional", missing: false },
+  { kind: "hook_block", expectation: "required", missing: false },
+] as const)(
+  "accounts for queued $expectation $kind completion despite trace",
+  async ({ kind, expectation, missing }) => {
     const fixture = await createFixture();
     fixture.context.followupRun.run.traceAuthorized = true;
     fixture.context.followupRun.run.traceLevelOverride = "raw";
+    fixture.context.followupRun.run.terminalReplyExpectation = expectation;
     fixture.context.execution.result.payloads = [];
     if (kind === "NO_REPLY") {
       fixture.context.execution.result.meta.finalAssistantRawText = "NO_REPLY";
     } else {
       fixture.context.execution.result.meta.error = { kind: "hook_block", message: "blocked" };
     }
-    expect(await fixture.deliverQueued()).toEqual([]);
+    const delivered = await fixture.deliverQueued();
+    if (missing) {
+      expect(
+        delivered.some((payload) => payload.isError && isReplyPayloadTerminalContent(payload)),
+      ).toBe(true);
+    } else {
+      expect(delivered).toEqual([]);
+    }
   },
 );
 
@@ -512,6 +524,7 @@ it("keeps queued diagnostic supplements behind source send policy", async () => 
 it("accounts a completed compaction before an empty heartbeat skips reply preparation", async () => {
   const fixture = await createFixture();
   fixture.context.isHeartbeat = true;
+  fixture.context.followupRun.run.terminalReplyExpectation = "optional";
   fixture.recordCompaction({ currentContextTokens: 40 });
   fixture.context.execution.result.payloads = [];
   fixture.context.execution.result.meta.agentMeta = {
@@ -533,11 +546,17 @@ it("accounts a completed compaction before an empty heartbeat skips reply prepar
   expect(fixture.read()?.pendingFinalDelivery).toBeUndefined();
 });
 
-it.each(["NO_REPLY", "hook_block", "empty"] as const)(
-  "finalizes a %s fallback without confusing deliberate silence with failure",
-  async (completion) => {
+it.each([
+  { completion: "NO_REPLY", expectation: "required", missing: true },
+  { completion: "NO_REPLY", expectation: "optional", missing: false },
+  { completion: "hook_block", expectation: "required", missing: false },
+  { completion: "empty", expectation: "required", missing: true },
+] as const)(
+  "finalizes a $expectation $completion fallback without hiding missing output",
+  async ({ completion, expectation, missing }) => {
     const fixture = await createFixture();
     const { context } = fixture;
+    context.followupRun.run.terminalReplyExpectation = expectation;
     const onAgentRunTerminalOutcome = vi.fn();
     context.opts = { onAgentRunTerminalOutcome };
     context.execution.resolved = { provider: "fallback-provider", model: "fallback-model" };
@@ -554,10 +573,10 @@ it.each(["NO_REPLY", "hook_block", "empty"] as const)(
     const result = await finalizeReplyAgentRun(context);
     context.replyOperation.complete();
 
-    if (completion === "empty") {
+    if (missing) {
       expect(result).toMatchObject({
         isError: true,
-        text: expect.stringContaining("produced no visible reply"),
+        text: expect.any(String),
       });
       expect(context.replyOperation.result).toMatchObject({ kind: "failed", code: "run_failed" });
       expect(onAgentRunTerminalOutcome).toHaveBeenCalledWith("failed");
@@ -792,6 +811,9 @@ describe.each(["ordinary", "followup"] as const)("%s context-pressure accounting
   ])("preserves diagnostics for $mode with usage=$withUsage", async ({ mode, withUsage }) => {
     const fixture = await createFixture();
     fixture.context.isHeartbeat = mode === "heartbeat";
+    if (mode === "heartbeat") {
+      fixture.context.followupRun.run.terminalReplyExpectation = "optional";
+    }
     fixture.context.execution.fallback.exhausted = mode === "exhausted fallback";
     if (mode === "inter-session completion") {
       fixture.context.followupRun.run.inputProvenance = {

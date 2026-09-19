@@ -372,6 +372,7 @@ export const discordMessageActions: ChannelMessageActionAdapter = {
     inboundEventKind,
     conversationReadOrigin,
     reply,
+    progressSnapshot,
     assertDirectAdapterHandoff,
   }) => {
     return await (
@@ -392,6 +393,7 @@ export const discordMessageActions: ChannelMessageActionAdapter = {
       ...(requesterAccountId ? { requesterAccountId } : {}),
       ...(conversationReadOrigin ? { conversationReadOrigin } : {}),
       ...(reply ? { reply } : {}),
+      ...(progressSnapshot ? { progressSnapshot } : {}),
       ...(assertDirectAdapterHandoff ? { assertDirectAdapterHandoff } : {}),
     });
   },

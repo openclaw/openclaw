@@ -1,4 +1,5 @@
 import { isDeepStrictEqual } from "node:util";
+import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import { toErrorObject } from "../../infra/errors.js";
 import { hasUsableOAuthCredential } from "./credential-state.js";
 import {
@@ -324,12 +325,14 @@ export async function observeOAuthRefreshSettlement<T>(
   label: string,
   timeoutMs: number,
   settlement: Promise<T>,
+  signal?: AbortSignal,
 ): Promise<T> {
   return await observeOAuthRefreshSettlementBeforeDeadline(
     label,
     timeoutMs,
     Date.now() + timeoutMs,
     settlement,
+    signal,
   );
 }
 
@@ -338,24 +341,28 @@ async function observeOAuthRefreshSettlementBeforeDeadline<T>(
   timeoutMs: number,
   deadline: number,
   settlement: Promise<T>,
+  signal?: AbortSignal,
 ): Promise<T> {
   let timeoutHandle: NodeJS.Timeout | undefined;
   try {
-    return await new Promise<T>((resolve, reject) => {
-      timeoutHandle = setTimeout(
-        () => {
-          reject(createOAuthRefreshTimeoutError(label, timeoutMs));
-        },
-        Math.max(0, deadline - Date.now()),
-      );
-      settlement
-        .finally(() => {
-          if (Date.now() >= deadline) {
-            throw createOAuthRefreshTimeoutError(label, timeoutMs);
-          }
-        })
-        .then(resolve, reject);
-    });
+    return await racePromiseWithAbortSignal(
+      new Promise<T>((resolve, reject) => {
+        timeoutHandle = setTimeout(
+          () => {
+            reject(createOAuthRefreshTimeoutError(label, timeoutMs));
+          },
+          Math.max(0, deadline - Date.now()),
+        );
+        settlement
+          .finally(() => {
+            if (Date.now() >= deadline) {
+              throw createOAuthRefreshTimeoutError(label, timeoutMs);
+            }
+          })
+          .then(resolve, reject);
+      }),
+      signal,
+    );
   } finally {
     if (timeoutHandle) {
       clearTimeout(timeoutHandle);

@@ -34,15 +34,75 @@ describe("portable theme definition", () => {
     { background: "#000;display:none" },
     { background: "var(--other-theme)" },
     { background: "rgb()" },
+    { background: "rgb(1 2 3 .5)" },
+    { background: "rgb(1, 2 3)" },
+    { background: "rgb(1 2, 3)" },
+    { background: "rgb(1, 2, 3 / .5)" },
+    { background: "rgb(1%, 2, 3%)" },
+    { background: "rgb(1. 2 3)" },
+    { background: "rgb(1\u00a02\u00a03)" },
+    { background: "hsl(180, 40, 50)" },
+    { background: "hsl(180 40% 50% .5)" },
+    { background: "oklch(50%, 0.2, 180)" },
+    { background: "lab(50%, 20, 10)" },
+    { background: "color(srgb\u00a00 0 0)" },
     { background: "red/* hidden */" },
     { "font-sans": "monospace; background: url(https://example.invalid)" },
     { "font-sans": "var(--font-body)" },
-  ])("rejects executable or dependent CSS values %j", (palette) => {
+    { "font-sans": "'unterminated" },
+    { "font-sans": "Roboto,,monospace" },
+    { "font-sans": "123Font" },
+    { "font-sans": "Foo.Bar" },
+    { "font-sans": "-1font" },
+    { "font-sans": "serif Foo" },
+    { "font-sans": "Foo serif" },
+    { "font-sans": "Foo inherit" },
+    { "font-sans": "default Foo" },
+    { "font-sans": "default" },
+    { "font-sans": "-webkit-body Foo" },
+  ])("rejects unsafe or malformed CSS values %j", (palette) => {
     expect(
       parseThemeDefinition(
         createThemeDefinitionFixture({ dark: createThemePaletteFixture(palette) }),
       ),
     ).toBeNull();
+  });
+
+  it.each([
+    "rgb(1 2 3)",
+    "rgb(1e2 2 3)",
+    "rgb(1% 2 3% / 50%)",
+    "rgba(1, 2, 3, .5)",
+    "rgb(1%, 2%, 3%, 50%)",
+    "hsl(180 40 50 / .5)",
+    "hsla(0.5turn, 40%, 50%, .5)",
+    "lab(50% -20 10 / .5)",
+    "lch(50% 20 180deg)",
+    "oklab(50% -.2 .1 / 50%)",
+    "oklch(50% 0.2 180)",
+    "color(display-p3 .1 .2 .3 / .5)",
+  ])("preserves supported color syntax: %s", (background) => {
+    expect(
+      normalizeThemeDefinition(
+        createThemeDefinitionFixture({ dark: createThemePaletteFixture({ background }) }),
+      ).dark?.background,
+    ).toBe(background);
+  });
+
+  it.each([
+    "JetBrains Mono, monospace",
+    "'A,B', monospace",
+    "\"A'B\", 'C\"D'",
+    '"123 Font", monospace',
+    "'serif Foo', 'Foo serif', 'Foo inherit', 'default Foo', 'default', 'inherit'",
+    "--font, Foo_Bar",
+    '""',
+  ])("preserves font family names: %s", (font) => {
+    expect(
+      normalizeThemeDefinition(
+        createThemeDefinitionFixture({ dark: createThemePaletteFixture({ "font-sans": font }) }),
+      ).dark?.["font-sans"],
+    ).toBe(font);
   });
 
   it("rejects missing modes, incomplete palettes, unknown properties, and oversized stored values", () => {

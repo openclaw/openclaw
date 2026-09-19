@@ -109,7 +109,7 @@ import type {
 } from "./openclaw-state-worker-contract.js";
 import { readUserModelAuthProfile } from "./user-model-accounts.js";
 import { executeUserPreferenceCommand } from "./user-preferences.worker.js";
-import { executeUserProfileReadCommand } from "./user-profiles.worker.js";
+import { executeUserProfileCommand } from "./user-profiles.worker.js";
 
 type Operations = OpenClawStateWorkerOperations & OpenClawStateWorkerInspectionOperations;
 
@@ -290,8 +290,13 @@ export function executeSharedStateCommand(
       env: getSqliteWorkerStateContext().environment,
     });
   }
-  if (command.type === "userProfiles.list" || command.type === "userProfiles.directory") {
-    return executeUserProfileReadCommand(command, {
+  if (
+    command.type === "userProfiles.list" ||
+    command.type === "userProfiles.directory" ||
+    command.type === "userProfiles.avatar.inspect" ||
+    command.type === "userProfiles.avatar.adopt"
+  ) {
+    return executeUserProfileCommand(command, {
       database: open(),
       path: context.databasePath,
       env: getSqliteWorkerStateContext().environment,

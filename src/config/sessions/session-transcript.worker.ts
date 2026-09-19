@@ -144,7 +144,6 @@ serveWorkerTasks(
             const result = withOpenClawAgentDatabaseReadOnly(
               (database) => listSessionMembersInDatabase(database, request.sessionKey),
               { ...request.database, env: request.env },
-              { throwOnMissingTable: true },
             );
             return result.found ? result.value : [];
           })),

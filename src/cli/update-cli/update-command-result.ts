@@ -22,6 +22,7 @@ import { FreeBsdPkgOwnershipError } from "../../infra/update-freebsd-pkg-ownersh
 import { UpdateRequesterRevokedError } from "../../infra/update-requester-authority.js";
 import { UpdateRunAdmissionBusyError } from "../../infra/update-run-admission.js";
 import { getUpdateRun, recordUpdateRunPhase } from "../../infra/update-run-ledger.js";
+import type { UpdateRunRecord } from "../../infra/update-run-record.js";
 import type { UpdateRunResult, UpdateStepResult } from "../../infra/update-runner.js";
 import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
 import { defaultRuntime } from "../../runtime.js";
@@ -419,9 +420,10 @@ export async function markControlPlaneUpdateRestartSentinelFailureBestEffort(par
 export function recordUpdateResultNextAction(
   params: Pick<FinishUpdateParams, "opts" | "coreAlreadyCurrent" | "ownedManagedUpdateEnv">,
   result: UpdateRunResult,
+  committed?: UpdateRunRecord,
 ) {
   const run = params.opts.run;
-  const active = run ? getUpdateRun(run.runId, { env: run.env }) : undefined;
+  const active = committed ?? (run ? getUpdateRun(run.runId, { env: run.env }) : undefined);
   const nextAction = resolveUpdateResultNextAction({
     result,
     restart: params.coreAlreadyCurrent ? params.opts.restart : undefined,

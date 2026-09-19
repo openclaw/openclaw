@@ -163,7 +163,6 @@ export function buildActiveSubagentRuntimeContext(params: {
         ? `wait_runs=${JSON.stringify(entry.execution.wait.dependencies.map((child) => child.runId))};`
         : undefined,
       entry.deliveryStatus ? `delivery=${entry.deliveryStatus};` : undefined,
-      entry.resume ? `resume_rpc=${entry.resume.method};` : undefined,
       `label_json=${quotePromptData(entry.label)};`,
       `task_json=${quotePromptData(entry.task)}`,
     ]

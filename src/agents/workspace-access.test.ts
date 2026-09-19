@@ -5,6 +5,8 @@ import { createDeferredCore } from "../shared/deferred.js";
 import {
   declareAgentWorkspaceAccess,
   getAgentWorkspaceAccess,
+  isWorkspaceAccessUnavailableError,
+  WorkspaceAccessUnavailableError,
   registerAgentWorkspaceAccess,
   type AgentWorkspaceAccess,
 } from "./workspace-access.js";
@@ -24,15 +26,29 @@ function provider(): AgentWorkspaceAccess {
 }
 
 describe("host-owned workspace access", () => {
+  it("identifies unavailable access through wrapped errors and separate SDK instances", () => {
+    const cause = new Error("host offline");
+    const error = new WorkspaceAccessUnavailableError("workspace unavailable", { cause });
+    expect(error.cause).toBe(cause);
+    expect(isWorkspaceAccessUnavailableError(error)).toBe(true);
+    expect(isWorkspaceAccessUnavailableError(new Error("wrapped", { cause: error }))).toBe(true);
+    // A separately loaded SDK has a different prototype, but preserves the error code.
+    expect(isWorkspaceAccessUnavailableError({ code: "WORKSPACE_ACCESS_UNAVAILABLE" })).toBe(true);
+    expect(isWorkspaceAccessUnavailableError(cause)).toBe(false);
+    expect(
+      isWorkspaceAccessUnavailableError(new Error("Workspace access is stopped or not ready")),
+    ).toBe(false);
+  });
+
   it("leaves unconfigured workspaces local and declared workspaces unavailable until start", () => {
     const root = workspace();
     expect(getAgentWorkspaceAccess(root)).toBeUndefined();
     declareAgentWorkspaceAccess(root);
-    expect(() => getAgentWorkspaceAccess(root)).toThrow("stopped or not ready");
+    expect(() => getAgentWorkspaceAccess(root)).toThrow(WorkspaceAccessUnavailableError);
     const release = registerAgentWorkspaceAccess(root, provider());
     expect(getAgentWorkspaceAccess(root)).toBeDefined();
     release();
-    expect(() => getAgentWorkspaceAccess(root)).toThrow("stopped or not ready");
+    expect(() => getAgentWorkspaceAccess(root)).toThrow(WorkspaceAccessUnavailableError);
   });
 
   it("rejects duplicate ownership and revokes retained methods without affecting a replacement", async () => {
@@ -67,7 +83,7 @@ describe("host-owned workspace access", () => {
     host.bridge.readFile = vi.fn(() => pending.promise);
     const release = registerAgentWorkspaceAccess(root, host);
     const read = getAgentWorkspaceAccess(root)!.bridge.readFile({ filePath: "AGENTS.md" });
-    const rejected = expect(read).rejects.toThrow("stopped or not ready");
+    const rejected = expect(read).rejects.toThrow(WorkspaceAccessUnavailableError);
     release();
     pending.resolve(Buffer.from("late result"));
     await rejected;
@@ -106,7 +122,7 @@ describe("host-owned workspace access", () => {
     const read = getAgentWorkspaceAccess(root)!.bridge.readFileWithSource!({
       filePath: "AGENTS.md",
     });
-    const rejected = expect(read).rejects.toThrow("stopped or not ready");
+    const rejected = expect(read).rejects.toThrow(WorkspaceAccessUnavailableError);
     release();
     pending.resolve({ data: Buffer.from("late result"), canonicalPath: "/remote/AGENTS.md" });
     await rejected;

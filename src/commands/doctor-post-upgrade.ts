@@ -4,8 +4,10 @@ import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { hasErrnoCode } from "../infra/errno.js";
 import { formatConsoleDiagnosticLine } from "../logging/json-console-line.js";
 import { resolveInstalledPluginIndexInstallOwner } from "../plugins/installed-plugin-index-install-owner.js";
+import { isOptionalPluginManifestFile } from "../plugins/installed-plugin-index-manifest.js";
 import { readPersistedInstalledPluginIndex } from "../plugins/installed-plugin-index-store.js";
 import type { InstalledPluginIndexRecord } from "../plugins/installed-plugin-index-types.js";
 import { resolvePackageExtensionEntries, type PackageManifest } from "../plugins/manifest.js";
@@ -77,15 +79,6 @@ async function resolvePackageJsonRelPath(
     return "package.json";
   } catch {
     return undefined;
-  }
-}
-
-async function sha256OfFile(absPath: string): Promise<string | null> {
-  try {
-    const raw = await fs.readFile(absPath);
-    return crypto.createHash("sha256").update(raw).digest("hex");
-  } catch {
-    return null;
   }
 }
 
@@ -183,9 +176,26 @@ export async function runPostUpgradeProbes(params: {
       }
     }
 
-    if (record.manifestPath && record.manifestHash) {
-      const currentHash = await sha256OfFile(record.manifestPath);
-      if (currentHash && currentHash !== record.manifestHash) {
+    if (record.manifestPath) {
+      let currentHash: string;
+      try {
+        const raw = await fs.readFile(record.manifestPath);
+        currentHash = crypto.createHash("sha256").update(raw).digest("hex");
+      } catch (err) {
+        // Doctor checks current disk state; cached existence can predate a file transition.
+        if (hasErrnoCode(err, "ENOENT") && isOptionalPluginManifestFile(record)) {
+          continue;
+        }
+        const reason = err instanceof Error ? err.message : String(err);
+        findings.push({
+          level: "error",
+          code: "plugin.manifest_unavailable",
+          message: `Plugin ${record.pluginId}: could not read indexed manifest (${record.manifestPath}): ${reason}. Reinstall the plugin or run \`openclaw plugins registry --refresh\`.`,
+          plugin: record.pluginId,
+        });
+        continue;
+      }
+      if (record.manifestHash && currentHash !== record.manifestHash) {
         findings.push({
           level: "warn",
           code: "plugin.manifest_drift",

@@ -179,7 +179,13 @@ export function renderUpdateRunReport(
   // Git updates can change commits without changing the package version.
   const before = run.before.sha?.slice(0, 8) ?? run.before.version;
   const after = run.after.sha?.slice(0, 8) ?? run.after.version;
-  const reason = bounded(run.reason?.trim() || "unknown reason", 240);
+  const reason = bounded(
+    run.reason?.trim() ||
+      (run.status === "failed" &&
+        run.steps.find((step) => step.status === "failed" && step.step !== "requested")?.step) ||
+      "unknown reason",
+    240,
+  );
   const running =
     !currentHealth && run.verification.serviceRunning === true
       ? run.verification.runningVersion

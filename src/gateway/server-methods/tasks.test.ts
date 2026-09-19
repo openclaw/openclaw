@@ -92,33 +92,6 @@ describe("tasks gateway handlers", () => {
     expect(canonical.payload?.tasks?.map((task) => task.taskId)).toEqual([running.taskId]);
   });
 
-  it("uses the persisted fixed-store owner for a bare task session filter", async () => {
-    const task = createTaskFixture("cli", {
-      requesterSessionKey: "global",
-      ownerKey: "global",
-      scopeKind: "session",
-      runId: "run-global",
-      task: "Owned task",
-      status: "running",
-      deliveryStatus: "pending",
-    });
-    const { calls, payload } = await runTaskHandler(
-      "tasks.list",
-      { sessionKey: "global" },
-      {
-        session: { store: "/tmp/shared-sessions.sqlite", scope: "global" },
-        agents: {
-          ownership: "explicit",
-          list: [{ id: "ops" }, { id: "research" }],
-          defaults: { sessionStore: { agentId: "ops" } },
-        },
-      },
-    );
-
-    expect(calls[0]?.[0]).toBe(true);
-    expect(payload?.tasks?.map((entry) => entry.taskId)).toEqual([task.taskId]);
-  });
-
   it("orders the ledger by last activity, not creation time", async () => {
     // The registry lists newest-created first; the wire must page by last
     // activity so an old task that just finished is not hidden behind

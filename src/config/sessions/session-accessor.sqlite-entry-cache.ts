@@ -10,6 +10,7 @@ import {
 import { readSqliteDataVersion } from "../../infra/node-sqlite.js";
 import { stageSqliteTransactionState } from "../../infra/sqlite-post-commit.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
+import { readOpenClawAgentDatabase } from "../../state/openclaw-agent-db-readonly-open.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { tableExists } from "../../state/openclaw-state-db-schema-helpers.js";
@@ -233,7 +234,7 @@ export function readExactSessionEntryCandidatesInDatabase(
     }
     let result: Result<ExactSessionEntry | undefined, unknown>;
     try {
-      const entry = readPrepared(sessionKey);
+      const entry = readOpenClawAgentDatabase(database, () => readPrepared(sessionKey)).value;
       result = ok(entry ? { sessionKey, entry } : undefined);
     } catch (error) {
       result = err(error);

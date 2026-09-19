@@ -233,9 +233,15 @@ function formatStepStatus(step: {
 export function printResult(
   result: UpdateRunResult,
   opts: UpdateCommandOptions,
-  reportHints: { doctorHint?: string | null; nextAction?: string } = {},
+  reportHints: {
+    doctorHint?: string | null;
+    nextAction?: string;
+    record?: UpdateRunRecord;
+  } = {},
 ): void {
-  const run = result.runId ? getUpdateRun(result.runId, { env: opts.run?.env }) : undefined;
+  const run =
+    reportHints.record ??
+    (result.runId ? getUpdateRun(result.runId, { env: opts.run?.env }) : undefined);
   if (opts.json) {
     defaultRuntime.writeJson({ ...result, ...(run ? { run } : {}) });
     return;

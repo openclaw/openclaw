@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { expect, it } from "vitest";
+import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createSandboxTestContext } from "./sandbox/test-fixtures.js";
 import { resolveAttemptWorkspaceSandbox, resolveHarnessWorkspace } from "./workspace-sandbox.js";
 
@@ -56,3 +57,44 @@ it("refuses a retired admitted run before creating or preparing its workspace", 
     await fs.rm(root, { recursive: true, force: true });
   }
 });
+
+it.each(["ro", "rw"] as const)(
+  "keeps writable policy with the %s placement without preparing its paths locally",
+  async (workspaceAccess) => {
+    await withOpenClawTestState({ label: "placement-workspace-policy" }, async (state) => {
+      const remoteWorkspace = state.path("remote-execution-only");
+      const preparation = resolveAttemptWorkspaceSandbox({
+        workspaceDir: state.workspaceDir,
+        sessionId: "remote-policy",
+        sessionKey: "agent:main:remote-policy",
+        agentId: "main",
+        requireWritableSandbox: true,
+        requireWorkspaceOnly: true,
+        config: {
+          agents: { defaults: { sandbox: { mode: "all", backend: "unavailable-fixture" } } },
+        },
+        placementSandbox: createSandboxTestContext({
+          overrides: {
+            workspaceDir: remoteWorkspace,
+            agentWorkspaceDir: remoteWorkspace,
+            containerWorkdir: "/native/guest",
+            workspaceAccess,
+          },
+        }),
+      });
+      if (workspaceAccess === "ro") {
+        await expect(preparation).rejects.toThrow(
+          "sandbox workspace is not read-write; collection review skipped",
+        );
+      } else {
+        await expect(preparation).resolves.toMatchObject({
+          effectiveWorkspace: state.workspaceDir,
+          effectiveCwd: state.workspaceDir,
+          effectiveFsWorkspaceOnly: true,
+          sandbox: null,
+        });
+      }
+      await expect(fs.stat(remoteWorkspace)).rejects.toMatchObject({ code: "ENOENT" });
+    });
+  },
+);

@@ -29,6 +29,7 @@ import {
   openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
 } from "../state/openclaw-agent-db.js";
+import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -151,6 +152,26 @@ describe("usage archive identity", () => {
   afterEach(async () => {
     vi.restoreAllMocks();
     await state.cleanup();
+  });
+
+  it("lists legacy usage without creating the optional archive identity table", async () => {
+    const manager = transcript();
+    const sessionFile = await writeArchive({ state, manager, encoding: "plain" });
+    const { db } = openOpenClawAgentDatabase({ agentId: "main", env: state.env });
+    db.exec("DROP TABLE session_transcript_archives");
+    expect(tableExists(db, "session_transcript_archives")).toBe(false);
+
+    expect(await listUsageCountedTranscriptStats("main")).toEqual([
+      expect.objectContaining({
+        sessionId: manager.getSessionId(),
+        filePath: sessionFile,
+        sourcePath: sessionFile,
+        kind: "jsonl",
+        size: Buffer.byteLength(serialize(manager)),
+        mtimeMs: archiveTime,
+      }),
+    ]);
+    expect(tableExists(db, "session_transcript_archives")).toBe(false);
   });
 
   it.each(["shared.sqlite", "my-store.json", "shared-link.sqlite"])(
@@ -448,11 +469,20 @@ describe("usage archive identity", () => {
 
           const cacheLookup = { agentId, config, sessions: [{ sessionId, sessionFile }] };
           expect(readSessionCostUsageRollupRows(agentId)).toEqual([]);
-          expect(await loadSessionCostSummariesFromCache(cacheLookup)).toMatchObject({
-            summaries: [null],
-            cacheStatus: { status: "refreshing", cachedFiles: 0, pendingFiles: 1 },
-          });
-          await expect.poll(() => readSessionCostUsageRollupRows(agentId)).toHaveLength(1);
+          const work = new AsyncWorkScope();
+          try {
+            expect(
+              await work.track(() => loadSessionCostSummariesFromCache(cacheLookup)),
+            ).toMatchObject({
+              summaries: [null],
+              cacheStatus: { status: "refreshing", cachedFiles: 0, pendingFiles: 1 },
+            });
+            await work.runWhenIdle(() => {
+              expect(readSessionCostUsageRollupRows(agentId)).toHaveLength(1);
+            });
+          } finally {
+            await work.drain();
+          }
           expect(
             await loadSessionCostSummariesFromCache({ ...cacheLookup, requestRefresh: false }),
           ).toMatchObject({

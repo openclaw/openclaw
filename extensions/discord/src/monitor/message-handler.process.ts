@@ -195,9 +195,11 @@ export async function processDiscordMessage(
     resolvedBlockStreamingEnabled,
   } = replyRuntime;
   let deliverChannelId = initialDeliverChannelId;
+  let deliverThreadId = ctxPayload.MessageThreadId;
   activeThreadRoute.bindThreadAdoption(async (threadId) => {
     deliverTarget = `channel:${threadId}`;
     deliverChannelId = threadId;
+    deliverThreadId = threadId;
     await draftPreview.retarget(threadId);
   });
   let finalReplyStartNotified = false;
@@ -383,6 +385,19 @@ export async function processDiscordMessage(
         }),
       );
       return { visibleReplySent: false };
+    }
+    if (
+      await draftPreview.adoptProgressContinuation(deliverablePayload, info, {
+        to: isDirectMessage
+          ? (ctxPayload.OriginatingTo ?? ctxPayload.To ?? deliverTarget)
+          : deliverTarget,
+        threadId: deliverThreadId,
+      })
+    ) {
+      notifyFinalReplyStart();
+      markFinalReplyDelivered();
+      replyReference.markSent();
+      return { visibleReplySent: true };
     }
     if (isFinal && !replyLifecycleStarted && !isRoomEvent && configuredTypingMode !== "never") {
       // Fast replies can bypass the normal resolver lifecycle. Start feedback

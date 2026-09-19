@@ -1,6 +1,7 @@
 import path from "node:path";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Page } from "playwright";
-import { expect, it } from "vitest";
+import { assert, expect, it } from "vitest";
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -13,6 +14,87 @@ async function captureDiagnosticProof(page: Page, name: string) {
 }
 
 suite.define(() => {
+  it("keeps a rejected session-change message visible with recovery guidance and diagnostic details", async () => {
+    await suite.withPage(
+      {
+        viewport: { height: 900, width: 1280 },
+        permissions: ["clipboard-read", "clipboard-write"],
+      },
+      async ({ page }) => {
+        const sessionKey = "agent:main:main";
+        const prompt = "Continue reviewing the example project";
+        const diagnostic = `DispatchSessionRefreshRequiredError: Session "${sessionKey}" changed while starting work. Retry.`;
+        const recovery =
+          "Your message didn't run because the conversation changed. Refresh the conversation, then send it again.";
+        const errorMessage = `${recovery}\n\n${diagnostic}`;
+        const gateway = await installMockGateway(page, { sessionKey });
+        await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
+        await page.locator(".agent-chat__input textarea").fill(prompt);
+        await page.getByRole("button", { name: "Send message" }).click();
+        const send = await gateway.waitForRequest("chat.send");
+        assert(isRecord(send.params) && typeof send.params.idempotencyKey === "string");
+        const runId = send.params.idempotencyKey;
+        await gateway.setHistoryMessages([
+          {
+            role: "user",
+            content: prompt,
+            __openclaw: {
+              id: "rejected-input",
+              seq: 1,
+              idempotencyKey: `${runId}:user`,
+            },
+          },
+        ]);
+        await gateway.emitGatewayEvent("chat", {
+          sessionKey,
+          runId,
+          state: "error",
+          errorMessage,
+        });
+        const alert = page.locator(".chat-error");
+        await alert.waitFor();
+        await captureDiagnosticProof(page, "session-change-collapsed");
+        expect(await alert.locator("summary strong").textContent()).toBe(`Error: ${recovery}`);
+        expect(await page.locator(".chat-thread").textContent()).toContain(prompt);
+        await alert.locator("summary").click();
+        const details = alert.getByLabel("Error details", { exact: true });
+        await expect.poll(() => details.isVisible()).toBe(true);
+        expect(await details.textContent()).toBe(`Error: ${errorMessage}`);
+        await alert.getByRole("button", { name: "Copy error", exact: true }).click();
+        await expect
+          .poll(() => page.evaluate(() => navigator.clipboard.readText()))
+          .toBe(`Error: ${errorMessage}`);
+        await captureDiagnosticProof(page, "session-change-expanded");
+        await page.setViewportSize({ width: 393, height: 852 });
+        await expect
+          .poll(() =>
+            page
+              .locator(".sidebar")
+              .evaluate(
+                (node) =>
+                  !node.checkVisibility({ checkOpacity: true }) ||
+                  node.getBoundingClientRect().right <= 0,
+              ),
+          )
+          .toBe(true);
+        await expect
+          .poll(() => alert.evaluate((node) => node.scrollWidth <= node.clientWidth))
+          .toBe(true);
+        await captureDiagnosticProof(page, "session-change-mobile");
+        await alert.locator("summary").click();
+        await captureDiagnosticProof(page, "session-change-mobile-collapsed");
+        const input = page.locator(".agent-chat__input textarea");
+        await input.fill("A newer draft stays here");
+        const historyCount = (await gateway.getRequests("chat.history")).length;
+        await alert.getByRole("button", { name: "Refresh", exact: true }).click();
+        await gateway.waitForRequest("chat.history", { after: historyCount });
+        expect(await input.inputValue()).toBe("A newer draft stays here");
+        expect(await page.locator(".chat-thread").textContent()).toContain(prompt);
+        expect(await gateway.getRequests("chat.send")).toHaveLength(1);
+      },
+    );
+  });
+
   it.each(["live", "history"] as const)(
     "keeps diagnostic paths and lets the operator expand and copy a complete failed run from %s",
     async (source) => {

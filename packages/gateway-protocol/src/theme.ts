@@ -163,24 +163,68 @@ function requireText(value: unknown, label: string, maxLength: number): string {
   return value.trim();
 }
 
-const NUMBER = "[+-]?(?:\\d+(?:\\.\\d*)?|\\.\\d+)";
+const NUMBER = "[+-]?(?:\\d+(?:\\.\\d+)?|\\.\\d+)(?:e[+-]?\\d+)?";
 const COMPONENT = `${NUMBER}%?`;
 const HUE = `${NUMBER}(?:deg|grad|rad|turn)?`;
-const COMPONENT_SEPARATOR = "(?:\\s*,\\s*|\\s+)";
+const LEGACY_COLOR_FUNCTION = new RegExp(
+  `^(?:(?:rgb|rgba)\\( *(?:${NUMBER} *, *${NUMBER} *, *${NUMBER}|${NUMBER}% *, *${NUMBER}% *, *${NUMBER}%)|(?:hsl|hsla)\\( *${HUE} *, *${NUMBER}% *, *${NUMBER}%)(?: *, *${COMPONENT})? *\\)$`,
+  "i",
+);
 const COLOR_FUNCTION = new RegExp(
-  `^(?:(?:rgb|rgba|oklab|lab)\\(\\s*${COMPONENT}${COMPONENT_SEPARATOR}${COMPONENT}${COMPONENT_SEPARATOR}${COMPONENT}|(?:hsl|hsla)\\(\\s*${HUE}${COMPONENT_SEPARATOR}${COMPONENT}${COMPONENT_SEPARATOR}${COMPONENT}|(?:oklch|lch)\\(\\s*${COMPONENT}${COMPONENT_SEPARATOR}${COMPONENT}${COMPONENT_SEPARATOR}${HUE})(?:(?:\\s*[,/]\\s*|\\s+)${COMPONENT})?\\s*\\)$`,
+  `^(?:(?:rgb|rgba|oklab|lab)\\( *${COMPONENT} +${COMPONENT} +${COMPONENT}|(?:hsl|hsla)\\( *${HUE} +${COMPONENT} +${COMPONENT}|(?:oklch|lch)\\( *${COMPONENT} +${COMPONENT} +${HUE})(?: */ *${COMPONENT})? *\\)$`,
   "i",
 );
 const COLOR_SPACE_FUNCTION = new RegExp(
-  `^color\\(\\s*(?:srgb|srgb-linear|display-p3|a98-rgb|prophoto-rgb|rec2020|xyz|xyz-d50|xyz-d65)\\s+${COMPONENT}\\s+${COMPONENT}\\s+${COMPONENT}(?:\\s*/\\s*${COMPONENT})?\\s*\\)$`,
+  `^color\\( *(?:srgb|srgb-linear|display-p3|a98-rgb|prophoto-rgb|rec2020|xyz|xyz-d50|xyz-d65) +${COMPONENT} +${COMPONENT} +${COMPONENT}(?: */ *${COMPONENT})? *\\)$`,
   "i",
 );
+const FONT_IDENTIFIER = "(?:--[a-z0-9_-]*|-?[a-z_][a-z0-9_-]*)";
+const FONT_FAMILY = `(?:"[a-z0-9 ,'._-]*"|'[a-z0-9 ,"._-]*'|${FONT_IDENTIFIER}(?: +${FONT_IDENTIFIER})*)`;
+const FONT_FAMILY_LIST = new RegExp(`^${FONT_FAMILY}(?: *, *${FONT_FAMILY})*$`, "i");
+const CSS_WIDE_KEYWORDS = new Set(["inherit", "initial", "unset", "revert", "revert-layer"]);
+const GENERIC_FONT_FAMILIES = new Set([
+  "serif",
+  "sans-serif",
+  "monospace",
+  "cursive",
+  "fantasy",
+  "system-ui",
+  "ui-serif",
+  "ui-sans-serif",
+  "ui-monospace",
+  "ui-rounded",
+  "emoji",
+  "math",
+  "fangsong",
+  "-webkit-body",
+]);
+
+function isFontFamilyList(value: string): boolean {
+  if (!FONT_FAMILY_LIST.test(value)) {
+    return false;
+  }
+  // Quoted names may contain commas or match reserved keywords.
+  return value
+    .replace(/"[^"]*"|'[^']*'/g, "")
+    .split(",")
+    .every((family) => {
+      const normalized = family.trim().toLowerCase();
+      const words = normalized.split(/ +/);
+      return words.every(
+        (word) =>
+          !CSS_WIDE_KEYWORDS.has(word) &&
+          word !== "default" &&
+          (words.length === 1 || !GENERIC_FONT_FAMILIES.has(word)),
+      );
+    });
+}
 
 function requireColor(value: unknown, label: string): string {
   const color = requireText(value, label, THEME_TOKEN_MAX_LENGTH);
   if (
     !/^#(?:[0-9a-f]{3,4}|[0-9a-f]{6}|[0-9a-f]{8})$/i.test(color) &&
     !/^(?:transparent|black|white)$/i.test(color) &&
+    !LEGACY_COLOR_FUNCTION.test(color) &&
     !COLOR_FUNCTION.test(color) &&
     !COLOR_SPACE_FUNCTION.test(color)
   ) {
@@ -204,7 +248,7 @@ function normalizePalette(value: unknown, mode: ThemeColorMode): ThemePalette {
       continue;
     }
     const font = requireText(palette[key], `theme.${mode}.${key}`, THEME_TOKEN_MAX_LENGTH);
-    if (!/^[a-z0-9 ,'"._-]+$/i.test(font)) {
+    if (!isFontFamilyList(font)) {
       throw new Error(`theme.${mode}.${key} must contain only font family names`);
     }
     result[key] = font;

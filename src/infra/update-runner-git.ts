@@ -19,6 +19,7 @@ import {
   recordGitRollbackOutcome,
 } from "./update-runner-git-recovery.js";
 import { prepareGitRuntimePromotion } from "./update-runner-git-runtime.js";
+import { createGitUpdateSteps } from "./update-runner-git-step-policy.js";
 import {
   resolveGitDoctorEntry,
   runGitCleanCheckStep,
@@ -36,7 +37,6 @@ import {
 import { prepareGitCandidateTransfer } from "./update-runner-git-transfer.js";
 import type {
   CommandRunner,
-  RunStepOptions,
   UpdateRunResult,
   UpdateRunnerOptions,
   UpdateStepResult,
@@ -91,21 +91,10 @@ export async function updateGitCheckout(params: {
   const needsCheckoutMain = channel === "dev" && !hasDevTarget && branch !== DEV_BRANCH;
   const totalSteps = channel === "dev" ? (needsCheckoutMain ? 12 : 11) : 9;
   const steps: UpdateStepResult[] = [];
-  let stepIndex = 0;
-  const step = (
-    name: string,
-    argv: string[],
-    cwd: string,
-    env?: NodeJS.ProcessEnv,
-  ): RunStepOptions => ({
+  const { step, workStep, forRunner, recoveryStep } = createGitUpdateSteps({
     runCommand,
-    name,
-    argv,
-    cwd,
-    timeoutMs,
-    env,
-    progress: opts.progress,
-    stepIndex: stepIndex++,
+    opts,
+    probeTimeoutMs: timeoutMs,
     totalSteps,
     results: steps,
   });
@@ -162,16 +151,7 @@ export async function updateGitCheckout(params: {
     durationMs: Date.now() - startedAt,
   });
   const appendRecoveryStep = async (name: string, argv: string[]) => {
-    const result = await runStep({
-      runCommand,
-      name,
-      argv,
-      cwd: gitRoot,
-      timeoutMs,
-      stepIndex: 0,
-      totalSteps: 1,
-      results: steps,
-    });
+    const result = await runStep(recoveryStep(name, argv, gitRoot));
     return result.exitCode === 0;
   };
   const verifyRollbackHead = async () => {
@@ -341,7 +321,7 @@ export async function updateGitCheckout(params: {
     }
   };
   const runRequiredStep = async (name: string, argv: string[], reason: string) => {
-    const result = await runStep(step(name, argv, gitRoot));
+    const result = await runStep(workStep(name, argv, gitRoot));
     if (result.exitCode === 0) {
       return null;
     }
@@ -382,10 +362,8 @@ export async function updateGitCheckout(params: {
       runInspectionCommand: CommandRunner,
     ) => {
       let publishedCandidate = false;
-      const inspectionStep: typeof step = (...args) => ({
-        ...step(...args),
-        runCommand: runInspectionCommand,
-      });
+      const { step: inspectionStep, workStep: inspectionWorkStep } =
+        forRunner(runInspectionCommand);
       const importCandidate = async (candidateSha: string, upstreamRef?: string) => {
         const transfer = await prepareGitCandidateTransfer({
           candidateSha,
@@ -393,7 +371,8 @@ export async function updateGitCheckout(params: {
           installedRoot: gitRoot,
           installedRunCommand: runCommand,
           upstreamRef,
-          step: inspectionStep("git pack update", [], inspectionRoot),
+          step: inspectionWorkStep("git pack update", [], inspectionRoot),
+          probeTimeoutMs: timeoutMs,
         });
         if (!transfer) {
           return { status: "error" as const, reason: "fetch-failed" };
@@ -404,7 +383,9 @@ export async function updateGitCheckout(params: {
         }
         await prepareMutation(candidateSha, inspectionRoot, runInspectionCommand);
         candidateTransfer = transfer;
-        const imported = await transfer.importInto(step("git import admitted target", [], gitRoot));
+        const imported = await transfer.importInto(
+          workStep("git import admitted target", [], gitRoot),
+        );
         if (!imported) {
           return { status: "error" as const, reason: "fetch-failed" };
         }
@@ -414,6 +395,7 @@ export async function updateGitCheckout(params: {
         !(await fetchGitUpdateTarget({
           root: inspectionRoot,
           step: inspectionStep,
+          workStep: inspectionWorkStep,
           name: "git target inspection fetch",
           channel,
           steps,
@@ -436,6 +418,8 @@ export async function updateGitCheckout(params: {
         gitRoot: inspectionRoot,
         runCommand: runInspectionCommand,
         step: inspectionStep,
+        workStep: inspectionWorkStep,
+        workTimeoutMs: opts.timeoutMs,
         channel,
         devTarget,
         beforeSha,
@@ -495,6 +479,7 @@ export async function updateGitCheckout(params: {
             root: gitRoot,
             runCommand,
             timeoutMs,
+            work: { timeoutMs: opts.timeoutMs },
             onWarning: (warning) => {
               steps.push(warning);
               opts.progress?.onStepComplete?.({ ...warning, index: 0, total: 0 });
@@ -523,7 +508,14 @@ export async function updateGitCheckout(params: {
     }
     if (!inspectedTarget) {
       if (
-        !(await fetchGitUpdateTarget({ root: gitRoot, step, name: "git fetch", channel, steps }))
+        !(await fetchGitUpdateTarget({
+          root: gitRoot,
+          step,
+          workStep,
+          name: "git fetch",
+          channel,
+          steps,
+        }))
       ) {
         return buildError("fetch-failed");
       }
@@ -549,6 +541,8 @@ export async function updateGitCheckout(params: {
         defaultCommandEnv,
         steps,
         step,
+        workStep,
+        workTimeoutMs: opts.timeoutMs,
         validateCandidate: opts.validateCandidate,
         inspectGitCandidate: opts.inspectGitCandidate,
         prepareGitExposure: opts.prepareGitExposure,
@@ -595,7 +589,7 @@ export async function updateGitCheckout(params: {
         preflight.selectedDevUpstream,
         DEV_BRANCH,
       ];
-      const upstreamOptions = step(
+      const upstreamOptions = workStep(
         `git branch --set-upstream-to ${preflight.selectedDevUpstream} ${DEV_BRANCH}`,
         upstreamArgs,
         gitRoot,
@@ -642,7 +636,7 @@ export async function updateGitCheckout(params: {
         entryPath: doctorEntry,
         nodePath: doctorNodePath,
         fix: doctorPolicy.fix,
-        step,
+        step: workStep,
         env: buildUpdateDoctorEnv({
           allowGatewayServiceRepair,
           allowGatewayActivation,

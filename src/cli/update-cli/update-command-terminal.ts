@@ -27,9 +27,17 @@ import {
   writeControlPlaneUpdateRestartSentinelBestEffort,
 } from "./update-command-result.js";
 import { completeUpdateCommandRun } from "./update-command-run.js";
+import {
+  readUpdateCommandTerminalRecord,
+  type UpdateCommandTerminalRecord,
+} from "./update-command-terminal-record.js";
 
 type Run = NonNullable<UpdateCommandOptions["run"]>;
-type Publisher = (failure?: unknown) => Promise<UpdateRunResult>;
+type PublishedRecord = (record: UpdateCommandTerminalRecord["record"]) => void;
+type Publisher = (
+  failure?: unknown,
+  onTerminalRecord?: PublishedRecord,
+) => Promise<UpdateRunResult>;
 const terminalOwners = new WeakMap<Run, { publish?: Publisher }>();
 
 /** Finalization prepares a report; the outer invocation owns its publication. */
@@ -52,7 +60,10 @@ export function hasDeferredUpdateCommandTerminalResult(run: Run): boolean {
 /** Enclose the real executor so its final checks and release precede terminal output. */
 export async function withUpdateCommandTerminalResult<T>(
   operation: (registerRun: (run: Run) => void) => Promise<T>,
-  opts: Pick<UpdateCommandOptions, "json" | "onResult"> = {},
+  opts: Pick<UpdateCommandOptions, "json" | "onResult"> & {
+    /** Internal candidate-worker output, never a serialized continuation grant. */
+    onTerminalRecord?: PublishedRecord;
+  } = {},
 ): Promise<T> {
   const owner: { publish?: Publisher } = {};
   let run: Run | undefined;
@@ -101,7 +112,10 @@ export async function withUpdateCommandTerminalResult<T>(
     };
   }
   if (owner.publish) {
-    const result = await owner.publish("error" in outcome ? outcome.error : undefined);
+    const result = await owner.publish(
+      "error" in outcome ? outcome.error : undefined,
+      opts.onTerminalRecord,
+    );
     opts.onResult?.(result);
     if ("error" in outcome) {
       const failure = outcome.error;
@@ -138,7 +152,12 @@ export async function resolveSettledUpdateCommandResult(
   params: Pick<FinishUpdateParams, "opts" | "ownedManagedUpdateEnv" | "root">,
   pendingResult: UpdateRunResult,
   failure?: unknown,
-): Promise<{ result: UpdateRunResult; settlementFailed: boolean }> {
+  captured?: UpdateCommandTerminalRecord,
+): Promise<{
+  result: UpdateRunResult;
+  settlementFailed: boolean;
+  captured?: UpdateCommandTerminalRecord;
+}> {
   const settlementFailed =
     failure !== undefined &&
     (!(failure instanceof UpdateCommandFailure) ||
@@ -170,6 +189,10 @@ export async function resolveSettledUpdateCommandResult(
   // The mutation owner is now closed. This is diagnostic publication only,
   // never authority to reopen displaced state or replace another terminal row.
   try {
+    if (failure === undefined && captured) {
+      readUpdateCommandTerminalRecord(params, result, captured);
+      return { result, settlementFailed, captured };
+    }
     const env = params.ownedManagedUpdateEnv ?? params.opts.run?.env;
     // Keep the first target stable if selectors change during admission.
     const targetPath = resolveOpenClawStateSqlitePath(env);
@@ -397,10 +420,29 @@ async function publishPreMutationUpdateOutcome(
 export function publishUpdateCommandTerminalResult(
   params: Pick<FinishUpdateParams, "opts" | "coreAlreadyCurrent" | "ownedManagedUpdateEnv">,
   input: UpdateRunResult,
-  outcome: { rolledBack: boolean; downtimeMs?: number },
+  outcome: {
+    rolledBack: boolean;
+    downtimeMs?: number;
+    captured?: UpdateCommandTerminalRecord;
+  },
+  onTerminalRecord?: PublishedRecord,
 ): UpdateRunResult {
-  const nextAction = recordUpdateResultNextAction(params, input);
-  const result = completeUpdateCommandRun(input, params.opts.run, outcome);
-  printResult(result, params.opts, { nextAction });
+  let record: UpdateCommandTerminalRecord["record"] | undefined;
+  if (outcome.captured) {
+    try {
+      // Sentinel delivery may have yielded since settlement checked this identity.
+      record = readUpdateCommandTerminalRecord(params, input, outcome.captured);
+    } catch (cause) {
+      throw new UpdateCommandPendingRecoveryFailure(input, formatErrorMessage(cause), { cause });
+    }
+  }
+  const nextAction = recordUpdateResultNextAction(params, input, record);
+  const result = record
+    ? { ...input, runId: record.runId }
+    : completeUpdateCommandRun(input, params.opts.run, outcome);
+  printResult(result, params.opts, { nextAction, record });
+  if (record) {
+    onTerminalRecord?.(record);
+  }
   return result;
 }

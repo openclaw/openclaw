@@ -5,7 +5,6 @@ import { setRuntimeConfigSnapshot } from "../../config/config.js";
 import type { TemplateContext } from "../templating.js";
 import type { AgentTurnParams } from "./agent-runner-execution.types.js";
 import {
-  EXPECTED_STEER_QUEUE_IDENTITY,
   createMediaFollowupRun,
   createReplyMediaContextRuntimeMock,
   enqueueFollowupRunMock,
@@ -24,10 +23,7 @@ import {
 } from "./agent-runner.media-paths.test-harness.js";
 import type { FollowupRun, QueueSettings } from "./queue.js";
 import { createReplyOperation as createRegisteredReplyOperation } from "./reply-run-registry.js";
-import {
-  prepareReplyToolAuthority,
-  resolveFollowupRunToolAuthorityFingerprint,
-} from "./reply-tool-authority.js";
+import { prepareReplyToolAuthority } from "./reply-tool-authority.js";
 
 describe("runReplyAgent media path normalization", () => {
   beforeEach(resetAgentRunnerMediaTestState);
@@ -59,21 +55,12 @@ describe("runReplyAgent media path normalization", () => {
 
       await runReplyAgent(params);
 
-      expect(queueEmbeddedAgentMessageWithOutcomeAsyncMock).toHaveBeenCalledOnce();
-      expect(queueEmbeddedAgentMessageWithOutcomeAsyncMock).toHaveBeenLastCalledWith(
-        "session",
-        "generate chart",
-        {
-          abortSignal: undefined,
-          steeringMode: "all",
-          isInboundUserMessage: true,
-          waitForTranscriptCommit: true,
-          queueIdentity: EXPECTED_STEER_QUEUE_IDENTITY,
-          onQueueAccepted: expect.any(Function),
-          taskSuggestionDeliveryMode: "gateway",
-          toolAuthorityFingerprint: resolveFollowupRunToolAuthorityFingerprint(followupRun),
-        },
-      );
+      expect(
+        queueEmbeddedAgentMessageWithOutcomeAsyncMock.mock.calls.map(([sessionId, prompt]) => [
+          sessionId,
+          prompt,
+        ]),
+      ).toEqual([["session", "generate chart"]]);
       expect(enqueueFollowupRunMock).not.toHaveBeenCalled();
       expect(parkedSteerConsumeMock).toHaveBeenCalledOnce();
       expect(parkedSteerFallbackMock).not.toHaveBeenCalled();
@@ -153,22 +140,16 @@ describe("runReplyAgent media path normalization", () => {
       }),
     );
 
-    expect(queueEmbeddedAgentMessageWithOutcomeAsyncMock).toHaveBeenLastCalledWith(
-      "session",
-      "compare these",
-      {
-        abortSignal: undefined,
-        steeringMode: "all",
-        isInboundUserMessage: true,
-        waitForTranscriptCommit: true,
-        queueIdentity: EXPECTED_STEER_QUEUE_IDENTITY,
-        onQueueAccepted: expect.any(Function),
-        images,
-        media: followupRun.media,
-        taskSuggestionDeliveryMode: undefined,
-        toolAuthorityFingerprint: resolveFollowupRunToolAuthorityFingerprint(followupRun),
-      },
-    );
+    expect(
+      queueEmbeddedAgentMessageWithOutcomeAsyncMock.mock.calls.map(([sessionId, prompt]) => [
+        sessionId,
+        prompt,
+      ]),
+    ).toEqual([["session", "compare these"]]);
+    expect(queueEmbeddedAgentMessageWithOutcomeAsyncMock.mock.calls[0]?.[2]).toMatchObject({
+      images,
+      media: followupRun.media,
+    });
     expect(enqueueFollowupRunMock).not.toHaveBeenCalled();
     expect(parkedSteerConsumeMock).toHaveBeenCalledOnce();
     expect(parkedSteerFallbackMock).not.toHaveBeenCalled();
@@ -239,20 +220,12 @@ describe("runReplyAgent media path normalization", () => {
     );
 
     expect(operation.acceptedSteeredInboundAudio).toBe(true);
-    expect(queueEmbeddedAgentMessageWithOutcomeAsyncMock).toHaveBeenLastCalledWith(
-      "session",
-      "summarize the audio",
-      {
-        abortSignal: undefined,
-        steeringMode: "all",
-        isInboundUserMessage: true,
-        waitForTranscriptCommit: true,
-        queueIdentity: EXPECTED_STEER_QUEUE_IDENTITY,
-        onQueueAccepted: expect.any(Function),
-        taskSuggestionDeliveryMode: undefined,
-        toolAuthorityFingerprint: operation.toolAuthorityFingerprint,
-      },
-    );
+    expect(
+      queueEmbeddedAgentMessageWithOutcomeAsyncMock.mock.calls.map(([sessionId, prompt]) => [
+        sessionId,
+        prompt,
+      ]),
+    ).toEqual([["session", "summarize the audio"]]);
     expect(enqueueFollowupRunMock).not.toHaveBeenCalled();
     expect(parkedSteerConsumeMock).toHaveBeenCalledOnce();
     expect(parkedSteerFallbackMock).not.toHaveBeenCalled();

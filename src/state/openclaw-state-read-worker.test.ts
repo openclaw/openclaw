@@ -2,12 +2,18 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { acquireStateDatabaseHandleExclusion } from "../infra/state-database-coordinator.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import type { OpenClawStateReadReply } from "./openclaw-state-read.types.js";
+import type {
+  OpenClawStateReadReply,
+  OpenClawStateReadRequest,
+} from "./openclaw-state-read.types.js";
 
 type MockPool = {
   selectLibrary: ReturnType<typeof vi.fn<() => void>>;
-  run: ReturnType<typeof vi.fn<() => Promise<OpenClawStateReadReply>>>;
+  run: ReturnType<
+    typeof vi.fn<(request: OpenClawStateReadRequest) => Promise<OpenClawStateReadReply>>
+  >;
   close: ReturnType<typeof vi.fn<() => Promise<void>>>;
   notify?: (error: unknown) => void | Promise<void>;
 };
@@ -42,7 +48,12 @@ import { executeExistingOpenClawStateRead } from "./openclaw-state-db-readonly.j
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
+  openOpenClawStateDatabase,
 } from "./openclaw-state-db.js";
+import { withOpenClawStateSettlementRead } from "./openclaw-state-settlement-read.js";
+import { captureOpenClawStateWorkerContext } from "./openclaw-state-worker-context.js";
+import { selectProfileDisplayEntries } from "./user-profiles-internal.js";
+import { ensureProfileForEmail } from "./user-profiles.js";
 
 beforeEach(() => mock.selectLibrary.mockClear());
 
@@ -53,6 +64,121 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
     closeOpenClawStateDatabaseForTest();
     cleanup();
   }),
+);
+
+it.each([false, true])(
+  "preserves interrupted settlement task errors and source custody through canonical retry (close retry fails=%s)",
+  async (retryFails) => {
+    mock.run.mockReset();
+    mock.close.mockReset();
+    const root = tempDirs.make("openclaw-settlement-task-failure-");
+    const pathname = path.join(root, "source.sqlite");
+    const options = { path: pathname, env: { OPENCLAW_STATE_DIR: root } };
+    const profile = ensureProfileForEmail("settlement@example.test", options);
+    const descriptor = selectProfileDisplayEntries(openOpenClawStateDatabase(options).db, [
+      profile.id,
+    ])[0]![1];
+    await closeOpenClawStateDatabaseAsync();
+    const context = captureOpenClawStateWorkerContext(options);
+    const command = { type: "userProfiles.avatar.reconcile", profileId: profile.id } as const;
+    const reply: OpenClawStateReadReply = {
+      ok: true,
+      type: command.type,
+      sourceAdmitted: true,
+      profile: descriptor,
+    };
+    const started = createDeferredCore();
+    const closeAttempt = createDeferredCore();
+    const task = createDeferredCore<OpenClawStateReadReply>();
+    const retryCloseStarted = createDeferredCore();
+    const stopped = createDeferredCore();
+    const delivery = new Error("mutation result delivery failed");
+    const query = new Error("interrupted settlement task failed");
+    const retirement = new Error("first settlement worker stop failed");
+    const retryFailure = new Error("settlement close retry failed");
+    const mutation = vi.fn();
+    const publish = vi.fn();
+    const release = vi.fn();
+    mock.run.mockImplementationOnce(() => {
+      started.resolve();
+      return task.promise;
+    });
+    mock.close.mockImplementationOnce(async () => {
+      closeAttempt.resolve();
+      if (retryFails) {
+        throw retryFailure;
+      }
+    });
+    try {
+      const result = withOpenClawStateSettlementRead(context, async (read) => {
+        mutation();
+        read.bind(command, Promise.resolve({ kind: "completed" }), publish, release);
+        mock.selectLibrary.mockClear();
+        throw delivery;
+      }).catch((error: unknown) => error);
+      await started.promise;
+      await mock.notify?.(retirement);
+      // The retirement signal wins the transport race before the task's own rejection.
+      await closeAttempt.promise;
+      task.reject(query);
+      const failure = await result;
+      expect(publish).not.toHaveBeenCalled();
+      expect(release).not.toHaveBeenCalled();
+      expect(mock.close).toHaveBeenCalledTimes(1);
+      expect(() =>
+        acquireStateDatabaseHandleExclusion({ databasePath: pathname, busyTimeoutMs: 0 }),
+      ).toThrow();
+
+      mock.selectLibrary.mockClear();
+      mock.run.mockResolvedValue(reply);
+      if (retryFails) {
+        mock.close.mockResolvedValueOnce();
+      }
+      mock.close.mockImplementationOnce(() => {
+        retryCloseStarted.resolve();
+        return stopped.promise;
+      });
+      const closing = closeOpenClawStateDatabaseAsync();
+      try {
+        await retryCloseStarted.promise;
+        expect(publish).not.toHaveBeenCalled();
+        expect(release).not.toHaveBeenCalled();
+      } finally {
+        stopped.resolve();
+        await closing;
+      }
+      expect(publish).toHaveBeenCalledExactlyOnceWith(descriptor);
+      expect(release).toHaveBeenCalledOnce();
+      expect(mutation).toHaveBeenCalledOnce();
+      expect(mock.run.mock.calls.map(([request]) => request.command)).toEqual([command, command]);
+      for (const [request] of mock.run.mock.calls) {
+        expect(request).toMatchObject({
+          databasePath: pathname,
+          location: pathname,
+          expectedIdentity: context.admission.identity.key,
+          checkFreshAdmission: false,
+        });
+      }
+      expect(mock.close).toHaveBeenCalledTimes(retryFails ? 3 : 2);
+      const exclusion = acquireStateDatabaseHandleExclusion({ databasePath: pathname });
+      exclusion.release();
+      expect(failure).toMatchObject({
+        errors: [
+          delivery,
+          expect.objectContaining({
+            errors: [query, retirement, ...(retryFails ? [retryFailure] : [])],
+          }),
+        ],
+      });
+    } finally {
+      task.resolve(reply);
+      stopped.resolve();
+      mock.selectLibrary.mockClear();
+      mock.run.mockResolvedValue(reply);
+      mock.close.mockReset().mockResolvedValue();
+      await closeOpenClawStateDatabaseAsync();
+    }
+  },
 );
 
 it.each([false, true])(

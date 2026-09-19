@@ -1,4 +1,5 @@
 import {
+  isReplyPayloadTerminalContent,
   markReplyPayloadForSourceSuppressionDelivery,
   setReplyPayloadMetadata,
   type ReplyPayloadMetadata,
@@ -17,6 +18,7 @@ import type {
   AgentHarness,
   AgentHarnessSettledTurnFinalizationResult,
 } from "../../harness/types.js";
+import { observeReplyDelivery } from "../../reply-completion.js";
 import { resolveAgentRunSessionTarget } from "../../run-session-target.js";
 import { resolveAgentTimeoutMs } from "../../timeout.js";
 import {
@@ -95,8 +97,20 @@ export async function prepareTerminalWithSettledTurnFinalization(input: {
   const initial = input.initial;
   let attempt = initial.attempt;
   let lastRunPromptUsage = input.lastRunPromptUsage;
+  const minimumAssistantMessageIndex = (attempt.answerSegments?.at(-1)?.messageEnd ?? -1) + 1;
+  const observeSourceDelivery = () =>
+    observeReplyDelivery(
+      input.terminalBase.runParams.resolveReplyDelivery,
+      minimumAssistantMessageIndex,
+      (error) =>
+        log.warn(
+          `reply delivery observation failed; retaining custody: ${formatErrorMessage(error)}`,
+        ),
+    );
+  const replyDeliveryState = await observeSourceDelivery();
   let prepared = prepareEmbeddedRunTerminal({
     ...input.terminalBase,
+    replyDeliveryState,
     attempt,
     currentAttemptCompletedAssistant: initial.currentAttemptCompletedAssistant,
     sessionIdUsed: initial.sessionIdUsed,
@@ -115,6 +129,7 @@ export async function prepareTerminalWithSettledTurnFinalization(input: {
       prepared.recoveredFinalAssistantPayloadsAfterPromptTimeout,
     hasTerminalToolPresentation: input.finalization.hasTerminalToolPresentation,
     terminalState: initial.terminalState,
+    replyDeliveryState,
     settledTurnFinalizationAvailable:
       typeof input.finalization.harness.finalizeSettledTurn === "function",
   });
@@ -190,8 +205,7 @@ export async function prepareTerminalWithSettledTurnFinalization(input: {
         runParams.terminalReplyExpectation === "optional" &&
         !initial.attempt.lastToolError &&
         shouldTreatEmptyAssistantReplyAsSilent({
-          allowEmptyAssistantReplyAsSilent: runParams.allowEmptyAssistantReplyAsSilent,
-          terminalReplyExpectation: runParams.terminalReplyExpectation,
+          terminalReplyExpectation: "optional",
           onlyExplicitSilentReply: true,
           payloadCount: 0,
           aborted: input.finalization.abortSignal.aborted,
@@ -305,6 +319,7 @@ export async function prepareTerminalWithSettledTurnFinalization(input: {
   const finalizedPrepared = prepareEmbeddedRunTerminal({
     ...input.terminalBase,
     ...completion,
+    replyDeliveryState: await observeSourceDelivery(),
     lastRunPromptUsage,
   });
   // Only a real finalizer answer may cross source-reply suppression. The
@@ -320,6 +335,14 @@ export async function prepareTerminalWithSettledTurnFinalization(input: {
   // Tool-free finalization cannot resolve failures from the settled tools.
   prepared = {
     ...finalizedPrepared,
+    // Recovery can itself commit the source reply (notably WebChat history).
+    // Preserve supplements, but never hand an already-owned final to a second sender.
+    payloadsWithToolMedia:
+      finalizedPrepared.replyDeliveryState === "missing"
+        ? finalizedPrepared.payloadsWithToolMedia
+        : finalizedPrepared.payloadsWithToolMedia?.filter(
+            (payload) => !isReplyPayloadTerminalContent(payload),
+          ),
     // Do not offer the private diagnostic to stranded-reply recovery as an
     // undelivered model answer. Automatic-delivery callers retain their fallback.
     ...(finalizationOutcome !== "answered" &&

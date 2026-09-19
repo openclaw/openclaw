@@ -543,7 +543,7 @@ export async function reviewDependencyChanges(
     prepared,
   );
   if (!guard) {
-    return;
+    return true;
   }
   const { api, owner, repo, pullRequest, issuePath, files } = guard;
   const { isDependencyFile, isDependencyManifest, isPackageLockfile } = loadSecurityReviewPolicy();
@@ -606,7 +606,7 @@ export async function reviewDependencyChanges(
     await writeSummary(
       "## Dependency Guard\n\nDependency analysis complete; the final guard job publishes the review result.",
     );
-    return;
+    return true;
   }
 
   const [comments, labels] = await Promise.all([
@@ -641,9 +641,9 @@ export async function reviewDependencyChanges(
     }
     await writeSummary("## Dependency Guard\n\nNo dependency-related file changes detected.");
     if (mode === "enforce") {
-      await finishGuard(guard, { description: "No dependency changes require review." });
+      return await finishGuard(guard, { description: "No dependency changes require review." });
     }
-    return;
+    return true;
   }
   await addLabelIfMissing(dependencyChangedLabel);
 
@@ -663,7 +663,7 @@ export async function reviewDependencyChanges(
           await writeSummary(
             "## Dependency Guard\n\nMaintainer approval arrived; lockfile changes were preserved.",
           );
-          return;
+          return true;
         }
         await removeLabelIfPresent(dependencyChangedLabel);
         const body = renderAutoscrubbedDependencyComment({
@@ -673,7 +673,7 @@ export async function reviewDependencyChanges(
         });
         await upsertComment(existingGuardComment, body);
         await writeSummary(body);
-        return;
+        return true;
       } catch (error) {
         autoscrubStatus = {
           kind: "failed",
@@ -685,7 +685,7 @@ export async function reviewDependencyChanges(
       await writeSummary(
         "## Dependency Guard\n\nNo unapproved lockfile-only change needs autoscrub.",
       );
-      return;
+      return true;
     }
   } else if (autoscrubCandidate && !autoscrubTarget && !approval && !removalOnly) {
     autoscrubStatus = { kind: "not-attempted" };
@@ -724,7 +724,7 @@ export async function reviewDependencyChanges(
           );
       await upsertComment(existingGuardComment, body);
       await writeSummary(body);
-      return;
+      return true;
     }
   }
   const body = withApprovalRequest(
@@ -740,9 +740,10 @@ export async function reviewDependencyChanges(
   );
   await upsertComment(existingGuardComment, body);
   await writeSummary(body);
-  throw new Error(
-    "Dependency changes require a maintainer's /allow-dependencies-change comment for the current revision.",
-  );
+  if (autoscrubStatus?.kind === "failed") {
+    throw new Error(`Dependency lockfile autoscrub failed: ${autoscrubStatus.reason}`);
+  }
+  return false;
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {

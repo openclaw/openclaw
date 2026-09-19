@@ -25,9 +25,7 @@ export function withCurrentProjectionSnapshot<T>(
   const readSnapshot = (database: CurrentTranscriptProjection["database"]) =>
     readCurrentProjectionSnapshot(database, resolved, read);
   const result = options.readOnly
-    ? withOpenClawAgentDatabaseReadOnly(readSnapshot, databaseOptions, {
-        throwOnMissingTable: true,
-      })
+    ? withOpenClawAgentDatabaseReadOnly(readSnapshot, databaseOptions)
     : { found: true as const, value: readSnapshot(openOpenClawAgentDatabase(databaseOptions)) };
   if (!result.found) {
     throw new SessionTranscriptStorageUnavailableError();

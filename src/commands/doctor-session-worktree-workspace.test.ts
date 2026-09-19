@@ -103,7 +103,7 @@ it("repairs discovered worktree sessions only through Doctor and releases their 
     const log = { info: vi.fn(), warn: vi.fn() };
     await runSessionStartupMigration({ cfg, env, log });
     expect(readEntries()).toEqual(before);
-    expect(log.warn).toHaveBeenCalledWith(expect.stringContaining("openclaw doctor --fix"));
+    expect(log.warn).not.toHaveBeenCalled();
 
     const targetDiscovery = vi.spyOn(sessionReaders, "listExistingAgentDatabaseTargets");
     await noteSessionTranscriptHealth({ cfg, env, shouldRepair: false });

@@ -52,6 +52,41 @@ function simulateExpensiveAccessSlices() {
 }
 
 describe("task page access snapshots", () => {
+  it("uses the persisted fixed-store owner for a bare task session filter", async () => {
+    const storePath = state.statePath("fixed-store.sqlite");
+    await upsertSessionEntryCore(
+      { agentId: "ops", storePath, sessionKey: "global" },
+      { sessionId: "session-global", updatedAt: 1 },
+    );
+    const task = createSnapshotTask({
+      taskId: "fixed-store-task",
+      requesterSessionKey: "global",
+      ownerKey: "global",
+      scopeKind: "session",
+      runId: "run-global",
+      task: "Owned task",
+      status: "running",
+      deliveryStatus: "pending",
+    });
+    seedTaskRegistryRowsForTests([task]);
+    await reloadTaskRegistryFromStoreAsync(captureOpenClawStateWorkerContext());
+    const { calls, payload } = await runTaskHandler(
+      "tasks.list",
+      { sessionKey: "global" },
+      {
+        session: { store: storePath, scope: "global" },
+        agents: {
+          ownership: "explicit",
+          list: [{ id: "ops" }, { id: "research" }],
+          defaults: { sessionStore: { agentId: "ops" } },
+        },
+      },
+    );
+
+    expect(calls[0]?.[0]).toBe(true);
+    expect(payload?.tasks?.map((entry) => entry.taskId)).toEqual([task.taskId]);
+  });
+
   it.each(["canonical", "main alias", "distinct requesters", "warm"] as const)(
     "bounds session lookup work across a yielded task page using %s keys",
     async (mode) => {

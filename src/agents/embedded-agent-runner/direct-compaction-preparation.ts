@@ -141,6 +141,7 @@ export async function prepareDirectCompactionAttempt(
   };
   const preparedModelRuntime = params.preparedModelRuntime;
   const { resolution: modelResolution } = await resolveTieredModel({
+    abortSignal: params.abortSignal,
     provider: runtimeProvider,
     modelId,
     requestedRouteResolution: params.requestedRouteResolution,
@@ -201,6 +202,7 @@ export async function prepareDirectCompactionAttempt(
     Parameters<typeof materializePreparedRuntimeModel<ProviderRuntimeModel>>[0]["resolveModel"]
   >[0]) =>
     resolveModelAsync(runtimeProvider, modelId, agentDir, config, {
+      abortSignal: params.abortSignal,
       ...modelResolutionOptions,
       modelIdSource: params.requestedRouteResolution === "resolved" ? "selected" : "input",
       skipAgentDiscovery: true,

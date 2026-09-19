@@ -83,6 +83,7 @@ export function createEmbeddedAgentSubscribeState(
     messagingToolSentMediaUrls: [],
     messagingToolSourceReplyPayloads: [],
     messageToolOnlySourceReplyDelivered: false,
+    sourceReplyDeliveryState: "missing",
     successfulCronAdds: 0,
     pendingToolMediaUrls: initialPendingToolMedia.mediaUrls,
     pendingToolMediaAttachments: initialPendingToolMedia.attachments,

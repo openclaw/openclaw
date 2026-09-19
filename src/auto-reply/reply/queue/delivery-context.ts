@@ -148,7 +148,7 @@ export function resolveFollowupDeliveryContextKey(run: FollowupRun): string {
     execution.enforceFinalTag === true,
     execution.skipProviderRuntimeHints === true,
     execution.silentExpected === true,
-    execution.allowEmptyAssistantReplyAsSilent === true,
+    run.currentInboundEventKind ?? "",
     execution.terminalReplyExpectation ?? "",
     execution.suppressNextUserMessagePersistence === true,
     execution.suppressTranscriptOnlyAssistantPersistence === true,

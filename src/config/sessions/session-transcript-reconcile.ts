@@ -687,7 +687,6 @@ export async function waitForSessionTranscriptProjection(
     const pending = withOpenClawAgentDatabaseReadOnly(
       ({ db }) => sessionTranscriptIndexNeedsReconcile(db, resolved.sessionId),
       databaseOptions,
-      { throwOnMissingTable: true },
     );
     if (!pending.found || !pending.value) {
       break;

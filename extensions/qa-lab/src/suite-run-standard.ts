@@ -130,6 +130,7 @@ export async function runQaFlowSuiteStandard(
       `provider ready: ${sanitizeQaSuiteProgressValue(activeMock?.baseUrl ?? "live")}`,
     );
     writeQaSuiteProgress(progressEnabled, "gateway start");
+    const runtimePreloads = transport.createRuntimePreloads?.();
     const activeGateway = await gateway.start({
       repoRoot,
       command: params?.sutOpenClawCommand,
@@ -162,6 +163,7 @@ export async function runQaFlowSuiteStandard(
         transport.createRuntimeEnvPatch?.(),
         buildQaGatewayHeapCheckpointRuntimeEnvPatch(),
       ),
+      ...(runtimePreloads ? { runtimePreloads } : {}),
     });
     writeQaSuiteProgress(
       progressEnabled,

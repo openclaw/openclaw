@@ -26,14 +26,14 @@ export type SessionIdentityEvidenceResult =
   | { status: "absent" }
   | {
       status: "unknown";
-      reason: "ambiguous" | "read-failed" | "row-invalid" | "schema-missing" | "table-missing";
+      reason: "ambiguous" | "read-failed" | "row-invalid" | "schema-missing";
     };
 
 type ExactSessionEntryReadOnlyResult =
   | { found: true; value: ExactSessionEntry | undefined }
   | {
       found: false;
-      reason: "database-missing" | "schema-missing" | "table-missing" | "row-invalid";
+      reason: "database-missing" | "schema-missing" | "row-invalid";
     };
 
 /** Exact persisted-key probe that preserves database and row availability. */
@@ -47,7 +47,7 @@ export function loadExactSessionEntryReadOnlyResult(
   const resolved = resolveSqliteScope(scope);
   let result:
     | { found: true; value: { entry: SessionEntry | undefined; rowExists: boolean } }
-    | { found: false; reason: "database-missing" | "schema-missing" | "table-missing" };
+    | { found: false; reason: "database-missing" | "schema-missing" };
   try {
     result = withOpenClawAgentDatabaseReadOnly((database) => {
       const entry = readExactSessionEntryRowValidated(database, sessionKey)?.entry;
@@ -240,7 +240,7 @@ export function readSessionIdentityEvidenceBatch(
   for (const group of groups.values()) {
     let read:
       | { found: true; value: SessionIdentityEvidenceResult[] }
-      | { found: false; reason: "database-missing" | "schema-missing" | "table-missing" };
+      | { found: false; reason: "database-missing" | "schema-missing" };
     try {
       read = withOpenClawAgentDatabaseReadOnly(
         (database) => readSessionIdentityEvidenceRows(database, group.items),

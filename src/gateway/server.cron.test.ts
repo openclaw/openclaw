@@ -10,6 +10,7 @@ import type WebSocket from "ws";
 import { createInfoWarnErrorLogger } from "../../test/helpers/mock-logger.js";
 import { createOperationalRunInstanceRef } from "../agents/admitted-run-context.js";
 import { resetConfigRuntimeState } from "../config/config.js";
+import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { loadCronStore, saveCronStore } from "../cron/store.js";
 import type { GuardedFetchOptions } from "../infra/net/fetch-guard.js";
 import { peekSystemEvents } from "../infra/system-events.js";
@@ -174,14 +175,7 @@ async function setupCronTestRun(params: {
   testState.sessionConfig = params.sessionConfig;
   testState.cronEnabled = params.cronEnabled;
   testState.cronTriggersEnabled = params.cronTriggersEnabled;
-  if (params.jobs) {
-    await saveCronStore(testState.cronStorePath, {
-      version: 1,
-      jobs: params.jobs as never,
-    });
-  } else {
-    await saveCronStore(testState.cronStorePath, { version: 1, jobs: [] });
-  }
+  await saveCronStore(storePath, { version: 1, jobs: (params.jobs ?? []) as never });
   return { prevSkipCron, dir };
 }
 
@@ -520,6 +514,10 @@ describe("gateway server cron", () => {
       tempPrefix: "openclaw-gw-cron-agent-turn-default-",
       cronEnabled: false,
     });
+    await upsertSessionEntryCore(
+      { agentId: "main", sessionKey: "agent:main:webchat:loop" },
+      { sessionId: "loop", updatedAt: 1 },
+    );
     const cronState = await createDirectCronState();
 
     try {

@@ -58,11 +58,12 @@ openclaw-pending-session-create {
 }
 
 @media (max-width: 560px) {
-  .chat-error:has(> .chat-error__discard) {
+  .chat-error:has(> :is(.chat-error__discard, .chat-error__refresh)) {
     grid-template-columns: 18px minmax(0, 1fr);
   }
 
-  .chat-error__discard {
+  .chat-error__discard,
+  .chat-error__refresh {
     grid-column: 2;
     justify-self: start;
     white-space: normal;
@@ -89,14 +90,22 @@ openclaw-pending-session-create {
 .chat-error__summary strong {
   flex: 1;
   min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  white-space: normal;
 }
 
 .chat-error__summary > span {
   flex: 0 0 auto;
   color: var(--muted);
+}
+
+@media (max-width: 560px) {
+  .chat-error__summary {
+    flex-wrap: wrap;
+  }
+
+  .chat-error__summary strong {
+    flex-basis: 100%;
+  }
 }
 
 .chat-error__chevron {
@@ -112,7 +121,7 @@ openclaw-pending-session-create {
   transform: rotate(180deg);
 }
 
-/* Preserve the received diagnostic as text; only its collapsed preview clips. */
+/* Preserve the received diagnostic as text beyond the bounded summary. */
 .chat-error__diagnostic {
   max-height: min(16rem, 35dvh);
   margin: 10px 0;

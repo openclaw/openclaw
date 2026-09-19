@@ -1,5 +1,5 @@
 // Exercises control-command reachability without relaxing ordinary reply admission.
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeAll, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { markCommandReplyForDelivery } from "../reply-payload.js";
@@ -55,6 +55,7 @@ describe("dispatch active command admission", () => {
       resetTriggered: false,
     });
     activeOperation.setPhase("running");
+    onTestFinished(() => activeOperation.complete());
 
     const acknowledgement = { text: "Thinking level set to high." };
     const replyResolver = vi.fn(async () => markCommandReplyForDelivery(acknowledgement));
@@ -85,19 +86,7 @@ describe("dispatch active command admission", () => {
     });
 
     try {
-      type DispatchOutcome =
-        | { status: "settled"; result: Awaited<typeof dispatchPromise> }
-        | { status: "pending" };
-      const outcome = await raceWithTimeoutResult<DispatchOutcome>(
-        dispatchPromise.then((result) => ({ status: "settled" as const, result })),
-        200,
-        { status: "pending" as const },
-      );
-
-      expect(outcome).toMatchObject({
-        status: "settled",
-        result: { queuedFinal: true },
-      });
+      await expect(dispatchPromise).resolves.toMatchObject({ queuedFinal: true });
       expect(replyResolver).toHaveBeenCalledOnce();
       expect(dispatcher.sendFinalReply).toHaveBeenCalledWith(acknowledgement);
       expect(replyRunRegistry.get(sessionKey)).toBe(activeOperation);
@@ -261,6 +250,7 @@ describe("dispatch active command admission", () => {
     activeOperation.setPhase("running");
 
     const acknowledgement = { text: "Thinking level set to high.", isStatusNotice: true };
+    const finalReply = { text: "The calculation is complete." };
     const dispatcher = createDispatcher();
     const dispatchPromise = dispatchReplyFromConfig({
       ctx: buildTestCtx({
@@ -286,7 +276,7 @@ describe("dispatch active command admission", () => {
       dispatcher,
       replyResolver: async (_resolverCtx, options) => {
         await options?.onBlockReply?.(acknowledgement);
-        return undefined;
+        return finalReply;
       },
     });
 
@@ -306,7 +296,8 @@ describe("dispatch active command admission", () => {
     } finally {
       activeOperation.complete();
     }
-    await expect(dispatchPromise).resolves.toMatchObject({ queuedFinal: false });
+    await expect(dispatchPromise).resolves.toMatchObject({ queuedFinal: true });
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledExactlyOnceWith(finalReply);
     expect(getActiveReplyRunCount()).toBe(0);
   });
 

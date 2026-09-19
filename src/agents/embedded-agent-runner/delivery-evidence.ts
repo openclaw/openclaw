@@ -5,6 +5,7 @@ import {
 import { hasNonEmptyString } from "@openclaw/normalization-core/string-coerce";
 import { normalizeMediaReferenceForComparison } from "../../media/media-reference-comparison.js";
 import { hasAnyNonEmptyString as hasNonEmptyStringArray } from "../delivery-evidence-values.js";
+import type { ReplyDeliveryState } from "../reply-completion.js";
 import { collectMediaUrlsFromRecord, hasVisibleAgentPayload } from "./message-visibility.js";
 export { hasExplicitlyVisibleAgentPayload, hasVisibleAgentPayload } from "./message-visibility.js";
 
@@ -47,6 +48,8 @@ export type AgentDeliveryEvidence = {
 };
 
 type SourceReplyDeliveryEvidence = {
+  sourceReplyDelivered?: unknown;
+  sourceReplyDeliveryState?: ReplyDeliveryState;
   didDeliverSourceReplyViaMessageTool?: unknown;
   messagingToolSourceReplyPayloads?: unknown;
 };
@@ -81,10 +84,23 @@ export function resolveExplicitFinalSourceReplyDeliveryEvidence(
 export function hasCompletedSourceReplyDeliveryEvidence(
   result: SourceReplyDeliveryEvidence & ExplicitFinalSourceReplyEvidence,
 ): boolean {
-  return (
-    resolveExplicitFinalSourceReplyDeliveryEvidence(result) ??
-    hasCommittedSourceReplyDeliveryEvidence(result)
-  );
+  return resolveSourceReplyDelivery(result) === "delivered";
+}
+
+/** Only a final reply to this input's source can satisfy its reply requirement. */
+export function resolveSourceReplyDelivery(
+  result: SourceReplyDeliveryEvidence & ExplicitFinalSourceReplyEvidence,
+  observedDelivery: ReplyDeliveryState = "missing",
+): ReplyDeliveryState {
+  if (result.sourceReplyDeliveryState !== undefined) {
+    return result.sourceReplyDeliveryState === "missing" || observedDelivery === "delivered"
+      ? observedDelivery
+      : result.sourceReplyDeliveryState;
+  }
+  return (resolveExplicitFinalSourceReplyDeliveryEvidence(result) ??
+    (result.sourceReplyDelivered === true || hasCommittedSourceReplyDeliveryEvidence(result)))
+    ? "delivered"
+    : observedDelivery;
 }
 
 /** Returns whether messaging-tool evidence completes the current source reply. */
@@ -94,18 +110,6 @@ export function hasCompletedMessagingToolDeliveryEvidence(
   return (
     resolveExplicitFinalSourceReplyDeliveryEvidence(result) ??
     hasMessagingToolDeliveryEvidence(result)
-  );
-}
-
-/** Returns whether delivery evidence completes the current interactive turn. */
-export function hasCompletedTerminalDeliveryEvidence(
-  result: AgentDeliveryEvidence & SourceReplyDeliveryEvidence & ExplicitFinalSourceReplyEvidence,
-): boolean {
-  const explicitFinal = resolveExplicitFinalSourceReplyDeliveryEvidence(result);
-  return (
-    hasCompletedSourceReplyDeliveryEvidence(result) ||
-    (explicitFinal === undefined && hasVisibleOutboundDeliveryEvidence(result)) ||
-    result.didSendDeterministicApprovalPrompt === true
   );
 }
 

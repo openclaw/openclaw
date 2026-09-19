@@ -33,7 +33,8 @@ export function createThemeCatalog(gateway: ApplicationGateway, onChange: () => 
   let ownerConnected = gateway.snapshot.phase === "connected";
   let generation = 0;
   let disposed = false;
-  const definitions = new Map<string, CatalogTheme>();
+  const definitions = new Map<string, { generation: number; theme: CatalogTheme }>();
+  const definitionErrors = new Map<string, string>();
   const requested = new Set<string>();
 
   const remainsCurrent = (request: number) =>
@@ -48,11 +49,15 @@ export function createThemeCatalog(gateway: ApplicationGateway, onChange: () => 
     const light = definition?.light ?? definition?.dark;
     const dark = definition?.dark ?? definition?.light;
     if (definition && light && dark) {
+      definitionErrors.delete(result.theme.id);
       definitions.set(result.theme.id, {
-        mode: !definition.light ? "dark" : !definition.dark ? "light" : undefined,
-        palette: {
-          light: normalizeThemePalette("light", light, undefined),
-          dark: normalizeThemePalette("dark", dark, undefined),
+        generation,
+        theme: {
+          mode: !definition.light ? "dark" : !definition.dark ? "light" : undefined,
+          palette: {
+            light: normalizeThemePalette("light", light, undefined),
+            dark: normalizeThemePalette("dark", dark, undefined),
+          },
         },
       });
     }
@@ -67,12 +72,23 @@ export function createThemeCatalog(gateway: ApplicationGateway, onChange: () => 
     ownerProfile = gateway.snapshot.selfUser?.id;
     const request = ++generation;
     requested.clear();
+    definitionErrors.clear();
     try {
       const result = await client.request<ThemesListResult>("themes.list", {});
       if (!remainsCurrent(request)) {
         return;
       }
-      definitions.clear();
+      const available = new Set<string>(result.themes.map((theme) => theme.id));
+      for (const id of definitions.keys()) {
+        if (!available.has(id)) {
+          definitions.delete(id);
+        }
+      }
+      for (const id of definitionErrors.keys()) {
+        if (!available.has(id)) {
+          definitionErrors.delete(id);
+        }
+      }
       rememberDefinition(result);
       snapshot = { themes: result.themes, error: null, unavailableId: result.current.requestedId };
       onChange();
@@ -89,7 +105,7 @@ export function createThemeCatalog(gateway: ApplicationGateway, onChange: () => 
     if (
       id === "custom" ||
       isBuiltinThemeId(id) ||
-      definitions.has(id) ||
+      definitions.get(id)?.generation === generation ||
       requested.has(id) ||
       !snapshot.themes.some((theme) => theme.id === id) ||
       gateway.snapshot.phase !== "connected" ||
@@ -99,20 +115,19 @@ export function createThemeCatalog(gateway: ApplicationGateway, onChange: () => 
     }
     requested.add(id);
     const request = generation;
+    const remainsAvailable = () =>
+      remainsCurrent(request) && snapshot.themes.some((theme) => theme.id === id);
     void client.request<ThemesGetResult>("themes.get", { id }).then(
       (result) => {
-        if (!remainsCurrent(request)) {
+        if (!remainsAvailable()) {
           return;
         }
         rememberDefinition(result);
         onChange();
       },
       (error: unknown) => {
-        if (remainsCurrent(request)) {
-          snapshot = {
-            ...snapshot,
-            error: error instanceof Error ? error.message : String(error),
-          };
+        if (remainsAvailable()) {
+          definitionErrors.set(id, error instanceof Error ? error.message : String(error));
           onChange();
         }
       },
@@ -121,6 +136,7 @@ export function createThemeCatalog(gateway: ApplicationGateway, onChange: () => 
 
   const clear = () => {
     definitions.clear();
+    definitionErrors.clear();
     requested.clear();
     snapshot = { themes: [], error: null };
     onChange();
@@ -177,12 +193,13 @@ export function createThemeCatalog(gateway: ApplicationGateway, onChange: () => 
   }
 
   return {
-    get snapshot() {
-      return snapshot;
+    snapshot(theme: ThemeName): ThemeCatalogSnapshot {
+      const error = snapshot.error ?? definitionErrors.get(theme) ?? null;
+      return error === snapshot.error ? snapshot : { ...snapshot, error };
     },
     theme(id: ThemeName) {
       ensureDefinition(id);
-      return definitions.get(id);
+      return definitions.get(id)?.theme;
     },
     refresh,
     dispose() {
@@ -191,6 +208,7 @@ export function createThemeCatalog(gateway: ApplicationGateway, onChange: () => 
       stopGateway();
       stopEvents();
       definitions.clear();
+      definitionErrors.clear();
     },
   };
 }

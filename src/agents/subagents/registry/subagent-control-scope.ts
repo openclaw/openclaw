@@ -1,6 +1,7 @@
 /** Controller identity, authorization, and controlled-run read scope. */
 import type { TaskSummary } from "../../../../packages/gateway-protocol/src/schema/tasks.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import { isSystemEventStoreCurrent } from "../../../infra/system-event-ownership.js";
 import {
   isSubagentSessionKey,
   normalizeAgentId,
@@ -186,13 +187,22 @@ export function ensureSubagentControllerOwnsRun(params: {
   controller: Pick<ResolvedSubagentController, "controllerSessionKey" | "controllerAgentId">;
   entry: SubagentRunRecord;
 }) {
-  const owner = params.entry.controllerSessionKey?.trim() || params.entry.requesterSessionKey;
+  const controllerKey = params.entry.controllerSessionKey?.trim();
+  const owner = controllerKey || params.entry.requesterSessionKey;
+  const ownerStorePath = controllerKey
+    ? params.entry.controllerStorePath
+    : params.entry.requesterStorePath;
   const ownerAgentId =
     parseAgentSessionKey(owner)?.agentId ?? resolveRunRequesterAgentId(params.entry, params.cfg);
   const controllerAgentId =
     params.controller.controllerAgentId ??
     parseAgentSessionKey(params.controller.controllerSessionKey)?.agentId;
-  if (owner === params.controller.controllerSessionKey && ownerAgentId === controllerAgentId) {
+  if (
+    owner === params.controller.controllerSessionKey &&
+    ownerAgentId === controllerAgentId &&
+    // Retained v2026.9.5 tasks lack store provenance; preserve their control until retirement.
+    (ownerStorePath === undefined || isSystemEventStoreCurrent(owner, ownerStorePath, ownerAgentId))
+  ) {
     return undefined;
   }
   return "Subagents can only control runs spawned from their own session.";

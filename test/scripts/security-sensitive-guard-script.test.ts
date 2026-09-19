@@ -317,9 +317,9 @@ describe("security-sensitive guard entry point", () => {
     },
   ])("requires a fresh command for $name", ({ options }) => {
     const result = runGuard(options);
-    expect(result.status).toBe(1);
+    expect(result.status, result.stderr).toBe(0);
     expect(result.statuses).toEqual(["failure", "failure"]);
-    expect(result.stderr).toContain("A maintainer must approve");
+    expect(result.comment).toContain("/allow-security-sensitive-change");
     expect(
       result.requests.some((request) => request.body?.labels?.includes("security-review-required")),
     ).toBe(true);
@@ -392,6 +392,7 @@ describe("security-sensitive guard entry point", () => {
       comments: [approvedNotice],
       event: { ...commentEvent, action: "deleted" },
     });
+    expect(revoked.status, revoked.stderr).toBe(0);
     expect(revoked.statuses).toEqual(["failure", "failure"]);
   });
 
@@ -497,7 +498,7 @@ describe("security-sensitive guard entry point", () => {
             },
           },
         });
-        expect(result.status).toBe(1);
+        expect(result.status, result.stderr).toBe(0);
         expect(result.statuses.at(-1)).toBe("failure");
         expect(result.comment).toContain("/allow-");
       });

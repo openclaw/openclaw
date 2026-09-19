@@ -4,6 +4,7 @@ import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { createSelectedAuthProfileUnavailableError } from "../../agents/auth-profiles/selection-error.js";
 import { renderFailoverCodeUserCopy } from "../../agents/failover/user-copy.js";
+import { DispatchSessionRefreshRequiredError } from "../../auto-reply/reply/dispatch-session-refresh-error.js";
 import { retainLegacyDefaultAgentId } from "../../config/legacy.default-agent-owner.js";
 import {
   appendTranscriptMessage,
@@ -82,9 +83,11 @@ describe("createChatSendDispatchErrorLifecycle", () => {
     { settlement: "restart-safe", missingProfile: false },
     { settlement: "fallback", missingProfile: true },
     { settlement: "restart-safe", missingProfile: true },
+    { settlement: "fallback", missingProfile: false, sessionChanged: true },
+    { settlement: "restart-safe", missingProfile: false, sessionChanged: true },
   ])(
-    "records the rejected input and bounded error through $settlement settlement (missing profile: $missingProfile)",
-    async ({ settlement, missingProfile }) => {
+    "records the rejected input and bounded error through $settlement settlement (missing profile: $missingProfile, session changed: $sessionChanged)",
+    async ({ settlement, missingProfile, sessionChanged }) => {
       await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
         const target = {
           agentId: "main",
@@ -185,13 +188,17 @@ describe("createChatSendDispatchErrorLifecycle", () => {
           userTurnRecorder: { hasPersisted: () => userPersisted, isBlocked: () => false },
         });
 
-        const failure = missingProfile
-          ? createSelectedAuthProfileUnavailableError({
-              profileId: "openai:removed",
-              provider: "openai",
-              modelId: "fixture-model",
-            })
-          : new Error("Cloud worker unavailable");
+        const failure = sessionChanged
+          ? new DispatchSessionRefreshRequiredError(
+              new Error(`Session "${target.sessionKey}" changed while starting work. Retry.`),
+            )
+          : missingProfile
+            ? createSelectedAuthProfileUnavailableError({
+                profileId: "openai:removed",
+                provider: "openai",
+                modelId: "fixture-model",
+              })
+            : new Error("Cloud worker unavailable");
         await lifecycle.handleError(failure);
         expect(previewGroup?.signal.aborted).toBe(false);
         await lifecycle.finalize();
@@ -231,6 +238,17 @@ describe("createChatSendDispatchErrorLifecycle", () => {
             expect.objectContaining({ errorMessage: recovery }),
             expect.anything(),
           );
+        }
+        if (sessionChanged) {
+          const recovery =
+            "Your message didn't run because the conversation changed. Refresh the conversation, then send it again.";
+          expect(broadcast).toHaveBeenLastCalledWith(
+            "chat",
+            expect.objectContaining({ errorMessage: `${recovery}\n\n${String(failure)}` }),
+            expect.anything(),
+          );
+          expect(loadSessionEntry(target)?.lastRunError).toMatch(/^Your message didn't run/);
+          expect(JSON.stringify(messages)).toContain(recovery);
         }
         if (restartSafe) {
           expect(loadSessionEntry(target)?.restartRecoveryDeliveryRunId).toBe(runId);

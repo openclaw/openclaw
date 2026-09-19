@@ -362,7 +362,7 @@ export type {
   SkillStatusEntry,
   SkillStatusReport,
 } from "../../../src/skills/discovery/status.types.js";
-export type { ClawHubSkillStatusLink as SkillClawHubLink } from "../../../src/skills/lifecycle/clawhub-status.js";
+export type { ClawHubSkillStatusLink as SkillClawHubLink } from "../../../src/skills/lifecycle/workspace-types.js";
 
 export type StatusSummary = Record<string, unknown>;
 

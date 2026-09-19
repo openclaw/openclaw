@@ -9,6 +9,7 @@ import { isRecord as isObjectRecord } from "@openclaw/normalization-core/record-
 import { runCommandWithTimeout } from "../process/exec.js";
 import { hasErrnoCode } from "./errno.js";
 import { FsSafeError, pathExists } from "./fs-safe.js";
+import { resolveInstallWorkTimeoutMs } from "./install-mode-options.js";
 import { assertCanonicalPathWithinBase } from "./install-safe-path.js";
 import { formatNpmCommandFailureOutput } from "./install-source-utils.js";
 import { tryReadJson, writeJson } from "./json-files.js";
@@ -262,6 +263,7 @@ export async function installPackageDir<
   targetDir: string;
   mode: "install" | "update";
   timeoutMs: number;
+  workTimeoutMs?: number | null;
   logger?: { info?: (message: string) => void; warn?: (message: string) => void };
   copyErrorPrefix: string;
   hasDeps: boolean;
@@ -503,7 +505,10 @@ export async function installPackageDir<
                 }),
               ],
               {
-                timeoutMs: Math.max(params.timeoutMs, 300_000),
+                timeoutMs: resolveInstallWorkTimeoutMs(
+                  params.workTimeoutMs,
+                  Math.max(params.timeoutMs, 300_000),
+                ),
                 cwd: stageDir,
                 env: createSafeNpmInstallEnv(process.env, {
                   npmConfigCwd: stageDir,

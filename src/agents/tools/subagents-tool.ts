@@ -205,9 +205,6 @@ function mapTask(task: TaskRecord) {
     runtime: task.runtime,
     deliveryStatus: task.deliveryStatus,
     ...(execution ? { execution } : {}),
-    ...(execution.wait?.kind === "external" && task.childSessionKey
-      ? { resume: { method: "sessions.send", sessionKey: task.childSessionKey } }
-      : {}),
     status:
       task.status === "succeeded" && task.terminalOutcome === "blocked"
         ? "blocked"

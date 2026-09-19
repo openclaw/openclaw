@@ -45,12 +45,20 @@ describe("explicit final source-reply delivery evidence", () => {
     ).toBeUndefined();
   });
 
-  it("preserves legacy completion evidence when no marker is present", () => {
+  it.each([
+    { name: "legacy", final: undefined, state: undefined, delivered: true },
+    { name: "explicit progress", final: false, state: undefined, delivered: false },
+    { name: "explicit final", final: true, state: undefined, delivered: true },
+    { name: "earlier input", final: true, state: "missing", delivered: false },
+  ] as const)("honors $name evidence over coarse send flags", ({ final, state, delivered }) => {
     expect(
       hasCompletedSourceReplyDeliveryEvidence({
+        sourceReplyDelivered: true,
         didDeliverSourceReplyViaMessageTool: true,
+        sourceReplyDeliveryState: state,
+        messagingToolSentTargets: final === undefined ? [] : [{ sourceReplyFinal: final }],
       }),
-    ).toBe(true);
+    ).toBe(delivered);
   });
 });
 

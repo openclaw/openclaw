@@ -22,7 +22,11 @@ export type WorkspaceSandboxParams = Pick<
   | "requireWritableSandbox"
   | "requireWorkspaceOnly"
   | "workspaceDir"
-> & { admittedRunContext?: EmbeddedRunAttemptParams["admittedRunContext"] };
+> & {
+  admittedRunContext?: EmbeddedRunAttemptParams["admittedRunContext"];
+  /** Placement execution policy never supplies Gateway-side filesystem or media roots. */
+  placementSandbox?: Awaited<ReturnType<typeof resolveSandboxContext>>;
+};
 
 function assertSandboxCwd(requestedCwd: string | undefined, workspaceDir: string) {
   if (requestedCwd && requestedCwd !== workspaceDir) {
@@ -72,24 +76,31 @@ export async function resolveAttemptWorkspaceSandbox(params: WorkspaceSandboxPar
   await fs.mkdir(resolvedWorkspace, { recursive: true });
   const sessionKey = params.sessionKey?.trim() || params.sessionId;
   const sandboxSessionKey = params.sandboxSessionKey?.trim() || sessionKey;
-  const sandbox = await resolveSandboxContext({
-    config: params.config,
-    // Independent policy sessions keep their own owner; unscoped execution retains its prepared one.
-    agentId:
-      params.sandboxAgentId ?? (sandboxSessionKey === sessionKey ? sessionAgentId : undefined),
-    execOverrides: params.execOverrides,
-    sessionKey: sandboxSessionKey,
-    skillsSnapshot: params.skillsSnapshot,
-    workspaceDir: resolvedWorkspace,
-    assertCurrent,
-  });
+  const sandbox = params.placementSandbox
+    ? null
+    : await resolveSandboxContext({
+        config: params.config,
+        // Independent policy sessions keep their own owner; unscoped execution retains its prepared one.
+        agentId:
+          params.sandboxAgentId ?? (sandboxSessionKey === sessionKey ? sessionAgentId : undefined),
+        execOverrides: params.execOverrides,
+        sessionKey: sandboxSessionKey,
+        skillsSnapshot: params.skillsSnapshot,
+        workspaceDir: resolvedWorkspace,
+        assertCurrent,
+      });
   assertCurrent?.();
   const projectedWorkspace = sandbox?.enabled && sandbox.workspaceSource === "managed-worktree";
   const effectiveWorkspace =
     sandbox?.enabled && (sandbox.workspaceAccess !== "rw" || projectedWorkspace)
       ? (sandbox.workspaceCwd ?? sandbox.workspaceDir)
       : resolvedWorkspace;
-  if (params.requireWritableSandbox && sandbox?.enabled && sandbox.workspaceAccess !== "rw") {
+  const executionSandbox = params.placementSandbox ?? sandbox;
+  if (
+    params.requireWritableSandbox &&
+    executionSandbox?.enabled &&
+    executionSandbox.workspaceAccess !== "rw"
+  ) {
     throw new Error("sandbox workspace is not read-write; collection review skipped");
   }
   const requestedCwd = params.cwd ? resolveUserPath(params.cwd) : undefined;

@@ -1,6 +1,6 @@
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { Insertable, Selectable } from "kysely";
-import type { EmbeddedRunTrigger } from "../agents/embedded-agent-runner/run/params.js";
+import type { EmbeddedRunTrigger } from "../agents/run-trigger.js";
 import type { HeartbeatToolResponse } from "../auto-reply/heartbeat-tool-response.js";
 import {
   captureLifecycleDatabaseScope,

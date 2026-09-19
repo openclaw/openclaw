@@ -605,6 +605,7 @@ export async function runPreparedEmbeddedLoop(
         finalAssistantVisibleText,
         finalAssistantRawText,
         payloadsWithToolMedia,
+        replyDeliveryState,
         recoveredFinalAssistantPayloadsAfterPromptTimeout,
         attemptToolSummary,
         failureSignal,
@@ -638,6 +639,7 @@ export async function runPreparedEmbeddedLoop(
         executionContract,
         terminalState: resolvedTerminalState,
         payloadsWithToolMedia,
+        replyDeliveryState,
         recoveredFinalAssistantPayloadsAfterPromptTimeout,
         finalAssistantVisibleText,
         finalAssistantRawText,
@@ -651,6 +653,7 @@ export async function runPreparedEmbeddedLoop(
         replayState: accumulatedReplayState,
         activePromptPersisted: sessionPromptState.activePrompt.persisted,
         activateInternalPrompt: sessionPromptState.activateInternalPrompt,
+        markOwnedTranscriptRetry: sessionPromptState.markOwnedTranscriptRetry,
         activateCompactionContinuation: sessionPromptState.activateCompactionContinuation,
         clearCompactionContinuation: sessionPromptState.clearCompactionContinuation,
         setSuppressNextUserMessagePersistence: (value) => {

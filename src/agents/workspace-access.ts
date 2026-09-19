@@ -1,4 +1,8 @@
 import path from "node:path";
+import {
+  collectErrorGraphCandidates,
+  extractErrorCode,
+} from "@openclaw/normalization-core/error-coercion";
 import type { SandboxFsBridge } from "./sandbox/fs-bridge.types.js";
 
 /** Host-owned workspace files; callers keep their existing allowlists. */
@@ -10,6 +14,25 @@ export type AgentWorkspaceAccess = {
 };
 
 const bindings = new Map<string, { access?: AgentWorkspaceAccess; active: boolean }>();
+
+const WORKSPACE_ACCESS_UNAVAILABLE_CODE = "WORKSPACE_ACCESS_UNAVAILABLE";
+
+/** The configured workspace host cannot currently provide the requested data. */
+export class WorkspaceAccessUnavailableError extends Error {
+  readonly code = WORKSPACE_ACCESS_UNAVAILABLE_CODE;
+
+  constructor(message: string, options?: ErrorOptions) {
+    super(message, options);
+    this.name = "WorkspaceAccessUnavailableError";
+  }
+}
+
+/** Match wrapped errors and separate SDK module instances without parsing messages. */
+export function isWorkspaceAccessUnavailableError(error: unknown): boolean {
+  return collectErrorGraphCandidates(error, (current) => [current.cause]).some(
+    (candidate) => extractErrorCode(candidate) === WORKSPACE_ACCESS_UNAVAILABLE_CODE,
+  );
+}
 
 /** Declare ownership during plugin registration so startup cannot fall back to a local copy. */
 export function declareAgentWorkspaceAccess(workspaceDir: string): void {
@@ -34,7 +57,7 @@ export function registerAgentWorkspaceAccess(
   const binding: { access?: AgentWorkspaceAccess; active: boolean } = { active: true };
   const assertCurrent = () => {
     if (!binding.active || bindings.get(key) !== binding) {
-      throw new Error("Workspace access is stopped or not ready");
+      throw new WorkspaceAccessUnavailableError("Workspace access is stopped or not ready");
     }
   };
   // Retained methods must stop working when their service stops or is replaced.
@@ -87,7 +110,7 @@ export function registerAgentWorkspaceAccess(
 export function getAgentWorkspaceAccess(workspaceDir: string): AgentWorkspaceAccess | undefined {
   const binding = bindings.get(path.resolve(workspaceDir));
   if (binding && !binding.active) {
-    throw new Error("Workspace access is stopped or not ready");
+    throw new WorkspaceAccessUnavailableError("Workspace access is stopped or not ready");
   }
   return binding?.access;
 }

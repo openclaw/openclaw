@@ -166,6 +166,7 @@ export function buildLegacyStateMigrationPreludeSteps(params: {
     target,
     requiredness,
     reversibility: "checkpoint-required",
+    collectNotices: id === "profile-workspace",
     ...(refusal ? { refusal } : {}),
     run,
   });
@@ -196,11 +197,12 @@ export function buildLegacyStateMigrationPreludeSteps(params: {
   if (params.mode !== "doctor") {
     return steps;
   }
+  const profileParams = { config: params.config, env: params.env, homedir: params.homedir };
   const profileWorkspace = (
     params.readOnlyPlanning
       ? resolveLegacyProfileWorkspaceMigrationPaths
       : resolvePendingLegacyProfileWorkspaceMigrationPaths
-  )({ env: params.env, homedir: params.homedir });
+  )(profileParams);
   const profileRefusal =
     profileWorkspace && params.readOnlyPlanning
       ? {
@@ -214,7 +216,7 @@ export function buildLegacyStateMigrationPreludeSteps(params: {
       "profile-workspace",
       profileWorkspace ? [{ kind: "path", path: profileWorkspace.source }] : [],
       profileWorkspace ? [{ kind: "path", path: profileWorkspace.target }] : [],
-      () => migrateLegacyProfileWorkspace({ env: params.env, homedir: params.homedir }),
+      () => migrateLegacyProfileWorkspace(profileParams),
       profileRefusal,
       profileWorkspace ? "conditional" : "not-required",
     ),

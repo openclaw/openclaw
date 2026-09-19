@@ -10,6 +10,10 @@ import { sha256HexPrefixCore } from "../infra/crypto-digest.js";
 import { pathExists } from "../infra/fs-safe.js";
 import { acquireGitSource } from "../infra/git-source.js";
 import {
+  resolveInstallWorkTimeoutMs,
+  resolveTimedInstallModeOptions,
+} from "../infra/install-mode-options.js";
+import {
   installPackageDir,
   requestDeferredPackageDirInstall,
   resolvePackageDirInstallTransaction,
@@ -365,6 +369,7 @@ export async function installPluginFromGitSpec(
     extensionsDir?: string;
     gitDir?: string;
     timeoutMs?: number;
+    workTimeoutMs?: number | null;
     logger?: PluginInstallLogger;
     mode?: "install" | "update";
     dryRun?: boolean;
@@ -381,6 +386,7 @@ export async function installPluginFromGitSpec(
     };
   }
 
+  const { workTimeoutMs } = resolveTimedInstallModeOptions(params, {});
   const persistentRepoDir = resolveGitInstallRepoDir({ gitDir: params.gitDir, source: parsed });
   const effectiveMode =
     params.mode === "update" && (await pathExists(persistentRepoDir)) ? "update" : "install";
@@ -403,6 +409,7 @@ export async function installPluginFromGitSpec(
       repoDir,
       refMode: "resolve-remote",
       timeoutMs: params.timeoutMs,
+      workTimeoutMs,
       commandEnv: () => ({ env: createGitCommandEnv() }),
     });
     if (!acquired.ok) {
@@ -458,7 +465,10 @@ export async function installPluginFromGitSpec(
         ],
         {
           cwd: repoDir,
-          timeoutMs: Math.max(params.timeoutMs ?? DEFAULT_GIT_TIMEOUT_MS, 300_000),
+          timeoutMs: resolveInstallWorkTimeoutMs(
+            workTimeoutMs,
+            Math.max(params.timeoutMs ?? DEFAULT_GIT_TIMEOUT_MS, 300_000),
+          ),
           env: createSafeNpmInstallEnv(process.env, {
             npmConfigCwd: repoDir,
             packageLock: true,

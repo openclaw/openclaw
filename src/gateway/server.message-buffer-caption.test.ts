@@ -55,6 +55,7 @@ it(
       expected: "attachment" | "suppressed" | "error" | "text";
       error?: RegExp;
       bytes?: Buffer;
+      finalText?: string;
     };
     const cases: [Scenario, ...Scenario[]] = [
       {
@@ -75,6 +76,7 @@ it(
         caption: captionCases[1].caption,
         buffer,
         expected: "suppressed" as const,
+        finalText: "No attachment was provided, so nothing was sent.",
       })),
       { name: "text-only", caption: "Attached proof.", expected: "text" },
       {
@@ -83,6 +85,7 @@ it(
         buffer: "%%%",
         expected: "error",
         error: /invalid base64 data/,
+        finalText: "The attachment data is invalid, so it was not sent.",
       },
       {
         name: "oversized",
@@ -90,6 +93,7 @@ it(
         buffer: Buffer.alloc(2048).toString("base64"),
         expected: "error",
         error: /Media too large/,
+        finalText: "The attachment exceeds the size limit, so it was not sent.",
       },
       {
         name: "explicit",
@@ -105,6 +109,7 @@ it(
         media: deniedMedia,
         expected: "error",
         error: /allowed directory|could not be staged/,
+        finalText: "The attachment could not be accessed, so it was not sent.",
       },
     ];
     const configPath = path.join(state, "openclaw.json");
@@ -191,7 +196,7 @@ it(
           ]);
         } else {
           writeOpenAiResponsesText(response, {
-            text: "NO_REPLY",
+            text: selected.finalText ?? "NO_REPLY",
             messageId: `msg_${selected.name}`,
             responseId: `final_${selected.name}`,
           });
@@ -285,6 +290,9 @@ it(
           .map((block) => block.text);
         const expectedText =
           scenario.name === "ordinary" || scenario.expected === "text" ? [scenario.caption] : [];
+        if (scenario.finalText) {
+          expectedText.push(scenario.finalText);
+        }
         expect.soft(visibleText, scenario.name).toEqual(expectedText);
         const toolResults = history.messages.filter((message) => message.role === "toolResult");
         expect.soft(toolResults, scenario.name).toHaveLength(1);

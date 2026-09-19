@@ -189,7 +189,7 @@ export function createApplicationTheme(
         catalogRequested = true;
         void loadCatalog();
       }
-      return catalog?.snapshot ?? catalogLoadError;
+      return catalog?.snapshot(settings.theme) ?? catalogLoadError;
     },
     get settings() {
       return settings;

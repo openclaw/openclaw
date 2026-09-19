@@ -19,13 +19,19 @@ import {
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { z } from "zod";
 import { isJsonObject, type JsonObject, type JsonValue } from "./protocol.js";
+import {
+  formatCalendarResetTime,
+  formatRelativeDuration,
+  formatResetDuration,
+} from "./rate-limit-time.js";
 
 const CODEX_LIMIT_ID = "codex";
+// Codex exposes Reserve as a distinct backend-authorized route, not ordinary Luna usage.
+const CODEX_RESERVE_ROUTE = "gpt-reserve";
+const CODEX_RESERVE_USAGE_NOTICE =
+  "Luna Reserve is a separate, backend-authorized route. Ordinary Luna does not use this reserve, even with Fast off. An unused reserve does not establish eligibility or per-request billing. Ordinary usage may consume credits after included limits are reached.";
 const LIMIT_WINDOW_KEYS = ["primary", "secondary"] as const;
-const ONE_SECOND_MS = 1000;
-const ONE_MINUTE_MS = 60_000;
-const ONE_HOUR_MS = 60 * ONE_MINUTE_MS;
-const ONE_DAY_MS = 24 * ONE_HOUR_MS;
+const ONE_DAY_MS = 24 * 60 * 60_000;
 const DAY_WINDOW_MINUTES = 24 * 60;
 const WEEKLY_WINDOW_MINUTES = 7 * DAY_WINDOW_MINUTES;
 const WEEKLY_RESET_GAP_MS = 3 * ONE_DAY_MS;
@@ -197,7 +203,10 @@ export function summarizeCodexRateLimits(
     .slice(0, 4)
     .map((snapshot) => summarizeRateLimitSnapshot(snapshot, nowMs))
     .filter((summary): summary is string => summary !== undefined);
-  return summaries.length > 0 ? summaries.join("; ") : undefined;
+  if (summaries.length === 0) {
+    return undefined;
+  }
+  return [summaries.join("; "), reserveUsageNotice(snapshots)].filter(Boolean).join(". ");
 }
 
 /** Returns true when a value contains any recognizable Codex rate-limit snapshots. */
@@ -289,7 +298,9 @@ export function buildCodexAppServerUsageSnapshot(
   const windows = entries
     .map((entry) => readProviderUsageWindow(entry, entries))
     .filter((window): window is UsageWindow => Boolean(window));
+  const summary = reserveUsageNotice(snapshots);
   const result: ProviderUsageSnapshot = {
+    ...(summary ? { summary } : {}),
     provider: "openai",
     displayName: PROVIDER_LABELS.openai,
     windows,
@@ -489,7 +500,18 @@ function formatRateLimitWindowDetails(window: RateLimitReset, nowMs: number): st
   return `${remainingPercent}${reset}`;
 }
 
+function reserveUsageNotice(snapshots: RateLimitSnapshot[]): string | undefined {
+  return snapshots.some(isReserveSnapshot) ? CODEX_RESERVE_USAGE_NOTICE : undefined;
+}
+
+function isReserveSnapshot(snapshot: RateLimitSnapshot): boolean {
+  return snapshot.limitName === CODEX_RESERVE_ROUTE || snapshot.limitId === CODEX_RESERVE_ROUTE;
+}
+
 function formatLimitLabel(snapshot: RateLimitSnapshot): string {
+  if (isReserveSnapshot(snapshot)) {
+    return "Luna Reserve (separate route)";
+  }
   const label = snapshot.limitName ?? snapshot.limitId;
   if (!label || label === CODEX_LIMIT_ID) {
     return "Codex";
@@ -718,65 +740,6 @@ function hasWeeklySecondaryResetCadence(
   );
 }
 
-function formatCalendarResetTime(resetsAtMs: number, nowMs: number): string {
-  const resetDate = new Date(resetsAtMs);
-  const resetParts = new Intl.DateTimeFormat("en-US", {
-    month: "short",
-    day: "numeric",
-    ...(resetDate.getFullYear() === new Date(nowMs).getFullYear() ? {} : { year: "numeric" }),
-    hour: "numeric",
-    minute: "2-digit",
-    timeZoneName: "short",
-  }).formatToParts(resetDate);
-  const part = (type: Intl.DateTimeFormatPartTypes): string | undefined =>
-    resetParts.find((entry) => entry.type === type)?.value;
-  const dateParts = [part("month"), part("day"), part("year")].filter(Boolean);
-  const day =
-    dateParts.length > 1 ? `${dateParts[0]} ${dateParts.slice(1).join(", ")}` : dateParts[0];
-  const time = [part("hour"), part("minute")].filter(Boolean).join(":");
-  const dayPeriod = part("dayPeriod");
-  const timeZone = part("timeZoneName");
-  return [day, "at", [time, dayPeriod, timeZone].filter(Boolean).join(" ")]
-    .filter(Boolean)
-    .join(" ");
-}
-
-function formatRelativeDuration(durationMs: number): string {
-  const safeMs = Math.max(1_000, durationMs);
-  if (safeMs < ONE_MINUTE_MS) {
-    return `${Math.ceil(safeMs / 1000)} seconds`;
-  }
-  if (safeMs < ONE_HOUR_MS) {
-    const minutes = Math.ceil(safeMs / ONE_MINUTE_MS);
-    return `${minutes} ${minutes === 1 ? "minute" : "minutes"}`;
-  }
-  if (safeMs < ONE_DAY_MS) {
-    const hours = Math.ceil(safeMs / ONE_HOUR_MS);
-    return `${hours} ${hours === 1 ? "hour" : "hours"}`;
-  }
-  const days = Math.ceil(safeMs / ONE_DAY_MS);
-  return `${days} ${days === 1 ? "day" : "days"}`;
-}
-
-function formatResetDuration(resetsAtMs: number, nowMs: number): string {
-  const durationMs =
-    Math.round(Math.max(ONE_SECOND_MS, resetsAtMs - nowMs) / ONE_SECOND_MS) * ONE_SECOND_MS;
-  const days = Math.floor(durationMs / ONE_DAY_MS);
-  const hours = Math.floor((durationMs % ONE_DAY_MS) / ONE_HOUR_MS);
-  const minutes = Math.floor((durationMs % ONE_HOUR_MS) / ONE_MINUTE_MS);
-  const seconds = Math.floor((durationMs % ONE_MINUTE_MS) / ONE_SECOND_MS);
-  if (days > 0) {
-    return hours > 0 ? `${days}d ${hours}h` : `${days}d`;
-  }
-  if (hours > 0) {
-    return minutes > 0 ? `${hours}h ${minutes}m` : `${hours}h`;
-  }
-  if (minutes > 0) {
-    return seconds > 0 ? `${minutes}m ${seconds}s` : `${minutes}m`;
-  }
-  return `${seconds}s`;
-}
-
 function formatWindowSignature(window: RateLimitSnapshot["primary"]): string {
   return window ? `${window.usedPercent ?? ""}:${window.resetsAt ?? ""}` : "";
 }
@@ -794,5 +757,3 @@ function extractCodexRetryHint(message: string | undefined): string | undefined 
   );
   return tryAgainRelative?.[1]?.trim();
 }
-
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

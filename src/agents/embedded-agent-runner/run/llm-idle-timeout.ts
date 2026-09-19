@@ -15,11 +15,11 @@ import type { AssistantMessageEvent } from "../../../llm/types.js";
 import { markDiagnosticRunProgress } from "../../../logging/diagnostic-run-activity.js";
 import { captureAsyncWorkTracker } from "../../../shared/async-work-scope.js";
 import { recordAgentCleanupFailure } from "../../run-cleanup-timeout.js";
+import type { EmbeddedRunTrigger } from "../../run-trigger.js";
 import type { StreamFn } from "../../runtime/index.js";
 import type { MutableAssistantMessageEventStream } from "../../stream-compat.js";
 import { createStreamIteratorWrapper } from "../../stream-iterator-wrapper.js";
 import { abortable } from "./abortable.js";
-import type { EmbeddedRunTrigger } from "./params.js";
 import { getLastToolActivityMs, onToolActivity } from "./tool-activity-heartbeat.js";
 
 /**

@@ -203,7 +203,11 @@ export function renderAppearanceSection(
         : t("configView.appearance.importHint"),
     },
   ];
-  const presentedTheme = themeOptions.find((option) => option.id === props.theme) ?? {
+  const selectedTheme = themeOptions.find((option) => option.id === props.theme);
+  const themeUnavailable =
+    props.themeCatalog?.unavailableId === props.theme ||
+    (props.theme.includes("/") && Boolean(props.themeCatalog?.themes.length) && !selectedTheme);
+  const presentedTheme = selectedTheme ?? {
     id: UI_APPEARANCE_DEFAULTS.theme,
     label: t("configView.themes.claw.label"),
   };
@@ -257,7 +261,7 @@ export function renderAppearanceSection(
           ${themeProvenance}
         </p>
         ${
-          props.themeCatalog?.unavailableId === props.theme
+          themeUnavailable
             ? html`<p class="settings-section__desc" role="status">
                 ${t("configView.appearance.themeUnavailable", { id: props.theme })}
               </p>`

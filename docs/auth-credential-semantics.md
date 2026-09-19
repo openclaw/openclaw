@@ -122,8 +122,9 @@ continue to wait for the owner's cleanup.
 Pending refresh profiles remain candidates for model id/mode selection; the OAuth
 owner still settles the refresh before credentials can be used. A caller timeout
 does not retire its durable settlement from observation, and a waiting model read
-cannot cancel it. Continued changes, admission refusals, and cleanup failures
-remain errors.
+cannot cancel it. Canceling a model request ends only its settlement wait; the
+refresh owner and other waiting requests continue independently. Continued changes,
+admission refusals, and cleanup failures remain errors.
 Workers certify committed SQLite visibility before rows enter the cache. Reads
 with unpublished or trailing WAL frames return normally without being retained.
 

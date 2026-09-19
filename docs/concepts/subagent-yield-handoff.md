@@ -83,9 +83,12 @@ with its scheduler-owned continuation.
   requester.
 - **Stable audience.** A nested wake uses internal delivery. A settlement
   continuation targeting a live `sessions_yield`-paused row adopts that row;
-  ordinary inter-session messages do not adopt that row. A parent's
-  `sessions_send` turn to its native child has separate activity tracking and
-  keeps the child's original result or pending yield intact. Explicit plugin follow-ups
+  unrelated inter-session messages do not adopt that row. An ordinary
+  `sessions_send` from the controlling parent to its paused native child resumes
+  the existing task through the same exact-generation admission owner as explicit
+  `mode: "resume"`. Task-owned completion remains the sole result delivery path.
+  An explicit `mode: "followup"` keeps separate activity tracking and leaves the
+  child's original result or pending yield intact. Explicit plugin follow-ups
   naming a new requester continue to create their own delivery obligation.
 - **Deterministic batches.** Frozen run IDs are sorted. Findings use creation
   time, completion time, and child session identity as tie-breakers. Superseded
@@ -105,11 +108,13 @@ with its scheduler-owned continuation.
 
 ## Progress after yield
 
-Yield closes the old execution, not the delegated work. On Telegram, an
-interactive requester can hand its existing progress card to the core task
+Yield closes the old execution, not the delegated work. On Discord and Telegram,
+an interactive requester can hand its existing progress card to the core task
 presenter. The message ID, checklist, commentary, and bounded public display
 state survive the handoff. Channel cleanup stops the old stream without
 deleting the adopted card. The final answer remains a separate delivery.
+Discord requires `streaming.mode: "progress"`; this handoff does not change
+channel streaming defaults.
 
 An adopted card can continue for `done_only` children; `silent` children remain
 excluded. Channel commentary, tool-detail, and quiet-mode settings still apply.

@@ -371,6 +371,7 @@ export async function installPluginDirectoryIntoExtensions(params: {
   extensionsDir?: string;
   logger: PluginInstallLogger;
   timeoutMs: number;
+  workTimeoutMs?: number | null;
   mode: "install" | "update";
   dryRun: boolean;
   copyErrorPrefix: string;
@@ -425,6 +426,7 @@ export async function installPluginDirectoryIntoExtensions(params: {
     targetDir,
     mode: params.mode,
     timeoutMs: params.timeoutMs,
+    workTimeoutMs: params.workTimeoutMs,
     logger: params.logger,
     copyErrorPrefix: params.copyErrorPrefix,
     hasDeps: params.hasDeps,

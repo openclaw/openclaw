@@ -194,6 +194,10 @@ A turn that fails before producing any reply leaves a durable notice in the thre
 
 Chat error banners, including cloud runner failures, show short messages in full. Use **Copy error** beside **Details** in the header to copy the complete diagnostic received by the UI, even while collapsed. **Details** appears only when the complete diagnostic adds information beyond the preview, such as additional lines or text shortened for the preview; repeated lines and whitespace-only differences do not add details. Open it to read and select the complete diagnostic. The disclosure works with Enter or Space; the expanded text wraps long lines and can be scrolled with the keyboard. Copying does not open or close the details, and neither copying nor expanding an error retries the failed operation. Retry and other recovery actions remain separate from the disclosure.
 
+When an active run compacts the conversation while your next message is being prepared, OpenClaw follows the verified continuation automatically, even if the earlier run finishes before preparation does. This keeps the original message and send identity without displaying a retry error.
+
+Run-error banners offer **Refresh** to reload the conversation without resending a message or replacing your draft. If the conversation changes before a message can run and dispatch cannot verify a safe continuation, the banner explains that the message did not run and asks you to refresh before sending it again. The original diagnostic remains under **Details**. OpenClaw does not automatically redirect that message into a replacement conversation.
+
 <AccordionGroup>
   <Accordion title="Send and history semantics">
     - `chat.send` is **non-blocking**: it acknowledges admission with `{ runId, status: "started" }` and the response streams via `chat` events. An optional `messageSeq` identifies an already committed transcript position; it is omitted when input remains only in accepted custody. Trusted Control UI clients may also receive optional ACK timing metadata for local diagnostics.

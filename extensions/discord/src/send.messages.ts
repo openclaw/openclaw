@@ -178,6 +178,7 @@ export async function editMessageDiscord(
     body: {
       content: payload.content,
       ...(payload.flags !== undefined ? { flags: payload.flags } : {}),
+      ...(payload.allowedMentions ? { allowed_mentions: payload.allowedMentions } : {}),
     },
   });
 }

@@ -108,7 +108,6 @@ type AgentEventState = {
   lifecycleRotationHandlers?: Map<string, (lifecycleGeneration: string) => void>;
 };
 
-const AGENT_EVENT_STATE_KEY = Symbol.for("openclaw.agentEvents.state");
 const AGENT_EVENT_ROUTING_FIELDS = [
   ["controlUiVisible", "isControlUiVisible"],
   ["projectSessionLifecycle", "projectSessionLifecycle"],
@@ -120,7 +119,8 @@ const AGENT_EVENT_ROUTING_FIELDS = [
 ] as const;
 
 function getAgentEventState(): AgentEventState {
-  return resolveGlobalSingleton<AgentEventState>(AGENT_EVENT_STATE_KEY, () => ({
+  // Lifecycle owners can register before an importing runtime chunk finishes initialization.
+  return resolveGlobalSingleton<AgentEventState>(Symbol.for("openclaw.agentEvents.state"), () => ({
     seqByRun: new Map<string, number>(),
     listeners: new Map(),
     runListeners: new Map(),

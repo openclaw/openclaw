@@ -704,10 +704,16 @@ describe("runCliAgent before_agent_reply seam", () => {
     expect(executePreparedCliRunMock).toHaveBeenCalledTimes(1);
   });
 
-  it("treats empty CLI subprocess output as a failover failure, not a green cron run", async () => {
+  it("treats empty CLI subprocess output as a failover failure, not a green required cron run", async () => {
     executePreparedCliRunMock.mockResolvedValue({ text: "   " });
 
-    await expect(runCliAgent({ ...baseRunParams, trigger: "cron" })).rejects.toMatchObject({
+    await expect(
+      runCliAgent({
+        ...baseRunParams,
+        trigger: "cron",
+        terminalReplyExpectation: "required",
+      }),
+    ).rejects.toMatchObject({
       name: "FailoverError",
       reason: "empty_response",
       provider: baseRunParams.provider,

@@ -31,9 +31,11 @@ type ChatViewNoticesProps = ChatPlacementStartupNoticeProps & {
 };
 
 type ChatComposerNoticesProps = ChatPlacementStartupNoticeProps & {
+  connected?: boolean;
   messages: readonly unknown[];
   providerPolicyNotice?: ProviderPolicyNotice | null;
   runError?: { summary: string } | null;
+  onRefresh?: () => void;
   onDismissWorkspaceConflict?: () => void;
   workspaceConflict?: WorkspaceResultConflict | null;
 };
@@ -84,7 +86,7 @@ function renderErrorNotice(
   const [firstLine = ""] = lines;
   const summary = clampText(firstLine);
   const hasDetails = lines.some((line) => line !== "" && line !== summary);
-  // Plain summaries wrap fully; only expandable previews may clip at narrow widths.
+  // Keep the bounded summary readable without opening the technical details.
   return html`
     <div
       class="chat-composer-neighbor-card chat-composer-neighbor-card--danger chat-error"
@@ -154,9 +156,19 @@ export function renderChatTopbarNotices(props: ChatViewNoticesProps) {
 }
 
 export function renderChatComposerNotices(props: ChatComposerNoticesProps) {
+  const refresh = props.onRefresh
+    ? html`<button
+        class="btn btn--sm chat-error__refresh"
+        type="button"
+        ?disabled=${!props.connected}
+        @click=${props.onRefresh}
+      >
+        ${t("common.refresh")}
+      </button>`
+    : nothing;
   return html`
     ${renderProviderPolicyNotice(props.providerPolicyNotice)}
-    ${props.runError ? renderErrorNotice(props.runError.summary) : nothing}
+    ${props.runError ? renderErrorNotice(props.runError.summary, refresh) : nothing}
     ${renderWorkspaceConflictNotice({
       conflict: props.workspaceConflict ?? undefined,
       onDismiss: props.onDismissWorkspaceConflict,

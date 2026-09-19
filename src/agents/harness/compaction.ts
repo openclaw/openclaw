@@ -173,6 +173,7 @@ async function resolveHarnessCompactApiKey(params: {
     authProfileMode,
   }: Parameters<Parameters<typeof materializePreparedRuntimeModel<Model>>[0]["resolveModel"]>[0]) =>
     resolveModelAsync(provider, modelId, agentDir, config, {
+      abortSignal: compactParams.abortSignal,
       ...preparedStores,
       preparedModelRuntime: params.preparedModelRuntime,
       authProfileId: profileId,
@@ -186,6 +187,7 @@ async function resolveHarnessCompactApiKey(params: {
     try {
       model = (
         await resolveModelAsync(provider, modelId, agentDir, compactParams.config, {
+          abortSignal: compactParams.abortSignal,
           ...preparedStores,
           preparedModelRuntime: params.preparedModelRuntime,
           authProfileId:
@@ -196,6 +198,7 @@ async function resolveHarnessCompactApiKey(params: {
         })
       ).model;
     } catch (error) {
+      compactParams.abortSignal?.throwIfAborted();
       log.warn(
         `native compaction model resolution failed for ${provider}/${modelId}: ${error instanceof Error ? error.message : String(error)}`,
       );
@@ -335,6 +338,7 @@ async function resolveHarnessCompactApiKey(params: {
       errorMessage: `Prepared native compaction auth attempts could not be resolved for ${provider}/${modelId}.`,
     });
   } catch (error) {
+    compactParams.abortSignal?.throwIfAborted();
     log.warn(
       `native compaction prepared auth resolution failed for ${provider}/${modelId}: ${error instanceof Error ? error.message : String(error)}`,
     );

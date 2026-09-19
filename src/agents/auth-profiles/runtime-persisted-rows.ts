@@ -9,7 +9,7 @@ type RowsReader = {
 };
 
 export class AuthProfileRuntimeReadStaleError extends Error {
-  constructor(readonly waitForSettlement?: () => Promise<void>) {
+  constructor(readonly waitForSettlement?: (signal?: AbortSignal) => Promise<void>) {
     super("Auth profile store changed during its runtime read; retry resolution");
     this.name = "AuthProfileRuntimeReadStaleError";
   }
@@ -65,7 +65,7 @@ export function createRuntimeAuthProfileRowsCache(
       captureSettlement?: (
         databasePaths: readonly string[],
         rows: AuthProfileRowRead | undefined,
-      ) => (() => Promise<void>) | undefined,
+      ) => ((signal?: AbortSignal) => Promise<void>) | undefined,
     ): RowsReader {
       const revision = revisionAtPath(databasePath);
       const ownerLineage = [databasePath, ...(revision.ownerLineage ?? [])];

@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { GATEWAY_CLIENT_IDS } from "../../../packages/gateway-protocol/src/client-info.js";
 import type { ErrorShape } from "../../../packages/gateway-protocol/src/index.js";
 import type { ThemeCatalogEntry } from "../../../packages/gateway-protocol/src/theme.js";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import {
   createThemeDefinitionFixture,
   createThemePaletteFixture,
@@ -13,7 +14,7 @@ import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db-c
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import * as userPreferences from "../../state/user-preferences.js";
 import { getUserPreferences, setUserPreferences } from "../../state/user-preferences.js";
-import { ensureProfileForEmail } from "../../state/user-profiles.js";
+import { ensureProfileForEmail, linkEmail } from "../../state/user-profiles.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -146,6 +147,31 @@ function changePreferencesAfterSnapshot(entries: Record<string, unknown>) {
   );
 }
 
+async function withConcurrentPreferenceSnapshots<T>(count: number, run: () => Promise<T>) {
+  const readPreferences = userPreferences.getCanonicalUserPreferences;
+  const release = createDeferred();
+  let remaining = count;
+  const read = vi
+    .spyOn(userPreferences, "getCanonicalUserPreferences")
+    .mockImplementation(async (...args) => {
+      const snapshot = await readPreferences(...args);
+      if (remaining > 0) {
+        remaining -= 1;
+        if (remaining === 0) {
+          release.resolve();
+        }
+        await release.promise;
+      }
+      return snapshot;
+    });
+  try {
+    return await run();
+  } finally {
+    release.resolve();
+    read.mockRestore();
+  }
+}
+
 describe("theme RPC", () => {
   it("lists descriptive choices and inspects a plugin definition without exposing palettes in list entries", async () => {
     pluginThemes.push(pluginTheme());
@@ -275,15 +301,23 @@ describe("theme RPC", () => {
 
   it.each([
     { background: "url(https://example.test/collect)" },
+    { background: "rgb(1 2 3 .5)" },
+    { background: "oklch(50%, 0.2, 180)" },
     { "font-sans": "sans-serif; background: red" },
-  ])("rejects unsafe theme values without importing or selecting: %j", async (palette) => {
-    const definition = createThemeDefinitionFixture();
-    definition.dark = { ...definition.dark!, ...palette };
-    expect(await invoke("themes.import", { id: "unsafe", definition, apply: true })).toMatchObject({
-      ok: false,
-    });
-    expect(getUserPreferences(requesterProfileId)).toEqual({});
-  });
+    { "font-sans": "'unterminated" },
+  ])(
+    "rejects unsafe or malformed theme values without importing or selecting: %j",
+    async (palette) => {
+      const definition = createThemeDefinitionFixture();
+      definition.dark = { ...definition.dark!, ...palette };
+      expect(
+        await invoke("themes.import", { id: "unsafe", definition, apply: true }),
+      ).toMatchObject({
+        ok: false,
+      });
+      expect(getUserPreferences(requesterProfileId)).toEqual({});
+    },
+  );
 
   it("clears theme overrides against Gateway defaults while retaining saved custom themes", async () => {
     const definition = createThemeDefinitionFixture();
@@ -466,6 +500,212 @@ describe("theme RPC", () => {
     });
   });
 
+  it("preserves independent concurrent imports and atomically settles competing selections", async () => {
+    const expected: Record<string, unknown> = { "chat.showThinking": true };
+    expect(setUserPreferences(requesterProfileId, expected).ok).toBe(true);
+    for (let round = 0; round < 4; round += 1) {
+      Object.assign(expected, { "ui.theme": "claw", "ui.themeMode": "system" });
+      expect(
+        setUserPreferences(requesterProfileId, { "ui.theme": "claw", "ui.themeMode": "system" }).ok,
+      ).toBe(true);
+      const ids = Array.from({ length: 4 }, (_, index) => `independent-${round}-${index}`);
+      const definitions = ids.map((name) => createThemeDefinitionFixture({ name }));
+      const imports = await withConcurrentPreferenceSnapshots(ids.length, () =>
+        Promise.all(
+          ids.map((id, index) => invoke("themes.import", { id, definition: definitions[index] })),
+        ),
+      );
+      for (const [index, result] of imports.entries()) {
+        expect(result).toMatchObject({ ok: true, payload: { application: "saved" } });
+        expected[`ui.themeDefinition.${ids[index]}`] = definitions[index];
+      }
+      expect(getUserPreferences(requesterProfileId)).toEqual(expected);
+
+      const choices = [
+        ...[0, 1].map((index) => ({
+          method: "themes.import" as const,
+          params: {
+            id: `applied-${round}-${index}`,
+            definition: createThemeDefinitionFixture({ name: `Applied ${round}-${index}` }),
+            apply: true,
+            mode: "dark",
+          },
+          selectedId: `user/applied-${round}-${index}`,
+        })),
+        ...["rose", "tide"].map((id) => ({
+          method: "themes.set" as const,
+          params: { id, mode: "dark" },
+          selectedId: id,
+        })),
+      ];
+      const contenders = [...choices.slice(round), ...choices.slice(0, round)];
+      const selections = await withConcurrentPreferenceSnapshots(contenders.length, () =>
+        Promise.all(contenders.map(({ method, params }) => invoke(method, params))),
+      );
+      const winners = selections.flatMap((result, index) => (result.ok ? [index] : []));
+      expect(winners).toHaveLength(1);
+      const winnerIndex = expectDefined(winners[0], "winning theme mutation index");
+      const winner = expectDefined(contenders[winnerIndex], "winning theme mutation");
+      expected["ui.theme"] = winner.selectedId;
+      expected["ui.themeMode"] = "dark";
+      if (winner.method === "themes.import") {
+        expected[`ui.themeDefinition.${winner.params.id}`] = winner.params.definition;
+      }
+      for (const [index, result] of selections.entries()) {
+        expect(result).toMatchObject(
+          index === winnerIndex
+            ? {
+                ok: true,
+                payload: { current: { id: winner.selectedId, mode: "dark" }, application: "saved" },
+              }
+            : { ok: false, error: { message: expect.stringContaining("Appearance changed") } },
+        );
+      }
+      expect(getUserPreferences(requesterProfileId)).toEqual(expected);
+      expect(getUserPreferences(otherProfileId)).toEqual({});
+      expect(await invoke("themes.list")).toMatchObject({
+        ok: true,
+        payload: {
+          current: { id: winner.selectedId, mode: "dark" },
+          themes: expect.arrayContaining(
+            ids.map((id) => expect.objectContaining({ id: `user/${id}` })),
+          ),
+        },
+      });
+      expect(await invoke("themes.get")).toMatchObject({
+        ok: true,
+        payload: {
+          current: { id: winner.selectedId, mode: "dark" },
+          theme: { id: winner.selectedId },
+        },
+      });
+    }
+  });
+
+  it("reads and writes through a merged profile alias and notifies both identities only", async () => {
+    const unrelatedId = ensureProfileForEmail("unrelated@example.test").id;
+    linkEmail("requester@example.test", otherProfileId);
+    const clients = [
+      client(requesterProfileId),
+      { ...client(otherProfileId), connId: "canonical-browser" },
+      { ...client(unrelatedId), connId: "unrelated-browser" },
+    ];
+    const broadcastToConnIds = vi.fn();
+    const definition = createThemeDefinitionFixture();
+    expect(
+      await invoke(
+        "themes.import",
+        { id: "merged", definition, apply: true, mode: "dark" },
+        {
+          context: {
+            broadcastToConnIds,
+            getClientConnIds: (filter) =>
+              new Set(
+                clients.filter((entry) => !filter || filter(entry)).map((entry) => entry.connId!),
+              ),
+          },
+        },
+      ),
+    ).toMatchObject({
+      ok: true,
+      payload: { current: { id: "user/merged" }, application: "saved" },
+    });
+    expect(getUserPreferences(requesterProfileId)).toEqual({});
+    expect(getUserPreferences(otherProfileId)).toEqual({
+      "ui.themeDefinition.merged": definition,
+      "ui.theme": "user/merged",
+      "ui.themeMode": "dark",
+    });
+    expect(getUserPreferences(unrelatedId)).toEqual({});
+    for (const profileId of [requesterProfileId, otherProfileId]) {
+      expect(await invoke("themes.get", {}, { client: client(profileId) })).toMatchObject({
+        ok: true,
+        payload: { current: { id: "user/merged", mode: "dark" }, definition },
+      });
+    }
+    expect(broadcastToConnIds).toHaveBeenCalledExactlyOnceWith(
+      "users.prefs.changed",
+      {
+        profileId: otherProfileId,
+        keys: ["ui.themeDefinition.merged", "ui.theme", "ui.themeMode"],
+      },
+      new Set(["requester-browser", "canonical-browser"]),
+    );
+  });
+
+  it("does not redirect a prepared import when its profile merges before the write", async () => {
+    expect(setUserPreferences(requesterProfileId, { "ui.theme": "claw" }).ok).toBe(true);
+    const targetPreferences = { "ui.theme": "tide", "ui.themeMode": "light" };
+    expect(setUserPreferences(otherProfileId, targetPreferences).ok).toBe(true);
+    const readPreferences = userPreferences.getCanonicalUserPreferences;
+    vi.spyOn(userPreferences, "getCanonicalUserPreferences").mockImplementationOnce(
+      async (...args) => {
+        const snapshot = await readPreferences(...args);
+        linkEmail("requester@example.test", otherProfileId);
+        return snapshot;
+      },
+    );
+    const broadcastToConnIds = vi.fn();
+    expect(
+      await invoke(
+        "themes.import",
+        { id: "stale", definition: createThemeDefinitionFixture(), apply: true },
+        {
+          context: { broadcastToConnIds, getClientConnIds: () => new Set(["requester-browser"]) },
+        },
+      ),
+    ).toMatchObject({ ok: false, error: { message: expect.stringContaining("profile changed") } });
+    expect(getUserPreferences(requesterProfileId)).toEqual({});
+    expect(getUserPreferences(otherProfileId)).toEqual(targetPreferences);
+    expect(broadcastToConnIds).not.toHaveBeenCalled();
+  });
+
+  it("rolls back an import at the profile key limit while allowing replacement at capacity", async () => {
+    const expected: Record<string, unknown> = {
+      ...Object.fromEntries(
+        Array.from({ length: 125 }, (_, index) => [`retained-${index}`, index]),
+      ),
+      "ui.theme": "claw",
+      "ui.themeMode": "dark",
+    };
+    const entries = Object.entries(expected);
+    for (let offset = 0; offset < entries.length; offset += 32) {
+      expect(
+        setUserPreferences(
+          requesterProfileId,
+          Object.fromEntries(entries.slice(offset, offset + 32)),
+        ).ok,
+      ).toBe(true);
+    }
+    const broadcastToConnIds = vi.fn();
+    const options = {
+      context: { broadcastToConnIds, getClientConnIds: () => new Set(["requester-browser"]) },
+    };
+    const definition = createThemeDefinitionFixture();
+    expect(
+      await invoke("themes.import", { id: "last", definition, apply: true, mode: "dark" }, options),
+    ).toMatchObject({ ok: true });
+    Object.assign(expected, { "ui.themeDefinition.last": definition, "ui.theme": "user/last" });
+    expect(Object.keys(getUserPreferences(requesterProfileId))).toHaveLength(128);
+    expect(getUserPreferences(requesterProfileId)).toEqual(expected);
+    expect(
+      await invoke("themes.import", { id: "overflow", definition, apply: true }, options),
+    ).toMatchObject({
+      ok: false,
+      error: { message: expect.stringContaining("profile-key-limit") },
+    });
+    expect(getUserPreferences(requesterProfileId)).toEqual(expected);
+    expect(broadcastToConnIds).toHaveBeenCalledTimes(1);
+    const replacement = createThemeDefinitionFixture({ name: "Updated at capacity" });
+    expect(
+      await invoke("themes.import", { id: "last", definition: replacement, apply: true }, options),
+    ).toMatchObject({ ok: true });
+    expected["ui.themeDefinition.last"] = replacement;
+    expect(getUserPreferences(requesterProfileId)).toEqual(expected);
+    expect(getUserPreferences(otherProfileId)).toEqual({});
+    expect(broadcastToConnIds).toHaveBeenCalledTimes(2);
+  });
+
   it("retains a missing plugin selection and resumes it when the catalog is republished", async () => {
     pluginThemes.push(pluginTheme());
     expect(await invoke("themes.set", { id: "space-pack/xenovessel", mode: "dark" })).toMatchObject(
@@ -562,39 +802,44 @@ describe("theme RPC", () => {
     expect(getUserPreferences(otherProfileId)).toEqual({});
   });
 
-  it.each(["select", "mode-only"])(
-    "refuses a plugin palette replaced before commit during %s",
-    async (action) => {
-      const installed = pluginTheme();
-      pluginThemes.push(installed);
-      const original = {
-        "ui.theme": action === "select" ? "claw" : installed.id,
-        "ui.themeMode": "system",
-        "ui.accent": "#aabbcc",
+  it.each(
+    ["select", "mode-only"].flatMap((action) =>
+      ["replaced", "unavailable"].map((change) => ({ action, change })),
+    ),
+  )("refuses a plugin palette $change before commit during $action", async ({ action, change }) => {
+    const installed = pluginTheme();
+    pluginThemes.push(installed);
+    const original = {
+      "ui.theme": action === "select" ? "claw" : installed.id,
+      "ui.themeMode": "system",
+      "ui.accent": "#aabbcc",
+    };
+    expect(setUserPreferences(requesterProfileId, original).ok).toBe(true);
+    let reachedCommit = false;
+    beforeWorkerCommit(() => {
+      reachedCommit = true;
+      if (change === "unavailable") {
+        pluginThemes.length = 0;
+        return;
+      }
+      pluginThemes[0] = {
+        ...installed,
+        modes: ["light"],
+        definition: {
+          name: installed.name,
+          description: "Replacement light-only palette",
+          light: createThemePaletteFixture(),
+        },
       };
-      expect(setUserPreferences(requesterProfileId, original).ok).toBe(true);
-      let reachedCommit = false;
-      beforeWorkerCommit(() => {
-        reachedCommit = true;
-        pluginThemes[0] = {
-          ...installed,
-          modes: ["light"],
-          definition: {
-            name: installed.name,
-            description: "Replacement light-only palette",
-            light: createThemePaletteFixture(),
-          },
-        };
-      });
-      const params = action === "select" ? { id: installed.id, mode: "dark" } : { mode: "dark" };
-      expect(await invoke("themes.set", params)).toMatchObject({
-        ok: false,
-        error: { message: expect.stringContaining("theme plugin changed") },
-      });
-      expect(reachedCommit).toBe(true);
-      expect(getUserPreferences(requesterProfileId)).toEqual(original);
-    },
-  );
+    });
+    const params = action === "select" ? { id: installed.id, mode: "dark" } : { mode: "dark" };
+    expect(await invoke("themes.set", params)).toMatchObject({
+      ok: false,
+      error: { message: expect.stringContaining("theme plugin changed") },
+    });
+    expect(reachedCommit).toBe(true);
+    expect(getUserPreferences(requesterProfileId)).toEqual(original);
+  });
 
   it("rolls back both import and selection when the live run retires at the commit boundary", async () => {
     const identity = runtimeIdentity(requesterProfileId);

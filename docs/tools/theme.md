@@ -76,6 +76,14 @@ and may include `font-sans` and `font-mono`. Use CSS color values such as hex,
 `rgb()`, `hsl()`, or `oklch()`. Font families describe locally available fonts;
 definitions cannot load external stylesheets or resources.
 
+Use consistent CSS separators: `rgb(20 30 40 / 50%)` or
+`rgba(20, 30, 40, 0.5)`. Modern functions such as `oklch()` use spaces between
+components and `/` before opacity. Font lists use comma-separated family names;
+quote names containing punctuation or beginning with a digit, such as
+`"123 Font", monospace`. Also quote names containing CSS keywords, such as
+`"Foo serif"`. Malformed colors and unbalanced font quotes are rejected before
+the theme is saved.
+
 This example creates and activates a dark theme in one call:
 
 ```json

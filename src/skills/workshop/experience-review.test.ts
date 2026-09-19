@@ -1,10 +1,10 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { EmbeddedRunTrigger } from "../../agents/embedded-agent-runner/run/params.js";
 import {
   getPreparedModelRuntimePluginGeneration,
   withPreparedModelRuntimePluginGenerationScope,
 } from "../../agents/prepared-model-runtime-generation-scope.js";
 import type { PreparedModelRuntimePluginGeneration } from "../../agents/prepared-model-runtime.types.js";
+import type { EmbeddedRunTrigger } from "../../agents/run-trigger.js";
 import {
   createPluginCache,
   getPluginCache,

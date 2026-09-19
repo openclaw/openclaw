@@ -3,6 +3,7 @@ import { lstatSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { sha256Hex } from "../../infra/crypto-digest.js";
+import { isErrno } from "../../infra/errors.js";
 import { resolveClawHubSkillStatusLinkSync } from "./clawhub-status.js";
 import {
   formatClawHubSkillRef,
@@ -15,34 +16,18 @@ import {
   hasCommittedSkillChangeHooks,
   snapshotCommittedSkillArtifactBestEffort,
 } from "./skill-change-hook.js";
-import { digestClawHubSkillTree } from "./skill-tree-digest.js";
+import { checkClawHubSkillPlanAtPath, digestClawHubSkillTree } from "./skill-tree-digest.js";
+import type {
+  WorkspaceSkillLifecycle,
+  ClawHubSkillUninstallPlan,
+  ClawHubSkillUninstallPlanResult,
+} from "./workspace-types.js";
 
-export type ClawHubSkillUninstallPlan = {
-  workspaceDir: string;
-  // Replan from the registry identity so publisher/source changes cannot retarget deletion.
-  requestedRef: string;
-  slug: string;
-  version: string;
-  installedAt: number;
-  targetDir: string;
-  skillFilePath: string;
-  skillFileSha256: string;
-  fileTreeSha256: string;
-};
+export type { ClawHubSkillUninstallPlan } from "./workspace-types.js";
 
-type ClawHubSkillUninstallPlanResult =
-  | { ok: true; plan: ClawHubSkillUninstallPlan }
-  | {
-      ok: false;
-      code: "missing" | "ambiguous" | "modified";
-      error: string;
-    };
-
-export async function planClawHubSkillUninstall(params: {
-  workspaceDir: string;
-  slug: string;
-  expectedVersion: string;
-}): Promise<ClawHubSkillUninstallPlanResult> {
+export async function planClawHubSkillUninstall(
+  params: Parameters<WorkspaceSkillLifecycle["planClawHubSkillUninstall"]>[0],
+): Promise<ClawHubSkillUninstallPlanResult> {
   let requestedRef: ReturnType<typeof parseRequestedClawHubSkillRef>;
   try {
     requestedRef = parseRequestedClawHubSkillRef(params.slug);
@@ -56,7 +41,7 @@ export async function planClawHubSkillUninstall(params: {
   });
 }
 
-export async function planTrackedClawHubSkillState(params: {
+async function planTrackedClawHubSkillState(params: {
   workspaceDir: string;
   requestedRef: ReturnType<typeof parseRequestedClawHubSkillRef>;
   expectedVersion: string;
@@ -159,29 +144,6 @@ export async function planTrackedClawHubSkillState(params: {
       fileTreeSha256,
     },
   };
-}
-
-export async function checkClawHubSkillPlanAtPath(
-  plan: ClawHubSkillUninstallPlan,
-  skillDir: string,
-  readFile: typeof fs.readFile = fs.readFile,
-): Promise<{ ok: true } | { ok: false; error: string }> {
-  try {
-    const stat = await fs.lstat(skillDir);
-    if (!stat.isDirectory() || stat.isSymbolicLink()) {
-      return { ok: false, error: `Skill ${JSON.stringify(plan.slug)} changed during update.` };
-    }
-    const content = await readFile(path.join(skillDir, plan.skillFilePath));
-    if (
-      sha256Hex(content) !== plan.skillFileSha256 ||
-      (await digestClawHubSkillTree(skillDir)) !== plan.fileTreeSha256
-    ) {
-      return { ok: false, error: `Skill ${JSON.stringify(plan.slug)} changed during update.` };
-    }
-    return { ok: true };
-  } catch (error) {
-    return { ok: false, error: String(error) };
-  }
 }
 
 export async function applyClawHubSkillUninstall(
@@ -299,4 +261,29 @@ export async function applyClawHubSkillUninstall(
       error: `${String(error)}${rollbackErrors.length > 0 ? `; rollback incomplete: ${rollbackErrors.join("; ")}` : ""}`,
     };
   }
+}
+
+export async function guardTrackedSkillLocalState(
+  params: Parameters<WorkspaceSkillLifecycle["guardTrackedSkillLocalState"]>[0],
+): Promise<
+  { ok: true; plan: ClawHubSkillUninstallPlan | undefined } | { ok: false; error: string }
+> {
+  const targetDir = resolveWorkspaceSkillInstallDir(params.workspaceDir, params.slug);
+  try {
+    await fs.lstat(targetDir);
+  } catch (error) {
+    if (isErrno(error) && error.code === "ENOENT") {
+      return { ok: true, plan: undefined };
+    }
+    return { ok: false, error: String(error) };
+  }
+  const local = await planTrackedClawHubSkillState({
+    workspaceDir: params.workspaceDir,
+    requestedRef: { slug: params.slug },
+    expectedVersion: params.previousVersion ?? "",
+  });
+  if (local.ok) {
+    return { ok: true, plan: local.plan };
+  }
+  return { ok: false, error: local.error };
 }

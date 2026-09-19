@@ -90,7 +90,6 @@ it("does not create a missing configured agent database during startup maintenan
     agentId: "idle",
     env,
   }).path;
-  const migrateManagedWorktreeCanonicalWorkspaces = vi.fn(async () => ({ found: 0, repaired: 0 }));
 
   await runSessionStartupMigration({
     cfg,
@@ -107,13 +106,11 @@ it("does not create a missing configured agent database during startup maintenan
         outcomes: [{ kind: "not-armed" as const }],
         warnings: [],
       })),
-      migrateManagedWorktreeCanonicalWorkspaces,
       resolveAllAgentSessionStoreTargetsSync: () => [{ agentId: "idle", storePath }],
     },
   });
 
   expect(fs.existsSync(sqlitePath)).toBe(false);
-  expect(migrateManagedWorktreeCanonicalWorkspaces).not.toHaveBeenCalled();
 });
 
 it.each([false, true])(
@@ -224,16 +221,11 @@ it("re-registers durable lineage children before configured-only runtime reads",
       ),
     ).toBe(false);
 
-    const migrateManagedWorktreeCanonicalWorkspaces = vi.fn(async () => ({
-      found: 0,
-      repaired: 0,
-    }));
     await runSessionStartupMigration({
       cfg,
       env,
       log: { info: vi.fn(), warn: vi.fn() },
       deps: {
-        migrateManagedWorktreeCanonicalWorkspaces,
         migrateLegacyMainSessionKeys: vi.fn(async () => ({
           armed: false,
           changes: [],
@@ -246,7 +238,6 @@ it("re-registers durable lineage children before configured-only runtime reads",
         })),
       },
     });
-    expect(migrateManagedWorktreeCanonicalWorkspaces).toHaveBeenCalled();
 
     expect(listOpenClawRegisteredAgentDatabases({ env })).toContainEqual(
       expect.objectContaining({ agentId: "codex", path: childDatabasePath }),
@@ -324,8 +315,6 @@ it.each(["registry", "main-key"] as const)(
     }
     const originalOpen = nodeSqlite.openNodeSqliteDatabase;
     let yielded = false;
-    let maintenanceSawProgress = false;
-    let maintenanceSawSelectedKey = false;
     let tick: ReturnType<typeof setImmediate> | undefined;
     const open = vi
       .spyOn(nodeSqlite, "openNodeSqliteDatabase")
@@ -346,17 +335,10 @@ it.each(["registry", "main-key"] as const)(
         cfg,
         env,
         log,
-        deps: {
-          migrateManagedWorktreeCanonicalWorkspaces: async () => {
-            maintenanceSawProgress = yielded;
-            maintenanceSawSelectedKey = isCanonicalSqliteSessionMainKeyCurrent(options, undefined);
-            return { found: 0, repaired: 0 };
-          },
-        },
       });
       expect(log.warn).not.toHaveBeenCalled();
-      expect(maintenanceSawProgress).toBe(true);
-      expect(maintenanceSawSelectedKey).toBe(true);
+      expect(yielded).toBe(true);
+      expect(isCanonicalSqliteSessionMainKeyCurrent(options, undefined)).toBe(true);
       expect(listOpenClawRegisteredAgentDatabases({ env })).toContainEqual(
         expect.objectContaining({ agentId: "main", path: initial.path }),
       );

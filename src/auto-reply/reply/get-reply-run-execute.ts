@@ -113,7 +113,6 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
     hasUserBody,
     shouldInjectGroupIntro,
     typingMode,
-    allowEmptyAssistantReplyAsSilent,
     terminalReplyExpectation,
   } = context;
   const runParams = { ...params };
@@ -551,7 +550,6 @@ export async function executePreparedReplyRun(state: PreparedReplyRunAdmission) 
       extraSystemPromptStatic,
       cliSessionBindingFacts,
       skipProviderRuntimeHints: useFastReplyRuntime,
-      allowEmptyAssistantReplyAsSilent,
       terminalReplyExpectation,
       suppressTranscriptOnlyAssistantPersistence: isRoomEvent,
       ...(opts?.skillWorkshopProposalRevision

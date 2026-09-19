@@ -80,25 +80,26 @@ export async function planMemoryIndex(params: {
       const indexedChunks = executeSqliteQuerySync(
         db,
         kysely
-          .selectFrom("memory_index_chunks")
-          .leftJoin(
-            "memory_index_chunk_provenance",
-            "memory_index_chunk_provenance.chunk_id",
-            "memory_index_chunks.id",
+          .selectFrom("memory_index_chunks as chunk")
+          .select(["chunk.id", "chunk.path", "chunk.source"])
+          .$if(tableExists(db, "memory_index_chunk_provenance"), (query) =>
+            query
+              .leftJoin(
+                "memory_index_chunk_provenance as provenance",
+                "provenance.chunk_id",
+                "chunk.id",
+              )
+              .select([
+                "provenance.origin_class as originClass",
+                "provenance.session_kind as sessionKind",
+              ]),
           )
-          .select([
-            "memory_index_chunks.id as id",
-            "memory_index_chunks.path as path",
-            "memory_index_chunks.source as source",
-            "memory_index_chunk_provenance.origin_class as originClass",
-            "memory_index_chunk_provenance.session_kind as sessionKind",
-          ])
           .select((eb) =>
             eb
-              .case("memory_index_chunks.source")
+              .case("chunk.source")
               .when("sessions")
               .then("")
-              .else(eb.ref("memory_index_chunks.text"))
+              .else(eb.ref("chunk.text"))
               .end()
               .as("text"),
           ),

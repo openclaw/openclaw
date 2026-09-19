@@ -209,7 +209,7 @@ describe("dependency guard script", () => {
       "GET /repos/openclaw/openclaw/collaborators/maintainer/permission": { role_name: role },
       [`GET ${issuePath}/comments`]: [approvalNotice, comment],
     });
-    expect(result.status, result.stderr).toBe(allowed ? 0 : 1);
+    expect(result.status, result.stderr).toBe(0);
     expect(result.statuses.map((call) => call.body?.state)).toEqual([
       "failure",
       allowed ? "success" : "failure",
@@ -226,7 +226,7 @@ describe("dependency guard script", () => {
         responses: [[approvalNotice, approval], [approvalNotice, approval], [approvalNotice]],
       },
     });
-    expect(result.status).toBe(1);
+    expect(result.status, result.stderr).toBe(0);
     expect(result.statuses.at(-1)?.body?.state).toBe("failure");
     expect(result.stdout).toContain("Maintainer dependency review required");
   });
@@ -237,7 +237,7 @@ describe("dependency guard script", () => {
         { filename: "archived.patch", previous_filename: "patches/package.patch" },
       ],
     });
-    expect(result.status).toBe(1);
+    expect(result.status, result.stderr).toBe(0);
     expect(result.statuses.at(-1)?.body?.state).toBe("failure");
     expect(result.stdout).toContain("patches/package.patch");
   });
@@ -261,7 +261,7 @@ describe("dependency guard script", () => {
         { change_type: "removed", name: "example", manifest: "extensions/old/package.json" },
       ],
     });
-    expect(result.status).toBe(1);
+    expect(result.status, result.stderr).toBe(0);
     expect(result.statuses.at(-1)?.body?.state).toBe("failure");
     expect(result.stdout).toContain(
       "- `extensions/old/package.json`\n- `extensions/new/package.json`\n",
@@ -282,7 +282,7 @@ describe("dependency guard script", () => {
     expect(detection.output).toBe("autoscrub=false\n");
     expect(detection.calls.some((call) => call.path === "/graphql")).toBe(false);
     const enforcement = runDependencyGuard(routes);
-    expect(enforcement.status).toBe(1);
+    expect(enforcement.status, enforcement.stderr).toBe(0);
     expect(enforcement.statuses.at(-1)?.body?.state).toBe("failure");
   });
 
@@ -302,42 +302,57 @@ describe("dependency guard script", () => {
     expect(result.statuses.at(-1)?.body?.state).toBe("success");
   });
 
-  it.each([false, true])("preserves autoscrub with late command approval=%s", (lateApproval) => {
-    const result = runDependencyGuard(
-      {
-        [`GET ${pullPath}/files`]: [{ filename: "pnpm-lock.yaml" }],
-        [`GET ${issuePath}/comments`]: {
-          responses: [
-            [approvalNotice],
-            [approvalNotice],
-            lateApproval ? [approvalNotice, approval] : [approvalNotice],
-          ],
+  it.each([
+    { lateApproval: false, writeError: false },
+    { lateApproval: true, writeError: false },
+    { lateApproval: false, writeError: true },
+  ])(
+    "preserves autoscrub with late approval=$lateApproval and write error=$writeError",
+    ({ lateApproval, writeError }) => {
+      const result = runDependencyGuard(
+        {
+          [`GET ${pullPath}/files`]: [{ filename: "pnpm-lock.yaml" }],
+          [`GET ${issuePath}/comments`]: {
+            responses: [
+              [approvalNotice],
+              [approvalNotice],
+              lateApproval ? [approvalNotice, approval] : [approvalNotice],
+            ],
+          },
+          [`GET /repos/openclaw/openclaw/dependency-graph/compare/${staleSha}...${headSha}`]: [],
+          "GET /repos/openclaw/openclaw/contents/pnpm-lock.yaml": {
+            type: "file",
+            encoding: "base64",
+            content: Buffer.from("base lockfile").toString("base64"),
+          },
+          "POST /graphql": writeError
+            ? { httpError: 403 }
+            : { data: { createCommitOnBranch: { commit: { oid: staleSha } } } },
         },
-        [`GET /repos/openclaw/openclaw/dependency-graph/compare/${staleSha}...${headSha}`]: [],
-        "GET /repos/openclaw/openclaw/contents/pnpm-lock.yaml": {
-          type: "file",
-          encoding: "base64",
-          content: Buffer.from("base lockfile").toString("base64"),
-        },
-        "POST /graphql": { data: { createCommitOnBranch: { commit: { oid: staleSha } } } },
-      },
-      "autoscrub",
-    );
-    expect(result.status, result.stderr).toBe(0);
-    const writes = result.calls.filter((call) => call.path === "/graphql");
-    expect(writes).toHaveLength(lateApproval ? 0 : 1);
-    if (!lateApproval) {
-      expect(writes[0]?.body?.variables?.input).toMatchObject({
-        expectedHeadOid: headSha,
-        fileChanges: {
-          additions: [
-            { path: "pnpm-lock.yaml", contents: Buffer.from("base lockfile").toString("base64") },
-          ],
-        },
-      });
-    }
-    expect(result.statuses.map((call) => call.body?.state)).toEqual(["failure"]);
-  });
+        "autoscrub",
+      );
+      expect(result.status, result.stderr).toBe(writeError ? 1 : 0);
+      if (writeError) {
+        expect(result.stderr).toContain("Fixture API failure");
+        expect(result.stdout).toContain(
+          "Auto-scrub was attempted, but GitHub rejected the cleanup commit",
+        );
+      }
+      const writes = result.calls.filter((call) => call.path === "/graphql");
+      expect(writes).toHaveLength(lateApproval ? 0 : 1);
+      if (!lateApproval) {
+        expect(writes[0]?.body?.variables?.input).toMatchObject({
+          expectedHeadOid: headSha,
+          fileChanges: {
+            additions: [
+              { path: "pnpm-lock.yaml", contents: Buffer.from("base lockfile").toString("base64") },
+            ],
+          },
+        });
+      }
+      expect(result.statuses.map((call) => call.body?.state)).toEqual(["failure"]);
+    },
+  );
 
   it.each(["detect", "autoscrub", "enforce"])(
     "does not approve or autoscrub a grandfathered lockfile PR in %s mode",

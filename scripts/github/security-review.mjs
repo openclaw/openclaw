@@ -84,15 +84,24 @@ async function main() {
     }
     // Each guard must publish its own notice even when its sibling rejects a PR.
     const errors = [];
+    let allowed = true;
     for (const guard of [reviewDependencyChanges, reviewSecuritySensitiveChanges]) {
       try {
-        await guard(review);
+        if (!(await guard(review))) {
+          allowed = false;
+        }
       } catch (error) {
         errors.push(error instanceof Error ? error.message : String(error));
       }
     }
     if (errors.length > 0) {
       throw new Error(errors.join("\n"));
+    }
+    // Merge decisions live in commit statuses. Expected blocks must not leave
+    // failed Actions jobs behind after an automatic reevaluation succeeds.
+    if (!allowed) {
+      console.log("Security review is awaiting maintainer approval.");
+      return;
     }
   } else {
     const summary = `Security review: ${review.rollout.mode}; standalone review statuses are not published.`;
@@ -111,9 +120,10 @@ async function main() {
       "failure",
       "CI must complete successfully; review updates automatically",
     );
-    throw new Error(
+    console.log(
       "The current CI gate has not passed. CI completion will automatically reevaluate security review.",
     );
+    return;
   }
   // Authority can be removed while CI metadata and the other guard are read.
   // Revalidate both decisions immediately before publishing their combined result.
@@ -124,7 +134,8 @@ async function main() {
         "failure",
         "A maintainer must approve the current PR revision",
       );
-      throw new Error("Maintainer approval changed during security review.");
+      console.log("Maintainer approval changed during security review.");
+      return;
     }
   }
   await assertGuardUnchanged(review);

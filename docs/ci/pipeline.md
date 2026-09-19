@@ -158,6 +158,11 @@ the current PR head. The existing CI job retains its check with the same name.
 GitHub requires both the check and the commit status when both share a required
 context. Missing approval or incomplete CI fails the review status; CI completion
 automatically evaluates it again. Approval comments do not rerun the test suite.
+The Security Review Actions job succeeds when evaluation completes, including
+when the required commit status blocks merging for missing approval or CI that
+has not passed. This prevents an earlier evaluation from leaving a stale failed
+job after automatic reevaluation clears the status. Evaluation errors still fail
+the job and keep the required status closed. No pending statuses are published.
 
 The **Security Sensitive Guard** publishes `openclaw/security-sensitive-review`.
 Its inventory in `.github/security-review-policy.yml` covers Gateway

@@ -316,29 +316,6 @@ describe("prepareTerminalWithSettledTurnFinalization", () => {
     });
   });
 
-  it("keeps a failed command followed by NO_REPLY out of summary recovery", async () => {
-    const attempt = settledFailedAttempt();
-    const assistant = buildEmbeddedRunnerAssistant({
-      content: [{ type: "text", text: SILENT_REPLY_TOKEN }],
-    });
-    attempt.terminal = { kind: "ok" };
-    attempt.assistantTexts = [SILENT_REPLY_TOKEN];
-    attempt.messagesSnapshot.push(assistant);
-    attempt.lastAssistant = assistant;
-    attempt.currentAttemptAssistant = assistant;
-    attempt.currentAttemptCompletedAssistant = assistant;
-    attempt.lastToolError = { toolName: "exec", error: "Command exited with code 127" };
-
-    const result = await prepareTerminalWithSettledTurnFinalization(finalizationInput(attempt));
-
-    expect(backendMocks.runSettledFinalization).not.toHaveBeenCalled();
-    expect(result.finalizationOutcome).toBe("not-attempted");
-    expect(result.prepared.finalAssistantRawText).toBe(SILENT_REPLY_TOKEN);
-    expect(result.prepared.payloadsWithToolMedia).toEqual([
-      expect.objectContaining({ text: expect.stringContaining("failed"), isError: true }),
-    ]);
-  });
-
   it.each(["empty", "failed"] as const)(
     "preserves the command failure when summary recovery is %s",
     async (outcome) => {

@@ -165,6 +165,7 @@ export type UpdateRunnerOptions = {
     allowGatewayServiceRepair?: boolean;
     allowGatewayActivation?: boolean;
   } | void>;
+  /** Operator-selected work deadline; omission leaves work unbounded, not probes or cleanup. */
   timeoutMs?: number;
   runCommand?: CommandRunner;
   progress?: UpdateStepProgress;
@@ -181,7 +182,7 @@ export type RunStepOptions = {
   name: string;
   argv: string[];
   cwd: string;
-  timeoutMs: number;
+  timeoutMs?: number;
   env?: NodeJS.ProcessEnv;
   progress?: UpdateStepProgress;
   stepIndex: number;

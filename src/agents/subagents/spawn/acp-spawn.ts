@@ -642,6 +642,8 @@ export async function spawnAcpDirect(
         runTimeoutSeconds,
         expectsCompletionMessage,
         spawnMode,
+        // ACP's Gateway manager publishes the task; avoid a second registry projection.
+        taskRowOwnership: "gateway_best_effort",
       };
     },
   });

@@ -1282,7 +1282,7 @@ describe("reply turn admission", () => {
       sessionKey,
       sessionId,
       expectedSessionId: sessionId,
-      expectedActiveOperation: active,
+      expectedActiveOperations: [active],
       storePath,
     });
 
@@ -1392,7 +1392,7 @@ describe("reply turn admission", () => {
       sessionKey,
       sessionId,
       expectedSessionId: sessionId,
-      expectedActiveOperation: active,
+      expectedActiveOperations: [active],
       storePath,
     });
 

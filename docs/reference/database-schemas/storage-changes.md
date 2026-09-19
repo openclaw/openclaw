@@ -74,9 +74,20 @@ the existing profile-version invalidation, then evaluates current requester,
 session, and role policy and publishes the RPC response in one synchronous step.
 Prepared directory rows are descriptive
 facts, never permission or current alias authority. Project recents retain a narrow
-fresh canonical-profile and alias query for their disclosure scope. Profile
-mutations, avatar storage, identity merges, and final identity/permission lookups
-keep their existing native owners.
+fresh canonical-profile and alias query for their disclosure scope. Profile creation,
+display-name and role changes, explicit avatar uploads, identity merges, and final
+identity/permission lookups keep their existing native owners.
+
+Post-login Tailscale avatar adoption reads and conditionally writes through the
+shared-state worker. Its transaction follows the current merge target and preserves
+every non-null avatar, including an explicit empty upload. Committed descriptors
+update the existing profile catalog before observers run; later edits and merges
+published by the host profile owner remain authoritative. The catalog retains its
+existing process-local freshness contract. Uncertain result delivery retains a fixed read-only
+reconciliation of the original physical source through close, without replaying
+the mutation or converting the original error into success. Failed reconciliation
+or reader retirement remains owned by canonical close for retry. Profile schema,
+avatar bytes, fetch limits, and final identity and permission checks are unchanged.
 
 Explicit promotion notice and claim annotations execute in the shared-state
 worker. The CLI awaits their best-effort completion before reporting results;

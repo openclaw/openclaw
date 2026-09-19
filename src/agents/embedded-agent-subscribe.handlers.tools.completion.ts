@@ -270,9 +270,6 @@ export async function handleToolExecutionEnd(
   const messageDelivery = readEmbeddedMessageDeliveryFact(
     readToolResultDetails(toolSendReceiptResult)?.messageDelivery,
   );
-  if (messageDelivery?.sourceReplyDelivered) {
-    ctx.state.sourceReplyDelivered = true;
-  }
   const didDeliverMessagingResult =
     isMessagingInvocation &&
     (messageDelivery
@@ -337,9 +334,17 @@ export async function handleToolExecutionEnd(
       result,
       isToolError,
     });
-  const sourceReplyFinal = deliveredMessageToolSourceReply
-    ? resolveMessageToolSourceReplyFinal(startArgs)
-    : undefined;
+  const sourceReplyFinal =
+    deliveredMessageToolSourceReply || messageDelivery?.sourceReplyDelivered
+      ? resolveMessageToolSourceReplyFinal(startArgs)
+      : undefined;
+  ctx.state.sourceReplyDelivered ||= messageDelivery?.sourceReplyDelivered;
+  if (
+    sourceReplyFinal !== false &&
+    (messageDelivery?.sourceReplyDelivered || deliveredCurrentSourceReply)
+  ) {
+    ctx.state.sourceReplyDeliveryState = "delivered";
+  }
   if (didDeliverMessagingResult && messageText) {
     ctx.state.messagingToolSentTexts.push(messageText);
     ctx.state.messagingToolSentTextsNormalized.push(normalizeTextForComparison(messageText));

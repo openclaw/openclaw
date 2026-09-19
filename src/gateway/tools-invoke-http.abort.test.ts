@@ -155,6 +155,13 @@ describe("POST /tools/invoke request cancellation", () => {
   });
 
   it("revokes the tool signal after a successful request and releases its disconnect watcher", async () => {
+    const revoked = vi.fn();
+    lifecycle.execute.mockImplementationOnce(async (_toolCallId, _args, signal) => {
+      // Observe while the tool owns the signal: Node 24 composites retain weak
+      // sources until subscribed, so a later getter can lose an aborted source to GC.
+      signal?.addEventListener("abort", revoked, { once: true });
+      return { ok: true };
+    });
     const response = await invokeAbortProbe();
 
     expect(response.status).toBe(200);
@@ -163,6 +170,7 @@ describe("POST /tools/invoke request cancellation", () => {
 
     const toolSignal = lifecycle.execute.mock.calls[0]?.[2];
     expect(toolSignal).toBeInstanceOf(AbortSignal);
+    expect(revoked).toHaveBeenCalledTimes(1);
     expect(toolSignal?.aborted).toBe(true);
     expect(lifecycle.beforeHook).toHaveBeenCalledWith(
       expect.objectContaining({ signal: toolSignal }),
