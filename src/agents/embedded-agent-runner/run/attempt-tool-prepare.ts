@@ -44,7 +44,9 @@ import type {
   CronCreatorToolAllowlistEntry,
   CronToolsAllowCaptureRef,
 } from "../../tools/cron-tool.js";
+import { createChannelQuestionPromptDelivery } from "../../tools/question-prompt-send.js";
 import { log } from "../logger.js";
+import { resolveEmbeddedMessageDeliveryRoute } from "../message-delivery-route.js";
 import { resolveAttemptToolPolicyMessageProvider } from "./attempt-run-decisions.js";
 import type { EmbeddedAttemptSetup } from "./attempt-setup.js";
 import { resolveAttemptSpawnWorkspaceDir } from "./attempt-thread-helpers.js";
@@ -275,6 +277,13 @@ export async function prepareEmbeddedAttemptToolBase(params: {
           const codingToolOptions: OpenClawCodingToolsOptions = {
             agentId: params.setup.sessionAgentId,
             ...buildConversationContext(),
+            questionPrompt:
+              attempt.onToolResult === undefined
+                ? createChannelQuestionPromptDelivery({
+                    cfg: attempt.config ?? {},
+                    ...resolveEmbeddedMessageDeliveryRoute(attempt),
+                  })
+                : undefined,
             exec: {
               ...attempt.execOverrides,
               ...(sessionPermissionPolicy
