@@ -545,6 +545,11 @@ suite.define(() => {
             )
             .toEqual({ loadingOlder: false, historyIntentConsumed: false });
         await thread.hover();
+        const profiler = captureUiProof ? await context.newCDPSession(page) : undefined;
+        if (profiler) {
+          await profiler.send("Profiler.enable");
+          await profiler.send("Profiler.start");
+        }
         const paginationStartedAt = Date.now();
         const performanceBeforePagination = await readPerformanceSample(page);
         let loadedMessages = await loadedMessageCount();
@@ -574,7 +579,22 @@ suite.define(() => {
           .toBe(true);
         expect(loadedMessages).toBe(transcriptLength);
         const paginationLoadedMs = Date.now() - paginationStartedAt;
+        await selectedPane.evaluate(async (element) => {
+          await (element as HTMLElement & { updateComplete: Promise<boolean> }).updateComplete;
+          await new Promise<void>((resolve) => {
+            requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+          });
+        });
+        const paginationRenderedMs = Date.now() - paginationStartedAt;
         const performanceAfterPagination = await readPerformanceSample(page);
+        if (profiler) {
+          const { profile } = await profiler.send("Profiler.stop");
+          await writeFile(
+            path.join(artifactDir, "history-pagination.cpuprofile"),
+            JSON.stringify(profile),
+          );
+          await profiler.detach();
+        }
         expect(
           await selectedPane.evaluate((element) =>
             (
@@ -682,6 +702,7 @@ suite.define(() => {
               startupIdentity,
               pagination: paginationMetrics,
               paginationLoadedMs,
+              paginationRenderedMs,
               initialLoadedMessages,
               olderPageCommits,
               performanceBeforePagination,

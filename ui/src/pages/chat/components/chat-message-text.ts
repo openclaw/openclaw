@@ -1,5 +1,6 @@
 import { html, nothing, render, type RootPart } from "lit";
 import { AsyncDirective, directive } from "lit/async-directive.js";
+import { guard } from "lit/directives/guard.js";
 import { keyed } from "lit/directives/keyed.js";
 import { ref } from "lit/directives/ref.js";
 import { icons } from "../../../components/icons.ts";
@@ -90,28 +91,72 @@ function shouldCollapseUserMessage(markdown: string): boolean {
 
 const FORWARDED_MESSAGE_COLLAPSE_LINE_LIMIT = 3;
 
+type MessageOverflowMeasurement = {
+  element: HTMLElement;
+  read: () => (() => void) | undefined;
+};
+const pendingOverflowMeasurements = new Set<MessageOverflowMeasurement>();
+let overflowMeasurementQueued = false;
+
+function scheduleOverflowMeasurement(measurement: MessageOverflowMeasurement): void {
+  pendingOverflowMeasurements.add(measurement);
+  if (overflowMeasurementQueued) {
+    return;
+  }
+  overflowMeasurementQueued = true;
+  queueMicrotask(() => {
+    overflowMeasurementQueued = false;
+    const measurements = [...pendingOverflowMeasurements];
+    pendingOverflowMeasurements.clear();
+    // Restore every full preview before reading layout, then apply every cut.
+    // Interleaving these phases forces a separate page layout for each message.
+    for (const entry of measurements) {
+      entry.element.style.removeProperty("--chat-disclosure-clamp");
+    }
+    const updates = measurements.map((entry) => entry.read());
+    for (const update of updates) {
+      update?.();
+    }
+  });
+}
+
 function messageOverflowRef(expanded: boolean, forwarded: boolean) {
   let resizeObserver: ResizeObserver | null = null;
+  let onFontsLoaded: (() => void) | undefined;
+  let measurement: MessageOverflowMeasurement | undefined;
+  let generation = 0;
   return (element: Element | undefined) => {
+    const currentGeneration = ++generation;
+    if (measurement) {
+      pendingOverflowMeasurements.delete(measurement);
+      measurement = undefined;
+    }
     resizeObserver?.disconnect();
     resizeObserver = null;
+    if (onFontsLoaded) {
+      document.fonts?.removeEventListener("loadingdone", onFontsLoaded);
+      onFontsLoaded = undefined;
+    }
     if (!(element instanceof HTMLElement)) {
       return;
     }
-    const update = () => {
+    const read = () => {
+      if (generation !== currentGeneration) {
+        return undefined;
+      }
       const disclosure = element.parentElement;
       const toggle = disclosure?.querySelector<HTMLButtonElement>(
         ":scope > .chat-message-disclosure__toggle",
       );
       if (!disclosure || !toggle) {
-        return;
+        return undefined;
       }
       let clamp: string | undefined;
       let fadeSize: string | undefined;
       const text = element.querySelector<HTMLElement>(":scope > .chat-text");
       // Test the full preview before a partial-line cut can create its own overflow.
-      element.style.removeProperty("--chat-disclosure-clamp");
-      const overflows = element.scrollHeight > element.clientHeight + 1;
+      const scrollHeight = element.scrollHeight;
+      const overflows = scrollHeight > element.clientHeight + 1;
       if (!forwarded && !expanded && overflows && text && element.clientWidth > 0) {
         const origin = element.getBoundingClientRect().top - element.scrollTop;
         const defaultLineHeight = Number.parseFloat(getComputedStyle(text).lineHeight);
@@ -169,39 +214,54 @@ function messageOverflowRef(expanded: boolean, forwarded: boolean) {
           fadeSize = `${lastLine.clamp - lastLine.top - lastLine.lineHeight * MESSAGE_PREVIEW_FADE_START_FRACTION}px`;
         }
       }
-      for (const [property, value] of [
-        ["--chat-disclosure-clamp", clamp],
-        ["--chat-disclosure-fade-size", fadeSize],
-      ] as const) {
-        if (value === undefined) {
-          element.style.removeProperty(property);
-        } else if (element.style.getPropertyValue(property) !== value) {
-          element.style.setProperty(property, value);
+      const hidden =
+        !expanded &&
+        (forwarded && text
+          ? scrollHeight <=
+            Number.parseFloat(getComputedStyle(text).lineHeight) *
+              FORWARDED_MESSAGE_COLLAPSE_LINE_LIMIT +
+              1
+          : !overflows);
+      return () => {
+        if (generation !== currentGeneration) {
+          return;
         }
+        for (const [property, value] of [
+          ["--chat-disclosure-clamp", clamp],
+          ["--chat-disclosure-fade-size", fadeSize],
+        ] as const) {
+          if (value === undefined) {
+            element.style.removeProperty(property);
+          } else if (element.style.getPropertyValue(property) !== value) {
+            element.style.setProperty(property, value);
+          }
+        }
+        toggle.hidden = hidden;
+      };
+    };
+    const currentMeasurement = (measurement = { element, read });
+    const update = () => {
+      if (generation === currentGeneration) {
+        scheduleOverflowMeasurement(currentMeasurement);
       }
-      const threshold =
-        forwarded && text
-          ? Number.parseFloat(getComputedStyle(text).lineHeight) *
-            FORWARDED_MESSAGE_COLLAPSE_LINE_LIMIT
-          : element.clientHeight;
-      toggle.hidden = !expanded && element.scrollHeight <= threshold + 1;
     };
     // Lit resolves refs while siblings are still committing. Measure after the
     // toggle exists; it renders visible so collapsing never shifts row height,
     // and only content that fits the clamp hides it.
     queueMicrotask(() => {
-      update();
+      if (generation !== currentGeneration) {
+        return;
+      }
       const text = element.querySelector(":scope > .chat-text");
       if (text) {
         resizeObserver?.observe(text);
       }
-      // Font metrics can change without resizing tightly spaced text.
-      void document.fonts?.ready.then(() => {
-        if (resizeObserver) {
-          update();
-        }
-      });
     });
+    update();
+    // Font metrics can change without resizing tightly spaced text, including
+    // fonts loaded after this retained message's original render.
+    onFontsLoaded = update;
+    document.fonts?.addEventListener("loadingdone", onFontsLoaded);
     if (typeof ResizeObserver === "function") {
       resizeObserver = new ResizeObserver(update);
       resizeObserver.observe(element);
@@ -229,7 +289,7 @@ export function renderMessageMarkdown(
   const recoverFullMessage =
     isAssistant || (opts.role === "user" && disclosure?.onRetryFullMessage);
   const recovered = recoverFullMessage && disclosure?.expanded;
-  const text = renderMarkdownText(
+  const { content: text, parts } = renderMarkdownText(
     recovered ? (disclosure.markdown ?? markdown) : markdown,
     messageKey,
     opts.isStreaming,
@@ -271,7 +331,9 @@ export function renderMessageMarkdown(
     >
       <div
         class="chat-message-disclosure__content"
-        ${ref(messageOverflowRef(expanded, Boolean(opts.isForwarded)))}
+        ${guard([...parts, expanded, opts.isForwarded], () =>
+          ref(messageOverflowRef(expanded, Boolean(opts.isForwarded))),
+        )}
       >
         ${text}
       </div>
@@ -403,9 +465,12 @@ function renderMarkdownText(
     parts[terminalPart] = appendDuplicateSuffix(parts[terminalPart], duplicateSuffix);
   }
   const content = markdownParts(messageKey, markdown, parts, media);
-  return html`
-    <div class="chat-text" dir="${detectTextDirection(media?.text ?? markdown)}">${content}</div>
-  `;
+  return {
+    parts,
+    content: html`
+      <div class="chat-text" dir="${detectTextDirection(media?.text ?? markdown)}">${content}</div>
+    `,
+  };
 }
 
 function appendDuplicateSuffix(rendered: string, suffix: DuplicateSuffix): string {
