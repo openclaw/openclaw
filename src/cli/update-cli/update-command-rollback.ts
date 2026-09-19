@@ -138,7 +138,7 @@ export async function rollbackFailedUpdate(params: {
   };
   const recoveryEnv = { ...env, [ALLOW_OLDER_BINARY_DESTRUCTIVE_ACTIONS_ENV]: "1" };
   const port = before?.stopped
-    ? await resolveUpdatedGatewayRestartPort({ config, serviceEnv: env })
+    ? (before.servicePort ?? (await resolveUpdatedGatewayRestartPort({ config, serviceEnv: env })))
     : undefined;
   const failed = (reason: string) => ({
     result: {
@@ -433,18 +433,47 @@ export async function rollbackFailedUpdate(params: {
     if (!stopped || port === undefined) {
       return { result, rolledBack: false };
     }
-    if (!params.previousVerified || !result.before?.version) {
+    const originalVerdict = before?.serviceUpdateVerdict;
+    const restoresDifferentService =
+      originalVerdict?.kind === "owned" && originalVerdict.requiresInstallRootRefresh;
+    const serviceRoot = restoresDifferentService ? originalVerdict.root : params.previousRoot;
+    const serviceIdentity = restoresDifferentService ? before?.serviceIdentity : result.before;
+    if (!params.previousVerified || !serviceIdentity?.version) {
       // Restoring retained bytes is safe after the schema fence. Starting the
       // previous runtime additionally requires its pre-activation verification.
       return failed("previous-version-unverified");
     }
+    if (
+      restoresDifferentService &&
+      !isDeepStrictEqual(await readPackageUpdateIdentity(serviceRoot), serviceIdentity)
+    ) {
+      return failed("previous-version-unverified");
+    }
+    assertCurrent();
+    // A receipt can restore service A while the package transaction restores CLI B.
+    // Pin A's original command instead of granting the candidate stop snapshot its identity.
+    const restoredService = restoresDifferentService
+      ? {
+          ...stopped,
+          serviceUpdateVerdict: {
+            ...originalVerdict,
+            refreshDefinition: false,
+            requiresInstallRootRefresh: false,
+          },
+          serviceEnv: before?.serviceEnv,
+          serviceNodeRunner: before?.serviceNodeRunner,
+          servicePort: before?.servicePort,
+          serviceIdentity: before?.serviceIdentity,
+          serviceManagerUid: before?.serviceManagerUid,
+        }
+      : stopped;
     failureReason = "service-revalidation-failed";
     await maybeResumeWindowsTaskAutoStartAfterPackageUpdate(
       stopped,
       true,
       createWindowsTaskAutoStartGuard({
-        root: params.previousRoot,
-        before: stopped,
+        root: serviceRoot,
+        before: restoredService,
         timeoutMs: params.timeoutMs,
       }),
       assertCurrent,
@@ -462,19 +491,20 @@ export async function rollbackFailedUpdate(params: {
     });
     let verdict = await revalidateManagedGatewayServiceAfterUpdate({
       state,
-      root: params.previousRoot,
-      preManagedServiceStop: stopped,
+      root: serviceRoot,
+      preManagedServiceStop: restoredService,
     });
     if (verdict.kind === "owned") {
       verdict = { ...verdict, refreshDefinition: false, requiresInstallRootRefresh: false };
     }
     assertCurrent();
+    stoppedForRollback = { ...restoredService, serviceUpdateVerdict: verdict };
     result.recovery = {
       serviceRestartSafe: true,
       packageRollbackVerified: true,
-      version: result.before.version,
+      version: serviceIdentity.version,
       reason: "gateway-verification-incomplete",
-      ...(result.before.buildId ? { buildId: result.before.buildId } : {}),
+      ...(serviceIdentity.buildId ? { buildId: serviceIdentity.buildId } : {}),
     };
     assertCurrent();
     if (opts.run) {
@@ -496,6 +526,10 @@ export async function rollbackFailedUpdate(params: {
       result,
       opts,
       refreshServiceEnv: false,
+      expectedGatewayIdentity: {
+        version: serviceIdentity.version,
+        ...(serviceIdentity.buildId ? { buildId: serviceIdentity.buildId } : {}),
+      },
       serviceUpdateVerdict: verdict,
       serviceManagerUid: before?.serviceManagerUid,
       serviceEnv: recoveryEnv,

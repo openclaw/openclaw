@@ -394,7 +394,6 @@ describe.skipIf(process.platform === "win32")("Doctor native repair authority or
               command: inspected.command,
               activeRoot: path.join(root, "candidate"),
               env: process.env,
-              updateRepairMode: false,
               maintenance: {
                 assertCurrent: () => {
                   if (!current) {

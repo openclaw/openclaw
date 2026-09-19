@@ -269,6 +269,7 @@ function expectNoGatewayTermination() {
 }
 
 function addMissingTaskInstallResponses(responses: NativeResponse[]): void {
+  taskProbe.mockReturnValueOnce({ status: 1, stdout: "-2147024894" });
   queueNativeResponses(
     { code: 1, stdout: "", stderr: "ERROR: The system cannot find the file specified." },
     ...responses.flatMap((response, index) =>
@@ -1939,7 +1940,7 @@ describe("Windows startup fallback", () => {
 
       expect(schtasksCalls).toHaveLength(expectedCommandCount);
       expect(schtasksResponses).toEqual([]);
-      expect(taskProbe).toHaveBeenCalledTimes(2);
+      expect(taskProbe).toHaveBeenCalledTimes(3);
       expect(sleepMock).toHaveBeenCalledTimes(1);
       expect(sleepMock).toHaveBeenCalledWith(250);
       expect(spawn).not.toHaveBeenCalled();

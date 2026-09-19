@@ -1,13 +1,16 @@
-import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { hasErrnoCode } from "../infra/errno.js";
+import { isDeepStrictEqual } from "node:util";
+import { sha256Hex } from "../infra/crypto-digest.js";
 import {
+  readScheduledTaskDefinition,
+  restoreScheduledTaskDefinition,
   resumeScheduledTaskAutoStartAfterUpdate,
+  setScheduledTaskXmlEnabled,
   suspendScheduledTaskAutoStartForUpdate,
 } from "./schtasks-control.js";
 import { execSchtasks } from "./schtasks-exec.js";
-import { resolveTaskName, writeTaskXmlTempFile } from "./schtasks-layout.js";
+import { resolveTaskName } from "./schtasks-layout.js";
 import {
   shouldManageGatewayListenerPort,
   terminateScheduledTaskGatewayListeners,
@@ -19,44 +22,40 @@ import {
   waitForScheduledTaskRunningEvidence,
 } from "./schtasks-runtime.js";
 import { probeScheduledTaskExists, probeScheduledTaskState } from "./schtasks-state-probe.js";
-import type { GatewayServiceEnv } from "./service-types.js";
+import { publishServiceFile, readServiceFileState } from "./service-stage.js";
+import type { GatewayServiceEnv, GatewayServiceInstallArgs } from "./service-types.js";
 import {
   assertGatewayServiceUpdateCurrent,
   withGatewayServiceInstallationRecovery,
 } from "./service-update-authority.js";
 
 type TaskFile = { path: string; contents: Buffer };
+type TaskFileState = NonNullable<Awaited<ReturnType<typeof readServiceFileState>>>;
+type TaskFileSnapshot = TaskFile & {
+  original: { contents: Buffer; state: TaskFileState } | null;
+  after: TaskFileState | null;
+  prepared: TaskFileState | null;
+  changed: boolean;
+};
 
 async function publishTaskFile(file: TaskFile): Promise<void> {
-  const temporary = `${file.path}.${randomUUID()}.tmp`;
-  try {
-    assertGatewayServiceUpdateCurrent();
-    await fs.writeFile(temporary, file.contents, { flag: "wx", mode: 0o600 });
-    assertGatewayServiceUpdateCurrent();
-    await fs.rename(temporary, file.path);
-  } finally {
-    await fs.unlink(temporary).catch(() => undefined);
-  }
+  await publishServiceFile({ filePath: file.path, contents: file.contents, mode: 0o600 });
 }
 
 export async function backupScheduledTaskDefinition(env: GatewayServiceEnv, scriptPath: string) {
   const taskName = resolveTaskName(env);
   const readXml = async () => {
-    const query = await execSchtasks(["/Query", "/TN", taskName, "/XML"]);
-    if (query.code !== 0) {
-      const missing =
-        query.code !== 124 &&
-        (query.stderr || query.stdout).toLowerCase().includes("cannot find the file");
-      if (missing || probeScheduledTaskExists(taskName) === false) {
+    try {
+      return await readScheduledTaskDefinition(env);
+    } catch (error) {
+      assertGatewayServiceUpdateCurrent();
+      if (probeScheduledTaskExists(taskName) === false) {
         return null;
       }
-      throw new Error(`Could not back up Scheduled Task ${taskName} before replacement.`);
+      throw new Error(`Could not back up Scheduled Task ${taskName} before replacement.`, {
+        cause: error,
+      });
     }
-    const xml = query.stdout.replace(/^\uFEFF/u, "").replaceAll(String.fromCharCode(0), "");
-    if (!/<Task[\s>]/u.test(xml)) {
-      throw new Error(`Scheduled Task ${taskName} did not return a restorable XML definition.`);
-    }
-    return xml;
   };
   const original = await readXml();
   const originalRuntime = original === null ? null : probeScheduledTaskState(taskName);
@@ -74,10 +73,7 @@ export async function backupScheduledTaskDefinition(env: GatewayServiceEnv, scri
   let unsettled = false;
   // Disabling is our only allowed registration change during settlement.
   const withoutEnabled = (xml: string | null) =>
-    xml?.replace(
-      /(<Settings(?:\s[^>]*)?>[\s\S]*?<Enabled>)\s*(?:true|false)\s*(<\/Enabled>)/u,
-      "$1$2",
-    );
+    xml === null ? null : setScheduledTaskXmlEnabled(xml, false);
   const assertReceipt = async (disabled = false) => {
     const current = unsettled ? null : await readXml();
     if (
@@ -149,25 +145,17 @@ export async function backupScheduledTaskDefinition(env: GatewayServiceEnv, scri
           throw new Error(`Could not remove replacement Scheduled Task ${taskName}.`);
         }
       } else {
-        const temporary = await writeTaskXmlTempFile(original);
-        try {
-          const restored = await execSchtasks([
-            "/Create",
-            "/F",
-            "/TN",
-            taskName,
-            "/XML",
-            temporary,
-          ]);
-          if (restored.code !== 0 || (await readXml()) !== original) {
-            throw new Error(`Could not restore Scheduled Task ${taskName} from ${backupPath}.`);
-          }
-          receipt = original;
-        } finally {
-          await fs.rm(path.dirname(temporary), { recursive: true, force: true });
-        }
+        await restoreScheduledTaskDefinition({
+          env,
+          xml: original,
+          beforeWrite: () => assertReceipt(true),
+          assertCurrent: assertGatewayServiceUpdateCurrent,
+        });
+        receipt = setScheduledTaskXmlEnabled(original, false);
+        await assertReceipt();
         if (
           originalRuntime?.status !== "found" ||
+          typeof originalRuntime.enabled !== "boolean" ||
           (originalRuntime.state !== 1 &&
             originalRuntime.state !== 3 &&
             originalRuntime.state !== 4)
@@ -176,9 +164,15 @@ export async function backupScheduledTaskDefinition(env: GatewayServiceEnv, scri
             `Scheduled Task ${taskName} previous running state could not be verified.`,
           );
         }
+        // Definition restoration preserves settlement's disabled state; policy is owned here.
+        if (originalRuntime.enabled) {
+          await resumeScheduledTaskAutoStartAfterUpdate(env, { beforeMutation: assertReceipt });
+          receipt = setScheduledTaskXmlEnabled(original, true);
+          await assertReceipt();
+        }
         if (originalRuntime.state === 4) {
           // Disabling a running task only suspends its triggers; preserve both prior facts.
-          const restoreDisabled = originalRuntime.enabled === false;
+          const restoreDisabled = !originalRuntime.enabled;
           try {
             if (restoreDisabled) {
               await resumeScheduledTaskAutoStartAfterUpdate(env, { beforeMutation: assertReceipt });
@@ -214,41 +208,103 @@ export async function backupScheduledTaskDefinition(env: GatewayServiceEnv, scri
 }
 
 /** Capture every launcher before replacing any part of the runnable definition. */
-export async function publishScheduledTaskFiles(files: TaskFile[]) {
+export async function publishScheduledTaskFiles(
+  files: TaskFile[],
+  definitionTransaction?: GatewayServiceInstallArgs["definitionTransaction"],
+) {
+  if (definitionTransaction) {
+    for (const file of files) {
+      assertGatewayServiceUpdateCurrent();
+      await fs.mkdir(path.dirname(file.path), { recursive: true });
+      await publishServiceFile({
+        filePath: file.path,
+        contents: file.contents,
+        mode: 0o600,
+        definitionTransaction,
+      });
+    }
+    return undefined;
+  }
   const snapshots = await withGatewayServiceInstallationRecovery(
     () =>
       Promise.all(
-        files.map(async (file) => ({
-          ...file,
-          previous: await fs.readFile(file.path).catch((error: unknown) => {
-            if (hasErrnoCode(error, "ENOENT")) {
-              return null;
-            }
-            throw error;
-          }),
-        })),
+        files.map(async (file): Promise<TaskFileSnapshot> => {
+          const before = await readServiceFileState(file.path);
+          const previous = before ? await fs.readFile(file.path) : null;
+          if (previous && sha256Hex(previous) !== before?.sha256) {
+            throw new Error(`Task launcher changed during backup: ${file.path}`);
+          }
+          return {
+            ...file,
+            original: before && previous ? { contents: previous, state: before } : null,
+            after: before,
+            prepared: null,
+            changed: false,
+          };
+        }),
       ),
     async () => false,
   );
-  const published: typeof snapshots = [];
   const assertPublished = async () => {
-    for (const file of published) {
-      if (!(await fs.readFile(file.path)).equals(file.contents)) {
+    for (const file of snapshots) {
+      const current = await readServiceFileState(file.path);
+      const prepared = file.prepared;
+      if (prepared) {
+        // Rename can change ctime; the prepared inode and payload identify our publication.
+        if (
+          current &&
+          (["dev", "ino", "sha256", "mode", "size", "mtimeMs"] as const).every(
+            (key) => current[key] === prepared[key],
+          )
+        ) {
+          file.after = current;
+          file.changed = true;
+        } else if (!isDeepStrictEqual(current, file.after)) {
+          throw new Error(`Task launcher changed during publication: ${file.path}`);
+        }
+        file.prepared = null;
+      }
+      if (!isDeepStrictEqual(current, file.after)) {
         throw new Error(`Task launcher changed after publication: ${file.path}`);
       }
     }
   };
+  const publish = (file: (typeof snapshots)[number], contents: Buffer, mode: number) =>
+    publishServiceFile({
+      filePath: file.path,
+      contents,
+      mode,
+      definitionTransaction: {
+        assertCurrent: assertGatewayServiceUpdateCurrent,
+        beforeWrite: assertPublished,
+        filePrepared: async (_source, temporary) => {
+          const prepared = temporary === null ? null : await readServiceFileState(temporary);
+          if (!prepared) {
+            throw new Error(`Task launcher publication was not staged: ${file.path}`);
+          }
+          await assertPublished();
+          file.prepared = prepared;
+        },
+        fileWritten: assertPublished,
+        taskPrepared: async () => {},
+        taskWritten: async () => {},
+      },
+    });
   const restore = async () => {
     await assertPublished();
-    for (const file of published.toReversed()) {
-      if (file.previous) {
-        await publishTaskFile({ path: file.path, contents: file.previous });
+    const changed = snapshots.filter((file) => file.changed);
+    for (const file of changed.toReversed()) {
+      if (file.original) {
+        await publish(file, file.original.contents, file.original.state.mode);
       } else {
+        await assertPublished();
         assertGatewayServiceUpdateCurrent();
         await fs.unlink(file.path);
+        file.after = null;
       }
     }
-    return published.length > 0;
+    await assertPublished();
+    return changed.length > 0;
   };
   return withGatewayServiceInstallationRecovery(async () => {
     for (const directory of new Set(files.map((file) => path.dirname(file.path)))) {
@@ -256,13 +312,12 @@ export async function publishScheduledTaskFiles(files: TaskFile[]) {
       await fs.mkdir(directory, { recursive: true });
     }
     for (const file of snapshots) {
-      if (file.previous) {
-        await publishTaskFile({ path: `${file.path}.bak`, contents: file.previous });
+      if (file.original) {
+        await publishTaskFile({ path: `${file.path}.bak`, contents: file.original.contents });
       }
     }
     for (const file of snapshots) {
-      await publishTaskFile(file);
-      published.push(file);
+      await publish(file, file.contents, 0o600);
     }
     return { restore, assertPublished };
   }, restore);

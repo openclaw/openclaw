@@ -1,4 +1,5 @@
 import fs from "node:fs/promises";
+import path from "node:path";
 import { PassThrough } from "node:stream";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
@@ -9,6 +10,7 @@ import {
   readScheduledTaskCommand,
   resolveTaskScriptPath,
 } from "./schtasks-layout.js";
+import type { GatewayServiceDefinitionTransactionHooks } from "./service-stage.js";
 import {
   assertGatewayServiceUpdateCurrent,
   withGatewayServiceUpdateAuthority,
@@ -132,7 +134,9 @@ it.each(["registration", "xml-upgrade"])("preserves recovery when %s fails", asy
   if (failure === "xml-upgrade") {
     await expect(installation).resolves.toEqual({ scriptPath });
     expect(args.warn).toHaveBeenCalledWith(
-      expect.stringMatching(/launch command.*refreshed.*XML settings.*not.*Task Scheduler/u),
+      expect.stringMatching(
+        /launch command.*refreshed.*XML settings.*battery settings.*not.*registration rejected.*Inspect Task Scheduler.*retry the service installation/u,
+      ),
     );
     expect(native.run).toHaveBeenCalledOnce();
     expect((await readScheduledTaskCommand(args.env))?.programArguments).toEqual(
@@ -174,18 +178,23 @@ it.each([
     return result;
   });
   const rename = fs.rename;
-  const writeFile = fs.writeFile;
-  vi.spyOn(fs, "writeFile").mockImplementation(async (...parameters) => {
-    await writeFile(...parameters);
+  const open = fs.open;
+  vi.spyOn(fs, "open").mockImplementation(async (...parameters) => {
+    const handle = await open(...parameters);
     if (
       phase === "before-publication" &&
       typeof parameters[0] === "string" &&
-      parameters[0].startsWith(`${scriptPath}.`) &&
-      !parameters[0].includes(".bak") &&
-      !parameters[0].includes(".task.xml")
+      parameters[0].startsWith(
+        path.join(path.dirname(scriptPath), `.${path.basename(scriptPath)}.openclaw`),
+      )
     ) {
-      revoked = true;
+      const sync = handle.sync.bind(handle);
+      vi.spyOn(handle, "sync").mockImplementation(async () => {
+        await sync();
+        revoked = true;
+      });
     }
+    return handle;
   });
   vi.spyOn(fs, "rename").mockImplementation(async (...parameters) => {
     await rename(...parameters);
@@ -239,6 +248,92 @@ it.each([
   }
   expect(args.warn).not.toHaveBeenCalled();
 });
+
+it.each(["before-rename", "after-rename", "foreign-after-rename"])(
+  "settles a launcher publication failure %s before reporting recovery",
+  async (phase) => {
+    const { args, scriptPath, launcherPath, original, assertRestored, assertBackups } =
+      await fixture();
+    await fs.chmod(scriptPath, 0o640);
+    let revoked = false;
+    let renamed = false;
+    let faulted = false;
+    let foreignInode: number | undefined;
+    const rename = fs.rename;
+    const open = fs.open;
+    vi.spyOn(fs, "rename").mockImplementation(async (...parameters) => {
+      if (!faulted && parameters[1] === scriptPath && phase === "before-rename") {
+        faulted = true;
+        revoked = true;
+        throw new Error("Launcher rename rejected");
+      }
+      await rename(...parameters);
+      if (parameters[1] === scriptPath) {
+        renamed = true;
+      }
+    });
+    vi.spyOn(fs, "open").mockImplementation(async (...parameters) => {
+      const handle = await open(...parameters);
+      if (
+        parameters[1] === "wx" &&
+        typeof parameters[0] === "string" &&
+        parameters[0].startsWith(
+          path.join(path.dirname(scriptPath), `.${path.basename(scriptPath)}.openclaw`),
+        )
+      ) {
+        const close = handle.close.bind(handle);
+        vi.spyOn(handle, "close").mockImplementation(async () => {
+          await close();
+          if (!renamed || faulted) {
+            return;
+          }
+          faulted = true;
+          if (phase === "foreign-after-rename") {
+            const replacement = `${scriptPath}.operator`;
+            await fs.writeFile(replacement, await fs.readFile(scriptPath), { mode: 0o600 });
+            await rename(replacement, scriptPath);
+            foreignInode = (await fs.stat(scriptPath)).ino;
+          }
+          revoked = true;
+          throw new Error("Published launcher descriptor close failed");
+        });
+      }
+      return handle;
+    });
+
+    await expect(
+      withGatewayServiceUpdateAuthority(
+        () => {
+          if (revoked) {
+            throw new Error("Doctor custody revoked");
+          }
+        },
+        () => installScheduledTask(args),
+        { updateOwned: false, assertRecoveryCurrent: () => {} },
+      ),
+    ).rejects.toMatchObject({
+      code: "service-authority-revoked",
+      outcome:
+        phase === "before-rename"
+          ? "unchanged"
+          : phase === "after-rename"
+            ? "restored"
+            : "recovery-pending",
+    });
+    expect(faulted).toBe(true);
+    if (phase === "foreign-after-rename") {
+      expect((await fs.stat(scriptPath)).ino).toBe(foreignInode);
+      expect(await fs.readFile(scriptPath)).not.toEqual(original);
+      expect(await fs.readFile(launcherPath, "utf8")).toBe("original hidden launcher");
+    } else {
+      await assertRestored();
+      expect((await fs.stat(scriptPath)).mode & 0o7777).toBe(0o640);
+    }
+    await assertBackups();
+    expect(native.run).not.toHaveBeenCalled();
+    expect(native.exec.mock.calls.every(([command]) => command[0] === "/Query")).toBe(true);
+  },
+);
 
 it.each([
   "queued",
@@ -316,6 +411,56 @@ it.each([
   }
 });
 
+it.each(["publication", "activation"])(
+  "leaves transactional repair recovery to its caller after revoked %s",
+  async (phase) => {
+    const { args, scriptPath, launcherPath, original } = await fixture();
+    let revoked = false;
+    const written: string[] = [];
+    const definitionTransaction: GatewayServiceDefinitionTransactionHooks = {
+      assertCurrent: () => {},
+      beforeWrite: async () => {},
+      filePrepared: async () => {},
+      fileWritten: async (file) => {
+        written.push(file);
+        if (phase === "publication" && file === scriptPath) {
+          revoked = true;
+        }
+      },
+      taskPrepared: async () => {},
+      taskWritten: async () => {},
+    };
+    native.run.mockImplementation(async () => {
+      revoked = true;
+      return "scheduled-task";
+    });
+    await expect(
+      withGatewayServiceUpdateAuthority(
+        () => {
+          if (revoked) {
+            throw new Error("Doctor custody revoked");
+          }
+        },
+        () => installScheduledTask({ ...args, definitionTransaction }),
+        { updateOwned: false, assertRecoveryCurrent: () => {} },
+      ),
+    ).rejects.toMatchObject({ code: "service-authority-revoked", outcome: undefined });
+    expect(await fs.readFile(scriptPath)).not.toEqual(original);
+    expect(written).toEqual(phase === "publication" ? [scriptPath] : [scriptPath, launcherPath]);
+    expect(native.exec.mock.calls.map(([command]) => command[0])).toEqual(
+      phase === "publication" ? [] : ["/Query", "/Create"],
+    );
+    for (const backup of [
+      `${scriptPath}.bak`,
+      `${launcherPath}.bak`,
+      `${scriptPath}.task.xml.bak`,
+    ]) {
+      await expect(fs.stat(backup)).rejects.toMatchObject({ code: "ENOENT" });
+    }
+    expect(args.warn).not.toHaveBeenCalled();
+  },
+);
+
 it.each([
   "running",
   "running-disabled",
@@ -384,7 +529,7 @@ it.each([
   expect(native.exec.mock.calls.filter(([command]) => command[0] === "/Run")).toHaveLength(
     originallyRunning ? 1 : 0,
   );
-  expect(native.exec.mock.calls.some(([command]) => command.includes("/ENABLE"))).toBe(!enabled);
+  expect(native.exec.mock.calls.some(([command]) => command.includes("/ENABLE"))).toBe(true);
   expect(taskRunning).toBe(originallyRunning && !pending);
   if (pending) {
     expect(args.warn).toHaveBeenCalledWith(

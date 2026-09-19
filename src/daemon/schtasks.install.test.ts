@@ -15,10 +15,12 @@ import {
 import { auditGatewayServiceConfig, SERVICE_AUDIT_CODES } from "./service-audit.js";
 import { buildServiceEnvironment } from "./service-env.js";
 
+const taskProbe = vi.hoisted(() => vi.fn(() => ({ status: 0, stdout: '{"state":4}', stderr: "" })));
+
 // Install tests control registration separately; runtime probes never inspect host tasks.
 vi.mock("node:child_process", async () => ({
   ...(await vi.importActual<typeof import("node:child_process")>("node:child_process")),
-  spawnSync: vi.fn(() => ({ status: 0, stdout: '{"state":4}', stderr: "" })),
+  spawnSync: taskProbe,
 }));
 
 const resolveWindowsOemEncodingMock = vi.hoisted(() => vi.fn((): string | null => null));
@@ -60,6 +62,14 @@ vi.mock("./schtasks-exec.js", () => ({
       }
     }
     const response = schtasksResponses.shift() ?? { code: 0, stdout: "", stderr: "" };
+    if (
+      argv[0] === "/Query" &&
+      argv.includes("/XML") &&
+      response.code !== 0 &&
+      response.stderr.includes("cannot find the file")
+    ) {
+      taskProbe.mockReturnValueOnce({ status: 1, stdout: "-2147024894", stderr: "" });
+    }
     return argv[0] === "/Query" && argv.includes("/XML") && response.code === 0 && !response.stdout
       ? {
           ...response,
@@ -74,6 +84,7 @@ beforeEach(() => {
   schtasksCalls.length = 0;
   schtasksResponses.length = 0;
   xmlPayloadCaptures.length = 0;
+  taskProbe.mockReset().mockReturnValue({ status: 0, stdout: '{"state":4}', stderr: "" });
   resolveWindowsOemEncodingMock.mockReset();
   resolveWindowsOemEncodingMock.mockReturnValue(null);
 });
@@ -603,9 +614,10 @@ describe("installScheduledTask", () => {
         "/Query",
         "/Change",
         "/Create",
+        "/Query",
         "/Run",
       ]);
-      expectTaskRunCall(3);
+      expectTaskRunCall(4);
     });
   });
 

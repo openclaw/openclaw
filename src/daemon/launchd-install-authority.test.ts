@@ -11,7 +11,10 @@ import {
   resolveLaunchAgentEnvWrapperPath,
   resolveLaunchAgentPlistPath,
 } from "./launchd-service-files.js";
-import { withGatewayServiceUpdateAuthority } from "./service-update-authority.js";
+import {
+  assertGatewayServiceUpdateCurrent,
+  withGatewayServiceUpdateAuthority,
+} from "./service-update-authority.js";
 
 const native = vi.hoisted(() => ({
   command: vi.fn<typeof import("../process/exec.js").runCommandWithTimeout>(),
@@ -72,111 +75,158 @@ async function fixture() {
 }
 
 it.each([
-  "snapshot-read",
-  "before-write",
-  "before-publication",
-  "environment-published",
-  "plist-published",
-  "bootout",
-  "bootstrap",
-] as const)("restores owned LaunchAgent effects when custody ends at %s", async (boundary) => {
-  const { args, originals, plist, environment } = await fixture();
-  let current = true;
-  let loaded = true;
-  const activations: string[] = [];
-  const bootstrapDefinitions: string[] = [];
-  native.command.mockImplementation(async ([binary, nativeAction]) => {
-    const action = expectDefined(nativeAction, "Expected a native launchctl action");
-    expect(binary).toBe("launchctl");
-    if (action === "bootout" || action === "unload") {
-      loaded = false;
-    }
-    if (action === "bootstrap") {
-      loaded = true;
-      bootstrapDefinitions.push(await fs.readFile(plist, "utf8"));
-    }
-    if (action !== "print") {
-      activations.push(action);
-    }
-    if (action === boundary || (boundary === "snapshot-read" && action === "print")) {
-      current = false;
-    }
-    return {
-      code: action === "print" && !loaded ? 1 : 0,
-      stdout: action === "print" && loaded ? "state = waiting\n" : "",
-      stderr: action === "print" && !loaded ? "Could not find service" : "",
-      signal: null,
-      killed: false,
-      termination: "exit",
-    };
-  });
-  if (boundary === "before-write") {
-    native.ownership.mockImplementationOnce(async () => {
-      current = false;
+  ...[
+    "snapshot-read",
+    "before-write",
+    "before-publication",
+    "environment-published",
+    "plist-published",
+    "publication-error",
+    "bootout",
+    "bootstrap",
+  ].map((boundary) => ({ boundary, transaction: false })),
+  ...["plist-published", "bootstrap"].map((boundary) => ({ boundary, transaction: true })),
+])(
+  "retains owned LaunchAgent effects at $boundary (caller transaction=$transaction)",
+  async ({ boundary, transaction }) => {
+    const { args, originals, plist, environment } = await fixture();
+    let current = true;
+    let loaded = true;
+    const activations: string[] = [];
+    const bootstrapDefinitions: string[] = [];
+    native.command.mockImplementation(async ([binary, nativeAction]) => {
+      const action = expectDefined(nativeAction, "Expected a native launchctl action");
+      expect(binary).toBe("launchctl");
+      if (action === "bootout" || action === "unload") {
+        loaded = false;
+      }
+      if (action === "bootstrap") {
+        loaded = true;
+        bootstrapDefinitions.push(await fs.readFile(plist, "utf8"));
+      }
+      if (action !== "print") {
+        activations.push(action);
+      }
+      if (action === boundary || (boundary === "snapshot-read" && action === "print")) {
+        current = false;
+      }
+      return {
+        code: action === "print" && !loaded ? 1 : 0,
+        stdout: action === "print" && loaded ? "state = waiting\n" : "",
+        stderr: action === "print" && !loaded ? "Could not find service" : "",
+        signal: null,
+        killed: false,
+        termination: "exit",
+      };
     });
-  }
-  const write = fs.writeFile;
-  vi.spyOn(fs, "writeFile").mockImplementation(async (...parameters) => {
-    await write(...parameters);
-    if (
-      boundary === "before-publication" &&
-      typeof parameters[0] === "string" &&
-      parameters[0].endsWith(".tmp")
-    ) {
-      current = false;
+    if (boundary === "before-write") {
+      native.ownership.mockImplementationOnce(async () => {
+        current = false;
+      });
     }
-  });
-  const rename = fs.rename;
-  const publications: string[] = [];
-  vi.spyOn(fs, "rename").mockImplementation(async (from, to) => {
-    await rename(from, to);
-    publications.push(String(to));
-    if (
-      (boundary === "environment-published" && to === environment) ||
-      (boundary === "plist-published" && to === plist)
-    ) {
-      current = false;
-    }
-  });
+    const write = fs.writeFile;
+    vi.spyOn(fs, "writeFile").mockImplementation(async (...parameters) => {
+      await write(...parameters);
+      if (boundary === "before-publication") {
+        current = false;
+      }
+    });
+    const rename = fs.rename;
+    const publications: string[] = [];
+    let failedPublication = false;
+    vi.spyOn(fs, "rename").mockImplementation(async (from, to) => {
+      await rename(from, to);
+      publications.push(String(to));
+      if (boundary === "publication-error" && to === plist && !failedPublication) {
+        failedPublication = true;
+        throw new Error("publication confirmation failed after rename");
+      }
+      if (
+        (boundary === "environment-published" && to === environment) ||
+        (boundary === "plist-published" && to === plist)
+      ) {
+        current = false;
+      }
+    });
 
-  await expect(
-    withGatewayServiceUpdateAuthority(
+    const installation = withGatewayServiceUpdateAuthority(
       () => {
         if (!current) {
           throw new Error("Doctor maintenance custody released");
         }
       },
-      () => installLaunchAgent(args),
+      () =>
+        installLaunchAgent({
+          ...args,
+          ...(transaction
+            ? {
+                definitionTransaction: {
+                  assertCurrent: assertGatewayServiceUpdateCurrent,
+                  beforeWrite: async () => {
+                    assertGatewayServiceUpdateCurrent();
+                  },
+                  filePrepared: async () => {
+                    assertGatewayServiceUpdateCurrent();
+                  },
+                  fileWritten: async () => {
+                    assertGatewayServiceUpdateCurrent();
+                  },
+                  taskPrepared: async () => {
+                    throw new Error("Unexpected task publication");
+                  },
+                  taskWritten: async () => {
+                    throw new Error("Unexpected task publication");
+                  },
+                },
+              }
+            : {}),
+        }),
       { updateOwned: false, assertRecoveryCurrent: () => {} },
-    ),
-  ).rejects.toMatchObject({
-    code: "service-authority-revoked",
-    outcome:
-      boundary.startsWith("before-") || boundary === "snapshot-read" ? "unchanged" : "restored",
-  });
-  for (const [file, original] of originals) {
-    expect(await fs.readFile(file, "utf8")).toBe(original.contents);
-    expect((await fs.stat(file)).mode & 0o777).toBe(original.mode);
-  }
-  expect(loaded).toBe(true);
-  if (boundary.startsWith("before-") || boundary === "snapshot-read") {
-    expect(publications).toEqual([]);
-  }
-  if (boundary === "bootout" || boundary === "bootstrap") {
-    expect(bootstrapDefinitions.at(-1)).toBe(originals.get(plist)!.contents);
-    expect(bootstrapDefinitions).toHaveLength(boundary === "bootstrap" ? 2 : 1);
-    expect(activations).toEqual(
-      boundary === "bootout"
-        ? ["bootout", "enable", "bootstrap"]
-        : ["bootout", "unload", "enable", "bootstrap", "bootout", "enable", "bootstrap"],
     );
-  } else {
-    expect(activations).toEqual([]);
-  }
-  for (const directory of new Set([...originals.keys()].map((file) => path.dirname(file)))) {
-    expect((await fs.readdir(directory)).some((file) => file.endsWith(".tmp"))).toBe(false);
-  }
-});
+    if (boundary === "publication-error") {
+      await expect(installation).rejects.toThrow("publication confirmation failed after rename");
+    } else {
+      await expect(installation).rejects.toMatchObject({
+        code: "service-authority-revoked",
+        outcome: transaction
+          ? undefined
+          : boundary.startsWith("before-") || boundary === "snapshot-read"
+            ? "unchanged"
+            : "restored",
+      });
+    }
+    if (transaction) {
+      expect(await fs.readFile(plist, "utf8")).toContain("/candidate/openclaw/dist/index.js");
+      expect(loaded).toBe(true);
+      expect(activations).toEqual(
+        boundary === "bootstrap" ? ["bootout", "unload", "enable", "bootstrap"] : [],
+      );
+      return;
+    }
+    for (const [file, original] of originals) {
+      expect(await fs.readFile(file, "utf8")).toBe(original.contents);
+      expect((await fs.stat(file)).mode & 0o777).toBe(original.mode);
+    }
+    expect(loaded).toBe(true);
+    if (boundary.startsWith("before-") || boundary === "snapshot-read") {
+      expect(publications).toEqual([]);
+    }
+    if (boundary === "bootout" || boundary === "bootstrap") {
+      expect(bootstrapDefinitions.at(-1)).toBe(originals.get(plist)!.contents);
+      expect(bootstrapDefinitions).toHaveLength(boundary === "bootstrap" ? 2 : 1);
+      expect(activations).toEqual(
+        boundary === "bootout"
+          ? ["bootout", "enable", "bootstrap"]
+          : ["bootout", "unload", "enable", "bootstrap", "bootout", "enable", "bootstrap"],
+      );
+    } else {
+      expect(activations).toEqual([]);
+    }
+    for (const directory of new Set([...originals.keys()].map((file) => path.dirname(file)))) {
+      expect((await fs.readdir(directory)).some((file) => file.endsWith(".tmp"))).toBe(false);
+    }
+  },
+);
 
 it("retains another writer's artifact instead of claiming successful LaunchAgent recovery", async () => {
   const { args, plist, environment } = await fixture();

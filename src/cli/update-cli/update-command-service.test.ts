@@ -459,7 +459,6 @@ describe("maybeRestartService", () => {
       warning,
     );
   });
-
   it.for(
     ["installed", "registration rejected", "activation uncertain", "definition unchanged"].flatMap(
       (outcome) => ["default", "work"].map((profile) => ({ outcome, profile })),
@@ -499,9 +498,12 @@ describe("maybeRestartService", () => {
         }),
       );
       onTestFinished(() => service.mockRestore());
-      mocks.runUpdatedInstallGatewayCommand.mockImplementation(async (_params, action) => {
+      mocks.runUpdatedInstallGatewayCommand.mockImplementation(async (params, action) => {
         if (action === "install") {
           if (outcome === "registration rejected" || outcome === "activation uncertain") {
+            if (outcome === "activation uncertain" && params.definitionRecovery) {
+              params.definitionRecovery.unverified = true;
+            }
             throw new Error(outcome);
           }
           if (outcome === "installed") {
@@ -533,6 +535,7 @@ describe("maybeRestartService", () => {
         result,
         opts: { json: true },
         refreshServiceEnv: true,
+        definitionRecovery: {},
         serviceEnv: { HOME: home, OPENCLAW_PROFILE: profile },
         requireRunningServiceAfterRestart: true,
         serviceUpdateVerdict: {
@@ -545,12 +548,23 @@ describe("maybeRestartService", () => {
         gatewayPort: 18789,
         timeoutMs: 1_000,
       });
-      expect(actual).toBe(outcome === "installed" ? "ok" : "reconciliation-pending");
+      expect(actual).toBe(
+        outcome === "installed"
+          ? "ok"
+          : outcome === "activation uncertain"
+            ? "failed"
+            : "reconciliation-pending",
+      );
       expect(servingRoot).toBe(outcome === "installed" ? roots[1] : roots[0]);
       expect(mocks.runUpdatedInstallGatewayCommand.mock.calls.map(([, action]) => action)).toEqual(
         outcome === "installed" ? ["install", "restart"] : ["install"],
       );
       if (outcome !== "installed") {
+        if (outcome === "activation uncertain") {
+          expect(result.steps).toHaveLength(1);
+          expect(result.steps[0]?.advisory?.message).toContain(outcome);
+          return;
+        }
         if (outcome !== "definition unchanged") {
           expect(result.steps[0]?.advisory?.message).toContain(outcome);
         }

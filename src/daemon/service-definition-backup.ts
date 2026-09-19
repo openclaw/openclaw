@@ -325,7 +325,19 @@ export async function captureGatewayServiceDefinitionBackup(
       await hooks.beforeWrite();
       return structuredClone(receipt);
     },
-    compensate: () => restoreGatewayServiceDefinitionBackup({ ...params, receipt }),
+    compensate: async (): Promise<boolean> => {
+      const prepared = await prepareGatewayServiceDefinitionRestore({ ...params, receipt });
+      const changed =
+        prepared.receipt.files.some((file) => !isDeepStrictEqual(file.before, file.after)) ||
+        (prepared.task !== null &&
+          prepared.receipt.task?.afterPolicySha256 !==
+            taskPolicy(prepared.task.subarray(2).toString("utf16le")));
+      if (!changed) {
+        return false;
+      }
+      await restorePreparedGatewayServiceDefinitionBackup(params, prepared);
+      return true;
+    },
   };
 }
 
@@ -376,7 +388,21 @@ export async function verifyGatewayServiceDefinitionBackup(
 export async function restoreGatewayServiceDefinitionBackup(
   params: Context & { receipt: GatewayServiceDefinitionBackupReceipt },
 ): Promise<void> {
-  const { receipt, hooks, contents, task } = await prepareGatewayServiceDefinitionRestore(params);
+  await restorePreparedGatewayServiceDefinitionBackup(
+    params,
+    await prepareGatewayServiceDefinitionRestore(params),
+  );
+}
+
+async function restorePreparedGatewayServiceDefinitionBackup(
+  params: Context,
+  {
+    receipt,
+    hooks,
+    contents,
+    task,
+  }: Awaited<ReturnType<typeof prepareGatewayServiceDefinitionRestore>>,
+): Promise<void> {
   const primary = receipt.files[0]!;
   if (process.platform === "darwin" && primary.before?.sha256 !== primary.after?.sha256) {
     const label = resolveLaunchAgentLabel(params.env);

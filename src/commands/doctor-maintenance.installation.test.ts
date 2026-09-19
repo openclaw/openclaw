@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { applyCliProfileEnv } from "../cli/profile.js";
 import type { GatewayServiceCommandConfig } from "../daemon/service-types.js";
 import { GatewayServiceAuthorityError } from "../daemon/service-update-authority.js";
 import type { GatewayService } from "../daemon/service.js";
@@ -62,7 +63,11 @@ vi.mock("./daemon-install-helpers.js", () => ({
         "--port",
         String(port),
       ],
-      environment: { HOME: process.env.HOME },
+      environment: {
+        HOME: process.env.HOME,
+        PATH: "/usr/bin:/bin",
+        OPENCLAW_PROFILE: process.env.OPENCLAW_PROFILE,
+      },
     };
   },
 }));
@@ -139,14 +144,36 @@ async function runInstallationCase(params: {
   inspectionFailure?: "unavailable" | "lost-before-install";
   inspectionScenario?: "slow-admission" | "competing-update";
   invocationPort?: string;
-  consent?: { aggressive: boolean; approved: boolean; interactive: boolean };
+  profile?: string;
+  updateInProgress?: boolean;
+  consent?: {
+    aggressive: boolean;
+    approved: boolean;
+    interactive: boolean;
+    mixed?: "stale-native" | "custom-argv";
+  };
 }) {
   const { installFails, initiallyStopped } = params;
   if (params.consent) {
     const { auditGatewayServiceConfig } = await vi.importActual<
       typeof import("../daemon/service-audit.js")
     >("../daemon/service-audit.js");
-    mocks.audit.mockImplementation(auditGatewayServiceConfig);
+    mocks.audit.mockImplementation(async (options) => {
+      const audit = await auditGatewayServiceConfig(options);
+      if (params.consent?.mixed === "stale-native") {
+        audit.definitionDrift = [
+          ...(audit.definitionDrift ?? []),
+          {
+            kind: "outdated",
+            key: "RunAtLoad",
+            current: false,
+            expected: true,
+            message: "LaunchAgent RunAtLoad differs from the installer value true.",
+          },
+        ];
+      }
+      return audit;
+    });
     mocks.confirm.mockResolvedValue(params.consent.approved);
     Object.defineProperty(process.stdin, "isTTY", {
       value: params.consent.interactive,
@@ -177,7 +204,7 @@ async function runInstallationCase(params: {
       OPENCLAW_HOME: undefined,
       OPENCLAW_STATE_DIR: undefined,
       OPENCLAW_CONFIG_PATH: undefined,
-      OPENCLAW_PROFILE: undefined,
+      OPENCLAW_PROFILE: params.profile,
       OPENCLAW_SUPERVISOR_MODE: undefined,
       OPENCLAW_SERVICE_REPAIR_POLICY: undefined,
       OPENCLAW_SERVICE_MARKER: undefined,
@@ -185,10 +212,13 @@ async function runInstallationCase(params: {
       OPENCLAW_SYSTEMD_UNIT: undefined,
       OPENCLAW_GATEWAY_PORT: params.invocationPort,
       OPENCLAW_UPDATE_RUN_ID: undefined,
-      OPENCLAW_UPDATE_IN_PROGRESS: undefined,
+      OPENCLAW_UPDATE_IN_PROGRESS: params.updateInProgress ? "1" : undefined,
       OPENCLAW_UPDATE_PARENT_ALLOWS_GATEWAY_ACTIVATION: undefined,
     },
     async () => {
+      if (params.profile) {
+        applyCliProfileEnv({ profile: params.profile, homedir: () => home });
+      }
       if (params.inspectionScenario) {
         openOpenClawStateDatabase();
         closeOpenClawStateDatabaseForTest();
@@ -200,8 +230,13 @@ async function runInstallationCase(params: {
           ...(params.consent?.aggressive ? ["node", "run"] : ["gateway"]),
           "--port",
           "19989",
+          ...(params.consent?.mixed === "custom-argv" ? ["--verbose"] : []),
         ],
-        environment: { HOME: home },
+        environment: {
+          HOME: home,
+          PATH: "/usr/bin:/bin",
+          ...(params.profile ? { OPENCLAW_PROFILE: params.profile } : {}),
+        },
       };
       let running = !initiallyStopped;
       let nativeInspectionReads = 0;
@@ -294,17 +329,31 @@ async function runInstallationCase(params: {
         const notes = mocks.note.mock.calls.flat().join("\n");
         expect(notes).toContain(`${oldRoot} (2026.9.4)`);
         expect(notes).toContain(`${mocks.activeRoot} (2026.9.17)`);
-        expect(notes).toContain("openclaw doctor --fix");
-        expect(notes).toContain("openclaw gateway install --force");
+        const cli = params.profile ? `openclaw --profile ${params.profile}` : "openclaw";
+        expect(notes).toContain(`${cli} doctor --fix`);
+        expect(notes).toContain(`${cli} gateway install --force`);
+        if (params.updateInProgress) {
+          expect(notes).toContain("deferred to update finalization");
+          expect(events).toEqual([]);
+          expect(command.programArguments[1]).toBe(path.join(oldRoot, "dist/index.js"));
+          expect(mocks.confirm).not.toHaveBeenCalled();
+          return;
+        }
         if (params.consent) {
           expect(mocks.confirm).toHaveBeenCalledTimes(
-            Number(params.consent.aggressive && params.consent.interactive),
+            Number(
+              Boolean(params.consent.aggressive || params.consent.mixed) &&
+                params.consent.interactive,
+            ),
           );
           if (params.consent.aggressive) {
             expect(notes).toContain("Service command does not include the gateway subcommand");
           }
         }
-        if (params.inspectionFailure || (params.consent?.aggressive && !params.consent.approved)) {
+        if (
+          params.inspectionFailure ||
+          ((params.consent?.aggressive || params.consent?.mixed) && !params.consent.approved)
+        ) {
           expect(events).toEqual([]);
           expect(command.programArguments[1]).toBe(path.join(oldRoot, "dist/index.js"));
         } else {
@@ -481,8 +530,14 @@ it.each([
   { aggressive: true, approved: true, interactive: true },
   { aggressive: true, approved: false, interactive: false },
   { aggressive: false, approved: false, interactive: true },
-])(
-  "requires consent beyond installation drift (aggressive=$aggressive, approved=$approved, interactive=$interactive)",
+  { aggressive: false, approved: false, interactive: true, mixed: "stale-native" },
+  { aggressive: false, approved: true, interactive: true, mixed: "stale-native" },
+  { aggressive: false, approved: false, interactive: false, mixed: "stale-native" },
+  { aggressive: false, approved: false, interactive: true, mixed: "custom-argv" },
+  { aggressive: false, approved: true, interactive: true, mixed: "custom-argv" },
+  { aggressive: false, approved: false, interactive: false, mixed: "custom-argv" },
+] as const)(
+  "requires consent beyond installation drift (aggressive=$aggressive, mixed=$mixed, approved=$approved, interactive=$interactive)",
   async (consent) => runInstallationCase({ platform: "darwin", mode: "direct", consent }),
 );
 
@@ -505,4 +560,12 @@ it.each(["unavailable", "lost-before-install"] as const)(
 it.each(["unchanged", "restored", "recovery-pending", "unclassified"] as const)(
   "records native authority loss as a warning and blocks only pending recovery (%s)",
   (revoked) => runInstallationCase({ platform: "linux", mode: "maintenance", revoked }),
+);
+
+it("keeps installation reconciliation guidance on the selected profile", async () =>
+  runInstallationCase({ platform: "linux", mode: "direct", profile: "work" }));
+
+it.each(["linux", "darwin", "win32"] as const)(
+  "leaves two-prefix installation drift with update finalization on %s",
+  async (platform) => runInstallationCase({ platform, mode: "direct", updateInProgress: true }),
 );

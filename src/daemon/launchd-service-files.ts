@@ -1,5 +1,5 @@
 /** LaunchAgent plist, environment-file, and atomic publication ownership. */
-import { createHash, randomUUID } from "node:crypto";
+import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
@@ -16,7 +16,11 @@ import { assertNoSystemLaunchDaemonOwnership } from "./launchd-system.js";
 import { formatLine, normalizeWindowsPathSeparators } from "./output.js";
 import { resolveDaemonHomeDir, resolveGatewayStateDir } from "./paths.js";
 import { resolveGatewaySupervisorLogPaths } from "./restart-logs.js";
-import { readServiceFileState } from "./service-stage.js";
+import {
+  publishServiceFile,
+  readServiceFileState,
+  type GatewayServiceDefinitionTransactionHooks,
+} from "./service-stage.js";
 import type { GatewayServiceEnv, GatewayServiceInstallArgs } from "./service-types.js";
 import {
   assertGatewayServiceUpdateCurrent,
@@ -43,7 +47,7 @@ function resolveLaunchAgentEnvDir(env: GatewayServiceEnv): string {
   return path.join(resolveGatewayStateDir(env), LAUNCH_AGENT_ENV_DIR_NAME);
 }
 
-function resolveLaunchAgentEnvFilePath(env: GatewayServiceEnv, label: string): string {
+export function resolveLaunchAgentEnvFilePath(env: GatewayServiceEnv, label: string): string {
   return path.join(resolveLaunchAgentEnvDir(env), `${label}.env`);
 }
 
@@ -75,7 +79,7 @@ function buildLaunchAgentEnvironmentFile(entries: Array<[string, string]>): stri
   ].join("\n");
 }
 
-function buildLaunchAgentEnvironmentWrapper(): string {
+export function buildLaunchAgentEnvironmentWrapper(): string {
   return `#!/bin/sh
 set -eu
 env_file="$1"
@@ -138,7 +142,7 @@ async function prepareLaunchAgentProgramArguments(params: {
   environment: GatewayServiceEnv | undefined;
   stdout?: NodeJS.WritableStream;
   warn?: (message: string) => void;
-  publication: LaunchAgentFilePublication;
+  definitionTransaction: GatewayServiceDefinitionTransactionHooks;
 }): Promise<{
   programArguments: string[];
   inlineEnvironment?: GatewayServiceEnv;
@@ -155,17 +159,23 @@ async function prepareLaunchAgentProgramArguments(params: {
   const wrapperPath = resolveLaunchAgentEnvWrapperPath(params.env, params.label);
   const generatedWrapper = buildLaunchAgentEnvironmentWrapper();
   await ensureSecureDirectory(envDir, LAUNCH_AGENT_PRIVATE_DIR_MODE);
-  await params.publication.publish(
-    envFilePath,
-    buildLaunchAgentEnvironmentFile(entries),
-    LAUNCH_AGENT_ENV_FILE_MODE,
-  );
+  await publishServiceFile({
+    filePath: envFilePath,
+    contents: buildLaunchAgentEnvironmentFile(entries),
+    mode: LAUNCH_AGENT_ENV_FILE_MODE,
+    definitionTransaction: params.definitionTransaction,
+  });
   const overwriteWarnings = await resolveLaunchAgentEnvironmentWrapperOverwriteWarnings({
     wrapperPath,
     generatedWrapper,
   });
   writeLaunchAgentOverwriteWarnings(params.stdout, params.warn, overwriteWarnings);
-  await params.publication.publish(wrapperPath, generatedWrapper, LAUNCH_AGENT_ENV_WRAPPER_MODE);
+  await publishServiceFile({
+    filePath: wrapperPath,
+    contents: generatedWrapper,
+    mode: LAUNCH_AGENT_ENV_WRAPPER_MODE,
+    definitionTransaction: params.definitionTransaction,
+  });
 
   if (
     isLaunchAgentEnvironmentWrapperArgs({
@@ -257,73 +267,103 @@ async function captureLaunchAgentFiles(paths: string[]) {
     async () => false,
   );
   const published = new Map<string, LaunchAgentFileState>();
+  const prepared = new Map<string, LaunchAgentFileState>();
+  const matchesPublication = (
+    current: LaunchAgentFileState | null,
+    expected: LaunchAgentFileState,
+  ): current is LaunchAgentFileState =>
+    current !== null &&
+    (["dev", "ino", "sha256", "mode", "size", "mtimeMs"] as const).every(
+      (key) => current[key] === expected[key],
+    );
   const verify = async (file: string) => {
     const current = await readServiceFileState(file);
     const expected = published.get(file);
-    // Rename changes ctime; the prepared inode, payload, mode, and mtime still bind the write.
-    const matches = expected
-      ? current !== null &&
-        (["dev", "ino", "sha256", "mode", "size", "mtimeMs"] as const).every(
-          (key) => current[key] === expected[key],
-        )
-      : isDeepStrictEqual(current, originals.get(file)?.state);
-    if (!matches) {
+    if (
+      expected
+        ? !matchesPublication(current, expected)
+        : !isDeepStrictEqual(current, originals.get(file)?.state)
+    ) {
       throw new Error(`LaunchAgent artifact changed after capture or publication: ${file}`);
     }
     return current;
   };
-  const assertCurrent = async () => {
+  const beforeWrite = async () => {
+    assertGatewayServiceUpdateCurrent();
+    // A rename may finish before publication confirmation or directory fsync fails.
+    for (const [file, pending] of prepared) {
+      const current = await readServiceFileState(file);
+      if (matchesPublication(current, pending)) {
+        published.set(file, current);
+      } else {
+        await verify(file);
+      }
+      prepared.delete(file);
+    }
     for (const file of originals.keys()) {
       await verify(file);
     }
+    assertGatewayServiceUpdateCurrent();
   };
-  const publish = async (
-    file: string,
-    contents: string | Buffer,
-    mode: number,
-    beforePublish?: () => Promise<void>,
-  ) => {
-    if (!originals.has(file)) {
-      throw new Error("Not a captured LaunchAgent publication target.");
-    }
-    await verify(file);
-    const temporary = `${file}.openclaw-${randomUUID()}.tmp`;
-    try {
+  const refuseTaskPublication = async () => {
+    throw new Error("LaunchAgent file receipts cannot publish Scheduled Tasks.");
+  };
+  const hooks: GatewayServiceDefinitionTransactionHooks = {
+    assertCurrent: assertGatewayServiceUpdateCurrent,
+    beforeWrite,
+    filePrepared: async (file, temporary) => {
+      if (!originals.has(file) || temporary === null) {
+        throw new Error("Not a captured LaunchAgent publication target.");
+      }
+      const pending = await readServiceFileState(temporary);
       assertGatewayServiceUpdateCurrent();
-      await fs.writeFile(temporary, contents, { flag: "wx", mode });
-      assertGatewayServiceUpdateCurrent();
-      await fs.chmod(temporary, mode);
-      const prepared = await readServiceFileState(temporary);
-      if (!prepared) {
+      if (!pending) {
         throw new Error("Prepared LaunchAgent artifact disappeared before publication.");
       }
-      await beforePublish?.();
-      await verify(file);
+      prepared.set(file, pending);
+    },
+    fileWritten: async (file, contents) => {
+      const current = await readServiceFileState(file);
+      const pending = prepared.get(file);
       assertGatewayServiceUpdateCurrent();
-      await fs.rename(temporary, file);
-      published.set(file, prepared);
-      const committed = await verify(file);
-      if (committed) {
-        published.set(file, committed);
+      if (
+        !pending ||
+        !matchesPublication(current, pending) ||
+        contents === null ||
+        current?.sha256 !== createHash("sha256").update(contents).digest("hex")
+      ) {
+        throw new Error(`LaunchAgent artifact changed after publication: ${file}`);
       }
-      assertGatewayServiceUpdateCurrent();
-    } finally {
-      await fs.unlink(temporary).catch(() => undefined);
-    }
+      published.set(file, current);
+      prepared.delete(file);
+    },
+    taskPrepared: refuseTaskPublication,
+    taskWritten: refuseTaskPublication,
   };
   return {
     originals,
-    publish,
-    assertCurrent,
+    hooks,
+    assertCurrent: beforeWrite,
     restore: async (): Promise<boolean> => {
+      if (!published.size && !prepared.size) {
+        return false;
+      }
+      await beforeWrite();
       if (!published.size) {
         return false;
       }
-      await assertCurrent();
-      for (const file of [...published.keys()].toReversed()) {
+      const order = (file: string) =>
+        file === paths[0] ? 1 : originals.get(file)!.snapshot ? 0 : 2;
+      // Restore original inputs, then their reference, before retiring newly created inputs.
+      for (const file of [...published.keys()].toSorted((a, b) => order(a) - order(b))) {
         const original = originals.get(file)!;
         if (original.snapshot !== null && original.state) {
-          await publish(file, original.snapshot.contents, original.snapshot.mode);
+          await publishServiceFile({
+            filePath: file,
+            contents: original.snapshot.contents,
+            mode: original.snapshot.mode,
+            definitionTransaction: hooks,
+          });
           original.state = published.get(file)!;
         } else {
           await verify(file);
@@ -347,13 +387,19 @@ export function captureLaunchAgentInstallFiles(env: GatewayServiceEnv) {
   ]);
 }
 
-async function publishLaunchAgentPlist(
-  params: { label: string; plistPath: string; contents: string },
-  publication: LaunchAgentFilePublication,
-): Promise<void> {
-  await publication.publish(params.plistPath, params.contents, LAUNCH_AGENT_PLIST_MODE, () =>
-    assertNoSystemLaunchDaemonOwnership(params.label),
-  );
+async function publishLaunchAgentPlist(params: {
+  label: string;
+  plistPath: string;
+  contents: string;
+  definitionTransaction: GatewayServiceDefinitionTransactionHooks;
+}): Promise<void> {
+  await publishServiceFile({
+    filePath: params.plistPath,
+    contents: params.contents,
+    mode: LAUNCH_AGENT_PLIST_MODE,
+    definitionTransaction: params.definitionTransaction,
+    beforeRename: () => assertNoSystemLaunchDaemonOwnership(params.label),
+  });
   await assertNoSystemLaunchDaemonOwnership(params.label);
 }
 
@@ -391,7 +437,8 @@ export async function writeLaunchAgentPlist(
   publication?: LaunchAgentFilePublication,
 ): Promise<{ plistPath: string; stdoutPath: string }> {
   assertGatewayServiceUpdateCurrent();
-  if (!publication) {
+  const definitionTransaction = args.definitionTransaction ?? publication?.hooks;
+  if (!definitionTransaction) {
     const captured = await captureLaunchAgentInstallFiles(args.env);
     return withGatewayServiceInstallationRecovery(
       () => writeLaunchAgentPlist(args, captured),
@@ -419,7 +466,7 @@ export async function writeLaunchAgentPlist(
     environment,
     stdout,
     warn,
-    publication,
+    definitionTransaction,
   });
 
   const serviceDescription = resolveGatewayServiceDescription({ env, description });
@@ -434,7 +481,7 @@ export async function writeLaunchAgentPlist(
     stderrPath: stdoutPath,
     environment: prepared.inlineEnvironment,
   });
-  await publishLaunchAgentPlist({ label, plistPath, contents: plist }, publication);
+  await publishLaunchAgentPlist({ label, plistPath, contents: plist, definitionTransaction });
   return { plistPath, stdoutPath };
 }
 export async function rewriteLaunchAgentPlistForRestart({
@@ -459,6 +506,7 @@ export async function rewriteLaunchAgentPlistForRestart({
   }
 
   const publication = await captureLaunchAgentInstallFiles(env);
+  const definitionTransaction = publication.hooks;
   return withGatewayServiceInstallationRecovery(async () => {
     const { logDir, stdoutPath } = resolveGatewaySupervisorLogPaths(env, { platform: "darwin" });
     await ensureSecureDirectory(logDir);
@@ -479,7 +527,7 @@ export async function rewriteLaunchAgentPlistForRestart({
       environment: canonicalEnvironment,
       stdout,
       warn,
-      publication,
+      definitionTransaction,
     });
     const plist = buildLaunchAgentPlist({
       label,
@@ -497,7 +545,7 @@ export async function rewriteLaunchAgentPlistForRestart({
       await ensureLaunchAgentPlistReadable(plistPath);
       return false;
     }
-    await publishLaunchAgentPlist({ label, plistPath, contents: plist }, publication);
+    await publishLaunchAgentPlist({ label, plistPath, contents: plist, definitionTransaction });
     return true;
   }, publication.restore);
 }

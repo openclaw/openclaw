@@ -20,6 +20,7 @@ const owners = new AsyncLocalStorage<
       assertCurrent: () => void;
       compensate: <T>(operation: () => Promise<T>) => Promise<T>;
       updateOwned: boolean;
+      originalRoot?: string;
     }
   | undefined
 >();
@@ -29,9 +30,10 @@ const owners = new AsyncLocalStorage<
 export async function withGatewayServiceUpdateAuthority<T>(
   assertOwner: (() => void) | undefined,
   operation: (assertCurrent: () => void) => Promise<T>,
-  options?: { updateOwned?: boolean; assertRecoveryCurrent?: () => void },
+  options?: { updateOwned?: boolean; assertRecoveryCurrent?: () => void; originalRoot?: string },
 ): Promise<T> {
   const parent = owners.getStore();
+  const originalRoot = parent?.originalRoot ?? options?.originalRoot;
   let active = true;
   const assertScope = (compensating = false) => {
     if (!active) {
@@ -64,9 +66,10 @@ export async function withGatewayServiceUpdateAuthority<T>(
       {
         assertCurrent,
         updateOwned: parent?.updateOwned || (options?.updateOwned ?? true),
+        originalRoot,
         compensate: (restore) =>
           owners.run(parent, () =>
-            withGatewayServiceUpdateAuthority(() => assertScope(true), restore),
+            withGatewayServiceUpdateAuthority(() => assertScope(true), restore, { originalRoot }),
           ),
       },
       async () => {
@@ -93,6 +96,13 @@ export function assertGatewayServiceUpdateCurrent(): boolean {
 
 export function isUpdateOwnedGatewayServiceCommand(): boolean {
   return owners.getStore()?.updateOwned === true;
+}
+
+/** Original-root evidence is usable only while its inherited owner remains live. */
+export function readGatewayServiceUpdateOriginalRoot(): string | undefined {
+  const owner = owners.getStore();
+  owner?.assertCurrent();
+  return owner?.originalRoot;
 }
 
 /** Detached or unmanaged fallbacks cannot retain the updater grant. */

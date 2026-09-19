@@ -35,14 +35,7 @@ beforeEach(() => {
   native.read.mockReset().mockResolvedValue(null);
 });
 
-it.each([
-  { enabled: "enabled", running: true, failure: "activation" },
-  { enabled: "disabled", running: false, failure: "activation" },
-  { enabled: "enabled-runtime", running: true, failure: "activation" },
-  { enabled: "enabled", running: true, failure: "availability-read" },
-  { enabled: "enabled", running: true, failure: "definition-read" },
-  { enabled: "enabled", running: true, failure: "policy-read" },
-])("preserves the previous prefix and native policy after $failure ($enabled)", async (prior) => {
+async function createInstallFixture() {
   const root = temporary.make("openclaw-systemd-rollback-");
   const env = {
     HOME: root,
@@ -60,6 +53,18 @@ it.each([
     await fs.mkdir(path.dirname(file), { recursive: true, mode: 0o700 });
     await fs.writeFile(file, contents, { mode: 0o600 });
   }
+  return { env, unit, environment, originals };
+}
+
+it.each([
+  { enabled: "enabled", running: true, failure: "activation" },
+  { enabled: "disabled", running: false, failure: "activation" },
+  { enabled: "enabled-runtime", running: true, failure: "activation" },
+  { enabled: "enabled", running: true, failure: "availability-read" },
+  { enabled: "enabled", running: true, failure: "definition-read" },
+  { enabled: "enabled", running: true, failure: "policy-read" },
+])("preserves the previous prefix and native policy after $failure ($enabled)", async (prior) => {
+  const { env, unit, originals } = await createInstallFixture();
   let enabled = prior.enabled;
   let running = prior.running;
   let failed = false;
@@ -138,3 +143,65 @@ it.each([
   }
   expect({ enabled, running }).toEqual({ enabled: prior.enabled, running: prior.running });
 });
+
+it.each(["publication", "activation"])(
+  "leaves %s interruption recovery to the definition transaction",
+  async (failure) => {
+    const { env, unit, environment, originals } = await createInstallFixture();
+    let current = true;
+    const revoke = () => {
+      current = false;
+      assertGatewayServiceUpdateCurrent();
+    };
+    native.exec.mockImplementation(async (_env, args) => {
+      assertGatewayServiceUpdateCurrent();
+      if (failure === "activation" && args[0] === "restart") {
+        revoke();
+      }
+      return { code: 0, termination: "exit", stdout: "", stderr: "" };
+    });
+    const check = async () => {
+      assertGatewayServiceUpdateCurrent();
+    };
+    const installation = withGatewayServiceUpdateAuthority(
+      () => {
+        if (!current) {
+          throw new Error("Doctor custody revoked during transaction-owned installation");
+        }
+      },
+      () =>
+        installSystemdService({
+          env,
+          stdout: new PassThrough(),
+          programArguments: ["/usr/bin/node", "/prefix-b/openclaw/dist/index.js", "gateway"],
+          environment: { SERVICE_VALUE: "candidate" },
+          environmentValueSources: { SERVICE_VALUE: "file" },
+          definitionTransaction: {
+            assertCurrent: assertGatewayServiceUpdateCurrent,
+            beforeWrite: check,
+            filePrepared: check,
+            fileWritten: async (file) => {
+              if (failure === "publication" && file === unit) {
+                revoke();
+              }
+              await check();
+            },
+            taskPrepared: check,
+            taskWritten: check,
+          },
+        }),
+      { updateOwned: false, assertRecoveryCurrent: () => {} },
+    );
+    await expect(installation).rejects.toMatchObject({
+      code: "service-authority-revoked",
+      outcome: undefined,
+    });
+    // The central receipt owner must restore these together in its own order.
+    expect(await fs.readFile(unit, "utf8")).toContain("/prefix-b/");
+    expect(await fs.readFile(environment, "utf8")).toContain("SERVICE_VALUE=candidate");
+    expect(await fs.readFile(`${unit}.bak`, "utf8")).toBe(originals.get(unit));
+    expect(native.exec.mock.calls.map(([, args]) => args[0])).toEqual(
+      failure === "publication" ? [] : ["daemon-reload", "enable", "restart"],
+    );
+  },
+);

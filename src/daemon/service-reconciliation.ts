@@ -1,9 +1,14 @@
 import { isDeepStrictEqual } from "node:util";
+import { formatCliCommand } from "../cli/command-format.js";
 import { UPDATE_RUN_ID_ENV } from "../infra/update-control-plane-sentinel.js";
 import { recordUpdateRunStep } from "../infra/update-run-ledger.js";
+import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import { auditGatewayServiceConfig, type GatewayServiceExpectedCommand } from "./service-audit.js";
 import { captureGatewayServiceDefinitionBackup } from "./service-definition-backup.js";
-import { gatewayServiceCommandMatchesRoot } from "./service-layout.js";
+import {
+  gatewayServiceCommandMatchesRoot,
+  resolveGatewayServiceInstallationRefreshRoot,
+} from "./service-layout.js";
 import { withGatewayServiceOperationLock } from "./service-operation-lock.js";
 import type {
   GatewayServiceDefinitionBackupReceipt,
@@ -11,10 +16,12 @@ import type {
 } from "./service-stage.js";
 import type { GatewayServiceCommandConfig, GatewayServiceEnv } from "./service-types.js";
 import {
+  GatewayServiceAuthorityError,
   isUpdateOwnedGatewayServiceCommand,
   readGatewayServiceUpdateOriginalRoot,
+  withGatewayServiceInstallationRecovery,
 } from "./service-update-authority.js";
-import { resolveGatewayService } from "./service.js";
+import { readGatewayServiceState, resolveGatewayService } from "./service.js";
 
 /** Update repair shares the ordinary installer, retaining only facts needed for recovery. */
 export async function reconcileGatewayServiceDefinition(params: {
@@ -53,6 +60,7 @@ export async function reconcileGatewayServiceDefinition(params: {
     if (!command) {
       return deny("Gateway service definition could not be inspected; it was left unchanged.");
     }
+    const inspectHint = `Run ${formatCliCommand("openclaw gateway status --deep", params.env)} before retrying after the active maintenance or update finishes.`;
     let keys: string[] = [];
     const transaction = await captureGatewayServiceDefinitionBackup({
       env: params.env,
@@ -74,7 +82,25 @@ export async function reconcileGatewayServiceDefinition(params: {
         );
         assertCurrent();
         if (!ownership.includes(true)) {
-          throw new Error("Gateway service belongs to an unknown or foreign installation.");
+          const state = await readGatewayServiceState(resolveGatewayService(), {
+            env: params.env,
+            requireEffective: true,
+          });
+          assertCurrent();
+          if (!isDeepStrictEqual(state.command, command)) {
+            throw new Error("Gateway service definition changed during inspection.");
+          }
+          const refreshRoot = await resolveGatewayServiceInstallationRefreshRoot({
+            root: params.root,
+            state,
+          });
+          assertCurrent();
+          const owned =
+            refreshRoot && (await gatewayServiceCommandMatchesRoot(refreshRoot, command));
+          assertCurrent();
+          if (!owned) {
+            throw new Error("Gateway service belongs to an unknown or foreign installation.");
+          }
         }
         const audit = await auditGatewayServiceConfig({
           env: params.env,
@@ -92,34 +118,69 @@ export async function reconcileGatewayServiceDefinition(params: {
         }
         keys = audit.definitionDrift?.map((fact) => fact.key) ?? [];
       },
-    }).catch((error: unknown) =>
-      deny(
+    }).catch((error: unknown) => {
+      if (hasCommandProcessCleanupError(error)) {
+        throw error;
+      }
+      if (error instanceof GatewayServiceAuthorityError) {
+        warn(
+          `Service definition refresh was skipped; the definition was left unchanged: ${String(error)}. ${inspectHint}`,
+        );
+        throw new GatewayServiceAuthorityError(error, error.outcome ?? "unchanged");
+      }
+      return deny(
         `Service definition inspection or backup failed; the definition was preserved: ${String(error)}`,
-      ),
-    );
-    try {
-      await params.install(transaction.hooks);
-      assertCurrent();
-      const receipt = await transaction.finish();
-      warn(
-        `${keys.length ? `Reconciled Gateway service definition: ${keys.join(", ")}.` : "Refreshed Gateway service definition."} Backup: ${transaction.backupPaths.join(", ")}`,
       );
-      return receipt;
+    });
+    let recoveryResult: boolean | undefined;
+    let recoveryError: unknown;
+    try {
+      return await withGatewayServiceInstallationRecovery(
+        async () => {
+          await params.install(transaction.hooks);
+          assertCurrent();
+          const receipt = await transaction.finish();
+          warn(
+            `${keys.length ? `Reconciled Gateway service definition: ${keys.join(", ")}.` : "Refreshed Gateway service definition."} Backup: ${transaction.backupPaths.join(", ")}`,
+          );
+          return receipt;
+        },
+        async () => {
+          try {
+            recoveryResult = await transaction.compensate();
+            return recoveryResult;
+          } catch (error) {
+            recoveryError = error;
+            throw error;
+          }
+        },
+      );
     } catch (error) {
-      assertCurrent();
-      try {
-        await transaction.compensate();
-      } catch (recoveryError) {
+      if (hasCommandProcessCleanupError(error)) {
+        warn(
+          `Service definition refresh did not settle; backups retained: ${transaction.backupPaths.join(", ")}`,
+        );
+        throw error;
+      }
+      if (error instanceof GatewayServiceAuthorityError) {
+        warn(
+          error.outcome === "unchanged" || error.outcome === "restored"
+            ? `Service definition refresh stopped; the previous definition was ${error.outcome === "restored" ? "restored" : "left unchanged"}: ${String(error)}. ${inspectHint}`
+            : `Service definition recovery could not be verified: ${String(error)}; backups retained: ${transaction.backupPaths.join(", ")}. ${inspectHint}`,
+        );
+        throw error;
+      }
+      if (recoveryResult === undefined) {
         warn(
           `Service definition refresh failed: ${String(error)}. Recovery could not be verified: ${String(recoveryError)}; backups retained: ${transaction.backupPaths.join(", ")}`,
         );
         throw new Error(
           `UPDATE_NATIVE_AUTHORITY: Service definition recovery is unverified: ${String(recoveryError)}`,
-          { cause: recoveryError },
+          { cause: error },
         );
       }
       return deny(
-        `Service definition refresh failed; the previous definition was restored: ${String(error)}`,
+        `Service definition refresh failed; the previous definition was ${recoveryResult ? "restored" : "left unchanged"}: ${String(error)}`,
       );
     }
   });

@@ -10,6 +10,7 @@ import {
   assertGatewayServiceFallbackAllowed,
   assertGatewayServiceUpdateCurrent,
   isUpdateOwnedGatewayServiceCommand,
+  readGatewayServiceUpdateOriginalRoot,
   withGatewayServiceInstallationRecovery,
   withGatewayServiceUpdateAuthority,
 } from "./service-update-authority.js";
@@ -17,6 +18,45 @@ import {
 vi.mock("./launchd-system.js", () => ({ assertNoSystemLaunchDaemonOwnership: async () => {} }));
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => vi.restoreAllMocks());
+
+it("retains the live original installation through nested guards and compensation", async () => {
+  let current = true;
+  await withGatewayServiceUpdateAuthority(
+    () => {
+      if (!current) {
+        throw new Error("original updater retired");
+      }
+    },
+    () =>
+      withGatewayServiceUpdateAuthority(
+        undefined,
+        async () => {
+          expect(readGatewayServiceUpdateOriginalRoot()).toBe("/original-install");
+          current = false;
+          expect(readGatewayServiceUpdateOriginalRoot).toThrow("original updater retired");
+          current = true;
+          await expect(
+            withGatewayServiceInstallationRecovery(
+              async () => {
+                throw new Error("installation failed");
+              },
+              async () => {
+                expect(readGatewayServiceUpdateOriginalRoot()).toBe("/original-install");
+                return false;
+              },
+            ),
+          ).rejects.toThrow("installation failed");
+        },
+        {
+          originalRoot: "/replacement-install",
+          updateOwned: false,
+          assertRecoveryCurrent: () => {},
+        },
+      ),
+    { originalRoot: "/original-install" },
+  );
+  expect(readGatewayServiceUpdateOriginalRoot()).toBeUndefined();
+});
 
 it("retains recovery material when a native writer has not settled", async () => {
   vi.spyOn(processExec, "runCommandWithTimeout").mockResolvedValue({

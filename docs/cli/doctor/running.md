@@ -57,7 +57,9 @@ and agent-database ownership before taking read-only schema snapshots. It
 excludes other processes during repair, then restarts the same service once
 and verifies readiness. It preserves the service definition except for
 [eligible installation drift](/cli/doctor/recovery#gateway-service-recovery) in a
-previously running service, reconciled through the native installer. Services
+previously running service, reconciled through the native installer. Automatic
+refresh covers installation-only drift; additional native settings, operator edits,
+or uncertain inspection still require interactive confirmation. Services
 confirmed offline before maintenance keep their definitions and stop state; use
 the reported profile-aware `openclaw gateway install --force` command to reconcile
 them (installation may start the service). On Linux, it also

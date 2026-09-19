@@ -1235,6 +1235,17 @@ describe("update-cli", () => {
 
   const FRESH_POST_UPDATE_ENTRYPOINT = "/tmp/openclaw-updated-entry.mjs";
 
+  const mockLegacyDoctorInstall = async () => {
+    const root = tempDirs.make("legacy-plugin-doctor-");
+    // The shipped legacy contract has no guarded finalizer worker, regardless of host build state.
+    await writeOpenClawPackageFixture(root, VERSION, {
+      entrySource: "export {};\n",
+      inventory: true,
+    });
+    vi.mocked(resolveOpenClawPackageRoot).mockResolvedValue(root);
+    return root;
+  };
+
   const mockCurrentProcessFreshDoctor = (
     params: {
       postCoreResumeAttempt?: boolean;
@@ -1895,11 +1906,21 @@ describe("update-cli", () => {
     });
   };
 
-  const mockGatewayInstallFailure = (entrypoint: string) => {
+  const mockGatewayInstallFailure = (entrypoint: string, stderr = "launchctl bootstrap failed") => {
+    const message =
+      "Service definition refresh failed; the previous definition was restored: Error: launchctl bootstrap failed";
     vi.mocked(runCommandWithTimeout).mockImplementation(async (argv) => {
       const failed = argv[1] === entrypoint && argv[2] === "gateway" && argv[3] === "install";
       return commandResult({
-        stderr: failed ? "launchctl bootstrap failed" : "",
+        stdout: failed
+          ? JSON.stringify({
+              action: "install",
+              ok: false,
+              error: `Gateway install failed: Error: SERVICE_DEFINITION_UNKNOWN: ${message}`,
+              warnings: [message],
+            })
+          : "",
+        stderr: failed ? stderr : "",
         code: failed ? 1 : 0,
       });
     });
@@ -4193,6 +4214,7 @@ describe("update-cli", () => {
   });
 
   it("runs updated plugin migrations for a plugin-only current-process update", async () => {
+    await mockLegacyDoctorInstall();
     mockGitUpdateAfterMutation(makeOkUpdateResult({ after: { version: VERSION } }));
     vi.mocked(resolveGatewayInstallEntrypoint).mockResolvedValueOnce(
       "/tmp/openclaw-updated-entry.mjs",
@@ -4227,6 +4249,7 @@ describe("update-cli", () => {
   });
 
   it("runs the final fresh doctor for convergence-only current-process changes", async () => {
+    await mockLegacyDoctorInstall();
     mockGitUpdateAfterMutation();
     vi.mocked(resolveGatewayInstallEntrypoint).mockResolvedValueOnce(FRESH_POST_UPDATE_ENTRYPOINT);
     runPostCorePluginConvergenceSpy.mockResolvedValueOnce(
@@ -11312,7 +11335,7 @@ describe("update-cli", () => {
   });
 
   it("keeps the core stopped for plugin Doctor and never restarts after Doctor fails", async () => {
-    const serviceEntrypoint = path.join(process.cwd(), "dist", "index.js");
+    const serviceEntrypoint = path.join(await mockLegacyDoctorInstall(), "dist", "index.js");
     mockRunningManagedGateway(["node", serviceEntrypoint, "gateway", "run"]);
     mockGitUpdateAfterMutation();
     mockNpmPluginOutcomes([], true);
@@ -13013,28 +13036,7 @@ describe("update-cli", () => {
       const { updatedRoot, updatedEntrypoint } = setupNpmUpdatedRootRefresh();
       serviceLoaded.mockResolvedValue(true);
       primeServiceCommand(["node", updatedEntrypoint, "gateway", "run"]);
-      mockGatewayInstallFailure(updatedEntrypoint);
-      if (json) {
-        vi.mocked(runCommandWithTimeout).mockImplementation(async (argv) => {
-          const failed = argv[1] === updatedEntrypoint && argv[3] === "install";
-          return commandResult({
-            stdout: failed
-              ? JSON.stringify(
-                  {
-                    action: "install",
-                    ok: false,
-                    error: "Gateway install blocked: newer configuration",
-                    hints: ["Use the intended binary."],
-                  },
-                  null,
-                  2,
-                )
-              : "",
-            stderr: failed ? "runtime warning" : "",
-            code: failed ? 1 : 0,
-          });
-        });
-      }
+      mockGatewayInstallFailure(updatedEntrypoint, json ? "runtime warning" : undefined);
       mockGatewayHealth("2026.4.24", "updated-gateway");
 
       await updateCommand({ yes: true, json });
@@ -13051,7 +13053,9 @@ describe("update-cli", () => {
       expect(runRestartScript).not.toHaveBeenCalled();
       expect(defaultRuntime.exit).not.toHaveBeenCalledWith(1);
       if (json) {
-        expect(getErrorOutput()).toContain("Gateway install blocked: newer configuration");
+        expect(getErrorOutput()).toContain(
+          "SERVICE_DEFINITION_UNKNOWN: Service definition refresh failed; the previous definition was restored: Error: launchctl bootstrap failed",
+        );
       } else {
         expect(getLogOutput()).toContain("Gateway: restarted and verified.");
       }

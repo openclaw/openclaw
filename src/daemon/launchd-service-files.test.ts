@@ -6,7 +6,7 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { installLaunchAgent, stageLaunchAgent } from "./launchd-install.js";
 import {
   readExistingLaunchAgentPlist,
-  resolveLaunchAgentEnvironmentReadOptions,
+  resolveLaunchAgentEnvFilePath,
   resolveLaunchAgentEnvWrapperPath,
   resolveLaunchAgentPlistPath,
 } from "./launchd-service-files.js";
@@ -120,7 +120,7 @@ describe.skipIf(process.platform === "win32")("LaunchAgent file restoration", ()
       const originalFiles = [
         { path: plistPath, contents: binaryPlist, mode },
         {
-          path: resolveLaunchAgentEnvironmentReadOptions(env, label).expectedEnvironmentFilePath,
+          path: resolveLaunchAgentEnvFilePath(env, label),
           contents: Buffer.from("export FIXTURE='prior'\n"),
           mode: 0o600,
         },

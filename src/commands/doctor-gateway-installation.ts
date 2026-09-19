@@ -75,7 +75,6 @@ export async function repairGatewayServiceInstallation(
   params: GatewayServiceInstallationRepair & {
     env: NodeJS.ProcessEnv;
     install: (assertCurrent: () => void) => Promise<void>;
-    updateRepairMode: boolean;
   },
 ): Promise<void> {
   await withGatewayServiceOperationLock(params.env, async (assertNative) => {
@@ -88,7 +87,7 @@ export async function repairGatewayServiceInstallation(
     await params.install(assertCurrent);
     // Maintenance already stopped the old task. A standalone reinstall can leave
     // an existing Scheduled Task process alive after /Run accepts its new script.
-    if (process.platform === "win32" && !params.updateRepairMode && !params.maintenance) {
+    if (process.platform === "win32" && !params.maintenance) {
       await params.service.restart({ env: params.env, stdout: process.stdout, assertCurrent });
     }
   });

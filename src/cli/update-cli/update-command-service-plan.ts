@@ -19,15 +19,13 @@ import {
 import {
   gatewayServiceCommandMatchesRoot,
   inspectGatewayServiceInstallationDrift,
+  resolveGatewayServiceInstallationRefreshRoot,
   resolveManagedServiceNodeRunner,
-  isGatewayServiceSourceCheckoutRoot,
   summarizeGatewayServiceLayout,
 } from "../../daemon/service-layout.js";
-import {
-  hasGatewayServiceLauncherOverride,
-  resolveManagedGatewayServiceProcessEnv,
-  type GatewayServiceCommandConfig,
-  type GatewayServiceState,
+import type {
+  GatewayServiceCommandConfig,
+  GatewayServiceState,
 } from "../../daemon/service-types.js";
 import { readGatewayServiceState, resolveGatewayService } from "../../daemon/service.js";
 import { isContainerEnvironment } from "../../infra/container-environment.js";
@@ -236,23 +234,17 @@ export async function inspectManagedGatewayServiceBeforeUpdate(params: {
     return unavailable();
   }
   if (ownsRoot === false) {
-    if (
-      params.allowInstallRootChange &&
-      (state.definitionMutationCapability?.kind ?? "writable") === "writable" &&
-      !hasGatewayServiceLauncherOverride(command) &&
-      resolveManagedGatewayServiceProcessEnv(command, state.env) !== null &&
-      !(await isGatewayServiceSourceCheckoutRoot(root))
-    ) {
-      const layout = await summarizeGatewayServiceLayout(command);
-      if (layout?.packageRootReal && !layout.entrypointSourceCheckout) {
-        return {
-          kind: "owned",
-          root: layout.packageRootReal,
-          fingerprint: sha256Hex(serialized),
-          refreshDefinition: true,
-          requiresInstallRootRefresh: true,
-        };
-      }
+    const serviceRoot = params.allowInstallRootChange
+      ? await resolveGatewayServiceInstallationRefreshRoot({ root, state })
+      : undefined;
+    if (serviceRoot) {
+      return {
+        kind: "owned",
+        root: serviceRoot,
+        fingerprint: sha256Hex(serialized),
+        refreshDefinition: true,
+        requiresInstallRootRefresh: true,
+      };
     }
     return { kind: "foreign" };
   }

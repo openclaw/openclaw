@@ -75,7 +75,7 @@ export async function runGatewayServiceUpdateCommand(
         async () => {
           await operation();
         },
-        grant.originalParent?.key ?? grant.parent.key,
+        { originalRoot: grant.originalParent?.key ?? grant.parent.key },
       ),
     );
   } catch (cause) {

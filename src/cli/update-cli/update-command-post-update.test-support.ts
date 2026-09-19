@@ -1,8 +1,11 @@
+import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { expect, it, vi, type Mock } from "vitest";
 import { GATEWAY_SERVICE_SELECTOR_ENV_KEYS } from "../../daemon/constants.js";
 import type { GatewayServiceCommandConfig } from "../../daemon/service.js";
+import { createRetainedPackageSwap } from "../../infra/package-update-swap.test-support.js";
+import { getUpdateRun } from "../../infra/update-run-ledger.js";
 import type { UpdateRunResult } from "../../infra/update-runner.js";
 import { captureEnv } from "../../test-utils/env.js";
 import type { PostCorePluginUpdateResult } from "./update-command-plugins.js";
@@ -269,4 +272,72 @@ export function registerServiceInstallationConvergenceTests(
       }
     },
   );
+}
+
+export function registerUnverifiedDefinitionRecoveryTest(options: {
+  fixture: () => FinishUpdateParams;
+  makeHome: () => string;
+  mocks: {
+    rollback: Mock<typeof import("./update-command-rollback.js").rollbackFailedUpdate>;
+    restart: Mock<typeof import("./update-command-service.js").maybeRestartService>;
+    repair: Mock;
+  };
+}) {
+  const { fixture, mocks, makeHome } = options;
+  it("retains the previous package when native definition recovery is unverified", async () => {
+    const params = fixture();
+    const { transaction, packageRoot } = await createRetainedPackageSwap(makeHome());
+    params.root = packageRoot;
+    params.result.root = packageRoot;
+    params.result.before = { version: "1.0.0" };
+    params.result.after = { version: "2.0.0" };
+    params.packageTransaction = transaction;
+    params.rollbackBlockedReason = undefined;
+    const complete = vi.spyOn(transaction, "complete");
+    const restorePackage = vi.spyOn(transaction, "rollback");
+    const actual = await vi.importActual<typeof import("./update-command-rollback.js")>(
+      "./update-command-rollback.js",
+    );
+    mocks.rollback.mockImplementation(actual.rollbackFailedUpdate);
+    mocks.restart.mockImplementationOnce(async ({ definitionRecovery, onVerificationFailure }) => {
+      if (!definitionRecovery) {
+        throw new Error("Finalization must retain native definition recovery state.");
+      }
+      definitionRecovery.unverified = true;
+      onVerificationFailure?.("service-definition-rollback-unverified");
+      return "failed";
+    });
+
+    await expect(finishUpdate(params)).rejects.toMatchObject({
+      exitCode: 1,
+      result: {
+        status: "error",
+        reason: "service-definition-rollback-unverified",
+        root: packageRoot,
+        rollbackOutcome: {
+          status: "not-attempted",
+          reason: "service-definition-rollback-unverified",
+        },
+      },
+    });
+
+    expect(mocks.rollback).toHaveBeenCalledOnce();
+    expect(mocks.repair).not.toHaveBeenCalled();
+    expect(restorePackage).not.toHaveBeenCalled();
+    expect(complete).toHaveBeenCalledExactlyOnceWith(
+      { activationVerified: false },
+      expect.any(Function),
+    );
+    await expect(
+      fs.readFile(path.join(transaction.backupRoot, "package.json"), "utf8"),
+    ).resolves.toContain('"version":"1.0.0"');
+    await expect(fs.readFile(path.join(packageRoot, "package.json"), "utf8")).resolves.toContain(
+      '"version":"2.0.0"',
+    );
+    expect(getUpdateRun(params.opts.run!.runId, { env: params.opts.run!.env })).toMatchObject({
+      status: "failed",
+      confirmedAtMs: null,
+      reason: "service-definition-rollback-unverified",
+    });
+  });
 }

@@ -38,6 +38,7 @@ import {
 } from "./schtasks-process.js";
 import {
   assertSchtasksAvailable,
+  isRegisteredScheduledTask,
   isStartupEntryInstalled,
   launchFallbackTaskScript,
   removeStartupEntries,
@@ -46,6 +47,7 @@ import {
   waitForScheduledTaskRunningEvidence,
 } from "./schtasks-runtime.js";
 import { probeScheduledTaskExists } from "./schtasks-state-probe.js";
+import { publishServiceFile } from "./service-stage.js";
 import type {
   GatewayServiceEnv,
   GatewayServiceInstallArgs,
@@ -128,12 +130,12 @@ async function writeScheduledTaskScript({
   workingDirectory,
   environment,
   description,
+  definitionTransaction,
 }: Omit<GatewayServiceInstallArgs, "stdout">): Promise<{
   scriptPath: string;
   taskLaunchPath: string;
   taskDescription: string;
-  restore: () => Promise<boolean>;
-  assertPublished: () => Promise<void>;
+  recovery: Awaited<ReturnType<typeof publishScheduledTaskFiles>>;
 }> {
   const taskEnv = resolveScheduledTaskRenderEnv(env, environment);
   const scriptPath = resolveTaskScriptPath(taskEnv);
@@ -162,8 +164,8 @@ async function writeScheduledTaskScript({
       contents: encodeWindowsLauncherScript({ format: "vbs", content: launcher }),
     });
   }
-  const published = await publishScheduledTaskFiles(files);
-  return { scriptPath, taskLaunchPath, taskDescription, ...published };
+  const recovery = await publishScheduledTaskFiles(files, definitionTransaction);
+  return { scriptPath, taskLaunchPath, taskDescription, recovery };
 }
 
 export async function stageScheduledTask({
@@ -177,61 +179,161 @@ export async function stageScheduledTask({
   return { scriptPath };
 }
 
-async function activateScheduledTask(params: {
-  env: GatewayServiceEnv;
-  stdout: NodeJS.WritableStream;
-  warn: (message: string) => void;
-  scriptPath: string;
-  taskLaunchPath: string;
-  description?: string;
-  retainRecovery: () => void;
-  recordRegistration: () => Promise<void>;
-  onActivation: () => void;
-  registered: boolean;
-}): Promise<ScheduledTaskActivation | "startup-fallback"> {
-  const taskDescription = params.description ?? "OpenClaw Gateway";
-  const taskName = resolveTaskName(params.env);
-  let updated = false;
-  if (params.registered) {
+type ScheduledTaskInstallRecovery = {
+  registration?: Awaited<ReturnType<typeof backupScheduledTaskDefinition>>;
+  onActivation?: () => void;
+};
+
+async function updateExistingScheduledTask(
+  params: {
+    env: GatewayServiceEnv;
+    stdout: NodeJS.WritableStream;
+    warn?: GatewayServiceInstallArgs["warn"];
+    taskName: string;
+    quotedLaunchPath: string;
+    scriptPath: string;
+    taskLaunchPath: string;
+    description?: string;
+    definitionTransaction?: GatewayServiceInstallArgs["definitionTransaction"];
+  } & ScheduledTaskInstallRecovery,
+): Promise<ScheduledTaskActivation | null> {
+  if (!(params.registration?.registered ?? (await isRegisteredScheduledTask(params.env)))) {
+    return null;
+  }
+  if (!params.definitionTransaction) {
+    // Ordinary installs retain their existing /Change failure and Startup fallback contract.
     assertGatewayServiceUpdateCurrent();
     const change = await execSchtasks([
       "/Change",
       "/TN",
-      taskName,
+      params.taskName,
       "/TR",
-      quoteSchtasksArg(params.taskLaunchPath),
+      params.quotedLaunchPath,
     ]);
     if (change.code === 124) {
-      params.retainRecovery();
+      params.registration?.retainRecovery();
       throw new Error("Scheduled Task registration change did not confirm completion.");
     }
-    updated = change.code === 0;
+    if (change.code !== 0) {
+      return null;
+    }
+  }
+  // Re-apply the full XML so older tasks inherit both false battery flags (#59299).
+  // Transactional repair must compensate; ordinary installs keep best-effort activation.
+  const expectedXml = buildScheduledTaskXml({
+    taskDescription: params.description ?? "OpenClaw Gateway",
+    taskUser: resolveTaskUser(params.env),
+    launchPath: params.taskLaunchPath,
+  });
+  const upgradeXmlPath = await writeTaskXmlTempFile(expectedXml);
+  try {
+    await params.definitionTransaction?.taskPrepared(expectedXml);
+    params.definitionTransaction?.assertCurrent();
+    assertGatewayServiceUpdateCurrent();
+    const upgraded = await execSchtasks([
+      "/Create",
+      "/F",
+      "/TN",
+      params.taskName,
+      "/XML",
+      upgradeXmlPath,
+    ]);
+    if (upgraded.code === 124) {
+      params.registration?.retainRecovery();
+      throw new Error("Scheduled Task registration did not confirm completion.");
+    }
+    if (upgraded.code !== 0) {
+      const detail = (upgraded.stderr || upgraded.stdout).trim() || "unknown error";
+      const message = `Scheduled Task definition upgrade failed: ${detail}`;
+      if (params.definitionTransaction) {
+        throw new Error(message);
+      }
+      params.warn?.(
+        `Scheduled Task ${params.taskName} launch command was refreshed, but XML settings (including battery settings) were not: ${detail}. Inspect Task Scheduler and retry the service installation to refresh those settings.`,
+      );
+    } else {
+      await params.definitionTransaction?.taskWritten(expectedXml);
+    }
+  } finally {
+    await fs.rm(path.dirname(upgradeXmlPath), { recursive: true, force: true }).catch(() => {});
+  }
+  await params.registration?.recordRegistration();
+  await params.definitionTransaction?.beforeWrite();
+  assertGatewayServiceUpdateCurrent();
+  params.onActivation?.();
+  const activation = await runScheduledTaskOrThrow({
+    taskName: params.taskName,
+    env: params.env,
+    scriptPath: params.scriptPath,
+    assertCurrent: params.definitionTransaction?.assertCurrent,
+    allowFallback: params.definitionTransaction ? false : undefined,
+  });
+  writeFormattedLines(
+    params.stdout,
+    [
+      { label: "Updated Scheduled Task", value: params.taskName },
+      { label: "Task script", value: params.scriptPath },
+    ],
+    { leadingBlankLine: true },
+  );
+  return activation;
+}
+
+async function activateScheduledTask(
+  params: {
+    env: GatewayServiceEnv;
+    stdout: NodeJS.WritableStream;
+    warn?: GatewayServiceInstallArgs["warn"];
+    scriptPath: string;
+    taskLaunchPath: string;
+    description?: string;
+    definitionTransaction?: GatewayServiceInstallArgs["definitionTransaction"];
+  } & ScheduledTaskInstallRecovery,
+): Promise<ScheduledTaskActivation | "startup-fallback"> {
+  const taskDescription = params.description ?? "OpenClaw Gateway";
+  const taskName = resolveTaskName(params.env);
+  const quotedLaunchPath = quoteSchtasksArg(params.taskLaunchPath);
+  const existingActivation = await updateExistingScheduledTask({
+    ...params,
+    taskName,
+    quotedLaunchPath,
+  });
+  if (existingActivation) {
+    return existingActivation;
   }
 
   const taskUser = resolveTaskUser(params.env);
   // Use `schtasks /Create /XML` so the task carries explicit battery settings.
   // The CLI flag form cannot set these and kills the Gateway when a laptop unplugs (#59299).
-  const xmlPath = await writeTaskXmlTempFile(
-    buildScheduledTaskXml({ taskDescription, taskUser, launchPath: params.taskLaunchPath }),
-  );
+  const expectedXml = buildScheduledTaskXml({
+    taskDescription,
+    taskUser,
+    launchPath: params.taskLaunchPath,
+  });
+  const xmlPath = await writeTaskXmlTempFile(expectedXml);
   let create: Awaited<ReturnType<typeof execSchtasks>>;
   try {
     const xmlArgs = ["/Create", "/F", "/TN", taskName, "/XML", xmlPath];
     // The XML owns UserId and InteractiveToken. `/NP` overrides that principal
     // with a non-interactive S4U logon, so a successful task never starts here.
+    await params.definitionTransaction?.taskPrepared(expectedXml);
+    params.definitionTransaction?.assertCurrent();
     assertGatewayServiceUpdateCurrent();
     create = await execSchtasks(xmlArgs);
+    if (create.code === 0) {
+      await params.definitionTransaction?.taskWritten(expectedXml);
+    }
   } finally {
     await fs.rm(path.dirname(xmlPath), { recursive: true, force: true }).catch(() => {});
   }
   if (create.code !== 0) {
     if (create.code === 124) {
-      params.retainRecovery();
+      params.registration?.retainRecovery();
       throw new Error("Scheduled Task registration did not confirm completion.");
     }
     const detail = create.stderr || create.stdout;
-    if (!updated && shouldFallbackToStartupEntry({ code: create.code, detail })) {
-      if (isUpdateOwnedGatewayServiceCommand()) {
+    if (shouldFallbackToStartupEntry({ code: create.code, detail })) {
+      if (isUpdateOwnedGatewayServiceCommand() || params.definitionTransaction) {
         throw new Error(
           "UPDATE_NATIVE_AUTHORITY: update-owned native commands require Task Scheduler; startup fallback is unsupported.",
         );
@@ -251,14 +353,15 @@ async function activateScheduledTask(params: {
             scriptPath: params.scriptPath,
           });
       assertGatewayServiceUpdateCurrent();
-      await fs.writeFile(
-        startupEntryPath,
-        encodeWindowsLauncherScript({
+      await publishServiceFile({
+        filePath: startupEntryPath,
+        contents: encodeWindowsLauncherScript({
           format: useHiddenLauncher ? "vbs" : "cmd",
           content: launcher,
         }),
-      );
-      params.retainRecovery();
+        mode: 0o600,
+      });
+      params.registration?.retainRecovery();
       await launchFallbackTaskScript(params.env);
       writeFormattedLines(
         params.stdout,
@@ -270,27 +373,25 @@ async function activateScheduledTask(params: {
       );
       return "startup-fallback";
     }
-    if (!updated) {
-      throw new Error(`schtasks create failed: ${detail}`.trim());
-    }
-    params.warn(
-      `Scheduled Task ${taskName} launch command was refreshed, but XML settings (including battery settings) were not: ${detail.trim() || "unknown error"}. Inspect Task Scheduler and retry the service installation to refresh those settings.`,
-    );
+    throw new Error(`schtasks create failed: ${detail}`.trim());
   }
 
-  await params.recordRegistration();
+  await params.registration?.recordRegistration();
+  await params.definitionTransaction?.beforeWrite();
   assertGatewayServiceUpdateCurrent();
-  params.onActivation();
+  params.onActivation?.();
   const activation = await runScheduledTaskOrThrow({
     taskName,
     env: params.env,
     scriptPath: params.scriptPath,
+    assertCurrent: params.definitionTransaction?.assertCurrent,
+    allowFallback: params.definitionTransaction ? false : undefined,
   });
   // Ensure we don't end up writing to a clack spinner line (wizards show progress without a newline).
   writeFormattedLines(
     params.stdout,
     [
-      { label: updated ? "Updated Scheduled Task" : "Installed Scheduled Task", value: taskName },
+      { label: "Installed Scheduled Task", value: taskName },
       { label: "Task script", value: params.scriptPath },
     ],
     { leadingBlankLine: true },
@@ -308,116 +409,118 @@ export async function installScheduledTask(
   let staged: Awaited<ReturnType<typeof writeScheduledTaskScript>> | undefined;
   const warn = args.warn ?? ((message: string) => args.stdout.write(`${message}\n`));
   let activationAttempted = false;
-  return withGatewayServiceInstallationRecovery(
-    async () => {
-      const installedCommand = await readScheduledTaskCommand(args.env).catch(() => null);
-      const fallbackEnv = resolveScheduledTaskActivationEnv(
-        args.env,
-        installedCommand?.environment,
+  const install = async () => {
+    const installedCommand = await readScheduledTaskCommand(args.env).catch(() => null);
+    const fallbackEnv = resolveScheduledTaskActivationEnv(args.env, installedCommand?.environment);
+    // Capture ownership before repair changes the port/profile that locates the old process.
+    const startupEntryInstalled =
+      !args.definitionTransaction && (await isStartupEntryInstalled(fallbackEnv));
+    let startupRuntime = startupEntryInstalled
+      ? await resolveFallbackRuntime(fallbackEnv, installedCommand, "control").catch(() => null)
+      : null;
+    if (
+      startupEntryInstalled &&
+      args.startupFallbackTakeoverRuntime?.status === "running" &&
+      startupRuntime?.status !== "running"
+    ) {
+      startupRuntime = await waitForFallbackTakeoverRuntime(
+        fallbackEnv,
+        installedCommand,
+        startupRuntime ?? { status: "unknown" },
+        args.startupFallbackTakeoverRuntime,
       );
-      // Capture ownership before repair changes the port/profile that locates the old process.
-      const startupEntryInstalled = await isStartupEntryInstalled(fallbackEnv);
-      let startupRuntime = startupEntryInstalled
-        ? await resolveFallbackRuntime(fallbackEnv, installedCommand, "control").catch(() => null)
-        : null;
-      if (
-        startupEntryInstalled &&
-        args.startupFallbackTakeoverRuntime?.status === "running" &&
-        startupRuntime?.status !== "running"
-      ) {
-        startupRuntime = await waitForFallbackTakeoverRuntime(
-          fallbackEnv,
-          installedCommand,
-          startupRuntime ?? { status: "unknown" },
-          args.startupFallbackTakeoverRuntime,
-        );
+    }
+    if (startupEntryInstalled && (!startupRuntime || startupRuntime.status === "unknown")) {
+      throw new Error(
+        startupRuntime?.detail ??
+          "Could not verify the existing Windows login item before Scheduled Task migration.",
+      );
+    }
+    const activationEnv = resolveScheduledTaskActivationEnv(args.env, args.environment);
+    if (startupRuntime) {
+      const fallbackPid = startupRuntime.status === "running" ? startupRuntime.pid : undefined;
+      if (startupRuntime.status === "running" && !fallbackPid) {
+        throw new Error("Could not verify the existing Windows login item process.");
       }
-      if (startupEntryInstalled && (!startupRuntime || startupRuntime.status === "unknown")) {
-        throw new Error(
-          startupRuntime?.detail ??
-            "Could not verify the existing Windows login item before Scheduled Task migration.",
-        );
-      }
-      const activationEnv = resolveScheduledTaskActivationEnv(args.env, args.environment);
-      if (startupRuntime) {
-        const fallbackPid = startupRuntime.status === "running" ? startupRuntime.pid : undefined;
-        if (startupRuntime.status === "running" && !fallbackPid) {
-          throw new Error("Could not verify the existing Windows login item process.");
-        }
-        await assertReplacementPortAvailableForTakeover({
-          env: activationEnv,
-          programArguments: args.programArguments,
-          ...(args.environment ? { environment: args.environment } : {}),
-          ...(fallbackPid ? { fallbackPid } : {}),
-        });
-      }
+      await assertReplacementPortAvailableForTakeover({
+        env: activationEnv,
+        programArguments: args.programArguments,
+        ...(args.environment ? { environment: args.environment } : {}),
+        ...(fallbackPid ? { fallbackPid } : {}),
+      });
+    }
+    if (!args.definitionTransaction) {
       restoreTask = await backupScheduledTaskDefinition(
         activationEnv,
         resolveTaskScriptPath(resolveScheduledTaskRenderEnv(args.env, args.environment)),
       );
-      staged = await writeScheduledTaskScript(args);
-      const activation = await activateScheduledTask({
-        env: activationEnv,
-        stdout: args.stdout,
-        warn,
-        scriptPath: staged.scriptPath,
-        taskLaunchPath: staged.taskLaunchPath,
-        description: staged.taskDescription,
-        registered: restoreTask.registered,
-        retainRecovery: restoreTask.retainRecovery,
-        recordRegistration: restoreTask.recordRegistration,
-        onActivation: () => {
-          activationAttempted = true;
-        },
-      });
-      assertGatewayServiceUpdateCurrent();
-      if (activation !== "scheduled-task") {
-        return { scriptPath: staged.scriptPath };
-      }
-      // Re-probe the captured command so a config-reload fallback is not hidden by the staged script.
-      const takeoverRuntime =
-        startupRuntime?.status === "stopped"
-          ? await resolveFallbackRuntime(fallbackEnv, installedCommand, "control").catch(
-              () => startupRuntime,
-            )
-          : startupRuntime;
-      if (takeoverRuntime?.status === "running" && takeoverRuntime.pid) {
-        // The old launcher can still own the listener; terminate it and prove the replacement.
-        await terminateGatewayProcessTree(takeoverRuntime.pid, 300);
-        let scheduledTaskRunAccepted = false;
-        try {
-          // Re-reading ownership now would inspect the replacement command, not the captured fallback.
-          await restartRegisteredScheduledTask({
-            env: activationEnv,
-            stdout: args.stdout,
-            mode: { kind: "fallback-takeover" },
-            onRunMutation: () => {
-              scheduledTaskRunAccepted = true;
-            },
-          });
-        } catch (err) {
-          // An accepted /Run can still start later. Replacing it with a detached Gateway
-          // would defeat Scheduler's single-instance policy and create a duplicate listener.
-          if (!scheduledTaskRunAccepted) {
-            await launchFallbackTaskScript(fallbackEnv, installedCommand);
-          }
-          throw err;
-        }
-      } else if (
-        takeoverRuntime?.status === "stopped" &&
-        (await waitForScheduledTaskRunningEvidence(activationEnv))
-      ) {
-        await removeStartupEntries(activationEnv, args.stdout);
-      }
+    }
+    staged = await writeScheduledTaskScript(args);
+    const activation = await activateScheduledTask({
+      env: activationEnv,
+      stdout: args.stdout,
+      warn,
+      scriptPath: staged.scriptPath,
+      taskLaunchPath: staged.taskLaunchPath,
+      description: staged.taskDescription,
+      definitionTransaction: args.definitionTransaction,
+      registration: restoreTask,
+      onActivation: () => {
+        activationAttempted = true;
+      },
+    });
+    assertGatewayServiceUpdateCurrent();
+    if (activation !== "scheduled-task") {
       return { scriptPath: staged.scriptPath };
-    },
-    async () => {
-      if (!staged || !restoreTask) {
-        return false;
+    }
+    // Re-probe the captured command so a config-reload fallback is not hidden by the staged script.
+    const takeoverRuntime =
+      startupRuntime?.status === "stopped"
+        ? await resolveFallbackRuntime(fallbackEnv, installedCommand, "control").catch(
+            () => startupRuntime,
+          )
+        : startupRuntime;
+    if (takeoverRuntime?.status === "running" && takeoverRuntime.pid) {
+      // The old launcher can still own the listener; terminate it and prove the replacement.
+      await terminateGatewayProcessTree(takeoverRuntime.pid, 300);
+      let scheduledTaskRunAccepted = false;
+      try {
+        // Re-reading ownership now would inspect the replacement command, not the captured fallback.
+        await restartRegisteredScheduledTask({
+          env: activationEnv,
+          stdout: args.stdout,
+          mode: { kind: "fallback-takeover" },
+          onRunMutation: () => {
+            scheduledTaskRunAccepted = true;
+          },
+        });
+      } catch (err) {
+        // An accepted /Run can still start later. Replacing it with a detached Gateway
+        // would defeat Scheduler's single-instance policy and create a duplicate listener.
+        if (!scheduledTaskRunAccepted) {
+          await launchFallbackTaskScript(fallbackEnv, installedCommand);
+        }
+        throw err;
       }
-      return restoreTask.restore(staged, activationAttempted);
-    },
-  ).catch((error: unknown) => {
+    } else if (
+      takeoverRuntime?.status === "stopped" &&
+      (await waitForScheduledTaskRunningEvidence(activationEnv))
+    ) {
+      await removeStartupEntries(activationEnv, args.stdout);
+    }
+    assertGatewayServiceUpdateCurrent();
+    return { scriptPath: staged.scriptPath };
+  };
+  if (args.definitionTransaction) {
+    // The caller's definition transaction owns rollback and native lifecycle recovery.
+    return install();
+  }
+  return withGatewayServiceInstallationRecovery(install, async () => {
+    if (!staged?.recovery || !restoreTask) {
+      return false;
+    }
+    return restoreTask.restore(staged.recovery, activationAttempted);
+  }).catch((error: unknown) => {
     if (
       (error instanceof GatewayServiceAuthorityError && error.outcome === "recovery-pending") ||
       error instanceof AggregateError

@@ -19,9 +19,12 @@ replace its service definition. Externally managed services still belong to
 their supervisor.
 
 Doctor also compares the service's package path and version with the active CLI,
-without requiring a Gateway connection. During `openclaw update` or
-`openclaw doctor --fix`, a running, verified, writable managed service that points
-at another packaged install is reconciled through the native installer.
+without requiring a Gateway connection. Update finalization and standalone
+`openclaw doctor --fix` reconcile eligible, previously running managed services
+through the native installer; update-time Doctor reports drift and defers publication
+to finalization. Doctor can automatically refresh installation-only drift in a
+verified, writable packaged service; additional native settings, operator edits,
+or uncertain inspection still require interactive confirmation.
 Services already stopped keep their definitions and stop state; run the reported
 profile-aware `openclaw gateway install --force` command from the intended
 installation to reconcile them (installation may start the service).

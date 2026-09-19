@@ -13,10 +13,8 @@ import { readGatewayOwnerLease } from "../../infra/gateway-owner-lease.js";
 import {
   getUpdateRun,
   recordUpdateRunPhase,
-  recordUpdateRunStep,
   recordUpdateRunVerification,
 } from "../../infra/update-run-ledger.js";
-import { updateRunStepsFromResultStep } from "../../infra/update-run-step.js";
 import type { UpdateRunResult } from "../../infra/update-runner.js";
 import { defaultRuntime } from "../../runtime.js";
 import { CLI_NAME } from "../cli-name.js";
@@ -32,7 +30,10 @@ import { tryWriteCompletionCache, type UpdateCommandOptions } from "./shared.js"
 import { createUpdateConfigSnapshot } from "./update-command-config-snapshot.js";
 import type { PluginUpdateWarning } from "./update-command-plugins-internals.js";
 import { UpdateCommandRecoveryPendingError } from "./update-command-recovery.js";
-import { recordServiceReconciliationWarning } from "./update-command-result.js";
+import {
+  recordServiceReconciliationWarning,
+  recordServiceReconciliationWarnings,
+} from "./update-command-result.js";
 import {
   DEFINITION_DENIAL,
   GatewayRestartHealthError,
@@ -42,7 +43,6 @@ import {
 import type {
   ManagedGatewayUpdateVerdict,
   UpdateServiceDefinitionRecovery,
-  UpdateRestartParams,
 } from "./update-command-service-context-types.js";
 import { resolveServiceRefreshEnv } from "./update-command-service-env.js";
 import {
@@ -242,6 +242,7 @@ export async function maybeRestartService(params: {
   onPluginWarnings?: (warnings: readonly PluginUpdateWarning[]) => void;
   onVerified?: (verifiedAtMs: number) => void;
   definitionRecovery?: UpdateServiceDefinitionRecovery;
+  expectedGatewayIdentity?: { version: string; buildId?: string };
 }): Promise<
   "ok" | "readiness-pending" | "reconciliation-pending" | "failed" | "restart-health-failed"
 > {
@@ -286,28 +287,8 @@ export async function maybeRestartService(params: {
     invocationEnv,
     serviceEnv,
     assertCurrent,
-    onWarnings: (warnings: string[]) => {
-      assertCurrent();
-      const step = {
-        name: "managed-service-reconciliation",
-        command: "openclaw gateway install --force",
-        cwd: params.result.root ?? "",
-        durationMs: 0,
-        exitCode: 0,
-        warnings,
-      };
-      params.result.steps.push(step);
-      if (run) {
-        try {
-          for (const row of updateRunStepsFromResultStep(step)) {
-            recordUpdateRunStep(run.runId, { ...row, endedAtMs: Date.now() }, { env: run.env });
-          }
-        } catch {
-          assertCurrent();
-          warnings.push("Could not record the service definition warning in update history.");
-        }
-      }
-    },
+    onWarnings: (warnings: string[]) =>
+      recordServiceReconciliationWarnings(params.result, warnings, run, assertCurrent),
   };
   const verdict = activation.serviceUpdateVerdict;
   let preserveDefinition =
@@ -469,8 +450,9 @@ export async function maybeRestartService(params: {
     }
 
     try {
-      let expectedGatewayVersion = normalizeOptionalString(activation.result.after?.version);
-      const expectedGatewayBuildId = normalizeOptionalString(activation.result.after?.buildId);
+      const expectedIdentity = activation.expectedGatewayIdentity ?? activation.result.after;
+      let expectedGatewayVersion = normalizeOptionalString(expectedIdentity?.version);
+      const expectedGatewayBuildId = normalizeOptionalString(expectedIdentity?.buildId);
       const canVerifyUpdatedGatewayByVersion =
         expectedGatewayVersion !== undefined &&
         expectedGatewayVersion !== normalizeOptionalString(activation.result.before?.version);
@@ -533,6 +515,10 @@ export async function maybeRestartService(params: {
           }
           if (activation.serviceRuntimeRefreshRequired) {
             params.onVerificationFailure?.("service-runtime-refresh-failed");
+            throw err;
+          }
+          if (activation.definitionRecovery?.unverified) {
+            params.onVerificationFailure?.("service-definition-rollback-unverified");
             throw err;
           }
           if (requiresInstallRootRefresh) {
@@ -701,8 +687,12 @@ export async function maybeRestartService(params: {
         // The installed CLI owns restart retries; observe its final health result
         // without another native mutation.
         const healthy = await verifyRestartedGateway(
-          normalizeOptionalString(activation.result.after?.version),
-          normalizeOptionalString(activation.result.after?.buildId),
+          normalizeOptionalString(
+            (activation.expectedGatewayIdentity ?? activation.result.after)?.version,
+          ),
+          normalizeOptionalString(
+            (activation.expectedGatewayIdentity ?? activation.result.after)?.buildId,
+          ),
           { requireRunningService: true, recoverHealth: false },
         );
         return healthy ?? (await failed("restart-health-failed"));

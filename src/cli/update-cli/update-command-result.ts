@@ -25,8 +25,13 @@ import {
 import { FreeBsdPkgOwnershipError } from "../../infra/update-freebsd-pkg-ownership.js";
 import { UpdateRequesterRevokedError } from "../../infra/update-requester-authority.js";
 import { UpdateRunAdmissionBusyError } from "../../infra/update-run-admission.js";
-import { getUpdateRun, recordUpdateRunPhase } from "../../infra/update-run-ledger.js";
+import {
+  getUpdateRun,
+  recordUpdateRunPhase,
+  recordUpdateRunStep,
+} from "../../infra/update-run-ledger.js";
 import type { UpdateRunRecord } from "../../infra/update-run-record.js";
+import { updateRunStepsFromResultStep } from "../../infra/update-run-step.js";
 import type { UpdateRunResult, UpdateStepResult } from "../../infra/update-runner.js";
 import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
 import { defaultRuntime } from "../../runtime.js";
@@ -80,6 +85,34 @@ export function recordServiceReconciliationWarning(
     exitCode: 0,
     advisory: { kind: "recoverable-maintenance", message },
   });
+}
+
+export function recordServiceReconciliationWarnings(
+  result: UpdateRunResult,
+  warnings: string[],
+  run: UpdateCommandOptions["run"],
+  assertCurrent: () => void,
+): void {
+  assertCurrent();
+  const step = {
+    name: "managed-service-reconciliation",
+    command: "openclaw gateway install --force",
+    cwd: result.root ?? "",
+    durationMs: 0,
+    exitCode: 0,
+    warnings,
+  };
+  result.steps.push(step);
+  if (run) {
+    try {
+      for (const row of updateRunStepsFromResultStep(step)) {
+        recordUpdateRunStep(run.runId, { ...row, endedAtMs: Date.now() }, { env: run.env });
+      }
+    } catch {
+      assertCurrent();
+      warnings.push("Could not record the service definition warning in update history.");
+    }
+  }
 }
 
 export function prepareUpdateServiceResult(

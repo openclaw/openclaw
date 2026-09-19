@@ -4,7 +4,12 @@ import path from "node:path";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { pathExists } from "../infra/fs-safe.js";
 import { readPackageName, readPackageVersion } from "../infra/package-json.js";
-import type { GatewayServiceCommandConfig } from "./service-types.js";
+import {
+  hasGatewayServiceLauncherOverride,
+  resolveManagedGatewayServiceProcessEnv,
+  type GatewayServiceCommandConfig,
+  type GatewayServiceState,
+} from "./service-types.js";
 
 /** Summary of the installed gateway service command and package layout. */
 export type GatewayServiceLayoutSummary = {
@@ -26,6 +31,36 @@ export type GatewayServiceInstallationDrift = {
   serviceVersion?: string;
   activeVersion?: string;
 };
+
+/** Shared admission for moving a verified packaged launcher onto the active CLI. */
+export async function resolveGatewayServiceInstallationRefreshRoot(params: {
+  root: string | undefined;
+  state: GatewayServiceState;
+}): Promise<string | undefined> {
+  const { root, state } = params;
+  const { command } = state;
+  const managerUid = state.runtime?.systemd?.managerUid;
+  if (
+    !root ||
+    !command ||
+    state.loadState.status === "unknown" ||
+    (state.runtime?.status !== "running" && state.runtime?.status !== "stopped") ||
+    (process.platform === "linux" &&
+      (managerUid === undefined ||
+        !Number.isInteger(managerUid) ||
+        managerUid < 0 ||
+        managerUid >= 0xffffffff)) ||
+    (state.definitionMutationCapability?.kind ?? "writable") !== "writable" ||
+    hasGatewayServiceLauncherOverride(command) ||
+    resolveManagedGatewayServiceProcessEnv(command, state.env) === null ||
+    (await readPackageName(root)) !== "openclaw" ||
+    (await isGatewayServiceSourceCheckoutRoot(root))
+  ) {
+    return undefined;
+  }
+  const layout = await summarizeGatewayServiceLayout(command);
+  return layout?.entrypointSourceCheckout ? undefined : layout?.packageRootReal;
+}
 
 export function resolveManagedServiceNodeRunner(
   command: GatewayServiceCommandConfig | null,
@@ -150,7 +185,7 @@ async function tryRealpath(value: string | undefined): Promise<string | undefine
   }
 }
 
-export async function isGatewayServiceSourceCheckoutRoot(candidate: string): Promise<boolean> {
+async function isGatewayServiceSourceCheckoutRoot(candidate: string): Promise<boolean> {
   const hasRepoMarker =
     (await pathExists(path.join(candidate, ".git"))) ||
     (await pathExists(path.join(candidate, "pnpm-workspace.yaml")));

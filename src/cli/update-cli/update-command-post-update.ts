@@ -105,7 +105,11 @@ export async function finishUpdate(
       true,
       stopped
         ? createWindowsTaskAutoStartGuard({
-            root: result.root ?? params.root,
+            root:
+              result.recovery?.packageRollbackVerified &&
+              stopped.serviceUpdateVerdict?.kind === "owned"
+                ? stopped.serviceUpdateVerdict.root
+                : (result.root ?? params.root),
             before: stopped,
             timeoutMs: params.updateStepTimeoutMs,
           })
@@ -235,7 +239,7 @@ export async function finishUpdate(
       triageAllowed = false;
       return { result, recoverService: false };
     }
-    if (result.status === "error" && !rolledBack && repair) {
+    if (result.status === "error" && !rolledBack && repair && !definitionRecovery.unverified) {
       postVerificationRepairAttempted = true;
       const previousRestored = result.recovery?.packageRollbackVerified === true;
       result = await repair(result);

@@ -15,6 +15,7 @@ import {
 } from "./launchd-runtime.js";
 import {
   captureLaunchAgentInstallFiles,
+  readExistingLaunchAgentPlist,
   resolveLaunchAgentPlistPath,
   writeLaunchAgentPlist,
 } from "./launchd-service-files.js";
@@ -174,73 +175,89 @@ export async function installLaunchAgent(
   const label = resolveLaunchAgentLabel(args.env);
   const domain = resolveLaunchAgentGuiDomain();
   const serviceTarget = `${domain}/${label}`;
-  const { files, loaded } = await withGatewayServiceInstallationRecovery(
+  const { publication, loaded } = await withGatewayServiceInstallationRecovery(
     async () => {
       await assertExternalLaunchAgentMutation(args.env, "install");
-      const captured = await captureLaunchAgentInstallFiles(args.env);
+      const captured = args.definitionTransaction
+        ? { kind: "transaction" as const, hooks: args.definitionTransaction }
+        : { kind: "local" as const, files: await captureLaunchAgentInstallFiles(args.env) };
+      const previous =
+        captured.kind === "local"
+          ? captured.files.originals.get(targetPlistPath)!.snapshot
+          : await readExistingLaunchAgentPlist(targetPlistPath);
       const wasLoaded = await snapshotLaunchAgentLoadedState(
-        captured.originals.get(targetPlistPath)!.snapshot?.contents ?? null,
+        previous?.contents ?? null,
         serviceTarget,
       );
-      return { files: captured, loaded: wasLoaded };
+      return { publication: captured, loaded: wasLoaded };
     },
     async () => false,
   );
   let activationAttempted = false;
-  const { plistPath, stdoutPath } = await withGatewayServiceInstallationRecovery(
-    async () => {
-      const published = await writeLaunchAgentPlist(args, files);
-      await files.assertCurrent();
-      // Recheck immediately before activation; another supervisor can appear during publication.
-      await assertNoSystemLaunchDaemonOwnership(label);
-      assertGatewayServiceUpdateCurrent();
-      activationAttempted = true;
-      if (loaded) {
-        await deactivateLaunchAgentDefinition(domain, published.plistPath);
-      }
-      await bootstrapLaunchAgentOrThrow({
-        domain,
-        serviceTarget,
-        plistPath: published.plistPath,
-        actionHint: "openclaw gateway install --force",
-        retryPendingTeardown: true,
-        assertCurrent: assertGatewayServiceUpdateCurrent,
-      });
-      return published;
-    },
-    async () => {
-      if (activationAttempted) {
-        await files.assertCurrent();
-        const current = await probeLaunchAgentState(serviceTarget);
-        if (current.state === "unknown") {
-          throw new Error(
-            `launchctl print could not determine whether ${serviceTarget} is loaded during LaunchAgent rollback: ${current.detail ?? "unknown error"}`,
-          );
-        }
-        if (current.state !== "not-loaded") {
-          await files.assertCurrent();
-          const bootout = await execLaunchctl(["bootout", serviceTarget]);
-          if (bootout.code !== 0 && !isLaunchctlNotLoaded(bootout)) {
-            throw new Error(`launchctl bootout failed: ${formatLaunchctlResultDetail(bootout)}`);
+  const install = async () => {
+    const published = await writeLaunchAgentPlist(
+      args,
+      publication.kind === "local" ? publication.files : undefined,
+    );
+    await (publication.kind === "local"
+      ? publication.files.assertCurrent()
+      : publication.hooks.beforeWrite());
+    // Recheck immediately before activation; another supervisor can appear during publication.
+    await assertNoSystemLaunchDaemonOwnership(label);
+    assertGatewayServiceUpdateCurrent();
+    activationAttempted = true;
+    if (loaded) {
+      await deactivateLaunchAgentDefinition(domain, published.plistPath);
+    }
+    await bootstrapLaunchAgentOrThrow({
+      domain,
+      serviceTarget,
+      plistPath: published.plistPath,
+      actionHint: "openclaw gateway install --force",
+      retryPendingTeardown: true,
+      assertCurrent: assertGatewayServiceUpdateCurrent,
+    });
+    assertGatewayServiceUpdateCurrent();
+    return published;
+  };
+  const { plistPath, stdoutPath } =
+    publication.kind === "transaction"
+      ? await install()
+      : await withGatewayServiceInstallationRecovery(install, async () => {
+          const files = publication.files;
+          if (activationAttempted) {
+            await files.assertCurrent();
+            const current = await probeLaunchAgentState(serviceTarget);
+            if (current.state === "unknown") {
+              throw new Error(
+                `launchctl print could not determine whether ${serviceTarget} is loaded during LaunchAgent rollback: ${current.detail ?? "unknown error"}`,
+              );
+            }
+            if (current.state !== "not-loaded") {
+              await files.assertCurrent();
+              const bootout = await execLaunchctl(["bootout", serviceTarget]);
+              if (bootout.code !== 0 && !isLaunchctlNotLoaded(bootout)) {
+                throw new Error(
+                  `launchctl bootout failed: ${formatLaunchctlResultDetail(bootout)}`,
+                );
+              }
+            }
           }
-        }
-      }
-      const restored = await files.restore();
-      if (activationAttempted && loaded) {
-        await files.assertCurrent();
-        await assertNoSystemLaunchDaemonOwnership(label);
-        await bootstrapLaunchAgentOrThrow({
-          domain,
-          serviceTarget,
-          plistPath: targetPlistPath,
-          actionHint: "openclaw gateway start",
-          retryPendingTeardown: true,
-          assertCurrent: assertGatewayServiceUpdateCurrent,
+          const restored = await files.restore();
+          if (activationAttempted && loaded) {
+            await files.assertCurrent();
+            await assertNoSystemLaunchDaemonOwnership(label);
+            await bootstrapLaunchAgentOrThrow({
+              domain,
+              serviceTarget,
+              plistPath: targetPlistPath,
+              actionHint: "openclaw gateway start",
+              retryPendingTeardown: true,
+              assertCurrent: assertGatewayServiceUpdateCurrent,
+            });
+          }
+          return restored || activationAttempted;
         });
-      }
-      return restored || activationAttempted;
-    },
-  );
   // `bootstrap` already loads RunAtLoad agents. Avoid `kickstart -k` here:
   // on slow macOS guests it SIGTERMs the freshly booted gateway and pushes the
   // real listener startup past setup's health deadline.
