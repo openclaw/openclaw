@@ -19,7 +19,8 @@ import {
   type AssistantMessageExpansionState,
 } from "../chat-message-recovery.ts";
 import { persistedMessageEntryId } from "../chat-thread.ts";
-import { extractMessageMediaText } from "./chat-message-media.ts";
+import { extractMessageMediaText, projectMessageMedia } from "./chat-message-media.ts";
+import { isSentCommentAttachment } from "./chat-sent-comments.ts";
 
 registerChatMessageMetadataEnglish();
 
@@ -45,6 +46,16 @@ export const FULL_MESSAGE_RETRY_REVISION_LIMIT = 6;
 export function prepareChatMessageRender(message: unknown) {
   const normalizedMessage = normalizeMessage(message);
   const displayMarkdown = resolveMessageDisplayMarkdown(message, normalizedMessage);
+  const media = projectMessageMedia(message, normalizedMessage.content);
+  const onlyComments =
+    normalizeRoleForGrouping(normalizedMessage.role) === "user" &&
+    !displayMarkdown &&
+    !normalizedMessage.replyTarget &&
+    normalizedMessage.content.every((item) => item.type === "text" || item.type === "attachment") &&
+    media.images.length === 0 &&
+    media.expiredPairingQrCount === 0 &&
+    media.attachments.length > 0 &&
+    media.attachments.every(isSentCommentAttachment);
   const record = asNullableRecord(message);
   const metadata = asNullableRecord(record?.["__openclaw"]);
   let humanMentions: ReturnType<typeof readHumanMentions>;
@@ -65,7 +76,7 @@ export function prepareChatMessageRender(message: unknown) {
       humanMentions = readHumanMentions(displayMarkdown, metadata.humanMentions);
     }
   }
-  return { message, normalizedMessage, displayMarkdown, humanMentions };
+  return { message, normalizedMessage, displayMarkdown, humanMentions, media, onlyComments };
 }
 
 export type ChatMessageRenderPreparation = ReturnType<typeof prepareChatMessageRender>;

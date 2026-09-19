@@ -558,7 +558,10 @@ export function renderMessageGroup(group: MessageGroup, opts: RenderMessageGroup
   const inlineUserAvatar =
     normalizedRole === "user" &&
     avatarPlacement === "gutter" &&
-    Boolean(preparedMessages[lastMessageIndex]?.source.displayMarkdown);
+    Boolean(
+      preparedMessages[lastMessageIndex]?.source.displayMarkdown ||
+      preparedMessages[lastMessageIndex]?.source.onlyComments,
+    );
   const avatar =
     !sourceOnly &&
     normalizedRole !== "tool" &&
