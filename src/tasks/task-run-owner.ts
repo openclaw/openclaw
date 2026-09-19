@@ -6,7 +6,7 @@ import { withTaskRegistryMutation } from "./task-registry-state.js";
 import { getTaskRegistryProcessState, type TaskRunOwner } from "./task-registry.process-state.js";
 import type { TaskRecord } from "./task-registry.types.js";
 
-export function getTaskRunOwner(task: TaskRecord): TaskRunOwner | undefined {
+export function getTaskRunOwner(task: TaskRunOwner["task"]): TaskRunOwner | undefined {
   const owner = getTaskRegistryProcessState().runOwners.get(task.taskId);
   // Store reloads replace record objects, but cannot transfer the producer's fixed task scope.
   return owner && sameTaskRunScope(owner.task, task) ? owner : undefined;

@@ -107,7 +107,7 @@ it("delivers a concise terminal failure message without internal ACP chatter", a
         error: "Permission denied by ACP runtime",
       },
     });
-    await flushAsyncWork();
+    await waitForFast(() => expect(hoisted.sendMessageMock).toHaveBeenCalledOnce());
 
     expect(sentMessageCall()).toMatchObject({
       channel: "guildchat",

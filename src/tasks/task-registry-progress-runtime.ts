@@ -340,14 +340,9 @@ export async function publishTaskProgressMessage(
 
 export type TaskProgressTyping = Pick<
   TaskProgressPublication,
-  | "operationId"
-  | "requesterSessionId"
-  | "sessionKey"
-  | "agentId"
-  | "origin"
-  | "signal"
-  | "assertCurrent"
+  "operationId" | "requesterSessionId" | "sessionKey" | "agentId" | "origin" | "signal"
 > & {
+  prepareCurrent: () => Promise<() => void>;
   isExecutionActive: () => boolean;
   onStopped: () => void;
   onError: (error: unknown) => void;
@@ -378,9 +373,9 @@ export function startTaskProgressTyping(params: TaskProgressTyping): boolean {
   }
   const controller = new AbortController();
   const signal = AbortSignal.any([params.signal, controller.signal]);
-  const assertCurrent = () => {
+  const assertCurrent = (assertTaskCurrent: () => void) => {
     signal.throwIfAborted();
-    params.assertCurrent();
+    assertTaskCurrent();
     const currentConfig = getRuntimeConfig();
     const requester = loadSessionEntryReadOnly({
       storePath: scope.storePath,
@@ -410,14 +405,16 @@ export function startTaskProgressTyping(params: TaskProgressTyping): boolean {
   const callbacks = createTypingCallbacks({
     start: async () => {
       await runWithGatewayDetachedWorkContinuation(async () => {
-        assertCurrent();
+        const assertTaskCurrent = await params.prepareCurrent();
+        const assertAuthorized = () => assertCurrent(assertTaskCurrent);
+        assertAuthorized();
         await sendTyping({
           cfg: getRuntimeConfig(),
           to,
           accountId,
           threadId: params.origin.threadId,
           signal,
-          assertPlatformSendAuthorized: assertCurrent,
+          assertPlatformSendAuthorized: assertAuthorized,
         });
       }, "tasks:progress-typing");
     },

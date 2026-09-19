@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import { emitAcpLifecycleStart } from "../agents/command/attempt-execution.js";
 import { emitAgentEvent, resetAgentEventsForTest } from "../infra/agent-events.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
@@ -7,9 +8,17 @@ import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createInMemoryTaskRegistryStore } from "../test-utils/task-registry-store.js";
 import { getTaskExecutionObservation } from "./task-execution-observation.js";
 import { getTaskActivitySnapshot } from "./task-registry-activity.js";
-import { runTaskRegistryWorkerMutation } from "./task-registry-state.js";
+import {
+  reloadTaskRegistryFromStoreAsync,
+  runTaskRegistryWorkerMutation,
+  tasks,
+} from "./task-registry-state.js";
 import { findTaskByRunId, getTaskById, markTaskTerminalById } from "./task-registry.js";
-import { configureTaskRegistryRuntime, getTaskRegistryStore } from "./task-registry.store.js";
+import {
+  configureTaskRegistryRuntime,
+  getTaskRegistryStore,
+  onTaskRegistryChange,
+} from "./task-registry.store.js";
 import { createTaskFixture } from "./task-registry.test-support.js";
 import { bindTaskRunOwner } from "./task-run-owner.js";
 import {
@@ -80,6 +89,111 @@ describe("task registry agent events", () => {
     },
   );
 
+  it.each([
+    {
+      name: "persists an ACP producer timestamp across lifecycle projection and SQLite reload",
+      runId: "run-reused-lifecycle",
+      task: "Reuse a persisted task row",
+      initialStatus: "queued" as const,
+      lastEventAt: 1_000,
+      lifecycleStartedAt: 2_000,
+      terminalStartedAt: undefined,
+      endedAt: 2_500,
+      expectedStartedAt: 2_000,
+    },
+    {
+      name: "persists an accepted zero lifecycle start timestamp over stale state",
+      runId: "run-zero-lifecycle",
+      task: "Replace a stale task timestamp",
+      initialStatus: "queued" as const,
+      lastEventAt: undefined,
+      lifecycleStartedAt: 0,
+      terminalStartedAt: undefined,
+      endedAt: 500,
+      expectedStartedAt: 0,
+    },
+    {
+      name: "preserves an earlier nonzero producer timestamp across queued lifecycle writes",
+      runId: "run-earlier-lifecycle",
+      task: "Normalize the accepted producer timestamp",
+      initialStatus: "queued" as const,
+      lastEventAt: undefined,
+      lifecycleStartedAt: 500,
+      terminalStartedAt: undefined,
+      endedAt: 1_500,
+      expectedStartedAt: 500,
+    },
+    {
+      name: "ignores a non-finite lifecycle timestamp during durable terminal projection",
+      runId: "run-non-finite-terminal",
+      task: "Keep the accepted producer timestamp",
+      initialStatus: undefined,
+      lastEventAt: undefined,
+      lifecycleStartedAt: undefined,
+      terminalStartedAt: Number.NaN,
+      endedAt: 1_500,
+      expectedStartedAt: 1_000,
+    },
+  ])(
+    "$name",
+    async ({
+      runId,
+      task,
+      initialStatus,
+      lastEventAt,
+      lifecycleStartedAt,
+      terminalStartedAt,
+      endedAt,
+      expectedStartedAt,
+    }) => {
+      await withOpenClawTestState({ layout: "state-only" }, async () => {
+        resetTaskRegistryForTests({ persist: false });
+        const created = createTaskFixture("acp", {
+          requesterSessionKey: "agent:main:main",
+          runId,
+          task,
+          notifyPolicy: "silent",
+          startedAt: 1_000,
+          ...(initialStatus === undefined ? {} : { status: initialStatus }),
+          ...(lastEventAt === undefined ? {} : { lastEventAt }),
+        });
+
+        const published = createDeferred();
+        const stop = onTaskRegistryChange(() => {
+          if (tasks.get(created.taskId)?.status === "succeeded") {
+            published.resolve();
+          }
+        });
+        try {
+          if (lifecycleStartedAt !== undefined) {
+            emitAcpLifecycleStart({ runId, startedAt: lifecycleStartedAt });
+          }
+          emitAgentEvent({
+            runId,
+            stream: "lifecycle",
+            data: {
+              phase: "end",
+              endedAt,
+              ...(terminalStartedAt === undefined ? {} : { startedAt: terminalStartedAt }),
+            },
+          });
+
+          await published.promise;
+        } finally {
+          stop();
+        }
+
+        resetTaskRegistryForTests({ persist: false });
+        await reloadTaskRegistryFromStoreAsync(captureOpenClawStateWorkerContext());
+        expect(getTaskById(created.taskId)).toMatchObject({
+          status: "succeeded",
+          startedAt: expectedStartedAt,
+          endedAt,
+        });
+      });
+    },
+  );
+
   it("keeps unscoped agent events out of SQLite", async () => {
     await withOpenClawTestState(
       { layout: "state-only", prefix: "openclaw-task-unscoped-events-" },
@@ -146,14 +260,22 @@ describe("task registry agent events", () => {
         },
         async () => store.loadSnapshot(),
       );
+      const published = createDeferred();
+      const stop = onTaskRegistryChange(() => {
+        if (tasks.get(task.taskId)?.status === "succeeded") {
+          published.resolve();
+        }
+      });
       try {
         emitAgentEvent({
           runId: rebound.runId,
           stream: "lifecycle",
           data: { phase: "end" },
         });
+        await published.promise;
         expect(store.loadSnapshot().tasks.get(task.taskId)?.status).toBe("succeeded");
       } finally {
+        stop();
         release.resolve();
         await pending;
       }
@@ -228,7 +350,7 @@ describe("task registry agent events", () => {
 
           dateNow.mockReturnValue(initialLastEventAt + 60_000);
           emitCandidate(text.trimEnd());
-          expect(upsert).toHaveBeenCalledOnce();
+          await vi.waitFor(() => expect(upsert).toHaveBeenCalledOnce());
           expect(findTaskByRunId(runId)?.lastEventAt).toBe(initialLastEventAt + 60_000);
           upsert.mockClear();
           emit("assistant", { text: "Still editing" });
@@ -236,7 +358,7 @@ describe("task registry agent events", () => {
           expect(getTaskActivitySnapshot(task.taskId)?.lastActivity).toBe("Still editing");
 
           emit("error", { error: "Observed diagnostic failure" });
-          expect(upsert).toHaveBeenCalledOnce();
+          await vi.waitFor(() => expect(upsert).toHaveBeenCalledOnce());
           expect(findTaskByRunId(runId)?.error).toBe("Observed diagnostic failure");
           upsert.mockClear();
           emit("tool", {
@@ -245,7 +367,7 @@ describe("task registry agent events", () => {
             toolCallId: "write-1",
             args: { path: "src/example.ts", content: "one\ntwo" },
           });
-          expect(upsert).toHaveBeenCalledOnce();
+          await vi.waitFor(() => expect(upsert).toHaveBeenCalledOnce());
           expect(findTaskByRunId(runId)).toMatchObject({
             toolUseCount: 1,
             lastToolName: "write",
@@ -265,7 +387,7 @@ describe("task registry agent events", () => {
           });
           expect(upsert).not.toHaveBeenCalled();
           emit("lifecycle", { phase: "end", endedAt: initialLastEventAt + 60_000 });
-          expect(upsert).toHaveBeenCalledOnce();
+          await vi.waitFor(() => expect(upsert).toHaveBeenCalledOnce());
           expect(findTaskByRunId(runId)?.status).toBe("succeeded");
         } finally {
           dateNow.mockRestore();

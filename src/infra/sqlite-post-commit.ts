@@ -8,7 +8,8 @@ const pendingPublications = resolveGlobalSingleton(
 );
 const pendingTransactionState = resolveGlobalSingleton(
   Symbol.for("openclaw.sqliteTransactionState"),
-  () => new WeakMap<DatabaseSync, Array<{ commit: () => void; rollback: () => void }>>(),
+  () =>
+    new WeakMap<DatabaseSync, Array<{ commit: () => void; rollback: (error: unknown) => void }>>(),
 );
 
 /** Publications are non-throwing observers, never part of a durable transaction's result. */
@@ -27,7 +28,7 @@ export function deferSqlitePostCommitPublication(db: DatabaseSync, publish: () =
  */
 export function stageSqliteTransactionState(
   db: DatabaseSync,
-  state: { stage: () => void; rollback: () => void; commit: () => void },
+  state: { stage: () => void; rollback: (error: unknown) => void; commit: () => void },
 ): boolean {
   const pending = pendingTransactionState.get(db);
   if (!pending) {
@@ -39,13 +40,13 @@ export function stageSqliteTransactionState(
 }
 
 /** A lost transaction invalidates every savepoint's staged state and observers. */
-export function discardSqliteTransactionState(db: DatabaseSync): void {
+export function discardSqliteTransactionState(db: DatabaseSync, error: unknown): void {
   pendingPublications.get(db)?.splice(0);
   const rolledBackState = pendingTransactionState.get(db)?.splice(0) ?? [];
   pendingPublications.delete(db);
   pendingTransactionState.delete(db);
   for (const state of rolledBackState.toReversed()) {
-    state.rollback();
+    state.rollback(error);
   }
 }
 
@@ -67,7 +68,7 @@ export function withSqlitePostCommitPublications<T>(db: DatabaseSync, transactio
     publications?.splice(publicationStart);
     const rolledBackState = transactionState?.splice(stateStart) ?? [];
     for (const state of rolledBackState.toReversed()) {
-      state.rollback();
+      state.rollback(error);
     }
     throw error;
   } finally {

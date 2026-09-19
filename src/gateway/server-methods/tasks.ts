@@ -18,7 +18,11 @@ import {
   retrySubagentCompletionDelivery,
 } from "../../agents/subagents/completion/subagent-completion-delivery.js";
 import { canonicalizeMainSessionAlias } from "../../config/sessions.js";
-import { getTaskById, listTaskRecordPage } from "../../tasks/runtime-internal.js";
+import {
+  getTaskById,
+  listTaskRecordPage,
+  prepareTaskRegistryRead,
+} from "../../tasks/runtime-internal.js";
 import type { TaskRecord, TaskStatus } from "../../tasks/task-registry.types.js";
 import { readGatewayAccessRevision } from "../gateway-access-revision.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
@@ -199,7 +203,7 @@ export const tasksHandlers: GatewayRequestHandlers = {
     // Selection stays inside the registry so ordering applies before pagination
     // and only the bounded wire page pays for defensive record cloning.
     const prepareFilter = (tasks: readonly Readonly<TaskRecord>[]) =>
-      prepareTaskSessionReadFilter({ cfg, client }, tasks);
+      prepareTaskSessionReadFilter({ cfg: context.getRuntimeConfig(), client }, tasks);
     const pageParams = {
       offset: cursor?.offset ?? 0,
       limit,
@@ -234,6 +238,7 @@ export const tasksHandlers: GatewayRequestHandlers = {
       // Sharing changes invalidate every access decision made before a yield.
       // Recheck selected rows in the final synchronous response turn as well.
       if (
+        !page.isCurrent() ||
         accessRevision !== readGatewayAccessRevision() ||
         !page.tasks.every(prepareFilter(page.tasks))
       ) {
@@ -269,12 +274,21 @@ export const tasksHandlers: GatewayRequestHandlers = {
       ),
     );
   },
-  "tasks.get": ({ params, respond, context, client }) => {
+  "tasks.get": async ({ params, respond, context, client }) => {
     if (!assertValidParams(params, validateTasksGetParams, "tasks.get", respond)) {
       return;
     }
     const taskId = params.taskId;
-    const task = getTaskById(taskId);
+    const read = await prepareTaskRegistryRead();
+    if (!read) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.UNAVAILABLE, "Task activity did not stabilize. Refresh the task."),
+      );
+      return;
+    }
+    const task = read.getTaskById(taskId);
     if (
       !task ||
       !canAccessTaskRequesterSession({ cfg: context.getRuntimeConfig(), client, task })

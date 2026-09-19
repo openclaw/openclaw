@@ -123,7 +123,7 @@ describe("task-flow-registry", () => {
         .spyOn(sqlitePostCommit, "stageSqliteTransactionState")
         .mockImplementation((_db, publication) => {
           publication.stage();
-          publication.rollback();
+          publication.rollback(new Error("Synthetic projection rollback"));
           return true;
         });
       try {

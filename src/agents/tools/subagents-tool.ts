@@ -9,7 +9,10 @@ import { readAcpSessionEntry } from "../../acp/runtime/session-meta.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createAbortError } from "../../infra/abort-signal.js";
-import { listTaskRecordsForOwnerTree } from "../../tasks/runtime-internal.js";
+import {
+  listTaskRecordsForOwnerTree,
+  prepareTaskRegistryRead,
+} from "../../tasks/runtime-internal.js";
 import { readTaskBackingInstance } from "../../tasks/task-backing-records.js";
 import {
   withTaskCancellationContext,
@@ -288,8 +291,20 @@ function waitForSelectedTasks(params: {
     };
     const onAbort = () =>
       finish(createAbortError("subagents wait aborted; tasks continue running."));
-    const unsubscribeTasks = onTaskRegistryChange(() => finish());
-    const unsubscribeSubagents = onSubagentRegistryPersisted(() => finish());
+    let wakeQueued = false;
+    const wake = () => {
+      if (wakeQueued || settled) {
+        return;
+      }
+      wakeQueued = true;
+      // The publisher retires its mutation before a reader checks the resulting identity.
+      queueMicrotask(() => {
+        wakeQueued = false;
+        finish();
+      });
+    };
+    const unsubscribeTasks = onTaskRegistryChange(wake);
+    const unsubscribeSubagents = onSubagentRegistryPersisted(wake);
     unsubscribe = () => {
       unsubscribeTasks();
       unsubscribeSubagents();
@@ -368,10 +383,23 @@ export function createSubagentsTool(opts: SubagentsToolOptions = {}): AnyAgentTo
         recentMinutesRaw === undefined
           ? DEFAULT_RECENT_MINUTES
           : Math.min(MAX_RECENT_MINUTES, recentMinutesRaw);
+      const prepared =
+        !opts.listTasks && (action === "list" || action === "wait")
+          ? await prepareTaskRegistryRead()
+          : undefined;
+      if (!opts.listTasks && (action === "list" || action === "wait") && !prepared) {
+        throw new Error("Task activity did not stabilize. Retry the task read.");
+      }
+      const listTasks = (owners: ReadonlySet<string>) =>
+        opts.listTasks
+          ? opts.listTasks()
+          : prepared
+            ? prepared.listTaskRecordsForOwnerTree(owners)
+            : listTaskRecordsForOwnerTree(owners);
       const readTreeTasks = () => {
         const current = readScope();
         return readTaskTree(
-          opts.listTasks?.() ?? listTaskRecordsForOwnerTree(current.allowedOwnerKeys),
+          listTasks(current.allowedOwnerKeys),
           current.allowedOwnerKeys,
           current.controllerAgentId,
           current.cfg,
@@ -398,7 +426,7 @@ export function createSubagentsTool(opts: SubagentsToolOptions = {}): AnyAgentTo
       }
       const { cfg, controller, controllerAgentId, allowedOwnerKeys } = readScope();
       const treeTasks = readTaskTree(
-        opts.listTasks?.() ?? listTaskRecordsForOwnerTree(allowedOwnerKeys),
+        listTasks(allowedOwnerKeys),
         allowedOwnerKeys,
         controllerAgentId,
         cfg,

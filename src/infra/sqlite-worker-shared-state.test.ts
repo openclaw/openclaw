@@ -179,51 +179,63 @@ describe("canonical shared-state worker admission", () => {
     },
   );
 
-  it("keeps metadata inspection and the first Web Push operation in the same actor", async () => {
-    const captured = context();
-    const value = { generation: "prepared-metadata", plugins: [] };
-    writeConfigMachineState("plugins.installedIndex", value, {
-      path: captured.admission.databasePath,
-      env: captured.environment,
-    });
-    await closeOpenClawStateDatabaseAsync();
-    const reopened = captureOpenClawStateWorkerContext({
-      path: captured.admission.databasePath,
-      env: captured.environment,
-    });
-    const messages = vi.spyOn(Worker.prototype, "postMessage");
-    await runOpenClawStateWorkerOperation(
-      reopened,
-      async (scope) => {
-        expect(
-          await scope.execute({
-            type: "plugins.metadata.read",
-            input: { selector: "installed-index", artifactPreservingReadOnly: true },
-          }),
-        ).toEqual({ value_json: JSON.stringify(value) });
-        const metadataWorker = messages.mock.contexts[0];
-        expect(metadataWorker).toBeInstanceOf(Worker);
-        messages.mockClear();
-        expect(
-          await scope.execute({
-            type: "webPush.listTerminalWebPushApprovalDeliveryIds",
-            input: {},
-          }),
-        ).toEqual({ approvalIds: [], nextAfterApprovalId: null, throughApprovalId: null });
-        expect(messages.mock.contexts.length).toBeGreaterThan(0);
-        expect(messages.mock.contexts.every((worker) => worker === metadataWorker)).toBe(true);
-        expect(
-          await scope.execute({
-            type: "plugins.metadata.read",
-            input: { selector: "installed-index", artifactPreservingReadOnly: true },
-          }),
-        ).toEqual({ value_json: JSON.stringify(value) });
-      },
-      { existingOnly: true },
-    );
-    await closeOpenClawStateDatabaseAsync();
-    messages.mockRestore();
-  });
+  it.each(["Web Push", "task"] as const)(
+    "keeps metadata inspection and the first %s operation in the same actor",
+    async (operation) => {
+      const captured = context();
+      const value = { generation: "prepared-metadata", plugins: [] };
+      writeConfigMachineState("plugins.installedIndex", value, {
+        path: captured.admission.databasePath,
+        env: captured.environment,
+      });
+      await closeOpenClawStateDatabaseAsync();
+      const reopened = captureOpenClawStateWorkerContext({
+        path: captured.admission.databasePath,
+        env: captured.environment,
+      });
+      const messages = vi.spyOn(Worker.prototype, "postMessage");
+      await runOpenClawStateWorkerOperation(
+        reopened,
+        async (scope) => {
+          expect(
+            await scope.execute({
+              type: "plugins.metadata.read",
+              input: { selector: "installed-index", artifactPreservingReadOnly: true },
+            }),
+          ).toEqual({ value_json: JSON.stringify(value) });
+          const metadataWorker = messages.mock.contexts[0];
+          expect(metadataWorker).toBeInstanceOf(Worker);
+          messages.mockClear();
+          if (operation === "task") {
+            expect(
+              await scope.execute({
+                type: "tasks.list",
+                input: { ownerKey: "agent:main:main" },
+              }),
+            ).toEqual([]);
+          } else {
+            expect(
+              await scope.execute({
+                type: "webPush.listTerminalWebPushApprovalDeliveryIds",
+                input: {},
+              }),
+            ).toEqual({ approvalIds: [], nextAfterApprovalId: null, throughApprovalId: null });
+          }
+          expect(messages.mock.contexts.length).toBeGreaterThan(0);
+          expect(messages.mock.contexts.every((worker) => worker === metadataWorker)).toBe(true);
+          expect(
+            await scope.execute({
+              type: "plugins.metadata.read",
+              input: { selector: "installed-index", artifactPreservingReadOnly: true },
+            }),
+          ).toEqual({ value_json: JSON.stringify(value) });
+        },
+        { existingOnly: true },
+      );
+      await closeOpenClawStateDatabaseAsync();
+      messages.mockRestore();
+    },
+  );
 
   it("leaves a missing database absent for existing-only inspection", async () => {
     const captured = context();

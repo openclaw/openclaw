@@ -4,6 +4,7 @@ import {
   executionOwnerBindingFromAdmission,
   type ExecutionOwnerBindingResult,
 } from "../audit/execution-owner-binding.js";
+import { readSqliteBusyTimeout } from "../infra/sqlite-busy-timeout.js";
 import { withExistingOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-readonly.js";
 import { withSharedStateWriteCoordinator } from "../state/openclaw-state-db-write-coordination.js";
 import {
@@ -16,7 +17,6 @@ import {
 import {
   bindTaskRunExecutionInDatabase,
   deleteTaskRowsWithDeliveryState,
-  listTaskRecordsByOwnerKeyInDatabase,
   listTaskRecordsByRuntimeSourceIdInDatabase,
   readTaskRegistrySnapshot,
   readTaskRegistryMutationSnapshotInDatabase,
@@ -68,6 +68,13 @@ export function withTaskRegistrySqliteMutation<T>(operation: () => T): T {
   );
 }
 
+/** A native compatibility caller joins already-granted worker writes before selecting rows. */
+export function settleTaskRegistrySqliteWrites(join: (deadlineMs: number) => void): void {
+  const deadlineMs = performance.now() + readSqliteBusyTimeout(openTaskRegistryDatabase().db);
+  runOpenClawStateWriteTransaction(() => {}, undefined, { operationLabel: "task.event.settle" });
+  join(deadlineMs);
+}
+
 export function loadTaskRegistryMutationStateFromSqlite(
   scope: TaskRegistryMutationScope,
 ): TaskRegistryStoreSnapshot {
@@ -87,17 +94,6 @@ export function loadTaskRegistryStateFromSqliteReadOnlyResult(): TaskRegistryRea
       snapshot: { tasks: new Map(), deliveryStates: new Map() },
     }
   );
-}
-
-export async function listTaskRegistryRecordsByOwnerKeyFromSqlite(
-  ownerKey: string,
-): Promise<TaskRecord[]> {
-  const key = ownerKey.trim();
-  if (!key) {
-    return [];
-  }
-  const { db } = openTaskRegistryDatabase();
-  return listTaskRecordsByOwnerKeyInDatabase(db, key);
 }
 
 /** Reads task rows for one runtime/source without restoring the process registry snapshot. */

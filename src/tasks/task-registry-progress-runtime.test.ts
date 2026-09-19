@@ -1,4 +1,9 @@
+import { setTimeout as sleep } from "node:timers/promises";
+import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it } from "vitest";
+import { subagentRuns } from "../agents/subagents/registry/subagent-registry-memory.js";
+import { settleRequesterTurnAfterSessionSpawns } from "../agents/subagents/registry/subagent-registry-requester-yield.js";
+import type { SubagentRunRecord } from "../agents/subagents/registry/subagent-registry.types.js";
 import type { ChannelPlugin } from "../channels/plugins/types.public.js";
 import type { ProgressContinuationReceipt } from "../channels/progress-continuation.js";
 import { createChannelProgressDraftCompositor } from "../channels/progress-draft-compositor.js";
@@ -23,21 +28,43 @@ import {
   updateSessionLastRoute,
 } from "../config/sessions/session-accessor.js";
 import { sendMessage } from "../infra/outbound/message.js";
+import { captureStateDatabaseCoordinatorRuntime } from "../infra/state-database-coordinator.js";
 import {
   initializeGlobalHookRunner,
   resetGlobalHookRunner,
 } from "../plugins/hook-runner-global.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../plugins/runtime.js";
 import { createPluginRecord } from "../plugins/status.test-fixtures.js";
+import { getActiveGatewayRootWorkCount } from "../process/gateway-work-admission.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseByPathAsync,
+  openOpenClawStateDatabase,
+} from "../state/openclaw-state-db.js";
 import { createChannelTestPluginBase, createTestRegistry } from "../test-utils/channel-plugins.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { cleanupSessionStateForTest } from "../test-utils/session-state-cleanup.js";
+import { holdStateDatabaseCoordinator } from "../test-utils/state-database-contention.js";
+import {
+  createSubagentTaskBackingDetail,
+  resolveManagedTaskBackingDetail,
+} from "./task-backing-authority.js";
+import { createManagedTaskFlow, createTaskFlowForTask } from "./task-flow-registry.js";
 import {
   adoptTaskProgressMessage,
   publishTaskProgressMessage,
   readTaskProgressSnapshot,
   type TaskProgressPublication,
 } from "./task-registry-progress-runtime.js";
+import { flushTaskProgressBatch, getTaskProgressBatchesForRuns } from "./task-registry-progress.js";
+import { prepareTaskRegistryRead } from "./task-registry-read.js";
+import { linkTaskToFlowById } from "./task-registry-record-api.js";
+import { taskProgressBatches } from "./task-registry-state.js";
+import { createTaskFixture } from "./task-registry.test-support.js";
+import {
+  resetTaskFlowRegistryForTests,
+  resetTaskRegistryForTests,
+} from "./task-runtime.test-helpers.js";
 
 const channel = "progresschat";
 const sessionKey = "agent:main:progresschat:direct:operator:thread:topic-a";
@@ -361,6 +388,160 @@ it("keeps the captured requester when a child also owns a current association on
 });
 
 describe("detached progress at the registered channel boundary", () => {
+  it.each(["warm", "reopened"] as const)(
+    "keeps adopted-card publication responsive while shared-state admission is held (%s)",
+    async (stateMode) => {
+      await withPublisher(async (fixture) => {
+        // Session seeding schedules maintenance that must settle before introducing contention.
+        await fixture.restart();
+        resetTaskRegistryForTests({ persist: false });
+        resetTaskFlowRegistryForTests({ persist: false });
+        const entry: SubagentRunRecord = {
+          runId: "contended-card-child",
+          childSessionKey: "agent:main:subagent:contended-card",
+          requesterSessionKey: sessionKey,
+          requesterAgentId: "main",
+          requesterDisplayKey: "card requester",
+          requesterTurnRunId: "contended-card-requester-turn",
+          requesterTurnYielded: true,
+          completionRequesterSessionId: requesterSessionId,
+          task: "Continue the adopted card",
+          cleanup: "keep",
+          createdAt: Date.now(),
+          generation: 1,
+          execution: { status: "running", startedAt: Date.now() },
+          expectsCompletionMessage: true,
+        };
+        subagentRuns.set(entry.runId, entry);
+        let holder: ReturnType<typeof holdStateDatabaseCoordinator> | undefined;
+        let publication: Promise<void> | undefined;
+        const failures: unknown[] = [];
+        try {
+          const params = {
+            runId: entry.runId,
+            childSessionKey: entry.childSessionKey,
+            ownerKey: sessionKey,
+            requesterAgentId: "main",
+            task: entry.task,
+            notifyPolicy: "state_changes" as const,
+            requesterOrigin: origin,
+          };
+          const canonical = createTaskFixture("subagent", {
+            ...params,
+            detail: createSubagentTaskBackingDetail(1),
+          });
+          const mirrored = expectDefined(
+            createTaskFlowForTask({ task: canonical }),
+            "canonical child flow",
+          );
+          expect(
+            linkTaskToFlowById({ taskId: canonical.taskId, flowId: mirrored.flowId }),
+          ).not.toBeNull();
+          const flow = expectDefined(
+            createManagedTaskFlow({
+              ownerKey: sessionKey,
+              controllerId: "tests/contended-progress",
+              goal: entry.task,
+              requesterOrigin: origin,
+            }),
+            "managed progress flow",
+          );
+          createTaskFixture("subagent", {
+            ...params,
+            parentFlowId: flow.flowId,
+            detail: resolveManagedTaskBackingDetail({
+              ...params,
+              runtime: "subagent",
+              scopeKind: "session",
+            }),
+          });
+          expect(await fixture.adopt()).toBe(true);
+          await prepareTaskRegistryRead();
+          const sharedState = openOpenClawStateDatabase();
+          expect(taskProgressBatches.size).toBe(0);
+          if (stateMode === "reopened") {
+            await closeOpenClawStateDatabaseByPathAsync(sharedState.path);
+          }
+          holder = holdStateDatabaseCoordinator(
+            sharedState.path,
+            captureStateDatabaseCoordinatorRuntime(),
+            300,
+          );
+          await holder.ready;
+          const released = holder.released;
+          const timer = sleep(10).then(() => Atomics.load(released, 0));
+          expect(
+            settleRequesterTurnAfterSessionSpawns({
+              requesterSessionKey: sessionKey,
+              requesterAgentId: "main",
+              requesterTurnRunId: "contended-card-requester-turn",
+              requesterYielded: true,
+              acceptedSessionSpawns: [
+                {
+                  runId: entry.runId,
+                  childSessionKey: entry.childSessionKey,
+                  expectsCompletionMessage: true,
+                },
+              ],
+              progressPresentation: { operationId },
+              runs: subagentRuns,
+              persistOrThrow: () => {},
+              schedule: () => {},
+            }),
+          ).toBe(true);
+          const selected = expectDefined(
+            (await getTaskProgressBatchesForRuns([entry])).find(
+              ({ batch }) => batch.operationId === operationId,
+            ),
+            "adopted progress batch",
+          );
+          publication = flushTaskProgressBatch(selected.key, selected.batch);
+          const releasedAtTimer = await timer;
+          await publication;
+          expect(fixture.sends).toEqual([]);
+          expect(fixture.edits).toHaveLength(1);
+          expect(fixture.edits[0]?.messageId).toBe(initialMessage.messageId);
+          expect(getActiveGatewayRootWorkCount()).toBe(0);
+          expect(releasedAtTimer, "timer must run before the contended coordinator releases").toBe(
+            0,
+          );
+        } catch (error) {
+          failures.push(error);
+        } finally {
+          for (const cleanup of [
+            () => holder?.release(),
+            () => holder?.joined,
+            () => publication,
+            () => closeOpenClawStateDatabaseAsync(),
+            () => resetTaskRegistryForTests({ persist: false }),
+            () => resetTaskFlowRegistryForTests({ persist: false }),
+            () => subagentRuns.delete(entry.runId),
+          ]) {
+            try {
+              await cleanup();
+            } catch (error) {
+              if (!failures.includes(error)) {
+                failures.push(error);
+              }
+            }
+          }
+        }
+        if (failures.length === 1) {
+          throw failures[0];
+        }
+        if (failures.length > 1) {
+          throw new AggregateError(
+            failures,
+            "Adopted progress fixture failed with cleanup errors",
+            {
+              cause: failures[0],
+            },
+          );
+        }
+      });
+    },
+  );
+
   it("restores prior presentation into subsequent updates across two storage reopens", async () => {
     await withPublisher(async (fixture) => {
       expect(await fixture.adopt()).toBe(true);

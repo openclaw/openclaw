@@ -361,7 +361,7 @@ export async function resolveFollowupDeliveryDecision(params: {
       // Only accepted waiting replies need the task presentation runtime.
       const { createTaskProgressContinuation } =
         await import("../../tasks/task-progress-requester.js");
-      const progressContinuation = createTaskProgressContinuation({
+      const progressContinuation = await createTaskProgressContinuation({
         requesterSessionKey,
         requesterAgentId: turn.queued.run.agentId,
         requesterTurnRunId: execution.runId,

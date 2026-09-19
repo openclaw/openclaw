@@ -139,7 +139,7 @@ async function prepare(lane: "ordinary" | "queued", context: FinalizeReplyAgentR
 
 beforeEach(() => {
   settleRequester.mockReset().mockReturnValue(true);
-  createContinuation.mockReset().mockImplementation((params) => {
+  createContinuation.mockReset().mockImplementation(async (params) => {
     let open = true;
     return {
       adopt: async () => {

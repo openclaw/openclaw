@@ -78,3 +78,4 @@ export {
 } from "./task-registry.js";
 export type { TaskRecord } from "./task-registry.types.js";
 export { listTaskStatesForFlowIds } from "./task-registry-query.js";
+export { prepareTaskRegistryRead } from "./task-registry-read.js";

@@ -16,7 +16,7 @@ import {
   readTaskRegistryMutationSnapshotInDatabase,
   upsertTaskRunRowInDatabase,
 } from "./task-registry.store.kernel.js";
-import type { TaskPersistenceReceipt } from "./task-registry.types.js";
+import type { TaskPersistenceReceipt, TaskRecord } from "./task-registry.types.js";
 
 export type { TaskRecordTransitionReceipt } from "./task-registry-transition.operation.js";
 
@@ -24,6 +24,24 @@ type TaskWorkerTransitionInput = Extract<TaskRecordTransitionInput, { kind: "sta
   expectedTask: TaskPersistenceReceipt;
   selection?: never;
 };
+
+export function hasAuthoritativeTaskBackingInDatabase(db: DatabaseSync, task: TaskRecord): boolean {
+  return hasAuthoritativeTaskBackingFromRecords(task, {
+    isManagedFlow: (flowId) => readTaskFlowRecord(db, flowId)?.syncMode === "managed",
+    resolveCurrentCanonicalBacking: (scope) => {
+      const snapshot = readTaskRegistryMutationSnapshotInDatabase(db, {
+        taskId: task.taskId,
+        childSessionKey: scope.childSessionKey,
+      });
+      return selectCurrentCanonicalTaskBacking({
+        ...scope,
+        candidates: [...snapshot.tasks.values()],
+        isTaskMirroredFlow: (flowId) =>
+          readTaskFlowRecord(db, flowId)?.syncMode === "task_mirrored",
+      });
+    },
+  });
+}
 
 /** Worker settlement retains an exact task receipt and current host admission. */
 export function transitionTaskRecordInDatabase(
@@ -42,22 +60,7 @@ export function transitionTaskRecordInDatabase(
       }
       return readTaskRecord(db, input.taskId);
     },
-    hasAuthoritativeBacking: (task) =>
-      hasAuthoritativeTaskBackingFromRecords(task, {
-        isManagedFlow: (flowId) => readTaskFlowRecord(db, flowId)?.syncMode === "managed",
-        resolveCurrentCanonicalBacking: (scope) => {
-          const snapshot = readTaskRegistryMutationSnapshotInDatabase(db, {
-            taskId: task.taskId,
-            childSessionKey: scope.childSessionKey,
-          });
-          return selectCurrentCanonicalTaskBacking({
-            ...scope,
-            candidates: [...snapshot.tasks.values()],
-            isTaskMirroredFlow: (flowId) =>
-              readTaskFlowRecord(db, flowId)?.syncMode === "task_mirrored",
-          });
-        },
-      }),
+    hasAuthoritativeBacking: (task) => hasAuthoritativeTaskBackingInDatabase(db, task),
     write,
     upsertTask(task) {
       // No notification bookkeeping changed; preserve the delivery row's exact bytes.

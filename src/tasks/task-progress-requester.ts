@@ -11,7 +11,11 @@ import { onAgentEvent } from "../infra/agent-events.js";
 import { getAgentRunLifecycleGeneration } from "../infra/agent-run-registry.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { getGatewayRestartDrainSignal } from "../process/gateway-work-admission.js";
-import { hasAuthoritativeTaskBacking, readTaskBackingInstance } from "./task-backing-authority.js";
+import {
+  prepareTaskBackingRead,
+  readTaskBackingInstance,
+  type TaskBackingRead,
+} from "./task-backing-authority.js";
 import { resolveTaskDeliveryOwner } from "./task-registry-delivery.js";
 import {
   MAX_PROGRESS_BATCH_MEMBERS,
@@ -20,12 +24,8 @@ import {
   getTaskProgressBatchesForRuns,
   recordRequesterTaskProgress,
 } from "./task-registry-progress.js";
-import {
-  getTasksByRunId,
-  tasks,
-  taskProgressBatches,
-  taskRegistryLog,
-} from "./task-registry-state.js";
+import { sameTaskRunScope } from "./task-registry-records.js";
+import { taskProgressBatches, taskRegistryLog } from "./task-registry-state.js";
 import type { TaskProgressBatch } from "./task-registry.process-state.js";
 
 type RequesterContinuation = NonNullable<TaskProgressBatch["requesterContinuation"]>;
@@ -66,7 +66,7 @@ export async function withTaskProgressRequesterContinuation<T>(
 ): Promise<T> {
   let batches: Array<{ key: string; batch: TaskProgressBatch }>;
   try {
-    batches = getTaskProgressBatchesForRuns(params.entries);
+    batches = await getTaskProgressBatchesForRuns(params.entries);
   } catch (error) {
     logProgressFailure(error);
     return await run();
@@ -195,14 +195,31 @@ export function captureTaskProgressContinuationForRequesterTurn(params: {
   }
   return undefined;
 }
-/** A turn-scoped capability transfers only a positively identified existing card. */
-export function createTaskProgressContinuation(params: {
+type TaskProgressContinuationParams = {
   requesterSessionKey: string;
   requesterAgentId?: string;
   requesterTurnRunId: string;
   acceptedSessionSpawns: readonly AcceptedSessionSpawn[];
   onAdopted?: (state: ProgressContinuationState) => void;
-}): ProgressContinuationCapability | undefined {
+};
+
+/** A turn-scoped capability transfers only a positively identified existing card. */
+export async function createTaskProgressContinuation(
+  params: TaskProgressContinuationParams,
+): Promise<ProgressContinuationCapability | undefined> {
+  try {
+    const read = await prepareTaskBackingRead();
+    return read ? createPreparedTaskProgressContinuation(params, read) : undefined;
+  } catch (error) {
+    logProgressFailure(error);
+    return undefined;
+  }
+}
+
+function createPreparedTaskProgressContinuation(
+  params: TaskProgressContinuationParams,
+  read: TaskBackingRead,
+): ProgressContinuationCapability | undefined {
   const accepted = params.acceptedSessionSpawns.map((spawn) => ({
     spawn,
     entry: getLatestLiveSubagentRunByChildSessionKey(spawn.childSessionKey),
@@ -218,15 +235,17 @@ export function createTaskProgressContinuation(params: {
       !entry.collect &&
       !entry.suppressAnnounceReason &&
       !entry.execution.suppressSessionEffects
-        ? getTasksByRunId(entry.taskRunId ?? entry.runId).find(
-            (candidate) =>
-              candidate.runtime === "subagent" &&
-              candidate.childSessionKey === spawn.childSessionKey &&
-              candidate.ownerKey === params.requesterSessionKey &&
-              candidate.notifyPolicy !== "silent" &&
-              readTaskBackingInstance(candidate.detail)?.generation === entry.generation &&
-              hasAuthoritativeTaskBacking(candidate),
-          )
+        ? read
+            .getTasksByRunId(entry.taskRunId ?? entry.runId)
+            .find(
+              (candidate) =>
+                candidate.runtime === "subagent" &&
+                candidate.childSessionKey === spawn.childSessionKey &&
+                candidate.ownerKey === params.requesterSessionKey &&
+                candidate.notifyPolicy !== "silent" &&
+                readTaskBackingInstance(candidate.detail)?.generation === entry.generation &&
+                read.hasAuthoritativeTaskBacking(candidate),
+            )
         : undefined;
     return entry && task && entry.generation !== undefined
       ? [
@@ -240,7 +259,7 @@ export function createTaskProgressContinuation(params: {
       : [];
   });
   const first = rows[0];
-  const owner = first ? resolveTaskDeliveryOwner(first.task) : undefined;
+  const owner = first ? resolveTaskDeliveryOwner(first.task, read.getTaskFlowById) : undefined;
   const requesterSessionId = first?.entry.completionRequesterSessionId;
   if (
     !first ||
@@ -260,13 +279,14 @@ export function createTaskProgressContinuation(params: {
   let used = false;
   const assertCurrent = () => {
     signal.throwIfAborted();
+    read.assertCurrent();
     if (getAgentRunLifecycleGeneration() !== lifecycleGeneration) {
       throw new Error("Progress handoff lifecycle was replaced");
     }
     for (const row of rows) {
       const entry = subagentRuns.get(row.entry.runId);
-      const task = tasks.get(row.task.taskId);
-      const currentOwner = task ? resolveTaskDeliveryOwner(task) : undefined;
+      const task = read.getTaskById(row.task.taskId);
+      const currentOwner = task ? resolveTaskDeliveryOwner(task, read.getTaskFlowById) : undefined;
       if (
         entry !== row.entry ||
         entry.generation !== row.generation ||
@@ -278,8 +298,10 @@ export function createTaskProgressContinuation(params: {
         entry.suppressAnnounceReason ||
         entry.collect ||
         !task ||
+        !sameTaskRunScope(task, row.task) ||
+        readTaskBackingInstance(task.detail)?.generation !== row.generation ||
         task.notifyPolicy === "silent" ||
-        !hasAuthoritativeTaskBacking(task) ||
+        !read.hasAuthoritativeTaskBacking(task) ||
         JSON.stringify([
           currentOwner?.agentId,
           currentOwner?.sessionKey,

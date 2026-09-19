@@ -63,6 +63,72 @@ describe("worker publication scope", () => {
     createdAt: 1,
   };
 
+  it.each(["before read", "during read", "during effects"] as const)(
+    "does not recover stale committed publication across task ABA %s",
+    async (phase) => {
+      const { store, context, events } = await prepare([task]);
+      const committed = { ...task, task: "Committed" };
+      const started = createDeferred();
+      const release = createDeferred();
+      const effects = vi.fn();
+      let recovered = false;
+      const outcome = runTaskRegistryWorkerMutation(
+        {
+          admission: context.admission,
+          scope: { taskId: task.taskId },
+          publicationRecords: () => new Map(),
+          recoverPublication: (snapshot) => {
+            recovered = true;
+            return snapshot.tasks.get(task.taskId);
+          },
+          beforeObservers: async (assertCurrent) => {
+            if (!recovered) {
+              return;
+            }
+            if (phase === "during effects") {
+              started.resolve();
+              await release.promise;
+            }
+            assertCurrent();
+            effects();
+          },
+        },
+        async () => {
+          store.upsertTaskWithDeliveryState({ task: committed });
+          if (phase === "before read") {
+            started.resolve();
+            await release.promise;
+          }
+          throw new Error("Lost committed result");
+        },
+        async () => {
+          const snapshot = store.loadSnapshot();
+          if (phase === "during read") {
+            started.resolve();
+            await release.promise;
+          }
+          return snapshot;
+        },
+      );
+      const rejected = expect(outcome).rejects.toThrow("Lost committed result");
+      try {
+        await started.promise;
+        expect(updateTask(task.taskId, { task: "Other write" })).not.toBeNull();
+        expect(updateTask(task.taskId, { task: "Committed" })).not.toBeNull();
+        release.resolve();
+        await rejected;
+        expect(events).toEqual([
+          "upserted:existing-task:original-run",
+          "upserted:existing-task:original-run",
+        ]);
+        expect(effects).not.toHaveBeenCalled();
+      } finally {
+        release.resolve();
+        await rejected;
+      }
+    },
+  );
+
   it.each([
     { selection: "run", registration: "before claim" },
     { selection: "child", registration: "before claim" },
@@ -438,7 +504,7 @@ describe("worker publication during canonical reads", () => {
             .mockImplementation((_db, publication) => {
               publication.stage();
               expect(authoritativeTasks.get(task.taskId)?.task).toBe("Committed");
-              publication.rollback();
+              publication.rollback(new Error("Synthetic projection rollback"));
               expect(authoritativeTasks.get(task.taskId)?.task).toBe("Original");
               return true;
             });

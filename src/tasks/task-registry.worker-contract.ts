@@ -11,6 +11,7 @@ import type {
 } from "./task-flow-registry.store.types.js";
 import type { TaskFlowRecord } from "./task-flow-registry.types.js";
 import type { TaskInitialWorkerOperations } from "./task-initial-worker.types.js";
+import type { TaskAgentEventWorkerOperations } from "./task-registry-agent-event.operation.js";
 import type {
   TaskRegistryRestoreResult,
   TaskMirroredFlowSyncOutcome,
@@ -40,68 +41,71 @@ type TaskFlowReadQuery = {
   token?: string;
 };
 
-export type TaskRegistryWorkerOperations = TaskInitialWorkerOperations & {
-  "tasks.restore": { input: undefined; output: TaskRegistryRestoreResult };
-  "flows.syncMirroredTask": {
-    input: { taskId: string; expectedParentFlowId?: string };
-    output: TaskMirroredFlowSyncOutcome;
-  };
-  "flows.snapshot": { input: undefined; output: TaskFlowRegistryStoreSnapshot };
-  "flows.syncLiveMirroredTask": {
-    input: { taskId: string; flowId: string };
-    output: TaskLiveFlowSyncOutcome;
-  };
-  "tasks.statusSummary": {
-    input: { now: number; preserveSourceArtifacts: boolean };
-    output: TaskRegistryStatusSnapshot | undefined;
-  };
-  "flows.runTask": { input: ManagedTaskInFlowInput; output: ManagedTaskInFlowReceipt };
-  "tasks.mutationSnapshot": {
-    input: TaskRegistryMutationScope | undefined;
-    output: TaskRegistryStoreSnapshot;
-  };
-  "flows.createManaged": {
-    input: { flow: TaskFlowRecord };
-    output: TaskFlowRecord;
-  };
-  "flows.updateManaged": {
-    input: TaskFlowRegistryUpdate & {
-      ownerKey: string;
+export type TaskRegistryWorkerOperations = TaskInitialWorkerOperations &
+  TaskAgentEventWorkerOperations & {
+    "tasks.restore": { input: undefined; output: TaskRegistryRestoreResult };
+    "flows.syncMirroredTask": {
+      input: { taskId: string; expectedParentFlowId?: string };
+      output: TaskMirroredFlowSyncOutcome;
     };
-    output:
-      | TaskFlowRegistryUpdateResult
-      | { applied: false; reason: "not_managed"; current: TaskFlowRecord }
-      | { applied: false; reason: "persist_failed"; current?: TaskFlowRecord };
+    "flows.snapshot": { input: undefined; output: TaskFlowRegistryStoreSnapshot };
+    "flows.syncLiveMirroredTask": {
+      input: { taskId: string; flowId: string };
+      output: TaskLiveFlowSyncOutcome;
+    };
+    "tasks.statusSummary": {
+      input: { now: number; preserveSourceArtifacts: boolean };
+      output: TaskRegistryStatusSnapshot | undefined;
+    };
+    "flows.runTask": { input: ManagedTaskInFlowInput; output: ManagedTaskInFlowReceipt };
+    "tasks.mutationSnapshot": {
+      input: TaskRegistryMutationScope | undefined;
+      output: TaskRegistryStoreSnapshot;
+    };
+    "flows.createManaged": {
+      input: { flow: TaskFlowRecord };
+      output: TaskFlowRecord;
+    };
+    "flows.updateManaged": {
+      input: TaskFlowRegistryUpdate & {
+        ownerKey: string;
+      };
+      output:
+        | TaskFlowRegistryUpdateResult
+        | { applied: false; reason: "not_managed"; current: TaskFlowRecord }
+        | { applied: false; reason: "persist_failed"; current?: TaskFlowRecord };
+    };
+    "flows.current": { input: { flowId: string }; output: TaskFlowRecord | undefined };
+    "tasks.get": { input: { taskId: string }; output: TaskRecord | undefined };
+    "tasks.findByRunId": { input: { runId: string }; output: TaskRecord | undefined };
+    "tasks.list": { input: { ownerKey: string }; output: TaskRecord[] };
+    "tasks.ownerRecords": { input: { ownerKey: string }; output: TaskRecord[] };
+    "tasks.resolve": {
+      input: { ownerKey: string; token: string };
+      output: TaskLookupRecords;
+    };
+    "flows.list": { input: { ownerKey: string }; output: TaskFlowRecord[] };
+    "flows.views": { input: { ownerKey: string }; output: TaskFlowView[] };
+    "flows.summary": {
+      input: { ownerKey: string; flowId: string };
+      output: TaskRegistrySummary | undefined;
+    };
+    "flows.read": {
+      input: TaskFlowReadQuery;
+      output: TaskFlowRecord | undefined;
+    };
+    "flows.detail": {
+      input: TaskFlowReadQuery;
+      output: TaskFlowRead | undefined;
+    };
   };
-  "flows.current": { input: { flowId: string }; output: TaskFlowRecord | undefined };
-  "tasks.get": { input: { taskId: string }; output: TaskRecord | undefined };
-  "tasks.findByRunId": { input: { runId: string }; output: TaskRecord | undefined };
-  "tasks.list": { input: { ownerKey: string }; output: TaskRecord[] };
-  "tasks.resolve": {
-    input: { ownerKey: string; token: string };
-    output: TaskLookupRecords;
-  };
-  "flows.list": { input: { ownerKey: string }; output: TaskFlowRecord[] };
-  "flows.views": { input: { ownerKey: string }; output: TaskFlowView[] };
-  "flows.summary": {
-    input: { ownerKey: string; flowId: string };
-    output: TaskRegistrySummary | undefined;
-  };
-  "flows.read": {
-    input: TaskFlowReadQuery;
-    output: TaskFlowRecord | undefined;
-  };
-  "flows.detail": {
-    input: TaskFlowReadQuery;
-    output: TaskFlowRead | undefined;
-  };
-};
 
 export function isTaskRegistryWorkerCommand(command: {
   type: string;
   input: unknown;
 }): command is SqliteWorkerCommand<TaskRegistryWorkerOperations> {
   switch (command.type) {
+    case "tasks.observeAgentEvent":
     case "tasks.createRecord":
     case "tasks.settleUnstarted":
     case "flows.createForTask":
@@ -121,6 +125,7 @@ export function isTaskRegistryWorkerCommand(command: {
     case "tasks.get":
     case "tasks.findByRunId":
     case "tasks.list":
+    case "tasks.ownerRecords":
     case "tasks.resolve":
     case "flows.list":
     case "flows.views":

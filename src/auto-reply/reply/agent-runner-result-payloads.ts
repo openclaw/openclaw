@@ -617,7 +617,7 @@ export async function prepareReplyAgentPayloads(state: {
       // Ordinary replies must not load the task presentation runtime.
       const { createTaskProgressContinuation } =
         await import("../../tasks/task-progress-requester.js");
-      const progressContinuation = createTaskProgressContinuation({
+      const progressContinuation = await createTaskProgressContinuation({
         requesterSessionKey,
         requesterAgentId: followupRun.run.agentId,
         requesterTurnRunId: runId,

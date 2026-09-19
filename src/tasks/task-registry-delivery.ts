@@ -21,6 +21,7 @@ import {
   shouldSuppressDuplicateTerminalDelivery,
   shouldUseParentReviewTaskTerminalMessage,
 } from "./task-executor-policy.js";
+import type { TaskFlowRecord } from "./task-flow-registry.types.js";
 import { getTaskFlowById } from "./task-flow-runtime-internal.js";
 import {
   getTaskDeliveryState,
@@ -70,12 +71,15 @@ function resolveTaskTerminalIdempotencyKey(task: TaskRecord, owner: TaskDelivery
   return `${prefix}:${task.taskId}:${task.status}:${outcome}`;
 }
 
-export function resolveTaskDeliveryOwner(task: TaskRecord): TaskDeliveryOwner {
+export function resolveTaskDeliveryOwner(
+  task: TaskRecord,
+  readFlow: (flowId: string) => Readonly<TaskFlowRecord> | undefined = getTaskFlowById,
+): TaskDeliveryOwner {
   if (task.scopeKind !== "session") {
     return {};
   }
   const flowId = task.parentFlowId?.trim();
-  const candidate = flowId ? getTaskFlowById(flowId) : undefined;
+  const candidate = flowId ? readFlow(flowId) : undefined;
   const flow =
     candidate &&
     normalizeOptionalString(candidate.ownerKey) === normalizeOptionalString(task.ownerKey)

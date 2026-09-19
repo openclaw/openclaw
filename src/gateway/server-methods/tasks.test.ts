@@ -15,6 +15,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { emitAgentEvent } from "../../infra/agent-events.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
+import * as taskRuntime from "../../tasks/runtime-internal.js";
 import {
   finalizeTaskRecordByRunId,
   getTaskById,
@@ -24,8 +25,10 @@ import {
 import { createAcpTaskBackingDetailForTest } from "../../tasks/task-backing-authority.test-support.js";
 import { updateTaskStateByRunId } from "../../tasks/task-registry-record-api.js";
 import { reloadTaskRegistryFromStoreAsync } from "../../tasks/task-registry-state.js";
+import { configureTaskRegistryRuntime } from "../../tasks/task-registry.store.js";
 import { createTaskFixture } from "../../tasks/task-registry.test-support.js";
 import { seedTaskRegistryRowsForTests } from "../../test-utils/task-registry-sqlite.js";
+import { createInMemoryTaskRegistryStore } from "../../test-utils/task-registry-store.js";
 import {
   getTaskPayload,
   mainSessionTaskScope,
@@ -41,6 +44,82 @@ import {
 const { cancelSessionMock } = useTaskGatewayFixture();
 
 describe("tasks gateway handlers", () => {
+  it.each([
+    { change: "mutation", continuation: false },
+    { change: "mutation", continuation: true },
+    { change: "replacement", continuation: false },
+    { change: "replacement", continuation: true },
+  ])(
+    "revalidates a selected page after $change before responding (cursor: $continuation)",
+    async ({ change, continuation }) => {
+      const task = createTaskFixture("cli", {
+        ...mainSessionTaskScope,
+        task: "Selected before the response turn",
+        status: "running",
+        deliveryStatus: "not_applicable",
+        notifyPolicy: "silent",
+        lastEventAt: 200,
+      });
+      createTaskFixture("cli", {
+        ...mainSessionTaskScope,
+        task: "Second page",
+        status: "running",
+        deliveryStatus: "not_applicable",
+        notifyPolicy: "silent",
+        lastEventAt: 100,
+      });
+      const context = createContext();
+      const first = await runTaskHandler("tasks.list", { limit: 1 }, {}, null, context);
+      const select = taskRuntime.listTaskRecordPage;
+      const replacement = { ...task, taskId: "replacement", task: "Current registry" };
+      let reload: Promise<void> | undefined;
+      let changed = false;
+      const spy = vi.spyOn(taskRuntime, "listTaskRecordPage").mockImplementation(async (params) => {
+        const page = await select(params);
+        if (!changed && page.ok) {
+          changed = true;
+          queueMicrotask(() => {
+            if (change === "mutation") {
+              markTaskTerminalById({ taskId: task.taskId, status: "succeeded", endedAt: 300 });
+            } else {
+              configureTaskRegistryRuntime({
+                store: createInMemoryTaskRegistryStore({
+                  tasks: new Map([[replacement.taskId, replacement]]),
+                  deliveryStates: new Map(),
+                }),
+              });
+              reload = reloadTaskRegistryFromStoreAsync(captureOpenClawStateWorkerContext());
+            }
+          });
+        }
+        return page;
+      });
+      try {
+        const result = await runTaskHandler(
+          "tasks.list",
+          { limit: 1, ...(continuation ? { cursor: first.payload?.nextCursor } : {}) },
+          {},
+          null,
+          context,
+        );
+        expect(changed).toBe(true);
+        if (continuation) {
+          expect(result.calls[0]).toMatchObject([false, undefined, { code: "INVALID_REQUEST" }]);
+        } else {
+          expect(result.calls[0]?.[0]).toBe(true);
+          expect(result.payload?.tasks).toMatchObject([
+            change === "mutation"
+              ? { id: task.taskId, status: "completed" }
+              : { id: replacement.taskId, title: replacement.task },
+          ]);
+        }
+      } finally {
+        await reload;
+        spy.mockRestore();
+      }
+    },
+  );
+
   it("lists task summaries with SDK-facing statuses and filters", async () => {
     const running = createTaskFixture("subagent", {
       taskKind: "investigation",
