@@ -279,6 +279,15 @@ export async function generateBranchSummary(
     );
   }
 
+  if (response.stopReason === "length") {
+    return err(
+      new BranchSummaryError(
+        "summarization_failed",
+        "Branch summary failed: summary truncated at the output token limit",
+      ),
+    );
+  }
+
   const summaryText = extractSummaryText(response);
   if (summaryText === undefined) {
     return err(

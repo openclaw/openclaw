@@ -297,60 +297,68 @@ describe("AgentSession getLastAssistantText", () => {
 });
 
 describe("AgentSession tree navigation", () => {
-  it("leaves the tree unchanged when branch summarization returns reasoning only", async () => {
-    const authStorage = AuthStorage.inMemory();
-    authStorage.setRuntimeApiKey(testModel.provider, "test-api-key");
-    const sessionManager = SessionManager.inMemory();
-    const rootId = sessionManager.appendMessage(makeUserMessage("shared root", 1));
-    const abandonedLeafId = sessionManager.appendMessage(makeUserMessage("abandoned branch", 2));
-    sessionManager.branch(rootId);
-    const targetId = sessionManager.appendMessage({
-      role: "assistant",
-      content: [{ type: "text", text: "target branch" }],
-      api: testModel.api,
-      provider: testModel.provider,
-      model: testModel.id,
-      usage: createZeroUsageFixture(),
-      stopReason: "stop",
-      timestamp: 3,
-    });
-    sessionManager.branch(abandonedLeafId);
-    streamMocks.streamSimple.mockReset();
-    streamMocks.streamSimple.mockImplementation(() =>
-      createAssistantResultStream({
+  it.each(["reasoning-only", "truncated"])(
+    "leaves the tree unchanged when branch summarization returns a %s response",
+    async (kind) => {
+      const authStorage = AuthStorage.inMemory();
+      authStorage.setRuntimeApiKey(testModel.provider, "test-api-key");
+      const sessionManager = SessionManager.inMemory();
+      const rootId = sessionManager.appendMessage(makeUserMessage("shared root", 1));
+      const abandonedLeafId = sessionManager.appendMessage(makeUserMessage("abandoned branch", 2));
+      sessionManager.branch(rootId);
+      const targetId = sessionManager.appendMessage({
         role: "assistant",
-        content: [{ type: "thinking", thinking: "internal summary reasoning" }],
+        content: [{ type: "text", text: "target branch" }],
         api: testModel.api,
         provider: testModel.provider,
         model: testModel.id,
         usage: createZeroUsageFixture(),
         stopReason: "stop",
-        timestamp: 4,
-      }),
-    );
-    const { session } = await createAgentSession({
-      authStorage,
-      model: testModel,
-      resourceLoader: createResourceLoader(),
-      sessionManager,
-      settingsManager: SettingsManager.inMemory(),
-      modelRegistry: createTestModelRegistry(authStorage),
-    });
-    const entriesBefore = sessionManager.getEntries();
-    const leafBefore = sessionManager.getLeafId();
+        timestamp: 3,
+      });
+      sessionManager.branch(abandonedLeafId);
+      streamMocks.streamSimple.mockReset();
+      streamMocks.streamSimple.mockImplementation(() =>
+        createAssistantResultStream({
+          role: "assistant",
+          content:
+            kind === "truncated"
+              ? [{ type: "text", text: "## Next Steps\n- verify the backfi" }]
+              : [{ type: "thinking", thinking: "internal summary reasoning" }],
+          api: testModel.api,
+          provider: testModel.provider,
+          model: testModel.id,
+          usage: createZeroUsageFixture(),
+          stopReason: kind === "truncated" ? "length" : "stop",
+          timestamp: 4,
+        }),
+      );
+      const { session } = await createAgentSession({
+        authStorage,
+        model: testModel,
+        resourceLoader: createResourceLoader(),
+        sessionManager,
+        settingsManager: SettingsManager.inMemory(),
+        modelRegistry: createTestModelRegistry(authStorage),
+      });
+      const entriesBefore = sessionManager.getEntries();
+      const leafBefore = sessionManager.getLeafId();
 
-    await expect(session.navigateTree(targetId, { summarize: true })).rejects.toThrow(
-      "Branch summary failed: model returned no summary text",
-    );
+      await expect(session.navigateTree(targetId, { summarize: true })).rejects.toThrow(
+        kind === "truncated"
+          ? "Branch summary failed: summary truncated at the output token limit"
+          : "Branch summary failed: model returned no summary text",
+      );
 
-    expect(streamMocks.streamSimple).toHaveBeenCalledOnce();
-    expect(sessionManager.getEntries()).toEqual(entriesBefore);
-    expect(sessionManager.getLeafId()).toBe(leafBefore);
-    expect(sessionManager.getEntries().some((entry) => entry.type === "branch_summary")).toBe(
-      false,
-    );
-    session.dispose();
-  });
+      expect(streamMocks.streamSimple).toHaveBeenCalledOnce();
+      expect(sessionManager.getEntries()).toEqual(entriesBefore);
+      expect(sessionManager.getLeafId()).toBe(leafBefore);
+      expect(sessionManager.getEntries().some((entry) => entry.type === "branch_summary")).toBe(
+        false,
+      );
+      session.dispose();
+    },
+  );
 });
 
 describe("AgentSession queued user turns", () => {
