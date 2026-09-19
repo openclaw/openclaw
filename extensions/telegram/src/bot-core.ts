@@ -128,335 +128,326 @@ export function createTelegramBotCore(
         }),
       })
     : null;
-  const telegramCfg = account.config;
+  try {
+    const telegramCfg = account.config;
 
-  const telegramTransport =
-    opts.telegramTransport ??
-    resolveTelegramTransport(opts.proxyFetch, {
-      network: telegramCfg.network,
-    });
-  const finalFetch = createTelegramClientFetch({
-    fetchImpl: asTelegramClientFetch(telegramTransport.fetch),
-    shutdownSignal: opts.fetchAbortSignal,
-    transport: telegramTransport,
-  });
-
-  const timeoutSeconds = resolveTelegramClientTimeoutSeconds({
-    value: undefined,
-    minimum: resolveTelegramClientTimeoutMinimumSeconds([
-      opts.minimumClientTimeoutSeconds,
-      resolveTelegramOutboundClientTimeoutFloorSeconds(undefined),
-    ]),
-  });
-  const apiRoot = normalizeOptionalString(telegramCfg.apiRoot);
-  const normalizedApiRoot = apiRoot ? normalizeTelegramApiRoot(apiRoot) : undefined;
-  const client: ApiClientOptions | undefined =
-    finalFetch || timeoutSeconds || normalizedApiRoot
-      ? {
-          ...(finalFetch ? { fetch: asTelegramClientFetch(finalFetch) } : {}),
-          ...(timeoutSeconds ? { timeoutSeconds } : {}),
-          ...(normalizedApiRoot ? { apiRoot: normalizedApiRoot } : {}),
-        }
-      : undefined;
-
-  const botConfig =
-    client || opts.botInfo
-      ? { ...(client ? { client } : {}), ...(opts.botInfo ? { botInfo: opts.botInfo } : {}) }
-      : undefined;
-  const bot = new botRuntime.Bot(opts.token, botConfig);
-  const accountThrottler = getOrCreateAccountThrottler(opts.token, botRuntime.apiThrottler);
-  bot.api.config.use(accountThrottler.transformer);
-  const sendChatActionHandler: TelegramSendChatActionHandler = {
-    sendChatAction: (chatId, action, threadParams) =>
-      accountThrottler.chatActions.sendChatAction(chatId, action, threadParams, () =>
-        bot.api.sendChatAction(chatId, action, threadParams),
-      ),
-    isSuspended: accountThrottler.chatActions.isSuspended,
-    reset: accountThrottler.chatActions.reset,
-  };
-  // Catch all errors from bot middleware to prevent unhandled rejections
-  bot.catch((err) => {
-    runtime.error?.(danger(`telegram bot error: ${formatUncaughtError(err)}`));
-  });
-
-  const initialUpdateId =
-    typeof opts.updateOffset?.lastUpdateId === "number" ? opts.updateOffset.lastUpdateId : null;
-  const logSkippedUpdate = (key: string) => {
-    if (shouldLogVerbose()) {
-      logVerbose(`telegram dedupe: skipped ${key}`);
-    }
-  };
-  const updateTracker = createTelegramUpdateTracker({
-    initialUpdateId,
-    persistenceFloorUpdateId:
-      typeof opts.updateOffset?.persistenceFloorUpdateId === "number"
-        ? opts.updateOffset.persistenceFloorUpdateId
-        : initialUpdateId,
-    ackPolicy: "after_agent_dispatch",
-    ...(typeof opts.updateOffset?.onUpdateId === "function"
-      ? { onAcceptedUpdateId: opts.updateOffset.onUpdateId }
-      : {}),
-    onPersistError: (err) => {
-      runtime.error?.(`telegram: failed to persist update watermark: ${formatErrorMessage(err)}`);
-    },
-    onSkip: logSkippedUpdate,
-  });
-  const shouldSkipUpdate = (ctx: TelegramUpdateKeyContext) =>
-    updateTracker.shouldSkipHandlerDispatch(ctx);
-
-  bot.use(async (ctx, next) => {
-    const begin = updateTracker.beginUpdate(ctx);
-    if (!begin.accepted) {
-      return;
-    }
-    try {
-      const { result } = await runWithTelegramUpdateProcessingFrame(async () => {
-        await next();
-        if (!getTelegramSpooledReplayDeferredParticipant()) {
-          // Accepted synchronous updates need one terminal fact at their middleware owner.
-          ensureTelegramMessageProcessingResult({ kind: "completed" });
-        }
+    const telegramTransport =
+      opts.telegramTransport ??
+      resolveTelegramTransport(opts.proxyFetch, {
+        network: telegramCfg.network,
       });
-      const deferredWork = getTelegramSpooledReplayDeferredParticipant();
-      if (deferredWork) {
-        void deferredWork.task
-          .then((deferredResult) => {
-            updateTracker.finishUpdate(begin.update, {
-              completed: deferredResult.kind !== "failed-retryable",
-            });
-          })
-          .catch(() => {
-            updateTracker.finishUpdate(begin.update, { completed: false });
-          });
+    const finalFetch = createTelegramClientFetch({
+      fetchImpl: asTelegramClientFetch(telegramTransport.fetch),
+      shutdownSignal: opts.fetchAbortSignal,
+      transport: telegramTransport,
+    });
+
+    const timeoutSeconds = resolveTelegramClientTimeoutSeconds({
+      value: undefined,
+      minimum: resolveTelegramClientTimeoutMinimumSeconds([
+        opts.minimumClientTimeoutSeconds,
+        resolveTelegramOutboundClientTimeoutFloorSeconds(undefined),
+      ]),
+    });
+    const apiRoot = normalizeOptionalString(telegramCfg.apiRoot);
+    const normalizedApiRoot = apiRoot ? normalizeTelegramApiRoot(apiRoot) : undefined;
+    const client: ApiClientOptions | undefined =
+      finalFetch || timeoutSeconds || normalizedApiRoot
+        ? {
+            ...(finalFetch ? { fetch: asTelegramClientFetch(finalFetch) } : {}),
+            ...(timeoutSeconds ? { timeoutSeconds } : {}),
+            ...(normalizedApiRoot ? { apiRoot: normalizedApiRoot } : {}),
+          }
+        : undefined;
+
+    const botConfig =
+      client || opts.botInfo
+        ? { ...(client ? { client } : {}), ...(opts.botInfo ? { botInfo: opts.botInfo } : {}) }
+        : undefined;
+    const bot = new botRuntime.Bot(opts.token, botConfig);
+    const accountThrottler = getOrCreateAccountThrottler(opts.token, botRuntime.apiThrottler);
+    bot.api.config.use(accountThrottler.transformer);
+    const sendChatActionHandler: TelegramSendChatActionHandler = {
+      sendChatAction: (chatId, action, threadParams) =>
+        accountThrottler.chatActions.sendChatAction(chatId, action, threadParams, () =>
+          bot.api.sendChatAction(chatId, action, threadParams),
+        ),
+      isSuspended: accountThrottler.chatActions.isSuspended,
+      reset: accountThrottler.chatActions.reset,
+    };
+    // Catch all errors from bot middleware to prevent unhandled rejections
+    bot.catch((err) => {
+      runtime.error?.(danger(`telegram bot error: ${formatUncaughtError(err)}`));
+    });
+
+    const initialUpdateId =
+      typeof opts.updateOffset?.lastUpdateId === "number" ? opts.updateOffset.lastUpdateId : null;
+    const logSkippedUpdate = (key: string) => {
+      if (shouldLogVerbose()) {
+        logVerbose(`telegram dedupe: skipped ${key}`);
+      }
+    };
+    const updateTracker = createTelegramUpdateTracker({
+      initialUpdateId,
+      persistenceFloorUpdateId:
+        typeof opts.updateOffset?.persistenceFloorUpdateId === "number"
+          ? opts.updateOffset.persistenceFloorUpdateId
+          : initialUpdateId,
+      ackPolicy: "after_agent_dispatch",
+      ...(typeof opts.updateOffset?.onUpdateId === "function"
+        ? { onAcceptedUpdateId: opts.updateOffset.onUpdateId }
+        : {}),
+      onPersistError: (err) => {
+        runtime.error?.(`telegram: failed to persist update watermark: ${formatErrorMessage(err)}`);
+      },
+      onSkip: logSkippedUpdate,
+    });
+    const shouldSkipUpdate = (ctx: TelegramUpdateKeyContext) =>
+      updateTracker.shouldSkipHandlerDispatch(ctx);
+
+    bot.use(async (ctx, next) => {
+      const begin = updateTracker.beginUpdate(ctx);
+      if (!begin.accepted) {
         return;
       }
-      if (result?.kind === "failed-retryable") {
-        if (isTelegramSpooledReplayUpdate(ctx.update)) {
-          throw new TelegramSpooledReplayProcessingError(result.error);
+      try {
+        const { result } = await runWithTelegramUpdateProcessingFrame(async () => {
+          await next();
+          if (!getTelegramSpooledReplayDeferredParticipant()) {
+            // Accepted synchronous updates need one terminal fact at their middleware owner.
+            ensureTelegramMessageProcessingResult({ kind: "completed" });
+          }
+        });
+        const deferredWork = getTelegramSpooledReplayDeferredParticipant();
+        if (deferredWork) {
+          void deferredWork.task
+            .then((deferredResult) => {
+              updateTracker.finishUpdate(begin.update, {
+                completed: deferredResult.kind !== "failed-retryable",
+              });
+            })
+            .catch(() => {
+              updateTracker.finishUpdate(begin.update, { completed: false });
+            });
+          return;
+        }
+        if (result?.kind === "failed-retryable") {
+          if (isTelegramSpooledReplayUpdate(ctx.update)) {
+            throw new TelegramSpooledReplayProcessingError(result.error);
+          }
+          updateTracker.finishUpdate(begin.update, { completed: true });
+          return;
         }
         updateTracker.finishUpdate(begin.update, { completed: true });
-        return;
+      } catch (error) {
+        updateTracker.finishUpdate(begin.update, { completed: false });
+        throw error;
       }
-      updateTracker.finishUpdate(begin.update, { completed: true });
-    } catch (error) {
-      updateTracker.finishUpdate(begin.update, { completed: false });
-      throw error;
-    }
-  });
+    });
 
-  // Both transports start callback answers after spool commit. Reuse that
-  // answer or start a missing one before same-lane sequentialization so
-  // callback acknowledgements cannot wait for earlier handlers.
-  bot.use(async (ctx, next) => {
-    const callback = ctx.callbackQuery;
-    if (callback) {
-      const answerPromise =
-        takeTelegramCallbackQueryAdmissionAnswer(bot, callback.id) ??
-        startTelegramCallbackQueryAnswer(bot, callback.id, false);
-      setTelegramCallbackQueryAnswerPromise(ctx, answerPromise);
-      void answerPromise.catch(() => {});
-    }
-    await next();
-  });
-
-  // poll_answer omits its chat and topic. Resolve the send-time route before
-  // sequentialize so the vote shares the same lane as ordinary session turns.
-  bot.use(async (ctx, next) => {
-    try {
-      await prepareTelegramPollAnswerContextAsync({
-        update: ctx.update,
-        accountId: account.accountId,
-      });
-    } catch (error) {
-      if (isTelegramSpooledReplayUpdate(ctx.update)) {
-        recordTelegramMessageProcessingResult({ kind: "failed-retryable", error });
-        return;
+    // Both transports start callback answers after spool commit. Reuse that
+    // answer or start a missing one before same-lane sequentialization so
+    // callback acknowledgements cannot wait for earlier handlers.
+    bot.use(async (ctx, next) => {
+      const callback = ctx.callbackQuery;
+      if (callback) {
+        const answerPromise =
+          takeTelegramCallbackQueryAdmissionAnswer(bot, callback.id) ??
+          startTelegramCallbackQueryAnswer(bot, callback.id, false);
+        setTelegramCallbackQueryAnswerPromise(ctx, answerPromise);
+        void answerPromise.catch(() => {});
       }
-      throw error;
-    }
-    await next();
-  });
+      await next();
+    });
 
-  bot.use(botRuntime.sequentialize(getTelegramSequentialConstraints));
-
-  // A fast vote can know its route before outbound verification finishes. Hold
-  // only that route's sequential lane until registration succeeds or declines it.
-  bot.use(async (ctx, next) => {
-    await settleTelegramPollAnswerContext({ update: ctx.update, accountId: account.accountId });
-    await next();
-  });
-
-  const rawUpdateLogger = createSubsystemLogger("gateway/channels/telegram/raw-update");
-
-  bot.use(async (ctx, next) => {
-    if (shouldLogVerbose()) {
+    // poll_answer omits its chat and topic. Resolve the send-time route before
+    // sequentialize so the vote shares the same lane as ordinary session turns.
+    bot.use(async (ctx, next) => {
       try {
-        rawUpdateLogger.debug(`telegram update: ${formatTelegramRawUpdateForLog(ctx.update)}`);
-      } catch (err) {
-        rawUpdateLogger.debug(`telegram update log failed: ${String(err)}`);
+        await prepareTelegramPollAnswerContextAsync({
+          update: ctx.update,
+          accountId: account.accountId,
+        });
+      } catch (error) {
+        if (isTelegramSpooledReplayUpdate(ctx.update)) {
+          recordTelegramMessageProcessingResult({ kind: "failed-retryable", error });
+          return;
+        }
+        throw error;
       }
-    }
-    await next();
-  });
+      await next();
+    });
 
-  const { historyLimit } = resolveTelegramMessageTurnSettings({
-    accountId: account.accountId,
-    cfg,
-    telegramCfg,
-    opts: runtimeOpts,
-  });
-  const groupHistories = new Map<string, HistoryEntry[]>();
-  const botHistorySender = buildTelegramSelfSenderName(account.name, opts.botInfo);
-  const unregisterOutboundGroupHistoryRecorder = registerTelegramOutboundGroupHistoryRecorder({
-    accountId: account.accountId,
-    recorder: (record) => {
-      if (!String(record.chatId).startsWith("-")) {
-        return;
+    bot.use(botRuntime.sequentialize(getTelegramSequentialConstraints));
+
+    // A fast vote can know its route before outbound verification finishes. Hold
+    // only that route's sequential lane until registration succeeds or declines it.
+    bot.use(async (ctx, next) => {
+      await settleTelegramPollAnswerContext({ update: ctx.update, accountId: account.accountId });
+      await next();
+    });
+
+    const rawUpdateLogger = createSubsystemLogger("gateway/channels/telegram/raw-update");
+
+    bot.use(async (ctx, next) => {
+      if (shouldLogVerbose()) {
+        try {
+          rawUpdateLogger.debug(`telegram update: ${formatTelegramRawUpdateForLog(ctx.update)}`);
+        } catch (err) {
+          rawUpdateLogger.debug(`telegram update log failed: ${String(err)}`);
+        }
       }
-      recordTelegramGroupHistoryEntry({
-        historyMap: groupHistories,
-        historyKey: buildTelegramGroupPeerId(record.chatId, record.threadSpec),
-        limit: historyLimit,
-        entry: {
-          sender: botHistorySender,
-          body: record.text?.trim() || "<media>",
-          timestamp: record.timestamp,
-          messageId: String(record.messageId),
-        },
+      await next();
+    });
+
+    const { historyLimit } = resolveTelegramMessageTurnSettings({
+      accountId: account.accountId,
+      cfg,
+      telegramCfg,
+      opts: runtimeOpts,
+    });
+    const groupHistories = new Map<string, HistoryEntry[]>();
+    const botHistorySender = buildTelegramSelfSenderName(account.name, opts.botInfo);
+    const unregisterOutboundGroupHistoryRecorder = registerTelegramOutboundGroupHistoryRecorder({
+      accountId: account.accountId,
+      recorder: (record) => {
+        if (!String(record.chatId).startsWith("-")) {
+          return;
+        }
+        recordTelegramGroupHistoryEntry({
+          historyMap: groupHistories,
+          historyKey: buildTelegramGroupPeerId(record.chatId, record.threadSpec),
+          limit: historyLimit,
+          entry: {
+            sender: botHistorySender,
+            body: record.text?.trim() || "<media>",
+            timestamp: record.timestamp,
+            messageId: String(record.messageId),
+          },
+        });
+      },
+    });
+    const nativeEnabled = resolveNativeCommandsEnabled({
+      providerId: "telegram",
+      providerSetting: telegramCfg.commands?.native,
+      globalSetting: cfg.commands?.native,
+    });
+    const nativeSkillsEnabled = resolveNativeSkillsEnabled({
+      providerId: "telegram",
+      providerSetting: telegramCfg.commands?.nativeSkills,
+      globalSetting: cfg.commands?.nativeSkills,
+    });
+    const mediaMaxBytes = (opts.mediaMaxMb ?? telegramCfg.mediaMaxMb ?? 100) * 1024 * 1024;
+    const logger = getChildLogger({ module: "telegram-auto-reply" });
+    const resolveGroupPolicy = (chatId: string | number, turnCfg: OpenClawConfig) =>
+      resolveChannelGroupPolicy({
+        cfg: turnCfg,
+        channel: "telegram",
+        accountId: account.accountId,
+        groupId: String(chatId),
       });
-    },
-  });
-  const nativeEnabled = resolveNativeCommandsEnabled({
-    providerId: "telegram",
-    providerSetting: telegramCfg.commands?.native,
-    globalSetting: cfg.commands?.native,
-  });
-  const nativeSkillsEnabled = resolveNativeSkillsEnabled({
-    providerId: "telegram",
-    providerSetting: telegramCfg.commands?.nativeSkills,
-    globalSetting: cfg.commands?.nativeSkills,
-  });
-  const mediaMaxBytes = (opts.mediaMaxMb ?? telegramCfg.mediaMaxMb ?? 100) * 1024 * 1024;
-  const logger = getChildLogger({ module: "telegram-auto-reply" });
-  const resolveGroupPolicy = (chatId: string | number, turnCfg: OpenClawConfig) =>
-    resolveChannelGroupPolicy({
-      cfg: turnCfg,
-      channel: "telegram",
+    const resolveGroupActivation = (params: {
+      agentId?: string;
+      sessionKey: string;
+      cfg: OpenClawConfig;
+    }) => {
+      const agentId = params.agentId ?? ownerAgentId;
+      const storePath = telegramDeps.resolveStorePath(params.cfg.session?.store, { agentId });
+      try {
+        const getSessionEntry = telegramDeps.getSessionEntry;
+        if (!getSessionEntry) {
+          return undefined;
+        }
+        const storedActivation = getSessionEntry({
+          storePath,
+          sessionKey: params.sessionKey,
+        })?.groupActivation;
+        const activation =
+          storedActivation === "mention" || storedActivation === "always"
+            ? normalizeGroupActivation(storedActivation)
+            : undefined;
+        if (activation === "always") {
+          return false;
+        }
+        if (activation === "mention") {
+          return true;
+        }
+      } catch (err) {
+        logVerbose(`Failed to load session for activation check: ${String(err)}`);
+      }
+      return undefined;
+    };
+    const resolveGroupRequireMention = (chatId: string | number, turnCfg: OpenClawConfig) =>
+      resolveScopeRequireMention({
+        tree: buildChannelGroupsScopeTree(turnCfg, "telegram", account.accountId),
+        path: [String(chatId)],
+        requireMentionOverride: opts.requireMention,
+        overrideOrder: "after-config",
+      });
+    const resolveTelegramGroupConfig = (
+      chatId: string | number,
+      messageThreadId: number | undefined,
+      turnCfg: OpenClawConfig,
+    ) => {
+      const turnTelegramCfg = resolveTelegramAccount({
+        cfg: turnCfg,
+        accountId: account.accountId,
+      }).config;
+      return resolveTelegramScopedGroupConfig(turnTelegramCfg, chatId, messageThreadId);
+    };
+
+    const { nativeCommandNames, nativeCommandCallbackDispatcher } = registerTelegramNativeCommands({
+      bot,
+      cfg,
+      runtime,
       accountId: account.accountId,
-      groupId: String(chatId),
+      telegramCfg,
+      mediaMaxBytes,
+      nativeEnabled,
+      nativeSkillsEnabled,
+      resolveGroupPolicy,
+      resolveTelegramGroupConfig,
+      shouldSkipUpdate,
+      opts: runtimeOpts,
+      telegramDeps: {
+        ...telegramDeps,
+        sendMessageTelegram: defaultTelegramNativeCommandDeps.sendMessageTelegram,
+      },
     });
-  const resolveGroupActivation = (params: {
-    agentId?: string;
-    sessionKey: string;
-    cfg: OpenClawConfig;
-  }) => {
-    const agentId = params.agentId ?? ownerAgentId;
-    const storePath = telegramDeps.resolveStorePath(params.cfg.session?.store, { agentId });
-    try {
-      const getSessionEntry = telegramDeps.getSessionEntry;
-      if (!getSessionEntry) {
-        return undefined;
-      }
-      const storedActivation = getSessionEntry({
-        storePath,
-        sessionKey: params.sessionKey,
-      })?.groupActivation;
-      const activation =
-        storedActivation === "mention" || storedActivation === "always"
-          ? normalizeGroupActivation(storedActivation)
-          : undefined;
-      if (activation === "always") {
-        return false;
-      }
-      if (activation === "mention") {
-        return true;
-      }
-    } catch (err) {
-      logVerbose(`Failed to load session for activation check: ${String(err)}`);
-    }
-    return undefined;
-  };
-  const resolveGroupRequireMention = (chatId: string | number, turnCfg: OpenClawConfig) =>
-    resolveScopeRequireMention({
-      tree: buildChannelGroupsScopeTree(turnCfg, "telegram", account.accountId),
-      path: [String(chatId)],
-      requireMentionOverride: opts.requireMention,
-      overrideOrder: "after-config",
+
+    const processMessage = createTelegramMessageProcessor({
+      nativeCommandNames,
+      bot,
+      account,
+      groupHistories,
+      logger,
+      resolveGroupActivation,
+      resolveGroupRequireMention,
+      resolveTelegramGroupConfig,
+      sendChatActionHandler,
+      runtime,
+      buildContext: opts.buildContext,
+      opts: runtimeOpts,
+      telegramDeps,
     });
-  const resolveTelegramGroupConfig = (
-    chatId: string | number,
-    messageThreadId: number | undefined,
-    turnCfg: OpenClawConfig,
-  ) => {
-    const turnTelegramCfg = resolveTelegramAccount({
-      cfg: turnCfg,
+
+    const handlers = createTelegramHandlers({
+      nativeCommandNames,
+      cfg,
       accountId: account.accountId,
-    }).config;
-    return resolveTelegramScopedGroupConfig(turnTelegramCfg, chatId, messageThreadId);
-  };
-
-  const { nativeCommandNames, nativeCommandCallbackDispatcher } = registerTelegramNativeCommands({
-    bot,
-    cfg,
-    runtime,
-    accountId: account.accountId,
-    telegramCfg,
-    mediaMaxBytes,
-    nativeEnabled,
-    nativeSkillsEnabled,
-    resolveGroupPolicy,
-    resolveTelegramGroupConfig,
-    shouldSkipUpdate,
-    opts: runtimeOpts,
-    telegramDeps: {
-      ...telegramDeps,
-      sendMessageTelegram: defaultTelegramNativeCommandDeps.sendMessageTelegram,
-    },
-  });
-
-  const processMessage = createTelegramMessageProcessor({
-    nativeCommandNames,
-    bot,
-    account,
-    groupHistories,
-    logger,
-    resolveGroupActivation,
-    resolveGroupRequireMention,
-    resolveTelegramGroupConfig,
-    sendChatActionHandler,
-    runtime,
-    buildContext: opts.buildContext,
-    opts: runtimeOpts,
-    telegramDeps,
-  });
-
-  const handlers = createTelegramHandlers({
-    nativeCommandNames,
-    cfg,
-    accountId: account.accountId,
-    ownerAgentId,
-    bot,
-    opts: runtimeOpts,
-    telegramTransport,
-    runtime,
-    mediaMaxBytes,
-    telegramCfg,
-    resolveGroupPolicy,
-    resolveGroupActivation,
-    resolveGroupRequireMention,
-    resolveTelegramGroupConfig,
-    shouldSkipUpdate,
-    processMessage: async ({
-      ctx,
-      allMedia,
-      storeAllowFrom,
-      turnContext,
-      options,
-      replyMedia,
-      replyChain,
-      promptContext,
-    }) =>
-      await processMessage(
+      ownerAgentId,
+      bot,
+      opts: runtimeOpts,
+      telegramTransport,
+      runtime,
+      mediaMaxBytes,
+      telegramCfg,
+      resolveGroupPolicy,
+      resolveGroupActivation,
+      resolveGroupRequireMention,
+      resolveTelegramGroupConfig,
+      shouldSkipUpdate,
+      processMessage: async ({
         ctx,
         allMedia,
         storeAllowFrom,
@@ -465,19 +456,35 @@ export function createTelegramBotCore(
         replyMedia,
         replyChain,
         promptContext,
-      ),
-    logger,
-    telegramDeps,
-  });
+      }) =>
+        await processMessage(
+          ctx,
+          allMedia,
+          storeAllowFrom,
+          turnContext,
+          options,
+          replyMedia,
+          replyChain,
+          promptContext,
+        ),
+      logger,
+      telegramDeps,
+    });
 
-  handlers.register(nativeCommandCallbackDispatcher);
+    handlers.register(nativeCommandCallbackDispatcher);
 
-  const originalStop = bot.stop.bind(bot);
-  bot.stop = ((...args: Parameters<typeof originalStop>) => {
+    const originalStop = bot.stop.bind(bot);
+    bot.stop = ((...args: Parameters<typeof originalStop>) => {
+      threadBindingManager?.stop();
+      unregisterOutboundGroupHistoryRecorder();
+      return originalStop(...args);
+    }) as typeof bot.stop;
+
+    return bot;
+  } catch (error) {
+    // The acquired manager registered a binding adapter and sweeper; construction
+    // failures after this point must not leave them running without a bot.
     threadBindingManager?.stop();
-    unregisterOutboundGroupHistoryRecorder();
-    return originalStop(...args);
-  }) as typeof bot.stop;
-
-  return bot;
+    throw error;
+  }
 }

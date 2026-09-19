@@ -267,6 +267,15 @@ export class TelegramPollingSession {
       persistenceFloorUpdateId: committedUpdateId,
     };
     try {
+      // Restore persisted thread bindings off the event loop before the sync bot
+      // factory performs its compatibility cold read. Loaded lazily so the
+      // bindings/SQLite graph stays out of the polling transport's static
+      // import graph, mirroring Discord's channel.loaders.ts.
+      const { ensureTelegramBotThreadBindingsLoaded } = await import("./thread-bindings.js");
+      await ensureTelegramBotThreadBindingsLoaded({
+        cfg: this.opts.config,
+        accountId: this.opts.accountId,
+      });
       return createTelegramBot({
         token: this.opts.token,
         runtime: this.opts.runtime,

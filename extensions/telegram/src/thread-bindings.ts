@@ -6,13 +6,17 @@ import {
   resolveThreadBindingConversationIdFromBindingId,
   resolveThreadBindingEffectiveExpiresAt,
   resolveThreadBindingLifecycle,
+  resolveThreadBindingSpawnPolicy,
   unregisterSessionBindingAdapter,
   type BindingTargetKind,
   type SessionBindingAdapter,
   type SessionBindingRecord,
 } from "openclaw/plugin-sdk/conversation-runtime";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
-import type { PluginStateSyncKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
+import type {
+  PluginStateKeyedStore,
+  PluginStateSyncKeyedStore,
+} from "openclaw/plugin-sdk/plugin-state-runtime";
 import { normalizeAccountId, isAcpSessionKey } from "openclaw/plugin-sdk/routing";
 import { logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -32,6 +36,8 @@ const DEFAULT_THREAD_BINDING_IDLE_TIMEOUT_MS = 24 * 60 * 60 * 1000;
 const DEFAULT_THREAD_BINDING_MAX_AGE_MS = 0;
 const THREAD_BINDINGS_SWEEP_INTERVAL_MS = 60_000;
 type TelegramThreadBindingStore = PluginStateSyncKeyedStore<TelegramThreadBindingRecord>;
+type TelegramThreadBindingAsyncStore = PluginStateKeyedStore<TelegramThreadBindingRecord>;
+type TelegramThreadBindingStoreEntry = { key: string; value: TelegramThreadBindingRecord };
 
 type TelegramThreadBindingManager = {
   accountId: string;
@@ -60,6 +66,9 @@ type TelegramThreadBindingManager = {
 type TelegramThreadBindingsState = {
   managersByAccountId: Map<string, TelegramThreadBindingManager>;
   bindingsByAccountConversation: Map<string, TelegramThreadBindingRecord>;
+  /** Accounts whose persisted bindings were restored into the live registry. */
+  restoredAccounts?: Set<string>;
+  restoringAccounts?: Map<string, Promise<void>>;
 };
 
 /**
@@ -99,6 +108,17 @@ function openThreadBindingStore(): TelegramThreadBindingStore {
     namespace: TELEGRAM_THREAD_BINDINGS_NAMESPACE,
     maxEntries: TELEGRAM_THREAD_BINDINGS_MAX_ENTRIES,
   });
+}
+
+async function openThreadBindingStoreAsync(): Promise<TelegramThreadBindingAsyncStore> {
+  return getTelegramRuntime().state.openKeyedStore<TelegramThreadBindingRecord>({
+    namespace: TELEGRAM_THREAD_BINDINGS_NAMESPACE,
+    maxEntries: TELEGRAM_THREAD_BINDINGS_MAX_ENTRIES,
+  });
+}
+
+function getRestoredAccounts(state: TelegramThreadBindingsState): Set<string> {
+  return (state.restoredAccounts ??= new Set<string>());
 }
 
 function toSessionBindingTargetKind(raw: TelegramBindingTargetKind): BindingTargetKind {
@@ -257,6 +277,172 @@ function loadBindingsFromStore(accountId: string): TelegramThreadBindingRecord[]
   return bindings;
 }
 
+async function loadBindingsFromStoreAsync(
+  accountId: string,
+): Promise<TelegramThreadBindingStoreEntry[] | null> {
+  let store: TelegramThreadBindingAsyncStore;
+  try {
+    store = await openThreadBindingStoreAsync();
+  } catch (err) {
+    logVerbose(`telegram thread bindings store open failed (${accountId}): ${String(err)}`);
+    return null;
+  }
+  let entries: TelegramThreadBindingStoreEntry[];
+  try {
+    entries = await store.entries();
+  } catch (err) {
+    logVerbose(`telegram thread bindings store read failed (${accountId}): ${String(err)}`);
+    return null;
+  }
+  for (const entry of entries) {
+    if (entry.value.accountId !== accountId) {
+      continue;
+    }
+    if (sanitizeStoredBinding(accountId, entry.value)) {
+      continue;
+    }
+    try {
+      await store.delete(entry.key);
+    } catch (err) {
+      logVerbose(
+        `telegram thread bindings invalid row cleanup failed (${accountId}): ${String(err)}`,
+      );
+    }
+  }
+  return entries;
+}
+
+function restoreAccountBindings(accountId: string, loaded: TelegramThreadBindingRecord[]): void {
+  for (const entry of loaded) {
+    const key = resolveBindingKey({
+      accountId,
+      conversationId: entry.conversationId,
+    });
+    getThreadBindingsState().bindingsByAccountConversation.set(key, {
+      ...entry,
+      accountId,
+    });
+  }
+}
+
+/** Startup staleness pass shared by the sync and async restore paths. */
+function cleanupStaleAcpSessionBindings(accountId: string, persist: boolean): void {
+  const acpSessionKeys = new Set<string>();
+  for (const binding of getThreadBindingsState().bindingsByAccountConversation.values()) {
+    if (binding.targetKind !== "acp" || !isAcpSessionKey(binding.targetSessionKey)) {
+      continue;
+    }
+    acpSessionKeys.add(binding.targetSessionKey);
+  }
+
+  const staleSessionKeys = new Set<string>();
+  for (const targetSessionKey of acpSessionKeys) {
+    const sessionEntry = readAcpSessionEntry({ sessionKey: targetSessionKey });
+    if (!sessionEntry || sessionEntry.storeReadFailed) {
+      continue;
+    }
+    const isStale =
+      !sessionEntry.entry ||
+      sessionEntry.entry.status === "failed" ||
+      sessionEntry.entry.status === "killed" ||
+      sessionEntry.entry.status === "timeout" ||
+      sessionEntry.acp?.state === "error";
+    if (isStale) {
+      staleSessionKeys.add(targetSessionKey);
+    }
+  }
+
+  for (const sessionKey of staleSessionKeys) {
+    const bindingsToRemove = listBindingsForAccount(accountId).filter(
+      (b) => b.targetSessionKey === sessionKey,
+    );
+    for (const binding of bindingsToRemove) {
+      getThreadBindingsState().bindingsByAccountConversation.delete(
+        resolveBindingKey({ accountId, conversationId: binding.conversationId }),
+      );
+      persistBindingMutation({
+        accountId,
+        persist,
+        binding,
+        remove: true,
+        reason: "cleanup-stale",
+      });
+    }
+    if (bindingsToRemove.length > 0) {
+      logVerbose(
+        `telegram thread binding: cleaned up ${bindingsToRemove.length} stale binding(s) for session ${sessionKey}`,
+      );
+    }
+  }
+}
+
+/**
+ * Restores one account's persisted bindings through the worker-backed store so
+ * bundled entry points never block the gateway event loop on the cold read.
+ */
+export async function ensureTelegramThreadBindingsLoadedAsync(
+  accountIdRaw: string | undefined,
+  params?: { persist?: boolean },
+): Promise<void> {
+  const accountId = normalizeAccountId(accountIdRaw);
+  const state = getThreadBindingsState();
+  const restoredAccounts = getRestoredAccounts(state);
+  if (restoredAccounts.has(accountId)) {
+    return;
+  }
+  const pending = state.restoringAccounts?.get(accountId);
+  if (pending) {
+    await pending;
+    return;
+  }
+  const task = (async () => {
+    const entries = await loadBindingsFromStoreAsync(accountId);
+    // A synchronous compatibility caller can restore this account while we wait.
+    if (restoredAccounts.has(accountId)) {
+      return;
+    }
+    restoredAccounts.add(accountId);
+    if (!entries) {
+      return;
+    }
+    restoreAccountBindings(
+      accountId,
+      entries
+        .filter((entry) => entry.value.accountId === accountId)
+        .map((entry) => sanitizeStoredBinding(accountId, entry.value))
+        .filter((entry): entry is TelegramThreadBindingRecord => entry !== null),
+    );
+    cleanupStaleAcpSessionBindings(accountId, params?.persist ?? true);
+  })();
+  (state.restoringAccounts ??= new Map<string, Promise<void>>()).set(accountId, task);
+  try {
+    await task;
+  } finally {
+    state.restoringAccounts?.delete(accountId);
+  }
+}
+
+/**
+ * Gate matched to createTelegramBotCore's manager creation: entry points await
+ * this before constructing a bot so only enabled accounts pay the cold read.
+ */
+export async function ensureTelegramBotThreadBindingsLoaded(params: {
+  cfg: OpenClawConfig;
+  accountId?: string;
+}): Promise<void> {
+  const accountId = normalizeAccountId(params.accountId);
+  const policy = resolveThreadBindingSpawnPolicy({
+    cfg: params.cfg,
+    channel: "telegram",
+    accountId,
+    kind: "subagent",
+  });
+  if (!policy.enabled) {
+    return;
+  }
+  await ensureTelegramThreadBindingsLoadedAsync(accountId);
+}
+
 function persistBindingMutation(params: {
   accountId: string;
   persist: boolean;
@@ -323,64 +509,12 @@ export function createTelegramThreadBindingManager(params: {
   );
   const maxAgeMs = normalizeDurationMs(params.maxAgeMs, DEFAULT_THREAD_BINDING_MAX_AGE_MS);
 
-  const loaded = loadBindingsFromStore(accountId);
-  for (const entry of loaded) {
-    const key = resolveBindingKey({
-      accountId,
-      conversationId: entry.conversationId,
-    });
-    getThreadBindingsState().bindingsByAccountConversation.set(key, {
-      ...entry,
-      accountId,
-    });
-  }
-
-  const acpSessionKeys = new Set<string>();
-  for (const binding of getThreadBindingsState().bindingsByAccountConversation.values()) {
-    if (binding.targetKind !== "acp" || !isAcpSessionKey(binding.targetSessionKey)) {
-      continue;
-    }
-    acpSessionKeys.add(binding.targetSessionKey);
-  }
-
-  const staleSessionKeys = new Set<string>();
-  for (const targetSessionKey of acpSessionKeys) {
-    const sessionEntry = readAcpSessionEntry({ sessionKey: targetSessionKey });
-    if (!sessionEntry || sessionEntry.storeReadFailed) {
-      continue;
-    }
-    const isStale =
-      !sessionEntry.entry ||
-      sessionEntry.entry.status === "failed" ||
-      sessionEntry.entry.status === "killed" ||
-      sessionEntry.entry.status === "timeout" ||
-      sessionEntry.acp?.state === "error";
-    if (isStale) {
-      staleSessionKeys.add(targetSessionKey);
-    }
-  }
-
-  for (const sessionKey of staleSessionKeys) {
-    const bindingsToRemove = listBindingsForAccount(accountId).filter(
-      (b) => b.targetSessionKey === sessionKey,
-    );
-    for (const binding of bindingsToRemove) {
-      getThreadBindingsState().bindingsByAccountConversation.delete(
-        resolveBindingKey({ accountId, conversationId: binding.conversationId }),
-      );
-      persistBindingMutation({
-        accountId,
-        persist,
-        binding,
-        remove: true,
-        reason: "cleanup-stale",
-      });
-    }
-    if (bindingsToRemove.length > 0) {
-      logVerbose(
-        `telegram thread binding: cleaned up ${bindingsToRemove.length} stale binding(s) for session ${sessionKey}`,
-      );
-    }
+  // Synchronous compatibility restore; bundled async entry points pre-restore
+  // through ensureTelegramThreadBindingsLoadedAsync so this read stays cold.
+  if (!getRestoredAccounts(getThreadBindingsState()).has(accountId)) {
+    getRestoredAccounts(getThreadBindingsState()).add(accountId);
+    restoreAccountBindings(accountId, loadBindingsFromStore(accountId));
+    cleanupStaleAcpSessionBindings(accountId, persist);
   }
 
   let sweepTimer: NodeJS.Timeout | null = null;
@@ -503,6 +637,8 @@ export function createTelegramThreadBindingManager(params: {
             resolveBindingKey({ accountId, conversationId: binding.conversationId }),
           );
         }
+        // Allow the next manager generation to restore persisted rows again.
+        getRestoredAccounts(state).delete(accountId);
       }
     },
   };
@@ -708,6 +844,15 @@ export function createTelegramThreadBindingManager(params: {
 
   getThreadBindingsState().managersByAccountId.set(accountId, manager);
   return manager;
+}
+
+export async function createTelegramThreadBindingManagerAsync(
+  params: Parameters<typeof createTelegramThreadBindingManager>[0],
+): Promise<TelegramThreadBindingManager> {
+  await ensureTelegramThreadBindingsLoadedAsync(params.accountId, {
+    persist: params.persist ?? true,
+  });
+  return createTelegramThreadBindingManager(params);
 }
 
 export function getTelegramThreadBindingManager(

@@ -72,6 +72,13 @@ vi.mock("./bot.js", () => ({
   createTelegramBot: createTelegramBotMock,
 }));
 
+// The polling transport awaits persisted-binding restoration before bot
+// construction; that restore path has its own dedicated suite. Stub it here so
+// the transport unit tests keep their isolated module graph.
+vi.mock("./thread-bindings.js", () => ({
+  ensureTelegramBotThreadBindingsLoaded: vi.fn(async () => undefined),
+}));
+
 vi.mock("./network-errors.js", () => ({
   isRecoverableTelegramNetworkError: isRecoverableTelegramNetworkErrorMock,
 }));

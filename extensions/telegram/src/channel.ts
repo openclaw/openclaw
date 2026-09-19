@@ -99,7 +99,7 @@ import { withTelegramStartupProbeSlot } from "./startup-probe-limiter.js";
 import { collectTelegramStatusIssues } from "./status-issues.js";
 import { normalizeTelegramChatId, parseTelegramTarget } from "./targets.js";
 import {
-  createTelegramThreadBindingManager,
+  createTelegramThreadBindingManagerAsync,
   setTelegramThreadBindingIdleTimeoutBySessionKey,
   setTelegramThreadBindingMaxAgeBySessionKey,
 } from "./thread-bindings.js";
@@ -770,7 +770,7 @@ export const telegramPlugin = createChatChannelPlugin({
       },
       shouldStripThreadFromAnnounceOrigin: shouldStripTelegramThreadFromAnnounceOrigin,
       createManager: ({ cfg, accountId }) =>
-        createTelegramThreadBindingManager({
+        createTelegramThreadBindingManagerAsync({
           cfg,
           accountId: accountId ?? undefined,
           persist: false,
