@@ -4345,6 +4345,7 @@ td.data-table-key-col {
 .skill-reader-dialog__body {
   flex: 0 1 auto;
   min-height: 0;
+  grid-template-columns: minmax(0, 1fr);
   align-content: start;
   overflow: auto;
   overscroll-behavior: contain;

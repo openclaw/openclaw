@@ -655,7 +655,6 @@
 
 .clawhub-skill-detail__body {
   display: grid;
-  grid-template-columns: minmax(0, 1fr);
   align-content: start;
   gap: var(--space-3);
   overflow-wrap: anywhere;
@@ -1763,7 +1762,6 @@ h3.settings-row__title {
 
 .skill-library-import {
   display: grid;
-  grid-template-columns: minmax(0, 1fr);
   gap: var(--space-4);
 }
 
