@@ -309,6 +309,33 @@ describe("sanitizeForPlainText", () => {
     expect(sanitizeForPlainText("a < b && c > d")).toBe("a < b && c > d");
   });
 
+  it.each([
+    [
+      "Guard the retry loop: only retry while attempts<max and backoffMs>0, otherwise give up.",
+      "Guard the retry loop: only retry while attempts<max and backoffMs>0, otherwise give up.",
+    ],
+    [
+      "Set the threshold so that latency<budget. Then verify the p99 stays flat, confirm the alert fires, and only after that raise concurrency>4.",
+      "Set the threshold so that latency<budget. Then verify the p99 stays flat, confirm the alert fires, and only after that raise concurrency>4.",
+    ],
+    ["Use timeout<300 and n>0 for the probe.", "Use timeout<300 and n>0 for the probe."],
+  ])("preserves unspaced comparison prose in %s", (input, expected) => {
+    expect(sanitizeForPlainText(input)).toBe(expected);
+  });
+
+  it.each([
+    ["checkbox-after-value", 'x^2 • <input type="checkbox" checked/>done', "x^2 • done"],
+    ["boolean-after-value", '<input type="checkbox" disabled/>todo', "todo"],
+    ["boolean-only", "<input disabled/>todo", "todo"],
+    ["boolean-first", '<input checked type="checkbox"/>done', "done"],
+    ["interleaved", '<input checked type="checkbox" disabled/>done', "done"],
+    ["autofocus-after-value", '<input type="text" autofocus/>ready', "ready"],
+    ["controls-after-value", '<video src="clip.mp4" controls/>play', "play"],
+    ["autoplay-after-value", '<audio src="clip.mp3" autoplay/>now', "now"],
+  ])("strips remaining tags that use boolean attributes (%s)", (_name, input, expected) => {
+    expect(sanitizeForPlainText(input)).toBe(expected);
+  });
+
   // --- mixed content ------------------------------------------------------
 
   it("handles mixed HTML content", () => {
