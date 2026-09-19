@@ -54,6 +54,7 @@ describe("tsgo core test shards", () => {
       }),
     ).toEqual([]);
     for (const [file, owner] of [
+      ["src/gateway/worker-environments/service-validation.test.ts", "gateway-server"],
       ["src/commands/doctor-session-worktree-workspace.test.ts", "commands-doctor"],
       ["src/commands/doctor/repair-sequencing.test.ts", "commands-doctor"],
       ["src/commands/oauth-tls-preflight.doctor.test.ts", "commands-doctor"],

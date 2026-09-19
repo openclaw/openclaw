@@ -1,11 +1,12 @@
-import type { CronJob, ModelAuthStatusResult } from "../api/types.ts";
+import type { CronCompactJob, ModelAuthStatusResult } from "../api/types.ts";
 import { createMentionsCapability, type MentionsCapability } from "../app/mentions.ts";
 import type {
   SidebarAttentionStoreController as StoreController,
   SidebarAttentionStoreSources,
 } from "../app/sidebar-attention-store.ts";
 import { normalizeAgentLabel } from "../lib/agents/display.ts";
-import { createInitialCronState, loadCronJobsPage, loadCronStatus } from "../lib/cron/index.ts";
+import { createInitialCronState, loadCronStatus } from "../lib/cron/index.ts";
+import { loadCompactCronJobsPage } from "../lib/cron/jobs.ts";
 import { loadModelAuthStatus, nextModelAuthStatusRefreshAt } from "../lib/model-auth.ts";
 import { normalizeAgentId } from "../lib/sessions/session-key.ts";
 import {
@@ -24,6 +25,7 @@ import {
   type SidebarInboxEntry,
 } from "./sidebar-attention-entries.ts";
 import {
+  type CronAttentionJob,
   buildSidebarAttentionEntries,
   compareSidebarAttentionEntries,
 } from "./sidebar-attention-items.ts";
@@ -39,7 +41,7 @@ const IDLE_REFRESH_INTERVAL_MS = 10 * 60_000;
 
 export class SidebarAttentionStoreController implements StoreController {
   readonly mentions: MentionsCapability;
-  private cronJobs: CronJob[] = [];
+  private cronJobs: CronAttentionJob[] = [];
   private cronSchedulerEnabled: boolean | null = null;
   private modelAuthStatus: ModelAuthStatusResult | null = null;
   private modelAuthAgentId: string | null = null;
@@ -258,21 +260,34 @@ export class SidebarAttentionStoreController implements StoreController {
               break;
             }
             refresh.requested = false;
-            const cron = createInitialCronState({ client, connected: true });
+            const cron = createInitialCronState<CronCompactJob>({ client, connected: true });
             cron.canRefresh = canRefreshCron;
             cron.cronAgentId = agentScope.scopeId;
-            await Promise.all([loadCronJobsPage(cron), loadCronStatus(cron)]);
+            await Promise.all([loadCompactCronJobsPage(cron), loadCronStatus(cron)]);
             while (
               canRefreshCron() &&
               cron.cronJobsHasMore &&
               !cron.cronJobsError &&
               !refresh.requested
             ) {
-              await loadCronJobsPage(cron, { append: true });
+              await loadCompactCronJobsPage(cron, { append: true });
             }
             if (current()) {
               if (!cron.cronJobsError && !cron.cronJobsHasMore) {
-                this.cronJobs = cron.cronJobs;
+                this.cronJobs = cron.cronJobs.map((job) => ({
+                  id: job.id,
+                  name: job.name,
+                  agentId: job.agentId,
+                  enabled: job.enabled,
+                  updatedAtMs: job.updatedAtMs,
+                  state: {
+                    nextRunAtMs: job.nextRunAtMs ?? undefined,
+                    lastRunAtMs: job.lastRunAtMs ?? undefined,
+                    lastRunStatus: job.lastRunStatus ?? undefined,
+                    runningAtMs: job.runningAtMs,
+                    autoDisabled: job.autoDisabled,
+                  },
+                }));
               }
               if (!cron.cronError) {
                 this.cronSchedulerEnabled = cron.cronStatus?.enabled ?? null;

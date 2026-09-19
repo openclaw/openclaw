@@ -1,12 +1,14 @@
 import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
+import type { CronJob } from "../api/types.ts";
 import { pathForRoute, type RouteId } from "../app-route-paths.ts";
 import {
   defaultControlUiFeatureMethods,
   installMockGateway,
   waitForControlUiRoute,
 } from "../test-helpers/control-ui-e2e.ts";
+import { cronListResponseFixture } from "../test-helpers/cron.ts";
 import {
   createControlUiE2eContextOptions,
   createControlUiE2eSuite,
@@ -131,7 +133,7 @@ const standaloneHeaderCases = [
 ] as const satisfies ReadonlyArray<{ route: RouteId; subtitle: string }>;
 
 function createCronLayoutMethodResponses() {
-  const jobs = [
+  const jobs: CronJob[] = [
     {
       id: "healthy",
       configRevision: "healthy-revision",
@@ -169,7 +171,7 @@ function createCronLayoutMethodResponses() {
       mainKey: "main",
       scope: "agent",
     },
-    "cron.list": {
+    "cron.list": cronListResponseFixture({
       jobs,
       snapshotRevision: "settings-layout",
       total: jobs.length,
@@ -177,7 +179,7 @@ function createCronLayoutMethodResponses() {
       limit: 50,
       hasMore: false,
       nextOffset: null,
-    },
+    }),
     "cron.runs": {
       entries: [],
       total: 0,

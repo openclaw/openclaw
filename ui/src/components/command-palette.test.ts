@@ -50,7 +50,7 @@ describe("CommandPalette search", () => {
     vi.unstubAllGlobals();
   });
 
-  it("lazily searches automation names and descriptions once per connection", async () => {
+  it("lazily searches compact automation names once per connection", async () => {
     const request = vi.fn(async (method: string) => {
       if (method === "models.list") {
         return { models: [] };
@@ -61,7 +61,6 @@ describe("CommandPalette search", () => {
             {
               id: "nightly-invoices",
               name: "Nightly invoices",
-              description: "Reconciles customer billing",
             },
           ],
         };
@@ -80,7 +79,7 @@ describe("CommandPalette search", () => {
       ),
     );
 
-    await enterQuery(palette, "reconciles");
+    await enterQuery(palette, "nightly");
     await vi.advanceTimersByTimeAsync(50);
     await vi.waitFor(() => expect(palette.textContent).toContain("Nightly invoices"));
     const item = findPaletteOption(palette, "Nightly invoices");

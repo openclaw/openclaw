@@ -4,6 +4,7 @@ import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import type { CronJob, CronRunLogEntry } from "../api/types.ts";
 import { installMockGateway, type MockGatewayControls } from "../test-helpers/control-ui-e2e.ts";
+import { cronListResponseFixture } from "../test-helpers/cron.ts";
 import {
   createControlUiE2eContextOptions,
   createControlUiE2eSuite,
@@ -62,7 +63,7 @@ function runsResponse(summary: string) {
 async function installScenario(page: Page, failInitially = false) {
   return installMockGateway(page, {
     methodResponses: {
-      "cron.list": listResponse,
+      "cron.list": cronListResponseFixture(listResponse),
       "cron.runs": failInitially
         ? { __mockError: { code: "UNAVAILABLE", message: historyError } }
         : runsResponse(alphaSummary),

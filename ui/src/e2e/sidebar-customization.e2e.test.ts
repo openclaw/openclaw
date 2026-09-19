@@ -14,6 +14,7 @@ import {
   waitForControlUiRoute,
   waitForControlUiSettingsTakeover,
 } from "../test-helpers/control-ui-e2e.ts";
+import { compactCronJobFixture } from "../test-helpers/cron.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({
@@ -795,7 +796,7 @@ suite.define(() => {
           methodResponses: {
             "cron.list": {
               jobs: [
-                {
+                compactCronJobFixture({
                   id: "release-digest",
                   name: "Release digest",
                   enabled: true,
@@ -809,7 +810,7 @@ suite.define(() => {
                     lastRunStatus: "error",
                     lastError: "Provider request failed",
                   },
-                },
+                }),
               ],
               snapshotRevision: "sidebar-mobile-attention",
               total: 1,

@@ -1,7 +1,9 @@
 import path from "node:path";
 import { expect, it } from "vitest";
+import type { CronJobsListResult } from "../api/types.ts";
 import { defaultControlUiFeatureMethods } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiSessionRow as sessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
+import { cronListResponseFixture } from "../test-helpers/cron.ts";
 import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
 import {
   actionOpacity,
@@ -240,26 +242,37 @@ suite.define(() => {
       serviceWorkers: "block",
       viewport: { height: 900, width: 1280 },
     });
+    const automationPage: CronJobsListResult = {
+      jobs: [
+        {
+          id: "nightly-invoices",
+          name: "Nightly invoices",
+          enabled: true,
+          createdAtMs: baseTime,
+          updatedAtMs: baseTime,
+          schedule: { kind: "every", everyMs: 60_000 },
+          sessionTarget: "isolated",
+          wakeMode: "now",
+          payload: { kind: "agentTurn", message: "Prepare customer invoices." },
+          state: {},
+        },
+      ],
+      snapshotRevision: "1",
+      total: 1,
+      limit: 50,
+      offset: 0,
+      nextOffset: null,
+      hasMore: false,
+    };
     const page = await context.newPage();
     await page.clock.install();
     const gateway = await installMockGateway(page, {
       featureMethods: [...defaultControlUiFeatureMethods, "cron.list"],
       methodResponses: {
-        "cron.list": {
-          jobs: [
-            {
-              id: "nightly-invoices",
-              name: "Nightly invoices",
-              description: "Reconciles customer billing",
-            },
-          ],
-          snapshotRevision: "1",
-          total: 1,
-          limit: 200,
-          offset: 0,
-          nextOffset: null,
-          hasMore: false,
-        },
+        "cron.list": cronListResponseFixture([
+          { match: { limit: 200 }, response: { ...automationPage, limit: 200 } },
+          { response: automationPage },
+        ]),
         "sessions.list": {
           cases: [
             {
@@ -396,13 +409,13 @@ suite.define(() => {
         .toBe(true);
 
       // The same palette lazily loads small non-session catalogs once and
-      // matches both item names and descriptions without involving FTS.
+      // matches compact automation names without involving FTS.
       const cronRequestsBeforePalette = (await gateway.getRequests("cron.list")).length;
       const transcriptRequestsBeforePalette = (await gateway.getRequests("sessions.search")).length;
       await page.getByRole("button", { name: "Open command palette" }).click();
       const paletteInput = page.locator(".cmd-palette__input");
       await paletteInput.waitFor({ state: "visible", timeout: 10_000 });
-      await paletteInput.fill("reconciles customer billing");
+      await paletteInput.fill("nightly invoices");
       await page.clock.runFor(50);
       const automationOption = page.getByRole("option", { name: /Nightly invoices/u });
       await automationOption.waitFor({ state: "visible", timeout: 10_000 });

@@ -8,6 +8,7 @@ import { CronService } from "../../cron/service.js";
 import { createCronStoreHarness, createNoopLogger } from "../../cron/service.test-harness.js";
 import type { CronJob } from "../../cron/types.js";
 import { GatewayClientRequestError } from "../../gateway/client.js";
+import { compactCronListJob } from "../../gateway/server-methods/cron-list-projection.js";
 import { claimAgentRunContext, clearAgentRunContext } from "../../infra/agent-run-registry.js";
 import { applyCodeModeCatalog } from "../code-mode.js";
 import {
@@ -31,7 +32,7 @@ const job: CronJob = {
   payload: { kind: "systemEvent", text: "Check unpaid invoices" },
   state: {},
 };
-const compactJob = {
+const legacyCompactJob = {
   id: job.id,
   name: job.name,
   enabled: true,
@@ -44,6 +45,18 @@ const compactJob = {
   lastRunAtMs: null,
   lastRunStatus: null,
   lastRunError: null,
+};
+const compactJob = {
+  ...compactCronListJob({
+    ...job,
+    agentId: "main",
+    enabled: false,
+    state: {
+      runningAtMs: 0,
+      autoDisabled: { reason: "consecutive-failures", atMs: 0, consecutiveErrors: 3 },
+    },
+  }),
+  effectiveAgentId: "main",
 };
 const page = {
   total: 1,
@@ -91,6 +104,11 @@ describe("automations output contract", () => {
       },
     },
     { name: "compact inventory", args: { action: "list" }, reply: list },
+    {
+      name: "older compact inventory",
+      args: { action: "list" },
+      reply: { ...list, jobs: [legacyCompactJob] },
+    },
     { name: "job details", args: { action: "get", jobId: job.id }, reply: job },
     {
       name: "creation",

@@ -746,32 +746,21 @@ describe("gateway server cron", () => {
         compactListRes.payload as { jobs?: Array<Record<string, unknown>> } | null
       )?.jobs;
       expect(compactJobs).toHaveLength(1);
-      expect(compactJobs?.[0]).toMatchObject({
+      expect(compactJobs?.[0]).toStrictEqual({
         id: dailyJobId,
         effectiveAgentId: "main",
         name: "daily",
         enabled: true,
+        updatedAtMs: expect.any(Number),
         scheduleKind: "every",
-        schedule: { kind: "every", everyMs: 60_000 },
+        schedule: expect.objectContaining({ kind: "every", everyMs: 60_000 }),
+        nextRunAt: expect.any(String),
+        nextRunAtMs: expect.any(Number),
         lastRunAt: null,
+        lastRunAtMs: null,
+        lastRunError: null,
         lastRunStatus: null,
       });
-      expect(Object.keys(compactJobs?.[0] ?? {}).toSorted()).toEqual(
-        [
-          "effectiveAgentId",
-          "enabled",
-          "id",
-          "lastRunAtMs",
-          "lastRunAt",
-          "lastRunError",
-          "lastRunStatus",
-          "name",
-          "nextRunAtMs",
-          "nextRunAt",
-          "scheduleKind",
-          "schedule",
-        ].toSorted(),
-      );
       expect(Date.parse(String(compactJobs?.[0]?.nextRunAt))).toBe(compactJobs?.[0]?.nextRunAtMs);
       expect(
         (compactListRes.payload as { deliveryPreviews?: unknown } | null)?.deliveryPreviews,

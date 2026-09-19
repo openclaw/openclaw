@@ -10,6 +10,7 @@ import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { WorkerTaskPool } from "openclaw/plugin-sdk/process-runtime";
 import { upsertSessionEntry } from "openclaw/plugin-sdk/session-store-runtime";
 import { appendSessionTranscriptMessageByIdentity } from "openclaw/plugin-sdk/session-transcript-runtime";
+import { closeOpenClawAgentDatabasesAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { readCodexNativeHistory } from "./session-history-read.js";
 import { readCodexMirroredSessionHistoryMessages } from "./session-history.js";
@@ -28,6 +29,7 @@ const tempDirs: string[] = [];
 
 afterEach(async () => {
   for (const dir of tempDirs.splice(0)) {
+    await closeOpenClawAgentDatabasesAsync(dir);
     await fs.rm(dir, { recursive: true, force: true });
   }
 });
