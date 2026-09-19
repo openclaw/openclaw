@@ -167,7 +167,7 @@ final class TalkRealtimeWebRTCSession: NSObject {
     private static let audioTrackID = "openclaw-ios-audio"
     private static let dataChannelLabel = "oai-events"
     private static let toolCallTimeoutSeconds = 12
-    private static let toolResultTimeoutSeconds = 45
+    static let toolResultTimeoutSeconds = 120
     private static let agentWaitSliceSeconds = 3
     private static let agentWaitRequestGraceSeconds = 15
     private static let historyFallbackTimeoutSeconds = 5
@@ -720,11 +720,7 @@ final class TalkRealtimeWebRTCSession: NSObject {
             self.delegate?.realtimeSession(
                 self,
                 didChangeStatus: confirmationInstruction == nil ? "OpenClaw unavailable" : "Confirmation needed")
-            let fallbackMessage = confirmationInstruction ?? [
-                "OpenClaw consult did not finish quickly enough.",
-                "Give a brief spoken fallback from the realtime conversation",
-                "and ask the user to try again if they need OpenClaw-specific context.",
-            ].joined(separator: " ")
+            let fallbackMessage = confirmationInstruction ?? Self.consultFailureMessage(from: error)
             self.submitToolResult(callId: callId, result: [
                 "error": fallbackMessage,
             ])
@@ -819,6 +815,21 @@ final class TalkRealtimeWebRTCSession: NSObject {
             ].joined(separator: " ")
         }
         return nil
+    }
+
+    static func consultFailureMessage(from error: Error) -> String {
+        let nsError = error as NSError
+        if nsError.domain == "TalkRealtimeWebRTC", nsError.code == 12 || nsError.code == 16 {
+            return [
+                "OpenClaw consult reached its two-minute limit.",
+                "Give a brief spoken fallback from the realtime conversation",
+                "and ask the user to try again if they need OpenClaw-specific context.",
+            ].joined(separator: " ")
+        }
+        return [
+            "OpenClaw consult failed before it completed.",
+            "Tell the user OpenClaw is currently unavailable and ask them to try again.",
+        ].joined(separator: " ")
     }
 
     private static func controlResultMessage(from data: Data) -> String? {
