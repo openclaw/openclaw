@@ -8,7 +8,7 @@ import {
 } from "../../../lib/bounded-response.mjs";
 import { createTimeoutError } from "../../../lib/timeout-error.mjs";
 import { assertClawHubArtifactMetadata } from "../clawhub-artifact-assertions.mjs";
-import { readPositiveIntEnv } from "../env-limits.mjs";
+import { MAX_TIMER_TIMEOUT_MS, readPositiveIntEnv } from "../env-limits.mjs";
 import { assertRealPathInside, resolveHomePath } from "../openclaw-state-paths.mjs";
 import {
   readPluginInstallIndex,
@@ -31,7 +31,12 @@ function readClawHubPreflightLimits() {
       "OPENCLAW_PLUGINS_E2E_CLAWHUB_PREFLIGHT_BODY_MAX_BYTES",
       1024 * 1024,
     ),
-    timeoutMs: readPositiveIntEnv("OPENCLAW_PLUGINS_E2E_CLAWHUB_PREFLIGHT_TIMEOUT_MS", 30_000),
+    timeoutMs: readPositiveIntEnv(
+      "OPENCLAW_PLUGINS_E2E_CLAWHUB_PREFLIGHT_TIMEOUT_MS",
+      30_000,
+      process.env,
+      MAX_TIMER_TIMEOUT_MS,
+    ),
   };
 }
 

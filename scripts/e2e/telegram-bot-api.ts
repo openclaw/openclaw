@@ -1,7 +1,7 @@
 // Telegram Bot Api script supports OpenClaw repository automation.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { readBoundedResponseText } from "../lib/bounded-response.mjs";
-import { readPositiveIntEnv } from "./lib/env-limits.mjs";
+import { MAX_TIMER_TIMEOUT_MS, readPositiveIntEnv } from "./lib/env-limits.mjs";
 
 type JsonObject = Record<string, unknown>;
 
@@ -28,7 +28,12 @@ export function readTelegramBotApiLimits(
       1024 * 1024,
       env,
     ),
-    timeoutMs: readPositiveIntEnv("OPENCLAW_TELEGRAM_USER_BOT_API_TIMEOUT_MS", 30000, env),
+    timeoutMs: readPositiveIntEnv(
+      "OPENCLAW_TELEGRAM_USER_BOT_API_TIMEOUT_MS",
+      30000,
+      env,
+      MAX_TIMER_TIMEOUT_MS,
+    ),
   };
 }
 

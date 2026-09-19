@@ -357,6 +357,19 @@ describe("MCP code-mode gateway Docker client fetch helper", () => {
     });
   });
 
+  it("rejects a timer timeout above the Node timer ceiling", () => {
+    expect(() =>
+      readMcpCodeModeClientFetchLimits({
+        OPENCLAW_MCP_CODE_MODE_CLIENT_TIMEOUT_MS: "2147483648",
+      }),
+    ).toThrow("invalid OPENCLAW_MCP_CODE_MODE_CLIENT_TIMEOUT_MS: 2147483648");
+    expect(
+      readMcpCodeModeClientFetchLimits({
+        OPENCLAW_MCP_CODE_MODE_CLIENT_BODY_MAX_BYTES: "2147483648",
+      }).bodyMaxBytes,
+    ).toBe(2_147_483_648);
+  });
+
   it("aborts requests that never resolve", async () => {
     let signal: AbortSignal | undefined;
     await expect(

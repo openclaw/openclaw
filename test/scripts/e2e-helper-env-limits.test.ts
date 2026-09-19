@@ -7,6 +7,7 @@ import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { describe, expect, it, vi } from "vitest";
+import { readTelegramBotApiLimits } from "../../scripts/e2e/telegram-bot-api.ts";
 import { createBoundedChildOutput } from "../helpers/bounded-child-output.js";
 
 const browserFixturePath = "scripts/e2e/lib/browser-cdp-snapshot/fixture-server.mjs";
@@ -14,6 +15,10 @@ const clickclackFixturePath = "scripts/e2e/lib/release-user-journey/clickclack-f
 const clickclackPluginWritePath =
   "scripts/e2e/lib/release-user-journey/write-clickclack-plugin.mjs";
 const httpProbePath = "scripts/e2e/lib/openwebui/http-probe.mjs";
+const pluginsAssertionsPath = "scripts/e2e/lib/plugins/assertions.mjs";
+// Node reports TimeoutOverflowWarning above the 32-bit timer range and collapses
+// the delay to 1 ms; the issue recorded this exact value.
+const OVERSIZED_TIMER_MS = 2_147_483_648;
 
 type ClickClackFixturePlugin = {
   outbound: {
@@ -333,5 +338,65 @@ describe("e2e helper numeric env limits", () => {
       });
       fs.rmSync(tempDir, { force: true, recursive: true });
     }
+  });
+
+  it("bounds e2e timer timeouts to the canonical coercion ceiling", async () => {
+    const limits = await import("../../scripts/e2e/lib/env-limits.mjs");
+
+    // These helpers run under plain `node`, which cannot resolve the workspace
+    // tsconfig alias, so the local constant must stay pinned to its owner.
+    expect(limits.MAX_TIMER_TIMEOUT_MS).toBe(MAX_TIMER_TIMEOUT_MS);
+    expect(
+      limits.readPositiveIntEnv(
+        "OPENCLAW_E2E_TIMER_PROBE_MS",
+        1_000,
+        { OPENCLAW_E2E_TIMER_PROBE_MS: String(MAX_TIMER_TIMEOUT_MS) },
+        limits.MAX_TIMER_TIMEOUT_MS,
+      ),
+    ).toBe(MAX_TIMER_TIMEOUT_MS);
+    expect(() =>
+      limits.readPositiveIntEnv(
+        "OPENCLAW_E2E_TIMER_PROBE_MS",
+        1_000,
+        { OPENCLAW_E2E_TIMER_PROBE_MS: String(OVERSIZED_TIMER_MS) },
+        limits.MAX_TIMER_TIMEOUT_MS,
+      ),
+    ).toThrow(`invalid OPENCLAW_E2E_TIMER_PROBE_MS: ${OVERSIZED_TIMER_MS}`);
+    // Without a ceiling the same value stays accepted, so non-timer limits keep
+    // their existing contract.
+    expect(
+      limits.readPositiveIntEnv("OPENCLAW_E2E_TIMER_PROBE_MS", 1_000, {
+        OPENCLAW_E2E_TIMER_PROBE_MS: String(OVERSIZED_TIMER_MS),
+      }),
+    ).toBe(OVERSIZED_TIMER_MS);
+  });
+
+  it("rejects the recorded oversized ClawHub preflight timeout before scheduling a timer", () => {
+    const result = runScript(pluginsAssertionsPath, ["clawhub-preflight"], {
+      CLAWHUB_PLUGIN_SPEC: "clawhub:openclaw-e2e-demo",
+      OPENCLAW_CLAWHUB_URL: "http://127.0.0.1:9",
+      OPENCLAW_PLUGINS_E2E_CLAWHUB_PREFLIGHT_TIMEOUT_MS: String(OVERSIZED_TIMER_MS),
+    });
+
+    expect(result.status).not.toBe(0);
+    expect(result.stderr).toContain(
+      `invalid OPENCLAW_PLUGINS_E2E_CLAWHUB_PREFLIGHT_TIMEOUT_MS: ${OVERSIZED_TIMER_MS}`,
+    );
+  });
+
+  it("rejects an oversized Telegram Bot API timer", () => {
+    expect(() =>
+      readTelegramBotApiLimits({
+        OPENCLAW_TELEGRAM_USER_BOT_API_TIMEOUT_MS: String(OVERSIZED_TIMER_MS),
+      }),
+    ).toThrow(`invalid OPENCLAW_TELEGRAM_USER_BOT_API_TIMEOUT_MS: ${OVERSIZED_TIMER_MS}`);
+  });
+
+  it("leaves byte limits unbounded above the timer ceiling", () => {
+    expect(
+      readTelegramBotApiLimits({
+        OPENCLAW_TELEGRAM_USER_BOT_API_BODY_MAX_BYTES: String(OVERSIZED_TIMER_MS),
+      }).bodyMaxBytes,
+    ).toBe(OVERSIZED_TIMER_MS);
   });
 });
