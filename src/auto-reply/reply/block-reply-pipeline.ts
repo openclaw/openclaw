@@ -157,13 +157,14 @@ export function createBlockReplyPipeline(params: {
     const payloadKey = createBlockReplyPayloadKey(payload);
     const contentKey = createBlockReplyContentKey(payload);
     const blockSourceText = getReplyPayloadMetadata(payload)?.blockSourceText;
-    if (!bypassSeenCheck) {
+    const carriesDistinctSource = blockSourceText !== undefined;
+    if (!bypassSeenCheck && !carriesDistinctSource) {
       if (seenKeys.has(payloadKey)) {
         return;
       }
       seenKeys.add(payloadKey);
     }
-    if (sentKeys.has(payloadKey) || pendingKeys.has(payloadKey)) {
+    if (!carriesDistinctSource && (sentKeys.has(payloadKey) || pendingKeys.has(payloadKey))) {
       return;
     }
     pendingKeys.add(payloadKey);
@@ -301,10 +302,13 @@ export function createBlockReplyPipeline(params: {
       flushBufferedAssistantBlock();
     }
     const payloadKey = createBlockReplyPayloadKey(payload);
-    if (hasSeenOrQueuedPayloadKey(payloadKey)) {
+    const carriesDistinctSource = getReplyPayloadMetadata(payload)?.blockSourceText !== undefined;
+    if (!carriesDistinctSource && hasSeenOrQueuedPayloadKey(payloadKey)) {
       return;
     }
-    seenKeys.add(payloadKey);
+    if (!carriesDistinctSource) {
+      seenKeys.add(payloadKey);
+    }
     bufferedAssistantMessageIndex = assistantMessageIndex;
     coalescer.enqueue(payload);
   };

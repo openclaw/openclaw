@@ -461,7 +461,13 @@ export function createStreamRendering({
       return;
     }
 
-    if (chunk && shouldSkipAssistantText(chunk, normalizedChunk)) {
+    // Chunker source metadata identifies a distinct source occurrence even when
+    // adjacent rendered chunks happen to have identical text.
+    if (
+      chunk &&
+      options?.sourceText === undefined &&
+      shouldSkipAssistantText(chunk, normalizedChunk)
+    ) {
       if (slicedPrefixReplay) {
         markBlockReplyTextHandled();
       }
