@@ -4,6 +4,7 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import { normalizeUpdateChannel, type UpdateChannel } from "../../infra/update-channels.js";
 import { UPDATE_RUN_ID_ENV } from "../../infra/update-control-plane-sentinel.js";
 import { hasDeferredUpdateModelRetirement } from "../../infra/update-deferred-model-retirement.js";
+import { writeUpdateRunReportArtifact } from "../../infra/update-failure-report-artifact.js";
 import {
   POST_CORE_UPDATE_REQUESTED_CHANNEL_ENV,
   POST_CORE_UPDATE_ENV,
@@ -219,6 +220,15 @@ async function resumePostCoreUpdateInternal(params: ResumePostCoreUpdateParams):
   const { pluginUpdate } = outcome;
   assertCurrent?.();
   const runId = process.env[UPDATE_RUN_ID_ENV]?.trim();
+  const result: UpdateRunResult = {
+    status: pluginUpdate.status === "error" ? "error" : "ok",
+    mode: "unknown",
+    root: params.root,
+    runId,
+    steps: pluginUpdate.doctorLint ? [pluginUpdate.doctorLint] : [],
+    durationMs: 0,
+    postUpdate: { plugins: pluginUpdate },
+  };
   if (process.env[POST_CORE_UPDATE_ENV] === "1" && runId) {
     try {
       recordPostCoreUpdateEvidence(runId, {
@@ -227,10 +237,24 @@ async function resumePostCoreUpdateInternal(params: ResumePostCoreUpdateParams):
             ? await readPackageUpdateIdentity(params.root)
             : undefined,
         warnings: collectPostCorePluginAdvisories(pluginUpdate),
+        doctorLint: pluginUpdate.doctorLint,
       });
+      if (!parentOwnsCompletion && pluginUpdate.doctorLint) {
+        const reportPath = await writeUpdateRunReportArtifact({
+          result,
+          detached: true,
+          report: {
+            markdown:
+              "Post-plugin Doctor diagnostics; update completion is pending with the parent updater.",
+          },
+        });
+        defaultRuntime.error(
+          `Post-plugin Doctor report (update completion pending): ${reportPath}`,
+        );
+      }
     } catch (error) {
       defaultRuntime.error(
-        `Post-core update evidence could not be saved to update history: ${formatErrorMessage(error)} Update completion may require Doctor verification.`,
+        `Post-core update evidence could not be saved: ${formatErrorMessage(error)} Update completion may require Doctor verification.`,
       );
     }
   }
@@ -243,14 +267,6 @@ async function resumePostCoreUpdateInternal(params: ResumePostCoreUpdateParams):
   }
   assertCurrent?.();
   if (params.opts.json && !process.env[POST_CORE_UPDATE_RESULT_PATH_ENV]) {
-    const result: UpdateRunResult = {
-      status: pluginUpdate.status === "error" ? "error" : "ok",
-      mode: "unknown",
-      root: params.root,
-      steps: [],
-      durationMs: 0,
-      postUpdate: { plugins: pluginUpdate },
-    };
     defaultRuntime.writeJson(result);
   }
   defaultRuntime.exit(0);

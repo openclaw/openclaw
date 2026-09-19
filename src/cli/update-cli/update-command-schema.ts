@@ -72,7 +72,7 @@ export async function previewUpdateCommand(params: {
         preflight.preflightNotes.push(`Would refuse update: ${permissions.stderrTail}`);
       }
     }
-    printUpdateDryRun({
+    await printUpdateDryRun({
       ...target,
       ...preflight,
       runId: params.runId,

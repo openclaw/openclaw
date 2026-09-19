@@ -349,16 +349,16 @@ export async function withUpdatePreviewSignals<T>(
 export function failUpdateCommandRun(
   error: unknown,
   run: NonNullable<UpdateCommandOptions["run"]>,
-): void {
+): ReturnType<typeof createUpdateErrorFact> | undefined {
   const options = { env: run.env };
   // Recovery owns failure/outcome publication; outer unwind must not rewrite a
   // database whose exact contents may still be needed to reconcile restoration.
   if (loadUpdateRecovery(run.runId, options)) {
-    return;
+    return undefined;
   }
   const active = getUpdateRun(run.runId, options);
   if (active?.status !== "running") {
-    return;
+    return undefined;
   }
   const step =
     active.steps.findLast((entry) => entry.status === "in_progress")?.step ?? active.phase;
@@ -387,7 +387,7 @@ export function failUpdateCommandRun(
       options,
     );
   }
-  finishUpdateRun(run.runId, { status: "failed", reason: "update-failed" }, options);
+  return fact;
 }
 
 export function createUpdateRunProgress(

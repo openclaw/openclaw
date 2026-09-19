@@ -18,6 +18,13 @@ vi.mock("../../daemon/gateway-entrypoint.js", () => ({
 vi.mock("../../process/exec.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../process/exec.js")>()),
   runExec: mocks.runExec,
+  runUtf8CommandWithTimeout: async ([command, ...args]: string[], options: unknown) => ({
+    ...(await mocks.runExec(command, args, options)),
+    code: 0,
+    signal: null,
+    killed: false,
+    termination: "exit",
+  }),
 }));
 vi.mock("./shared.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./shared.js")>()),

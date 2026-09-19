@@ -18,6 +18,43 @@ function prepareDiagnosticReport(reason: string) {
 }
 
 describe("update report diagnostic command boundary", () => {
+  it("includes every named lint finding using the existing public diagnostic redaction", async () => {
+    const findings = Array.from({ length: 40 }, (_, index) => ({
+      checkId: "core/doctor/security",
+      severity: index === 0 ? "error" : "warning",
+      message: "EACCES: permission denied",
+      requirement: `private-customer-requirement-${index}`,
+    }));
+    const report = await prepareUpdateFailureReport(
+      {
+        attemptId: "complete-lint-inventory",
+        result: {
+          status: "error",
+          mode: "npm",
+          reason: "doctor-failed",
+          durationMs: 1,
+          steps: [
+            {
+              name: "candidate doctor lint",
+              command: "doctor --lint --json",
+              cwd: "/candidate",
+              durationMs: 1,
+              exitCode: 1,
+              doctorLintFindings: findings,
+            },
+          ],
+        },
+      },
+      context,
+    );
+    expect(
+      report.body.match(/Doctor lint (?:error|warning) \[core\/doctor\/security\]/gu),
+    ).toHaveLength(40);
+    expect(report.body).toContain("EACCES");
+    expect(report.body).toContain("Permission denied");
+    expect(report.body).not.toContain("private-customer-requirement");
+  });
+
   it.each([
     { source: "stderr", diagnostic: true },
     { source: "stderr", diagnostic: false },

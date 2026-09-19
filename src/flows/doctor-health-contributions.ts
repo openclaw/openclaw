@@ -482,7 +482,12 @@ export async function resolveDoctorContributionHealthChecks(): Promise<
   const checks: DoctorHealthCheck[] = [];
   for (const contribution of resolveDoctorHealthContributions()) {
     if (contribution.healthChecks.length > 0) {
-      checks.push(...contribution.healthChecks.map(normalizeHealthCheck));
+      checks.push(
+        ...contribution.healthChecks.map((check) => ({
+          ...normalizeHealthCheck(check),
+          updateWork: contribution.updateWork,
+        })),
+      );
       continue;
     }
     for (const id of contribution.healthCheckIds) {
@@ -492,7 +497,7 @@ export async function resolveDoctorContributionHealthChecks(): Promise<
           `doctor contribution ${contribution.id} references unknown core health check ${id}`,
         );
       }
-      checks.push(check);
+      checks.push({ ...check, updateWork: contribution.updateWork });
     }
   }
   return checks;

@@ -16,6 +16,7 @@ import { truncateUtf8Prefix } from "../utils/utf8-truncate.js";
 import { VERSION } from "../version.js";
 import { prepareGithubIssue, type PreparedGithubIssue } from "./github-issue.js";
 import { normalizeUpdateChannel } from "./update-channels.js";
+import { normalizeUpdateDoctorLintFindings } from "./update-doctor-lint.js";
 import {
   formatUpdateFailureFact,
   selectUpdateFailureReportSteps,
@@ -258,6 +259,20 @@ async function renderBoundedDiagnostics(
   ];
   if (input.result.reason === LEGACY_UPDATE_RUN_EXPIRED_REASON) {
     diagnostics.push(`Advisory: ${LEGACY_UPDATE_RUN_ADVISORY}`);
+  }
+  for (const finding of normalizeUpdateDoctorLintFindings(
+    input.result.steps.flatMap((step) => step.doctorLintFindings ?? []),
+    context.env,
+  )) {
+    const { check } = await projectPublicUpdateFailureIdentifiers({
+      check: finding.checkId,
+      code: "doctor-failed",
+    });
+    const severity =
+      finding.severity === "warning" || finding.severity === "info" ? finding.severity : "error";
+    diagnostics.push(
+      `Doctor lint ${severity} [${check}]: ${redactPublicSupportDiagnosticLine([finding.requirement, finding.message].filter(Boolean).join(": "), context)}`,
+    );
   }
   // Reviewed identity facts also bind consent when the run ID stays the same.
   for (const [label, identity] of [

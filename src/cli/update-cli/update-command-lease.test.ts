@@ -13,14 +13,11 @@ import type { PluginInstallRecord } from "../../config/types.plugins.js";
 import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
 import * as temporaryState from "../../infra/tmp-openclaw-dir.js";
 import {
-  createUpdateRun,
   getUpdateRun,
   listUpdateRuns,
-  recordUpdateRunPhase,
   recordUpdateRunStep,
 } from "../../infra/update-run-ledger.js";
 import type { UpdateRunRecord } from "../../infra/update-run-record.js";
-import { ABANDONED_UPDATE_RUN_MS } from "../../infra/update-run-timeouts.js";
 import { loadInstalledPluginIndexInstallRecords } from "../../plugins/installed-plugin-index-records.js";
 import { readPersistedInstalledPluginIndex } from "../../plugins/installed-plugin-index-store.js";
 import { seedInstalledPluginIndex } from "../../plugins/test-helpers/installed-plugin-index.js";
@@ -81,7 +78,10 @@ vi.mock("../../infra/update-triage.js", () => ({
 import { convergeUpdatePlugins } from "./update-command-convergence.js";
 import { updateExecutorNativeEntrypoints } from "./update-command-executor-native-runtime.test-support.js";
 import { updateFinalizeCommand } from "./update-command-finalize.js";
-import { mockRepairManagedService } from "./update-command-lease-service.test-support.js";
+import {
+  mockRepairManagedService,
+  seedInterruptedPostCoreRun,
+} from "./update-command-lease-service.test-support.js";
 import type { LeaseScenario } from "./update-command-lease.test-support.js";
 import type { ProducedPluginUpdateResult } from "./update-command-plugins-internals.js";
 import { finishUpdate } from "./update-command-post-update.js";
@@ -290,15 +290,16 @@ it("passes standalone repair ownership to both fresh Doctor phases through the p
 });
 
 it.each([
-  { failDoctor: undefined, restartFails: false },
-  { failDoctor: "pre", restartFails: false },
-  { failDoctor: undefined, restartFails: true },
+  { command: "finalize", failDoctor: undefined, restartFails: false },
+  { command: "repair", failDoctor: undefined, restartFails: false },
+  { command: "repair", failDoctor: "pre", restartFails: false },
+  { command: "repair", failDoctor: undefined, restartFails: true },
 ] as const)(
-  "the repair parent restores its managed service (Doctor failure=$failDoctor, restart failure=$restartFails)",
-  async ({ failDoctor, restartFails }) => {
+  "the $command parent restores its managed service (Doctor failure=$failDoctor, restart failure=$restartFails)",
+  async ({ command, failDoctor, restartFails }) => {
     const recovery = seedInterruptedPostCoreRun();
     await writeScenario("repair", {
-      verifyRepairOwner: true,
+      verifyRepairOwner: command === "repair",
       verifyServiceCustody: true,
       failDoctor,
     });
@@ -310,7 +311,7 @@ it.each([
 
     await runRegisteredCli({
       register: registerUpdateCli,
-      argv: ["update", "repair", "--yes", "--json", "--timeout", "15"],
+      argv: ["update", command, "--yes", "--json", "--timeout", "15"],
     });
 
     expect(stop.mock.calls.filter(([params]) => params.phase !== "inspect")).toHaveLength(1);
@@ -330,7 +331,11 @@ it.each([
       expect(getUpdateRun(recovery.runId)).toEqual(recovery);
     } else {
       expectSuccess("repair");
-      expectRecoveredRun(getUpdateRun(recovery.runId));
+      if (command === "repair") {
+        expectRecoveredRun(getUpdateRun(recovery.runId));
+      } else {
+        expect(getUpdateRun(recovery.runId)).toEqual(recovery);
+      }
     }
   },
 );
@@ -376,18 +381,6 @@ function reportedResult(lane: Lane): unknown {
   return lane === "repair"
     ? vi.mocked(defaultRuntime.writeJson).mock.lastCall?.[0]
     : mocks.print.mock.lastCall?.[0];
-}
-
-function seedInterruptedPostCoreRun(): UpdateRunRecord {
-  const clock = vi.spyOn(Date, "now").mockReturnValue(Date.now() - 2 * ABANDONED_UPDATE_RUN_MS);
-  try {
-    const run = createUpdateRun({ trigger: "cli", before: { version: "2026.9.2" } });
-    return recordUpdateRunPhase(run.runId, "verifying", {
-      step: { step: "post-update verification", status: "in_progress" },
-    });
-  } finally {
-    clock.mockRestore();
-  }
 }
 
 function expectRecoveredRun(run: UpdateRunRecord | undefined): void {

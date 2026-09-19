@@ -1,8 +1,11 @@
 import { spinner } from "@clack/prompts";
 import { UPDATE_RUN_PHASES } from "../../../packages/gateway-protocol/src/update-run-vocabulary.js";
 import { theme } from "../../../packages/terminal-core/src/theme.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import { formatDurationPrecise } from "../../infra/format-time/format-duration.ts";
+import { formatUpdateDoctorLintFinding } from "../../infra/update-doctor-lint.js";
 import { formatUpdateFailureFact } from "../../infra/update-failure-facts-format.js";
+import { writeUpdateRunReportArtifact } from "../../infra/update-failure-report-artifact.js";
 import { getUpdateRun } from "../../infra/update-run-ledger.js";
 import {
   updateStepDiagnostics,
@@ -48,6 +51,15 @@ type ProgressController = {
   dispose: () => void;
 };
 
+function readDisplayRecord(runId: string, env?: NodeJS.ProcessEnv, source = "report") {
+  try {
+    return getUpdateRun(runId, { env });
+  } catch (error) {
+    defaultRuntime.error(`Update ${source} history unavailable: ${formatErrorMessage(error)}`);
+    return undefined;
+  }
+}
+
 export function createUpdateProgress(
   enabled: boolean,
   run?: UpdateCommandOptions["run"],
@@ -74,7 +86,7 @@ export function createUpdateProgress(
   // Candidate migrations can advance the ledger beyond this process's reader.
   // Step callbacks and final cleanup must respect the same fence as the timer.
   const read = () =>
-    observation === "active" && run ? getUpdateRun(run.runId, { env: run.env }) : undefined;
+    observation === "active" && run ? readDisplayRecord(run.runId, run.env, "progress") : undefined;
   const renderRecord = (record: UpdateRunRecord | undefined) => {
     // Doctor's unbound spinner does not observe ledger phases, even after a write.
     if (observation !== "active" || !run || !record) {
@@ -97,9 +109,22 @@ export function createUpdateProgress(
       clearTimer();
     }
   };
-  const flush = (record: UpdateRunRecord | undefined) => {
-    renderRecord(record);
-    stop();
+  const finalize = (
+    record: UpdateRunRecord | undefined,
+    terminal = record?.status !== "running",
+  ) => {
+    try {
+      renderRecord(record);
+    } finally {
+      if (terminal) {
+        observation = "disposed";
+        clearTimer();
+        if (run && activeUpdateProgress.get(run.runId) === finalize) {
+          activeUpdateProgress.delete(run.runId);
+        }
+      }
+      stop();
+    }
   };
   const poll = () => {
     timer = undefined;
@@ -113,13 +138,13 @@ export function createUpdateProgress(
     }
   };
   if (run) {
-    // Initial observation can throw; publish only once the caller can own cleanup.
+    // Register only after initial observation so failed setup leaves no callback.
     poll();
-    activeUpdateProgress.set(run.runId, flush);
+    activeUpdateProgress.set(run.runId, finalize);
   }
   const progress: UpdateDisplayProgress = {
     onStepStart: (step, record) => {
-      flush(record ?? read());
+      finalize(record ?? read(), false);
       const label = currentPhase ? `${currentPhase} — ${step.name}` : step.name;
       if (process.stdout.isTTY) {
         currentSpinner = spinner({ indicator: "timer" });
@@ -129,7 +154,7 @@ export function createUpdateProgress(
       }
     },
     onStepComplete: (step, record) => {
-      flush(record ?? read());
+      finalize(record ?? read(), false);
       printStep(step);
     },
   };
@@ -151,35 +176,11 @@ export function createUpdateProgress(
         poll();
       }
     },
-    dispose: () => {
-      try {
-        renderRecord(read());
-      } finally {
-        observation = "disposed";
-        clearTimer();
-        if (run && activeUpdateProgress.get(run.runId) === flush) {
-          activeUpdateProgress.delete(run.runId);
-        }
-        stop();
-      }
-    },
+    dispose: () => finalize(read(), true),
   };
 }
 
-type DisplayStep = Pick<
-  UpdateStepResult,
-  | "name"
-  | "durationMs"
-  | "exitCode"
-  | "advisory"
-  | "stdoutTail"
-  | "stderrTail"
-  | "termination"
-  | "signal"
-  | "failureFacts"
->;
-
-function printStep(step: DisplayStep): void {
+function printStep(step: Omit<UpdateStepResult, "cwd">): void {
   const duration = theme.muted(`(${formatDurationPrecise(step.durationMs)})`);
   const termination =
     step.termination === "timeout" || step.termination === "no-output-timeout"
@@ -188,6 +189,9 @@ function printStep(step: DisplayStep): void {
         ? ` — interrupted (${step.signal})`
         : "";
   defaultRuntime.log(`  ${formatStepStatus(step)} ${step.name}${termination} ${duration}`);
+  for (const finding of step.doctorLintFindings ?? []) {
+    defaultRuntime.log(`    ${formatUpdateDoctorLintFinding(finding)}`);
+  }
   if (step.advisory === undefined && step.exitCode === 0) {
     return;
   }
@@ -230,22 +234,21 @@ function formatStepStatus(step: {
   return theme.error("\u2717");
 }
 
-export function printResult(
+export async function printResult(
   result: UpdateRunResult,
   opts: UpdateCommandOptions,
   reportHints: {
     doctorHint?: string | null;
     nextAction?: string;
     record?: UpdateRunRecord;
+    readHistory?: boolean;
   } = {},
-): void {
+): Promise<void> {
   const run =
     reportHints.record ??
-    (result.runId ? getUpdateRun(result.runId, { env: opts.run?.env }) : undefined);
-  if (opts.json) {
-    defaultRuntime.writeJson({ ...result, ...(run ? { run } : {}) });
-    return;
-  }
+    (result.runId && reportHints.readHistory !== false
+      ? readDisplayRecord(result.runId, opts.run?.env)
+      : undefined);
   if (result.runId) {
     activeUpdateProgress.get(result.runId)?.(run);
   }
@@ -253,9 +256,25 @@ export function printResult(
     ...reportHints,
     mode: result.mode === "unknown" ? run?.target.kind : result.mode,
   });
+  const reportPath = await writeUpdateRunReportArtifact({
+    result,
+    report,
+    env: opts.run?.env,
+    detached: reportHints.readHistory === false,
+  }).catch((error: unknown) => {
+    defaultRuntime.error(`Update report could not be saved: ${formatErrorMessage(error)}`);
+    return undefined;
+  });
+  if (opts.json) {
+    defaultRuntime.writeJson({ ...result, ...(run ? { run } : {}), reportPath });
+    return;
+  }
   defaultRuntime.log("");
   defaultRuntime.log(theme.heading(report.headline));
   for (const line of report.lines) {
     defaultRuntime.log(line);
+  }
+  if (reportPath) {
+    defaultRuntime.log(`Report: ${reportPath}`);
   }
 }

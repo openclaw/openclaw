@@ -3,11 +3,90 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { UpdateRunResult } from "../infra/update-runner-types.js";
-import { readTriageUpdateFailure, writeTriageUpdateFailure } from "./triage-update.js";
+import {
+  readTriageUpdateFailure,
+  sanitizeTriageUpdateFailure,
+  updateFailureSchema,
+  writeTriageUpdateFailure,
+} from "./triage-update.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("update failure triage diagnostics", () => {
+  it.each([0, 40])(
+    "retains all %i lint findings and physical flags while keeping the inference projection bounded",
+    async (findingCount) => {
+      const stateDir = tempDirs.make("openclaw-update-triage-");
+      const env = { OPENCLAW_STATE_DIR: stateDir };
+      const secret = "sk-test-update-triage-secret-1234567890";
+      const physical = {
+        termination: "signal" as const,
+        signal: "SIGTERM" as const,
+        killed: true,
+        outputLimitExceeded: true,
+      };
+      const findings = Array.from({ length: findingCount }, (_, index) => ({
+        checkId: `fixture/check-${index}`,
+        severity: index === 0 ? "error" : "warning",
+        message: index === 0 ? "Candidate startup failed" : `Optional advice ${index}`,
+        fixHint: `${"Retained diagnostic context. ".repeat(16)} token=${secret}`,
+      }));
+      const result: UpdateRunResult = {
+        runId: "10000000-0000-4000-8000-000000000001",
+        status: "error",
+        mode: "npm",
+        reason: "doctor-failed",
+        durationMs: 1,
+        steps: [
+          {
+            name: "candidate doctor lint",
+            command: "doctor --lint --json",
+            cwd: stateDir,
+            durationMs: 1,
+            exitCode: 1,
+            doctorLintFindings: findings,
+            ...physical,
+            failureFacts: [
+              {
+                check: "fixture/check-0",
+                code: "doctor-failed",
+                message: "Candidate startup failed",
+              },
+            ],
+          },
+        ],
+      };
+      const outputPath = await writeTriageUpdateFailure({ result }, { env });
+      const raw = await fs.readFile(outputPath, "utf8");
+      const artifact = await readTriageUpdateFailure(outputPath, { env, stateDir });
+      expect(raw).not.toContain(secret);
+      if (findingCount > 0) {
+        expect(Buffer.byteLength(raw)).toBeGreaterThan(8 * 1024);
+      }
+      expect("result" in artifact && artifact.result.steps[0]?.doctorLintFindings).toHaveLength(
+        findingCount,
+      );
+      for (const finding of findings) {
+        expect(raw).toContain(finding.checkId);
+        expect(raw).toContain(finding.message);
+      }
+      expect("result" in artifact && artifact.result.steps[0]).toMatchObject(physical);
+      const wire = updateFailureSchema.parse(artifact);
+      expect("result" in wire && wire.result.steps[0]).not.toHaveProperty("doctorLintFindings");
+      for (const key of ["signal", "killed", "outputLimitExceeded"]) {
+        expect("result" in wire && wire.result.steps[0]).not.toHaveProperty(key);
+      }
+      const prompt = sanitizeTriageUpdateFailure(artifact, { env, stateDir });
+      expect(Buffer.byteLength(JSON.stringify(prompt))).toBeLessThanOrEqual(4 * 1024);
+      expect(JSON.stringify(prompt)).toContain("Candidate startup failed");
+      const copiedPath = await writeTriageUpdateFailure(artifact, {
+        env,
+        outputPath: path.join(stateDir, "copy.json"),
+      });
+      expect(await readTriageUpdateFailure(copiedPath, { env, stateDir })).toEqual(artifact);
+    },
+  );
+
   it.each(["package-post-install-doctor", "candidate-runtime-unavailable"] as const)(
     "writes bounded sanitized failure evidence without changing the result (%s)",
     async (advisoryKind) => {
@@ -278,7 +357,7 @@ describe("update failure triage diagnostics", () => {
   );
 
   it.each([
-    { name: "oversized", input: "x".repeat(8 * 1024 + 1), error: "exceeds 8192 bytes" },
+    { name: "oversized", input: "x".repeat(4 * 1024 * 1024 + 1), error: "exceeds 4194304 bytes" },
     { name: "invalid JSON", input: "not-json", error: "Invalid update failure diagnostics JSON" },
     {
       name: "successful result without an error",

@@ -105,6 +105,8 @@ default. Declining or cancelling preserves the failed update's nonzero exit
 status. JSON, non-interactive, `--yes`, and managed-service handoff invocations do
 not prompt after rollback.
 
+Update completion prints the terminal outcome and a local Markdown report path before exiting, including unexpected failures. Failed runs also save the complete bounded Doctor findings in the diagnostic JSON bundle linked from that report. JSON output includes `reportPath`; a report-write failure prints a warning and preserves the update outcome.
+
 After a final interactive update failure, **Diagnose update failure** and
 **Report update failure** are separate choices. Reporting first shows the exact
 sanitized issue body and defaults confirmation to **No**. After confirmation,

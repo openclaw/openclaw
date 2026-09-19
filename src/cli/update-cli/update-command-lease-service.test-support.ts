@@ -4,9 +4,24 @@ import * as doctorServicePolicy from "../../commands/doctor-service-repair-polic
 import * as configPaths from "../../config/paths.js";
 import * as gatewayService from "../../daemon/service.js";
 import { createMockGatewayService } from "../../daemon/service.test-helpers.js";
+import { createUpdateRun, recordUpdateRunPhase } from "../../infra/update-run-ledger.js";
+import type { UpdateRunRecord } from "../../infra/update-run-record.js";
+import { ABANDONED_UPDATE_RUN_MS } from "../../infra/update-run-timeouts.js";
 import type { OpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import * as restartHealth from "../daemon-cli/restart-health.js";
 import * as serviceMaintenance from "./update-command-service-maintenance.js";
+
+export function seedInterruptedPostCoreRun(): UpdateRunRecord {
+  const clock = vi.spyOn(Date, "now").mockReturnValue(Date.now() - 2 * ABANDONED_UPDATE_RUN_MS);
+  try {
+    const run = createUpdateRun({ trigger: "cli", before: { version: "2026.9.2" } });
+    return recordUpdateRunPhase(run.runId, "verifying", {
+      step: { step: "post-update verification", status: "in_progress" },
+    });
+  } finally {
+    clock.mockRestore();
+  }
+}
 
 /** Native manager fixture shared with the fresh Doctor's observed service state. */
 export async function mockRepairManagedService(

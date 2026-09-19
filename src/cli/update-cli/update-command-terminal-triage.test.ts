@@ -1,6 +1,7 @@
 import { spawn } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { once } from "node:events";
+import { readFileSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -154,8 +155,13 @@ it.each([
         lease: { owner, helper: { pid: helper.pid }, executor: { pid: process.pid } },
       });
     }
-    const output = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => undefined);
-    const human = vi.spyOn(defaultRuntime, "log").mockImplementation(() => undefined);
+    const reportPath = path.join(root, "state", "update-reports", `${run.runId}.md`);
+    let savedAtPublication: string | undefined;
+    const captureReport = () => {
+      savedAtPublication ??= readFileSync(reportPath, "utf8");
+    };
+    const output = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(captureReport);
+    const human = vi.spyOn(defaultRuntime, "log").mockImplementation(captureReport);
     vi.spyOn(defaultRuntime, "error").mockImplementation(() => undefined);
     // These spies call through to the real filesystem, including atomic temp creation.
     const opened = vi.spyOn(fs, "open");
@@ -271,6 +277,7 @@ it.each([
       );
     }
     expect(exit).toBeInstanceOf(ExitError);
+    expect(savedAtPublication).toContain("OpenClaw update failed");
     const unsettled = trial.revoked || trial.releaseDenied;
     expect(observation.exitCode).toBe(unsettled ? 1 : 7);
     expect(statusAtPublication).toBe("running");
@@ -284,6 +291,7 @@ it.each([
       expect(output).toHaveBeenCalledOnce();
       expect(output.mock.calls[0]?.[0]).toMatchObject({
         status: "error",
+        reportPath,
         reason: unsettled ? "update-executor-settlement-failed" : "global-install-failed",
       });
     } else {

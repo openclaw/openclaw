@@ -12,9 +12,12 @@ import {
   UpdateCommandPendingRecoveryFailure,
   mergeWindowsTaskRecoveryFailure,
 } from "./update-command-result.js";
-import { completeUpdateCommandRun, failUpdateCommandRun } from "./update-command-run.js";
+import { completeUpdateCommandRun } from "./update-command-run.js";
 import type { UpdateCommandRecoveryState } from "./update-command-service-maintenance.js";
-import { hasDeferredUpdateCommandTerminalResult } from "./update-command-terminal.js";
+import {
+  hasDeferredUpdateCommandTerminalResult,
+  prepareUnexpectedUpdateCommandFailure,
+} from "./update-command-terminal.js";
 
 /** Unwind only legacy updates; pending publication cannot authorize compensation or diagnostics. */
 export async function withUpdateCommandRecoveryUnwind(
@@ -143,7 +146,7 @@ export async function withUpdateCommandRecoveryUnwind(
       if (failure.error instanceof UpdateCommandFailure) {
         completeUpdateCommandRun(failure.error.result, run);
       } else {
-        failUpdateCommandRun(failure.error, run);
+        failure.error = await prepareUnexpectedUpdateCommandFailure(failure.error, opts);
       }
     }
     throw failure.error;

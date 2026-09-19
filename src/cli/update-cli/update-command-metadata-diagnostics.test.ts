@@ -1,6 +1,7 @@
 import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
 import * as nodeRuntimeDiagnostics from "../../commands/node-runtime-diagnostics.js";
 import * as packageMetadata from "../../infra/update-check-package-target.js";
@@ -21,6 +22,16 @@ import * as commandRun from "./update-command-run.js";
 import { updateCommand } from "./update-command.js";
 
 const { fixture } = installFreshUpdateFixture();
+
+function readPrintedFailureReport() {
+  expect(defaultRuntime.writeJson).toHaveBeenCalledOnce();
+  const result = vi.mocked(defaultRuntime.writeJson).mock.calls[0]?.[0];
+  if (!isRecord(result) || typeof result.reportPath !== "string") {
+    throw new Error("The failed command did not print its saved report path.");
+  }
+  return { result, markdown: fs.readFileSync(result.reportPath, "utf8") };
+}
+
 it.each(["cause", "aggregate", "suppressed", "structured"] as const)(
   "keeps private exception identities out of reports across %s edges",
   async (edge) => {
@@ -62,7 +73,24 @@ it.each(["cause", "aggregate", "suppressed", "structured"] as const)(
 
     await expect(
       updateCommand({ tag: "2026.9.2", dryRun: true, json: true, restart: false }),
-    ).rejects.toBe(error);
+    ).rejects.toMatchObject({ name: "ExitError", code: 1 });
+    const printed = readPrintedFailureReport();
+    expect(printed.result).toMatchObject({
+      status: "error",
+      reason: "update-failed",
+      steps: expect.arrayContaining([
+        expect.objectContaining({
+          failureFacts: [
+            expect.objectContaining({
+              code: "EACCES",
+              message: expect.stringContaining("Lookup failed"),
+            }),
+          ],
+        }),
+      ]),
+    });
+    expect(printed.markdown).toContain("Lookup failed");
+    expect(printed.markdown).toContain("OpenClaw update failed");
     const recordedRun = ledger.listUpdateRuns()[0];
     const report = await prepareUpdateFailureReport({
       attemptId: recordedRun!.runId,
@@ -73,7 +101,12 @@ it.each(["cause", "aggregate", "suppressed", "structured"] as const)(
     expect(report.body).toContain("ECONNRESET");
     expect(report.body).toContain("Transport failed");
     expect(report.body).toContain("Connection refused");
-    for (const output of [report.body, JSON.stringify(recordedRun)]) {
+    for (const output of [
+      report.body,
+      JSON.stringify(recordedRun),
+      JSON.stringify(printed.result),
+      printed.markdown,
+    ]) {
       for (const privateText of [
         "PRIVATE_",
         "PrivateLeafError",
@@ -124,11 +157,25 @@ it.each([
     }
 
     await expect(
-      updateCommand({ tag: "2026.9.2", dryRun: true, json: true, restart: false }).then(
-        () => false,
-        (caught: unknown) => caught === error,
-      ),
-    ).resolves.toBe(true);
+      updateCommand({ tag: "2026.9.2", dryRun: true, json: true, restart: false }),
+    ).rejects.toMatchObject({ name: "ExitError", code: 1 });
+    const printed = readPrintedFailureReport();
+    expect(printed.result).toMatchObject({
+      status: "error",
+      reason: "update-failed",
+      steps: expect.arrayContaining([
+        expect.objectContaining({
+          failureFacts: [
+            expect.objectContaining({
+              check: "target-resolution",
+              errorName: metadata === "constructor" ? "Error" : "TypeError",
+              message: expect.stringContaining("Target response was invalid"),
+            }),
+          ],
+        }),
+      ]),
+    });
+    expect(printed.markdown).toContain("Target response was invalid");
     const recordedRun = ledger.listUpdateRuns()[0];
     expect(recordedRun).toBeDefined();
     const report = await prepareUpdateFailureReport({
@@ -165,6 +212,8 @@ it.each([
     ]) {
       expect(report.body).not.toContain(value);
       expect(JSON.stringify(recordedRun)).not.toContain(value);
+      expect(JSON.stringify(printed.result)).not.toContain(value);
+      expect(printed.markdown).not.toContain(value);
     }
   },
 );
@@ -237,7 +286,7 @@ it.each(cases)(
     const message = result.steps[0]?.failureFacts?.[0]?.message;
     expect(message).toMatch(/openclaw update/);
     const log = vi.spyOn(defaultRuntime, "log").mockImplementation(() => undefined);
-    printResult(result, {});
+    await printResult(result, {});
     expect(log.mock.calls.flat().join("\n")).toContain(message);
 
     const report = await prepareUpdateFailureReport({ attemptId: "metadata-admission", result });
@@ -309,7 +358,7 @@ it.each(["npm", "pnpm", "bun"] as const)(
       reason: "unsupported-package-target",
     });
     const log = vi.spyOn(defaultRuntime, "log").mockImplementation(() => undefined);
-    printResult(result, {});
+    await printResult(result, {});
     expect(log.mock.calls.flat().join("\n")).toContain(`Update mode: ${manager}`);
     const report = await prepareUpdateFailureReport({ attemptId: "target-policy", result });
     expect(report.body).toContain(`Update mode: ${manager}`);

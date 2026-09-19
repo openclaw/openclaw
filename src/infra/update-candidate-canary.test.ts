@@ -29,7 +29,7 @@ import {
   POST_CORE_UPDATE_SOURCE_CONFIG_PATH_ENV,
 } from "./update-post-core-context.js";
 import { renderUpdateRunReport, updateRunReportInputFromResult } from "./update-run-report.js";
-import { updateRunStepsFromResultStep, updateRunWarningMessages } from "./update-run-step.js";
+import { updateRunStepsFromResultStep } from "./update-run-step.js";
 
 const mocks = vi.hoisted(() => ({ spawn: vi.fn(), snapshot: vi.fn(), signal: vi.fn() }));
 vi.mock("node:child_process", async (importOriginal) =>
@@ -61,7 +61,6 @@ let pluginErrors = false;
 let pluginInventory: unknown;
 let runtimeError = false;
 let runtimeContract: unknown;
-let lintReport: { ok: boolean; checksRun: number; findings: unknown[]; warnings: unknown[] };
 let databasePath: string | undefined;
 
 function canaryStateOptions(timeoutMs?: number) {
@@ -74,7 +73,6 @@ beforeEach(async () => {
   pluginInventory = undefined;
   runtimeError = false;
   runtimeContract = { state: 2, agent: 3 };
-  lintReport = { ok: true, checksRun: 1, findings: [], warnings: [] };
   databasePath = undefined;
   root = path.join(await fs.realpath(tempDirs.make("canary-unit-")), "candidate");
   await fs.mkdir(path.join(root, "dist", "infra"), { recursive: true });
@@ -98,7 +96,7 @@ beforeEach(async () => {
           pluginErrors,
           runtimeContract,
           runtimeError,
-          lintReport,
+          lintReport: { ok: true, checksRun: 1, findings: [], warnings: [] },
         }));
       }
       return child;
@@ -151,35 +149,6 @@ describe("update candidate canary", () => {
     }
   });
 
-  it.each([false, true])(
-    "retains posture warnings without admitting blocking lint errors (blocking: %s)",
-    async (blocking) => {
-      lintReport = {
-        ok: !blocking,
-        checksRun: 1,
-        findings: blocking
-          ? [{ checkId: "core/config", severity: "error", message: "Invalid configuration." }]
-          : [],
-        warnings: [
-          {
-            checkId: "core/doctor/security",
-            severity: "warning",
-            message: "Open group policy permits mention-gated requests.",
-          },
-        ],
-      };
-      stubHealthyGateway();
-      const result = await validateUpdateCandidateCanary(canaryStateOptions());
-      expect(result.status).toBe(blocking ? "error" : "ok");
-      if (blocking) {
-        expect(result).toMatchObject({ phase: "lint", reason: "doctor-failed" });
-      } else {
-        expect(
-          updateRunWarningMessages(result.steps.flatMap(updateRunStepsFromResultStep)),
-        ).toContain("Open group policy permits mention-gated requests.");
-      }
-    },
-  );
   it("keeps snapshot and validation source selection inside the candidate", async () => {
     stubHealthyGateway();
     const servingRoot = path.join(root, "installed");
@@ -772,8 +741,10 @@ describe("update candidate canary", () => {
         if (scenario.endsWith("multiline")) {
           expect(output).toContain("gateway.port: invalid");
           expect(output).toContain("gateway.host: unknown");
-          expect(updateRunStepsFromResultStep(failed).at(-1)?.detail).toContain(
-            scenario === "multiline" ? "gateway.port: invalid" : "gateway.host: unknown",
+          expect(updateRunStepsFromResultStep(failed).map((step) => step.detail)).toContainEqual(
+            expect.stringContaining(
+              scenario === "multiline" ? "gateway.port: invalid" : "gateway.host: unknown",
+            ),
           );
         } else {
           const report = renderUpdateRunReport(
@@ -791,60 +762,6 @@ describe("update candidate canary", () => {
       expect(JSON.stringify(result)).not.toContain("synthetic-secret");
     },
   );
-
-  it("preserves bounded Doctor findings before the diagnostic log tail", async () => {
-    const spawnNormally = mocks.spawn.getMockImplementation()!;
-    mocks.spawn.mockImplementation((command, args: string[], options) => {
-      if (!args.includes("--lint")) {
-        return spawnNormally(command, args, options);
-      }
-      const child = new FakeChild(nextPid++);
-      queueMicrotask(() => {
-        child.stdout.write(
-          `${JSON.stringify({
-            ok: false,
-            checksRun: 1,
-            findings: [
-              ...Array.from({ length: 8 }, (_, index) => ({
-                checkId: `optional.warning.${index}`,
-                severity: "warning",
-                message: "Optional check was skipped.",
-              })),
-              ...Array.from({ length: 8 }, (_, index) => ({
-                checkId: `config.invalid.${index}`,
-                severity: "error",
-                path: "mcp.servers.example",
-                message:
-                  "Invalid server at /Users/synthetic/private/config.json token=synthetic-canary-secret",
-                requirement: "connect ECONNREFUSED private-host.example:8443",
-              })),
-            ],
-          })}\n`,
-        );
-        child.stderr.write(Array.from({ length: 60 }, (_, index) => `cleanup ${index}\n`).join(""));
-        child.emit("close", 1);
-      });
-      return child;
-    });
-    const onStep = vi.fn();
-    const env = { API_TOKEN: "synthetic-canary-secret" };
-    const options = { ...canaryStateOptions(3_000), env, onStep };
-    const result = await validateUpdateCandidateCanary(options);
-    expect(result).toMatchObject({ status: "error", phase: "lint" });
-    expect(result.steps.at(-1)).toMatchObject({
-      failureFacts: Array.from({ length: 5 }, (_, index) => ({
-        check: `config.invalid.${index}`,
-        code: "doctor-failed",
-        affectedKey: "mcp.servers.example",
-        message: expect.stringContaining("Invalid server"),
-      })),
-    });
-    expect(onStep).toHaveBeenLastCalledWith(result.steps.at(-1));
-    expect(result.steps.at(-1)?.failureFacts?.[0]?.message).toContain("ECONNREFUSED");
-    expect(JSON.stringify(result)).not.toContain("synthetic-canary-secret");
-    expect(JSON.stringify(result)).not.toContain("/Users/synthetic");
-    expect(result.logTail.join("\n")).not.toContain("config.invalid.0");
-  });
 
   it.each(["snapshot", "doctor", "plugins", "runtime", "readiness"] as const)(
     "records the %s outcome and cleans private state",

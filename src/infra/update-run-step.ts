@@ -5,20 +5,7 @@ import { summarizeUpdateStepFailure, type UpdateRunStep } from "./update-run-rec
 import type { UpdateRunResult, UpdateStepResult } from "./update-runner-types.js";
 import type { UpdateSnapshotCapacity } from "./update-snapshot-capacity.js";
 
-type ResultStep = Pick<
-  UpdateStepResult,
-  | "name"
-  | "exitCode"
-  | "advisory"
-  | "warnings"
-  | "termination"
-  | "stdoutTail"
-  | "stderrTail"
-  | "failureFacts"
-  | "configChanges"
-  | "configWriteRefusal"
-  | "snapshotCapacity"
->;
+type ResultStep = Omit<UpdateStepResult, "command" | "cwd" | "durationMs" | "recoverySteps">;
 
 export function isUpdateGatewayReadinessPending(result: UpdateRunResult): boolean {
   const step = result.steps.findLast(
@@ -64,6 +51,36 @@ export function updateRunStepsFromResultStep(step: ResultStep): UpdateRunStep[] 
     : step.advisory
       ? [step.advisory.message]
       : [];
+  const errors: Array<{ checkId: string; message: string }> = [];
+  const lint = {
+    exitCode: step.exitCode,
+    termination: step.termination,
+    signal: step.signal,
+    killed: step.killed,
+    outputLimitExceeded: step.outputLimitExceeded,
+    counts: { error: 0, warning: 0, info: 0 },
+    errors,
+    omitted: 0,
+  };
+  for (const finding of step.doctorLintFindings ?? []) {
+    const severity =
+      finding.severity === "warning" || finding.severity === "info" ? finding.severity : "error";
+    lint.counts[severity]++;
+    if (severity === "error") {
+      lint.errors.push({
+        checkId: truncateUtf16Safe(finding.checkId, 128),
+        message: truncateUtf16Safe(
+          [finding.requirement, finding.message].filter(Boolean).join(": "),
+          200,
+        ),
+      });
+    }
+  }
+  const utf8 = new TextEncoder();
+  while (utf8.encode(JSON.stringify(lint)).length > UPDATE_RUN_TEXT_LIMIT && lint.errors.length) {
+    lint.errors.pop();
+    lint.omitted++;
+  }
   return [
     {
       step: text(step.name),
@@ -78,6 +95,15 @@ export function updateRunStepsFromResultStep(step: ResultStep): UpdateRunStep[] 
         ? { detail: text(step.advisory?.message ?? summarizeUpdateStepFailure(step)) }
         : {}),
     },
+    ...(step.doctorLintFindings
+      ? [
+          {
+            step: text(`finalize:doctor-lint:${step.name}`),
+            status: "completed" as const,
+            detail: JSON.stringify(lint),
+          },
+        ]
+      : []),
     ...warnings.slice(0, UPDATE_RUN_DIAGNOSTIC_LIMIT).map((detail, index) => ({
       step: text(`warning:${step.name}${index === 0 ? "" : `:${index + 1}`}`),
       status: "completed" as const,

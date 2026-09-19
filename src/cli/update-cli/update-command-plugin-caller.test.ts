@@ -35,6 +35,13 @@ const transport = vi.hoisted(() => ({ exec: vi.fn(), command: vi.fn() }));
 vi.mock("../../process/exec.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../process/exec.js")>()),
   runExec: transport.exec,
+  runUtf8CommandWithTimeout: async ([command, ...args]: string[], options: unknown) => ({
+    ...(await transport.exec(command, args, options)),
+    code: 0,
+    signal: null,
+    killed: false,
+    termination: "exit",
+  }),
   runCommandWithTimeout: transport.command,
 }));
 // Native Doctor delegation has real-child coverage. Keep this suite focused on

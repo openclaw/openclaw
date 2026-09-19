@@ -107,7 +107,7 @@ function printDryRunPreview(preview: UpdateDryRunPreview, jsonMode: boolean): vo
   }
 }
 
-export function printUpdateDryRun(params: {
+export async function printUpdateDryRun(params: {
   runId: string;
   root: string;
   installKind: "git" | "package" | "unknown";
@@ -132,7 +132,7 @@ export function printUpdateDryRun(params: {
   preflightNotes?: readonly string[];
   preflightFailures?: readonly UpdateDryRunFailure[];
   opts: Pick<UpdateCommandOptions, "tag" | "json" | "run">;
-}): void {
+}): Promise<void> {
   const actions: string[] = [];
   if (params.requestedChannel && params.requestedChannel !== params.storedChannel) {
     actions.push(`Persist update.channel=${params.requestedChannel} in config`);
@@ -219,7 +219,7 @@ export function printUpdateDryRun(params: {
     Boolean(params.opts.json),
   );
   if (!params.opts.json) {
-    printResult(
+    await printResult(
       {
         runId: params.runId,
         status: "skipped",

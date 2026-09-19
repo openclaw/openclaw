@@ -1,12 +1,12 @@
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { UPDATE_POST_CORE_CONVERGENCE_ENV } from "../../commands/doctor/shared/update-phase.js";
 import { resolveGatewayInstallEntrypoint } from "../../daemon/gateway-entrypoint.js";
 import {
   parseUpdateDoctorLintReport,
   type UpdateDoctorLintFinding,
 } from "../../infra/update-doctor-lint.js";
+import type { UpdateStepResult } from "../../infra/update-runner-types.js";
 import { isConfiguredPluginPathDiagnosticCode } from "../../plugins/discovery-availability.js";
-import { runExec } from "../../process/exec.js";
+import { runUtf8CommandWithTimeout } from "../../process/exec.js";
 import { resolveNodeRunner } from "./shared.js";
 import type { PostCorePluginUpdateResult } from "./update-command-plugins.js";
 import {
@@ -80,48 +80,72 @@ export async function applyPostPluginUpdateReadiness(params: {
   const args = [entryPath, "doctor", "--lint", "--json", "--severity-min", "error"];
   const baseEnv = stripGatewayServiceMarkerEnv(disableUpdatedPackageCompileCacheEnv(process.env));
   delete baseEnv[UPDATE_POST_CORE_CONVERGENCE_ENV];
-  let stdout: string;
-  let executionFailed = false;
+  const startedAt = Date.now();
+  const doctorLint: UpdateStepResult = {
+    name: "post-plugin doctor lint",
+    command: args.slice(1).join(" "),
+    cwd: params.root,
+    durationMs: 0,
+    exitCode: null,
+    doctorLintFindings: [],
+  };
+  const pluginUpdate: PostCorePluginUpdateResult = { ...params.pluginUpdate, doctorLint };
+  let execution: Awaited<ReturnType<typeof runUtf8CommandWithTimeout>>;
+  let report: ReturnType<typeof parseUpdateDoctorLintReport>;
   try {
-    stdout = (
-      await runExec(params.nodeRunner ?? resolveNodeRunner(), args, {
+    execution = await runUtf8CommandWithTimeout(
+      [params.nodeRunner ?? resolveNodeRunner(), ...args],
+      {
         cwd: params.root,
         timeoutMs: params.timeoutMs,
-        maxBuffer: 4 * 1024 * 1024,
-        logOutput: false,
+        input: "",
+        maxOutputBytes: 4 * 1024 * 1024,
+        outputCapture: "head",
+        terminateOnOutputLimit: true,
         baseEnv,
         env: {
           OPENCLAW_UPDATE_IN_PROGRESS: "1",
           [UPDATE_POST_CORE_CONVERGENCE_ENV]: "1",
         },
-      })
-    ).stdout;
+      },
+    );
+    doctorLint.exitCode = execution.code;
+    doctorLint.termination = execution.termination;
+    doctorLint.signal = execution.signal;
+    doctorLint.killed = execution.killed;
+    doctorLint.outputLimitExceeded = execution.outputLimitExceeded;
+    doctorLint.stderrTail = execution.stderr.slice(-2_000);
+    report = parseUpdateDoctorLintReport(execution.stdout);
   } catch (error) {
-    if (!isRecord(error) || typeof error.stdout !== "string") {
-      return createPostPluginReadinessExecutionFailure(params.pluginUpdate, String(error));
-    }
-    executionFailed = true;
-    stdout = error.stdout;
+    return createPostPluginReadinessExecutionFailure(pluginUpdate, String(error));
+  } finally {
+    doctorLint.durationMs = Date.now() - startedAt;
   }
-
-  let report: ReturnType<typeof parseUpdateDoctorLintReport>;
-  try {
-    report = parseUpdateDoctorLintReport(stdout);
-  } catch (error) {
-    return createPostPluginReadinessExecutionFailure(params.pluginUpdate, String(error));
+  const completed = execution.termination === "exit" && !execution.outputLimitExceeded;
+  doctorLint.doctorLintFindings = report.doctorLintFindings;
+  const policyAdvisory =
+    execution.code === 1 && completed && report.advisoryOnly && report.checksRun > 0;
+  const passed =
+    ((execution.code === 0 && completed && report.ok) || policyAdvisory) &&
+    report.checksRun > 0 &&
+    report.findings.length === 0;
+  if (policyAdvisory) {
+    doctorLint.advisory = {
+      kind: "recoverable-maintenance",
+      message: "Doctor security policy findings are advisory during updates.",
+    };
   }
-  const pluginUpdate: PostCorePluginUpdateResult =
-    report.warnings.length > 0
-      ? {
-          ...params.pluginUpdate,
-          status: params.pluginUpdate.status === "error" ? "error" : "warning",
-          warnings: [
-            ...(params.pluginUpdate.warnings ?? []),
-            ...report.warnings.map((finding) => readinessWarning(finding, "doctor-advisory")),
-          ],
-        }
-      : params.pluginUpdate;
-  if (report.ok && !executionFailed && report.checksRun > 0 && report.findings.length === 0) {
+  if (report.failureFacts.length) {
+    doctorLint.failureFacts = report.failureFacts;
+  }
+  if (report.warnings.length > 0) {
+    pluginUpdate.status = pluginUpdate.status === "error" ? "error" : "warning";
+    pluginUpdate.warnings = [
+      ...(pluginUpdate.warnings ?? []),
+      ...report.warnings.map((finding) => readinessWarning(finding, "doctor-advisory")),
+    ];
+  }
+  if (passed) {
     return pluginUpdate;
   }
   if (report.findings.length === 0) {

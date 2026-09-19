@@ -1,6 +1,14 @@
+import fs from "node:fs/promises";
+import os from "node:os";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import * as doctorMaintenance from "../../commands/doctor-maintenance.js";
 import { readConfigFileSnapshot } from "../../config/config.js";
-import { createUpdateRun, recordUpdateRunStep } from "../../infra/update-run-ledger.js";
+import {
+  adoptUpdateRun,
+  createUpdateRun,
+  getUpdateRun,
+  recordUpdateRunStep,
+} from "../../infra/update-run-ledger.js";
 import { defaultRuntime } from "../../runtime.js";
 import {
   createOpenClawTestState,
@@ -22,6 +30,13 @@ vi.mock("../../daemon/gateway-entrypoint.js", () => ({
 vi.mock("../../process/exec.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../process/exec.js")>()),
   runExec: mocks.runExec,
+  runUtf8CommandWithTimeout: async ([command, ...args]: string[], options: unknown) => ({
+    ...(await mocks.runExec(command, args, options)),
+    code: 0,
+    signal: null,
+    killed: false,
+    termination: "exit",
+  }),
 }));
 // Native binding/settlement has real-process coverage. This caller suite keeps
 // both process transports inert while exercising its synthetic one-shot fence.
@@ -59,6 +74,7 @@ vi.mock("./update-command-plugins.js", () => ({ updatePluginsAfterCoreUpdate: mo
 vi.mock("./update-command-runtime.js", () => ({ completeSourceUpdateRuntime: vi.fn() }));
 
 import { completePostCorePluginUpdate } from "./update-command-fresh-doctor.js";
+import * as postCore from "./update-command-post-core.js";
 import { resumePostCoreUpdate } from "./update-command-resume.js";
 
 const pluginUpdate: PostCorePluginUpdateResult = {
@@ -134,6 +150,78 @@ function firstRefusal() {
 }
 
 describe("unproved Doctor authority callers", () => {
+  it.each([false, true])(
+    "publishes settled phase evidence only for older parents (parent owns completion=%s)",
+    async (parentOwnsCompletion) => {
+      const run = createUpdateRun({ trigger: "cli" });
+      adoptUpdateRun(run.runId);
+      recordUpdateRunStep(run.runId, {
+        step: "finalize:doctor:model-retirement",
+        status: "skipped",
+      });
+      vi.stubEnv("OPENCLAW_UPDATE_RUN_ID", run.runId);
+      vi.stubEnv("OPENCLAW_UPDATE_POST_CORE", "1");
+      const resultPath = state.statePath("post-core-result.json");
+      vi.stubEnv("OPENCLAW_UPDATE_POST_CORE_RESULT_PATH", resultPath);
+      if (parentOwnsCompletion) {
+        await state.writeJson("handoff.json", { completionOwner: "parent" });
+      }
+      await fs.mkdir(state.path("phase-artifacts"));
+      vi.spyOn(os, "tmpdir").mockReturnValue(state.path("phase-artifacts"));
+      let restored = false;
+      const maintenance = vi.spyOn(doctorMaintenance, "beginDoctorMaintenance").mockResolvedValue({
+        run: (operation) => operation(),
+        releaseState: async () => {},
+        release: async () => {},
+        finish: async () => {
+          await Promise.resolve();
+          restored = true;
+        },
+      });
+      let phasePath: string | undefined;
+      vi.mocked(defaultRuntime.error).mockImplementation((line) => {
+        const prefix = "Post-plugin Doctor report (update completion pending): ";
+        if (typeof line === "string" && line.startsWith(prefix)) {
+          expect(restored).toBe(true);
+          phasePath = line.slice(prefix.length);
+        }
+      });
+      const writeResult = postCore.writePostCorePluginUpdateResultFile;
+      const publication = vi
+        .spyOn(postCore, "writePostCorePluginUpdateResultFile")
+        .mockImplementation(async (...args) => {
+          expect(getUpdateRun(run.runId)?.steps).toContainEqual(
+            expect.objectContaining({ step: "finalize:doctor-lint:post-plugin doctor lint" }),
+          );
+          expect(getUpdateRun(run.runId)?.status).toBe("running");
+          const canonicalPath = state.statePath("update-reports", `${run.runId}.md`);
+          await expect(fs.stat(canonicalPath)).rejects.toMatchObject({ code: "ENOENT" });
+          if (parentOwnsCompletion) {
+            expect(phasePath).toBeUndefined();
+            expect(maintenance).not.toHaveBeenCalled();
+          } else {
+            expect(phasePath).toBeDefined();
+            expect(phasePath).not.toBe(canonicalPath);
+            const report = await fs.readFile(phasePath!, "utf8");
+            expect(report).toContain("update completion is pending with the parent updater");
+            expect(report).toContain("Complete Doctor lint findings (0)");
+          }
+          await writeResult(...args);
+        });
+
+      await resumePostCoreUpdate({
+        root: state.root,
+        channel: "stable",
+        opts: { json: true, yes: true },
+        timeoutMs: 5_000,
+      });
+
+      expect(publication).toHaveBeenCalledOnce();
+      expect(defaultRuntime.writeJson).not.toHaveBeenCalled();
+      expect(defaultRuntime.log).not.toHaveBeenCalled();
+    },
+  );
+
   it.each(["live", "paths", "sizes"] as const)(
     "fences default-budget %s await before the next child",
     async (boundary) => {

@@ -157,7 +157,7 @@ export async function updateFinalizeCommand(
                   lifecycle,
                   recoveryRunIds ?? [],
                   runId,
-                  recoveryRunIds !== undefined,
+                  recoveryRunIds !== undefined || lifecycle.ownsUpdateRun,
                 );
               });
               complete();
@@ -265,7 +265,7 @@ async function updateFinalizeCommandInternal(
   lifecycle: UpdateFinalizationLifecycle,
   recoveryRunIds: readonly string[],
   invokingRunId: string,
-  repair: boolean,
+  ownsMaintenance: boolean,
 ): Promise<() => void> {
   const { root, preFinalizeConfig, requestedChannel, storedChannel, effectiveChannel, channel } =
     prepared;
@@ -313,7 +313,7 @@ async function updateFinalizeCommandInternal(
         undefined,
         {
           enter: async () => {
-            if (!repair) {
+            if (!ownsMaintenance) {
               return;
             }
             const { beginDoctorMaintenance } = await import("../../commands/doctor-maintenance.js");

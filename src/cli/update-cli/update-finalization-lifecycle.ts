@@ -80,6 +80,10 @@ export class UpdateFinalizationLifecycle {
     private readonly stopChildren: () => void,
   ) {}
 
+  get ownsUpdateRun(): boolean {
+    return this.ownsRun;
+  }
+
   attachLedger(repair = false): string {
     this.driver = readUpdateRunDriver();
     const inherited = process.env[UPDATE_RUN_ID_ENV]?.trim();

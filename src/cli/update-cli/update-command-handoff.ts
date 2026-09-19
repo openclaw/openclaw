@@ -250,7 +250,7 @@ export async function handoffUpdateFromGateway(params: {
       { env: params.opts.run.env },
     );
   }
-  printResult(result, params.opts);
+  await printResult(result, params.opts);
   if (!params.opts.json) {
     defaultRuntime.log(guidance);
   }

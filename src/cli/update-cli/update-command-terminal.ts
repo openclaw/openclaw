@@ -2,7 +2,10 @@ import { collectNestedErrorCandidates } from "../../infra/error-graph-internal.j
 import { formatErrorMessage } from "../../infra/errors.js";
 import { readPackageVersion } from "../../infra/package-json.js";
 import { resolveManagedServiceUpdateFailureExitCode } from "../../infra/update-control-plane-sentinel.js";
-import { normalizeUpdateFailureFacts } from "../../infra/update-failure-facts.js";
+import {
+  normalizeUpdateFailureFacts,
+  type UpdateFailureFact,
+} from "../../infra/update-failure-facts.js";
 import { verifyPackageUpdateRecovery } from "../../infra/update-global.js";
 import { getUpdateRun, recordUpdateRunPhase } from "../../infra/update-run-ledger.js";
 import { assertUpdateRecoveryAdmission } from "../../infra/update-run-recovery-admission.js";
@@ -19,6 +22,7 @@ import type { FinishUpdateParams } from "./update-command-finish-types.js";
 import { UpdateCommandRecoveryPendingError } from "./update-command-recovery.js";
 import {
   recordUpdateResultNextAction,
+  createUpdateCommandFailureResult,
   UnreportedUpdateAdmissionOutcome,
   type UpdateAdmissionReportParams,
   UpdateCommandFailure,
@@ -26,7 +30,7 @@ import {
   UpdateCommandPendingRecoveryFailure,
   writeControlPlaneUpdateRestartSentinelBestEffort,
 } from "./update-command-result.js";
-import { completeUpdateCommandRun } from "./update-command-run.js";
+import { completeUpdateCommandRun, failUpdateCommandRun } from "./update-command-run.js";
 import {
   readUpdateCommandTerminalRecord,
   type UpdateCommandTerminalRecord,
@@ -55,6 +59,44 @@ export function deferUpdateCommandTerminalResult(
 
 export function hasDeferredUpdateCommandTerminalResult(run: Run): boolean {
   return terminalOwners.get(run)?.publish !== undefined;
+}
+
+/** Record facts while admitted; publish only when the executor has settled. */
+export async function prepareUnexpectedUpdateCommandFailure(
+  error: unknown,
+  opts: UpdateCommandOptions & { run: Run },
+): Promise<UpdateCommandFailure> {
+  const failure = { mode: "unknown" as const, durationMs: 0, failure: { cause: error } };
+  let fact: UpdateFailureFact;
+  try {
+    const recorded = failUpdateCommandRun(error, opts.run);
+    if (!recorded) {
+      throw new Error("Update history remains with its existing recovery owner.");
+    }
+    fact = recorded;
+  } catch (cause) {
+    return new UpdateCommandPendingRecoveryFailure(
+      createUpdateCommandFailureResult(failure),
+      formatErrorMessage(cause),
+      { cause: error },
+    );
+  }
+  const result = createUpdateCommandFailureResult({ ...failure, phase: fact.check });
+  result.failedStep.failureFacts = [fact];
+  const params = { opts, root: result.root ?? "" };
+  const publish: Publisher = async (settlementFailure, onTerminalRecord) => {
+    const settled = await resolveSettledUpdateCommandResult(params, result, settlementFailure);
+    return publishUpdateCommandTerminalResult(
+      params,
+      settled.result,
+      { rolledBack: false },
+      onTerminalRecord,
+    );
+  };
+  if (!deferUpdateCommandTerminalResult(opts.run, publish)) {
+    await publish();
+  }
+  return new UpdateCommandFailure(result, 1, fact.message, { cause: error });
 }
 
 /** Enclose the real executor so its final checks and release precede terminal output. */
@@ -412,12 +454,12 @@ async function publishPreMutationUpdateOutcome(
   if (params.opts.json && params.message) {
     defaultRuntime.error(params.message);
   }
-  printResult(result, params.opts, { nextAction: params.message });
+  await printResult(result, params.opts, { nextAction: params.message });
   return result;
 }
 
 /** Write the terminal ledger and its visible result together after settlement. */
-export function publishUpdateCommandTerminalResult(
+export async function publishUpdateCommandTerminalResult(
   params: Pick<FinishUpdateParams, "opts" | "coreAlreadyCurrent" | "ownedManagedUpdateEnv">,
   input: UpdateRunResult,
   outcome: {
@@ -426,7 +468,7 @@ export function publishUpdateCommandTerminalResult(
     captured?: UpdateCommandTerminalRecord;
   },
   onTerminalRecord?: PublishedRecord,
-): UpdateRunResult {
+): Promise<UpdateRunResult> {
   let record: UpdateCommandTerminalRecord["record"] | undefined;
   if (outcome.captured) {
     try {
@@ -440,7 +482,7 @@ export function publishUpdateCommandTerminalResult(
   const result = record
     ? { ...input, runId: record.runId }
     : completeUpdateCommandRun(input, params.opts.run, outcome);
-  printResult(result, params.opts, { nextAction, record });
+  await printResult(result, params.opts, { nextAction, record });
   if (record) {
     onTerminalRecord?.(record);
   }

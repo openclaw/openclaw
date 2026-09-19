@@ -27,7 +27,6 @@ import {
   admitUpdateCommandRun,
   assertUpdatePackageActivationAdmission,
   createUpdateRunProgress,
-  failUpdateCommandRun,
   prepareUpdateCommand,
   prepareMutableUpdateRuntime,
   resolveUpdateCommandAdmissionEnv,
@@ -45,6 +44,7 @@ import type { UpdateCommandRecoveryState } from "./update-command-service.js";
 import { resolveFreshUpdateMetadata, resolveUpdateCommandTarget } from "./update-command-target.js";
 import {
   reportPreMutationUpdateResult,
+  prepareUnexpectedUpdateCommandFailure,
   reportUnreportedUpdateAdmissionOutcome,
   withUpdateCommandTerminalResult,
 } from "./update-command-terminal.js";
@@ -152,7 +152,7 @@ async function runAdmittedUpdate(
   } catch (error) {
     // Execution owns recovery; only failures before execution starts are terminalized here.
     if (!executionStarted) {
-      failUpdateCommandRun(error, run);
+      throw await prepareUnexpectedUpdateCommandFailure(error, opts);
     }
     throw error;
   } finally {

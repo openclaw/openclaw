@@ -24,7 +24,12 @@ export type UpdateRestartSentinelMeta = {
   continuationMessage?: string | null;
 };
 
-export function normalizeControlPlaneUpdateResult(result: UpdateRunResult): UpdateRunResult {
+export function normalizeControlPlaneUpdateResult(input: UpdateRunResult): UpdateRunResult {
+  const lint = input.postUpdate?.plugins?.doctorLint;
+  const result =
+    lint && !input.steps.some((step) => step.name === lint.name)
+      ? { ...input, steps: [...input.steps, lint] }
+      : input;
   if (
     (result.status === "ok" ||
       (result.status === "skipped" && result.reason === "already-current")) &&

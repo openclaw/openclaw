@@ -67,13 +67,13 @@ export type MutableUpdateExecutionResult = {
   activationConfig?: UpdateConfigSnapshot;
 };
 
-function createUpdateCommandFailureResult(
+export function createUpdateCommandFailureResult(
   params: Pick<UpdateRunResult, "mode" | "root" | "recovery" | "durationMs"> & {
     failure: { cause: unknown; detail?: string };
     admission?: true;
     phase?: string;
   },
-): UpdateRunResult {
+): UpdateRunResult & { failedStep: UpdateStepResult } {
   const { failure, admission, phase, ...result } = params;
   const { cause, detail } = failure;
   const preMutationFailure = cause instanceof UpdatePreMutationError;
@@ -193,7 +193,7 @@ export async function withUpdateAdmissionReporting<T>(
     if (opts.json) {
       defaultRuntime.error(message);
     }
-    printResult(
+    await printResult(
       createUpdateCommandFailureResult({
         mode: "unknown",
         admission: true,
@@ -240,14 +240,11 @@ export class UpdateCommandPendingRecoveryFailure extends UpdateCommandFailure {
   }
 }
 
-export function reportUpdateCommandPendingRecovery(
+export async function reportUpdateCommandPendingRecovery(
   error: UpdateCommandPendingRecoveryFailure,
   opts: Pick<UpdateCommandOptions, "json">,
-): never {
-  // printResult resolves history, which may be part of the retained evidence.
-  if (opts.json) {
-    defaultRuntime.writeJson(error.result);
-  }
+): Promise<never> {
+  await printResult(error.result, opts, { readHistory: false, nextAction: error.detail });
   defaultRuntime.error(
     `Update recovery remains pending (${error.result.reason ?? "update-failed"}). Retained state and artifacts were left for the owning updater to reconcile; automatic restart and repair were not attempted.${error.detail ? `\n${error.detail}` : ""}`,
   );

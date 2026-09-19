@@ -1,8 +1,57 @@
 /** Filesystem lifecycle for a non-authoritative, sanitized update report body. */
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
+import { z } from "zod";
+import { writeTriageUpdateFailure } from "../commands/triage-update.js";
+import { resolveStateDir } from "../config/paths.js";
+import { redactSupportString } from "../logging/diagnostic-support-redaction.js";
+import { classifyUpdateOutcome } from "../shared/update-outcome.js";
+import { writeTextAtomic } from "./json-files.js";
+import { formatUpdateDoctorLintFinding } from "./update-doctor-lint.js";
 import type { PreparedUpdateFailureReport } from "./update-failure-report-prepare.js";
+import type { UpdateRunReport } from "./update-run-report.js";
+import type { UpdateRunResult } from "./update-runner-types.js";
+
+/** Terminal exports never write into state retained by an unresolved recovery owner. */
+export async function writeUpdateRunReportArtifact(params: {
+  result: UpdateRunResult;
+  report: Pick<UpdateRunReport, "markdown">;
+  env?: NodeJS.ProcessEnv;
+  detached?: boolean;
+}): Promise<string> {
+  const env = params.env ?? process.env;
+  const stateDir = resolveStateDir(env);
+  const id = (!params.detached && z.uuid().safeParse(params.result.runId).data) || randomUUID();
+  const directory = params.detached ? os.tmpdir() : path.join(stateDir, "update-reports");
+  const outputPath = path.join(directory, `${id}.md`);
+  const failurePath =
+    classifyUpdateOutcome(params.result) === "failed"
+      ? await writeTriageUpdateFailure(
+          { result: params.result },
+          {
+            env,
+            outputPath: params.detached
+              ? path.join(directory, `openclaw-update-failure-${id}.json`)
+              : undefined,
+          },
+        )
+      : undefined;
+  const findings = params.result.steps.flatMap((step) => step.doctorLintFindings ?? []);
+  const body = [
+    params.report.markdown,
+    `\n## Complete Doctor lint findings (${findings.length})\n`,
+    ...findings.map((finding) => `- ${formatUpdateDoctorLintFinding(finding, env)}`),
+    failurePath ? `\nComplete diagnostic JSON: ${path.relative(directory, failurePath)}` : "",
+  ].join("\n");
+  await writeTextAtomic(
+    outputPath,
+    redactSupportString(body, { env, stateDir }, { maxLength: Number.MAX_SAFE_INTEGER }),
+    { mode: 0o600, dirMode: 0o700 },
+  );
+  return outputPath;
+}
 
 export type SavedUpdateFailureReport = {
   reportCreated: boolean;

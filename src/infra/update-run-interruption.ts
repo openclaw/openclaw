@@ -16,8 +16,10 @@ import {
 } from "./update-run-reader.js";
 import { finishUpdateRunRecord, type UpdateRunRecord } from "./update-run-record.js";
 import { hasStoredUpdateRecovery } from "./update-run-recovery-store.js";
+import { updateRunStepsFromResultStep } from "./update-run-step.js";
 import { recordUpdateRunVerificationRecord } from "./update-run-verification.js";
 import { persistRun, updateRunLedgerSchema, upsertStep } from "./update-run-write.js";
+import type { UpdateStepResult } from "./update-runner-types.js";
 
 const CANDIDATE_STEP = "finalize:installed-candidate";
 const candidateSchema = z.object({
@@ -46,7 +48,11 @@ export function readInstalledUpdateCandidate(
 /** Shipped parents can terminate the post-core child as soon as its result appears. */
 export function recordPostCoreUpdateEvidence(
   runId: string,
-  input: { candidate?: { version: string | null; buildId?: string }; warnings: string[] },
+  input: {
+    candidate?: { version: string | null; buildId?: string };
+    warnings: string[];
+    doctorLint?: UpdateStepResult;
+  },
   options: UpdateRunLedgerOptions = {},
 ): void {
   runExistingOpenClawStateWriteTransaction(
@@ -60,6 +66,9 @@ export function recordPostCoreUpdateEvidence(
         throw new Error("Cannot verify a live parent for the inherited update history.");
       }
       const candidate = candidateSchema.safeParse(input.candidate);
+      for (const step of input.doctorLint ? updateRunStepsFromResultStep(input.doctorLint) : []) {
+        upsertStep(run, step);
+      }
       if (candidate.success && !hasStoredUpdateRecovery(db, runId)) {
         // Keep after.version empty until serving verification: released rollback
         // readers use that absence to recognize restored-generation observations.

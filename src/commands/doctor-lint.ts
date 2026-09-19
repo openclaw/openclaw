@@ -42,6 +42,7 @@ import {
   type DeferredPluginMigration,
 } from "../infra/deferred-plugin-migrations.js";
 import { prepareSqliteReadOnlyLocationSync } from "../infra/sqlite-snapshot-source.js";
+import { formatUpdateDoctorLintFinding } from "../infra/update-doctor-lint.js";
 import { resolveUpdateRehearsalRoot } from "../infra/update-rehearsal-paths.js";
 import {
   resolvePluginInstallRoots,
@@ -345,13 +346,28 @@ async function executeDoctorLint(
     ...(opts.onlyIds && opts.onlyIds.length > 0 ? { onlyIds: opts.onlyIds } : {}),
   };
   const result = await runDoctorLintChecks(ctx, runOpts);
-  const visible = result.findings.filter((finding) => healthFindingMeetsSeverity(finding, sevMin));
+  const advisoryChecks = new Set(
+    coreChecks
+      .filter(
+        (check) =>
+          check.updateWork?.kind === "inspection" || check.updateWork?.kind === "standalone",
+      )
+      .map((check) => check.id),
+  );
+  const findings = isUpdateDoctorLintPass(stateView.sourceEnv)
+    ? result.findings.map((finding) =>
+        finding.severity === "error" && advisoryChecks.has(finding.checkId)
+          ? { ...finding, severity: "warning" as const }
+          : finding,
+      )
+    : result.findings;
+  const visible = findings.filter((finding) => healthFindingMeetsSeverity(finding, sevMin));
   const warnings = isUpdateDoctorLintPass(stateView.sourceEnv)
-    ? result.findings.filter(
+    ? findings.filter(
         (finding) => finding.severity === "warning" && !healthFindingMeetsSeverity(finding, sevMin),
       )
     : [];
-  const exitCode = exitCodeFromFindings(result.findings, sevMin);
+  const exitCode = exitCodeFromFindings(findings, sevMin);
   return {
     exitCode,
     findings: visible,
@@ -600,6 +616,14 @@ function writeJsonResult(result: {
       ...(result.warnings?.length ? { warnings: result.warnings.map(toJsonFinding) } : {}),
     }) + "\n",
   );
+  if (isUpdateDoctorLintPass(process.env)) {
+    // Shipped parents keep line tails; print blockers last, outside the single JSON line.
+    for (const finding of [...(result.warnings ?? []), ...result.findings].toSorted(
+      (a, b) => Number(a.severity === "error") - Number(b.severity === "error"),
+    )) {
+      process.stderr.write(`${formatUpdateDoctorLintFinding(finding)}\n`);
+    }
+  }
 }
 
 function toJsonFinding(f: HealthFinding): Record<string, unknown> {
