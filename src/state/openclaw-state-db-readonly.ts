@@ -564,10 +564,18 @@ export function executeExistingOpenClawStateRead(
       }
       let location = snapshot?.location ?? pathname;
       if (nativeSource) {
-        prepared = await prepareSqliteReadOnlyLocationFromOwnedDatabase(
-          nativeSource.db,
-          authority.assertCurrent,
-        );
+        prepared =
+          excluded || mutation
+            ? await prepareSqliteReadOnlyLocationFromOwnedDatabase(
+                nativeSource.db,
+                authority.assertCurrent,
+              )
+            : await prepareSqliteReadOnlyLocationFromOwnedDatabase(
+                nativeSource.db,
+                authority.assertCurrent,
+                authority.signal,
+                "async",
+              );
         location = prepared.location;
       } else if (!snapshot && (preserveArtifacts || excluded || mutation)) {
         await transport.validateFresh(context, authority);

@@ -6,6 +6,7 @@ import { sameFileIdentity } from "./fs-safe-advanced.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { backupNodeSqliteDatabase } from "./sqlite-backup.js";
 import { setSqliteBusyTimeout } from "./sqlite-busy-timeout.js";
+import { createSqliteLifecycleAggregateError } from "./sqlite-coordinator.js";
 import { withSqliteInspectionOperation } from "./sqlite-error-diagnostics.js";
 import { resolvePrivateSqliteSnapshotStagingRoot } from "./sqlite-private-directory.js";
 import {
@@ -14,7 +15,10 @@ import {
   removeTempDirectoryAsync,
   retainSnapshotWork,
 } from "./sqlite-readonly-location-cleanup.js";
-import type { PreparedSqliteReadOnlyLocation } from "./sqlite-readonly-location.types.js";
+import type {
+  AsyncPreparedSqliteReadOnlyLocation,
+  PreparedSqliteReadOnlyLocation,
+} from "./sqlite-readonly-location.types.js";
 import {
   readSqliteSchemaHeader,
   readSqliteSchemaHeaderFromSnapshot,
@@ -683,17 +687,34 @@ export async function prepareSqliteReadOnlyLocationSyncFallbackInProcess(
 /** Snapshot the lifecycle owner's already-open native connection. Opening or
  * closing another source descriptor could release its process-wide POSIX locks.
  * Only the private destination is opened/closed here; the source owner retains it. */
+export function prepareSqliteReadOnlyLocationFromOwnedDatabase(
+  database: DatabaseSync,
+  assertCurrent: () => void,
+  signal: AbortSignal | undefined,
+  cleanupMode: "async",
+): Promise<AsyncPreparedSqliteReadOnlyLocation>;
+export function prepareSqliteReadOnlyLocationFromOwnedDatabase(
+  database: DatabaseSync,
+  assertCurrent: () => void,
+  signal?: AbortSignal,
+): Promise<PreparedSqliteReadOnlyLocation>;
 export async function prepareSqliteReadOnlyLocationFromOwnedDatabase(
   database: DatabaseSync,
   assertCurrent: () => void,
   signal?: AbortSignal,
+  cleanupMode?: "async",
 ): Promise<PreparedSqliteReadOnlyLocation> {
   signal?.throwIfAborted();
   assertCurrent();
   if (!database.isOpen || database.isTransaction) {
     throw new Error("SQLite inspection requires an open owner outside a transaction");
   }
-  const directory = await createSqliteSnapshotStagingDirectory(undefined, false, signal);
+  const directory = await createSqliteSnapshotStagingDirectory(
+    undefined,
+    false,
+    signal,
+    cleanupMode === "async",
+  );
   try {
     signal?.throwIfAborted();
     assertCurrent();
@@ -706,7 +727,17 @@ export async function prepareSqliteReadOnlyLocationFromOwnedDatabase(
     assertCurrent();
     return publishPreparedCopy(directory);
   } catch (error) {
-    await removeTempDirectoryAsync(directory);
+    const errors: unknown[] = [error];
+    const removed = await removeTempDirectoryAsync(directory, (cleanupError) =>
+      errors.push(cleanupError),
+    );
+    if (!removed && cleanupMode === "async") {
+      throw createSqliteLifecycleAggregateError(
+        errors,
+        "Owned SQLite snapshot preparation and cleanup failed",
+        error,
+      );
+    }
     throw error;
   }
 }

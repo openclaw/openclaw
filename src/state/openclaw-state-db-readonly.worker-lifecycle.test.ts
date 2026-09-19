@@ -13,6 +13,15 @@ const mock = vi.hoisted(() => ({
   independent: vi.fn(),
   prepareNative: vi.fn(),
   prepareSource: vi.fn(),
+  excluded: vi.fn<() => boolean>(),
+  mutation: vi.fn<() => (() => void) | undefined>(),
+  releaseSourcePin: vi.fn(),
+}));
+vi.mock("../infra/state-database-coordinator.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/state-database-coordinator.js")>()),
+  hasStateDatabaseSourceExclusion: mock.excluded,
+  prepareStateDatabaseCanonicalMutation: mock.mutation,
+  acquireStateDatabaseHandleLease: () => ({ release: mock.releaseSourcePin }),
 }));
 vi.mock("./openclaw-state-db-cache.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./openclaw-state-db-cache.js")>()),
@@ -70,6 +79,9 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   }),
 );
 beforeEach(() => {
+  mock.excluded.mockReset().mockReturnValue(false);
+  mock.mutation.mockReset().mockReturnValue(undefined);
+  mock.releaseSourcePin.mockReset();
   mock.borrow.mockReset();
   mock.independent.mockReset();
   mock.prepareNative.mockReset().mockImplementation(async () => ({
@@ -118,23 +130,70 @@ it("reads independently when native snapshot borrowing refuses a transaction", a
   expect(mock.prepareSource).not.toHaveBeenCalled();
 });
 
-it("prepares artifact-preserving reads from the retained native source", async () => {
+it.each(["ordinary", "excluded", "mutation"] as const)(
+  "prepares %s artifact reads from the retained native source with its cleanup owner",
+  async (mode) => {
+    const options = source();
+    const database = { db: {} };
+    const observe = vi.fn();
+    const release = vi.fn();
+    mock.excluded.mockReturnValue(mode === "excluded");
+    mock.mutation.mockReturnValue(mode === "mutation" ? () => {} : undefined);
+    mock.borrow.mockReturnValue({ database, assertCurrent() {}, observe, release });
+    await expect(
+      withArtifactPreservingStateReads(() =>
+        executeExistingOpenClawStateRead(options, { type: "fleet.list" }),
+      ),
+    ).resolves.toEqual({ ok: true, type: "fleet.list", sourceAdmitted: true, cells: [] });
+    expect(mock.prepareNative).toHaveBeenCalledWith(
+      database.db,
+      expect.any(Function),
+      ...(mode === "ordinary" ? [expect.any(AbortSignal), "async"] : []),
+    );
+    expect(mock.prepareSource).not.toHaveBeenCalled();
+    expect(mock.independent).not.toHaveBeenCalled();
+    expect(observe).toHaveBeenCalledOnce();
+    expect(release).toHaveBeenCalledOnce();
+    expect(mock.cleanup).toHaveBeenCalledOnce();
+    expect(mock.releaseSourcePin).toHaveBeenCalledTimes(mode === "ordinary" ? 0 : 1);
+  },
+);
+
+it("retains the borrowed source through pending preparation and failed published cleanup", async () => {
   const options = source();
-  const database = { db: {} };
-  const observe = vi.fn();
+  const started = createDeferredCore();
+  const prepared = createDeferredCore<{
+    location: string;
+    cleanupAsync: () => Promise<boolean>;
+  }>();
   const release = vi.fn();
-  mock.borrow.mockReturnValue({ database, assertCurrent() {}, observe, release });
-  await expect(
-    withArtifactPreservingStateReads(() =>
-      executeExistingOpenClawStateRead(options, { type: "fleet.list" }),
-    ),
-  ).resolves.toEqual({ ok: true, type: "fleet.list", sourceAdmitted: true, cells: [] });
-  expect(mock.prepareNative).toHaveBeenCalledWith(database.db, expect.any(Function));
-  expect(mock.prepareSource).not.toHaveBeenCalled();
-  expect(mock.independent).not.toHaveBeenCalled();
-  expect(observe).toHaveBeenCalledOnce();
+  mock.borrow.mockReturnValue({ database: { db: {} }, assertCurrent() {}, observe() {}, release });
+  mock.prepareNative.mockImplementation(async () => {
+    started.resolve();
+    return prepared.promise;
+  });
+  mock.cleanup.mockResolvedValueOnce(false).mockResolvedValue(true);
+  finishProducer = () =>
+    prepared.resolve({ location: "/fixture/prepared.sqlite", cleanupAsync: mock.cleanup });
+  const result = withArtifactPreservingStateReads(() =>
+    executeExistingOpenClawStateRead(options, { type: "fleet.list" }),
+  ).catch((error: unknown) => error);
+  await started.promise;
+  const closing = closeOpenClawStateDatabaseByPathAsync(options.path).catch(
+    (error: unknown) => error,
+  );
+  expect(release).not.toHaveBeenCalled();
+  expect(mock.read).not.toHaveBeenCalled();
+  finishProducer();
+  expect(await closing).toMatchObject({
+    message: expect.stringMatching(/snapshot cleanup failed/),
+  });
+  expect(await result).toBeInstanceOf(Error);
+  expect(mock.read).not.toHaveBeenCalled();
+  expect(release).not.toHaveBeenCalled();
+  await closeOpenClawStateDatabaseByPathAsync(options.path);
+  expect(mock.cleanup).toHaveBeenCalledTimes(2);
   expect(release).toHaveBeenCalledOnce();
-  expect(mock.cleanup).toHaveBeenCalledOnce();
 });
 
 it("preserves native transaction refusal for artifact reads without independent fallback", async () => {
