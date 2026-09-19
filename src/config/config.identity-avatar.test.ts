@@ -73,4 +73,41 @@ describe("identity avatar validation", () => {
       }
     });
   });
+
+  it("returns a field-level workspace issue instead of throwing for a blank workspace with an avatar", async () => {
+    await withTempHome(async (home) => {
+      // A blank per-agent workspace plus an avatar previously let the schema
+      // accept the config and then escaped validateConfigObjectRaw as a thrown
+      // resolver error. It must surface as a consistent { ok: false, issues }.
+      const res = validateConfigObject({
+        agents: {
+          entries: {
+            main: {
+              default: true,
+              workspace: "   ",
+              identity: { avatar: "avatars/bot.png" },
+            },
+          },
+        },
+      });
+      expect(res.ok).toBe(false);
+      if (!res.ok) {
+        expect(res.issues[0]?.path).toBe("agents.entries.main.workspace");
+        expect(res.issues[0]?.pathSegments).toEqual(["agents", "entries", "main", "workspace"]);
+      }
+    });
+  });
+
+  it("returns a field-level issue for a blank defaults workspace", async () => {
+    await withTempHome(async (home) => {
+      const res = validateConfigObject({
+        agents: { defaults: { workspace: "\t\n " } },
+      });
+      expect(res.ok).toBe(false);
+      if (!res.ok) {
+        expect(res.issues[0]?.path).toBe("agents.defaults.workspace");
+        expect(res.issues[0]?.pathSegments).toEqual(["agents", "defaults", "workspace"]);
+      }
+    });
+  });
 });

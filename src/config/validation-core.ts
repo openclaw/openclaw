@@ -160,6 +160,51 @@ function createIdentityAvatarIssue(
   return withConfigIssuePath({ path: pathSegments.join("."), message }, pathSegments);
 }
 
+function createAgentWorkspaceIssue(
+  source: ReturnType<typeof listAgentEntriesWithSource>[number]["source"],
+  message: string,
+): ConfigValidationIssue {
+  const pathSegments =
+    source.kind === "entries"
+      ? (["agents", "entries", source.key, "workspace"] as const)
+      : (["agents", "list", source.index, "workspace"] as const);
+  return withConfigIssuePath({ path: pathSegments.join("."), message }, pathSegments);
+}
+
+/**
+ * Reject explicitly blank workspace values as field-level issues before any
+ * workspace-dependent validation (e.g. avatar boundary checks) so callers
+ * receive consistent { ok: false, issues } results instead of a thrown error.
+ */
+function collectBlankAgentWorkspaceIssues(config: OpenClawConfig): ConfigValidationIssue[] {
+  const issues: ConfigValidationIssue[] = [];
+  const defaultsWorkspace = config.agents?.defaults?.workspace;
+  if (typeof defaultsWorkspace === "string" && !defaultsWorkspace.trim()) {
+    issues.push(
+      withConfigIssuePath(
+        {
+          path: "agents.defaults.workspace",
+          message:
+            "agents.defaults.workspace must not be blank; omit the key to use the default workspace directory.",
+        },
+        ["agents", "defaults", "workspace"],
+      ),
+    );
+  }
+  for (const { entry, source } of listAgentEntriesWithSource(config)) {
+    const workspace = entry.workspace;
+    if (typeof workspace === "string" && !workspace.trim()) {
+      issues.push(
+        createAgentWorkspaceIssue(
+          source,
+          "workspace must not be blank; omit the key to use the default workspace directory.",
+        ),
+      );
+    }
+  }
+  return issues;
+}
+
 function validateIdentityAvatar(
   config: OpenClawConfig,
   env?: NodeJS.ProcessEnv,
@@ -452,6 +497,12 @@ export function validateConfigObjectRaw(
       ok: false,
       issues: [{ path: "agents.entries", message: formatDuplicateAgentDirError(duplicates) }],
     };
+  }
+  // Field-level blank-workspace rejection must run before avatar resolution so
+  // the resolver's loud runtime throw cannot escape validation.
+  const blankWorkspaceIssues = collectBlankAgentWorkspaceIssues(validatedConfig);
+  if (blankWorkspaceIssues.length > 0) {
+    return { ok: false, issues: blankWorkspaceIssues };
   }
   const avatarIssues = validateIdentityAvatar(validatedConfig, opts?.env);
   if (avatarIssues.length > 0) {

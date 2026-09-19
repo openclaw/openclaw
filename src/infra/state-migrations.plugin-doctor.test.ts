@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { listPluginDoctorStateMigrationEntries } from "../plugins/doctor-contract-registry.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
@@ -275,4 +276,45 @@ describe("plugin Doctor migrations", () => {
       expect(fs.readFileSync(markers[0], "utf8")).toBe("committed");
     },
   );
+
+  it("resolves the default service workspace during detection for a saved blank workspace", async () => {
+    const root = await tempDirs.make("openclaw-plugin-doctor-blank-workspace-");
+    const env = {
+      ...process.env,
+      HOME: root,
+      OPENCLAW_CONFIG_PATH: path.join(root, "openclaw.json"),
+      OPENCLAW_STATE_DIR: root,
+    };
+    let detectedServiceWorkspaceDir: string | undefined;
+    controls.entries = [
+      {
+        pluginId: "workspace-owner",
+        channelIds: [],
+        trustedForDurableStores: false,
+        migration: {
+          id: "inspect-workspace",
+          label: "Inspect workspace",
+          phase: "after-session-repair",
+          detectLegacyState: (args) => {
+            detectedServiceWorkspaceDir = args.serviceWorkspaceDir;
+            return { preview: ["pending"] };
+          },
+          migrateLegacyState: () => ({ changes: [], warnings: [] }),
+        },
+      },
+    ];
+    const config = { agents: { entries: { main: { workspace: "   " } } } } as OpenClawConfig;
+
+    const result = await runPostSessionPluginDoctorStateRepairs({
+      config,
+      env,
+      maintenanceAuthority: { assertCurrent() {} },
+      plannedActions: [{ pluginId: "workspace-owner", id: "inspect-workspace" }],
+    });
+
+    // Detection must reach the migration with the same default directory a saved
+    // blank always resolved to, instead of aborting preparation with a throw.
+    expect(detectedServiceWorkspaceDir).toBe(path.resolve(root, "workspace"));
+    expect(result.warnings).toEqual([]);
+  });
 });
