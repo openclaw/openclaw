@@ -1,6 +1,7 @@
 // Control UI E2E proves model-aware /think completion in the rendered composer.
 import path from "node:path";
 import { expect, it } from "vitest";
+import { composerEnabled, composerValue, fillComposer } from "../test-helpers/composer-editor.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -43,12 +44,12 @@ suite.define(() => {
       try {
         await page.goto(`${suite.server.baseUrl}chat`);
         await gateway.waitForRequest("chat.startup");
-        const composer = page.locator(".agent-chat__composer-combobox textarea");
+        const composer = page.locator(".agent-chat__composer-combobox openclaw-composer-editor");
         await composer.waitFor({ state: "visible" });
-        await expect.poll(() => composer.isEnabled()).toBe(true);
-        await composer.fill("/think");
+        await expect.poll(() => composerEnabled(composer)).toBe(true);
+        await fillComposer(composer, "/think");
         await composer.press("Tab");
-        await expect.poll(() => composer.inputValue()).toBe("/think ");
+        await expect.poll(() => composerValue(composer)).toBe("/think ");
         await composer.press("Enter");
         await expect
           .poll(async () => {
@@ -61,7 +62,7 @@ suite.define(() => {
         sliders = await page.locator('[data-chat-thinking-slider="true"]').count();
         expect(highOptions).toBe(0);
         expect(sliders).toBe(0);
-        await composer.fill("/think low");
+        await fillComposer(composer, "/think low");
         await composer.press("Enter");
         patch = (await gateway.waitForRequest("sessions.patch")).params;
         expect(patch).toMatchObject({ key, thinkingLevel: "low" });
@@ -92,16 +93,16 @@ suite.define(() => {
 
       await page.goto(`${suite.server.baseUrl}chat`);
       await gateway.waitForRequest("chat.startup");
-      const composer = page.locator(".agent-chat__composer-combobox textarea");
+      const composer = page.locator(".agent-chat__composer-combobox openclaw-composer-editor");
       await composer.waitFor({ state: "visible" });
-      await expect.poll(() => composer.isEnabled()).toBe(true);
+      await expect.poll(() => composerEnabled(composer)).toBe(true);
 
-      await composer.fill("Keep this /elevated full");
+      await fillComposer(composer, "Keep this /elevated full");
       await composer.press("Enter");
 
       const request = await gateway.waitForRequest("chat.send");
       expect((request.params as { message?: unknown }).message).toBe("/elevated full");
-      await expect.poll(() => composer.inputValue()).toBe("Keep this ");
+      await expect.poll(() => composerValue(composer)).toBe("Keep this ");
     });
   });
 
@@ -113,17 +114,17 @@ suite.define(() => {
 
       await page.goto(`${suite.server.baseUrl}chat`);
       await gateway.waitForRequest("chat.startup");
-      const composer = page.locator(".agent-chat__composer-combobox textarea");
+      const composer = page.locator(".agent-chat__composer-combobox openclaw-composer-editor");
       await composer.waitFor({ state: "visible" });
-      await expect.poll(() => composer.isEnabled()).toBe(true);
+      await expect.poll(() => composerEnabled(composer)).toBe(true);
 
-      await composer.fill("Keep this /exec");
+      await fillComposer(composer, "Keep this /exec");
       await composer.press("Tab");
       await composer.press("Enter");
 
       const request = await gateway.waitForRequest("chat.send");
       expect((request.params as { message?: unknown }).message).toBe("/exec host=auto");
-      await expect.poll(() => composer.inputValue()).toBe("Keep this ");
+      await expect.poll(() => composerValue(composer)).toBe("Keep this ");
     });
   });
 
@@ -182,16 +183,16 @@ suite.define(() => {
 
         await page.goto(`${suite.server.baseUrl}chat`);
         await gateway.waitForRequest("chat.startup");
-        const composer = page.locator(".agent-chat__composer-combobox textarea");
+        const composer = page.locator(".agent-chat__composer-combobox openclaw-composer-editor");
         await composer.waitFor({ state: "visible" });
-        await expect.poll(() => composer.isEnabled()).toBe(true);
+        await expect.poll(() => composerEnabled(composer)).toBe(true);
 
-        await composer.fill("/think");
+        await fillComposer(composer, "/think");
         await composer.press("Tab");
 
         const picker = page.locator(".slash-menu[role='listbox']");
         await picker.waitFor({ state: "visible" });
-        await expect.poll(() => composer.inputValue()).toBe("/think ");
+        await expect.poll(() => composerValue(composer)).toBe("/think ");
         await expect
           .poll(() => picker.getByRole("option").locator(".slash-menu-name").allTextContents())
           .toEqual(["default", "off", "minimal", "low", "medium", "high", "xhigh", "max", "ultra"]);
@@ -215,7 +216,7 @@ suite.define(() => {
 
         await composer.press("ArrowUp");
         await composer.press("Tab");
-        await expect.poll(() => composer.inputValue()).toBe("/think ultra");
+        await expect.poll(() => composerValue(composer)).toBe("/think ultra");
         await composer.press("Enter");
         const patchRequest = await gateway.waitForRequest("sessions.patch");
         expect(patchRequest.params).toMatchObject({

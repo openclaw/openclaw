@@ -1,4 +1,5 @@
 import { expect, it } from "vitest";
+import { composerValue, fillComposer } from "../test-helpers/composer-editor.ts";
 import {
   waitForControlUiGatewayReady,
   waitForControlUiGatewayReconnecting,
@@ -24,7 +25,9 @@ suite.define(() => {
       await gateway.waitForRequest("connect");
       await gateway.resolveDeferred("connect");
       await waitForControlUiGatewayReady(page);
-      await page.locator(".agent-chat__composer-combobox textarea").waitFor({ state: "visible" });
+      await page
+        .locator(".agent-chat__composer-combobox openclaw-composer-editor")
+        .waitFor({ state: "visible" });
       await expect
         .poll(() =>
           page.evaluate(() =>
@@ -37,15 +40,15 @@ suite.define(() => {
       await page.goto(`${suite.server.baseUrl}new?agent=main`, { waitUntil: "commit" });
 
       const message = page.locator(".new-session-page__message");
-      await message.fill("Keep this draft while connecting");
-      expect(await message.inputValue()).toBe("Keep this draft while connecting");
+      await fillComposer(message, "Keep this draft while connecting");
+      expect(await composerValue(message)).toBe("Keep this draft while connecting");
       expect(await gateway.getRequests("config.get")).toHaveLength(0);
 
       await gateway.waitForRequest("connect");
       await gateway.resolveDeferred("connect");
       await waitForControlUiGatewayReady(page);
       await gateway.waitForRequest("config.get");
-      expect(await message.inputValue()).toBe("Keep this draft while connecting");
+      expect(await composerValue(message)).toBe("Keep this draft while connecting");
     });
   });
 
@@ -79,7 +82,7 @@ suite.define(() => {
 
       const composer = page.locator(".new-session-page__composer");
       const message = page.locator(".new-session-page__message");
-      await message.fill("Keep this draft after the config error");
+      await fillComposer(message, "Keep this draft after the config error");
       await composer.getByRole("button", { name: "Add attachment" }).click();
       const menu = composer.locator("wa-dropdown.agent-chat__capability-menu");
       const search = menu.getByRole("menuitemcheckbox", { name: "Web search" });
@@ -103,10 +106,10 @@ suite.define(() => {
       await expect
         .poll(() => menu.getByRole("menuitem", { name: /^github/ }).isEnabled())
         .toBe(true);
-      expect(await message.inputValue()).toBe("Keep this draft after the config error");
+      expect(await composerValue(message)).toBe("Keep this draft after the config error");
       const recoveredReads = (await gateway.getRequests("config.get")).length;
       await page.keyboard.press("Escape");
-      await message.fill("The recovered draft is still editable");
+      await fillComposer(message, "The recovered draft is still editable");
       await composer.getByRole("button", { name: "Add attachment" }).click();
       expect(await gateway.getRequests("config.get")).toHaveLength(recoveredReads);
     });

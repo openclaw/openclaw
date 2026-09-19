@@ -1,8 +1,8 @@
-import path from "node:path";
 import { gatewayOriginScope } from "@openclaw/gateway-client/browser";
 import type { BrowserContextOptions, Page } from "playwright";
 import { expect, it } from "vitest";
 import { finishElementAnimations } from "../test-helpers/animations.ts";
+import { composerValue, fillComposer } from "../test-helpers/composer-editor.ts";
 import {
   MOVED_WORKSPACE,
   NEW_SESSION_MODEL_CATALOG,
@@ -12,12 +12,12 @@ import {
   WORKSPACE,
   captureProjectUiProof,
   captureUiProof,
-  captureUiProofEnabled,
   choosePackagesFolder,
   createNewSessionPageE2eSuite,
   installMockGateway,
   navigateInApp,
   pollLocatorText,
+  projectProofRecording,
   waitForCommittedChatRoute,
   waitForCommittedNewSessionDraft,
 } from "./new-session-page.test-support.ts";
@@ -97,18 +97,6 @@ async function withNewSessionPage(
   } finally {
     await context.close();
   }
-}
-
-function projectProofRecording(): BrowserContextOptions {
-  return captureUiProofEnabled
-    ? {
-        recordVideo: {
-          dir: path.join(suite.artifactDir, "project-registry"),
-          size: { height: 900, width: 1280 },
-        },
-        viewport: { height: 900, width: 1280 },
-      }
-    : {};
 }
 
 suite.define(() => {
@@ -270,7 +258,7 @@ suite.define(() => {
       await expect.poll(pickerOpen).toBe(true);
       await page.mouse.click(8, 8);
       await expect.poll(pickerOpen).toBe(false);
-      await page.locator(".new-session-page__message").fill("use this model");
+      await fillComposer(page.locator(".new-session-page__message"), "use this model");
       await page.getByRole("button", { name: "Start session" }).click();
 
       const create = await gateway.waitForRequest("sessions.create");
@@ -364,7 +352,7 @@ suite.define(() => {
 
       await modelSelect.focus();
       await page.keyboard.type("1");
-      await expect.poll(() => page.locator(".new-session-page__message").inputValue()).toBe("1");
+      await expect.poll(() => composerValue(page.locator(".new-session-page__message"))).toBe("1");
     });
   });
 
@@ -451,7 +439,7 @@ suite.define(() => {
       ).toBeCloseTo(83.33, 1);
 
       await effortSelect.click();
-      await page.locator(".new-session-page__message").fill("keep the selected effort");
+      await fillComposer(page.locator(".new-session-page__message"), "keep the selected effort");
       await page.getByRole("button", { name: "Start session" }).click();
       const create = await gateway.waitForRequest("sessions.create");
       expect(create.params).toMatchObject({
@@ -548,7 +536,7 @@ suite.define(() => {
   it("uses identity-scoped server recents without duplicating registered projects", async () => {
     const context = await suite.browser.newContext({
       ...BASE_CONTEXT,
-      ...projectProofRecording(),
+      ...projectProofRecording(suite),
     });
     const page = await context.newPage();
     const gateway = await installMockGateway(page, {
@@ -605,7 +593,7 @@ suite.define(() => {
         content: [project, recentFolder],
       });
       await project.click();
-      await page.locator(".new-session-page__message").fill("continue registered work");
+      await fillComposer(page.locator(".new-session-page__message"), "continue registered work");
       await page.getByRole("button", { name: "Start session" }).click();
       const create = await gateway.waitForRequest("sessions.create");
       expect(create.params).toMatchObject({
@@ -621,7 +609,7 @@ suite.define(() => {
     await withNewSessionPage(
       {
         ...DESKTOP_CONTEXT,
-        ...projectProofRecording(),
+        ...projectProofRecording(suite),
       },
       async (page) => {
         const appUrl = new URL(suite.server.baseUrl);
@@ -823,7 +811,10 @@ suite.define(() => {
         .poll(() => modelSelect.getAttribute("data-chat-select-value"))
         .toBe("anthropic/claude-sonnet-4-6");
 
-      await page.locator(".new-session-page__message").fill("keep both remembered choices");
+      await fillComposer(
+        page.locator(".new-session-page__message"),
+        "keep both remembered choices",
+      );
       const start = page.getByRole("button", { name: "Start session" });
       await expect.poll(() => start.isDisabled()).toBe(true);
 
@@ -842,7 +833,7 @@ suite.define(() => {
       // the async restore, which can append the stored draft to the typed text.
       // Waiting for the restored value asserts the documented persistence.
       await expect
-        .poll(() => page.locator(".new-session-page__message").inputValue())
+        .poll(() => composerValue(page.locator(".new-session-page__message")))
         .toBe("keep both remembered choices");
       await expect
         .poll(() => modelSelect.getAttribute("data-chat-select-value"))
@@ -936,7 +927,7 @@ suite.define(() => {
         .poll(async () => (await gateway.getRequests("fs.listDir")).length)
         .toBeGreaterThan(validationRequests);
       const message = page.locator(".new-session-page__message");
-      await message.fill("use a safe folder");
+      await fillComposer(message, "use a safe folder");
       await expect
         .poll(() => page.getByRole("button", { name: "Start session" }).isDisabled())
         .toBe(true);
@@ -979,7 +970,7 @@ suite.define(() => {
         )
         .toBe(pickedListRequests);
 
-      await message.fill("use the repaired preference");
+      await fillComposer(message, "use the repaired preference");
       await expect
         .poll(() => page.getByRole("button", { name: "Start session" }).isDisabled())
         .toBe(false);
@@ -1028,7 +1019,7 @@ suite.define(() => {
         "openclaw",
       );
 
-      await page.locator(".new-session-page__message").fill("keep the newer choice");
+      await fillComposer(page.locator(".new-session-page__message"), "keep the newer choice");
       await page.getByRole("button", { name: "Start session" }).click();
       const create = await gateway.waitForRequest("sessions.create");
       expect(create.params).not.toHaveProperty("cwd");
@@ -1058,7 +1049,7 @@ suite.define(() => {
       await page.getByRole("button", { name: "Use this folder" }).click();
       await gateway.resolveDeferred("agents.list", mainAgentList());
 
-      await page.locator(".new-session-page__message").fill("keep my early folder choice");
+      await fillComposer(page.locator(".new-session-page__message"), "keep my early folder choice");
       await expect
         .poll(() => page.getByRole("button", { name: "Start session" }).isDisabled())
         .toBe(false);

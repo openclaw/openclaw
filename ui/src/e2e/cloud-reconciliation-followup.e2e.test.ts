@@ -1,6 +1,7 @@
 import path from "node:path";
 import { expect, it } from "vitest";
 import type { ApplicationContext } from "../app/context.ts";
+import { composerEnabled, fillComposer } from "../test-helpers/composer-editor.ts";
 import {
   captureUiProofEnabled,
   chatSessionListResponse,
@@ -121,8 +122,8 @@ suite.define(() => {
         await gateway.waitForRequest("chat.startup");
         await page.getByRole("button", { name: "Cloud · syncing files" }).waitFor();
         await page.getByText("Safely applying cloud edits", { exact: false }).waitFor();
-        const composer = page.locator(".agent-chat__composer-combobox textarea");
-        await expect.poll(() => composer.isEnabled()).toBe(true);
+        const composer = page.locator(".agent-chat__composer-combobox openclaw-composer-editor");
+        await expect.poll(() => composerEnabled(composer)).toBe(true);
         await page.getByText("your message starts automatically", { exact: false }).waitFor();
         await expect
           .poll(() =>
@@ -130,7 +131,7 @@ suite.define(() => {
           )
           .toBe(0);
 
-        await composer.fill(pendingInput.message.content);
+        await fillComposer(composer, pendingInput.message.content);
         await page.getByRole("button", { name: "Send message" }).click();
         const firstFollowUp = await gateway.waitForRequest("chat.send");
         expect(firstFollowUp.params).toMatchObject({ message: pendingInput.message.content });

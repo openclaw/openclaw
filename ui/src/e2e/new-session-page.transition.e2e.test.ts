@@ -3,6 +3,7 @@ import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
 import type { ApplicationContext } from "../app/context.ts";
+import { composerDisabled, composerValue, fillComposer } from "../test-helpers/composer-editor.ts";
 import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   captureControlUiE2eFailureDiagnostics,
@@ -57,7 +58,7 @@ async function captureProof(page: import("playwright").Page, fileName: string) {
       await takeControlUiViewportScreenshot(page, page.locator(".shell"), [
         page
           .locator(
-            ".new-session-page__message:visible, .agent-chat__composer-combobox textarea:visible",
+            ".new-session-page__message:visible, .agent-chat__composer-combobox openclaw-composer-editor:visible",
           )
           .first(),
       ]),
@@ -102,7 +103,7 @@ suite.define(() => {
       await page.goto(`${suite.server.baseUrl}new`);
       await gateway.deferNext("agent.wait");
       const composer = page.locator(".new-session-page__message");
-      await composer.fill(`run this separately on ${label}`);
+      await fillComposer(composer, `run this separately on ${label}`);
       await captureProof(page, `background-${label}-ready.png`);
       if (captureProofEnabled) {
         await page.waitForTimeout(400);
@@ -113,7 +114,7 @@ suite.define(() => {
         params: { agentId: "main", message: `run this separately on ${label}` },
       });
       await expect.poll(() => new URL(page.url()).pathname).toBe("/new");
-      await expect.poll(() => composer.inputValue()).toBe("");
+      await expect.poll(() => composerValue(composer)).toBe("");
       await captureProof(page, `background-${label}-running.png`);
       await expect
         .poll(() => page.locator(".new-session-page__starting").textContent())
@@ -181,7 +182,7 @@ suite.define(() => {
     try {
       await page.goto(`${suite.server.baseUrl}new`);
       const composer = page.locator(".new-session-page__message");
-      await composer.fill("start in the background");
+      await fillComposer(composer, "start in the background");
       await composer.press("Control+Shift+Enter");
       await expect.poll(() => new URL(page.url()).pathname).toBe("/new");
       await expect(gateway.waitForRequest("sessions.create")).resolves.toMatchObject({
@@ -198,7 +199,7 @@ suite.define(() => {
     const gateway = await installMockGateway(page);
     try {
       await page.goto(`${suite.server.baseUrl}new`);
-      await page.locator(".new-session-page__message").fill("verify the default mock");
+      await fillComposer(page.locator(".new-session-page__message"), "verify the default mock");
       await page.getByRole("button", { name: "Start session" }).click();
 
       await expect(gateway.waitForRequest("sessions.create")).resolves.toMatchObject({
@@ -219,7 +220,7 @@ suite.define(() => {
 
       await page.getByRole("link", { name: "New conversation" }).first().click();
       await expect.poll(() => new URL(page.url()).pathname).toBe("/new");
-      await page.locator(".new-session-page__message").fill("verify another default mock");
+      await fillComposer(page.locator(".new-session-page__message"), "verify another default mock");
       await page.getByRole("button", { name: "Start session" }).click();
       await expect.poll(async () => (await gateway.getRequests("sessions.create")).length).toBe(2);
       expect((await gateway.getRequests("sessions.create")).at(-1)).toMatchObject({
@@ -337,7 +338,7 @@ suite.define(() => {
       await page.keyboard.press("Escape");
       const message = page.locator(".new-session-page__message");
       const start = page.locator(".new-session-page__start-submit");
-      await message.fill("keep progress moving");
+      await fillComposer(message, "keep progress moving");
       await expect.poll(() => start.isEnabled()).toBe(true);
       await gateway.waitForRequest("sessions.list", { match: rosterMatch });
       expect(
@@ -465,7 +466,9 @@ suite.define(() => {
         .poll(() =>
           page.evaluate(
             () =>
-              document.activeElement?.matches(".agent-chat__composer-combobox textarea") === true,
+              document.activeElement?.matches(
+                ".agent-chat__composer-combobox openclaw-composer-editor",
+              ) === true,
           ),
         )
         .toBe(true);
@@ -584,7 +587,7 @@ suite.define(() => {
             name: imageFileName,
           });
 
-          await message.fill(submittedMessage);
+          await fillComposer(message, submittedMessage);
           await page.locator(".agent-chat__photo-input").setInputFiles(imageFile);
           await expectDecodedThumbnail(draftImage);
           await page.locator(".agent-chat__file-input").setInputFiles({
@@ -696,10 +699,10 @@ suite.define(() => {
             .filter({ hasText: "session creation unavailable" })
             .waitFor();
           await expect.poll(() => message.isVisible()).toBe(true);
-          await expect.poll(() => message.isDisabled()).toBe(false);
+          await expect.poll(() => composerDisabled(message)).toBe(false);
           expect(await startup.isVisible()).toBe(false);
           await expect.poll(async () => (await announcement.textContent())?.trim()).toBe("");
-          expect(await message.inputValue()).toBe(submittedMessage);
+          expect(await composerValue(message)).toBe(submittedMessage);
           expect(await placeSummary.isDisabled()).toBe(false);
           await expectDecodedThumbnail(draftImage);
           await captureUiProof(suite, page, `${proofName}-restored.png`);

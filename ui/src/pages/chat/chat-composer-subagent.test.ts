@@ -2,6 +2,7 @@
 import { nothing, render } from "lit";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { GatewaySessionRow } from "../../api/types.ts";
+import type { ComposerEditor } from "../../components/composer-editor.ts";
 import { buildCatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
 import { resetComposerFixture } from "./chat-composer.test-support.ts";
 import { createRefreshChatPane } from "./chat-pane-history.test-support.ts";
@@ -87,7 +88,7 @@ describe("subagent composer", () => {
     const container = document.createElement("div");
     render(renderChatComposer(pane.chatProps!), container);
 
-    expect(container.querySelector("textarea")).not.toBeNull();
+    expect(container.querySelector("openclaw-composer-editor")).not.toBeNull();
     expect(pane.chatProps?.canSend).toBe(true);
     expect(container.textContent).not.toContain("View-only subagent");
   });
@@ -132,7 +133,7 @@ describe("subagent composer", () => {
         pane.render();
         render(renderChat(pane.chatProps!), container);
         expect(container.textContent).toContain("The workspace review is complete.");
-        expect(container.querySelector("textarea")).toBeNull();
+        expect(container.querySelector("openclaw-composer-editor")).toBeNull();
         expect(container.querySelector(".chat-reply-btn")).toBeNull();
         expect(container.querySelector(".chat-copy-btn")).not.toBeNull();
       } finally {
@@ -181,7 +182,7 @@ describe("subagent composer", () => {
     expect(props.canSend).toBe(false);
     void props.onSend();
     expect(state.handleSendChat).not.toHaveBeenCalled();
-    expect(container.querySelector("textarea, input[type=file]")).toBeNull();
+    expect(container.querySelector("openclaw-composer-editor, input[type=file]")).toBeNull();
     expect(container.querySelector(".agent-chat__composer-footer")).toBeNull();
     const banner = container.querySelector(".agent-chat__disabled-banner");
     expect(banner?.textContent).toContain("View-only subagent");
@@ -209,7 +210,7 @@ describe("subagent composer", () => {
     const container = document.createElement("div");
     render(renderChatComposer(pane.chatProps!), container);
     expect(pane.chatProps?.canSend).toBe(false);
-    expect(container.querySelector("textarea")).toBeNull();
+    expect(container.querySelector("openclaw-composer-editor")).toBeNull();
     expect(
       container.querySelector<HTMLButtonElement>(".agent-chat__disabled-banner button")?.disabled,
     ).toBe(!hasRow);
@@ -257,7 +258,7 @@ describe("subagent composer", () => {
         expect(container.querySelector(".chat-reply-preview__text")?.textContent).toBe(
           "Review complete.",
         );
-        expect(container.querySelector<HTMLTextAreaElement>("textarea")?.value).toBe(
+        expect(container.querySelector<ComposerEditor>("openclaw-composer-editor")?.value).toBe(
           "Keep this draft",
         );
       } finally {

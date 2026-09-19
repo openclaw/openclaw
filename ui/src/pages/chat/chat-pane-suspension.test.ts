@@ -1,6 +1,6 @@
+import "../../components/composer-editor.ts";
 /* @vitest-environment jsdom */
 /* @vitest-environment-options {"url":"http://chat-pane-suspension.test/"} */
-
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
@@ -26,7 +26,7 @@ describe("chat pane suspension", () => {
       render: () => unknown;
     };
     lifecycle.render = () => null;
-    const textarea = document.createElement("textarea");
+    const textarea = document.createElement("openclaw-composer-editor");
     textarea.value = "Draft still being composed";
     getChatComposerState(lifecycle.paneId).composerTextarea = textarea;
     state.chatMessage = "Draft still being";

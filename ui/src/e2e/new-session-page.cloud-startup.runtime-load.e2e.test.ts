@@ -6,6 +6,7 @@ import type { ApplicationContext } from "../app/context.ts";
 import { sessionPlacementRecoveryExactStorageKey } from "../lib/sessions/session-placement-recovery-storage-key.ts";
 import type { SessionPlacementPendingRecovery } from "../lib/sessions/session-placement-recovery.ts";
 import type { ChatPageHost } from "../pages/chat/chat-state-host.ts";
+import { composerDisabled, composerValue, fillComposer } from "../test-helpers/composer-editor.ts";
 import {
   navigateToControlUiSession,
   startProductionControlUiE2eServer,
@@ -95,8 +96,8 @@ suite.define(() => {
       try {
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
         const pane = page.locator(".chat-pane-cache__pane--active");
-        const composer = page.locator(".agent-chat__composer-combobox textarea");
-        await expect.poll(() => composer.isDisabled()).toBe(false);
+        const composer = page.locator(".agent-chat__composer-combobox openclaw-composer-editor");
+        await expect.poll(() => composerDisabled(composer)).toBe(false);
         const owner = await page.evaluate(() => {
           const app = document.querySelector("openclaw-app") as HTMLElement & {
             runtime: { context: ApplicationContext };
@@ -198,7 +199,7 @@ suite.define(() => {
             .getByRole("button", { name: "test-cloud", exact: true })
             .click();
           await page.getByRole("switch", { name: "Incognito" }).click();
-          await page.locator(".new-session-page__message").fill(privateMessage);
+          await fillComposer(page.locator(".new-session-page__message"), privateMessage);
           await page.getByRole("button", { name: "Start session" }).click();
           await waitForCommittedChatRoute(page);
           expect(await gateway.waitForRequest("sessions.create")).toMatchObject({
@@ -333,7 +334,7 @@ suite.define(() => {
           .poll(() => page.evaluate((key) => sessionStorage.getItem(key), storageKey))
           .toBeNull();
         await page.locator(".chat-group.user", { hasText: message }).waitFor();
-        expect(await composer.inputValue()).toBe("later ordinary turn");
+        expect(await composerValue(composer)).toBe("later ordinary turn");
         expect(await gateway.getRequests("sessions.dispatch")).toHaveLength(0);
         expect(await gateway.getRequests("sessions.send")).toHaveLength(1);
         expect(await gateway.getRequests("chat.send")).toHaveLength(0);

@@ -1,4 +1,5 @@
 import { expect, it } from "vitest";
+import { fillComposer } from "../test-helpers/composer-editor.ts";
 import { tooltipTitleText } from "./control-ui-e2e-suite.test-support.ts";
 import {
   WORKSPACE,
@@ -176,7 +177,7 @@ suite.define(() => {
       await profile.hover();
       await page.locator('[data-value="machine:fast"]').click();
       await page.keyboard.press("Escape");
-      await page.locator(".new-session-page__message").fill("keep this task on the cloud");
+      await fillComposer(page.locator(".new-session-page__message"), "keep this task on the cloud");
       await expect.poll(() => start.isEnabled()).toBe(true);
 
       await model.click();

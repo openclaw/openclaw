@@ -1,4 +1,6 @@
 import { expect, it } from "vitest";
+import type { ComposerEditor } from "../components/composer-editor.ts";
+import { composerValue, fillComposer } from "../test-helpers/composer-editor.ts";
 import {
   captureUiProof,
   createChatFlowE2eSuite,
@@ -31,9 +33,9 @@ suite.define(() => {
       });
       await page.goto(`${suite.server.baseUrl}chat`);
       const pane = page.locator(".chat-pane-cache__pane--active");
-      const composer = pane.locator(".agent-chat__composer-combobox textarea");
+      const composer = pane.locator(".agent-chat__composer-combobox openclaw-composer-editor");
       const initialText = "Keep this run active while composing a reply.";
-      await composer.fill(initialText);
+      await fillComposer(composer, initialText);
       await pane.getByRole("button", { name: "Send message", exact: true }).click();
       const send = await gateway.waitForRequest("chat.send");
       const sendParams = requireRecord(send.params);
@@ -46,7 +48,7 @@ suite.define(() => {
       });
       const stop = pane.getByRole("button", { name: "Stop generating", exact: true });
       await stop.waitFor({ state: "visible" });
-      await expect.poll(() => composer.inputValue()).toBe("");
+      await expect.poll(() => composerValue(composer)).toBe("");
 
       await pane
         .locator('.chat-bubble[data-entry-id="ime-reply-source"]')
@@ -72,7 +74,7 @@ suite.define(() => {
       await captureUiProof(suite, page, "reply-focus", "reply-after-stream-rerender.png");
       expect(await composer.evaluate((element) => document.activeElement === element)).toBe(true);
       const draft = "Preserve this unsent reply draft.";
-      await composer.fill(draft);
+      await fillComposer(composer, draft);
 
       // Synthetic IME events exercise the application flow, not native IME delivery.
       for (const mode of ["isComposing", "keyCode229"]) {
@@ -103,21 +105,26 @@ suite.define(() => {
           defaultPrevented: false,
         });
         expect(await preview.locator(".chat-reply-preview__text").textContent()).toBe(quote);
-        expect(await composer.inputValue()).toBe(draft);
+        expect(await composerValue(composer)).toBe(draft);
         expect(await composer.evaluate((element) => document.activeElement === element)).toBe(true);
         await expectRequestCountStable(gateway, "chat.send", 1);
         await expectRequestCountStable(gateway, "chat.abort", 0);
       }
 
-      await composer.fill("");
+      await fillComposer(composer, "");
       await stop.waitFor({ state: "visible" });
       const primary = pane.locator(".agent-chat__composer-actions .chat-send-btn--send");
       expect(await primary.count()).toBe(0);
       expect(await preview.locator(".chat-reply-preview__text").textContent()).toBe(quote);
       const composingDraft = "Preserve this composing reply draft.";
       await composer.evaluate((element, value) => {
-        if (!(element instanceof HTMLTextAreaElement)) {
-          throw new Error("Expected composer textarea");
+        if (
+          !(
+            element instanceof
+            (customElements.get("openclaw-composer-editor") as typeof ComposerEditor)
+          )
+        ) {
+          throw new Error("Expected composer editor");
         }
         element.dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true }));
         element.value = value;
@@ -134,11 +141,11 @@ suite.define(() => {
       await primary.waitFor({ state: "visible" });
       expect(await primary.isEnabled()).toBe(true);
       await stop.waitFor({ state: "detached" });
-      expect(await composer.inputValue()).toBe(composingDraft);
+      expect(await composerValue(composer)).toBe(composingDraft);
       expect(await composer.evaluate((element) => document.activeElement === element)).toBe(true);
       await page.keyboard.press("Escape");
       expect(await preview.locator(".chat-reply-preview__text").textContent()).toBe(quote);
-      expect(await composer.inputValue()).toBe(composingDraft);
+      expect(await composerValue(composer)).toBe(composingDraft);
       expect(await composer.evaluate((element) => document.activeElement === element)).toBe(true);
       await expectRequestCountStable(gateway, "chat.send", 1);
       await expectRequestCountStable(gateway, "chat.abort", 0);
@@ -148,7 +155,7 @@ suite.define(() => {
       });
       await page.keyboard.press("Escape");
       await preview.waitFor({ state: "detached" });
-      expect(await composer.inputValue()).toBe(composingDraft);
+      expect(await composerValue(composer)).toBe(composingDraft);
       expect(await composer.evaluate((element) => document.activeElement === element)).toBe(true);
       await expectRequestCountStable(gateway, "chat.send", 1);
       await expectRequestCountStable(gateway, "chat.abort", 0);
@@ -163,7 +170,7 @@ suite.define(() => {
         .toBe("Interrupted");
       expect(requireRecord(abort.params)).toEqual({ sessionKey, runId });
       await stop.waitFor({ state: "detached" });
-      expect(await composer.inputValue()).toBe(composingDraft);
+      expect(await composerValue(composer)).toBe(composingDraft);
       expect(await composer.evaluate((element) => document.activeElement === element)).toBe(true);
       await expectRequestCountStable(gateway, "chat.send", 1);
       await expectRequestCountStable(gateway, "chat.abort", 1);
@@ -209,16 +216,16 @@ suite.define(() => {
         await page.locator("[data-settings-send-shortcut]").selectOption("enter");
         await page.goto(`${suite.server.baseUrl}chat`);
 
-        const composer = page.locator(".agent-chat__composer-combobox textarea");
+        const composer = page.locator(".agent-chat__composer-combobox openclaw-composer-editor");
         const initialText = "keep the shortcut run active";
-        await composer.fill(initialText);
+        await fillComposer(composer, initialText);
         await page.getByRole("button", { name: "Send message" }).click();
         const initialSend = await gateway.waitForRequest("chat.send");
         const runId = requireString(requireRecord(initialSend.params).idempotencyKey, "active run");
         await page.getByRole("button", { name: "Stop generating" }).waitFor();
 
         const followUpText = "use the alternate follow-up action";
-        await composer.fill(followUpText);
+        await fillComposer(composer, followUpText);
         const primary = page.locator(".agent-chat__composer-actions .chat-send-btn--send");
         await primary.hover();
         const tooltip =

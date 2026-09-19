@@ -1,5 +1,6 @@
 import path from "node:path";
 import { expect, it } from "vitest";
+import { composerValue, fillComposer } from "../test-helpers/composer-editor.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { createChatFlowE2eSuite, installMockGateway } from "./chat-flow.test-support.ts";
 
@@ -39,8 +40,8 @@ suite.define(() => {
         await page.goto(`${suite.server.baseUrl}chat`);
         await gateway.waitForRequest("chat.startup");
         const artifactDir = createControlUiE2eArtifactDir(`progress-startup-${outcome}`);
-        const composer = page.locator(".agent-chat__composer-combobox textarea");
-        await composer.fill("Queue before history and progress");
+        const composer = page.locator(".agent-chat__composer-combobox openclaw-composer-editor");
+        await fillComposer(composer, "Queue before history and progress");
         await page.screenshot({
           path: path.join(artifactDir, "history-pending.png"),
           animations: "disabled",
@@ -61,7 +62,7 @@ suite.define(() => {
         expect(await gateway.getRequests("chat.send")).toHaveLength(0);
         expect(await gateway.getRequests("progressCard.get")).toHaveLength(0);
         const draft = "Keep this draft while progress loads";
-        await composer.fill(draft);
+        await fillComposer(composer, draft);
         await gateway.resolveDeferred("chat.startup");
         await gateway.waitForRequest("progressCard.get");
         await page.locator(".chat-thread").getByText("Ready.", { exact: true }).waitFor();
@@ -72,7 +73,7 @@ suite.define(() => {
           attachments: [expect.objectContaining({ fileName: "startup-note.txt" })],
         });
         expect(await composer.evaluate((node, original) => node === original, textarea)).toBe(true);
-        expect(await composer.inputValue()).toBe(draft);
+        expect(await composerValue(composer)).toBe(draft);
         expect(await composer.evaluate((node) => document.activeElement === node)).toBe(true);
         await page.screenshot({ path: path.join(artifactDir, "progress-pending.png") });
         const geometry = await page.evaluateHandle(() => {
@@ -83,7 +84,7 @@ suite.define(() => {
           };
           const readEditor = () => ({
             input: bounds(".agent-chat__input"),
-            textarea: bounds(".agent-chat__composer-combobox textarea"),
+            textarea: bounds(".agent-chat__composer-combobox openclaw-composer-editor"),
           });
           const before = readEditor();
           const editorFrames: Array<typeof before> = [];
@@ -139,7 +140,7 @@ suite.define(() => {
           expect(await composer.evaluate((node, original) => node === original, textarea)).toBe(
             true,
           );
-          expect(await composer.inputValue()).toBe(draft);
+          expect(await composerValue(composer)).toBe(draft);
           expect(await composer.evaluate((node) => document.activeElement === node)).toBe(true);
           const { frames, before, editorFrames } = await geometry.evaluate((capture) =>
             capture.finish(),
@@ -168,17 +169,17 @@ suite.define(() => {
           await geometry.dispose();
         }
 
-        await composer.fill("Keep this draft while progress refreshes");
+        await fillComposer(composer, "Keep this draft while progress refreshes");
         await gateway.deferNext("progressCard.get");
         await gateway.emitGatewayEvent("progressCard.changed", { sessionKey, revision: 2 });
         await expect
           .poll(async () => (await gateway.getRequests("progressCard.get")).length)
           .toBe(2);
-        expect(await composer.inputValue()).toBe("Keep this draft while progress refreshes");
+        expect(await composerValue(composer)).toBe("Keep this draft while progress refreshes");
         await gateway.rejectDeferred("progressCard.get", {
           message: "Refresh temporarily unavailable",
         });
-        expect(await composer.inputValue()).toBe("Keep this draft while progress refreshes");
+        expect(await composerValue(composer)).toBe("Keep this draft while progress refreshes");
       } finally {
         await suite.closeBrowserContext(context);
       }
@@ -199,9 +200,9 @@ suite.define(() => {
       try {
         await page.goto(`${suite.server.baseUrl}chat`);
         await gateway.waitForRequest("progressCard.get");
-        const composer = page.locator(".agent-chat__composer-combobox textarea");
+        const composer = page.locator(".agent-chat__composer-combobox openclaw-composer-editor");
         const draft = "Keep draft and focus through either reply order";
-        await composer.fill(draft);
+        await fillComposer(composer, draft);
         const textarea = await composer.elementHandle();
         expect(textarea).not.toBeNull();
         // Initial history owns progress admission. A live message can independently
@@ -232,7 +233,7 @@ suite.define(() => {
           expect(await composer.evaluate((node, original) => node === original, textarea)).toBe(
             true,
           );
-          expect(await composer.inputValue()).toBe(draft);
+          expect(await composerValue(composer)).toBe(draft);
           expect(await composer.evaluate((node) => document.activeElement === node)).toBe(true);
         }
       } finally {
@@ -255,9 +256,10 @@ suite.define(() => {
       const error = page.locator('.chat-history-error[role="alert"]');
       await error.waitFor();
       expect(await error.textContent()).toContain("History temporarily unavailable");
-      await page
-        .locator(".agent-chat__composer-combobox textarea")
-        .fill("Preserve this recovery draft");
+      await fillComposer(
+        page.locator(".agent-chat__composer-combobox openclaw-composer-editor"),
+        "Preserve this recovery draft",
+      );
       expect(await error.getByRole("button", { name: "Retry" }).count()).toBe(1);
     } finally {
       await suite.closeBrowserContext(context);

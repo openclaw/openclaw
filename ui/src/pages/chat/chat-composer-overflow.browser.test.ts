@@ -153,7 +153,9 @@ describe("composer overflow presentation", () => {
       const strips = container.querySelectorAll<HTMLElement>(".composer-context-strip");
       expect(strips).toHaveLength(kind === "combined" ? 3 : 1);
       const attachmentBox = rail().querySelector(".chat-attachment-thumb")!.getBoundingClientRect();
-      const textareaBox = container.querySelector("textarea")!.getBoundingClientRect();
+      const textareaBox = container
+        .querySelector("openclaw-composer-editor")!
+        .getBoundingClientRect();
       const composerBox = container.querySelector(".agent-chat__input")!.getBoundingClientRect();
       for (const strip of strips) {
         const box = strip.getBoundingClientRect();

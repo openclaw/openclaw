@@ -218,7 +218,9 @@ export function renderChat(props: ChatProps) {
                 const focusComposer = () =>
                   props.transcript.scrollElement
                     ?.closest(".chat")
-                    ?.querySelector<HTMLElement>(".agent-chat__composer-combobox > textarea")
+                    ?.querySelector<HTMLElement>(
+                      ".agent-chat__composer-combobox > openclaw-composer-editor",
+                    )
                     ?.focus({ preventScroll: true });
                 showChatAnnotationEditor({
                   paneId: props.paneId,
@@ -261,7 +263,7 @@ export function renderChat(props: ChatProps) {
           props.transcript.scrollElement
             ?.closest(".chat")
             ?.querySelector<HTMLElement>(
-              "openclaw-plugin-view[data-plugin-composer], .agent-chat__composer-combobox > textarea",
+              "openclaw-plugin-view[data-plugin-composer], .agent-chat__composer-combobox > openclaw-composer-editor",
             )
             ?.focus({ preventScroll: true }),
       },

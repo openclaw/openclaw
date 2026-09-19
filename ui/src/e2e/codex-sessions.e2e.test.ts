@@ -2,6 +2,7 @@ import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { beforeEach, expect, it } from "vitest";
 import type { SessionsCatalogHostEvent } from "../../../packages/gateway-protocol/src/index.ts";
+import { fillComposer } from "../test-helpers/composer-editor.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
   assertSessionSectionCountAlignment,
@@ -795,8 +796,10 @@ suite.define(() => {
       hostId: "gateway:local",
       threadId: "thread-1",
     });
-    const composer = catalogPane.locator(".agent-chat__composer-combobox > textarea");
-    await composer.fill("continue with the final checks /status");
+    const composer = catalogPane.locator(
+      ".agent-chat__composer-combobox > openclaw-composer-editor",
+    );
+    await fillComposer(composer, "continue with the final checks /status");
     expect(await catalogPane.locator('.slash-menu[role="listbox"]').count()).toBe(0);
     await gateway.setMethodResponse("sessions.list", {
       count: 1,

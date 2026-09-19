@@ -1,6 +1,7 @@
 import type { BrowserContext, Page } from "playwright";
 import { expect } from "vitest";
 import type { ChatQueueItem } from "../lib/chat/chat-types.ts";
+import { fillComposer } from "../test-helpers/composer-editor.ts";
 import { readOutboxPayloadAttachments } from "./chat-flow.test-support.ts";
 
 export const outboxPayloadFile = {
@@ -14,7 +15,7 @@ export const outboxPayloadHistory = [
 export const outboxPaneFor = (page: Page) =>
   page.locator('openclaw-chat-pane[aria-hidden="false"]');
 export const outboxComposerFor = (page: Page) =>
-  outboxPaneFor(page).locator(".agent-chat__composer-combobox textarea");
+  outboxPaneFor(page).locator(".agent-chat__composer-combobox openclaw-composer-editor");
 
 export async function readOutboxQueue(page: Page): Promise<ChatQueueItem[]> {
   return page.evaluate(() =>
@@ -62,7 +63,7 @@ export async function readOutboxPayloadBytes(page: Page, key: string): Promise<s
 }
 
 export async function stageOutboxAttachment(page: Page, message: string) {
-  await outboxComposerFor(page).fill(message);
+  await fillComposer(outboxComposerFor(page), message);
   await outboxPaneFor(page).locator(".agent-chat__file-input").setInputFiles(outboxPayloadFile);
   await expect.poll(() => outboxPaneFor(page).locator(".chat-attachment-thumb").count()).toBe(1);
 }

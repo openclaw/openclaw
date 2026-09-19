@@ -2,6 +2,7 @@ import path from "node:path";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { assert, expect, it } from "vitest";
 import { prepareChatHistoryFixture } from "../test-helpers/chat-activity-fixtures.ts";
+import { fillComposer } from "../test-helpers/composer-editor.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -27,7 +28,10 @@ suite.define(() => {
       });
       await page.goto(`${suite.server.baseUrl}chat`);
       await page.getByText("Ready to prepare the release.").waitFor();
-      await page.locator(".agent-chat__input textarea").fill("Prepare the release");
+      await fillComposer(
+        page.locator(".agent-chat__input openclaw-composer-editor"),
+        "Prepare the release",
+      );
       await page.getByRole("button", { name: "Send message" }).click();
       const send = await gateway.waitForRequest("chat.send");
       const runId = asNullableRecord(send.params)?.idempotencyKey;

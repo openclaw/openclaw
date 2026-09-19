@@ -1,5 +1,7 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import { render, type ReactiveControllerHost } from "lit";
 import { vi } from "vitest";
+import type { ComposerEditor } from "../../components/composer-editor.ts";
 import {
   areUiSessionKeysEquivalent,
   isUiGlobalScopeConfigured,
@@ -198,4 +200,31 @@ export function renderChatView(overrides: Partial<ChatProps> = {}) {
 
 export function renderChatInto(container: HTMLElement, overrides: Partial<ChatProps> = {}) {
   render(renderChat(createChatProps(overrides)), container);
+}
+
+export function requireElement(container: Element, selector: string, label: string): Element {
+  const element = container.querySelector(selector);
+  if (element === null) {
+    throw new Error(`expected ${label}`);
+  }
+  return element;
+}
+
+export function getComposerTextarea(container: Element): ComposerEditor {
+  return expectDefined(
+    container.querySelector<ComposerEditor>(
+      ".agent-chat__composer-combobox > openclaw-composer-editor",
+    ),
+    "expected composer editor",
+  );
+}
+
+export function createDragEvent(type: string, types = ["Files"]): Event {
+  const event = new Event(type, { bubbles: true, cancelable: true });
+  Object.defineProperty(event, "dataTransfer", { value: { types } });
+  return event;
+}
+
+export function itemAt<T>(items: ArrayLike<T>, index: number, label: string): T {
+  return expectDefined(items[index], `${label} ${index}`);
 }

@@ -1,5 +1,23 @@
 import { installSafeLocalStorageForTesting } from "./storage.ts";
 
+// CodeMirror's shadow selection probe uses a legacy editing command in Safari,
+// which JSDOM reports as its engine. JSDOM has no editing or layout; real cursor,
+// clipboard, and geometry behavior is covered by the browser suites.
+if (typeof navigator !== "undefined" && navigator.userAgent.includes("jsdom")) {
+  if (!document.execCommand) {
+    Object.defineProperty(document, "execCommand", {
+      configurable: true,
+      value: () => false,
+    });
+  }
+  if (!Range.prototype.getClientRects) {
+    Range.prototype.getClientRects = () => Object.assign([], { item: () => null });
+  }
+  if (!Range.prototype.getBoundingClientRect) {
+    Range.prototype.getBoundingClientRect = () => new DOMRect();
+  }
+}
+
 // Lit emits a one-time dev-mode warning in test builds. Pre-mark it as issued
 // so broad UI suites stay signal-heavy instead of repeating the same console.warn.
 const issuedWarnings = ((globalThis as { litIssuedWarnings?: Set<string> }).litIssuedWarnings ??=

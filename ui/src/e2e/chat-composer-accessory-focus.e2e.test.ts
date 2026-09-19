@@ -50,7 +50,7 @@ suite.define(() => {
       await gateway.waitForRequest("chat.startup");
 
       const composer = page.locator(".agent-chat__input");
-      const textarea = composer.locator("textarea");
+      const textarea = composer.locator("openclaw-composer-editor");
       await composer.waitFor({ state: "visible" });
       await page.evaluate(() => {
         const outside = document.createElement("button");
@@ -100,7 +100,7 @@ suite.define(() => {
         }
         await trigger.click();
 
-        await textarea.focus();
+        await textarea.locator(".cm-content").focus();
         await trigger.click();
         expect(await textarea.evaluate((element) => document.activeElement === element)).toBe(true);
         await trigger.click();

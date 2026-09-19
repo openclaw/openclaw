@@ -1,5 +1,7 @@
 import path from "node:path";
 import { expect, it } from "vitest";
+import type { ComposerEditor } from "../components/composer-editor.ts";
+import { composerValue } from "../test-helpers/composer-editor.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { controlUiBundledSettingsStorageKey } from "../test-helpers/control-ui-e2e.ts";
 import {
@@ -62,14 +64,23 @@ suite.define(() => {
     try {
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:session-c"));
       const cells = page.locator(".chat-split-view__cell");
-      const composers = cells.locator(".agent-chat__composer-combobox textarea");
+      const composers = cells.locator(".agent-chat__composer-combobox openclaw-composer-editor");
       await expect.poll(() => composers.count()).toBe(3);
       const historyLength = await page.evaluate(() => history.length);
       // Focus back before the first navigation can finish loading its route.
       await composers.evaluateAll((nodes) => {
         const first = nodes[0];
         const last = nodes[nodes.length - 1];
-        if (!(first instanceof HTMLTextAreaElement) || !(last instanceof HTMLTextAreaElement)) {
+        if (
+          !(
+            first instanceof
+            (customElements.get("openclaw-composer-editor") as typeof ComposerEditor)
+          ) ||
+          !(
+            last instanceof
+            (customElements.get("openclaw-composer-editor") as typeof ComposerEditor)
+          )
+        ) {
           throw new Error("Expected split composers");
         }
         first.focus();
@@ -119,13 +130,13 @@ suite.define(() => {
       ).toBe("agent:main:session-c");
       expect(new URL(page.url()).pathname).toBe("/chat/main/session-c");
       expect(await page.evaluate(() => history.length)).toBe(historyLength);
-      expect(await composers.last().inputValue()).toBe("Active lower-right draft stays unsent");
+      expect(await composerValue(composers.last())).toBe("Active lower-right draft stays unsent");
       await page.setViewportSize({ height: 900, width: 1440 });
       await expect.poll(() => cells.first().isVisible()).toBe(true);
       await expect.poll(() => cells.nth(1).isVisible()).toBe(true);
       await expect.poll(geometry).toEqual(desktop);
-      expect(await composers.first().inputValue()).toBe("Left draft stays unsent");
-      expect(await composers.last().inputValue()).toBe("Active lower-right draft stays unsent");
+      expect(await composerValue(composers.first())).toBe("Left draft stays unsent");
+      expect(await composerValue(composers.last())).toBe("Active lower-right draft stays unsent");
     } finally {
       await suite.closeBrowserContext(context);
     }

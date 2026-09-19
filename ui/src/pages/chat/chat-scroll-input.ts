@@ -116,7 +116,10 @@ export function isTranscriptScrollKey(event: KeyboardEvent): boolean {
     ) {
       return false;
     }
-    if (target instanceof HTMLTextAreaElement && !nativePaging) {
+    if (
+      (target instanceof HTMLTextAreaElement || target.localName === "openclaw-composer-editor") &&
+      !nativePaging
+    ) {
       return false;
     }
     if (!editabilityResolved && target.hasAttribute("contenteditable")) {

@@ -2,6 +2,7 @@ import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
 import type { GatewaySessionRow } from "../api/types.ts";
+import { composerValue } from "../test-helpers/composer-editor.ts";
 import {
   controlUiBundledSettingsStorageKey,
   defaultControlUiFeatureMethods,
@@ -138,7 +139,9 @@ suite.define(() => {
         const observe = async () => ({
           url: page.url(),
           betaDashboard: await dashboard(beta).count(),
-          betaDraft: await beta.locator(".agent-chat__composer-combobox textarea").inputValue(),
+          betaDraft: await composerValue(
+            beta.locator(".agent-chat__composer-combobox openclaw-composer-editor"),
+          ),
           betaClass: await beta.getAttribute("class"),
           patches: await gateway.getRequests("sessions.patch"),
           sends: await gateway.getRequests("chat.send"),

@@ -2,6 +2,7 @@ import type { ModelsSnapshotEvent } from "@openclaw/gateway-protocol";
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import type { ApplicationContext } from "../app/context.ts";
+import { composerValue, fillComposer } from "../test-helpers/composer-editor.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import {
   createControlUiE2eContextOptions,
@@ -44,7 +45,7 @@ async function openPendingChat(page: Page) {
     return observed;
   });
   const composer = page.locator(
-    ".chat-pane-cache__pane--active .agent-chat__composer-combobox textarea",
+    ".chat-pane-cache__pane--active .agent-chat__composer-combobox openclaw-composer-editor",
   );
   return { gateway, href, observation, composer };
 }
@@ -58,8 +59,8 @@ suite.define(() => {
         await gateway.emitGatewayEvent("models.snapshot", publication);
         await expect.poll(() => observation.evaluate((value) => value.accepted)).toBe(true);
         await expect.poll(async () => (await gateway.getRequests("chat.startup")).length).toBe(1);
-        await expect.poll(() => composer.isEditable()).toBe(true);
-        await composer.fill("Draft retained while the route resolves.");
+        await expect.poll(() => composer.locator(".cm-content").isEditable()).toBe(true);
+        await fillComposer(composer, "Draft retained while the route resolves.");
         expect(page.url()).toBe(href);
         await gateway.resolveDeferred("chat.startup");
         await page.getByText(historyText, { exact: true }).waitFor();
@@ -83,7 +84,7 @@ suite.define(() => {
           );
           expect(page.url()).toBe(href);
         }
-        expect(await composer.inputValue()).toBe("Draft retained while the route resolves.");
+        expect(await composerValue(composer)).toBe("Draft retained while the route resolves.");
         expect(await gateway.getRequests("chat.startup")).toHaveLength(1);
         await observation.dispose();
       });
@@ -106,13 +107,13 @@ suite.define(() => {
         displayName: "Current title",
       });
       await gateway.waitForRequest("chat.startup");
-      await expect.poll(() => composer.isEditable()).toBe(true);
-      await composer.fill("Draft from ordinary resolution.");
+      await expect.poll(() => composer.locator(".cm-content").isEditable()).toBe(true);
+      await fillComposer(composer, "Draft from ordinary resolution.");
       await gateway.emitGatewayEvent("models.snapshot", publication);
       await expect.poll(() => observation.evaluate((value) => value.accepted)).toBe(true);
       await gateway.resolveDeferred("chat.startup");
       await page.getByText(historyText, { exact: true }).waitFor();
-      expect(await composer.inputValue()).toBe("Draft from ordinary resolution.");
+      expect(await composerValue(composer)).toBe("Draft from ordinary resolution.");
       expect(await gateway.getRequests("chat.startup")).toHaveLength(1);
       await observation.dispose();
     });

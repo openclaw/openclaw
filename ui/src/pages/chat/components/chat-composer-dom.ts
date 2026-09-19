@@ -1,3 +1,4 @@
+import type { ComposerEditor } from "../../../components/composer-editor.ts";
 import { captureChatSessionScrollPosition } from "../scroll.ts";
 
 const COMPOSER_CHROME_INTERACTIVE_SELECTOR = [
@@ -6,6 +7,7 @@ const COMPOSER_CHROME_INTERACTIVE_SELECTOR = [
   "input",
   "select",
   "textarea",
+  "openclaw-composer-editor",
   "summary",
   "wa-dropdown",
   "[contenteditable='true']",
@@ -30,7 +32,7 @@ type ComposerPopoverAnchorObserverState = {
 };
 
 const composerTextareaResizeObservers = new WeakMap<
-  HTMLTextAreaElement,
+  HTMLElement,
   ComposerTextareaResizeObserverState
 >();
 const composerPopoverAnchorObservers = new WeakMap<
@@ -125,7 +127,7 @@ export function replaceComposerPopoverAnchor(
   return next;
 }
 
-function updateTextareaOverflow(el: HTMLTextAreaElement) {
+function updateTextareaOverflow(el: HTMLElement) {
   const scrollable = el.scrollHeight > el.clientHeight + 1;
   // Two 16px fades need enough vertical runway not to overlap into a narrow
   // opaque strip on short drafts. Small overflows still scroll, just unfaded.
@@ -138,7 +140,7 @@ function updateTextareaOverflow(el: HTMLTextAreaElement) {
   el.toggleAttribute("data-scroll-fade-bottom", fadeBottom);
 }
 
-export function adjustTextareaHeight(el: HTMLTextAreaElement) {
+export function adjustTextareaHeight(el: HTMLElement) {
   // A surface that declares the compact shape is a fixed CSS box: it holds one
   // line whatever the draft is, so an inline height left by an earlier measured
   // pass would silently outrank the stylesheet. Which shape a composer is in is
@@ -172,7 +174,7 @@ export function adjustTextareaHeight(el: HTMLTextAreaElement) {
   }
 }
 
-export function observeTextareaOverflow(el: HTMLTextAreaElement) {
+export function observeTextareaOverflow(el: HTMLElement) {
   if (composerTextareaResizeObservers.has(el)) {
     return;
   }
@@ -238,7 +240,7 @@ export function observeTextareaOverflow(el: HTMLTextAreaElement) {
   updateTextareaOverflow(el);
 }
 
-export function disconnectTextareaOverflowObserver(el: HTMLTextAreaElement) {
+export function disconnectTextareaOverflowObserver(el: HTMLElement) {
   const state = composerTextareaResizeObservers.get(el);
   composerTextareaResizeObservers.delete(el);
   if (!state) {
@@ -251,7 +253,7 @@ export function disconnectTextareaOverflowObserver(el: HTMLTextAreaElement) {
   }
 }
 
-export function scheduleTextareaHeightAdjustment(el: HTMLTextAreaElement) {
+export function scheduleTextareaHeightAdjustment(el: HTMLElement) {
   // Lit invokes ref callbacks before the textarea is connected and before its
   // controlled value is committed, so measure once the render has settled.
   queueMicrotask(() => {
@@ -287,13 +289,13 @@ export function focusComposerFromChrome(event: MouseEvent | PointerEvent, connec
     return;
   }
   currentTarget
-    .querySelector<HTMLTextAreaElement>(".agent-chat__composer-combobox > textarea")
+    .querySelector<HTMLElement>(".agent-chat__composer-combobox > openclaw-composer-editor")
     ?.focus({ preventScroll: true });
 }
 
 export function preserveComposerFocusOnPrimaryAction(
   event: PointerEvent,
-  textarea: HTMLTextAreaElement | null,
+  textarea: HTMLElement | null,
 ): void {
   const composerShell = textarea?.closest<HTMLElement>(".agent-chat__composer-shell");
   if (document.activeElement === textarea && composerShell) {
@@ -301,7 +303,7 @@ export function preserveComposerFocusOnPrimaryAction(
   }
 }
 
-export function restoreHistoryCaret(target: HTMLTextAreaElement, direction: "up" | "down") {
+export function restoreHistoryCaret(target: ComposerEditor, direction: "up" | "down") {
   requestAnimationFrame(() => {
     if (document.activeElement !== target) {
       return;

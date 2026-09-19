@@ -2,6 +2,7 @@
 import type { BrowserContext, Page } from "playwright";
 import { afterEach, beforeEach, expect, it } from "vitest";
 import { planLobsterPasser } from "../components/lobster-pet-plans.ts";
+import { fillComposer } from "../test-helpers/composer-editor.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import { installMockGateway } from "./new-session-page.test-support.ts";
 
@@ -208,7 +209,7 @@ suite.define(() => {
     await page.clock.runFor(1300);
     await page.screenshot({ path: suite.artifactDir + "/floor-visit.png", animations: "disabled" });
     const textarea = page.locator(".new-session-page__message");
-    await textarea.fill("The prompt takes priority.");
+    await fillComposer(textarea, "The prompt takes priority.");
     await expect.poll(() => pet.getAttribute("data-spot")).toBe("top");
     expect(await pet.getAttribute("data-floor-enabled")).toBeNull();
     await page.screenshot({

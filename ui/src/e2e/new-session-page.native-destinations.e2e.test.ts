@@ -1,5 +1,6 @@
 import path from "node:path";
 import { expect, it } from "vitest";
+import { composerValue, fillComposer } from "../test-helpers/composer-editor.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
   waitForControlUiGatewayReady,
@@ -50,7 +51,10 @@ suite.define(() => {
     try {
       await page.goto(`${suite.server.baseUrl}new?agent=main&catalog=codex`);
       const historyLength = await page.evaluate(() => history.length);
-      await page.locator(".new-session-page__message").fill("Explain the project architecture");
+      await fillComposer(
+        page.locator(".new-session-page__message"),
+        "Explain the project architecture",
+      );
       await page.locator(".new-session-page__message").press("Enter");
       await page.waitForURL(`${suite.server.baseUrl}terminal/native-cli`);
       const terminalPage = page.locator("openclaw-terminal-page");
@@ -83,7 +87,7 @@ suite.define(() => {
       }
 
       await navigateInApp(page, "chat");
-      await page.locator(".agent-chat__composer-combobox textarea").waitFor();
+      await page.locator(".agent-chat__composer-combobox openclaw-composer-editor").waitFor();
       expect(await terminalPage.count()).toBe(0);
       expect(await gateway.getRequests("terminal.close")).toHaveLength(0);
       await page.keyboard.press("Control+Backquote");
@@ -209,7 +213,7 @@ suite.define(() => {
         expect(await destination.count()).toBe(0);
         expect(await page.getByRole("button", { name: "Refresh", exact: true }).count()).toBe(0);
         const message = page.locator(".new-session-page__message");
-        await message.fill("Keep this draft on the selected machine");
+        await fillComposer(message, "Keep this draft on the selected machine");
 
         await gateway.setMethodResponse("sessions.catalog.list", result([local, node]));
         await gateway.emitGatewayEvent("node.runnerInventory.changed", { nodeId: "builder" });
@@ -241,7 +245,7 @@ suite.define(() => {
           .poll(() => destination.locator(`option[value="${node.hostId}"]`).isDisabled())
           .toBe(false);
         await expect.poll(() => destination.inputValue()).toBe(node.hostId);
-        expect(await message.inputValue()).toBe("Keep this draft on the selected machine");
+        expect(await composerValue(message)).toBe("Keep this draft on the selected machine");
         expect(await folder.inputValue()).toBe("/workspace/native-project");
         expect(await gateway.getRequests("sessions.catalog.startTerminal")).toHaveLength(0);
 

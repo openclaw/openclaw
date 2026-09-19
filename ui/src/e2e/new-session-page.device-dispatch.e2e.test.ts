@@ -2,6 +2,7 @@ import path from "node:path";
 import { gatewayOriginScope } from "@openclaw/gateway-client/browser";
 import { expect, it } from "vitest";
 import { CLOUD_PROFILE_RETRY_DELAYS_MS } from "../pages/new-session/cloud-profile-discovery.ts";
+import { composerValue, fillComposer } from "../test-helpers/composer-editor.ts";
 import {
   WORKSPACE,
   captureDeviceRuntimeUiProof,
@@ -163,7 +164,7 @@ suite.define(() => {
       await gateway.waitForRequest("environments.list");
       await page.locator("#new-session-where-trigger").click();
       await page.locator(`[data-value="${value}"]`).click();
-      await page.locator(".new-session-page__message").fill("run on the paired device");
+      await fillComposer(page.locator(".new-session-page__message"), "run on the paired device");
       expect(await page.locator('wa-dropdown-item[value="start-terminal"]').count()).toBe(0);
       await page.getByRole("button", { name: "Start session" }).click();
 
@@ -248,7 +249,10 @@ suite.define(() => {
         const where = page.locator("#new-session-where-trigger");
         await where.click();
         await page.locator(`[data-value="${value}"]`).click();
-        await page.locator(".new-session-page__message").fill("require current worker capacity");
+        await fillComposer(
+          page.locator(".new-session-page__message"),
+          "require current worker capacity",
+        );
         const start = page.getByRole("button", { name: "Start session" });
         await expect.poll(() => start.isEnabled()).toBe(true);
         await where.click();
@@ -441,7 +445,10 @@ suite.define(() => {
           await waitForGatewayRecoveryScope(page);
           expect(await gateway.getRequests("environments.list")).toHaveLength(1);
         }
-        await page.locator(".new-session-page__message").fill("keep my chosen remote destination");
+        await fillComposer(
+          page.locator(".new-session-page__message"),
+          "keep my chosen remote destination",
+        );
         const start = page.getByRole("button", { name: "Start session" });
         await expect.poll(() => start.isDisabled()).toBe(true);
         await expect
@@ -531,7 +538,7 @@ suite.define(() => {
         const where = page.locator("#new-session-where-trigger");
         await expect.poll(() => where.getAttribute(attribute)).toBe(value);
 
-        await page.locator(".new-session-page__message").fill("run only where I choose");
+        await fillComposer(page.locator(".new-session-page__message"), "run only where I choose");
         const start = page.getByRole("button", { name: "Start session" });
         await expect.poll(() => start.isDisabled()).toBe(true);
         await expect
@@ -647,7 +654,7 @@ suite.define(() => {
       );
 
       const message = "run this agent locally";
-      await page.locator(".new-session-page__message").fill(message);
+      await fillComposer(page.locator(".new-session-page__message"), message);
       await page.getByRole("button", { name: "Start session" }).click();
       const create = await gateway.waitForRequest("sessions.create");
       expect(create.params).toMatchObject({ agentId: "research", message });
@@ -700,7 +707,7 @@ suite.define(() => {
         await gateway.waitForRequest("environments.list");
         await page.locator("#new-session-where-trigger").click();
         await page.locator(`[data-value="${value}"]`).click();
-        await page.locator(".new-session-page__message").fill(message);
+        await fillComposer(page.locator(".new-session-page__message"), message);
         await page.getByRole("button", { name: "Start session" }).click();
         const firstCreate = await gateway.waitForRequest("sessions.create");
         expect(firstCreate.params).toMatchObject({ worktree: true, worktreeSource: "empty" });
@@ -719,7 +726,7 @@ suite.define(() => {
           )
           .toBe(value === "auto-device" ? "true" : "paired-runner");
         await expect
-          .poll(() => page.locator(".new-session-page__message").inputValue())
+          .poll(() => composerValue(page.locator(".new-session-page__message")))
           .toBe(message);
         await expect
           .poll(() => page.locator("#new-session-project-trigger").textContent())

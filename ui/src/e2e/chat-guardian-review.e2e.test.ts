@@ -1,6 +1,7 @@
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { beforeEach, expect, it } from "vitest";
+import { fillComposer } from "../test-helpers/composer-editor.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
@@ -41,7 +42,10 @@ suite.define(() => {
         });
         await page.goto(`${suite.server.baseUrl}chat`);
         await page.getByText("Ready for a Guardian-reviewed action.").waitFor();
-        await page.locator(".agent-chat__composer-combobox textarea").fill("Review this action.");
+        await fillComposer(
+          page.locator(".agent-chat__composer-combobox openclaw-composer-editor"),
+          "Review this action.",
+        );
         await page.getByRole("button", { name: "Send message" }).click();
         const request = await gateway.waitForRequest("chat.send");
         const runId = requireString(requireRecord(request.params).idempotencyKey, "chat run id");
@@ -50,7 +54,7 @@ suite.define(() => {
           await writeFile(
             path.join(proofDir, "01-before-review.png"),
             await takeControlUiViewportScreenshot(page, page.locator(".shell"), [
-              page.locator(".agent-chat__composer-combobox textarea"),
+              page.locator(".agent-chat__composer-combobox openclaw-composer-editor"),
             ]),
           );
         }
@@ -100,7 +104,7 @@ suite.define(() => {
           await writeFile(
             path.join(proofDir, "03-review-approved.png"),
             await takeControlUiViewportScreenshot(page, page.locator(".shell"), [
-              page.locator(".agent-chat__composer-combobox textarea"),
+              page.locator(".agent-chat__composer-combobox openclaw-composer-editor"),
             ]),
           );
         }

@@ -1,3 +1,4 @@
+import type { ComposerEditor } from "../../../components/composer-editor.ts";
 import type { ChatQueueItem, HumanMention } from "../../../lib/chat/chat-types.ts";
 import type { ChatRunUiStatus } from "../run-lifecycle.ts";
 import {
@@ -133,7 +134,7 @@ function isExplicitComposerInsertion(event: InputEvent): boolean {
 }
 
 export function suppressStaleSubmittedDraftReplay(
-  target: HTMLTextAreaElement,
+  target: ComposerEditor,
   event: InputEvent,
   currentDraft: string,
   hasInputIntent: boolean,

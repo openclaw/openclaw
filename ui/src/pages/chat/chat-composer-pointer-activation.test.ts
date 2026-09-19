@@ -1,7 +1,7 @@
-/* @vitest-environment jsdom */
-
 import { render } from "lit";
+/* @vitest-environment jsdom */
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { ComposerEditor } from "../../components/composer-editor.ts";
 import { i18n, t } from "../../i18n/index.ts";
 import { createComposerProps } from "./chat-composer.test-support.ts";
 import { renderChatComposer, resetChatComposerState } from "./components/chat-composer.ts";
@@ -23,8 +23,8 @@ function button(container: Element, label: string): HTMLButtonElement {
   return result;
 }
 
-function textarea(container: Element): HTMLTextAreaElement {
-  const result = container.querySelector<HTMLTextAreaElement>("textarea");
+function textarea(container: Element): ComposerEditor {
+  const result = container.querySelector<ComposerEditor>("openclaw-composer-editor");
   if (!result) {
     throw new Error("expected composer textarea");
   }

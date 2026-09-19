@@ -2,6 +2,7 @@ import { asNullableRecord as catalogRawRecord } from "@openclaw/normalization-co
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { RouteId } from "../../app-routes.ts";
 import type { ApplicationContext } from "../../app/context.ts";
+import type { ComposerEditor } from "../../components/composer-editor.ts";
 import type { BoardProvider } from "../../lib/board/provider.ts";
 import type { BoardFace } from "../../lib/board/settings.ts";
 import type { BoardSnapshot } from "../../lib/board/types.ts";
@@ -198,11 +199,12 @@ export type ChatPaneConnectionScope = {
 };
 export const CHAT_OPEN_DETAILS_SELECTOR =
   ".chat-controls__inline-select[open], .context-usage details[open], .agent-chat__attach-menu[open], .chat-pr__checks[open]";
-export const CHAT_COMPOSER_TEXTAREA_SELECTOR = ".agent-chat__composer-combobox > textarea";
+export const CHAT_COMPOSER_EDITOR_SELECTOR =
+  ".agent-chat__composer-combobox > openclaw-composer-editor";
 // Menus without typeahead own activation/navigation, not printable input.
 // Keeping those key classes separate prevents an open menu from silently dropping a letter.
 const CHAT_PRINTABLE_KEY_TARGET_SELECTOR =
-  "input, textarea, select, [contenteditable]:not([contenteditable='false']), [role='combobox'], [role='textbox'], [data-chat-autotype-exempt]";
+  "input, textarea, openclaw-composer-editor, select, [contenteditable]:not([contenteditable='false']), [role='combobox'], [role='textbox'], [data-chat-autotype-exempt]";
 const CHAT_SPACE_ACTIVATION_SELECTOR =
   "a[href], button, summary, [role='button'], [role='checkbox'], [role='link'], [role='listbox'], [role='menu'], [role='menuitem'], [role='menuitemcheckbox'], [role='menuitemradio'], [role='option'], [role='radio'], [role='switch'], [role='tab']";
 const CHAT_DROPDOWN_KEYS = new Set([
@@ -272,7 +274,7 @@ export function focusChatComposerFromPrintableKeydown(
   ) {
     return;
   }
-  const composer = root.querySelector<HTMLTextAreaElement>(CHAT_COMPOSER_TEXTAREA_SELECTOR);
+  const composer = root.querySelector<ComposerEditor>(CHAT_COMPOSER_EDITOR_SELECTOR);
   if (!composer || composer.disabled || composer.readOnly) {
     return;
   }

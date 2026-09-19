@@ -1,5 +1,6 @@
 import { writeFile } from "node:fs/promises";
 import { expect, it } from "vitest";
+import { fillComposer } from "../test-helpers/composer-editor.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import {
   createControlUiE2eContextOptions,
@@ -23,11 +24,11 @@ suite.define(() => {
       await expect.poll(() => cells.count()).toBe(2);
       const left = cells.first();
       const right = cells.last();
-      const composer = left.locator(".agent-chat__composer-combobox textarea");
+      const composer = left.locator(".agent-chat__composer-combobox openclaw-composer-editor");
       await composer.waitFor({ state: "visible" });
       await gateway.setOnline(false);
       for (const message of ["QA queued A", "QA queued B", "QA queued C"]) {
-        await composer.fill(message);
+        await fillComposer(composer, message);
         await composer.press("Enter");
         await right.locator(".chat-queue__text", { hasText: message }).waitFor();
       }

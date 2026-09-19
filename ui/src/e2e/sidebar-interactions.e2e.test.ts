@@ -1,6 +1,8 @@
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import { CONTROL_UI_BOOTSTRAP_CONFIG_PATH } from "../../../src/gateway/control-ui-bootstrap-contract.js";
+import type { ComposerEditor } from "../components/composer-editor.ts";
+import { composerValue, fillComposer } from "../test-helpers/composer-editor.ts";
 import {
   controlUiSessionPath,
   controlUiSessionUrl,
@@ -101,9 +103,9 @@ suite.define(() => {
         controlUiSessionUrl(`${suite.server.baseUrl}operator/`, `agent:${agentId}:main`),
       );
       await waitForControlUiRoute(page, { routeId: "chat" });
-      const composer = page.locator(".agent-chat__composer-combobox > textarea");
+      const composer = page.locator(".agent-chat__composer-combobox > openclaw-composer-editor");
       const draft = "Keep this unsent conversation draft";
-      await composer.fill(draft);
+      await fillComposer(composer, draft);
       const originalUrl = page.url();
       await captureSidebarUiProof(suite, page, "new-session-links-source.png");
 
@@ -172,7 +174,7 @@ suite.define(() => {
           expect(popup.url()).toBe(expectedUrl.href);
           expect(await sessionCreates(popup)).toEqual([]);
           expect(page.url()).toBe(originalUrl);
-          expect(await composer.inputValue()).toBe(draft);
+          expect(await composerValue(composer)).toBe(draft);
           expect(await sessionCreates(page)).toEqual([]);
           if ("group" in action.params) {
             await captureSidebarUiProof(suite, popup, "new-session-links-group-tab.png");
@@ -219,8 +221,8 @@ suite.define(() => {
         value: "",
       };
       const observer = new MutationObserver(() => {
-        const textarea = document.querySelector<HTMLTextAreaElement>(
-          ".agent-chat__composer-combobox > textarea",
+        const textarea = document.querySelector<ComposerEditor>(
+          ".agent-chat__composer-combobox > openclaw-composer-editor",
         );
         const input = textarea?.closest<HTMLElement>(".agent-chat__input");
         if (!textarea || !input?.classList.contains("agent-chat__input--prefill-attention")) {
@@ -254,7 +256,7 @@ suite.define(() => {
         .locator('wa-dropdown.sidebar-agent-menu wa-dropdown-item[value="command:capabilities"]')
         .click();
 
-      const textarea = page.locator(".agent-chat__composer-combobox > textarea");
+      const textarea = page.locator(".agent-chat__composer-combobox > openclaw-composer-editor");
       const input = textarea.locator("xpath=ancestor::*[contains(@class, 'agent-chat__input')][1]");
       let cueStyle = { background: "", boxShadow: "", duration: "", name: "" };
       await expect
@@ -271,7 +273,7 @@ suite.define(() => {
         .toEqual({ active: true, focused: true, value: "What can you do?" });
       await expect
         .poll(() =>
-          textarea.evaluate((element: HTMLTextAreaElement) => ({
+          textarea.evaluate((element: ComposerEditor) => ({
             focused: element === document.activeElement,
             value: element.value,
           })),

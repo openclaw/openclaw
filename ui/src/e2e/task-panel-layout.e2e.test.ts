@@ -6,6 +6,7 @@ import { afterAll, beforeAll, expect, it } from "vitest";
 import { buildWidgetDocument } from "../../../src/canvas/wrap.js";
 import { buildBoardWidgetSandboxPath } from "../../../src/gateway/board-sandbox.js";
 import { createSandboxHostHttpServer } from "../../../src/gateway/mcp-app-sandbox-http.js";
+import { composerValue, fillComposer } from "../test-helpers/composer-editor.ts";
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { dockChatSidePanel } from "./chat-side-panel.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -138,8 +139,8 @@ suite.define(() => {
         const documentIdentity = await input.evaluate((element) =>
           Reflect.get(element.ownerDocument.defaultView!, "documentIdentity"),
         );
-        const composer = page.locator(".agent-chat__composer-combobox textarea");
-        await composer.fill("Keep this chat draft");
+        const composer = page.locator(".agent-chat__composer-combobox openclaw-composer-editor");
+        await fillComposer(composer, "Keep this chat draft");
         const chat = page.locator(".sidebar-region__primary");
         const dashboard = page.locator('[data-panel-slot="dashboard"]');
         const taskHeader = page.locator(".chat-pane__header");
@@ -154,7 +155,7 @@ suite.define(() => {
             ),
           ).toBe(documentIdentity);
           expect(await input.inputValue()).toBe("Keep this unsaved widget input");
-          expect(await composer.inputValue()).toBe("Keep this chat draft");
+          expect(await composerValue(composer)).toBe("Keep this chat draft");
         };
         const expectSwapLabel = async (label: string) => {
           await expect.poll(() => swap.getAttribute("aria-label")).toBe(label);

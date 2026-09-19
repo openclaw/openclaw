@@ -1,13 +1,14 @@
 import WaPopup from "@awesome.me/webawesome/dist/components/popup/popup.js";
 import { html, nothing } from "lit";
 import { ref } from "lit/directives/ref.js";
+import { ComposerEditor } from "../../../components/composer-editor.ts";
 import {
   handleComposerMenuKeydown,
   renderComposerMenu,
   renderComposerMenuOption,
 } from "../../../components/composer-menu.ts";
 import "../../../styles/chat/emoji-menu.css";
-import { TextareaTokenAnchor } from "../../../components/textarea-token-anchor.ts";
+import { ComposerTokenAnchor } from "../../../components/composer-token-anchor.ts";
 import { t } from "../../../i18n/index.ts";
 import {
   emojiForShortcode,
@@ -27,13 +28,13 @@ export class ComposerEmojiMenu {
   private inserting = false;
   private acceptedEnter = false;
   private requestUpdate: (() => void) | null = null;
-  private readonly anchor = new TextareaTokenAnchor(() => {
+  private readonly anchor = new ComposerTokenAnchor(() => {
     const update = this.requestUpdate;
     this.dismiss(this.textarea);
     update?.();
   });
   private popup: WaPopup | null = null;
-  private textarea: HTMLTextAreaElement | null = null;
+  private textarea: ComposerEditor | null = null;
   private readonly popupRef = (element?: Element) => {
     this.popup = element instanceof WaPopup ? element : null;
     this.syncAnchor();
@@ -61,7 +62,7 @@ export class ComposerEmojiMenu {
     this.dismissed = null;
     this.resolver.reset();
   }
-  dismiss(textarea: HTMLTextAreaElement | null) {
+  dismiss(textarea: ComposerEditor | null) {
     this.close();
     // Window-level picker dismissal runs before the textarea key handler.
     this.dismissed = textarea ? { value: textarea.value, caret: textarea.selectionStart } : null;
@@ -73,7 +74,7 @@ export class ComposerEmojiMenu {
     return this.open ? `:${this.items[this.index]}:` : "";
   }
 
-  update(target: HTMLTextAreaElement, requestUpdate: () => void, enabled = true) {
+  update(target: ComposerEditor, requestUpdate: () => void, enabled = true) {
     if (
       this.dismissed &&
       this.dismissed.caret === target.selectionStart &&
@@ -111,7 +112,7 @@ export class ComposerEmojiMenu {
   }
 
   private insert(
-    textarea: HTMLTextAreaElement,
+    textarea: ComposerEditor,
     target: EmojiTarget,
     emoji: string,
     requestUpdate: () => void,
@@ -125,11 +126,10 @@ export class ComposerEmojiMenu {
     this.inserting = true;
     this.close();
     textarea.setSelectionRange(target.start, target.end);
-    // Unlike value/setRangeText, the browser editing command records an undoable
-    // replacement. Its input event goes through the host's canonical draft owner.
+    // Keep the replacement undoable and publish through the canonical draft owner.
     let inserted = false;
     try {
-      inserted = textarea.ownerDocument.execCommand?.("insertText", false, emoji) ?? false;
+      inserted = textarea.insertText(emoji);
     } finally {
       this.inserting = false;
     }
@@ -148,7 +148,7 @@ export class ComposerEmojiMenu {
       event.isComposing ||
       event.inputType !== "insertText" ||
       event.data !== ":" ||
-      !(textarea instanceof HTMLTextAreaElement) ||
+      !(textarea instanceof ComposerEditor) ||
       textarea.selectionStart !== textarea.selectionEnd
     ) {
       return false;
@@ -188,7 +188,7 @@ export class ComposerEmojiMenu {
     const textarea = event.target;
     if (
       !this.open ||
-      !(textarea instanceof HTMLTextAreaElement) ||
+      !(textarea instanceof ComposerEditor) ||
       textarea.disabled ||
       textarea.readOnly ||
       textarea.selectionStart !== textarea.selectionEnd ||
@@ -220,7 +220,7 @@ export class ComposerEmojiMenu {
     });
   }
 
-  private select(textarea: HTMLTextAreaElement, requestUpdate: () => void, index = this.index) {
+  private select(textarea: ComposerEditor, requestUpdate: () => void, index = this.index) {
     const target = this.resolver.find(textarea.value, textarea.selectionStart);
     const emoji = emojiForShortcode(this.items[index] ?? "");
     if (
@@ -234,7 +234,7 @@ export class ComposerEmojiMenu {
     this.insert(textarea, target, emoji, requestUpdate);
   }
 
-  render(paneId: string, textarea: HTMLTextAreaElement | null, requestUpdate: () => void) {
+  render(paneId: string, textarea: ComposerEditor | null, requestUpdate: () => void) {
     if (!this.open || !textarea || textarea.disabled || textarea.readOnly) {
       return nothing;
     }

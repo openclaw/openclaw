@@ -3,6 +3,7 @@ import path from "node:path";
 import type { TaskSummary } from "@openclaw/gateway-protocol";
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
+import { composerEnabled, composerValue, fillComposer } from "../test-helpers/composer-editor.ts";
 import {
   defaultControlUiFeatureMethods,
   installMockGateway,
@@ -219,11 +220,11 @@ suite.define(() => {
         await page.getByText("Current rollout progress", { exact: true }).waitFor();
         await page.getByText(suggestion.title, { exact: true }).waitFor();
         const composer = page.locator(
-          ".chat-pane-cache__pane--active .agent-chat__composer-combobox textarea",
+          ".chat-pane-cache__pane--active .agent-chat__composer-combobox openclaw-composer-editor",
         );
         const draft = "Synthetic draft while background lists are pending.";
-        await expect.poll(() => composer.isEnabled()).toBe(true);
-        await composer.fill(draft);
+        await expect.poll(() => composerEnabled(composer)).toBe(true);
+        await fillComposer(composer, draft);
         await gateway.waitForRequest("sessions.messages.subscribe", { match: { key: sessionKey } });
         // Bulk replies are still held: the selected transcript and its live stream must work alone.
         await gateway.deferNext("chat.history");
@@ -239,10 +240,10 @@ suite.define(() => {
           },
         });
         await transcript.getByText("Live peer message after startup.", { exact: true }).waitFor();
-        expect(await composer.inputValue()).toBe(draft);
-        expect(await composer.isEditable()).toBe(true);
-        await composer.fill(`${draft} Still editable.`);
-        expect(await composer.inputValue()).toBe(`${draft} Still editable.`);
+        expect(await composerValue(composer)).toBe(draft);
+        expect(await composer.locator(".cm-content").isEditable()).toBe(true);
+        await fillComposer(composer, `${draft} Still editable.`);
+        expect(await composerValue(composer)).toBe(`${draft} Still editable.`);
         expect(await gateway.getRequests("chat.send")).toEqual([]);
         if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
           await page.screenshot({

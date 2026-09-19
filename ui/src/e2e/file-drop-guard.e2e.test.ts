@@ -1,5 +1,7 @@
 // Control UI tests cover browser-level file-drop routing against a mocked Gateway.
 import { expect, it } from "vitest";
+import type { ComposerEditor } from "../components/composer-editor.ts";
+import { fillComposer } from "../test-helpers/composer-editor.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import {
   createControlUiE2eContextOptions,
@@ -18,16 +20,16 @@ suite.define(() => {
       await installMockGateway(page);
 
       await page.goto(`${suite.server.baseUrl}chat`);
-      const composer = page.locator(".agent-chat__composer-combobox textarea");
+      const composer = page.locator(".agent-chat__composer-combobox openclaw-composer-editor");
       await composer.waitFor({ state: "visible", timeout: 10_000 });
-      await composer.fill("draft survives stray drop");
+      await fillComposer(composer, "draft survives stray drop");
 
       const stray = await page.locator("openclaw-app-shell").evaluate((element) => {
         const transfer = new DataTransfer();
         transfer.items.add(new File(["stray"], "stray-proof.txt", { type: "text/plain" }));
         const beforeUrl = location.href;
-        const beforeDraft = document.querySelector<HTMLTextAreaElement>(
-          ".agent-chat__composer-combobox textarea",
+        const beforeDraft = document.querySelector<ComposerEditor>(
+          ".agent-chat__composer-combobox openclaw-composer-editor",
         )?.value;
         const dragOver = new DragEvent("dragover", {
           bubbles: true,
@@ -43,8 +45,9 @@ suite.define(() => {
         element.dispatchEvent(drop);
         return {
           draftUnchanged:
-            document.querySelector<HTMLTextAreaElement>(".agent-chat__composer-combobox textarea")
-              ?.value === beforeDraft,
+            document.querySelector<ComposerEditor>(
+              ".agent-chat__composer-combobox openclaw-composer-editor",
+            )?.value === beforeDraft,
           dragOverPrevented: dragOver.defaultPrevented,
           dropEffect: transfer.dropEffect,
           dropPrevented: drop.defaultPrevented,

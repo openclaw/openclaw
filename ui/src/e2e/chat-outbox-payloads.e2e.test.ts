@@ -1,6 +1,7 @@
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { assert, expect, it } from "vitest";
+import { composerValue, fillComposer } from "../test-helpers/composer-editor.ts";
 import {
   waitForControlUiGatewayReady,
   waitForControlUiGatewayReconnecting,
@@ -158,7 +159,7 @@ suite.define(() => {
         const queued = (await readQueue(page))[0]!;
         expect(queued.attachmentPayload).toBeDefined();
         expect(queued.sendAttempts).toBe(0);
-        await expect.poll(() => composerFor(page).inputValue()).toBe("");
+        await expect.poll(() => composerValue(composerFor(page))).toBe("");
         await expectRequestCountStable(gateway, "chat.send", 0);
         await page.reload();
         await expect.poll(async () => (await readQueue(page))[0]?.sendRunId).toBe(queued.sendRunId);
@@ -217,7 +218,7 @@ suite.define(() => {
       expect(queued.attachmentPayload).toBeDefined();
       expect(queued.sendAttempts).toBe(0);
       await expect.poll(() => payloadCount(page)).toBe(1);
-      await expect.poll(() => composerFor(page).inputValue()).toBe("");
+      await expect.poll(() => composerValue(composerFor(page))).toBe("");
       await expectRequestCountStable(gateway, "chat.send", 0);
       await context.setOffline(false);
       await gateway.setOnline(true);
@@ -276,7 +277,9 @@ suite.define(() => {
         .getByRole("alert")
         .filter({ hasText: "Browser attachment storage is unavailable" })
         .waitFor();
-      expect(await composerFor(page).inputValue()).toBe("Mock Gateway: retain on blocked storage");
+      expect(await composerValue(composerFor(page))).toBe(
+        "Mock Gateway: retain on blocked storage",
+      );
       expect(await paneFor(page).locator(".chat-attachment-thumb").count()).toBe(1);
       await expectRequestCountStable(gateway, "chat.send", 0);
       expect(await readQueue(page)).toEqual([]);
@@ -611,7 +614,7 @@ suite.define(() => {
         };
       });
       await paneFor(page).getByRole("button", { name: "Send message", exact: true }).click();
-      await composerFor(page).fill("Mock Gateway: newer input must survive");
+      await fillComposer(composerFor(page), "Mock Gateway: newer input must survive");
       expect(await readQueue(page)).toEqual([]);
       await expectRequestCountStable(gateway, "chat.send", 0);
       await gate.evaluate((value) => value.release());
@@ -631,7 +634,7 @@ suite.define(() => {
           ],
         }),
       );
-      expect(await composerFor(page).inputValue()).toBe("Mock Gateway: newer input must survive");
+      expect(await composerValue(composerFor(page))).toBe("Mock Gateway: newer input must survive");
       expect(await paneFor(page).locator(".chat-attachment-thumb").count()).toBe(1);
     });
   });

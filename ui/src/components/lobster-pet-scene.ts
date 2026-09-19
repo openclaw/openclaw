@@ -242,7 +242,7 @@ export class LobsterComposerGeometry implements ReactiveController {
       return;
     }
     const footer = composer.querySelector(".agent-chat__composer-footer");
-    const editor = composer.querySelector("textarea");
+    const editor = composer.querySelector("openclaw-composer-editor");
     const controls = Array.from(
       footer?.querySelectorAll(
         ".agent-chat__composer-lead, .chat-composer-model-control, .agent-chat__composer-actions, button, wa-button, [role=button]",

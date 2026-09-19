@@ -1,4 +1,5 @@
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import { ComposerEditor } from "../../components/composer-editor.ts";
 import type { HumanMentionInput } from "../../lib/chat/human-mentions.ts";
 import {
   adjustTextareaHeight,
@@ -22,7 +23,7 @@ import { insertComposerDictation } from "../chat/composer-dictation.ts";
 export class NewSessionComposerTextareaController {
   // An opening gets one cast; typing and async picker updates never reroll it.
   readonly critterVisit = Math.random();
-  private textarea: HTMLTextAreaElement | null = null;
+  private textarea: ComposerEditor | null = null;
   private placeholderFrame: number | null = null;
   private placeholderStartedAt: number | null = null;
   private placeholderText = "";
@@ -32,6 +33,7 @@ export class NewSessionComposerTextareaController {
   private skillCommandClient: GatewayBrowserClient | null = null;
   private skillCommandAgentId = "";
   private skillCommandDraftOwnerKey = "";
+  private resetDraftHistory = false;
   readonly skillMenuState = createSkillMenuState();
   readonly slashMenuState = createSlashMenuState();
   readonly mentionMenu = new HumanMentionMenu();
@@ -42,7 +44,7 @@ export class NewSessionComposerTextareaController {
   capabilityMenuView: ChatComposerPlusMenuView = "root";
 
   readonly ref = (element?: Element) => {
-    const nextTextarea = element instanceof HTMLTextAreaElement ? element : null;
+    const nextTextarea = element instanceof ComposerEditor ? element : null;
     if (this.textarea && this.textarea !== nextTextarea) {
       disconnectTextareaOverflowObserver(this.textarea);
     }
@@ -57,6 +59,10 @@ export class NewSessionComposerTextareaController {
   };
 
   syncDraft(message: string) {
+    if (this.resetDraftHistory || (message === "" && this.textarea?.value)) {
+      this.textarea?.resetValue(message);
+      this.resetDraftHistory = false;
+    }
     // The stable ref measures attachment only. Programmatic restores and
     // resets still need a post-render measurement after Lit commits .value.
     if (this.textarea?.isConnected && this.textarea.value !== message) {
@@ -210,6 +216,7 @@ export class NewSessionComposerTextareaController {
     this.skillCommandClient = client;
     this.skillCommandAgentId = normalizedAgentId;
     this.skillCommandDraftOwnerKey = draftOwnerKey;
+    this.resetDraftHistory = true;
     this.emojiMenu.close();
     resetSkillMenuState(this.skillMenuState);
   }

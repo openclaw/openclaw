@@ -1,5 +1,6 @@
 import { writeFile } from "node:fs/promises";
 import { expect, it } from "vitest";
+import { composerValue, fillComposer } from "../test-helpers/composer-editor.ts";
 import {
   controlUiSessionUrl,
   defaultControlUiFeatureMethods,
@@ -37,10 +38,12 @@ suite.define(() => {
       });
       try {
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, homeKey));
-        const composer = page.locator("openclaw-chat-page .agent-chat__composer-combobox textarea");
+        const composer = page.locator(
+          "openclaw-chat-page .agent-chat__composer-combobox openclaw-composer-editor",
+        );
         await composer.waitFor({ state: "visible" });
         await gateway.deferNext("chat.send", { queueMode: "steer" });
-        await composer.fill(command);
+        await fillComposer(composer, command);
         await composer.press("Enter");
         const request = await gateway.waitForRequest("chat.send");
         expect(request.params).toMatchObject({
@@ -48,20 +51,20 @@ suite.define(() => {
           message: "QA recovery message",
           queueMode: "steer",
         });
-        await expect.poll(() => composer.inputValue()).toBe("");
+        await expect.poll(() => composerValue(composer)).toBe("");
         await page.screenshot({ path: `${suite.artifactDir}/command-pending.png`, fullPage: true });
 
         const dockComposer = page.locator(
-          "openclaw-assistant-panel .agent-chat__composer-combobox textarea",
+          "openclaw-assistant-panel .agent-chat__composer-combobox openclaw-composer-editor",
         );
         if (handoff) {
           await page.getByRole("link", { name: "Agents", exact: true }).click();
           await page.waitForURL((url) => url.pathname.endsWith("/agents"));
           await page.locator(".sidebar-footer-bar__home").click();
           await dockComposer.waitFor({ state: "visible" });
-          await expect.poll(() => dockComposer.inputValue()).toBe("");
+          await expect.poll(() => composerValue(dockComposer)).toBe("");
           if (newerDraft) {
-            await dockComposer.fill(newer);
+            await fillComposer(dockComposer, newer);
           }
           await page.screenshot({
             path: `${suite.artifactDir}/dock-before-failure.png`,
@@ -77,8 +80,8 @@ suite.define(() => {
           .locator("openclaw-chat-page .chat-error", { hasText: "QA synthetic command rejection" })
           .waitFor({ state: "attached" });
         const failureObservation = {
-          sourceDraft: await composer.inputValue(),
-          dockDraft: handoff ? await dockComposer.inputValue() : null,
+          sourceDraft: await composerValue(composer),
+          dockDraft: handoff ? await composerValue(dockComposer) : null,
           errors: await page.locator(".chat-error").allTextContents(),
         };
         await page.screenshot({
@@ -94,7 +97,7 @@ suite.define(() => {
           handoff,
           newerDraft,
           failureObservation,
-          returnedDraft: await composer.inputValue(),
+          returnedDraft: await composerValue(composer),
           pageErrors,
           requests: await gateway.getRequests("chat.send"),
         };
@@ -102,7 +105,7 @@ suite.define(() => {
         await page.screenshot({ path: `${suite.artifactDir}/returned-home.png`, fullPage: true });
         console.log(JSON.stringify({ artifactDir: suite.artifactDir, ...receipt }));
         expect(receipt.requests).toHaveLength(1);
-        await expect.poll(() => composer.inputValue()).toBe(newerDraft ? newer : command);
+        await expect.poll(() => composerValue(composer)).toBe(newerDraft ? newer : command);
         await page.screenshot({
           path: `${suite.artifactDir}/returned-home-verified.png`,
           fullPage: true,

@@ -1,5 +1,6 @@
 import path from "node:path";
 import { expect, it } from "vitest";
+import { composerValue, fillComposer } from "../test-helpers/composer-editor.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
   createChatFlowE2eSuite,
@@ -73,8 +74,8 @@ suite.define(() => {
           has: page.getByRole("button", { name: "Cancel reply" }),
         });
         await expect.poll(() => composerReply.textContent()).toContain(replyMessage.content);
-        const composer = page.locator(".agent-chat__composer-combobox textarea");
-        await composer.fill("Keep this separate composer draft.");
+        const composer = page.locator(".agent-chat__composer-combobox openclaw-composer-editor");
+        await fillComposer(composer, "Keep this separate composer draft.");
         const custom = card.getByRole("textbox", { name: `Your own answer for ${title}` });
         await custom.fill("/stop is an example for the whole team");
         expect(
@@ -106,7 +107,7 @@ suite.define(() => {
         );
         expect(params.queueMode).toBe(active ? "steer" : undefined);
         expect(params).not.toHaveProperty("replyToId");
-        expect(await composer.inputValue()).toBe("Keep this separate composer draft.");
+        expect(await composerValue(composer)).toBe("Keep this separate composer draft.");
         expect(await composerReply.textContent()).toContain(replyMessage.content);
         expect(await gateway.getRequests("chat.abort")).toHaveLength(0);
         expect(await gateway.getRequests("question.resolve")).toHaveLength(0);

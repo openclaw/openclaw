@@ -1,6 +1,7 @@
 import path from "node:path";
 import { expect, type Locator, type Page } from "playwright/test";
 import { beforeEach, it } from "vitest";
+import { composerValue, fillComposer } from "../test-helpers/composer-editor.ts";
 // Control UI E2E tests cover attributed chat identity placement.
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
@@ -201,9 +202,10 @@ suite.define(() => {
             await expectColumn(page.locator(".chat-group.assistant > .chat-group-messages"));
             await expect(page.locator(".chat-group .chat-avatar:visible")).toHaveCount(0);
           }
-          await page
-            .locator(".agent-chat__composer-combobox textarea")
-            .fill("Read the example file.");
+          await fillComposer(
+            page.locator(".agent-chat__composer-combobox openclaw-composer-editor"),
+            "Read the example file.",
+          );
           await page.getByRole("button", { name: "Send message" }).click();
           const request = await gateway.waitForRequest("chat.send");
           const params = request.params;
@@ -615,7 +617,10 @@ suite.define(() => {
       const before = await readUserAvatarLayout(priorPrompt);
       const peerBefore = await readUserAvatarLayout(peerPrompt);
 
-      await page.locator(".agent-chat__composer-combobox textarea").fill(prompt);
+      await fillComposer(
+        page.locator(".agent-chat__composer-combobox openclaw-composer-editor"),
+        prompt,
+      );
       await page.getByRole("button", { name: "Send message" }).click();
       const sendRequest = await gateway.waitForRequest("chat.send");
       const afterSend = await readUserAvatarLayout(prompt);
@@ -687,7 +692,10 @@ suite.define(() => {
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:main"));
       await page.getByText("Ready for a delivery check.").waitFor();
       await gateway.deferNext("chat.send");
-      await page.locator(".agent-chat__composer-combobox textarea").fill(prompt);
+      await fillComposer(
+        page.locator(".agent-chat__composer-combobox openclaw-composer-editor"),
+        prompt,
+      );
       await page.getByRole("button", { name: "Send message" }).click();
       const firstSend = await gateway.waitForRequest("chat.send");
       const firstRunId = String((firstSend.params as { idempotencyKey?: unknown }).idempotencyKey);
@@ -725,7 +733,11 @@ suite.define(() => {
       await expect(group).toBeVisible();
       await expect(page.locator(".chat-queue__item--failed")).toHaveCount(0);
       await expect(page.locator(".chat-error")).toHaveCount(0);
-      await expect(page.locator(".agent-chat__composer-combobox textarea")).toHaveValue("");
+      await expect
+        .poll(() =>
+          composerValue(page.locator(".agent-chat__composer-combobox openclaw-composer-editor")),
+        )
+        .toBe("");
       const status = group.locator(".chat-send-status");
       await expect(status).toHaveText("· Not sent · Retry");
       await expect(group.locator(".chat-sender-name")).toHaveCount(0);

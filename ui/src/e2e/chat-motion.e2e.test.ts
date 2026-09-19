@@ -1,5 +1,6 @@
 import path from "node:path";
 import { expect, it } from "vitest";
+import { fillComposer } from "../test-helpers/composer-editor.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
   createChatFlowE2eSuite,
@@ -76,9 +77,10 @@ suite.define(() => {
         if (dir) {
           await page.screenshot({ path: path.join(dir, "01-history.png") });
         }
-        await page
-          .locator(".agent-chat__composer-combobox textarea")
-          .fill("Make this feel fast and smooth");
+        await fillComposer(
+          page.locator(".agent-chat__composer-combobox openclaw-composer-editor"),
+          "Make this feel fast and smooth",
+        );
         await page.getByRole("button", { name: "Send message", exact: true }).click();
         const request = await gateway.waitForRequest("chat.send");
         const runId = requireString(requireRecord(request.params).idempotencyKey, "run id");

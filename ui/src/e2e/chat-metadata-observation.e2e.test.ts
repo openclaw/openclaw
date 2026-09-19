@@ -2,6 +2,7 @@ import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
+import { composerValue, fillComposer } from "../test-helpers/composer-editor.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
   controlUiBundledSettingsStorageKey,
@@ -179,8 +180,8 @@ suite.define(() => {
           await expectCatalog(page.locator('openclaw-chat-pane[aria-hidden="false"]'), model.name);
         }
         const visible = page.locator('openclaw-chat-pane[aria-hidden="false"]');
-        const draft = visible.locator(".agent-chat__composer-combobox textarea");
-        await draft.fill("Retain this draft");
+        const draft = visible.locator(".agent-chat__composer-combobox openclaw-composer-editor");
+        await fillComposer(draft, "Retain this draft");
         const before = await requestCounts(gateway);
         const proof =
           process.env.OPENCLAW_UI_E2E_RECORD === "1"
@@ -204,7 +205,7 @@ suite.define(() => {
           "chat.metadata": before["chat.metadata"] + 1,
           "models.list": before["models.list"] + 1,
         });
-        expect(await draft.inputValue()).toBe("Retain this draft");
+        expect(await composerValue(draft)).toBe("Retain this draft");
 
         await page
           .locator(`.sidebar-recent-session[data-session-key="${sessionKeys[0]}"] a`)
@@ -400,8 +401,10 @@ suite.define(() => {
       await expect.poll(() => panes.count()).toBe(2);
       await gateway.waitForRequest("chat.startup", { after: startupsBefore });
       await gateway.resolveDeferred("chat.metadata");
-      const composer = panes.nth(1).locator(".agent-chat__composer-combobox textarea");
-      await composer.fill("/recovered-metadata");
+      const composer = panes
+        .nth(1)
+        .locator(".agent-chat__composer-combobox openclaw-composer-editor");
+      await fillComposer(composer, "/recovered-metadata");
       await expect
         .poll(() =>
           panes

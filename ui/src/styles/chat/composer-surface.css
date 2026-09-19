@@ -188,13 +188,17 @@
 /* Focus is a neutral state, not an accent/status signal. Keep it within one
    subtle luminance step of the resting hairline; a second ring or outer spread
    would make the composer look thicker as soon as the operator starts typing. */
-.agent-chat__input:has(.agent-chat__composer-combobox > :is(textarea, input):focus) {
+.agent-chat__input:has(
+  .agent-chat__composer-combobox > :is(openclaw-composer-editor, textarea, input):focus-within
+) {
   border-color: color-mix(in srgb, var(--chat-composer-hairline) 94%, var(--text-strong));
   box-shadow: 0 4px 16px rgb(0 0 0 / 5%);
 }
 
 :root[data-theme-mode="light"]
-  .agent-chat__input:has(.agent-chat__composer-combobox > :is(textarea, input):focus) {
+  .agent-chat__input:has(
+    .agent-chat__composer-combobox > :is(openclaw-composer-editor, textarea, input):focus-within
+  ) {
   border-color: transparent;
   box-shadow:
     0 0 0 1px rgb(0 0 0 / 8%),
@@ -271,7 +275,7 @@
   min-width: 0;
 }
 
-.agent-chat__composer-combobox > :is(textarea, input) {
+.agent-chat__composer-combobox > :is(openclaw-composer-editor, textarea, input) {
   --control-ui-touch-input-size: var(--chat-composer-editor-size);
 
   width: 100%;
@@ -295,7 +299,8 @@
   outline: none;
 }
 
-.agent-chat__composer-combobox > textarea:is([data-scroll-fade-top], [data-scroll-fade-bottom]) {
+.agent-chat__composer-combobox
+  > :is(openclaw-composer-editor, textarea):is([data-scroll-fade-top], [data-scroll-fade-bottom]) {
   --chat-composer-scroll-mask-top: currentColor;
   --chat-composer-scroll-mask-bottom: currentColor;
 
@@ -308,15 +313,15 @@
   );
 }
 
-.agent-chat__composer-combobox > textarea[data-scroll-fade-top] {
+.agent-chat__composer-combobox > :is(openclaw-composer-editor, textarea)[data-scroll-fade-top] {
   --chat-composer-scroll-mask-top: transparent;
 }
 
-.agent-chat__composer-combobox > textarea[data-scroll-fade-bottom] {
+.agent-chat__composer-combobox > :is(openclaw-composer-editor, textarea)[data-scroll-fade-bottom] {
   --chat-composer-scroll-mask-bottom: transparent;
 }
 
-.agent-chat__composer-combobox > :is(textarea, input):focus-visible {
+.agent-chat__composer-combobox > :is(openclaw-composer-editor, textarea, input):focus-within {
   box-shadow: none;
 }
 
@@ -869,7 +874,7 @@
     align-self: stretch;
   }
 
-  .agent-chat__composer-combobox > :is(textarea, input) {
+  .agent-chat__composer-combobox > :is(openclaw-composer-editor, textarea, input) {
     flex: 1 1 auto;
     padding-top: 10px;
     padding-bottom: 10px;
@@ -922,7 +927,7 @@
     background: var(--chat-composer-surface);
   }
 
-  .agent-chat__composer-combobox > :is(textarea, input) {
+  .agent-chat__composer-combobox > :is(openclaw-composer-editor, textarea, input) {
     min-height: 48px;
     max-height: 56px;
     overflow-y: auto;

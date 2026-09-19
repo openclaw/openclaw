@@ -2,6 +2,7 @@
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
+import { composerValue, fillComposer } from "../test-helpers/composer-editor.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
@@ -86,8 +87,8 @@ suite.define(() => {
 
         await page.goto(`${suite.server.baseUrl}chat`);
         await gateway.waitForRequest("chat.startup");
-        const composer = page.locator(".agent-chat__composer-combobox textarea");
-        await composer.fill("Review this with $auto");
+        const composer = page.locator(".agent-chat__composer-combobox openclaw-composer-editor");
+        await fillComposer(composer, "Review this with $auto");
 
         const picker = page.getByRole("listbox", { name: "Skill references" });
         await picker.waitFor({ state: "visible" });
@@ -102,13 +103,13 @@ suite.define(() => {
           );
         }
         await composer.press("Enter");
-        await expect.poll(() => composer.inputValue()).toBe("Review this with $autoreview ");
+        await expect.poll(() => composerValue(composer)).toBe("Review this with $autoreview ");
 
-        await composer.fill(`${await composer.inputValue()}and $technical`);
+        await fillComposer(composer, `${await composerValue(composer)}and $technical`);
         await expect.poll(() => picker.getByRole("option").count()).toBe(1);
         await composer.press("Tab");
         await expect
-          .poll(() => composer.inputValue())
+          .poll(() => composerValue(composer))
           .toBe("Review this with $autoreview and $technical_documentation ");
 
         if (artifactDir) {
@@ -124,23 +125,23 @@ suite.define(() => {
           "Review this with $autoreview and $technical_documentation",
         );
 
-        await composer.fill("Print $HOME");
+        await fillComposer(composer, "Print $HOME");
         await expect.poll(() => picker.count()).toBe(0);
-        await composer.fill("Review this with /auto");
+        await fillComposer(composer, "Review this with /auto");
         const slashPicker = page.getByRole("listbox", { name: "Slash commands" });
         await slashPicker.waitFor({ state: "visible" });
         await expect.poll(() => slashPicker.getByRole("option").count()).toBe(1);
         await composer.press("Enter");
-        await expect.poll(() => composer.inputValue()).toBe("Review this with $autoreview ");
+        await expect.poll(() => composerValue(composer)).toBe("Review this with $autoreview ");
 
-        await composer.fill("/");
+        await fillComposer(composer, "/");
         await page.getByRole("listbox", { name: "Slash commands" }).waitFor({ state: "visible" });
         await expect.poll(() => page.getByRole("option", { name: /\/status/u }).count()).toBe(2);
 
         const slashOptions = page
           .getByRole("listbox", { name: "Slash commands" })
           .getByRole("option");
-        await composer.fill("/sta");
+        await fillComposer(composer, "/sta");
         await expect
           .poll(async () => {
             const names = await slashOptions.locator(".slash-menu-name").allTextContents();
@@ -148,7 +149,7 @@ suite.define(() => {
           })
           .toEqual({ first: "/status", last: "/status_report" });
         await composer.press("Tab");
-        await expect.poll(() => composer.inputValue()).toBe("/status");
+        await expect.poll(() => composerValue(composer)).toBe("/status");
       },
     );
   });

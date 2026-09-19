@@ -1,6 +1,11 @@
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
+import {
+  accessibleChatComposer,
+  composerValue,
+  fillComposer,
+} from "../test-helpers/composer-editor.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { requireRecord, requireString } from "./chat-flow.test-support.ts";
@@ -28,13 +33,13 @@ suite.define(() => {
           await page.goto(`${suite.server.baseUrl}chat`);
           await openChatSidePanelType(page, "Side chat");
           await held.request;
-          const main = page.locator(".agent-chat__composer-shell textarea");
+          const main = page.locator(".agent-chat__composer-shell openclaw-composer-editor");
           const side = page.getByRole("textbox", { name: "Ask in side chat", exact: true });
           expect(await side.count()).toBe(0);
           if (newerMainIntent) {
             await main.click();
             await page.keyboard.type("Keep typing here");
-            expect(await main.inputValue()).toBe("Keep typing here");
+            expect(await composerValue(main)).toBe("Keep typing here");
             expect(await main.evaluate((element) => document.activeElement === element)).toBe(true);
           }
           await page.screenshot({ path: path.join(artifacts, "before-rail-arrives.png") });
@@ -43,12 +48,12 @@ suite.define(() => {
           const afterMount = {
             mainFocused: await main.evaluate((element) => document.activeElement === element),
             sideFocused: await side.evaluate((element) => document.activeElement === element),
-            mainDraft: await main.inputValue(),
+            mainDraft: await composerValue(main),
             sideDraft: await side.inputValue(),
           };
           await page.keyboard.type(" continued");
           const afterTyping = {
-            mainDraft: await main.inputValue(),
+            mainDraft: await composerValue(main),
             sideDraft: await side.inputValue(),
           };
           await page.screenshot({ path: path.join(artifacts, "after-rail-and-continuation.png") });
@@ -97,7 +102,9 @@ suite.define(() => {
             await page.getByRole("button", { name: "Open split view", exact: true }).click();
             const panes = page.locator("openclaw-chat-pane.chat-split-view__pane");
             await expect.poll(() => panes.count()).toBe(2);
-            foreground = panes.last().locator(".agent-chat__composer-shell textarea");
+            foreground = panes
+              .last()
+              .locator(".agent-chat__composer-shell openclaw-composer-editor");
             side = panes.first().getByRole("textbox", { name: "Ask in side chat", exact: true });
           } else {
             await page.keyboard.press("ControlOrMeta+k");
@@ -105,7 +112,9 @@ suite.define(() => {
           }
           await foreground.click();
           await page.keyboard.type("Keep typing here");
-          expect(await foreground.inputValue()).toBe("Keep typing here");
+          expect(
+            await (target === "another pane" ? composerValue(foreground) : foreground.inputValue()),
+          ).toBe("Keep typing here");
           await page.screenshot({ path: path.join(artifacts, "before-rail-arrives.png") });
           held.release();
           await side.waitFor();
@@ -113,10 +122,12 @@ suite.define(() => {
             (element) => document.activeElement === element,
           );
           await page.keyboard.type(" continued");
-          const foregroundDraft = await foreground.inputValue();
+          const foregroundDraft = await (target === "another pane"
+            ? composerValue(foreground)
+            : foreground.inputValue());
           const mainDrafts = await Promise.all(
-            (await page.locator(".agent-chat__composer-shell textarea").all()).map((input) =>
-              input.inputValue(),
+            (await page.locator(".agent-chat__composer-shell openclaw-composer-editor").all()).map(
+              (input) => composerValue(input),
             ),
           );
           const sideDrafts = await Promise.all(
@@ -163,8 +174,8 @@ suite.define(() => {
           await page.goto(`${suite.server.baseUrl}settings/appearance`);
           await page.locator("[data-settings-follow-up-mode]").selectOption("queue");
           await page.goto(`${suite.server.baseUrl}chat?session=main`);
-          const main = page.getByRole("textbox", { name: "Chat composer", exact: true });
-          await main.fill("Keep the first run active");
+          const main = accessibleChatComposer(page);
+          await fillComposer(main, "Keep the first run active");
           await page.getByRole("button", { name: "Send message", exact: true }).click();
           const active = requireRecord((await gateway.waitForRequest("chat.send")).params);
           const runId = requireString(active.idempotencyKey, "active run idempotency key");
@@ -189,11 +200,11 @@ suite.define(() => {
           });
           await gateway.emitGatewayEvent("sessions.changed", acceptedSession);
           await page.locator(".chat-send-status").waitFor({ state: "detached" });
-          await main.fill("Queued correction");
+          await fillComposer(main, "Queued correction");
           await page.getByRole("button", { name: "Queue message", exact: true }).click();
           const row = page.locator(".chat-queue__item", { hasText: "Queued correction" });
           await row.waitFor();
-          await main.fill("Separate main draft");
+          await fillComposer(main, "Separate main draft");
           await row.dblclick();
           const editor = page.locator(".chat-queue__edit-input");
           await editor.waitFor();
@@ -221,7 +232,7 @@ suite.define(() => {
           );
           await page.keyboard.type(" continued");
           const drafts = {
-            main: await main.inputValue(),
+            main: await composerValue(main),
             queued: await editor.inputValue(),
             side: await side.inputValue(),
           };

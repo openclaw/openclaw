@@ -1,4 +1,5 @@
 import { expect, it } from "vitest";
+import { fillComposer } from "../test-helpers/composer-editor.ts";
 import {
   createNewSessionPageE2eSuite,
   installMockGateway,
@@ -123,7 +124,7 @@ suite.define(() => {
           ),
         )
         .toEqual(["3 overrides"]);
-      await page.locator(".new-session-page__message").fill("prepare the release");
+      await fillComposer(page.locator(".new-session-page__message"), "prepare the release");
       await composer.getByRole("button", { name: "Start session" }).click();
 
       const create = await gateway.waitForRequest("sessions.create");

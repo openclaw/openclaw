@@ -1,4 +1,5 @@
 import { html, nothing, type TemplateResult } from "lit";
+import type { ComposerEditor } from "../../../components/composer-editor.ts";
 import {
   handleComposerMenuKeydown,
   renderComposerMenu,
@@ -43,7 +44,7 @@ export type SkillMenuHost = {
   paneId: string;
   getDraft: () => string;
   commitDraft: (next: string) => void;
-  getTextarea: () => HTMLTextAreaElement | null;
+  getTextarea: () => ComposerEditor | null;
   refreshCommands?: () => void | Promise<void>;
 };
 
@@ -239,6 +240,7 @@ function selectSkillMention(
     }
     currentTextarea.focus({ preventScroll: true });
     currentTextarea.setSelectionRange(nextCaret, nextCaret);
+    currentTextarea.refreshChips();
   });
 }
 

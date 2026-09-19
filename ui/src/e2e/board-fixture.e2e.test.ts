@@ -13,6 +13,11 @@ import { runQaGatewayFixture } from "../../../test/helpers/qa-gateway-cleanup.ts
 import { stopChildProcess } from "../../../test/helpers/stop-child-process.ts";
 import type { ApplicationRuntime } from "../app/bootstrap.ts";
 import type { SkillWorkshopDiffResponse } from "../lib/skill-workshop/diff.ts";
+import {
+  accessibleChatComposer,
+  composerValue,
+  fillComposer,
+} from "../test-helpers/composer-editor.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
   canRunPlaywrightChromium,
@@ -194,7 +199,7 @@ describeStandaloneMockServer("standalone Control UI mock server", () => {
     const page = await browser.newPage();
     try {
       await page.goto(new URL("/chat", fixtureServer.url).toString());
-      await page.getByRole("textbox", { name: "Chat composer", exact: true }).waitFor();
+      await accessibleChatComposer(page).waitFor();
       const replies = await requestPreviewGateway(page, [
         { method: "openclaw.chat", params: { sessionId: "delayed", message: "hello" } },
         { method: "openclaw.chat", params: { sessionId: "welcome" } },
@@ -212,14 +217,14 @@ describeStandaloneMockServer("standalone Control UI mock server", () => {
     const page = await browser.newPage();
     try {
       await page.goto(new URL("/chat", fixtureServer.url).toString());
-      await page.getByRole("textbox", { name: "Chat composer", exact: true }).waitFor();
+      await accessibleChatComposer(page).waitFor();
       await requestPreviewGateway(page, [
         { method: "sessions.groups.rename", params: { name: "Research", to: "Reviewed" } },
       ]);
       for (const reload of [false, true]) {
         if (reload) {
           await page.reload();
-          await page.getByRole("textbox", { name: "Chat composer", exact: true }).waitFor();
+          await accessibleChatComposer(page).waitFor();
         }
         expect(await requestPreviewGateway(page, [{ method: "sessions.groups.list" }])).toEqual([
           { groups: [{ name: "Reviewed", position: 0 }], sectionOrder: [] },
@@ -236,7 +241,7 @@ describeStandaloneMockServer("standalone Control UI mock server", () => {
       const page = await browser.newPage();
       try {
         await page.goto(new URL("/chat", fixtureServer.url).toString());
-        await page.getByRole("textbox", { name: "Chat composer", exact: true }).waitFor();
+        await accessibleChatComposer(page).waitFor();
         const sessionKey = `agent:openclaw-mock:subagent:mock-task-${task}`;
         const [description] = (await requestPreviewGateway(page, [
           { method: "sessions.describe", params: { key: sessionKey } },
@@ -286,7 +291,7 @@ describeStandaloneMockServer("standalone Control UI mock server", () => {
     const page = await browser.newPage();
     try {
       await page.goto(new URL("/chat", fixtureServer.url).toString());
-      await page.getByRole("textbox", { name: "Chat composer", exact: true }).waitFor();
+      await accessibleChatComposer(page).waitFor();
       expect(
         await requestPreviewGateway(page, [
           { method: "chat.startup", params: { sessionKey: "agent:main:main" } },
@@ -307,7 +312,7 @@ describeStandaloneMockServer("standalone Control UI mock server", () => {
     const page = await browser.newPage();
     try {
       await page.goto(new URL("/chat", fixtureServer.url).toString());
-      await page.getByRole("textbox", { name: "Chat composer", exact: true }).waitFor();
+      await accessibleChatComposer(page).waitFor();
       const replies = await requestPreviewGateway(
         page,
         ["telegram", "claude"].map((search) => ({
@@ -362,7 +367,7 @@ describeStandaloneMockServer("standalone Control UI mock server", () => {
           avatarRequests.length = 0;
           await page.reload();
         }
-        await page.getByRole("textbox", { name: "Chat composer", exact: true }).waitFor();
+        await accessibleChatComposer(page).waitFor();
         await expect.poll(() => avatarRequests.length).toBeGreaterThan(0);
         expect([...new Set(avatarRequests.map((url) => new URL(url).origin))]).toEqual([
           previewOrigin,
@@ -954,16 +959,16 @@ describeStandaloneMockServer("standalone Control UI mock server", () => {
 
       const prompt = "generic mock send probe";
       const composer = page.locator(
-        ".chat-pane-cache__pane--active .agent-chat__composer-combobox textarea",
+        ".chat-pane-cache__pane--active .agent-chat__composer-combobox openclaw-composer-editor",
       );
-      await composer.fill(prompt);
+      await fillComposer(composer, prompt);
       await page.getByRole("button", { name: "Send message" }).click();
 
       await page
         .locator(".chat-thread-inner")
         .getByText(`Mock reply: ${prompt}`, { exact: true })
         .waitFor();
-      expect(await composer.inputValue()).toBe("");
+      expect(await composerValue(composer)).toBe("");
     } finally {
       await page.close();
     }

@@ -1,6 +1,7 @@
 import { readFile } from "node:fs/promises";
 import type { Locator } from "playwright";
 import { expect, it } from "vitest";
+import { composerValue } from "../test-helpers/composer-editor.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import { waitForCommittedComposerDraft } from "./settle.test-support.ts";
@@ -40,7 +41,7 @@ suite.define(() => {
     await suite.withPage(contextOptions, async ({ page }) => {
       const gateway = await installMockGateway(page);
       await page.goto(`${suite.server.baseUrl}chat`);
-      const composer = page.locator(".agent-chat__composer-combobox textarea");
+      const composer = page.locator(".agent-chat__composer-combobox openclaw-composer-editor");
       await composer.waitFor({ state: "visible" });
       await paste(composer);
       const chip = page.getByRole("button", { name: pastedTextLabel, exact: true });
@@ -58,7 +59,7 @@ suite.define(() => {
       await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe(pastedText);
       await preview.getByRole("button", { name: "Show in text field", exact: true }).click();
       await expect.poll(() => page.locator(".chat-attachment-thumb").count()).toBe(0);
-      await expect.poll(() => composer.inputValue()).toBe(pastedText);
+      await expect.poll(() => composerValue(composer)).toBe(pastedText);
       expect(await gateway.getRequests("chat.send")).toHaveLength(0);
     });
   });
@@ -71,7 +72,7 @@ suite.define(() => {
       const sessionKey = "agent:main:main";
       const gateway = await installMockGateway(page, { sessionKey });
       await page.goto(`${suite.server.baseUrl}chat?session=${encodeURIComponent(sessionKey)}`);
-      const composer = page.locator(".agent-chat__composer-combobox textarea");
+      const composer = page.locator(".agent-chat__composer-combobox openclaw-composer-editor");
       await composer.waitFor({ state: "visible" });
       await paste(composer);
       const scopeKey = `chat:v3:${sessionKey}\u0000agent:main`;

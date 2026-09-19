@@ -2,6 +2,7 @@ import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
+import { composerDisabled } from "../test-helpers/composer-editor.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
@@ -626,7 +627,9 @@ suite.define(() => {
     }
     expectPaintedVirtualRowAnchor(anchor, paintResult);
     expect(
-      await catalogPane.locator(".agent-chat__composer-combobox > textarea").isDisabled(),
+      await composerDisabled(
+        catalogPane.locator(".agent-chat__composer-combobox > openclaw-composer-editor"),
+      ),
     ).toBe(true);
     await expect
       .poll(() => page.getByText("This session is on a paired device and is view-only.").count())

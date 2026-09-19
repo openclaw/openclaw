@@ -1,5 +1,6 @@
 import { writeFile } from "node:fs/promises";
 import { expect, it } from "vitest";
+import { composerValue, fillComposer } from "../test-helpers/composer-editor.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { controlUiBundledGatewayUrl } from "../test-helpers/control-ui-e2e.ts";
@@ -39,7 +40,7 @@ suite.define(() => {
               await writeFile(
                 `${artifactDir}/${name}.png`,
                 await takeControlUiViewportScreenshot(page, page.locator(".shell"), [
-                  page.locator(".agent-chat__composer-combobox textarea"),
+                  page.locator(".agent-chat__composer-combobox openclaw-composer-editor"),
                 ]),
               );
             }
@@ -62,7 +63,10 @@ suite.define(() => {
             action === "exact authoritative history proof"
               ? "already accepted after the reconnect"
               : "retry with the same key";
-          await page.locator(".agent-chat__composer-combobox textarea").fill(prompt);
+          await fillComposer(
+            page.locator(".agent-chat__composer-combobox openclaw-composer-editor"),
+            prompt,
+          );
           await page.getByRole("button", { name: "Send message" }).click();
 
           const firstRequest = await gateway.waitForRequest("chat.send");
@@ -148,9 +152,10 @@ suite.define(() => {
           }
 
           if (action === "discard") {
-            await page
-              .locator(".agent-chat__composer-combobox textarea")
-              .fill("send the next message");
+            await fillComposer(
+              page.locator(".agent-chat__composer-combobox openclaw-composer-editor"),
+              "send the next message",
+            );
             await page.getByRole("button", { name: "Send message" }).click();
             await page
               .locator(".chat-queue")
@@ -313,11 +318,11 @@ suite.define(() => {
       });
       try {
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
-        const composer = page.locator(".agent-chat__composer-combobox textarea");
+        const composer = page.locator(".agent-chat__composer-combobox openclaw-composer-editor");
         await composer.waitFor();
         await gateway.setOnline(false);
         await page.locator('.agent-chat__composer-underlaps[data-tone="warn"]').waitFor();
-        await composer.fill(`retain destination ${sessionKey}`);
+        await fillComposer(composer, `retain destination ${sessionKey}`);
         await page.getByRole("button", { name: "Send message" }).click();
         await page.locator(".chat-queue").getByText("Waiting for reconnect").waitFor();
         expect(
@@ -328,7 +333,7 @@ suite.define(() => {
         ).toBe(0);
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, otherKey));
         await gateway.setOnline(true);
-        await page.locator(".agent-chat__composer-combobox textarea").waitFor();
+        await page.locator(".agent-chat__composer-combobox openclaw-composer-editor").waitFor();
         const request = await gateway.waitForRequest("chat.send");
         expect(requireRecord(request.params)).toMatchObject({
           sessionKey,
@@ -429,8 +434,8 @@ suite.define(() => {
         .locator("openclaw-modal-dialog")
         .getByRole("button", { name: "Restore here for review" })
         .click();
-      const composer = page.locator(".agent-chat__composer-combobox textarea");
-      await expect.poll(() => composer.inputValue()).toBe("Review the attached deployment note");
+      const composer = page.locator(".agent-chat__composer-combobox openclaw-composer-editor");
+      await expect.poll(() => composerValue(composer)).toBe("Review the attached deployment note");
       await page.screenshot({
         animations: "disabled",
         path: `${artifacts}/attachment-after-confirmation.png`,
@@ -440,7 +445,7 @@ suite.define(() => {
         .getByText("legacy-note.txt", { exact: true })
         .waitFor();
       await page.reload();
-      await expect.poll(() => composer.inputValue()).toBe("Review the attached deployment note");
+      await expect.poll(() => composerValue(composer)).toBe("Review the attached deployment note");
       await page
         .locator(".chat-attachments-preview .chat-attachment-file__name")
         .getByText("legacy-note.txt", { exact: true })

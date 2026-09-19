@@ -1,6 +1,7 @@
 import { writeSync } from "node:fs";
 import { writeFile } from "node:fs/promises";
 import { expect, it } from "vitest";
+import { fillComposer } from "../test-helpers/composer-editor.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
@@ -127,7 +128,7 @@ suite.define(() => {
     try {
       timeoutStage = "navigate to work agent";
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:work:main"));
-      const composer = page.locator(".agent-chat__composer-combobox textarea");
+      const composer = page.locator(".agent-chat__composer-combobox openclaw-composer-editor");
       timeoutStage = "wait for composer";
       await composer.waitFor({ state: "visible", timeout: 10_000 });
       timeoutStage = "go offline";
@@ -141,7 +142,7 @@ suite.define(() => {
 
       const prompt = "deliver the work outbox independently";
       timeoutStage = "fill composer";
-      await composer.fill(prompt);
+      await fillComposer(composer, prompt);
       timeoutStage = "queue message";
       await page.getByRole("button", { name: "Send message" }).click();
       const queue = page.locator(".chat-queue");

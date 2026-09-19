@@ -1,4 +1,5 @@
 import { expect, it } from "vitest";
+import { composerValue, fillComposer } from "../test-helpers/composer-editor.ts";
 import {
   controlUiSessionUrl,
   installMockGateway,
@@ -37,23 +38,23 @@ suite.define(() => {
             new URL(method === "models.list" ? "/new" : "/chat/main", suite.server.baseUrl).href,
           );
           await gateway.waitForRequest(method);
-          const composer = page.locator("textarea:visible").first();
+          const composer = page.locator("openclaw-composer-editor:visible").first();
           if (method === "chat.startup") {
-            await composer.fill(submittedMessage);
+            await fillComposer(composer, submittedMessage);
             await page.getByRole("button", { name: "Send message", exact: true }).click();
-            await expect.poll(() => composer.inputValue()).toBe("");
+            await expect.poll(() => composerValue(composer)).toBe("");
             await page
               .locator(".chat-queue")
               .getByText(submittedMessage, { exact: true })
               .waitFor();
             expect(await gateway.getRequests("chat.send")).toHaveLength(0);
           }
-          await composer.fill(draft);
+          await fillComposer(composer, draft);
           await pauseVirtualClock(page);
           await page.clock.runFor(60_001);
 
           expect(await gateway.getSocketCount()).toBe(1);
-          expect(await composer.inputValue()).toBe(draft);
+          expect(await composerValue(composer)).toBe(draft);
           if (method === "chat.startup") {
             expect(await page.locator(".chat-history-error").textContent()).toContain("timed out");
             expect(await page.getByRole("button", { name: "Retry", exact: true }).isEnabled()).toBe(
@@ -88,7 +89,7 @@ suite.define(() => {
           if (method === "chat.startup") {
             expect(await page.getByText(readyText, { exact: true }).count()).toBe(0);
             expect(await gateway.getRequests("chat.send")).toHaveLength(0);
-            expect(await composer.inputValue()).toBe(draft);
+            expect(await composerValue(composer)).toBe(draft);
             await page.getByRole("button", { name: "Retry", exact: true }).click();
           } else {
             expect(await page.locator('[data-chat-model-select="true"]').textContent()).toContain(
@@ -113,7 +114,7 @@ suite.define(() => {
               await page.locator('[data-chat-model-select="true"]').textContent(),
             ).not.toContain("Models unavailable");
           }
-          expect(await composer.inputValue()).toBe(draft);
+          expect(await composerValue(composer)).toBe(draft);
         },
       );
     },
@@ -142,14 +143,14 @@ suite.define(() => {
         await currentPage.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
         const startup = await gateway.waitForRequest("chat.startup");
         expect(startup.params).toMatchObject({ sessionKey });
-        const composer = currentPage.locator(".agent-chat__input textarea");
+        const composer = currentPage.locator(".agent-chat__input openclaw-composer-editor");
         const sendButton = currentPage.getByRole("button", { name: "Send message" });
         const alert = currentPage.getByRole("alert").filter({ hasText: renderedDiagnostic });
-        await composer.fill("Try again");
+        await fillComposer(composer, "Try again");
         expect(await sendButton.isEnabled()).toBe(true);
         if (retryTiming === "before history") {
           await sendButton.click();
-          await expect.poll(() => composer.inputValue()).toBe("");
+          await expect.poll(() => composerValue(composer)).toBe("");
           await currentPage
             .locator(".chat-queue")
             .getByText("Try again", { exact: true })
@@ -172,7 +173,7 @@ suite.define(() => {
           await gateway.resolveDeferred("chat.history");
         }
         if (retryTiming === "after history") {
-          expect(await composer.inputValue()).toBe("Try again");
+          expect(await composerValue(composer)).toBe("Try again");
           expect(await gateway.getRequests("chat.send")).toHaveLength(0);
           await alert.waitFor();
           await alert
@@ -187,7 +188,7 @@ suite.define(() => {
         const { idempotencyKey: runId } = send.params as { idempotencyKey: string };
         expect(runId).toEqual(expect.any(String));
         expect(await gateway.getRequests("chat.send")).toHaveLength(1);
-        expect(await composer.inputValue()).toBe("");
+        expect(await composerValue(composer)).toBe("");
         if (retryTiming === "after history") {
           await expect.poll(() => alert.count()).toBe(0);
         }

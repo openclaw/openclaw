@@ -3,6 +3,7 @@ import path from "node:path";
 import { beforeEach, expect, it } from "vitest";
 import { projectAgentToolActivity } from "../../../src/infra/agent-activity-events.js";
 import type { ApplicationContext } from "../app/context.ts";
+import { composerValue, fillComposer } from "../test-helpers/composer-editor.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
   createChatFlowE2eSuite,
@@ -328,7 +329,10 @@ async function openStreamingTurn(
   gateway: Awaited<ReturnType<typeof installMockGateway>>,
   prompt: string,
 ): Promise<string> {
-  await page.locator(".agent-chat__composer-combobox textarea").fill(prompt);
+  await fillComposer(
+    page.locator(".agent-chat__composer-combobox openclaw-composer-editor"),
+    prompt,
+  );
   await page.getByRole("button", { name: "Send message" }).click();
   const sendRequest = await gateway.waitForRequest("chat.send");
   const params = requireRecord(sendRequest.params);
@@ -790,9 +794,9 @@ suite.define(() => {
       await gateway.waitForRequest("chat.startup");
       await page.locator(".chat-thread-inner").getByText("LONG-TAIL-SENTINEL").waitFor();
 
-      const composer = page.locator(".agent-chat__composer-combobox textarea");
+      const composer = page.locator(".agent-chat__composer-combobox openclaw-composer-editor");
       const scopeKey = "chat:v3:agent:main:main\u0000agent:main";
-      await composer.fill("seed");
+      await fillComposer(composer, "seed");
       await page.getByRole("button", { name: "Send message" }).waitFor();
       // The first saved draft notifies presence subscribers. Drain that transition
       // before measuring edits to an already-present draft.
@@ -827,19 +831,19 @@ suite.define(() => {
       const suffix = " ordinary typing without commands";
       await composer.pressSequentially(suffix, { delay: scrollAwayAndBack ? 5 : 0 });
       await waitForCommittedComposerDraft(page, scopeKey, `seed${suffix}`, 0);
-      expect(await composer.inputValue()).toBe(`seed${suffix}`);
+      expect(await composerValue(composer)).toBe(`seed${suffix}`);
       const probe = await readRenderProbe(page);
 
       expect(probe.hostUpdates).toBeLessThanOrEqual(MAX_STEADY_COMPOSER_HOST_UPDATES);
 
       const send = page.locator(".chat-send-btn--send");
-      await composer.fill("");
+      await fillComposer(composer, "");
       await expect.poll(() => send.isDisabled()).toBe(true);
 
-      await composer.fill("new draft");
+      await fillComposer(composer, "new draft");
       await expect.poll(() => send.isDisabled()).toBe(false);
 
-      await composer.fill("مرحبا");
+      await fillComposer(composer, "مرحبا");
       await expect.poll(() => composer.getAttribute("dir")).toBe("rtl");
     });
   });

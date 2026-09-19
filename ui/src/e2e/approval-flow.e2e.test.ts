@@ -3,6 +3,7 @@ import path from "node:path";
 import type { Page } from "playwright";
 import { afterEach, beforeEach, expect, it } from "vitest";
 import { createRequireRecord } from "../../../test/helpers/record.js";
+import { composerValue, fillComposer } from "../test-helpers/composer-editor.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -214,14 +215,14 @@ suite.define(() => {
     await currentPage.goto(`${suite.server?.baseUrl ?? ""}chat`);
     await gateway.waitForRequest("sessions.list");
 
-    const composer = currentPage.locator(".agent-chat__composer-combobox textarea");
-    await composer.fill("run a command that needs approval");
+    const composer = currentPage.locator(".agent-chat__composer-combobox openclaw-composer-editor");
+    await fillComposer(composer, "run a command that needs approval");
     await currentPage.getByRole("button", { name: "Send message" }).click();
     const firstSend = requireRecord((await gateway.waitForRequest("chat.send")).params);
     expect(firstSend.message).toBe("run a command that needs approval");
     await currentPage.getByRole("button", { name: "Stop generating" }).waitFor();
 
-    await composer.fill("/approve approval-123 allow-once");
+    await fillComposer(composer, "/approve approval-123 allow-once");
     await currentPage.getByRole("button", { name: "Send message" }).click();
 
     await expect
@@ -233,7 +234,7 @@ suite.define(() => {
     expect(approvalSend.deliver).toBe(false);
     expect(typeof approvalSend.idempotencyKey).toBe("string");
     expect(await currentPage.locator(".chat-queue").count()).toBe(0);
-    expect(await composer.inputValue()).toBe("");
+    expect(await composerValue(composer)).toBe("");
     expect(await currentPage.getByRole("button", { name: "Stop generating" }).count()).toBe(1);
   });
 });

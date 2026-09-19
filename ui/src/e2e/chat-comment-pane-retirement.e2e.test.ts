@@ -1,6 +1,7 @@
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
+import { composerValue, fillComposer } from "../test-helpers/composer-editor.ts";
 import {
   controlUiBundledSettingsStorageKey,
   installMockGateway,
@@ -73,9 +74,10 @@ suite.define(() => {
           await expect.poll(() => panes.count()).toBe(2);
           const paneA = panes.filter({ hasText: passage });
           const paneB = panes.filter({ hasText: "Beta review is complete." });
-          await paneA
-            .locator(".agent-chat__composer-combobox textarea")
-            .fill("Preserve Alpha draft.");
+          await fillComposer(
+            paneA.locator(".agent-chat__composer-combobox openclaw-composer-editor"),
+            "Preserve Alpha draft.",
+          );
           await paneB.getByText("Beta review is complete.", { exact: true }).waitFor();
           const source = paneA.locator(".chat-bubble .chat-text p").filter({ hasText: passage });
           const editor = page.getByRole("dialog", { name: "Comment", exact: true });
@@ -176,7 +178,7 @@ suite.define(() => {
             expect(await menu.count()).toBe(0);
             expect(
               await paneA
-                .locator(".agent-chat__composer-combobox textarea")
+                .locator(".agent-chat__composer-combobox openclaw-composer-editor")
                 .evaluate((element) => element === document.activeElement),
             ).toBe(true);
           } else {
@@ -200,7 +202,9 @@ suite.define(() => {
           }
           if (archivedPane === "other") {
             expect(
-              await paneA.locator(".agent-chat__composer-combobox textarea").inputValue(),
+              await composerValue(
+                paneA.locator(".agent-chat__composer-combobox openclaw-composer-editor"),
+              ),
             ).toBe("Preserve Alpha draft.");
           }
           expect(await gateway.getRequests("chat.send")).toEqual([]);

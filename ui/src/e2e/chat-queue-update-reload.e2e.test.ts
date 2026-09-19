@@ -1,4 +1,5 @@
 import { expect, it } from "vitest";
+import { composerValue, fillComposer } from "../test-helpers/composer-editor.ts";
 import {
   startControlUiE2eServer,
   installMockGateway,
@@ -49,19 +50,19 @@ suite.define(() => {
           `${suite.server.baseUrl}chat?session=${split ? "agent:main:original" : "main"}`,
         );
         const composer = page.locator(
-          ".chat-pane-cache__pane--active .agent-chat__composer-combobox textarea",
+          ".chat-pane-cache__pane--active .agent-chat__composer-combobox openclaw-composer-editor",
         );
         await composer.waitFor({ state: "visible", timeout: 15000 });
         const originalPathname = new URL(page.url()).pathname;
         await gateway.setOnline(false);
-        await composer.fill("Reply exactly ORIGINAL-RELOAD");
+        await fillComposer(composer, "Reply exactly ORIGINAL-RELOAD");
         await composer.press("Enter");
         const row = page.locator(".chat-queue__item", { hasText: "Reply exactly ORIGINAL-RELOAD" });
         await row.waitFor();
         await row.dblclick();
         const edit = page.locator(".chat-queue__edit-input");
         await edit.fill("Reply exactly CORRECTED-RELOAD");
-        await composer.fill("Separate saved composer draft");
+        await fillComposer(composer, "Separate saved composer draft");
         await page.screenshot({
           path: `${suite.artifactDir}/${resolution}-before-update.png`,
           fullPage: true,
@@ -76,7 +77,7 @@ suite.define(() => {
           await page
             .locator(".chat-split-view__cell")
             .first()
-            .locator(".agent-chat__composer-combobox textarea")
+            .locator(".agent-chat__composer-combobox openclaw-composer-editor")
             .click();
         }
         await page
@@ -103,7 +104,7 @@ suite.define(() => {
           await page
             .locator(".chat-split-view__cell")
             .nth(1)
-            .locator(".agent-chat__composer-combobox textarea")
+            .locator(".agent-chat__composer-combobox openclaw-composer-editor")
             .click();
           await page
             .locator('[data-session-key="agent:main:second"] a.sidebar-recent-session__link')
@@ -176,7 +177,7 @@ suite.define(() => {
             .poll(() => rightVisible.evaluate((element) => element.hasAttribute("inert")))
             .toBe(narrow);
         }
-        expect(await composer.inputValue()).toBe("Separate saved composer draft");
+        expect(await composerValue(composer)).toBe("Separate saved composer draft");
         await page.screenshot({
           path: `${suite.artifactDir}/${resolution}-reviewed-edit.png`,
           fullPage: true,
@@ -237,19 +238,19 @@ suite.define(() => {
       try {
         await page.goto(`${suite.server.baseUrl}chat?session=agent:main:original`);
         const composer = page.locator(
-          ".chat-pane-cache__pane--active .agent-chat__composer-combobox textarea",
+          ".chat-pane-cache__pane--active .agent-chat__composer-combobox openclaw-composer-editor",
         );
         await composer.waitFor({ state: "visible", timeout: 15000 });
         const originalPathname = new URL(page.url()).pathname;
         await gateway.setOnline(false);
-        await composer.fill("Reply exactly ORIGINAL-RELOAD");
+        await fillComposer(composer, "Reply exactly ORIGINAL-RELOAD");
         await composer.press("Enter");
         const row = page.locator(".chat-queue__item", { hasText: "Reply exactly ORIGINAL-RELOAD" });
         await row.waitFor();
         await row.dblclick();
         const edit = page.locator(".chat-pane-cache__pane--active .chat-queue__edit-input");
         await edit.fill("Reply exactly CORRECTED-RELOAD");
-        await composer.fill("Separate saved composer draft");
+        await fillComposer(composer, "Separate saved composer draft");
         await page.screenshot({
           path: `${suite.artifactDir}/${resolution}-before-navigation.png`,
           fullPage: true,
@@ -265,7 +266,9 @@ suite.define(() => {
             .click();
           await page.waitForURL((url) => url.pathname.endsWith(`/${name}`));
           await page
-            .locator(".chat-pane-cache__pane--active .agent-chat__composer-combobox textarea")
+            .locator(
+              ".chat-pane-cache__pane--active .agent-chat__composer-combobox openclaw-composer-editor",
+            )
             .waitFor();
           await expect
             .poll(() =>
@@ -278,7 +281,7 @@ suite.define(() => {
             .toBe(`agent:main:${name}`);
           if (overflow && name !== "third") {
             await gateway.setOnline(false);
-            await composer.fill(`Queued ${name}`);
+            await fillComposer(composer, `Queued ${name}`);
             await composer.press("Enter");
             await page.locator(".chat-pane-cache__pane--active .chat-queue__item").dblclick();
             await edit.fill(`Corrected ${name}`);
@@ -302,7 +305,7 @@ suite.define(() => {
               .evaluate((element) => (element as HTMLElement & { sessionKey: string }).sessionKey),
           )
           .toBe("agent:main:original");
-        expect(await composer.inputValue()).toBe("Separate saved composer draft");
+        expect(await composerValue(composer)).toBe("Separate saved composer draft");
         await page.screenshot({
           path: `${suite.artifactDir}/${resolution}-after-navigation.png`,
           fullPage: true,
@@ -312,7 +315,7 @@ suite.define(() => {
             artifactDir: suite.artifactDir,
             reloads,
             editCount: await edit.count(),
-            composer: await composer.inputValue(),
+            composer: await composerValue(composer),
           }),
         );
         expect(await edit.count(), "queued correction must survive same-pane cache eviction").toBe(

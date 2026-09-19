@@ -1,5 +1,6 @@
 import path from "node:path";
 import { expect, it } from "vitest";
+import { fillComposer } from "../test-helpers/composer-editor.ts";
 import {
   createChatFlowE2eSuite,
   installMockGateway,
@@ -325,7 +326,10 @@ suite.define(() => {
       await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
         const gateway = await installMockGateway(page, { historyMessages: [] });
         await page.goto(`${suite.server.baseUrl}chat`);
-        await page.locator(".agent-chat__composer-combobox textarea").fill("Check the workspace");
+        await fillComposer(
+          page.locator(".agent-chat__composer-combobox openclaw-composer-editor"),
+          "Check the workspace",
+        );
         await page.getByRole("button", { name: "Send message" }).click();
         const send = await gateway.waitForRequest("chat.send");
         const runId = requireString(requireRecord(send.params).idempotencyKey, "chat run id");

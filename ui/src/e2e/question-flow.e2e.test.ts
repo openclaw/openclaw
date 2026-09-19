@@ -5,6 +5,7 @@ import type { BrowserContext, Page } from "playwright";
 import { beforeEach, afterEach, expect, it } from "vitest";
 import type { SessionsListResult } from "../api/types.ts";
 import { CHAT_TRANSCRIPT_END_THRESHOLD_PX } from "../pages/chat/scroll.ts";
+import { composerValue, fillComposer } from "../test-helpers/composer-editor.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
   controlUiSessionUrl,
@@ -468,7 +469,10 @@ suite.define(() => {
         shellContainsChildren: true,
       });
 
-      await composer.locator(".agent-chat__composer-combobox > textarea").focus();
+      await composer
+        .locator(".agent-chat__composer-combobox > openclaw-composer-editor")
+        .locator(".cm-content")
+        .focus();
       await expect
         .poll(() => composer.evaluate((element) => getComputedStyle(element).boxShadow))
         .toBe("none");
@@ -489,8 +493,8 @@ suite.define(() => {
 
   it("restores the composer and its draft from an authoritative answer without a resolution event", async () => {
     const { gateway, page } = await openQuestionPage();
-    const composer = page.locator(".agent-chat__composer-combobox textarea");
-    await composer.fill("Keep this release note draft");
+    const composer = page.locator(".agent-chat__composer-combobox openclaw-composer-editor");
+    await fillComposer(composer, "Keep this release note draft");
     const request = questionRecord("question-deploy-target", [
       {
         questionId: "deploy_target",
@@ -559,7 +563,7 @@ suite.define(() => {
 
     await panel.locator(".chat-question-panel__collapse").click();
     await composer.waitFor();
-    await expect.poll(() => composer.inputValue()).toBe("Keep this release note draft");
+    await expect.poll(() => composerValue(composer)).toBe("Keep this release note draft");
     await expect
       .poll(() => composer.evaluate((element) => document.activeElement === element))
       .toBe(true);
@@ -591,7 +595,7 @@ suite.define(() => {
       .poll(() => summary.getByText("Staging (Recommended)", { exact: true }).count())
       .toBe(1);
     await composer.waitFor();
-    await expect.poll(() => composer.inputValue()).toBe("Keep this release note draft");
+    await expect.poll(() => composerValue(composer)).toBe("Keep this release note draft");
     await expect
       .poll(() => composer.evaluate((element) => document.activeElement === element))
       .toBe(true);
@@ -846,7 +850,7 @@ suite.define(() => {
     expect(resolveRequest.params).toEqual({ id: request.id, cancel: true });
     await expect.poll(() => panel.count()).toBe(0);
     await expectQuestionAttention(page, null);
-    await page.locator(".agent-chat__composer-combobox textarea").waitFor();
+    await page.locator(".agent-chat__composer-combobox openclaw-composer-editor").waitFor();
     await expect
       .poll(() => page.locator(".chat-question-summary").filter({ hasText: "Skipped" }).count())
       .toBe(1);
@@ -873,7 +877,9 @@ suite.define(() => {
       const panes = page.locator("openclaw-chat-pane.chat-split-view__pane");
       await expect.poll(() => panes.count()).toBe(2);
       await expect
-        .poll(() => panes.locator(".agent-chat__composer-combobox textarea").count())
+        .poll(() =>
+          panes.locator(".agent-chat__composer-combobox openclaw-composer-editor").count(),
+        )
         .toBe(2);
       expect(await gateway.getRequests("question.list")).toHaveLength(1);
 
@@ -923,7 +929,9 @@ suite.define(() => {
 
       await expect.poll(() => panels.count()).toBe(0);
       await expect
-        .poll(() => remainingPanes.locator(".agent-chat__composer-combobox textarea").count())
+        .poll(() =>
+          remainingPanes.locator(".agent-chat__composer-combobox openclaw-composer-editor").count(),
+        )
         .toBe(remainingCount);
       await expect
         .poll(() =>
@@ -971,7 +979,7 @@ suite.define(() => {
 
     await expect.poll(() => panel.count()).toBe(0);
     await expectQuestionAttention(page, null);
-    await page.locator(".agent-chat__composer-combobox textarea").waitFor();
+    await page.locator(".agent-chat__composer-combobox openclaw-composer-editor").waitFor();
     await expect.poll(() => favicon.getAttribute("href")).toBe(originalFavicon);
   });
 

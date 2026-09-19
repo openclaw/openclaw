@@ -8,6 +8,7 @@ import {
   createOpenClawTestInstance,
   type OpenClawTestInstance,
 } from "../../../test/helpers/openclaw-test-instance.ts";
+import { accessibleChatComposer, fillComposer } from "../test-helpers/composer-editor.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -274,9 +275,9 @@ suite.define(() => {
               });
               await page.goto(url.href);
               await waitForControlUiGatewayReady(page);
-              const composer = page.getByRole("textbox", { name: "Chat composer", exact: true });
+              const composer = accessibleChatComposer(page);
               const send = async (text: string) => {
-                await composer.fill(text);
+                await fillComposer(composer, text);
                 await page.getByRole("button", { name: "Send message", exact: true }).click();
               };
               const answer = (text: string) =>

@@ -25,7 +25,7 @@ suite.define(() => {
       expect(await gateway.getRequests("terminal.open")).toHaveLength(0);
       await content.getByRole("button", { name: "New session", exact: true }).click();
       await page.waitForURL(`${suite.server.baseUrl}new`);
-      await page.locator(".agent-chat__composer-combobox textarea").waitFor();
+      await page.locator(".agent-chat__composer-combobox openclaw-composer-editor").waitFor();
     });
   });
 });

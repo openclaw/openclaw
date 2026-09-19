@@ -119,6 +119,18 @@ shortcodes, and unknown names stay literal. Existing messages are not rewritten.
 You can still paste emoji or use your operating system’s emoji keyboard; there
 is no separate emoji picker in the composer.
 
+## Skill chips
+
+In Chat and New Session, choose an installed skill from the `/` menu, or type its
+complete command and confirm it with Enter or Tab. The composer shows the skill's
+icon and display name as an inline chip. You can place several skills among your
+message text. Arrow keys move across each chip, and Backspace or Delete removes
+it as one item.
+
+Chips restore with your draft. Copying or sending uses the original command text:
+`/skill_name` for a leading skill command and `$skill_name` for an inline skill
+reference. The visual label does not change the message sent to the Gateway.
+
 ## Chat behavior
 
 When you send a message, the model picker keeps your selected model visible with

@@ -1,5 +1,7 @@
 import { expect, it } from "vitest";
-import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import type { ComposerEditor } from "../components/composer-editor.ts";
+import { composerValue, fillComposer } from "../test-helpers/composer-editor.ts";
+import { createRequestedControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -12,27 +14,32 @@ suite.define(() => {
     { route: "chat", width: 390 },
     { route: "new", width: 390 },
   ])("keeps overflowing $route text readable at $width px", async ({ route, width }) => {
-    const artifactDir = createControlUiE2eArtifactDir(`composer-${route}-${width}`);
+    const artifactDir = createRequestedControlUiE2eArtifactDir(`composer-${route}-${width}`);
     await suite.withPage(
-      { viewport: { width, height: 900 }, recordVideo: { dir: artifactDir } },
+      {
+        viewport: { width, height: 900 },
+        ...(artifactDir ? { recordVideo: { dir: artifactDir } } : {}),
+      },
       async ({ page }) => {
         await installMockGateway(page);
         await page.goto(`${suite.server.baseUrl}${route}`);
-        const textarea = page.locator(".agent-chat__composer-combobox textarea");
+        const textarea = page.locator(".agent-chat__composer-combobox openclaw-composer-editor");
         const lines = Array.from(
           { length: 20 },
           (_, index) => `Line ${index + 1}: Keep text readable`,
         );
-        await textarea.fill(lines.slice(0, 2).join("\n"));
+        await fillComposer(textarea, lines.slice(0, 2).join("\n"));
         // Grow through the height cap using native editing, without forcing scrollTop.
         for (const line of lines.slice(2)) {
           await textarea.press("Shift+Enter");
           await page.keyboard.insertText(line);
           expect(await textarea.evaluate((el) => getComputedStyle(el).maskImage)).toBe("none");
         }
-        await expect.poll(() => textarea.inputValue()).toBe(lines.join("\n"));
+        await expect.poll(() => composerValue(textarea)).toBe(lines.join("\n"));
         await expect.poll(() => textarea.evaluate((el) => el.scrollTop)).toBeGreaterThan(0);
-        await page.screenshot({ path: `${artifactDir}/typing-last-line.png` });
+        if (artifactDir) {
+          await page.screenshot({ path: `${artifactDir}/typing-last-line.png` });
+        }
         expect(await textarea.evaluate((el) => getComputedStyle(el).maskImage)).toBe("none");
         expect(await textarea.evaluate((el) => getComputedStyle(el).overflowY)).toBe("auto");
 
@@ -45,7 +52,9 @@ suite.define(() => {
         await expect
           .poll(() => textarea.evaluate((el) => getComputedStyle(el).maskImage))
           .not.toBe("none");
-        await page.screenshot({ path: `${artifactDir}/scrolling-draft.png` });
+        if (artifactDir) {
+          await page.screenshot({ path: `${artifactDir}/scrolling-draft.png` });
+        }
         // Typing again after scrolling must clear the fade before native caret scrolling.
         await textarea.press("y");
         await expect
@@ -56,7 +65,7 @@ suite.define(() => {
         await expect
           .poll(() =>
             textarea.evaluate((el) => ({
-              caret: (el as HTMLTextAreaElement).selectionStart,
+              caret: (el as ComposerEditor).selectionStart,
               firstLineVisible: el.scrollTop < Number.parseFloat(getComputedStyle(el).lineHeight),
             })),
           )
@@ -71,7 +80,7 @@ suite.define(() => {
         expect(await textarea.evaluate((el) => getComputedStyle(el).maskImage)).toBe("none");
         await expect.poll(() => textarea.evaluate((el) => el.scrollTop)).toBeGreaterThan(0);
 
-        await textarea.fill("Short draft");
+        await fillComposer(textarea, "Short draft");
         await expect
           .poll(() => textarea.evaluate((el) => getComputedStyle(el).overflowY))
           .toBe("hidden");

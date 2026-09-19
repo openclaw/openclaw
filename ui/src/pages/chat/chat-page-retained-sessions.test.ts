@@ -1,6 +1,6 @@
+import "../../components/composer-editor.ts";
 /* @vitest-environment jsdom */
 /* @vitest-environment-options {"url":"http://chat-page-retained.test/"} */
-
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -422,7 +422,7 @@ describe("chat page retained sessions", () => {
 
       const combobox = document.createElement("div");
       combobox.className = "agent-chat__composer-combobox";
-      const textarea = document.createElement("textarea");
+      const textarea = document.createElement("openclaw-composer-editor");
       combobox.append(textarea);
       pane.append(combobox);
       vi.advanceTimersByTime(250);
@@ -433,9 +433,11 @@ describe("chat page retained sessions", () => {
       replacementPane.sessionKey = "main";
       const replacementCombobox = document.createElement("div");
       replacementCombobox.className = "agent-chat__composer-combobox";
-      const replacementTextarea = document.createElement("textarea");
+      const replacementTextarea = document.createElement("openclaw-composer-editor");
       replacementCombobox.append(replacementTextarea);
       replacementPane.append(replacementCombobox);
+      // jsdom does not clear shadow focus when its ancestor is removed, unlike browser focus fixup.
+      textarea.blur();
       pane.replaceWith(replacementPane);
 
       vi.advanceTimersByTime(250);

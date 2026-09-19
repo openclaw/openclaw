@@ -1,5 +1,6 @@
 import path from "node:path";
 import { expect, it } from "vitest";
+import { fillComposer } from "../test-helpers/composer-editor.ts";
 import {
   captureDeviceRuntimeUiProof,
   captureUiProofEnabled,
@@ -96,7 +97,7 @@ suite.define(() => {
         await gateway.waitForRequest("environments.list");
         await page.locator("#new-session-where-trigger").click();
         await page.locator('[data-value="device:paired-runner"]').click();
-        await page.locator(".new-session-page__message").fill("Run on the paired device");
+        await fillComposer(page.locator(".new-session-page__message"), "Run on the paired device");
         await captureDeviceRuntimeUiProof(suite, page, "device-selected.png");
         await page.getByRole("button", { name: "Start session" }).click();
         const create = await gateway.waitForRequest("sessions.create");

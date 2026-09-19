@@ -1,5 +1,6 @@
 import { gatewayOriginScope } from "@openclaw/gateway-client/browser";
 import { expect, it } from "vitest";
+import { fillComposer } from "../test-helpers/composer-editor.ts";
 import {
   WORKSPACE,
   createNewSessionPageE2eSuite,
@@ -72,7 +73,7 @@ suite.define(() => {
       await picker.locator('[data-value="device:writer-runner"]').waitFor();
       expect(await picker.locator('[data-value="cloud:aws"]').count()).toBe(0);
       await page.keyboard.press("Escape");
-      await page.locator(".new-session-page__message").fill("start locally");
+      await fillComposer(page.locator(".new-session-page__message"), "start locally");
       await expect
         .poll(() => page.getByRole("button", { name: "Start session" }).isEnabled())
         .toBe(true);

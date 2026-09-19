@@ -3,6 +3,7 @@ import { copyFile, mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { chromium, type Browser, type BrowserContext } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { fillComposer } from "../test-helpers/composer-editor.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
@@ -97,7 +98,10 @@ describeMantisWebUiChat("Mantis Control UI web chat proof", () => {
     try {
       await page.goto(`${server.baseUrl}chat`);
       await page.getByText("Mantis web UI proof is ready.").waitFor({ timeout: 10_000 });
-      await page.locator(".agent-chat__composer-combobox textarea").fill(prompt);
+      await fillComposer(
+        page.locator(".agent-chat__composer-combobox openclaw-composer-editor"),
+        prompt,
+      );
       // The working timer starts at the send click; pause first so the elapsed
       // reading is exactly the fastForward below, not inflated by real time.
       await pauseVirtualClock(page);

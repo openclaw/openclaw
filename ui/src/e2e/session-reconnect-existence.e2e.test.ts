@@ -1,6 +1,7 @@
 import path from "node:path";
 import { expect, it } from "vitest";
 import type { GatewaySessionRow, SessionsListResult } from "../api/types.ts";
+import { composerValue, fillComposer } from "../test-helpers/composer-editor.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -53,11 +54,11 @@ suite.define(() => {
         });
         await page.goto(`${suite.server.baseUrl}chat/main/temporary-research-b1c2cd3c`);
         await page.getByText(transcript, { exact: true }).waitFor();
-        const composer = page.locator(".agent-chat__composer-combobox textarea");
-        await composer.fill("Keep my unsent research question.");
+        const composer = page.locator(".agent-chat__composer-combobox openclaw-composer-editor");
+        await fillComposer(composer, "Keep my unsent research question.");
         await gateway.setOnline(false);
         await page.getByText(transcript, { exact: true }).waitFor();
-        expect(await composer.inputValue()).toBe("Keep my unsent research question.");
+        expect(await composerValue(composer)).toBe("Keep my unsent research question.");
 
         // A filtered roster omits both surviving and expired sessions. Only the
         // exact Gateway resolution may retire the established route.
@@ -90,7 +91,7 @@ suite.define(() => {
           await page.getByRole("button", { name: "View sessions", exact: true }).waitFor();
         } else {
           await page.getByText(transcript, { exact: true }).waitFor();
-          expect(await composer.inputValue()).toBe("Keep my unsent research question.");
+          expect(await composerValue(composer)).toBe("Keep my unsent research question.");
           expect(await page.locator(".session-route-not-found").count()).toBe(0);
         }
         expect(pageErrors).toEqual([]);

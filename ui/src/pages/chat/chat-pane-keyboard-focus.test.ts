@@ -1,5 +1,5 @@
+import "../../components/composer-editor.ts";
 /* @vitest-environment jsdom */
-
 import { html, render } from "lit";
 import { describe, expect, it, vi } from "vitest";
 import { getRenderedModalDialog, installDialogPolyfill } from "../../test-helpers/modal-dialog.ts";
@@ -76,7 +76,7 @@ describe("chat pane keyboard focus", () => {
     pane.presented = true;
     const composer = document.createElement("div");
     composer.className = "agent-chat__composer-combobox";
-    const textarea = composer.appendChild(document.createElement("textarea"));
+    const textarea = composer.appendChild(document.createElement("openclaw-composer-editor"));
     pane.append(composer);
     const focus = vi.spyOn(textarea, "focus");
     const button = document.body.appendChild(document.createElement("button"));
@@ -103,7 +103,7 @@ describe("chat pane keyboard focus", () => {
     pane.presented = true;
     const composer = document.createElement("div");
     composer.className = "agent-chat__composer-combobox";
-    const textarea = composer.appendChild(document.createElement("textarea"));
+    const textarea = composer.appendChild(document.createElement("openclaw-composer-editor"));
     pane.append(composer);
     const focus = vi.spyOn(textarea, "focus");
     const details = document.body.appendChild(document.createElement("details"));
@@ -145,7 +145,7 @@ describe("chat pane keyboard focus", () => {
     pane.presented = true;
     const composer = document.createElement("div");
     composer.className = "agent-chat__composer-combobox";
-    const textarea = composer.appendChild(document.createElement("textarea"));
+    const textarea = composer.appendChild(document.createElement("openclaw-composer-editor"));
     pane.append(composer);
     const focus = vi.spyOn(textarea, "focus");
     const container = document.body.appendChild(document.createElement("div"));
@@ -176,7 +176,7 @@ describe("chat pane keyboard focus", () => {
     pane.presented = true;
     const composer = document.createElement("div");
     composer.className = "agent-chat__composer-combobox";
-    const textarea = composer.appendChild(document.createElement("textarea"));
+    const textarea = composer.appendChild(document.createElement("openclaw-composer-editor"));
     pane.append(composer);
     const focus = vi.spyOn(textarea, "focus");
     const modal = document.body.appendChild(document.createElement("div"));

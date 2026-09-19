@@ -1,6 +1,7 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
+import { composerValue, fillComposer } from "../test-helpers/composer-editor.ts";
 import {
   waitForControlUiGatewayReady,
   waitForControlUiGatewayReconnecting,
@@ -274,7 +275,7 @@ suite.define(() => {
       await page.locator(".new-session-page__runtime").waitFor();
 
       expect(await page.locator(".new-session-page__start-split").count()).toBe(0);
-      await page.locator(".new-session-page__message").fill("keep the normal path");
+      await fillComposer(page.locator(".new-session-page__message"), "keep the normal path");
       const start = page.getByRole("button", { name: "Start in terminal" });
       await expect.poll(() => start.getAttribute("aria-disabled")).toBe("true");
       await page.locator(".new-session-page__message").press("Enter");
@@ -371,7 +372,7 @@ suite.define(() => {
         .toBe("main");
       await placePopover.getByLabel("Name", { exact: true }).fill("terminal-task");
       await page.locator("#new-session-checkout-trigger").click();
-      await page.locator(".new-session-page__message").fill("  inspect the checkout  ");
+      await fillComposer(page.locator(".new-session-page__message"), "  inspect the checkout  ");
 
       expect(await page.getByRole("button", { name: "Add attachment" }).count()).toBe(0);
       expect(await page.locator('[data-chat-model-select="true"]').count()).toBe(0);
@@ -473,13 +474,15 @@ suite.define(() => {
     try {
       await page.goto(`${suite.server.baseUrl}new?catalog=claude`);
       await pollLocatorText(page.locator(".new-session-page__runtime")).toContain("Claude Code");
-      await page.locator(".new-session-page__message").fill("keep this draft");
+      await fillComposer(page.locator(".new-session-page__message"), "keep this draft");
       await page.getByRole("button", { name: "Start in terminal" }).click();
 
       await expect
         .poll(() => page.locator(".new-session-page__alert-message").textContent())
         .toBe(serverMessage);
-      expect(await page.locator(".new-session-page__message").inputValue()).toBe("keep this draft");
+      expect(await composerValue(page.locator(".new-session-page__message"))).toBe(
+        "keep this draft",
+      );
       expect(await page.locator(".new-session-page__scroll").getAttribute("aria-busy")).toBe(
         "false",
       );
@@ -522,12 +525,12 @@ suite.define(() => {
       try {
         await page.goto(`${suite.server.baseUrl}new`);
         const message = page.locator(".new-session-page__message");
-        await message.fill("ordinary Chat naming control");
+        await fillComposer(message, "ordinary Chat naming control");
         await gateway.waitForRequest("sessions.title.prepare");
         expect(await gateway.getRequests("sessions.title.prepare")).toHaveLength(1);
         await navigateInApp(page, "new-session", `?catalog=${catalogId}`);
         await page.clock.install();
-        await message.fill("native prompt");
+        await fillComposer(message, "native prompt");
         const start = page.getByRole("button", { name: "Start in terminal" });
         await expect.poll(() => start.getAttribute("aria-disabled")).toBe("false");
         // Exercise the mounted controller's real idle debounce after proving Chat naming works.
@@ -623,7 +626,7 @@ suite.define(() => {
         .poll(async () => (await gateway.getRequests("sessions.list")).length)
         .toBe(listCalls + 1);
 
-      await message.fill("create during refresh");
+      await fillComposer(message, "create during refresh");
       await page.getByRole("button", { name: "Start session" }).click();
       const create = await gateway.waitForRequest("sessions.create");
       expect(create.params).toMatchObject({
@@ -722,9 +725,9 @@ suite.define(() => {
       });
 
       const message = page.locator(".new-session-page__message");
-      await message.fill("keep this reconnect draft");
+      await fillComposer(message, "keep this reconnect draft");
       await pollLocatorText(page.locator(".new-session-page__runtime")).toContain("claude");
-      await expect.poll(() => message.inputValue()).toBe("keep this reconnect draft");
+      await expect.poll(() => composerValue(message)).toBe("keep this reconnect draft");
       await expect
         .poll(() =>
           page.getByRole("button", { name: "Start in terminal" }).getAttribute("aria-disabled"),
@@ -750,7 +753,7 @@ suite.define(() => {
         })
         .toBe(3);
       await pollLocatorText(page.locator(".new-session-page__runtime")).toContain("Claude Code");
-      await expect.poll(() => message.inputValue()).toBe("keep this reconnect draft");
+      await expect.poll(() => composerValue(message)).toBe("keep this reconnect draft");
       await pollLocatorText(page.locator(".new-session-page").getByRole("heading")).toContain(
         "Research",
       );
@@ -782,12 +785,12 @@ suite.define(() => {
       await page.goto(`${suite.server.baseUrl}new?agent=research`);
       await page.getByRole("heading", { name: "Research" }).waitFor();
       const message = page.locator(".new-session-page__message");
-      await message.fill("discard on real navigation");
+      await fillComposer(message, "discard on real navigation");
 
       await navigateInApp(page, "new-session", "?agent=main");
 
       await page.getByRole("heading", { name: "Main" }).waitFor();
-      await expect.poll(() => message.inputValue()).toBe("");
+      await expect.poll(() => composerValue(message)).toBe("");
     } finally {
       await context.close();
     }
@@ -841,7 +844,7 @@ suite.define(() => {
       await page.getByRole("heading", { name: "Research" }).waitFor();
 
       const message = page.locator(".new-session-page__message");
-      await message.fill("keep my selected agent");
+      await fillComposer(message, "keep my selected agent");
       const agentRequestsBefore = (await gateway.getRequests("agents.list")).length;
       const branchRequestsBefore = (await gateway.getRequests("worktrees.branches")).length;
 
@@ -857,7 +860,7 @@ suite.define(() => {
       await expect
         .poll(async () => (await gateway.getRequests("agents.list")).length)
         .toBe(agentRequestsBefore + 1);
-      await expect.poll(() => message.inputValue()).toBe("keep my selected agent");
+      await expect.poll(() => composerValue(message)).toBe("keep my selected agent");
       await pollLocatorText(page.locator(".new-session-page").getByRole("heading")).toContain(
         "Research",
       );

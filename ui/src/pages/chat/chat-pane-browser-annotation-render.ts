@@ -1,8 +1,9 @@
+import type { ComposerEditor } from "../../components/composer-editor.ts";
 import { t } from "../../i18n/index.ts";
 import type { ChatAttachment } from "../../lib/chat/chat-types.ts";
 import { removeBrowserAnnotationWithUndo } from "./browser-annotation-removal.ts";
 import { ChatPaneHeader } from "./chat-pane-header.ts";
-import { CHAT_COMPOSER_TEXTAREA_SELECTOR } from "./chat-pane-shared.ts";
+import { CHAT_COMPOSER_EDITOR_SELECTOR } from "./chat-pane-shared.ts";
 
 export abstract class ChatPaneBrowserAnnotationRender extends ChatPaneHeader {
   protected readonly removeBrowserAnnotation = (attachment: ChatAttachment) => {
@@ -27,7 +28,7 @@ export abstract class ChatPaneBrowserAnnotationRender extends ChatPaneHeader {
             if (this.state !== state || this.state.sessionKey !== sourceSessionKey) {
               return;
             }
-            this.querySelector<HTMLTextAreaElement>(CHAT_COMPOSER_TEXTAREA_SELECTOR)?.focus({
+            this.querySelector<ComposerEditor>(CHAT_COMPOSER_EDITOR_SELECTOR)?.focus({
               preventScroll: true,
             });
           });

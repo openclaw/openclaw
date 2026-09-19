@@ -1,6 +1,7 @@
 import path from "node:path";
 import { GATEWAY_SERVER_CAPS } from "@openclaw/gateway-protocol";
 import { expect, it } from "vitest";
+import { composerDisabled } from "../test-helpers/composer-editor.ts";
 import { createControlUiSessionRow as sessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
 import { expectRequestCountStable } from "./chat-flow.test-support.ts";
 import {
@@ -79,7 +80,11 @@ suite.define(() => {
             .waitFor();
         }
         await expect
-          .poll(() => pane.locator(".agent-chat__composer-combobox textarea").isDisabled())
+          .poll(() =>
+            composerDisabled(
+              pane.locator(".agent-chat__composer-combobox openclaw-composer-editor"),
+            ),
+          )
           .toBe(restricted);
         if (acknowledgesRead) {
           const acknowledgement = await gateway.waitForRequest("sessions.patch", { match });

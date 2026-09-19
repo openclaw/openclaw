@@ -1,5 +1,6 @@
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
+import { composerValue, fillComposer } from "../test-helpers/composer-editor.ts";
 import {
   defaultControlUiFeatureMethods,
   installMockGateway,
@@ -12,6 +13,7 @@ const suite = createControlUiE2eSuite({ name: "Control UI comment lifecycle" });
 const passage = "Review the deployment checklist.";
 
 async function selectText(text: Locator) {
+  await text.click();
   await text.evaluate((element) => {
     const range = document.createRange();
     range.selectNodeContents(element);
@@ -63,8 +65,8 @@ suite.define(() => {
             }),
           );
           await page.goto(`${suite.server.baseUrl}chat`);
-          const composer = page.locator(".agent-chat__composer-shell textarea");
-          await composer.fill("Keep this draft through the composer change.");
+          const composer = page.locator(".agent-chat__composer-shell openclaw-composer-editor");
+          await fillComposer(composer, "Keep this draft through the composer change.");
           const source = page.locator(".chat-bubble .chat-text p").filter({ hasText: passage });
           const editor = page.getByRole("dialog", { name: "Comment", exact: true });
           for (const comment of ["Check the rollback steps.", "Remove this extra comment."]) {
@@ -82,7 +84,9 @@ suite.define(() => {
           const chip = page.locator(".chat-selection-annotations__chip");
           expect(await chip.count()).toBe(1);
           expect(await chip.textContent()).toContain("2 comments");
-          expect(await composer.inputValue()).toBe("Keep this draft through the composer change.");
+          expect(await composerValue(composer)).toBe(
+            "Keep this draft through the composer change.",
+          );
           await chip.hover();
           const preview = page.getByRole("region", { name: "Comments", exact: true });
           await preview.getByRole("button", { name: "Edit comment 1", exact: true }).click();
@@ -139,8 +143,8 @@ suite.define(() => {
           historyMessages: [{ role: "assistant", content: passage }],
         });
         await page.goto(`${suite.server.baseUrl}chat`);
-        const composer = page.locator(".agent-chat__composer-shell textarea");
-        await composer.fill("Preserve the draft.");
+        const composer = page.locator(".agent-chat__composer-shell openclaw-composer-editor");
+        await fillComposer(composer, "Preserve the draft.");
         const source = page.locator(".chat-bubble .chat-text p").filter({ hasText: passage });
         for (const comment of ["First note", "Second note"]) {
           await addComment(page, source, comment);
@@ -205,7 +209,7 @@ suite.define(() => {
         await expect
           .poll(() => composer.evaluate((element) => element === document.activeElement))
           .toBe(true);
-        expect(await composer.inputValue()).toBe("Preserve the draft.");
+        expect(await composerValue(composer)).toBe("Preserve the draft.");
         const toast = page.getByRole("status").filter({ hasText: "Comments removed" });
         await toast.getByRole("button", { name: "Undo", exact: true }).click();
         await expect.poll(() => chip.textContent()).toContain("1 comment");
@@ -221,7 +225,7 @@ suite.define(() => {
         await expect
           .poll(() => composer.evaluate((element) => element === document.activeElement))
           .toBe(true);
-        expect(await composer.inputValue()).toBe("Preserve the draft.");
+        expect(await composerValue(composer)).toBe("Preserve the draft.");
         await page.getByRole("button", { name: "Send message", exact: true }).click();
         const request = await gateway.waitForRequest("chat.send");
         expect((request.params as { attachments?: unknown[] }).attachments ?? []).toHaveLength(0);
@@ -261,8 +265,8 @@ suite.define(() => {
           }),
         );
         await page.goto(`${suite.server.baseUrl}chat`);
-        const composer = page.locator(".agent-chat__composer-shell textarea");
-        await composer.fill("Keep this draft.");
+        const composer = page.locator(".agent-chat__composer-shell openclaw-composer-editor");
+        await fillComposer(composer, "Keep this draft.");
         const source = page.locator(".chat-bubble .chat-text p").filter({ hasText: passage });
         await selectText(source);
         await page
@@ -292,7 +296,7 @@ suite.define(() => {
         await expect
           .poll(() => composer.evaluate((element) => element === document.activeElement))
           .toBe(true);
-        expect(await composer.inputValue()).toBe("Keep this draft.");
+        expect(await composerValue(composer)).toBe("Keep this draft.");
         await page.getByRole("button", { name: "Send message", exact: true }).click();
         const request = await gateway.waitForRequest("chat.send");
         expect((request.params as { attachments?: unknown[] }).attachments ?? []).toHaveLength(0);

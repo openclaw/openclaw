@@ -1,5 +1,10 @@
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
+import {
+  accessibleChatComposer,
+  composerValue,
+  fillComposer,
+} from "../test-helpers/composer-editor.ts";
 import { installMockGateway, startControlUiE2eServer } from "../test-helpers/control-ui-e2e.ts";
 import {
   captureUiProof,
@@ -92,13 +97,13 @@ suite.define(() => {
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
         await page.getByRole("button", { name: "Open split view", exact: true }).click();
         const cells = page.locator(".chat-split-view__cell");
-        const left = cells.nth(0).getByRole("textbox", { name: "Chat composer" });
-        const right = cells.nth(1).getByRole("textbox", { name: "Chat composer" });
+        const left = accessibleChatComposer(cells.nth(0));
+        const right = accessibleChatComposer(cells.nth(1));
         await expect.poll(() => left.count()).toBe(1);
-        await left.fill("OLDER LEFT DRAFT");
+        await fillComposer(left, "OLDER LEFT DRAFT");
         const scopeKey = `chat:v3:${sessionKey}\u0000agent:main`;
         await waitForCommittedComposerDraft(page, scopeKey, "OLDER LEFT DRAFT", 0);
-        await right.fill("NEWER RIGHT DRAFT");
+        await fillComposer(right, "NEWER RIGHT DRAFT");
         await waitForCommittedComposerDraft(page, scopeKey, "NEWER RIGHT DRAFT", 0);
         await left.click();
         for (const letter of ["b", "c", "d", "a"]) {
@@ -114,10 +119,10 @@ suite.define(() => {
                 .pathname,
             );
         }
-        await expect.poll(() => left.inputValue()).toBe("NEWER RIGHT DRAFT");
-        await expect.poll(() => right.inputValue()).toBe("NEWER RIGHT DRAFT");
+        await expect.poll(() => composerValue(left)).toBe("NEWER RIGHT DRAFT");
+        await expect.poll(() => composerValue(right)).toBe("NEWER RIGHT DRAFT");
         await page.reload();
-        await expect.poll(() => left.inputValue()).toBe("NEWER RIGHT DRAFT");
+        await expect.poll(() => composerValue(left)).toBe("NEWER RIGHT DRAFT");
         await captureUiProof(suite, page, "split-draft-eviction", "after.png");
       },
     );

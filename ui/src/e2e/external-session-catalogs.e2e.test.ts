@@ -2,6 +2,7 @@ import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
 import type { ApplicationContext } from "../app/context.ts";
+import { composerDisabled, composerValue, fillComposer } from "../test-helpers/composer-editor.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { installMockGateway, waitForControlUiRoute } from "../test-helpers/control-ui-e2e.ts";
@@ -234,7 +235,8 @@ suite.define(() => {
         const activePane = page.locator(
           "openclaw-chat-pane.chat-pane-cache__pane--active:not([inert])",
         );
-        const composer = () => activePane.locator(".agent-chat__composer-combobox > textarea");
+        const composer = () =>
+          activePane.locator(".agent-chat__composer-combobox > openclaw-composer-editor");
         const navigate = async (agentId: string, catalog = true) => {
           await page.evaluate(
             ({ agentId: routeAgentId, search: routeSearch }) => {
@@ -318,17 +320,17 @@ suite.define(() => {
               .textContent(),
           )
           .toContain("other native thread");
-        await composer().fill("other retained draft");
+        await fillComposer(composer(), "other retained draft");
 
         // Same source, different route owner: no intervening ordinary session may hide a key collision.
         await navigate("main");
         await activePane.getByText("main native transcript", { exact: true }).waitFor();
         await assertOwner("main");
-        expect(await composer().inputValue()).toBe("");
-        await composer().fill("main retained draft");
+        expect(await composerValue(composer())).toBe("");
+        await fillComposer(composer(), "main retained draft");
         await navigate("other");
         await assertOwner("other");
-        expect(await composer().inputValue()).toBe("other retained draft");
+        expect(await composerValue(composer())).toBe("other retained draft");
         expect(
           await page
             .locator("openclaw-chat-pane")
@@ -340,7 +342,7 @@ suite.define(() => {
         await sidebar.getByText("other native thread", { exact: true }).click();
         await waitForControlUiRoute(page, { routeId: "chat", pathname: "/chat/other", search });
         await assertOwner("other");
-        expect(await composer().inputValue()).toBe("other retained draft");
+        expect(await composerValue(composer())).toBe("other retained draft");
         expect(await gateway.getRequests("sessions.catalog.read")).toHaveLength(readsBeforeReturn);
 
         await activePane.getByRole("button", { name: "Open split view" }).click();
@@ -402,11 +404,11 @@ suite.define(() => {
         await visiblePanes.getByText("other native transcript", { exact: true }).click();
         await waitForControlUiRoute(page, { routeId: "chat", pathname: "/chat/other", search });
         await assertOwner("other");
-        await composer().fill("/bt");
+        await fillComposer(composer(), "/bt");
         await page.getByRole("option").filter({ hasText: "/btw" }).click();
         expect(await gateway.getRequests("sessions.catalog.continue")).toHaveLength(0);
-        expect(await composer().inputValue()).toBe("/btw ");
-        await composer().fill("Continue under Other");
+        expect(await composerValue(composer())).toBe("/btw ");
+        await fillComposer(composer(), "Continue under Other");
         await activePane.getByRole("button", { name: "Send message", exact: true }).click();
         expect((await gateway.waitForRequest("sessions.catalog.continue")).params).toMatchObject({
           ...source,
@@ -562,9 +564,11 @@ suite.define(() => {
         .locator(".chat-pane__session-title-text", { hasText: "Pretty Beam route" })
         .waitFor();
       expect(
-        await page
-          .locator("openclaw-chat-pane.chat-pane-cache__pane--visible textarea")
-          .isDisabled(),
+        await composerDisabled(
+          page.locator(
+            "openclaw-chat-pane.chat-pane-cache__pane--visible openclaw-composer-editor",
+          ),
+        ),
       ).toBe(true);
       const resolution = (await gateway.getRequests("sessions.catalog.list")).find(
         (request) => (request.params as { search?: string } | undefined)?.search,
@@ -727,9 +731,11 @@ suite.define(() => {
       .locator("openclaw-chat-pane.chat-pane-cache__pane--visible")
       .filter({ hasText: "Pi transcript loaded" });
     await piPane.getByText("Pi transcript loaded").waitFor();
-    expect(await piPane.locator(".agent-chat__composer-combobox > textarea").isDisabled()).toBe(
-      true,
-    );
+    expect(
+      await composerDisabled(
+        piPane.locator(".agent-chat__composer-combobox > openclaw-composer-editor"),
+      ),
+    ).toBe(true);
     expect(await gateway.getRequests("sessions.catalog.read")).toHaveLength(2);
 
     const artifactRoot = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();

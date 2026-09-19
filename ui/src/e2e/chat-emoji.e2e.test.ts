@@ -1,5 +1,7 @@
 import type WaPopup from "@awesome.me/webawesome/dist/components/popup/popup.js";
 import { expect, it } from "vitest";
+import type { ComposerEditor } from "../components/composer-editor.ts";
+import { composerValue, fillComposer } from "../test-helpers/composer-editor.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -10,7 +12,7 @@ suite.define(() => {
     {
       name: "Chat",
       route: "chat",
-      selector: ".agent-chat__composer-combobox > textarea",
+      selector: ".agent-chat__composer-combobox > openclaw-composer-editor",
       viewport: { width: 1280, height: 800 },
       prefix: "Nice ",
     },
@@ -24,7 +26,7 @@ suite.define(() => {
     {
       name: "narrow multiline Chat",
       route: "chat",
-      selector: ".agent-chat__composer-combobox > textarea",
+      selector: ".agent-chat__composer-combobox > openclaw-composer-editor",
       viewport: { width: 390, height: 760 },
       prefix: "A short first line.\nNice ",
     },
@@ -36,7 +38,7 @@ suite.define(() => {
         await page.goto(`${suite.server.baseUrl}${route}`);
         const composer = page.locator(selector);
         await composer.waitFor({ state: "visible" });
-        await composer.fill(prefix);
+        await fillComposer(composer, prefix);
         await expect
           .poll(() => composer.evaluate((element) => element.scrollHeight - element.clientHeight))
           .toBeLessThanOrEqual(1);
@@ -61,7 +63,12 @@ suite.define(() => {
         await menu.waitFor({ state: "visible" });
         expect(await menu.getByRole("option").count()).toBeGreaterThan(1);
         const word = await composer.evaluate((element, draftPrefix) => {
-          if (!(element instanceof HTMLTextAreaElement)) {
+          if (
+            !(
+              element instanceof
+              (customElements.get("openclaw-composer-editor") as typeof ComposerEditor)
+            )
+          ) {
             throw new Error("Expected composer");
           }
           const style = getComputedStyle(element);
@@ -102,7 +109,7 @@ suite.define(() => {
         await composer.press("ArrowDown");
         await composer.press("ArrowUp");
         await composer.press("Tab");
-        await expect.poll(() => composer.inputValue()).toBe(`${prefix}😄`);
+        await expect.poll(() => composerValue(composer)).toBe(`${prefix}😄`);
         await expect
           .poll(() => composer.evaluate((element) => document.activeElement === element))
           .toBe(true);
@@ -114,13 +121,18 @@ suite.define(() => {
           .toBe(false);
         await anchor.dispose();
 
-        await composer.fill("Nice ");
+        await fillComposer(composer, "Nice ");
         await composer.pressSequentially(":smile:");
-        await expect.poll(() => composer.inputValue()).toBe("Nice 😄");
+        await expect.poll(() => composerValue(composer)).toBe("Nice 😄");
 
-        await composer.fill("Before :smi after");
+        await fillComposer(composer, "Before :smi after");
         await composer.evaluate((element) => {
-          if (!(element instanceof HTMLTextAreaElement)) {
+          if (
+            !(
+              element instanceof
+              (customElements.get("openclaw-composer-editor") as typeof ComposerEditor)
+            )
+          ) {
             throw new Error("Expected composer");
           }
           element.setSelectionRange(11, 11);
@@ -132,9 +144,9 @@ suite.define(() => {
           .getByRole("option")
           .filter({ has: page.getByText(":smile:", { exact: true }) })
           .click();
-        await expect.poll(() => composer.inputValue()).toBe("Before 😄 after");
+        await expect.poll(() => composerValue(composer)).toBe("Before 😄 after");
         await composer.press("ControlOrMeta+z");
-        await expect.poll(() => composer.inputValue()).toBe("Before :smi after");
+        await expect.poll(() => composerValue(composer)).toBe("Before :smi after");
 
         for (const literalPrefix of [
           "`:smile",
@@ -143,27 +155,27 @@ suite.define(() => {
           "\\:smile",
           ":not_a_real_emoji",
         ]) {
-          await composer.fill(literalPrefix);
+          await fillComposer(composer, literalPrefix);
           await composer.pressSequentially(":");
-          await expect.poll(() => composer.inputValue()).toBe(`${literalPrefix}:`);
+          await expect.poll(() => composerValue(composer)).toBe(`${literalPrefix}:`);
           await expect.poll(() => menu.count()).toBe(0);
         }
 
-        await composer.fill("");
+        await fillComposer(composer, "");
         await composer.pressSequentially(":smi");
         await menu.waitFor({ state: "visible" });
         await composer.press("Escape");
         await expect.poll(() => menu.count()).toBe(0);
-        await expect.poll(() => composer.inputValue()).toBe(":smi");
-        await composer.fill("");
+        await expect.poll(() => composerValue(composer)).toBe(":smi");
+        await fillComposer(composer, "");
         await composer.pressSequentially(":smi");
         await menu.waitFor({ state: "visible" });
         await page.keyboard.down("Enter");
-        await expect.poll(() => composer.inputValue()).toBe("😄");
+        await expect.poll(() => composerValue(composer)).toBe("😄");
         await expect.poll(() => menu.count()).toBe(0);
         await page.keyboard.down("Enter");
         await page.keyboard.up("Enter");
-        expect(await composer.inputValue()).toBe("😄");
+        expect(await composerValue(composer)).toBe("😄");
         expect(await gateway.getRequests("chat.send")).toHaveLength(0);
         expect(await gateway.getRequests("sessions.create")).toHaveLength(0);
         await composer.press("Enter");
@@ -178,12 +190,12 @@ suite.define(() => {
     await suite.withPage({}, async ({ page }) => {
       await installMockGateway(page);
       await page.goto(`${suite.server.baseUrl}chat`);
-      const composer = page.locator(".agent-chat__composer-combobox > textarea");
-      await composer.fill("Context line\n".repeat(50));
+      const composer = page.locator(".agent-chat__composer-combobox > openclaw-composer-editor");
+      await fillComposer(composer, "Context line\n".repeat(50));
       await composer.evaluate((element) => {
         element.scrollTop = element.scrollHeight;
       });
-      await composer.pressSequentially(":smi");
+      await composer.locator(".cm-content").pressSequentially(":smi");
       const menu = page.getByRole("listbox", { name: /emoji/i });
       await menu.waitFor({ state: "visible" });
       await composer.evaluate((element) => {
@@ -192,7 +204,7 @@ suite.define(() => {
       await expect.poll(() => menu.count()).toBe(0);
       await composer.dispatchEvent("select");
       expect(await composer.getAttribute("aria-expanded")).not.toBe("true");
-      await expect.poll(() => composer.inputValue()).toBe("Context line\n".repeat(50) + ":smi");
+      await expect.poll(() => composerValue(composer)).toBe("Context line\n".repeat(50) + ":smi");
     });
   });
 });

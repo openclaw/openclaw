@@ -1,7 +1,9 @@
 import path from "node:path";
 import { gatewayOriginScope } from "@openclaw/gateway-client/browser";
 import { expect, it } from "vitest";
+import type { ComposerEditor } from "../components/composer-editor.ts";
 import type { ChatPaneElement } from "../pages/chat/route-draft-focus-handoff.ts";
+import { composerEnabled, composerValue, fillComposer } from "../test-helpers/composer-editor.ts";
 import {
   controlUiSessionUrl,
   defaultControlUiFeatureMethods,
@@ -69,14 +71,14 @@ suite.define(() => {
           });
           await page.goto(`${suite.server.baseUrl}chat/main/draft-timing-12345678`);
           const pane = page.locator("openclaw-chat-pane.chat-pane-cache__pane--visible");
-          const composer = pane.locator(".agent-chat__composer-combobox textarea");
+          const composer = pane.locator(".agent-chat__composer-combobox openclaw-composer-editor");
           await composer.waitFor({ state: "visible" });
-          await expect.poll(() => composer.isEnabled()).toBe(true);
+          await expect.poll(() => composerEnabled(composer)).toBe(true);
           await expect.poll(() => pane.locator(".loading-skeleton").isVisible()).toBe(true);
           expect(await composer.evaluate((element) => element === document.activeElement)).toBe(
             false,
           );
-          await composer.fill(submittedMessage);
+          await fillComposer(composer, submittedMessage);
           if (artifactDir) {
             await page.screenshot({ path: path.join(artifactDir, "01-loading-before-submit.png") });
           }
@@ -86,7 +88,7 @@ suite.define(() => {
           } else {
             await pane.getByRole("button", { name: "Send message" }).click();
           }
-          await expect.poll(() => composer.inputValue()).toBe("");
+          await expect.poll(() => composerValue(composer)).toBe("");
           await pane.locator(".chat-queue").getByText(submittedMessage, { exact: true }).waitFor();
           expect(await gateway.getRequests("chat.send")).toHaveLength(0);
           expect(await pane.locator(".loading-skeleton").isVisible()).toBe(true);
@@ -96,10 +98,10 @@ suite.define(() => {
             });
           }
 
-          await composer.fill("Next draft written before history arrives.");
+          await fillComposer(composer, "Next draft written before history arrives.");
           const input = await composer.elementHandle();
-          let pendingDraft = await composer.inputValue();
-          await composer.evaluate((element: HTMLTextAreaElement) =>
+          let pendingDraft = await composerValue(composer);
+          await composer.evaluate((element: ComposerEditor) =>
             element.setSelectionRange(6, 13, "backward"),
           );
           const cdp = ime ? await context.newCDPSession(page) : null;
@@ -109,10 +111,10 @@ suite.define(() => {
               selectionStart: 1,
               selectionEnd: 2,
             });
-            pendingDraft = await composer.inputValue();
+            pendingDraft = await composerValue(composer);
             expect(pendingDraft).toContain("編集中");
           }
-          const selection = await composer.evaluate((element: HTMLTextAreaElement) => ({
+          const selection = await composer.evaluate((element: ComposerEditor) => ({
             start: element.selectionStart,
             end: element.selectionEnd,
             direction: element.selectionDirection,
@@ -143,9 +145,9 @@ suite.define(() => {
               (element) => element.isConnected && element === document.activeElement,
             ),
           ).toBe(true);
-          expect(await composer.inputValue()).toBe(pendingDraft);
+          expect(await composerValue(composer)).toBe(pendingDraft);
           expect(
-            await composer.evaluate((element: HTMLTextAreaElement) => ({
+            await composer.evaluate((element: ComposerEditor) => ({
               start: element.selectionStart,
               end: element.selectionEnd,
               direction: element.selectionDirection,
@@ -164,11 +166,11 @@ suite.define(() => {
           });
           if (cdp) {
             await cdp.send("Input.insertText", { text: "編集済み" });
-            pendingDraft = await composer.inputValue();
+            pendingDraft = await composerValue(composer);
             expect(pendingDraft).toContain("編集済み");
             await cdp.detach();
           }
-          expect(await composer.inputValue()).toBe(pendingDraft);
+          expect(await composerValue(composer)).toBe(pendingDraft);
           expect(await gateway.getRequests("chat.send")).toHaveLength(1);
           if (width > 400) {
             await expect
@@ -183,7 +185,7 @@ suite.define(() => {
               gateway.waitForRequest("cron.status"),
               gateway.waitForRequest("system.info"),
             ]);
-            expect(await composer.inputValue()).toBe(pendingDraft);
+            expect(await composerValue(composer)).toBe(pendingDraft);
             if (artifactDir) {
               await page.screenshot({
                 path: path.join(artifactDir, "03-ready-with-next-draft.png"),

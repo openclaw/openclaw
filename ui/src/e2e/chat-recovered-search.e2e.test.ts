@@ -52,8 +52,8 @@ suite.define(() => {
       await expect.poll(() => reply.textContent()).toContain(keyword);
       await page.screenshot({ path: path.join(artifactDir, "recovered.png") });
 
-      const composer = pane.locator(".agent-chat__composer-combobox textarea");
-      await composer.focus();
+      const composer = pane.locator(".agent-chat__composer-combobox openclaw-composer-editor");
+      await composer.locator(".cm-content").focus();
       const shortcut = await page.evaluate(() =>
         /Mac|iPhone|iPad|iPod/.test(navigator.platform) ? "Meta+f" : "Control+f",
       );

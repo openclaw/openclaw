@@ -136,7 +136,7 @@ suite.define(() => {
           } else if (input === "touch") {
             await reference.tap();
           } else {
-            await page.locator(".agent-chat__composer-combobox textarea").hover();
+            await page.locator(".agent-chat__composer-combobox openclaw-composer-editor").hover();
           }
           await card.waitFor({ state: "detached" });
           expect(await reference.getAttribute("aria-expanded")).toBe("false");
@@ -253,7 +253,7 @@ suite.define(() => {
         await expect.poll(() => card.textContent()).toContain("Could not load people");
         expect(await card.locator("a").count()).toBe(0);
         expect(await card.locator("openclaw-viewer-avatar").count()).toBe(0);
-        await page.locator(".agent-chat__composer-combobox textarea").click();
+        await page.locator(".agent-chat__composer-combobox openclaw-composer-editor").click();
         await card.waitFor({ state: "detached" });
       });
     },

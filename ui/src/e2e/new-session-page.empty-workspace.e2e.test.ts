@@ -1,4 +1,5 @@
 import { expect, it } from "vitest";
+import { fillComposer } from "../test-helpers/composer-editor.ts";
 import {
   controlUiSessionPath,
   createNewSessionPageE2eSuite,
@@ -51,7 +52,7 @@ suite.define(() => {
       await pollLocatorText(empty).toContain("Start in an empty folder for this session.");
       await empty.click();
 
-      await page.locator(".new-session-page__message").fill(message);
+      await fillComposer(page.locator(".new-session-page__message"), message);
       await page.getByRole("button", { name: "Start session" }).click();
       const create = await gateway.waitForRequest("sessions.create");
       expect(create.params).toMatchObject({

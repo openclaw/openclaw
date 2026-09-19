@@ -1,6 +1,7 @@
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
+import { composerDisabled, composerValue, fillComposer } from "../test-helpers/composer-editor.ts";
 import {
   controlUiBundledSettingsStorageKey,
   defaultControlUiFeatureMethods,
@@ -122,16 +123,16 @@ suite.define(() => {
         const paneB = page
           .locator("openclaw-chat-page openclaw-chat-pane")
           .filter({ hasText: `Conversation Research ${closed}` });
-        const composerA = paneA.locator(".agent-chat__composer-combobox textarea");
-        const composerB = paneB.locator(".agent-chat__composer-combobox textarea");
+        const composerA = paneA.locator(".agent-chat__composer-combobox openclaw-composer-editor");
+        const composerB = paneB.locator(".agent-chat__composer-combobox openclaw-composer-editor");
         if (editable && composerVisible) {
-          await composerA.fill("Draft A");
+          await fillComposer(composerA, "Draft A");
         }
         if (editable) {
-          await composerB.fill("Draft B");
+          await fillComposer(composerB, "Draft B");
         }
         if (!editable) {
-          await expect.poll(() => composerA.isDisabled()).toBe(true);
+          await expect.poll(() => composerDisabled(composerA)).toBe(true);
         }
         if (!composerVisible) {
           await paneA.locator('[data-panel-slot="dashboard"][data-region="main"]').waitFor();
@@ -141,10 +142,10 @@ suite.define(() => {
           await page.locator(".sidebar-footer-bar__home").click();
         }
         const homeComposer = page.locator(
-          "openclaw-assistant-panel .agent-chat__composer-combobox textarea",
+          "openclaw-assistant-panel .agent-chat__composer-combobox openclaw-composer-editor",
         );
         if (editable) {
-          await homeComposer.fill("Home draft");
+          await fillComposer(homeComposer, "Home draft");
         }
         const close = paneB.locator(".chat-pane__close-pane");
         await close.focus();
@@ -184,7 +185,7 @@ suite.define(() => {
           }));
         const afterClose = await focus();
         const accessibilityAfterClose = await page.locator(":focus").ariaSnapshot();
-        const draftAfterClose = await composerA.inputValue();
+        const draftAfterClose = await composerValue(composerA);
         await page.screenshot({ path: path.join(suite.artifactDir, "after-close.png") });
         if (editable && composerVisible) {
           await page.keyboard.type(" continuation");
@@ -195,8 +196,8 @@ suite.define(() => {
           accessibilityAfterClose,
           afterTyping,
           draftAfterClose,
-          finalDraftA: await composerA.inputValue(),
-          finalHomeDraft: editable ? await homeComposer.inputValue() : null,
+          finalDraftA: await composerValue(composerA),
+          finalHomeDraft: editable ? await composerValue(homeComposer) : null,
           url: page.url(),
           errors,
           methods: (await gateway.getRequests()).map(({ method }) => method),

@@ -3,11 +3,11 @@ import { guard } from "lit/directives/guard.js";
 import { ifDefined } from "lit/directives/if-defined.js";
 import { live } from "lit/directives/live.js";
 import { ref } from "lit/directives/ref.js";
+import { ComposerEditor } from "../../components/composer-editor.ts";
 import { icons } from "../../components/icons.ts";
 import { t } from "../../i18n/index.ts";
 import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-session-setup.ts";
 import { updateHumanMentions } from "../../lib/chat/human-mentions.ts";
-import "../../components/tooltip.ts";
 import {
   createChatAttachmentDropHandlers,
   handleChatAttachmentPaste,
@@ -15,10 +15,12 @@ import {
   renderAttachmentReadStatus,
   renderChatAttachmentInputs,
 } from "../chat/components/chat-attachments.ts";
+import "../../components/tooltip.ts";
 import { adjustTextareaHeight, paneDomId } from "../chat/components/chat-composer-dom.ts";
 import type { HumanMentionMenuHost } from "../chat/components/chat-composer-mention-menu.ts";
 import { resolveComposerMenus } from "../chat/components/chat-composer-menus.ts";
 import { renderSelectedHumanMentions } from "../chat/components/chat-composer-selected-mentions.ts";
+import { resolveComposerSkillChips } from "../chat/components/chat-composer-skill-chips.ts";
 import {
   handleSkillMenuKeydown,
   renderSkillMenu,
@@ -200,7 +202,7 @@ export function renderNewSessionComposer(options: NewSessionComposerOptions) {
     getMentions: () => options.getMentions?.() ?? options.mentions ?? [],
     commitDraft: options.onInput,
   };
-  const updateEmojiMenu = (target: HTMLTextAreaElement) => {
+  const updateEmojiMenu = (target: ComposerEditor) => {
     emojiMenu.update(
       target,
       options.requestUpdate,
@@ -212,7 +214,7 @@ export function renderNewSessionComposer(options: NewSessionComposerOptions) {
         !mentionMenu.open,
     );
   };
-  const updateMenus = (target: HTMLTextAreaElement, event?: InputEvent) => {
+  const updateMenus = (target: ComposerEditor, event?: InputEvent) => {
     if (options.nativeTerminal || options.textareaController.composing || event?.isComposing) {
       emojiMenu.close();
       return;
@@ -243,7 +245,7 @@ export function renderNewSessionComposer(options: NewSessionComposerOptions) {
   };
   const handleSelect = (event: Event) => {
     const target = event.currentTarget;
-    if (target instanceof HTMLTextAreaElement) {
+    if (target instanceof ComposerEditor) {
       if (event.type === "keyup") {
         updateEmojiMenu(target);
       } else {
@@ -374,10 +376,10 @@ export function renderNewSessionComposer(options: NewSessionComposerOptions) {
                 ? renderSkillMenu(skillMenuState, skillMenuHost, options.requestUpdate)
                 : nothing
             }
-            <textarea
+            <openclaw-composer-editor
+              .resolveChips=${options.nativeTerminal ? undefined : resolveComposerSkillChips}
               ${ref(options.textareaController.ref)}
               class="new-session-page__message"
-              rows="1"
               ?autofocus=${globalThis.matchMedia?.("(max-width: 560px)")?.matches ?? false}
               ?disabled=${options.submitting || options.messageLocked}
               ?readonly=${options.dictationActive}
@@ -394,8 +396,8 @@ export function renderNewSessionComposer(options: NewSessionComposerOptions) {
                 if (options.dictationActive) {
                   return;
                 }
-                // SAFETY: this input listener is attached directly to the textarea below.
-                const target = event.target as HTMLTextAreaElement;
+                // SAFETY: the editor forwards input with itself as the event target.
+                const target = event.target as ComposerEditor;
                 adjustTextareaHeight(target);
                 const mentions = mentionMenuHost.getMentions();
                 options.onInput(
@@ -413,8 +415,8 @@ export function renderNewSessionComposer(options: NewSessionComposerOptions) {
                 updateMenus(target, event);
               }}
               @beforeinput=${(event: InputEvent) => {
-                // SAFETY: this beforeinput listener belongs to this native textarea.
-                const target = event.target as HTMLTextAreaElement;
+                // SAFETY: the editor forwards beforeinput with itself as the event target.
+                const target = event.target as ComposerEditor;
                 options.textareaController.mentionInput = {
                   value: target.value,
                   start: target.selectionStart,
@@ -448,7 +450,7 @@ export function renderNewSessionComposer(options: NewSessionComposerOptions) {
               }}
               @compositionend=${(event: CompositionEvent) => {
                 options.textareaController.composing = false;
-                if (event.target instanceof HTMLTextAreaElement) {
+                if (event.target instanceof ComposerEditor) {
                   updateMenus(event.target);
                 }
               }}
@@ -474,7 +476,7 @@ export function renderNewSessionComposer(options: NewSessionComposerOptions) {
                   handleChatAttachmentPaste(event, attachmentProps);
                 }
               }}
-            ></textarea>
+            ></openclaw-composer-editor>
             <span
               id=${menuAnnouncementId}
               class="sr-only"

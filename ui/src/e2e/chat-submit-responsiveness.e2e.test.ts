@@ -1,6 +1,8 @@
 import path from "node:path";
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
+import type { ComposerEditor } from "../components/composer-editor.ts";
+import { composerValue, fillComposer } from "../test-helpers/composer-editor.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { createChatFlowE2eSuite, installMockGateway } from "./chat-flow.test-support.ts";
 
@@ -30,8 +32,8 @@ suite.define(() => {
     await withChatPage(async (page) => {
       const gateway = await installMockGateway(page);
       await page.goto(`${suite.server.baseUrl}chat`);
-      const composer = page.locator(".agent-chat__composer-combobox textarea");
-      await composer.fill("discard before delivery");
+      const composer = page.locator(".agent-chat__composer-combobox openclaw-composer-editor");
+      await fillComposer(composer, "discard before delivery");
       await gateway.setOnline(false);
       await gateway.closeLatest();
       await composer.evaluate((element) => {
@@ -60,7 +62,7 @@ suite.define(() => {
       }
       await queued.locator(".chat-queue__remove").evaluate((button: HTMLElement) => button.click());
       await queued.waitFor({ state: "detached" });
-      await composer.fill("next draft stays mine");
+      await fillComposer(composer, "next draft stays mine");
       await page.evaluate(
         () =>
           new Promise<void>((resolve) => {
@@ -83,7 +85,7 @@ suite.define(() => {
         await page.screenshot({ path: path.join(proofDir, "retirement-resumed.png") });
       }
       expect(await page.getByRole("alert").allTextContents()).toEqual([]);
-      expect(await composer.inputValue()).toBe("next draft stays mine");
+      expect(await composerValue(composer)).toBe("next draft stays mine");
       expect(await page.locator(".chat-queue__item").count()).toBe(0);
       expect(await gateway.getRequests("chat.send")).toHaveLength(0);
     });
@@ -94,14 +96,14 @@ suite.define(() => {
       const gateway = await installMockGateway(page);
       await page.goto(`${suite.server.baseUrl}chat`);
 
-      const composer = page.locator(".agent-chat__composer-combobox textarea");
-      await composer.fill("first prompt");
+      const composer = page.locator(".agent-chat__composer-combobox openclaw-composer-editor");
+      await fillComposer(composer, "first prompt");
       if (proofDir) {
         await page.screenshot({ path: path.join(proofDir, "before-submit.png") });
         await page.waitForTimeout(400);
       }
       await composer.evaluate((element) => {
-        const textarea = element as HTMLTextAreaElement;
+        const textarea = element as ComposerEditor;
         const order: string[] = [];
         const record = (value: string) => {
           order.push(value);
@@ -157,7 +159,7 @@ suite.define(() => {
       await expect
         .poll(() => composer.getAttribute("data-submit-task-order"))
         .toBe(JSON.stringify(["next-input-task", "transport:second prompt"]));
-      expect(await composer.inputValue()).toBe("second prompt");
+      expect(await composerValue(composer)).toBe("second prompt");
       if (proofDir) {
         await page.screenshot({ path: path.join(proofDir, "next-prompt-ready.png") });
         await page.waitForTimeout(700);

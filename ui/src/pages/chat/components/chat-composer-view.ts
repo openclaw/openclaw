@@ -1,17 +1,18 @@
-import "../../../styles/chat/composer-surface.css";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { html, nothing, type TemplateResult } from "lit";
+import "../../../styles/chat/composer-surface.css";
 import { guard } from "lit/directives/guard.js";
 import { ifDefined } from "lit/directives/if-defined.js";
 import { live } from "lit/directives/live.js";
 import { ref } from "lit/directives/ref.js";
 import type { GatewaySessionRow } from "../../../api/types.ts";
+import type { ComposerEditor } from "../../../components/composer-editor.ts";
 import { icons } from "../../../components/icons.ts";
 import { renderSessionProgressCard } from "../../../components/session-progress-card.ts";
 import { t } from "../../../i18n/index.ts";
 import { detectTextDirection } from "../../../lib/text-direction.ts";
-import "../../../styles/chat/composer-context-strip.css";
 import type { ComposerDictationController } from "../composer-dictation.ts";
+import "../../../styles/chat/composer-context-strip.css";
 import { insertComposerDictation } from "../composer-dictation.ts";
 import {
   handleChatAttachmentPaste,
@@ -32,6 +33,7 @@ import type { HumanMentionMenuHost } from "./chat-composer-mention-menu.ts";
 import { renderChatComposerPlusMenu } from "./chat-composer-plus-menu.ts";
 import { renderChatQueue } from "./chat-composer-queue.ts";
 import { renderSelectedHumanMentions } from "./chat-composer-selected-mentions.ts";
+import { resolveComposerSkillChips } from "./chat-composer-skill-chips.ts";
 import {
   resetSkillMenuState,
   renderSkillMenu,
@@ -489,7 +491,8 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
 
               <div class="agent-chat__composer-input-row">
                 <div class="agent-chat__composer-combobox">
-                  <textarea
+                  <openclaw-composer-editor
+                    .resolveChips=${resolveComposerSkillChips}
                     ${ref(state.textareaRef ?? undefined)}
                     .value=${guard([dictationPreviewDraft], () => live(dictationPreviewDraft))}
                     dir=${draftDirection}
@@ -537,7 +540,7 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
                       state.composerComposing = true;
                       state.composingDraft = {
                         key: draftKey,
-                        value: (event.target as HTMLTextAreaElement).value,
+                        value: (event.target as ComposerEditor).value,
                       };
                       if (emojiWasOpen) {
                         requestUpdate();
@@ -552,8 +555,7 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
                     }}
                     aria-label=${t("chat.composer.composerInput")}
                     placeholder=${dictation?.active ? "" : placeholder}
-                    rows="1"
-                  ></textarea>
+                  ></openclaw-composer-editor>
                   <span
                     id=${slashMenuAnnouncementId}
                     class="sr-only"

@@ -3,6 +3,7 @@ import type { ApplicationContext } from "../app/context.ts";
 import { sessionPlacementRecoveryExactStorageKey } from "../lib/sessions/session-placement-recovery-storage-key.ts";
 import type { SessionPlacementPendingRecovery } from "../lib/sessions/session-placement-recovery.ts";
 import type { ChatPageHost } from "../pages/chat/chat-state-host.ts";
+import { composerDisabled, composerValue, fillComposer } from "../test-helpers/composer-editor.ts";
 import { holdModuleResponse } from "./control-ui-e2e-suite.test-support.ts";
 import {
   captureUiProof,
@@ -76,7 +77,7 @@ suite.define(() => {
           .getByRole("button", { name: "aws", exact: true })
           .click();
         await page.getByRole("switch", { name: "Incognito" }).click();
-        await page.locator(".new-session-page__message").fill(message);
+        await fillComposer(page.locator(".new-session-page__message"), message);
         await page.getByRole("button", { name: "Start session", exact: true }).click();
         await gateway.waitForRequest("sessions.dispatch");
         await waitForCommittedChatRoute(page);
@@ -107,7 +108,7 @@ suite.define(() => {
         );
         expect(await retained.textContent()).not.toContain("temporary session was cleaned up");
         expect(page.url()).toBe(route);
-        expect(await retained.locator("textarea").count()).toBe(0);
+        expect(await retained.locator("openclaw-composer-editor").count()).toBe(0);
         if (outcome === "cancelled") {
           await gateway.setMethodResponse("sessions.describe", { session: null });
           await gateway.resolveDeferred("sessions.dispatch", {});
@@ -217,7 +218,7 @@ suite.define(() => {
           .getByRole("button", { name: "aws", exact: true })
           .click();
         const composer = page.locator(".new-session-page__message");
-        await composer.fill(message);
+        await fillComposer(composer, message);
         await pastePng(composer);
         await page.getByRole("button", { name: "Start session" }).click();
         await gateway.waitForRequest("sessions.dispatch");
@@ -285,9 +286,9 @@ suite.define(() => {
             await state.handleSendChat();
             return { draft: state.chatMessage, queued: state.chatQueue.map((item) => item.text) };
           });
-          const composerDisabled = await page
-            .locator(".agent-chat__composer-combobox textarea")
-            .isDisabled();
+          const isComposerDisabled = await composerDisabled(
+            page.locator(".agent-chat__composer-combobox openclaw-composer-editor"),
+          );
           await failedGroup.waitFor({ state: "visible" });
           await pollLocatorText(pane.locator(".chat-working-indicator")).toContain("Reconnecting");
           expect(await pane.locator(".agent-chat__welcome").count()).toBe(0);
@@ -302,14 +303,16 @@ suite.define(() => {
           if (offline.queued.includes("later ordinary turn")) {
             await gateway.waitForRequest("chat.send");
           }
-          expect(composerDisabled).toBe(true);
+          expect(isComposerDisabled).toBe(true);
           expect({ offline, sends: await gateway.getRequests("chat.send") }).toMatchObject({
             offline: { draft: "later ordinary turn", queued: [] },
             sends: [],
           });
-          expect(await page.locator(".agent-chat__composer-combobox textarea").inputValue()).toBe(
-            "later ordinary turn",
-          );
+          expect(
+            await composerValue(
+              page.locator(".agent-chat__composer-combobox openclaw-composer-editor"),
+            ),
+          ).toBe("later ordinary turn");
           expect(await gateway.getRequests("sessions.dispatch")).toHaveLength(1);
         } else {
           if (coldScope) {
@@ -334,9 +337,9 @@ suite.define(() => {
               await state.handleSendChat();
               return { draft: state.chatMessage, queued: state.chatQueue.map((item) => item.text) };
             });
-            const composerDisabled = await page
-              .locator(".agent-chat__composer-combobox textarea")
-              .isDisabled();
+            const isComposerDisabled = await composerDisabled(
+              page.locator(".agent-chat__composer-combobox openclaw-composer-editor"),
+            );
             await pollLocatorText(pane.locator(".agent-chat__composer-status-band")).toContain(
               "Finishing connection recovery.",
             );
@@ -352,7 +355,7 @@ suite.define(() => {
               blocked: { draft: "later ordinary turn", queued: [] },
               sends: [],
             });
-            expect(composerDisabled).toBe(true);
+            expect(isComposerDisabled).toBe(true);
           }
         }
         await failedGroup.waitFor({ state: "visible" });
@@ -382,9 +385,11 @@ suite.define(() => {
         });
         expect(await gateway.getRequests("sessions.create")).toHaveLength(disconnect ? 1 : 0);
         if (disconnect || coldScope) {
-          expect(await page.locator(".agent-chat__composer-combobox textarea").inputValue()).toBe(
-            "later ordinary turn",
-          );
+          expect(
+            await composerValue(
+              page.locator(".agent-chat__composer-combobox openclaw-composer-editor"),
+            ),
+          ).toBe("later ordinary turn");
           expect(await gateway.getRequests("chat.send")).toHaveLength(0);
         }
       } finally {
@@ -423,8 +428,8 @@ suite.define(() => {
       try {
         await page.goto(`${suite.server.baseUrl}${controlUiSessionPath(sessionKey).slice(1)}`);
         const pane = page.locator(".chat-pane-cache__pane--active");
-        const composer = page.locator(".agent-chat__composer-combobox textarea");
-        await expect.poll(() => composer.isDisabled()).toBe(false);
+        const composer = page.locator(".agent-chat__composer-combobox openclaw-composer-editor");
+        await expect.poll(() => composerDisabled(composer)).toBe(false);
         const owner = await page.evaluate(() => {
           const app = document.querySelector("openclaw-app") as HTMLElement & {
             runtime: { context: ApplicationContext };
@@ -457,10 +462,10 @@ suite.define(() => {
             ),
           )
           .toBe(false);
-        await composer.fill("queued while offline");
+        await fillComposer(composer, "queued while offline");
         await composer.press("Enter");
         await page.locator(".chat-queue__item", { hasText: "queued while offline" }).waitFor();
-        expect(await composer.inputValue()).toBe("");
+        expect(await composerValue(composer)).toBe("");
         if (recoveryKind !== "none") {
           // Accepted retirement can fail to remove its sending row after the map owner
           // retires. A malformed target represents the reader's existing corruption boundary.

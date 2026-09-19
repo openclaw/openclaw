@@ -1,5 +1,6 @@
 import path from "node:path";
 import { expect, it } from "vitest";
+import { fillComposer } from "../test-helpers/composer-editor.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { requireRecord, requireString } from "./chat-flow.test-support.ts";
@@ -13,8 +14,8 @@ suite.define(() => {
       const gateway = await installMockGateway(page, { historyMessages: [] });
       await page.goto(`${suite.server.baseUrl}chat`);
       await gateway.waitForRequest("chat.startup");
-      const composer = page.locator(".agent-chat__composer-combobox textarea");
-      await composer.fill("Explain secure password storage.");
+      const composer = page.locator(".agent-chat__composer-combobox openclaw-composer-editor");
+      await fillComposer(composer, "Explain secure password storage.");
       await composer.press("Enter");
       const send = await gateway.waitForRequest("chat.send");
       const sendParams = requireRecord(send.params);
@@ -66,7 +67,7 @@ suite.define(() => {
         sessionKey,
         text: "The provider blocked this response.",
       });
-      await composer.fill("Explain password managers.");
+      await fillComposer(composer, "Explain password managers.");
       await composer.press("Enter");
       await expect.poll(async () => (await gateway.getRequests("chat.send")).length).toBe(2);
       await expect.poll(() => notice.count()).toBe(0);

@@ -1,6 +1,7 @@
 import path from "node:path";
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
+import { fillComposer } from "../test-helpers/composer-editor.ts";
 import {
   chatSessionListResponse,
   createChatFlowE2eSuite,
@@ -406,8 +407,10 @@ suite.define(() => {
             .toBe(1);
         }
 
-        const composer = panes.last().locator(".agent-chat__composer-combobox textarea");
-        await composer.fill(`Resume locally ${attempt}.`);
+        const composer = panes
+          .last()
+          .locator(".agent-chat__composer-combobox openclaw-composer-editor");
+        await fillComposer(composer, `Resume locally ${attempt}.`);
         await panes.last().getByRole("button", { name: "Send message" }).click();
         const send = await gateway.waitForRequest("chat.send");
         const localRunId = requireString(

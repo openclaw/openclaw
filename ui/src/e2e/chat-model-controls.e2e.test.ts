@@ -1,5 +1,6 @@
 import { writeFile } from "node:fs/promises";
 import { expect, it } from "vitest";
+import { composerValue } from "../test-helpers/composer-editor.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -29,14 +30,14 @@ suite.define(() => {
         .poll(() => picker.locator("[data-chat-model-option]").count())
         .toBe(models.length);
       await expect.poll(() => trigger.getAttribute("aria-disabled")).toBe("false");
-      const textarea = composer.locator("textarea").first();
+      const textarea = composer.locator("openclaw-composer-editor").first();
       const cdp = await page.context().newCDPSession(page);
       await cdp.send("Performance.enable");
       const before: { metrics: Array<{ name: string; value: number }> } =
         await cdp.send("Performance.getMetrics");
       const started = performance.now();
       await textarea.pressSequentially("catalog proof");
-      expect(await textarea.inputValue()).toBe("catalog proof");
+      expect(await composerValue(textarea)).toBe("catalog proof");
       const after: typeof before = await cdp.send("Performance.getMetrics");
       const elapsedMs = performance.now() - started;
       const metric = (name: string, beforeMetrics = before, afterMetrics = after) => {

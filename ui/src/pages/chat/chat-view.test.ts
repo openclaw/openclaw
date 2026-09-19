@@ -1,6 +1,5 @@
-/* @vitest-environment jsdom */
-
 import { expectDefined } from "@openclaw/normalization-core";
+/* @vitest-environment jsdom */
 import { html, render, type LitElement } from "lit";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
@@ -14,6 +13,7 @@ import type {
 import { createChatAttachmentHandoff } from "../../app/chat-attachment-handoff.ts";
 import type { ExecApprovalRequest } from "../../app/exec-approval.ts";
 import type { UiSettings } from "../../app/settings.ts";
+import { ComposerEditor } from "../../components/composer-editor.ts";
 import { i18n, t } from "../../i18n/index.ts";
 import type { ChatAttachment, ChatQueueItem, MessageGroup } from "../../lib/chat/chat-types.ts";
 import {
@@ -56,6 +56,10 @@ import { resetChatViewState } from "./chat-view-state.ts";
 import {
   appendChatBubble,
   createChatProps,
+  createDragEvent,
+  getComposerTextarea,
+  itemAt,
+  requireElement,
   createPasteEvent,
   createTestTranscript,
   renderChatInto,
@@ -677,32 +681,6 @@ function getThinkingReasoningValueLabel(container: Element): string {
       "[data-chat-thinking-preview-index]:not([hidden])",
   );
   return preview?.textContent?.trim() ?? "";
-}
-
-function requireElement(container: Element, selector: string, label: string): Element {
-  const element = container.querySelector(selector);
-  if (element === null) {
-    throw new Error(`expected ${label}`);
-  }
-  return element;
-}
-
-function getComposerTextarea(container: Element): HTMLTextAreaElement {
-  return requireElement(
-    container,
-    ".agent-chat__composer-combobox > textarea",
-    "composer textarea",
-  ) as HTMLTextAreaElement;
-}
-
-function createDragEvent(type: string, types = ["Files"]): Event {
-  const event = new Event(type, { bubbles: true, cancelable: true });
-  Object.defineProperty(event, "dataTransfer", { value: { types } });
-  return event;
-}
-
-function itemAt<T>(items: ArrayLike<T>, index: number, label: string): T {
-  return expectDefined(items[index], `${label} ${index}`);
 }
 
 describe("chat typing status", () => {
@@ -2446,7 +2424,9 @@ describe("chat composer workbench", () => {
       onSend,
     });
 
-    expect(container.querySelector<HTMLTextAreaElement>("textarea")?.disabled).toBe(false);
+    expect(container.querySelector<ComposerEditor>("openclaw-composer-editor")?.disabled).toBe(
+      false,
+    );
     expect(container.querySelector<HTMLInputElement>(".agent-chat__file-input")?.disabled).toBe(
       false,
     );
@@ -2696,7 +2676,7 @@ describe("per-pane chat presentation state", () => {
       renderChatInto(container, { paneId, draft, getDraft: () => draft });
     };
     const openSlashMenu = (container: HTMLElement) => {
-      const textarea = container.querySelector<HTMLTextAreaElement>("textarea");
+      const textarea = container.querySelector<ComposerEditor>("openclaw-composer-editor");
       if (!textarea) {
         throw new Error("expected composer textarea");
       }
@@ -3898,7 +3878,7 @@ describe("chat voice controls", () => {
       `[aria-label="${t("chat.composer.addAttachment")}"]`,
       "localized attachment menu",
     );
-    expect(container.querySelector("textarea")?.getAttribute("placeholder")).toBe(
+    expect(container.querySelector("openclaw-composer-editor")?.getAttribute("placeholder")).toBe(
       t("chat.composer.placeholder", { name: "Val" }),
     );
   });
@@ -4087,7 +4067,9 @@ describe("chat composer IME composition", () => {
 
     render(renderChat({ ...props, draft: "" }), container);
 
-    expect(container.querySelector<HTMLTextAreaElement>("textarea")?.value).toBe("dangqian");
+    expect(container.querySelector<ComposerEditor>("openclaw-composer-editor")?.value).toBe(
+      "dangqian",
+    );
 
     const rerenderedTextarea = getComposerTextarea(container);
     rerenderedTextarea.value = "当前";
@@ -4278,7 +4260,7 @@ describe("chat composer sizing", () => {
     let width = 320;
     let scrollHeight = 42;
     let clientHeight = 42;
-    vi.spyOn(HTMLTextAreaElement.prototype, "getBoundingClientRect").mockImplementation(() => ({
+    vi.spyOn(ComposerEditor.prototype, "getBoundingClientRect").mockImplementation(() => ({
       bottom: clientHeight,
       height: clientHeight,
       left: 0,
@@ -4342,8 +4324,8 @@ describe("chat slash menu accessibility", () => {
   }
 
   function inputDraft(container: HTMLElement, value: string) {
-    const textarea = container.querySelector<HTMLTextAreaElement>("textarea");
-    expect(textarea).toBeInstanceOf(HTMLTextAreaElement);
+    const textarea = container.querySelector<ComposerEditor>("openclaw-composer-editor");
+    expect(textarea).toBeInstanceOf(ComposerEditor);
     textarea!.value = value;
     textarea!.dispatchEvent(new Event("input", { bubbles: true }));
   }
@@ -4356,14 +4338,14 @@ describe("chat slash menu accessibility", () => {
   }
 
   function keydownComposer(container: HTMLElement, key: string, init: KeyboardEventInit = {}) {
-    const textarea = container.querySelector<HTMLTextAreaElement>("textarea");
-    expect(textarea).toBeInstanceOf(HTMLTextAreaElement);
+    const textarea = container.querySelector<ComposerEditor>("openclaw-composer-editor");
+    expect(textarea).toBeInstanceOf(ComposerEditor);
     const event = new KeyboardEvent("keydown", { ...init, key, bubbles: true, cancelable: true });
     textarea!.dispatchEvent(event);
     return event;
   }
 
-  function replayInput(textarea: HTMLTextAreaElement, value: string, type = "input") {
+  function replayInput(textarea: ComposerEditor, value: string, type = "input") {
     if (type === "input") {
       textarea.value = value;
     }
@@ -4621,7 +4603,7 @@ describe("chat slash menu accessibility", () => {
 
     expect(onSlashCommand).toHaveBeenCalledExactlyOnceWith("/status");
     expect(draft).toBe("hello ");
-    expect(container.querySelector<HTMLTextAreaElement>("textarea")?.value).toBe(draft);
+    expect(container.querySelector<ComposerEditor>("openclaw-composer-editor")?.value).toBe(draft);
     expect(onTypingChange).toHaveBeenLastCalledWith(true, "hello ");
     expect(onSend).not.toHaveBeenCalled();
   });
@@ -4663,7 +4645,7 @@ describe("chat slash menu accessibility", () => {
 
     expect(onSlashCommand).toHaveBeenCalledExactlyOnceWith("/verbose full");
     expect(draft).toBe("hello ");
-    expect(container.querySelector<HTMLTextAreaElement>("textarea")?.value).toBe(draft);
+    expect(container.querySelector<ComposerEditor>("openclaw-composer-editor")?.value).toBe(draft);
     expect(onSend).not.toHaveBeenCalled();
   });
 
@@ -4687,7 +4669,7 @@ describe("chat slash menu accessibility", () => {
 
     expect(onSlashCommand).toHaveBeenCalledExactlyOnceWith("/think high");
     expect(draft).toBe("hello ");
-    expect(container.querySelector<HTMLTextAreaElement>("textarea")?.value).toBe(draft);
+    expect(container.querySelector<ComposerEditor>("openclaw-composer-editor")?.value).toBe(draft);
     expect(onSend).not.toHaveBeenCalled();
   });
 
@@ -4735,7 +4717,7 @@ describe("chat slash menu accessibility", () => {
 
     expect(onSlashCommand).toHaveBeenCalledExactlyOnceWith("/think high");
     expect(draft).toBe("hello ");
-    expect(container.querySelector<HTMLTextAreaElement>("textarea")?.value).toBe(draft);
+    expect(container.querySelector<ComposerEditor>("openclaw-composer-editor")?.value).toBe(draft);
     expect(onSend).not.toHaveBeenCalled();
   });
 
@@ -4762,7 +4744,9 @@ describe("chat slash menu accessibility", () => {
 
       expect(onSlashCommand).toHaveBeenCalledExactlyOnceWith(`/${command} ${argument}`);
       expect(draft).toBe("hello ");
-      expect(container.querySelector<HTMLTextAreaElement>("textarea")?.value).toBe(draft);
+      expect(container.querySelector<ComposerEditor>("openclaw-composer-editor")?.value).toBe(
+        draft,
+      );
       expect(onSend).not.toHaveBeenCalled();
     },
   );
@@ -4932,7 +4916,7 @@ describe("chat slash menu accessibility", () => {
 
     expect(onSlashCommand).not.toHaveBeenCalled();
     expect(draft).toBe("hello /verbose on ");
-    expect(container.querySelector<HTMLTextAreaElement>("textarea")?.value).toBe(draft);
+    expect(container.querySelector<ComposerEditor>("openclaw-composer-editor")?.value).toBe(draft);
   });
 
   it("keeps inline skill selection in the draft for the eventual model turn", () => {
@@ -4983,7 +4967,7 @@ describe("chat slash menu accessibility", () => {
 
     expect(onSlashCommand).toHaveBeenCalledExactlyOnceWith("/reset");
     expect(draft).toBe("Please ");
-    expect(container.querySelector<HTMLTextAreaElement>("textarea")?.value).toBe(draft);
+    expect(container.querySelector<ComposerEditor>("openclaw-composer-editor")?.value).toBe(draft);
     expect(onSend).not.toHaveBeenCalled();
   });
 
@@ -5002,7 +4986,7 @@ describe("chat slash menu accessibility", () => {
 
     expect(onSlashCommand).toHaveBeenCalledExactlyOnceWith("/exec host=auto");
     expect(draft).toBe("Please ");
-    expect(container.querySelector<HTMLTextAreaElement>("textarea")?.value).toBe(draft);
+    expect(container.querySelector<ComposerEditor>("openclaw-composer-editor")?.value).toBe(draft);
     expect(onSend).not.toHaveBeenCalled();
   });
 
@@ -5037,7 +5021,7 @@ describe("chat slash menu accessibility", () => {
     await Promise.resolve();
 
     const listbox = container.querySelector<HTMLElement>("#chat-single-skill-menu-listbox");
-    const renderedTextarea = container.querySelector<HTMLTextAreaElement>("textarea");
+    const renderedTextarea = container.querySelector<ComposerEditor>("openclaw-composer-editor");
     expect(listbox?.getAttribute("aria-label")).toBe("Skill references");
     expect(listbox?.querySelector(".slash-menu-name")?.textContent).toBe("Prose Writer");
     expect(renderedTextarea?.getAttribute("aria-controls")).toBe("chat-single-skill-menu-listbox");
@@ -5094,7 +5078,9 @@ describe("chat slash menu accessibility", () => {
 
     keydownComposer(container, "Enter");
     container = harness.renderCurrent();
-    expect(container.querySelector<HTMLTextAreaElement>("textarea")?.value).toBe("/status-check ");
+    expect(container.querySelector<ComposerEditor>("openclaw-composer-editor")?.value).toBe(
+      "/status-check ",
+    );
   });
 
   it("dismisses invocation sheets on an outside pointer press", () => {
@@ -5109,33 +5095,26 @@ describe("chat slash menu accessibility", () => {
     container.remove();
   });
 
-  it("keeps confirmed skill references as raw textarea text with native selection", () => {
+  it("renders confirmed skill references inline while preserving the raw draft", () => {
     replaceSkillCommands({
       key: "prose_writer",
       skillDisplayName: "Prose Writer",
       description: "Draft polished prose.",
     });
     const { container } = createReactiveDraftHarness();
+    document.body.append(container);
     inputDraftAtEnd(container, "Use $prose_writer: next");
 
-    const textarea = getComposerTextarea(container);
-    expect(textarea.value).toBe("Use $prose_writer: next");
-    expect(container.querySelector(".agent-chat__skill-token")).toBeNull();
-    expect(container.querySelector(".agent-chat__composer-draft-overlay")).toBeNull();
-    expect(textarea.classList.contains("agent-chat__composer-textarea--rich")).toBe(false);
-
-    textarea.setSelectionRange(8, 8);
-    textarea.dispatchEvent(new PointerEvent("pointerup", { bubbles: true }));
-    expect(textarea.selectionStart).toBe(8);
-
-    textarea.setSelectionRange(8, 8);
-    textarea.dispatchEvent(new Event("select", { bubbles: true }));
-    expect(textarea.selectionStart).toBe(8);
-
-    textarea.setSelectionRange("Use $prose_writer".length, "Use $prose_writer".length);
-    expect(keydownComposer(container, "ArrowLeft").defaultPrevented).toBe(false);
-    expect(keydownComposer(container, "Backspace").defaultPrevented).toBe(false);
-    expect(textarea.value).toBe("Use $prose_writer: next");
+    const editor = getComposerTextarea(container);
+    expect(editor.value).toBe("Use $prose_writer: next");
+    expect(editor.shadowRoot?.querySelector(".composer-chip--skill")?.textContent).toContain(
+      "Prose Writer",
+    );
+    editor.setSelectionRange(0, editor.value.length);
+    expect(editor.value.slice(editor.selectionStart, editor.selectionEnd)).toBe(
+      "Use $prose_writer: next",
+    );
+    container.remove();
   });
 
   it("fills a selected $ skill without submitting the surrounding prompt", async () => {
@@ -5158,7 +5137,7 @@ describe("chat slash menu accessibility", () => {
     expect(onSend).not.toHaveBeenCalled();
     expect(container.querySelector(".skill-menu")).toBeNull();
     await Promise.resolve();
-    const completed = container.querySelector<HTMLTextAreaElement>("textarea");
+    const completed = container.querySelector<ComposerEditor>("openclaw-composer-editor");
     expect(completed?.selectionStart).toBe("Polish this with $prose_writer:".length);
   });
 
@@ -5331,7 +5310,7 @@ describe("chat slash menu accessibility", () => {
     textarea.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText" }));
     expect(container.querySelector(".skill-menu")).not.toBeNull();
 
-    textarea = container.querySelector<HTMLTextAreaElement>("textarea")!;
+    textarea = container.querySelector<ComposerEditor>("openclaw-composer-editor")!;
     textarea.setSelectionRange(textarea.value.length, textarea.value.length);
     textarea.dispatchEvent(new Event("select", { bubbles: true }));
 
@@ -5463,7 +5442,7 @@ describe("chat slash menu accessibility", () => {
 
     expect(onDraftChange).toHaveBeenCalledWith("submitted message", undefined);
     expect(onSend).toHaveBeenCalledTimes(1);
-    expect(container.querySelector<HTMLTextAreaElement>("textarea")?.value).toBe("");
+    expect(container.querySelector<ComposerEditor>("openclaw-composer-editor")?.value).toBe("");
   });
 
   it("ignores a stale native InputEvent replay after send clears the host draft", () => {
@@ -5471,7 +5450,7 @@ describe("chat slash menu accessibility", () => {
     inputDraft(container, "submitted message");
     container.querySelector<HTMLButtonElement>(".chat-send-btn")!.click();
 
-    const textarea = container.querySelector<HTMLTextAreaElement>("textarea");
+    const textarea = container.querySelector<ComposerEditor>("openclaw-composer-editor");
     expect(textarea?.value).toBe("");
 
     replayInput(textarea!, "submitted message");
@@ -5485,7 +5464,7 @@ describe("chat slash menu accessibility", () => {
     inputDraft(container, "submitted message");
     container.querySelector<HTMLButtonElement>(".chat-send-btn")!.click();
 
-    const textarea = container.querySelector<HTMLTextAreaElement>("textarea");
+    const textarea = container.querySelector<ComposerEditor>("openclaw-composer-editor");
     expect(textarea?.value).toBe("");
 
     replayInput(textarea!, "new draft", "beforeinput");
@@ -5504,10 +5483,10 @@ describe("chat slash menu accessibility", () => {
     renderSession("stale-replay-a");
     inputDraft(container, "submitted message");
     container.querySelector<HTMLButtonElement>(".chat-send-btn")!.click();
-    expect(container.querySelector<HTMLTextAreaElement>("textarea")?.value).toBe("");
+    expect(container.querySelector<ComposerEditor>("openclaw-composer-editor")?.value).toBe("");
 
     renderSession("stale-replay-b");
-    const textarea = container.querySelector<HTMLTextAreaElement>("textarea");
+    const textarea = container.querySelector<ComposerEditor>("openclaw-composer-editor");
     expect(textarea?.value).toBe("");
 
     replayInput(textarea!, "submitted message");
@@ -5523,10 +5502,10 @@ describe("chat slash menu accessibility", () => {
     renderSession("delayed-replay-a");
     inputDraft(container, "submitted message");
     container.querySelector<HTMLButtonElement>(".chat-send-btn")!.click();
-    expect(container.querySelector<HTMLTextAreaElement>("textarea")?.value).toBe("");
+    expect(container.querySelector<ComposerEditor>("openclaw-composer-editor")?.value).toBe("");
 
     renderSession("delayed-replay-b");
-    const textarea = container.querySelector<HTMLTextAreaElement>("textarea");
+    const textarea = container.querySelector<ComposerEditor>("openclaw-composer-editor");
     expect(textarea?.value).toBe("");
 
     replayInput(textarea!, "session b draft", "beforeinput");
@@ -5549,7 +5528,9 @@ describe("chat slash menu accessibility", () => {
 
     expect(onDraftChange).toHaveBeenCalledWith("send from enter", undefined);
     expect(onSend).toHaveBeenCalledTimes(1);
-    expect(container.querySelector("textarea")?.getAttribute("aria-keyshortcuts")).toBe("Enter");
+    expect(
+      container.querySelector("openclaw-composer-editor")?.getAttribute("aria-keyshortcuts"),
+    ).toBe("Enter");
   });
 
   it("requires Ctrl or Meta to send in modifier mode", () => {
@@ -5571,22 +5552,22 @@ describe("chat slash menu accessibility", () => {
 
     keydownComposer(container, "Enter", { ctrlKey: true });
     container
-      .querySelector("textarea")
+      .querySelector("openclaw-composer-editor")
       ?.dispatchEvent(new InputEvent("beforeinput", { bubbles: true, inputType: "insertText" }));
     inputDraft(container, "compose across lines");
     keydownComposer(container, "Enter", { metaKey: true });
 
     expect(onDraftChange).toHaveBeenCalledWith("compose across lines", undefined);
     expect(onSend).toHaveBeenCalledTimes(2);
-    expect(container.querySelector("textarea")?.getAttribute("aria-keyshortcuts")).toBe(
-      "Control+Enter Meta+Enter",
-    );
+    expect(
+      container.querySelector("openclaw-composer-editor")?.getAttribute("aria-keyshortcuts"),
+    ).toBe("Control+Enter Meta+Enter");
   });
 
   it("does not send a modifier shortcut during IME composition", () => {
     const onSend = vi.fn();
     const container = renderChatView({ onSend, sendShortcut: "modifier-enter" });
-    const textarea = container.querySelector<HTMLTextAreaElement>("textarea")!;
+    const textarea = container.querySelector<ComposerEditor>("openclaw-composer-editor")!;
 
     textarea.dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true }));
     keydownComposer(container, "Enter", { ctrlKey: true });
@@ -5601,7 +5582,7 @@ describe("chat slash menu accessibility", () => {
 
     inputDraft(container, "persist before leaving composer");
     container
-      .querySelector<HTMLTextAreaElement>("textarea")!
+      .querySelector<ComposerEditor>("openclaw-composer-editor")!
       .dispatchEvent(new FocusEvent("blur", { bubbles: false }));
 
     expect(onDraftChange).toHaveBeenCalledWith("persist before leaving composer", undefined);
@@ -5627,7 +5608,7 @@ describe("chat slash menu accessibility", () => {
     inputDraft(container, "still typing locally");
     render(renderChat(createChatProps({ onDraftChange, loading: true })), container);
 
-    expect(container.querySelector<HTMLTextAreaElement>("textarea")?.value).toBe(
+    expect(container.querySelector<ComposerEditor>("openclaw-composer-editor")?.value).toBe(
       "still typing locally",
     );
   });
@@ -5640,7 +5621,9 @@ describe("chat slash menu accessibility", () => {
     inputDraft(container, "still typing locally");
     render(renderChat(createChatProps({ onDraftChange, draft: "history recall" })), container);
 
-    expect(container.querySelector<HTMLTextAreaElement>("textarea")?.value).toBe("history recall");
+    expect(container.querySelector<ComposerEditor>("openclaw-composer-editor")?.value).toBe(
+      "history recall",
+    );
   });
 
   it("wires command suggestions to the composer with stable active option ids", () => {
@@ -5648,7 +5631,7 @@ describe("chat slash menu accessibility", () => {
     const container = harness.inputAndRender(harness.container, "/");
 
     const wrapper = container.querySelector<HTMLElement>(".agent-chat__composer-combobox");
-    const textarea = container.querySelector<HTMLTextAreaElement>("textarea");
+    const textarea = container.querySelector<ComposerEditor>("openclaw-composer-editor");
     const listbox = container.querySelector<HTMLElement>("#chat-single-slash-menu-listbox");
     const activeId = textarea?.getAttribute("aria-activedescendant");
 
@@ -5749,14 +5732,16 @@ describe("chat slash menu accessibility", () => {
     container = harness.renderCurrent();
     const options = container.querySelectorAll<HTMLElement>(".slash-menu [role='option']");
     const activeId = container
-      .querySelector<HTMLTextAreaElement>("textarea")
+      .querySelector<ComposerEditor>("openclaw-composer-editor")
       ?.getAttribute("aria-activedescendant");
     expect(options[1]?.id).toBe(activeId);
     expect(options[1]?.getAttribute("aria-selected")).toBe("true");
 
     keydownComposer(container, "Enter");
     container = harness.renderCurrent();
-    expect(container.querySelector<HTMLTextAreaElement>("textarea")?.value).toBe("/pair-device ");
+    expect(container.querySelector<ComposerEditor>("openclaw-composer-editor")?.value).toBe(
+      "/pair-device ",
+    );
     expect(container.querySelector(".slash-menu")).toBeNull();
   });
 
@@ -5764,9 +5749,9 @@ describe("chat slash menu accessibility", () => {
     const harness = createReactiveDraftHarness();
     const textarea = requireElement(
       harness.container,
-      "textarea",
+      "openclaw-composer-editor",
       "chat composer",
-    ) as HTMLTextAreaElement;
+    ) as ComposerEditor;
     const initialPlaceholder = textarea.placeholder;
     expect(textarea.getAttribute("aria-label")).toBe("Chat composer");
     expect(textarea.hasAttribute("role")).toBe(false);
@@ -5796,13 +5781,13 @@ describe("chat slash menu accessibility", () => {
     const harness = createSlashRerenderHarness();
     let container = harness.inputAndRender(harness.container, "/");
     const initialActiveId = container
-      .querySelector<HTMLTextAreaElement>("textarea")
+      .querySelector<ComposerEditor>("openclaw-composer-editor")
       ?.getAttribute("aria-activedescendant");
 
     keydownComposer(container, "ArrowDown");
     container = harness.renderCurrent();
 
-    const textarea = container.querySelector<HTMLTextAreaElement>("textarea");
+    const textarea = container.querySelector<ComposerEditor>("openclaw-composer-editor");
     const nextActiveId = textarea?.getAttribute("aria-activedescendant");
     const activeOption = nextActiveId
       ? container.querySelector<HTMLElement>(`#${nextActiveId}`)
@@ -5853,7 +5838,7 @@ describe("chat slash menu accessibility", () => {
     const harness = createSlashRerenderHarness();
     const container = harness.inputAndRender(harness.container, "/tools ");
 
-    const textarea = container.querySelector<HTMLTextAreaElement>("textarea");
+    const textarea = container.querySelector<ComposerEditor>("openclaw-composer-editor");
     const listbox = container.querySelector<HTMLElement>("#chat-single-slash-menu-listbox");
     const activeId = textarea?.getAttribute("aria-activedescendant");
 
@@ -5893,7 +5878,9 @@ describe("chat slash menu accessibility", () => {
       inputDraft(container, "/think");
       keydownComposer(container, "Tab");
 
-      expect(container.querySelector<HTMLTextAreaElement>("textarea")?.value).toBe("/think ");
+      expect(container.querySelector<ComposerEditor>("openclaw-composer-editor")?.value).toBe(
+        "/think ",
+      );
       expect(
         Array.from(container.querySelectorAll<HTMLElement>(".slash-menu [role='option']")).map(
           (option) => option.querySelector(".slash-menu-name")?.textContent?.trim(),
@@ -5921,7 +5908,9 @@ describe("chat slash menu accessibility", () => {
     inputDraft(container, "/think");
     keydownComposer(container, "Tab");
 
-    expect(container.querySelector<HTMLTextAreaElement>("textarea")?.value).toBe("/think ");
+    expect(container.querySelector<ComposerEditor>("openclaw-composer-editor")?.value).toBe(
+      "/think ",
+    );
     expect(container.querySelector(".slash-menu")).toBeNull();
   });
 
@@ -5945,7 +5934,7 @@ describe("chat slash menu accessibility", () => {
     expect(container.querySelector(".slash-menu")).not.toBeNull();
     expect(
       container
-        .querySelector<HTMLTextAreaElement>("textarea")
+        .querySelector<ComposerEditor>("openclaw-composer-editor")
         ?.getAttribute("aria-activedescendant"),
     ).toBe("chat-single-slash-option-arg-think-default");
 
@@ -5954,7 +5943,7 @@ describe("chat slash menu accessibility", () => {
     expect(container.querySelector(".slash-menu")).toBeNull();
     expect(
       container
-        .querySelector<HTMLTextAreaElement>("textarea")
+        .querySelector<ComposerEditor>("openclaw-composer-editor")
         ?.hasAttribute("aria-activedescendant"),
     ).toBe(false);
   });
@@ -5963,7 +5952,7 @@ describe("chat slash menu accessibility", () => {
     const harness = createSlashRerenderHarness();
     let container = harness.inputAndRender(harness.container, "/");
     const activeDescendant = container
-      .querySelector<HTMLTextAreaElement>("textarea")
+      .querySelector<ComposerEditor>("openclaw-composer-editor")
       ?.getAttribute("aria-activedescendant");
     if (!activeDescendant) {
       throw new Error("Expected slash suggestions to set aria-activedescendant");
@@ -5973,7 +5962,9 @@ describe("chat slash menu accessibility", () => {
 
     expect(container.querySelector(".slash-menu")).toBeNull();
     expect(
-      container.querySelector<HTMLTextAreaElement>("textarea")?.hasAttribute("aria-expanded"),
+      container
+        .querySelector<ComposerEditor>("openclaw-composer-editor")
+        ?.hasAttribute("aria-expanded"),
     ).toBe(false);
     expect(
       container
@@ -5982,7 +5973,7 @@ describe("chat slash menu accessibility", () => {
     ).toBe(false);
     expect(
       container
-        .querySelector<HTMLTextAreaElement>("textarea")
+        .querySelector<ComposerEditor>("openclaw-composer-editor")
         ?.hasAttribute("aria-activedescendant"),
     ).toBe(false);
   });
@@ -6200,18 +6191,18 @@ describe("chat attachment picker", () => {
     };
 
     const textOnly = renderChatView({ attachments: pastedTextAttachments });
-    expect(textOnly.querySelector("textarea")?.getAttribute("placeholder")).toBe(
+    expect(textOnly.querySelector("openclaw-composer-editor")?.getAttribute("placeholder")).toBe(
       t("chat.composer.placeholder", { name: "Val" }),
     );
 
     const ordinaryTextFile = renderChatView({ attachments: [namedLikePaste] });
-    expect(ordinaryTextFile.querySelector("textarea")?.getAttribute("placeholder")).toBe(
-      t("chat.composer.placeholderWithAttachments"),
-    );
+    expect(
+      ordinaryTextFile.querySelector("openclaw-composer-editor")?.getAttribute("placeholder"),
+    ).toBe(t("chat.composer.placeholderWithAttachments"));
     expect(ordinaryTextFile.querySelector(".chat-attachment-text-action")).toBeNull();
 
     const withImage = renderChatView({ attachments: [imageAttachment] });
-    expect(withImage.querySelector("textarea")?.getAttribute("placeholder")).toBe(
+    expect(withImage.querySelector("openclaw-composer-editor")?.getAttribute("placeholder")).toBe(
       t("chat.composer.placeholderWithAttachments"),
     );
   });
@@ -10032,7 +10023,7 @@ describe("right-click Reply", () => {
       expect(target.text).toBe("hello world");
       expect(target.senderLabel).toBe("User");
       expect(document.activeElement).toBe(
-        container.querySelector(".agent-chat__composer-combobox textarea"),
+        container.querySelector(".agent-chat__composer-combobox openclaw-composer-editor"),
       );
     } finally {
       transcript.hostDisconnected();

@@ -4,6 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import type { CommandsListResult } from "../../../../packages/gateway-protocol/src/index.js";
 import { createDeferred } from "../../../../test/helpers/promise.ts";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
+import type { ComposerEditor } from "../../components/composer-editor.ts";
 import {
   buildFallbackSlashCommands,
   getSkillCommandCompletions,
@@ -99,7 +100,7 @@ describe("new-session composer keyboard submission", () => {
       },
       onSubmit,
     });
-    const textarea = composer.querySelector<HTMLTextAreaElement>("textarea");
+    const textarea = composer.querySelector<ComposerEditor>("openclaw-composer-editor");
     if (!textarea) {
       throw new Error("Expected composer textarea");
     }
@@ -136,7 +137,7 @@ describe("new-session composer keyboard submission", () => {
       const onInput = vi.fn();
       const onSubmit = vi.fn();
       const { composer } = renderComposer({ onInput, onSubmit });
-      const textarea = composer.querySelector<HTMLTextAreaElement>("textarea");
+      const textarea = composer.querySelector<ComposerEditor>("openclaw-composer-editor");
       if (!textarea) {
         throw new Error("Expected composer textarea");
       }
@@ -180,7 +181,7 @@ describe("new-session composer keyboard submission", () => {
       context,
       message: "$",
     });
-    const textarea = composer.querySelector<HTMLTextAreaElement>("textarea");
+    const textarea = composer.querySelector<ComposerEditor>("openclaw-composer-editor");
     if (!textarea) {
       throw new Error("Expected composer textarea");
     }
@@ -230,7 +231,7 @@ describe("new-session composer keyboard submission", () => {
       context,
       message: "$",
     });
-    const textarea = composer.querySelector<HTMLTextAreaElement>("textarea");
+    const textarea = composer.querySelector<ComposerEditor>("openclaw-composer-editor");
     if (!textarea) {
       throw new Error("Expected composer textarea");
     }
@@ -283,7 +284,7 @@ describe("new-session composer keyboard submission", () => {
         message = next;
       },
     });
-    const textarea = composer.querySelector<HTMLTextAreaElement>("textarea");
+    const textarea = composer.querySelector<ComposerEditor>("openclaw-composer-editor");
     if (!textarea) {
       throw new Error("Expected composer textarea");
     }
@@ -312,7 +313,7 @@ describe("new-session composer keyboard submission", () => {
     const onSubmit = vi.fn();
     const { composer, rerenderForDraftRoute } = renderComposer({ onSubmit });
 
-    const textarea = composer.querySelector<HTMLTextAreaElement>("textarea");
+    const textarea = composer.querySelector<ComposerEditor>("openclaw-composer-editor");
     if (!textarea) {
       throw new Error("Expected composer textarea");
     }
@@ -353,7 +354,7 @@ describe("new-session composer keyboard submission", () => {
         message = next;
       },
     });
-    const textarea = composer.querySelector<HTMLTextAreaElement>("textarea");
+    const textarea = composer.querySelector<ComposerEditor>("openclaw-composer-editor");
     if (!textarea) {
       throw new Error("Expected composer textarea");
     }
@@ -385,7 +386,7 @@ describe("new-session composer keyboard submission", () => {
       onSubmit,
       requiresModifier: testCase.requiresModifier,
     });
-    const textarea = composer.querySelector<HTMLTextAreaElement>("textarea");
+    const textarea = composer.querySelector<ComposerEditor>("openclaw-composer-editor");
     if (!textarea) {
       throw new Error("Expected composer textarea");
     }
@@ -416,7 +417,7 @@ describe("new-session composer keyboard submission", () => {
       onBackgroundSubmit,
       requiresModifier: testCase.requiresModifier,
     });
-    const textarea = composer.querySelector<HTMLTextAreaElement>("textarea");
+    const textarea = composer.querySelector<ComposerEditor>("openclaw-composer-editor");
     if (!textarea) {
       throw new Error("Expected composer textarea");
     }
@@ -472,7 +473,7 @@ describe("new-session composer keyboard submission", () => {
       onBackgroundSubmit,
       requiresModifier: testCase.requiresModifier,
     });
-    const textarea = composer.querySelector<HTMLTextAreaElement>("textarea");
+    const textarea = composer.querySelector<ComposerEditor>("openclaw-composer-editor");
     if (!textarea) {
       throw new Error("Expected composer textarea");
     }
@@ -502,7 +503,7 @@ describe("new-session composer keyboard submission", () => {
       submitDisabledReason: "Restoring your last session setup…",
       onSubmit,
     });
-    const textarea = composer.querySelector<HTMLTextAreaElement>("textarea");
+    const textarea = composer.querySelector<ComposerEditor>("openclaw-composer-editor");
     if (!textarea) {
       throw new Error("Expected composer textarea");
     }
@@ -548,7 +549,7 @@ describe("new-session composer keyboard submission", () => {
       dictationStatus: html`<div class="agent-chat__dictation-status">Listening…</div>`,
       onSubmit,
     });
-    const textarea = composer.querySelector<HTMLTextAreaElement>("textarea");
+    const textarea = composer.querySelector<ComposerEditor>("openclaw-composer-editor");
 
     expect(textarea?.value).toBe("Existing draft spoken words");
     expect(textarea?.readOnly).toBe(true);
@@ -587,7 +588,7 @@ describe("new-session composer start control", () => {
       button.click();
     } else {
       composer
-        .querySelector("textarea")!
+        .querySelector("openclaw-composer-editor")!
         .dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
     }
     expect(onSubmit).toHaveBeenCalledOnce();
@@ -596,7 +597,7 @@ describe("new-session composer start control", () => {
 
 describe("new-session composer sizing lifecycle", () => {
   it("keeps the shared fallback for non-pixel CSS caps", () => {
-    const textarea = document.createElement("textarea");
+    const textarea = document.createElement("openclaw-composer-editor");
     Object.defineProperty(textarea, "scrollHeight", { configurable: true, value: 500 });
     vi.spyOn(window, "getComputedStyle").mockReturnValue({
       maxHeight: "50vh",
@@ -608,25 +609,29 @@ describe("new-session composer sizing lifecycle", () => {
   });
 
   it("keeps one observer across controlled updates and remeasures programmatic drafts", async () => {
-    const observe = vi.fn();
-    const disconnect = vi.fn();
-    const resizeObserverConstructed = vi.fn();
+    const observers: TestResizeObserver[] = [];
     class TestResizeObserver {
       constructor() {
-        resizeObserverConstructed();
+        observers.push(this);
       }
-      observe = observe;
-      disconnect = disconnect;
+      observe = vi.fn();
+      disconnect = vi.fn();
     }
     vi.stubGlobal("ResizeObserver", TestResizeObserver);
     const textareaController = new NewSessionComposerTextareaController();
     const onInput = vi.fn();
     const first = renderComposer({ textareaController, onInput });
     document.body.append(first.container);
-    const textarea = first.composer.querySelector<HTMLTextAreaElement>("textarea");
+    const textarea = first.composer.querySelector<ComposerEditor>("openclaw-composer-editor");
     if (!textarea) {
       throw new Error("Expected composer textarea");
     }
+    const composerObservers = () =>
+      observers.filter((observer) =>
+        observer.observe.mock.calls.some(([target]) => target === textarea),
+      );
+    expect(composerObservers()).toHaveLength(1);
+    const composerObserver = composerObservers()[0]!;
     let scrollHeightReads = 0;
     Object.defineProperty(textarea, "scrollHeight", {
       configurable: true,
@@ -663,9 +668,9 @@ describe("new-session composer sizing lifecycle", () => {
     );
     await Promise.resolve();
 
-    expect(first.container.querySelector("textarea")).toBe(textarea);
-    expect(resizeObserverConstructed).toHaveBeenCalledOnce();
-    expect(disconnect).not.toHaveBeenCalled();
+    expect(first.container.querySelector("openclaw-composer-editor")).toBe(textarea);
+    expect(composerObservers()).toEqual([composerObserver]);
+    expect(composerObserver.disconnect).not.toHaveBeenCalled();
     expect(scrollHeightReads).toBe(readsAfterInput);
 
     render(
@@ -691,10 +696,10 @@ describe("new-session composer sizing lifecycle", () => {
 
     expect(scrollHeightReads).toBeGreaterThan(readsAfterInput);
     expect(readsAfterAttach).toBeGreaterThan(0);
-    expect(resizeObserverConstructed).toHaveBeenCalledOnce();
-    expect(disconnect).not.toHaveBeenCalled();
+    expect(composerObservers()).toEqual([composerObserver]);
+    expect(composerObserver.disconnect).not.toHaveBeenCalled();
     textareaController.disconnect();
-    expect(disconnect).toHaveBeenCalledOnce();
+    expect(composerObserver.disconnect).toHaveBeenCalledOnce();
     first.container.remove();
   });
 });
@@ -713,7 +718,7 @@ describe("new-session composer attachment drops", () => {
     expect(onUnsupportedAttachment).toHaveBeenCalledOnce();
     const paste = new Event("paste", { bubbles: true, cancelable: true });
     Object.defineProperty(paste, "clipboardData", { value: { files: [file] } });
-    composer.querySelector("textarea")?.dispatchEvent(paste);
+    composer.querySelector("openclaw-composer-editor")?.dispatchEvent(paste);
     expect(paste.defaultPrevented).toBe(true);
     expect(onUnsupportedAttachment).toHaveBeenCalledTimes(2);
     expect(attachmentDraft.attachments).toEqual([]);
@@ -811,7 +816,7 @@ describe("new-session composer attachment drops", () => {
   it("keeps non-file drops native inside the textarea and cancels them elsewhere", () => {
     const { attachmentDraft, composer } = renderComposer();
     const replace = vi.spyOn(attachmentDraft, "replace");
-    const textarea = composer.querySelector<HTMLTextAreaElement>("textarea");
+    const textarea = composer.querySelector<ComposerEditor>("openclaw-composer-editor");
     if (!textarea) {
       throw new Error("Expected composer textarea");
     }
@@ -854,7 +859,7 @@ describe("new-session composer attachment drops", () => {
     expect(replace).not.toHaveBeenCalled();
     expect(attachmentDraft.attachments).toEqual([]);
 
-    const textarea = composer.querySelector<HTMLTextAreaElement>("textarea");
+    const textarea = composer.querySelector<ComposerEditor>("openclaw-composer-editor");
     if (!textarea) {
       throw new Error("Expected composer textarea");
     }
@@ -867,7 +872,7 @@ describe("new-session composer attachment drops", () => {
 
 describe("new-session composer dictation insertion", () => {
   function draftTextarea(composer: HTMLElement, value: string, start: number, end = start) {
-    const textarea = composer.querySelector<HTMLTextAreaElement>("textarea");
+    const textarea = composer.querySelector<ComposerEditor>("openclaw-composer-editor");
     if (!textarea) {
       throw new Error("Expected composer textarea");
     }

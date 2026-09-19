@@ -1,4 +1,5 @@
 import { expect, it } from "vitest";
+import { composerValue, fillComposer } from "../test-helpers/composer-editor.ts";
 import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
 import {
   captureUiProof,
@@ -165,7 +166,7 @@ suite.define(() => {
         .poll(() => page.locator("#new-session-checkout-trigger").getAttribute("data-worktree"))
         .toBe("true");
 
-      await page.locator(".new-session-page__message").fill("prepare the client release");
+      await fillComposer(page.locator(".new-session-page__message"), "prepare the client release");
       await page.getByRole("button", { name: "Start session" }).click();
       expect((await gateway.waitForRequest("sessions.create")).params).toMatchObject({
         agentId: "main",
@@ -261,7 +262,7 @@ suite.define(() => {
 
     try {
       await page.goto(`${suite.server.baseUrl}new?group=Client+work`);
-      await page.locator(".new-session-page__message").fill("start on an older Gateway");
+      await fillComposer(page.locator(".new-session-page__message"), "start on an older Gateway");
       await page.getByRole("button", { name: "Start session" }).click();
       const create = await gateway.waitForRequest("sessions.create");
       expect(create.params).toMatchObject({
@@ -298,7 +299,7 @@ suite.define(() => {
       await page.goto(`${suite.server.baseUrl}new?group=Client+work`);
       const project = page.locator("#new-session-project-trigger .new-session-page__trigger-label");
       await expect.poll(() => project.textContent()).toContain("client-work");
-      await page.locator(".new-session-page__message").fill("keep this draft");
+      await fillComposer(page.locator(".new-session-page__message"), "keep this draft");
 
       await page.evaluate(async (cwd) => {
         const app = document.querySelector("openclaw-app") as HTMLElement & {
@@ -324,7 +325,7 @@ suite.define(() => {
         .poll(() => page.locator("#new-session-checkout-trigger").getAttribute("data-worktree"))
         .toBe("false");
       await expect
-        .poll(() => page.locator(".new-session-page__message").inputValue())
+        .poll(() => composerValue(page.locator(".new-session-page__message")))
         .toBe("keep this draft");
 
       await page.evaluate(async () => {
@@ -375,7 +376,7 @@ suite.define(() => {
     try {
       await page.goto(`${suite.server.baseUrl}new?group=Client+work`);
       const start = page.getByRole("button", { name: "Start session" });
-      await page.locator(".new-session-page__message").fill("wait for fresh defaults");
+      await fillComposer(page.locator(".new-session-page__message"), "wait for fresh defaults");
       await expect.poll(() => start.isEnabled()).toBe(true);
 
       // Pin each wait past earlier sessions.groups.list traffic (the route
@@ -584,7 +585,7 @@ suite.define(() => {
       await expect
         .poll(() => unavailable.textContent())
         .toContain("This session target is unavailable.");
-      await page.locator(".new-session-page__message").fill("do not create this session");
+      await fillComposer(page.locator(".new-session-page__message"), "do not create this session");
       const start = page.getByRole("button", { name: "Start session" });
       await expect.poll(() => start.isDisabled()).toBe(true);
       expect(await gateway.getRequests("sessions.create")).toHaveLength(0);

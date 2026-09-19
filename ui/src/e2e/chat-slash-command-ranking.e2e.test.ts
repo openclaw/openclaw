@@ -3,6 +3,7 @@ import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { text } from "node:stream/consumers";
 import { expect, it } from "vitest";
+import { composerEnabled, composerValue, fillComposer } from "../test-helpers/composer-editor.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
@@ -27,7 +28,7 @@ suite.define(() => {
 
         await page.goto(`${suite.server.baseUrl}chat`);
         await gateway.waitForRequest("chat.startup");
-        const composer = page.locator(".agent-chat__composer-combobox textarea");
+        const composer = page.locator(".agent-chat__composer-combobox openclaw-composer-editor");
         await composer.waitFor({ state: "visible" });
         await page.locator(".agent-chat__file-input").setInputFiles({
           name: "export-proof.txt",
@@ -39,7 +40,7 @@ suite.define(() => {
         });
         await attachment.waitFor({ state: "visible" });
 
-        await composer.fill(command);
+        await fillComposer(composer, command);
         if (artifactDir && command === "/export") {
           await page.screenshot({
             path: path.join(artifactDir, "empty-export-before.png"),
@@ -58,7 +59,7 @@ suite.define(() => {
             fullPage: true,
           });
         }
-        await expect.poll(() => composer.inputValue()).toBe("");
+        await expect.poll(() => composerValue(composer)).toBe("");
         expect(await attachment.isVisible()).toBe(true);
         expect(await gateway.getRequests("chat.send")).toHaveLength(0);
         expect(downloads).toEqual([]);
@@ -83,8 +84,8 @@ suite.define(() => {
         state: "visible",
       });
 
-      const composer = page.locator(".agent-chat__composer-combobox textarea");
-      await composer.fill("/export");
+      const composer = page.locator(".agent-chat__composer-combobox openclaw-composer-editor");
+      await fillComposer(composer, "/export");
       const downloadPromise = page.waitForEvent("download");
       await page.getByRole("button", { name: "Send message" }).click();
       const download = await downloadPromise;
@@ -142,10 +143,10 @@ suite.define(() => {
         });
         await page.goto(`${suite.server.baseUrl}chat`);
         await gateway.waitForRequest("chat.startup");
-        const composer = page.locator(".agent-chat__composer-combobox textarea");
+        const composer = page.locator(".agent-chat__composer-combobox openclaw-composer-editor");
         await composer.waitFor({ state: "visible" });
-        await expect.poll(() => composer.isEnabled()).toBe(true);
-        await composer.fill("/viewport-");
+        await expect.poll(() => composerEnabled(composer)).toBe(true);
+        await fillComposer(composer, "/viewport-");
 
         const picker = page.locator(".slash-menu[role='listbox']");
         const scroll = picker.locator(".slash-menu__scroll");
@@ -171,7 +172,7 @@ suite.define(() => {
           await composer.press(selection);
         }
 
-        await expect.poll(() => composer.inputValue()).toBe("/viewport-15 ");
+        await expect.poll(() => composerValue(composer)).toBe("/viewport-15 ");
         const active = picker.locator("[role='option'][aria-selected='true']");
         const first = options.first();
         await expect.poll(() => first.locator(".slash-menu-name").textContent()).toBe("choice-00");
@@ -204,7 +205,7 @@ suite.define(() => {
           await composer.press("ArrowDown");
         }
         await expect.poll(() => scroll.evaluate((element) => element.scrollTop)).toBeGreaterThan(0);
-        await composer.fill("/viewport-");
+        await fillComposer(composer, "/viewport-");
         await expect
           .poll(() => active.locator(".slash-menu-name").textContent())
           .toContain("/viewport-00");
@@ -267,10 +268,10 @@ suite.define(() => {
 
         await page.goto(`${suite.server.baseUrl}chat`);
         await gateway.waitForRequest("chat.startup");
-        const composer = page.locator(".agent-chat__composer-combobox textarea");
+        const composer = page.locator(".agent-chat__composer-combobox openclaw-composer-editor");
         await composer.waitFor({ state: "visible" });
-        await expect.poll(() => composer.isEnabled()).toBe(true);
-        await composer.fill("/pair");
+        await expect.poll(() => composerEnabled(composer)).toBe(true);
+        await fillComposer(composer, "/pair");
 
         const picker = page.locator(".slash-menu[role='listbox']");
         await picker.waitFor({ state: "visible" });
@@ -298,7 +299,7 @@ suite.define(() => {
         }
 
         await composer.press("Enter");
-        await expect.poll(() => composer.inputValue()).toBe("/pair-device ");
+        await expect.poll(() => composerValue(composer)).toBe("/pair-device ");
         await expect.poll(() => picker.count()).toBe(0);
       },
     );

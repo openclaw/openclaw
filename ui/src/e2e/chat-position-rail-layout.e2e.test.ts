@@ -1,4 +1,5 @@
 import { expect, it } from "vitest";
+import { fillComposer } from "../test-helpers/composer-editor.ts";
 import {
   controlUiBundledSettingsStorageKey,
   defaultControlUiFeatureMethods,
@@ -183,14 +184,13 @@ suite.define(() => {
           }
           const expandedHeight = (await marks.boundingBox())!.height;
           const textareaSamples = sampleAnchor();
-          await page
-            .locator(".agent-chat__composer-combobox textarea")
-            .fill(
-              Array.from(
-                { length: 6 },
-                (_, index) => `Review note ${index + 1}: keep navigation visible.`,
-              ).join("\n"),
-            );
+          await fillComposer(
+            page.locator(".agent-chat__composer-combobox openclaw-composer-editor"),
+            Array.from(
+              { length: 6 },
+              (_, index) => `Review note ${index + 1}: keep navigation visible.`,
+            ).join("\n"),
+          );
           await expect
             .poll(async () => (await composer.boundingBox())!.height)
             .toBeGreaterThan(collapsedComposer.height + 180);
@@ -204,9 +204,11 @@ suite.define(() => {
             ).toBe(true);
           }
           if (count === 80 && direction === "ltr") {
-            const textarea = page.locator(".agent-chat__composer-combobox textarea");
+            const textarea = page.locator(
+              ".agent-chat__composer-combobox openclaw-composer-editor",
+            );
             const goalSamples = sampleAnchor();
-            await textarea.fill("/goal");
+            await fillComposer(textarea, "/goal");
             await textarea.press("Enter");
             await page.locator(".agent-chat__goal-mode").waitFor();
             await assertAnchor(goalSamples);
@@ -218,7 +220,7 @@ suite.define(() => {
             await gateway.closeLatest();
             for (const text of ["Review the next checkpoint", "Check the supporting notes"]) {
               const queueSamples = sampleAnchor();
-              await textarea.fill(text);
+              await fillComposer(textarea, text);
               await textarea.press("Enter");
               await page.locator(".chat-queue__item", { hasText: text }).waitFor();
               await assertAnchor(queueSamples);

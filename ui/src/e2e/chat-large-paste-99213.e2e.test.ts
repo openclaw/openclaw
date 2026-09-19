@@ -6,6 +6,7 @@ import { crc32 } from "node:zlib";
 import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createRequireRecord } from "../../../test/helpers/record.js";
+import { fillComposer } from "../test-helpers/composer-editor.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
@@ -207,15 +208,17 @@ describeControlUiE2e("Control UI #99213 large screenshot paste proof", () => {
         .getByText("The existing assistant reply is taller than the virtualizer estimate.")
         .waitFor({ timeout: 10_000 });
 
-      const composer = recorded.page.locator(".agent-chat__composer-combobox textarea");
-      await composer.focus();
+      const composer = recorded.page.locator(
+        ".agent-chat__composer-combobox openclaw-composer-editor",
+      );
+      await composer.locator(".cm-content").focus();
       await recorded.page.evaluate(async (text) => {
         await navigator.clipboard.writeText(text);
       }, dataUrl);
       await composer.press(process.platform === "darwin" ? "Meta+V" : "Control+V");
 
       await recorded.page.locator(".chat-attachment-thumb").waitFor({ state: "visible" });
-      await composer.fill(prompt);
+      await fillComposer(composer, prompt);
       const pasteScreenshot = path.join(artifactDir, "01-pasted-large-image.png");
       await writeFile(
         pasteScreenshot,

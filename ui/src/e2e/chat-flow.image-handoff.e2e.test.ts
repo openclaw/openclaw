@@ -2,6 +2,7 @@ import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
 import type { ChatHost } from "../pages/chat/chat-send-contract.ts";
+import { fillComposer } from "../test-helpers/composer-editor.ts";
 import {
   takeControlUiElementScreenshot,
   takeControlUiViewportScreenshot,
@@ -91,7 +92,10 @@ suite.define(() => {
         try {
           await page.goto(`${suite.server.baseUrl}chat`);
           await gateway.waitForRequest("chat.startup");
-          await page.locator(".agent-chat__composer-combobox textarea").fill(prompt);
+          await fillComposer(
+            page.locator(".agent-chat__composer-combobox openclaw-composer-editor"),
+            prompt,
+          );
           await page.locator(".agent-chat__file-input").setInputFiles({
             name: "stable-preview.png",
             mimeType: "image/png",

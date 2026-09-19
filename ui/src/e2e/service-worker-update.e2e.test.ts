@@ -6,6 +6,7 @@ import path from "node:path";
 import { chromium, webkit, type Browser, type Page } from "playwright";
 import { beforeEach, afterAll, beforeAll, describe, expect, it } from "vitest";
 import { CONTROL_UI_BOOTSTRAP_CONFIG_PATH } from "../../../src/gateway/control-ui-contract.js";
+import { composerValue, fillComposer } from "../test-helpers/composer-editor.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
   buildProductionControlUiE2e,
@@ -372,12 +373,12 @@ describe("Control UI service-worker production update E2E", () => {
         const originalUrl = page.url();
         const editor = page.locator(
           mode === "chat"
-            ? ".agent-chat__composer-combobox textarea"
+            ? ".agent-chat__composer-combobox openclaw-composer-editor"
             : ".config-raw-field textarea",
         );
         const draft =
           mode === "chat" ? "keep my draft through the missed update" : '{ "count": 2 }';
-        await editor.fill(draft);
+        await (mode === "chat" ? fillComposer(editor, draft) : editor.fill(draft));
         await stageBuildB(nextDir);
         await page.evaluate(() => sessionStorage.setItem("test-missed-activation", "1"));
         await server.replaceBuild(nextDir, previousDir);
@@ -414,7 +415,7 @@ describe("Control UI service-worker production update E2E", () => {
           .toMatchObject({ client: { buildId: buildB } });
         expect(page.url()).toBe(originalUrl);
         if (mode === "chat") {
-          await expect.poll(() => editor.inputValue()).toBe(draft);
+          await expect.poll(() => composerValue(editor)).toBe(draft);
         } else {
           await page.getByRole("button", { name: "Raw", exact: true }).click();
           await expect

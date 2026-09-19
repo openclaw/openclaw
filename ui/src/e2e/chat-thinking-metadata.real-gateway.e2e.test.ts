@@ -7,6 +7,11 @@ import {
   type OpenClawTestInstance,
 } from "../../../test/helpers/openclaw-test-instance.ts";
 import type { ModelCatalogResult, SessionsListResult } from "../api/types.ts";
+import {
+  accessibleChatComposer,
+  composerValue,
+  fillComposer,
+} from "../test-helpers/composer-editor.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -135,9 +140,9 @@ suite.define(() => {
           });
           await page.goto(url.href);
           await waitForControlUiGatewayReady(page);
-          const composer = page.getByRole("textbox", { name: "Chat composer", exact: true });
+          const composer = accessibleChatComposer(page);
           await composer.waitFor({ state: "visible" });
-          await composer.fill("/model thinking-fixture/no-effort");
+          await fillComposer(composer, "/model thinking-fixture/no-effort");
           await expect
             .poll(() =>
               page
@@ -160,9 +165,9 @@ suite.define(() => {
               thinkingLevel: "off",
               thinkingLevels: [],
             });
-          await composer.fill("/think");
+          await fillComposer(composer, "/think");
           await composer.press("Tab");
-          await expect.poll(() => composer.inputValue()).toBe("/think ");
+          await expect.poll(() => composerValue(composer)).toBe("/think ");
           await composer.press("Enter");
           await expect
             .poll(async () => {
@@ -175,7 +180,7 @@ suite.define(() => {
           await page.screenshot({
             path: path.join(suite.artifactDir, "saved-off-empty-profile.png"),
           });
-          await composer.fill("/think high");
+          await fillComposer(composer, "/think high");
           await composer.press("Enter");
           await expect
             .poll(async () => {
@@ -298,11 +303,11 @@ suite.define(() => {
             });
             await page.goto(url.href);
             await waitForControlUiGatewayReady(page);
-            const composer = page.getByRole("textbox", { name: "Chat composer", exact: true });
+            const composer = accessibleChatComposer(page);
             await composer.waitFor({ state: "visible" });
-            await composer.fill("/think");
+            await fillComposer(composer, "/think");
             await composer.press("Tab");
-            await expect.poll(() => composer.inputValue()).toBe("/think ");
+            await expect.poll(() => composerValue(composer)).toBe("/think ");
             await expect
               .poll(() =>
                 page
@@ -325,7 +330,7 @@ suite.define(() => {
             } finally {
               await page.screenshot({ path: path.join(suite.artifactDir, "thinking-status.png") });
             }
-            expect(await composer.inputValue()).toBe("");
+            expect(await composerValue(composer)).toBe("");
             expect(await page.getByRole("slider").count()).toBe(0);
 
             stage = "open Sessions";

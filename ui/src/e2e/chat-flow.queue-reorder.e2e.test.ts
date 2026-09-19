@@ -2,6 +2,7 @@ import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
+import { fillComposer } from "../test-helpers/composer-editor.ts";
 import {
   waitForControlUiGatewayReady,
   waitForControlUiGatewayReconnecting,
@@ -55,16 +56,16 @@ suite.define(() => {
       });
       await page.goto(`${suite.server.baseUrl}chat`);
       await waitForControlUiGatewayReady(page);
-      await page.locator(".agent-chat__composer-combobox textarea").waitFor();
+      await page.locator(".agent-chat__composer-combobox openclaw-composer-editor").waitFor();
       await page.getByText("Synthetic queue ordering proof.", { exact: true }).waitFor();
       await gateway.setOnline(false);
       await gateway.closeLatest();
       await waitForControlUiGatewayReconnecting(page);
       await stageOutboxAttachment(page, "A: review the attached itinerary");
-      const composer = page.locator(".agent-chat__composer-combobox textarea");
+      const composer = page.locator(".agent-chat__composer-combobox openclaw-composer-editor");
       await composer.press("Enter");
       await page.locator(".chat-queue__item", { hasText: "A: review" }).waitFor();
-      await composer.fill("B: read this instruction first");
+      await fillComposer(composer, "B: read this instruction first");
       await composer.press("Enter");
       await page.locator(".chat-queue__item", { hasText: "B: read" }).waitFor();
       // Hold the browser's real Blob decoder after offline admission has stored every byte.
@@ -153,7 +154,7 @@ suite.define(() => {
 
     try {
       await page.goto(`${suite.server.baseUrl}chat`);
-      const composer = page.locator(".agent-chat__composer-combobox textarea");
+      const composer = page.locator(".agent-chat__composer-combobox openclaw-composer-editor");
       await composer.waitFor({ state: "visible", timeout: 15_000 });
 
       // Offline is the honest way to hold a queue still: nothing drains while
@@ -161,7 +162,7 @@ suite.define(() => {
       await gateway.setOnline(false);
       await gateway.closeLatest();
       for (const message of QUEUED) {
-        await composer.fill(message);
+        await fillComposer(composer, message);
         await composer.press("Enter");
         await page.locator(".chat-queue__item", { hasText: message }).waitFor({ timeout: 10_000 });
       }
@@ -196,10 +197,10 @@ suite.define(() => {
 
       try {
         await page.goto(`${suite.server.baseUrl}chat`);
-        const composer = page.locator(".agent-chat__composer-combobox textarea");
+        const composer = page.locator(".agent-chat__composer-combobox openclaw-composer-editor");
         await composer.waitFor({ state: "visible", timeout: 15_000 });
         await gateway.deferNext("chat.send");
-        await composer.fill(QUEUED[0]);
+        await fillComposer(composer, QUEUED[0]);
         await composer.press("Enter");
         await gateway.waitForRequest("chat.send");
         await gateway.setOnline(false);
@@ -209,7 +210,7 @@ suite.define(() => {
           .waitFor();
 
         for (const message of QUEUED.slice(1)) {
-          await composer.fill(message);
+          await fillComposer(composer, message);
           await composer.press("Enter");
           await page.locator(".chat-queue__item", { hasText: message }).waitFor();
         }
@@ -280,13 +281,13 @@ suite.define(() => {
 
     try {
       await page.goto(`${suite.server.baseUrl}chat`);
-      const composer = page.locator(".agent-chat__composer-combobox textarea");
+      const composer = page.locator(".agent-chat__composer-combobox openclaw-composer-editor");
       await composer.waitFor({ state: "visible", timeout: 15_000 });
 
       await gateway.setOnline(false);
       await gateway.closeLatest();
       for (const message of QUEUED) {
-        await composer.fill(message);
+        await fillComposer(composer, message);
         await composer.press("Enter");
         await page.locator(".chat-queue__item", { hasText: message }).waitFor({ timeout: 10_000 });
       }

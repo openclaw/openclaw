@@ -2,6 +2,7 @@ import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import type { UiSettings } from "../app/settings.ts";
 import type { ChatSplitLayout } from "../pages/chat/split-layout-types.ts";
+import { composerValue, fillComposer } from "../test-helpers/composer-editor.ts";
 import {
   controlUiBundledGatewayUrl,
   controlUiBundledSettingsStorageKey,
@@ -79,7 +80,7 @@ suite.define(() => {
       });
       await page.goto(`${suite.server.baseUrl}new?agent=main#saved-split`);
       const composer = page.locator(".new-session-page__message");
-      await composer.fill("preserve my saved split");
+      await fillComposer(composer, "preserve my saved split");
       const before = {
         chatSplitLayout: savedLayout,
         sessionKey: rightKey,
@@ -102,7 +103,7 @@ suite.define(() => {
         code: "UNAVAILABLE",
         message: "Synthetic saved-layout admission refusal",
       });
-      await expect.poll(() => composer.inputValue()).toBe("preserve my saved split");
+      await expect.poll(() => composerValue(composer)).toBe("preserve my saved split");
       expect(await readSaved(page, storageKey)).toEqual(before);
       expect(page.url()).toBe(draftUrl);
       await page.reload();
@@ -114,7 +115,7 @@ suite.define(() => {
       await expect.poll(() => page.locator(".chat-split-view__cell").count()).toBe(2);
       expect(await readSaved(page, storageKey)).toEqual(before);
       await navigateInApp(page, "new-session", "?agent=main");
-      await composer.fill("adopt the confirmed session only");
+      await fillComposer(composer, "adopt the confirmed session only");
       await gateway.deferNext("sessions.create");
       await page.getByRole("button", { name: "Start session", exact: true }).click();
       const request = await gateway.waitForRequest("sessions.create");

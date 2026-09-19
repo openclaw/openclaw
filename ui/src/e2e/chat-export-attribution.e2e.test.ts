@@ -2,6 +2,7 @@ import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { text } from "node:stream/consumers";
 import { expect, it } from "vitest";
+import { fillComposer } from "../test-helpers/composer-editor.ts";
 import { waitForControlUiProofSurface } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { startControlUiE2eServer } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiSessionRow as sessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
@@ -72,7 +73,10 @@ suite.define(() => {
 
           let markdown: string;
           if (action === "download") {
-            await page.locator(".agent-chat__composer-combobox textarea").fill("/export");
+            await fillComposer(
+              page.locator(".agent-chat__composer-combobox openclaw-composer-editor"),
+              "/export",
+            );
             const downloadPromise = page.waitForEvent("download");
             await page.getByRole("button", { name: "Send message" }).click();
             const download = await downloadPromise;

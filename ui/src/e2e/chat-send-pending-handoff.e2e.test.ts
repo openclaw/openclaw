@@ -3,6 +3,7 @@ import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
+import { accessibleChatComposer, fillComposer } from "../test-helpers/composer-editor.ts";
 import { installMockGateway, type MockGatewayControls } from "../test-helpers/control-ui-e2e.ts";
 import { waitForChatScrollIdle } from "./chat-flow.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -137,8 +138,8 @@ async function openChatAndSubmitProbe(
     await gateway.deferNext("chat.send");
   }
   await startFrameSampler(currentPage, probeText);
-  await currentPage.locator(".agent-chat__input textarea").fill(probeText);
-  await currentPage.locator(".agent-chat__input textarea").press("Enter");
+  await fillComposer(currentPage.locator(".agent-chat__input openclaw-composer-editor"), probeText);
+  await currentPage.locator(".agent-chat__input openclaw-composer-editor").press("Enter");
   const send = await gateway.waitForRequest("chat.send");
   const sendParams = send.params as ChatSendParams;
   const runId = sendParams.idempotencyKey ?? "";
@@ -253,7 +254,7 @@ suite.define(() => {
         await page.goto(`${suite.server.baseUrl}chat`);
         await page.getByText("The PR is ready to land.", { exact: true }).waitFor();
         await gateway.deferNext("chat.send");
-        await page.getByRole("textbox", { name: "Chat composer", exact: true }).fill(prompt);
+        await fillComposer(accessibleChatComposer(page), prompt);
         await page.getByRole("button", { name: "Send message", exact: true }).click();
         const send = await gateway.waitForRequest("chat.send");
         const runId = (send.params as { idempotencyKey: string }).idempotencyKey;

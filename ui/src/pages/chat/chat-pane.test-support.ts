@@ -618,3 +618,11 @@ export function createRenderTestChatPane() {
   }
   return document.createElement("openclaw-chat-render-regression") as RenderTestChatPane;
 }
+
+export function createSuggestionPane(client: GatewayBrowserClient) {
+  const fixture = createTestChatPane({ client, sessions: {} as SessionCapability });
+  fixture.pane.presencePayload = {
+    presence: [{ user: { id: "owner" } }, { user: { id: "alice" } }],
+  };
+  return fixture;
+}

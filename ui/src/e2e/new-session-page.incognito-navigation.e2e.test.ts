@@ -2,6 +2,7 @@ import { Buffer } from "node:buffer";
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
+import { composerValue } from "../test-helpers/composer-editor.ts";
 import { waitForControlUiRoute } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import {
@@ -80,7 +81,7 @@ suite.define(() => {
           samePageElement: await original.evaluate(
             (element) => element === document.querySelector("openclaw-new-session-page"),
           ),
-          text: (await message.count()) ? await message.inputValue() : null,
+          text: (await message.count()) ? await composerValue(message) : null,
           incognito: (await page.getByRole("switch", { name: "Incognito" }).count())
             ? await page.getByRole("switch", { name: "Incognito" }).getAttribute("aria-checked")
             : null,
@@ -165,7 +166,7 @@ suite.define(() => {
           await waitForCommittedNewSessionDraft(page, null, 0);
           await page.reload();
           await waitForControlUiRoute(page, { routeId: "new-session", pathname: "/new" });
-          await expect.poll(() => message.inputValue()).toBe("");
+          await expect.poll(() => composerValue(message)).toBe("");
           await expect.poll(() => page.locator(".chat-attachment-file__name").count()).toBe(0);
           await expect
             .poll(() =>
@@ -177,7 +178,7 @@ suite.define(() => {
           await waitForCommittedNewSessionDraft(page, text, 1);
           await page.reload();
           await waitForControlUiRoute(page, { routeId: "new-session", pathname: "/new" });
-          await expect.poll(() => message.inputValue()).toBe(text);
+          await expect.poll(() => composerValue(message)).toBe(text);
           await expect
             .poll(() => page.locator(".chat-attachment-file__name").allTextContents())
             .toContain(filename);

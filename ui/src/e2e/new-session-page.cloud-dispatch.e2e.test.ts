@@ -4,6 +4,7 @@ import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { CLOUD_PROFILE_RETRY_DELAYS_MS } from "../pages/new-session/cloud-profile-discovery.ts";
+import { composerDisabled, fillComposer } from "../test-helpers/composer-editor.ts";
 import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { navigateToControlUiSession } from "../test-helpers/control-ui-e2e.ts";
 import { tooltipTitleText } from "./control-ui-e2e-suite.test-support.ts";
@@ -90,7 +91,10 @@ suite.define(() => {
       await captureUiProof(suite, page, "optionless-cloud-profile.png");
       await page.keyboard.press("Escape");
 
-      await page.locator(".new-session-page__message").fill("Use the configured machine size");
+      await fillComposer(
+        page.locator(".new-session-page__message"),
+        "Use the configured machine size",
+      );
       await page.getByRole("button", { name: "Start session" }).click();
       const dispatch = await gateway.waitForRequest("sessions.dispatch");
       expect(dispatch.params).toEqual({ key: sessionKey, agentId: "main", profileId: "machine0" });
@@ -359,7 +363,7 @@ suite.define(() => {
 
       const message = "fix the cloud-only failure";
       const composer = page.locator(".new-session-page__message");
-      await composer.fill(message);
+      await fillComposer(composer, message);
       await pastePng(composer);
       await page.getByRole("img", { name: "pixel.png" }).waitFor();
       const startButton = page.getByRole("button", { name: "Start session" });
@@ -506,7 +510,9 @@ suite.define(() => {
       await gateway.waitForRequest("sessions.describe", { match: { key: sessionKey } });
       await expect.poll(() => page.url()).toContain(controlUiSessionPath(sessionKey));
       await expect
-        .poll(() => page.locator(".agent-chat__composer-combobox textarea").isDisabled())
+        .poll(() =>
+          composerDisabled(page.locator(".agent-chat__composer-combobox openclaw-composer-editor")),
+        )
         .toBe(true);
       const publishPlacement = async (
         state: "requested" | "provisioning" | "syncing" | "starting",

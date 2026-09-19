@@ -12,6 +12,7 @@ import {
   type OpenClawTestInstance,
 } from "../../../test/helpers/openclaw-test-instance.ts";
 import { runQaGatewayFixture } from "../../../test/helpers/qa-gateway-cleanup.ts";
+import { composerValue, fillComposer } from "../test-helpers/composer-editor.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
 import { controlUiSessionUrl } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -345,7 +346,7 @@ suite.define(() => {
           throw new Error("Daily Claw frame and board were not mounted");
         }
         const composer = page.locator(
-          "openclaw-chat-pane.chat-pane-cache__pane--visible .agent-chat__composer-combobox textarea",
+          "openclaw-chat-pane.chat-pane-cache__pane--visible .agent-chat__composer-combobox openclaw-composer-editor",
         );
         await capture("01-daily-claw-warmed.png");
         for (let attempt = 0; attempt < 3; attempt += 1) {
@@ -353,10 +354,10 @@ suite.define(() => {
           await composer.waitFor();
           await expect.poll(() => sessionLink(chatKey).getAttribute("aria-current")).toBe("page");
           if (attempt === 0) {
-            await composer.fill(draft);
+            await fillComposer(composer, draft);
             await capture("02-chat-with-draft.png");
           } else {
-            expect(await composer.inputValue()).toBe(draft);
+            expect(await composerValue(composer)).toBe(draft);
           }
           expect(await originalFrame.evaluate((element) => element.isConnected)).toBe(true);
           await expect
@@ -391,7 +392,7 @@ suite.define(() => {
         expect(await article.evaluate((element) => element.scrollTop)).toBe(articleScrollTop);
         await sessionLink(chatKey).click();
         await composer.waitFor();
-        expect(await composer.inputValue()).toBe(draft);
+        expect(await composerValue(composer)).toBe(draft);
         await sessionLink(dashboardKey).click();
         await readingNote.waitFor();
         await rpc("board.widget.put", {

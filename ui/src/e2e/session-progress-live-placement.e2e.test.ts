@@ -3,6 +3,7 @@ import path from "node:path";
 import { MAX_DATE_TIMESTAMP_MS } from "@openclaw/normalization-core/number-coercion";
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
+import { fillComposer } from "../test-helpers/composer-editor.ts";
 import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   controlUiBundledGatewayUrl,
@@ -112,7 +113,10 @@ suite.define(() => {
     };
     const send = async (message: string) => {
       const requestCount = (await gateway.getRequests("chat.send")).length;
-      await page.locator(".agent-chat__composer-combobox textarea").fill(message);
+      await fillComposer(
+        page.locator(".agent-chat__composer-combobox openclaw-composer-editor"),
+        message,
+      );
       await page.getByRole("button", { name: "Send message" }).click();
       await expect
         .poll(async () => (await gateway.getRequests("chat.send")).length)
@@ -605,11 +609,11 @@ suite.define(() => {
           expect(dismissRequest.params).toEqual({ sessionKey, expectedRevision: 3 });
           await expect.poll(() => card.count()).toBe(0);
 
-          await page.locator("textarea").fill("rerender");
+          await fillComposer(page.locator("openclaw-composer-editor"), "rerender");
           await expect.poll(() => card.count()).toBe(0);
           await gateway.setMethodResponse("progressCard.get", { card: null });
           await page.reload();
-          await page.locator("textarea").waitFor({ state: "visible" });
+          await page.locator("openclaw-composer-editor").waitFor({ state: "visible" });
           await expect.poll(() => card.count()).toBe(0);
           expect(await gateway.getRequests("chat.send")).toHaveLength(0);
           await captureProof(page, `completed-${colorScheme}-after.png`);

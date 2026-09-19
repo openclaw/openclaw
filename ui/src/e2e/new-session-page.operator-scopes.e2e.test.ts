@@ -1,4 +1,5 @@
 import { expect, it } from "vitest";
+import { fillComposer } from "../test-helpers/composer-editor.ts";
 import {
   createControlUiE2eContextOptions,
   tooltipTitleText,
@@ -47,7 +48,7 @@ async function openDraft(
     },
   });
   await page.goto(`${suite.server.baseUrl}new`);
-  await page.locator(".new-session-page__message").fill("scope proof");
+  await fillComposer(page.locator(".new-session-page__message"), "scope proof");
   return { context, gateway, page };
 }
 
@@ -283,7 +284,7 @@ suite.define(() => {
       await page.getByRole("button", { name: "app", exact: true }).click();
       expect(await page.locator('[data-value="recent:/private/repo"]').count()).toBe(0);
 
-      await page.locator(".new-session-page__message").fill("work in the package");
+      await fillComposer(page.locator(".new-session-page__message"), "work in the package");
       await page.getByRole("button", { name: "Start session" }).click();
       await expect(gateway.waitForRequest("sessions.create")).resolves.toMatchObject({
         params: { cwd: contained, message: "work in the package" },
@@ -400,7 +401,10 @@ suite.define(() => {
       await expect.poll(() => useFolder.isEnabled()).toBe(true);
       await useFolder.click();
 
-      await page.locator(".new-session-page__message").fill("inspect the canonical checkout");
+      await fillComposer(
+        page.locator(".new-session-page__message"),
+        "inspect the canonical checkout",
+      );
       const submit = page.getByRole("button", { name: "Start session" });
       await expect.poll(() => submit.isEnabled()).toBe(true);
       await submit.click();
@@ -449,7 +453,7 @@ suite.define(() => {
       await expect.poll(() => useFolder.isEnabled()).toBe(true);
       await useFolder.click();
 
-      await page.locator(".new-session-page__message").fill("let the Gateway decide");
+      await fillComposer(page.locator(".new-session-page__message"), "let the Gateway decide");
       const submit = page.getByRole("button", { name: "Start session" });
       await expect.poll(() => submit.isEnabled()).toBe(true);
       await submit.click();

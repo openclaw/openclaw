@@ -274,7 +274,7 @@ suite.define(() => {
           await page.goto(`${suite.server.baseUrl}${pathname}`);
           const ready = isSettings
             ? page.getByRole("heading", { name: /^Provider access\b/ })
-            : page.locator(".agent-chat__composer-combobox textarea");
+            : page.locator(".agent-chat__composer-combobox openclaw-composer-editor");
           await ready.waitFor();
           if (isSettings) {
             expect(settingsScripts.join("\n")).toContain(settingsOnlyCopy[0]);

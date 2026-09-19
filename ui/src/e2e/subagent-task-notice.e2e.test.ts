@@ -1,4 +1,5 @@
 import { expect, it } from "vitest";
+import { fillComposer } from "../test-helpers/composer-editor.ts";
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -53,7 +54,7 @@ suite.define(() => {
         const body = progress.locator(".session-progress-card__body");
         await notice.getByText("View-only subagent", { exact: true }).waitFor();
         await progress.waitFor();
-        expect(await shell.locator("textarea").count()).toBe(0);
+        expect(await shell.locator("openclaw-composer-editor").count()).toBe(0);
         expect(
           await notice.evaluate((element) =>
             Boolean(
@@ -98,7 +99,7 @@ suite.define(() => {
         await expect.poll(() => progress.getAttribute("open")).toBeNull();
         await notice.getByRole("button", { name: "Open parent session", exact: true }).click();
         const input = shell.locator(".agent-chat__input");
-        await input.locator("textarea").fill("Continue the review");
+        await fillComposer(input.locator("openclaw-composer-editor"), "Continue the review");
         await progress.waitFor();
         expect(
           await input.evaluate((element) =>

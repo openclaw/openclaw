@@ -508,7 +508,9 @@ suite.define(() => {
       await rowFor(selected.key).waitFor({ state: "visible", timeout: 10_000 });
       await rowFor(selected.key).locator("a").first().click();
       await assertSelectedRoute();
-      await activePane.locator(".agent-chat__input textarea").waitFor({ state: "visible" });
+      await activePane
+        .locator(".agent-chat__input openclaw-composer-editor")
+        .waitFor({ state: "visible" });
       const replyPreview = activePane.locator(".chat-reply-preview", {
         hasText: "Replying to current message",
       });
@@ -721,7 +723,9 @@ suite.define(() => {
       await archivedNotice.waitFor({ state: "detached", timeout: 10_000 });
       await archiveEvent.waitFor({ state: "detached", timeout: 10_000 });
       await selectedRow.waitFor({ state: "visible", timeout: 10_000 });
-      await activePane.locator(".agent-chat__input textarea").waitFor({ state: "visible" });
+      await activePane
+        .locator(".agent-chat__input openclaw-composer-editor")
+        .waitFor({ state: "visible" });
       await progressCard.waitFor({ state: "visible" });
       await expect
         .poll(() =>
@@ -863,7 +867,7 @@ suite.define(() => {
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, deletedKey));
       const activePane = page.locator("openclaw-chat-pane.chat-pane-cache__pane--active");
       await activePane
-        .locator(".agent-chat__input textarea")
+        .locator(".agent-chat__input openclaw-composer-editor")
         .waitFor({ state: "visible", timeout: 10_000 });
 
       const requestsBeforeDeletion = (await gateway.getRequests("sessions.list", rosterMatch))
@@ -887,7 +891,7 @@ suite.define(() => {
         )
         .toBe(mainKey);
       await activePane
-        .locator(".agent-chat__input textarea")
+        .locator(".agent-chat__input openclaw-composer-editor")
         .waitFor({ state: "visible", timeout: 10_000 });
       await expect
         .poll(async () => (await gateway.getRequests("sessions.list", rosterMatch)).length)

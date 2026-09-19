@@ -1,4 +1,5 @@
 import { expect, it } from "vitest";
+import { composerValue, fillComposer } from "../test-helpers/composer-editor.ts";
 import { defaultControlUiFeatureMethods } from "../test-helpers/control-ui-e2e.ts";
 import {
   createChatFlowE2eSuite,
@@ -30,8 +31,8 @@ suite.define(() => {
           methodResponses: { "users.mentionable": { users: people, truncated: false } },
         });
         await page.goto(`${suite.server.baseUrl}chat`, { waitUntil: "domcontentloaded" });
-        const input = page.locator(".agent-chat__composer-combobox textarea");
-        await input.fill("@h");
+        const input = page.locator(".agent-chat__composer-combobox openclaw-composer-editor");
+        await fillComposer(input, "@h");
         const menu = page.getByRole("listbox", { name: "Mention a person" });
         await expect.poll(() => menu.getByRole("option").count()).toBe(2);
         await gateway.setMethodResponse("users.mentionable", {
@@ -47,7 +48,7 @@ suite.define(() => {
         await expectRequestCountStable(gateway, "users.mentionable", 2);
         await input.press("ArrowDown");
         await input.press("Enter");
-        expect(await input.inputValue()).toBe("@Henry ");
+        expect(await composerValue(input)).toBe("@Henry ");
       },
     );
   });
@@ -69,7 +70,10 @@ suite.define(() => {
           deferredMethods: ["users.mentionable"],
         });
         await page.goto(`${suite.server.baseUrl}chat`, { waitUntil: "domcontentloaded" });
-        await page.locator(".agent-chat__composer-combobox textarea").fill("@ha");
+        await fillComposer(
+          page.locator(".agent-chat__composer-combobox openclaw-composer-editor"),
+          "@ha",
+        );
         await gateway.waitForRequest("users.mentionable");
         const menu = page.getByRole("listbox", { name: "Mention a person" });
         expect(await menu.textContent()).toContain("Mention a person");

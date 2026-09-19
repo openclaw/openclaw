@@ -85,7 +85,7 @@ describeControlUiE2e("Control UI strict CSP E2E", () => {
       expect(csp).not.toContain("'unsafe-eval'");
       await gateway.waitForRequest("connect");
       await page
-        .locator(".agent-chat__composer-combobox textarea")
+        .locator(".agent-chat__composer-combobox openclaw-composer-editor")
         .waitFor({ state: "visible", timeout: 10_000 });
 
       const cspState = await page.evaluate(() => {

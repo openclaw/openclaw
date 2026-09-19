@@ -1,6 +1,7 @@
 // Control UI tests cover server preference replay and reconciliation through real reconnects.
 import type { BrowserContext, Page } from "playwright";
 import { expect, it } from "vitest";
+import { composerValue, fillComposer } from "../test-helpers/composer-editor.ts";
 import {
   controlUiBundledSettingsStorageKey,
   installMockGateway,
@@ -148,10 +149,10 @@ suite.define(() => {
         const selector =
           route === "new"
             ? ".new-session-page__message"
-            : ".agent-chat__composer-combobox textarea";
+            : ".agent-chat__composer-combobox openclaw-composer-editor";
         const textarea = page.locator(selector).first();
         await textarea.waitFor();
-        await textarea.fill("Synthetic preference proof");
+        await fillComposer(textarea, "Synthetic preference proof");
         const reads = await page.evaluate(async (activeRoute) => {
           const owner = document.querySelector(
             activeRoute === "new" ? "openclaw-new-session-page" : "openclaw-chat-pane",
@@ -204,7 +205,7 @@ suite.define(() => {
           )
           .toBe("modifier-enter");
         await textarea.press("Enter");
-        expect(await textarea.inputValue()).toBe("Synthetic preference proof\n");
+        expect(await composerValue(textarea)).toBe("Synthetic preference proof\n");
         expect(await gateway.getRequests("chat.send")).toHaveLength(0);
         expect(await gateway.getRequests("sessions.create")).toHaveLength(0);
       } finally {

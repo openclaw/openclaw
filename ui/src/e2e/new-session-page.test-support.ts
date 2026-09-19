@@ -1,8 +1,9 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { errors, type Locator, type Page } from "playwright";
+import { errors, type BrowserContextOptions, type Locator, type Page } from "playwright";
 import { expect } from "vitest";
 import type { ApplicationContext } from "../app/context.ts";
+import { composerDisabled } from "../test-helpers/composer-editor.ts";
 import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   controlUiSessionPath,
@@ -261,7 +262,9 @@ export async function expectPendingSessionPlacementStartupBeforeRuntime(
     0,
   );
   await expect
-    .poll(() => page.locator(".agent-chat__composer-combobox textarea").isDisabled())
+    .poll(() =>
+      composerDisabled(page.locator(".agent-chat__composer-combobox openclaw-composer-editor")),
+    )
     .toBe(true);
   expect(await gateway.getRequests("sessions.dispatch")).toHaveLength(0);
   expect(await gateway.getRequests("sessions.send")).toHaveLength(0);
@@ -284,6 +287,20 @@ export async function captureUiProof(
     fileName,
     presentation,
   );
+}
+
+export function projectProofRecording(owner: {
+  readonly artifactDir: string;
+}): BrowserContextOptions {
+  return captureUiProofEnabled
+    ? {
+        recordVideo: {
+          dir: path.join(owner.artifactDir, "project-registry"),
+          size: { height: 900, width: 1280 },
+        },
+        viewport: { height: 900, width: 1280 },
+      }
+    : {};
 }
 
 export async function captureProjectUiProof(
@@ -368,7 +385,7 @@ async function captureProof(
         presentation?.content ?? [
           page
             .locator(
-              ".new-session-page__message:visible, .new-session-page__starting .chat-group.user:visible, .agent-chat__composer-combobox textarea:visible",
+              ".new-session-page__message:visible, .new-session-page__starting .chat-group.user:visible, .agent-chat__composer-combobox openclaw-composer-editor:visible",
             )
             .first(),
         ],

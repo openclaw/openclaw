@@ -3,6 +3,7 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { chromium, type Browser, type Locator, type Page } from "playwright";
 import { beforeEach, afterAll, beforeAll, describe, expect, it } from "vitest";
+import { fillComposer } from "../test-helpers/composer-editor.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
   canRunPlaywrightChromium,
@@ -228,7 +229,9 @@ describeControlUiE2e("Control UI chat message actions", () => {
         await bubble.hover();
       }
       await screenshot(page, `${viewport.name}-subagent-actions.png`);
-      expect(await page.locator(".agent-chat__composer-combobox textarea").count()).toBe(0);
+      expect(
+        await page.locator(".agent-chat__composer-combobox openclaw-composer-editor").count(),
+      ).toBe(0);
       expect.soft(await page.getByRole("button", { name: "Reply to message" }).count()).toBe(0);
       const copy = page.getByRole("button", { name: "Copy as markdown", exact: true });
       await copy.click();
@@ -247,7 +250,7 @@ describeControlUiE2e("Control UI chat message actions", () => {
       expect(await gateway.getRequests("chat.send")).toHaveLength(0);
 
       await page.getByRole("button", { name: "Open parent session", exact: true }).click();
-      const composer = page.locator(".agent-chat__composer-combobox textarea");
+      const composer = page.locator(".agent-chat__composer-combobox openclaw-composer-editor");
       await composer.waitFor({ state: "visible" });
       if (viewport.name === "mobile") {
         await bubble.tap();
@@ -396,7 +399,10 @@ describeControlUiE2e("Control UI chat message actions", () => {
           .toBe(fileName);
         await screenshot(page, `${sourceId}-02-reply.png`);
         const text = "Please explain this file.";
-        await page.locator(".agent-chat__composer-combobox textarea").fill(text);
+        await fillComposer(
+          page.locator(".agent-chat__composer-combobox openclaw-composer-editor"),
+          text,
+        );
         await page.getByRole("button", { name: "Send message", exact: true }).click();
         const sent = await gateway.waitForRequest("chat.send");
         expect(sent.params).toMatchObject({ message: text, replyToId: sourceId });

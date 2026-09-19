@@ -2,6 +2,7 @@
 import { expect, it } from "vitest";
 import { buildGatewaySessionSnapshot } from "../../../src/gateway/session-event-payload.ts";
 import type { GatewaySessionRow } from "../api/types.ts";
+import { composerDisabled, composerValue, fillComposer } from "../test-helpers/composer-editor.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
   controlUiSessionUrl,
@@ -50,11 +51,11 @@ suite.define(() => {
         });
         await page.goto(`${suite.server.baseUrl}chat`);
         await gateway.waitForRequest("chat.startup");
-        const textarea = page.locator(".agent-chat__composer-combobox > textarea");
+        const textarea = page.locator(".agent-chat__composer-combobox > openclaw-composer-editor");
         const send = page.getByRole("button", { name: "Send message", exact: true });
         const draft = "Continue our conversation.";
-        await expect.poll(() => textarea.isDisabled()).toBe(false);
-        await textarea.fill(draft);
+        await expect.poll(() => composerDisabled(textarea)).toBe(false);
+        await fillComposer(textarea, draft);
         await expect.poll(() => send.isDisabled()).toBe(true);
         expect(await gateway.getRequests("chat.send")).toHaveLength(0);
         const startupCount = (await gateway.getRequests("chat.startup")).length;
@@ -67,13 +68,13 @@ suite.define(() => {
         });
         await gateway.emitGatewayEvent(event, {});
         await gateway.waitForRequest("models.list", { after: 1 });
-        expect(await textarea.isDisabled()).toBe(false);
-        expect(await textarea.inputValue()).toBe(draft);
+        expect(await composerDisabled(textarea)).toBe(false);
+        expect(await composerValue(textarea)).toBe(draft);
         expect(await send.isDisabled()).toBe(true);
         await gateway.resolveDeferred("models.list");
         await expect.poll(() => send.isDisabled()).toBe(false);
-        expect(await textarea.isDisabled()).toBe(false);
-        expect(await textarea.inputValue()).toBe(draft);
+        expect(await composerDisabled(textarea)).toBe(false);
+        expect(await composerValue(textarea)).toBe(draft);
         expect(await gateway.getRequests("chat.send")).toHaveLength(0);
         await expect.poll(() => page.getByText("Earlier reply", { exact: true }).count()).toBe(1);
         expect(await gateway.getRequests("chat.startup")).toHaveLength(startupCount);
@@ -136,9 +137,10 @@ suite.define(() => {
             )
             .toBe("true");
           await page.screenshot({ path: `${artifactDir}/active-fallback-model.png` });
-          await composer
-            .locator(".agent-chat__composer-combobox textarea")
-            .fill("Try the selected model again.");
+          await fillComposer(
+            composer.locator(".agent-chat__composer-combobox openclaw-composer-editor"),
+            "Try the selected model again.",
+          );
           await gateway.deferNext("chat.send");
           await page.getByRole("button", { name: "Send message", exact: true }).click();
           const send = await gateway.waitForRequest("chat.send");
@@ -457,11 +459,11 @@ suite.define(() => {
       await gateway.waitForRequest("models.list");
 
       const composer = page.locator(".agent-chat__input");
-      const textarea = composer.locator("textarea");
+      const textarea = composer.locator("openclaw-composer-editor");
       const send = composer.getByRole("button", { name: "Send message", exact: true });
       const draft = "Continue our conversation.";
-      await expect.poll(() => textarea.isDisabled()).toBe(false);
-      await textarea.fill(draft);
+      await expect.poll(() => composerDisabled(textarea)).toBe(false);
+      await fillComposer(textarea, draft);
       const picker = composer.locator("details.chat-controls__model-picker");
       const options = picker.locator(
         "button[data-chat-model-option]:not([data-chat-model-target])",
@@ -499,8 +501,8 @@ suite.define(() => {
       await expect
         .poll(() => composer.locator(".chat-controls__model-catalog-state").textContent())
         .toContain("No models available");
-      expect(await textarea.isDisabled()).toBe(false);
-      expect(await textarea.inputValue()).toBe(draft);
+      expect(await composerDisabled(textarea)).toBe(false);
+      expect(await composerValue(textarea)).toBe(draft);
       await expect.poll(() => send.isDisabled()).toBe(true);
       expect(await gateway.getRequests("chat.send")).toHaveLength(0);
 
@@ -914,21 +916,19 @@ suite.define(() => {
     [1280, 900, "desktop"],
     [390, 844, "mobile"],
   ] as const)(
-    "restores the native composer placeholder after a whitespace-only %s draft",
+    "restores the composer placeholder after a whitespace-only %s draft",
     async (width, height, label) => {
       await suite.withPage({ viewport: { width, height } }, async ({ page }) => {
         const gateway = await installMockGateway(page);
         await page.goto(`${suite.server.baseUrl}chat`);
         await gateway.waitForRequest("chat.startup");
 
-        const textarea = page.locator(".agent-chat__composer-combobox > textarea");
-        await textarea.fill("   ");
+        const textarea = page.locator(".agent-chat__composer-combobox > openclaw-composer-editor");
+        await fillComposer(textarea, "   ");
         await textarea.blur();
 
-        await expect.poll(() => textarea.inputValue()).toBe("");
-        await expect
-          .poll(() => textarea.evaluate((node) => node.matches(":placeholder-shown")))
-          .toBe(true);
+        await expect.poll(() => composerValue(textarea)).toBe("");
+        await expect.poll(() => textarea.locator(".cm-placeholder").isVisible()).toBe(true);
         await expect.poll(() => textarea.getAttribute("placeholder")).toContain("Message");
         const artifactRoot = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
         const artifactDir = artifactRoot

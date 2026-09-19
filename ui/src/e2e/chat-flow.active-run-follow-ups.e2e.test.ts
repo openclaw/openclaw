@@ -1,5 +1,6 @@
 import path from "node:path";
 import { expect, it } from "vitest";
+import { fillComposer } from "../test-helpers/composer-editor.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { waitForControlUiGatewayReconnecting } from "../test-helpers/control-ui-e2e-readiness.ts";
 import {
@@ -76,14 +77,20 @@ suite.define(() => {
       await page.goto(`${suite.server.baseUrl}chat`);
 
       const activePrompt = "keep this run active";
-      await page.locator(".agent-chat__composer-combobox textarea").fill(activePrompt);
+      await fillComposer(
+        page.locator(".agent-chat__composer-combobox openclaw-composer-editor"),
+        activePrompt,
+      );
       await page.getByRole("button", { name: "Send message" }).click();
 
       await gateway.waitForRequest("chat.send");
       await page.getByRole("button", { name: "Stop generating" }).waitFor({ timeout: 10_000 });
 
       const queuedPrompt = "queue this on the server";
-      await page.locator(".agent-chat__composer-combobox textarea").fill(queuedPrompt);
+      await fillComposer(
+        page.locator(".agent-chat__composer-combobox openclaw-composer-editor"),
+        queuedPrompt,
+      );
       await page.getByRole("button", { name: "Queue message" }).click();
 
       const sends = await waitForRequests(gateway, "chat.send", 2);
@@ -136,7 +143,7 @@ suite.define(() => {
       expect(await shortcut.inputValue()).toBe("enter");
       await page.goto(`${suite.server.baseUrl}chat`);
 
-      const composer = page.locator(".agent-chat__composer-combobox textarea");
+      const composer = page.locator(".agent-chat__composer-combobox openclaw-composer-editor");
       await page.locator(".chat-tool-msg-summary", { hasText: "Exec" }).waitFor();
       await page.getByRole("button", { name: "Stop generating" }).waitFor();
       let agentSequence = 0;
@@ -168,7 +175,7 @@ suite.define(() => {
       const steerText = "steer while the process runs";
       const sendsBeforeSteer = (await gateway.getRequests("chat.send")).length;
       await gateway.deferNext("chat.send");
-      await composer.fill(steerText);
+      await fillComposer(composer, steerText);
       await composer.press("Control+Enter");
       const steerSend = await gateway.waitForRequest("chat.send", { after: sendsBeforeSteer });
       await gateway.emitGatewayEvent("chat", {
@@ -630,14 +637,14 @@ suite.define(() => {
       await page.locator("[data-settings-send-shortcut]").selectOption("modifier-enter");
       await page.goto(`${suite.server.baseUrl}chat`);
 
-      const composer = page.locator(".agent-chat__composer-combobox textarea");
-      await composer.fill("keep the modifier shortcut run active");
+      const composer = page.locator(".agent-chat__composer-combobox openclaw-composer-editor");
+      await fillComposer(composer, "keep the modifier shortcut run active");
       await page.getByRole("button", { name: "Send message" }).click();
       await gateway.waitForRequest("chat.send");
       await page.getByRole("button", { name: "Stop generating" }).waitFor({ timeout: 10_000 });
 
       const queuedText = "leave this modifier follow-up queued";
-      await composer.fill(queuedText);
+      await fillComposer(composer, queuedText);
       await composer.press("Control+Enter");
 
       const queuedRow = page.locator(".chat-queue__item", { hasText: queuedText });
@@ -659,8 +666,8 @@ suite.define(() => {
       await page.locator("[data-settings-send-shortcut]").selectOption("enter");
       await page.goto(`${suite.server.baseUrl}chat`);
 
-      const composer = page.locator(".agent-chat__composer-combobox textarea");
-      await composer.fill("keep the disconnect run active");
+      const composer = page.locator(".agent-chat__composer-combobox openclaw-composer-editor");
+      await fillComposer(composer, "keep the disconnect run active");
       await page.getByRole("button", { name: "Send message" }).click();
       const initial = requireRecord((await gateway.waitForRequest("chat.send")).params);
       const activeRunId = requireString(initial.idempotencyKey, "initial accepted run");
@@ -692,7 +699,7 @@ suite.define(() => {
       await waitForControlUiGatewayReconnecting(page);
 
       const followUpText = "steer after the gateway returns";
-      await composer.fill(followUpText);
+      await fillComposer(composer, followUpText);
       await page.locator(".agent-chat__composer-actions .chat-send-btn--send").click();
 
       const rows = page.locator(".chat-queue__item");
@@ -727,9 +734,9 @@ suite.define(() => {
       await page.locator("[data-settings-follow-up-mode]").selectOption("queue");
       await page.goto(`${suite.server.baseUrl}chat`);
 
-      const composer = page.locator(".agent-chat__composer-combobox textarea");
+      const composer = page.locator(".agent-chat__composer-combobox openclaw-composer-editor");
       const initialText = "keep this run active until session state settles it";
-      await composer.fill(initialText);
+      await fillComposer(composer, initialText);
       await page.getByRole("button", { name: "Send message" }).click();
       const initialSend = await gateway.waitForRequest("chat.send");
       const initialSendParams = requireRecord(initialSend.params);
@@ -738,7 +745,7 @@ suite.define(() => {
       await page.getByRole("button", { name: "Stop generating" }).waitFor({ timeout: 10_000 });
 
       const followUp = "send after the missed terminal event";
-      await composer.fill(followUp);
+      await fillComposer(composer, followUp);
       await page.getByRole("button", { name: "Queue message" }).click();
       const queuedRow = page.locator(".chat-queue__item", { hasText: followUp });
       await queuedRow.waitFor({ timeout: 10_000 });
@@ -839,13 +846,19 @@ suite.define(() => {
     try {
       await page.goto(`${suite.server.baseUrl}chat`);
 
-      await page.locator(".agent-chat__composer-combobox textarea").fill("keep this run active");
+      await fillComposer(
+        page.locator(".agent-chat__composer-combobox openclaw-composer-editor"),
+        "keep this run active",
+      );
       await page.getByRole("button", { name: "Send message" }).click();
       await gateway.waitForRequest("chat.send");
       await page.getByRole("button", { name: "Stop generating" }).waitFor({ timeout: 10_000 });
 
       const followUp = "interrupt for this session override";
-      await page.locator(".agent-chat__composer-combobox textarea").fill(followUp);
+      await fillComposer(
+        page.locator(".agent-chat__composer-combobox openclaw-composer-editor"),
+        followUp,
+      );
       await page.getByRole("button", { name: "Send message" }).click();
 
       const sends = await waitForRequests(gateway, "chat.send", 2);
@@ -866,9 +879,10 @@ suite.define(() => {
 
     try {
       await page.goto(`${suite.server.baseUrl}chat`);
-      await page
-        .locator(".agent-chat__composer-combobox textarea")
-        .fill("/redirect start over cleanly");
+      await fillComposer(
+        page.locator(".agent-chat__composer-combobox openclaw-composer-editor"),
+        "/redirect start over cleanly",
+      );
       await page.getByRole("button", { name: "Send message" }).click();
 
       const request = await gateway.waitForRequest("chat.send");
@@ -896,13 +910,19 @@ suite.define(() => {
       await page.goto(`${suite.server.baseUrl}chat?session=main`);
       await expect.poll(() => new URL(page.url()).pathname).toMatch(/\/chat\/main$/);
 
-      await page.locator(".agent-chat__composer-combobox textarea").fill("keep this run active");
+      await fillComposer(
+        page.locator(".agent-chat__composer-combobox openclaw-composer-editor"),
+        "keep this run active",
+      );
       await page.getByRole("button", { name: "Send message" }).click();
       await gateway.waitForRequest("chat.send");
       await page.getByRole("button", { name: "Stop generating" }).waitFor({ timeout: 10_000 });
 
       const queuedPrompt = "steer this after restoring the queue";
-      await page.locator(".agent-chat__composer-combobox textarea").fill(queuedPrompt);
+      await fillComposer(
+        page.locator(".agent-chat__composer-combobox openclaw-composer-editor"),
+        queuedPrompt,
+      );
       await page.getByRole("button", { name: "Queue message" }).click();
       await page.locator(".chat-queue").getByText(queuedPrompt).waitFor({ timeout: 10_000 });
 

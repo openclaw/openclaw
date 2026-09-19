@@ -2,6 +2,8 @@
 import { chromium, type Browser, type Locator, type Page } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { runQaGatewayFixture } from "../../../test/helpers/qa-gateway-cleanup.ts";
+import type { ComposerEditor } from "../components/composer-editor.ts";
+import { composerValue, fillComposer } from "../test-helpers/composer-editor.ts";
 import {
   canRunPlaywrightChromium,
   installMockGateway,
@@ -65,7 +67,9 @@ async function installPointerTrace(page: Page, button: Locator): Promise<void> {
       "pointerdown",
       (event) => {
         if ((event as PointerEvent).pointerType === "touch" && !event.defaultPrevented) {
-          document.querySelector<HTMLTextAreaElement>(".agent-chat__input textarea")?.blur();
+          document
+            .querySelector<ComposerEditor>(".agent-chat__input openclaw-composer-editor")
+            ?.blur();
         }
       },
       { once: true },
@@ -148,9 +152,9 @@ describeControlUiE2e("Control UI composer pointer controls", () => {
       });
 
       const composerShell = page.locator(".agent-chat__composer-shell");
-      const textarea = page.locator(".agent-chat__input textarea");
-      await textarea.fill("Verify mobile safe-area touch controls");
-      await textarea.focus();
+      const textarea = page.locator(".agent-chat__input openclaw-composer-editor");
+      await fillComposer(textarea, "Verify mobile safe-area touch controls");
+      await textarea.locator(".cm-content").focus();
       await expect
         .poll(() => composerShell.evaluate((node) => getComputedStyle(node).marginBottom))
         .toBe("48px");
@@ -189,7 +193,7 @@ describeControlUiE2e("Control UI composer pointer controls", () => {
 
       const stop = page.getByRole("button", { name: "Stop generating" });
       await expect.poll(() => stop.isVisible()).toBe(true);
-      await textarea.focus();
+      await textarea.locator(".cm-content").focus();
       await expect
         .poll(() => composerShell.evaluate((node) => getComputedStyle(node).marginBottom))
         .toBe("48px");
@@ -231,9 +235,9 @@ describeControlUiE2e("Control UI composer pointer controls", () => {
       });
 
       const composerShell = page.locator(".agent-chat__composer-shell");
-      const textarea = page.locator(".agent-chat__input textarea");
-      await textarea.fill("Verify narrow desktop pointer controls");
-      await textarea.focus();
+      const textarea = page.locator(".agent-chat__input openclaw-composer-editor");
+      await fillComposer(textarea, "Verify narrow desktop pointer controls");
+      await textarea.locator(".cm-content").focus();
       await expect
         .poll(() => composerShell.evaluate((node) => getComputedStyle(node).marginBottom))
         .toBe("48px");
@@ -272,7 +276,7 @@ describeControlUiE2e("Control UI composer pointer controls", () => {
 
       const stop = page.getByRole("button", { name: "Stop generating" });
       await expect.poll(() => stop.isVisible()).toBe(true);
-      await textarea.focus();
+      await textarea.locator(".cm-content").focus();
       await installPointerTrace(page, stop);
       await clickMouseAtCurrentCenter(page, stop);
       expectStablePointerActivation(await readPointerTrace(page));
@@ -301,9 +305,9 @@ describeControlUiE2e("Control UI composer pointer controls", () => {
       });
       await page.goto(`${server.baseUrl}chat`);
       await gateway.waitForRequest("chat.startup");
-      const textarea = page.locator(".agent-chat__input textarea");
-      await textarea.fill("Verify wide desktop pointer controls");
-      await textarea.focus();
+      const textarea = page.locator(".agent-chat__input openclaw-composer-editor");
+      await fillComposer(textarea, "Verify wide desktop pointer controls");
+      await textarea.locator(".cm-content").focus();
       const send = page.getByRole("button", { name: "Send message" });
       await installPointerTrace(page, send);
       await clickMouseAtCurrentCenter(page, send);
@@ -337,8 +341,8 @@ describeControlUiE2e("Control UI composer pointer controls", () => {
       const abortRequest = await gateway.waitForRequest("chat.abort");
       expect(abortRequest.params).toMatchObject({ runId, sessionKey: "agent:main:main" });
 
-      await textarea.fill("Verify keyboard Send");
-      await textarea.focus();
+      await fillComposer(textarea, "Verify keyboard Send");
+      await textarea.locator(".cm-content").focus();
       const keyboardSend = page.getByRole("button", { name: "Send message" });
       // Send holds the trailing end of the action row, behind the microphone, so
       // it is no longer one Tab away. What this proves is that plain forward
@@ -380,9 +384,9 @@ describeControlUiE2e("Control UI composer pointer controls", () => {
       await page.addStyleTag({
         content: ":root { --safe-area-bottom: 34px !important; }",
       });
-      const textarea = page.locator(".agent-chat__input textarea");
-      await textarea.fill("Do not send this draft");
-      await textarea.focus();
+      const textarea = page.locator(".agent-chat__input openclaw-composer-editor");
+      await fillComposer(textarea, "Do not send this draft");
+      await textarea.locator(".cm-content").focus();
       const send = page.getByRole("button", { name: "Send message" });
       const bounds = await send.boundingBox();
       expect(bounds).not.toBeNull();
@@ -400,7 +404,7 @@ describeControlUiE2e("Control UI composer pointer controls", () => {
           }),
       );
       expect(await gateway.getRequests("chat.send")).toHaveLength(0);
-      await expect.poll(() => textarea.inputValue()).toBe("Do not send this draft");
+      await expect.poll(() => composerValue(textarea)).toBe("Do not send this draft");
     } finally {
       await context.close();
     }

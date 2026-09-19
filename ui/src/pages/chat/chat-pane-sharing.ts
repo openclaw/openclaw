@@ -8,13 +8,14 @@ import type {
 } from "../../../../packages/gateway-protocol/src/index.js";
 import { GatewayRequestError } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
+import type { ComposerEditor } from "../../components/composer-editor.ts";
 import { t } from "../../i18n/index.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
 import { hasMultiplePresenceIdentities } from "../../lib/presence-users.ts";
 import { scopedAgentParamsForSession } from "../../lib/sessions/index.ts";
 import { uiSessionEventMatches } from "../../lib/sessions/session-key.ts";
-import { CHAT_COMPOSER_TEXTAREA_SELECTOR } from "./chat-pane-shared.ts";
+import { CHAT_COMPOSER_EDITOR_SELECTOR } from "./chat-pane-shared.ts";
 import { ChatPaneSharingActions } from "./chat-pane-sharing-actions.ts";
 import { selectedChatSessionRow } from "./chat-state-route.ts";
 import { clearTypingActorForSessionMessage } from "./chat-typing-presence.ts";
@@ -301,7 +302,7 @@ export abstract class ChatPaneSharing extends ChatPaneSharingActions {
     if (resolution === "edit") {
       scope.state.handleChatDraftChange(suggestion.text, []);
       queueMicrotask(() =>
-        this.querySelector<HTMLTextAreaElement>(CHAT_COMPOSER_TEXTAREA_SELECTOR)?.focus({
+        this.querySelector<ComposerEditor>(CHAT_COMPOSER_EDITOR_SELECTOR)?.focus({
           preventScroll: true,
         }),
       );

@@ -2,8 +2,9 @@ import type {
   BrowserAnnotationDraft,
   BrowserAnnotationEvent,
 } from "../../components/browser/browser-annotation.ts";
+import type { ComposerEditor } from "../../components/composer-editor.ts";
 import { canAdmitBrowserAnnotation } from "./browser-annotation-admission.ts";
-import { CHAT_COMPOSER_TEXTAREA_SELECTOR } from "./chat-pane-shared.ts";
+import { CHAT_COMPOSER_EDITOR_SELECTOR } from "./chat-pane-shared.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import { chatAttachmentFromDataUrl } from "./components/chat-attachments.ts";
 
@@ -11,7 +12,7 @@ export function focusBrowserAnnotationComposerAfterUpdate(
   host: ParentNode & { updateComplete: Promise<unknown> },
 ): void {
   void host.updateComplete.then(() => {
-    host.querySelector<HTMLTextAreaElement>(CHAT_COMPOSER_TEXTAREA_SELECTOR)?.focus({
+    host.querySelector<ComposerEditor>(CHAT_COMPOSER_EDITOR_SELECTOR)?.focus({
       preventScroll: true,
     });
   });

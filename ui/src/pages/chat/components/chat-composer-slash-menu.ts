@@ -1,6 +1,7 @@
 import { html, nothing, type TemplateResult } from "lit";
 import { keyed } from "lit/directives/keyed.js";
 import type { ChatSendShortcut } from "../../../app/settings.ts";
+import type { ComposerEditor } from "../../../components/composer-editor.ts";
 import {
   handleComposerMenuKeydown,
   renderComposerMenu,
@@ -51,7 +52,7 @@ export type SlashMenuHost = {
   paneId: string;
   getDraft: () => string;
   commitDraft: (next: string) => void;
-  getTextarea: () => HTMLTextAreaElement | null;
+  getTextarea: () => ComposerEditor | null;
   resolveArgOptions: (command: SlashCommandDef) => string[];
   runCommand: () => void;
   canRun: (inline: boolean, command?: SlashCommandDef, args?: string) => boolean;
@@ -298,6 +299,9 @@ function selectSlashCommand(
   if (commitInlineSlashSelection(inlineReplacement, state, host)) {
     resetSlashMenuState(state);
     requestUpdate();
+    if (cmd.source === "skill") {
+      queueMicrotask(() => host.getTextarea()?.refreshChips());
+    }
     return;
   }
 
@@ -329,6 +333,9 @@ function selectSlashCommand(
   } else {
     host.commitDraft(`/${cmd.name} `);
     closeSlashMenuIfNeeded(state, requestUpdate);
+  }
+  if (cmd.source === "skill") {
+    queueMicrotask(() => host.getTextarea()?.refreshChips());
   }
 }
 

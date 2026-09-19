@@ -1,8 +1,8 @@
-// @vitest-environment jsdom
-
 import { expectDefined } from "@openclaw/normalization-core";
+// @vitest-environment jsdom
 import { render } from "lit";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import type { ComposerEditor } from "../../components/composer-editor.ts";
 import type { ChatAttachment } from "../../lib/chat/chat-types.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import {
@@ -43,7 +43,9 @@ function renderChatView(overrides: Partial<Parameters<typeof renderChat>[0]>) {
 
 function getComposerTextarea(container: Element) {
   return expectDefined(
-    container.querySelector<HTMLTextAreaElement>(".agent-chat__composer-combobox > textarea"),
+    container.querySelector<ComposerEditor>(
+      ".agent-chat__composer-combobox > openclaw-composer-editor",
+    ),
     "composer textarea",
   );
 }

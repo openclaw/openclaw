@@ -151,7 +151,7 @@ suite.define(() => {
         await writeFile(
           path.join(artifactDir, "stale-reset-error-suppressed.png"),
           await takeControlUiViewportScreenshot(page, page.locator(".shell"), [
-            visiblePane.locator(".agent-chat__composer-combobox textarea"),
+            visiblePane.locator(".agent-chat__composer-combobox openclaw-composer-editor"),
           ]),
         );
       }

@@ -7,6 +7,7 @@ import {
 import type { Page, Route, Video } from "playwright";
 import { beforeEach, expect, it } from "vitest";
 import { ConnectErrorDetailCodes } from "../../../packages/gateway-protocol/src/connect-error-details.js";
+import { composerValue, fillComposer } from "../test-helpers/composer-editor.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
 import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
@@ -215,7 +216,9 @@ const dockedCases = [
       await page.locator(".sidebar-footer-bar__home").click();
     },
     ready: (page: Page) =>
-      page.locator("openclaw-assistant-panel .agent-chat__composer-combobox textarea"),
+      page.locator(
+        "openclaw-assistant-panel .agent-chat__composer-combobox openclaw-composer-editor",
+      ),
   })),
   systemBusyness,
   {
@@ -279,9 +282,9 @@ async function installDockedScenario(
   const composer = page.locator(
     route === "new"
       ? ".new-session-page__message"
-      : "openclaw-chat-page .agent-chat__composer-combobox textarea",
+      : "openclaw-chat-page .agent-chat__composer-combobox openclaw-composer-editor",
   );
-  await composer.fill("Keep working");
+  await fillComposer(composer, "Keep working");
   return composer;
 }
 
@@ -535,7 +538,7 @@ suite.define(() => {
             expect(await page.locator("openclaw-modal-dialog").count()).toBe(0);
             const expanded = await frame.boundingBox();
             expect(expanded).not.toBeNull();
-            await composer.fill("Still editable during the outer load");
+            await fillComposer(composer, "Still editable during the outer load");
             await frame
               .getByRole("button", { name: "Minimize system busyness", exact: true })
               .click();
@@ -563,7 +566,7 @@ suite.define(() => {
             held.release();
             await page.locator("openclaw-debug-overlay .debug-overlay--minimized").waitFor();
             await expect.poll(() => frame.boundingBox()).toEqual(minimized);
-            expect(await composer.inputValue()).toBe("Still editable during the outer load");
+            expect(await composerValue(composer)).toBe("Still editable during the outer load");
             await frame
               .getByRole("button", { name: "Expand system busyness", exact: true })
               .click();
@@ -624,10 +627,10 @@ suite.define(() => {
               headerBounds!.y + headerBounds!.height,
             );
           }
-          await composer.fill("Keep working while Home loads");
+          await fillComposer(composer, "Keep working while Home loads");
           await page.getByRole("button", { name: "Close assistant sidebar", exact: true }).click();
           await page.locator(".assistant-panel").waitFor({ state: "hidden" });
-          expect(await composer.inputValue()).toBe("Keep working while Home loads");
+          expect(await composerValue(composer)).toBe("Keep working while Home loads");
         } finally {
           held.release();
         }
@@ -675,11 +678,11 @@ suite.define(() => {
                 })
                 .toBe(true);
             }
-            expect(await composer.inputValue()).toBe("Keep working");
+            expect(await composerValue(composer)).toBe("Keep working");
             await composer.click({ position: { x: 8, y: 8 } });
             await composer.press("ControlOrMeta+a");
             await page.keyboard.type("Keep working while the panel loads");
-            expect(await composer.inputValue()).toBe("Keep working while the panel loads");
+            expect(await composerValue(composer)).toBe("Keep working while the panel loads");
             await testCase.close(page).click();
             await frame.waitFor({ state: "hidden" });
 
@@ -693,7 +696,7 @@ suite.define(() => {
             await testCase.open(page);
             await testCase.ready(page).waitFor();
             await expect.poll(() => frame.boundingBox()).toEqual(loadingBounds);
-            expect(await composer.inputValue()).toBe("Keep working while the panel loads");
+            expect(await composerValue(composer)).toBe("Keep working while the panel loads");
             expect(await page.locator("openclaw-modal-dialog").count()).toBe(0);
             if (captureUiProof) {
               await page.screenshot({
@@ -752,7 +755,7 @@ suite.define(() => {
           );
           expect(await testCase.close(page).isVisible()).toBe(true);
           await composer.click({ position: { x: 8, y: 8 } });
-          expect(await composer.inputValue()).toBe("Keep working");
+          expect(await composerValue(composer)).toBe("Keep working");
           await expect.poll(failure.headCount).toBe(1);
 
           await retryThroughReload(page, error);
@@ -760,7 +763,7 @@ suite.define(() => {
         await testCase.ready(page).waitFor();
         expect(failure.chunkRequestCount()).toBe(2);
         expect(await page.locator(".lazy-view-error, openclaw-modal-dialog").count()).toBe(0);
-        expect(await composer.inputValue()).toBe("Keep working");
+        expect(await composerValue(composer)).toBe("Keep working");
         if (captureUiProof) {
           await page.screenshot({
             animations: "disabled",
@@ -771,7 +774,7 @@ suite.define(() => {
           await page.reload();
           await waitForControlUiGatewayReady(page);
           expect(await frame.isVisible()).toBe(false);
-          expect(await composer.inputValue()).toBe("Keep working");
+          expect(await composerValue(composer)).toBe("Keep working");
         }
       },
     );

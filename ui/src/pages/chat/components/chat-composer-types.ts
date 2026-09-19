@@ -8,6 +8,7 @@ import type {
 } from "../../../api/types.ts";
 import type { QuestionPrompt } from "../../../app/question-prompt.ts";
 import type { ChatFollowUpMode, ChatSendShortcut } from "../../../app/settings.ts";
+import type { ComposerEditor } from "../../../components/composer-editor.ts";
 import type {
   ChatGoalAction,
   ChatGoalDraft,
@@ -211,7 +212,7 @@ export type ChatComposerState = SkillMenuState &
     questionTakeoverActive: boolean;
     restoreComposerFocus: boolean;
     composerInput: HTMLElement | null;
-    composerTextarea: HTMLTextAreaElement | null;
+    composerTextarea: ComposerEditor | null;
     microphonePicker: ComposerMicrophonePicker | null;
     capabilityMenuOpen: boolean;
     capabilityMenuView: ChatComposerPlusMenuView;

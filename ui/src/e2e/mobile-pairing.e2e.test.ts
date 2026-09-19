@@ -4,6 +4,7 @@ import { DEFAULT_GATEWAY_REQUEST_TIMEOUT_MS } from "@openclaw/gateway-client/bro
 import type { Page } from "playwright";
 import qrcode from "qrcode";
 import { beforeEach, expect, it } from "vitest";
+import { composerValue, fillComposer } from "../test-helpers/composer-editor.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { requireRecord, requireString } from "./chat-flow.test-support.ts";
@@ -129,13 +130,13 @@ suite.define(() => {
         .locator(".chat-group.assistant .chat-text")
         .getByText(baselineText, { exact: true });
       await baseline.waitFor();
-      const composer = page.locator(".agent-chat__composer-combobox textarea");
-      await composer.fill("/pa");
+      const composer = page.locator(".agent-chat__composer-combobox openclaw-composer-editor");
+      await fillComposer(composer, "/pa");
       await gateway.waitForRequest("commands.list");
       const pairOption = page.getByRole("option").filter({ hasText: "/pair" });
       await pairOption.waitFor();
       await pairOption.click();
-      await expect.poll(() => composer.inputValue()).toBe("/pair ");
+      await expect.poll(() => composerValue(composer)).toBe("/pair ");
       await page.getByRole("button", { name: "Send message" }).click();
 
       const dialog = page.getByRole("dialog", { name: "Pair a device" });
@@ -152,7 +153,7 @@ suite.define(() => {
       expect(await page.locator(".chat-group.user", { hasText: "/pair" }).count()).toBe(0);
       expect(await gateway.getRequests("chat.send")).toEqual([]);
 
-      await composer.fill("/pair status");
+      await fillComposer(composer, "/pair status");
       await page.getByRole("button", { name: "Send message" }).click();
       const remote = await gateway.waitForRequest("chat.send");
       const remoteParams = requireRecord(remote.params);
@@ -182,7 +183,7 @@ suite.define(() => {
       });
       await page.reload();
       await baseline.waitFor();
-      await composer.fill("/pa");
+      await fillComposer(composer, "/pa");
       await expect.poll(async () => (await gateway.getRequests("commands.list")).length).toBe(1);
       await page.getByRole("option").filter({ hasText: "/pair" }).click();
       await page.getByRole("button", { name: "Send message" }).click();

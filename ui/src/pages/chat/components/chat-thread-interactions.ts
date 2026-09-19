@@ -10,6 +10,7 @@ import type {
 } from "../../../api/types.ts";
 import type { QuestionPrompt } from "../../../app/question-prompt.ts";
 import type { BrowserTabSelection } from "../../../components/browser/browser-target.ts";
+import type { ComposerEditor } from "../../../components/composer-editor.ts";
 import { copyMarkdownLabel, handleCopyButton } from "../../../components/copy-button.ts";
 import { icons } from "../../../components/icons.ts";
 import type { ImageLightboxItem } from "../../../components/image-lightbox.types.ts";
@@ -349,8 +350,8 @@ export function closeTranscriptSearch(state: ChatThreadState, requestUpdate: () 
   queueMicrotask(() => {
     const target = returnFocusTarget?.isConnected
       ? returnFocusTarget
-      : returnFocusOwner?.querySelector<HTMLTextAreaElement>(
-          ".agent-chat__composer-combobox > textarea",
+      : returnFocusOwner?.querySelector<ComposerEditor>(
+          ".agent-chat__composer-combobox > openclaw-composer-editor",
         );
     target?.focus({ preventScroll: true });
   });

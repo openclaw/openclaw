@@ -1,5 +1,6 @@
 import { writeFile } from "node:fs/promises";
 import { expect, it } from "vitest";
+import { composerValue, fillComposer } from "../test-helpers/composer-editor.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { captureControlUiE2eFailureDiagnostics } from "../test-helpers/control-ui-e2e.ts";
@@ -25,14 +26,14 @@ suite.define(() => {
 
     try {
       await page.goto(`${suite.server.baseUrl}chat`);
-      const composer = page.locator(".agent-chat__composer-combobox textarea");
+      const composer = page.locator(".agent-chat__composer-combobox openclaw-composer-editor");
       await composer.waitFor({ state: "visible", timeout: 15_000 });
 
       // Offline holds the queue still, so the round-trip stays observable.
       await gateway.setOnline(false);
       await gateway.closeLatest();
       for (const message of QUEUED) {
-        await composer.fill(message);
+        await fillComposer(composer, message);
         await composer.press("Enter");
         await page.locator(".chat-queue__item", { hasText: message }).waitFor({ timeout: 10_000 });
       }
@@ -47,7 +48,7 @@ suite.define(() => {
         );
       expect(await queueText()).toEqual([...QUEUED]);
 
-      await composer.fill("a separate composer draft");
+      await fillComposer(composer, "a separate composer draft");
 
       // Double-click is the shortcut; the pencil on the row is the visible path.
       await page.locator(".chat-queue__item").nth(1).dblclick();
@@ -56,7 +57,7 @@ suite.define(() => {
       await rowEditor.waitFor({ timeout: 10_000 });
       await rowEditor.press("ControlOrMeta+A");
       expect(await rowEditor.inputValue()).toBe(QUEUED[1]);
-      expect(await composer.inputValue()).toBe("a separate composer draft");
+      expect(await composerValue(composer)).toBe("a separate composer draft");
       // The row stays where it is, marked as the one being edited.
       expect(await queueText()).toEqual([...QUEUED]);
       expect(await page.locator(".chat-queue__item--editing").count()).toBe(1);
@@ -67,7 +68,7 @@ suite.define(() => {
       await expect
         .poll(queueText, { timeout: 10_000 })
         .toEqual([QUEUED[0], "then update the docs and the changelog", QUEUED[2]]);
-      expect(await composer.inputValue()).toBe("a separate composer draft");
+      expect(await composerValue(composer)).toBe("a separate composer draft");
     } finally {
       await suite.closeBrowserContext(context);
     }
@@ -80,17 +81,17 @@ suite.define(() => {
 
     try {
       await page.goto(`${suite.server.baseUrl}chat`);
-      const composer = page.locator(".agent-chat__composer-combobox textarea");
+      const composer = page.locator(".agent-chat__composer-combobox openclaw-composer-editor");
       await composer.waitFor({ state: "visible", timeout: 15_000 });
       await gateway.setOnline(false);
       await gateway.closeLatest();
       for (const message of QUEUED) {
-        await composer.fill(message);
+        await fillComposer(composer, message);
         await composer.press("Enter");
         await page.locator(".chat-queue__item", { hasText: message }).waitFor({ timeout: 10_000 });
       }
 
-      await composer.fill("a separate composer draft");
+      await fillComposer(composer, "a separate composer draft");
       const row = page.locator(".chat-queue__item").nth(1);
       await row.dblclick();
       const rowEditor = row.locator(".chat-queue__edit-input");
@@ -104,7 +105,7 @@ suite.define(() => {
           timeout: 10_000,
         })
         .toEqual([...QUEUED]);
-      expect(await composer.inputValue()).toBe("a separate composer draft");
+      expect(await composerValue(composer)).toBe("a separate composer draft");
     } finally {
       await suite.closeBrowserContext(context);
     }
@@ -117,12 +118,12 @@ suite.define(() => {
 
     try {
       await page.goto(`${suite.server.baseUrl}chat`);
-      const composer = page.locator(".agent-chat__composer-combobox textarea");
+      const composer = page.locator(".agent-chat__composer-combobox openclaw-composer-editor");
       await composer.waitFor({ state: "visible", timeout: 15_000 });
       await gateway.setOnline(false);
       await gateway.closeLatest();
       for (const message of QUEUED) {
-        await composer.fill(message);
+        await fillComposer(composer, message);
         await composer.press("Enter");
         await page.locator(".chat-queue__item", { hasText: message }).waitFor({ timeout: 10_000 });
       }
@@ -131,14 +132,14 @@ suite.define(() => {
       await row.dblclick();
       const rowEditor = row.locator(".chat-queue__edit-input");
       await rowEditor.waitFor({ timeout: 10_000 });
-      await composer.fill("a separate composer send");
+      await fillComposer(composer, "a separate composer send");
       await composer.press("Enter");
 
       await page
         .locator(".chat-queue__item", { hasText: "a separate composer send" })
         .waitFor({ timeout: 10_000 });
       await expect.poll(() => rowEditor.inputValue(), { timeout: 10_000 }).toBe(QUEUED[1]);
-      expect(await composer.inputValue()).toBe("");
+      expect(await composerValue(composer)).toBe("");
       expect(await page.locator(".chat-queue__item").count()).toBe(4);
 
       await rowEditor.press("Escape");
@@ -181,9 +182,9 @@ suite.define(() => {
       await page.goto(`${suite.server.baseUrl}settings/appearance`);
       await page.locator("[data-settings-follow-up-mode]").selectOption("queue");
       await page.goto(`${suite.server.baseUrl}chat?session=main`);
-      const composer = page.locator(".agent-chat__composer-combobox textarea");
+      const composer = page.locator(".agent-chat__composer-combobox openclaw-composer-editor");
       await composer.waitFor({ state: "visible", timeout: 15_000 });
-      await composer.fill("keep the first run active");
+      await fillComposer(composer, "keep the first run active");
       await page.getByRole("button", { name: "Send message" }).click();
       const active = requireRecord((await gateway.waitForRequest("chat.send")).params);
       const activeRunId = requireString(active.idempotencyKey, "active run idempotency key");
@@ -212,7 +213,7 @@ suite.define(() => {
       await page.locator(".chat-send-status").waitFor({ state: "detached" });
 
       for (const message of ["send first", "edit before send", "remove me", "send last"]) {
-        await composer.fill(message);
+        await fillComposer(composer, message);
         await page.getByRole("button", { name: "Queue message" }).click();
         await page.locator(".chat-queue__item", { hasText: message }).waitFor({ timeout: 10_000 });
       }
@@ -345,7 +346,7 @@ suite.define(() => {
       expect(await gateway.getRequests("chat.send")).toHaveLength(1);
 
       const queueDisposable = async (text: string) => {
-        await composer.fill(text);
+        await fillComposer(composer, text);
         await composer.press("Enter");
         const disposable = page.locator(".chat-queue__item", { hasText: text });
         await disposable.waitFor({ timeout: 10_000 });
@@ -377,7 +378,7 @@ suite.define(() => {
         observer.observe(document, { childList: true, subtree: true });
         return { wasRemoved: () => removed };
       });
-      await composer.fill("programmatic removal");
+      await fillComposer(composer, "programmatic removal");
       await composer.press("Enter");
       await expect.poll(() => removal.evaluate((proof) => proof.wasRemoved())).toBe(true);
       await removal.dispose();

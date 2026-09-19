@@ -1,6 +1,7 @@
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
+import { composerValue, fillComposer } from "../test-helpers/composer-editor.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
   createChatFlowE2eSuite,
@@ -67,10 +68,10 @@ suite.define(() => {
         expect(await reply.textContent()).toContain("Replying to message");
         await gateway.waitForRequest("chat.message.get");
         const composer = page.locator(
-          ".chat-pane-cache__pane--active .agent-chat__composer-combobox textarea",
+          ".chat-pane-cache__pane--active .agent-chat__composer-combobox openclaw-composer-editor",
         );
-        await composer.fill("This draft remains usable.");
-        expect(await composer.inputValue()).toBe("This draft remains usable.");
+        await fillComposer(composer, "This draft remains usable.");
+        expect(await composerValue(composer)).toBe("This draft remains usable.");
         firstCount = (await gateway.getRequests("chat.message.get")).length;
         await expectRequestCountStable(gateway, "chat.message.get", 1);
         if (artifact === "unavailable-source") {

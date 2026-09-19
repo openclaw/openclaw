@@ -1,7 +1,9 @@
 import path from "node:path";
 // Control UI E2E tests cover visible browser dictation state through a real composer.
 import { expect, it } from "vitest";
+import type { ComposerEditor } from "../components/composer-editor.ts";
 import { finishElementAnimations } from "../test-helpers/animations.ts";
+import { composerValue, fillComposer } from "../test-helpers/composer-editor.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import {
   captureComposerProof,
@@ -50,10 +52,10 @@ suite.define(() => {
       });
       await installTalkBrowserFixtures(page);
       await page.goto(`${suite.server.baseUrl}chat`);
-      const textarea = page.locator(".agent-chat__composer-combobox textarea");
-      await textarea.fill("ship it");
+      const textarea = page.locator(".agent-chat__composer-combobox openclaw-composer-editor");
+      await fillComposer(textarea, "ship it");
       await textarea.evaluate(
-        (element: HTMLTextAreaElement, selection) =>
+        (element: ComposerEditor, selection) =>
           element.setSelectionRange(selection.start, selection.end),
         { start, end },
       );
@@ -67,7 +69,7 @@ suite.define(() => {
         type: "partial",
         text: "please",
       });
-      await expect.poll(() => textarea.inputValue()).toBe(expected);
+      await expect.poll(() => composerValue(textarea)).toBe(expected);
       await page.mouse.move(0, 0);
       const dictationStop = page.getByRole("button", { name: "Stop and keep text" });
       await dictationStop.evaluate(finishElementAnimations);
@@ -91,14 +93,14 @@ suite.define(() => {
       }
       await gateway.waitForRequest("talk.session.close");
       const committedDraft = cancel ? "ship it" : expected;
-      expect(await textarea.inputValue()).toBe(committedDraft);
+      expect(await composerValue(textarea)).toBe(committedDraft);
       expect(await gateway.getRequests("chat.send")).toHaveLength(0);
       await captureComposerProof(
         suite,
         page,
         `dictation-${name.replaceAll(" ", "-")}-committed.png`,
       );
-      expect(await textarea.inputValue()).toBe(committedDraft);
+      expect(await composerValue(textarea)).toBe(committedDraft);
     });
   });
 
@@ -120,9 +122,9 @@ suite.define(() => {
       });
       await installTalkBrowserFixtures(page);
       await page.goto(`${suite.server.baseUrl}chat`);
-      const textarea = page.locator(".agent-chat__composer-combobox textarea");
-      await textarea.fill("ship it");
-      await textarea.evaluate((element: HTMLTextAreaElement) => element.setSelectionRange(5, 5));
+      const textarea = page.locator(".agent-chat__composer-combobox openclaw-composer-editor");
+      await fillComposer(textarea, "ship it");
+      await textarea.evaluate((element: ComposerEditor) => element.setSelectionRange(5, 5));
 
       await page.getByRole("button", { name: "Start voice input" }).hover();
       await page.mouse.down();
@@ -132,7 +134,7 @@ suite.define(() => {
       await page.getByRole("button", { name: "Stop and keep text" }).click();
       await gateway.waitForRequest("talk.session.close");
       if (editedDraft) {
-        await textarea.fill(editedDraft);
+        await fillComposer(textarea, editedDraft);
       }
 
       await gateway.emitGatewayEvent("talk.event", {
@@ -160,7 +162,7 @@ suite.define(() => {
       });
       await captureComposerProof(suite, page, "dictation-late-finals.png");
 
-      await expect.poll(() => textarea.inputValue()).toBe(expected);
+      await expect.poll(() => composerValue(textarea)).toBe(expected);
       expect(await gateway.getRequests("chat.send")).toHaveLength(0);
     });
   });
@@ -180,7 +182,7 @@ suite.define(() => {
         await installTalkBrowserFixtures(page);
         await page.goto(`${suite.server.baseUrl}new`);
         const textarea = page.locator(".new-session-page__message");
-        await textarea.fill("keep this draft");
+        await fillComposer(textarea, "keep this draft");
         await page.getByRole("button", { name: "Dictate", exact: true }).click();
         await gateway.waitForRequest("talk.session.create");
         await gateway.resolveDeferred("talk.session.create");
@@ -189,21 +191,23 @@ suite.define(() => {
           type: "partial",
           text: "discard this speech",
         });
-        await expect.poll(() => textarea.inputValue()).toContain("discard this speech");
+        await expect.poll(() => composerValue(textarea)).toContain("discard this speech");
         await gateway.emitGatewayEvent("talk.event", {
           transcriptionSessionId: "dictation-direct-proof",
           type: "transcript",
           text: "discard this speech",
           final: true,
         });
-        await expect.poll(() => textarea.inputValue()).toBe("keep this draft discard this speech");
+        await expect
+          .poll(() => composerValue(textarea))
+          .toBe("keep this draft discard this speech");
         await gateway.emitGatewayEvent("talk.event", {
           transcriptionSessionId: "dictation-direct-proof",
           type: "partial",
           text: "too",
         });
         await expect
-          .poll(() => textarea.inputValue())
+          .poll(() => composerValue(textarea))
           .toBe("keep this draft discard this speech too");
         await gateway.emitGatewayEvent("talk.event", {
           transcriptionSessionId: "dictation-direct-proof",
@@ -212,7 +216,7 @@ suite.define(() => {
           final: true,
         });
         await expect
-          .poll(() => textarea.inputValue())
+          .poll(() => composerValue(textarea))
           .toBe("keep this draft discard this speech too");
         await captureComposerProof(
           suite,
@@ -222,7 +226,7 @@ suite.define(() => {
         // Clicking Dictate changes the hovered button into Stop; its hover hint
         // can open while transcripts arrive. Establish which surface Escape owns.
         await textarea.hover();
-        await textarea.focus();
+        await textarea.locator(".cm-content").focus();
         const openTooltips = page.locator("openclaw-tooltip[open]");
         await expect.poll(() => openTooltips.count()).toBe(0);
         if (tooltipOpen) {
@@ -234,25 +238,21 @@ suite.define(() => {
           await page.keyboard.press("Escape");
 
           await expect.poll(() => tooltip.getAttribute("open")).toBeNull();
-          expect(await textarea.inputValue()).toBe("keep this draft discard this speech too");
-          expect(await textarea.evaluate((element: HTMLTextAreaElement) => element.readOnly)).toBe(
-            true,
-          );
+          expect(await composerValue(textarea)).toBe("keep this draft discard this speech too");
+          expect(await textarea.evaluate((element: ComposerEditor) => element.readOnly)).toBe(true);
           expect(await textarea.evaluate((element) => document.activeElement === element)).toBe(
             true,
           );
           expect(await gateway.getRequests("talk.session.close")).toHaveLength(0);
         }
         await page.keyboard.press("Escape");
-        await expect.poll(() => textarea.inputValue()).toBe("keep this draft");
+        await expect.poll(() => composerValue(textarea)).toBe("keep this draft");
         await gateway.waitForRequest("talk.session.close");
         expect(await page.getByRole("button", { name: "Dictate", exact: true }).isVisible()).toBe(
           true,
         );
         expect(await gateway.getRequests("sessions.create")).toHaveLength(0);
-        expect(await textarea.evaluate((element: HTMLTextAreaElement) => element.readOnly)).toBe(
-          false,
-        );
+        expect(await textarea.evaluate((element: ComposerEditor) => element.readOnly)).toBe(false);
         expect(await gateway.getRequests("talk.session.close")).toHaveLength(1);
         await captureComposerProof(
           suite,
@@ -276,13 +276,13 @@ suite.define(() => {
       await installTalkBrowserFixtures(page);
       await page.goto(`${suite.server.baseUrl}new`);
       const textarea = page.locator(".new-session-page__message");
-      await textarea.fill("keep draft");
+      await fillComposer(textarea, "keep draft");
       await page.getByRole("button", { name: "Dictate", exact: true }).click();
       await gateway.waitForRequest("talk.session.create");
       await gateway.resolveDeferred("talk.session.create");
       await page.getByRole("button", { name: "Stop and keep text" }).click();
       await gateway.waitForRequest("talk.session.close");
-      await textarea.fill("keep draft today");
+      await fillComposer(textarea, "keep draft today");
 
       for (const text of ["spoken", "task"]) {
         await gateway.emitGatewayEvent("talk.event", {
@@ -298,7 +298,7 @@ suite.define(() => {
         reason: "completed",
       });
 
-      await expect.poll(() => textarea.inputValue()).toBe("keep draft today spoken task");
+      await expect.poll(() => composerValue(textarea)).toBe("keep draft today spoken task");
       expect(await gateway.getRequests("sessions.create")).toHaveLength(0);
       await captureComposerProof(suite, page, "dictation-new-session-late-finals.png");
     });

@@ -276,7 +276,10 @@ suite.define(() => {
     await pin.focus();
     await pin.hover();
     // Hover keeps the toolbar visible after keyboard focus leaves it.
-    await page.locator(".agent-chat__composer-combobox textarea").focus();
+    await page
+      .locator(".agent-chat__composer-combobox openclaw-composer-editor")
+      .locator(".cm-content")
+      .focus();
     await expect
       .poll(() => widgetActions.evaluate((element) => getComputedStyle(element).opacity))
       .toBe("1");

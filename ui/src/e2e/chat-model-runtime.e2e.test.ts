@@ -1,6 +1,7 @@
 import path from "node:path";
 import { expect, it } from "vitest";
 import type { ModelCatalogEntry } from "../api/types.ts";
+import { fillComposer } from "../test-helpers/composer-editor.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -145,7 +146,10 @@ suite.define(() => {
       await codex.click();
       if (route === "new") {
         await expect.poll(() => codex.getAttribute("aria-selected")).toBe("true");
-        await composer.locator("textarea").first().fill("Reply with the selected runtime.");
+        await fillComposer(
+          composer.locator("openclaw-composer-editor").first(),
+          "Reply with the selected runtime.",
+        );
         await page.getByRole("button", { name: "Start session" }).click();
         expect((await gateway.waitForRequest("sessions.create")).params).toMatchObject({
           model: "openai/gpt-5.6-sol",

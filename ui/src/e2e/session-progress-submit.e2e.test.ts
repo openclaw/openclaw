@@ -1,6 +1,7 @@
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
+import { composerValue, fillComposer } from "../test-helpers/composer-editor.ts";
 import {
   createChatFlowE2eSuite,
   installMockGateway,
@@ -39,8 +40,9 @@ suite.define(() => {
         if (!expanded) {
           await card.locator("summary").click();
         }
-        const textarea = page.locator(".agent-chat__composer-combobox textarea");
-        await textarea.fill(
+        const textarea = page.locator(".agent-chat__composer-combobox openclaw-composer-editor");
+        await fillComposer(
+          textarea,
           multiline
             ? "Please continue.\nCheck the changes.\nShare the result."
             : "Please continue the review.",
@@ -102,7 +104,7 @@ suite.define(() => {
             ),
           ).toBe(true);
         }
-        expect(await textarea.inputValue()).toBe("");
+        expect(await composerValue(textarea)).toBe("");
         expect(await gateway.getRequests("chat.send")).toHaveLength(1);
       } finally {
         await suite.closeBrowserContext(context);

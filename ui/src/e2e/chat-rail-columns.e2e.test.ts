@@ -1,6 +1,7 @@
 import path from "node:path";
 import type { Locator, Page } from "playwright";
 import { beforeEach, expect, it } from "vitest";
+import { accessibleChatComposer } from "../test-helpers/composer-editor.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
   controlUiBundledSettingsStorageKey,
@@ -996,7 +997,7 @@ suite.define(() => {
         expect(companionGeometry.railTop).toBeGreaterThanOrEqual(companionGeometry.bodyTop - 1);
         expect(companionGeometry.railBottom).toBeLessThanOrEqual(companionGeometry.bodyBottom + 1);
 
-        const mainComposer = page.getByRole("textbox", { name: "Chat composer", exact: true });
+        const mainComposer = accessibleChatComposer(page);
         await mainComposer.click();
         expect(await mainComposer.evaluate((element) => element === document.activeElement)).toBe(
           true,

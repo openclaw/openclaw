@@ -2,6 +2,7 @@
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { beforeEach, expect, it } from "vitest";
+import { fillComposer } from "../test-helpers/composer-editor.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
   takeControlUiElementScreenshot,
@@ -678,7 +679,10 @@ suite.define(() => {
 
     await page.goto(`${suite.server.baseUrl}chat`);
     await page.getByText("Ready for the running tool wave proof.").waitFor();
-    await page.locator(".agent-chat__input textarea").fill("run a long command");
+    await fillComposer(
+      page.locator(".agent-chat__input openclaw-composer-editor"),
+      "run a long command",
+    );
     await page.getByRole("button", { name: "Send message" }).click();
     const send = await gateway.waitForRequest("chat.send");
     const runId = (send.params as { idempotencyKey?: string }).idempotencyKey as string;
@@ -893,7 +897,10 @@ suite.define(() => {
       });
 
       await page.goto(`${suite.server.baseUrl}chat`);
-      await page.locator(".agent-chat__input textarea").fill("run the reviewed command");
+      await fillComposer(
+        page.locator(".agent-chat__input openclaw-composer-editor"),
+        "run the reviewed command",
+      );
       await page.getByRole("button", { name: "Send message" }).click();
       const send = await gateway.waitForRequest("chat.send");
       const runId = (send.params as { idempotencyKey?: string }).idempotencyKey as string;

@@ -5,6 +5,7 @@ import {
   patchSettings,
   type ChatFollowUpMode,
 } from "../../../app/settings.ts";
+import { ComposerEditor } from "../../../components/composer-editor.ts";
 import "../../../components/tooltip.ts";
 import { t } from "../../../i18n/index.ts";
 import type { HumanMention } from "../../../lib/chat/chat-types.ts";
@@ -87,7 +88,9 @@ export function renderChatComposer(props: ChatComposerProps) {
   const composerRunStatus =
     sendingForCurrentSession || runWorking ? { phase: "in-progress" as const } : props.runStatus;
   const draftKey = composerDraftKey(props);
-  if (state.composerDraftScopeKey !== null && state.composerDraftScopeKey !== draftKey) {
+  const draftScopeChanged =
+    state.composerDraftScopeKey !== null && state.composerDraftScopeKey !== draftKey;
+  if (draftScopeChanged) {
     state.emojiMenu.close();
     state.dictation?.dispose();
     state.dictation = null;
@@ -96,11 +99,14 @@ export function renderChatComposer(props: ChatComposerProps) {
   state.composerDraftScopeKey = draftKey;
   const visibleDraft =
     state.composingDraft?.key === draftKey ? state.composingDraft.value : props.draft;
+  if (draftScopeChanged) {
+    state.composerTextarea?.resetValue(visibleDraft);
+  }
   state.composerInputRef ??= (element?: Element) => {
     state.composerInput = replaceComposerPopoverAnchor(state.composerInput, element);
   };
   state.textareaRef ??= (element?: Element) => {
-    const nextTextarea = element instanceof HTMLTextAreaElement ? element : null;
+    const nextTextarea = element instanceof ComposerEditor ? element : null;
     const prevTextarea = state.composerTextarea;
     if (prevTextarea && prevTextarea !== nextTextarea) {
       disconnectTextareaOverflowObserver(prevTextarea);
@@ -258,7 +264,7 @@ export function renderChatComposer(props: ChatComposerProps) {
     (props.connected || !draft.trimStart().startsWith("/"));
   const renderedDraftCanSubmit = canSubmitDraft(visibleDraft);
 
-  const syncComposerDraftAfterSend = (target: HTMLTextAreaElement | null) => {
+  const syncComposerDraftAfterSend = (target: ComposerEditor | null) => {
     state.emojiMenu.close();
     state.mentionMenu.close();
     const submittedDraft = target?.value ?? props.getDraft?.() ?? props.draft;
@@ -274,7 +280,7 @@ export function renderChatComposer(props: ChatComposerProps) {
       clearPendingClearedSubmittedDraft(state, draftKey);
     }
     if (target && target.value !== hostDraft) {
-      target.value = hostDraft;
+      target.resetValue(hostDraft);
       adjustTextareaHeight(target);
     }
   };
@@ -295,7 +301,7 @@ export function renderChatComposer(props: ChatComposerProps) {
     goalComposer,
   });
 
-  const syncComposerValue = (target: HTMLTextAreaElement, typedAtSign = false) => {
+  const syncComposerValue = (target: ComposerEditor, typedAtSign = false) => {
     adjustTextareaHeight(target);
     target.dir = detectTextDirection(target.value);
     const mentions = getMentions();
@@ -337,7 +343,7 @@ export function renderChatComposer(props: ChatComposerProps) {
   };
   const handleBeforeInput = (event: InputEvent) => {
     const target = event.target;
-    if (!(target instanceof HTMLTextAreaElement)) {
+    if (!(target instanceof ComposerEditor)) {
       return;
     }
     state.mentionInput = {
@@ -352,7 +358,7 @@ export function renderChatComposer(props: ChatComposerProps) {
     }
   };
   const handleInput = (event: InputEvent) => {
-    const target = event.target as HTMLTextAreaElement;
+    const target = event.target as ComposerEditor;
     const hasInputIntent = consumeComposerInputIntent(state, draftKey);
     if (state.composerComposing || event.isComposing) {
       state.composingDraft = { key: draftKey, value: target.value };
@@ -381,7 +387,7 @@ export function renderChatComposer(props: ChatComposerProps) {
     props.onTypingChange?.(Boolean(target.value.trim()), target.value);
   };
   const handleSelect = (event: Event) => {
-    const target = event.target as HTMLTextAreaElement;
+    const target = event.target as ComposerEditor;
     state.emojiMenu.update(
       target,
       requestUpdate,
@@ -402,8 +408,8 @@ export function renderChatComposer(props: ChatComposerProps) {
     if (state.composingDraft?.key === draftKey) {
       state.composingDraft = null;
     }
-    syncComposerValue(event.target as HTMLTextAreaElement);
-    const value = (event.target as HTMLTextAreaElement).value;
+    syncComposerValue(event.target as ComposerEditor);
+    const value = (event.target as ComposerEditor).value;
     props.onTypingChange?.(Boolean(value.trim()), value);
   };
   const handleBlur = (event: FocusEvent) => {
@@ -412,7 +418,7 @@ export function renderChatComposer(props: ChatComposerProps) {
     if (emojiWasOpen) {
       requestUpdate();
     }
-    const target = event.target as HTMLTextAreaElement;
+    const target = event.target as ComposerEditor;
     // A dropped compositionend (detach/blur mid-IME) must not wedge the
     // composing flag: it persists across renders and kills Enter-send,
     // history keys, and command menus until the Send button resets it.

@@ -4,6 +4,7 @@ import path from "node:path";
 import type { Page } from "playwright";
 import { afterEach, expect, it } from "vitest";
 import { prepareChatHistoryFixture } from "../test-helpers/chat-activity-fixtures.ts";
+import { composerValue, fillComposer } from "../test-helpers/composer-editor.ts";
 import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   controlUiSessionUrl,
@@ -47,7 +48,7 @@ async function openMockAbortableRun(currentPage: Page, runId: string) {
   });
   await currentPage.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
   const stop = currentPage.getByRole("button", { name: "Stop generating" });
-  const composer = currentPage.locator(".agent-chat__input textarea");
+  const composer = currentPage.locator(".agent-chat__input openclaw-composer-editor");
   await stop.waitFor({ state: "visible" });
   await currentPage.getByText("The fixture run is still working.", { exact: true }).waitFor();
   return { gateway, sessionKey, runId, stop, composer };
@@ -68,8 +69,8 @@ suite.define(() => {
     const sessionKey = "agent:main:dashboard:failed-turn-elapsed";
     const gateway = await installMockGateway(currentPage, { sessionKey });
     await currentPage.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
-    const composer = currentPage.locator(".agent-chat__input textarea");
-    await composer.fill("First attempt");
+    const composer = currentPage.locator(".agent-chat__input openclaw-composer-editor");
+    await fillComposer(composer, "First attempt");
     // Freeze wall time without pausing the animation frames that publish sends.
     const firstStartedAt = Date.now();
     await currentPage.clock.setFixedTime(firstStartedAt);
@@ -123,7 +124,7 @@ suite.define(() => {
     expect(await currentPage.getByRole("button", { name: "Stop generating" }).count()).toBe(0);
 
     await currentPage.clock.setFixedTime(firstStartedAt + 981_000);
-    await composer.fill("Try again independently");
+    await fillComposer(composer, "Try again independently");
     await currentPage.getByRole("button", { name: "Send message" }).click();
     const runId = await persistUser("Try again independently", firstStartedAt + 981_000, 1);
     expect(runId).not.toBe(failedRunId);
@@ -310,14 +311,17 @@ suite.define(() => {
     const gateway = await installMockGateway(currentPage, { sessionKey });
 
     await currentPage.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
-    await currentPage.locator(".agent-chat__input textarea").fill("keep this run stoppable");
+    await fillComposer(
+      currentPage.locator(".agent-chat__input openclaw-composer-editor"),
+      "keep this run stoppable",
+    );
     await currentPage.getByRole("button", { name: "Send message" }).click();
     const send = await gateway.waitForRequest("chat.send");
     const runId = (send.params as { idempotencyKey?: unknown }).idempotencyKey;
     expect(typeof runId).toBe("string");
     const stop = currentPage.getByRole("button", { name: "Stop generating" });
     await stop.waitFor({ state: "visible" });
-    const composer = currentPage.locator(".agent-chat__input textarea");
+    const composer = currentPage.locator(".agent-chat__input openclaw-composer-editor");
 
     await gateway.setOnline(false);
     await expect
@@ -341,15 +345,15 @@ suite.define(() => {
 
     await stop.click();
     expect(await gateway.getRequests("chat.abort")).toHaveLength(0);
-    await composer.fill("keep this draft");
-    expect(await composer.inputValue()).toBe("keep this draft");
+    await fillComposer(composer, "keep this draft");
+    expect(await composerValue(composer)).toBe("keep this draft");
 
     await gateway.setOnline(true);
     const abort = await gateway.waitForRequest("chat.abort");
     expect(abort.params).toEqual({ runId, sessionKey });
     await stop.waitFor({ state: "detached" });
     expect(await gateway.getRequests("chat.abort")).toHaveLength(1);
-    expect(await composer.inputValue()).toBe("keep this draft");
+    expect(await composerValue(composer)).toBe("keep this draft");
   });
 
   it("restores stale Stop through a terminal mock-Gateway history response", async () => {
@@ -379,17 +383,17 @@ suite.define(() => {
     await stop.click();
     const abort = await gateway.waitForRequest("chat.abort");
     expect(abort.params).toEqual({ runId, sessionKey });
-    await composer.fill("keep this draft");
+    await fillComposer(composer, "keep this draft");
     await gateway.resolveDeferred("chat.abort", { ok: true, aborted: false, runIds: [] });
     await gateway.waitForRequest("chat.history", { after: historyCount });
     await currentPage
       .locator(".chat-bubble")
       .getByText("The completed reply.", { exact: true })
       .waitFor();
-    expect(await composer.inputValue()).toBe("keep this draft");
-    await composer.fill("");
+    expect(await composerValue(composer)).toBe("keep this draft");
+    await fillComposer(composer, "");
     await stop.waitFor({ state: "detached" });
-    await composer.fill("next message");
+    await fillComposer(composer, "next message");
     await currentPage.getByRole("button", { name: "Send message" }).waitFor({ state: "visible" });
     expect(await gateway.getRequests("chat.abort")).toHaveLength(1);
     await captureMockStopProof(currentPage, "mock-stale-stop-recovered");
@@ -449,7 +453,7 @@ suite.define(() => {
     await stop.click();
     const abort = await gateway.waitForRequest("chat.abort");
     expect(abort.params).toEqual({ sessionKey, runId });
-    await composer.fill("keep this draft");
+    await fillComposer(composer, "keep this draft");
     await gateway.resolveDeferred("chat.abort", { ok: true, aborted: false, runIds: [] });
     await gateway.waitForRequest("chat.history", { after: historyCount });
     await currentPage
@@ -459,8 +463,8 @@ suite.define(() => {
     await runningTool.waitFor({ state: "visible" });
     expect(await runningTool.count()).toBe(1);
     await currentPage.locator(".chat-working-indicator").waitFor({ state: "visible" });
-    expect(await composer.inputValue()).toBe("keep this draft");
-    await composer.fill("");
+    expect(await composerValue(composer)).toBe("keep this draft");
+    await fillComposer(composer, "");
     await stop.waitFor({ state: "visible" });
     expect(
       await currentPage.getByRole("button", { name: "Send message", exact: true }).count(),
@@ -481,7 +485,7 @@ suite.define(() => {
     await stop.click();
     const abort = await gateway.waitForRequest("chat.abort");
     expect(abort.params).toEqual({ sessionKey, runId });
-    await composer.fill("keep this draft");
+    await fillComposer(composer, "keep this draft");
     // Deferred responses do not synthesize chat.abort lifecycle events.
     await gateway.resolveDeferred("chat.abort", { ok: true, aborted: true, runIds: [runId] });
     await gateway.emitGatewayEvent("chat", {
@@ -494,15 +498,15 @@ suite.define(() => {
       .getByText("Waiting for the accepted abort to settle.", { exact: false })
       .waitFor();
     await currentPage.locator(".chat-working-indicator").waitFor({ state: "visible" });
-    expect(await composer.inputValue()).toBe("keep this draft");
+    expect(await composerValue(composer)).toBe("keep this draft");
     expect(await gateway.getRequests("chat.history")).toHaveLength(historyCount);
     await captureMockStopProof(currentPage, "mock-accepted-abort-before-terminal");
     await gateway.emitGatewayEvent("chat", { sessionKey, runId, state: "aborted" });
     await currentPage.locator(".chat-working-indicator").waitFor({ state: "detached" });
-    expect(await composer.inputValue()).toBe("keep this draft");
-    await composer.fill("");
+    expect(await composerValue(composer)).toBe("keep this draft");
+    await fillComposer(composer, "");
     await stop.waitFor({ state: "detached" });
-    await composer.fill("next message");
+    await fillComposer(composer, "next message");
     await currentPage.getByRole("button", { name: "Send message", exact: true }).waitFor();
   });
 
@@ -520,7 +524,7 @@ suite.define(() => {
     await stop.click();
     const abort = await gateway.waitForRequest("chat.abort");
     expect(abort.params).toEqual({ sessionKey, runId });
-    await composer.fill("keep this draft");
+    await fillComposer(composer, "keep this draft");
     await gateway.resolveDeferred("chat.abort", { ok: true, aborted: false, runIds: [] });
     await gateway.waitForRequest("chat.history", { after: historyCount });
     await gateway.rejectDeferred("chat.history", {
@@ -531,9 +535,9 @@ suite.define(() => {
       .getByRole("status")
       .filter({ hasText: "History is temporarily unavailable." });
     await error.waitFor();
-    expect(await composer.inputValue()).toBe("keep this draft");
+    expect(await composerValue(composer)).toBe("keep this draft");
     await currentPage.getByText("The fixture run is still working.", { exact: true }).waitFor();
-    await composer.fill("");
+    await fillComposer(composer, "");
     await stop.waitFor({ state: "visible" });
     await captureMockStopProof(currentPage, "mock-history-error-retained");
 
@@ -555,7 +559,7 @@ suite.define(() => {
     await stop.click();
     const retryAbort = await gateway.waitForRequest("chat.abort", { after: abortCount });
     expect(retryAbort.params).toEqual({ sessionKey, runId });
-    await composer.fill("keep this draft");
+    await fillComposer(composer, "keep this draft");
     await gateway.resolveDeferred("chat.abort", { ok: true, aborted: false, runIds: [] });
     await gateway.waitForRequest("chat.history", { after: retryHistoryCount });
     await currentPage
@@ -563,10 +567,10 @@ suite.define(() => {
       .getByText("The reply recovered after retry.", { exact: true })
       .waitFor();
     await error.waitFor({ state: "detached" });
-    expect(await composer.inputValue()).toBe("keep this draft");
-    await composer.fill("");
+    expect(await composerValue(composer)).toBe("keep this draft");
+    await fillComposer(composer, "");
     await stop.waitFor({ state: "detached" });
-    await composer.fill("next message");
+    await fillComposer(composer, "next message");
     await currentPage.getByRole("button", { name: "Send message", exact: true }).waitFor();
     await captureMockStopProof(currentPage, "mock-history-retry-recovered");
   });
@@ -596,7 +600,7 @@ suite.define(() => {
       });
       await currentPage.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
       const stop = currentPage.getByRole("button", { name: "Stop generating" });
-      const composer = currentPage.locator(".agent-chat__input textarea");
+      const composer = currentPage.locator(".agent-chat__input openclaw-composer-editor");
       await stop.waitFor({ state: "visible" });
       await gateway.setMethodResponse("chat.history", {
         messages: [{ role: "assistant", content: "Cached activity has finished." }],
@@ -616,7 +620,7 @@ suite.define(() => {
       const abort = await gateway.waitForRequest("sessions.abort");
       expect(abort.params).toEqual({ key: sessionKey, clearQueued: true });
       expect(await gateway.getRequests("chat.abort")).toHaveLength(0);
-      await composer.fill("keep this draft");
+      await fillComposer(composer, "keep this draft");
       await gateway.resolveDeferred("sessions.abort", {
         ok: true,
         abortedRunId: null,
@@ -627,10 +631,10 @@ suite.define(() => {
         .locator(".chat-bubble")
         .getByText("Cached activity has finished.", { exact: true })
         .waitFor();
-      expect(await composer.inputValue()).toBe("keep this draft");
-      await composer.fill("");
+      expect(await composerValue(composer)).toBe("keep this draft");
+      await fillComposer(composer, "");
       await stop.waitFor({ state: "detached" });
-      await composer.fill("next message");
+      await fillComposer(composer, "next message");
       await currentPage.getByRole("button", { name: "Send message", exact: true }).waitFor();
       await captureMockStopProof(currentPage, `mock-session-only-${activity}-recovered`);
     },
@@ -658,7 +662,10 @@ suite.define(() => {
 
     await currentPage.goto(`${suite.server?.baseUrl ?? ""}chat`);
     await currentPage.getByText("saved 875.3k tokens", { exact: true }).waitFor();
-    await currentPage.locator(".agent-chat__input textarea").fill("keep working");
+    await fillComposer(
+      currentPage.locator(".agent-chat__input openclaw-composer-editor"),
+      "keep working",
+    );
     // The working timer starts at the send click; pause first so the elapsed
     // reading is exactly the fastForward below, not inflated by real time.
     await pauseVirtualClock(currentPage);
@@ -700,7 +707,10 @@ suite.define(() => {
         .getByText("Ready for run lifecycle verification.")
         .waitFor({ timeout: 10_000 });
       await gateway.waitForRequest("sessions.list", { match: rosterMatch });
-      await currentPage.locator(".agent-chat__input textarea").fill("finish this run");
+      await fillComposer(
+        currentPage.locator(".agent-chat__input openclaw-composer-editor"),
+        "finish this run",
+      );
       await currentPage.getByRole("button", { name: "Send message" }).click();
       const send = await gateway.waitForRequest("chat.send");
       const params = send.params as { idempotencyKey?: unknown };
@@ -894,7 +904,10 @@ suite.define(() => {
       .getByText("Ready for yielded lifecycle verification.")
       .waitFor({ timeout: 10_000 });
     await gateway.waitForRequest("sessions.list", { match: rosterMatch });
-    await currentPage.locator(".agent-chat__input textarea").fill("restart and continue");
+    await fillComposer(
+      currentPage.locator(".agent-chat__input openclaw-composer-editor"),
+      "restart and continue",
+    );
     await currentPage.getByRole("button", { name: "Send message" }).click();
     const send = await gateway.waitForRequest("chat.send");
     const params = send.params as { idempotencyKey?: unknown };
@@ -961,7 +974,10 @@ suite.define(() => {
     const gateway = await installMockGateway(currentPage);
 
     await currentPage.goto(`${suite.server?.baseUrl ?? ""}chat`);
-    await currentPage.locator(".agent-chat__input textarea").fill("run the edit");
+    await fillComposer(
+      currentPage.locator(".agent-chat__input openclaw-composer-editor"),
+      "run the edit",
+    );
     await currentPage.getByRole("button", { name: "Send message" }).click();
     const send = await gateway.waitForRequest("chat.send");
     const params = send.params as { idempotencyKey?: unknown };

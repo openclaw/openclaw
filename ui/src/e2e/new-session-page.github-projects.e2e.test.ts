@@ -2,6 +2,7 @@ import { Buffer } from "node:buffer";
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
+import { composerEnabled, fillComposer } from "../test-helpers/composer-editor.ts";
 import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   WORKSPACE,
@@ -95,7 +96,7 @@ suite.define(() => {
           surface: checkoutPopover.locator('wa-popup [part="popup"]'),
           content: [baseRef],
         });
-        await page.locator(".new-session-page__message").fill("inspect the worktree");
+        await fillComposer(page.locator(".new-session-page__message"), "inspect the worktree");
         await page.getByRole("button", { name: "Start session" }).click();
 
         const create = await gateway.waitForRequest("sessions.create");
@@ -313,7 +314,7 @@ suite.define(() => {
       const permission = page.locator('[data-chat-permission-select="true"]');
       await permission.click();
       await page.locator('[data-chat-permission-option="read-only"]').click();
-      await page.locator(".new-session-page__message").fill(message);
+      await fillComposer(page.locator(".new-session-page__message"), message);
       await page.locator(".agent-chat__photo-input").setInputFiles({
         name: "synthetic.png",
         mimeType: "image/png",
@@ -501,15 +502,15 @@ suite.define(() => {
       const alert = page.locator('.chat-error[role="alert"]');
       await pollLocatorText(alert).toContain(failure);
       await expect.poll(() => working.count()).toBe(0);
-      const composer = page.locator(".agent-chat__composer-combobox textarea");
-      await expect.poll(() => composer.isEnabled()).toBe(true);
+      const composer = page.locator(".agent-chat__composer-combobox openclaw-composer-editor");
+      await expect.poll(() => composerEnabled(composer)).toBe(true);
       await captureProjectUiProof(
         suite,
         page,
         worktree ? "worktree-setup-failed.png" : "project-cloning-failed.png",
       );
 
-      await composer.fill(message);
+      await fillComposer(composer, message);
       await page.getByRole("button", { name: "Send message" }).click();
       const retry = await gateway.waitForRequest("chat.send");
       expect(retry.params).toMatchObject({ sessionKey, message });

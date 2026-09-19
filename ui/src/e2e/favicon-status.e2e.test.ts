@@ -1,6 +1,7 @@
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import { CHAT_RUN_ACTIVITY_CHANGED_EVENT } from "../pages/chat/chat-history-events.ts";
+import { fillComposer } from "../test-helpers/composer-editor.ts";
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { requireRecord, requireString } from "./chat-flow.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -64,7 +65,7 @@ suite.define(() => {
           ],
         });
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
-        const composer = page.locator(".agent-chat__composer-combobox textarea");
+        const composer = page.locator(".agent-chat__composer-combobox openclaw-composer-editor");
         await composer.waitFor();
         await gateway.waitForRequest("exec.approval.list");
         await expect
@@ -74,7 +75,7 @@ suite.define(() => {
             { href: expect.stringMatching(/^\/favicon-32\.png(?:\?v=.+)?$/), type: "image/png" },
           ]);
         const original = await faviconLinks(page);
-        await composer.fill("Prepare the draft report.");
+        await fillComposer(composer, "Prepare the draft report.");
         await page.getByRole("button", { name: "Send message", exact: true }).click();
         const send = await gateway.waitForRequest("chat.send");
         const runId = requireString(requireRecord(send.params).idempotencyKey, "chat run id");

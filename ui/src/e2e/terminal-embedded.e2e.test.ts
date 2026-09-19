@@ -41,7 +41,7 @@ suite.define(() => {
       await page.goto(`${suite.server.baseUrl}${route}`);
       await waitForControlUiGatewayReady(page);
       if (route === "chat") {
-        await page.locator(".agent-chat__composer-combobox textarea").waitFor();
+        await page.locator(".agent-chat__composer-combobox openclaw-composer-editor").waitFor();
         await page.keyboard.press("Control+Backquote");
       }
       const panel = page

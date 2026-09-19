@@ -1,5 +1,6 @@
 import path from "node:path";
 import { expect, it } from "vitest";
+import { fillComposer } from "../test-helpers/composer-editor.ts";
 import { installMockGateway, startControlUiE2eServer } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -74,8 +75,8 @@ suite.define(() => {
           await page.goto(`${suite.server.baseUrl}${route}`);
           const composer = page.locator(
             route === "new"
-              ? ".new-session-page__composer textarea"
-              : ".agent-chat__composer-combobox textarea",
+              ? ".new-session-page__composer openclaw-composer-editor"
+              : ".agent-chat__composer-combobox openclaw-composer-editor",
           );
           if (native) {
             // A warm composer can render before native startup. Playwright evaluate
@@ -96,7 +97,7 @@ suite.define(() => {
               await protocol.detach();
             }
           }
-          await composer.fill("Check notification startup.");
+          await fillComposer(composer, "Check notification startup.");
           expect(notificationModules).toHaveLength(native ? 1 : 0);
           await page.screenshot({ path: path.join(suite.artifactDir, "ready.png") });
           if (background) {

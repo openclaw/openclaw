@@ -416,7 +416,9 @@ suite.define(() => {
             hasText: "Synthetic loading proof message 900.",
           })
           .waitFor();
-        await selectedPane.locator(".agent-chat__composer-combobox textarea").waitFor();
+        await selectedPane
+          .locator(".agent-chat__composer-combobox openclaw-composer-editor")
+          .waitFor();
         await page.locator(".sidebar-footer-bar__home").click();
         await page
           .locator("openclaw-assistant-panel .chat-thread")
@@ -441,7 +443,9 @@ suite.define(() => {
           })
           .waitFor();
         const selectedVisibleMs = Date.now() - startedAt;
-        await selectedPane.locator(".agent-chat__composer-combobox textarea").waitFor();
+        await selectedPane
+          .locator(".agent-chat__composer-combobox openclaw-composer-editor")
+          .waitFor();
         const composerVisibleMs = Date.now() - startedAt;
         const entryScripts = await page
           .locator("script[src]")
@@ -623,7 +627,9 @@ suite.define(() => {
             })
             .waitFor();
           const selectedMs = Date.now() - startedAt;
-          await selectedPane.locator(".agent-chat__composer-combobox textarea").waitFor();
+          await selectedPane
+            .locator(".agent-chat__composer-combobox openclaw-composer-editor")
+            .waitFor();
           const composerMs = Date.now() - startedAt;
           if (homeOpen) {
             await page

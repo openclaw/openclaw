@@ -1,6 +1,11 @@
 import path from "node:path";
 import { expect, it } from "vitest";
 import type { GatewaySessionRow } from "../api/types.ts";
+import {
+  accessibleChatComposer,
+  composerEnabled,
+  fillComposer,
+} from "../test-helpers/composer-editor.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
   chatSessionListResponse,
@@ -89,9 +94,7 @@ suite.define(() => {
         ok: true,
         placement: recovered.placement,
       });
-      await expect
-        .poll(() => page.getByRole("textbox", { name: "Chat composer" }).isEnabled())
-        .toBe(true);
+      await expect.poll(() => composerEnabled(accessibleChatComposer(page))).toBe(true);
       await expect.poll(() => error.count()).toBe(0);
       expect(await gateway.getRequests("sessions.dispatch")).toHaveLength(0);
       expect(await gateway.getRequests("sessions.create")).toHaveLength(0);
@@ -159,9 +162,9 @@ suite.define(() => {
 
     try {
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, session.key));
-      const composer = page.getByRole("textbox", { name: "Chat composer" });
+      const composer = accessibleChatComposer(page);
       await page.getByText("Repository worker required", { exact: true }).waitFor();
-      expect(await composer.isEnabled()).toBe(false);
+      expect(await composerEnabled(composer)).toBe(false);
       expect(await gateway.getRequests("chat.send")).toHaveLength(0);
       if (proofDir) {
         await page.screenshot({ path: path.join(proofDir, "worker-required.png") });
@@ -207,10 +210,10 @@ suite.define(() => {
         ok: true,
         placement: recovered.placement,
       });
-      await expect.poll(() => composer.isEnabled()).toBe(true);
+      await expect.poll(() => composerEnabled(composer)).toBe(true);
       expect(await gateway.getRequests("chat.send")).toHaveLength(0);
 
-      await composer.fill("Continue after repository recovery");
+      await fillComposer(composer, "Continue after repository recovery");
       await page.getByRole("button", { name: "Send message", exact: true }).click();
       const send = await gateway.waitForRequest("chat.send");
       expect(send.params).toMatchObject({

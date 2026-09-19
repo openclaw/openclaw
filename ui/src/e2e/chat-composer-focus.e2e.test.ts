@@ -1,4 +1,5 @@
 import { expect, it } from "vitest";
+import { composerValue } from "../test-helpers/composer-editor.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { openChatSidePanelType } from "./chat-side-panel.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -47,7 +48,7 @@ suite.define(() => {
       await expect
         .poll(() => picker.locator(".agent-select__label").textContent())
         .toBe("research");
-      await expect.poll(() => page.locator(".new-session-page__message").inputValue()).toBe("");
+      await expect.poll(() => composerValue(page.locator(".new-session-page__message"))).toBe("");
       await expect
         .poll(() =>
           picker
@@ -66,7 +67,7 @@ suite.define(() => {
 
       await page.keyboard.type("r");
 
-      await expect.poll(() => page.locator(".new-session-page__message").inputValue()).toBe("r");
+      await expect.poll(() => composerValue(page.locator(".new-session-page__message"))).toBe("r");
     });
   });
 
@@ -110,7 +111,7 @@ suite.define(() => {
       });
 
       expect(result).toEqual({ activeTag: "main", dropdownOpen: true });
-      await expect.poll(() => composer.inputValue()).toBe("");
+      await expect.poll(() => composerValue(composer)).toBe("");
     });
   });
 
@@ -137,8 +138,8 @@ suite.define(() => {
 
       await page.keyboard.type("x");
 
-      const composer = page.locator(".agent-chat__composer-combobox > textarea");
-      await expect.poll(() => composer.inputValue()).toBe("x");
+      const composer = page.locator(".agent-chat__composer-combobox > openclaw-composer-editor");
+      await expect.poll(() => composerValue(composer)).toBe("x");
       await expect
         .poll(() => composer.evaluate((element) => document.activeElement === element))
         .toBe(true);
@@ -155,7 +156,7 @@ suite.define(() => {
       await page.locator("main").click({ position: { x: 5, y: 5 } });
       await page.keyboard.type("x");
 
-      await expect.poll(() => composer.inputValue()).toBe("x");
+      await expect.poll(() => composerValue(composer)).toBe("x");
       await expect
         .poll(() => composer.evaluate((element) => document.activeElement === element))
         .toBe(true);
@@ -181,7 +182,7 @@ suite.define(() => {
       await page.goto(`${suite.server.baseUrl}chat`);
       await gateway.waitForRequest("chat.startup");
 
-      const composer = page.locator(".agent-chat__composer-combobox > textarea");
+      const composer = page.locator(".agent-chat__composer-combobox > openclaw-composer-editor");
       await composer.waitFor({ state: "visible" });
 
       for (const [label, selector] of [
@@ -216,7 +217,7 @@ suite.define(() => {
       await gateway.waitForRequest("chat.startup");
 
       const composer = page.locator(".agent-chat__input");
-      const textarea = composer.locator("textarea");
+      const textarea = composer.locator("openclaw-composer-editor");
       await composer.waitFor({ state: "visible" });
 
       for (const theme of ["dark", "light"] as const) {
@@ -232,7 +233,7 @@ suite.define(() => {
           return { borderColor: style.borderColor, boxShadow: style.boxShadow, width, height };
         });
 
-        await textarea.focus();
+        await textarea.locator(".cm-content").focus();
         const focused = await composer.evaluate(async (element) => {
           await Promise.all(element.getAnimations().map((animation) => animation.finished));
           const style = getComputedStyle(element);

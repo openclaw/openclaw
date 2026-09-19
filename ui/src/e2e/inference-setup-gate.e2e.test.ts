@@ -1,6 +1,7 @@
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { beforeEach, expect, it } from "vitest";
+import { composerDisabled, composerValue, fillComposer } from "../test-helpers/composer-editor.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
@@ -53,8 +54,8 @@ suite.define(() => {
       await page.getByRole("heading", { name: "No AI provider configured" }).waitFor();
 
       await expect.poll(() => page.locator(".agent-chat__composer-shell").count()).toBe(1);
-      const textarea = page.locator(".agent-chat__composer-combobox textarea");
-      await expect.poll(() => textarea.isDisabled()).toBe(false);
+      const textarea = page.locator(".agent-chat__composer-combobox openclaw-composer-editor");
+      await expect.poll(() => composerDisabled(textarea)).toBe(false);
       const welcome = page.locator(".agent-chat__welcome--setup");
       const setupAction = page.getByRole("button", { name: "Connect an AI provider", exact: true });
       await expect.poll(() => setupAction.count()).toBe(1);
@@ -64,7 +65,7 @@ suite.define(() => {
       expect(new URL(page.url()).searchParams.get("connect")).toBe("1");
       await page.goBack();
       const sendButton = page.getByRole("button", { name: "Send message", exact: true });
-      await textarea.fill("/help");
+      await fillComposer(textarea, "/help");
       await expect.poll(() => sendButton.isDisabled()).toBe(false);
       await sendButton.click();
       await page.getByText("Available Commands", { exact: true }).waitFor();
@@ -100,9 +101,9 @@ suite.define(() => {
       await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/model-providers");
       expect(new URL(page.url()).searchParams.get("connect")).toBe("1");
       await page.goBack();
-      await textarea.fill("Start a conversation.");
+      await fillComposer(textarea, "Start a conversation.");
       await expect.poll(() => sendButton.isDisabled()).toBe(true);
-      expect(await textarea.inputValue()).toBe("Start a conversation.");
+      expect(await composerValue(textarea)).toBe("Start a conversation.");
       expect(await gateway.getRequests("chat.send")).toHaveLength(0);
     } finally {
       await context.close();
@@ -124,7 +125,7 @@ suite.define(() => {
       await page.getByRole("heading", { name: "No AI provider configured" }).waitFor();
 
       await expect.poll(() => page.locator(".new-session-page__composer").count()).toBe(0);
-      await expect.poll(() => page.locator("textarea").count()).toBe(0);
+      await expect.poll(() => page.locator("openclaw-composer-editor").count()).toBe(0);
       await captureProof(page, "new-session-desktop.png");
       await page.getByRole("button", { name: "Connect an AI provider" }).click();
       await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/model-providers");

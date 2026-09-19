@@ -3,6 +3,7 @@ import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import { CONTROL_UI_BOOTSTRAP_CONFIG_PATH } from "../../../src/gateway/control-ui-bootstrap-contract.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { composerValue } from "../test-helpers/composer-editor.ts";
 import {
   controlUiSessionUrl,
   defaultControlUiFeatureMethods,
@@ -637,7 +638,9 @@ suite.define(() => {
         await composerSelect.selectOption("");
         await closeCustomizeUi(page);
         await expect
-          .poll(() => page.locator(".agent-chat__composer-combobox textarea").inputValue())
+          .poll(() =>
+            composerValue(page.locator(".agent-chat__composer-combobox openclaw-composer-editor")),
+          )
           .toBe("Send through the canonical composer");
         expect(await page.getByLabel("Fixture draft", { exact: true }).count()).toBe(0);
         await selectView(page, "Composer", "ui-fixture/composer");

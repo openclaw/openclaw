@@ -2,6 +2,7 @@ import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
 import { CHAT_TRANSCRIPT_END_THRESHOLD_PX } from "../pages/chat/scroll.ts";
+import { composerValue, fillComposer } from "../test-helpers/composer-editor.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
@@ -49,7 +50,7 @@ suite.define(() => {
       await page.getByText("Composer wheel history 49").waitFor();
       await waitForChatScrollIdle(page);
       const thread = page.locator(".chat-thread");
-      const composer = page.locator(".agent-chat__composer-combobox textarea");
+      const composer = page.locator(".agent-chat__composer-combobox openclaw-composer-editor");
       const input = page.locator(".agent-chat__input");
       const originalTop = await thread.evaluate((element) => element.scrollTop);
       const composerBounds = await input.boundingBox();
@@ -99,7 +100,8 @@ suite.define(() => {
       await expect.poll(() => progress.evaluate((element) => element.scrollTop)).toBeGreaterThan(0);
       expect(await thread.evaluate((element) => element.scrollTop)).toBe(beforeProgress);
 
-      await composer.fill(
+      await fillComposer(
+        composer,
         Array.from({ length: 30 }, (_, index) => `Draft line ${index}`).join("\n"),
       );
       await composer.evaluate((element) => {
@@ -151,9 +153,10 @@ suite.define(() => {
         .toBeLessThanOrEqual(CHAT_TRANSCRIPT_END_THRESHOLD_PX);
       await waitForChatScrollIdle(page);
 
-      const composer = page.locator(".agent-chat__composer-combobox textarea");
+      const composer = page.locator(".agent-chat__composer-combobox openclaw-composer-editor");
       for (let line = 1; line <= 8; line += 1) {
-        await composer.fill(
+        await fillComposer(
+          composer,
           Array.from({ length: line }, (_, index) => `Growing composer line ${index + 1}`).join(
             "\n",
           ),
@@ -171,13 +174,14 @@ suite.define(() => {
         });
       }
 
-      await composer.fill("Growing composer line 1");
+      await fillComposer(composer, "Growing composer line 1");
       await waitForChatScrollIdle(page);
       await scrollChatThreadToTop(page);
       const readingScrollTop = await page
         .locator(".chat-thread")
         .evaluate((element) => element.scrollTop);
-      await composer.fill(
+      await fillComposer(
+        composer,
         Array.from({ length: 8 }, (_, index) => `Reading composer line ${index + 1}`).join("\n"),
       );
       await waitForChatScrollIdle(page);
@@ -268,8 +272,8 @@ suite.define(() => {
       await gateway.deferNext("chat.send");
 
       const prompt = `pending send should scroll before ack\n${"visible now\n".repeat(6)}`;
-      const composer = page.locator(".agent-chat__composer-combobox textarea");
-      await composer.fill(prompt);
+      const composer = page.locator(".agent-chat__composer-combobox openclaw-composer-editor");
+      await fillComposer(composer, prompt);
       const draftHeight = await composer.evaluate((element) => element.clientHeight);
       if (artifactDir) {
         await writeFile(
@@ -287,7 +291,7 @@ suite.define(() => {
       const runId = requireString(params.idempotencyKey, "chat send idempotency key");
 
       await expect.poll(() => progress.getAttribute("open")).toBe("");
-      await expect.poll(() => composer.inputValue()).toBe("");
+      await expect.poll(() => composerValue(composer)).toBe("");
       await expect
         .poll(() => composer.evaluate((element) => element.clientHeight))
         .toBeLessThan(draftHeight);

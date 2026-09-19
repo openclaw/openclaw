@@ -1,4 +1,5 @@
 import { expect, it } from "vitest";
+import { composerValue, fillComposer } from "../test-helpers/composer-editor.ts";
 import { controlUiBundledSettingsStorageKey } from "../test-helpers/control-ui-e2e.ts";
 import {
   SESSION_DRAG_MIME,
@@ -260,8 +261,8 @@ suite.define(() => {
       const regularHeaderPadding = await taskHeader.evaluate(
         (header) => getComputedStyle(header).paddingLeft,
       );
-      const composer = page.locator(".agent-chat__composer-combobox textarea");
-      await composer.fill("Keep this draft while docking beside native controls");
+      const composer = page.locator(".agent-chat__composer-combobox openclaw-composer-editor");
+      await fillComposer(composer, "Keep this draft while docking beside native controls");
       const originalComposer = await composer.elementHandle();
       await page.evaluate(() => {
         document.documentElement.classList.add("openclaw-native-macos");
@@ -292,13 +293,13 @@ suite.define(() => {
       expect(
         await composer.evaluate((element, original) => element === original, originalComposer),
       ).toBe(true);
-      expect(await composer.inputValue()).toBe(
+      expect(await composerValue(composer)).toBe(
         "Keep this draft while docking beside native controls",
       );
       await originalComposer?.dispose();
       await sideHeader.getByRole("button", { name: "Close Files", exact: true }).click();
       await filesTab.waitFor({ state: "detached" });
-      await composer.fill("");
+      await fillComposer(composer, "");
       await page.evaluate(() => {
         document.documentElement.classList.remove("openclaw-native-macos");
         document.querySelector(".shell")?.classList.remove("shell--nav-collapsed");
@@ -589,13 +590,13 @@ suite.define(() => {
       await page.goto(`${suite.server.baseUrl}chat`);
       await page.getByText("Type whenever you are ready.").click();
 
-      const composer = page.locator(".agent-chat__composer-combobox textarea");
+      const composer = page.locator(".agent-chat__composer-combobox openclaw-composer-editor");
       await expect
         .poll(() => composer.evaluate((element) => element === document.activeElement))
         .toBe(false);
 
       await page.keyboard.type("first character preserved");
-      expect(await composer.inputValue()).toBe("first character preserved");
+      expect(await composerValue(composer)).toBe("first character preserved");
       await expect
         .poll(() => composer.evaluate((element) => element === document.activeElement))
         .toBe(true);
@@ -609,7 +610,7 @@ suite.define(() => {
       await page.keyboard.type("session search");
 
       expect(await paletteInput.inputValue()).toBe("session search");
-      expect(await composer.inputValue()).toBe("first character preserved");
+      expect(await composerValue(composer)).toBe("first character preserved");
     } finally {
       await suite.closeBrowserContext(context);
     }
@@ -679,16 +680,16 @@ suite.define(() => {
       await page.goto(`${suite.server.baseUrl}chat`);
 
       await page.getByText("History renders before sessions finish.").waitFor({ timeout: 10_000 });
-      const composer = page.locator(".agent-chat__composer-combobox textarea");
+      const composer = page.locator(".agent-chat__composer-combobox openclaw-composer-editor");
       await composer.waitFor({ state: "visible", timeout: 10_000 });
 
       // The chat boot hydrates the sidebar session list; that request stays
       // deferred here while the composer must remain fully usable.
       await gateway.waitForRequest("sessions.list", { match: rosterMatch });
 
-      await composer.fill("draft while sessions load");
-      expect(await composer.inputValue()).toBe("draft while sessions load");
-      await composer.fill("");
+      await fillComposer(composer, "draft while sessions load");
+      expect(await composerValue(composer)).toBe("draft while sessions load");
+      await fillComposer(composer, "");
 
       // The background hydrate must not take the shared sessions loading
       // flag, which would disable New conversation for the whole request.

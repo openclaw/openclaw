@@ -1,8 +1,8 @@
-// @vitest-environment jsdom
-
 import { expectDefined } from "@openclaw/normalization-core";
+// @vitest-environment jsdom
 import { render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { ComposerEditor } from "../../components/composer-editor.ts";
 import { resetChatViewState } from "./chat-view-state.ts";
 import { createChatProps } from "./chat-view.test-helpers.ts";
 import { renderChat } from "./chat-view.ts";
@@ -44,7 +44,9 @@ function createPane(paneId = "primary") {
   });
   render(renderChat(props), container);
   const composer = expectDefined(
-    container.querySelector<HTMLTextAreaElement>(".agent-chat__composer-combobox > textarea"),
+    container.querySelector<ComposerEditor>(
+      ".agent-chat__composer-combobox > openclaw-composer-editor",
+    ),
     "composer",
   );
   const search = () =>

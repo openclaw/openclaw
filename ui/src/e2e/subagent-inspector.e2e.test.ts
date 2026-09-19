@@ -1,5 +1,6 @@
 import { expect, it } from "vitest";
 import type { TaskSummary } from "../lib/tasks/task-summary.ts";
+import { composerValue, fillComposer } from "../test-helpers/composer-editor.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -99,8 +100,8 @@ suite.define(() => {
         },
       });
       await page.goto(`${suite.server.baseUrl}chat`);
-      const composer = page.locator(".agent-chat__composer-combobox textarea");
-      await composer.fill("Keep this parent follow-up");
+      const composer = page.locator(".agent-chat__composer-combobox openclaw-composer-editor");
+      await fillComposer(composer, "Keep this parent follow-up");
       const parentUrl = page.url();
       const notice = page.locator('[data-subagent-task-id="inspect-child"]');
       await notice.click();
@@ -246,7 +247,7 @@ suite.define(() => {
         await inspector.getByText("The release evidence is complete.", { exact: false }).count(),
       ).toBe(1);
       expect(page.url()).toBe(parentUrl);
-      expect(await composer.inputValue()).toBe("Keep this parent follow-up");
+      expect(await composerValue(composer)).toBe("Keep this parent follow-up");
       expect(await page.locator(".chat-main .chat-thread").textContent()).not.toContain(
         "The install evidence is ready.",
       );

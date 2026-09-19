@@ -1,6 +1,7 @@
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
+import { composerValue, fillComposer } from "../test-helpers/composer-editor.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
   controlUiSessionUrl,
@@ -94,8 +95,8 @@ suite.define(() => {
           await expect.poll(() => workToggle.getAttribute("aria-expanded")).toBe("false");
           expect(await earlierMessage.count()).toBe(0);
 
-          const composer = pane.locator(".agent-chat__composer-combobox textarea");
-          await composer.focus();
+          const composer = pane.locator(".agent-chat__composer-combobox openclaw-composer-editor");
+          await composer.locator(".cm-content").focus();
           const shortcut = await page.evaluate(() =>
             /Mac|iPhone|iPad|iPod/.test(navigator.platform) ? "Meta+f" : "Control+f",
           );
@@ -116,12 +117,12 @@ suite.define(() => {
             .toBe(sourceText);
 
           const followup = "Please explain that step in more detail.";
-          await composer.fill(followup);
+          await fillComposer(composer, followup);
           await pane.getByRole("button", { name: "Send message", exact: true }).click();
           const send = await gateway.waitForRequest("chat.send");
           const params = requireRecord(send.params);
           expect(params).toMatchObject({ sessionKey, message: followup, replyToId: sourceId });
-          await expect.poll(() => composer.inputValue()).toBe("");
+          await expect.poll(() => composerValue(composer)).toBe("");
           await pane
             .getByRole("button", { name: "Stop generating", exact: true })
             .waitFor({ state: "visible" });

@@ -4,6 +4,7 @@ import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Locator } from "playwright";
 import { beforeEach, expect, it } from "vitest";
 import type { ApplicationRuntime } from "../app/bootstrap.ts";
+import { composerEnabled, fillComposer } from "../test-helpers/composer-editor.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
   defaultControlUiFeatureMethods,
@@ -110,9 +111,9 @@ suite.define(() => {
           .click();
         await page.getByRole("button", { name: "Back to app" }).click();
         await page.getByText("The existing chat is ready.", { exact: true }).waitFor();
-        const composer = page.locator(".agent-chat__composer-combobox textarea");
-        await expect.poll(() => composer.isEnabled()).toBe(true);
-        await composer.fill("Continue after setup.");
+        const composer = page.locator(".agent-chat__composer-combobox openclaw-composer-editor");
+        await expect.poll(() => composerEnabled(composer)).toBe(true);
+        await fillComposer(composer, "Continue after setup.");
         await page.getByRole("button", { name: "Send message", exact: true }).click();
         const sent = await gateway.waitForRequest("chat.send");
         const params = asOptionalRecord(sent.params);

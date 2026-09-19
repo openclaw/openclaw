@@ -490,7 +490,7 @@ openclaw-chat-async-question {
   }
 
   .agent-chat__composer-shell--question-composer:has(
-    .agent-chat__composer-combobox > :is(textarea, input):focus
+    .agent-chat__composer-combobox > :is(openclaw-composer-editor, textarea, input):focus-within
   ) {
     border-color: color-mix(in srgb, var(--chat-composer-hairline) 94%, var(--text-strong));
   }
@@ -502,10 +502,14 @@ openclaw-chat-async-question {
   }
 
   .agent-chat__composer-shell--question-composer
-    .agent-chat__input:has(.agent-chat__composer-combobox > :is(textarea, input):focus),
+    .agent-chat__input:has(
+      .agent-chat__composer-combobox > :is(openclaw-composer-editor, textarea, input):focus-within
+    ),
   :root[data-theme-mode="light"]
     .agent-chat__composer-shell--question-composer
-    .agent-chat__input:has(.agent-chat__composer-combobox > :is(textarea, input):focus) {
+    .agent-chat__input:has(
+      .agent-chat__composer-combobox > :is(openclaw-composer-editor, textarea, input):focus-within
+    ) {
     border-color: transparent;
     box-shadow: none;
   }
@@ -543,7 +547,7 @@ openclaw-chat-async-question {
 
   :root[data-theme-mode="light"]
     .agent-chat__composer-shell--question-composer:has(
-      .agent-chat__composer-combobox > :is(textarea, input):focus
+      .agent-chat__composer-combobox > :is(openclaw-composer-editor, textarea, input):focus-within
     ) {
     box-shadow:
       0 0 0 1px rgb(0 0 0 / 8%),

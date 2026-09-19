@@ -1,5 +1,6 @@
 import path from "node:path";
 import { expect, it } from "vitest";
+import { composerValue, fillComposer } from "../test-helpers/composer-editor.ts";
 import {
   PICKED,
   WORKSPACE,
@@ -57,7 +58,7 @@ suite.define(() => {
       await page.getByRole("heading", { name: "Main" }).waitFor();
       const message = page.locator(".new-session-page__message");
       await message.waitFor();
-      await message.fill("/");
+      await fillComposer(message, "/");
       const slashMenu = page.locator("#chat-new-session-slash-menu-listbox");
       await pollLocatorText(slashMenu).toContain("/status");
       expect(await slashMenu.textContent()).not.toContain("/clear");
@@ -68,7 +69,7 @@ suite.define(() => {
       if (captureUiProofEnabled) {
         await page.waitForTimeout(750);
       }
-      await message.fill("fix the flaky draft test");
+      await fillComposer(message, "fix the flaky draft test");
 
       // Owner boundary: the New Session page (new-session-page.ts:228) keeps
       // the draft message on DraftSubmissionFlow until the composer submits,
@@ -77,7 +78,7 @@ suite.define(() => {
       // requests before that happens.
       expect(new URL(page.url()).pathname).toBe("/new");
       expect(new URL(page.url()).search).toBe("?agent=main");
-      expect(await message.inputValue()).toBe("fix the flaky draft test");
+      expect(await composerValue(message)).toBe("fix the flaky draft test");
       expect(
         await page
           .locator('.sidebar-recent-session[data-session-key="agent:main:existing"]')
@@ -498,7 +499,7 @@ suite.define(() => {
       await expect.poll(() => checkoutSelect.getAttribute("open")).toBeNull();
 
       const message = page.locator(".new-session-page__message");
-      await message.fill("fix the flaky test");
+      await fillComposer(message, "fix the flaky test");
       await page.getByRole("button", { name: "Start session" }).click();
 
       const createRequest = await gateway.waitForRequest("sessions.create");
@@ -602,7 +603,7 @@ suite.define(() => {
         content: [checkout.getByLabel("From", { exact: true })],
       });
       await page.keyboard.press("Escape");
-      await page.locator(".new-session-page__message").fill("inspect the project");
+      await fillComposer(page.locator(".new-session-page__message"), "inspect the project");
       await page.getByRole("button", { name: "Start session" }).click();
 
       const create = await gateway.waitForRequest("sessions.create");

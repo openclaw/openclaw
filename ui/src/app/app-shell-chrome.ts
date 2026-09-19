@@ -443,7 +443,9 @@ export class ShellChromeOwner {
       const target = event.target;
       if (
         target instanceof Element &&
-        target.closest("input, textarea, [contenteditable]:not([contenteditable='false'])")
+        target.closest(
+          "input, textarea, openclaw-composer-editor, [contenteditable]:not([contenteditable='false'])",
+        )
       ) {
         return;
       }
@@ -594,7 +596,7 @@ export class ShellChromeOwner {
     return (
       target instanceof Element &&
       target.closest(
-        "input, textarea, select, wa-select[open], wa-dropdown[open], [contenteditable], dialog, [role='dialog'], [role='menu'], [role='listbox']",
+        "input, textarea, openclaw-composer-editor, select, wa-select[open], wa-dropdown[open], [contenteditable], dialog, [role='dialog'], [role='menu'], [role='listbox']",
       ) !== null
     );
   }

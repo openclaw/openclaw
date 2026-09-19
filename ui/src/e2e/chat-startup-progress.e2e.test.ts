@@ -1,6 +1,7 @@
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { beforeEach, expect, it } from "vitest";
+import { fillComposer } from "../test-helpers/composer-editor.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { createChatFlowE2eSuite, installMockGateway } from "./chat-flow.test-support.ts";
@@ -32,8 +33,8 @@ suite.define(() => {
       await gateway.waitForRequest("chat.startup");
       await gateway.waitForRequest("exec.approval.list");
       await gateway.deferNext("chat.send");
-      const composer = page.locator(".agent-chat__composer-combobox textarea");
-      await composer.fill("Inspect this synthetic workspace");
+      const composer = page.locator(".agent-chat__composer-combobox openclaw-composer-editor");
+      await fillComposer(composer, "Inspect this synthetic workspace");
       await composer.press("Enter");
       const send = await gateway.waitForRequest("chat.send");
       const { idempotencyKey: runId, sessionKey } = send.params as {

@@ -3,6 +3,7 @@ import path from "node:path";
 import { expect, it } from "vitest";
 import type { ApplicationContext } from "../app/context.ts";
 import type { ChatQueueItem } from "../lib/chat/chat-types.ts";
+import { composerDisabled, fillComposer } from "../test-helpers/composer-editor.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
@@ -736,7 +737,7 @@ suite.define(() => {
 
     try {
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, "global"));
-      const composer = page.locator(".agent-chat__composer-combobox textarea");
+      const composer = page.locator(".agent-chat__composer-combobox openclaw-composer-editor");
       await composer.waitFor({ state: "visible", timeout: 10_000 });
 
       await gateway.setOnline(false);
@@ -752,9 +753,9 @@ suite.define(() => {
       const attachmentText = "offline attachment proof";
       const attachmentBase64 = Buffer.from(attachmentText).toString("base64");
       const attachmentDataUrl = `data:${attachmentMimeType};base64,${attachmentBase64}`;
-      const composerEnabled = await composer.isEnabled();
+      const composerEnabled = !(await composerDisabled(composer));
       expect(composerEnabled).toBe(true);
-      await composer.fill(prompt);
+      await fillComposer(composer, prompt);
       await page.locator(".agent-chat__file-input").setInputFiles({
         name: attachmentName,
         mimeType: attachmentMimeType,
@@ -887,7 +888,6 @@ suite.define(() => {
         process.stdout.write(
           `${JSON.stringify({
             proof: "offline-chat-reconnect",
-            composerEnabled,
             sendEnabled,
             waitingStateVisible: true,
             storedPrompt: storedProof.prompt,

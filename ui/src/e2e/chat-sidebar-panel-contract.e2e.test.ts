@@ -799,7 +799,7 @@ suite.define(() => {
       await page.getByRole("button", { name: "Open split view", exact: true }).click();
       const panes = page.locator("openclaw-chat-pane.chat-split-view__pane");
       await expect.poll(() => panes.count()).toBe(2);
-      await panes.last().locator(".agent-chat__composer-combobox textarea").click();
+      await panes.last().locator(".agent-chat__composer-combobox openclaw-composer-editor").click();
       await expect
         .poll(() =>
           panes.last().evaluate((pane) => (pane as HTMLElement & { active: boolean }).active),

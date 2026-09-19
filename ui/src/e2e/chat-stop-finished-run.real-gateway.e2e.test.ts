@@ -11,6 +11,11 @@ import {
 } from "../../../test/helpers/openclaw-test-instance.ts";
 import { createDeferred } from "../../../test/helpers/promise.ts";
 import type { SessionsListResult } from "../api/types.ts";
+import {
+  accessibleChatComposer,
+  composerValue,
+  fillComposer,
+} from "../test-helpers/composer-editor.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -377,8 +382,8 @@ suite.define(() => {
                 stage = "open same-origin authenticated Chat";
                 await page.goto(url.href);
                 await waitForControlUiGatewayReady(page);
-                const composer = page.getByRole("textbox", { name: "Chat composer", exact: true });
-                await composer.fill("Finish this fixture turn.");
+                const composer = accessibleChatComposer(page);
+                await fillComposer(composer, "Finish this fixture turn.");
                 await page.getByRole("button", { name: "Send message", exact: true }).click();
                 const stop = page.getByRole("button", { name: "Stop generating", exact: true });
                 await stop.waitFor({ state: "visible" });
@@ -556,7 +561,7 @@ suite.define(() => {
                   deliver();
                 }
                 await page.locator(".chat-bubble").getByText(replyText, { exact: true }).waitFor();
-                await composer.fill("Next draft");
+                await fillComposer(composer, "Next draft");
                 await page
                   .getByRole("button", { name: "Send message", exact: true })
                   .waitFor({ state: "visible" });
@@ -568,8 +573,8 @@ suite.define(() => {
                 proof.restoredSendVisible = await page
                   .getByRole("button", { name: "Send message", exact: true })
                   .isVisible();
-                proof.restoredDraftPreserved = (await composer.inputValue()) === "Next draft";
-                expect(await composer.inputValue()).toBe("Next draft");
+                proof.restoredDraftPreserved = (await composerValue(composer)) === "Next draft";
+                expect(await composerValue(composer)).toBe("Next draft");
               } finally {
                 proof.stage = stage;
                 proof.browserSockets = sockets;

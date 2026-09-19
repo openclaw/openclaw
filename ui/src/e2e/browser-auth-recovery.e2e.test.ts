@@ -5,6 +5,7 @@ import { expect, it } from "vitest";
 import { CONTROL_UI_BOOTSTRAP_CONFIG_PATH } from "../../../src/gateway/control-ui-bootstrap-contract.js";
 import { buildControlUiCspHeader } from "../../../src/gateway/control-ui-csp.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { composerValue, fillComposer } from "../test-helpers/composer-editor.ts";
 import {
   controlUiSessionUrl,
   createControlUiMockSameOriginGatewayScript,
@@ -227,9 +228,9 @@ suite.define(() => {
             meta.content = policy;
             document.head.append(meta);
           }, buildControlUiCspHeader());
-          const composer = page.locator(".agent-chat__composer-combobox textarea");
+          const composer = page.locator(".agent-chat__composer-combobox openclaw-composer-editor");
           const draft = "Keep this unsent draft while I sign in.";
-          await composer.fill(draft);
+          await fillComposer(composer, draft);
           if (serviceWorkers === "allow") {
             await page.evaluate(async () => {
               await navigator.serviceWorker.register("/sw.js?v=sign-in-proof");
@@ -257,7 +258,7 @@ suite.define(() => {
             expect(await modal.count()).toBe(1);
             expect(probes).toBe(2);
             expect(metadataRequests).toBe(2);
-            expect(await composer.inputValue()).toBe(draft);
+            expect(await composerValue(composer)).toBe(draft);
             expect(page.url()).toBe(originalUrl);
             expect(await gateway.getRequests("connect")).toHaveLength(initialConnects);
             const expectDialogToFit = async () => {
@@ -316,7 +317,7 @@ suite.define(() => {
           expect(forwardedCredentials).not.toContain(true);
           expect(await page.locator("iframe").count()).toBe(0);
           expect(context.pages()).toHaveLength(renewal === "automatic" ? 1 : 2);
-          expect(await composer.inputValue()).toBe(draft);
+          expect(await composerValue(composer)).toBe(draft);
           expect(page.url()).toBe(originalUrl);
           expect(await gateway.getRequests("connect")).toHaveLength(initialConnects);
           await page.screenshot({

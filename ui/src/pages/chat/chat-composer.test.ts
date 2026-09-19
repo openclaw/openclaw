@@ -1,12 +1,12 @@
-/* @vitest-environment jsdom */
-
 import { html, render } from "lit";
+/* @vitest-environment jsdom */
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { createApplicationTheme } from "../../app/bootstrap-theme.ts";
 import { createGatewayStoreTestStore } from "../../app/gateway-store.test-support.ts";
 import type { QuestionPrompt } from "../../app/question-prompt.ts";
 import { loadSettings, patchSettings } from "../../app/settings.ts";
+import type { ComposerEditor } from "../../components/composer-editor.ts";
 import { t } from "../../i18n/index.ts";
 import {
   createComposerProps as props,
@@ -37,7 +37,7 @@ describe("suggestion composer", () => {
         ?.disabled,
     ).toBe(true);
 
-    const textarea = view.container.querySelector<HTMLTextAreaElement>("textarea");
+    const textarea = view.container.querySelector<ComposerEditor>("openclaw-composer-editor");
     expect(textarea).not.toBeNull();
     if (!textarea) {
       return;
@@ -182,15 +182,16 @@ describe("renderChatComposer controls", () => {
 
   it("labels the message input independently of its placeholder", () => {
     const { container } = renderComposer();
-    const textarea = container.querySelector<HTMLTextAreaElement>("textarea");
+    const textarea = container.querySelector<ComposerEditor>("openclaw-composer-editor");
 
     expect(textarea?.getAttribute("aria-label")).toBe(t("chat.composer.composerInput"));
   });
 
-  it("clears a whitespace-only draft on blur so the native placeholder returns", () => {
+  it("clears a whitespace-only draft on blur so the placeholder returns", () => {
     const onDraftChange = vi.fn();
     const { container } = renderComposer({ draft: "saved", onDraftChange });
-    const textarea = container.querySelector<HTMLTextAreaElement>("textarea");
+    document.body.append(container);
+    const textarea = container.querySelector<ComposerEditor>("openclaw-composer-editor");
     if (!textarea) {
       throw new Error("expected composer textarea");
     }
@@ -200,7 +201,9 @@ describe("renderChatComposer controls", () => {
 
     expect(textarea.value).toBe("");
     expect(onDraftChange).toHaveBeenLastCalledWith("", undefined);
-    expect(textarea.matches(":placeholder-shown")).toBe(true);
+    expect(textarea.shadowRoot?.querySelector(".cm-placeholder")?.textContent).toBe(
+      textarea.placeholder,
+    );
   });
 
   it("clears a live whitespace draft when the last rendered draft was already empty", () => {
@@ -213,7 +216,8 @@ describe("renderChatComposer controls", () => {
       getDraft: () => currentDraft,
       onDraftChange,
     });
-    const textarea = container.querySelector<HTMLTextAreaElement>("textarea");
+    document.body.append(container);
+    const textarea = container.querySelector<ComposerEditor>("openclaw-composer-editor");
     if (!textarea) {
       throw new Error("expected composer textarea");
     }
@@ -224,7 +228,9 @@ describe("renderChatComposer controls", () => {
     expect(currentDraft).toBe("");
     expect(textarea.value).toBe("");
     expect(onDraftChange).toHaveBeenLastCalledWith("", undefined);
-    expect(textarea.matches(":placeholder-shown")).toBe(true);
+    expect(textarea.shadowRoot?.querySelector(".cm-placeholder")?.textContent).toBe(
+      textarea.placeholder,
+    );
   });
 
   it.each([true, false])(
@@ -242,8 +248,8 @@ describe("renderChatComposer controls", () => {
           onCancel,
         },
       });
-      const composer = container.querySelector<HTMLTextAreaElement>(
-        ".agent-chat__composer-combobox textarea",
+      const composer = container.querySelector<ComposerEditor>(
+        ".agent-chat__composer-combobox openclaw-composer-editor",
       );
 
       composer?.dispatchEvent(new MouseEvent("dblclick", { bubbles: true }));
@@ -270,7 +276,9 @@ describe("renderChatComposer controls", () => {
     expect(container.querySelector(".agent-chat__composer-status-band")?.textContent?.trim()).toBe(
       "Offline — 3 queued; messages send when the connection returns.",
     );
-    expect(container.querySelector<HTMLTextAreaElement>("textarea")?.disabled).toBe(false);
+    expect(container.querySelector<ComposerEditor>("openclaw-composer-editor")?.disabled).toBe(
+      false,
+    );
     expect(button(container, t("chat.runControls.sendMessage")).disabled).toBe(false);
 
     const empty = renderComposer({ offline: true, queuedOutboxCount: 0 });
@@ -301,7 +309,7 @@ describe("renderChatComposer controls", () => {
     const banner = container.querySelector(".agent-chat__disabled-banner");
     expect(banner?.textContent).toContain("This session is archived.");
     expect(container.querySelector(".agent-chat__input")).toBeNull();
-    expect(container.querySelector("textarea")).toBeNull();
+    expect(container.querySelector("openclaw-composer-editor")).toBeNull();
     expect(container.querySelector("openclaw-chat-question-panel")).toBeNull();
     expect(container.querySelector(".agent-chat__typing-indicator--outside")).toBeNull();
     banner?.querySelector<HTMLButtonElement>("button")?.click();
@@ -322,7 +330,9 @@ describe("renderChatComposer controls", () => {
 
     expect(container.querySelector(".agent-chat__disabled-banner")).toBeNull();
     expect(container.querySelector(".agent-chat__input")).not.toBeNull();
-    expect(container.querySelector<HTMLTextAreaElement>("textarea")?.disabled).toBe(true);
+    expect(container.querySelector<ComposerEditor>("openclaw-composer-editor")?.disabled).toBe(
+      true,
+    );
   });
 
   it("shows the disabled reason even when draft text hides the placeholder", () => {
@@ -338,7 +348,9 @@ describe("renderChatComposer controls", () => {
     expect(container.querySelector(".agent-chat__composer-status-band")?.textContent).toContain(
       reason,
     );
-    expect(container.querySelector<HTMLTextAreaElement>("textarea")?.disabled).toBe(true);
+    expect(container.querySelector<ComposerEditor>("openclaw-composer-editor")?.disabled).toBe(
+      true,
+    );
   });
 
   it("shows placement work as an attached busy status while composing is disabled", () => {
@@ -350,7 +362,9 @@ describe("renderChatComposer controls", () => {
       draft: "Keep this draft",
     });
 
-    expect(container.querySelector<HTMLTextAreaElement>("textarea")?.disabled).toBe(true);
+    expect(container.querySelector<ComposerEditor>("openclaw-composer-editor")?.disabled).toBe(
+      true,
+    );
     expect(container.querySelector(".agent-chat__input")?.getAttribute("aria-busy")).toBe("true");
     const status = container.querySelector('.agent-chat__composer-underlaps[data-tone="info"]');
     expect(status?.textContent).toContain("Preparing workspace…");
@@ -949,7 +963,7 @@ describe("renderChatComposer status", () => {
     const draw = () => render(renderChatComposer(composerProps), container);
 
     draw();
-    const initialTextarea = container.querySelector<HTMLTextAreaElement>("textarea")!;
+    const initialTextarea = container.querySelector<ComposerEditor>("openclaw-composer-editor")!;
     initialTextarea.focus();
     expect(document.activeElement).toBe(initialTextarea);
     initialTextarea.dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true }));
@@ -976,7 +990,7 @@ describe("renderChatComposer status", () => {
     panel.props.onCollapsedChange(true);
     draw();
     await Promise.resolve();
-    let textarea = container.querySelector<HTMLTextAreaElement>("textarea")!;
+    let textarea = container.querySelector<ComposerEditor>("openclaw-composer-editor")!;
     expect(textarea.value).toBe("Host updated this draft while the question was open");
     expect(document.activeElement).toBe(textarea);
 
@@ -990,7 +1004,7 @@ describe("renderChatComposer status", () => {
     prompt.status = "answered";
     draw();
     await Promise.resolve();
-    textarea = container.querySelector<HTMLTextAreaElement>("textarea")!;
+    textarea = container.querySelector<ComposerEditor>("openclaw-composer-editor")!;
     expect(textarea.value).toBe("Host updated this draft while the question was open");
     expect(document.activeElement).toBe(textarea);
     expect(container.querySelector("openclaw-chat-question-panel")).toBeNull();

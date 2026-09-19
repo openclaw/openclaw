@@ -1,6 +1,7 @@
 import path from "node:path";
 import { expect, type Page } from "playwright/test";
 import { beforeEach, it } from "vitest";
+import { composerDisabled, composerValue, fillComposer } from "../test-helpers/composer-editor.ts";
 // Control UI E2E tests cover suggestion queue and solo-dormancy behavior.
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
@@ -100,12 +101,12 @@ suite.define(() => {
     });
 
     await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
-    const composer = page.locator(".agent-chat__composer-combobox textarea");
+    const composer = page.locator(".agent-chat__composer-combobox openclaw-composer-editor");
     const modelTrigger = page.locator(".chat-controls__model-trigger");
     const typingRow = page.locator('[data-virtual-row-key="presence:typing"]');
     const typingIndicator = typingRow.locator(".agent-chat__typing-indicator");
     await gateway.waitForRequest("session.suggestions.list");
-    await expect(composer).toBeEnabled();
+    await expect.poll(() => composerDisabled(composer)).toBe(false);
     await modelTrigger.waitFor();
     const idleModelBox = await modelTrigger.boundingBox();
     if (idleModelBox === null) {
@@ -148,7 +149,7 @@ suite.define(() => {
       },
     });
     await expect(typingIndicator).toHaveCount(0);
-    await composer.fill("Try the focused change");
+    await fillComposer(composer, "Try the focused change");
     const typing = await gateway.waitForRequest("session.typing");
     expect(typing.params).toMatchObject({
       sessionId: "session-main",
@@ -194,15 +195,15 @@ suite.define(() => {
 
     await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
     await gateway.waitForRequest("session.suggestions.list");
-    const composer = page.locator(".agent-chat__composer-combobox textarea");
-    await expect(composer).toBeEnabled();
-    await composer.fill("Keep this /sta");
+    const composer = page.locator(".agent-chat__composer-combobox openclaw-composer-editor");
+    await expect.poll(() => composerDisabled(composer)).toBe(false);
+    await fillComposer(composer, "Keep this /sta");
     await gateway.waitForRequest("commands.list");
     await expect(page.getByRole("option", { name: /\/status/u })).toHaveCount(0);
-    await composer.fill("/bt");
+    await fillComposer(composer, "/bt");
     await page.getByRole("option").filter({ hasText: "/btw" }).click();
     expect(await gateway.getRequests("session.suggestions.add")).toHaveLength(0);
-    await expect(composer).toHaveValue("/btw ");
+    await expect.poll(() => composerValue(composer)).toBe("/btw ");
     expect(await gateway.getRequests("chat.send")).toHaveLength(0);
     await context.close();
   });
@@ -236,7 +237,11 @@ suite.define(() => {
       const typingRow = page.locator('[data-virtual-row-key="presence:typing"]');
       const previewBubble = typingRow.locator(".agent-chat__typing-preview-text");
       await gateway.waitForRequest("session.suggestions.list");
-      await expect(page.locator(".agent-chat__composer-combobox textarea")).toBeEnabled();
+      await expect
+        .poll(() =>
+          composerDisabled(page.locator(".agent-chat__composer-combobox openclaw-composer-editor")),
+        )
+        .toBe(false);
 
       const ownerTyping = (preview?: string) =>
         gateway.emitGatewayEvent("session.typing", {
@@ -455,13 +460,13 @@ suite.define(() => {
     ]);
     await page.getByRole("button", { name: "Edit Alice's suggestion" }).click();
     await gateway.waitForRequest("session.suggestions.resolve");
-    const composer = page.locator(".agent-chat__composer-combobox textarea");
-    await expect(composer).toHaveValue("Please edit this first");
-    await composer.fill("A newer owner draft");
+    const composer = page.locator(".agent-chat__composer-combobox openclaw-composer-editor");
+    await expect.poll(() => composerValue(composer)).toBe("Please edit this first");
+    await fillComposer(composer, "A newer owner draft");
     await gateway.resolveDeferred("session.suggestions.resolve", {
       suggestion: { ...suggestion, state: "accepted" },
     });
-    await expect(composer).toHaveValue("A newer owner draft");
+    await expect.poll(() => composerValue(composer)).toBe("A newer owner draft");
     await screenshot(page, "owner-edit.png");
     await context.close();
   });
@@ -482,7 +487,11 @@ suite.define(() => {
     });
 
     await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
-    await expect(page.locator(".agent-chat__composer-combobox textarea")).toBeDisabled();
+    await expect
+      .poll(() =>
+        composerDisabled(page.locator(".agent-chat__composer-combobox openclaw-composer-editor")),
+      )
+      .toBe(true);
     await expect(page.getByRole("button", { name: "Suggest message" })).toHaveCount(0);
     await expect(page.locator(".agent-chat__typing-indicator")).toHaveCount(0);
     expect(await gateway.getRequests("session.suggestions.list")).toEqual([]);
@@ -501,7 +510,11 @@ suite.define(() => {
     });
 
     await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
-    await expect(page.locator(".agent-chat__composer-combobox textarea")).toBeDisabled();
+    await expect
+      .poll(() =>
+        composerDisabled(page.locator(".agent-chat__composer-combobox openclaw-composer-editor")),
+      )
+      .toBe(true);
     await expect(page.getByRole("button", { name: "Suggest message" })).toHaveCount(0);
     await context.close();
   });

@@ -1,5 +1,6 @@
 import { writeFile } from "node:fs/promises";
 import { expect, it } from "vitest";
+import { composerValue, fillComposer } from "../test-helpers/composer-editor.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import {
   createControlUiE2eContextOptions,
@@ -27,16 +28,20 @@ suite.define(() => {
         await expect.poll(() => cells.count()).toBe(2);
         const left = cells.first();
         const right = cells.last();
-        const leftComposer = left.locator(".agent-chat__composer-combobox textarea");
-        const rightComposer = right.locator(".agent-chat__composer-combobox textarea");
+        const leftComposer = left.locator(
+          ".agent-chat__composer-combobox openclaw-composer-editor",
+        );
+        const rightComposer = right.locator(
+          ".agent-chat__composer-combobox openclaw-composer-editor",
+        );
         await leftComposer.waitFor({ state: "visible" });
         await gateway.setOnline(false);
         for (const message of ["QA queued B", "QA queued C"]) {
-          await leftComposer.fill(message);
+          await fillComposer(leftComposer, message);
           await leftComposer.press("Enter");
           await right.locator(".chat-queue__text", { hasText: message }).waitFor();
         }
-        await rightComposer.fill("QA separate composer draft");
+        await fillComposer(rightComposer, "QA separate composer draft");
         await left.locator(".chat-queue__item", { hasText: "QA queued B" }).dblclick();
         const leftEdit = left.locator(".chat-queue__edit-input");
         await leftEdit.waitFor({ state: "visible" });
@@ -73,7 +78,7 @@ suite.define(() => {
         const receipt = {
           scenario,
           editedText: await rightEdit.inputValue(),
-          composerDraft: await rightComposer.inputValue(),
+          composerDraft: await composerValue(rightComposer),
           queueRows: await right.locator(".chat-queue__item").count(),
           openEdits: await page.locator(".chat-queue__edit-input").count(),
           errors: await right.locator(".chat-error").allTextContents(),

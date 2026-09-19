@@ -48,7 +48,7 @@ suite.define(() => {
         await page.goto(suite.server.baseUrl);
         await expect.poll(() => new URL(page.url()).pathname).toBe("/chat/main");
         const activeComposer = page.locator(
-          'openclaw-chat-pane[aria-hidden="false"] .agent-chat__input textarea',
+          'openclaw-chat-pane[aria-hidden="false"] .agent-chat__input openclaw-composer-editor',
         );
         await activeComposer.waitFor({ state: "visible" });
         expect(await activeComposer.count()).toBe(1);
@@ -88,7 +88,9 @@ suite.define(() => {
       await rememberSession(page, key);
 
       await page.goto(suite.server.baseUrl);
-      await page.locator(".agent-chat__input textarea").waitFor({ state: "visible" });
+      await page
+        .locator(".agent-chat__input openclaw-composer-editor")
+        .waitFor({ state: "visible" });
       expect((await gateway.waitForRequest("chat.startup")).params).toMatchObject({
         sessionKey: key,
       });
@@ -137,7 +139,7 @@ suite.define(() => {
             .evaluate((element) => getComputedStyle(element).textWrap),
         ).toBe("balance");
         expect(await page.locator("openclaw-chat-page").count()).toBe(0);
-        expect(await page.locator(".agent-chat__input textarea").count()).toBe(0);
+        expect(await page.locator(".agent-chat__input openclaw-composer-editor").count()).toBe(0);
         expect(await page.locator("openclaw-toast-host .app-toast").count()).toBe(0);
         expect(await gateway.getRequests("chat.startup")).toHaveLength(0);
         expect(await gateway.getRequests("sessions.resolve")).toEqual([
@@ -152,7 +154,9 @@ suite.define(() => {
 
         await currentSession.click();
         await expect.poll(() => new URL(page.url()).pathname).toBe("/chat/main");
-        await page.locator(".agent-chat__input textarea").waitFor({ state: "visible" });
+        await page
+          .locator(".agent-chat__input openclaw-composer-editor")
+          .waitFor({ state: "visible" });
 
         await page.goto(`${suite.server.baseUrl}${attemptedPath.slice(1)}`);
         await page.getByRole("button", { name: "View sessions" }).click();

@@ -56,7 +56,7 @@ suite.define(() => {
             'openclaw-chat-pane[aria-hidden="false"] .chat-controls__permission-picker',
           );
           const composer = page.locator(
-            'openclaw-chat-pane[aria-hidden="false"] .agent-chat__composer-combobox textarea',
+            'openclaw-chat-pane[aria-hidden="false"] .agent-chat__composer-combobox openclaw-composer-editor',
           );
           const retainedTrigger = expectDefined(await trigger.elementHandle(), "picker trigger");
           const protocol = await context.newCDPSession(page);

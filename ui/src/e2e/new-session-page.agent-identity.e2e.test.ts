@@ -2,6 +2,7 @@ import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import type { BrowserContextOptions, Locator, Page } from "playwright";
 import { expect, it } from "vitest";
+import { composerValue, fillComposer } from "../test-helpers/composer-editor.ts";
 import {
   createNewSessionPageE2eSuite,
   installMockGateway,
@@ -134,8 +135,8 @@ suite.define(() => {
     try {
       await page.goto(`${suite.server.baseUrl}new?agent=main`);
       await gateway.waitForRequest("agent.identity.get");
-      const composer = page.locator(".new-session-page__composer textarea");
-      await composer.fill("$");
+      const composer = page.locator(".new-session-page__composer openclaw-composer-editor");
+      await fillComposer(composer, "$");
       await composer.press("End");
       await composer.dispatchEvent("select");
       await gateway.waitForRequest("commands.list");
@@ -159,7 +160,7 @@ suite.define(() => {
       await expect
         .poll(() => page.getByRole("listbox", { name: "Skill references" }).count())
         .toBe(0);
-      await expect.poll(() => composer.inputValue()).toBe("$");
+      await expect.poll(() => composerValue(composer)).toBe("$");
     } finally {
       await context.close();
     }

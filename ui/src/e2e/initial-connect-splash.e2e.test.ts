@@ -212,7 +212,7 @@ describeControlUiE2e("Control UI initial connect splash E2E", () => {
     expect(loginModuleRequests).toEqual([]);
     await captureProof(page, "02-connected-content", [
       page.locator(".sidebar-brand"),
-      page.locator(".agent-chat__composer-combobox textarea"),
+      page.locator(".agent-chat__composer-combobox openclaw-composer-editor"),
     ]);
   });
 
@@ -281,7 +281,7 @@ describeControlUiE2e("Control UI initial connect splash E2E", () => {
       expect(await loadingState.count()).toBe(0);
       await captureProof(page, "04-loaded-chat-content", [
         page.locator(".sidebar-brand"),
-        page.locator(".agent-chat__composer-combobox textarea"),
+        page.locator(".agent-chat__composer-combobox openclaw-composer-editor"),
       ]);
     } finally {
       releaseChatModule();

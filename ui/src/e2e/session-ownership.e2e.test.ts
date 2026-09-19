@@ -1,6 +1,7 @@
 import type { Locator, Page } from "playwright";
 import { expect as expectBrowser } from "playwright/test";
 import { afterEach, expect, it } from "vitest";
+import { fillComposer } from "../test-helpers/composer-editor.ts";
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite, tooltipTitleText } from "./control-ui-e2e-suite.test-support.ts";
 import { openNewSessionPlusMenu, replaceGatewayClient } from "./new-session-page.test-support.ts";
@@ -589,7 +590,7 @@ suite.define(() => {
     await captureUiProof(suite, draftToggle, "02-create-draft-available.png", [draftToggle]);
     await draftToggle.check();
     await expectBrowser(draftToggle).toBeChecked();
-    await currentPage.locator(".new-session-page__message").fill("work privately first");
+    await fillComposer(currentPage.locator(".new-session-page__message"), "work privately first");
     await captureUiProof(suite, draftToggle, "03-create-draft-selected.png", [
       currentPage.locator(".new-session-page__message"),
     ]);

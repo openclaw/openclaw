@@ -1,6 +1,7 @@
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { beforeEach, expect, it } from "vitest";
+import { fillComposer } from "../test-helpers/composer-editor.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -50,9 +51,10 @@ suite.define(() => {
 
           let runId: string | undefined;
           if (flow === "completed") {
-            await page
-              .locator(".agent-chat__composer-combobox textarea")
-              .fill("Send the summary PDF");
+            await fillComposer(
+              page.locator(".agent-chat__composer-combobox openclaw-composer-editor"),
+              "Send the summary PDF",
+            );
             await page.getByRole("button", { name: "Send message" }).click();
             const request = await gateway.waitForRequest("chat.send");
             expect(request.params).toMatchObject({

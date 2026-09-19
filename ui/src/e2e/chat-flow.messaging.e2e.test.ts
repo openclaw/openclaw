@@ -1,6 +1,8 @@
 import path from "node:path";
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
+import type { ComposerEditor } from "../components/composer-editor.ts";
+import { composerValue, fillComposer } from "../test-helpers/composer-editor.ts";
 import {
   captureUiProofEnabled,
   chatSessionListResponse,
@@ -40,8 +42,8 @@ suite.define(() => {
       sessionUrl.hash = "#pane";
 
       await page.goto(sessionUrl.href);
-      const composer = page.locator(".agent-chat__composer-combobox textarea");
-      await expect.poll(() => composer.inputValue()).toBe(draft ?? "");
+      const composer = page.locator(".agent-chat__composer-combobox openclaw-composer-editor");
+      await expect.poll(() => composerValue(composer)).toBe(draft ?? "");
       await expect.poll(() => new URL(page.url()).search).toBe("?panel=details");
       await expect.poll(() => new URL(page.url()).hash).toBe("#pane");
     });
@@ -62,7 +64,10 @@ suite.define(() => {
       await page.getByText("Ready for an end-to-end GUI check.").waitFor({ timeout: 10_000 });
 
       const prompt = "verify the control UI e2e harness";
-      await page.locator(".agent-chat__composer-combobox textarea").fill(prompt);
+      await fillComposer(
+        page.locator(".agent-chat__composer-combobox openclaw-composer-editor"),
+        prompt,
+      );
       await page.getByRole("button", { name: "Send message" }).click();
 
       const sendRequest = await gateway.waitForRequest("chat.send");
@@ -80,7 +85,10 @@ suite.define(() => {
         .waitFor({ timeout: 10_000 });
 
       const spacedPairCommand = "/ pair qr";
-      await page.locator(".agent-chat__composer-combobox textarea").fill(spacedPairCommand);
+      await fillComposer(
+        page.locator(".agent-chat__composer-combobox openclaw-composer-editor"),
+        spacedPairCommand,
+      );
       await page.getByRole("button", { name: "Send message" }).click();
 
       const commandRequests = await waitForRequests(gateway, "chat.send", 2);
@@ -97,7 +105,10 @@ suite.define(() => {
       });
       const prompt = "Keep my browser-local prompt synchronized.";
       await page.goto(`${suite.server.baseUrl}chat`);
-      await page.locator(".agent-chat__composer-combobox textarea").fill(prompt);
+      await fillComposer(
+        page.locator(".agent-chat__composer-combobox openclaw-composer-editor"),
+        prompt,
+      );
       await page.getByRole("button", { name: "Send message" }).click();
 
       const request = await gateway.waitForRequest("chat.send");
@@ -192,7 +203,10 @@ suite.define(() => {
         sessionKey: "agent:main:main",
       });
 
-      await page.locator(".agent-chat__composer-combobox textarea").fill(currentPrompt);
+      await fillComposer(
+        page.locator(".agent-chat__composer-combobox openclaw-composer-editor"),
+        currentPrompt,
+      );
       await page.getByRole("button", { name: "Send message" }).click();
       const sendRequest = await gateway.waitForRequest("chat.send");
       const currentRunId = requireString(
@@ -600,7 +614,10 @@ suite.define(() => {
         );
       await page.goto(`${suite.server.baseUrl}chat`);
       await gateway.deferNext("chat.send");
-      await page.locator(".agent-chat__composer-combobox textarea").fill(prompt);
+      await fillComposer(
+        page.locator(".agent-chat__composer-combobox openclaw-composer-editor"),
+        prompt,
+      );
       await page.getByRole("button", { name: "Send message" }).click();
 
       const sendRequest = await gateway.waitForRequest("chat.send");
@@ -649,8 +666,8 @@ suite.define(() => {
     await withChatPage(async (page) => {
       const gateway = await installMockGateway(page, { historyMessages: [] });
       await page.goto(`${suite.server.baseUrl}chat`);
-      const composer = page.locator(".agent-chat__composer-combobox textarea");
-      await composer.fill("reconcile the terminal event ordering");
+      const composer = page.locator(".agent-chat__composer-combobox openclaw-composer-editor");
+      await fillComposer(composer, "reconcile the terminal event ordering");
       await page.getByRole("button", { name: "Send message" }).click();
       const send = await gateway.waitForRequest("chat.send");
       const runId = requireString(
@@ -764,9 +781,9 @@ suite.define(() => {
     await withChatPage(async (page) => {
       const gateway = await installMockGateway(page);
       await page.goto(`${suite.server.baseUrl}chat`);
-      const composer = page.locator(".agent-chat__composer-combobox textarea");
+      const composer = page.locator(".agent-chat__composer-combobox openclaw-composer-editor");
       await composer.waitFor({ state: "visible", timeout: 10_000 });
-      await composer.fill("wait");
+      await fillComposer(composer, "wait");
       await page.getByRole("button", { name: "Send message" }).click();
 
       const sendRequest = await gateway.waitForRequest("chat.send");
@@ -795,7 +812,7 @@ suite.define(() => {
         },
       });
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, channelSessionKey));
-      const composer = page.locator(".agent-chat__composer-combobox textarea");
+      const composer = page.locator(".agent-chat__composer-combobox openclaw-composer-editor");
       await composer.waitFor({ state: "visible", timeout: 10_000 });
       await gateway.waitForRequest("sessions.list");
       const workingIndicator = page.locator(".chat-working-indicator");
@@ -822,7 +839,7 @@ suite.define(() => {
       });
       await page.locator(".chat-attachment-thumb--browser-annotation").waitFor();
 
-      await composer.fill("/stop");
+      await fillComposer(composer, "/stop");
       await page.getByRole("option", { name: /\/stop/ }).waitFor();
       await composer.press("Enter");
 
@@ -857,7 +874,7 @@ suite.define(() => {
       await expectRequestCountStable(gateway, "chat.abort", 0);
       await expectRequestCountStable(gateway, "chat.send", 0);
       await expect.poll(() => page.getByRole("listbox").count()).toBe(0);
-      expect(await composer.inputValue()).toBe("");
+      expect(await composerValue(composer)).toBe("");
       if (captureUiProofEnabled) {
         const channelStopProofDir = path.join(suite.artifactDir, "channel-stop");
         await page.screenshot({
@@ -872,10 +889,10 @@ suite.define(() => {
     await withChatPage(async (page) => {
       const gateway = await installMockGateway(page);
       await page.goto(`${suite.server.baseUrl}chat`);
-      const composer = page.locator(".agent-chat__composer-combobox textarea");
+      const composer = page.locator(".agent-chat__composer-combobox openclaw-composer-editor");
       await composer.waitFor({ state: "visible", timeout: 10_000 });
 
-      await composer.fill("default enter send");
+      await fillComposer(composer, "default enter send");
       await composer.press("Enter");
       const defaultRequest = await gateway.waitForRequest("chat.send");
       const defaultParams = requireRecord(defaultRequest.params);
@@ -900,18 +917,18 @@ suite.define(() => {
       await composer.waitFor({ state: "visible", timeout: 10_000 });
       expect(await composer.getAttribute("aria-keyshortcuts")).toBe("Control+Enter Meta+Enter");
 
-      await composer.fill("plain enter stays in the draft");
+      await fillComposer(composer, "plain enter stays in the draft");
       await composer.press("Enter");
-      expect(await composer.inputValue()).toContain("\n");
+      expect(await composerValue(composer)).toContain("\n");
       expect(await gateway.getRequests("chat.send")).toHaveLength(0);
 
-      await composer.fill("composition must not send");
+      await fillComposer(composer, "composition must not send");
       await composer.dispatchEvent("compositionstart");
       await composer.press("Control+Enter");
       await composer.dispatchEvent("compositionend");
       expect(await gateway.getRequests("chat.send")).toHaveLength(0);
 
-      await composer.fill("modifier send");
+      await fillComposer(composer, "modifier send");
       await composer.press("Meta+Enter");
       const modifierRequest = await gateway.waitForRequest("chat.send");
       expect(requireRecord(modifierRequest.params).message).toBe("modifier send");
@@ -949,9 +966,10 @@ suite.define(() => {
       await gateway.waitForRequest("sessions.list");
       await page.getByRole("button", { name: "Stop generating" }).waitFor({ timeout: 10_000 });
 
-      await page
-        .locator(".agent-chat__composer-combobox textarea")
-        .fill("/steer use the smaller fix");
+      await fillComposer(
+        page.locator(".agent-chat__composer-combobox openclaw-composer-editor"),
+        "/steer use the smaller fix",
+      );
       await page.getByRole("button", { name: "Send message" }).click();
 
       const steerRequest = await gateway.waitForRequest("chat.send");
@@ -974,7 +992,10 @@ suite.define(() => {
       await page.goto(`${suite.server.baseUrl}chat`);
 
       const prompt = "send progress through the message tool and then finish";
-      await page.locator(".agent-chat__composer-combobox textarea").fill(prompt);
+      await fillComposer(
+        page.locator(".agent-chat__composer-combobox openclaw-composer-editor"),
+        prompt,
+      );
       await page.getByRole("button", { name: "Send message" }).click();
 
       const sendRequest = await gateway.waitForRequest("chat.send");
@@ -1026,14 +1047,14 @@ suite.define(() => {
       await page.getByText("Ready for stale replay check.").waitFor({ timeout: 10_000 });
 
       const prompt = "submitted message";
-      const composer = page.locator(".agent-chat__composer-combobox textarea");
-      await composer.fill(prompt);
+      const composer = page.locator(".agent-chat__composer-combobox openclaw-composer-editor");
+      await fillComposer(composer, prompt);
       await page.getByRole("button", { name: "Send message" }).click();
       await gateway.waitForRequest("chat.send");
-      expect(await composer.inputValue()).toBe("");
+      expect(await composerValue(composer)).toBe("");
 
       const afterReplay = await composer.evaluate((element, submitted) => {
-        const textarea = element as HTMLTextAreaElement;
+        const textarea = element as ComposerEditor;
         textarea.value = submitted;
         textarea.dispatchEvent(
           new InputEvent("input", {
@@ -1046,10 +1067,10 @@ suite.define(() => {
       }, prompt);
 
       expect(afterReplay).toBe("");
-      expect(await composer.inputValue()).toBe("");
+      expect(await composerValue(composer)).toBe("");
 
       await composer.pressSequentially(prompt);
-      expect(await composer.inputValue()).toBe(prompt);
+      expect(await composerValue(composer)).toBe(prompt);
     });
   });
 });

@@ -1,4 +1,5 @@
 import { expect, it } from "vitest";
+import { composerValue, fillComposer } from "../test-helpers/composer-editor.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { openChatSidePanelType } from "./chat-side-panel.test-support.ts";
 import {
@@ -48,17 +49,17 @@ suite.define(() => {
     await suite.withPage({ viewport: { width: 1440, height: 900 } }, async ({ page }) => {
       const gateway = await installMockGateway(page);
       await page.goto(`${suite.server.baseUrl}chat`);
-      const mainInput = page.locator(".agent-chat__composer-shell textarea");
+      const mainInput = page.locator(".agent-chat__composer-shell openclaw-composer-editor");
       const input = page.getByRole("textbox", { name: "Ask in side chat", exact: true });
       expect(await input.isVisible()).toBe(false);
       for (const draft of ["", "Keep this side draft"]) {
-        await mainInput.fill(command);
+        await fillComposer(mainInput, command);
         await mainInput.press("Enter");
         await expect.poll(() => input.isVisible()).toBe(true);
         await expect
           .poll(() => input.evaluate((element) => document.activeElement === element))
           .toBe(true);
-        expect(await mainInput.inputValue()).toBe("");
+        expect(await composerValue(mainInput)).toBe("");
         expect(await input.inputValue()).toBe(draft);
         await page.keyboard.type("Keep this side draft");
       }
@@ -80,13 +81,13 @@ suite.define(() => {
         try {
           await installMockGateway(page);
           await page.goto(`${suite.server.baseUrl}chat`);
-          const mainInput = page.locator(".agent-chat__composer-shell textarea");
-          await mainInput.fill(command);
+          const mainInput = page.locator(".agent-chat__composer-shell openclaw-composer-editor");
+          await fillComposer(mainInput, command);
           await mainInput.press("Enter");
           await held.request;
           const sideInput = page.getByRole("textbox", { name: "Ask in side chat", exact: true });
           expect(await sideInput.count()).toBe(0);
-          expect(await mainInput.inputValue()).toBe("");
+          expect(await composerValue(mainInput)).toBe("");
           await mainInput.click();
           held.release();
           await sideInput.waitFor();
@@ -94,7 +95,7 @@ suite.define(() => {
             true,
           );
           await page.keyboard.type("Keep typing here");
-          expect(await mainInput.inputValue()).toBe("Keep typing here");
+          expect(await composerValue(mainInput)).toBe("Keep typing here");
           expect(await sideInput.inputValue()).toBe("");
           await page.getByRole("button", { name: "Close Side chat", exact: true }).click();
           await openChatSidePanelType(page, "Side chat");
@@ -116,8 +117,8 @@ suite.define(() => {
         try {
           await installMockGateway(page);
           await page.goto(`${suite.server.baseUrl}chat`);
-          const mainInput = page.locator(".agent-chat__composer-shell textarea");
-          await mainInput.fill("/btw");
+          const mainInput = page.locator(".agent-chat__composer-shell openclaw-composer-editor");
+          await fillComposer(mainInput, "/btw");
           await mainInput.press("Enter");
           await held.request;
           const sideInput = page.getByRole("textbox", { name: "Ask in side chat", exact: true });
@@ -154,14 +155,14 @@ suite.define(() => {
     await suite.withPage({ viewport: { width: 1440, height: 900 } }, async ({ page }) => {
       await installMockGateway(page);
       await page.goto(`${suite.server.baseUrl}chat`);
-      const mainInput = page.locator(".agent-chat__composer-shell textarea");
-      await mainInput.fill("/bt");
+      const mainInput = page.locator(".agent-chat__composer-shell openclaw-composer-editor");
+      await fillComposer(mainInput, "/bt");
       await page.getByRole("option").filter({ hasText: "/btw" }).click();
       const input = page.getByRole("textbox", { name: "Ask in side chat", exact: true });
       await expect
         .poll(() => input.evaluate((element) => document.activeElement === element))
         .toBe(true);
-      expect(await mainInput.inputValue()).toBe("");
+      expect(await composerValue(mainInput)).toBe("");
     });
   });
 
@@ -181,8 +182,8 @@ suite.define(() => {
             .poll(() => input.evaluate((element) => document.activeElement === element))
             .toBe(true);
         }
-        const mainInput = page.locator(".agent-chat__composer-shell textarea");
-        await mainInput.fill("/btw what is this?");
+        const mainInput = page.locator(".agent-chat__composer-shell openclaw-composer-editor");
+        await fillComposer(mainInput, "/btw what is this?");
         await mainInput.press("Enter");
         const request = await gateway.waitForRequest("sessions.companion.ask");
         expect(request.params).toMatchObject({ question: "what is this?" });
@@ -195,7 +196,7 @@ suite.define(() => {
         await expect
           .poll(() => input.evaluate((element) => document.activeElement === element))
           .toBe(true);
-        expect(await mainInput.inputValue()).toBe("");
+        expect(await composerValue(mainInput)).toBe("");
         await page.keyboard.type("Follow up");
         expect(await input.inputValue()).toBe("Follow up");
         expect(await gateway.getRequests("chat.send")).toHaveLength(0);
@@ -214,19 +215,23 @@ suite.define(() => {
         await page.getByRole("button", { name: "Open split view", exact: true }).click();
         const panes = page.locator("openclaw-chat-pane.chat-split-view__pane");
         await expect.poll(() => panes.count()).toBe(2);
-        const firstInput = panes.first().locator(".agent-chat__composer-shell textarea");
-        const secondInput = panes.last().locator(".agent-chat__composer-shell textarea");
-        await firstInput.fill("/btw what is this?");
+        const firstInput = panes
+          .first()
+          .locator(".agent-chat__composer-shell openclaw-composer-editor");
+        const secondInput = panes
+          .last()
+          .locator(".agent-chat__composer-shell openclaw-composer-editor");
+        await fillComposer(firstInput, "/btw what is this?");
         await firstInput.press("Enter");
         await gateway.waitForRequest("sessions.companion.ask");
         const sideInput = panes
           .first()
           .getByRole("textbox", { name: "Ask in side chat", exact: true });
         await expect.poll(() => sideInput.isDisabled()).toBe(true);
-        await secondInput.fill("Keep typing here");
+        await fillComposer(secondInput, "Keep typing here");
         const foregroundInput = returnToFirstPane ? firstInput : secondInput;
         if (returnToFirstPane) {
-          await firstInput.fill("Keep typing here");
+          await fillComposer(firstInput, "Keep typing here");
         }
         await gateway.resolveDeferred("sessions.companion.ask", {
           answer: "A side conversation.",
@@ -238,7 +243,7 @@ suite.define(() => {
           await foregroundInput.evaluate((element) => document.activeElement === element),
         ).toBe(true);
         await page.keyboard.type(".");
-        expect(await foregroundInput.inputValue()).toBe("Keep typing here.");
+        expect(await composerValue(foregroundInput)).toBe("Keep typing here.");
         expect(await sideInput.inputValue()).toBe("");
       });
     },
@@ -269,9 +274,9 @@ suite.define(() => {
         },
       });
       await page.goto(`${suite.server.baseUrl}chat`);
-      const mainInput = page.locator(".agent-chat__composer-shell textarea");
+      const mainInput = page.locator(".agent-chat__composer-shell openclaw-composer-editor");
       const sideInput = page.locator(".chat-session-rail__input");
-      await mainInput.fill("/btw what is this?");
+      await fillComposer(mainInput, "/btw what is this?");
       await mainInput.press("Enter");
       const request = await gateway.waitForRequest("sessions.companion.ask");
       expect(request.params).toMatchObject({ agentId: "main", sessionKey: "global" });
@@ -298,7 +303,7 @@ suite.define(() => {
       });
       expect(await mainInput.evaluate((element) => document.activeElement === element)).toBe(true);
       await page.keyboard.type("New agent draft");
-      expect(await mainInput.inputValue()).toBe("New agent draft");
+      expect(await composerValue(mainInput)).toBe("New agent draft");
       expect(await sideInput.inputValue()).toBe("");
       expect(await page.getByText("Old agent answer", { exact: true }).count()).toBe(0);
     });
@@ -326,8 +331,8 @@ suite.define(() => {
           ],
         });
         await page.goto(`${suite.server.baseUrl}chat`);
-        const mainInput = page.locator(".agent-chat__composer-shell textarea");
-        await mainInput.fill("/btw what is this?");
+        const mainInput = page.locator(".agent-chat__composer-shell openclaw-composer-editor");
+        await fillComposer(mainInput, "/btw what is this?");
         await mainInput.press("Enter");
         await gateway.waitForRequest("sessions.companion.ask");
         const sideInput = page.locator(".chat-session-rail__input");
@@ -345,13 +350,13 @@ suite.define(() => {
           await mainInput.click();
         } else if (intent === "history") {
           await page.keyboard.press("ArrowUp");
-          expect(await mainInput.inputValue()).toBe("/btw what is this?");
+          expect(await composerValue(mainInput)).toBe("/btw what is this?");
           await page.keyboard.press("ArrowDown");
-          expect(await mainInput.inputValue()).toBe("");
+          expect(await composerValue(mainInput)).toBe("");
         } else if (intent === "command palette") {
           await page.keyboard.press("ControlOrMeta+k");
           foregroundInput = page.getByRole("combobox", { name: "Search chats and commands…" });
-          await foregroundInput.fill("Keep typing here");
+          await fillComposer(foregroundInput, "Keep typing here");
         } else if (intent === "sidebar menu" || intent === "sidebar menu before mount") {
           await page
             .getByRole("button", { name: "Open session menu: Sidebar focus", exact: true })
@@ -360,7 +365,7 @@ suite.define(() => {
           await openSessionMenuSubmenu(page, "Icon & color");
           await page.getByRole("button", { name: "Custom icon…", exact: true }).click();
           foregroundInput = page.getByRole("textbox", { name: "Custom icon", exact: true });
-          await foregroundInput.fill("Keep typing here");
+          await fillComposer(foregroundInput, "Keep typing here");
         } else {
           await page.keyboard.type("Keep typing here");
           if (intent === "cleared draft") {
@@ -379,7 +384,7 @@ suite.define(() => {
           await foregroundInput.evaluate((element) => document.activeElement === element),
         ).toBe(true);
         await page.keyboard.type(".");
-        expect(await foregroundInput.inputValue()).toBe(
+        expect(await composerValue(foregroundInput)).toBe(
           intent === "cleared draft" || intent === "click" || intent === "history"
             ? "."
             : "Keep typing here.",
@@ -403,15 +408,15 @@ suite.define(() => {
       await expect
         .poll(() => input.evaluate((element) => document.activeElement === element))
         .toBe(true);
-      const mainInput = page.locator(".agent-chat__composer-shell textarea");
-      await mainInput.fill("Keep typing here");
+      const mainInput = page.locator(".agent-chat__composer-shell openclaw-composer-editor");
+      await fillComposer(mainInput, "Keep typing here");
       await gateway.resolveDeferred("sessions.companion.state", {
         exchanges: [{ question: "What changed?", answer: "The introduction is ready.", ts: 1 }],
       });
       await page.getByText("The introduction is ready.", { exact: true }).waitFor();
       expect(await mainInput.evaluate((element) => document.activeElement === element)).toBe(true);
       await page.keyboard.type(".");
-      expect(await mainInput.inputValue()).toBe("Keep typing here.");
+      expect(await composerValue(mainInput)).toBe("Keep typing here.");
     });
   });
 });

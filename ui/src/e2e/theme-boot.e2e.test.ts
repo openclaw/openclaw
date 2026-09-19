@@ -209,7 +209,9 @@ suite.define(() => {
               releaseAppScripts();
               if (saved) {
                 await gateway.waitForRequest("users.prefs.get");
-                await page.locator(".agent-chat__composer-combobox textarea").waitFor();
+                await page
+                  .locator(".agent-chat__composer-combobox openclaw-composer-editor")
+                  .waitFor();
                 await settleThemeFrames(page);
                 await gateway.resolveDeferred("users.prefs.get", profileResponse);
               }
@@ -237,7 +239,7 @@ suite.define(() => {
             });
             await assertThemeFrames(page, expectedAppearance);
             await page.goBack();
-            await page.locator(".agent-chat__composer-combobox textarea").waitFor();
+            await page.locator(".agent-chat__composer-combobox openclaw-composer-editor").waitFor();
             await assertThemeFrames(page, expectedAppearance);
             const newThread = page.locator("openclaw-app-sidebar .sidebar-brand__new-thread");
             await page

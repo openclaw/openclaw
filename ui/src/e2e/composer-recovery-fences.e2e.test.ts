@@ -1,5 +1,6 @@
 import { expect, it } from "vitest";
 import type { ChatQueueItem } from "../lib/chat/chat-types.ts";
+import { composerValue, fillComposer } from "../test-helpers/composer-editor.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
   waitForControlUiGatewayReady,
@@ -216,7 +217,10 @@ suite.define(() => {
         await page.goto(`${suite.server.baseUrl}chat/main`);
         await waitForControlUiGatewayReady(page);
         await page.getByText("Split draft owner ready.", { exact: true }).waitFor();
-        await page.locator(".agent-chat__composer-combobox textarea").fill("split seed");
+        await fillComposer(
+          page.locator(".agent-chat__composer-combobox openclaw-composer-editor"),
+          "split seed",
+        );
         await page.getByRole("button", { name: "Send message", exact: true }).click();
         const seed = await gateway.waitForRequest("chat.send");
         await gateway.emitChatFinal({
@@ -232,13 +236,13 @@ suite.define(() => {
         await expect.poll(() => panes.count()).toBe(2);
         const left = panes.nth(0);
         const right = panes.nth(1);
-        const composer = left.locator(".agent-chat__composer-combobox textarea");
+        const composer = left.locator(".agent-chat__composer-combobox openclaw-composer-editor");
         const attachmentBytes = Buffer.from("independent queued attachment bytes");
         await gateway.setOnline(false);
         await waitForControlUiGatewayReconnecting(page);
         const messages = ["split tail", "split attachment", "split remove"];
         for (const [index, message] of messages.entries()) {
-          await composer.fill(message);
+          await fillComposer(composer, message);
           if (index === 1) {
             await left.locator(".agent-chat__file-input").setInputFiles({
               name: "split.txt",
@@ -248,7 +252,7 @@ suite.define(() => {
             await expect.poll(() => left.locator(".chat-attachment-thumb").count()).toBe(1);
           }
           await left.getByRole("button", { name: "Send message", exact: true }).click();
-          await expect.poll(() => composer.inputValue()).toBe("");
+          await expect.poll(() => composerValue(composer)).toBe("");
           await expect.poll(() => right.locator(".chat-queue__item").count()).toBe(index + 1);
         }
         await right
@@ -267,14 +271,14 @@ suite.define(() => {
             .toEqual(["split attachment", "split tail"]);
         }
         const draft = "independent split composer draft";
-        await composer.fill(draft);
+        await fillComposer(composer, draft);
         await waitForCommittedComposerDraft(
           page,
           "chat:v3:agent:main:main\u0000agent:main",
           draft,
           0,
         );
-        expect(await composer.inputValue()).toBe(draft);
+        expect(await composerValue(composer)).toBe(draft);
         await expectRequestCountStable(gateway, "chat.send", 1);
         const original = await page.evaluate(() =>
           Object.keys(sessionStorage)
@@ -345,7 +349,7 @@ suite.define(() => {
           await expect.poll(() => pane.locator(".chat-queue__item").count()).toBe(0);
         }
         await expectRequestCountStable(gateway, "chat.send", 3);
-        expect(await composer.inputValue()).toBe(draft);
+        expect(await composerValue(composer)).toBe(draft);
         await waitForCommittedComposerDraft(
           page,
           "chat:v3:agent:main:main\u0000agent:main",

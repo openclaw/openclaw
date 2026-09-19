@@ -1,3 +1,4 @@
+import "../../components/composer-editor.ts";
 // The non-isolated runner resets modules between files but preserves customElements.
 // A dedicated jsdom context keeps the registered pane class on this file's module graph.
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -16,6 +17,7 @@ import type { SessionCapability } from "../../lib/sessions/index.ts";
 import { ChatPaneBase } from "./chat-pane-base.ts";
 import {
   createInitializationContext,
+  createSuggestionPane,
   createTestChatPane,
   type TestChatPane,
 } from "./chat-pane.test-support.ts";
@@ -47,7 +49,7 @@ describe("chat pane composer prefill attention", () => {
     });
     const input = document.body.appendChild(document.createElement("div"));
     input.className = "agent-chat__input";
-    const textarea = input.appendChild(document.createElement("textarea"));
+    const textarea = input.appendChild(document.createElement("openclaw-composer-editor"));
     vi.spyOn(pane, "querySelector").mockReturnValue(textarea);
     const lifecycle = pane as TestChatPane & {
       draft?: string;
@@ -126,14 +128,6 @@ describe("chat pane first-turn attachment lifecycle", () => {
 });
 
 describe("chat pane session suggestion lifecycle", () => {
-  function createSuggestionPane(client: GatewayBrowserClient) {
-    const fixture = createTestChatPane({ client, sessions: {} as SessionCapability });
-    fixture.pane.presencePayload = {
-      presence: [{ user: { id: "owner" } }, { user: { id: "alice" } }],
-    };
-    return fixture;
-  }
-
   it("does not let a stale add completion clear a newer session operation", async () => {
     const first = createDeferred<{ suggestion: SessionSuggestion }>();
     const second = createDeferred<{ suggestion: SessionSuggestion }>();

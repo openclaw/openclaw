@@ -1,5 +1,6 @@
 import path from "node:path";
 import { expect, it } from "vitest";
+import { fillComposer } from "../test-helpers/composer-editor.ts";
 import { tooltipTitleText } from "./control-ui-e2e-suite.test-support.ts";
 import {
   SESSION_LIST_DEFAULTS,
@@ -296,7 +297,7 @@ suite.define(() => {
         .evaluateAll((items) => items.map((item) => item.getAttribute("data-value")));
       expect(recentValues).toEqual(["recent:/a/openclaw", "recent:/b/openclaw"]);
       await second.click();
-      await page.locator(".new-session-page__message").fill("continue in work checkout");
+      await fillComposer(page.locator(".new-session-page__message"), "continue in work checkout");
       await page.getByRole("button", { name: "Start session" }).click();
       const create = await gateway.waitForRequest("sessions.create");
       expect(create.params).toMatchObject({
@@ -379,7 +380,10 @@ suite.define(() => {
         .toBe("aws");
       await page.keyboard.press("Escape");
       await pollLocatorText(trigger.locator(".new-session-page__trigger-label")).toBe("home");
-      await page.locator(".new-session-page__message").fill("clone and inspect this project");
+      await fillComposer(
+        page.locator(".new-session-page__message"),
+        "clone and inspect this project",
+      );
       await expect
         .poll(() => page.getByRole("button", { name: "Start session" }).isDisabled())
         .toBe(true);

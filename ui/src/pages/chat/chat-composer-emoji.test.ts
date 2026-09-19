@@ -1,7 +1,7 @@
 import { nothing, render } from "lit";
 import MarkdownIt from "markdown-it";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
-import { TextareaTokenAnchor } from "../../components/textarea-token-anchor.ts";
+import { ComposerTokenAnchor } from "../../components/composer-token-anchor.ts";
 /* @vitest-environment jsdom */
 import { NewSessionComposerTextareaController } from "../new-session/composer-controller.ts";
 import { renderNewSessionComposer } from "../new-session/composer.ts";
@@ -10,36 +10,14 @@ import { renderChatComposer } from "./components/chat-composer.ts";
 import { installChatComposerPickerDismissal } from "./components/chat-picker-overlay.ts";
 
 const controllers: NewSessionComposerTextareaController[] = [];
-const originalExecCommand = Object.getOwnPropertyDescriptor(document, "execCommand");
 afterEach(async () => {
-  if (originalExecCommand) {
-    Object.defineProperty(document, "execCommand", originalExecCommand);
-  } else {
-    Reflect.deleteProperty(document, "execCommand");
-  }
   controllers.splice(0).forEach((controller) => controller.disconnect());
   await resetComposerFixture();
 });
 beforeEach(() => {
   onTestFinished(installChatComposerPickerDismissal(document));
   // jsdom has no layout/ResizeObserver; real-browser tests cover placement and cleanup.
-  vi.spyOn(TextareaTokenAnchor.prototype, "update").mockImplementation(() => {});
-  // jsdom has no editing engine. Exercise the browser command's input contract;
-  // native undo itself is covered by the real-browser composer suite.
-  Object.defineProperty(document, "execCommand", {
-    configurable: true,
-    value: vi.fn((_command: string, _ui: boolean, text: string) => {
-      const textarea = document.activeElement;
-      if (!(textarea instanceof HTMLTextAreaElement)) {
-        throw new Error("Expected focused composer");
-      }
-      textarea.setRangeText(text, textarea.selectionStart, textarea.selectionEnd, "end");
-      textarea.dispatchEvent(
-        new InputEvent("input", { bubbles: true, inputType: "insertText", data: text }),
-      );
-      return true;
-    }),
-  });
+  vi.spyOn(ComposerTokenAnchor.prototype, "update").mockImplementation(() => {});
 });
 
 function fixture(kind: "chat" | "new", locked = false, requiresModifier = false) {
@@ -89,7 +67,7 @@ function fixture(kind: "chat" | "new", locked = false, requiresModifier = false)
     );
   }
   redraw();
-  const textarea = container.querySelector("textarea")!;
+  const textarea = container.querySelector("openclaw-composer-editor")!;
   textarea.focus();
   const input = (value: string, caret = value.length) => {
     textarea.value = value;

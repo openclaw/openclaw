@@ -1,5 +1,6 @@
 import { expect, it } from "vitest";
 import type { ChatPaneElement } from "../pages/chat/route-draft-focus-handoff.ts";
+import { fillComposer } from "../test-helpers/composer-editor.ts";
 import { waitForControlUiRoute } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiSessionRow as sessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
 import {
@@ -44,14 +45,14 @@ suite.define(() => {
       const homeRow = page.locator(".nav-item--home");
       const secondRow = page.locator(`[data-session-key="${secondKey}"]`);
       const composer = page.locator(
-        'openclaw-chat-pane[aria-hidden="false"] .agent-chat__composer-combobox > textarea',
+        'openclaw-chat-pane[aria-hidden="false"] .agent-chat__composer-combobox > openclaw-composer-editor',
       );
       await homeRow.waitFor({ state: "visible", timeout: 10_000 });
       await secondRow.waitFor({ state: "visible" });
       await composer.waitFor({ state: "visible" });
       await captureUiProof(suite, page, "draft-indicator-before.png");
 
-      await composer.fill("Keep this unsent");
+      await fillComposer(composer, "Keep this unsent");
       const activity = homeRow.getByRole("img", { name: "Active run" });
       const draft = homeRow.getByRole("img", { name: "Unsent draft" });
       await activity.waitFor();
@@ -83,9 +84,11 @@ suite.define(() => {
         )
         .toEqual([mainKey]);
 
-      await waitForSettledFormControls(page, [{ locator: composer, value: "Keep this unsent" }]);
-      await composer.fill("");
-      await waitForSettledFormControls(page, [{ locator: composer, value: "" }]);
+      await waitForSettledFormControls(page, [
+        { locator: composer, kind: "composer", value: "Keep this unsent" },
+      ]);
+      await fillComposer(composer, "");
+      await waitForSettledFormControls(page, [{ locator: composer, kind: "composer", value: "" }]);
       await expect.poll(() => draft.count()).toBe(0);
       await secondRow.getByRole("link").click();
       await expect.poll(() => new URL(page.url()).pathname).toBe(controlUiSessionPath(secondKey));

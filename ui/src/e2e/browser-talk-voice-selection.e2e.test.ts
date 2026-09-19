@@ -1,5 +1,6 @@
 import path from "node:path";
 import { expect, it } from "vitest";
+import { fillComposer } from "../test-helpers/composer-editor.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import {
   dispatchOpenAiTalkEvent,
@@ -92,8 +93,8 @@ suite.define(() => {
         .toContain("Keep working while I change your voice.");
 
       await gateway.deferNext("chat.send");
-      const textarea = page.locator(".agent-chat__input textarea");
-      await textarea.fill("Prepare the report");
+      const textarea = page.locator(".agent-chat__input openclaw-composer-editor");
+      await fillComposer(textarea, "Prepare the report");
       await textarea.press("Enter");
       const send = await gateway.waitForRequest("chat.send");
       const runId =

@@ -2,6 +2,7 @@ import { mkdir, rename } from "node:fs/promises";
 import path from "node:path";
 import { chromium, webkit, type Browser } from "playwright";
 import { expect, it } from "vitest";
+import { composerValue, fillComposer } from "../test-helpers/composer-editor.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
 import {
   installMockGateway,
@@ -34,8 +35,8 @@ it("replaces a silent suspended socket when its tab returns to the foreground", 
     await page.goto(`${server.baseUrl}chat?wake=1#latest`);
     await waitForControlUiGatewayReady(page);
     await expect.poll(() => gateway.getSocketCount()).toBe(1);
-    const composer = page.locator(".agent-chat__composer-combobox textarea");
-    await composer.fill("keep this draft across Safari suspension");
+    const composer = page.locator(".agent-chat__composer-combobox openclaw-composer-editor");
+    await fillComposer(composer, "keep this draft across Safari suspension");
     const expectedUrl = page.url();
     if (proofDir) {
       await page.screenshot({ path: path.join(proofDir, "1-before-suspension.png") });
@@ -59,7 +60,9 @@ it("replaces a silent suspended socket when its tab returns to the foreground", 
 
     await expect.poll(() => gateway.getSocketCount()).toBe(2);
     await waitForControlUiGatewayReady(page);
-    await expect.poll(() => composer.inputValue()).toBe("keep this draft across Safari suspension");
+    await expect
+      .poll(() => composerValue(composer))
+      .toBe("keep this draft across Safari suspension");
     expect(page.url()).toBe(expectedUrl);
     if (proofDir) {
       await page.screenshot({ path: path.join(proofDir, "2-after-recovery.png") });

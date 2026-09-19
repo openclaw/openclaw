@@ -1,4 +1,5 @@
 import { expect, it } from "vitest";
+import { fillComposer } from "../test-helpers/composer-editor.ts";
 import {
   createNewSessionPageE2eSuite,
   installMockGateway,
@@ -21,7 +22,7 @@ suite.define(() => {
       });
       await page.goto(`${suite.server.baseUrl}new`);
       const message = page.locator(".new-session-page__message");
-      await message.fill("repair the sidebar naming");
+      await fillComposer(message, "repair the sidebar naming");
       await gateway.waitForRequest("sessions.title.prepare");
       expect(
         await page.getByText("When you pause, draft text is sent", { exact: false }).count(),
@@ -37,9 +38,10 @@ suite.define(() => {
         (url) => url.pathname === controlUiSessionPath("agent:main:prepared-title"),
       );
       await page.clock.install();
-      await page
-        .locator(".agent-chat__composer-combobox textarea")
-        .fill("another topic in the ongoing chat");
+      await fillComposer(
+        page.locator(".agent-chat__composer-combobox openclaw-composer-editor"),
+        "another topic in the ongoing chat",
+      );
       await page.clock.runFor(2_000);
       expect(await gateway.getRequests("sessions.title.prepare")).toHaveLength(1);
     });
@@ -55,7 +57,7 @@ suite.define(() => {
       await page.clock.install();
       const message = page.locator(".new-session-page__message");
       await message.dispatchEvent("compositionstart");
-      await message.fill("compose a draft through an input method editor");
+      await fillComposer(message, "compose a draft through an input method editor");
       await page.clock.runFor(2_000);
       expect(await gateway.getRequests("sessions.title.prepare")).toHaveLength(0);
       await message.blur();
@@ -79,7 +81,7 @@ suite.define(() => {
       });
       await page.goto(`${suite.server.baseUrl}new`);
       const message = page.locator(".new-session-page__message");
-      await message.fill("prepare a draft name without blocking");
+      await fillComposer(message, "prepare a draft name without blocking");
       await gateway.waitForRequest("sessions.title.prepare");
       await page.getByRole("button", { name: "Start session" }).click();
       const created = await gateway.waitForRequest("sessions.create");
@@ -92,7 +94,7 @@ suite.define(() => {
       await page.goto(`${suite.server.baseUrl}new`);
       await page.getByRole("switch", { name: "Incognito", exact: true }).click();
       await page.clock.install();
-      await message.fill("this incognito draft must not be sent");
+      await fillComposer(message, "this incognito draft must not be sent");
       await page.clock.runFor(2_000);
       expect(await gateway.getRequests("sessions.title.prepare")).toHaveLength(0);
     });

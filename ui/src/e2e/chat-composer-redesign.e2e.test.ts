@@ -1,7 +1,8 @@
 // Control UI E2E tests cover the redesigned chat composer.
 import { writeFile } from "node:fs/promises";
 import { expect, it } from "vitest";
-import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
+import { composerDisabled, composerValue, fillComposer } from "../test-helpers/composer-editor.ts";
+import { createRequestedControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
   takeControlUiElementScreenshot,
   takeControlUiViewportScreenshot,
@@ -32,10 +33,7 @@ suite.define(() => {
   ] as const)(
     "keeps $reason model availability honest in the composer and picker",
     async ({ reason, blocked, message }) => {
-      const artifactRoot = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
-      const artifactDir = artifactRoot
-        ? createControlUiE2eArtifactDir("chat-composer-redesign", artifactRoot)
-        : undefined;
+      const artifactDir = createRequestedControlUiE2eArtifactDir("chat-composer-redesign");
       await suite.withPage(
         {
           viewport: { width: 1280, height: 900 },
@@ -55,12 +53,12 @@ suite.define(() => {
           });
           await page.goto(`${suite.server.baseUrl}chat`);
           await gateway.waitForRequest("chat.startup");
-          const textarea = page.locator(".agent-chat__composer-combobox textarea");
+          const textarea = page.locator(".agent-chat__composer-combobox openclaw-composer-editor");
           const sendButton = page.getByRole("button", { name: "Send message", exact: true });
-          await expect.poll(() => textarea.isDisabled()).toBe(false);
-          await textarea.fill("Send while availability recovers");
+          await expect.poll(() => composerDisabled(textarea)).toBe(false);
+          await fillComposer(textarea, "Send while availability recovers");
           await expect.poll(() => sendButton.isDisabled()).toBe(blocked);
-          expect(await textarea.inputValue()).toBe("Send while availability recovers");
+          expect(await composerValue(textarea)).toBe("Send while availability recovers");
           const statusBand = page.locator(".agent-chat__composer-status-band");
           const setupBanner = page.locator(".agent-chat__disabled-banner");
           await expect.poll(() => statusBand.count()).toBe(0);
@@ -142,22 +140,19 @@ suite.define(() => {
       });
       await expect.poll(() => page.locator(".chat-error").textContent()).toContain(message);
       await expect.poll(() => page.locator(".agent-chat__composer-status-band").count()).toBe(0);
-      const textarea = page.locator(".agent-chat__input textarea");
-      await expect.poll(() => textarea.isDisabled()).toBe(false);
-      await textarea.fill("Try the message again.");
+      const textarea = page.locator(".agent-chat__input openclaw-composer-editor");
+      await expect.poll(() => composerDisabled(textarea)).toBe(false);
+      await fillComposer(textarea, "Try the message again.");
       await expect
         .poll(() => page.getByRole("button", { name: "Send message", exact: true }).isDisabled())
         .toBe(true);
-      expect(await textarea.inputValue()).toBe("Try the message again.");
+      expect(await composerValue(textarea)).toBe("Try the message again.");
       expect(await gateway.getRequests("chat.send")).toHaveLength(0);
     });
   });
 
   it("keeps the loading model picker beside the microphone", async () => {
-    const artifactRoot = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
-    const artifactDir = artifactRoot
-      ? createControlUiE2eArtifactDir("chat-composer-redesign", artifactRoot)
-      : undefined;
+    const artifactDir = createRequestedControlUiE2eArtifactDir("chat-composer-redesign");
     await suite.withPage({ viewport: { width: 1280, height: 900 } }, async ({ page }) => {
       const gateway = await installMockGateway(page, {
         deferredMethods: ["chat.startup", "models.list"],
@@ -289,10 +284,7 @@ suite.define(() => {
   });
 
   it("keeps the model in the bottom bar, session settings in the header, and holds send beside the microphone in every input state", async () => {
-    const artifactRoot = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
-    const artifactDir = artifactRoot
-      ? createControlUiE2eArtifactDir("chat-composer-redesign", artifactRoot)
-      : undefined;
+    const artifactDir = createRequestedControlUiE2eArtifactDir("chat-composer-redesign");
     const pageOptions = {
       viewport: { width: 1920, height: 1080 },
       ...(artifactDir
@@ -394,7 +386,7 @@ suite.define(() => {
       const contextUsage = composer.locator(".context-ring");
       const permission = composer.locator('[data-chat-permission-select="true"]');
       const permissionIcon = permission.locator(".chat-controls__permission-icon svg");
-      const textarea = composer.locator("textarea");
+      const textarea = composer.locator("openclaw-composer-editor");
       const attach = composer.locator(
         'button.agent-chat__input-btn--attach[aria-label="Add attachment"]',
       );
@@ -741,7 +733,7 @@ suite.define(() => {
       await settings.click();
       await expect.poll(() => viewDropdown.getAttribute("open")).toBeNull();
 
-      await textarea.fill("Send this message");
+      await fillComposer(textarea, "Send this message");
       await expect
         .poll(() => page.getByRole("button", { name: "Send message" }).isVisible())
         .toBe(true);
@@ -823,7 +815,7 @@ suite.define(() => {
         ),
       ).toBeLessThanOrEqual(24);
       expect(Math.abs(activeSplitViewBox.y - activeChatContentBox.y)).toBeLessThanOrEqual(24);
-      await textarea.fill("Steer this queued follow-up");
+      await fillComposer(textarea, "Steer this queued follow-up");
       const followUp = page.getByRole("button", {
         name: /^(Queue message|Steer into the active run)$/,
       });
@@ -832,7 +824,7 @@ suite.define(() => {
       await page.setViewportSize({ width: 393, height: 852 });
       await captureMobileState("mobile-composer-active-follow-up.png");
 
-      await textarea.fill("");
+      await fillComposer(textarea, "");
       const stop = page.getByRole("button", { name: "Stop generating" });
       await expect.poll(() => stop.isVisible()).toBe(true);
       // Stop is deliberately left out of the brand fill: commit and interrupt
@@ -859,7 +851,7 @@ suite.define(() => {
       });
       await expect.poll(() => stop.count()).toBe(0);
 
-      await textarea.fill("");
+      await fillComposer(textarea, "");
       await expect.poll(() => mobileDictation.isVisible()).toBe(true);
       const mobileTalk = page.getByRole("button", { name: "Tap to talk" });
       await expect.poll(() => mobileTalk.isVisible()).toBe(true);
@@ -975,13 +967,13 @@ suite.define(() => {
         .poll(() => composerShell.getByRole("menuitem", { name: "File", exact: true }).isVisible())
         .toBe(true);
       await page.keyboard.press("Escape");
-      await textarea.fill("Keep camera access in the attachment menu");
+      await fillComposer(textarea, "Keep camera access in the attachment menu");
       await expect.poll(() => camera.count()).toBe(0);
       await expect
         .poll(() => page.getByRole("button", { name: "Send message" }).isVisible())
         .toBe(true);
       await captureMobileState("mobile-composer-send-ready.png");
-      await textarea.fill("");
+      await fillComposer(textarea, "");
       await expect.poll(() => camera.count()).toBe(0);
       await mobileModelSettings.click();
       await expect

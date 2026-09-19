@@ -2,6 +2,7 @@ import { Buffer } from "node:buffer";
 import path from "node:path";
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
+import { composerValue, fillComposer } from "../test-helpers/composer-editor.ts";
 import { createControlUiE2eContextOptions } from "./control-ui-e2e-suite.test-support.ts";
 import {
   controlUiSessionPath,
@@ -196,7 +197,7 @@ suite.define(() => {
       await firstPage.evaluate(() => {
         (globalThis as DurableWriteTeardownGlobal).durableWriteTeardown.blockNextRead = true;
       });
-      await firstPage.locator(".new-session-page__message").fill(text);
+      await fillComposer(firstPage.locator(".new-session-page__message"), text);
       await expect
         .poll(() =>
           firstPage.evaluate(
@@ -233,7 +234,7 @@ suite.define(() => {
       await installMockGateway(restoredPage);
       await restoredPage.goto(`${suite.server.baseUrl}new`);
       await expect
-        .poll(() => restoredPage.locator(".new-session-page__message").inputValue())
+        .poll(() => composerValue(restoredPage.locator(".new-session-page__message")))
         .toBe(text);
       await restoredPage.getByRole("button", { name: `Open image ${fileName}` }).waitFor();
     } finally {
@@ -252,19 +253,19 @@ suite.define(() => {
       });
       await page.goto(`${suite.server.baseUrl}new?agent=main`);
       const message = page.locator(".new-session-page__message");
-      await message.fill("main route draft");
+      await fillComposer(message, "main route draft");
       await navigateInApp(page, "new-session", "?agent=writer");
-      await expect.poll(() => message.inputValue()).toBe("");
-      await message.fill("writer route draft");
+      await expect.poll(() => composerValue(message)).toBe("");
+      await fillComposer(message, "writer route draft");
       await navigateInApp(page, "new-session", "?agent=main");
-      await expect.poll(() => message.inputValue()).toBe("main route draft");
+      await expect.poll(() => composerValue(message)).toBe("main route draft");
 
       await page.getByRole("switch", { name: "Incognito" }).click();
       await waitForCommittedNewSessionDraft(page, null, 0);
       await page.reload();
-      await expect.poll(() => message.inputValue()).toBe("");
+      await expect.poll(() => composerValue(message)).toBe("");
       await navigateInApp(page, "new-session", "?agent=writer");
-      await expect.poll(() => message.inputValue()).toBe("writer route draft");
+      await expect.poll(() => composerValue(message)).toBe("writer route draft");
       await page.getByRole("button", { name: "Start session" }).click();
       await page.waitForURL(
         (url) => url.pathname === controlUiSessionPath("agent:main:retired-draft"),
@@ -274,7 +275,7 @@ suite.define(() => {
       await installMockGateway(restoredPage);
       await restoredPage.goto(`${suite.server.baseUrl}new?agent=writer`);
       await expect
-        .poll(() => restoredPage.locator(".new-session-page__message").inputValue())
+        .poll(() => composerValue(restoredPage.locator(".new-session-page__message")))
         .toBe("");
     } finally {
       await context.close();

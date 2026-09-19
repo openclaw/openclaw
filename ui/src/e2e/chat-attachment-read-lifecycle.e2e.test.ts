@@ -2,11 +2,13 @@ import { mkdir, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
+import type { ComposerEditor } from "../components/composer-editor.ts";
 import { storedChatOutboxScopeKey } from "../lib/chat/outbox-store.ts";
 import {
   resolveUiConversationIdentity,
   type UiSessionDefaultsHost,
 } from "../lib/sessions/session-key.ts";
+import { composerValue, fillComposer } from "../test-helpers/composer-editor.ts";
 import {
   controlUiSessionUrl,
   installMockGateway,
@@ -131,9 +133,9 @@ suite.define(() => {
       const proofDir = path.join(suite.artifactDir, scenario);
       await mkdir(proofDir, { recursive: true });
       await page.goto(`${suite.server.baseUrl}chat`);
-      const composer = page.locator(".agent-chat__composer-combobox textarea");
+      const composer = page.locator(".agent-chat__composer-combobox openclaw-composer-editor");
       const send = page.getByRole("button", { name: "Send message", exact: true });
-      await composer.fill(currentText);
+      await fillComposer(composer, currentText);
       const selectFile = () =>
         page.locator(".agent-chat__file-input").setInputFiles({
           name: "late-selection.png",
@@ -182,7 +184,7 @@ suite.define(() => {
             .waitFor();
         } else {
           if (scenario === "rewind-newer-draft") {
-            await composer.fill(newerText);
+            await fillComposer(composer, newerText);
           } else if (scenario === "rewind-newer-file") {
             await selectFile();
             await expect.poll(() => send.isDisabled()).toBe(true);
@@ -199,7 +201,7 @@ suite.define(() => {
           }
         }
         if (scenario !== "rewind-newer-file") {
-          await expect.poll(() => composer.inputValue()).toBe(expectedText);
+          await expect.poll(() => composerValue(composer)).toBe(expectedText);
         }
         await page.screenshot({ path: path.join(proofDir, "restored-before-release.png") });
       }
@@ -209,7 +211,7 @@ suite.define(() => {
       await expect.poll(() => send.isEnabled()).toBe(true);
       const observed = {
         scenario,
-        composerText: await composer.inputValue(),
+        composerText: await composerValue(composer),
         composerFiles: await page
           .locator(".chat-attachment-thumb img")
           .evaluateAll((images) => images.map((image) => image.getAttribute("alt"))),
@@ -283,11 +285,11 @@ suite.define(() => {
         page.on("pageerror", (error) => pageErrors.push(error.message));
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, "main"));
         const pane = page.locator('openclaw-chat-pane[aria-hidden="false"]');
-        const composer = pane.locator(".agent-chat__composer-combobox textarea");
+        const composer = pane.locator(".agent-chat__composer-combobox openclaw-composer-editor");
         await pane.getByText("Ready for the held Enter check.", { exact: true }).waitFor();
         await gateway.waitForRequest("chat.startup");
         const initialText = "Finish the initial synthetic turn.";
-        await composer.fill(initialText);
+        await fillComposer(composer, initialText);
         await composer.press("Enter");
         const initial = await gateway.waitForRequest("chat.send");
         expect(initial.params).toMatchObject({
@@ -302,7 +304,7 @@ suite.define(() => {
         const followUpText = attachment ? "" : "Submit this follow-up once per key press.";
         const fileName = "held-enter.txt";
         const fileContents = "Synthetic held Enter attachment contents.";
-        await composer.fill(followUpText);
+        await fillComposer(composer, followUpText);
         if (attachment) {
           await pane.locator(".agent-chat__file-input").setInputFiles({
             name: fileName,
@@ -357,7 +359,7 @@ suite.define(() => {
         await expect
           .poll(() => pane.getByRole("button", { name: "Send message" }).isEnabled())
           .toBe(true);
-        expect(await composer.inputValue()).toBe(followUpText);
+        expect(await composerValue(composer)).toBe(followUpText);
         expect(await pane.locator(".chat-attachment-thumb").count()).toBe(attachment ? 1 : 0);
         expect(await pane.locator(".chat-queue__item").count()).toBe(0);
         await composer.click();
@@ -372,7 +374,7 @@ suite.define(() => {
         }
 
         const keyProof = await composer.evaluateHandle((element) => {
-          const textarea = element as HTMLTextAreaElement;
+          const textarea = element as ComposerEditor;
           const events: Array<{ isTrusted: boolean; repeat: boolean }> = [];
           const record = (event: KeyboardEvent) => {
             if (event.key === "Enter" && events.length < 4) {
@@ -390,9 +392,9 @@ suite.define(() => {
             await page.keyboard.down("Enter");
             if (!held) {
               await page.keyboard.up("Enter");
-              await expect.poll(() => composer.inputValue()).toBe("");
+              await expect.poll(() => composerValue(composer)).toBe("");
               await expect.poll(() => pane.locator(".chat-attachment-thumb").count()).toBe(0);
-              await composer.fill(followUpText);
+              await fillComposer(composer, followUpText);
               if (attachment) {
                 await pane.locator(".agent-chat__file-input").setInputFiles({
                   name: fileName,
@@ -416,7 +418,7 @@ suite.define(() => {
           ]);
           expect(await gateway.getRequests("chat.history")).toHaveLength(historyBefore + 1);
           expect(await gateway.getRequests("chat.send")).toHaveLength(1);
-          await expect.poll(() => composer.inputValue()).toBe("");
+          await expect.poll(() => composerValue(composer)).toBe("");
           await expect.poll(() => pane.locator(".chat-attachment-thumb").count()).toBe(0);
           await expect.poll(() => pane.locator(".chat-queue__item").count()).toBe(expectedTurns);
 
@@ -467,9 +469,12 @@ suite.define(() => {
             page,
             () => {
               const active = document.querySelector('openclaw-chat-pane[aria-hidden="false"]');
-              const input = active?.querySelector(".agent-chat__composer-combobox textarea");
+              const input = active?.querySelector(
+                ".agent-chat__composer-combobox openclaw-composer-editor",
+              );
               return (
-                input instanceof HTMLTextAreaElement &&
+                input instanceof
+                  (customElements.get("openclaw-composer-editor") as typeof ComposerEditor) &&
                 input.value === "" &&
                 active?.querySelectorAll(".chat-attachment-thumb").length === 0
               );
@@ -546,12 +551,12 @@ suite.define(() => {
       const text = "offline attachment draft";
       const contents = "offline attachment contents";
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
-      const composer = page.locator(".agent-chat__composer-combobox textarea");
+      const composer = page.locator(".agent-chat__composer-combobox openclaw-composer-editor");
       await composer.waitFor();
 
       await gateway.setOnline(false);
       await page.locator('.agent-chat__composer-underlaps[data-tone="warn"]').waitFor();
-      await composer.fill(text);
+      await fillComposer(composer, text);
       await page.locator(".agent-chat__file-input").setInputFiles({
         name: "offline.txt",
         mimeType: "text/plain",
@@ -562,7 +567,7 @@ suite.define(() => {
 
       await page.reload();
       await gateway.setOnline(true);
-      await expect.poll(() => composer.inputValue()).toBe(text);
+      await expect.poll(() => composerValue(composer)).toBe(text);
       await expect.poll(() => page.locator(".chat-attachment-thumb").count()).toBe(1);
       const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
       if (artifactDir) {
@@ -614,7 +619,7 @@ suite.define(() => {
     });
     const activeComposer = (page: Page) =>
       page.locator(
-        'openclaw-chat-pane[aria-hidden="false"] .agent-chat__composer-combobox textarea',
+        'openclaw-chat-pane[aria-hidden="false"] .agent-chat__composer-combobox openclaw-composer-editor',
       );
     const activeAttachments = (page: Page) =>
       page.locator('openclaw-chat-pane[aria-hidden="false"] .chat-attachment-thumb');
@@ -625,13 +630,13 @@ suite.define(() => {
         sessionKey: firstSession,
       });
       await firstPage.goto(controlUiSessionUrl(suite.server.baseUrl, firstSession));
-      await activeComposer(firstPage).fill("restart draft A with image");
+      await fillComposer(activeComposer(firstPage), "restart draft A with image");
       await pastePng(activeComposer(firstPage));
       await expect.poll(() => activeAttachments(firstPage).count()).toBe(1);
       await waitForCommittedAttachmentDraft(firstPage, firstSession, "restart draft A with image");
 
       await navigateToControlUiSession(firstPage, secondSession);
-      await activeComposer(firstPage).fill("restart draft B with removable file");
+      await fillComposer(activeComposer(firstPage), "restart draft B with removable file");
       await firstPage
         .locator('openclaw-chat-pane[aria-hidden="false"] .agent-chat__file-input')
         .setInputFiles({
@@ -654,7 +659,7 @@ suite.define(() => {
       });
       await restoredPage.goto(controlUiSessionUrl(suite.server.baseUrl, firstSession));
       await expect
-        .poll(() => activeComposer(restoredPage).inputValue())
+        .poll(() => composerValue(activeComposer(restoredPage)))
         .toBe("restart draft A with image");
       await activeAttachments(restoredPage).first().waitFor();
       expect(await activeAttachments(restoredPage).count()).toBe(1);
@@ -666,7 +671,7 @@ suite.define(() => {
 
       await navigateToControlUiSession(restoredPage, secondSession);
       await expect
-        .poll(() => activeComposer(restoredPage).inputValue())
+        .poll(() => composerValue(activeComposer(restoredPage)))
         .toBe("restart draft B with removable file");
       await activeAttachments(restoredPage).first().waitFor();
       expect(await activeAttachments(restoredPage).count()).toBe(1);
@@ -690,7 +695,7 @@ suite.define(() => {
           },
         ],
       });
-      await expect.poll(() => activeComposer(restoredPage).inputValue()).toBe("");
+      await expect.poll(() => composerValue(activeComposer(restoredPage))).toBe("");
       await expect.poll(() => activeAttachments(restoredPage).count()).toBe(0);
       await restoredPage.close();
 
@@ -700,11 +705,11 @@ suite.define(() => {
         sessionKey: firstSession,
       });
       await clearedPage.goto(controlUiSessionUrl(suite.server.baseUrl, firstSession));
-      await expect.poll(() => activeComposer(clearedPage).inputValue()).toBe("");
+      await expect.poll(() => composerValue(activeComposer(clearedPage))).toBe("");
       await expect.poll(() => activeAttachments(clearedPage).count()).toBe(0);
       await navigateToControlUiSession(clearedPage, secondSession);
       await expect
-        .poll(() => activeComposer(clearedPage).inputValue())
+        .poll(() => composerValue(activeComposer(clearedPage)))
         .toBe("restart draft B with removable file");
       await expect.poll(() => activeAttachments(clearedPage).count()).toBe(0);
       if (artifactDir) {
@@ -725,8 +730,8 @@ suite.define(() => {
       });
 
       await page.goto(`${suite.server.baseUrl}chat`);
-      const composer = page.locator(".agent-chat__composer-combobox textarea");
-      await composer.fill("Send both files");
+      const composer = page.locator(".agent-chat__composer-combobox openclaw-composer-editor");
+      await fillComposer(composer, "Send both files");
       await page.locator(".agent-chat__file-input").setInputFiles([
         { name: "first.txt", mimeType: "text/plain", buffer: Buffer.alloc(200, 0x61) },
         { name: "second.txt", mimeType: "text/plain", buffer: Buffer.alloc(200, 0x62) },
@@ -747,7 +752,7 @@ suite.define(() => {
       expect(outcome).toBe("rejected");
       expect(await gateway.getRequests("chat.send")).toHaveLength(0);
       await expect.poll(() => page.locator(".chat-attachment-thumb").count()).toBe(2);
-      await expect.poll(() => composer.inputValue()).toBe("Send both files");
+      await expect.poll(() => composerValue(composer)).toBe("Send both files");
 
       const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
       if (artifactDir) {
@@ -771,9 +776,9 @@ suite.define(() => {
       const gateway = await installMockGateway(page);
 
       await page.goto(`${suite.server.baseUrl}chat`);
-      const composer = page.locator(".agent-chat__composer-combobox textarea");
+      const composer = page.locator(".agent-chat__composer-combobox openclaw-composer-editor");
       const send = page.getByRole("button", { name: "Send message" });
-      await composer.fill("Include the image that is still loading");
+      await fillComposer(composer, "Include the image that is still loading");
       await pastePng(composer);
 
       await expect.poll(() => send.isDisabled()).toBe(true);
@@ -831,9 +836,9 @@ suite.define(() => {
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, firstSession));
       const activeComposer = () =>
         page.locator(
-          'openclaw-chat-pane[aria-hidden="false"] .agent-chat__composer-combobox textarea',
+          'openclaw-chat-pane[aria-hidden="false"] .agent-chat__composer-combobox openclaw-composer-editor',
         );
-      await activeComposer().fill("Private session A attachment");
+      await fillComposer(activeComposer(), "Private session A attachment");
       await pastePng(activeComposer());
       await expect
         .poll(() => page.getByRole("button", { name: "Send message" }).isDisabled())
@@ -856,7 +861,7 @@ suite.define(() => {
         )
         .toBe(0);
 
-      await activeComposer().fill("Safe session B message");
+      await fillComposer(activeComposer(), "Safe session B message");
       await activeComposer().press("Enter");
       const request = await gateway.waitForRequest("chat.send");
       expect(request.params).toMatchObject({

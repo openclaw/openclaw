@@ -4,6 +4,7 @@ import { crc32, deflateSync } from "node:zlib";
 import type { Page } from "playwright";
 import { assert, expect, it } from "vitest";
 import type { StoredComposerState } from "../lib/chat/outbox-store.ts";
+import { composerValue, fillComposer } from "../test-helpers/composer-editor.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
@@ -153,7 +154,7 @@ suite.define(() => {
           await gateway.waitForRequest("config.patch");
           await page.goto(`${suite.server.baseUrl}chat`);
           const pane = page.locator('openclaw-chat-pane[aria-hidden="false"]');
-          const composer = pane.locator(".agent-chat__composer-combobox textarea");
+          const composer = pane.locator(".agent-chat__composer-combobox openclaw-composer-editor");
           const steer = pane.getByRole("button", {
             name: "Steer into the active run",
             exact: true,
@@ -168,7 +169,7 @@ suite.define(() => {
           }));
           expect(files.map((file) => file.buffer.length)).toEqual(sizes);
           const message = `Mock Gateway: steer with ${name} PNG batch.`;
-          await composer.fill(message);
+          await fillComposer(composer, message);
           await pane.locator(".agent-chat__file-input").setInputFiles(files);
           const previews = pane.locator(".chat-attachment-thumb img");
           await expect.poll(() => previews.count()).toBe(files.length);
@@ -229,7 +230,7 @@ suite.define(() => {
               outcome,
               error,
               sends,
-              draft: await composer.inputValue(),
+              draft: await composerValue(composer),
               attachmentPreviews: await previews.count(),
               queueRows: await pane.locator(".chat-queue__item").count(),
             };
@@ -333,7 +334,7 @@ suite.define(() => {
                 })),
               },
             ]);
-            await expect.poll(() => composer.inputValue()).toBe("");
+            await expect.poll(() => composerValue(composer)).toBe("");
             await expect.poll(() => previews.count()).toBe(0);
             await pane.locator(".chat-group.user", { hasText: message }).waitFor();
             expect(await pane.locator(".chat-queue__item").count()).toBe(0);

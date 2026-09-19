@@ -1,9 +1,10 @@
 // @vitest-environment node
 // Composer native undo/redo regression: the controlled `.value` binding must
-// not re-apply the textarea value after native input, which clobbers the
+// not re-apply the composer value after native input, which clobbers the
 // browser's undo/redo bookkeeping (#131708).
 import { chromium, type Browser, type Page } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { composerValue } from "../../test-helpers/composer-editor.ts";
 import {
   canRunPlaywrightChromium,
   installMockGateway,
@@ -17,7 +18,7 @@ const describeComposerUndoRedo = canRunPlaywrightChromium(chromiumExecutablePath
   ? describe
   : describe.skip;
 
-const COMPOSER_TEXTAREA = ".agent-chat__composer-combobox > textarea";
+const COMPOSER_TEXTAREA = ".agent-chat__composer-combobox > openclaw-composer-editor";
 const TYPED_TEXT = "hello world test";
 
 let browser: Browser | null = null;
@@ -33,23 +34,26 @@ describeComposerUndoRedo("chat composer native undo/redo", () => {
     server = await startControlUiE2eServer();
     page = await browser.newPage();
     await installMockGateway(page);
-    // Count every programmatic textarea value write so the binding contract
+    // Count every programmatic composer value write so the binding contract
     // (no re-apply after native input) is asserted directly.
     await page.addInitScript(() => {
-      const descriptor = Object.getOwnPropertyDescriptor(
-        HTMLTextAreaElement.prototype,
-        "value",
-      ) as PropertyDescriptor & { get(): string; set(next: string): void };
-      Object.defineProperty(HTMLTextAreaElement.prototype, "value", {
-        get: descriptor.get,
-        set(next: string) {
-          if (this.isConnected) {
-            (window as { composerValueWrites?: number }).composerValueWrites =
-              ((window as { composerValueWrites?: number }).composerValueWrites ?? 0) + 1;
-          }
-          descriptor.set.call(this, next);
-        },
-        configurable: true,
+      void customElements.whenDefined("openclaw-composer-editor").then(() => {
+        const editor = customElements.get("openclaw-composer-editor")!;
+        const descriptor = Object.getOwnPropertyDescriptor(
+          editor.prototype,
+          "value",
+        ) as PropertyDescriptor & { get(): string; set(next: string): void };
+        Object.defineProperty(editor.prototype, "value", {
+          get: descriptor.get,
+          set(next: string) {
+            if (this.isConnected) {
+              (window as { composerValueWrites?: number }).composerValueWrites =
+                ((window as { composerValueWrites?: number }).composerValueWrites ?? 0) + 1;
+            }
+            descriptor.set.call(this, next);
+          },
+          configurable: true,
+        });
       });
     });
     await page.goto(`${server.baseUrl}chat/main`, {
@@ -71,25 +75,25 @@ describeComposerUndoRedo("chat composer native undo/redo", () => {
     );
   }
 
-  it("keeps native redo working after undo in the composer textarea", async () => {
+  it("keeps native redo working after undo in the composer editor", async () => {
     const textarea = page!.locator(COMPOSER_TEXTAREA);
     await textarea.click();
-    await textarea.type(TYPED_TEXT);
-    expect(await textarea.inputValue()).toBe(TYPED_TEXT);
+    await textarea.locator(".cm-content").pressSequentially(TYPED_TEXT);
+    expect(await composerValue(textarea)).toBe(TYPED_TEXT);
 
     await page!.keyboard.press("ControlOrMeta+a");
     await page!.keyboard.press("Backspace");
-    expect(await textarea.inputValue()).toBe("");
+    expect(await composerValue(textarea)).toBe("");
 
     await page!.keyboard.press("ControlOrMeta+z");
-    expect(await textarea.inputValue()).toBe(TYPED_TEXT);
+    expect(await composerValue(textarea)).toBe(TYPED_TEXT);
 
     // Redo must re-apply the deletion, exactly like a native textarea.
     await page!.keyboard.press("ControlOrMeta+Shift+z");
-    expect(await textarea.inputValue()).toBe("");
+    expect(await composerValue(textarea)).toBe("");
   });
 
-  it("does not re-apply the textarea value after native input", async () => {
+  it("does not re-apply the composer value after native input", async () => {
     const textarea = page!.locator(COMPOSER_TEXTAREA);
     await textarea.click();
     await page!.keyboard.press("ControlOrMeta+a");
@@ -97,12 +101,12 @@ describeComposerUndoRedo("chat composer native undo/redo", () => {
     await page!.waitForTimeout(100);
 
     const beforeTyping = await valueWriteCount();
-    await textarea.type(TYPED_TEXT);
+    await textarea.locator(".cm-content").pressSequentially(TYPED_TEXT);
     await page!.waitForTimeout(100);
     const afterTyping = await valueWriteCount();
 
     // Typing reaches the draft owner and requests renders, but none of those
-    // renders may write the textarea value back: the DOM already holds it, and
+    // renders may write the composer value back: the DOM already holds it, and
     // a programmatic re-apply resets the browser's undo/redo bookkeeping.
     expect(afterTyping - beforeTyping).toBe(0);
 
@@ -113,7 +117,7 @@ describeComposerUndoRedo("chat composer native undo/redo", () => {
     await page!.keyboard.press("ControlOrMeta+z");
     await page!.keyboard.press("ControlOrMeta+Shift+z");
     await page!.waitForTimeout(100);
-    expect(await textarea.inputValue()).toBe("");
+    expect(await composerValue(textarea)).toBe("");
     expect((await valueWriteCount()) - beforeUndo).toBe(0);
   });
 });

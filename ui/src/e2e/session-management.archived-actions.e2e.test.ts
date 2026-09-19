@@ -314,7 +314,9 @@ suite.define(() => {
       });
 
       await archivedNotice.waitFor({ state: "detached", timeout: 10_000 });
-      await activePane.locator(".agent-chat__input textarea").waitFor({ state: "visible" });
+      await activePane
+        .locator(".agent-chat__input openclaw-composer-editor")
+        .waitFor({ state: "visible" });
       await expect
         .poll(() =>
           activePane.evaluate(

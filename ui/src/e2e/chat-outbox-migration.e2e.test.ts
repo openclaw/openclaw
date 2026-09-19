@@ -1,5 +1,6 @@
 import path from "node:path";
 import { assert, expect, it } from "vitest";
+import { composerValue, fillComposer } from "../test-helpers/composer-editor.ts";
 import {
   waitForControlUiGatewayReady,
   waitForControlUiGatewayReconnecting,
@@ -289,13 +290,13 @@ suite.define(() => {
       });
       await page.goto(`${suite.server.baseUrl}chat`, { waitUntil: "domcontentloaded" });
       await expect
-        .poll(() => composerFor(page).inputValue())
+        .poll(() => composerValue(composerFor(page)))
         .toBe("Mock Gateway: old durable draft");
       await expect.poll(() => paneFor(page).locator(".chat-attachment-thumb").count()).toBe(1);
       expect((await readQueue(page))[0]?.sendRunId).toBe("legacy-idempotency");
       await gateway.setOnline(false);
       await waitForControlUiGatewayReconnecting(page);
-      await composerFor(page).fill("Mock Gateway: newer independent draft");
+      await fillComposer(composerFor(page), "Mock Gateway: newer independent draft");
       const row = paneFor(page).locator(".chat-queue__item");
       await row.dblclick();
       await row.locator(".chat-queue__edit-input").fill("cancel this edit");
@@ -308,12 +309,12 @@ suite.define(() => {
         .poll(async () => (await readQueue(page))[0]?.text)
         .toBe("Mock Gateway: edited with original bytes");
       expect((await readQueue(page))[0]?.attachmentPayload).toBeDefined();
-      expect(await composerFor(page).inputValue()).toBe("Mock Gateway: newer independent draft");
+      expect(await composerValue(composerFor(page))).toBe("Mock Gateway: newer independent draft");
       expect(await paneFor(page).locator(".chat-attachment-thumb").count()).toBe(1);
       await expect.poll(() => payloadCount(page)).toBe(1);
       await row.getByRole("button", { name: "Remove queued message", exact: true }).click();
       await expect.poll(() => payloadCount(page)).toBe(0);
-      expect(await composerFor(page).inputValue()).toBe("Mock Gateway: newer independent draft");
+      expect(await composerValue(composerFor(page))).toBe("Mock Gateway: newer independent draft");
       await expectRequestCountStable(gateway, "chat.send", 0);
     });
   });

@@ -42,7 +42,7 @@ suite.define(() => {
         });
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, session.key));
         await gateway.waitForRequest("sessions.list");
-        await page.locator(".agent-chat__composer-combobox textarea").waitFor();
+        await page.locator(".agent-chat__composer-combobox openclaw-composer-editor").waitFor();
         await captureUiProof(suite, page, "reopened-provisioning.png");
         await pollLocatorText(
           page.locator('.chat-thread .chat-working-indicator[role="status"]'),

@@ -1,6 +1,7 @@
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
 import { projectAgentActivityItem } from "../../../src/agents/agent-activity-presentation.js";
+import { fillComposer } from "../test-helpers/composer-editor.ts";
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import type { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -15,7 +16,10 @@ export function registerItemOnlyOutcomeTest(
         const sessionKey = "agent:main:main";
         const gateway = await installMockGateway(page, { sessionKey });
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));
-        await page.locator(".agent-chat__input textarea").fill("Check the delegated tasks");
+        await fillComposer(
+          page.locator(".agent-chat__input openclaw-composer-editor"),
+          "Check the delegated tasks",
+        );
         await page.getByRole("button", { name: "Send message" }).click();
         const send = await gateway.waitForRequest("chat.send");
         const runId = (send.params as { idempotencyKey: string }).idempotencyKey;

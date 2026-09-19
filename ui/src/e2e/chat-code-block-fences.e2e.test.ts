@@ -1,6 +1,7 @@
 import path from "node:path";
 import { chromium, type Browser, type Page } from "playwright";
 import { beforeEach, afterAll, beforeAll, describe, expect, it } from "vitest";
+import { fillComposer } from "../test-helpers/composer-editor.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
   canRunPlaywrightChromium,
@@ -113,9 +114,10 @@ describeControlUiE2e("Control UI fenced code blocks", () => {
       expect(await page.locator(".chat-group.assistant pre code").textContent()).toBe(
         "*assistant literal*\n",
       );
-      await page
-        .locator(".agent-chat__composer-combobox textarea")
-        .fill("Show an indented example");
+      await fillComposer(
+        page.locator(".agent-chat__composer-combobox openclaw-composer-editor"),
+        "Show an indented example",
+      );
       await page.getByRole("button", { name: "Send message" }).click();
       const request = await gateway.waitForRequest("chat.send");
       const runId = requireString(requireRecord(request.params).idempotencyKey, "run id");
@@ -160,7 +162,10 @@ describeControlUiE2e("Control UI fenced code blocks", () => {
 
     try {
       await page.goto(`${server.baseUrl}chat`);
-      await page.locator(".agent-chat__composer-combobox textarea").fill("show TypeScript");
+      await fillComposer(
+        page.locator(".agent-chat__composer-combobox openclaw-composer-editor"),
+        "show TypeScript",
+      );
       await page.getByRole("button", { name: "Send message" }).click();
       const sendRequest = await gateway.waitForRequest("chat.send");
       const runId = requireString(
@@ -446,7 +451,7 @@ describeControlUiE2e("Control UI fenced code blocks", () => {
         // Virtualization must initialize replacement DOM in an otherwise quiet transcript.
         const thread = page.locator(".chat-thread");
         // Focused rows stay mounted offscreen; move focus out of the wrap control first.
-        await page.locator(".agent-chat__composer-combobox textarea").click();
+        await page.locator(".agent-chat__composer-combobox openclaw-composer-editor").click();
         await thread.hover();
         await page.mouse.wheel(0, -100_000);
         await expect.poll(() => thread.evaluate((element) => element.scrollTop)).toBe(0);

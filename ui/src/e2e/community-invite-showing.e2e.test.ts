@@ -265,7 +265,9 @@ suite.define(() => {
               '.sidebar-recent-session[data-session-key="agent:main:session-10"]',
             );
             const menu = row.getByRole("button", { name: "Open session menu" });
-            const composer = page.locator(".agent-chat__composer-combobox textarea");
+            const composer = page.locator(
+              ".agent-chat__composer-combobox openclaw-composer-editor",
+            );
             const card = page.locator(".community-invite-card");
             await expect.poll(() => card.count()).toBe(0);
             if (interaction === "touch") {
@@ -275,7 +277,7 @@ suite.define(() => {
               await page.mouse.move(900, 500);
               await menu.focus();
             } else if (interaction === "drag") {
-              await composer.focus();
+              await composer.locator(".cm-content").focus();
               const bounds = await row.boundingBox();
               if (!bounds) {
                 throw new Error("Expected a draggable session row");
@@ -306,7 +308,7 @@ suite.define(() => {
               await expect
                 .poll(() => row.getAttribute("class"))
                 .not.toContain("sidebar-recent-session--dragging");
-              await composer.focus();
+              await composer.locator(".cm-content").focus();
             } else {
               if (interaction === "keyboard") {
                 await page.keyboard.press("Tab");
@@ -331,7 +333,7 @@ suite.define(() => {
                 await page.keyboard.press("Escape");
                 await page.mouse.move(900, 500);
                 expect(await card.count()).toBe(0);
-                await composer.focus();
+                await composer.locator(".cm-content").focus();
               }
             }
             await card.waitFor({ state: "visible" });

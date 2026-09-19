@@ -2,6 +2,7 @@ import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { expect } from "playwright/test";
 import { it } from "vitest";
+import { fillComposer } from "../test-helpers/composer-editor.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import {
   createdSessionListResult,
@@ -65,7 +66,7 @@ suite.define(() => {
             .locator("wa-popover.new-session-page__where-popover")
             .getByRole("button", { name: "aws", exact: true })
             .click();
-          await page.locator(".new-session-page__message").fill(message);
+          await fillComposer(page.locator(".new-session-page__message"), message);
           await page.getByRole("button", { name: "Start session" }).click();
           await gateway.waitForRequest("sessions.dispatch");
           await waitForCommittedChatRoute(page);

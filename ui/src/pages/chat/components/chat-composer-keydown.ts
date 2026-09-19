@@ -1,4 +1,5 @@
 import type { ChatFollowUpMode, ChatSendShortcut } from "../../../app/settings.ts";
+import { ComposerEditor } from "../../../components/composer-editor.ts";
 import { steerableQueuedMessage } from "../chat-queue.ts";
 import { restoreHistoryCaret } from "./chat-composer-dom.ts";
 import type { GoalComposerController } from "./chat-composer-goal-mode.ts";
@@ -21,7 +22,7 @@ type ComposerKeyDownDeps = {
   sendShortcut: ChatSendShortcut;
   canSubmitDraft: (draft: string) => boolean;
   commitDraft: (draft: string) => void;
-  syncDraftAfterSend: (target: HTMLTextAreaElement | null) => void;
+  syncDraftAfterSend: (target: ComposerEditor | null) => void;
   showAbortableUi: boolean;
   alternateFollowUpMode?: ChatFollowUpMode;
   goalComposer: GoalComposerController;
@@ -46,7 +47,7 @@ export function createComposerKeyDownHandler({
     // The handler only ever binds to the composer textarea; narrowing here
     // keeps the draft/selection reads below assertion-free.
     const target = event.target;
-    if (!(target instanceof HTMLTextAreaElement)) {
+    if (!(target instanceof ComposerEditor)) {
       return;
     }
     if (state.composerComposing || event.isComposing || event.keyCode === 229) {

@@ -1,8 +1,8 @@
-/* @vitest-environment jsdom */
-
 import { render } from "lit";
+/* @vitest-environment jsdom */
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
+import type { ComposerEditor } from "../../components/composer-editor.ts";
 import { t } from "../../i18n/index.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import {
@@ -22,7 +22,7 @@ function pressComposerEnter(
   container: Element,
   modifiers: Pick<KeyboardEventInit, "altKey" | "ctrlKey" | "metaKey" | "shiftKey" | "repeat"> = {},
 ) {
-  const textarea = container.querySelector<HTMLTextAreaElement>("textarea");
+  const textarea = container.querySelector<ComposerEditor>("openclaw-composer-editor");
   if (!textarea) {
     throw new Error("expected composer textarea");
   }
@@ -56,7 +56,9 @@ describe("renderChatComposer controls", () => {
       send.click();
       pressComposerEnter(container);
       expect(onSend).not.toHaveBeenCalled();
-      expect(container.querySelector<HTMLTextAreaElement>("textarea")?.value).toBe("/compact");
+      expect(container.querySelector<ComposerEditor>("openclaw-composer-editor")?.value).toBe(
+        "/compact",
+      );
     },
   );
 
@@ -79,7 +81,9 @@ describe("renderChatComposer controls", () => {
         primaryButton(container).click();
       }
       expect(onSend).toHaveBeenCalledTimes(draft === "/compact" ? 0 : 1);
-      expect(container.querySelector<HTMLTextAreaElement>("textarea")?.value).toBe(draft);
+      expect(container.querySelector<ComposerEditor>("openclaw-composer-editor")?.value).toBe(
+        draft,
+      );
     },
   );
 
@@ -143,7 +147,7 @@ describe("renderChatComposer controls", () => {
         commit(transcript);
         return true;
       });
-      const textarea = container.querySelector<HTMLTextAreaElement>("textarea")!;
+      const textarea = container.querySelector<ComposerEditor>("openclaw-composer-editor")!;
       textarea.setSelectionRange(textarea.value.length, textarea.value.length);
       pressComposerEnter(container);
       expect(onSend).not.toHaveBeenCalled();
@@ -320,7 +324,9 @@ describe("renderChatComposer controls", () => {
       expect(onToggleRealtimeTalk).not.toHaveBeenCalled();
       expect(talk.disabled).toBe(true);
       expect(microphone.disabled).toBe(!composerHoldToRecord);
-      expect(container.querySelector<HTMLTextAreaElement>("textarea")?.disabled).toBe(false);
+      expect(container.querySelector<ComposerEditor>("openclaw-composer-editor")?.disabled).toBe(
+        false,
+      );
     },
   );
 
@@ -413,7 +419,7 @@ describe("renderChatComposer controls", () => {
     });
 
     container
-      .querySelector("textarea")
+      .querySelector("openclaw-composer-editor")
       ?.dispatchEvent(
         new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }),
       );
@@ -434,7 +440,7 @@ describe("renderChatComposer controls", () => {
 
     expect(() =>
       container
-        .querySelector("textarea")
+        .querySelector("openclaw-composer-editor")
         ?.dispatchEvent(
           new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }),
         ),
@@ -491,7 +497,7 @@ describe("renderChatComposer controls", () => {
           onSend,
           sendShortcut: "enter",
         });
-        const textarea = container.querySelector<HTMLTextAreaElement>("textarea");
+        const textarea = container.querySelector<ComposerEditor>("openclaw-composer-editor");
         if (textarea && liveDraft !== undefined) {
           textarea.value = liveDraft;
         }
@@ -688,7 +694,7 @@ describe("renderChatComposer controls", () => {
     const onAbort = vi.fn();
     let view = renderComposer({ canAbort: true, onAbort });
     let event = new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true });
-    view.container.querySelector("textarea")?.dispatchEvent(event);
+    view.container.querySelector("openclaw-composer-editor")?.dispatchEvent(event);
     expect(event.defaultPrevented).toBe(true);
     expect(onAbort).toHaveBeenCalledOnce();
 
@@ -699,11 +705,11 @@ describe("renderChatComposer controls", () => {
       replyTarget: { messageId: "reply-1", text: "Original message" },
     });
     event = new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true });
-    view.container.querySelector("textarea")?.dispatchEvent(event);
+    view.container.querySelector("openclaw-composer-editor")?.dispatchEvent(event);
     expect(onAbort).not.toHaveBeenCalled();
 
     view = renderComposer({ canAbort: true, onAbort });
-    const textarea = view.container.querySelector<HTMLTextAreaElement>("textarea")!;
+    const textarea = view.container.querySelector<ComposerEditor>("openclaw-composer-editor")!;
     textarea.value = "/";
     textarea.dispatchEvent(new InputEvent("beforeinput", { bubbles: true }));
     textarea.dispatchEvent(new InputEvent("input", { bubbles: true }));

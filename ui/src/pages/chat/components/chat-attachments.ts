@@ -2,6 +2,7 @@
 import { html, nothing } from "lit";
 import { repeat } from "lit/directives/repeat.js";
 import { styleMap } from "lit/directives/style-map.js";
+import { ComposerEditor } from "../../../components/composer-editor.ts";
 import { icons } from "../../../components/icons.ts";
 import { scrollState } from "../../../components/scroll-state.ts";
 import "../../../components/tooltip.ts";
@@ -54,11 +55,11 @@ function isEditableDropTarget(event: DragEvent): boolean {
   if (!(target instanceof Element)) {
     return false;
   }
-  const editable = target.closest("textarea, input, [contenteditable]");
+  const editable = target.closest("textarea, input, openclaw-composer-editor, [contenteditable]");
   if (editable instanceof HTMLInputElement) {
     return TEXT_ENTRY_INPUT_TYPES.has(editable.type) && !editable.disabled && !editable.readOnly;
   }
-  if (editable instanceof HTMLTextAreaElement) {
+  if (editable instanceof HTMLTextAreaElement || editable instanceof ComposerEditor) {
     return !editable.disabled && !editable.readOnly;
   }
   return editable instanceof HTMLElement && editable.isContentEditable;

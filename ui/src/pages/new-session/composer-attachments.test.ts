@@ -1,8 +1,8 @@
-/* @vitest-environment jsdom */
-
 import { expectDefined } from "@openclaw/normalization-core";
+/* @vitest-environment jsdom */
 import { render, nothing } from "lit";
 import { afterEach, expect, it, onTestFinished, vi } from "vitest";
+import type { ComposerEditor } from "../../components/composer-editor.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import { NewSessionAttachmentDraft } from "./attachment-draft.ts";
 import { NewSessionComposerTextareaController } from "./composer-controller.ts";
@@ -136,6 +136,8 @@ it.each(["owner", "tile"] as const)(
       "second.txt",
     ]);
     expect(container.querySelector('button[aria-label="Remove held.txt"]')).toBeNull();
-    expect(container.querySelector<HTMLTextAreaElement>("textarea")?.value).toBe("Keep this draft");
+    expect(container.querySelector<ComposerEditor>("openclaw-composer-editor")?.value).toBe(
+      "Keep this draft",
+    );
   },
 );

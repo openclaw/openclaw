@@ -2,6 +2,7 @@ import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { Locator, Page } from "playwright";
 import { beforeEach, expect, it } from "vitest";
+import { fillComposer } from "../test-helpers/composer-editor.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { defaultControlUiFeatureMethods } from "../test-helpers/control-ui-e2e.ts";
@@ -620,9 +621,10 @@ suite.define(() => {
               page.locator(".chat-pane__presence [data-viewer-id]").getAttribute("aria-label"),
             )
             .toBe(peer.name);
-          await page
-            .locator(".agent-chat__composer-combobox textarea")
-            .fill("A synthetic typing draft");
+          await fillComposer(
+            page.locator(".agent-chat__composer-combobox openclaw-composer-editor"),
+            "A synthetic typing draft",
+          );
           const typing = await gateway.waitForRequest("session.typing");
           expect(typing.params).toMatchObject({ sessionKey: selected, typing: true });
         },

@@ -2,6 +2,7 @@ import type { Locator } from "playwright";
 import { expect, it } from "vitest";
 import { GATEWAY_SERVER_CAPS } from "../../../packages/gateway-protocol/src/index.js";
 import { finishElementAnimations } from "../test-helpers/animations.ts";
+import { composerValue, fillComposer } from "../test-helpers/composer-editor.ts";
 import { createControlUiMockBootstrapConfig } from "../test-helpers/control-ui-e2e.ts";
 import { resolveRenderedColors, type RenderedColor } from "../test-helpers/rendered-colors.ts";
 import {
@@ -141,9 +142,9 @@ suite.define(() => {
         })
         .waitFor({ state: "visible", timeout: 10_000 });
       const sourceUrl = page.url();
-      const composer = page.locator(".agent-chat__composer-combobox textarea");
+      const composer = page.locator(".agent-chat__composer-combobox openclaw-composer-editor");
       const draft = "Continue the current conversation.";
-      await composer.fill(draft);
+      await fillComposer(composer, draft);
       await gateway.deferNext("taskSuggestions.accept");
       if (mode === "local") {
         await startButton.click();
@@ -177,7 +178,7 @@ suite.define(() => {
       await card.getByRole("link", { name: "Open session", exact: true }).waitFor();
       expect(await card.getByText(suggestion.prompt, { exact: true }).isVisible()).toBe(true);
       expect(page.url()).toBe(sourceUrl);
-      expect(await composer.inputValue()).toBe(draft);
+      expect(await composerValue(composer)).toBe(draft);
       expect(await gateway.getRequests("taskSuggestions.accept")).toHaveLength(1);
       await captureUiProof(
         suite,
@@ -240,8 +241,8 @@ suite.define(() => {
       expect(
         await nextCard.getByRole("button", { name: "Start in a new session" }).isEnabled(),
       ).toBe(true);
-      const composer = page.locator(".agent-chat__composer-combobox textarea");
-      await composer.fill("Continue working while the suggestion closes.");
+      const composer = page.locator(".agent-chat__composer-combobox openclaw-composer-editor");
+      await fillComposer(composer, "Continue working while the suggestion closes.");
 
       await gateway.deferNext("taskSuggestions.list");
       await gateway.emitGatewayEvent("task.suggestion", { action: "created", suggestion });
@@ -262,7 +263,7 @@ suite.define(() => {
       await expect.poll(() => card.count()).toBe(1);
       expect(await card.isVisible()).toBe(false);
       expect(await nextCard.isVisible()).toBe(true);
-      expect(await composer.inputValue()).toBe("Continue working while the suggestion closes.");
+      expect(await composerValue(composer)).toBe("Continue working while the suggestion closes.");
       await nextCard.getByRole("button", { name: "Previous suggested task" }).click();
       await card.waitFor({ state: "visible" });
       expect(await card.getByRole("button", { name: "Start in a new session" }).isEnabled()).toBe(

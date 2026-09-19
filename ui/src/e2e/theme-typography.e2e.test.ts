@@ -2,10 +2,12 @@ import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import type { Locator } from "playwright";
 import { expect, it } from "vitest";
+import type { ComposerEditor } from "../components/composer-editor.ts";
 import {
   formatKeyboardShortcutCombo,
   KEYBOARD_SHORTCUT_COMBOS,
 } from "../lib/keyboard-shortcut-contract.ts";
+import { composerValue, fillComposer } from "../test-helpers/composer-editor.ts";
 import {
   controlUiBundledGatewayUrl,
   defaultControlUiFeatureMethods,
@@ -317,28 +319,28 @@ suite.define(() => {
       await page.goto(`${suite.server.baseUrl}chat`);
       await expect.poll(() => page.locator(".chat-text").last().textContent()).toContain("keep");
 
-      const textarea = page.locator(".agent-chat__composer-combobox textarea");
-      await expect.poll(() => textarea.isEditable()).toBe(true);
+      const textarea = page.locator(".agent-chat__composer-combobox openclaw-composer-editor");
+      await expect.poll(() => textarea.locator(".cm-content").isEditable()).toBe(true);
       await page.evaluate(() => document.fonts.ready);
       await textarea.click();
       // The reported failure sequence: operator pairs each closed by a trailing
       // space at the caret.
       await textarea.pressSequentially(COMPOSER_LIGATURE_SEQUENCE);
-      expect(await textarea.inputValue()).toBe(COMPOSER_LIGATURE_SEQUENCE);
+      expect(await composerValue(textarea)).toBe(COMPOSER_LIGATURE_SEQUENCE);
       // Blur first: the corruption outlives focus, and an unfocused control
       // paints no caret, so the two shots differ only in how the text arrived.
-      await textarea.evaluate((element) => (element as HTMLTextAreaElement).blur());
+      await textarea.evaluate((element) => (element as ComposerEditor).blur());
       const typedPixels = await textarea.screenshot();
 
       await textarea.evaluate((element, sequence) => {
-        const field = element as HTMLTextAreaElement;
+        const field = element as ComposerEditor;
         field.value = "";
         field.dispatchEvent(new Event("input", { bubbles: true }));
         field.value = sequence;
         field.dispatchEvent(new Event("input", { bubbles: true }));
         field.blur();
       }, COMPOSER_LIGATURE_SEQUENCE);
-      await expect.poll(() => textarea.inputValue()).toBe(COMPOSER_LIGATURE_SEQUENCE);
+      await expect.poll(() => composerValue(textarea)).toBe(COMPOSER_LIGATURE_SEQUENCE);
       const valuePixels = await textarea.screenshot();
 
       // Typing must paint what the value itself paints. On an unfixed control
@@ -346,8 +348,8 @@ suite.define(() => {
       expect(Buffer.compare(typedPixels, valuePixels)).toBe(0);
 
       const report = await page.evaluate(() => {
-        const composer = document.querySelector<HTMLTextAreaElement>(
-          ".agent-chat__composer-combobox textarea",
+        const composer = document.querySelector<ComposerEditor>(
+          ".agent-chat__composer-combobox openclaw-composer-editor",
         );
         const chat = document.querySelector(".chat-text");
         return {
@@ -404,7 +406,7 @@ suite.define(() => {
     });
     await page.goto(`${suite.server.baseUrl}chat`);
 
-    const composer = page.locator(".agent-chat__composer-combobox textarea");
+    const composer = page.locator(".agent-chat__composer-combobox openclaw-composer-editor");
     await composer.waitFor({ state: "visible" });
 
     // Open the file first: fetching it needs the gateway, and queuing below
@@ -427,7 +429,7 @@ suite.define(() => {
     // composer wrapper, so it only inherits the opt-out from the shared rule.
     await gateway.setOnline(false);
     await gateway.closeLatest();
-    await composer.fill(COMPOSER_LIGATURE_SEQUENCE.trim());
+    await fillComposer(composer, COMPOSER_LIGATURE_SEQUENCE.trim());
     await composer.press("Enter");
     const queueRow = page.locator(".chat-queue__item").first();
     await queueRow.waitFor();
@@ -584,7 +586,7 @@ suite.define(() => {
     const { page } = await openThemedChat("claw", "light");
     await page.setViewportSize({ width: 720, height: 900 });
     await page.goto(`${suite.server.baseUrl}chat`);
-    await page.locator(".agent-chat__composer-combobox textarea").waitFor();
+    await page.locator(".agent-chat__composer-combobox openclaw-composer-editor").waitFor();
 
     const readChrome = () =>
       page.evaluate(() => ({
@@ -615,7 +617,7 @@ suite.define(() => {
     await waitForControlUiRoute(page, { pathname: "/settings/appearance", routeId: "appearance" });
     await expectChrome(pageColor);
     await page.goBack();
-    await page.locator(".agent-chat__composer-combobox textarea").waitFor();
+    await page.locator(".agent-chat__composer-combobox openclaw-composer-editor").waitFor();
     await expectChrome(chatColor);
     await page.locator(".chat-pane__nav-toggle").first().click();
     await page.locator("openclaw-app-sidebar .sidebar-brand__new-thread").click();
@@ -700,7 +702,7 @@ suite.define(() => {
       await route.continue();
     });
     await page.goto(`${suite.server.baseUrl}chat`);
-    await page.locator(".agent-chat__composer-combobox textarea").waitFor();
+    await page.locator(".agent-chat__composer-combobox openclaw-composer-editor").waitFor();
     await page.evaluate(() => {
       const root = document.documentElement;
       new MutationObserver(() => {
@@ -789,7 +791,7 @@ suite.define(() => {
 
     await page.goto(`${suite.server.baseUrl}${basePath.slice(1)}/chat`);
     await page
-      .locator(".agent-chat__composer-combobox textarea")
+      .locator(".agent-chat__composer-combobox openclaw-composer-editor")
       .waitFor({ state: "visible", timeout: 30_000 });
 
     const linkHref = await page.evaluate(

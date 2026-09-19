@@ -1,6 +1,7 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
+import { fillComposer } from "../test-helpers/composer-editor.ts";
 import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { controlUiSessionPath, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -75,8 +76,8 @@ suite.define(() => {
       const partialFinalText = "Drafting the durable dashboard reply.";
       const stalePartialFinalText = "Drafting more of the durable dashboard reply.";
       const finalText = "The durable dashboard reply is visible after Done.";
-      const composer = page.locator(".agent-chat__composer-combobox textarea");
-      await composer.fill(prompt);
+      const composer = page.locator(".agent-chat__composer-combobox openclaw-composer-editor");
+      await fillComposer(composer, prompt);
       await page.getByRole("button", { name: "Send message" }).click();
       const send = await gateway.waitForRequest("chat.send");
       const params = send.params as Record<string, unknown>;

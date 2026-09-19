@@ -1,4 +1,5 @@
 import { expect, it } from "vitest";
+import { composerValue, fillComposer } from "../test-helpers/composer-editor.ts";
 import { defaultControlUiFeatureMethods } from "../test-helpers/control-ui-e2e.ts";
 import {
   createChatFlowE2eSuite,
@@ -70,7 +71,7 @@ suite.define(() => {
       expect(await gateway.getRequests("chat.metadata")).toHaveLength(0);
       expect(await gateway.getRequests("commands.list")).toHaveLength(0);
       await gateway.waitForRequest("models.list");
-      const composer = page.locator(".agent-chat__composer-combobox textarea");
+      const composer = page.locator(".agent-chat__composer-combobox openclaw-composer-editor");
       const sendButton = page.getByRole("button", { name: "Send message" });
       await composer.waitFor({ state: "visible", timeout: 10_000 });
       await expect.poll(() => sendButton.count()).toBe(0);
@@ -107,14 +108,14 @@ suite.define(() => {
       await page.getByText("Global progress after startup", { exact: true }).waitFor();
 
       const prompt = "send after configured inference loads";
-      await composer.fill(prompt);
+      await fillComposer(composer, prompt);
       await sendButton.waitFor({ state: "visible", timeout: 10_000 });
       await expect.poll(() => sendButton.isEnabled()).toBe(true);
       await sendButton.click();
 
       const sendRequest = await gateway.waitForRequest("chat.send");
       await expect
-        .poll(() => composer.inputValue(), {
+        .poll(() => composerValue(composer), {
           timeout: 10_000,
         })
         .toBe("");
@@ -153,7 +154,10 @@ suite.define(() => {
         .locator(".chat-thread-inner")
         .getByText("History race stayed visible.")
         .waitFor({ timeout: 10_000 });
-      await page.locator(".agent-chat__composer-combobox textarea").fill("/");
+      await fillComposer(
+        page.locator(".agent-chat__composer-combobox openclaw-composer-editor"),
+        "/",
+      );
       await page.getByRole("option", { name: /\/startup-ready/ }).waitFor({ timeout: 10_000 });
       // Check after both controls render so no late fallback RPC supplied either catalog.
       expect({

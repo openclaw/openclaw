@@ -171,7 +171,10 @@ suite.define(() => {
 
       try {
         await page.goto(`${suite.server.baseUrl}chat`);
-        await page.locator(".agent-chat__composer-combobox > textarea").focus();
+        await page
+          .locator(".agent-chat__composer-combobox > openclaw-composer-editor")
+          .locator(".cm-content")
+          .focus();
         await page.keyboard.press("ControlOrMeta+f");
         const search = page.locator(".agent-chat__search-bar input");
         await search.waitFor();

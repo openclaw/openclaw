@@ -1,12 +1,12 @@
+import { afterEach, describe, expect, it, vi } from "vitest";
 /* @vitest-environment jsdom */
 /* @vitest-environment-options {"url":"http://chat-pane-retained.test/"} */
-
-import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { SessionWorkspaceGetResult } from "../../api/types.ts";
 import { chatInputOwnerForContext } from "../../app/chat-input-owner.ts";
 import { loadSettings, patchSettings } from "../../app/settings.ts";
+import type { ComposerEditor } from "../../components/composer-editor.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
 import { collectGarbageForTest } from "../../test-helpers/garbage-collection.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
@@ -164,7 +164,7 @@ describe("chat pane retained presentation lifecycle", () => {
       mounted.active = true;
       const composer = document.createElement("div");
       composer.className = "agent-chat__composer-combobox";
-      const textarea = composer.appendChild(document.createElement("textarea"));
+      const textarea = composer.appendChild(document.createElement("openclaw-composer-editor"));
       mounted.append(composer);
       const focus = vi.spyOn(textarea, "focus");
       ChatPaneBase.prototype.connectedCallback.call(mounted);
@@ -327,7 +327,7 @@ describe("chat pane retained presentation lifecycle", () => {
       expect(state.handleSendChat).not.toHaveBeenCalled();
       expect(state.chatMessage).toBe("continue from the catalog");
 
-      let composingInput: HTMLTextAreaElement | null = null;
+      let composingInput: ComposerEditor | null = null;
       if (outcome === "composition" || outcome === "canceled composition") {
         const { container } = renderComposerFixture({
           paneId: pane.presentationId,
@@ -336,7 +336,7 @@ describe("chat pane retained presentation lifecycle", () => {
           getDraft: () => state.chatMessage,
           onDraftChange: state.handleChatDraftChange,
         });
-        composingInput = container.querySelector("textarea");
+        composingInput = container.querySelector("openclaw-composer-editor");
         expect(composingInput).not.toBeNull();
         composingInput!.dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true }));
         composingInput!.value = "編集";
@@ -434,7 +434,7 @@ describe("chat pane retained presentation lifecycle", () => {
     const activePane = app.appendChild(document.createElement("section"));
     const composer = document.createElement("div");
     composer.className = "agent-chat__composer-combobox";
-    const textarea = composer.appendChild(document.createElement("textarea"));
+    const textarea = composer.appendChild(document.createElement("openclaw-composer-editor"));
     activePane.append(composer);
     const focus = vi.spyOn(textarea, "focus");
     const target = activePane.appendChild(document.createElement("main"));

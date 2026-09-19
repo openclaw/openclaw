@@ -2,6 +2,7 @@ import path from "node:path";
 import { expect, type Page } from "playwright/test";
 import { beforeEach, it } from "vitest";
 import type { ChatPageHost } from "../pages/chat/chat-state-host.ts";
+import { fillComposer } from "../test-helpers/composer-editor.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
   installMockGateway,
@@ -114,7 +115,10 @@ async function startActiveTurn(
   prompt: string,
   streamText: string,
 ): Promise<string> {
-  await page.locator(".agent-chat__composer-combobox textarea").fill(prompt);
+  await fillComposer(
+    page.locator(".agent-chat__composer-combobox openclaw-composer-editor"),
+    prompt,
+  );
   await page.getByRole("button", { name: "Send message" }).click();
   const send = await gateway.waitForRequest("chat.send");
   const runId = (send.params as { idempotencyKey?: unknown }).idempotencyKey;
@@ -243,7 +247,9 @@ async function openActiveTurn(scenario: Parameters<typeof installMockGateway>[1]
   const page = await context.newPage();
   const gateway = await installMockGateway(page, scenario);
   await page.goto(`${suite.server.baseUrl}chat`);
-  await page.locator(".agent-chat__composer-combobox textarea").waitFor({ timeout: 10_000 });
+  await page
+    .locator(".agent-chat__composer-combobox openclaw-composer-editor")
+    .waitFor({ timeout: 10_000 });
   return { context, page, gateway };
 }
 
@@ -375,7 +381,10 @@ suite.define(() => {
         const sessionKey = initial.sessionKey;
         const prompt = "Keep my reconnect prompt before its answer.";
         const reply = "This durable answer arrived before history recovery.";
-        await page.locator(".agent-chat__composer-combobox textarea").fill(prompt);
+        await fillComposer(
+          page.locator(".agent-chat__composer-combobox openclaw-composer-editor"),
+          prompt,
+        );
         await page.getByRole("button", { name: "Send message" }).click();
         const send = await gateway.waitForRequest("chat.send");
         const runId = (send.params as { idempotencyKey?: unknown }).idempotencyKey;

@@ -1,6 +1,7 @@
 import path from "node:path";
 import { expect, it } from "vitest";
 import type { GatewaySessionRow, SessionsListResult } from "../api/types.ts";
+import { fillComposer } from "../test-helpers/composer-editor.ts";
 import {
   controlUiBundledSettingsStorageKey,
   controlUiSessionUrl,
@@ -82,9 +83,9 @@ suite.define(() => {
           await panel.locator("openclaw-chat-pane").waitFor();
           await gateway.waitForRequest("chat.startup", { after: 1 });
           await page.screenshot({ path: path.join(artifactDir, "home-open.png") });
-          const composer = panel.locator(".agent-chat__composer-combobox textarea");
+          const composer = panel.locator(".agent-chat__composer-combobox openclaw-composer-editor");
           await expect.poll(() => composer.isVisible()).toBe(true);
-          await composer.fill("Help with the current work");
+          await fillComposer(composer, "Help with the current work");
           await composer.press("Enter");
           expect((await gateway.waitForRequest("chat.send")).params).toMatchObject({
             sessionKey: homeKey,
@@ -178,8 +179,8 @@ suite.define(() => {
         }
         await expect.poll(() => reference.textContent()).toContain('"title":"Renamed workspace"');
 
-        const composer = panel.locator(".agent-chat__composer-combobox textarea");
-        await composer.fill("Review the current work");
+        const composer = panel.locator(".agent-chat__composer-combobox openclaw-composer-editor");
+        await fillComposer(composer, "Review the current work");
         await composer.press("Enter");
         const sent = await gateway.waitForRequest("chat.send");
         expect(sent.params).toMatchObject({

@@ -4,6 +4,7 @@ import { withTimeout } from "@openclaw/fs-safe/advanced";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import type { ConsoleMessage, Frame, Page, Request } from "playwright";
 import { agentRouteFromPath, isRouteId, pathForRoute } from "../app-route-paths.ts";
+import type { ComposerEditor } from "../components/composer-editor.ts";
 import { createControlUiE2eArtifactDir } from "./control-ui-e2e-artifacts.ts";
 
 const CONTROL_UI_E2E_DIAGNOSTIC_RING_LIMIT = 200;
@@ -341,8 +342,8 @@ async function captureControlUiE2eFailureDiagnosticsUnsafe(
         }
         customElementCounts[name] = (customElementCounts[name] ?? 0) + 1;
       }
-      const textarea = document.querySelector<HTMLTextAreaElement>(
-        ".agent-chat__composer-combobox textarea",
+      const textarea = document.querySelector<ComposerEditor>(
+        ".agent-chat__composer-combobox openclaw-composer-editor",
       );
       const roster =
         agentsState?.agentsList && typeof agentsState.agentsList === "object"

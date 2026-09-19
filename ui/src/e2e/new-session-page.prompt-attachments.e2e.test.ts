@@ -3,6 +3,7 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { Page } from "playwright";
 import { expect, it } from "vitest";
+import { composerValue, fillComposer } from "../test-helpers/composer-editor.ts";
 import {
   takeControlUiElementScreenshot,
   takeControlUiViewportScreenshot,
@@ -62,7 +63,7 @@ suite.define(() => {
       await installMockGateway(firstPage);
       await firstPage.goto(`${suite.server.baseUrl}new`);
       const firstMessage = firstPage.locator(".new-session-page__message");
-      await firstMessage.fill("restore this prompt after restart");
+      await fillComposer(firstMessage, "restore this prompt after restart");
       await pastePng(firstMessage);
       await firstPage.locator('.chat-attachment-thumb img[alt="pixel.png"]').waitFor();
       const incognito = firstPage.getByRole("switch", { name: "Incognito" });
@@ -71,7 +72,7 @@ suite.define(() => {
       await waitForCommittedNewSessionDraft(firstPage, null, 0);
       await incognito.click();
       await expect.poll(() => incognito.getAttribute("aria-checked")).toBe("false");
-      await firstMessage.fill("restore this prompt after restart and incognito");
+      await fillComposer(firstMessage, "restore this prompt after restart and incognito");
       await expect.poll(() => firstPage.locator(".chat-attachment-thumb").count()).toBe(1);
       await waitForCommittedNewSessionDraft(
         firstPage,
@@ -80,7 +81,7 @@ suite.define(() => {
       );
       await firstPage.reload();
       await expect
-        .poll(() => firstMessage.inputValue())
+        .poll(() => composerValue(firstMessage))
         .toBe("restore this prompt after restart and incognito");
       await expect.poll(() => firstPage.locator(".chat-attachment-thumb").count()).toBe(1);
       await firstPage.close();
@@ -94,7 +95,7 @@ suite.define(() => {
       await restoredPage.goto(`${suite.server.baseUrl}new`);
       const restoredMessage = restoredPage.locator(".new-session-page__message");
       await expect
-        .poll(() => restoredMessage.inputValue())
+        .poll(() => composerValue(restoredMessage))
         .toBe("restore this prompt after restart and incognito");
       await expect.poll(() => restoredPage.locator(".chat-attachment-thumb").count()).toBe(1);
       await captureUiProof(suite, restoredPage, "new-session-restart-draft-restored.png");
@@ -126,7 +127,7 @@ suite.define(() => {
       await installMockGateway(clearedPage);
       await clearedPage.goto(`${suite.server.baseUrl}new`);
       await expect
-        .poll(() => clearedPage.locator(".new-session-page__message").inputValue())
+        .poll(() => composerValue(clearedPage.locator(".new-session-page__message")))
         .toBe("");
       await expect.poll(() => clearedPage.locator(".chat-attachment-thumb").count()).toBe(0);
       await captureUiProof(suite, clearedPage, "new-session-restart-draft-cleared.png");
@@ -166,7 +167,10 @@ suite.define(() => {
         height: element.clientHeight,
         overflowY: getComputedStyle(element).overflowY,
       }));
-      await message.fill(Array.from({ length: 10 }, (_, index) => `line ${index + 1}`).join("\n"));
+      await fillComposer(
+        message,
+        Array.from({ length: 10 }, (_, index) => `line ${index + 1}`).join("\n"),
+      );
       const tenLines = await message.evaluate((element) => {
         const style = getComputedStyle(element);
         return {
@@ -197,7 +201,7 @@ suite.define(() => {
       await captureUiProof(suite, page, "new-session-composer-ten-lines.png");
 
       const longPrompt = Array.from({ length: 14 }, (_, index) => `line ${index + 1}`).join("\n");
-      await message.fill(longPrompt);
+      await fillComposer(message, longPrompt);
       const capped = await message.evaluate((element) => ({
         clientHeight: element.clientHeight,
         overflowY: getComputedStyle(element).overflowY,
@@ -375,7 +379,7 @@ suite.define(() => {
         },
       });
       await page.goto(`${suite.server.baseUrl}new`);
-      await page.locator(".new-session-page__message").fill(message);
+      await fillComposer(page.locator(".new-session-page__message"), message);
       await page.getByRole("button", { name: "Start session" }).click();
       await page.waitForURL((url) => url.pathname === controlUiSessionPath(sessionKey), {
         timeout: 30_000,
@@ -416,7 +420,7 @@ suite.define(() => {
         },
       });
       await page.goto(`${suite.server.baseUrl}new`);
-      await page.locator(".new-session-page__message").fill(message);
+      await fillComposer(page.locator(".new-session-page__message"), message);
       await page.getByRole("button", { name: "Start session" }).click();
       await page.waitForURL((url) => url.pathname === controlUiSessionPath(sessionKey), {
         timeout: 30_000,
@@ -522,7 +526,7 @@ suite.define(() => {
       try {
         await page.goto(`${suite.server.baseUrl}new`);
         const composer = page.locator(".new-session-page__message");
-        await composer.fill(message);
+        await fillComposer(composer, message);
         await page.locator(".agent-chat__file-input").setInputFiles({
           name: "pixel.png",
           mimeType: "image/png",
@@ -657,7 +661,7 @@ suite.define(() => {
       await page.goto(`${suite.server.baseUrl}new`);
       const composer = page.locator(".new-session-page__message");
       const submit = page.getByRole("button", { name: "Start session" });
-      await composer.fill("include the image that is still loading");
+      await fillComposer(composer, "include the image that is still loading");
       await pastePng(composer);
 
       await expect.poll(() => submit.isDisabled()).toBe(true);
@@ -811,7 +815,7 @@ suite.define(() => {
       });
       await page.goto(`${suite.server.baseUrl}new`);
       const composer = page.locator(".new-session-page__message");
-      await composer.fill(message);
+      await fillComposer(composer, message);
       await pastePng(composer);
       await page.getByRole("button", { name: "Start session" }).click();
       const create = await gateway.waitForRequest("sessions.create");
@@ -878,7 +882,7 @@ suite.define(() => {
       });
       await page.goto(`${suite.server.baseUrl}new`);
       const composer = page.locator(".new-session-page__message");
-      await composer.fill(message);
+      await fillComposer(composer, message);
       await pastePng(composer);
       await page.getByRole("button", { name: "Start session" }).click();
 

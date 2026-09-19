@@ -316,7 +316,7 @@ suite.define(() => {
         if (dismissal === "Escape") {
           await page.keyboard.press("Escape");
         } else if (dismissal === "outside click") {
-          await page.locator(".agent-chat__composer-combobox textarea").click();
+          await page.locator(".agent-chat__composer-combobox openclaw-composer-editor").click();
         } else if (dismissal === "replacement") {
           await selectBubbleText(bubble);
         } else if (dismissal === "navigation") {
@@ -493,7 +493,10 @@ suite.define(() => {
         await message.hover();
         const copy = message.getByRole("button", { name: "Copy as markdown", exact: true });
         await copy.click();
-        await page.locator(".agent-chat__composer-combobox textarea").focus();
+        await page
+          .locator(".agent-chat__composer-combobox openclaw-composer-editor")
+          .locator(".cm-content")
+          .focus();
         await page.mouse.move(0, 0);
         const feedback = message.getByRole("status").filter({ hasText: "Copy failed" });
         await feedback.waitFor({ state: "visible" });

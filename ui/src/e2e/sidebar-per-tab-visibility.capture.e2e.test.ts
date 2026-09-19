@@ -182,7 +182,9 @@ suite.define(() => {
       const catalogTab = await context.newPage();
       const gateway = await installMockGateway(catalogTab, catalogSessionsMock());
       await catalogTab.goto(catalogUrl.href);
-      const composer = catalogTab.locator(".agent-chat__composer-combobox > textarea");
+      const composer = catalogTab.locator(
+        ".agent-chat__composer-combobox > openclaw-composer-editor",
+      );
       await composer.waitFor({ state: "visible", timeout: 10_000 });
       await catalogTab.getByText("Catalog transcript loaded", { exact: true }).waitFor();
       await expect.poll(() => catalogTab.locator("openclaw-app-sidebar").isVisible()).toBe(false);

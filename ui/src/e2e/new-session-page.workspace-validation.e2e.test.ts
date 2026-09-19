@@ -1,6 +1,7 @@
 import type { BrowserContextOptions, Page } from "playwright";
 import { expect, it } from "vitest";
 import type { ApplicationContext } from "../app/context.ts";
+import { composerValue, fillComposer } from "../test-helpers/composer-editor.ts";
 import {
   waitForControlUiGatewayReady,
   waitForControlUiGatewayReconnecting,
@@ -198,7 +199,7 @@ suite.define(() => {
         .poll(() => page.evaluate(() => document.activeElement?.className))
         .toContain("new-session-page__message");
 
-      await page.locator(".new-session-page__message").fill("verify the picker inputs");
+      await fillComposer(page.locator(".new-session-page__message"), "verify the picker inputs");
       await page.getByRole("button", { name: "Start session" }).click();
       await gateway.waitForRequest("sessions.create");
       await expect.poll(() => new URL(page.url()).pathname).toBe(controlUiSessionPath(sessionKey));
@@ -255,7 +256,10 @@ suite.define(() => {
           )
           .waitFor({ state: "visible" });
         await page.keyboard.press("Escape");
-        await page.locator(".new-session-page__message").fill("start from the selected release");
+        await fillComposer(
+          page.locator(".new-session-page__message"),
+          "start from the selected release",
+        );
         await page.getByRole("button", { name: "Start session" }).click();
         expect((await gateway.waitForRequest("sessions.create")).params).toMatchObject({
           agentId: "main",
@@ -312,7 +316,7 @@ suite.define(() => {
       expect(await worktree.isDisabled()).toBe(true);
       await page.keyboard.press("Escape");
 
-      await page.locator(".new-session-page__message").fill("keep this task isolated");
+      await fillComposer(page.locator(".new-session-page__message"), "keep this task isolated");
       const start = page.getByRole("button", { name: "Start session" });
       await expect.poll(() => start.isDisabled()).toBe(true);
       expect(await gateway.getRequests("sessions.create")).toHaveLength(0);
@@ -371,7 +375,7 @@ suite.define(() => {
         return value?.agents?.main?.worktree;
       });
       expect(storedWorktree).toBe(false);
-      await page.locator(".new-session-page__message").fill("continue directly");
+      await fillComposer(page.locator(".new-session-page__message"), "continue directly");
       await page.getByRole("button", { name: "Start session" }).click();
       const create = await gateway.waitForRequest("sessions.create");
       expect(create.params).toMatchObject({ cwd: TARGET_REPO, message: "continue directly" });
@@ -408,7 +412,7 @@ suite.define(() => {
       await reconnectForBranchRediscovery(page, gateway);
 
       await expect.poll(() => trigger.getAttribute("data-worktree")).toBe("true");
-      await page.locator(".new-session-page__message").fill("do not run directly");
+      await fillComposer(page.locator(".new-session-page__message"), "do not run directly");
       const start = page.getByRole("button", { name: "Start session" });
       await expect.poll(() => start.isDisabled()).toBe(true);
       await trigger.click();
@@ -474,7 +478,7 @@ suite.define(() => {
 
       await expect.poll(() => whereTrigger.getAttribute("data-cloud-profile")).toBe("aws");
       await expect.poll(() => checkoutTrigger.getAttribute("data-worktree")).toBe("true");
-      await page.locator(".new-session-page__message").fill("do not run directly");
+      await fillComposer(page.locator(".new-session-page__message"), "do not run directly");
       const start = page.getByRole("button", { name: "Start session" });
       await expect.poll(() => start.isDisabled()).toBe(true);
       await whereTrigger.click();
@@ -549,7 +553,7 @@ suite.define(() => {
       const whereTrigger = page.locator("#new-session-where-trigger");
       const projectSelect = page.locator("wa-popover.new-session-page__project-popover");
       const projectTrigger = page.locator("#new-session-project-trigger");
-      await message.fill("preserve this replacement draft");
+      await fillComposer(message, "preserve this replacement draft");
       await page.locator("#new-session-checkout-trigger").click();
       await page
         .getByRole("button", { name: "New worktree Isolated copy of the repo", exact: true })
@@ -592,7 +596,7 @@ suite.define(() => {
         )
         .toEqual([{ repoRoot: TARGET_REPO, includeRepositoryStatus: true }]);
       await page.getByRole("heading", { name: "Replacement agent" }).waitFor();
-      await expect.poll(() => message.inputValue()).toBe("preserve this replacement draft");
+      await expect.poll(() => composerValue(message)).toBe("preserve this replacement draft");
       await expect
         .poll(() =>
           projectSelect.evaluate((element) => (element as HTMLElement & { open: boolean }).open),
@@ -628,7 +632,7 @@ suite.define(() => {
           projectSelect.evaluate((element) => (element as HTMLElement & { open: boolean }).open),
         )
         .toBe(false);
-      await expect.poll(() => message.inputValue()).toBe("preserve this replacement draft");
+      await expect.poll(() => composerValue(message)).toBe("preserve this replacement draft");
     });
   });
 
@@ -660,7 +664,7 @@ suite.define(() => {
           await page.goto(`${suite.server.baseUrl}new`);
           const message = page.locator(".new-session-page__message");
           const start = page.locator("button.new-session-page__start-submit");
-          await message.fill("keep this admitted task");
+          await fillComposer(message, "keep this admitted task");
           await waitForGatewayRecoveryScope(page, false);
           await start.click();
           await gateway.waitForRequest("sessions.create");
@@ -719,7 +723,7 @@ suite.define(() => {
         const message = page.locator(".new-session-page__message");
         const start = page.locator("button.new-session-page__start-submit");
         const submittedMessage = "retry this draft after reconnect";
-        await message.fill(submittedMessage);
+        await fillComposer(message, submittedMessage);
         await gateway.deferNext("sessions.create");
         await start.click();
         const originalCreate = await gateway.waitForRequest("sessions.create");
@@ -781,7 +785,10 @@ suite.define(() => {
         await page.goto(`${suite.server.baseUrl}new`);
         await page.getByRole("heading", { name: "Main" }).waitFor();
         await waitForGatewayRecoveryScope(page);
-        await page.locator(".new-session-page__message").fill("do not duplicate this task");
+        await fillComposer(
+          page.locator(".new-session-page__message"),
+          "do not duplicate this task",
+        );
         await gateway.deferNext("sessions.create");
         await page.getByRole("button", { name: "Start session" }).click();
         await gateway.waitForRequest("sessions.create");
@@ -821,18 +828,20 @@ suite.define(() => {
         if (change === "process restarts") {
           await warning.waitFor();
           await expect
-            .poll(() => page.locator(".new-session-page__message").inputValue())
+            .poll(() => composerValue(page.locator(".new-session-page__message")))
             .toBe("do not duplicate this task");
           expect(await page.getByRole("button", { name: "Start session" }).isDisabled()).toBe(true);
         } else {
           // A different principal gets a fresh draft, not the previous owner's
           // private text or frozen startup controller (including its error).
-          await expect.poll(() => page.locator(".new-session-page__message").inputValue()).toBe("");
+          await expect
+            .poll(() => composerValue(page.locator(".new-session-page__message")))
+            .toBe("");
           expect(await warning.isVisible()).toBe(false);
           expect(
             await page.getByText("do not duplicate this task", { exact: true }).isVisible(),
           ).toBe(false);
-          await page.locator(".new-session-page__message").fill("new owner's task");
+          await fillComposer(page.locator(".new-session-page__message"), "new owner's task");
           expect(await page.getByRole("button", { name: "Start session" }).isEnabled()).toBe(true);
         }
         expect(await page.locator(".new-session-page__starting").isVisible()).toBe(false);
@@ -920,7 +929,7 @@ suite.define(() => {
 
       await pollLocatorText(page.locator(".new-session-page__runtime")).toContain("Claude Code");
       await pollLocatorText(folderLabel).toBe("openclaw");
-      await page.locator(".new-session-page__message").fill("retarget this draft");
+      await fillComposer(page.locator(".new-session-page__message"), "retarget this draft");
       await page.getByRole("button", { name: "Start in terminal" }).click();
 
       const create = await gateway.waitForRequest("sessions.catalog.startTerminal");

@@ -19,3 +19,9 @@ export function createControlUiE2eArtifactDir(scope: string, parentDir?: string)
   console.info(`[control-ui-e2e] retained proof: ${directory}`);
   return directory;
 }
+
+/** Keep optional captures opt-in while using the same exclusive directory owner. */
+export function createRequestedControlUiE2eArtifactDir(scope: string): string | undefined {
+  const artifactRoot = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
+  return artifactRoot ? createControlUiE2eArtifactDir(scope, artifactRoot) : undefined;
+}

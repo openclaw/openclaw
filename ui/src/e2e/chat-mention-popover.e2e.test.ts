@@ -1,4 +1,5 @@
 import { assert, expect, it } from "vitest";
+import { composerValue } from "../test-helpers/composer-editor.ts";
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 import { waitForGatewayRecoveryScope } from "./new-session-page.test-support.ts";
@@ -52,14 +53,14 @@ suite.define(() => {
           const textarea = page.locator(
             route === "new"
               ? ".new-session-page__message"
-              : ".agent-chat__composer-combobox textarea",
+              : ".agent-chat__composer-combobox openclaw-composer-editor",
           );
           await textarea.pressSequentially("@Casey");
           const menu = page.getByRole("listbox", { name: "Mention a person" });
           await expect.poll(() => menu.getByRole("option").count()).toBe(1);
           await expect.poll(() => requests).toEqual([avatarUrl]);
           await textarea.press("Enter");
-          await expect.poll(() => textarea.inputValue()).toBe("@Casey Vale ");
+          await expect.poll(() => composerValue(textarea)).toBe("@Casey Vale ");
           const avatar = page.locator(
             '.composer-context-strip__person .chat-author-avatar[aria-label="Casey Vale"]',
           );
@@ -126,7 +127,7 @@ suite.define(() => {
         const textarea = page.locator(
           route === "new"
             ? ".new-session-page__message"
-            : ".agent-chat__composer-combobox textarea",
+            : ".agent-chat__composer-combobox openclaw-composer-editor",
         );
         await textarea.pressSequentially("@");
         await gateway.waitForRequest("users.mentionable");
@@ -174,7 +175,7 @@ suite.define(() => {
         await last.hover();
         expect(await last.textContent()).not.toContain(lastPerson.profileId.slice(-8));
         await textarea.press("Enter");
-        await expect.poll(() => textarea.inputValue()).toBe(`@${lastPerson.displayName} `);
+        await expect.poll(() => composerValue(textarea)).toBe(`@${lastPerson.displayName} `);
         await expect.poll(() => menu.count()).toBe(0);
         expect(await page.locator(".chat-reply-preview").textContent()).toContain(
           lastPerson.displayName,

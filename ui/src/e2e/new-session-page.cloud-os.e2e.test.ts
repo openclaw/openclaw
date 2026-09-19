@@ -1,6 +1,7 @@
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
+import { fillComposer } from "../test-helpers/composer-editor.ts";
 import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   LOCAL_GIT_WORKSPACE_RESPONSES,
@@ -85,7 +86,7 @@ suite.define(() => {
         }
         await capturePicker("02-after-unavailable-operating-systems.png");
         await page.keyboard.press("Escape");
-        await page.locator(".new-session-page__message").fill("Continue on Linux");
+        await fillComposer(page.locator(".new-session-page__message"), "Continue on Linux");
         await page.getByRole("button", { name: "Start session" }).click();
         const dispatch = await gateway.waitForRequest("sessions.dispatch");
         expect(dispatch.params).toEqual({ key: sessionKey, agentId: "main", profileId: "aws" });

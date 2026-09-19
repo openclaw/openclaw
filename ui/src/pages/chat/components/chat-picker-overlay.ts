@@ -1,4 +1,5 @@
 import { syncAnchoredOverlay } from "../../../components/anchored-overlay.ts";
+import type { ComposerEditor } from "../../../components/composer-editor.ts";
 import { consumeTooltipEscape } from "../../../components/tooltip.ts";
 import { clearChatModelSearchOnEscape } from "./chat-model-picker-search.ts";
 
@@ -129,7 +130,7 @@ function connectChatComposerPickerDismissal(ownerDocument: Document): () => void
     deepestPickers.forEach(closeComposerPicker);
     invocationComposer?.dispatchEvent(new CustomEvent(CHAT_COMPOSER_DISMISS_INVOCATIONS_EVENT));
     invocationComposer
-      ?.querySelector<HTMLTextAreaElement>(".agent-chat__composer-combobox > textarea")
+      ?.querySelector<ComposerEditor>(".agent-chat__composer-combobox > openclaw-composer-editor")
       ?.focus({ preventScroll: true });
     if (lastPicker) {
       pickerTrigger(lastPicker)?.focus({ preventScroll: true });

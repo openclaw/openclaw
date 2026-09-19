@@ -2,6 +2,7 @@ import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
 import type { AgentsListResult } from "../api/types.ts";
+import { composerValue, fillComposer } from "../test-helpers/composer-editor.ts";
 import type { ControlUiMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import {
   controlUiSessionUrl,
@@ -63,11 +64,11 @@ suite.define(() => {
       const heading = page.locator(".agent-chat__welcome-identity h2");
       const avatar = page.locator(".agent-chat__welcome-avatar");
       const avatarText = avatar.locator(".identity-avatar__text");
-      const composer = page.locator(".agent-chat__composer-combobox textarea");
+      const composer = page.locator(".agent-chat__composer-combobox openclaw-composer-editor");
       await expect.poll(() => heading.textContent()).toBe(initialName);
       await expect.poll(() => avatarText.getAttribute("data-avatar")).toBe(initialAvatar);
       await expect.poll(() => composer.getAttribute("placeholder")).toContain(initialName);
-      await composer.fill(draft);
+      await fillComposer(composer, draft);
       const sessionUrl = page.url();
       expect(await page.locator(".chat-group").count()).toBe(0);
       await capture("initial.png");
@@ -121,7 +122,7 @@ suite.define(() => {
         };
         expect([initialName, nextName]).toContain(observed.name);
         expect([initialAvatar, nextAvatar]).toContain(observed.avatar);
-        expect(await composer.inputValue()).toBe(draft);
+        expect(await composerValue(composer)).toBe(draft);
         expect(page.url()).toBe(sessionUrl);
         expect(await page.locator(".chat-group").count()).toBe(0);
         expect((await gateway.getRequests("chat.send")).length).toBe(0);

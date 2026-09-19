@@ -1,3 +1,4 @@
+import type { ComposerEditor } from "../../components/composer-editor.ts";
 import type { BoardFace } from "../../lib/board/settings.ts";
 import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
 import type { SessionChatRouteData } from "./route-loader.ts";
@@ -5,7 +6,7 @@ import type { SessionChatRouteData } from "./route-loader.ts";
 const HANDOFF_TTL_MS = 30_000;
 const MAINTENANCE_MS = 15_000;
 const RETRY_MS = 250;
-const COMPOSER_SELECTOR = ".agent-chat__composer-combobox textarea";
+const COMPOSER_SELECTOR = ".agent-chat__composer-combobox openclaw-composer-editor";
 
 type PendingHandoff = {
   expiresAt: number;
@@ -108,7 +109,7 @@ export class RouteDraftComposerFocus {
       this.timer = undefined;
     }
     const deadline = Date.now() + MAINTENANCE_MS;
-    let ownedComposer: HTMLTextAreaElement | undefined;
+    let ownedComposer: ComposerEditor | undefined;
 
     const focusCurrentComposer = () => {
       if (!this.host.isConnected) {
@@ -121,7 +122,7 @@ export class RouteDraftComposerFocus {
           candidate.sessionKey !== undefined &&
           areUiSessionKeysEquivalent(candidate.sessionKey, sessionKey),
       );
-      const composer = pane?.querySelector<HTMLTextAreaElement>(COMPOSER_SELECTOR);
+      const composer = pane?.querySelector<ComposerEditor>(COMPOSER_SELECTOR);
       const activeElement = document.activeElement;
       const focusStillOwned =
         activeElement === ownedComposer ||

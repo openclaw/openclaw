@@ -1,5 +1,6 @@
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it } from "vitest";
+import { fillComposer } from "../test-helpers/composer-editor.ts";
 import {
   defaultControlUiFeatureMethods,
   installMockGateway,
@@ -153,7 +154,10 @@ suite.define(() => {
             }
           }
 
-          await page.locator(".agent-chat__input textarea").fill("Continue reading");
+          await fillComposer(
+            page.locator(".agent-chat__input openclaw-composer-editor"),
+            "Continue reading",
+          );
           await page.getByRole("button", { name: "Send message" }).click();
           const send = await gateway.waitForRequest("chat.send");
           const runId = asNullableRecord(send.params)?.idempotencyKey;

@@ -113,9 +113,9 @@ suite.define(() => {
         expect(await summary.textContent()).toContain(`${viewport.count} completed`);
         expect(await disclosure.getAttribute("open")).toBeNull();
         expect(await widget.locator(".chat-swarm__tasks").isVisible()).toBe(false);
-        expect(await page.locator(".agent-chat__composer-combobox textarea").isVisible()).toBe(
-          true,
-        );
+        expect(
+          await page.locator(".agent-chat__composer-combobox openclaw-composer-editor").isVisible(),
+        ).toBe(true);
         await summary.focus();
         await page.keyboard.press("Enter");
         await expect

@@ -1,4 +1,5 @@
 import { expect, it } from "vitest";
+import { fillComposer } from "../test-helpers/composer-editor.ts";
 import {
   createNewSessionPageE2eSuite,
   installMockGateway,
@@ -24,7 +25,7 @@ suite.define(() => {
       });
       const gateway = await installMockGateway(page);
       await page.goto(`${suite.server.baseUrl}new?agent=main`);
-      await page.locator(".new-session-page__message").fill("private pending draft");
+      await fillComposer(page.locator(".new-session-page__message"), "private pending draft");
       await gateway.deferNext("sessions.create");
       await page.getByRole("button", { name: "Start session", exact: true }).click();
       const request = await gateway.waitForRequest("sessions.create");

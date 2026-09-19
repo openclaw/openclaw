@@ -1,8 +1,9 @@
 import type { Locator, Page } from "playwright";
 import { expect } from "vitest";
+import { composerValue } from "../test-helpers/composer-editor.ts";
 
 type SettledFormControl =
-  | { locator: Locator; value: string }
+  | { locator: Locator; value: string; kind?: "composer" }
   | { locator: Locator; checked: boolean };
 
 async function waitForBrowserRenderBoundary(page: Page): Promise<void> {
@@ -25,7 +26,11 @@ export async function waitForSettledFormControls(
     Promise.all(
       controls.map(async (control) =>
         "value" in control
-          ? { value: await control.locator.inputValue() }
+          ? {
+              value: await (control.kind === "composer"
+                ? composerValue(control.locator)
+                : control.locator.inputValue()),
+            }
           : { checked: await control.locator.getAttribute("aria-checked") },
       ),
     );

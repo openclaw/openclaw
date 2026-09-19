@@ -1,3 +1,4 @@
+import type { ComposerEditor } from "../../../components/composer-editor.ts";
 import {
   getSlashCommandCompletions,
   type InlineSlashCompletion,
@@ -12,7 +13,7 @@ type InlineSlashState = {
 type InlineSlashHost = {
   getDraft: () => string;
   commitDraft: (next: string) => void;
-  getTextarea: () => HTMLTextAreaElement | null;
+  getTextarea: () => ComposerEditor | null;
 };
 
 type InlineSlashArgumentInvocation = {

@@ -48,7 +48,7 @@ describe("new-session composer critter visits", () => {
     first.rerenderForAgent("resolved-agent");
     expect(visitor()).toBe(initial);
     expect(visitor().seed).toBe(seed);
-    const textarea = first.composer.querySelector("textarea")!;
+    const textarea = first.composer.querySelector("openclaw-composer-editor")!;
     textarea.value = "A prompt takes priority over the visitors";
     textarea.dispatchEvent(new InputEvent("input", { bubbles: true }));
     expect(visitor().seed).toBe(seed);

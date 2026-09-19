@@ -1,6 +1,7 @@
 import type { Locator } from "playwright";
 import { expect, it } from "vitest";
 import { storedChatOutboxScopeKey } from "../lib/chat/outbox-store.ts";
+import { composerValue, fillComposer } from "../test-helpers/composer-editor.ts";
 import {
   defaultControlUiFeatureMethods,
   installMockGateway,
@@ -19,6 +20,7 @@ const viewports = [
 ];
 
 async function selectText(text: Locator) {
+  await text.click();
   await text.evaluate((element) => {
     const range = document.createRange();
     range.selectNodeContents(element);
@@ -50,7 +52,7 @@ suite.define(() => {
         await expect.poll(() => preview.isVisible()).toBe(true);
         const clear = page.getByRole("button", { name: "Remove all comments", exact: true });
         expect(await clear.evaluate((element) => getComputedStyle(element).opacity)).toBe("1");
-        await page.locator(".agent-chat__composer-shell textarea").tap();
+        await page.locator(".agent-chat__composer-shell openclaw-composer-editor").tap();
         await expect.poll(() => preview.isVisible()).toBe(false);
         await page.getByRole("button", { name: "Send message", exact: true }).tap();
         const request = await gateway.waitForRequest("chat.send");
@@ -69,7 +71,7 @@ suite.define(() => {
         await expect.poll(() => preview.textContent()).toContain(selectedText);
         await expect.poll(() => preview.textContent()).toContain("Check the rollback steps. 🦞");
         expect(await preview.locator("button").count()).toBe(0);
-        await page.locator(".agent-chat__composer-shell textarea").tap();
+        await page.locator(".agent-chat__composer-shell openclaw-composer-editor").tap();
         await expect.poll(() => preview.isVisible()).toBe(false);
         await selectText(source);
         await page.getByRole("button", { name: "Add to chat", exact: true }).tap();
@@ -106,7 +108,7 @@ suite.define(() => {
             historyMessages: [{ role: "assistant", content: selectedText }],
           });
           await page.goto(`${suite.server.baseUrl}chat`);
-          const composer = page.locator(".agent-chat__composer-shell textarea");
+          const composer = page.locator(".agent-chat__composer-shell openclaw-composer-editor");
           await composer.waitFor({ state: "visible" });
           const text = page.locator(".chat-bubble .chat-text p").filter({ hasText: selectedText });
           const toolbar = page.getByRole("toolbar", { name: "Selection actions" });
@@ -142,10 +144,10 @@ suite.define(() => {
               path: `${suite.artifactDir}/after-${viewport.width}-${stage}.png`,
             });
 
-          await composer.fill(draft);
+          await fillComposer(composer, draft);
           await open();
           expect(await comment.inputValue()).toBe("");
-          expect(await composer.inputValue()).toBe(draft);
+          expect(await composerValue(composer)).toBe(draft);
           expect(await highlightedText()).toBe(selectedText);
           await bounded(editor);
           await capture("inline-comment");
@@ -169,7 +171,7 @@ suite.define(() => {
           await editor.getByRole("button", { name: "Save comment", exact: true }).click();
           await chip(1).waitFor({ state: "visible" });
           expect(await highlightedText()).toBe("");
-          expect(await composer.inputValue()).toBe(draft);
+          expect(await composerValue(composer)).toBe(draft);
           await expect
             .poll(() => composer.evaluate((element) => element === document.activeElement))
             .toBe(true);
@@ -220,7 +222,7 @@ suite.define(() => {
           await deleteComment.click();
           expect(await chip(1).count()).toBe(0);
           expect(await pin(1).count()).toBe(0);
-          expect(await composer.inputValue()).toBe(draft);
+          expect(await composerValue(composer)).toBe(draft);
 
           await open();
           await comment.fill("Explain the rollback checks. 🦞");
@@ -237,7 +239,7 @@ suite.define(() => {
           );
           await page.reload();
           await chip(1).waitFor({ state: "visible" });
-          expect(await composer.inputValue()).toBe(draft);
+          expect(await composerValue(composer)).toBe(draft);
           await chip(1).hover();
           const preview = page.getByRole("region", { name: "Comments", exact: true });
           await preview.waitFor({ state: "visible" });
@@ -267,7 +269,7 @@ suite.define(() => {
           expect(contents[0]).toContain("agent:main:main");
           expect(contents[1]).toContain(selectedText);
           expect(contents[1]).not.toContain("Explain the rollback checks.");
-          await expect.poll(() => composer.inputValue()).toBe("");
+          await expect.poll(() => composerValue(composer)).toBe("");
           expect(await chip(2).count()).toBe(0);
           expect(await pin(1).count()).toBe(0);
           await gateway.emitChatFinal({
@@ -414,11 +416,11 @@ suite.define(() => {
         await page.goto(`${suite.server.baseUrl}chat`);
         const composer = replacement
           ? page.getByRole("textbox", { name: "Fixture draft", exact: true })
-          : page.locator(".agent-chat__composer-shell textarea");
-        await composer.fill(draft);
-        expect(await page.locator(".agent-chat__composer-shell textarea").count()).toBe(
-          replacement ? 0 : 1,
-        );
+          : page.locator(".agent-chat__composer-shell openclaw-composer-editor");
+        await (replacement ? composer.fill(draft) : fillComposer(composer, draft));
+        expect(
+          await page.locator(".agent-chat__composer-shell openclaw-composer-editor").count(),
+        ).toBe(replacement ? 0 : 1);
         const editor = page.getByRole("dialog", { name: "Comment", exact: true });
         const pin = page.getByRole("button", { name: "Edit comment 1", exact: true });
         const saveComment = async () => {
@@ -443,12 +445,12 @@ suite.define(() => {
         expect(await pin.count()).toBe(0);
         await saveComment();
         await saveComment();
-        expect(await composer.inputValue()).toBe(draft);
+        expect(await (replacement ? composer.inputValue() : composerValue(composer))).toBe(draft);
         const send = replacement
           ? page.getByRole("button", { name: "Fixture send", exact: true })
           : page.getByRole("button", { name: "Send message", exact: true });
         await gateway.setHistoryMessages([]);
-        await composer.fill("/clear");
+        await (replacement ? composer.fill("/clear") : fillComposer(composer, "/clear"));
         await send.click();
         await gateway.waitForRequest("sessions.reset");
         await page
@@ -474,7 +476,7 @@ suite.define(() => {
         });
         await preview.getByRole("button", { name: "Delete comment", exact: true }).first().click();
         await expect.poll(() => chip.textContent()).toContain("1 comment");
-        await composer.fill(draft);
+        await (replacement ? composer.fill(draft) : fillComposer(composer, draft));
         await send.click();
         const request = await gateway.waitForRequest("chat.send");
         const params = request.params as {
@@ -597,8 +599,8 @@ suite.define(() => {
             historyMessages: [{ role: "assistant", content: selectedText }],
           });
           await page.goto(`${suite.server.baseUrl}chat`);
-          const composer = page.locator(".agent-chat__composer-shell textarea");
-          await composer.fill(draft);
+          const composer = page.locator(".agent-chat__composer-shell openclaw-composer-editor");
+          await fillComposer(composer, draft);
           const text = page.locator(".chat-bubble .chat-text p").filter({ hasText: selectedText });
           const toolbar = page.getByRole("toolbar", { name: "Selection actions" });
           await selectText(text);
@@ -610,7 +612,7 @@ suite.define(() => {
           const sideComposer = page.locator(".chat-session-rail__input");
           await sideComposer.waitFor({ state: "visible" });
           expect(await sideComposer.inputValue()).toBe(`Regarding "${selectedText}": `);
-          expect(await composer.inputValue()).toBe(draft);
+          expect(await composerValue(composer)).toBe(draft);
           expect(await gateway.getRequests("chat.send")).toHaveLength(0);
         },
       );

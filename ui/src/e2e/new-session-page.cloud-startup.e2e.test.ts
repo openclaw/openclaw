@@ -1,5 +1,6 @@
 import { expect, it } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { composerDisabled, composerValue, fillComposer } from "../test-helpers/composer-editor.ts";
 import {
   ONE_PIXEL_PNG_B64,
   SESSION_LIST_DEFAULTS,
@@ -179,7 +180,7 @@ suite.define(() => {
         };
       });
       await gateway.deferNext("sessions.send");
-      await page.locator(".new-session-page__message").fill(message);
+      await fillComposer(page.locator(".new-session-page__message"), message);
       await pastePng(page.locator(".new-session-page__message"));
       await page.getByRole("button", { name: "Start session" }).click();
       const firstSend = await gateway.waitForRequest("sessions.send");
@@ -259,7 +260,9 @@ suite.define(() => {
       await checkDelivery.waitFor({ state: "visible" });
       await expectPastedPngImage(retainedTurn.locator("img.chat-message-image"));
       await expect
-        .poll(() => page.locator(".agent-chat__composer-combobox textarea").isDisabled())
+        .poll(() =>
+          composerDisabled(page.locator(".agent-chat__composer-combobox openclaw-composer-editor")),
+        )
         .toBe(true);
 
       const historyCount = (await gateway.getRequests("chat.history")).length;
@@ -406,13 +409,13 @@ suite.define(() => {
         .toHaveLength(0);
       expect(await gateway.getRequests("sessions.send")).toHaveLength(0);
       expect(await gateway.getRequests("sessions.dispatch")).toHaveLength(0);
-      await expect.poll(() => page.locator(".new-session-page__message").inputValue()).toBe("");
+      await expect.poll(() => composerValue(page.locator(".new-session-page__message"))).toBe("");
       await page.locator("#new-session-where-trigger").click();
       await page
         .locator("wa-popover.new-session-page__where-popover")
         .getByRole("button", { name: "aws", exact: true })
         .click();
-      await page.locator(".new-session-page__message").fill("start another cloud task");
+      await fillComposer(page.locator(".new-session-page__message"), "start another cloud task");
       await expect
         .poll(() => page.getByRole("button", { name: "Start session" }).isDisabled())
         .toBe(false);

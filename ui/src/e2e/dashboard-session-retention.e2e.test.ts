@@ -2,6 +2,7 @@ import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
 import { openSlot, setSidebarOpen } from "../pages/chat/sidebar-layout.ts";
+import { composerValue, fillComposer } from "../test-helpers/composer-editor.ts";
 import {
   controlUiBundledSettingsStorageKey,
   controlUiSessionPath,
@@ -46,13 +47,13 @@ suite.define(() => {
         },
       });
       await page.goto(new URL(controlUiSessionPath(alphaKey), suite.server.baseUrl).href);
-      const composer = page.locator(".agent-chat__composer-combobox textarea");
+      const composer = page.locator(".agent-chat__composer-combobox openclaw-composer-editor");
       const draft = "Review the release checklist.";
-      await composer.fill(draft);
+      await fillComposer(composer, draft);
       await openChatSidePanelType(page, "Dashboard");
       const dashboard = page.locator('[data-panel-slot="dashboard"]');
       await dashboard.getByRole("status").waitFor();
-      expect(await composer.inputValue()).toBe(draft);
+      expect(await composerValue(composer)).toBe(draft);
       await gateway.rejectDeferred("board.get", {
         code: "UNAVAILABLE",
         message: "Dashboard temporarily unavailable",
@@ -75,7 +76,7 @@ suite.define(() => {
         await dashboard.waitFor({ state: "hidden" });
         await page.locator(".chat-side-panel-toggle").click();
         await dashboard.locator('[data-test-id="board-empty"]').waitFor();
-        expect(await composer.inputValue()).toBe(draft);
+        expect(await composerValue(composer)).toBe(draft);
       }
       await page.locator(".chat-panel-swap").click();
       await page.getByRole("button", { name: "Focus", exact: true }).click();
@@ -91,7 +92,7 @@ suite.define(() => {
       ).toBe(true);
       await page.getByRole("button", { name: "Restore split", exact: true }).click();
       await composer.waitFor();
-      expect(await composer.inputValue()).toBe(draft);
+      expect(await composerValue(composer)).toBe(draft);
       expect(await gateway.getRequests("chat.send")).toHaveLength(0);
     });
   });

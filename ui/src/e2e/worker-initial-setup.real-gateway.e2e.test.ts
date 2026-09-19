@@ -36,6 +36,7 @@ import { openOpenClawStateDatabase } from "../../../src/state/openclaw-state-db.
 import { createOpenClawTestState } from "../../../src/test-utils/openclaw-test-state.js";
 import { getFreePort } from "../../../src/test-utils/ports.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
+import { fillComposer } from "../test-helpers/composer-editor.ts";
 import { controlUiSessionUrl } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -263,9 +264,11 @@ suite.define(() => {
             .getByRole("button", { name: `Switch to 127.0.0.1:${port}`, exact: true })
             .click();
           try {
-            const composer = page.locator(".agent-chat__composer-combobox textarea");
+            const composer = page.locator(
+              ".agent-chat__composer-combobox openclaw-composer-editor",
+            );
             await composer.waitFor({ state: "visible", timeout: 30_000 });
-            await composer.fill("Browser input held for setup");
+            await fillComposer(composer, "Browser input held for setup");
             await page.getByRole("button", { name: "Send message", exact: true }).click();
             await expect
               .poll(() => listSessionPendingInputs(scope).items.length, { timeout: 15000 })
