@@ -62,7 +62,6 @@ import {
   asCompactionHookRunner,
   buildBeforeCompactionHookMetrics,
   estimateTokensAfterCompaction,
-  runAfterCompactionHooks,
   runBeforeCompactionHooks,
   runPostCompactionSideEffects,
 } from "./compaction-hooks.js";
@@ -71,6 +70,10 @@ import {
   resolveCompactionTimeoutMs,
 } from "./compaction-safety-timeout.js";
 import { prepareCompactionSessionAgent } from "./compaction-session-agent.js";
+import {
+  completeNativeSkippedCompaction,
+  runPreparedAfterCompactionHooks,
+} from "./compaction-session-hooks.js";
 import { buildEmbeddedExtensionFactories } from "./extensions.js";
 import { getHistoryLimitFromSessionKey, limitHistoryTurns } from "./history.js";
 import { log } from "./logger.js";
@@ -444,7 +447,7 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
           observedTokenCount,
           estimateTokensFn: estimateTokens,
         });
-        const { hookSessionKey, missingSessionKey } = await runBeforeCompactionHooks({
+        const hookState = await runBeforeCompactionHooks({
           hookRunner,
           sessionId: params.sessionId,
           sessionKey: sessionTarget.sessionKey,
@@ -476,11 +479,16 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
           log.info(
             `[compaction] skipping — no real conversation messages (sessionKey=${params.sessionKey ?? params.sessionId})`,
           );
-          return {
-            ok: true,
-            compacted: false,
-            reason: "no real conversation messages",
-          };
+          return await completeNativeSkippedCompaction({
+            runtime,
+            hookRunner,
+            hookState,
+            messageCountAfter: beforeHookMetrics.messageCountBefore,
+            tokensAfter: beforeHookMetrics.tokenCountBefore,
+            sessionFile: params.sessionFile,
+            tokensBefore: limitedTranscriptTokensBefore,
+            assertActive,
+          });
         }
 
         const compactStartedAt = Date.now();
@@ -632,14 +640,10 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
               `delta.estTokens=${typeof preMetrics.estTokens === "number" && typeof postMetrics.estTokens === "number" ? postMetrics.estTokens - preMetrics.estTokens : "unknown"}`,
           );
         }
-        await runAfterCompactionHooks({
+        await runPreparedAfterCompactionHooks({
+          runtime,
           hookRunner,
-          sessionId: params.sessionId,
-          sessionAgentId,
-          hookSessionKey,
-          missingSessionKey,
-          workspaceDir: effectiveWorkspace,
-          messageProvider: resolvedMessageProvider,
+          hookState,
           messageCountAfter,
           tokensAfter,
           compactedCount,
@@ -648,7 +652,6 @@ export async function executePreparedCompactionSession(runtime: PreparedCompacti
           tokensBefore,
           firstKeptEntryId: effectiveFirstKeptEntryId,
           assertActive,
-          onHookMessages: params.onCompactionHookMessages,
         });
         const resultSessionTarget: ContextEngineSessionTarget = {
           agentId: sessionTarget.agentId,
