@@ -372,6 +372,64 @@ describe("cron runs query options", () => {
     vi.restoreAllMocks();
   });
 
+  it("queries all visible automations without a job selector", async () => {
+    await runCronRuns(["--all"]);
+    expect(callGatewayFromCli).toHaveBeenCalledExactlyOnceWith("cron.runs", expect.anything(), {
+      scope: "all",
+      limit: 50,
+    });
+    expect(defaultRuntime.writeJson).toHaveBeenCalledWith({ entries: [], total: 0 });
+  });
+
+  it("retains filters and pagination in the all-jobs request", async () => {
+    await runCronRuns([
+      "--all",
+      "--status",
+      "error",
+      "--delivery-status",
+      "not-delivered",
+      "--query",
+      "timeout",
+      "--sort",
+      "asc",
+      "--offset",
+      "1",
+      "--limit",
+      "2",
+      "--run-id",
+      "run-1",
+    ]);
+    expect(callGatewayFromCli).toHaveBeenCalledExactlyOnceWith("cron.runs", expect.anything(), {
+      scope: "all",
+      status: "error",
+      deliveryStatus: "not-delivered",
+      query: "timeout",
+      sortDir: "asc",
+      offset: 1,
+      limit: 2,
+      runId: "run-1",
+    });
+  });
+
+  it.each([["job-1"], ["--id", "job-1"], [""], ["--id", "  "]].map((selector) => ({ selector })))(
+    "rejects --all combined with a supplied selector %j before RPC",
+    async ({ selector }) => {
+      await expect(runCronRuns(["--all", ...selector])).rejects.toThrow("exit 1");
+      expect(defaultRuntime.error).toHaveBeenCalledWith("--all cannot be combined with a job id");
+      expect(callGatewayFromCli).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(["cron", "automations"])("registers --all through the %s root", async (root) => {
+    const program = new Command().name("openclaw").exitOverride();
+    registerCronCli(program);
+    await program.parseAsync([root, "runs", "--all"], { from: "user" });
+    expect(callGatewayFromCli).toHaveBeenCalledExactlyOnceWith("cron.runs", expect.anything(), {
+      scope: "all",
+      limit: 50,
+    });
+  });
+
   it("forwards filters, paging, and sort to cron.runs", async () => {
     await runCronRuns([
       "job-1",
