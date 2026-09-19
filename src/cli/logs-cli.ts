@@ -10,7 +10,7 @@ import {
   resolveIntegerOption,
 } from "@openclaw/normalization-core/number-coercion";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
-import type { Command } from "commander";
+import { Option, type Command } from "commander";
 import {
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
@@ -29,6 +29,12 @@ import { projectGatewayConnectionDetailsForDiagnostics } from "../gateway/connec
 import { isLoopbackHost } from "../gateway/net.js";
 import { computeBackoff } from "../infra/backoff.js";
 import { formatErrorMessage } from "../infra/errors.js";
+import {
+  ALLOWED_LOG_LEVELS,
+  levelToMinLevel,
+  tryParseLogLevel,
+  type LogLevel,
+} from "../logging/levels.js";
 import { readConfiguredLogTail } from "../logging/log-tail.js";
 import { parseLogLine } from "../logging/parse-log-line.js";
 import { redactSensitiveLines, resolveRedactOptions } from "../logging/redact.js";
@@ -91,6 +97,7 @@ async function loadLogsCliRuntime(): Promise<LogsCliRuntimeModule> {
 }
 
 type LogsCliOptions = GatewayRpcOpts & {
+  level?: LogLevel;
   limit?: string;
   maxBytes?: string;
   follow?: boolean;
@@ -514,6 +521,12 @@ export function registerLogsCli(program: Command) {
     .command("logs")
     .description("Tail gateway file logs via RPC")
     .option("--limit <n>", "Max lines to return", "200")
+    .addOption(
+      new Option(
+        "--level <level>",
+        "Show records at or above this severity in the fetched window",
+      ).choices(ALLOWED_LOG_LEVELS.filter((level) => level !== "silent")),
+    )
     .option("--max-bytes <n>", "Max bytes to read", "250000")
     .option("--follow", "Follow log output", false)
     .option("--interval <ms>", "Polling interval in ms", "1000")
@@ -561,6 +574,7 @@ export function registerLogsCli(program: Command) {
     const interval = parsePositiveInt(opts.interval, 1000, "--interval");
     const limit = parsePositiveInt(opts.limit, 200, "--limit");
     const maxBytes = parsePositiveInt(opts.maxBytes, 250_000, "--max-bytes");
+    const minimumLevelId = opts.level ? levelToMinLevel(opts.level) : undefined;
     let gatewayCursor: number | undefined;
     let journalCursor: string | undefined;
     let journalSince: string | undefined;
@@ -697,7 +711,19 @@ export function registerLogsCli(program: Command) {
       const sourceIdentity = buildLogSourceIdentity(payload);
       const sourceChanged = sourceIdentity !== undefined && sourceIdentity !== lastSourceIdentity;
       const shouldEmitSourceMetadata = first || sourceChanged;
-      const lines = Array.isArray(payload.lines) ? payload.lines : [];
+      const sourceLines = Array.isArray(payload.lines) ? payload.lines : [];
+      // Filtering is presentation-only: source cursors, bounds, and notices stay authoritative.
+      const lines =
+        minimumLevelId === undefined
+          ? sourceLines
+          : sourceLines.filter((line) => {
+              const level = tryParseLogLevel(parseLogLine(line)?.level);
+              return (
+                level !== undefined &&
+                level !== "silent" &&
+                levelToMinLevel(level) >= minimumLevelId
+              );
+            });
       if (jsonMode) {
         if (shouldEmitSourceMetadata) {
           if (!emitJsonLine(buildLogMetaRecord(payload))) {

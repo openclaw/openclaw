@@ -1178,3 +1178,200 @@ describe("logs cli", () => {
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
+
+describe("logs minimum severity", () => {
+  beforeEach(() => {
+    callGatewayFromCli.mockReset();
+    readConfiguredLogTail.mockReset();
+    buildGatewayConnectionDetails.mockReset();
+    buildGatewayConnectionDetails.mockReturnValue({
+      url: "ws://127.0.0.1:18789",
+      urlSource: "local loopback",
+      message: "",
+    });
+    readSystemdServiceRuntime.mockReset();
+    readSystemdServiceRuntime.mockResolvedValue({ status: "stopped" });
+    execFileUtf8Tail.mockReset();
+    execFileUtf8Tail.mockResolvedValue({ stdout: "", stderr: "", code: 1, truncated: false });
+  });
+  afterEach(() => {
+    callGatewayFromCli.mockReset();
+    readConfiguredLogTail.mockReset();
+    buildGatewayConnectionDetails.mockClear();
+    vi.restoreAllMocks();
+  });
+
+  function severityPayload() {
+    return {
+      file: "/tmp/fixture.log",
+      cursor: 987,
+      size: 987,
+      lines: [
+        JSON.stringify({ _meta: { logLevelName: "DEBUG" }, message: "debug-only" }),
+        JSON.stringify({ _meta: { logLevelName: "INFO" }, message: "info-only" }),
+        JSON.stringify({ _meta: { logLevelName: "WARN" }, message: "warn-visible" }),
+        JSON.stringify({ _meta: { logLevelName: "ERROR" }, message: "error-visible" }),
+        JSON.stringify({ _meta: { logLevelName: "FATAL" }, message: "fatal-visible" }),
+        JSON.stringify({ message: "unclassified" }),
+        "raw-unclassified",
+      ],
+      truncated: true,
+    };
+  }
+
+  it.each(["--plain", "--json"])(
+    "filters severity in %s without changing the request",
+    async (mode) => {
+      callGatewayFromCli.mockResolvedValueOnce(severityPayload());
+      const stdout = captureStdoutWrites();
+      const stderr = captureStderrWrites();
+      await runLogsCli(["logs", mode, "--level", "warn"]);
+      const out = stdout.join("");
+      for (const text of ["warn-visible", "error-visible", "fatal-visible"]) {
+        expect(out).toContain(text);
+      }
+      for (const text of ["debug-only", "info-only", "unclassified"]) {
+        expect(out).not.toContain(text);
+      }
+      const notices = mode === "--json" ? out : stderr.join("");
+      expect(notices).toContain("truncated");
+      expect(callGatewayFromCli).toHaveBeenCalledWith(
+        "logs.tail",
+        expect.any(Object),
+        { cursor: undefined, limit: 200, maxBytes: 250000 },
+        expect.any(Object),
+      );
+      if (mode === "--json") {
+        const records = out
+          .trim()
+          .split("\n")
+          .map((line) => JSON.parse(line));
+        expect(records.find((record) => record.type === "meta")).toMatchObject({ cursor: 987 });
+        expect(
+          records.filter((record) => record.type === "log").map((record) => record.level),
+        ).toEqual(["warn", "error", "fatal"]);
+      }
+    },
+  );
+
+  it("preserves raw and unclassified records when the option is omitted", async () => {
+    callGatewayFromCli.mockResolvedValueOnce(severityPayload());
+    const stdout = captureStdoutWrites();
+    captureStderrWrites();
+    await runLogsCli(["logs", "--json"]);
+    const out = stdout.join("");
+    expect(out).toContain("debug-only");
+    expect(out).toContain("raw-unclassified");
+    expect(out).toContain('"type":"raw"');
+  });
+
+  it("does not replace the source cursor when every record is filtered out", async () => {
+    callGatewayFromCli.mockResolvedValueOnce({
+      ...severityPayload(),
+      lines: [JSON.stringify({ _meta: { logLevelName: "INFO" }, message: "not-selected" })],
+    });
+    const stdout = captureStdoutWrites();
+    captureStderrWrites();
+    await runLogsCli(["logs", "--json", "--level", "error"]);
+    const records = stdout
+      .join("")
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line));
+    expect(records.filter((record) => record.type === "log")).toEqual([]);
+    expect(records.find((record) => record.type === "meta")).toMatchObject({ cursor: 987 });
+  });
+
+  it.each(["", "silent", "warning", "unknown"])(
+    "rejects invalid level %j before dispatch",
+    async (level) => {
+      captureStdoutWrites();
+      captureStderrWrites();
+      await expect(runLogsCli(["logs", "--level", level])).rejects.toThrow();
+      expect(callGatewayFromCli).not.toHaveBeenCalled();
+      expect(readConfiguredLogTail).not.toHaveBeenCalled();
+    },
+  );
+
+  it("applies the same filter to an admitted local-file fallback", async () => {
+    callGatewayFromCli.mockRejectedValueOnce(
+      createGatewayCloseError({
+        code: 1006,
+        reason: "",
+        message: "gateway closed (1006)",
+      }),
+    );
+    readConfiguredLogTail.mockResolvedValueOnce(severityPayload());
+    const stdout = captureStdoutWrites();
+    captureStderrWrites();
+    await runLogsCli(["logs", "--plain", "--level", "error"]);
+    expect(stdout.join("")).toContain("error-visible");
+    expect(stdout.join("")).not.toContain("warn-visible");
+    expect(readConfiguredLogTail).toHaveBeenCalledOnce();
+  });
+
+  it("applies the same filter to a systemd journal fallback", async () => {
+    vi.spyOn(process, "platform", "get").mockReturnValue("linux");
+    callGatewayFromCli
+      .mockRejectedValueOnce(
+        createGatewayCloseError({
+          code: 1006,
+          reason: "",
+          message: "gateway closed (1006)",
+        }),
+      )
+      .mockRejectedValueOnce(new Error("stop after journal filter"));
+    readSystemdServiceRuntime.mockResolvedValue({ status: "running", pid: 2557 });
+    execFileUtf8Tail.mockResolvedValueOnce({
+      stdout: [
+        JSON.stringify({ _meta: { logLevelName: "INFO" }, message: "journal-hidden" }),
+        JSON.stringify({ _meta: { logLevelName: "ERROR" }, message: "journal-visible" }),
+        "-- cursor: s=abc",
+      ].join("\n"),
+      stderr: "",
+      code: 0,
+      truncated: false,
+    });
+    const stdout = captureStdoutWrites();
+    captureStderrWrites();
+    const exitSpy = vi.spyOn(process, "exit").mockImplementation(() => undefined as never);
+
+    await runLogsCli(["logs", "--follow", "--plain", "--interval", "1", "--level", "error"]);
+
+    expect(stdout.join("")).toContain("journal-visible");
+    expect(stdout.join("")).not.toContain("journal-hidden");
+    expect(readConfiguredLogTail).not.toHaveBeenCalled();
+    expect(exitSpy).toHaveBeenCalledWith(1);
+  });
+
+  it("advances the source cursor before the next follow poll when all lines are hidden", async () => {
+    callGatewayFromCli.mockResolvedValueOnce({
+      file: "/tmp/fixture.log",
+      cursor: 987,
+      size: 987,
+      lines: [JSON.stringify({ _meta: { logLevelName: "INFO" }, message: "hidden" })],
+    });
+    callGatewayFromCli.mockRejectedValueOnce(
+      createGatewayCloseError({
+        code: 1008,
+        reason: "fixture stop",
+        message: "gateway closed (1008)",
+      }),
+    );
+    const stop = new Error("fixture terminal exit");
+    vi.spyOn(process, "exit").mockImplementation(() => {
+      throw stop;
+    });
+    captureStdoutWrites();
+    captureStderrWrites();
+    await expect(
+      runLogsCli(["logs", "--follow", "--interval", "1", "--level", "error", "--json"]),
+    ).rejects.toBe(stop);
+    expect(callGatewayFromCli).toHaveBeenCalledTimes(2);
+    expect(callGatewayFromCli.mock.calls[1]?.[2]).toEqual({
+      cursor: 987,
+      limit: 200,
+      maxBytes: 250000,
+    });
+  });
+});
