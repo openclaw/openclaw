@@ -38,6 +38,7 @@ packages/gateway-protocol/src/schema/since.ts
 packages/gateway-protocol/src/schema/skill-curator.ts
 packages/gateway-protocol/src/schema/transcripts.ts
 packages/gateway-protocol/src/schema/ui-appearance-preferences.ts
+packages/gateway-protocol/src/schema/ui-appearance-typefaces.ts
 packages/gateway-protocol/src/schema/user-profile-constants.ts
 packages/gateway-protocol/src/schema/users.ts
 packages/gateway-protocol/src/schema/wizard.ts
