@@ -735,7 +735,7 @@ describe("buildAgentSystemPrompt", () => {
     expect(prompt).toContain(
       "Long wait: no rapid poll. Use exec yieldMs or process(poll, timeout=<ms>).",
     );
-    expect(prompt).toContain("Large work: `sessions_spawn`; follow the accepted completion mode.");
+    expect(prompt).toContain("Follow the accepted completion mode.");
     expect(prompt).toContain("Never loop-poll `subagents list`/`sessions_list`");
     expect(prompt).not.toContain("wait with `sessions_yield`");
     expect(prompt).toContain(
@@ -1371,7 +1371,7 @@ describe("buildAgentSystemPrompt", () => {
       expect(prompt).toContain("For a chat update request, direct the user to `/update`.");
       expect(prompt).not.toContain("System controls unavailable");
       expect(prompt).toContain(
-        "Default to subagents for internal work; use `visible:true` only for a separate session the user requests or needs to revisit and steer independently.",
+        "Once delegation is appropriate, use a hidden subagent unless the user needs a separate, independently steerable session.",
       );
     },
   );
@@ -2699,7 +2699,7 @@ describe("system prompt runtime cache boundary", () => {
       expect(next.prefix).toBe(first.prefix);
       expect(first.prefix).toContain("## Safety");
       expect(first.prefix).toContain(
-        "Large work: `sessions_spawn`; follow the accepted completion mode.",
+        "Execute work directly by default. Delegate a bounded, independent task only when parallel execution or an independent review provides a concrete benefit. Keep dependent steps with the same owner.",
       );
       expect(first.prefix).not.toContain("## Proactive Sub-Agent Orchestration");
       expect(first.suffix).not.toContain("Ultra active");
