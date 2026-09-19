@@ -14,7 +14,6 @@ import {
   validateConfigSchemaParams,
   validateConfigSetParams,
 } from "../../../packages/gateway-protocol/src/index.js";
-import { readAgentRosterProperty } from "../../agents/agent-scope-config.js";
 import {
   createConfigIO,
   parseConfigJson5,
@@ -47,7 +46,6 @@ import { formatErrorMessage } from "../../infra/errors.js";
 import { isPlainObject } from "../../infra/plain-object.js";
 import { redactToolDetail } from "../../logging/redact.js";
 import { getActivePluginRegistryVersion } from "../../plugins/runtime.js";
-import { normalizeAgentId } from "../../routing/session-key.js";
 import {
   isRetryableSecretDegradationReason,
   redactSecretDegradationReason,
@@ -69,6 +67,10 @@ import {
   summarizeChangedPaths,
 } from "../control-plane-audit.js";
 import { resolveBaseHashParam } from "./base-hash.js";
+import {
+  listPatchedAgentRosterRemovals,
+  rejectDroppedAgentRosterEntries,
+} from "./config-agent-roster.js";
 import {
   commitGatewayConfigWrite,
   didActiveSharedGatewayAuthChange,
@@ -523,45 +525,6 @@ function parseValidateConfigFromRawOrRespond(
     writeConfig: validatedSubmission.validationCandidate,
     schema,
   };
-}
-
-function listExplicitAgentRosterIds(config: OpenClawConfig): string[] {
-  const roster = readAgentRosterProperty(config);
-  if (roster?.kind === "entries" && isRecord(roster.value)) {
-    return Object.keys(roster.value);
-  }
-  if (roster?.kind !== "list" || !Array.isArray(roster.value)) {
-    return [];
-  }
-  return roster.value.flatMap((entry) =>
-    isRecord(entry) && typeof entry.id === "string" ? [entry.id] : [],
-  );
-}
-
-function rejectDroppedAgentRosterEntries(params: {
-  currentConfig: OpenClawConfig;
-  submittedConfig: OpenClawConfig;
-  respond: RespondFn;
-}): boolean {
-  const submittedIds = new Set(
-    listExplicitAgentRosterIds(params.submittedConfig).map((agentId) => normalizeAgentId(agentId)),
-  );
-  const droppedIds = listExplicitAgentRosterIds(params.currentConfig)
-    .filter((agentId) => !submittedIds.has(normalizeAgentId(agentId)))
-    .toSorted();
-  if (droppedIds.length === 0) {
-    return false;
-  }
-  params.respond(
-    false,
-    undefined,
-    errorShape(
-      ErrorCodes.INVALID_REQUEST,
-      `config.set would remove existing agent entries: ${droppedIds.join(", ")}. ` +
-        "Use the agents.delete RPC or `openclaw agents delete <id>` for intentional deletion.",
-    ),
-  );
-  return true;
 }
 
 /** Shared normalize -> raw-validate -> plugin-validate pipeline for submitted configs; responds on failure. */
@@ -1197,7 +1160,12 @@ export const configHandlers: GatewayRequestHandlers = {
     });
     const writeResult = await commitGatewayConfigWriteOrRespond({
       snapshot,
-      writeOptions,
+      writeOptions: {
+        ...writeOptions,
+        allowedAgentRosterRemovals: hashlessPatch
+          ? []
+          : listPatchedAgentRosterRemovals(sourceConfig, normalizedPatch),
+      },
       nextConfig: writeConfig,
       context,
       disconnectSharedAuthClients,
