@@ -330,12 +330,16 @@ describe("question gateway methods", () => {
     },
   );
 
+  const credentialedBrowserUrl = new URL("https://example.test/connect");
+  credentialedBrowserUrl.username = "fixture-user";
+  credentialedBrowserUrl.password = "fixture-password";
+
   it.each([
     ["script", "javascript:alert(1)"],
     ["data", "data:text/html,hello"],
     ["relative", "/connect"],
     ["ambiguous scheme", "https:example.test/connect"],
-    ["credentials", "https://fixture-user:fixture-password@example.test/connect"],
+    ["credentials", credentialedBrowserUrl.href],
     ["over-limit", "https://example.test/" + "x".repeat(2048)],
   ])("rejects a %s browser URL before publishing", async (_name, url) => {
     expect(
