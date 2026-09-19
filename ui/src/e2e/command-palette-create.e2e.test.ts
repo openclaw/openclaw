@@ -198,6 +198,63 @@ function captureAfter(page: Page, name: string) {
 }
 
 suite.define(() => {
+  it("preserves manual prompt scrolling when background search finishes", async () => {
+    await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
+      const gateway = await installMockGateway(page, scenario());
+      const { composer, url, palette, input } = await openFromForeground(page);
+      const capture = captureAfter(page, "palette-manual-scroll");
+      const prompt = [
+        "FIRST WORDS: Review the complete task before starting.",
+        "Keep the foreground conversation unchanged.",
+        "Read the existing behavior and identify its owner.",
+        "Compare related paths before choosing a repair.",
+        "Keep the fix focused on the reported behavior.",
+        "Add a regression test that fails before the fix.",
+        "Verify the repaired behavior in the browser.",
+        "LAST WORDS: Open a pull request with the evidence.",
+      ].join("\n");
+      await gateway.deferNext("sessions.search");
+      await input.fill(prompt);
+      await gateway.waitForRequest("sessions.search");
+      const results = palette.locator(".cmd-palette__results");
+      expect(await results.getAttribute("aria-busy")).toBe("true");
+      await expect.poll(() => input.evaluate((element) => element.scrollTop)).toBeGreaterThan(0);
+      await input.hover();
+      await page.mouse.wheel(0, -2000);
+      await expect.poll(() => input.evaluate((element) => element.scrollTop)).toBe(0);
+      expect(await input.evaluate((element: HTMLTextAreaElement) => element.selectionEnd)).toBe(
+        prompt.length,
+      );
+      await capture("scrolled-to-first-words");
+
+      await gateway.resolveDeferred("sessions.search");
+      await expect.poll(() => results.getAttribute("aria-busy")).toBe("false");
+      // Let the render's layout frame and ResizeObserver delivery finish.
+      await page.evaluate(
+        () =>
+          new Promise<void>((resolve) => {
+            requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+          }),
+      );
+      await capture("after-background-search");
+      expect(await input.evaluate((element) => element.scrollTop)).toBe(0);
+      expect(await input.inputValue()).toBe(prompt);
+      expect(await composer.inputValue()).toBe(foregroundDraft);
+      expect(page.url()).toBe(url);
+      expect(await gateway.getRequests("sessions.create")).toEqual([]);
+
+      await input.pressSequentially(" Continue.");
+      await expect
+        .poll(() =>
+          input.evaluate(
+            (element) => element.scrollHeight - element.clientHeight - element.scrollTop,
+          ),
+        )
+        .toBeLessThanOrEqual(1);
+      expect(await input.inputValue()).toBe(prompt + " Continue.");
+    });
+  });
+
   it.each(["light", "dark"] as const)(
     "remembers only palette settings and restores defaults when unchecked in %s",
     async (mode) => {
