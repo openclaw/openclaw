@@ -10,6 +10,7 @@ import type {
   QaProfileCommandOptions,
   QaSuiteCommandOptions,
 } from "./cli.runtime.js";
+import { registerQaConfidenceBundleCli } from "./confidence-bundle-cli.js";
 import { listLiveTransportQaCliRegistrations } from "./live-transports/cli.js";
 import { registerMantisCli } from "./mantis/cli.js";
 import {
@@ -176,6 +177,7 @@ export function registerQaLabCli(program: Command) {
     .command("qa")
     .description("Run private QA automation flows and launch the QA debugger");
   registerMantisCli(qa);
+  registerQaConfidenceBundleCli(qa);
 
   const qaRun = qa
     .command("run")
