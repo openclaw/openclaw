@@ -650,7 +650,7 @@ describe("local turn placement admission", () => {
         expect(isSessionPlacementSettlementClosedError(thrownError)).toBe(true);
         expect(hasModelFallbackStop(thrownError)).toBe(true);
         expect(resolveModelFallbackError(thrownError)).toEqual({
-          kind: "terminal",
+          kind: "coordination",
           error: thrownError,
         });
         expect((thrownError as { code?: unknown }).code).toBe(
