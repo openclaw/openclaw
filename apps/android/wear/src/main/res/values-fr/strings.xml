@@ -126,4 +126,14 @@
     <string name="pulse_phase_counts" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"En attente %1$d, En cours %2$d, Terminés %3$d, Échoués %4$d, Masqués %5$d"</string>
     <string name="pulse_more_phases" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"D’autres phases ne sont pas affichées"</string>
     <string name="pulse_unknown" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Inconnu"</string>
+    <string name="read_full_reply" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Lire la réponse complète"</string>
+    <string name="reply_stream_preview" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Aperçu en direct. Lisez la réponse complète une fois qu’elle est terminée."</string>
+    <string name="reply_previous_page" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Partie précédente"</string>
+    <string name="reply_next_page" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Partie suivante"</string>
+    <string name="reply_loading" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Chargement de la réponse complète…"</string>
+    <string name="reply_unsupported" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Mettez à jour l’application sur votre téléphone et Gateway pour lire les réponses complètes."</string>
+    <string name="reply_too_large" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Cette réponse est trop longue pour être lue ici. Ouvrez-la sur votre téléphone."</string>
+    <string name="reply_changed" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"La réponse ou la connexion a changé. Réessayez depuis le début."</string>
+    <string name="reply_unavailable" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Le texte intégral n’est plus disponible."</string>
+    <string name="reply_failed" tools:ignore="MissingTranslation,Typos,TypographyDashes,TypographyEllipsis">"Impossible de charger la réponse complète. Réessayez."</string>
 </resources>
