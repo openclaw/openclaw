@@ -428,7 +428,7 @@ export function assertTaskRegistryOwnerCurrent(
   }
 }
 
-async function prepareTaskRegistryProjectionAsync(
+export async function prepareTaskRegistryProjectionAsync(
   context: OpenClawStateWorkerContext,
   store: TaskRegistryStore,
   maxAttempts = Number.POSITIVE_INFINITY,

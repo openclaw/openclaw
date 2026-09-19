@@ -142,31 +142,40 @@ export function deleteGatewayDedupeEntries(params: {
   }
 }
 
-export function dispatchAgentRunFromGateway(params: {
-  assertCurrent?: () => void;
-  admittedRunEntry: ChatAbortControllerEntry | undefined;
-  ingressOpts: Parameters<typeof agentCommandFromGatewayIngress>[0];
-  runId: string;
-  cronCreatorAuthority?: GatewayCronCreatorAuthorityAdmission;
-  dedupeKeys: readonly string[];
-  /**
-   * Controller whose signal is wired into `ingressOpts.abortSignal`. Used on
-   * completion to drop the matching `chatAbortControllers` entry without
-   * touching a same-runId entry owned by a concurrent chat.send.
-   */
-  abortController: AbortController;
-  cleanupAbortController: () => void;
-  io: AgentTurnIo;
-  context: AgentTurnContext;
-  taskTrackingMode: Exclude<GatewayAgentTaskTrackingMode, "plugin_subagent">;
-  canonicalSkillWorkspaceDir?: string;
-  restoreAdmittedRecovery?: () => Promise<MainSessionRecoveryPendingTarget | undefined>;
-  commandRuntimeContext?: PreparedAgentCommandRuntimeContext;
-  onSettled?: (outcome: {
-    terminalOutcome: AgentRunTerminalOutcome;
-    onRecovered?: () => void;
-  }) => Promise<boolean> | boolean;
-}) {
+type TaskSettlementAdmission =
+  | { taskTrackingMode: "none"; assertSettlementCurrent?: () => void }
+  | {
+      taskTrackingMode: Exclude<GatewayAgentTaskTrackingMode, "none" | "plugin_subagent">;
+      assertSettlementCurrent: () => void;
+    };
+
+export function dispatchAgentRunFromGateway(
+  params: {
+    assertCurrent?: () => void;
+    admittedRunEntry: ChatAbortControllerEntry | undefined;
+    ingressOpts: Parameters<typeof agentCommandFromGatewayIngress>[0];
+    runId: string;
+    cronCreatorAuthority?: GatewayCronCreatorAuthorityAdmission;
+    dedupeKeys: readonly string[];
+    /**
+     * Controller whose signal is wired into `ingressOpts.abortSignal`. Used on
+     * completion to drop the matching `chatAbortControllers` entry without
+     * touching a same-runId entry owned by a concurrent chat.send.
+     */
+    abortController: AbortController;
+    cleanupAbortController: () => void;
+    io: AgentTurnIo;
+    context: AgentTurnContext;
+    canonicalSkillWorkspaceDir?: string;
+    restoreAdmittedRecovery?: () => Promise<MainSessionRecoveryPendingTarget | undefined>;
+    commandRuntimeContext?: PreparedAgentCommandRuntimeContext;
+    onSettled?: (outcome: {
+      terminalOutcome: AgentRunTerminalOutcome;
+      onRecovered?: () => void;
+    }) => Promise<boolean> | boolean;
+  } & TaskSettlementAdmission,
+) {
+  const assertSettlementCurrent = params.assertSettlementCurrent;
   const registeredRunEntry = params.admittedRunEntry;
   const jobSessionBinding = registeredRunEntry ?? params.ingressOpts;
   const registeredRunInstance = registeredRunEntry?.operationalRunInstance;
@@ -222,6 +231,27 @@ export function dispatchAgentRunFromGateway(params: {
       try {
         return createdTask
           .settleUnstarted(terminal, canSettleTrackedTask)
+          .then(() => undefined, settlementFailed);
+      } catch (error) {
+        settlementFailed(error);
+      }
+      return;
+    }
+    if (createdTask) {
+      const settlementFailed = (error: unknown) => {
+        params.context.logGateway.warn(
+          `failed to finalize tracked agent task ${params.runId}: ${formatForLog(error)}`,
+        );
+      };
+      try {
+        if (!assertSettlementCurrent) {
+          throw new Error("Active task settlement requires its Gateway admission");
+        }
+        return createdTask
+          .finalizeActive(terminal, (current) => {
+            assertSettlementCurrent();
+            return canSettleTrackedTask(current);
+          })
           .then(() => undefined, settlementFailed);
       } catch (error) {
         settlementFailed(error);

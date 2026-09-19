@@ -10,10 +10,22 @@ import type {
 } from "./task-initial-flow.kernel.js";
 import type { TaskCreateInput, TaskCreateResult } from "./task-registry-create.kernel.js";
 import type { TaskRecordTransitionReceipt } from "./task-registry-transition.kernel.js";
-import type { TaskPersistenceReceipt } from "./task-registry.types.js";
+import type { TaskPersistenceReceipt, TaskRuntime } from "./task-registry.types.js";
 
 export type TaskInitialWorkerOperations = {
   "tasks.createRecord": { input: TaskCreateInput; output: TaskCreateResult };
+  "tasks.finalizeActive": {
+    input: {
+      taskId: string;
+      expectedTask: TaskPersistenceReceipt;
+      params: { runId: string; runtime: TaskRuntime; sessionKey?: string } & Pick<
+        DetachedTaskTerminalState,
+        "status" | "endedAt" | "error" | "terminalSummary"
+      >;
+      now: number;
+    };
+    output: TaskRecordTransitionReceipt | null;
+  };
   "tasks.settleUnstarted": {
     input: {
       taskId: string;

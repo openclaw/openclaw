@@ -103,6 +103,7 @@ export function isTaskRegistryWorkerCommand(command: {
 }): command is SqliteWorkerCommand<TaskRegistryWorkerOperations> {
   switch (command.type) {
     case "tasks.createRecord":
+    case "tasks.finalizeActive":
     case "tasks.settleUnstarted":
     case "flows.createForTask":
     case "tasks.linkInitialFlow":

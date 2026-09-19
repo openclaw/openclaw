@@ -97,6 +97,35 @@ export function createInMemoryTaskRegistryStore(
       const unsupported = (): never => {
         throw new Error("Initial flow mutations require the isolated worker fixture.");
       };
+      const transitionRecord = (
+        transition: Parameters<typeof runTaskRecordTransitionOperation>[0],
+      ) =>
+        runTaskRecordTransitionOperation(transition, {
+          readCurrent: () => this.loadSnapshot().tasks.get(transition.taskId),
+          hasAuthoritativeBacking: (task) =>
+            hasAuthoritativeTaskBackingFromRecords(task, {
+              isManagedFlow: (flowId) =>
+                flowStore?.loadSnapshot().flows.get(flowId)?.syncMode === "managed",
+              resolveCurrentCanonicalBacking: (scope) =>
+                selectCurrentCanonicalTaskBacking({
+                  ...scope,
+                  candidates: [...this.loadSnapshot().tasks.values()],
+                  isTaskMirroredFlow: (flowId) =>
+                    flowStore?.loadSnapshot().flows.get(flowId)?.syncMode === "task_mirrored",
+                }),
+            }),
+          write: (operation) => operation(),
+          upsertTask: (task) => {
+            this.upsertTaskWithDeliveryState({
+              task,
+              deliveryState: this.loadSnapshot().deliveryStates.get(task.taskId),
+            });
+            return true;
+          },
+          assertCurrent,
+          deferCommit: (publish) => publish(),
+          onCommitted() {},
+        });
       const operations: {
         [Key in keyof TaskInitialWorkerOperations]: (
           input: TaskInitialWorkerOperations[Key]["input"],
@@ -135,6 +164,7 @@ export function createInMemoryTaskRegistryStore(
             deferCommit: (publish) => publish(),
             onCommitted() {},
           }),
+        "tasks.finalizeActive": (input) => transitionRecord({ kind: "state", ...input }),
         "flows.createForTask": unsupported,
         "tasks.settleUnstarted": (input) => {
           const current = this.loadSnapshot().tasks.get(input.taskId);
@@ -151,41 +181,13 @@ export function createInMemoryTaskRegistryStore(
             runtime: input.expectedTask.runtime,
             sessionKey: input.expectedTask.childSessionKey ?? input.expectedTask.ownerKey,
           };
-          return runTaskRecordTransitionOperation(
-            {
-              kind: "state",
-              taskId: input.taskId,
-              now: input.now,
-              expectedTask: input.expectedTask,
-              params,
-            },
-            {
-              readCurrent: () => this.loadSnapshot().tasks.get(input.taskId),
-              hasAuthoritativeBacking: (task) =>
-                hasAuthoritativeTaskBackingFromRecords(task, {
-                  isManagedFlow: (flowId) =>
-                    flowStore?.loadSnapshot().flows.get(flowId)?.syncMode === "managed",
-                  resolveCurrentCanonicalBacking: (scope) =>
-                    selectCurrentCanonicalTaskBacking({
-                      ...scope,
-                      candidates: [...this.loadSnapshot().tasks.values()],
-                      isTaskMirroredFlow: (flowId) =>
-                        flowStore?.loadSnapshot().flows.get(flowId)?.syncMode === "task_mirrored",
-                    }),
-                }),
-              write: (operation) => operation(),
-              upsertTask: (task) => {
-                this.upsertTaskWithDeliveryState({
-                  task,
-                  deliveryState: this.loadSnapshot().deliveryStates.get(task.taskId),
-                });
-                return true;
-              },
-              assertCurrent,
-              deferCommit: (publish) => publish(),
-              onCommitted() {},
-            },
-          );
+          return transitionRecord({
+            kind: "state",
+            taskId: input.taskId,
+            now: input.now,
+            expectedTask: input.expectedTask,
+            params,
+          });
         },
         "tasks.linkInitialFlow": unsupported,
         "flows.deleteUnlinkedForTask": unsupported,
