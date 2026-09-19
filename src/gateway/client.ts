@@ -9,6 +9,7 @@ import type {
 } from "../../packages/gateway-client/src/index.js";
 import { markGatewayConnectAssemblyError } from "../../packages/gateway-client/src/request-error.js";
 import { resolveGatewayWebSocketTransport } from "../../packages/gateway-client/src/websocket-transport.js";
+import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
 import {
   clearDeviceAuthToken,
   clearOriginDeviceToken,
@@ -166,7 +167,10 @@ function createOpenClawGatewayClientHostDeps(
     registerGatewayLoopbackBypass: registerManagedProxyGatewayLoopbackBypass,
     logDebug,
     logError,
-    redactForLog: redactToolPayloadText,
+    redactForLog: (message) =>
+      redactToolPayloadText(
+        redactToolPayloadText(message).split(/\r?\n/).map(sanitizeTerminalText).join("\n"),
+      ),
     ...overrides,
     ...(readOnly
       ? {
