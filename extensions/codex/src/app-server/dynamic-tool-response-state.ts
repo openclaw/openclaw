@@ -1,3 +1,4 @@
+import { isRecord } from "@openclaw/normalization-core";
 import type { AgentToolResult } from "openclaw/plugin-sdk/agent-core";
 import type { EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type {
@@ -11,6 +12,8 @@ export type CodexDynamicToolRuntimeResponse = CodexDynamicToolCallResponse & {
   asyncStarted?: boolean;
   diagnosticTerminalReason?: CodexDynamicToolDiagnosticTerminalReason;
   diagnosticTerminalType?: CodexDynamicToolDiagnosticTerminalType;
+  /** Per-invocation provenance retained for OpenClaw's mirrored transcript only. */
+  resultContentSource?: "network";
   executionStarted?: boolean;
   executedArguments?: Record<string, unknown>;
   replaySafe?: boolean;
@@ -48,4 +51,17 @@ export function failedToolResult(
     content: [{ type: "text", text: message }],
     details: { status, error: message },
   };
+}
+
+export function isToolResultYield(result: AgentToolResult<unknown>): boolean {
+  const details = result.details;
+  if (!isRecord(details) || typeof details.status !== "string") {
+    return false;
+  }
+  return details.status.trim().toLowerCase() === "yielded";
+}
+
+export function isAsyncStartedToolResult(result: AgentToolResult<unknown>): boolean {
+  const details = result.details;
+  return isRecord(details) && details.async === true && details.status === "started";
 }

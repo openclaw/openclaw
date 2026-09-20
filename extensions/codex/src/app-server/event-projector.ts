@@ -336,10 +336,16 @@ export class CodexAppServerEventProjector extends CodexTurnProjection {
   recordDynamicToolResult(
     params: Parameters<CodexToolProgressProjection["recordDynamicToolResult"]>[0] & {
       details?: unknown;
+      /** Per-invocation provenance from the executed result, when present. */
+      resultContentSource?: "network";
     },
   ): void {
     this.toolProgressProjection.recordDynamicToolResult(params);
-    const source = this.options.resolveDynamicToolResultContentSource?.(params.tool);
+    // Per-invocation provenance from the executed result wins over the static
+    // tool-level source: remote and local media must not share one label.
+    const source =
+      params.resultContentSource ??
+      this.options.resolveDynamicToolResultContentSource?.(params.tool);
     this.toolTranscriptProjection.recordDynamicToolResult(params, source);
   }
 

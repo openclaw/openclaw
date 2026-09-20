@@ -247,6 +247,7 @@ export async function runCopilotExecution(context: {
     | Awaited<ReturnType<typeof createToolBridge>>["promptToolPolicy"]
     | undefined;
   try {
+    const resultContentSourceByToolCallId = new Map<string, "network">();
     let resultContentSourceByToolName = new Map<
       string,
       NonNullable<AnyAgentTool["resultContentSource"]>
@@ -281,6 +282,14 @@ export async function runCopilotExecution(context: {
                 : null;
             if (acceptedSessionSpawn) {
               acceptedSessionSpawns.push(acceptedSessionSpawn);
+            }
+            // Per-invocation provenance: capture before middleware rewrites the result.
+            // SAFETY: untyped hook-result record; the optional-field probe below narrows to the one accepted literal.
+            const resultRecord = result as { resultContentSource?: unknown } | undefined;
+            const resultContentSource =
+              result && typeof result === "object" ? resultRecord?.resultContentSource : undefined;
+            if (resultContentSource === "network") {
+              resultContentSourceByToolCallId.set(toolCallId, resultContentSource);
             }
             await runAgentHarnessAfterToolCallHook({
               toolName,
@@ -460,6 +469,7 @@ export async function runCopilotExecution(context: {
         journal: transcriptJournal,
         modelRef,
         now,
+        resultContentSourceByToolCallId,
         resultContentSourceByToolName,
       },
     });

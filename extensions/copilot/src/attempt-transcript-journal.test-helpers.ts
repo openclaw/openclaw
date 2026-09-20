@@ -75,6 +75,7 @@ export function createJournalSession(
   attempt: AttemptParamsLike,
   messages: AgentMessage[] = [],
   resultContentSourceByToolName?: ReadonlyMap<string, "network">,
+  resultContentSourceByToolCallId?: ReadonlyMap<string, "network">,
 ) {
   const session = createFakeSession();
   const journal = createAttemptTranscriptJournal({
@@ -91,6 +92,7 @@ export function createJournalSession(
       modelRef: { api: "openai-responses", id: "gpt-5", provider: "github-copilot" },
       now: () => 2,
       ...(resultContentSourceByToolName ? { resultContentSourceByToolName } : {}),
+      ...(resultContentSourceByToolCallId ? { resultContentSourceByToolCallId } : {}),
     },
   });
   return { bridge, journal, session };
@@ -117,6 +119,7 @@ export function emitReplayGroup(targetSession: FakeSession): void {
 export async function createFixture(
   trigger?: string,
   resultContentSourceByToolName?: ReadonlyMap<string, "network">,
+  resultContentSourceByToolCallId?: ReadonlyMap<string, "network">,
 ): Promise<AttemptTranscriptJournalFixture> {
   const tempDir = await fs.mkdtemp(
     path.join(resolvePreferredOpenClawTmpDir(), "openclaw-copilot-journal-"),
@@ -184,6 +187,7 @@ export async function createFixture(
     attempt,
     [],
     resultContentSourceByToolName,
+    resultContentSourceByToolCallId,
   );
   return { attempt, bridge, journal, recorder, session, target, tempDir };
 }
