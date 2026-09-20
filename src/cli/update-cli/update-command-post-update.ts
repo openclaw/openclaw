@@ -419,7 +419,11 @@ export async function finishUpdate(
           finalResult.recovery.service === "healthy"),
     );
     assertCurrent();
-    const cleanupFailure = await recordUpdatePackageCompletion(params, finalResult, assertCurrent);
+    // Failed, unverified packages were retained before service recovery above.
+    // Do not invoke their completion owner twice during the same publication.
+    const cleanupFailure = retireBackup
+      ? await recordUpdatePackageCompletion(params, finalResult, assertCurrent)
+      : undefined;
     assertCurrent();
     pendingResult = completedResult(cleanupFailure?.result ?? finalResult);
     terminalRecord = deferredTerminal
