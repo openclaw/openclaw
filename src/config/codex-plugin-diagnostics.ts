@@ -10,7 +10,7 @@ import {
 import {
   listAgentIds,
   resolveAgentConfig,
-  resolveAgentEffectiveModelPrimary,
+  resolveNativeModelPrimary,
   resolveAgentModelFallbacksOverride,
   resolveEffectiveModelFallbacks,
 } from "../agents/agent-scope.js";
@@ -100,7 +100,7 @@ function resolveEffectiveSelectedModelRefs(params: { cfg: OpenClawConfig; agentI
   values: ReadonlySet<string>;
 } {
   const { cfg, agentId } = params;
-  const mainPrimaryRaw = resolveAgentEffectiveModelPrimary(cfg, agentId);
+  const mainPrimaryRaw = resolveNativeModelPrimary(cfg, agentId);
   const mainFallbacks =
     resolveAgentModelFallbacksOverride(cfg, agentId) ??
     resolveAgentModelFallbackValues(cfg.agents?.defaults?.model);

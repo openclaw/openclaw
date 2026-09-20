@@ -1,88 +1,164 @@
-// An ACP-runtime agent's configured model belongs to its ACP harness, not to OpenClaw dispatch.
 import { describe, expect, it } from "vitest";
+import type { AgentModelConfig } from "../config/types.agents-shared.js";
+import type { AgentEntryConfig } from "../config/types.agents.js";
 import type { OpenClawConfig } from "../config/types.js";
+import {
+  resolveAgentEffectiveModelPrimary,
+  resolveAgentExplicitModelPrimary,
+  resolveEffectiveModelFallbacks,
+} from "./agent-scope.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "./defaults.js";
-import { resolveAgentHarnessPolicy } from "./harness/policy.js";
+import { FailoverError } from "./failover-error.js";
+import { resolveModelCandidateChain } from "./model-fallback-candidates.js";
+import { runWithModelFallback } from "./model-fallback-runner.js";
 import { resolveDefaultModelForAgent } from "./model-selection.js";
 
-// Live Cursor advertises this exact opaque id (openclaw#153217); it is not an OpenAI catalog id.
-const CURSOR_MODEL_ID = "gpt-5.6-sol[context=272k,reasoning=medium,fast=false]";
+const HARNESS_MODEL = "harness-only[context=272k,reasoning=medium]";
+const nativePrimary = "native/primary";
+const nativeFallback = "native/backup";
 
-const ACP_RUNTIME = { type: "acp", acp: { agent: "cursor", backend: "acpx" } };
-
-function buildConfig(
-  runtime?: Record<string, unknown>,
-  overrides?: { primary?: string; defaultModel?: string | null },
-): OpenClawConfig {
-  const defaultModel = overrides?.defaultModel;
+function buildConfig(agent: AgentEntryConfig): OpenClawConfig {
   return {
+    plugins: { enabled: false },
     agents: {
-      ...(defaultModel === null
-        ? {}
-        : { defaults: { model: defaultModel ?? "anthropic/claude-opus-5" } }),
-      entries: {
-        cursoragent: {
-          id: "cursoragent",
-          model: { primary: overrides?.primary ?? CURSOR_MODEL_ID, fallbacks: [] },
-          ...(runtime ? { runtime } : {}),
-        },
-      },
+      defaults: { model: { primary: nativePrimary, fallbacks: [nativeFallback] } },
+      entries: { worker: agent },
     },
-  } as unknown as OpenClawConfig;
+  };
 }
 
-describe("ACP-runtime agent default model resolution", () => {
-  it("does not expose an ACP harness model id as the agent's dispatchable model", () => {
-    const cfg = buildConfig(ACP_RUNTIME);
-
-    expect(resolveDefaultModelForAgent({ cfg, agentId: "cursoragent" })).toEqual({
-      provider: "anthropic",
-      model: "claude-opus-5",
-    });
-  });
-
-  it("keeps that agent off the native OpenAI runtime", () => {
-    const cfg = buildConfig(ACP_RUNTIME);
-    const resolved = resolveDefaultModelForAgent({ cfg, agentId: "cursoragent" });
-
-    // Before the fix this resolved to openai/<harness id> and selected the native Codex runtime.
+describe("ACP native model policy", () => {
+  it.each<{ name: string; model: AgentModelConfig; fallbacks: string[] }>([
+    { name: "string primary", model: HARNESS_MODEL, fallbacks: [nativeFallback] },
+    {
+      name: "object primary",
+      model: { primary: HARNESS_MODEL },
+      fallbacks: [nativeFallback],
+    },
+    {
+      name: "native-shaped harness primary",
+      model: { primary: "another-provider/harness-model" },
+      fallbacks: [nativeFallback],
+    },
+    {
+      name: "explicit native fallbacks",
+      model: { primary: HARNESS_MODEL, fallbacks: ["other/backup"] },
+      fallbacks: ["other/backup"],
+    },
+    {
+      name: "explicit empty fallbacks",
+      model: { primary: HARNESS_MODEL, fallbacks: [] },
+      fallbacks: [],
+    },
+  ])("uses native primary and fallback policy for $name", ({ model, fallbacks }) => {
+    const cfg = buildConfig({ model, runtime: { type: "acp" } });
+    const primary = resolveDefaultModelForAgent({ cfg, agentId: "worker", manifestPlugins: [] });
+    expect(primary).toEqual({ provider: "native", model: "primary" });
+    expect(resolveAgentEffectiveModelPrimary(cfg, "worker")).toBe(
+      typeof model === "string" ? model : model.primary,
+    );
+    expect(resolveAgentExplicitModelPrimary(cfg, "worker")).toBe(
+      typeof model === "string" ? model : model.primary,
+    );
     expect(
-      resolveAgentHarnessPolicy({
-        provider: resolved.provider,
-        modelId: resolved.model,
-        config: cfg,
-        agentId: "cursoragent",
-      }).runtime,
-    ).not.toBe("codex");
+      resolveModelCandidateChain({
+        cfg,
+        agentId: "worker",
+        ...primary,
+        manifestPlugins: [],
+        fallbacksOverride: resolveEffectiveModelFallbacks({
+          cfg,
+          agentId: "worker",
+          hasSessionModelOverride: false,
+        }),
+      }).map((candidate) => candidate.provider + "/" + candidate.model),
+    ).toEqual([nativePrimary, ...fallbacks]);
   });
 
-  it("still resolves a bare primary model for an embedded agent", () => {
-    const cfg = buildConfig();
-
-    expect(resolveDefaultModelForAgent({ cfg, agentId: "cursoragent" })).toEqual({
-      provider: "openai",
-      model: CURSOR_MODEL_ID,
-    });
+  it("keeps native agent primaries strict when fallbacks are omitted", () => {
+    const cfg = buildConfig({ model: "other/primary" });
+    const primary = resolveDefaultModelForAgent({ cfg, agentId: "worker", manifestPlugins: [] });
+    expect(primary).toEqual({ provider: "other", model: "primary" });
+    expect(resolveAgentEffectiveModelPrimary(cfg, "worker")).toBe("other/primary");
+    expect(
+      resolveEffectiveModelFallbacks({ cfg, agentId: "worker", hasSessionModelOverride: false }),
+    ).toEqual([]);
   });
 
-  // Upgrade case: an existing ACP agent whose primary was a dispatchable reference. Its
-  // OpenClaw-side calls move to the global default, which must still be a usable route.
-  it("leaves an ACP agent a usable local model route when its primary was dispatchable", () => {
-    const cfg = buildConfig(ACP_RUNTIME, { primary: "openai/gpt-5.4" });
+  it.each([
+    { fallbacks: undefined, expected: nativeFallback },
+    { fallbacks: ["other/backup"], expected: "other/backup" },
+    { fallbacks: [], expected: undefined },
+  ])(
+    "executes native failure recovery with fallbacks $fallbacks",
+    async ({ fallbacks, expected }) => {
+      const cfg = buildConfig({
+        model: { primary: HARNESS_MODEL, ...(fallbacks ? { fallbacks } : {}) },
+        runtime: { type: "acp" },
+      });
+      const primary = resolveDefaultModelForAgent({ cfg, agentId: "worker", manifestPlugins: [] });
+      const attempts: string[] = [];
+      const result = runWithModelFallback({
+        cfg,
+        agentId: "worker",
+        ...primary,
+        manifestPlugins: [],
+        fallbacksOverride: resolveEffectiveModelFallbacks({
+          cfg,
+          agentId: "worker",
+          hasSessionModelOverride: false,
+        }),
+        run: async (provider, model) => {
+          const ref = `${provider}/${model}`;
+          attempts.push(ref);
+          if (ref === nativePrimary) {
+            throw new FailoverError("Native primary unavailable", { reason: "model_not_found" });
+          }
+          return ref;
+        },
+      });
+      if (expected) {
+        await expect(result).resolves.toMatchObject({ result: expected });
+        expect(attempts).toEqual([nativePrimary, expected]);
+      } else {
+        await expect(result).rejects.toThrow("Native primary unavailable");
+        expect(attempts).toEqual([nativePrimary]);
+      }
+    },
+  );
 
-    const resolved = resolveDefaultModelForAgent({ cfg, agentId: "cursoragent" });
-    expect(resolved).toEqual({ provider: "anthropic", model: "claude-opus-5" });
-    expect(resolved.provider).not.toBe("");
-    expect(resolved.model).not.toBe("");
-    expect(resolved.model).not.toContain("[");
-  });
-
-  it("falls back to the shipped default when an ACP agent has no global default", () => {
-    const cfg = buildConfig(ACP_RUNTIME, { primary: "openai/gpt-5.4", defaultModel: null });
-
-    expect(resolveDefaultModelForAgent({ cfg, agentId: "cursoragent" })).toEqual({
+  it("uses the native implicit default when an ACP agent has no configured native primary", () => {
+    const cfg: OpenClawConfig = {
+      plugins: { enabled: false },
+      agents: { entries: { worker: { model: HARNESS_MODEL, runtime: { type: "acp" } } } },
+    };
+    expect(resolveDefaultModelForAgent({ cfg, agentId: "worker", manifestPlugins: [] })).toEqual({
       provider: DEFAULT_PROVIDER,
       model: DEFAULT_MODEL,
     });
+    expect(resolveAgentEffectiveModelPrimary(cfg, "worker")).toBe(HARNESS_MODEL);
   });
+
+  it.each(["user", undefined] as const)(
+    "keeps persisted %s native model selections strict",
+    (modelOverrideSource) => {
+      const cfg = buildConfig({ model: HARNESS_MODEL, runtime: { type: "acp" } });
+      const fallbacksOverride = resolveEffectiveModelFallbacks({
+        cfg,
+        agentId: "worker",
+        hasSessionModelOverride: true,
+        modelOverrideSource,
+      });
+      expect(
+        resolveModelCandidateChain({
+          cfg,
+          agentId: "worker",
+          provider: "pinned",
+          model: "selection",
+          fallbacksOverride,
+          manifestPlugins: [],
+        }).map(({ provider, model }) => provider + "/" + model),
+      ).toEqual(["pinned/selection"]);
+    },
+  );
 });

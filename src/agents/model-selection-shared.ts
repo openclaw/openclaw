@@ -19,7 +19,7 @@ import { getCurrentPluginMetadataSnapshot } from "../plugins/current-plugin-meta
 import { loadManifestMetadataSnapshot } from "../plugins/manifest-contract-eligibility.js";
 import { getActivePluginRegistryWorkspaceDirFromState } from "../plugins/runtime-state.js";
 import { dedupeByKey, indexFirstByKey } from "../shared/dedupe-by-key.js";
-import { resolveAgentConfig } from "./agent-scope-config.js";
+import { resolveAgentConfig, resolveAgentModelConfigForRuntime } from "./agent-scope-config.js";
 import { resolveConfiguredProviderFallback } from "./configured-provider-fallback.js";
 import { hasExactConfiguredProviderModel } from "./configured-provider-model.js";
 import { DEFAULT_PROVIDER } from "./defaults.js";
@@ -649,16 +649,13 @@ export function resolveConfiguredPrimaryProviderFallback(
 /** Resolve the default configured model ref, including aliases and fallback provider rows. */
 export function resolveConfiguredModelRef(
   params: ConfiguredModelSelectionParams & { defaultModel: string },
+  modelRuntime: "native" | "acp" = "native",
 ): ModelRef {
   const agentEntry = params.agentId ? resolveAgentConfig(params.cfg, params.agentId) : undefined;
-  // An ACP-runtime agent's model.primary is its ACP harness's own model id, consumed verbatim
-  // by the ACP binding. Harness ids are not OpenClaw model refs, so normalizing one here would
-  // hand every generic dispatch path a provider-prefixed ref that matches no catalog entry.
-  const agentModel = agentEntry?.runtime?.type === "acp" ? undefined : agentEntry?.model;
+  const agentModel = resolveAgentModelConfigForRuntime(agentEntry, modelRuntime);
   const rawModel =
     resolveAgentModelPrimaryValue(agentModel) ??
-    resolveAgentModelPrimaryValue(params.cfg.agents?.defaults?.model) ??
-    "";
+    resolveAgentModelPrimaryValue(params.cfg.agents?.defaults?.model);
   if (rawModel) {
     const trimmed = rawModel.trim();
     const { model: modelWithoutProfile } = splitTrailingAuthProfile(trimmed);
