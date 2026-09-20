@@ -361,6 +361,47 @@ describe("prepareWorkerGitHubEnvironment", () => {
     );
   });
 
+  it.each([
+    { scenario: "the collision path", nested: "" },
+    { scenario: "a tracked subdirectory", nested: "sub" },
+  ])("preserves a nested repository inside $scenario", async ({ nested }) => {
+    const collision = "collision";
+    const nestedDirectory = nested ? path.join(collision, nested) : collision;
+    const trackedFile = path.join(nestedDirectory, "base.txt");
+    await fs.mkdir(path.join(cwd, nestedDirectory), { recursive: true });
+    await fs.writeFile(path.join(cwd, trackedFile), "base file\n");
+    initialHead = await commit(cwd, "Track collision directory");
+    await git(cwd, "push", "--quiet", "origin", "HEAD:refs/heads/main");
+
+    const seed = path.join(root, "earlier-worker");
+    await git(root, "clone", "--quiet", "--branch", "main", origin, seed);
+    await fs.rm(path.join(seed, collision), { recursive: true });
+    await fs.writeFile(path.join(seed, collision), "remote file\n");
+    const remoteHead = await commit(seed, "Earlier turn");
+    await git(seed, "push", "--quiet", "origin", `HEAD:refs/heads/${binding.branch}`);
+
+    // The worker initializes its own repository inside the tracked directory.
+    const nestedRepository = path.join(cwd, nestedDirectory);
+    await git(cwd, "init", "--quiet", nestedDirectory);
+    await git(nestedRepository, "config", "user.name", "Worker Fixture");
+    await git(nestedRepository, "config", "user.email", "worker@openclaw.invalid");
+    const nestedHead = await commit(nestedRepository, "Nested work");
+    // Git reports nothing for the `.git` entry, so the outer status is still empty here.
+    expect(await git(cwd, "status", "--porcelain", "--ignored", "-z")).toBe("");
+
+    await prepare();
+
+    await expect(fs.readFile(path.join(cwd, trackedFile), "utf8")).resolves.toBe("base file\n");
+    expect((await fs.lstat(path.join(cwd, collision))).isDirectory()).toBe(true);
+    await expect(fs.readFile(path.join(cwd, collision), "utf8")).rejects.toThrow();
+    expect((await git(nestedRepository, "rev-parse", "HEAD")).trim()).toBe(nestedHead);
+    expect((await git(cwd, "rev-parse", "HEAD")).trim()).toBe(initialHead);
+    expect(remoteHead).not.toBe(initialHead);
+    expect(warn).toHaveBeenCalledExactlyOnceWith(
+      expect.stringContaining("GitHub checkout fast-forward skipped"),
+    );
+  });
+
   it("preserves a tracked dirty directory that blocks an incoming file", async () => {
     const collision = "collision";
     const localFile = path.join(collision, "local.txt");

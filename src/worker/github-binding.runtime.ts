@@ -200,6 +200,33 @@ async function bindWorkerGitHubCheckout(
         hasPathPrefixCollision = true;
         break;
       }
+      // Git never reports `.git` entries, so an empty status cannot prove that a tracked
+      // directory holds no nested repository; deleting one would discard its own history.
+      const trackedDirectories = new Set([gitPath]);
+      for (const entry of tracked) {
+        const trackedPath = entry.slice(entry.indexOf("\t") + 1);
+        let separator = trackedPath.lastIndexOf("/");
+        while (separator > 0) {
+          trackedDirectories.add(trackedPath.slice(0, separator));
+          separator = trackedPath.lastIndexOf("/", separator - 1);
+        }
+      }
+      let holdsNestedRepository = false;
+      for (const trackedDirectory of trackedDirectories) {
+        try {
+          await fs.lstat(path.join(cwd, trackedDirectory, ".git"));
+          holdsNestedRepository = true;
+          break;
+        } catch (error) {
+          if (!isMissingPathError(error)) {
+            throw error;
+          }
+        }
+      }
+      if (holdsNestedRepository) {
+        hasPathPrefixCollision = true;
+        break;
+      }
       removableTrackedCollisions.add(collisionPath);
     }
     if (hasPathPrefixCollision) {
