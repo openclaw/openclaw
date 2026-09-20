@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import type { AgentModelConfig } from "../config/types.agents-shared.js";
 import type { AgentEntryConfig } from "../config/types.agents.js";
 import type { OpenClawConfig } from "../config/types.js";
+import { createWarnLogCapture } from "../logging/test-helpers/warn-log-capture.js";
 import {
   resolveAgentEffectiveModelPrimary,
   resolveAgentExplicitModelPrimary,
@@ -11,7 +12,10 @@ import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "./defaults.js";
 import { FailoverError } from "./failover-error.js";
 import { resolveModelCandidateChain } from "./model-fallback-candidates.js";
 import { runWithModelFallback } from "./model-fallback-runner.js";
-import { resolveDefaultModelForAgent } from "./model-selection.js";
+import {
+  resolveConfiguredSubagentSpawnModelSelection,
+  resolveDefaultModelForAgent,
+} from "./model-selection.js";
 
 const HARNESS_MODEL = "harness-only[context=272k,reasoning=medium]";
 const nativePrimary = "native/primary";
@@ -127,17 +131,44 @@ describe("ACP native model policy", () => {
     },
   );
 
-  it("uses the native implicit default when an ACP agent has no configured native primary", () => {
-    const cfg: OpenClawConfig = {
-      plugins: { enabled: false },
-      agents: { entries: { worker: { model: HARNESS_MODEL, runtime: { type: "acp" } } } },
-    };
-    expect(resolveDefaultModelForAgent({ cfg, agentId: "worker", manifestPlugins: [] })).toEqual({
-      provider: DEFAULT_PROVIDER,
-      model: DEFAULT_MODEL,
-    });
-    expect(resolveAgentEffectiveModelPrimary(cfg, "worker")).toBe(HARNESS_MODEL);
-  });
+  it.each([HARNESS_MODEL, "openai/gpt-5.4"])(
+    "uses the native implicit default for ACP primary %s without a native default",
+    (model) => {
+      const cfg: OpenClawConfig = {
+        plugins: { enabled: false },
+        agents: { entries: { worker: { model, runtime: { type: "acp" } } } },
+      };
+      expect(resolveDefaultModelForAgent({ cfg, agentId: "worker", manifestPlugins: [] })).toEqual({
+        provider: DEFAULT_PROVIDER,
+        model: DEFAULT_MODEL,
+      });
+      expect(resolveAgentEffectiveModelPrimary(cfg, "worker")).toBe(model);
+    },
+  );
+
+  it.each(["acp", "native"] as const)(
+    "reports native model advice only for native spawn selection (%s)",
+    async (modelRuntime) => {
+      const warnings = createWarnLogCapture("acp-model-selection");
+      try {
+        const cfg = buildConfig({
+          model: HARNESS_MODEL,
+          ...(modelRuntime === "acp" ? { runtime: { type: "acp" } } : {}),
+        });
+        expect(
+          resolveConfiguredSubagentSpawnModelSelection({ cfg, agentId: "worker", modelRuntime }),
+        ).toBe(HARNESS_MODEL);
+        const warning = await warnings.findText("specified without provider");
+        if (modelRuntime === "acp") {
+          expect(warning).toBeUndefined();
+        } else {
+          expect(warning).toContain("Please use");
+        }
+      } finally {
+        warnings.cleanup();
+      }
+    },
+  );
 
   it.each(["user", undefined] as const)(
     "keeps persisted %s native model selections strict",

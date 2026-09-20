@@ -1,70 +1,120 @@
-// Doctor must make the ACP harness/OpenClaw model split discoverable, loudly for configs it changes.
-// Driven through the registered check so the wiring stays covered, not just the helper.
+// Registered Doctor diagnostics explain ACP/native model selection without proposing repairs.
 import { describe, expect, it } from "vitest";
-import type { OpenClawConfig } from "../config/types.js";
-import { createAcpAgentModelCheck } from "./doctor-acp-agent-model-check.js";
-import type { HealthCheckContext, HealthFinding } from "./health-checks.js";
+import { createTestRuntime } from "../commands/test-runtime-config-helpers.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { CORE_HEALTH_CHECKS } from "./doctor-core-checks.js";
 
-const ACP_RUNTIME = { type: "acp", acp: { agent: "cursor", backend: "acpx" } };
+type AgentEntry = NonNullable<NonNullable<OpenClawConfig["agents"]>["entries"]>[string];
+const ACP_RUNTIME = {
+  type: "acp",
+  acp: { agent: "cursor", backend: "acpx" },
+} satisfies AgentEntry["runtime"];
+const NATIVE_MODEL = "anthropic/claude-sonnet-4-6";
+const HARNESS_MODEL = "gpt-5.6-sol[context=272k,reasoning=medium,fast=false]";
 
-async function detect(cfg: OpenClawConfig): Promise<readonly HealthFinding[]> {
-  return await createAcpAgentModelCheck().detect({
-    mode: "lint",
-    cfg,
-    cwd: process.cwd(),
-  } as unknown as HealthCheckContext);
-}
-
-function buildConfig(entry: Record<string, unknown>): OpenClawConfig {
-  return {
-    agents: {
-      defaults: { model: "anthropic/claude-opus-5" },
-      entries: { cursoragent: { id: "cursoragent", ...entry } },
-    },
-  } as unknown as OpenClawConfig;
+async function detect(cfg: OpenClawConfig) {
+  const check = CORE_HEALTH_CHECKS.find((entry) => entry.id === "core/doctor/acp-agent-model");
+  if (!check) {
+    throw new Error("missing registered ACP agent model check");
+  }
+  expect(check.repair).toBeUndefined();
+  const before = structuredClone(cfg);
+  const findings = await check.detect({ mode: "lint", runtime: createTestRuntime(), cfg });
+  expect(cfg).toEqual(before);
+  return findings;
 }
 
 describe("core/doctor/acp-agent-model", () => {
-  it("warns when an ACP agent's primary was a dispatchable reference", async () => {
-    const findings = await detect(
-      buildConfig({ runtime: ACP_RUNTIME, model: { primary: "openai/gpt-5.4" } }),
-    );
-
-    expect(findings).toHaveLength(1);
-    expect(findings[0]?.severity).toBe("warning");
-    expect(findings[0]?.path).toBe("agents.entries.cursoragent.model.primary");
-    expect(findings[0]?.message).toContain("openai/gpt-5.4");
-    expect(findings[0]?.message).toContain("anthropic/claude-opus-5");
-    expect(findings[0]?.fixHint).toContain("agents.defaults.model");
-  });
-
-  it("reports a harness-only model id as information, not a warning", async () => {
-    const findings = await detect(
-      buildConfig({
-        runtime: ACP_RUNTIME,
-        model: { primary: "gpt-5.6-sol[context=272k,reasoning=medium,fast=false]" },
-      }),
-    );
-
-    expect(findings).toHaveLength(1);
-    expect(findings[0]?.severity).toBe("info");
-    expect(findings[0]?.message).toContain("gpt-5.6-sol[context=272k,reasoning=medium,fast=false]");
-    expect(findings[0]?.message).toContain("anthropic/claude-opus-5");
-  });
-
-  it("skips a legacy roster entry that has no id yet", async () => {
-    const cfg = {
+  it.each([
+    { primary: NATIVE_MODEL, objectForm: false },
+    { primary: "openai/gpt-5.4", objectForm: true },
+    { primary: HARNESS_MODEL, objectForm: true },
+  ])("reports $primary as information without changing config", async ({ primary, objectForm }) => {
+    const findings = await detect({
       agents: {
-        defaults: { model: "anthropic/claude-opus-5" },
-        list: [{ runtime: ACP_RUNTIME, model: { primary: "openai/gpt-5.4" } }],
+        defaults: { model: NATIVE_MODEL },
+        entries: {
+          cursoragent: { runtime: ACP_RUNTIME, model: objectForm ? { primary } : primary },
+        },
       },
-    } as unknown as OpenClawConfig;
+    });
 
-    expect(await detect(cfg)).toEqual([]);
+    expect(findings).toEqual([
+      {
+        checkId: "core/doctor/acp-agent-model",
+        severity: "info",
+        source: "doctor",
+        target: "cursoragent",
+        path: `agents.entries.cursoragent.model${objectForm ? ".primary" : ""}`,
+        message: expect.any(String),
+      },
+    ]);
+    expect(findings[0]?.message).toContain(`ACP harness model "${primary}"`);
+    expect(findings[0]?.message).toContain(`native default is "${NATIVE_MODEL}"`);
+    expect(findings[0]?.message).toContain(
+      "Explicit native session, utility, and subagent model selections still apply.",
+    );
   });
 
-  it("ignores embedded agents and ACP agents without a configured primary", async () => {
-    expect(await detect(buildConfig({ model: { primary: "openai/gpt-5.4" } }))).toEqual([]);
-    expect(await detect(buildConfig({ runtime: ACP_RUNTIME }))).toEqual([]);
+  it.each([false, true])("uses the legacy roster index for object form %s", async (objectForm) => {
+    const findings = await detect({
+      agents: {
+        defaults: { model: NATIVE_MODEL },
+        list: [
+          { id: "main" },
+          {
+            id: "cursoragent",
+            runtime: ACP_RUNTIME,
+            model: objectForm ? { primary: HARNESS_MODEL } : HARNESS_MODEL,
+          },
+        ],
+      },
+    });
+    expect(findings).toEqual([
+      expect.objectContaining({
+        severity: "info",
+        path: `agents.list[1].model${objectForm ? ".primary" : ""}`,
+      }),
+    ]);
+  });
+
+  it("ignores native agents and ACP agents without a configured primary", async () => {
+    expect(
+      await detect({
+        agents: {
+          defaults: { model: NATIVE_MODEL },
+          entries: {
+            ordinary: { model: "openai/gpt-5.4" },
+            embedded: { runtime: { type: "embedded" }, model: "openai/gpt-5.4" },
+            cursoragent: { runtime: ACP_RUNTIME },
+          },
+        },
+      }),
+    ).toEqual([]);
+  });
+
+  it("quotes config keys and renders untrusted identifiers and references safely", async () => {
+    const findings = await detect({
+      agents: {
+        defaults: { model: "anthropic/native\u001b[31m\nmodel" },
+        entries: {
+          "cursor.ops\u001b[31m\nagent": {
+            runtime: ACP_RUNTIME,
+            model: "harness\u001b[31m\nmodel\r\t\u0007",
+          },
+        },
+      },
+    });
+    expect(findings).toEqual([
+      expect.objectContaining({
+        target: "cursor.ops\\nagent",
+        path: 'agents.entries["cursor.ops\\u001b[31m\\nagent"].model',
+      }),
+    ]);
+    expect(findings[0]?.message).toContain('ACP harness model "harness\\nmodel\\r\\t"');
+    expect(findings[0]?.message).toContain('native default is "anthropic/native\\nmodel"');
+    expect(
+      findings.map((finding) => `${finding.target}${finding.path}${finding.message}`).join(""),
+    ).not.toMatch(/\p{Cc}/u);
   });
 });

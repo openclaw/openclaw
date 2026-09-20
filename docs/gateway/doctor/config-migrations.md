@@ -28,18 +28,18 @@ not enter a restart loop. Add the reported binding and restart the Gateway.
 
 ## ACP agents' model precedence
 
-`agents.entries.*.model.primary` on an agent with `runtime.type: "acp"` selects that
-agent's ACP harness model. Harness model ids are the harness's own vocabulary, not
-OpenClaw model references, so OpenClaw-side model calls for such an agent resolve
-`agents.defaults.model` rather than the agent's primary.
+For an agent with `runtime.type: "acp"`, `agents.entries.*.model` (string form) or
+`agents.entries.*.model.primary` (object form) selects the ACP harness model. This
+also applies to harness selections that look like `provider/model` references.
+OpenClaw resolves a separate native default, using `agents.defaults.model` when
+configured. Explicit native session, utility, and subagent model selections retain
+their precedence.
 
-Doctor reports this split per ACP agent (`core/doctor/acp-agent-model`). A harness-only
-id is informational. A primary that is a normal `provider/model` reference is reported as
-a warning, because OpenClaw-side calls for that agent previously used it and now use the
-global default: if that default names a different provider or one without credentials,
-previously working local commands change route or fail. The finding names the resolved
-model so the transition is visible before it surprises a turn. ACP turns keep using the
-configured primary in both cases; no config is rewritten.
+Doctor reports this separation as information (`core/doctor/acp-agent-model`),
+naming the configured path, harness model, and resolved native default. Matching
+and differing selections are both supported configurations. This notice proposes
+no repair and does not rewrite the config; ACP turns keep their configured harness
+selection.
 
 ## Missing plugins during migration
 

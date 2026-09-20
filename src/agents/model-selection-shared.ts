@@ -48,8 +48,7 @@ export { resolvePrimaryStringValue as normalizeModelSelection } from "@openclaw/
 let log: ReturnType<typeof createSubsystemLogger> | null = null;
 
 function getLog(): ReturnType<typeof createSubsystemLogger> {
-  log ??= createSubsystemLogger("model-selection");
-  return log;
+  return (log ??= createSubsystemLogger("model-selection"));
 }
 
 const OPENROUTER_COMPAT_FREE_ALIAS = "openrouter:free";
@@ -261,10 +260,7 @@ function sanitizeModelWarningValue(value: string): string {
       break;
     }
   }
-  if (controlBoundary === -1) {
-    return sanitizeForLog(stripped);
-  }
-  return sanitizeForLog(stripped.slice(0, controlBoundary));
+  return sanitizeForLog(controlBoundary === -1 ? stripped : stripped.slice(0, controlBoundary));
 }
 
 // Metadata follows literal rows, even when display keys collapse provider-prefixed IDs.
@@ -795,11 +791,13 @@ export function resolveConfiguredModelRef(
         });
       }
 
-      const safeTrimmed = sanitizeModelWarningValue(trimmed);
-      const safeResolved = sanitizeForLog(`${params.defaultProvider}/${safeTrimmed}`);
-      getLog().warn(
-        `Model "${safeTrimmed}" specified without provider. Falling back to "${safeResolved}". Please use "${safeResolved}" in your config.`,
-      );
+      if (modelRuntime !== "acp") {
+        const safeTrimmed = sanitizeModelWarningValue(trimmed);
+        const safeResolved = sanitizeForLog(`${params.defaultProvider}/${safeTrimmed}`);
+        getLog().warn(
+          `Model "${safeTrimmed}" specified without provider. Falling back to "${safeResolved}". Please use "${safeResolved}" in your config.`,
+        );
+      }
     }
 
     // Bare defaults still use prepared runtime hooks without starting manifest discovery.
@@ -814,11 +812,13 @@ export function resolveConfiguredModelRef(
       return resolved.ref;
     }
 
-    const safe = sanitizeForLog(trimmed);
-    const safeFallback = sanitizeForLog(`${params.defaultProvider}/${params.defaultModel}`);
-    getLog().warn(
-      `Model "${safe}" could not be resolved. Falling back to default "${safeFallback}".`,
-    );
+    if (modelRuntime !== "acp") {
+      const safe = sanitizeForLog(trimmed);
+      const safeFallback = sanitizeForLog(`${params.defaultProvider}/${params.defaultModel}`);
+      getLog().warn(
+        `Model "${safe}" could not be resolved. Falling back to default "${safeFallback}".`,
+      );
+    }
   }
   return (
     resolveConfiguredPrimaryProviderFallback(params) ?? {
