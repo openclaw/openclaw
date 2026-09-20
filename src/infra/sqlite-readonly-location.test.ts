@@ -102,7 +102,7 @@ describe("prepareSqliteReadOnlyLocation", () => {
     await expectPublicSnapshot(prepareSqliteReadOnlyLocationSync);
   });
 
-  it("keeps each scoped artifact-preserving inspection byte-neutral across writer commits", async () => {
+  it("preserves database and WAL contents across scoped writer inspections", async () => {
     const sqlite = requireNodeSqlite();
     const databasePath = createTempDatabasePath();
     const writer = new sqlite.DatabaseSync(databasePath);
@@ -113,12 +113,12 @@ describe("prepareSqliteReadOnlyLocation", () => {
       await withSqliteReadOnlyWorkerScope(async () => {
         for (const value of ["first", "second"]) {
           writer.prepare("INSERT INTO probe VALUES (?)").run(value);
-          const familyBefore = readFamily(databasePath);
+          const familyBefore = readLogicalFamily(databasePath);
           const prepared = await prepareSqliteReadOnlyLocation(databasePath, {
             preserveSourceArtifacts: true,
           });
           try {
-            expect(readFamily(databasePath)).toEqual(familyBefore);
+            expect(readLogicalFamily(databasePath)).toEqual(familyBefore);
             const snapshot = new sqlite.DatabaseSync(prepared.location, { readOnly: true });
             try {
               expect(
@@ -743,46 +743,6 @@ describe("prepareSqliteReadOnlyLocation", () => {
     expect(readLogicalFamily(databasePath)).toEqual(sourceAfterReset);
     expect(prepared.cleanup()).toBe(true);
     raceWriter?.close();
-  });
-
-  it("backs up an active WAL database while another connection keeps writing", async () => {
-    const sqlite = requireNodeSqlite();
-    const databasePath = createTempDatabasePath();
-    const seed = new sqlite.DatabaseSync(databasePath);
-    seed.exec(`
-      PRAGMA journal_mode = WAL;
-      PRAGMA wal_autocheckpoint = 0;
-      CREATE TABLE writes (sequence INTEGER PRIMARY KEY);
-      CREATE TABLE payload (data BLOB NOT NULL);
-      INSERT INTO payload VALUES (zeroblob(16777216));
-      PRAGMA wal_checkpoint(TRUNCATE);
-    `);
-    seed.close();
-    const writer = startSqliteConcurrentWriter(databasePath, "WAL");
-    writers.push(writer);
-    try {
-      const ready = await writer.waitFor("ready");
-      expect(ready.commits).toBeGreaterThan(0);
-      expect(writer.pid).not.toBe(process.pid);
-
-      const prepared = await prepareSqliteReadOnlyLocationInProcess(databasePath);
-      const snapshot = new sqlite.DatabaseSync(prepared.location, { readOnly: true });
-      try {
-        expect(snapshot.prepare("PRAGMA integrity_check").get()).toEqual({ integrity_check: "ok" });
-        expect(snapshot.prepare("SELECT COUNT(*) AS count FROM payload").get()).toEqual({
-          count: 1,
-        });
-        expect(
-          snapshot.prepare("SELECT COUNT(*) AS count FROM writes").get()?.count,
-        ).toBeGreaterThan(0);
-      } finally {
-        snapshot.close();
-        expect(prepared.cleanup()).toBe(true);
-      }
-      expect((await writer.progress()).commits).toBeGreaterThan(ready.commits);
-    } finally {
-      await writer.stop();
-    }
   });
 
   it("retries when backup fallback inspection sees a replaced source", async () => {

@@ -228,8 +228,10 @@ TMPDIR=/var/tmp openclaw update --yes
 
 Subsequent updates use the new updater's measured destination selection.
 
-Schema checks also use private SQLite copies so inspection does not create or
-modify WAL sidecars beside live databases. Inspection budgets include database
+Schema checks use SQLite read transactions and private backups while live writers
+continue. Database and WAL contents remain unchanged; SQLite may update existing
+SHM read marks. Incomplete WAL families and crash journals are copied for private
+recovery without creating missing source sidecars. Inspection budgets include database
 and journal sizes, cold startup, and repeated IO passes for every discovered
 store. Metadata checks remain cancellable. Copy progress renews the watchdog,
 and larger caller allowances are preserved. Workers stop before their private
@@ -239,6 +241,18 @@ Inspection failures report the database or known scope, inspection phase, elapse
 time, and the next action. Check access to the named path, concurrent writers,
 and storage performance before retrying. Older candidate workers that cannot
 report their current database identify the known scope instead.
+
+If the initial config inspection encounters SQLite lock contention or a changing
+snapshot source, the updater repeats that read once. A successful read records a
+warning and lets target selection continue. Corruption and other inspection errors
+remain failures. A pre-staging failure retains its original diagnostic and next
+action in update history once fresh database admission succeeds; unresolved
+recovery ownership still prevents terminal publication.
+
+This inspection behavior belongs to the invoking updater. A published 2026.9.4
+updater can still fail before staging the candidate. In that case, use the
+installation's [manual update method](/install/updating/update-methods), then run
+`openclaw update repair` from the updated installation.
 
 Before stopping the previous Gateway, the updater waits for affirmative readiness.
 Its observation window uses the canary's measured startup time with headroom for

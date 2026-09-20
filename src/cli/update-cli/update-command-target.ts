@@ -4,6 +4,7 @@ import { formatConfigIssueLines } from "../../config/issue-format.js";
 import { resolveStateDir } from "../../config/paths.js";
 import { createLowDiskSpaceWarning } from "../../infra/disk-space.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { SqliteReadOnlyInspectionContentionError } from "../../infra/sqlite-readonly-worker-protocol.js";
 import { assessInitialUpdateSnapshotCapacity } from "../../infra/update-candidate-snapshot.js";
 import {
   channelToNpmTag,
@@ -228,9 +229,27 @@ export async function resolveUpdateCommandTarget(
         return undefined;
       }
 
-      const { configSnapshot, legacyConfigPlan, storedChannel } = await readUpdateChannelConfig(
-        Boolean(opts.channel),
-      );
+      const readChannelConfig = () => readUpdateChannelConfig(Boolean(opts.channel));
+      let channelConfig: Awaited<ReturnType<typeof readUpdateChannelConfig>>;
+      let inspectionWarning: string | undefined;
+      try {
+        channelConfig = await readChannelConfig();
+      } catch (error) {
+        if (!(error instanceof SqliteReadOnlyInspectionContentionError)) {
+          throw error;
+        }
+        channelConfig = await readChannelConfig();
+        inspectionWarning = `Read-only SQLite inspection recovered after temporary contention; continuing the update. ${formatErrorMessage(error)}`;
+        recordUpdateCommandTarget(opts.run, {
+          step: {
+            step: "warning:installation-inspection",
+            status: "completed",
+            detail: inspectionWarning,
+          },
+        });
+        defaultRuntime.error(`Warning: ${inspectionWarning}`);
+      }
+      const { configSnapshot, legacyConfigPlan, storedChannel } = channelConfig;
 
       if (opts.channel && !configSnapshot.valid && !legacyConfigPlan) {
         const issues = formatConfigIssueLines(configSnapshot.issues, "-");
@@ -578,6 +597,7 @@ export async function resolveUpdateCommandTarget(
 
       return {
         root,
+        ...(inspectionWarning ? { inspectionWarning } : {}),
         mode: await resolveMode(),
         updateInstallKind,
         refuseUpdate,

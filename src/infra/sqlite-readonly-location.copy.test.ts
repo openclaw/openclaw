@@ -7,7 +7,6 @@ import {
   prepareSqliteReadOnlyLocationInProcess,
   prepareSqliteReadOnlyLocationSyncInProcess,
 } from "./sqlite-readonly-location.js";
-import { waitForSnapshotQuiescence } from "./sqlite-snapshot-policy.js";
 
 const MIB = 1024 * 1024;
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
@@ -100,32 +99,6 @@ function interceptSourceReads(
 }
 
 describe("stable read-only snapshot copies", () => {
-  it("bounds quiescence admission while the source stays active", async () => {
-    const fixture = createFixture(Buffer.alloc(0));
-    vi.useFakeTimers();
-    const controller = new AbortController();
-    const completed = vi.fn();
-    const settled = waitForSnapshotQuiescence(fixture.sourcePath, controller.signal).then(
-      completed,
-      completed,
-    );
-    const timer = setInterval(() => {
-      const now = new Date();
-      fs.utimesSync(fixture.sourcePath, now, now);
-    }, 5);
-    try {
-      await vi.advanceTimersByTimeAsync(200);
-      expect(completed).toHaveBeenCalledExactlyOnceWith(
-        expect.objectContaining({ stabilized: false }),
-      );
-    } finally {
-      clearInterval(timer);
-      controller.abort();
-      await settled;
-      vi.useRealTimers();
-    }
-  });
-
   it.each([
     { label: "empty", size: 0 },
     { label: "partial chunk", size: 4099 },

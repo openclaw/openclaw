@@ -145,7 +145,7 @@ describe("SQLite read-only worker cancellation", () => {
       })),
     ),
   )(
-    "joins a scoped child and removes its unpublished snapshot on $stop (raw=$preserveSourceArtifacts)",
+    "joins a scoped child and removes its unpublished snapshot on $stop (session=$preserveSourceArtifacts)",
     async ({ stop, preserveSourceArtifacts }) => {
       const fixture = tempDirs.make("openclaw-readonly-scoped-held-");
       const worker = path.join(fixture, "worker.mjs");

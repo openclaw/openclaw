@@ -112,12 +112,18 @@ unchanged. Explicit provenance inspection and inherited artifact-preserving scop
 still use private snapshots. Neither optimization changes schemas, stored records,
 retention, or update migrations.
 
-Unavoidable raw copies first sample the main database and WAL for a short stable
-interval. A hard admission deadline then allows copying to proceed under sustained
-write load instead of waiting indefinitely. Source-change retries use bounded
-cancellable backoff without restarting that quiescence deadline. Snapshot debug
-telemetry contains only bounded operational metadata: operation and owner labels,
-main and WAL sizes, copied bytes, attempt, wait and duration, and outcome.
+Live shared-state inspection, including synchronous plugin and configuration reads,
+uses the same SQLite online-backup owner in an isolated child. One read transaction
+pins committed pages while writers continue; inspection does not require database
+or WAL bytes to stop changing. Native SQLite may update existing SHM read marks,
+but leaves database and WAL contents unchanged. Incomplete WAL families, rollback
+crash residue, and owner-excluded sources retain private copying and recovery so
+inspection does not create missing source sidecars. Source-change retries apply
+only to those copies. Existing WAL and rollback-journal files can coexist without
+write activity; inspection copies and verifies both before SQLite recovers the
+private family. It does not discard committed WAL pages or repair the source.
+Snapshot debug telemetry reports operation and owner,
+main and WAL sizes, copied bytes, attempt, duration, and outcome.
 
 Synchronous CLI snapshots also pause between source-change retries, so a brief
 write burst does not exhaust all ten attempts immediately. These retries only
@@ -229,7 +235,7 @@ A 2 GiB database gets 2,860 seconds, and workers finish as soon as their work co
 
 Update schema inspection and candidate snapshots use this same allowance as an inactivity watchdog. Larger caller budgets remain available, and observed private-copy progress renews the deadline. See [How updates run](/cli/update/how-updates-run).
 
-The synchronous byte-neutral snapshot strategy is for small or quiescent databases. Inspections of a live agent database, including memory-core readiness, use the asynchronous online-backup worker.
+Synchronous and asynchronous callers share the online-backup worker for live databases. Byte-neutral raw copying is reserved for owner-excluded sources or journal state requiring private recovery.
 
 Full startup readiness checks agent ownership, integrity, foreign keys, and schema
 in one fresh read-only transaction in a disposable child. Complete WAL families
