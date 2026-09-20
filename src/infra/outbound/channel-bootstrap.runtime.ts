@@ -26,6 +26,7 @@ import {
 import { PluginLruCache } from "../../plugins/plugin-lru-cache.js";
 import { resolvePluginMetadataEnvFingerprint } from "../../plugins/plugin-metadata-env.js";
 import { isPluginRegistryRetired } from "../../plugins/registry-lifecycle.js";
+import type { PluginChannelRegistration } from "../../plugins/registry-types.js";
 import type { PluginRegistry } from "../../plugins/registry.js";
 import { getActivePluginRegistry, getActivePluginRegistryVersion } from "../../plugins/runtime.js";
 import { getPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
