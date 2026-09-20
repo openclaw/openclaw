@@ -488,7 +488,7 @@ it("revokes earlier engine callbacks while its raw disposal remains admitted", a
     process.emit(event + "-finish");
     await Promise.all([disposal, retiring]);
     process.off(event, record);
-    drainSystemEvents(event);
+    drainSystemEvents(`agent:main:${event}`);
   }
   expect(events).toContain("dispose-finished");
 });

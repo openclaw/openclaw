@@ -29,7 +29,10 @@ export type WorkerPlacementDiskSpaceReader = {
 };
 
 export type WorkerPlacementRunnerAvailabilityReader = {
-  read(record: WorkerSessionPlacementRecord): SessionPlacementRunner | undefined;
+  read(
+    record: WorkerSessionPlacementRecord,
+    environment?: ReturnType<WorkerEnvironmentServiceContract["get"]> | null,
+  ): SessionPlacementRunner | undefined;
   version(): number;
 };
 
@@ -72,11 +75,14 @@ export function createWorkerPlacementRunnerAvailabilityReader(params: {
   hasCurrentDeviceRunner: (deviceId: string) => boolean;
 }): WorkerPlacementRunnerAvailabilityReader & { markChanged(): void } {
   let version = 0;
-  const read: WorkerPlacementRunnerAvailabilityReader["read"] = (record) => {
+  const read: WorkerPlacementRunnerAvailabilityReader["read"] = (record, preparedEnvironment) => {
     if (record.state !== "active") {
       return undefined;
     }
-    const environment = params.environments.get(record.environmentId);
+    const environment =
+      preparedEnvironment === undefined
+        ? params.environments.get(record.environmentId)
+        : preparedEnvironment;
     if (
       environment?.providerId !== DEVICE_WORKER_PROVIDER_ID ||
       environment.state !== "attached" ||

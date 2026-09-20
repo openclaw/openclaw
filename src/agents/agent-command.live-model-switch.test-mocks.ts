@@ -1,5 +1,30 @@
 import { vi } from "vitest";
 
+export function createTestThinkingPolicy(state: {
+  isThinkingLevelSupportedMock: (args: unknown) => boolean;
+  resolveSupportedThinkingLevelMock: (args: { level?: string }) => string | undefined;
+  resolveThinkingDefaultMock: (args: unknown) => string;
+}) {
+  return {
+    formatThinkingLevels: () => "low, medium, high",
+    normalizeThinkLevel: (v?: string) => v || undefined,
+    normalizeVerboseLevel: (v?: string) => v || undefined,
+    isThinkingLevelSupported: (args: unknown) => state.isThinkingLevelSupportedMock(args),
+    resolveSupportedThinkingLevel: (args: { level?: string }) =>
+      state.resolveSupportedThinkingLevelMock(args),
+    resolveThinkingSelectionForModel: (args: { level?: string }) => {
+      const requestedLevel = args.level ?? state.resolveThinkingDefaultMock(args);
+      const policy = { ...args, level: requestedLevel };
+      return {
+        requestedLevel,
+        level: state.resolveSupportedThinkingLevelMock(policy),
+        supported: state.isThinkingLevelSupportedMock(policy),
+      };
+    },
+    supportsXHighThinking: () => false,
+  };
+}
+
 export function createTestAgentScope(
   params: {
     hasLegacyAutoFallbackWithoutOriginMock: (entry: unknown) => boolean;

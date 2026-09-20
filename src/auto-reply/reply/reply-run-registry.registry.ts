@@ -140,13 +140,14 @@ export const replyRunRegistry: ReplyRunRegistry = {
     const resolved = resolveReplyMessageInjectionRejection({
       operation,
     });
-    if (!operation || !("injection" in resolved) || !normalizedSessionKey) {
+    const backend = "injection" in resolved ? resolved.backend : undefined;
+    if (!operation || !backend || !normalizedSessionKey) {
       return undefined;
     }
     const sourceTurnId = replyRunState.sourceTurnByKey.get(normalizedSessionKey);
     return {
       [replyMessageInjectionTargetOperation]: operation,
-      ...(resolved.backend.runId ? { runId: resolved.backend.runId } : {}),
+      ...(backend.runId ? { runId: backend.runId } : {}),
       ...(sourceTurnId ? { sourceTurnId } : {}),
     };
   },

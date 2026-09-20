@@ -17,7 +17,7 @@ const DOCS_OR_INSTRUCTIONS = /^(?:docs\/|(?:.+\/)?AGENTS\.md$|(?:.+\/)?CLAUDE\.m
 
 function listChangedPaths(baseSha: string, headSha: string, cwd: string): ChangedPath[] {
   const output = execFileSync(
-    "git",
+    process.env.OPENCLAW_PR_GIT || process.env.GIT_EXEC || "git",
     ["diff", "--name-status", "--no-renames", "-z", `${baseSha}...${headSha}`],
     { cwd, encoding: "utf8" },
   );
@@ -123,7 +123,11 @@ export function resolveCrabboxGatePlan({
   cwd?: string;
   headSha: string;
 }) {
-  const actualHead = execFileSync("git", ["rev-parse", "HEAD"], { cwd, encoding: "utf8" }).trim();
+  const actualHead = execFileSync(
+    process.env.OPENCLAW_PR_GIT || process.env.GIT_EXEC || "git",
+    ["rev-parse", "HEAD"],
+    { cwd, encoding: "utf8" },
+  ).trim();
   if (actualHead !== headSha) {
     throw new Error(`Crabbox gate planner checkout is at ${actualHead}, expected ${headSha}`);
   }

@@ -1,27 +1,21 @@
+// Install the native service fixtures before loading the maintenance owner.
+import "./update-command-service-maintenance.test-support.js";
 import { spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import fs from "node:fs/promises";
 import path from "node:path";
 import { stableStringify } from "@openclaw/normalization-core/stable-stringify";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { expect, it, vi } from "vitest";
 import { beginDoctorMaintenance } from "../../commands/doctor-maintenance.js";
 import * as doctorServicePolicy from "../../commands/doctor-service-repair-policy.js";
 import * as schtasksExec from "../../daemon/schtasks-exec.js";
 import { readScheduledTaskRuntime } from "../../daemon/schtasks-runtime.js";
 import { ServiceInspectionError } from "../../daemon/service-inspection-error.js";
 import { readGatewayServiceState, type GatewayService } from "../../daemon/service.js";
-import {
-  createMockGatewayService,
-  mockSystemAccountHome,
-} from "../../daemon/service.test-helpers.js";
+import { createMockGatewayService } from "../../daemon/service.test-helpers.js";
 import { sha256Hex } from "../../infra/crypto-digest.js";
-import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
 import * as openClawTmp from "../../infra/tmp-openclaw-dir.js";
-import { CONTROL_PLANE_UPDATE_SENTINEL_META_ENV } from "../../infra/update-control-plane-sentinel.js";
 import { createManagedHandoffLeaseStore } from "../../infra/update-managed-service-handoff-lease.js";
 import { createUpdateRun } from "../../infra/update-run-ledger.js";
-import { makeTempWorkspace } from "../../test-helpers/workspace.js";
-import { withEnvAsync } from "../../test-utils/env.js";
 import { mockProcessPlatform } from "../../test-utils/vitest-spies.js";
 import { withUpdateCommandExecutor } from "./update-command-executor.js";
 import {
@@ -30,58 +24,11 @@ import {
   type PreManagedServiceStop,
 } from "./update-command-service-maintenance.js";
 
-const mocks = vi.hoisted(() => ({
-  service: vi.fn<() => GatewayService>(),
-  taskState: 3 as number | string,
-}));
-
-vi.mock("../../daemon/service.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../daemon/service.js")>()),
-  resolveGatewayService: mocks.service,
-}));
-
-vi.mock("node:child_process", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("node:child_process")>()),
-  spawnSync: vi.fn(() => ({
-    pid: 0,
-    output: [null, JSON.stringify({ state: mocks.taskState, lastRunResult: 0 }), ""],
-    stdout: JSON.stringify({ state: mocks.taskState, lastRunResult: 0 }),
-    stderr: "",
-    status: 0,
-    signal: null,
-  })),
-}));
-
-beforeEach(() => mockSystemAccountHome());
-afterEach(() => vi.restoreAllMocks());
-
-async function withServiceHome(run: (home: string) => Promise<void>): Promise<void> {
-  const home = await makeTempWorkspace("openclaw-update-service-");
-  vi.spyOn(openClawTmp, "resolvePreferredOpenClawTmpDir").mockReturnValue(home);
-  try {
-    await withEnvAsync(
-      {
-        HOME: home,
-        USERPROFILE: home,
-        APPDATA: path.join(home, "AppData"),
-        OPENCLAW_GATEWAY_PORT: undefined,
-        OPENCLAW_HOME: undefined,
-        OPENCLAW_STATE_DIR: undefined,
-        OPENCLAW_CONFIG_PATH: undefined,
-        OPENCLAW_PROFILE: undefined,
-        OPENCLAW_SUPERVISOR_MODE: undefined,
-        OPENCLAW_SERVICE_MARKER: undefined,
-        OPENCLAW_SERVICE_KIND: undefined,
-      },
-      () => run(home),
-    );
-  } finally {
-    await fs.rm(home, { recursive: true, force: true });
-  }
-}
+const { mocks, withServiceHome } =
+  await import("./update-command-service-maintenance.test-support.js");
 
 it.each(["systemd-user-bus-unavailable", "service-manager-access-denied"] as const)(
-  "retains the native inspection reason for failed preflight: %s",
+  "retains the native inspection reason without service authority: %s",
   (reason) =>
     withServiceHome(async (home) => {
       mockProcessPlatform("linux");
@@ -96,17 +43,20 @@ it.each(["systemd-user-bus-unavailable", "service-manager-access-denied"] as con
         },
       });
       mocks.service.mockReturnValue(service);
-      await expect(
-        maybeStopManagedServiceBeforeMutableUpdate({
-          root: process.cwd(),
-          updateInstallKind: "package",
-          shouldRestart: true,
-          phase: "inspect",
-          jsonMode: true,
-        }),
-      ).resolves.toMatchObject({
-        serviceUpdateVerdict: { kind: "unavailable", inspectionReason: reason },
+      const inspection = await maybeStopManagedServiceBeforeMutableUpdate({
+        root: process.cwd(),
+        updateInstallKind: "package",
+        shouldRestart: true,
+        phase: "inspect",
+        jsonMode: true,
       });
+      expect(inspection.serviceUpdateVerdict).toMatchObject({
+        kind: "unavailable",
+        inspectionReason: reason,
+      });
+      expect(inspection.serviceEnv === undefined).toBe(true);
+      expect(inspection.serviceDefinitionEnv === undefined).toBe(true);
+      expect(inspection.serviceNodeRunner === undefined).toBe(true);
       expect(service.stop).not.toHaveBeenCalled();
     }),
 );
@@ -139,9 +89,9 @@ it.each([
       jsonMode: true,
     });
     expect(result.serviceUpdateVerdict?.kind).toBe("unavailable");
-    expect(result.blockMessage).toContain(
+    expect(result.serviceMutationSkipMessage).toContain(
       scenario.residual
-        ? "processes remain in its systemd service cgroup"
+        ? "Processes remain in the systemd service cgroup"
         : "Gateway service inspection is unavailable",
     );
     expect(service.stop).not.toHaveBeenCalled();
@@ -265,7 +215,7 @@ it.each(nativeOfflineCases)(
       expect(inspected.serviceUpdateVerdict?.kind).toBe(
         scenario.runtime === "unknown" ? "unavailable" : "owned",
       );
-      expect(inspected.offline).toBe(scenario.offline);
+      expect(inspected.offline).toBe(scenario.runtime === "unknown" ? undefined : scenario.offline);
       for (const [args] of isEnabled.mock.calls) {
         expect(args.timeoutMs).toBe(200);
       }
@@ -278,10 +228,10 @@ it.each(nativeOfflineCases)(
 );
 
 it.each([
-  { code: "ETIMEDOUT", failures: 1, proceeds: true },
-  { code: "ETIMEDOUT", failures: 2, proceeds: false },
-  { code: "ETIMEDOUT", failures: 2, proceeds: false, admitted: true },
-  { code: "ENOENT", failures: 1, proceeds: false },
+  { code: "ETIMEDOUT", failures: 1, recovered: true },
+  { code: "ETIMEDOUT", failures: 2, recovered: false },
+  { code: "ETIMEDOUT", failures: 2, recovered: false, admitted: true },
+  { code: "ENOENT", failures: 1, recovered: false },
 ])("handles Scheduled Task probe failures before update: %j", (scenario) =>
   withServiceHome(async (home) => {
     mockProcessPlatform("win32");
@@ -333,16 +283,20 @@ it.each([
       await expect(inspection).rejects.toThrow("Scheduled Task probe timed out after 30000 ms");
     } else {
       const inspected = await inspection;
-      if (scenario.proceeds) {
+      expect(inspected.blockMessage).toBeUndefined();
+      if (scenario.recovered) {
         expect(inspected.serviceUpdateVerdict?.kind).toBe("owned");
-        expect(inspected.blockMessage).toBeUndefined();
         expect(inspected.running).toBe(true);
       } else {
         expect(inspected.serviceUpdateVerdict?.kind).toBe("unavailable");
-        expect(inspected.blockMessage).toContain("Refusing to mutate code");
+        expect(inspected.serviceMutationSkipMessage).toContain(
+          "Restart the Gateway you launched manually after the update.",
+        );
         if (scenario.code === "ETIMEDOUT") {
-          expect(inspected.blockMessage).toContain("Scheduled Task probe timed out after 30000 ms");
-          expect(inspected.blockMessage).toContain("ETIMEDOUT");
+          expect(inspected.serviceMutationSkipMessage).toContain(
+            "Scheduled Task probe timed out after 30000 ms",
+          );
+          expect(inspected.serviceMutationSkipMessage).toContain("ETIMEDOUT");
         }
       }
     }
@@ -357,7 +311,7 @@ it.each([
   }),
 );
 
-it("preserves a silent Scheduled Task probe failure through update and Doctor refusal", () =>
+it("preserves a silent Scheduled Task probe failure through update and Doctor warnings", () =>
   withServiceHome(async (home) => {
     mockProcessPlatform("win32");
     vi.spyOn(doctorServicePolicy, "shouldManageGatewayService").mockResolvedValue(true);
@@ -386,206 +340,31 @@ it("preserves a silent Scheduled Task probe failure through update and Doctor re
       jsonMode: true,
     });
     expect(inspection).toMatchObject({
-      offline: false,
       stopped: false,
       serviceMutationAllowed: false,
       serviceUpdateVerdict: { kind: "unavailable" },
     });
     const detail = "Scheduled Task probe failed (exit 2): no output from PowerShell.";
-    expect.soft(inspection.blockMessage).toContain(detail);
-    await expect(
-      beginDoctorMaintenance({
-        root: process.cwd(),
-        options: { repair: true },
-        runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
-      }),
-    ).rejects.toThrow(detail);
+    expect(inspection.blockMessage).toBeUndefined();
+    expect(inspection.serviceMutationSkipMessage).toContain(detail);
+    const maintenance = await beginDoctorMaintenance({
+      root: process.cwd(),
+      options: { repair: true },
+      runtime: { log: vi.fn(), error: vi.fn(), exit: vi.fn() },
+    });
+    try {
+      expect(maintenance?.warnings).toEqual([expect.stringContaining(detail)]);
+      expect(maintenance?.warnings?.[0]).toContain(
+        "Restart the Gateway you launched manually after the update.",
+      );
+      await maintenance?.finish({});
+    } finally {
+      await maintenance?.release();
+    }
     expect(service.stop).not.toHaveBeenCalled();
     expect(service.install).not.toHaveBeenCalled();
+    expect(service.restart).not.toHaveBeenCalled();
   }));
-
-const servingAncestorMaintenanceCases = [
-  { platform: "linux", identity: "current updater", phase: "inspect", authorized: true },
-  { platform: "linux", identity: "current updater", phase: "prepare", authorized: true },
-  { platform: "darwin", identity: "current updater", phase: "inspect", authorized: true },
-  { platform: "darwin", identity: "current updater", phase: "prepare", authorized: false },
-  { platform: "linux", identity: "missing marker", phase: "prepare", authorized: false },
-  { platform: "linux", identity: "missing metadata", phase: "prepare", authorized: false },
-  { platform: "linux", identity: "missing lease", phase: "prepare", authorized: false },
-  { platform: "linux", identity: "replaced owner", phase: "prepare", authorized: false },
-  { platform: "linux", identity: "different root", phase: "prepare", authorized: false },
-  { platform: "linux", identity: "different run", phase: "prepare", authorized: false },
-  { platform: "linux", identity: "stale start identity", phase: "prepare", authorized: false },
-  { platform: "linux", identity: "parent lease", phase: "prepare", authorized: false },
-] as const;
-
-it.runIf(process.platform === "linux" || process.platform === "darwin").each(
-  servingAncestorMaintenanceCases.filter(
-    // Binding a foreign PID reads native process identity, so only exercise that
-    // fixture where the simulated Linux policy matches the actual host.
-    ({ identity }) => identity !== "parent lease" || process.platform === "linux",
-  ),
-)(
-  "keeps $platform serving-ancestor maintenance bound to the current updater: $identity $phase",
-  ({ platform, identity, phase, authorized }) =>
-    withServiceHome(async (home) => {
-      mockProcessPlatform(platform);
-      const root = await fs.realpath(process.cwd());
-      const metaPath = path.join(home, "handoff-meta.json");
-      const runId = randomUUID();
-      vi.spyOn(openClawTmp, "resolvePreferredOpenClawTmpDir").mockReturnValue(home);
-      createUpdateRun({ runId, trigger: "cli" }, { env: process.env });
-      await fs.writeFile(
-        metaPath,
-        JSON.stringify({
-          version: 1,
-          meta: {
-            root: identity === "different root" ? home : root,
-            runId: identity === "different run" ? randomUUID() : runId,
-            handoffId: "owned-handoff",
-          },
-        }),
-      );
-      const store = createManagedHandoffLeaseStore();
-      if (identity !== "missing lease") {
-        const claim = store.acquire(
-          root,
-          identity === "replaced owner" ? "replacement-handoff" : "owned-handoff",
-          { kind: "update" },
-        );
-        if (claim.kind !== "acquired") {
-          throw new Error("fixture could not acquire its installation lease");
-        }
-        if (identity === "parent lease") {
-          expect(store.bind(claim.lease, process.ppid)).not.toBeNull();
-        } else if (identity === "stale start identity") {
-          const db = openNodeSqliteDatabase(path.join(home, "managed-update-handoffs.sqlite"));
-          try {
-            db.prepare(
-              "UPDATE managed_update_handoffs SET payload_json = json_set(payload_json, '$.executor.startIdentity', 'stale') WHERE install_root = ?",
-            ).run(root);
-          } finally {
-            db.close();
-          }
-        }
-      }
-      await withEnvAsync(
-        {
-          OPENCLAW_UPDATE_RUN_HANDOFF: identity === "missing marker" ? undefined : "1",
-          [CONTROL_PLANE_UPDATE_SENTINEL_META_ENV]:
-            identity === "missing metadata" ? undefined : metaPath,
-        },
-        async () => {
-          const service = createMockGatewayService({
-            readCommand: async () => ({
-              programArguments: [process.execPath, path.join(root, "openclaw.mjs"), "gateway"],
-              environment: { HOME: home },
-            }),
-            readRuntime: async () => ({
-              status: "running",
-              pid: process.ppid,
-              systemd: { managerUid: 2001 },
-            }),
-            isLoaded: async () => true,
-          });
-          mocks.service.mockReturnValue(service);
-          const inspected = await maybeStopManagedServiceBeforeMutableUpdate({
-            root,
-            updateInstallKind: "package",
-            shouldRestart: true,
-            jsonMode: true,
-            phase,
-            updateRun: { runId, env: process.env },
-            handoffFromGateway: async () => false,
-          });
-          expect(inspected.serviceUpdateVerdict?.kind).toBe("owned");
-          if (authorized) {
-            expect(inspected.blockMessage).toBeUndefined();
-          } else {
-            expect(inspected.blockMessage).toContain("inside the gateway process tree");
-          }
-          expect(service.stop).toHaveBeenCalledTimes(authorized && phase === "prepare" ? 1 : 0);
-          expect(service.start).not.toHaveBeenCalled();
-          expect(service.restart).not.toHaveBeenCalled();
-          expect(service.stage).not.toHaveBeenCalled();
-          expect(service.install).not.toHaveBeenCalled();
-        },
-      );
-    }),
-);
-
-it.runIf(process.platform === "linux")(
-  "rechecks the managed handoff identity immediately before stopping the Gateway",
-  () =>
-    withServiceHome(async (home) => {
-      const root = await fs.realpath(process.cwd());
-      const metaPath = path.join(home, "handoff-meta.json");
-      const runId = randomUUID();
-      createUpdateRun({ runId, trigger: "cli" }, { env: process.env });
-      await fs.writeFile(
-        metaPath,
-        JSON.stringify({
-          version: 1,
-          meta: { root, runId, handoffId: "owned-handoff" },
-        }),
-      );
-      const store = createManagedHandoffLeaseStore();
-      const claim = store.acquire(root, "owned-handoff", { kind: "update" });
-      if (claim.kind !== "acquired") {
-        throw new Error("fixture could not acquire its installation lease");
-      }
-      let runtimeReads = 0;
-      const stop = vi.fn(async () => undefined);
-      mocks.service.mockReturnValue(
-        createMockGatewayService({
-          readCommand: async () => ({
-            programArguments: [process.execPath, path.join(root, "openclaw.mjs"), "gateway"],
-            environment: { HOME: home },
-          }),
-          readRuntime: async () => {
-            runtimeReads += 1;
-            if (runtimeReads === 2) {
-              const db = openNodeSqliteDatabase(path.join(home, "managed-update-handoffs.sqlite"));
-              try {
-                db.prepare(
-                  "UPDATE managed_update_handoffs SET payload_json = json_set(payload_json, '$.executor.startIdentity', 'replaced') WHERE install_root = ?",
-                ).run(root);
-              } finally {
-                db.close();
-              }
-            }
-            return {
-              status: "running",
-              pid: process.ppid,
-              systemd: { managerUid: 2001 },
-            };
-          },
-          isLoaded: async () => true,
-          stop,
-        }),
-      );
-      await withEnvAsync(
-        {
-          OPENCLAW_UPDATE_RUN_HANDOFF: "1",
-          [CONTROL_PLANE_UPDATE_SENTINEL_META_ENV]: metaPath,
-        },
-        async () => {
-          await expect(
-            maybeStopManagedServiceBeforeMutableUpdate({
-              root,
-              updateInstallKind: "package",
-              shouldRestart: true,
-              jsonMode: true,
-              phase: "prepare",
-              updateRun: { runId, env: process.env },
-            }),
-          ).rejects.toThrow(/inside the gateway process tree/);
-        },
-      );
-      expect(runtimeReads).toBe(2);
-      expect(stop).not.toHaveBeenCalled();
-    }),
-);
 
 it.each([
   { label: "changed account", uid: 3002 },
@@ -692,7 +471,11 @@ it.each([
   "different unit",
   "different profile",
   "foreign executable",
+  "unchanged protected command",
   "changed protected command",
+  "changed protected environment",
+  "changed protected working directory",
+  "changed protected override",
 ])("revalidates the shipped managed-service stop record: %s", (scenario) =>
   withServiceHome(async (home) => {
     mockProcessPlatform("linux");
@@ -701,7 +484,8 @@ it.each([
       programArguments: [process.execPath, path.join(root, "openclaw.mjs"), "gateway"],
       environment: { HOME: home },
     };
-    // v2026.9.2/v2026.9.3 forward this stop record to the fresh migration finalizer.
+    const protectedCommand = scenario.includes("protected");
+    // Stable updaters through v2026.9.4 omit metadata for known-empty systemd overrides.
     const before: PreManagedServiceStop = {
       stoppedAtMs: 1,
       stopped: true,
@@ -716,7 +500,7 @@ it.each([
         kind: "owned",
         root,
         fingerprint: sha256Hex(stableStringify(command)),
-        refreshDefinition: scenario !== "changed protected command",
+        refreshDefinition: !protectedCommand,
       },
     };
     if (scenario === "matching UID" || scenario === "mismatching UID") {
@@ -725,6 +509,14 @@ it.each([
     const service = createMockGatewayService({
       readCommand: async () => ({
         ...command,
+        ...(protectedCommand
+          ? {
+              managedDefinition: command,
+              managedOverrides:
+                scenario === "changed protected override" ? { launcher: "command" as const } : {},
+            }
+          : {}),
+        ...(scenario === "changed protected working directory" ? { workingDirectory: home } : {}),
         programArguments:
           scenario === "foreign executable"
             ? [process.execPath, path.join(home, "other", "openclaw.mjs"), "gateway"]
@@ -733,6 +525,7 @@ it.each([
               : command.programArguments,
         environment: {
           ...command.environment,
+          ...(scenario === "changed protected environment" ? { FIXTURE_VALUE: "changed" } : {}),
           ...(scenario === "different unit" ? { OPENCLAW_SYSTEMD_UNIT: "other-gateway" } : {}),
           ...(scenario === "different profile"
             ? {
@@ -759,8 +552,15 @@ it.each([
       root,
       preManagedServiceStop: before,
     });
-    if (scenario === "shipped handoff" || scenario === "matching UID") {
-      await expect(revalidated).resolves.toMatchObject({ kind: "owned", refreshDefinition: true });
+    if (
+      scenario === "shipped handoff" ||
+      scenario === "matching UID" ||
+      scenario === "unchanged protected command"
+    ) {
+      await expect(revalidated).resolves.toMatchObject({
+        kind: "owned",
+        refreshDefinition: !protectedCommand,
+      });
     } else {
       await expect(revalidated).rejects.toThrow(/ownership or manager identity changed/);
     }

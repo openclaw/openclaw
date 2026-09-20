@@ -18,10 +18,7 @@ export async function withDoctorBootstrapRecovery<T>(
   return withDoctorUpdateRecovery(defaultRuntime, run);
 }
 
-export async function prepareDoctorBootstrapRecovery(
-  argv: string[],
-  json: boolean | undefined,
-): Promise<void> {
+export async function prepareDoctorBootstrapRecovery(argv: string[], json: boolean | undefined) {
   // Debug capture can migrate shared state before Commander reaches Doctor.
   // Capture recovery after selectors settle, before any bootstrap writer.
   const { prepareDoctorUpdateRecovery } = await import("../commands/doctor-update-recovery.js");
@@ -44,12 +41,7 @@ export async function prepareDoctorBootstrapRecovery(
     yes: hasFlag(argv, "--yes"),
     nonInteractive: hasFlag(argv, "--non-interactive"),
   });
-  const [{ guardUpdateDoctorSchemaUpgrade }, { defaultRuntime }] = await Promise.all([
-    import("../commands/doctor-update-schema-guard.js"),
-    import("../runtime.js"),
-  ]);
-  await guardUpdateDoctorSchemaUpgrade({
-    runtime: defaultRuntime,
-    json,
-  });
+  const { guardUpdateDoctorSchemaUpgrade } =
+    await import("../commands/doctor-update-schema-guard.js");
+  return await guardUpdateDoctorSchemaUpgrade({ json });
 }

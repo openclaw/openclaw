@@ -1,6 +1,188 @@
+import { spawn, type ChildProcess } from "node:child_process";
+import fs from "node:fs";
+import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { expect, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
+import * as serviceChildControl from "../process/supervisor/service-child-control-reader.js";
+import * as workerLaunchTransport from "./node-worker-launch-transport.js";
+import {
+  inspectNodeWorkerProcessIdentity,
+  requireNodeWorkerProcessIdentity,
+  type NodeWorkerProcessIdentity,
+} from "./node-worker-process-identity.js";
 import { createNodeWorkerSupervisor } from "./node-worker-supervisor.js";
-import { writeNodeWorkerFixture } from "./node-worker-supervisor.test-support.js";
+import {
+  testWorkerLaunchInput,
+  writeNodeWorkerFixture,
+} from "./node-worker-supervisor.test-support.js";
+
+function writeSupervisorOwnerScript(root: string): string {
+  const supervisorUrl = pathToFileURL(path.resolve("src/node-host/node-worker-supervisor.ts")).href;
+  const scriptPath = path.join(root, "supervisor-owner.mts");
+  fs.writeFileSync(
+    scriptPath,
+    `
+      import fs from "node:fs";
+      import { createNodeWorkerSupervisor } from ${JSON.stringify(supervisorUrl)};
+      const [bundleRoot, stateDir, inputPath] = process.argv.slice(2);
+      const supervisor = createNodeWorkerSupervisor({
+        bundleRoot,
+        env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
+      });
+      const shutdown = async () => {
+        await supervisor.close();
+        process.exit(0);
+      };
+      process.once("SIGTERM", () => void shutdown());
+      const input = JSON.parse(fs.readFileSync(inputPath, "utf8"));
+      const receipt = await supervisor.launch(input, ${JSON.stringify({ kind: "unix", socketPath: "/tmp/openclaw-worker/gateway.sock" })});
+      process.stdout.write(JSON.stringify(receipt) + "\\n");
+      setInterval(() => {}, 1000);
+    `,
+  );
+  return scriptPath;
+}
+
+export function spawnSupervisorOwner(params: {
+  bundleRoot: string;
+  env: NodeJS.ProcessEnv;
+  input: ReturnType<typeof testWorkerLaunchInput>;
+  root: string;
+}): ChildProcess {
+  const inputPath = path.join(params.root, `${params.input.launchId}.json`);
+  fs.writeFileSync(inputPath, JSON.stringify(params.input));
+  const child = spawn(
+    process.execPath,
+    [
+      "--import",
+      "tsx",
+      writeSupervisorOwnerScript(params.root),
+      params.bundleRoot,
+      params.env.OPENCLAW_STATE_DIR!,
+      inputPath,
+    ],
+    { env: { ...process.env, ...params.env }, stdio: ["ignore", "pipe", "pipe"] },
+  );
+  return child;
+}
+
+export async function waitForIdentityDeath(identity: NodeWorkerProcessIdentity) {
+  await vi.waitFor(
+    () => expect(inspectNodeWorkerProcessIdentity(identity)).toMatch(/^(dead|reused)$/u),
+    { timeout: 5_000 },
+  );
+}
+
+export function waitForChildLine(child: ChildProcess): Promise<string> {
+  return new Promise((resolve, reject) => {
+    let stdout = "";
+    let stderr = "";
+    const onData = (chunk: Buffer) => {
+      stdout += chunk.toString("utf8");
+      const newline = stdout.indexOf("\n");
+      if (newline >= 0) {
+        resolve(stdout.slice(0, newline));
+      }
+    };
+    child.stdout?.on("data", onData);
+    child.stderr?.on("data", (chunk: Buffer) => {
+      stderr += chunk.toString("utf8");
+    });
+    child.once("error", reject);
+    child.once("close", (code, signal) => {
+      reject(new Error(`owner exited before ready (${code ?? signal}): ${stderr}`));
+    });
+  });
+}
+
+export function waitForChildExit(child: ChildProcess): Promise<void> {
+  if (child.exitCode !== null || child.signalCode !== null) {
+    return Promise.resolve();
+  }
+  return new Promise((resolve, reject) => {
+    child.once("error", reject);
+    child.once("close", () => resolve());
+  });
+}
+
+export function holdNodeWorkerReadiness(launchId: string) {
+  const readyCaptured = createDeferred<NodeWorkerProcessIdentity>();
+  const releaseReady = createDeferred();
+  let targetPreparing = false;
+  let readyDelivery: Promise<void> | undefined;
+  const prepare = workerLaunchTransport.prepareNodeWorkerLaunchTransport;
+  const preparing = vi
+    .spyOn(workerLaunchTransport, "prepareNodeWorkerLaunchTransport")
+    .mockImplementation(async (options) => {
+      if (options.input.launchId !== launchId) {
+        return await prepare(options);
+      }
+      targetPreparing = true;
+      try {
+        return await prepare(options);
+      } finally {
+        targetPreparing = false;
+      }
+    });
+  const readControl = serviceChildControl.readServiceChildControl;
+  const control = vi
+    .spyOn(serviceChildControl, "readServiceChildControl")
+    .mockImplementation((stream, onLine, onOverflow) => {
+      const target = targetPreparing;
+      readControl(
+        stream,
+        (line) => {
+          const message: unknown = JSON.parse(line);
+          if (
+            target &&
+            !readyDelivery &&
+            typeof message === "object" &&
+            message !== null &&
+            "type" in message &&
+            message.type === "ready" &&
+            "anchorPid" in message &&
+            typeof message.anchorPid === "number"
+          ) {
+            const owner = requireNodeWorkerProcessIdentity(message.anchorPid);
+            readyDelivery = releaseReady.promise.then(() => onLine(line));
+            readyCaptured.resolve(owner);
+            return;
+          }
+          onLine(line);
+        },
+        onOverflow,
+      );
+    });
+  return {
+    ready: readyCaptured.promise,
+    release: () => releaseReady.resolve(),
+    async close() {
+      releaseReady.resolve();
+      try {
+        await readyDelivery;
+      } finally {
+        control.mockRestore();
+        preparing.mockRestore();
+      }
+    },
+  };
+}
+
+export function observeNodeWorkerAdapters(
+  observe: (adapter: workerLaunchTransport.NodeWorkerChildAdapter) => void,
+) {
+  const prepare = workerLaunchTransport.prepareNodeWorkerLaunchTransport;
+  return vi
+    .spyOn(workerLaunchTransport, "prepareNodeWorkerLaunchTransport")
+    .mockImplementation(async (options) => {
+      const transport = await prepare(options);
+      if (transport.kind === "started") {
+        observe(transport.adapter);
+      }
+      return transport;
+    });
+}
 
 export function createNodeWorkerSupervisorFixture(
   root: string,

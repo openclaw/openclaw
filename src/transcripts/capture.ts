@@ -1,9 +1,14 @@
 import { randomUUID } from "node:crypto";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { isTranscriptArtifactText } from "../media-understanding/transcription-text.js";
 import { runPluginCleanup } from "../plugins/plugin-instance-scope.js";
 import { resolveAgentRoute } from "../routing/resolve-route.js";
 import { truncateUtf16Safe } from "../utils.js";
-import { persistTranscriptSummary } from "./capture-summary.js";
+import {
+  createTranscriptSummaryUpdates,
+  persistTranscriptSummary,
+  readSummaryCaptureLiveness,
+} from "./capture-summary.js";
 import { resolveTranscriptsConfig } from "./config.js";
 import { manualTranscriptSourceProvider } from "./manual-source.js";
 import { getTranscriptSourceProvider } from "./provider-registry.js";
@@ -58,6 +63,7 @@ type ActiveTranscriptsSession = {
   // Failed cleanup stays owned and cannot append until a later stop succeeds.
   cleanupPending?: true;
   phase: "starting" | "active" | "terminal" | "failed";
+  summaryUpdates?: Awaited<ReturnType<typeof createTranscriptSummaryUpdates>>;
   finalization?: Promise<Awaited<ReturnType<typeof persistTranscriptSummary>>>;
 };
 
@@ -95,7 +101,7 @@ export async function isTranscriptSelectionCurrent(
 
 /** Read-only process facts; a retained stop/cleanup owner does not prove capture is armed. */
 export function readTranscriptCaptureSnapshot() {
-  return [...activeSessions.values()]
+  const captures = [...activeSessions.values()]
     .filter((entry) => entry.phase !== "terminal" && entry.phase !== "failed")
     .map((entry) => ({
       session: {
@@ -111,13 +117,25 @@ export function readTranscriptCaptureSnapshot() {
           ? ("armed" as const)
           : ("unknown" as const),
     }));
+  return [
+    ...captures,
+    ...readSummaryCaptureLiveness().filter(
+      ({ session }) =>
+        activeSessions.get(session.sessionId)?.session.startedAt !== session.startedAt,
+    ),
+  ];
 }
 
 export function isTranscriptSessionActive(
   session: Pick<TranscriptSessionDescriptor, "sessionId" | "startedAt">,
 ): boolean {
   const entry = activeSessions.get(session.sessionId);
-  return entry?.session.startedAt === session.startedAt && entry.phase !== "terminal";
+  return entry?.session.startedAt === session.startedAt
+    ? entry.phase !== "terminal"
+    : readSummaryCaptureLiveness().some(
+        ({ session: capture }) =>
+          capture.sessionId === session.sessionId && capture.startedAt === session.startedAt,
+      );
 }
 // Reserve ids across async provider startup so overlapping starts cannot
 // replace the only cleanup owner for an existing or still-starting capture.
@@ -184,6 +202,7 @@ export function finalizeTranscriptCapture(params: {
     stoppedAt: entry.session.stoppedAt ?? new Date().toISOString(),
   };
   entry.finalization ??= (async () => {
+    await entry.summaryUpdates?.stop();
     const assertCurrent = () => {
       if (activeSessions.get(entry.session.sessionId) !== entry) {
         throw new TranscriptsSummaryChangedError();
@@ -425,6 +444,7 @@ export async function stopTranscriptProviderCapture(params: {
   reason: string;
 }): Promise<string | undefined> {
   const { entry } = params;
+  const summariesStopped = entry.summaryUpdates?.stop();
   let error: string | undefined;
   try {
     const stop = entry.provider.stop;
@@ -443,6 +463,8 @@ export async function stopTranscriptProviderCapture(params: {
     }
   } catch (cause) {
     error = cause instanceof Error ? cause.message : String(cause);
+  } finally {
+    await summariesStopped;
   }
   // Successful stops may drain final utterances. Fence only after failure, and
   // never turn an authoritative terminal notification back into pending cleanup.
@@ -565,6 +587,28 @@ export async function startTranscripts(params: {
       throw error;
     }
     admitted = true;
+    try {
+      entry.summaryUpdates = await createTranscriptSummaryUpdates({
+        config: resolveTranscriptsConfig(params.ctx.config?.transcripts),
+        cfg: params.ctx.config,
+        store: params.store,
+        session,
+        logger: params.ctx.logger,
+        assertCurrent: () => {
+          if (
+            activeSessions.get(session.sessionId) !== entry ||
+            entry.phase !== "active" ||
+            entry.stopping ||
+            entry.cleanupPending
+          ) {
+            throw new TranscriptsSummaryChangedError();
+          }
+        },
+      });
+    } catch (error) {
+      entry.phase = "failed";
+      throw error;
+    }
     let result: TranscriptsStartResult;
     try {
       result = await provider.start({
@@ -573,8 +617,9 @@ export async function startTranscripts(params: {
         abortSignal: startupAbort.signal,
         startupWaitMs: params.startupWaitMs,
         onUtterance: async (utterance) => {
-          // Abort, retirement, and id reuse fence this callback before any durable append.
+          // Reject empty speech and fence retired callbacks before any durable append.
           if (
+            isTranscriptArtifactText(utterance.text) ||
             entry.phase === "terminal" ||
             entry.phase === "failed" ||
             entry.cleanupPending ||
@@ -648,8 +693,10 @@ export async function startTranscripts(params: {
       return { status: "ended" as const, session: entry.session };
     }
     entry.phase = "active";
+    entry.summaryUpdates.start();
     return { status: "active" as const, session, providerId: provider.id };
   } catch (error) {
+    await entry.summaryUpdates?.stop();
     let failure = error;
     try {
       if (

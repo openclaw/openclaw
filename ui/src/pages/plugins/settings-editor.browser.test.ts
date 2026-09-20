@@ -57,6 +57,28 @@ async function mount(overrides: Partial<PluginSettingsEditorModel> = {}) {
 }
 afterEach(() => document.body.replaceChildren());
 describe("grouped plugin settings", () => {
+  it("keeps a retired menu bound to the setting action that rendered it", async () => {
+    const { editor, model } = await mount();
+    const original = vi.fn();
+    editor.onAskSetting = original;
+    await editor.updateComplete;
+    const menu = editor.querySelector('[data-setting="enabled"] wa-dropdown')!;
+    const replacement = vi.fn();
+    editor.onAskSetting = replacement;
+    editor.model = {
+      ...model,
+      pluginId: "replacement",
+      configHints: {},
+      configSchema: { type: "object", properties: { limit: { type: "number" } } },
+    };
+    await editor.updateComplete;
+    expect(menu.isConnected).toBe(false);
+    menu.dispatchEvent(new CustomEvent("wa-select", { detail: { item: { value: "ask" } } }));
+    expect(replacement).not.toHaveBeenCalled();
+    expect(original).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ path: ["plugins", "entries", "fixture", "config", "enabled"] }),
+    );
+  });
   it("shows every group and remaining field once, with names instead of raw keys or counts", async () => {
     const { editor, model } = await mount();
     expect([...editor.querySelectorAll("h2")].map((e) => e.textContent?.trim())).toEqual([

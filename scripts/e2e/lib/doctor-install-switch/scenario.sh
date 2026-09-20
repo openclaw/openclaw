@@ -73,6 +73,10 @@ use_default_service_identity() {
     "$account_home/openclaw-wrapper-argv.log"
   export HOME="$account_home"
   export USERPROFILE="$account_home"
+  # The mounted busctl shim owns this synthetic user bus; no host socket or manager is used.
+  # Without an explicit address, transport selection falls through to --machine testuser@.
+  export XDG_RUNTIME_DIR="$account_home/.cache/openclaw-doctor-switch-runtime"
+  export DBUS_SESSION_BUS_ADDRESS="unix:path=$XDG_RUNTIME_DIR/bus"
   unset OPENCLAW_HOME OPENCLAW_STATE_DIR OPENCLAW_CONFIG_PATH
 }
 

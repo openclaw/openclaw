@@ -1,9 +1,9 @@
-// Control UI component implements the file preview modal element.
 import { html, type PropertyValues, type TemplateResult } from "lit";
 import { property, query } from "lit/decorators.js";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import { stripFrontmatterBlock } from "../../../packages/markdown-core/src/frontmatter.js";
 import { t } from "../i18n/index.ts";
+import { registerFilePreviewEnglish } from "../i18n/locales/en-file-preview.ts";
 import { OpenClawLitElement } from "../lit/openclaw-element.ts";
 import { renderCopyButton } from "./copy-button.ts";
 import { type FileKind, fileKindForPath } from "./file-kind.ts";
@@ -11,6 +11,8 @@ import { filePreviewModalStyles } from "./file-preview-modal.styles.ts";
 import { icons } from "./icons.ts";
 import { toSanitizedMarkdownHtml } from "./markdown.ts";
 import "./modal-dialog.ts";
+
+registerFilePreviewEnglish();
 
 export type FilePreviewModalFile = {
   path: string;

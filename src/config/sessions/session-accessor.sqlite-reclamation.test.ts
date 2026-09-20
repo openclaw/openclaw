@@ -186,7 +186,7 @@ test.each(
     ),
   ),
 )(
-  "two synchronous writers progress at reclamation ($operation, rejected: $rejected, alias: $alias)",
+  "two foreground writers progress at reclamation ($operation, rejected: $rejected, alias: $alias)",
   async ({ operation, rejected, alias }) => {
     const { databaseOptions, plan, scopes } = createFixture(alias);
     const workers: Array<{ worker: Worker; id: number }> = [];
@@ -207,13 +207,15 @@ test.each(
     let commitChecks = 0;
     let commitRequested = false;
     let checksDuringWriters = 0;
+    let workerAuthorizationChecked = false;
+    const boardWriteOrder: string[] = [];
     const owner = new AsyncLocalStorage<string>();
     hooks.beforeAuthorization = () =>
       owner.run("transcript-writer", () => {
         commitRequested = true;
         const checksBeforeWriters = commitChecks;
-        // The worker owns BEGIN IMMEDIATE and is waiting for the parent. Both sync
-        // runtimes must service that request before its queued handler can return.
+        // Synchronous writers service the worker's pending authorization request;
+        // asynchronous board writes retain their FIFO place until the worker settles.
         for (const scope of scopes) {
           try {
             if (operation === "entry") {
@@ -222,7 +224,6 @@ test.each(
               continue;
             }
             if (operation === "board") {
-              // First use enters the board's schema transaction before its canonical writer.
               boardAppends.push(
                 board
                   .putWidget({
@@ -232,6 +233,8 @@ test.each(
                   })
                   .then(
                     (snapshot) => {
+                      expect(workerAuthorizationChecked).toBe(true);
+                      boardWriteOrder.push(scope.sessionId);
                       appends.push(snapshot.revision);
                     },
                     (error: unknown) => {
@@ -252,6 +255,14 @@ test.each(
           }
         }
         checksDuringWriters = commitChecks - checksBeforeWriters;
+        if (operation === "board") {
+          const stored = withOpenClawAgentDatabaseReadOnly(
+            ({ db }) =>
+              db.prepare("SELECT name FROM board_widgets WHERE name = 'writer-proof'").all(),
+            databaseOptions,
+          );
+          expect(stored).toEqual({ found: true, value: [] });
+        }
       });
     const reclamation = owner.run("reclamation-owner", () =>
       runSqliteSessionReclamation({
@@ -261,6 +272,9 @@ test.each(
         assertCommitAllowed: () => {
           commitChecks += 1;
           expect(owner.getStore()).toBe("reclamation-owner");
+          if (commitRequested) {
+            workerAuthorizationChecked = true;
+          }
           if (rejected && commitRequested) {
             throw new Error("reclamation owner retired");
           }
@@ -285,7 +299,12 @@ test.each(
     expect(diagnostics).toEqual({ kind: "history-eviction", workerThreadId: workers[0]?.id });
     await closeOpenClawAgentDatabasesAsync();
     expect(workers[0]?.worker.threadId).toBe(-1);
-    expect(checksDuringWriters).toBeGreaterThan(0);
+    if (operation === "board") {
+      expect(checksDuringWriters).toBe(0);
+      expect(boardWriteOrder).toEqual(scopes.map((scope) => scope.sessionId));
+    } else {
+      expect(checksDuringWriters).toBeGreaterThan(0);
+    }
     expect(appendErrors).toEqual([]);
     expect(appends).toEqual(
       operation === "entry"
@@ -583,7 +602,16 @@ test("one reclamation pass leaves a large freelist for bounded later maintenance
       });
     }
   });
-  await Promise.all([reclaimSqliteFreePages(databaseOptions), duringDrain]);
+  // Production retains writer admission across every yielded pass. In particular,
+  // retiring the old handle must queue its Worker checkpoint behind this drain.
+  await Promise.all([
+    runExclusiveSqliteSessionWrite(
+      databaseOptions,
+      () => reclaimSqliteFreePages(databaseOptions),
+      "session.history.free-pages",
+    ),
+    duringDrain,
+  ]);
   const reopened = openOpenClawAgentDatabase(databaseOptions);
   expect(Number(reopened.db.prepare("PRAGMA freelist_count").get()?.freelist_count)).toBe(0);
 });

@@ -112,9 +112,9 @@
       {
         "provider": "xai",
         "model": "auto",
-        "reason": "The OpenClaw xAI OAuth auto selector has retired; use a concrete model.",
+        "reason": "The xAI auto selector has retired; use a concrete model.",
         "retirement": { "replacedBy": "grok-4.6" },
-        "when": { "baseUrlHosts": ["cli-chat-proxy.grok.com"] }
+        "when": { "baseUrlHosts": ["cli-chat-proxy.grok.com", "api.x.ai"] }
       },
       {
         "provider": "xai",
@@ -320,6 +320,26 @@
       ]
     }
   },
+  "configGroups": [
+    {
+      "id": "web-search",
+      "title": "Web search",
+      "order": 10,
+      "properties": ["webSearch"]
+    },
+    {
+      "id": "x-search",
+      "title": "X search",
+      "order": 20,
+      "properties": ["xSearch"]
+    },
+    {
+      "id": "code-execution",
+      "title": "Code execution",
+      "order": 30,
+      "properties": ["codeExecution"]
+    }
+  ],
   "configSchema": {
     "type": "object",
     "additionalProperties": false,

@@ -42,7 +42,151 @@ def native_message(content, chat_id=-1001, message_id=42 << 20, sender_id=101):
     }
 
 
+class OwnedGroupTest(unittest.TestCase):
+    def fixture(self):
+        class Client:
+            def __init__(self):
+                self.requests = []
+                self.members = set()
+                self.creation_error = None
+                self.can_delete = True
+
+            def request(self, payload, timeout=20):
+                self.requests.append(payload)
+                kind = payload["@type"]
+                if kind == "getMe":
+                    return {"id": 123}
+                if kind == "searchPublicChat":
+                    return {"type": {"@type": "chatTypePrivate", "user_id": 42}}
+                if kind == "createNewBasicGroupChat":
+                    if self.creation_error:
+                        raise self.creation_error
+                    self.members = {123, *payload["user_ids"]}
+                    return {"@type": "createdBasicGroupChat", "chat_id": -2042, "failed_to_add_members": {"failed_to_add_members": []}}
+                if kind == "getChat":
+                    return {"type": {"@type": "chatTypeBasicGroup"}, "can_be_deleted_for_all_users": self.can_delete}
+                if kind == "getChatMember":
+                    return {"status": {"@type": "chatMemberStatusMember" if payload["member_id"]["user_id"] in self.members else "chatMemberStatusLeft"}}
+                if kind == "addChatMember":
+                    self.members.add(payload["user_id"])
+                    return {"@type": "failedToAddMembers", "failed_to_add_members": []}
+                if kind == "deleteChat":
+                    self.members.clear()
+                    return {"@type": "ok"}
+                raise AssertionError(kind)
+
+        instance = driver.UserDriver.__new__(driver.UserDriver)
+        instance.config = {"testDc": True, "testerUserId": 123, "sutId": 42, "sutUsername": "sut_bot"}
+        instance.bot_config = {}
+        instance.client = Client()
+        return instance
+
+    def test_pinned_creation_shape_and_deletion_remove_all_members(self):
+        instance = self.fixture()
+        with tempfile.TemporaryDirectory() as root:
+            manifest = Path(root) / "owned-test-group.json"
+            created = driver.prepare_owned_group(instance, manifest)
+            self.assertEqual(created["groupId"], "-2042")
+            self.assertEqual(instance.client.members, {123, 42})
+            deleted = driver.cleanup_owned_group(instance, manifest)
+            self.assertEqual(deleted["status"], "deleted")
+            self.assertEqual(instance.client.members, set())
+            self.assertEqual(driver.read_json(manifest)["deletion"], {"@type": "ok"})
+
+    def test_production_identity_cannot_create_a_group(self):
+        instance = self.fixture()
+        instance.config["testDc"] = False
+        with tempfile.TemporaryDirectory() as root:
+            with self.assertRaisesRegex(driver.DriverError, "Test Server"):
+                driver.prepare_owned_group(instance, Path(root) / "group.json")
+        self.assertEqual(instance.client.requests, [])
+
+    def test_existing_group_membership_is_repaired_and_only_added_bot_leaves(self):
+        instance = self.fixture()
+        instance.client.members = {123, 777}
+        def bot_request(token, method, payload=None, test_dc=False):
+            self.assertEqual(token, "synthetic-file-token")
+            self.assertTrue(test_dc)
+            if method == "getMe":
+                return {"id": 42}
+            self.assertEqual(method, "leaveChat")
+            self.assertEqual(payload, {"chat_id": "-3000"})
+            instance.client.members.remove(42)
+            return True
+        with tempfile.TemporaryDirectory() as root, patch.dict(driver.os.environ, {}, clear=True), patch.object(driver, "telegram_bot", side_effect=bot_request):
+            credentials_path = Path(root) / "credentials.local.json"
+            driver.write_json_private(credentials_path, {"sutBotToken": "synthetic-file-token"})
+            with patch.object(driver, "STATE_DIR", Path(root) / "user-driver"), patch.object(driver, "CONFIG_PATH", Path(root) / "user-driver/config.local.json"), patch.object(driver, "BOT_CREDENTIALS_PATH", credentials_path):
+                _, instance.bot_config = driver.load_config()
+            self.assertEqual(credentials_path.stat().st_mode & 0o777, 0o600)
+            manifest = Path(root) / "owned-test-group.json"
+            result = driver.prepare_owned_group(instance, manifest, "-3000")
+            self.assertEqual(result["status"], "membership-added")
+            self.assertEqual(instance.client.members, {123, 777, 42})
+            self.assertEqual(driver.cleanup_owned_group(instance, manifest)["status"], "membership-removed")
+            self.assertEqual(instance.client.members, {123, 777})
+            self.assertFalse(any(p["@type"] in {"deleteChat", "createNewBasicGroupChat"} for p in instance.client.requests))
+            self.assertNotIn("synthetic-file-token", manifest.read_text())
+
+    def test_existing_bot_membership_is_preserved(self):
+        instance = self.fixture()
+        instance.client.members = {123, 42, 777}
+        with tempfile.TemporaryDirectory() as root:
+            manifest = Path(root) / "owned-test-group.json"
+            self.assertEqual(driver.prepare_owned_group(instance, manifest, "-3000")["status"], "existing")
+            self.assertEqual(driver.cleanup_owned_group(instance, manifest)["status"], "not-created")
+        self.assertEqual(instance.client.members, {123, 42, 777})
+
+    def test_uncertain_creation_is_not_retried_or_released_as_clean(self):
+        instance = self.fixture()
+        instance.client.creation_error = driver.DriverError("Timed out")
+        with tempfile.TemporaryDirectory() as root:
+            manifest = Path(root) / "group.json"
+            with self.assertRaisesRegex(driver.DriverError, "Timed out"):
+                driver.prepare_owned_group(instance, manifest)
+            self.assertEqual(driver.read_json(manifest)["status"], "creating")
+            with self.assertRaisesRegex(driver.DriverError, "reconcile"):
+                driver.prepare_owned_group(instance, manifest)
+            with self.assertRaisesRegex(driver.DriverError, "unconfirmed"):
+                driver.cleanup_owned_group(instance, manifest)
+        self.assertEqual(sum(p["@type"] == "createNewBasicGroupChat" for p in instance.client.requests), 1)
+
+    def test_delete_permission_failure_preserves_created_group_record(self):
+        instance = self.fixture()
+        with tempfile.TemporaryDirectory() as root:
+            manifest = Path(root) / "group.json"
+            driver.prepare_owned_group(instance, manifest)
+            instance.client.can_delete = False
+            with self.assertRaisesRegex(driver.DriverError, "cannot delete"):
+                driver.cleanup_owned_group(instance, manifest)
+            self.assertEqual(driver.read_json(manifest)["status"], "created")
+            self.assertEqual(instance.client.members, {123, 42})
+
+
 class PhotoContentTest(unittest.TestCase):
+    def test_text_photo_and_album_preserve_forum_topic_and_reply_with_pinned_api(self):
+        class Transport:
+            def __init__(self):
+                self.requests = []
+            def request(self, payload, timeout=20):
+                self.requests.append(payload)
+                return {"messages": [{"id": 2}]} if payload["@type"] == "sendMessageAlbum" else {"id": 2}
+        instance = driver.UserDriver.__new__(driver.UserDriver)
+        instance.config = {}
+        instance.bot_config = {}
+        instance.client = Transport()
+        with tempfile.NamedTemporaryFile(suffix=".jpg") as photo:
+            instance.send_text(-10042, "topic text", reply_to=7, forum_topic_id=12)
+            instance.send_photos(-10042, [photo.name], reply_to=7, forum_topic_id=12)
+            instance.send_photos(-10042, [photo.name, photo.name], reply_to=7, forum_topic_id=12)
+        self.assertEqual(len(instance.client.requests), 3)
+        for request in instance.client.requests:
+            self.assertEqual(request["topic_id"], {"@type": "messageTopicForum", "forum_topic_id": 12})
+            self.assertEqual(request["reply_to"]["message_id"], 7)
+            self.assertEqual(request["reply_to"]["@type"], "inputMessageReplyToMessage")
+            self.assertNotIn("message_thread_id", request)
+            self.assertNotIn("reply_to_message_id", request)
+
     def test_rejects_unsafe_prebuilt_archive_members(self):
         class FakeTar:
             extracted = False

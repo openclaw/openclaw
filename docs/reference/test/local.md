@@ -64,6 +64,9 @@ reconcile dependencies before the remote wrapper starts.
 Run the test toolchain on Node 24.16+ or Node 26.1+, matching the packaged
 runtime floor. Older Node bindings can truncate SQLite TEXT values at embedded NUL characters.
 
+The script erasability gate uses Node's strip-only parser, including when package
+checks run under Bun. It selects an installed Node runtime and skips Bun's `node` shim.
+
 The test toolchain pins stable Vitest `5.0.0`, including its browser and coverage
 packages. Use `describe(name, { concurrent: false }, callback)` for ordered
 suites. Await asynchronous assertions, keep `vi.mock`/`vi.hoisted` at module
@@ -137,7 +140,7 @@ Isolated Doctor config scripts also share the prepared config-flow, health-write
 and install-index modules. Each case still starts a fresh process with separate
 state; standalone and watch runs resolve the original TypeScript entrypoints.
 
-The model-catalog and session model-context workers also use this compiled generation.
+The model-catalog, Codex catalog-page, and session model-context workers also use this compiled generation.
 Model-catalog workers still belong to their prepared model generations; context reads
 retain their serial worker pool. Plugin source/built selection remains independent
 of worker compilation.
@@ -154,6 +157,11 @@ The session-title and child-link retention tests declare their title-reader,
 session-utils, and listing roots in this same generation. Each fresh
 heap-measurement child runs their JavaScript without spending its execution
 deadline on TypeScript imports.
+
+Native Bash output-lifecycle fixtures also prepare the real tool and executor
+roots in this generation. Each scenario still uses a fresh process and real
+shell, pipe, and spill file; its unchanged child deadline covers prepared
+JavaScript startup and output handling instead of repeated TypeScript compilation.
 
 Automatic-triage process fixtures share this generation for admission, failure handling, execution, process identity, and respawn checks. Compilation finishes before readiness deadlines begin, so children load prepared JavaScript. The detached helper uses the same sealed lease runtime as the installed package.
 

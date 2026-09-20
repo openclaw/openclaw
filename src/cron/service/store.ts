@@ -23,6 +23,7 @@ import type { CronStoreTransactionHooks } from "../store/transaction-hooks.types
 import type { CronJob, CronStoreFile } from "../types.js";
 import { computeJobNextRunAtMs, recomputeNextRuns } from "./jobs-scheduling.js";
 import { assertTimeScheduleSatisfiable } from "./jobs-validation.js";
+import { resolveForcePreservedOneShotAtMs } from "./one-shot-schedule.js";
 import { emit, type CronServiceState, type DeferredCronNotifications } from "./state.js";
 
 const loadedCronStoreRevisions = new WeakMap<CronServiceState, number>();
@@ -117,7 +118,12 @@ function invalidateStaleNextRunOnScheduleChange(params: {
   params.hydrated.state.nextRunAtMs = undefined;
   params.hydrated.state.startupCatchupAtMs = undefined;
   params.hydrated.state.pacedNextRunAtMs = undefined;
-  params.hydrated.state.forcePreservedNextRunAtMs = undefined;
+  params.hydrated.state.forcePreservedNextRunAtMs = cronSchedulingInputsEqual(
+    { ...previousJob, enabled: params.hydrated.enabled },
+    params.hydrated,
+  )
+    ? resolveForcePreservedOneShotAtMs(params.hydrated)
+    : undefined;
 }
 
 function warnInvalidPersistedCronJob(params: {

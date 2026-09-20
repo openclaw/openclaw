@@ -15,9 +15,10 @@ import { hasMultipleSessionSharingIdentities } from "../../state/user-profiles.j
 import { ADMIN_SCOPE, authorizeOperatorScopesForRequiredScope } from "../method-scopes.js";
 import { operatorSessionCap } from "../operator-role-policy.js";
 import { prepareSessionCreatorProfile } from "../session-creator.js";
+import { getSessionRowProjection } from "../session-row-projection-access.js";
 import { resolveSessionSharingRole, resolveSessionSharingTarget } from "../session-sharing.js";
 import { createSessionCatalogRequestEntrySnapshot } from "./session-catalog-entry-snapshot.js";
-import type { GatewayClient } from "./types.js";
+import type { GatewayClient, GatewayRequestContext } from "./types.js";
 
 type SessionCatalogVisibility = { cacheKey: string } & (
   | { kind: "unrestricted" }
@@ -40,7 +41,7 @@ export function resolveSessionCatalogVisibility(
 ): SessionCatalogVisibility {
   const scopes = Array.isArray(client?.connect?.scopes) ? client.connect.scopes : [];
   const admin = authorizeOperatorScopesForRequiredScope(ADMIN_SCOPE, scopes).allowed;
-  const multipleIdentities = hasMultipleSessionSharingIdentities();
+  const multipleIdentities = !admin && hasMultipleSessionSharingIdentities();
   const attachedProfileId = client?.authenticatedUserProfile?.profileId;
   const profileId = attachedProfileId === GATEWAY_OWNER_PROFILE_ID ? undefined : attachedProfileId;
   const others = admin ? undefined : operatorSessionCap(client, config);
@@ -126,7 +127,7 @@ export async function isSessionCatalogThreadVisible(params: {
   allowProcessHomeFallback: boolean;
   audience?: SessionCatalogProvider["audience"];
   client: GatewayClient | null;
-  getConfig: () => OpenClawConfig;
+  context: GatewayRequestContext;
   fallbackAgentId: string;
   hostId: string;
   list: SessionCatalogProvider["list"];
@@ -134,7 +135,14 @@ export async function isSessionCatalogThreadVisible(params: {
   sourceHomeId?: string;
   threadId: string;
 }): Promise<boolean> {
-  let config = params.getConfig();
+  const projection = getSessionRowProjection(params.context);
+  if (!projection) {
+    throw new Error("Session projection is unavailable before Gateway startup completes");
+  }
+  while (projection.needsMaterialization) {
+    await projection.ensureMaterialized();
+  }
+  let config = params.context.getRuntimeConfig();
   let visibility = resolveSessionCatalogVisibility(params.client, config);
   if (visibility.kind === "unrestricted") {
     return true;
@@ -148,6 +156,7 @@ export async function isSessionCatalogThreadVisible(params: {
   const planningEntries = createSessionCatalogRequestEntrySnapshot({
     cfg: config,
     fallbackAgentId: params.fallbackAgentId,
+    projection,
   });
   planningEntries.freeze();
   const seenCursors = new Set<string>();
@@ -167,7 +176,10 @@ export async function isSessionCatalogThreadVisible(params: {
     }
     // Providers may populate planning entries before awaiting IO. Re-read privacy and caller
     // policy after enumeration, before granting read or mutation authority.
-    config = params.getConfig();
+    while (projection.needsMaterialization) {
+      await projection.ensureMaterialized();
+    }
+    config = params.context.getRuntimeConfig();
     visibility = resolveSessionCatalogVisibility(params.client, config);
     if (visibility.kind === "unrestricted") {
       return true;
@@ -178,6 +190,8 @@ export async function isSessionCatalogThreadVisible(params: {
     const requestEntries = createSessionCatalogRequestEntrySnapshot({
       cfg: config,
       fallbackAgentId: params.fallbackAgentId,
+      projection,
+      sessionKeys: host.sessions.flatMap(({ sessionKey }) => (sessionKey ? [sessionKey] : [])),
     });
     const instances = new Map();
     planningEntries.captureHostInstances(host, instances);

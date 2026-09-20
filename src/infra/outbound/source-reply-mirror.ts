@@ -6,6 +6,7 @@ import {
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
 import { normalizeOptionalTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
+import { projectPluginMessageDeliveryFact } from "../../agents/embedded-agent-message-delivery.js";
 import type { ReplyPayload } from "../../auto-reply/types.js";
 import { normalizeOutboundLocation } from "../../channels/location.js";
 import { getChannelPlugin } from "../../channels/plugins/index.js";
@@ -184,6 +185,16 @@ function hasExplicitDeliveryFailure(payload: unknown, depth = 0): boolean {
     return payload.some((value) => hasExplicitDeliveryFailure(value, depth + 1));
   }
   const record = payload as Record<string, unknown>;
+  const status = normalizeOptionalLowercaseString(record.status);
+  const deliveryStatus = normalizeOptionalLowercaseString(record.deliveryStatus);
+  if (
+    record.sentBeforeError === true ||
+    record.visibleReplySent === true ||
+    status === "partial_failed" ||
+    deliveryStatus === "partial_failed"
+  ) {
+    return true;
+  }
   if (record.ok === false || record.delivered === false || record.dryRun === true) {
     return true;
   }
@@ -191,7 +202,6 @@ function hasExplicitDeliveryFailure(payload: unknown, depth = 0): boolean {
   if (messageId === "skipped" || messageId === "suppressed") {
     return true;
   }
-  const status = normalizeOptionalLowercaseString(record.status);
   if (
     status === "failed" ||
     status === "error" ||
@@ -201,7 +211,6 @@ function hasExplicitDeliveryFailure(payload: unknown, depth = 0): boolean {
   ) {
     return true;
   }
-  const deliveryStatus = normalizeOptionalLowercaseString(record.deliveryStatus);
   if (
     deliveryStatus === "failed" ||
     deliveryStatus === "error" ||
@@ -291,7 +300,10 @@ export async function reconcileTerminalSourceReplyDelivery(params: {
   if (!params.receipt) {
     return "not-applicable";
   }
-  if (hasExplicitDeliveryFailure(params.deliveredPayload)) {
+  if (
+    hasExplicitDeliveryFailure(params.deliveredPayload) &&
+    projectPluginMessageDeliveryFact(params.deliveredPayload)?.partialDelivery !== true
+  ) {
     if (params.preservePendingOnExplicitFailure) {
       return "pending";
     }
@@ -489,7 +501,10 @@ function resolveDeliveredCurrentSourceReply(
   params: SourceReplyTranscriptMirrorParams,
   allowAsync: boolean,
 ): SourceReplyMatch {
-  if (hasExplicitDeliveryFailure(params.deliveredPayload)) {
+  if (
+    hasExplicitDeliveryFailure(params.deliveredPayload) &&
+    projectPluginMessageDeliveryFact(params.deliveredPayload)?.partialDelivery !== true
+  ) {
     return false;
   }
   switch (params.action.trim().toLowerCase()) {

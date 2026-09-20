@@ -41,6 +41,8 @@ function createConnectionProps(overrides: Partial<ConnectionProps> = {}): Connec
     sessionDirty: false,
     sessionSaved: false,
     showGatewaySecret: false,
+    canForgetDevice: false,
+    onForgetDevice: () => undefined,
     onConnectionChange: () => undefined,
     onSecretChange: () => undefined,
     onSessionKeyChange: () => undefined,
@@ -76,6 +78,27 @@ function expectStatByLabel(container: Element, text: string): HTMLElement {
 }
 
 describe("connection view rendering", () => {
+  it.each(["connected", "offline", "stopped", "reconnecting"] as const)(
+    "offers saved browser sign-in recovery at the bottom while %s",
+    (phase) => {
+      const container = document.createElement("div");
+      const props = createConnectionProps({ phase, canForgetDevice: true });
+      render(renderConnection(props), container);
+      const section = [...container.querySelectorAll(".settings-section")].at(-1);
+      expect(section?.querySelector("h2")?.textContent?.trim()).toBe("Browser");
+      expect(section?.querySelector(".settings-row__title")?.textContent?.trim()).toBe(
+        "Saved sign-in for this gateway",
+      );
+      expect(section?.querySelector(".settings-row__desc")).toBeNull();
+      const button = section?.querySelector<HTMLButtonElement>("button");
+      expect(button?.textContent?.trim()).toBe("Forget this browser");
+      expect(button?.className).toBe("btn");
+      expect(button?.disabled).toBe(false);
+      render(renderConnection({ ...props, canForgetDevice: false }), container);
+      expect(container.textContent).not.toContain("Browser");
+    },
+  );
+
   it.each([
     ["connected", null, null],
     ["connecting", null, "Connecting…"],

@@ -8,7 +8,10 @@ import { createTranscriptsTool } from "../src/agents/tools/transcripts-tool.js";
 import { createPluginMetadataSnapshotFixture } from "../src/plugins/plugin-metadata.test-support.js";
 import { createEmptyPluginRegistry } from "../src/plugins/registry-empty.js";
 import { withPluginRuntimeGenerationScope } from "../src/plugins/runtime/generation-scope.js";
-import { closeOpenClawStateDatabaseForTest } from "../src/state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseForTest,
+} from "../src/state/openclaw-state-db.js";
 import { TranscriptsStore } from "../src/transcripts/store.js";
 import { createTempDirTracker } from "./helpers/temp-dir.js";
 
@@ -118,7 +121,9 @@ defineDiscordVoiceTests(
           expect
             .soft(active.map((capture) => requireRecord(capture, "active capture").sessionId))
             .toEqual(["second"]);
-          expect.soft(first.stoppedAt).toEqual(expect.any(String));
+          await vi.waitFor(async () => {
+            expect((await store.readSession("first"))?.stoppedAt).toEqual(expect.any(String));
+          });
 
           await execute({ action: "stop", sessionId: "first" });
           await expect(execute({ action: "summarize", sessionId: "first" })).resolves.toMatchObject(
@@ -244,6 +249,7 @@ defineDiscordVoiceTests(
               expectedManager: manager,
             });
             providerStop.mockRestore();
+            await closeOpenClawStateDatabaseAsync();
             closeOpenClawStateDatabaseForTest();
             tempDirs.cleanup();
           }

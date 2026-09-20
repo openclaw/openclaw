@@ -662,6 +662,23 @@ final class NodeAppModel {
         self.chatDictationCaptureId != nil
     }
 
+    var chatDictationPhase: OpenClawChatDictationControl.Phase {
+        guard let captureId = self.chatDictationCaptureId else {
+            return self.isChatDictationPending ? .starting : .idle
+        }
+        guard self.talkMode.isActivePushToTalkCapture(captureId) else { return .processing }
+        return self.talkMode.isListening ? .listening : .starting
+    }
+
+    var chatDictationPartialTranscript: String {
+        guard let captureId = self.chatDictationCaptureId else { return "" }
+        return self.talkMode.pushToTalkPartialTranscript(captureId: captureId)
+    }
+
+    var chatDictationLevel: Double {
+        self.chatDictationPhase == .listening ? self.talkMode.micLevel : 0
+    }
+
     var localChatFixture: LocalChatFixture? {
         if self.isScreenshotFixtureModeEnabled { return .appScreenshots }
         if self.isAppleReviewDemoModeEnabled { return .appleReviewDemo }
@@ -3024,6 +3041,12 @@ final class NodeAppModel {
             return nil
         }
         self.chatDictationCaptureId = nil
+        if payload.status == "empty" {
+            throw NSError(domain: "ChatDictation", code: 1, userInfo: [
+                NSLocalizedDescriptionKey: String(
+                    localized: "No speech heard. Try again and speak near the microphone."),
+            ])
+        }
         return payload.transcript?.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 

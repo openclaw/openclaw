@@ -12,6 +12,7 @@ import type { AgentHarnessRuntimeArtifactBinding } from "openclaw/plugin-sdk/age
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { AuthProfileStore } from "openclaw/plugin-sdk/provider-auth";
 import { codexBuildSymbol } from "../build-state.js";
+import { observeCodexCatalogClient } from "../session-catalog-events.js";
 import { CodexAppServerStartupError } from "./attempt-timeouts.js";
 import {
   applyCodexAppServerAuthProfile,
@@ -70,6 +71,10 @@ import {
   type SharedCodexAppServerClientStartup,
   type SharedCodexAppServerClientState,
 } from "./shared-client-lifecycle.js";
+import {
+  resolveCodexAppServerSpawnIdentity,
+  type CodexAppServerClientProcessIdentity,
+} from "./spawn-identity.js";
 import { CodexAdoptedThreadActiveError } from "./thread-lifecycle-errors.js";
 import { withTimeout } from "./timeout.js";
 
@@ -104,23 +109,6 @@ type CodexAppServerClientStartupOptions = {
 };
 
 const CODEX_APP_SERVER_INITIALIZE_TIMEOUT_MESSAGE = "codex app-server initialize timed out";
-
-/** Successful physical process identity, excluding environment and credentials. */
-type CodexAppServerClientProcessIdentity = {
-  clientId: string;
-  command: string;
-  argsFingerprint: string;
-  commandSource?: CodexAppServerStartOptions["commandSource"];
-  managedCommandOrder?: CodexAppServerStartOptions["managedCommandOrder"];
-  nativeCommand?: string;
-  serverVersion?: string;
-  userAgent?: string;
-};
-
-type CodexAppServerSpawnIdentity = Omit<
-  CodexAppServerClientProcessIdentity,
-  "clientId" | "serverVersion" | "userAgent"
->;
 
 function ownCodexStartup<T>(
   lifetime: CodexAppServerStartupLifetime,
@@ -210,27 +198,6 @@ export async function waitForCodexAppServerClientDesktopGenerationDrain(params: 
   }
 }
 
-/** Resolves non-secret spawn identity before startup; argv is represented only by its hash. */
-export function resolveCodexAppServerSpawnIdentity(
-  startOptions: CodexAppServerStartOptions,
-  resolvedNativeCommand?: string,
-): CodexAppServerSpawnIdentity {
-  const nativeCommand =
-    resolvedNativeCommand ??
-    (startOptions.commandSource === "resolved-managed"
-      ? resolveManagedCodexNativeCommand(startOptions.command)
-      : undefined);
-  return {
-    command: startOptions.command,
-    argsFingerprint: createHash("sha256").update(JSON.stringify(startOptions.args)).digest("hex"),
-    ...(startOptions.commandSource ? { commandSource: startOptions.commandSource } : {}),
-    ...(startOptions.managedCommandOrder
-      ? { managedCommandOrder: startOptions.managedCommandOrder }
-      : {}),
-    ...(nativeCommand ? { nativeCommand } : {}),
-  };
-}
-
 class CodexAppServerStartSelectionChangedError extends Error {
   readonly code = "CODEX_APP_SERVER_START_SELECTION_CHANGED";
 
@@ -297,7 +264,7 @@ export function resolveCodexNativeConfigFenceKey(params: {
   if (!startOptions || startOptions.transport !== "stdio") {
     return undefined;
   }
-  const configuredHome = startOptions.env?.CODEX_HOME?.trim();
+  const configuredHome = startOptions.codexHome ?? startOptions.env?.CODEX_HOME?.trim();
   const codexHome = configuredHome
     ? configuredHome
     : startOptions.homeScope === "user"
@@ -1123,6 +1090,12 @@ async function startInitializedCodexAppServerClient(
       }
       assertStartupCurrent();
       params.onInitializedClient?.();
+      await waitForStartup(() =>
+        observeCodexCatalogClient(client, {
+          startOptions: params.requestedStartOptions,
+          agentDir: params.agentDir,
+        }),
+      );
 
       let runtimeArtifact: AgentHarnessRuntimeArtifactBinding | undefined;
       if (runtimeArtifactModule && runtimeArtifactBeforeStart) {

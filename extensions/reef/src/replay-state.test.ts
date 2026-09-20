@@ -1,6 +1,6 @@
-import { DatabaseSync, StatementSync } from "node:sqlite";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type {
+  OpenAsyncKeyedStoreOptions,
   OpenKeyedStoreOptions,
   PluginStateKeyedStore,
 } from "openclaw/plugin-sdk/plugin-state-runtime";
@@ -10,7 +10,10 @@ import {
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
-import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
+import {
+  closeOpenClawStateDatabaseAsync,
+  observeHostDataSql,
+} from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { base64url, generateIdentity, signReceipt } from "../protocol/index.js";
@@ -46,8 +49,8 @@ function fixture(
   const raw = createPluginStateSyncKeyedStoreForTests<ReefReplayRecord>("reef", options);
   runtime.state.openSyncKeyedStore = <T>(opts: OpenKeyedStoreOptions) =>
     createPluginStateSyncKeyedStoreForTests<T>("reef", { ...opts, env });
-  runtime.state.openKeyedStore = <T>(opts: OpenKeyedStoreOptions) => {
-    if (opts.namespace !== REEF_REPLAY_NAMESPACE) {
+  runtime.state.openKeyedStore = <T>(opts: OpenAsyncKeyedStoreOptions) => {
+    if (opts.retention === "retained" || opts.namespace !== REEF_REPLAY_NAMESPACE) {
       return createPluginStateKeyedStoreForTests<T>("reef", { ...opts, env });
     }
     const adapter = {
@@ -70,7 +73,7 @@ function fixture(
     { id, bodyHash: "b".repeat(64), auditHead: "c".repeat(64), status: "accepted" },
     identity.signing.secretKey,
   );
-  return { store, raw, runtime, open, receipt };
+  return { store, raw, runtime, open, receipt, env };
 }
 
 describe("Reef replay worker ownership", () => {
@@ -86,14 +89,8 @@ describe("Reef replay worker ownership", () => {
   it("claims, refreshes, completes and reopens encrypted replay without host SQLite calls", async () => {
     const f = fixture();
     const replay = f.open();
-    const sql = [
-      vi.spyOn(DatabaseSync.prototype, "prepare"),
-      vi.spyOn(DatabaseSync.prototype, "exec"),
-      vi.spyOn(StatementSync.prototype, "get"),
-      vi.spyOn(StatementSync.prototype, "all"),
-      vi.spyOn(StatementSync.prototype, "run"),
-      vi.spyOn(StatementSync.prototype, "iterate"),
-    ];
+    const observation = observeHostDataSql(f.env);
+    const sql = observation.calls;
     await expect(replay.claim("alice", id, hash)).resolves.toBe("new");
     await replay.refresh?.("alice", id);
     await replay.complete("alice", id, f.receipt, { text: "synthetic private body" });

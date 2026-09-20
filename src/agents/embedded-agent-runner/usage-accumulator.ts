@@ -1,7 +1,7 @@
 /**
  * Accumulates per-call token usage and monetary totals across embedded runs.
  */
-import { hasBillableUsage } from "../usage.js";
+import { hasBillableUsage, hasRecordedUsageCost, USAGE_COST_COMPONENTS } from "../usage.js";
 import type { NormalizedUsage } from "../usage.js";
 
 export type UsageAccumulator = {
@@ -15,7 +15,7 @@ export type UsageAccumulator = {
   reasoningTokens: number;
   total: number;
   /** Undefined means unobserved; any missing call price makes the complete sum unavailable. */
-  cost: { total: number } | "unavailable" | undefined;
+  cost: NormalizedUsage["cost"] | "unavailable";
   /**
    * Completed assistant round trips across every model attempt of the run.
    * Kept beside token totals so retried attempts stay counted like their usage.
@@ -68,10 +68,32 @@ export const mergeUsageIntoAccumulator = (
   target.cacheWrite1h += usage.cacheWrite1h ?? 0;
   target.reasoningTokens += usage.reasoningTokens ?? 0;
   target.total += callTotal;
-  target.cost =
-    target.cost !== "unavailable" && usage.cost
-      ? { total: (target.cost?.total ?? 0) + usage.cost.total }
-      : "unavailable";
+  if (target.cost === "unavailable" || !usage.cost) {
+    target.cost = "unavailable";
+    return;
+  }
+  const cost: NonNullable<NormalizedUsage["cost"]> = {
+    total: (target.cost?.total ?? 0) + usage.cost.total,
+  };
+  if (
+    usage.cost.totalOrigin === "provider-billed" &&
+    (!target.cost || target.cost.totalOrigin === "provider-billed")
+  ) {
+    cost.totalOrigin = "provider-billed";
+  }
+  if (
+    cost.total === 0 &&
+    hasRecordedUsageCost(usage.cost) &&
+    (!target.cost || hasRecordedUsageCost(target.cost))
+  ) {
+    for (const key of USAGE_COST_COMPONENTS) {
+      const component = (target.cost?.[key] ?? 0) + (usage.cost[key] ?? 0);
+      if (component !== 0) {
+        cost[key] = component;
+      }
+    }
+  }
+  target.cost = cost;
 };
 
 /**

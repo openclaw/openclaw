@@ -14,6 +14,7 @@ export {
   readBestEffortConfig,
   readBestEffortConfigSnapshot,
   readConfigFileSnapshot,
+  readCurrentConfigForPolicyCheck,
   readConfigFileSnapshotForRuntimeTransaction,
   readConfigFileSnapshotForWrite,
   readConfigFileSnapshotWithPluginMetadata,

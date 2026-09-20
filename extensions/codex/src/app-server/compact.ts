@@ -156,16 +156,9 @@ function watchCodexNativeCompactionCompletion(params: {
         { timeoutMs: Math.max(1, params.interruptGraceMs) },
       )
       .catch((error: unknown) => {
-        // Compaction derives its target from a native start/item receipt, never
-        // a start ACK, so an absent active target follows its terminal state.
         if (isCodexNoActiveTurnInterruptError(error)) {
-          if (compactionItemCompleted) {
-            complete();
-            return;
-          }
-          fail(
-            "codex app-server compaction reached terminal state without a completed compaction item",
-          );
+          // Native records terminal state before sending its notification; only
+          // the terminal status or retirement can settle this compaction.
           return;
         }
         embeddedAgentLog.warn("codex app-server compaction interrupt request failed", {

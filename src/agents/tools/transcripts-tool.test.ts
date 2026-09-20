@@ -6,7 +6,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseForTest,
+} from "../../state/openclaw-state-db.js";
 import { createTranscriptsAutoStartService } from "../../transcripts/auto-start.js";
 import { startTranscripts } from "../../transcripts/capture.js";
 import type {
@@ -89,8 +92,9 @@ function discordAccountOwnership(
 }
 
 describe("transcripts tool", () => {
-  afterEach(() => {
+  afterEach(async () => {
     vi.useRealTimers();
+    await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
     tempDirs.cleanup();
   });
@@ -715,7 +719,11 @@ describe("transcripts tool", () => {
 
   it("auto-starts configured live meeting sources", async () => {
     const stateDir = tempDirs.make("openclaw-transcripts-");
-    const start = vi.fn(async (request) => ({ ok: true, session: request.session }));
+    const entered = createDeferred<TranscriptStartRequest>();
+    const start = vi.fn(async (request: TranscriptStartRequest) => {
+      entered.resolve(request);
+      return { ok: true, session: request.session };
+    });
     const stop = vi.fn(async () => ({ ok: true as const, sessionId: "standup" }));
     getTranscriptSourceProviderMock.mockReturnValue({
       id: "discord-voice",
@@ -743,51 +751,46 @@ describe("transcripts tool", () => {
     );
 
     service.start();
-    for (let i = 0; i < 20 && start.mock.calls.length === 0; i += 1) {
-      await new Promise((resolve) => {
-        setTimeout(resolve, 10);
+    try {
+      const request = await entered.promise;
+      expect(getTranscriptSourceProviderMock).toHaveBeenCalledWith(
+        "discord-voice",
+        expect.objectContaining({ transcripts: expect.any(Object) }),
+      );
+      expect(start).toHaveBeenCalledOnce();
+      expect(request.session).toMatchObject({
+        sessionId: "standup",
+        title: "Standup",
+        source: {
+          accountId: "account-a",
+          providerId: "discord-voice",
+          guildId: "guild-1",
+          channelId: "channel-1",
+        },
       });
+      expect(request.startupWaitMs).toBe(30_000);
+      await expect(storeFor(stateDir).readSession("standup")).resolves.toMatchObject({
+        title: "Standup",
+        source: { accountId: "account-a" },
+        metadata: { agentId: "main" },
+      });
+      await expect(
+        tool.execute("status-auto-start", { action: "status" }, undefined, vi.fn()),
+      ).resolves.toMatchObject({
+        details: { active: [expect.objectContaining({ sessionId: "standup" })] },
+      });
+      await tool.execute(
+        "stop-auto-start",
+        { action: "stop", sessionId: "standup" },
+        undefined,
+        vi.fn(),
+      );
+      expect(stop).toHaveBeenCalledOnce();
+      await service.stop();
+      expect(stop).toHaveBeenCalledOnce();
+    } finally {
+      await service.stop();
     }
-
-    expect(getTranscriptSourceProviderMock).toHaveBeenCalledWith(
-      "discord-voice",
-      expect.objectContaining({ transcripts: expect.any(Object) }),
-    );
-    expect(start).toHaveBeenCalledOnce();
-    const request = start.mock.calls[0]?.[0];
-    if (!request) {
-      throw new Error("Expected transcripts source start request");
-    }
-    expect(request.session).toMatchObject({
-      sessionId: "standup",
-      title: "Standup",
-      source: {
-        accountId: "account-a",
-        providerId: "discord-voice",
-        guildId: "guild-1",
-        channelId: "channel-1",
-      },
-    });
-    expect(request.startupWaitMs).toBe(30_000);
-    await expect(storeFor(stateDir).readSession("standup")).resolves.toMatchObject({
-      title: "Standup",
-      source: { accountId: "account-a" },
-      metadata: { agentId: "main" },
-    });
-    await expect(
-      tool.execute("status-auto-start", { action: "status" }, undefined, vi.fn()),
-    ).resolves.toMatchObject({
-      details: { active: [expect.objectContaining({ sessionId: "standup" })] },
-    });
-    await tool.execute(
-      "stop-auto-start",
-      { action: "stop", sessionId: "standup" },
-      undefined,
-      vi.fn(),
-    );
-    expect(stop).toHaveBeenCalledOnce();
-    await service.stop();
-    expect(stop).toHaveBeenCalledOnce();
   });
 
   it.each(["account-a", undefined])(
@@ -998,14 +1001,16 @@ describe("transcripts tool", () => {
   it("aborts pending auto-starts when the service stops", async () => {
     const stateDir = tempDirs.make("openclaw-transcripts-");
     const stop = vi.fn(async () => ({ ok: true, sessionId: "standup" }));
+    const entered = createDeferred<TranscriptStartRequest>();
     const start = vi.fn(
-      async (request) =>
+      async (request: TranscriptStartRequest) =>
         await new Promise((resolve) => {
           request.abortSignal?.addEventListener(
             "abort",
             () => resolve({ ok: false, error: "aborted" }),
             { once: true },
           );
+          entered.resolve(request);
         }),
     );
     getTranscriptSourceProviderMock.mockReturnValue({
@@ -1026,16 +1031,18 @@ describe("transcripts tool", () => {
       ],
     });
     service.start();
-    await vi.waitFor(() => {
+    try {
+      const request = await entered.promise;
       expect(start).toHaveBeenCalledOnce();
-    });
-    const request = start.mock.calls[0]?.[0];
-    expect(request.abortSignal?.aborted).toBe(false);
+      expect(request.abortSignal?.aborted).toBe(false);
 
-    await service.stop();
+      await service.stop();
 
-    expect(request.abortSignal?.aborted).toBe(true);
-    expect(stop).not.toHaveBeenCalled();
-    expect(logger.warn).not.toHaveBeenCalled();
+      expect(request.abortSignal?.aborted).toBe(true);
+      expect(stop).not.toHaveBeenCalled();
+      expect(logger.warn).not.toHaveBeenCalled();
+    } finally {
+      await service.stop();
+    }
   });
 });

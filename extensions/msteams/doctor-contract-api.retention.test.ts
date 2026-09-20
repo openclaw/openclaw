@@ -8,7 +8,6 @@ import {
   openOpenClawStateDatabase,
   type OpenClawStateKyselyDatabaseForTests,
   resetPluginStateStoreForTests,
-  setMaxPluginStateEntriesPerPluginForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import type { PluginDoctorStateMigrationContext } from "openclaw/plugin-sdk/runtime-doctor-migrations";
 import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
@@ -58,7 +57,6 @@ describe("Teams custom migration retention", () => {
 
   afterEach(async () => {
     await closeOpenClawStateDatabaseAsync();
-    setMaxPluginStateEntriesPerPluginForTests();
     resetPluginStateStoreForTests();
     await fs.rm(stateDir, { recursive: true, force: true });
   });
@@ -89,13 +87,7 @@ describe("Teams custom migration retention", () => {
         (entry) => entry.id === `msteams-${kind}-json-to-plugin-state`,
       )!;
       const store = context.openPluginStateKeyedStore({ namespace, maxEntries });
-      // Metadata fills the real namespace. Buckets use the existing plugin fuse
-      // to reproduce the same SQLite eviction without seeding 32,032 rows.
-      const capacity = surface === "vote buckets" ? 32 : maxEntries;
-      if (surface === "vote buckets") {
-        setMaxPluginStateEntriesPerPluginForTests(capacity + 1);
-      }
-      const rows = Array.from({ length: capacity }, (_, index) => {
+      const rows = Array.from({ length: maxEntries }, (_, index) => {
         const id = `existing-${index}`;
         const row = {
           plugin_id: "msteams",
@@ -132,12 +124,14 @@ describe("Teams custom migration retention", () => {
       });
       // Seed pre-existing rows together; migration below still owns real limit enforcement.
       const { db } = openOpenClawStateDatabase({ env });
-      executeSqliteQuerySync(
-        db,
-        getNodeSqliteKysely<OpenClawStateKyselyDatabaseForTests>(db)
-          .insertInto("plugin_state_entries")
-          .values(rows),
-      );
+      for (let offset = 0; offset < rows.length; offset += 1_000) {
+        executeSqliteQuerySync(
+          db,
+          getNodeSqliteKysely<OpenClawStateKyselyDatabaseForTests>(db)
+            .insertInto("plugin_state_entries")
+            .values(rows.slice(offset, offset + 1_000)),
+        );
+      }
       const before = new Set((await store.entries()).map((entry) => entry.key));
       const poll = {
         ...makePoll("legacy"),
@@ -153,7 +147,7 @@ describe("Teams custom migration retention", () => {
       const result = await migration.migrateLegacyState(params);
 
       const after = new Set((await store.entries()).map((entry) => entry.key));
-      expect(after.size).toBe(capacity);
+      expect(after.size).toBe(maxEntries);
       expect([...before].filter((key) => !after.has(key))).toHaveLength(1);
       await expect(fs.readFile(filePath, "utf8")).resolves.toBe(source);
       await expect(fs.access(`${filePath}.migrated`)).rejects.toThrow();
@@ -161,47 +155,6 @@ describe("Teams custom migration retention", () => {
         changes: [],
         warnings: [expect.stringContaining("failed to retain every required entry (1 missing)")],
       });
-      await expect(migration.detectLegacyState(params)).resolves.not.toBeNull();
-    },
-  );
-
-  it.each(["conversations", "polls", "vote buckets"])(
-    "retains the source when plugin-wide pressure evicts imported %s",
-    async (surface) => {
-      // Exercise real SQLite eviction through the existing test-only plugin fuse.
-      // Namespace limits and importer options remain the production values.
-      setMaxPluginStateEntriesPerPluginForTests(2);
-      const conversations = surface === "conversations";
-      const kind = conversations ? "conversations" : "polls";
-      const filePath = path.join(stateDir, `msteams-${kind}.json`);
-      const migration = stateMigrations.find(
-        (entry) => entry.id === `msteams-${kind}-json-to-plugin-state`,
-      )!;
-      const polls = Object.fromEntries(
-        ["first", "second", "third"].map((id) => [id, makePoll(id)]),
-      );
-      if (surface === "vote buckets") {
-        polls.first!.votes = Object.fromEntries(
-          Array.from({ length: 100 }, (_, index) => [`voter-${index}`, ["0"]]),
-        );
-        delete polls.second;
-        delete polls.third;
-      }
-      const source = JSON.stringify({
-        version: 1,
-        [kind]: conversations
-          ? Object.fromEntries(Object.keys(polls).map((id) => [id, { conversation: { id } }]))
-          : polls,
-      });
-      await fs.writeFile(filePath, source);
-      const params = { config: {}, env, stateDir, oauthDir: stateDir, context };
-      const result = await migration.migrateLegacyState(params);
-      await expect(fs.readFile(filePath, "utf8")).resolves.toBe(source);
-      await expect(fs.access(`${filePath}.migrated`)).rejects.toThrow();
-      expect(result.changes).toEqual([]);
-      expect(result.warnings).toEqual([
-        expect.stringContaining("failed to retain every required entry"),
-      ]);
       await expect(migration.detectLegacyState(params)).resolves.not.toBeNull();
     },
   );

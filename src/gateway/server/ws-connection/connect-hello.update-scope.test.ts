@@ -73,6 +73,7 @@ vi.mock("../../../state/user-profiles.js", () => ({
 }));
 
 vi.mock("../../control-ui-plugin-tabs.js", () => ({
+  listControlUiLinkReaders: vi.fn(() => []),
   listControlUiPluginTabs: listControlUiPluginTabsMock,
   listControlUiPluginWidgetKinds: listControlUiPluginWidgetKindsMock,
 }));
@@ -121,6 +122,7 @@ function makeContext(role: "operator" | "node", scopes: string[]) {
     },
     configSnapshot: {},
     sendFrame: vi.fn(async () => undefined),
+    onHelloDelivered: vi.fn(),
     pendingNodePairingCleanup: {},
     releasePendingNodePairingCleanup: vi.fn(async () => undefined),
   };

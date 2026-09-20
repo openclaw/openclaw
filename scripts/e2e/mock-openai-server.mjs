@@ -5,6 +5,7 @@ import http from "node:http";
 import { setTimeout as delay } from "node:timers/promises";
 import { escapeRegExp } from "../lib/regexp.mjs";
 import { readPositiveIntEnv, readTcpPortEnv } from "./lib/env-limits.mjs";
+import { summarizeMockInferenceRequest } from "./lib/mock-inference-facts.ts";
 import {
   boundedRequestLogBody,
   isRequestBodyTooLargeError,
@@ -931,8 +932,10 @@ const server = http.createServer((req, res) => {
           seq: (requestLogSeq += 1),
           method: req.method,
           path: url.pathname,
+          requestBytes: Buffer.byteLength(bodyText),
           body: boundedRequestLogBody(requestLogBody, requestLogBody),
           ...summarizeRequestContent(body),
+          ...(scriptedRoute ? { inferenceFacts: summarizeMockInferenceRequest(body) } : {}),
           ...(selectedResponse?.scriptEntry ? { scriptEntry: selectedResponse.scriptEntry } : {}),
         },
       })

@@ -4,7 +4,7 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { fileURLToPath } from "node:url";
 import { afterAll, afterEach, describe, expect, it } from "vitest";
-import { createTempDirTracker, useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { createFixtureLifetime } from "../../test/helpers/fixture-lifetime.js";
 import {
   createBuiltRuntime,
   createSourceRuntime,
@@ -25,14 +25,17 @@ import {
 } from "../state/openclaw-state-db.js";
 import { spawnNodeEvalSync } from "../test-utils/node-process.js";
 import { cliRecoveryEntrypoints } from "./cli-entrypoint.test-support.js";
+import { getCliProcessTestTimeout } from "./cli-process-child.test-helpers.js";
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-const runtimeDirs = createTempDirTracker();
+const DOCTOR_CHILD_TIMEOUT_MS = 60_000;
+const tempDirs = createFixtureLifetime();
+afterEach(() => tempDirs.cleanup());
+const runtimeDirs = createFixtureLifetime();
 let doctorRuntime: ReturnType<typeof createDoctorRuntime> | undefined;
 
 afterAll(() => {
   doctorRuntime = undefined;
-  runtimeDirs.cleanup();
+  return runtimeDirs.cleanup();
 });
 
 function createDoctorRuntime(root: string) {
@@ -44,14 +47,22 @@ function createDoctorRuntime(root: string) {
   // Keep package discovery and real UI checks inside the fixture in both modes.
   return (env: NodeJS.ProcessEnv, args: string[]) =>
     source
-      ? runSourceRuntime(
-          runtimeRoot,
-          env,
-          [path.join(runtimeRoot, "src", "entry.ts"), ...args],
-          60_000,
-          4 * 1024 * 1024,
+      ? tempDirs.track(
+          runtimeDirs.track(
+            runSourceRuntime(
+              runtimeRoot,
+              env,
+              [path.join(runtimeRoot, "src", "entry.ts"), ...args],
+              DOCTOR_CHILD_TIMEOUT_MS,
+              4 * 1024 * 1024,
+            ),
+          ),
         )
-      : runBuiltRuntime(runtimeRoot, env, args, 60_000, 4 * 1024 * 1024);
+      : tempDirs.track(
+          runtimeDirs.track(
+            runBuiltRuntime(runtimeRoot, env, args, DOCTOR_CHILD_TIMEOUT_MS, 4 * 1024 * 1024),
+          ),
+        );
 }
 
 function runDoctor(params: {
@@ -61,7 +72,7 @@ function runDoctor(params: {
   env?: NodeJS.ProcessEnv;
 }) {
   // Only the immutable package is shared across cases; scenario state stays separate.
-  doctorRuntime ??= createDoctorRuntime(runtimeDirs.make("openclaw-doctor-runtime-"));
+  doctorRuntime ??= createDoctorRuntime(runtimeDirs.createTempDir("openclaw-doctor-runtime-"));
   return doctorRuntime(
     {
       ...process.env,
@@ -93,8 +104,8 @@ function runDoctor(params: {
 }
 
 describe("Doctor report process output", () => {
-  it("refuses an unfenced schema bump without publication metadata before CLI debug capture can write state", () => {
-    const root = tempDirs.make("openclaw-doctor-update-schema-");
+  it("refuses an unfenced schema bump without publication metadata before CLI debug capture can write state", async () => {
+    const root = tempDirs.createTempDir("openclaw-doctor-update-schema-");
     const configPath = path.join(root, "openclaw.json");
     const env = { OPENCLAW_STATE_DIR: path.join(root, "state"), OPENCLAW_CONFIG_PATH: configPath };
     fs.writeFileSync(configPath, "{}\n");
@@ -110,7 +121,7 @@ describe("Doctor report process output", () => {
     const sidecarsBefore = ["-wal", "-shm"].map((suffix) => fs.existsSync(`${shared}${suffix}`));
     const configBefore = fs.readFileSync(configPath);
 
-    const result = runDoctor({
+    const result = await runDoctor({
       root,
       configPath,
       repair: true,
@@ -120,7 +131,6 @@ describe("Doctor report process output", () => {
         OPENCLAW_SERVICE_REPAIR_POLICY: "external",
       },
     });
-    expect(result.error).toBeUndefined();
     expect(
       ["-wal", "-shm"].map((suffix) => fs.existsSync(`${shared}${suffix}`)),
       result.stderr,
@@ -135,115 +145,120 @@ describe("Doctor report process output", () => {
       after.close();
     }
     expect(fs.readFileSync(configPath)).toEqual(configBefore);
-    expect(result.status, `${result.stderr}\n${result.stdout}`).toBe(1);
+    expect(result.code, `${result.stderr}\n${result.stdout}`).toBe(1);
     expect(`${result.stderr}\n${result.stdout}`).toContain(
       "Doctor refused update-time schema repair driven by OpenClaw 2026.9.2",
     );
   });
 
-  it("reports deferred Doctor-only state after config refusal, then converges", () => {
-    const root = tempDirs.make("openclaw-doctor-deferred-state-");
-    const stateDir = path.join(root, "state");
-    const workspaceDir = path.join(root, "workspace");
-    const configPath = path.join(root, "openclaw.json");
-    const workspaceSource = path.join(workspaceDir, "openclaw-workspace-state.json");
-    const tuiSource = path.join(stateDir, "tui", "last-session.json");
-    const agentSource = path.join(stateDir, "agent", "auth.json");
-    fs.mkdirSync(path.dirname(tuiSource), { recursive: true });
-    fs.mkdirSync(workspaceDir, { recursive: true });
-    const invalidConfig = {
-      gatway: { port: 12345 },
-      gateway: {
-        mode: "remote",
-        remote: { url: "ws://127.0.0.1:1", token: "fixture-token" },
-      },
-      agents: {
-        ownership: "explicit",
-        defaults: { heartbeat: { every: 5 } },
-        entries: {
-          primary: { workspace: workspaceDir },
-          secondary: {},
+  it(
+    "reports deferred Doctor-only state after config refusal, then converges",
+    async () => {
+      const root = tempDirs.createTempDir("openclaw-doctor-deferred-state-");
+      const stateDir = path.join(root, "state");
+      const workspaceDir = path.join(root, "workspace");
+      const configPath = path.join(root, "openclaw.json");
+      const workspaceSource = path.join(workspaceDir, "openclaw-workspace-state.json");
+      const tuiSource = path.join(stateDir, "tui", "last-session.json");
+      const agentSource = path.join(stateDir, "agent", "auth.json");
+      fs.mkdirSync(path.dirname(tuiSource), { recursive: true });
+      fs.mkdirSync(workspaceDir, { recursive: true });
+      const invalidConfig = {
+        gatway: { port: 12345 },
+        gateway: {
+          mode: "remote",
+          remote: { url: "ws://127.0.0.1:1", token: "fixture-token" },
         },
-      },
-    };
-    fs.writeFileSync(configPath, `${JSON.stringify(invalidConfig, null, 2)}\n`);
-    fs.writeFileSync(
-      workspaceSource,
-      `${JSON.stringify({ version: 1, setupCompletedAt: "2026-08-01T00:00:00.000Z" })}\n`,
-    );
-    fs.writeFileSync(
-      tuiSource,
-      `${JSON.stringify({ global: { sessionKey: "agent:main:main", updatedAt: 1 } })}\n`,
-    );
-    fs.mkdirSync(path.dirname(agentSource), { recursive: true });
-    fs.writeFileSync(agentSource, "{}\n");
-    const configBefore = fs.readFileSync(configPath);
-    const workspaceBefore = fs.readFileSync(workspaceSource);
-    const tuiBefore = fs.readFileSync(tuiSource);
-    const agentBefore = fs.readFileSync(agentSource);
-
-    const refused = runDoctor({ root, configPath, repair: true });
-    const refusedOutput = `${refused.stderr}\n${refused.stdout}`;
-
-    expect(refused.error, refusedOutput).toBeUndefined();
-    expect(refused.signal, refusedOutput).toBeNull();
-    expect(refused.status, refusedOutput).toBe(1);
-    expect(refusedOutput.match(/Legacy state deferred/g) ?? [], refusedOutput).toHaveLength(1);
-    expect(refusedOutput).toContain("Workspace setup and attestations");
-    expect(refusedOutput).toContain("TUI last-session pointers");
-    expect(refusedOutput).toContain(
-      "Deferred legacy agent/session migration: select an agent owner",
-    );
-    expect(refusedOutput).toContain("No listed legacy source was removed.");
-    expect(refusedOutput).toContain('rerun "openclaw doctor --fix"');
-    expect(fs.readFileSync(configPath)).toEqual(configBefore);
-    expect(fs.readFileSync(workspaceSource)).toEqual(workspaceBefore);
-    expect(fs.readFileSync(tuiSource)).toEqual(tuiBefore);
-    expect(fs.readFileSync(agentSource)).toEqual(agentBefore);
-    expect(fs.readdirSync(workspaceDir)).toEqual(["openclaw-workspace-state.json"]);
-    expect(fs.readdirSync(path.dirname(tuiSource))).toEqual(["last-session.json"]);
-
-    fs.writeFileSync(
-      configPath,
-      `${JSON.stringify(
-        {
-          ...invalidConfig,
-          agents: {
-            ...invalidConfig.agents,
-            defaults: {
-              heartbeat: { every: "30m" },
-              systemAgent: { agentId: "primary" },
-            },
+        agents: {
+          ownership: "explicit",
+          defaults: { heartbeat: { every: 5 } },
+          entries: {
+            primary: { workspace: workspaceDir },
+            secondary: {},
           },
         },
-        null,
-        2,
-      )}\n`,
-    );
-    const repaired = runDoctor({ root, configPath, repair: true });
-    const repairedOutput = `${repaired.stderr}\n${repaired.stdout}`;
-    expect(repaired.error, repairedOutput).toBeUndefined();
-    expect(repaired.signal, repairedOutput).toBeNull();
-    expect(repaired.status, repairedOutput).toBe(0);
-    expect(fs.existsSync(workspaceSource)).toBe(false);
-    expect(fs.existsSync(tuiSource)).toBe(false);
-    expect(fs.existsSync(agentSource)).toBe(false);
-    expect(fs.existsSync(path.join(stateDir, "agents", "primary", "agent", "auth.json"))).toBe(
-      true,
-    );
-    expect(JSON.parse(fs.readFileSync(configPath, "utf8"))).not.toHaveProperty("gatway");
+      };
+      fs.writeFileSync(configPath, `${JSON.stringify(invalidConfig, null, 2)}\n`);
+      fs.writeFileSync(
+        workspaceSource,
+        `${JSON.stringify({ version: 1, setupCompletedAt: "2026-08-01T00:00:00.000Z" })}\n`,
+      );
+      fs.writeFileSync(
+        tuiSource,
+        `${JSON.stringify({ global: { sessionKey: "agent:main:main", updatedAt: 1 } })}\n`,
+      );
+      fs.mkdirSync(path.dirname(agentSource), { recursive: true });
+      fs.writeFileSync(agentSource, "{}\n");
+      const configBefore = fs.readFileSync(configPath);
+      const workspaceBefore = fs.readFileSync(workspaceSource);
+      const tuiBefore = fs.readFileSync(tuiSource);
+      const agentBefore = fs.readFileSync(agentSource);
 
-    const clean = runDoctor({ root, configPath, repair: true });
-    const cleanOutput = `${clean.stderr}\n${clean.stdout}`;
-    expect(clean.error, cleanOutput).toBeUndefined();
-    expect(clean.signal, cleanOutput).toBeNull();
-    expect(clean.status, cleanOutput).toBe(0);
-    expect(cleanOutput).not.toContain("Legacy state deferred");
-    expect(cleanOutput).not.toContain("Legacy state detected");
-  }, 180_000);
+      const refused = await runDoctor({ root, configPath, repair: true });
+      const refusedOutput = `${refused.stderr}\n${refused.stdout}`;
 
-  it("fails repair when session import leaves a startup-blocking legacy store", () => {
-    const root = tempDirs.make("openclaw-doctor-session-convergence-");
+      expect(refused.signal, refusedOutput).toBeNull();
+      expect(refused.code, refusedOutput).toBe(1);
+      expect(refusedOutput.match(/Legacy state deferred/g) ?? [], refusedOutput).toHaveLength(1);
+      expect(refusedOutput).toContain("Workspace setup and attestations");
+      expect(refusedOutput).toContain("TUI last-session pointers");
+      expect(refusedOutput).toContain(
+        "Deferred legacy agent/session migration: select an agent owner",
+      );
+      expect(refusedOutput).toContain("No listed legacy source was removed.");
+      expect(refusedOutput).toContain('rerun "openclaw doctor --fix"');
+      expect(fs.readFileSync(configPath)).toEqual(configBefore);
+      expect(fs.readFileSync(workspaceSource)).toEqual(workspaceBefore);
+      expect(fs.readFileSync(tuiSource)).toEqual(tuiBefore);
+      expect(fs.readFileSync(agentSource)).toEqual(agentBefore);
+      expect(fs.readdirSync(workspaceDir)).toEqual(["openclaw-workspace-state.json"]);
+      expect(fs.readdirSync(path.dirname(tuiSource))).toEqual(["last-session.json"]);
+
+      fs.writeFileSync(
+        configPath,
+        `${JSON.stringify(
+          {
+            ...invalidConfig,
+            agents: {
+              ...invalidConfig.agents,
+              defaults: {
+                heartbeat: { every: "30m" },
+                systemAgent: { agentId: "primary" },
+              },
+            },
+          },
+          null,
+          2,
+        )}\n`,
+      );
+      const repaired = await runDoctor({ root, configPath, repair: true });
+      const repairedOutput = `${repaired.stderr}\n${repaired.stdout}`;
+      expect(repaired.signal, repairedOutput).toBeNull();
+      expect(repaired.code, repairedOutput).toBe(0);
+      expect(fs.existsSync(workspaceSource)).toBe(false);
+      expect(fs.existsSync(tuiSource)).toBe(false);
+      expect(fs.existsSync(agentSource)).toBe(false);
+      expect(fs.existsSync(path.join(stateDir, "agents", "primary", "agent", "auth.json"))).toBe(
+        true,
+      );
+      expect(JSON.parse(fs.readFileSync(configPath, "utf8"))).not.toHaveProperty("gatway");
+
+      const clean = await runDoctor({ root, configPath, repair: true });
+      const cleanOutput = `${clean.stderr}\n${clean.stdout}`;
+      expect(clean.signal, cleanOutput).toBeNull();
+      expect(clean.code, cleanOutput).toBe(0);
+      expect(cleanOutput).not.toContain("Legacy state deferred");
+      expect(cleanOutput).not.toContain("Legacy state detected");
+    },
+    getCliProcessTestTimeout(
+      DOCTOR_CHILD_TIMEOUT_MS,
+      DOCTOR_CHILD_TIMEOUT_MS,
+      DOCTOR_CHILD_TIMEOUT_MS,
+    ),
+  );
+
+  it("fails repair when session import leaves a startup-blocking legacy store", async () => {
+    const root = tempDirs.createTempDir("openclaw-doctor-session-convergence-");
     const stateDir = path.join(root, "state");
     const configPath = path.join(root, "openclaw.json");
     const storePath = path.join(stateDir, "agents", "main", "sessions", "sessions.json");
@@ -252,12 +267,11 @@ describe("Doctor report process output", () => {
     fs.writeFileSync(configPath, `${JSON.stringify({ heartbeat: { every: "30m" } })}\n`);
     fs.writeFileSync(storePath, original);
 
-    const result = runDoctor({ root, configPath, repair: true });
+    const result = await runDoctor({ root, configPath, repair: true });
     const output = `${result.stderr}\n${result.stdout}`;
 
-    expect(result.error, output).toBeUndefined();
     expect(result.signal, output).toBeNull();
-    expect(result.status, output).toBe(1);
+    expect(result.code, output).toBe(1);
     expect(output).toContain("Legacy session store requires migration");
     expect(output).toContain("openclaw doctor --fix");
     expect(output).not.toContain("Doctor complete.");
@@ -268,99 +282,106 @@ describe("Doctor report process output", () => {
     expect(JSON.parse(fs.readFileSync(configPath, "utf8"))).not.toHaveProperty("heartbeat");
   }, 120_000);
 
-  it("explains and preserves retained custom agent databases in preview and repair", () => {
-    for (const repair of [false, true]) {
-      const root = tempDirs.make(
-        `openclaw-doctor-retained-database-${repair ? "repair" : "preview"}-`,
-      );
-      const stateDir = path.join(root, "state");
-      const configPath = path.join(root, "openclaw.json");
-      const env = { OPENCLAW_STATE_DIR: stateDir };
-      fs.mkdirSync(stateDir, { recursive: true });
-      fs.writeFileSync(
-        configPath,
-        `${JSON.stringify({
-          agents: {
-            ownership: "explicit",
-            defaults: { heartbeat: { every: "30m" } },
-            entries: { main: {} },
-          },
-        })}\n`,
-      );
-      openOpenClawAgentDatabase({ agentId: "main", env });
-      const retainedDatabase = {
-        agentId: "retired",
-        path: path.join(stateDir, "retired.sqlite"),
-      };
-      const externalDatabase = {
-        agentId: "external",
-        path: path.join(root, `external\n${String.fromCharCode(0x1b)}[31mforged`, "retired.sqlite"),
-      };
-      const sanitizedExternalPath = path.join(root, "externalforged", "retired.sqlite");
-      const retainedDatabases = [retainedDatabase, externalDatabase];
-      for (const databaseCase of retainedDatabases) {
-        const retained = openOpenClawAgentDatabase({
-          agentId: databaseCase.agentId,
-          env,
-          path: databaseCase.path,
-        });
-        retained.db
-          .prepare(
-            `INSERT INTO session_nodes (session_key, current_session_id, entry_json, updated_at)
-             VALUES (?, ?, ?, ?)`,
-          )
-          .run(
-            `agent:${databaseCase.agentId}:proof`,
-            `${databaseCase.agentId}-proof-session`,
-            "{}",
-            1,
-          );
-      }
-      closeOpenClawAgentDatabasesForTest();
-      closeOpenClawStateDatabaseForTest();
-
-      const result = runDoctor({ root, configPath, repair });
-      const output = `${result.stderr}\n${result.stdout}`;
-      expect(result.error, output).toBeUndefined();
-      expect(result.signal, output).toBeNull();
-      expect(result.status, output).toBe(0);
-      expect(output).toContain('Retained unconfigured agent database "retired" at');
-      expect(output).toContain(retainedDatabase.path);
-      expect(output).toContain("Doctor will not remove it automatically because it may contain");
-      expect(output).toContain("retired or manually managed agent state.");
-      expect(output).not.toContain('Retained unconfigured agent database "main"');
-      expect(output).toContain("Skipped foreign agent database");
-      expect(output).toContain(sanitizedExternalPath);
-      expect(output).not.toContain(externalDatabase.path);
-      for (const databaseCase of retainedDatabases) {
-        expect(fs.existsSync(databaseCase.path)).toBe(true);
-        const database = new DatabaseSync(databaseCase.path, { readOnly: true });
-        try {
-          expect(
-            database
-              .prepare(
-                `SELECT session_key, current_session_id, entry_json, updated_at
-                 FROM session_nodes WHERE session_key = ?`,
-              )
-              .get(`agent:${databaseCase.agentId}:proof`),
-          ).toEqual({
-            session_key: `agent:${databaseCase.agentId}:proof`,
-            current_session_id: `${databaseCase.agentId}-proof-session`,
-            entry_json: "{}",
-            updated_at: 1,
+  it(
+    "explains and preserves retained custom agent databases in preview and repair",
+    async () => {
+      for (const repair of [false, true]) {
+        const root = tempDirs.createTempDir(
+          `openclaw-doctor-retained-database-${repair ? "repair" : "preview"}-`,
+        );
+        const stateDir = path.join(root, "state");
+        const configPath = path.join(root, "openclaw.json");
+        const env = { OPENCLAW_STATE_DIR: stateDir };
+        fs.mkdirSync(stateDir, { recursive: true });
+        fs.writeFileSync(
+          configPath,
+          `${JSON.stringify({
+            agents: {
+              ownership: "explicit",
+              defaults: { heartbeat: { every: "30m" } },
+              entries: { main: {} },
+            },
+          })}\n`,
+        );
+        openOpenClawAgentDatabase({ agentId: "main", env });
+        const retainedDatabase = {
+          agentId: "retired",
+          path: path.join(stateDir, "retired.sqlite"),
+        };
+        const externalDatabase = {
+          agentId: "external",
+          path: path.join(
+            root,
+            `external\n${String.fromCharCode(0x1b)}[31mforged`,
+            "retired.sqlite",
+          ),
+        };
+        const sanitizedExternalPath = path.join(root, "externalforged", "retired.sqlite");
+        const retainedDatabases = [retainedDatabase, externalDatabase];
+        for (const databaseCase of retainedDatabases) {
+          const retained = openOpenClawAgentDatabase({
+            agentId: databaseCase.agentId,
+            env,
+            path: databaseCase.path,
           });
-        } finally {
-          database.close();
+          retained.db
+            .prepare(
+              `INSERT INTO session_nodes (session_key, current_session_id, entry_json, updated_at)
+             VALUES (?, ?, ?, ?)`,
+            )
+            .run(
+              `agent:${databaseCase.agentId}:proof`,
+              `${databaseCase.agentId}-proof-session`,
+              "{}",
+              1,
+            );
         }
+        closeOpenClawAgentDatabasesForTest();
+        closeOpenClawStateDatabaseForTest();
+
+        const result = await runDoctor({ root, configPath, repair });
+        const output = `${result.stderr}\n${result.stdout}`;
+        expect(result.signal, output).toBeNull();
+        expect(result.code, output).toBe(0);
+        expect(output).toContain('Retained unconfigured agent database "retired" at');
+        expect(output).toContain(retainedDatabase.path);
+        expect(output).toContain("Doctor will not remove it automatically because it may contain");
+        expect(output).toContain("retired or manually managed agent state.");
+        expect(output).not.toContain('Retained unconfigured agent database "main"');
+        expect(output).toContain("Skipped foreign agent database");
+        expect(output).toContain(sanitizedExternalPath);
+        expect(output).not.toContain(externalDatabase.path);
+        for (const databaseCase of retainedDatabases) {
+          expect(fs.existsSync(databaseCase.path)).toBe(true);
+          const database = new DatabaseSync(databaseCase.path, { readOnly: true });
+          try {
+            expect(
+              database
+                .prepare(
+                  `SELECT session_key, current_session_id, entry_json, updated_at
+                 FROM session_nodes WHERE session_key = ?`,
+                )
+                .get(`agent:${databaseCase.agentId}:proof`),
+            ).toEqual({
+              session_key: `agent:${databaseCase.agentId}:proof`,
+              current_session_id: `${databaseCase.agentId}-proof-session`,
+              entry_json: "{}",
+              updated_at: 1,
+            });
+          } finally {
+            database.close();
+          }
+        }
+        const registeredDatabases = listOpenClawRegisteredAgentDatabases({ env });
+        expect(registeredDatabases).toContainEqual(expect.objectContaining(retainedDatabase));
+        expect(registeredDatabases).not.toContainEqual(expect.objectContaining(externalDatabase));
       }
-      const registeredDatabases = listOpenClawRegisteredAgentDatabases({ env });
-      expect(registeredDatabases).toContainEqual(expect.objectContaining(retainedDatabase));
-      expect(registeredDatabases).not.toContainEqual(expect.objectContaining(externalDatabase));
-    }
-  }, 120_000);
+    },
+    getCliProcessTestTimeout(DOCTOR_CHILD_TIMEOUT_MS, DOCTOR_CHILD_TIMEOUT_MS),
+  );
 
   it("omits backup tips for Git-backed nested agent workspaces", () => {
-    const root = tempDirs.make("openclaw-doctor-workspace-git-");
+    const root = tempDirs.createTempDir("openclaw-doctor-workspace-git-");
     const repoRoot = path.join(root, "repo");
     const nestedWorkspace = path.join(
       repoRoot,
@@ -441,7 +462,7 @@ describe("Doctor report process output", () => {
     { name: "lint JSON", args: ["--lint", "--json"], exitCode: 1 },
     { name: "post-upgrade JSON", args: ["--post-upgrade", "--json"], exitCode: 1 },
   ])("drains the whole pipe before exiting for $name", ({ args, exitCode }) => {
-    const root = tempDirs.make("openclaw-doctor-output-");
+    const root = tempDirs.createTempDir("openclaw-doctor-output-");
     const payload = { ok: false, findings: [{ level: "error", message: "x".repeat(1024 * 1024) }] };
     const sourceUrl = (relative: string) => new URL(relative, import.meta.url).href;
     // Keep the parser, runtime, and exit lifecycle real. Synthetic report

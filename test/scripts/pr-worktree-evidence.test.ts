@@ -102,7 +102,7 @@ source "$FIXTURE_SCRIPTS/pr-lib/operation-lock.sh"
 source "$FIXTURE_SCRIPTS/pr-lib/common.sh"
 source "$FIXTURE_SCRIPTS/pr-lib/merge-outcome.sh"
 test "$(repo_root)" = "$FIXTURE_REPO"
-gh() {
+pr_gh() {
   if [ "$#" = 7 ] && [ "$1 $2" = 'pr view' ] && [ "$4 $5 $6 $7" = '--json state --jq .state' ]; then
     git show-ref --verify --quiet "refs/openclaw/pr-operation-locks/$3" || exit 97
     printf '%s\\n' "$*" >> "$FIXTURE_ROOT/gh-calls"
@@ -111,7 +111,7 @@ gh() {
     echo "Unexpected GitHub call: $*" >&2; exit 97
   fi
 }
-gh_plain() {
+pr_gh_plain() {
   if [ "$*" = 'api graphql -f query=query { viewer { login } } --include' ]; then
     printf 'HTTP/2.0 200 OK\\n\\n{"data":{"viewer":{"login":"fixture-user"}}}\\n'
   else

@@ -1,29 +1,25 @@
-import fs from "node:fs";
-import { deserialize } from "node:v8";
-import { Worker } from "node:worker_threads";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, it, vi } from "vitest";
-import * as registryRead from "../../agents/subagents/registry/subagent-registry-read.js";
-import { clearSubagentRunsReadCacheForTest } from "../../agents/subagents/registry/subagent-registry-state.js";
+import { notifyPreparedModelRuntimePublication } from "../../agents/prepared-model-runtime.publication-events.js";
 import {
-  loadSubagentSessionListRunsFromSqlite,
-  saveSubagentRegistryToSqlite,
-} from "../../agents/subagents/registry/subagent-registry.store.sqlite.js";
+  clearSubagentRunsReadCacheForTest,
+  persistSubagentRunsToDiskOrThrow,
+} from "../../agents/subagents/registry/subagent-registry-state.js";
 import type { SubagentRunRecord } from "../../agents/subagents/registry/subagent-registry.types.js";
+import { createEmbeddedCallGateway } from "../../agents/tools/embedded-gateway-stub.js";
 import { setRuntimeConfigSnapshot } from "../../config/config.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { AsyncWorkScope, getAsyncWorkSignal } from "../../shared/async-work-scope.js";
 import { createDeferredCore } from "../../shared/deferred.js";
-import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db-cache.js";
-import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import { runOpenClawStateWorkerOperation } from "../../state/openclaw-state-worker-store.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { EmbeddedTuiBackend } from "../../tui/embedded-backend.js";
+import { getSessionRowProjection } from "../session-row-projection-access.js";
 import { sessionByKeyReadHandlers } from "./sessions-read-by-key.js";
 import {
   identifiedClient,
+  initializeSessionReadContext,
   listSessions,
   requestContext,
 } from "./sessions-read-cache.test-support.js";
@@ -46,53 +42,14 @@ function run(runId: string, overrides: Partial<SubagentRunRecord> = {}): Subagen
     ...overrides,
   };
 }
-function readPersisted() {
-  return runOpenClawStateWorkerOperation(
-    captureOpenClawStateWorkerContext(),
-    (worker) => worker.execute({ type: "subagents.sessionList", input: undefined }),
-    { existingOnly: true },
-  );
-}
-
-function pausePersistedRead(onDispatch?: () => void) {
-  const dispatched = createDeferredCore();
-  let resumeRead: (() => void) | undefined;
-  // oxlint-disable-next-line typescript/unbound-method -- apply below preserves the intercepted Worker receiver.
-  const postMessage = Worker.prototype.postMessage;
-  vi.spyOn(Worker.prototype, "postMessage").mockImplementation(function (
-    this: Worker,
-    ...args: Parameters<Worker["postMessage"]>
-  ) {
-    const message: unknown = args[0];
-    if (isRecord(message) && message.type === "execute" && message.input instanceof Uint8Array) {
-      const command: unknown = deserialize(message.input);
-      if (isRecord(command) && command.type === "subagents.sessionList") {
-        onDispatch?.();
-        resumeRead = () => postMessage.apply(this, args);
-        dispatched.resolve();
-        return;
-      }
-    }
-    return postMessage.apply(this, args);
-  });
-  return {
-    dispatched: dispatched.promise,
-    resume() {
-      const dispatch = resumeRead;
-      resumeRead = undefined;
-      dispatch?.();
-    },
-  };
-}
-
 it.each(["replaced", "made private"])(
-  "describes current session metadata after a worker read while the session is %s",
+  "describes current session metadata without waiting for catalog readiness when the session is %s",
   async (change) => {
     await withOpenClawTestState(
       { scenario: "minimal", env: { OPENCLAW_TEST_READ_SUBAGENT_RUNS_FROM_SQLITE: "1" } },
       async () => {
         const cfg: OpenClawConfig = {
-          agents: { entries: { main: {} } },
+          agents: { list: [{ id: "main", default: true }] },
           gateway: {
             roles: {
               default: "reader",
@@ -129,36 +86,42 @@ it.each(["replaced", "made private"])(
           swarmRequesterSessionKey: controller,
           collectorCompletion: { status: "done" },
         });
-        saveSubagentRegistryToSqlite(
+        persistSubagentRunsToDiskOrThrow(
           new Map([child, collector].map((entry) => [entry.runId, entry])),
         );
         clearSubagentRunsReadCacheForTest();
-        const read = pausePersistedRead();
+        const context = requestContext(cfg);
+        await initializeSessionReadContext(context);
+        const projection = getSessionRowProjection(context)!;
+        await projection.ensureMaterialized();
+        const catalog = createDeferredCore();
+        const reading = createDeferredCore();
+        context.readPreparedGatewayModelCatalog = async () => {
+          reading.resolve();
+          await catalog.promise;
+          return undefined;
+        };
+        notifyPreparedModelRuntimePublication({ phase: "catalog-published" });
         const respond = vi.fn<RespondFn>();
-        const request = sessionByKeyReadHandlers["sessions.describe"]!({
-          req: { type: "req", id: "describe-worker", method: "sessions.describe" },
-          params: { key: controller },
-          client: identifiedClient(viewerId),
-          context: requestContext(cfg),
-          isWebchatConnect: () => false,
-          respond,
-        });
+        let request: Promise<void> | void = undefined;
         try {
-          expect(
-            await Promise.race([
-              read.dispatched.then(() => "worker"),
-              Promise.resolve(request).then(() => "response"),
-            ]),
-          ).toBe("worker");
+          await reading.promise;
           await upsertSessionEntryCore(
             { agentId: "main", sessionKey: controller },
             change === "replaced"
               ? { sessionId: "replacement-session", label: "Current conversation" }
               : { visibility: "draft" },
           );
-          read.resume();
-          await request;
+          request = sessionByKeyReadHandlers["sessions.describe"]!({
+            req: { type: "req", id: "describe-projection", method: "sessions.describe" },
+            params: { key: controller },
+            client: identifiedClient(viewerId),
+            context,
+            isWebchatConnect: () => false,
+            respond,
+          });
           expect(respond).toHaveBeenCalledTimes(1);
+          await request;
           expect(respond.mock.calls[0]?.[0]).toBe(true);
           const result = respond.mock.calls[0]?.[1];
           if (change === "made private") {
@@ -176,8 +139,9 @@ it.each(["replaced", "made private"])(
           }
         } finally {
           vi.restoreAllMocks();
-          read.resume();
-          await Promise.allSettled([request]);
+          catalog.resolve();
+          await Promise.allSettled([request, projection.ensureMaterialized()]);
+          projection.dispose();
           clearSubagentRunsReadCacheForTest();
         }
       },
@@ -190,7 +154,7 @@ it("lists off-page controller links and deleted-collector totals while a sibling
     { scenario: "minimal", env: { OPENCLAW_TEST_READ_SUBAGENT_RUNS_FROM_SQLITE: "1" } },
     async () => {
       clearSubagentRunsReadCacheForTest();
-      const cfg = { agents: { entries: { main: {} } } };
+      const cfg = { agents: { list: [{ id: "main", default: true }] } };
       setRuntimeConfigSnapshot(cfg);
       const controller = "agent:main:controller";
       const requester = "agent:main:requester";
@@ -214,187 +178,73 @@ it("lists off-page controller links and deleted-collector totals while a sibling
           { sessionId: key, updatedAt, visibility: "shared", spawnedBy },
         );
       }
-      saveSubagentRegistryToSqlite(
+      persistSubagentRunsToDiskOrThrow(
         new Map([child, collector].map((entry) => [entry.runId, entry])),
       );
-      expect(await readPersisted()).toEqual(loadSubagentSessionListRunsFromSqlite());
       const key = { pluginId: "session-list-proof", namespace: "mixed-progress", key: "written" };
-      const [result, written] = await Promise.all([
-        listSessions({
-          client: identifiedClient("owner@example.com"),
-          context: requestContext(cfg),
-          request: { limit: 1 },
-        }),
-        runOpenClawStateWorkerOperation(captureOpenClawStateWorkerContext(), (worker) =>
-          worker.execute({
-            type: "pluginState.register",
-            input: {
-              ...key,
-              valueJson: "true",
-              maxEntries: 4,
-              maxPluginEntries: 4,
-              overflowPolicy: "reject-new",
-            },
+      const context = requestContext(cfg);
+      await initializeSessionReadContext(context);
+      try {
+        const [result, written] = await Promise.all([
+          listSessions({
+            client: identifiedClient("owner@example.com"),
+            context,
+            request: { limit: 1 },
           }),
-        ),
-      ]);
-      expect(written).toEqual({ ok: true, value: undefined });
-      expect(result).toMatchObject({
-        count: 1,
-        totalCount: 3,
-        nextOffset: 1,
-        sessions: [
-          {
-            key: controller,
-            childSessions: [child.childSessionKey],
-            swarm: { groups: [{ groupId: "retained-group", done: 1, failed: 0 }] },
-          },
-        ],
-      });
-      expect(JSON.stringify(result)).not.toContain("retained synthetic");
-      const { createEmbeddedCallGateway } =
-        await import("../../agents/tools/embedded-gateway-stub.js");
-      const { EmbeddedTuiBackend } = await import("../../tui/embedded-backend.js");
-      for (const list of [
-        () => createEmbeddedCallGateway()({ method: "sessions.list", params: { limit: 1 } }),
-        () => new EmbeddedTuiBackend().listSessions({ limit: 1 }),
-      ]) {
-        clearSubagentRunsReadCacheForTest();
-        expect(await list()).toMatchObject({
+          runOpenClawStateWorkerOperation(captureOpenClawStateWorkerContext(), (worker) =>
+            worker.execute({
+              type: "pluginState.register",
+              input: {
+                ...key,
+                valueJson: "true",
+                maxEntries: 4,
+                overflowPolicy: "reject-new",
+              },
+            }),
+          ),
+        ]);
+        expect(written).toEqual({ ok: true, value: undefined });
+        expect(result).toMatchObject({
+          count: 1,
+          totalCount: 3,
+          nextOffset: 1,
           sessions: [
             {
               key: controller,
               childSessions: [child.childSessionKey],
-              swarm: { groups: [{ groupId: "retained-group", done: 1 }] },
+              swarm: { groups: [{ groupId: "retained-group", done: 1, failed: 0 }] },
             },
           ],
         });
-      }
-      expect(
-        await runOpenClawStateWorkerOperation(captureOpenClawStateWorkerContext(), (worker) =>
-          worker.execute({ type: "pluginState.lookup", input: key }),
-        ),
-      ).toEqual({ ok: true, value: true });
-      clearSubagentRunsReadCacheForTest();
-    },
-  );
-});
-
-it.each(["missing", "future schema", "malformed schema", "malformed payload"])(
-  "keeps %s storage read-only",
-  async (shape) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      const context = captureOpenClawStateWorkerContext();
-      if (shape === "missing") {
-        expect(await readPersisted()).toBeUndefined();
-        expect(fs.existsSync(context.admission.databasePath)).toBe(false);
-        return;
-      }
-      const record = run("valid");
-      saveSubagentRegistryToSqlite(new Map([[record.runId, record]]));
-      const { db } = openOpenClawStateDatabase();
-      if (shape === "future schema") {
-        const version = Number(db.prepare("PRAGMA user_version").get()?.user_version);
-        db.exec(`PRAGMA user_version = ${version + 1}`);
-      } else if (shape === "malformed schema") {
-        db.enableDefensive?.(false);
-        db.exec("PRAGMA writable_schema = ON");
-        db.prepare(
-          "INSERT INTO sqlite_master (type, name, tbl_name, rootpage, sql) VALUES ('index', 'malformed_fixture', 'subagent_runs', 0, 'CREATE INDEX malformed_fixture ON subagent_runs(missing_column)')",
-        ).run();
-        db.exec("PRAGMA writable_schema = RESET");
-      } else {
-        db.prepare("UPDATE subagent_runs SET payload_json = ? WHERE run_id = ?").run(
-          "{bad json",
-          record.runId,
-        );
-      }
-      await closeOpenClawStateDatabaseAsync();
-      const before = fs.readFileSync(context.admission.databasePath);
-      if (shape === "malformed payload") {
-        expect(await readPersisted()).toEqual(new Map());
-      } else {
-        await expect(readPersisted()).rejects.toThrow();
-      }
-      await closeOpenClawStateDatabaseAsync();
-      expect(fs.readFileSync(context.admission.databasePath)).toEqual(before);
-    });
-  },
-);
-
-it("keeps the shared native fill outside a retired initiating request scope", async () => {
-  await withOpenClawTestState(
-    { scenario: "minimal", env: { OPENCLAW_TEST_READ_SUBAGENT_RUNS_FROM_SQLITE: "1" } },
-    async () => {
-      const cfg = { agents: { entries: { main: {} } } };
-      setRuntimeConfigSnapshot(cfg);
-      const controller = "agent:main:controller";
-      await upsertSessionEntryCore(
-        { agentId: "main", sessionKey: controller },
-        { sessionId: "request-scope-parent", updatedAt: Date.now(), visibility: "shared" },
-      );
-      const collector = run("retained", {
-        collect: true,
-        groupId: "scope-retained-group",
-        swarmRequesterSessionKey: controller,
-        collectorCompletion: { status: "done" },
-      });
-      saveSubagentRegistryToSqlite(new Map([[collector.runId, collector]]));
-      clearSubagentRunsReadCacheForTest();
-      const firstScope = new AsyncWorkScope();
-      const secondScope = new AsyncWorkScope();
-      const joined = createDeferredCore();
-      const dispatchSignals: Array<AbortSignal | undefined> = [];
-      const read = pausePersistedRead(() => dispatchSignals.push(getAsyncWorkSignal()));
-      const prepare = registryRead.prepareSubagentSessionListReadIndex;
-      let callers = 0;
-      vi.spyOn(registryRead, "prepareSubagentSessionListReadIndex").mockImplementation(
-        (...args) => {
-          const result = prepare(...args);
-          if (++callers === 2) {
-            joined.resolve();
+        expect(JSON.stringify(result)).not.toContain("retained synthetic");
+        const backend = new EmbeddedTuiBackend();
+        backend.start();
+        try {
+          for (const list of [
+            () => createEmbeddedCallGateway()({ method: "sessions.list", params: { limit: 1 } }),
+            () => backend.listSessions({ limit: 1 }),
+          ]) {
+            clearSubagentRunsReadCacheForTest();
+            expect(await list()).toMatchObject({
+              sessions: [
+                {
+                  key: controller,
+                  childSessions: [child.childSessionKey],
+                  swarm: { groups: [{ groupId: "retained-group", done: 1 }] },
+                },
+              ],
+            });
           }
-          return result;
-        },
-      );
-      const context = requestContext(cfg);
-      const first = firstScope.run(() =>
-        listSessions({
-          client: identifiedClient("first@example.com"),
-          context,
-          request: { limit: 1 },
-        }),
-      );
-      const observedFirst = first.then(
-        () => undefined,
-        () => undefined,
-      );
-      let second: ReturnType<typeof listSessions> | undefined;
-      try {
-        await read.dispatched;
-        second = secondScope.track(() =>
-          listSessions({
-            client: identifiedClient("second@example.com"),
-            context,
-            request: { limit: 1 },
-          }),
-        );
-        await joined.promise;
-        await firstScope.drain();
-        expect(firstScope.signal.aborted).toBe(true);
-        read.resume();
-        expect(await second).toMatchObject({
-          sessions: [
-            { key: controller, swarm: { groups: [{ groupId: "scope-retained-group", done: 1 }] } },
-          ],
-        });
-        expect(dispatchSignals).toEqual([undefined]);
+        } finally {
+          await backend.stop();
+        }
+        expect(
+          await runOpenClawStateWorkerOperation(captureOpenClawStateWorkerContext(), (worker) =>
+            worker.execute({ type: "pluginState.lookup", input: key }),
+          ),
+        ).toEqual({ ok: true, value: true });
       } finally {
-        read.resume();
-        await Promise.allSettled([observedFirst, second]);
-        await firstScope.drain();
-        await secondScope.drain();
-        vi.restoreAllMocks();
+        getSessionRowProjection(context)?.dispose();
         clearSubagentRunsReadCacheForTest();
       }
     },

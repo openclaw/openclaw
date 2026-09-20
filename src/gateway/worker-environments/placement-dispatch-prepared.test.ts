@@ -5,7 +5,10 @@ import {
   GATEWAY_CLIENT_IDS,
   GATEWAY_CLIENT_MODES,
 } from "../../../packages/gateway-protocol/src/client-info.js";
-import { WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE } from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
+import {
+  WORKER_EXECUTION_AUTHORITY_PROTOCOL_FEATURE,
+  WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE,
+} from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import {
@@ -51,11 +54,15 @@ vi.mock("../../config/config.js", async (importOriginal) => ({
 }));
 
 const PREPARATION_KEY = "c".repeat(64);
-const FEATURES = [WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE];
+const FEATURES = [
+  WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE,
+  WORKER_EXECUTION_AUTHORITY_PROTOCOL_FEATURE,
+];
 
 function preparedHarness(
   options: {
     reserve?: boolean;
+    protocolFeatures?: string[];
     executionMode?: WorkerPlacementExecutionMode;
     liveBindingFails?: boolean;
     repository?: SessionRepositoryWorkspaceRecord;
@@ -65,6 +72,7 @@ function preparedHarness(
     >;
   } = {},
 ) {
+  const protocolFeatures = options.protocolFeatures ?? FEATURES;
   const executionMode = options.executionMode ?? "worker-turn";
   const reserve = options.reserve !== false;
   let nodeCurrent = true;
@@ -79,9 +87,14 @@ function preparedHarness(
           resolveWorkspace: async () => ({ kind: "repository", repository: options.repository! }),
         }
       : {}),
-    isCurrentNodePlacement: (proof, requirement) =>
+    isCurrentNodePlacement: (proof, requirement, mode) =>
       nodeCurrent &&
-      transport.isCurrent(proof, requirement.consumesWorkerSlot, requirement.requiredNodeCommands),
+      transport.isCurrent(
+        proof,
+        requirement.consumesWorkerSlot,
+        requirement.requiredNodeCommands,
+        mode === "worker-turn",
+      ),
   });
   const environmentId = reserve ? "prepared-spare" : harness.ready.environmentId;
   const intent: WorkerProviderPreparedIntent = {
@@ -117,7 +130,7 @@ function preparedHarness(
             workerBundleHash: support.BUNDLE_HASH,
             workerArchiveSha256: "b".repeat(64),
             openclawVersion: support.BOOTSTRAP_RECEIPT.openclawVersion,
-            protocolFeatures: FEATURES,
+            protocolFeatures,
           },
         },
       },
@@ -152,13 +165,13 @@ function preparedHarness(
       sharedHost: false,
       ...support.readyPatch(environmentId, {
         ...support.BOOTSTRAP_RECEIPT,
-        protocolFeatures: FEATURES,
+        protocolFeatures,
       }),
     },
   });
   vi.mocked(support.testState.prepareInstallation).mockResolvedValue({
     ...support.BUNDLE_ARTIFACT,
-    protocolFeatures: FEATURES,
+    protocolFeatures,
   });
   const liveEvents = support.createLiveEvents({
     bindSession: vi.fn(() => !options.liveBindingFails),
@@ -197,7 +210,7 @@ function preparedHarness(
     return { ...(await ordinaryBind(request)), ...options.boundWorkspace };
   });
   if (!reserve) {
-    vi.mocked(harness.environments.create).mockResolvedValue(projected);
+    vi.mocked(harness.environments.createWithRequest).mockResolvedValue(projected);
   }
   const node: NodeWorkerSupervisorNodeProof = {
     nodeId: "prepared-node",
@@ -212,6 +225,7 @@ function preparedHarness(
       capacity: { total: 1, available: 1 },
       environmentSession: NODE_WORKER_ENVIRONMENT_SESSION_VERSION,
       preparedWorkspace: NODE_WORKER_PREPARED_WORKSPACE_VERSION,
+      capturedExecPolicy: true,
     },
     commands: ["codex.exec-server.stdio.v1"],
   };
@@ -316,8 +330,7 @@ describe("prepared worker dispatch", () => {
         environmentId: ready.environmentId,
         executionMode,
       });
-      expect(harness.environments.create).not.toHaveBeenCalled();
-      expect(harness.environments.createFromProfileSnapshot).not.toHaveBeenCalled();
+      expect(harness.environments.createWithRequest).not.toHaveBeenCalled();
       expect(store.get(ready.environmentId)?.preparation?.consumedAtMs).toBe(1_000);
       expect(store.getCredential(ready.environmentId)).toMatchObject({
         sessionId: request.sessionId,
@@ -340,17 +353,13 @@ describe("prepared worker dispatch", () => {
     const active = await harness.service.dispatch(request);
 
     expect(active.environmentId).toBe(ready.environmentId);
-    expect(harness.environments.create).toHaveBeenCalledWith(
-      request.profileId,
-      expect.any(String),
-      undefined,
-      request.executionMode,
-      "/gateway/workspace",
-      undefined,
-      undefined,
-      undefined,
-      intent,
-    );
+    expect(harness.environments.createWithRequest).toHaveBeenCalledWith({
+      profileId: request.profileId,
+      idempotencyKey: expect.any(String),
+      executionMode: request.executionMode,
+      projectPath: "/gateway/workspace",
+      admittedIntent: intent,
+    });
     expect(store.get(ready.environmentId)?.preparation).toBeNull();
     expect(harness.environments.bindPreparedWorkspace).toHaveBeenCalledOnce();
     expect(harness.log.indexOf("workspace:bind-prepared")).toBeLessThan(
@@ -358,10 +367,13 @@ describe("prepared worker dispatch", () => {
     );
   });
 
-  it.each(["build", "node"] as const)(
+  it.each(["build", "node", "exec-authority"] as const)(
     "uses the cold path when a candidate's %s proof is stale",
     async (stale) => {
-      const { harness, store, ready, request, revokeNode } = preparedHarness();
+      const { harness, store, ready, request, revokeNode } = preparedHarness({
+        protocolFeatures:
+          stale === "exec-authority" ? [WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE] : undefined,
+      });
       if (stale === "build") {
         const environment = harness.environments.get(ready.environmentId)!;
         vi.mocked(harness.environments.getPreparedCandidates).mockReturnValue([
@@ -370,7 +382,7 @@ describe("prepared worker dispatch", () => {
             bootstrapReceipt: { ...ready.bootstrapReceipt!, bundleHash: "9".repeat(64) },
           },
         ]);
-      } else {
+      } else if (stale === "node") {
         revokeNode();
       }
 
@@ -378,7 +390,7 @@ describe("prepared worker dispatch", () => {
 
       expect(active.environmentId).toBe(harness.ready.environmentId);
       expect(active.environmentId).not.toBe(ready.environmentId);
-      expect(harness.environments.create).toHaveBeenCalledOnce();
+      expect(harness.environments.createWithRequest).toHaveBeenCalledOnce();
       expect(store.get(ready.environmentId)?.preparation?.consumedAtMs).toBeNull();
       expect(harness.environments.bindPreparedWorkspace).not.toHaveBeenCalled();
     },
@@ -400,7 +412,7 @@ describe("prepared worker dispatch", () => {
       const active = await harness.service.dispatch(request);
 
       expect(active.environmentId).toBe(harness.ready.environmentId);
-      expect(harness.environments.create).toHaveBeenCalledOnce();
+      expect(harness.environments.createWithRequest).toHaveBeenCalledOnce();
       expect(store.get(ready.environmentId)?.preparation?.consumedAtMs).toBeNull();
       expect(store.getCredential(ready.environmentId)?.sessionId).toBeNull();
       expect(harness.environments.bindPreparedWorkspace).not.toHaveBeenCalled();
@@ -435,7 +447,7 @@ describe("prepared worker dispatch", () => {
         const active = await dispatch;
 
         expect(active.environmentId).toBe(harness.ready.environmentId);
-        expect(harness.environments.create).toHaveBeenCalledOnce();
+        expect(harness.environments.createWithRequest).toHaveBeenCalledOnce();
         expect(store.get(ready.environmentId)?.preparation?.consumedAtMs).toBeNull();
         expect(store.getCredential(ready.environmentId)?.sessionId).toBeNull();
         expect(harness.environments.bindPreparedWorkspace).not.toHaveBeenCalled();
@@ -477,7 +489,7 @@ describe("prepared worker dispatch", () => {
     const active = await harness.service.dispatch(request);
 
     expect(active.environmentId).toBe(harness.ready.environmentId);
-    expect(harness.environments.create).toHaveBeenCalledOnce();
+    expect(harness.environments.createWithRequest).toHaveBeenCalledOnce();
     expect(store.get(ready.environmentId)?.preparation?.consumedAtMs).toBeNull();
     expect(harness.environments.bindPreparedWorkspace).not.toHaveBeenCalled();
   });
@@ -513,7 +525,7 @@ describe("prepared worker dispatch", () => {
 
     expect(store.get(ready.environmentId)?.preparation?.consumedAtMs).toBeNull();
     expect(harness.environments.attachSession).not.toHaveBeenCalled();
-    expect(harness.environments.create).not.toHaveBeenCalled();
+    expect(harness.environments.createWithRequest).not.toHaveBeenCalled();
   });
 
   it("cannot recycle a consumed environment after live attachment rollback", async () => {
@@ -680,8 +692,7 @@ describe("prepared worker dispatch", () => {
         remoteWorkspaceDir: boundWorkspace.workspaceDir,
         workspaceBaseManifestRef: current.manifestRef,
       });
-      expect(harness.environments.create).not.toHaveBeenCalled();
-      expect(harness.environments.createFromProfileSnapshot).not.toHaveBeenCalled();
+      expect(harness.environments.createWithRequest).not.toHaveBeenCalled();
       expect(store.get(ready.environmentId)?.preparation?.consumedAtMs).toBe(1_000);
       expect(harness.log.indexOf("workspace:bind-prepared")).toBeLessThan(
         harness.log.indexOf("sync"),

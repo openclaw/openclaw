@@ -1,5 +1,4 @@
 import { describe, expect, it, vi } from "vitest";
-import type { RouteId } from "../app-routes.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import {
   createGatewayEvent,
@@ -121,7 +120,7 @@ describe("native plugin asset admission", () => {
           subscribeEvents: () => () => undefined,
         },
         config: { refresh },
-      } as unknown as ApplicationContext<RouteId>;
+      } as unknown as ApplicationContext;
       const runtime = new ControlUiPluginRuntime(() => context);
       try {
         runtime.start();
@@ -198,7 +197,7 @@ it("reconciles native UI on plugin changes without retiring the unchanged connec
     gateway,
     resourceBasePath: "",
     config: { refresh: async () => ({ pluginAssetsRequireAuth: false, pluginFrameGrants: [] }) },
-  } as unknown as ApplicationContext<RouteId>;
+  } as unknown as ApplicationContext;
   vi.mocked(initializeControlUiPlugin).mockImplementation(async (getContext, runtime, owner) => {
     const host = createControlUiPluginHost(getContext, runtime, owner);
     host.ui.registerReplacement({

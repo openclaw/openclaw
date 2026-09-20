@@ -17,11 +17,51 @@ import { prepareRepositoryWorkerProjectSource } from "./repository-project-admis
 import type { WorkerDesktopLaunchResult, WorkerDesktopObserveResult } from "./service-contract.js";
 import type { WorkerEnvironmentState } from "./state.js";
 import type { WorkerEnvironmentRecord, WorkerEnvironmentStore } from "./store.js";
-import type { WorkerTunnelRequest } from "./tunnel-contract.js";
+import {
+  joinWorkerTunnelStops,
+  type WorkerTunnelRequest,
+  type WorkerTunnelStopReason,
+} from "./tunnel-contract.js";
 import type { WorkerTunnelHandle, WorkerTunnelManager } from "./tunnel.js";
 import { boundedWorkerError as boundedError } from "./worker-error.js";
 
 const TUNNEL_START_TIMEOUT_MS = 3 * 60_000;
+
+export type WorkerEnvironmentNodeTunnel = Pick<
+  NodeWorkerTunnelManager,
+  "status" | "start" | "stop" | "stopAll"
+>;
+
+/** Lease teardown joins every transport sharing that environment owner. */
+export function createWorkerEnvironmentTransportLifecycle(options: {
+  tunnelManager?: WorkerTunnelManager;
+  nodeTunnelManager?: Pick<NodeWorkerTunnelManager, "stop">;
+  nodeDesktopCarrier?: WorkerNodeDesktopCarrier;
+  nodePortalCarrier?: import("./portal-node-carrier.js").WorkerNodePortalCarrier;
+  closeWorkerPortals?: (environmentId: string, ownerEpoch?: number) => Promise<void>;
+  closeEnvironmentComputers?: (environmentId: string, ownerEpoch?: number) => Promise<void>;
+}) {
+  if (
+    !options.tunnelManager &&
+    !options.nodeTunnelManager &&
+    !options.nodeDesktopCarrier &&
+    !options.nodePortalCarrier
+  ) {
+    return undefined;
+  }
+  return {
+    stop: async (environmentId: string, ownerEpoch?: number, reason?: WorkerTunnelStopReason) => {
+      await joinWorkerTunnelStops([
+        options.tunnelManager?.stop(environmentId, ownerEpoch),
+        options.nodeTunnelManager?.stop(environmentId, ownerEpoch, reason),
+        options.nodeDesktopCarrier?.stop(environmentId, ownerEpoch),
+        options.nodePortalCarrier?.stop(environmentId, ownerEpoch),
+        options.closeWorkerPortals?.(environmentId, ownerEpoch),
+        options.closeEnvironmentComputers?.(environmentId, ownerEpoch),
+      ]);
+    },
+  };
+}
 
 type WorkerEnvironmentAccessOptions = {
   store: WorkerEnvironmentStore;
@@ -30,7 +70,7 @@ type WorkerEnvironmentAccessOptions = {
   prepareCurrentBundle: () => Promise<ExpectedWorkerBuild>;
   bindPreparedWorkspace?: WorkerProviderLifecycleInputOptions["bindPreparedWorkspace"];
   tunnelManager?: WorkerTunnelManager;
-  nodeTunnelManager?: NodeWorkerTunnelManager;
+  nodeTunnelManager?: WorkerEnvironmentNodeTunnel;
   nodeDesktopCarrier?: WorkerNodeDesktopCarrier;
   now: () => number;
   identityResolverFor: (
@@ -326,7 +366,9 @@ export function createWorkerEnvironmentAccess(options: WorkerEnvironmentAccessOp
       ownerEpoch = record.ownerEpoch;
       // Node observation remains usable without its provisioning plugin. Missing
       // optional permission disables resizing, not the established transport.
-      canResize = options.resolveProvider(record.providerId)?.allowsDesktopResize === true;
+      canResize =
+        options.resolveProvider(record.providerId)?.allowsDesktopResize === true &&
+        desktop.allowsResize !== false;
       if (record.sshEndpoint) {
         if (!tunnels) {
           throw serviceError("invalid_state", "Worker SSH desktop runtime is unavailable");

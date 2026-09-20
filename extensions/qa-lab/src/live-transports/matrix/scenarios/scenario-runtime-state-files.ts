@@ -1,4 +1,3 @@
-// QA Lab Matrix plugin module implements scenario runtime state files behavior.
 import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";

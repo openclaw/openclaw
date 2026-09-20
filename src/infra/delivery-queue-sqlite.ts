@@ -1,4 +1,5 @@
 // Stores durable delivery queue entries through their connection-bound owner.
+import { withExistingOpenClawStateDatabaseArtifactPreservingReadOnlyAsync } from "../state/openclaw-state-db-readonly.js";
 import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
@@ -174,6 +175,19 @@ export function countPendingDeliveryQueueEntries(
     return 0;
   }
   return countPendingDeliveryQueueEntriesInDatabase(openStateDatabase(stateDir), queueNames);
+}
+
+/** Inventory retired custody without opening a writer or creating state. */
+export async function countPendingDeliveryQueueEntriesReadOnly(
+  queueNames: readonly string[],
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<number> {
+  return (
+    (await withExistingOpenClawStateDatabaseArtifactPreservingReadOnlyAsync(
+      (database) => countPendingDeliveryQueueEntriesInDatabase(database, queueNames),
+      { env },
+    )) ?? 0
+  );
 }
 
 /** Physically expire age-bounded delivery queue tombstones. */

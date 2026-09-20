@@ -36,7 +36,7 @@ import type {
 import { deliverReplies, emitTelegramMessageSentHooks } from "./bot/delivery.js";
 import { resolveTelegramReplyId } from "./bot/helpers.js";
 import type { TelegramInlineButtons } from "./button-types.js";
-import { mergeTelegramPartialDeliveryError } from "./chunk-delivery.js";
+import { failPromptContextSequence, mergeTelegramPartialDeliveryError } from "./chunk-delivery.js";
 import { canonicalizeTelegramPresentationPayload } from "./interactive-fallback.js";
 import { createLaneDeliveryStateTracker } from "./lane-delivery-state.js";
 import {
@@ -313,8 +313,7 @@ export async function sendPayload(
       }),
     });
     if (durable.status === "failed") {
-      await projectionSequence.fail();
-      throw durable.error;
+      return await failPromptContextSequence(projectionSequence, durable.error);
     }
     if (durable.status === "handled_visible") {
       turn.deliveryState.markDelivered();
@@ -345,12 +344,22 @@ export async function sendPayload(
       await projectionSequence.fail();
       return false;
     }
-    await projectionSequence.finish();
+    try {
+      await projectionSequence.finish();
+    } catch (error) {
+      if (!result.receipt?.platformMessageIds.length) {
+        throw error;
+      }
+      throw mergeTelegramPartialDeliveryError(error, {
+        receipt: result.receipt,
+        messageIds: result.receipt.platformMessageIds,
+        visibleReplySent: true,
+      });
+    }
     turn.deliveryState.markDelivered();
     return true;
   } catch (error) {
-    await projectionSequence.fail();
-    throw error;
+    return await failPromptContextSequence(projectionSequence, error);
   }
 }
 
@@ -493,20 +502,6 @@ async function deliverTelegramProgressModeFinalAnswer(
     await cleanupProgressWithoutBlockingFinal("teardown", async () => {
       await teardownProgressWindow(turn);
     });
-    const delivered = await sendPayload(turn, applyTextToPayload(payload, text), {
-      afterAcceptedDraft,
-      durable: true,
-      promptContextSequence,
-      onPlatformSendDispatch,
-      assertPlatformSendAuthorized,
-      bindPendingFinalDelivery,
-    });
-    if (!delivered) {
-      return { kind: "skipped" };
-    }
-    turn.answerLane.finalized = true;
-    markFinalDelivered(turn);
-    return { kind: "sent" };
   }
   const delivered = await sendPayload(turn, applyTextToPayload(payload, text), {
     afterAcceptedDraft,
@@ -516,11 +511,13 @@ async function deliverTelegramProgressModeFinalAnswer(
     assertPlatformSendAuthorized,
     bindPendingFinalDelivery,
   });
-  // The final must dispatch before the activity window retires, so the answer
-  // lane cannot accept follow-ups against a stale preview message.
-  await cleanupProgressWithoutBlockingFinal("teardown", async () => {
-    await teardownProgressWindow(turn);
-  });
+  if (payload.isError !== true) {
+    // The final must dispatch before the activity window retires, so the answer
+    // lane cannot accept follow-ups against a stale preview message.
+    await cleanupProgressWithoutBlockingFinal("teardown", async () => {
+      await teardownProgressWindow(turn);
+    });
+  }
   if (!delivered) {
     return { kind: "skipped" };
   }

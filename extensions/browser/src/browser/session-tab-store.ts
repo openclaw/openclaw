@@ -8,9 +8,15 @@ import {
   setBrowserStateRuntime,
 } from "../browser-runtime-state.js";
 import {
+  clearDurableTabAliases,
   rememberDurableTabAliases,
   resetDurableTabAliases,
 } from "./session-tab-ephemeral-aliases.js";
+import {
+  activeDurableStorageKeys,
+  forgetColdNativeActivity,
+  readColdNativeActivity,
+} from "./session-tab-process-state.js";
 
 const BROWSER_SESSION_TABS_NAMESPACE = "browser.session-tabs";
 const BROWSER_SESSION_TABS_MAX_ENTRIES = 5_000;
@@ -142,25 +148,28 @@ export function deleteBrowserDashboardStopIntent(intent: BrowserDashboardStopInt
 }
 
 type BrowserSessionTabStoreRuntime = {
-  state: Pick<PluginRuntime["state"], "openSyncKeyedStore">;
+  state: Pick<PluginRuntime["state"], "openSyncKeyedStore" | "openKeyedStore">;
   gateway?: PluginRuntime["gateway"];
 };
 
 /** Opens and publishes Browser's canonical durable tab store during plugin registration. */
-export function initializeBrowserSessionTabStore(runtime: BrowserSessionTabStoreRuntime): void {
-  const sessionTabs = runtime.state.openSyncKeyedStore<unknown>({
+export function initializeBrowserSessionTabStore(runtime: BrowserSessionTabStoreRuntime) {
+  const options = {
     namespace: BROWSER_SESSION_TABS_NAMESPACE,
     maxEntries: BROWSER_SESSION_TABS_MAX_ENTRIES,
-    overflowPolicy: "reject-new",
-  });
-  setBrowserStateRuntime({
+    overflowPolicy: "reject-new" as const,
+  };
+  const sessionTabs = runtime.state.openSyncKeyedStore<unknown>(options);
+  const state: ReturnType<typeof getBrowserStateRuntime> = {
     sessionTabs,
+    sessionTabDiscovery: runtime.state.openKeyedStore<unknown>(options),
     // Metadata registration must not materialize the broad host runtime.
     get gateway() {
       return runtime.gateway;
     },
     dashboardOperations: new Map(),
-  });
+  };
+  setBrowserStateRuntime(state);
   resetDurableTabAliases();
   for (const entry of sessionTabs.entries()) {
     const record = parseBrowserSessionTabRecord(entry.value);
@@ -178,6 +187,7 @@ export function initializeBrowserSessionTabStore(runtime: BrowserSessionTabStore
       record.profileAliases,
     );
   }
+  return state;
 }
 
 export function getBrowserSessionTabStore() {
@@ -210,11 +220,13 @@ function parseBrowserDashboardTab(key: string, value: unknown) {
 }
 
 /** Discovery only; reconciliation rereads current authority after awaited work. */
-export function readBrowserDashboardSessionOwners(): Array<{
-  sessionKey: string;
-  agentId?: string;
-}> {
-  const entries = getOptionalBrowserSessionTabStore()?.entries() ?? [];
+export async function readBrowserDashboardSessionOwners(): Promise<
+  Array<{
+    sessionKey: string;
+    agentId?: string;
+  }>
+> {
+  const entries = (await getOptionalBrowserStateRuntime()?.sessionTabDiscovery.entries()) ?? [];
   const dashboards = entries.flatMap(({ key, value }) => {
     const tab = parseBrowserDashboardTab(key, value);
     return tab?.dashboard ? [tab.dashboard] : [];
@@ -320,24 +332,82 @@ export function withoutBrowserSessionTabCleanup(
   return active;
 }
 
+function retireColdNativeActivityIfUnowned(
+  store: ReturnType<typeof getBrowserSessionTabStore>,
+  identity: string | undefined,
+): void {
+  if (!identity || readColdNativeActivity(identity) === undefined) {
+    return;
+  }
+  // Only observed cold identities need a scan of the bounded canonical store.
+  // Retained dashboard rows and sibling generations still own their activity.
+  const hasOwner = store.entries().some(({ key, value }) => {
+    const record = parseBrowserSessionTabRecord(value);
+    return (
+      record?.interactionTargetKind === "native" &&
+      browserSessionTabNativeIdentity(record) === identity &&
+      browserSessionTabStorageKey(record) === key
+    );
+  });
+  if (!hasOwner) {
+    forgetColdNativeActivity(identity);
+  }
+}
+
 export function updateBrowserSessionTab(
   key: string,
   update: (current: unknown) => BrowserSessionTabRecord | undefined,
 ): boolean {
-  const updateStore = getBrowserSessionTabStore().update;
+  const store = getBrowserSessionTabStore();
+  const updateStore = store.update;
   if (!updateStore) {
     throw new Error("Browser session tab store requires atomic update support");
   }
-  return updateStore(key, update);
+  let retiredIdentity: string | undefined;
+  const updated = updateStore(key, (current) => {
+    const previous = parseBrowserSessionTabRecord(current);
+    const next = update(current);
+    if (
+      previous?.interactionTargetKind === "native" &&
+      (next?.interactionTargetKind !== "native" ||
+        browserSessionTabNativeIdentity(previous) !== browserSessionTabNativeIdentity(next))
+    ) {
+      retiredIdentity = browserSessionTabNativeIdentity(previous);
+    }
+    return next;
+  });
+  if (updated) {
+    retireColdNativeActivityIfUnowned(store, retiredIdentity);
+  }
+  return updated;
 }
 
 export function deleteBrowserSessionTabIf(
   key: string,
   predicate: (current: unknown) => boolean,
 ): boolean {
-  const deleteIf = getBrowserSessionTabStore().deleteIf;
+  const store = getBrowserSessionTabStore();
+  const deleteIf = store.deleteIf;
   if (!deleteIf) {
     throw new Error("Browser session tab store requires atomic deleteIf support");
   }
-  return deleteIf(key, predicate);
+  let removed: BrowserSessionTabRecord | undefined;
+  const deleted = deleteIf(key, (current) => {
+    if (!predicate(current)) {
+      return false;
+    }
+    removed = parseBrowserSessionTabRecord(current);
+    return true;
+  });
+  if (deleted) {
+    clearDurableTabAliases(key);
+    activeDurableStorageKeys().delete(key);
+    retireColdNativeActivityIfUnowned(
+      store,
+      removed?.interactionTargetKind === "native"
+        ? browserSessionTabNativeIdentity(removed)
+        : undefined,
+    );
+  }
+  return deleted;
 }

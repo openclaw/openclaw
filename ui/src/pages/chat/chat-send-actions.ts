@@ -1,18 +1,14 @@
-import type { QueueMode } from "../../../../packages/gateway-protocol/src/schema/logs-chat.js";
-import { GatewayRequestError, type GatewayEventFrame } from "../../api/gateway.ts";
+import type { GatewayEventFrame } from "../../api/gateway.ts";
 import { t } from "../../i18n/index.ts";
 import {
   chatQueueMovableSegments,
   isMovableChatQueueItem,
   reorderChatQueueItems,
 } from "../../lib/chat/chat-queue-order.ts";
-import type { ChatAttachment, ChatQueueItem, HumanMention } from "../../lib/chat/chat-types.ts";
-import { trimHumanMentions } from "../../lib/chat/human-mentions.ts";
+import type { ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import { hasUiSessionDefaults } from "../../lib/sessions/session-key.ts";
 import { generateUUID } from "../../lib/uuid.ts";
-import { loadChatBranches } from "./chat-history-branches.ts";
 import { isInitialChatHistoryUnavailable } from "./chat-history-state.ts";
-import { loadChatHistory } from "./chat-history.ts";
 import {
   flushStoredChatOutbox,
   resumeStoredChatOutboxes as resumeStoredChatOutboxesDrain,
@@ -34,82 +30,14 @@ import {
   reconnectSafeQueuedSendState,
   setChatError,
 } from "./chat-send-queue-state.ts";
-import {
-  isActiveLeafChangedError,
-  requestChatSend,
-  resolveDisplayedLeafEntryId,
-} from "./chat-send-request.ts";
 import { OFFLINE_QUEUE_STORAGE_ERROR } from "./chat-send-support.ts";
-import type { ChatHistoryHost } from "./chat-state-contract.ts";
 import { storedChatOutboxScopeKey } from "./composer-persistence.ts";
-import { formatConnectError } from "./connect-error.ts";
 import {
   isQueuedMessageBeingEdited,
   QUEUED_MESSAGE_RETRY_CONFLICT_ERROR,
   QUEUED_MESSAGE_REORDER_CONFLICT_ERROR,
   QUEUED_MESSAGE_STEER_CONFLICT_ERROR,
 } from "./queued-message-edit.ts";
-
-function applyChatSendError(
-  state: ChatHistoryHost,
-  err: unknown,
-  canApplyError: () => boolean,
-): string {
-  const error = isActiveLeafChangedError(err)
-    ? t("chat.sendErrors.activeLeafChanged")
-    : formatConnectError(err);
-  if (canApplyError()) {
-    setChatError(state, error);
-    if (isActiveLeafChangedError(err)) {
-      void Promise.all([loadChatHistory(state), loadChatBranches(state)]);
-    }
-  }
-  return error;
-}
-
-export async function sendChatMessageWithGeneratedRunId(
-  state: ChatHistoryHost,
-  message: string,
-  attachments?: ChatAttachment[],
-  options: {
-    canApplyError?: () => boolean;
-    expectedLeafEntryId?: string | null;
-    mentions?: readonly HumanMention[];
-    queueMode?: QueueMode;
-    replyToId?: string;
-    runId?: string;
-  } = {},
-) {
-  const submitted = trimHumanMentions(message, options.mentions);
-  if (!state.client || !state.connected || (!submitted.text && !attachments?.length)) {
-    return null;
-  }
-  const canApplyError = options.canApplyError ?? (() => true);
-  if (canApplyError()) {
-    setChatError(state, null);
-  }
-  const runId = options.runId ?? generateUUID();
-  // Direct sends fail closed on the authoritative leaf; restored drains omit it.
-  const expectedLeafEntryId = resolveDisplayedLeafEntryId(state);
-  try {
-    return await requestChatSend(state, {
-      message: submitted.text,
-      mentions: submitted.mentions,
-      attachments,
-      runId,
-      ...(options.queueMode !== "steer" && options.expectedLeafEntryId !== undefined
-        ? { expectedLeafEntryId: options.expectedLeafEntryId }
-        : options.queueMode !== "steer" && expectedLeafEntryId !== undefined
-          ? { expectedLeafEntryId }
-          : {}),
-      ...(options.queueMode ? { queueMode: options.queueMode } : {}),
-      ...(options.replyToId ? { replyToId: options.replyToId } : {}),
-    });
-  } catch (err) {
-    const error = applyChatSendError(state, err, canApplyError);
-    return err instanceof GatewayRequestError ? { kind: "rejected" as const, error } : null;
-  }
-}
 
 const resetRetryState = (
   entry: ChatQueueItem,
@@ -160,8 +88,6 @@ export const resumeStoredChatOutboxes = (host: ChatHost, event?: GatewayEventFra
 
 export const flushChatQueueForEvent = (host: ChatHost) =>
   flushStoredChatOutbox(host, chatOutboxDrainDependencies);
-
-export const retryReconnectableQueuedChatSends = resumeStoredChatOutboxes;
 
 /**
  * Moves a queued row to the target row's position in its own movable segment. A locked row
@@ -248,6 +174,7 @@ export async function retryQueuedChatMessage(host: ChatHost, id: string) {
     !item ||
     item.pendingRunId ||
     item.sendState === "executing-command" ||
+    item.sendState === "submitting" ||
     item.sendState === "sending" ||
     item.sendState === "waiting-model"
   ) {

@@ -147,7 +147,33 @@ describe("Code Mode guest execution", () => {
     expect(testing.resumingRunIds.size).toBe(0);
   });
 
-  it("does not invoke arbitrary toJSON methods while serializing final values", async () => {
+  it.each([
+    { kind: "own", setup: "", value: "result", expected: { invoked: false } },
+    {
+      kind: "object prototype",
+      setup: "Object.prototype.toJSON = result.value.toJSON;",
+      value: "({ kept: true })",
+      expected: { kept: true },
+    },
+    {
+      kind: "array prototype",
+      setup: "Array.prototype.toJSON = result.value.toJSON;",
+      value: "[1, 2]",
+      expected: [1, 2],
+    },
+    {
+      kind: "bigint prototype",
+      setup: "BigInt.prototype.toJSON = result.value.toJSON;",
+      value: "12n",
+      expected: "12",
+    },
+    {
+      kind: "date prototype",
+      setup: "Date.prototype.toJSON = result.value.toJSON;",
+      value: "new Date(0)",
+      expected: {},
+    },
+  ])("does not invoke $kind toJSON while serializing final values", async (scenario) => {
     const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
     const noop = pluginTool("fake_noop", "Noop");
     applyCodeModeCatalog({
@@ -171,13 +197,14 @@ describe("Code Mode guest execution", () => {
             return "changed";
           },
         };
-        return result;
+        ${scenario.setup}
+        return ${scenario.value};
       `,
     });
 
     expect(details).toMatchObject({
       status: "completed",
-      value: { invoked: false },
+      value: scenario.expected,
       telemetry: { searchCount: 0, describeCount: 0, callCount: 0 },
     });
     expect(noop.execute).not.toHaveBeenCalled();
@@ -337,9 +364,9 @@ describe("Code Mode guest execution", () => {
     const { config, catalogRef, tools: codeModeTools } = createCodeModeHarness();
     const privateNames = [
       "__openclawResult",
-      "__openclawSerializeCatalogHandles",
+      "__openclawRunCell",
       "__openclawSettleBridge",
-      "__openclawTakeOutput",
+      "__openclawTakeOutputJson",
       "__openclawFuturePrivateHook",
     ];
     const targets = privateNames.map((name) => pluginTool(name, `Exercise ${name}`));

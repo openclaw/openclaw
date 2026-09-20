@@ -12,6 +12,9 @@ type PluginSdkDocMetadata = {
 };
 
 export const pluginSdkDocMetadata = {
+  "control-ui-link-reader": {
+    category: "core",
+  },
   core: {
     category: "core",
   },
@@ -100,6 +103,9 @@ export const pluginSdkDocMetadata = {
     category: "runtime",
   },
   "agent-harness-runtime": {
+    category: "runtime",
+  },
+  "agent-workspace-runtime": {
     category: "runtime",
   },
   "speech-settings": {

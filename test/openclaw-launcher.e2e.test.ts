@@ -1,5 +1,5 @@
 // OpenClaw launcher E2E tests validate launcher process behavior.
-import { spawn, spawnSync } from "node:child_process";
+import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { once } from "node:events";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -7,14 +7,22 @@ import { pathToFileURL } from "node:url";
 import { build as esbuild } from "esbuild";
 import { afterEach, describe, expect, it } from "vitest";
 import { parseNodeReleaseVersion } from "../node-version.mjs";
+import { resolveTestNodeExecPath } from "../src/test-utils/node-process.js";
 import { NODE_RELEASE_VERSION_CASES } from "./helpers/node-version-cases.js";
 import { cleanupTempDirs, makeTempDir } from "./helpers/temp-dir.js";
+
+// Node version fixtures must enter Node admission even when Vitest runs under Bun.
+const testNodeExecPath = resolveTestNodeExecPath();
 
 async function makeLauncherFixture(fixtureRoots: string[]): Promise<string> {
   const fixtureRoot = makeTempDir(fixtureRoots, "openclaw-launcher-");
   await fs.copyFile(
     path.resolve(process.cwd(), "openclaw.mjs"),
     path.join(fixtureRoot, "openclaw.mjs"),
+  );
+  await fs.copyFile(
+    path.resolve(process.cwd(), "node-host-launcher.mjs"),
+    path.join(fixtureRoot, "node-host-launcher.mjs"),
   );
   await fs.copyFile(
     path.resolve(process.cwd(), "node-version.mjs"),
@@ -189,7 +197,7 @@ describe("openclaw launcher", () => {
       );
       if (params.cached) {
         await fs.mkdir(path.dirname(nodePath), { recursive: true });
-        await fs.symlink(process.execPath, nodePath);
+        await fs.symlink(testNodeExecPath, nodePath);
       }
       const installLog = path.join(root, "installer.json");
       const preload = path.join(root, "legacy-node.mjs");
@@ -249,7 +257,7 @@ describe("openclaw launcher", () => {
       }
       const run = (input: string, args = ["status"], env: NodeJS.ProcessEnv = {}, cwd = root) =>
         spawnSync(
-          process.execPath,
+          testNodeExecPath,
           ["--import", pathToFileURL(preload).href, path.join(root, "openclaw.mjs"), ...args],
           {
             cwd,
@@ -486,7 +494,10 @@ describe("openclaw launcher", () => {
     });
 
     it("keeps a supported active Node even when a private runtime exists", async () => {
-      const fixture = await prepareRecovery({ cached: true, version: process.versions.node });
+      const version = execFileSync(testNodeExecPath, ["--print", "process.versions.node"], {
+        encoding: "utf8",
+      }).trim();
+      const fixture = await prepareRecovery({ cached: true, version });
       const result = fixture.run("");
       expect(result.status, result.stderr).toBe(17);
       expect(result.stderr).not.toContain("Node.js");
@@ -555,7 +566,7 @@ describe("openclaw launcher", () => {
       'Object.defineProperty(process.versions, "node", { value: "22.23.2" });',
     );
     const result = spawnSync(
-      process.execPath,
+      testNodeExecPath,
       ["--import", pathToFileURL(preload).href, path.join(root, "openclaw.mjs"), ...args],
       {
         cwd: root,
@@ -588,7 +599,7 @@ describe("openclaw launcher", () => {
       );
 
       const result = spawnSync(
-        process.execPath,
+        testNodeExecPath,
         [
           "--import",
           pathToFileURL(mockNodeVersionPath).href,
@@ -628,7 +639,7 @@ describe("openclaw launcher", () => {
     );
 
     const result = spawnSync(
-      process.execPath,
+      testNodeExecPath,
       ["--import", pathToFileURL(legacyRuntimePath).href, path.join(fixtureRoot, "openclaw.mjs")],
       {
         cwd: fixtureRoot,

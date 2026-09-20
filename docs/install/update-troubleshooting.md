@@ -84,6 +84,111 @@ The controls require a connected Gateway, support for the corresponding typed
 Gateway method, and administrator scope. When those conditions are not met, use
 the CLI fallback on the Gateway host.
 
+## Node and global install permissions
+
+For `node-runtime-preflight`, upgrade the runtime named in the message to a
+version satisfying both the candidate's full engine range and the updater's
+supported Node range. The suggested version is the lowest supported release in
+that intersection. Follow the recovery steps for the detected runtime manager
+(nvm, fnm, Volta, or system Node). The next step runs `update` through the
+original installation's absolute `openclaw.mjs` launcher using the selected Node.
+It does not rely on `openclaw` remaining on PATH after a version-manager switch,
+or recommend a global install into an uninspected prefix. Extended-stable recovery
+uses `--channel extended-stable` so the resolver selects the supported monthly
+release; other package channels retain the inspected version with `--tag`.
+An explicit channel switch is included in recovery because the runtime refusal
+happens before that preference is saved. If an already-current service is stopped
+or its definition cannot be refreshed, have its deployment owner select the
+supported Node in that definition before retrying. Switching the shell runtime
+does not change a service's pinned Node path.
+
+Keep the same service account, profile, and state/config overrides. Recovery
+restores the recorded service selectors, including overrides absent from your
+shell; credentials are not included. The ordinary update invocation rechecks
+the selected npm prefix and managed service before installation, and retains
+the original package owner. Its normal runtime selection, service refresh,
+restart, and verification checks apply. Containers redeploy the target image
+with the same state/config mounts.
+
+`global-install-foreign-destination` means the selected prefix is foreign or its
+ownership could not be established. An inaccessible prefix, failed npm prefix
+probe, or unreadable layout stops the update before staging; an unknown
+destination is never treated as empty. Restore inspection access or make
+`npm prefix -g` succeed with the selected runtime. Ask the deployment owner to
+verify unreadable layouts and explicitly select the intended installation.
+The report names the destination (or says that npm could not resolve it), the cause,
+and the selected service's launcher when available. Switch the runtime back and
+retry through the retained absolute launcher. Alternatively, with the destination
+owner's agreement, explicitly select that installation for the intended service
+using a printed `gateway install --force` command when available, then update. This changes
+the service binding; it is not permission to overwrite another deployment's
+package. A protected service definition uses deployment-owner instructions instead;
+`--force` cannot replace a sealed mount. Dry-run returns the same refusal. Recorded attempts remain in update
+history and are shown by Doctor.
+
+If the ranges do not overlap, install a supported Node and select a compatible
+OpenClaw target; that candidate cannot run through this updater on a supported
+Node release. See [Node.js](/install/node).
+
+For `global-install-permission-denied`, check the named directory and owner.
+If you own the directory, the message gives a scoped `chmod u+rwx` command.
+For an administrator-owned npm prefix, have that account perform the package
+update or grant the intended updater write access. Keep the Gateway's existing
+state and configuration; invoking the whole updater with `sudo` can select a
+different home and service account. Do not recursively change ownership of a
+shared system prefix. A personal install can instead use a
+[user-writable npm prefix](/install/node#permission-errors-on-npm-install-g-linux).
+
+Permission errors discovered after admission carry the same reason. The report's
+rollback and service-recovery constraints still apply if activation had begun.
+Inside a container, the same next action also directs you to pull or build the
+target OpenClaw image and redeploy with the same state/config mounts. Package
+changes inside a running container are not durable.
+
+## Published 2026.9.4 on large agent fleets
+
+Published OpenClaw 2026.9.4 can spend many minutes preparing model catalogs and
+chat metadata after its HTTP listener binds. In an instrumented 480-agent
+control with no update, HTTP probes remained unanswered during 944 seconds of
+observation; the Gateway then logged `ready` at 947.5 seconds. Stopping that
+instance eventually required systemd's existing 5-minute-30-second stop limit.
+These are measurements of one synthetic fixture, not expected startup budgets.
+
+A second, uninstrumented 480-agent control first passed signed Gateway
+handshake, serving-build, and health-RPC checks, then lost HTTP responsiveness
+without any update. The 25-minute post-readiness control completed; sampled
+failures spanned 24 minutes before a final three-minute serving check also
+failed. The original PID and installation remained. Shared schema 17, all 481
+physical agent databases at schema 19, and config bytes stayed unchanged;
+captured state-maintenance leases were empty.
+
+The main thread consumed nearly one CPU core. Logs showed existing scheduled
+review attempts, fleet-wide integrity checks, and memory-plugin startup cleanup
+errors. This reproduces a published Gateway fleet preparation/background
+maintenance availability problem independently of updating. Its exact JavaScript
+hot loop remains unprofiled, and the original failed-update run lacked the
+live-state evidence needed to exclude an additional state or recovery defect.
+A retained package, PID, or `serviceRestartSafe: true` does not establish that
+the previous Gateway is serving.
+See [the investigation](https://github.com/openclaw/openclaw/issues/151295).
+
+Before recovery, preserve the update report and a
+[verified backup](/install/updating/rollback-and-recovery#before-updating-create-a-verified-backup).
+Keep the same service account, profile, package manager, and installation prefix.
+Have that installation's owner stop the Gateway and other writers before manual
+replacement. When the installed updater cannot complete, use the
+[manual package-manager procedure](/install/updating/update-methods#alternative-manual-npm-pnpm-or-bun)
+with an exact target compatible with the retained state, then run the target's
+`openclaw doctor --fix` before starting its Gateway. If the retained binary
+cannot read the current state, follow
+[backup recovery](/install/updating/rollback-and-recovery#downgrade); changing
+schema markers or deleting lease rows does not reverse migrations.
+
+Verify the actual serving version/build through an authenticated Gateway RPC
+and check `/readyz` before declaring recovery or removing backups. The
+plain-start control did not verify these recovery steps or establish that
+restarting the same 2026.9.4 fleet resolves the failed-update condition.
+
 ## Plugin repair warnings
 
 Doctor's configured-plugin repair and payload-verification warnings do not block

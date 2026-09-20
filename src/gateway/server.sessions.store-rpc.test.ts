@@ -6,14 +6,15 @@ import { expect, test, vi } from "vitest";
  * Gateway session store RPC tests.
  */
 import * as sessionDirs from "../agents/session-dirs.js";
-import {
-  loadSessionEntry,
-  loadTranscriptEvents,
-  persistSessionTranscriptTurn,
-} from "../config/sessions/session-accessor.js";
+import { loadSessionEntry } from "../config/sessions/session-accessor.js";
 import type { CronJob } from "../cron/types.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { deliveryContextFromSession } from "../utils/delivery-context.shared.js";
+import { initializeSessionReadContext } from "./server-methods/sessions-read-cache.test-support.js";
+import {
+  loadTranscriptRows,
+  seedLinearTranscript,
+} from "./server.sessions.store-rpc.test-helpers.js";
 import { agentDiscoveryMock, rpcReq, testState, writeSessionStore } from "./test-helpers.js";
 import {
   directSessionReq as directSessionHandlerReq,
@@ -26,37 +27,6 @@ const { createSessionStoreDir, defaultAgentWorkspace, openClient } =
   setupGatewaySessionsTestHarness();
 
 type SessionPatchResponse = { ok: true; key: string; entry: Record<string, unknown> };
-
-async function seedLinearTranscript(params: {
-  contents: string[];
-  sessionId: string;
-  sessionKey: string;
-  storePath: string;
-}): Promise<void> {
-  await persistSessionTranscriptTurn(
-    {
-      agentId: "main",
-      sessionId: params.sessionId,
-      sessionKey: params.sessionKey,
-      storePath: params.storePath,
-    },
-    {
-      updateMode: "none",
-      messages: params.contents.map((content, index) => ({
-        message: { role: "user", content, timestamp: index + 1 },
-        now: Date.parse(`2026-06-19T12:00:${String(index + 1).padStart(2, "0")}.000Z`),
-      })),
-    },
-  );
-}
-
-async function loadTranscriptRows(params: {
-  sessionId: string;
-  sessionKey: string;
-  storePath: string;
-}): Promise<unknown[]> {
-  return await loadTranscriptEvents({ agentId: "main", ...params });
-}
 
 test("sessions.patch validates persistent session icons", async () => {
   const invalid = await directSessionHandlerReq("sessions.patch", {
@@ -171,6 +141,7 @@ test("lists and patches session store via sessions.* RPC", async () => {
           error?: unknown;
         }
       | undefined;
+    await initializeSessionReadContext(directContext as never);
     await expectDefined(
       sessionsHandlers[method],
       "sessionsHandlers[method] test invariant",
@@ -721,6 +692,8 @@ test("sessions.list configuredAgentsOnly keeps configured-agent children and hid
       agentId: "local",
       entries: { main: { sessionId: "sess-local", updatedAt: 10 } },
     });
+    // Physical stores hydrate once before either warm selection policy runs.
+    await directSessionHandlerReq("sessions.list", { includeGlobal: false, includeUnknown: false });
     const enumerateAgentDirs = vi.spyOn(sessionDirs, "resolveAgentSessionDirsFromAgentsDirSync");
     try {
       const configuredOnly = await directSessionHandlerReq<{ sessions: Array<{ key: string }> }>(
@@ -748,7 +721,7 @@ test("sessions.list configuredAgentsOnly keeps configured-agent children and hid
         mainKey,
         "agent:local:main",
       ]);
-      expect(enumerateAgentDirs).toHaveBeenCalled();
+      expect(enumerateAgentDirs).not.toHaveBeenCalled();
     } finally {
       enumerateAgentDirs.mockRestore();
     }

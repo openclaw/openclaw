@@ -73,84 +73,7 @@ export type ModelProviderRequestTransportOverrides = ProviderRequestTransportOve
   allowPrivateNetwork?: boolean;
 };
 
-// Resolved request config separates configured vs default state so transports
-// can decide whether to inject provider defaults or operator-provided headers.
-type ResolvedProviderRequestAuthConfig =
-  | {
-      configured: false;
-      mode: "provider-default" | "authorization-bearer";
-      injectAuthorizationHeader: boolean;
-    }
-  | {
-      configured: true;
-      mode: "authorization-bearer";
-      headerName: "Authorization";
-      value: string;
-      injectAuthorizationHeader: true;
-    }
-  | {
-      configured: true;
-      mode: "header";
-      headerName: string;
-      value: string;
-      prefix?: string;
-      injectAuthorizationHeader: false;
-    };
-
-type ResolvedProviderRequestProxyConfig =
-  | {
-      configured: false;
-    }
-  | {
-      configured: true;
-      mode: "env-proxy";
-      tls: ResolvedProviderRequestTlsConfig;
-    }
-  | {
-      configured: true;
-      mode: "explicit-proxy";
-      proxyUrl: string;
-      tls: ResolvedProviderRequestTlsConfig;
-    };
-
-type ResolvedProviderRequestTlsConfig =
-  | {
-      configured: false;
-    }
-  | {
-      configured: true;
-      ca?: string;
-      cert?: string;
-      key?: string;
-      passphrase?: string;
-      serverName?: string;
-      rejectUnauthorized?: boolean;
-    };
-
-type ResolvedProviderRequestExtraHeadersConfig = {
-  configured: boolean;
-  headers?: Record<string, string>;
-};
-
-type ResolvedProviderRequestConfig = {
-  api?: RequestApi;
-  baseUrl?: string;
-  headers?: Record<string, string>;
-  extraHeaders: ResolvedProviderRequestExtraHeadersConfig;
-  auth: ResolvedProviderRequestAuthConfig;
-  proxy: ResolvedProviderRequestProxyConfig;
-  tls: ResolvedProviderRequestTlsConfig;
-};
-
 type ProviderRequestHeaderPrecedence = "caller-wins" | "defaults-win";
-
-// Policy config includes the resolved transport plus attribution/security facts
-// required before a provider request can be attached to a model call.
-type ResolvedProviderRequestPolicyConfig = ResolvedProviderRequestConfig & {
-  allowPrivateNetwork: boolean;
-  trustConfiguredBaseUrlOrigin: boolean;
-  capabilities: ProviderRequestCapabilities;
-};
 
 const FORBIDDEN_HEADER_KEYS = new Set(["__proto__", "prototype", "constructor"]);
 const FORBIDDEN_INSECURE_TLS_MESSAGE =
@@ -444,11 +367,9 @@ function mergeProviderRequestHeaders(
   return merged && Object.keys(merged).length > 0 ? merged : undefined;
 }
 
-function resolveTlsOverride(
-  tls: ProviderRequestTlsOverride | undefined,
-): ResolvedProviderRequestTlsConfig {
+function resolveTlsOverride(tls: ProviderRequestTlsOverride | undefined) {
   if (!tls) {
-    return { configured: false };
+    return { configured: false } as const;
   }
   if (tls.insecureSkipVerify === true) {
     throw new Error(FORBIDDEN_INSECURE_TLS_MESSAGE);
@@ -460,7 +381,7 @@ function resolveTlsOverride(
   const serverName = tls.serverName?.trim();
   const rejectUnauthorized = tls.insecureSkipVerify === false ? true : undefined;
   if (!ca && !cert && !key && !passphrase && !serverName && rejectUnauthorized === undefined) {
-    return { configured: false };
+    return { configured: false } as const;
   }
   return {
     configured: true,
@@ -470,13 +391,15 @@ function resolveTlsOverride(
     ...(passphrase ? { passphrase } : {}),
     ...(serverName ? { serverName } : {}),
     ...(rejectUnauthorized !== undefined ? { rejectUnauthorized } : {}),
-  };
+  } as const;
 }
+
+type ResolvedProviderRequestTlsConfig = ReturnType<typeof resolveTlsOverride>;
 
 function resolveAuthOverride(params: {
   authHeader?: boolean;
   request?: ProviderRequestTransportOverrides;
-}): ResolvedProviderRequestAuthConfig {
+}) {
   const auth = params.request?.auth;
   if (auth?.mode === "authorization-bearer") {
     const value = auth.token.trim();
@@ -487,7 +410,7 @@ function resolveAuthOverride(params: {
         headerName: "Authorization",
         value,
         injectAuthorizationHeader: true,
-      };
+      } as const;
     }
   }
   if (auth?.mode === "header") {
@@ -502,15 +425,17 @@ function resolveAuthOverride(params: {
         value,
         ...(prefix ? { prefix } : {}),
         injectAuthorizationHeader: false,
-      };
+      } as const;
     }
   }
   return {
     configured: false,
     mode: params.authHeader ? "authorization-bearer" : "provider-default",
     injectAuthorizationHeader: params.authHeader === true,
-  };
+  } as const;
 }
+
+type ResolvedProviderRequestAuthConfig = ReturnType<typeof resolveAuthOverride>;
 
 /** Sanitizes runtime-only provider request overrides for auth request paths. */
 function sanitizeRuntimeProviderRequestOverrides(
@@ -578,12 +503,10 @@ export function applyPreparedRuntimeAuthToModel<
     : next;
 }
 
-function resolveProxyOverride(
-  request: ProviderRequestTransportOverrides | undefined,
-): ResolvedProviderRequestProxyConfig {
+function resolveProxyOverride(request: ProviderRequestTransportOverrides | undefined) {
   const proxy = request?.proxy;
   if (!proxy) {
-    return { configured: false };
+    return { configured: false } as const;
   }
   const tls = resolveTlsOverride(proxy.tls);
   if (proxy.mode === "env-proxy") {
@@ -591,18 +514,18 @@ function resolveProxyOverride(
       configured: true,
       mode: "env-proxy",
       tls,
-    };
+    } as const;
   }
   const proxyUrl = proxy.url.trim();
   if (!proxyUrl) {
-    return { configured: false };
+    return { configured: false } as const;
   }
   return {
     configured: true,
     mode: "explicit-proxy",
     proxyUrl,
     tls,
-  };
+  } as const;
 }
 
 function applyResolvedAuthHeader(
@@ -683,7 +606,7 @@ export function buildProviderRequestDispatcherPolicy(
 /** Resolves the full provider request policy, headers, auth, proxy, and TLS config. */
 export function resolveProviderRequestPolicyConfig(
   params: ResolveProviderRequestPolicyConfigParams,
-): ResolvedProviderRequestPolicyConfig {
+) {
   const baseUrl = normalizeBaseUrl(params.baseUrl, params.defaultBaseUrl);
   const capability = params.capability ?? "llm";
   const transport = params.transport ?? "http";
@@ -768,7 +691,7 @@ export function resolveProviderRequestConfig(params: {
   modelHeaders?: Record<string, string>;
   authHeader?: boolean;
   request?: ProviderRequestTransportOverrides;
-}): ResolvedProviderRequestConfig {
+}) {
   const resolved = resolveProviderRequestPolicyConfig(params);
   return {
     api: resolved.api,
@@ -783,6 +706,8 @@ export function resolveProviderRequestConfig(params: {
     tls: resolved.tls,
   };
 }
+
+type ResolvedProviderRequestConfig = ReturnType<typeof resolveProviderRequestConfig>;
 
 /** Resolves final headers for one provider request route. */
 export function resolveProviderRequestHeaders(params: {

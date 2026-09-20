@@ -27,6 +27,7 @@ import {
 } from "./install-wizard-model.ts";
 import { renderPluginInstallWizard } from "./install-wizard.ts";
 import type { PluginDiscoveryController } from "./plugin-discovery-controller.ts";
+import type { PluginHelpController } from "./plugin-help-controller.ts";
 import { renderPluginRowMessage, type PluginRowMessage } from "./plugin-row-message.ts";
 import type { PluginsConsentController } from "./plugins-consent-controller.ts";
 import { renderPluginsHubHeader } from "./plugins-hub-header.ts";
@@ -89,6 +90,7 @@ type PluginsPageViewActions = {
 
 export type PluginsPageViewModel = {
   renderCredential?: PluginSettingsEditor["renderCredential"];
+  help?: PluginHelpController;
   context: ApplicationContext;
   routeData?: PluginsRouteData;
   surface: "discovery" | "settings";
@@ -119,6 +121,9 @@ export type PluginsPageViewModel = {
 };
 
 export function renderPluginsPage(model: PluginsPageViewModel) {
+  model.help?.update(model);
+  const ask = model.help?.available ? model.help.ask : undefined;
+  const onAskPlugin = ask ? () => void ask() : undefined;
   const {
     actions,
     catalogDetail,
@@ -180,6 +185,8 @@ export function renderPluginsPage(model: PluginsPageViewModel) {
     onConfigReadRetry: actions.retryConfigRead,
     onConfigWriteRetry: actions.retryConfigWrite,
     onRefresh: actions.refreshCatalog,
+    onAskPlugin,
+    onAskSetting: ask,
   };
 
   const renderInstalled = (pluginId: string) => {
@@ -258,6 +265,7 @@ export function renderPluginsPage(model: PluginsPageViewModel) {
                   ? detailPluginId
                     ? renderInstalled(detailPluginId)
                     : renderPluginCatalogDetail({
+                        onAskPlugin,
                         connected: model.connected,
                         skillsSection: catalogSkillsSection,
                         result: catalogDetail.result,

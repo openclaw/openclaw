@@ -240,7 +240,7 @@ describe("SystemAgentChatEngine approval", () => {
       );
 
       expect(createAgent).toHaveBeenCalledWith({
-        name: "researcher",
+        entry: { id: "researcher" },
         workspace: "/tmp/researcher",
         provenance: { createdVia: "agent", creatorAgentId: expectedCreatorAgentId },
       });
@@ -341,7 +341,7 @@ describe("SystemAgentChatEngine approval", () => {
     expect(reply.text).not.toContain("Your agent is hatching");
   });
 
-  it("routes model provider changes out of the active inference session", async () => {
+  it("keeps provider setup non-mutating and directs the operator to Models", async () => {
     const engine = new SystemAgentChatEngine({
       surface: "gateway",
       runAgentTurn: async () => ({ text: "noted" }),
@@ -353,15 +353,10 @@ describe("SystemAgentChatEngine approval", () => {
     expect(reply.action).toBe("none");
     expect(reply.handoff).toBeUndefined();
     expect(reply.sensitive).toBeUndefined();
-    expect(reply.text).toContain("replace the inference route powering this session");
-    // A gateway reader is in a browser or the app and cannot "exit OpenClaw"
-    // into a shell; the copy must name where the command runs instead.
-    expect(reply.text).toContain("`openclaw onboard`");
-    expect(reply.text).toContain("machine running OpenClaw");
-    expect(reply.text).toContain("Stop the OpenClaw host");
-    expect(reply.text).toContain("restart the host");
-    expect(reply.text).toContain("return to OpenClaw");
-    expect(reply.text).not.toContain("Exit OpenClaw");
+    expect(reply.text).toContain("Settings → Models → Connect provider");
+    expect(reply.text).toContain("Connecting another provider does not select it");
+    expect(reply.text).toContain("never in chat");
+    expect(reply.text).not.toContain("openclaw onboard");
   });
 
   it("drops the proposal when the user declines", async () => {

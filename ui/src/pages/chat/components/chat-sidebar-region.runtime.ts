@@ -14,6 +14,7 @@ import {
 import { renderPanelTabStrip, type PanelTabStripTab } from "../../../components/panel-tab-strip.ts";
 import {
   BROWSER_PANEL_TOGGLE_EVENT,
+  LINK_READER_PANEL_TOGGLE_EVENT,
   TERMINAL_PANEL_TOGGLE_EVENT,
   type PanelToggleElement,
 } from "../../../components/panel-toggle-contract.ts";
@@ -234,6 +235,14 @@ class ChatSidebarRegion extends OpenClawLightDomElement {
                 }),
               );
             }
+            if (slot === "link-reader" && openSlots.has(slot)) {
+              this.deliverPanelEvent(
+                slot,
+                new CustomEvent(LINK_READER_PANEL_TOGGLE_EVENT, {
+                  detail: { open: true, newTab: true },
+                }),
+              );
+            }
             if (slot === "terminal" && openSlots.has(slot)) {
               this.deliverPanelEvent(
                 slot,
@@ -257,7 +266,10 @@ class ChatSidebarRegion extends OpenClawLightDomElement {
         ${this.panelTypes()
           .filter(
             (type) =>
-              type.slot === "browser" || type.slot === "terminal" || !openSlots.has(type.slot),
+              type.slot === "browser" ||
+              type.slot === "terminal" ||
+              type.slot === "link-reader" ||
+              !openSlots.has(type.slot),
           )
           .map(
             (type) => html`
@@ -527,7 +539,11 @@ class ChatSidebarRegion extends OpenClawLightDomElement {
         dock === "bottom"
           ? (panel?.getBoundingClientRect().height ?? column.height)
           : (panel?.getBoundingClientRect().width ?? column.width);
-      return { primarySize, panelSize, total: primarySize + panelSize };
+      // Grid columns mirror in RTL; divider ratios follow physical left/top movement.
+      const panelBeforeMain =
+        dock !== "bottom" &&
+        (dock === "left") !== (getComputedStyle(shell ?? this).direction === "rtl");
+      return { primarySize, panelSize, panelBeforeMain, total: primarySize + panelSize };
     };
     return renderChatResizableDivider({
       className: "sidebar-column__divider",
@@ -537,8 +553,8 @@ class ChatSidebarRegion extends OpenClawLightDomElement {
       minRatio: 0.05,
       maxRatio: 0.95,
       measureRatio: () => {
-        const { primarySize, panelSize, total } = measure();
-        return total > 0 ? (dock === "left" ? panelSize : primarySize) / total : 0.5;
+        const { primarySize, panelSize, panelBeforeMain, total } = measure();
+        return total > 0 ? (panelBeforeMain ? panelSize : primarySize) / total : 0.5;
       },
       measureSize: () => measure().total,
       onResize: (event) => {
@@ -549,9 +565,11 @@ class ChatSidebarRegion extends OpenClawLightDomElement {
             : this.availableWidth > 0
               ? this.availableWidth
               : (bounds?.width ?? 0);
-        const total = measure().total || regionSize;
+        const measured = measure();
+        const total = measured.total || regionSize;
         const requested =
-          total * (dock === "left" ? event.detail.splitRatio : 1 - event.detail.splitRatio);
+          total *
+          (measured.panelBeforeMain ? event.detail.splitRatio : 1 - event.detail.splitRatio);
         const minimum = dock === "bottom" ? SIDEBAR_MIN_HEIGHT_PX : SIDEBAR_MIN_WIDTH_PX;
         const maximum = Math.max(minimum, regionSize * 0.6);
         this.callbacks?.resizePanel(column.id, Math.max(minimum, Math.min(requested, maximum)));

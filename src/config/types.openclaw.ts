@@ -88,7 +88,7 @@ export type OpenClawConfig = {
     /** Last OpenClaw version that wrote this config. */
     lastTouchedVersion?: string;
     /** One-time doctor migrations already applied to this config. */
-    migrations?: { modelPolicyAllowlist?: true };
+    migrations?: { modelPolicyAllowlist?: true; utilityModelSeparation?: true };
   };
   /** Authentication provider/profile configuration. */
   auth?: AuthConfig;

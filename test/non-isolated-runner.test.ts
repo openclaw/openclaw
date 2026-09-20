@@ -51,6 +51,12 @@ afterEach(() => {
   if (${detachEarly}) wrapper.remove();
 });
 it("establishes native focus before file cleanup", () => {
+  const previous = document.body.appendChild(document.createElement("input"));
+  // Initialize selector focus tracking before dispatching native focus events.
+  previous.matches(":focus-visible");
+  previous.focus();
+  expect(previous.matches(":focus-visible")).toBe(true);
+  previous.remove();
   wrapper = document.createElement("div");
   document.body.append(wrapper);
   let parent: Element | ShadowRoot = wrapper;
@@ -78,6 +84,12 @@ it("starts with an empty, attribute-free body and native default focus", () => {
   expect(document.body.childNodes).toHaveLength(0);
   expect(document.body.getAttributeNames()).toEqual([]);
   expect(document.activeElement).toBe(document.body);
+  const resetHasFocus = document.hasFocus();
+  const marker = document.body.appendChild(document.createElement("button"));
+  document.body.dispatchEvent(new KeyboardEvent("keydown", { key: "Tab", bubbles: true }));
+  marker.focus();
+  expect(marker.matches(":focus-visible")).toBe(true);
+  expect(resetHasFocus).toBe(false);
   const style = document.getElementById("${prefix}");
   expect(style).not.toBeNull();
   style?.remove();

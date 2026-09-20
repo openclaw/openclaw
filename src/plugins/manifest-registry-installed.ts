@@ -155,6 +155,9 @@ function normalizePackageChannelPersistedAuthState(
     ? {
         ...(specifier ? { specifier } : {}),
         ...(exportName ? { exportName } : {}),
+        ...(persistedAuthState.backingStore === "plugin-state"
+          ? { backingStore: "plugin-state" as const }
+          : {}),
       }
     : undefined;
 }

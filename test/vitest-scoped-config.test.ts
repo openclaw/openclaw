@@ -56,6 +56,7 @@ import { createExtensionVoiceCallVitestConfig } from "./vitest/vitest.extension-
 import { createExtensionWhatsAppVitestConfig } from "./vitest/vitest.extension-whatsapp.config.ts";
 import { createExtensionZaloVitestConfig } from "./vitest/vitest.extension-zalo.config.ts";
 import { createExtensionsVitestConfig } from "./vitest/vitest.extensions.config.ts";
+import { diagnosticForksPool } from "./vitest/vitest.forks-pool.ts";
 import { createGatewayClientVitestConfig } from "./vitest/vitest.gateway-client.config.ts";
 import { createGatewayCoreVitestConfig } from "./vitest/vitest.gateway-core.config.ts";
 import { createGatewayMethodsVitestConfig } from "./vitest/vitest.gateway-methods.config.ts";
@@ -148,20 +149,22 @@ function expectThreadedIsolatedRunner(config: {
   expect(testConfig.isolate).toBe(true);
   expect(testConfig.runner).toBeUndefined();
 }
-function expectForkedNonIsolatedRunner(config: {
-  test?: { pool?: unknown; isolate?: unknown; runner?: unknown };
-}) {
+function expectForkedNonIsolatedRunner(
+  config: { test?: { pool?: unknown; isolate?: unknown; runner?: unknown } },
+  pool: "forks" | typeof diagnosticForksPool = "forks",
+) {
   const testConfig = requireTestConfig(config);
-  expect(testConfig.pool).toBe("forks");
+  expect(testConfig.pool).toBe(pool);
   expect(testConfig.isolate).toBe(false);
   expect(normalizeConfigPath(testConfig.runner)).toBe("test/non-isolated-runner.ts");
 }
 
-function expectForkedIsolatedRunner(config: {
-  test?: { pool?: unknown; isolate?: unknown; runner?: unknown };
-}) {
+function expectForkedIsolatedRunner(
+  config: { test?: { pool?: unknown; isolate?: unknown; runner?: unknown } },
+  pool: "forks" | typeof diagnosticForksPool = "forks",
+) {
   const testConfig = requireTestConfig(config);
-  expect(testConfig.pool).toBe("forks");
+  expect(testConfig.pool).toBe(pool);
   expect(testConfig.isolate).toBe(true);
   expect(testConfig.runner).toBeUndefined();
 }
@@ -625,7 +628,7 @@ describe("scoped vitest configs", () => {
     expectThreadedNonIsolatedRunner(defaultUiConfig);
     expectThreadedIsolatedRunner(defaultExtensionMemoryConfig);
     expectThreadedIsolatedRunner(defaultExtensionProvidersConfig);
-    expectForkedIsolatedRunner(defaultInfraConfig);
+    expectForkedIsolatedRunner(defaultInfraConfig, diagnosticForksPool);
     expectForkedIsolatedRunner(defaultCliProcessConfig);
   });
 
@@ -763,7 +766,7 @@ describe("scoped vitest configs", () => {
   });
 
   it("serializes Slack extension files that share process globals", () => {
-    expectForkedNonIsolatedRunner(defaultExtensionSlackConfig);
+    expectForkedNonIsolatedRunner(defaultExtensionSlackConfig, diagnosticForksPool);
     expect(requireTestConfig(defaultExtensionSlackConfig).fileParallelism).toBe(false);
   });
 
@@ -815,6 +818,7 @@ describe("scoped vitest configs", () => {
       "amazon-bedrock-mantle/**/*.test.ts",
       "anthropic/**/*.test.ts",
       "anthropic-vertex/**/*.test.ts",
+      "apple-fm/**/*.test.ts",
       "byteplus/**/*.test.ts",
       "chutes/**/*.test.ts",
       "comfy/**/*.test.ts",
@@ -1016,6 +1020,7 @@ describe("scoped vitest configs", () => {
     expect(testConfig.include).toEqual([
       "src/gateway/**/*.test.ts",
       "test/plugins/codex-model-catalog.gateway.test.ts",
+      "test/plugins/crabbox-allocation-authority.gateway.test.ts",
     ]);
     expect(testConfig.exclude).toContain("src/gateway/gateway.test.ts");
     expect(testConfig.exclude).toContain(
@@ -1083,7 +1088,10 @@ describe("scoped vitest configs", () => {
             .every((pattern) => /\.test\.[cm]?[jt]sx?$/u.test(pattern)),
         ).toBe(true);
         expect(projects.map((project) => project.name)).toEqual(names);
-        expect(projects.map((project) => project.pool)).toEqual(["threads", "forks"]);
+        expect(projects.map((project) => project.pool)).toEqual([
+          "threads",
+          diagnosticForksPool.name,
+        ]);
         expect(projects[0]?.setupFiles).toEqual(owner.test?.setupFiles);
         expect(projects[0]?.maxWorkers).toBe(owner.test?.maxWorkers);
         const workerConfig = await resolveConfig(

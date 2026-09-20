@@ -40,6 +40,9 @@ function parsePositivePid(value: unknown): number | null {
   return /^\d+$/u.test(trimmed) ? (parseStrictPositiveInteger(trimmed) ?? null) : null;
 }
 
+/** EX_TEMPFAIL: ownership transferred successfully, but the update is not terminal yet. */
+const UPDATE_HANDOFF_IN_PROGRESS_EXIT_CODE = 75;
+
 const GATEWAY_ANCESTRY_SHELL_GUIDANCE =
   "Run this command from a shell outside the gateway service.";
 
@@ -256,5 +259,6 @@ export async function handoffUpdateFromGateway(params: {
   if (!params.opts.json) {
     defaultRuntime.log(guidance);
   }
+  process.exitCode = UPDATE_HANDOFF_IN_PROGRESS_EXIT_CODE;
   return true;
 }

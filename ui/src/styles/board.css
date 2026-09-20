@@ -565,6 +565,37 @@ openclaw-board-widget-cell {
   }
 }
 
+/* Page controls live in the task header on mouse and touch alike. */
+.board-widget--page-chrome {
+  grid-template-rows: minmax(0, 1fr);
+}
+
+.board-widget__page-menu-heading {
+  align-items: center;
+  display: flex;
+  gap: 8px;
+  padding: 8px 12px;
+}
+
+.board-widget__page-menu-heading strong {
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.board-widget__menu-capabilities {
+  color: var(--muted);
+  font-size: 11px;
+  overflow-wrap: anywhere;
+  padding: 0 12px 8px;
+}
+
+.board-widget__menu-capabilities ul {
+  margin: 4px 0 0;
+  padding-left: 16px;
+}
+
 /* A lone full-width widget becomes the focused dashboard's page. Keep the
    regular grid sizing, subtracting only the shell removed from auto heights. */
 :is(.sidebar-region--expanded, .sidebar-region:not(.sidebar-region--open), .board-document__content)

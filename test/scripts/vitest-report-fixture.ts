@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { spawnOwnedVitestProcess } from "../../scripts/lib/vitest-process.mts";
 import { waitForPidFile } from "../helpers/process-wait.js";
 
@@ -130,6 +131,17 @@ export function createVitestReportFixture(root: string, evidence = path.join(roo
     }
     const output = path.join(evidence, "result.json");
     const ready = path.join(root, "ready");
+    if (mode === "watchdog") {
+      const preload = path.join(root, "watchdog-startup.mjs");
+      // Exercise a first attempt killed before its config can record any state.
+      write(
+        preload,
+        `import fs from 'node:fs';import path from 'node:path';
+const output=process.argv.find(arg=>arg.startsWith('--outputFile.json='))?.slice('--outputFile.json='.length);
+if(output&&path.basename(path.dirname(output))==='1'&&process.argv.some(arg=>arg.endsWith(${JSON.stringify(configs[0])}))){fs.writeFileSync(${JSON.stringify(path.join(root, "cold-started"))},'started');await new Promise(resolve=>setTimeout(resolve,3000));}`,
+      );
+      env.NODE_OPTIONS = `--import=${pathToFileURL(preload).href}`;
+    }
     const done = path.join(root, "beta.done");
     const events = path.join(evidence, "executed.jsonl");
     const configLoads = path.join(evidence, "config-loads.txt");
@@ -147,8 +159,11 @@ export function createVitestReportFixture(root: string, evidence = path.join(roo
       write(path.join(env.HOME!, "canary"), "synthetic caller home\n");
     }
     const isParallel = ["parallel", "batch-parallel", "failure", "overlap"].includes(mode);
+    // Report paths identify attempts before spawn; a marker written during config
+    // loading would move the intentional hang to a retry after slow first startup.
     for (const [index, name] of ["alpha", "beta"].entries()) {
       const prelude = `import fs from 'node:fs';
+${mode === "watchdog" ? "import path from 'node:path';" : ""}
 ${mode === "teardown-timeout" && index === 0 ? "setInterval(()=>{},1000);" : ""}
 const merging = process.argv.includes('--mergeReports');
 ${mode === "config-load-once" ? `if(merging)fs.appendFileSync(${JSON.stringify(configLoads)},${JSON.stringify(name + "\n")});` : ""}
@@ -159,7 +174,7 @@ ${mode === "merge-failure" ? `if(merging)throw new Error('owned native merge fai
 ${mode === "config-error" && index === 1 ? "throw new Error('owned configuration failure');" : ""}
 ${mode === "final-write" ? `if(merging&&output)fs.mkdirSync(output);` : ""}
 ${mode === "child-write" && index === 0 ? `if(!merging&&output)fs.mkdirSync(output);` : ""}
-${mode === "watchdog" && index === 0 ? `if(!merging&&!fs.existsSync(${JSON.stringify(ready)})){fs.writeFileSync(${JSON.stringify(ready)},'started');await new Promise(()=>setInterval(()=>{},1000));}` : ""}
+${mode === "watchdog" && index === 0 ? "if(!merging&&output&&path.basename(path.dirname(output))==='1'){await new Promise(()=>setInterval(()=>{},1000));}" : ""}
 ${["missing", "corrupt"].includes(mode) && index === 0 ? `if(!merging)process.once('exit',()=>{const file=${mode === "missing" ? "output" : "process.argv.find(arg=>arg.startsWith('--outputFile.blob='))?.slice('--outputFile.blob='.length)"};if(file&&fs.existsSync(file)){fs.copyFileSync(file,file+'.native-original');${mode === "missing" ? "fs.unlinkSync(file)" : "fs.writeFileSync(file,'owned corruption')"};}});` : ""}
 `;
       write(

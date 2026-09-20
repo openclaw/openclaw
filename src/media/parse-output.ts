@@ -498,7 +498,8 @@ export function splitMediaOutput(
       const invalidParts: string[] = [];
       let hasValidMedia = false;
       for (const part of parts) {
-        const candidate = cleanCandidate(part);
+        // Matched quotes delimit the reference; punctuation inside them belongs to its value.
+        const candidate = unwrapped === undefined ? cleanCandidate(part) : part;
         const allowSpaces = Boolean(unwrapped) || /\s/.test(candidate);
         if (isValidMedia(candidate, { allowSpaces })) {
           media.push(candidate);
@@ -532,7 +533,7 @@ export function splitMediaOutput(
       }
 
       if (!hasValidMedia) {
-        const fallback = cleanCandidate(payloadValue);
+        const fallback = unwrapped ?? cleanCandidate(payloadValue);
         if (isValidMedia(fallback, { allowSpaces: true, allowBareFilename: true })) {
           media.push(fallback);
           hasValidMedia = true;

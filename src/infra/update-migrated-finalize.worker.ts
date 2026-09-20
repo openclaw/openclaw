@@ -43,18 +43,22 @@ import {
   UpdateRequesterRevokedError,
 } from "./update-requester-authority.js";
 import { adoptUpdateRun, getUpdateRun, recordUpdateRunStep } from "./update-run-ledger.js";
+import type { UpdateRunRecord } from "./update-run-record.js";
 import type { UpdateRecoveryFence } from "./update-run-recovery.js";
+import { isOmittedUpdateTimeout } from "./update-timeout-provenance.js";
+
 async function finalizeMigratedUpdate(): Promise<void> {
   // Validation imports this whole candidate graph before activation. The helper
   // also needs the stable recovery barrel's writer after an actual schema bump.
   if (process.argv[2] === "--check") {
     routeLogsToStderr();
     if (typeof finishUpdateRun !== "function") {
-      throw new Error("Candidate recovery writer is unavailable.");
+      throw new Error("Update recovery writer is unavailable.");
     }
     process.stdout.write(
       JSON.stringify({
         executorDelegation: "pid-start-v1",
+        retainedOwnerBinding: true,
         updateRecovery: "parent-v1",
         captureRetirement: "settled-v1",
         doctorConfigWrites: "pid-start-v1",
@@ -133,91 +137,108 @@ async function finalizeMigratedUpdate(): Promise<void> {
       "Full-state checkpoint recovery is deferred; retained state was left unchanged.",
     );
   }
+  const omittedOperatorTimeout = isOmittedUpdateTimeout(input.params.opts.timeout, input);
+  if (omittedOperatorTimeout) {
+    input.params.opts.timeout = undefined;
+  }
   const activationTimeoutMs =
     input.params.opts.run?.activationTimeoutMs ??
-    (await resolveUpdateFinalizationTimeoutMs(input.params.updateStepTimeoutMs, {
-      env: input.params.ownedManagedUpdateEnv ?? input.params.opts.run?.env,
-      databases: input.params.schemaVersions,
-      pluginCount: Object.keys(input.params.preUpdatePluginInstallRecords).length,
-    }));
-  const finalized = await withUpdateCommandTerminalResult(async (registerRun) => {
-    if (input.executor) {
-      return await withDelegatedUpdateCommandExecutor(
-        input.executor,
-        input.params.opts.run?.runId ?? "",
-        input.params.result.root ?? input.params.root,
-        async (fence) => finalizeInput(input, fence, registerRun),
-        {
-          activationTimeoutMs,
-        },
-      );
-    }
-    // The shipped v2026.9.3 producer overrides these selectors for worker
-    // scratch, but retains its pre-override environment in the private input.
-    // Restore only this one-shot worker's selectors before resolving the normal
-    // installation lease domain; scratch-local ownership cannot exclude updates.
-    const admissionEnv = input.params.ownedManagedUpdateEnv ?? input.params.opts.run?.env;
-    if (!admissionEnv) {
-      throw new Error("Grantless finalization requires its captured update environment.");
-    }
-    // v2026.9.3 update-command-migrated.ts:149–195 sends this grantless handoff.
-    // Its captured meta.root is the lease key; activation can retarget that path.
-    // Only the same installation borrows the waiting parent's lease.
-    const meta = input.params.controlPlaneUpdateSentinelMeta;
-    const runId = input.params.opts.run?.runId ?? "";
-    const scratch = path.dirname(input.resultPath);
-    const legacyManagedParent =
-      input.params.result.before?.version === "2026.9.3" &&
-      admissionEnv.OPENCLAW_UPDATE_RUN_HANDOFF === "1" &&
-      admissionEnv.OPENCLAW_UPDATE_RUN_ID === runId &&
-      meta?.runId === runId &&
-      meta.handoffId &&
-      meta.root &&
-      meta.root === resolveUpdateInstallRoot(input.params.result.root ?? input.params.root) &&
-      path.basename(scratch).startsWith("openclaw-update-migrated-") &&
-      path.basename(input.resultPath) === "result.json" &&
-      ["TMPDIR", "TMP", "TEMP"].every(
-        (name) => resolveEnvironmentValue(process.env, name) === scratch,
-      )
-        ? { runId, handoffId: meta.handoffId, root: meta.root }
-        : undefined;
-    for (const name of ["TMPDIR", "TMP", "TEMP"] as const) {
-      const value = resolveEnvironmentValue(admissionEnv, name);
-      if (value === undefined) {
-        delete process.env[name];
-      } else {
-        process.env[name] = value;
+    (omittedOperatorTimeout
+      ? undefined
+      : await resolveUpdateFinalizationTimeoutMs(input.params.updateStepTimeoutMs, {
+          env: input.params.ownedManagedUpdateEnv ?? input.params.opts.run?.env,
+          databases: input.params.schemaVersions,
+          pluginCount: Object.keys(input.params.preUpdatePluginInstallRecords).length,
+        }));
+  let publishedRecord: UpdateRunRecord | undefined;
+  const definitionRecovery: import("../cli/update-cli/update-command-service-context-types.js").UpdateServiceDefinitionRecovery =
+    {};
+  const finalized = await withUpdateCommandTerminalResult(
+    async (registerRun) => {
+      if (input.executor) {
+        return await withDelegatedUpdateCommandExecutor(
+          input.executor,
+          input.params.opts.run?.runId ?? "",
+          input.params.result.root ?? input.params.root,
+          async (fence) => finalizeInput(input, fence, registerRun, definitionRecovery),
+          activationTimeoutMs === undefined ? undefined : { activationTimeoutMs },
+        );
       }
-    }
-    return await withUpdateCommandExecutor(
-      runId,
-      async (executor) => {
-        const fence = await executor.enter(input.params.result.root ?? input.params.root, {
-          activationTimeoutMs,
-        });
-        return await finalizeInput(input, fence, registerRun);
+      // The shipped v2026.9.3 producer overrides these selectors for worker
+      // scratch, but retains its pre-override environment in the private input.
+      // Restore only this one-shot worker's selectors before resolving the normal
+      // installation lease domain; scratch-local ownership cannot exclude updates.
+      const admissionEnv = input.params.ownedManagedUpdateEnv ?? input.params.opts.run?.env;
+      if (!admissionEnv) {
+        throw new Error("Grantless finalization requires its captured update environment.");
+      }
+      // v2026.9.3 update-command-migrated.ts:149–195 sends this grantless handoff.
+      // Its captured meta.root is the lease key; activation can retarget that path.
+      // Only the same installation borrows the waiting parent's lease.
+      const meta = input.params.controlPlaneUpdateSentinelMeta;
+      const runId = input.params.opts.run?.runId ?? "";
+      const scratch = path.dirname(input.resultPath);
+      const legacyManagedParent =
+        input.params.result.before?.version === "2026.9.3" &&
+        admissionEnv.OPENCLAW_UPDATE_RUN_HANDOFF === "1" &&
+        admissionEnv.OPENCLAW_UPDATE_RUN_ID === runId &&
+        meta?.runId === runId &&
+        meta.handoffId &&
+        meta.root &&
+        meta.root === resolveUpdateInstallRoot(input.params.result.root ?? input.params.root) &&
+        path.basename(scratch).startsWith("openclaw-update-migrated-") &&
+        path.basename(input.resultPath) === "result.json" &&
+        ["TMPDIR", "TMP", "TEMP"].every(
+          (name) => resolveEnvironmentValue(process.env, name) === scratch,
+        )
+          ? { runId, handoffId: meta.handoffId, root: meta.root }
+          : undefined;
+      for (const name of ["TMPDIR", "TMP", "TEMP"] as const) {
+        const value = resolveEnvironmentValue(admissionEnv, name);
+        if (value === undefined) {
+          delete process.env[name];
+        } else {
+          process.env[name] = value;
+        }
+      }
+      return await withUpdateCommandExecutor(
+        runId,
+        async (executor) => {
+          const fence = await executor.enter(input.params.result.root ?? input.params.root, {
+            activationTimeoutMs,
+          });
+          return await finalizeInput(input, fence, registerRun, definitionRecovery);
+        },
+        legacyManagedParent ? { legacyManagedParent } : undefined,
+      );
+    },
+    {
+      ...input.params.opts,
+      onTerminalRecord: (record) => {
+        publishedRecord = record;
       },
-      legacyManagedParent ? { legacyManagedParent } : undefined,
-    );
-  }, input.params.opts);
+    },
+  );
   if (input.params.updateRecoveryBackup && finalized.result.status === "error") {
     const response: MigratedUpdateFinalizationResult = {
       result: { ...finalized.result, runId: finalized.run.runId },
       exitCode: finalized.exitCode || 1,
       recoveryRequired: true,
+      definitionRecovery,
       executorDelegation: "pid-start-v1",
     };
     await fs.writeFile(input.resultPath, JSON.stringify(response), { mode: 0o600 });
     return;
   }
-  const terminal = getUpdateRun(finalized.run.runId, { env: finalized.run.env });
-  if (!terminal || terminal.status === "running") {
-    throw new Error("Candidate finalization left the update run nonterminal.");
+  const terminal = publishedRecord ?? getUpdateRun(finalized.run.runId, { env: finalized.run.env });
+  if (!terminal || terminal.runId !== finalized.run.runId || terminal.status === "running") {
+    throw new Error("Update finalization left the update run nonterminal.");
   }
   const response: MigratedUpdateFinalizationResult = {
     result: finalized.result,
     exitCode: finalized.exitCode,
     terminalRunId: terminal.runId,
+    definitionRecovery,
     executorDelegation: "pid-start-v1",
     automaticTriage: finalized.automaticTriage,
   };
@@ -282,12 +303,16 @@ async function runDelegatedDoctor(input: UpdateDoctorInput): Promise<void> {
         },
         {
           repair: input.repair,
-          nonInteractive: true,
           ...(input.updateRecoveryBackup
             ? {
                 updateRecoveryOwner: "driver",
                 updateRecoveryBackup: JSON.stringify(input.updateRecoveryBackup),
               }
+            : {}),
+          nonInteractive: true,
+          ...(input.yes !== undefined ? { yes: input.yes } : {}),
+          ...(input.workspaceSuggestions !== undefined
+            ? { workspaceSuggestions: input.workspaceSuggestions }
             : {}),
         },
         { inputHash: input.configInputHash, assertCurrent },
@@ -300,6 +325,7 @@ async function finalizeInput(
   input: MigratedUpdateFinalizationInput,
   executorFence: UpdateRecoveryFence,
   registerRun: (run: NonNullable<UpdateCommandOptions["run"]>) => void,
+  definitionRecovery: import("../cli/update-cli/update-command-service-context-types.js").UpdateServiceDefinitionRecovery,
 ) {
   const transferredRun = input.params.opts.run;
   if (
@@ -310,7 +336,7 @@ async function finalizeInput(
       input.params.rollbackBlockedReason !== "state-migrated-no-rollback" &&
       input.params.rollbackBlockedReason !== "rollback-state-unverified")
   ) {
-    throw new Error("Candidate finalization requires its migrated update run.");
+    throw new Error("Update finalization requires its migrated update run.");
   }
   const { requesterAuthority: descriptor, ...runIdentity } = transferredRun;
   executorFence?.assertCurrent();
@@ -362,15 +388,19 @@ async function finalizeInput(
   let exitCode = 0;
   let automaticTriage: MigratedUpdateFinalizationResult["automaticTriage"];
   try {
-    result = await finishUpdate({
-      ...input.params,
-      deferFailureRecoveryToParent: Boolean(input.params.updateRecoveryBackup),
-      result: { ...input.params.result, runId: run.runId },
-      opts: { ...input.params.opts, run },
-      ...(stopped
-        ? { preManagedServiceStop: { ...stopped, windowsTaskAutoStartRecovery: windowsRecovery } }
-        : {}),
-    });
+    // This worker already loaded the candidate; the local flag conveys no authority.
+    result = await finishUpdate(
+      {
+        ...input.params,
+        deferFailureRecoveryToParent: Boolean(input.params.updateRecoveryBackup),
+        result: { ...input.params.result, runId: run.runId },
+        opts: { ...input.params.opts, run },
+        ...(stopped
+          ? { preManagedServiceStop: { ...stopped, windowsTaskAutoStartRecovery: windowsRecovery } }
+          : {}),
+      },
+      { candidateRuntime: true, definitionRecovery },
+    );
   } catch (error) {
     if (!(error instanceof UpdateCommandFailure)) {
       throw error;

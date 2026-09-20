@@ -249,7 +249,7 @@ export class CatalogTargetDiscovery {
     void owner.client
       .request<SessionsCatalogListResult>(
         "sessions.catalog.list",
-        { agentId: owner.agentId, limitPerHost: 1 },
+        { agentId: owner.agentId, metadataOnly: true },
         { signal: controller.signal },
       )
       .then(

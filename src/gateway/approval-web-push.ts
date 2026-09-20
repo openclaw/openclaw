@@ -15,10 +15,12 @@ import {
 import {
   deleteWebPushApprovalDeliveryTargets,
   hasBoundWebPushSubscriptions,
+  listBoundWebPushSubscriptions,
   listTerminalWebPushApprovalDeliveryIds,
   listWebPushApprovalDeliveryTargets,
   prepareWebPushApprovalDeliveries,
   prepareWebPushNotificationSender,
+  withBoundWebPushSubscriptions,
   type BoundWebPushSubscription,
 } from "../infra/push-web.js";
 import { getUserPreferences } from "../state/user-preferences.js";
@@ -115,92 +117,138 @@ async function deliverBoundApprovalWebPush<TPayload>(params: {
   if (params.record.resolvedAtMs !== undefined || params.record.expiresAtMs <= Date.now()) {
     return null;
   }
+  if (!(await hasBoundWebPushSubscriptions(params.stateDir))) {
+    return null;
+  }
   const sendWebPushNotifications = await prepareWebPushNotificationSender(params.stateDir);
-  const cfg = params.getRuntimeConfig();
+  const initialSubscriptions = await listBoundWebPushSubscriptions(params.stateDir);
+  let cfg = params.getRuntimeConfig();
   const targets = listCurrentWebPushTargets({
     cfg,
+    subscriptions: initialSubscriptions,
     requiredScopes: [APPROVALS_SCOPE, READ_SCOPE],
     stateDir: params.stateDir,
   });
-  const subscriptions = targets.flatMap((target) => {
-    const subscription = target.subscription;
-    const preferences = approvalPreferences({ subscription, stateDir: params.stateDir });
-    const source = isRecord(params.record.request) ? params.record.request : undefined;
-    const agentId = normalizeOptionalString(source?.agentId);
-    return webPushCategoryEnabled(preferences, "approval-requested") &&
-      !isWebPushQuietHours(preferences) &&
-      webPushAgentAllowed(preferences, agentId) &&
-      isApprovalRecordVisibleToClient({
-        record: params.record,
-        client: webPushTargetClient(target),
-        cfg,
-      })
-      ? [subscription]
-      : [];
-  });
+  const eligibleSubscriptions = (candidates: ReturnType<typeof listCurrentWebPushTargets>) =>
+    candidates.flatMap((target) => {
+      const subscription = target.subscription;
+      const preferences = approvalPreferences({ subscription, stateDir: params.stateDir });
+      const source = isRecord(params.record.request) ? params.record.request : undefined;
+      const agentId = normalizeOptionalString(source?.agentId);
+      return webPushCategoryEnabled(preferences, "approval-requested") &&
+        !isWebPushQuietHours(preferences) &&
+        webPushAgentAllowed(preferences, agentId) &&
+        isApprovalRecordVisibleToClient({
+          record: params.record,
+          client: webPushTargetClient(target),
+          cfg,
+        })
+        ? [subscription]
+        : [];
+    });
+  const subscriptions = eligibleSubscriptions(targets);
   if (subscriptions.length === 0) {
     return null;
   }
 
-  // Transport and pairing preparation await. Terminal state and TTL belong to
-  // the approval owner, so reread them with no async gap before network I/O.
-  const now = Date.now();
-  if (params.record.resolvedAtMs !== undefined || params.record.expiresAtMs <= now) {
-    return null;
-  }
-  // Persist the conservative may-have-received set with no async gap before
-  // network I/O. Definite failures are removed after the push service replies.
-  if (
-    !prepareWebPushApprovalDeliveries({
+  const preparedIds = new Set(
+    await prepareWebPushApprovalDeliveries({
       approvalId: params.record.id,
       subscriptions,
-      preparedAtMs: now,
+      preparedAtMs: Date.now(),
       stateDir: params.stateDir,
-    })
-  ) {
+    }),
+  );
+  if (preparedIds.size === 0) {
     return null;
   }
-  const ttlSeconds = Math.ceil((params.record.expiresAtMs - now) / 1_000);
-  const source = isRecord(params.record.request) ? params.record.request : undefined;
-  const agentId = normalizeOptionalString(source?.agentId);
-  const agentLabel = normalizeWebPushDisplayLabel(agentId);
-  const requestGroups = new Map<
-    string,
-    { copy: ReturnType<typeof approvalNotificationCopy>; subscriptions: BoundWebPushSubscription[] }
-  >();
-  for (const subscription of subscriptions) {
-    const preferences = approvalPreferences({ subscription, stateDir: params.stateDir });
-    const copy = approvalNotificationCopy({ terminal: false, preferences, agentLabel });
-    const key = JSON.stringify(copy);
-    const group = requestGroups.get(key) ?? { copy, subscriptions: [] };
-    group.subscriptions.push(subscription);
-    requestGroups.set(key, group);
-  }
-  const results = (
-    await Promise.all(
-      [...requestGroups.values()].map(({ copy, subscriptions: groupedSubscriptions }) =>
-        sendWebPushNotifications({
-          subscriptions: groupedSubscriptions,
-          payload: {
-            ...copy,
-            renotify: false,
-            tag: approvalWebPushTag(params.record.id),
-            url: resolveControlUiWebPushUrl(cfg, `approve/${encodeURIComponent(params.record.id)}`),
-          },
-          deliveryOptions: {
-            TTL: ttlSeconds,
-            urgency: "high",
-            timeout: WEB_PUSH_APPROVAL_TIMEOUT_MS,
-            topic: approvalWebPushTopic(params.record.id),
-          },
+  const preparedById = new Map(
+    subscriptions
+      .filter((subscription) => preparedIds.has(subscription.subscriptionId))
+      .map((subscription) => [subscription.subscriptionId, subscription]),
+  );
+  const groupedResults = await withBoundWebPushSubscriptions(
+    params.stateDir,
+    (currentSubscriptions) => {
+      cfg = params.getRuntimeConfig();
+      const currentEligibleSubscriptions = eligibleSubscriptions(
+        listCurrentWebPushTargets({
+          cfg,
+          requiredScopes: [APPROVALS_SCOPE, READ_SCOPE],
+          stateDir: params.stateDir,
+          subscriptions: currentSubscriptions.filter((subscription) => {
+            const prepared = preparedById.get(subscription.subscriptionId);
+            return (
+              prepared?.deviceId === subscription.deviceId &&
+              prepared.userProfileId === subscription.userProfileId
+            );
+          }),
         }),
-      ),
-    )
-  ).flat();
+      );
+      // Receipt persistence can yield. Recheck recipients and approval lifetime in
+      // the network continuation so revoked or resolved requests never dispatch.
+      const now = Date.now();
+      if (
+        currentEligibleSubscriptions.length === 0 ||
+        params.record.resolvedAtMs !== undefined ||
+        params.record.expiresAtMs <= now
+      ) {
+        return undefined;
+      }
+      const ttlSeconds = Math.ceil((params.record.expiresAtMs - now) / 1_000);
+      const source = isRecord(params.record.request) ? params.record.request : undefined;
+      const agentId = normalizeOptionalString(source?.agentId);
+      const agentLabel = normalizeWebPushDisplayLabel(agentId);
+      const requestGroups = new Map<
+        string,
+        {
+          copy: ReturnType<typeof approvalNotificationCopy>;
+          subscriptions: BoundWebPushSubscription[];
+        }
+      >();
+      for (const subscription of currentEligibleSubscriptions) {
+        const preferences = approvalPreferences({ subscription, stateDir: params.stateDir });
+        const copy = approvalNotificationCopy({ terminal: false, preferences, agentLabel });
+        const key = JSON.stringify(copy);
+        const group = requestGroups.get(key) ?? { copy, subscriptions: [] };
+        group.subscriptions.push(subscription);
+        requestGroups.set(key, group);
+      }
+      return {
+        start: () =>
+          Promise.all(
+            [...requestGroups.values()].map(({ copy, subscriptions: groupedSubscriptions }) =>
+              sendWebPushNotifications({
+                subscriptions: groupedSubscriptions,
+                payload: {
+                  ...copy,
+                  renotify: false,
+                  tag: approvalWebPushTag(params.record.id),
+                  url: resolveControlUiWebPushUrl(
+                    cfg,
+                    `approve/${encodeURIComponent(params.record.id)}`,
+                  ),
+                },
+                deliveryOptions: {
+                  TTL: ttlSeconds,
+                  urgency: "high",
+                  timeout: WEB_PUSH_APPROVAL_TIMEOUT_MS,
+                  topic: approvalWebPushTopic(params.record.id),
+                },
+              }),
+            ),
+          ),
+      };
+    },
+  );
+  if (!groupedResults) {
+    return null;
+  }
+  const results = groupedResults.flat();
   const definitelyRejectedSubscriptionIds = results
     .filter((result) => !result.ok && result.statusCode !== undefined)
     .map((result) => result.subscriptionId);
-  deleteWebPushApprovalDeliveryTargets({
+  await deleteWebPushApprovalDeliveryTargets({
     approvalId: params.record.id,
     subscriptionIds: definitelyRejectedSubscriptionIds,
     stateDir: params.stateDir,
@@ -235,24 +283,6 @@ export function createApprovalWebPushDelivery(params: {
       const requestDelivery = deliveryState ? await deliveryState.requestPushPromise : null;
       const sender =
         requestDelivery?.sender ?? (await prepareWebPushNotificationSender(params.stateDir));
-      const cfg = params.getRuntimeConfig();
-      const currentTargets = listCurrentWebPushTargets({
-        cfg,
-        requiredScopes: [APPROVALS_SCOPE, READ_SCOPE],
-        stateDir: params.stateDir,
-      });
-      const currentTargetsBySubscriptionId = new Map(
-        currentTargets.map((target) => [target.subscription.subscriptionId, target]),
-      );
-      // Pairing and transport preparation may await. Read durable targets only
-      // afterwards so revoked or rebound recipients cannot reach network I/O.
-      const subscriptions = listWebPushApprovalDeliveryTargets({
-        approvalId: approval.id,
-        stateDir: params.stateDir,
-      });
-      if (subscriptions.length === 0) {
-        return;
-      }
       const durableLookup = requestDelivery
         ? null
         : getOperatorApprovalDetailed({
@@ -262,76 +292,115 @@ export function createApprovalWebPushDelivery(params: {
               : undefined,
           });
       const durableRecord = durableLookup?.outcome === "found" ? durableLookup.record : null;
-      const terminalGroups = new Map<
-        string,
-        {
-          copy: ReturnType<typeof approvalNotificationCopy>;
-          subscriptions: BoundWebPushSubscription[];
-        }
-      >();
-      const suppressedSubscriptionIds: string[] = [];
-      for (const subscription of subscriptions) {
-        const target = currentTargetsBySubscriptionId.get(subscription.subscriptionId);
-        const client = target ? webPushTargetClient(target) : null;
-        const visible = requestDelivery
-          ? Boolean(
-              client &&
-              isApprovalRecordVisibleToClient({
-                record: requestDelivery.record,
-                client,
-                cfg,
-              }),
-            )
-          : Boolean(
-              client &&
-              durableRecord &&
-              canAccessOperatorApproval({
-                client,
-                binding: { reviewerDeviceIds: durableRecord.reviewerDeviceIds },
-              }) &&
-              canAccessApprovalSession({
-                cfg,
-                client,
-                sessionKey: durableRecord.source.sessionKey,
-                agentId: durableRecord.source.agentId,
-              }),
-            );
-        const preferences = approvalPreferences({ subscription, stateDir: params.stateDir });
-        if (!visible) {
-          suppressedSubscriptionIds.push(subscription.subscriptionId);
-          continue;
-        }
-        const copy = approvalNotificationCopy({ terminal: true, preferences });
-        const key = JSON.stringify(copy);
-        const group = terminalGroups.get(key) ?? { copy, subscriptions: [] };
-        group.subscriptions.push(subscription);
-        terminalGroups.set(key, group);
+      const recordedSubscriptions = await listWebPushApprovalDeliveryTargets({
+        approvalId: approval.id,
+        stateDir: params.stateDir,
+      });
+      if (recordedSubscriptions.length === 0) {
+        return;
       }
-      const results = (
-        await Promise.all(
-          [...terminalGroups.values()].map(({ copy, subscriptions: groupedSubscriptions }) =>
-            sender({
-              subscriptions: groupedSubscriptions,
-              payload: {
-                ...copy,
-                renotify: false,
-                tag: approvalWebPushTag(approval.id),
-                url: resolveControlUiWebPushUrl(cfg, `approve/${encodeURIComponent(approval.id)}`),
-              },
-              deliveryOptions: {
-                TTL: WEB_PUSH_TERMINAL_TTL_SECONDS,
-                urgency: "high",
-                timeout: WEB_PUSH_APPROVAL_TIMEOUT_MS,
-                topic: approvalWebPushTopic(approval.id),
-              },
-            }),
-          ),
-        )
-      ).flat();
+      const subscriptions = recordedSubscriptions;
+      const suppressedSubscriptionIds: string[] = [];
+      const groupedResults = await withBoundWebPushSubscriptions(
+        params.stateDir,
+        (currentSubscriptions) => {
+          const cfg = params.getRuntimeConfig();
+          const currentTargets = listCurrentWebPushTargets({
+            cfg,
+            requiredScopes: [APPROVALS_SCOPE, READ_SCOPE],
+            stateDir: params.stateDir,
+            subscriptions: currentSubscriptions,
+          });
+          const currentTargetsBySubscriptionId = new Map(
+            currentTargets.map((target) => [target.subscription.subscriptionId, target]),
+          );
+          const terminalGroups = new Map<
+            string,
+            {
+              copy: ReturnType<typeof approvalNotificationCopy>;
+              subscriptions: BoundWebPushSubscription[];
+            }
+          >();
+          for (const subscription of subscriptions) {
+            const current = currentTargetsBySubscriptionId.get(subscription.subscriptionId);
+            const target =
+              current?.subscription.deviceId === subscription.deviceId &&
+              current.subscription.userProfileId === subscription.userProfileId
+                ? current
+                : undefined;
+            const client = target ? webPushTargetClient(target) : null;
+            const visible = requestDelivery
+              ? Boolean(
+                  client &&
+                  isApprovalRecordVisibleToClient({
+                    record: requestDelivery.record,
+                    client,
+                    cfg,
+                  }),
+                )
+              : Boolean(
+                  client &&
+                  durableRecord &&
+                  canAccessOperatorApproval({
+                    client,
+                    binding: { reviewerDeviceIds: durableRecord.reviewerDeviceIds },
+                  }) &&
+                  canAccessApprovalSession({
+                    cfg,
+                    client,
+                    sessionKey: durableRecord.source.sessionKey,
+                    agentId: durableRecord.source.agentId,
+                  }),
+                );
+            const preferences = approvalPreferences({
+              subscription: target?.subscription ?? subscription,
+              stateDir: params.stateDir,
+            });
+            if (!target || !visible) {
+              suppressedSubscriptionIds.push(subscription.subscriptionId);
+              continue;
+            }
+            const copy = approvalNotificationCopy({ terminal: true, preferences });
+            const key = JSON.stringify(copy);
+            const group = terminalGroups.get(key) ?? { copy, subscriptions: [] };
+            group.subscriptions.push(target.subscription);
+            terminalGroups.set(key, group);
+          }
+          return {
+            start: () =>
+              Promise.all(
+                [...terminalGroups.values()].map(({ copy, subscriptions: groupedSubscriptions }) =>
+                  sender({
+                    subscriptions: groupedSubscriptions,
+                    payload: {
+                      ...copy,
+                      renotify: false,
+                      tag: approvalWebPushTag(approval.id),
+                      url: resolveControlUiWebPushUrl(
+                        cfg,
+                        `approve/${encodeURIComponent(approval.id)}`,
+                      ),
+                    },
+                    deliveryOptions: {
+                      TTL: WEB_PUSH_TERMINAL_TTL_SECONDS,
+                      urgency: "high",
+                      timeout: WEB_PUSH_APPROVAL_TIMEOUT_MS,
+                      topic: approvalWebPushTopic(approval.id),
+                    },
+                  }),
+                ),
+              ),
+          };
+        },
+      );
+      if (!groupedResults) {
+        return;
+      }
+      const results = groupedResults.flat();
       const successfulSubscriptionIds = results
         .filter((result) => result.ok)
         .map((result) => result.subscriptionId);
-      deleteWebPushApprovalDeliveryTargets({
+      await deleteWebPushApprovalDeliveryTargets({
         approvalId: approval.id,
         subscriptionIds: [...successfulSubscriptionIds, ...suppressedSubscriptionIds],
         stateDir: params.stateDir,
@@ -356,10 +425,7 @@ export function createApprovalWebPushDelivery(params: {
 
   return {
     /** Sends a request notification only when at least one browser has a durable binding. */
-    handleRequested<TPayload>(record: ExecApprovalRecord<TPayload>): boolean | Promise<boolean> {
-      if (!hasBoundWebPushSubscriptions(params.stateDir)) {
-        return false;
-      }
+    handleRequested<TPayload>(record: ExecApprovalRecord<TPayload>): Promise<boolean> {
       const deliveryState: ApprovalWebPushDeliveryState = {
         requestPushPromise: deliverBoundApprovalWebPush({
           record,
@@ -390,7 +456,7 @@ export function createApprovalWebPushDelivery(params: {
       let afterApprovalId: string | undefined;
       let throughApprovalId: string | undefined;
       do {
-        const page = listTerminalWebPushApprovalDeliveryIds({
+        const page = await listTerminalWebPushApprovalDeliveryIds({
           stateDir: params.stateDir,
           ...(afterApprovalId ? { afterApprovalId } : {}),
           ...(throughApprovalId ? { throughApprovalId } : {}),

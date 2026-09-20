@@ -7,7 +7,8 @@ import { listDevicePairing } from "../../infra/device-pairing.js";
 import { NODE_RUNNER_UPDATE_REQUIRED_ISSUE } from "../../infra/node-runner-inventory.js";
 import { NODE_DESKTOP_STREAM_COMMAND } from "../../shared/node-desktop-stream.js";
 import { collectNodeCatalogRuntimeState } from "../node-registry-private.js";
-import { environmentsHandlers, summarizeWorkerEnvironment } from "./environments.js";
+import { summarizeWorkerEnvironment } from "../worker-environments/environment-summary.js";
+import { environmentsHandlers } from "./environments.js";
 import {
   callEnvironmentMethod,
   FakeWorkerServiceError,
@@ -381,7 +382,9 @@ describe("environment gateway methods", () => {
       const listOperatingSystems = vi.fn(async (profileId: string) =>
         profileId === "aws" ? systems : [systems[0]!],
       );
+      const list = vi.fn(() => []);
       const service = workerService({
+        list,
         listMachineOptions,
         listOperatingSystems,
         supportsExecutionMode: vi.fn(
@@ -412,8 +415,107 @@ describe("environment gateway methods", () => {
       expect(listOperatingSystems.mock.calls).toEqual([["aws"], ["zeta"]]);
       expect(profiles[1]).not.toHaveProperty("machines");
       expect(profiles[1]).not.toHaveProperty("operatingSystems");
+
+      list.mockClear();
+      vi.mocked(listDevicePairing).mockClear();
+      const projected = await callEnvironmentMethod(
+        "environments.list",
+        { projection: "profiles" },
+        { service },
+      );
+      expect(projected).toEqual([true, { environments: [], profiles }, undefined]);
+      expect(service.list).not.toHaveBeenCalled();
+      expect(listDevicePairing).not.toHaveBeenCalled();
     },
   );
+
+  it.each(["worker", "pairing"])(
+    "isolates profile discovery from %s inventory failures without hiding default errors",
+    async (unavailable) => {
+      const list = vi.fn(() => {
+        if (unavailable === "worker") {
+          throw new Error("private worker inventory failure");
+        }
+        return [];
+      });
+      const service = workerService({ list });
+      if (unavailable === "pairing") {
+        vi.mocked(listDevicePairing).mockRejectedValue(new Error("pairing inventory unavailable"));
+      }
+      const full = await callEnvironmentMethod("environments.list", {}, { service });
+      expect(full).toEqual([
+        false,
+        undefined,
+        {
+          code: ErrorCodes.UNAVAILABLE,
+          message:
+            unavailable === "worker"
+              ? "Error: environment inventory unavailable"
+              : "Error: pairing inventory unavailable",
+        },
+      ]);
+      expect(service.listMachineOptions).not.toHaveBeenCalled();
+      list.mockClear();
+      vi.mocked(listDevicePairing).mockClear();
+
+      const projected = await callEnvironmentMethod(
+        "environments.list",
+        { projection: "profiles" },
+        { service },
+      );
+      expect(projected).toEqual([
+        true,
+        {
+          environments: [],
+          profiles: [
+            { id: "aws", providerId: "crabbox" },
+            { id: "zeta", providerId: "static-ssh" },
+          ],
+        },
+        undefined,
+      ]);
+      expect(service.list).not.toHaveBeenCalled();
+      expect(listDevicePairing).not.toHaveBeenCalled();
+    },
+  );
+
+  it("keeps profile summaries when their machine catalog fails", async () => {
+    const service = workerService({
+      supportsExecutionMode: vi.fn((_profileId, mode) => mode === "remote-exec"),
+      listMachineOptions: vi.fn(async () => {
+        throw new Error("provider unavailable");
+      }),
+    });
+    const context = mockContext(service);
+    const respond = vi.fn();
+    await environmentsHandlers["environments.list"]?.({
+      params: { projection: "profiles" },
+      respond,
+      context,
+    } as never);
+    expect(respond).toHaveBeenCalledWith(
+      true,
+      {
+        environments: [],
+        profiles: [
+          {
+            id: "aws",
+            providerId: "crabbox",
+            executionMode: "remote-exec",
+            executionModes: ["remote-exec"],
+          },
+          {
+            id: "zeta",
+            providerId: "static-ssh",
+            executionMode: "remote-exec",
+            executionModes: ["remote-exec"],
+          },
+        ],
+      },
+      undefined,
+    );
+    expect(context.logGateway.warn).toHaveBeenCalledTimes(2);
+  });
 
   it("projects trust from recorded worker isolation without guessing unknown leases", () => {
     expect(summarizeWorkerEnvironment(workerRecord({ sharedHost: true }), NOW).trust).toBe(

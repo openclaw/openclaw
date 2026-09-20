@@ -124,7 +124,8 @@ it.each(cases)(
     const releaseSibling = createDeferred();
     const server = http.createServer((req, res) => {
       if (req.method !== "POST" || req.url !== "/v1/responses") {
-        res.writeHead(404).end();
+        // 426 negotiates native HTTP fallback without retrying WebSocket handshakes.
+        res.writeHead(req.method === "GET" && req.url === "/v1/responses" ? 426 : 404).end();
         return;
       }
       let body = "";
@@ -204,7 +205,7 @@ it.each(cases)(
       OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
       OPENCLAW_SKIP_PROVIDERS: "0",
       OPENCLAW_DISABLE_BUNDLED_PLUGINS: "0",
-      OPENCLAW_BUNDLED_PLUGINS_DIR: path.join(process.cwd(), "extensions"),
+      OPENCLAW_BUNDLED_PLUGINS_DIR: path.join(process.cwd(), "dist/extensions"),
       OPENCLAW_TEST_TRUST_BUNDLED_PLUGINS_DIR: "1",
       HTTP_PROXY: "http://127.0.0.1:9",
       HTTPS_PROXY: "http://127.0.0.1:9",
@@ -261,6 +262,7 @@ it.each(cases)(
           codex: {
             enabled: true,
             config: {
+              sessionCatalog: { enabled: false },
               appServer: {
                 args: [
                   "app-server",
@@ -339,7 +341,6 @@ it.each(cases)(
         assert(thread, "chat.send must publish its ready native thread and client");
         return thread;
       });
-
     let idleThread: ReadyThread | undefined;
     if (idleSibling) {
       if (idleSibling === "incognito") {

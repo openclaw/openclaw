@@ -2,6 +2,7 @@
 // warning surfaces, size limits, and outbound message block assembly.
 
 import { expectDefined } from "@openclaw/normalization-core";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const saveMediaBufferMock = vi.hoisted(() =>
@@ -34,6 +35,14 @@ vi.mock("../media/media-probe.js", () => ({
 import { MAX_IMAGE_BYTES } from "@openclaw/media-core/constants";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
+  canonicalizePersistedUserMessageMedia,
+  readPersistedMediaFacts,
+} from "../media/media-facts.js";
+import {
+  buildPersistedUserTurnMediaInputsFromFields,
+  buildPersistedUserTurnMessage,
+} from "../sessions/user-turn-transcript.message.js";
+import {
   resolveChatAttachmentMaxBytes,
   resolveChatAttachmentPolicy,
 } from "./chat-attachment-policy.js";
@@ -46,6 +55,7 @@ import {
   stripImageMediaMarkers,
   UnsupportedAttachmentError,
 } from "./chat-attachments.js";
+import { sanitizeChatHistoryMessages } from "./chat-display-projection.js";
 import { normalizeRpcAttachmentsToChatAttachments } from "./server-methods/attachment-normalize.js";
 
 const PNG_1x1 =
@@ -186,6 +196,76 @@ describe("discardPreparedInboundMedia", () => {
       expect.stringContaining("failed to discard prepared inbound media managed-id: unlink denied"),
     );
   });
+});
+
+describe("composer attachment origin", () => {
+  it.each([
+    { origin: "paste", expected: "paste" },
+    { origin: "file", expected: "file" },
+    { origin: undefined, expected: undefined },
+    { origin: "clipboard", expected: undefined },
+    { origin: 42, expected: undefined },
+  ])(
+    "retains bounded origin $origin through transcript and history without changing content",
+    async ({ origin, expected }) => {
+      const bytes = Buffer.from("First line\nSecond line\n", "utf8");
+      const fileName = "pasted-text-123.txt";
+      saveMediaBufferMock.mockResolvedValueOnce({
+        id: "pasted-text-123---11111111-2222-3333-4444-555555555555.txt",
+        path: "/tmp/openclaw-test-media/inbound/pasted-text-123.txt",
+        size: bytes.length,
+        contentType: "text/plain",
+      });
+      const parsed = await parseMessageWithAttachments(
+        "Read this",
+        normalizeRpcAttachmentsToChatAttachments([
+          { mimeType: "text/plain", fileName, origin, content: bytes.toString("base64") },
+        ]),
+      );
+      expect(saveMediaBufferMock).toHaveBeenCalledWith(
+        bytes,
+        "text/plain",
+        "inbound",
+        expect.any(Number),
+        fileName,
+      );
+      expect(parsed.message).toBe(
+        `Read this\n[media attached: ${parsed.offloadedRefs[0]?.mediaRef}]`,
+      );
+      expect(parsed.images).toEqual([]);
+      const persisted = await persistInboundImagesForTranscript({
+        images: parsed.images,
+        offloadedRefs: parsed.offloadedRefs,
+        log: { warn: vi.fn() },
+        logContext: "chat.send",
+      });
+      const message = buildPersistedUserTurnMessage({
+        text: "Read this",
+        timestamp: 123,
+        media: persisted.entries.map((entry) => entry.fact),
+      });
+      const canonical = canonicalizePersistedUserMessageMedia(message).message;
+      const recovered = buildPersistedUserTurnMediaInputsFromFields(canonical);
+      expect(recovered[0]).toMatchObject({
+        fileName,
+        contentType: "text/plain",
+        sizeBytes: bytes.length,
+      });
+      const history = expectDefined(
+        asOptionalRecord(sanitizeChatHistoryMessages([canonical])[0]),
+        "projected history message",
+      );
+      for (const fact of [parsed.media[0], recovered[0], readPersistedMediaFacts(history)?.[0]]) {
+        if (expected === undefined) {
+          expect(fact).not.toHaveProperty("origin");
+        } else {
+          expect(fact).toHaveProperty("origin", expected);
+        }
+      }
+      expect(canonical.content).toBe("Read this");
+      expect(history).toMatchObject({ role: "user", content: "Read this" });
+    },
+  );
 });
 
 describe("persistInboundImagesForTranscript", () => {

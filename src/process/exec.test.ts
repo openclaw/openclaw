@@ -34,7 +34,9 @@ describe("runCommandWithTimeout", () => {
     ).toBe(false);
   });
 
-  it.skipIf(process.platform === "win32").each(["normal", "cooperative", "forced"] as const)(
+  it
+    .skipIf(process.platform === "win32")
+    .each(["normal", "cooperative", "default-signal", "forced"] as const)(
     "reports invocation cleanup and honors the initial SIGINT signal: %s",
     async (mode) => {
       const controller = new AbortController();
@@ -45,7 +47,9 @@ describe("runCommandWithTimeout", () => {
       const program =
         mode === "normal"
           ? "process.stdout.write('ready'); process.exitCode=17;"
-          : `const timer=setInterval(()=>{},1000); process.on('SIGINT',()=>{${mode === "cooperative" ? "clearInterval(timer);process.stdout.write('interrupted');process.exitCode=17;" : ""}}); process.stdout.write('ready');`;
+          : mode === "default-signal"
+            ? "setInterval(()=>{},1000); process.stdout.write('ready');"
+            : `const timer=setInterval(()=>{},1000); process.on('SIGINT',()=>{${mode === "cooperative" ? "clearInterval(timer);process.stdout.write('interrupted');process.exitCode=17;" : ""}}); process.stdout.write('ready');`;
       const running = runCommandWithTimeout([process.execPath, "-e", program], {
         signal: controller.signal,
         killProcessTree: true,
@@ -61,8 +65,11 @@ describe("runCommandWithTimeout", () => {
         controller.abort();
       }
       const result = await running;
-      expect(result.cleanup).toBe(mode);
-      if (mode !== "forced") {
+      expect(result.cleanup).toBe(mode === "default-signal" ? "cooperative" : mode);
+      if (mode === "default-signal") {
+        expect(result).toMatchObject({ code: null, signal: "SIGINT", termination: "signal" });
+      }
+      if (mode === "normal" || mode === "cooperative") {
         expect(result.code).toBe(17);
       }
       if (mode === "cooperative") {
@@ -104,6 +111,29 @@ describe("runCommandWithTimeout", () => {
           await waitForPidToExit(descendant);
         }
       }
+    },
+  );
+
+  it.skipIf(process.platform === "win32").each(["SIGKILL", 9] as const)(
+    "reports normal extinction after a successful native-style command with timeout signal %s",
+    async (killSignal) => {
+      const result = await runCommandWithTimeout(
+        [process.execPath, "-e", "process.stdout.write('enabled\\n')"],
+        {
+          killProcessTree: true,
+          requireProcessTreeExtinction: true,
+          killSignal,
+          timeoutMs: 5_000,
+        },
+      );
+      expect(result).toMatchObject({
+        termination: "exit",
+        code: 0,
+        signal: null,
+        stdout: "enabled\n",
+        stderr: "",
+        cleanup: "normal",
+      });
     },
   );
 
@@ -266,6 +296,7 @@ describe("runCommandWithTimeout", () => {
         code: null,
         signal: "SIGTERM",
         termination: "signal",
+        cleanup: "uncertain",
       });
     },
   );
@@ -966,6 +997,9 @@ describe("child input admission", () => {
       },
     );
     await expect(work).rejects.toBe(refusal);
+    expect(refusal).toMatchObject({
+      cleanup: process.platform === "win32" ? "forced" : "cooperative",
+    });
     expect(pid).toBeTypeOf("number");
     expect(isPidAlive(pid!)).toBe(false);
   });

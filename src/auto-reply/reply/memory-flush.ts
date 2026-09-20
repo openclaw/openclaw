@@ -105,27 +105,6 @@ export function resolveResponsesServerCompactionThreshold(params: {
   ).threshold;
 }
 
-function resolveMaintenanceGateState<
-  TEntry extends Pick<SessionEntry, "totalTokens" | "totalTokensFresh" | "totalTokensVersion">,
->(params: {
-  entry?: TEntry;
-  tokenCount?: number;
-  threshold: number;
-}): { entry: TEntry; totalTokens: number; threshold: number } | null {
-  if (!params.entry) {
-    return null;
-  }
-
-  const totalTokens =
-    resolvePositiveTokenCount(params.tokenCount) ?? resolveFreshSessionTotalTokens(params.entry);
-  if (!totalTokens || totalTokens <= 0) {
-    return null;
-  }
-
-  const threshold = params.threshold;
-  return threshold > 0 ? { entry: params.entry, totalTokens, threshold } : null;
-}
-
 export function shouldRunMemoryFlush(params: {
   entry?: Pick<
     SessionEntry,
@@ -139,16 +118,11 @@ export function shouldRunMemoryFlush(params: {
   tokenCount?: number;
   threshold: number;
 }): boolean {
-  const state = resolveMaintenanceGateState(params);
-  if (!state || state.totalTokens < state.threshold) {
-    return false;
-  }
-
-  if (hasAlreadyFlushedForCurrentCompaction(state.entry)) {
-    return false;
-  }
-
-  return true;
+  return Boolean(
+    shouldRunPreflightCompaction(params) &&
+    params.entry &&
+    !hasAlreadyFlushedForCurrentCompaction(params.entry),
+  );
 }
 
 export function shouldRunPreflightCompaction(params: {
@@ -161,8 +135,17 @@ export function shouldRunPreflightCompaction(params: {
   tokenCount?: number;
   threshold: number;
 }): boolean {
-  const state = resolveMaintenanceGateState(params);
-  return Boolean(state && state.totalTokens >= state.threshold);
+  if (!params.entry) {
+    return false;
+  }
+  const totalTokens =
+    resolvePositiveTokenCount(params.tokenCount) ?? resolveFreshSessionTotalTokens(params.entry);
+  return (
+    typeof totalTokens === "number" &&
+    totalTokens > 0 &&
+    params.threshold > 0 &&
+    totalTokens >= params.threshold
+  );
 }
 
 /**

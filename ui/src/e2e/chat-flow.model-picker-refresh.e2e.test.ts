@@ -206,9 +206,10 @@ suite.define(() => {
       await expect.poll(() => configureModelsTooltip.count()).toBe(0);
       await screenshot(page, "09-configure-models-no-tooltip.png");
       await configureModels.tap();
-      await expect.poll(() => page.url()).toContain("model-setup");
-      await page.locator("openclaw-model-setup-page .model-setup").waitFor({ state: "visible" });
-      await screenshot(page, "10-model-setup-navigation.png");
+      await expect.poll(() => new URL(page.url()).pathname).toBe("/settings/model-providers");
+      expect(new URL(page.url()).searchParams.get("connect")).toBe("1");
+      await page.locator("[data-models-login-search]").waitFor({ state: "visible" });
+      await screenshot(page, "10-models-connection-navigation.png");
     } finally {
       await context.close();
     }

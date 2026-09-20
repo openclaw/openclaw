@@ -20,7 +20,7 @@ import {
 } from "./tool-call-diff.ts";
 import { parsePatchView, type PatchFileOperation } from "./tool-call-patch.ts";
 
-export type ToolCallKind = "command" | "read" | "edit" | "write" | "search" | "fetch" | "generic";
+type ToolCallKind = "command" | "read" | "edit" | "write" | "search" | "fetch" | "generic";
 
 type ToolCallViewSource = {
   name: string;
@@ -252,26 +252,7 @@ function resolveTextEditorCommand(args: unknown): TextEditorCommand | undefined 
   }
 }
 
-export function resolveToolCallTargetPaths(name: string, args?: unknown): string[] {
-  const record = asRecord(args);
-  if (PATCH_TOOL_NAMES.has(normalizeKey(name))) {
-    return parsePatchView(record)?.paths ?? [];
-  }
-  const path = resolvePathArg(record);
-  return path ? [path] : [];
-}
-
-export function resolveToolCallFileOperations(
-  name: string,
-  args?: unknown,
-): PatchFileOperation[] | undefined {
-  if (!PATCH_TOOL_NAMES.has(normalizeKey(name))) {
-    return undefined;
-  }
-  return parsePatchView(asRecord(args))?.fileOperations;
-}
-
-export function resolveToolCallKind(name: string, args?: unknown): ToolCallKind {
+function resolveToolCallKind(name: string, args?: unknown): ToolCallKind {
   const key = normalizeKey(name);
   if (TEXT_EDITOR_TOOL_NAMES.has(key)) {
     switch (resolveTextEditorCommand(args)) {

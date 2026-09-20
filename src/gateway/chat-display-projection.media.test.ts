@@ -88,6 +88,23 @@ describe("commentary group visibility", () => {
       tools: 0,
     },
     {
+      name: "control-only commentary with media and visible siblings",
+      phase: undefined,
+      content: [{ ...keyed, text: "ANNOUNCE_SKIP REPLY_SKIP" }, image, tool, final],
+      text: ["ANNOUNCE_SKIP REPLY_SKIP", "Final reply"],
+      images: 1,
+      tools: 1,
+    },
+    {
+      name: "control-only commentary with transcript media facts",
+      phase: undefined,
+      content: [{ ...keyed, text: "ANNOUNCE_SKIP REPLY_SKIP" }],
+      media: [{ url: "/media/proof.png", contentType: "image/png" }],
+      text: [""],
+      images: 0,
+      tools: 0,
+    },
+    {
       name: "unkeyed media",
       phase: "commentary",
       content: [{ type: "text", text: "Image caption" }, image],
@@ -124,12 +141,12 @@ describe("commentary group visibility", () => {
       images: 1,
       tools: 1,
     },
-  ])("keeps visibility scoped to $name", ({ phase, content, text, images, tools }) => {
+  ])("keeps visibility scoped to $name", ({ phase, content, text, images, tools, media }) => {
     const source = {
       role: "assistant",
       ...(phase ? { phase } : {}),
       content,
-      __openclaw: { id: "row-identity" },
+      __openclaw: { id: "row-identity", ...(media ? { media } : {}) },
     };
     const before = structuredClone(source);
     const projected = projectChatDisplayMessages([source], { includeCommentaryFallbacks: true });
@@ -141,6 +158,10 @@ describe("commentary group visibility", () => {
     );
     expect(blocks.filter((block) => block?.type === "image")).toHaveLength(images);
     expect(blocks.filter((block) => block?.type === "toolCall")).toHaveLength(tools);
+    if (media) {
+      expect(projected).toHaveLength(1);
+      expect(projected[0]).toMatchObject({ __openclaw: { media } });
+    }
     expect(source).toEqual(before);
   });
 });

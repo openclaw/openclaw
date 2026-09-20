@@ -46,42 +46,72 @@ describe("subagent registry restart recovery", () => {
     textSignature: JSON.stringify({ v: 1, id: `recovery-${phase}`, phase }),
   });
 
-  describe("orphaned running sessions", () => {
-    it("recovers the exact running session orphaned before its Gateway could write an abort marker", async () => {
-      const entry = run();
-      entry.execution.lifecycleGeneration = getAgentEventLifecycleGeneration();
-      Object.assign(mocks.entries[childSessionKey]!, {
-        status: "running",
-        lifecycleRunId: entry.runId,
-        abortedLastRun: false,
-      });
-      rotateAgentEventLifecycleGeneration();
+  it("preserves an abort marker owned by a newer visible execution", async () => {
+    mocks.entries[childSessionKey]!.lifecycleRunId = "newer-visible-run";
 
-      expect(await recover(entry)).toEqual({ status: "accepted" });
-      expect(dispatchAgent).toHaveBeenCalledTimes(1);
-      expect(dispatchAgent).toHaveBeenCalledWith(
-        expect.objectContaining({
-          sessionKey: childSessionKey,
-          expectedExistingSessionId: "session-id",
-        }),
-      );
-      expect(mocks.entries[childSessionKey]).toMatchObject({
-        sessionId: "session-id",
-        abortedLastRun: false,
-        subagentRecovery: { automaticAttempts: 1 },
-      });
-      expect(gatewayRuntime.sendRecoveryNotice).toHaveBeenCalledWith({
-        channel: "qa-channel",
-        to: "qa-requester",
-        accountId: "default",
-        threadId: undefined,
-        text: "Resumed your interrupted task after the Gateway restart.",
-        idempotencyKey: expect.stringMatching(
-          /^main-session-restart-recovery:subagent:subagent-recovery:.*:resumed-notice$/,
-        ),
-        isCurrent: expect.any(Function),
-      });
+    expect(await recover(run())).toMatchObject({
+      status: "terminal",
+      suppressSessionEffects: true,
     });
+    expect(dispatchAgent).not.toHaveBeenCalled();
+    expect(mocks.patchSessionEntryCore).not.toHaveBeenCalled();
+    expect(mocks.entries[childSessionKey]).toMatchObject({
+      lifecycleRunId: "newer-visible-run",
+      abortedLastRun: true,
+    });
+  });
+
+  describe("orphaned running sessions", () => {
+    it.each([60_000, 3 * 24 * 60 * 60_000])(
+      "reconciles a hard-kill orphan last observed %i ms ago",
+      async (ageMs) => {
+        const entry = run();
+        const updatedAt = Date.now() - ageMs;
+        entry.execution.lifecycleGeneration = getAgentEventLifecycleGeneration();
+        Object.assign(mocks.entries[childSessionKey]!, {
+          status: "running",
+          lifecycleRunId: entry.runId,
+          abortedLastRun: false,
+          updatedAt,
+        });
+        rotateAgentEventLifecycleGeneration();
+
+        const result = await recover(entry);
+        if (ageMs > 2 * 60 * 60_000) {
+          expect(result).toMatchObject({
+            status: "terminal",
+            error: expect.stringContaining("stale aborted subagent run"),
+          });
+          expect(mocks.entries[childSessionKey]?.updatedAt).toBe(updatedAt);
+          expect(dispatchAgent).not.toHaveBeenCalled();
+          return;
+        }
+        expect(result).toEqual({ status: "accepted" });
+        expect(dispatchAgent).toHaveBeenCalledTimes(1);
+        expect(dispatchAgent).toHaveBeenCalledWith(
+          expect.objectContaining({
+            sessionKey: childSessionKey,
+            expectedExistingSessionId: "session-id",
+          }),
+        );
+        expect(mocks.entries[childSessionKey]).toMatchObject({
+          sessionId: "session-id",
+          abortedLastRun: false,
+          subagentRecovery: { automaticAttempts: 1 },
+        });
+        expect(gatewayRuntime.sendRecoveryNotice).toHaveBeenCalledWith({
+          channel: "qa-channel",
+          to: "qa-requester",
+          accountId: "default",
+          threadId: undefined,
+          text: "Resumed your interrupted task after the Gateway restart.",
+          idempotencyKey: expect.stringMatching(
+            /^main-session-restart-recovery:subagent:subagent-recovery:.*:resumed-notice$/,
+          ),
+          isCurrent: expect.any(Function),
+        });
+      },
+    );
 
     it.each(["current lifecycle", "different run", "completed session"])(
       "does not invent a restart interruption for a %s",
@@ -102,16 +132,28 @@ describe("subagent registry restart recovery", () => {
       },
     );
 
-    it.each(["run", "admission"])(
-      "does not mark a hard-kill orphan after a fresh %s owns its session",
-      async (owner) => {
+    it.each([
+      ["run", false],
+      ["admission", false],
+      ["run", true],
+      ["admission", true],
+    ] as const)(
+      "does not mark a hard-kill orphan after a fresh %s owns its session (recovered=%s)",
+      async (owner, recovered) => {
         const entry = run();
+        if (recovered) {
+          entry.taskRunId = "original-task-run";
+          entry.execution.transcriptTarget = { sessionKey: "agent:main:internal:recovered" };
+        }
         entry.execution.lifecycleGeneration = getAgentEventLifecycleGeneration();
         rotateAgentEventLifecycleGeneration();
         Object.assign(mocks.entries[childSessionKey]!, {
           status: "running",
-          lifecycleRunId: entry.runId,
+          lifecycleRunId: recovered ? "steered-source" : entry.runId,
           abortedLastRun: false,
+          subagentRecovery: recovered
+            ? { lastRunId: entry.runId, sessionLifecycleRunId: "steered-source" }
+            : undefined,
         });
         const lease =
           owner === "admission"
@@ -138,32 +180,79 @@ describe("subagent registry restart recovery", () => {
       },
     );
 
-    it("keeps a replacement session untouched when orphan marking waits for the store", async () => {
-      const entry = run();
+    it.each([
+      "current lifecycle",
+      "different task",
+      "different recovery",
+      "newer visible run",
+      "missing transcript",
+    ])("does not adopt a hidden recovery with %s", async (scenario) => {
+      const entry = run({ taskRunId: "original-task-run" });
       entry.execution.lifecycleGeneration = getAgentEventLifecycleGeneration();
-      rotateAgentEventLifecycleGeneration();
+      entry.execution.transcriptTarget = { sessionKey: "agent:main:internal:recovered" };
+      if (scenario !== "current lifecycle") {
+        rotateAgentEventLifecycleGeneration();
+      }
       Object.assign(mocks.entries[childSessionKey]!, {
         status: "running",
-        lifecycleRunId: entry.runId,
+        lifecycleRunId: scenario === "newer visible run" ? "visible-run" : "original-task-run",
         abortedLastRun: false,
+        subagentRecovery: {
+          lastRunId: scenario === "different recovery" ? "older-recovery" : entry.runId,
+          ...(scenario !== "different task" ? { sessionLifecycleRunId: "original-task-run" } : {}),
+        },
       });
-      mocks.patchSessionEntryCore.mockImplementationOnce(async (_scope, update) => {
-        const replacement = {
-          ...mocks.entries[childSessionKey]!,
-          sessionId: "replacement-session",
-          lifecycleRunId: "replacement-run",
-        };
-        mocks.entries[childSessionKey] = replacement;
-        return update({ ...replacement });
-      });
-      expect(await recover(entry)).toEqual({ status: "deferred" });
+      if (scenario === "different task") {
+        entry.taskRunId = "different-task-run";
+      }
+      if (scenario === "missing transcript") {
+        entry.execution.transcriptTarget = undefined;
+      }
+      expect(await recover(entry)).toEqual({ status: "ignored" });
       expect(dispatchAgent).not.toHaveBeenCalled();
-      expect(mocks.entries[childSessionKey]).toMatchObject({
-        sessionId: "replacement-session",
-        lifecycleRunId: "replacement-run",
-        abortedLastRun: false,
-      });
+      expect(mocks.patchSessionEntryCore).not.toHaveBeenCalled();
     });
+
+    it.each(["session", "visible turn"])(
+      "keeps a replacement %s untouched when orphan marking waits for the store",
+      async (replacementKind) => {
+        const entry = run();
+        if (replacementKind === "visible turn") {
+          entry.taskRunId = "original-task-run";
+          entry.execution.transcriptTarget = { sessionKey: "agent:main:internal:recovered" };
+        }
+        entry.execution.lifecycleGeneration = getAgentEventLifecycleGeneration();
+        rotateAgentEventLifecycleGeneration();
+        Object.assign(mocks.entries[childSessionKey]!, {
+          status: "running",
+          lifecycleRunId: replacementKind === "visible turn" ? "steered-source" : entry.runId,
+          abortedLastRun: false,
+          subagentRecovery: {
+            lastRunId: entry.runId,
+            sessionLifecycleRunId:
+              replacementKind === "visible turn" ? "steered-source" : entry.runId,
+          },
+        });
+        const replacementSessionId =
+          replacementKind === "session" ? "replacement-session" : "session-id";
+        mocks.patchSessionEntryCore.mockImplementationOnce(async (_scope, update) => {
+          const replacement = {
+            ...mocks.entries[childSessionKey]!,
+            sessionId: replacementSessionId,
+            lifecycleRunId: "replacement-run",
+          };
+          mocks.entries[childSessionKey] = replacement;
+          return update({ ...replacement });
+        });
+        expect(await recover(entry)).toEqual({ status: "deferred" });
+        expect(dispatchAgent).not.toHaveBeenCalled();
+        expect(mocks.entries[childSessionKey]).toMatchObject({
+          sessionId: replacementSessionId,
+          lifecycleRunId: "replacement-run",
+          abortedLastRun: false,
+        });
+      },
+    );
   });
 
   it.each([
@@ -886,47 +975,44 @@ describe("subagent registry restart recovery", () => {
     });
   });
 
-  it("terminalizes accepted ownership when its exact session is missing", async () => {
-    delete mocks.entries[childSessionKey];
-    const entry = run({
-      execution: {
-        status: "interrupted",
-        startedAt: Date.now() - 55_000,
-        restartRecovery: {
-          sessionId: "session-id",
-          sessionMarker: "session-id:1",
-          idempotencyKey: "subagent-recovery:accepted",
-          phase: "accepted",
+  it.each(["missing", "owned by a newer visible run"])(
+    "terminalizes accepted ownership before remapping a session %s",
+    async (scenario) => {
+      if (scenario === "missing") {
+        delete mocks.entries[childSessionKey];
+      } else {
+        mocks.entries[childSessionKey]!.lifecycleRunId = "newer-visible-run";
+      }
+      const entry = run({
+        execution: {
+          status: "interrupted",
+          startedAt: Date.now() - 55_000,
+          restartRecovery: {
+            sessionId: "session-id",
+            sessionMarker: "session-id:1",
+            sessionLifecycleRunId: "visible-source",
+            idempotencyKey: "subagent-recovery:accepted",
+            phase: "accepted",
+          },
         },
-      },
-    });
-    const successor = structuredClone(entry);
-    replaceRun.mockImplementation((params: ReplaceRunParams) => {
-      successor.runId = params.nextRunId;
-      successor.execution.restartRecovery = params.restartRecovery;
-      return true;
-    });
+      });
+      await expect(recover(entry)).resolves.toMatchObject({
+        status: "terminal",
+        error: expect.stringContaining("lost its exact session"),
+        suppressSessionEffects: true,
+        target: {
+          runId: entry.runId,
+          entry,
+        },
+      });
 
-    await expect(
-      recover(entry, {
-        getRun: (runId) => (runId === successor.runId ? successor : undefined),
-      }),
-    ).resolves.toMatchObject({
-      status: "terminal",
-      error: expect.stringContaining("lost its exact session"),
-      suppressSessionEffects: true,
-      target: {
-        runId: "subagent-recovery:accepted",
-        entry: successor,
-      },
-    });
-
-    expect(replaceRun).toHaveBeenCalledOnce();
-    expect(dispatchAgent).not.toHaveBeenCalled();
-    expect(mocks.patchSessionEntryCore).not.toHaveBeenCalled();
-    expect(clearAcceptedRecovery).not.toHaveBeenCalled();
-    expect(successor.execution.restartRecovery).toMatchObject({ phase: "accepted" });
-  });
+      expect(replaceRun).not.toHaveBeenCalled();
+      expect(dispatchAgent).not.toHaveBeenCalled();
+      expect(mocks.patchSessionEntryCore).not.toHaveBeenCalled();
+      expect(clearAcceptedRecovery).not.toHaveBeenCalled();
+      expect(entry.execution.restartRecovery).toMatchObject({ phase: "accepted" });
+    },
+  );
 
   it("tombstones a rapid third accepted recovery", async () => {
     mocks.entries[childSessionKey]!.subagentRecovery = {

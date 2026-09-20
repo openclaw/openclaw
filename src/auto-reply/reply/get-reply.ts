@@ -980,7 +980,6 @@ export async function getReplyFromConfig(
     return directiveResult.reply;
   }
   const {
-    commandSource,
     command,
     allowTextCommands,
     skillCommands,
@@ -988,14 +987,8 @@ export async function getReplyFromConfig(
     elevatedAllowed,
     elevatedFailures,
     defaultActivation,
-    resolvedFastMode,
-    resolvedFastModeAutoOnSeconds,
-    resolvedFastModeOverride,
-    resolvedFastModeAutoOnSecondsOverride,
     resolvedVerboseLevel,
     resolvedElevatedLevel,
-    execOverrides,
-    blockStreamingEnabled,
     blockReplyChunking,
     resolvedBlockStreamingBreak,
     provider: resolvedProvider,
@@ -1006,8 +999,6 @@ export async function getReplyFromConfig(
     contextTokens,
     inlineStatusRequested,
     directiveAck,
-    perMessageQueueMode,
-    perMessageQueueOptions,
   } = directiveResult.result;
   let { directives, cleanedBody } = directiveResult.result;
   provider = resolvedProvider;
@@ -1246,6 +1237,7 @@ export async function getReplyFromConfig(
   logResolverTiming("milestone", "before_run_prepared_reply");
   const replyResult = await traceGetReplyPhase("reply.run_prepared_reply", () =>
     runPreparedReply({
+      ...directiveResult.result,
       ctx,
       sessionCtx,
       conversation,
@@ -1255,25 +1247,9 @@ export async function getReplyFromConfig(
       agentCfg,
       sessionCfg,
       commandAuthorized,
-      command,
-      commandSource,
-      allowTextCommands,
       directives,
-      defaultActivation,
       resolvedThinkLevel,
-      resolvedFastMode,
-      resolvedFastModeAutoOnSeconds,
-      resolvedFastModeOverride,
-      resolvedFastModeAutoOnSecondsOverride,
-      resolvedVerboseLevel,
       resolvedReasoningLevel,
-      resolvedElevatedLevel,
-      execOverrides,
-      elevatedEnabled,
-      elevatedAllowed,
-      blockStreamingEnabled,
-      blockReplyChunking,
-      resolvedBlockStreamingBreak,
       modelState: runModelState,
       provider: runProvider,
       model: runModel,
@@ -1285,8 +1261,6 @@ export async function getReplyFromConfig(
       requestedRouteResolution: runAutoFallbackPrimaryProbe
         ? runModelState.requestedRouteResolution
         : requestedRouteResolution,
-      perMessageQueueMode,
-      perMessageQueueOptions,
       typing,
       opts: queueModeOverride ? { ...preparedReplyOpts, queueModeOverride } : preparedReplyOpts,
       defaultModel,

@@ -190,6 +190,7 @@ export class GoogleMeetRuntime {
         await this.#speakViaTransport(session, instructions),
       durableTranscripts: {
         config: params.fullConfig.transcripts,
+        openclawConfig: params.fullConfig,
         providerId: "google-meet",
         providerName: "Google Meet",
       },

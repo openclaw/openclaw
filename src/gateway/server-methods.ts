@@ -55,7 +55,10 @@ import { coreGatewayHandlers } from "./server-methods/core-handlers.js";
 import { authenticatedProfileUnavailableError } from "./server-methods/gateway-client-identity.js";
 import { prepareGatewayRequestHandler } from "./server-methods/lazy-core-handlers.js";
 import { isTargetedNonSafeGatewayRestartRequest } from "./server-methods/restart-request.js";
-import { withSessionMutationCommitGuard } from "./server-methods/session-mutation-guards.js";
+import {
+  bindGatewayRequestHandlerMutationAuthority,
+  withSessionMutationCommitGuard,
+} from "./server-methods/session-mutation-guards.js";
 import type {
   GatewayRequestContext,
   GatewayRequestHandler,
@@ -66,8 +69,16 @@ import type {
 import type { GatewayRequestEntry } from "./server-request-entry.js";
 import type { GatewayRpcDiagnostics } from "./server/ws-connection/request-diagnostics.js";
 import { sessionMutationTargetFields } from "./session-method-policy.js";
-import { resolveDirectIncognitoTargets } from "./session-sharing-target-input.js";
+import { retainSessionListForegroundWork } from "./session-projection-work.js";
+import { resolveRequestedSessionAgentId } from "./session-request-agent.js";
+import type { SessionRowReadView } from "./session-row-prepared-read.js";
+import { getSessionRowProjection } from "./session-row-projection-access.js";
 import {
+  resolveDirectIncognitoTargets,
+  resolveDirectSessionTargets,
+} from "./session-sharing-target-input.js";
+import {
+  isGatewayAdmin,
   resolveSessionMutationAuthorization,
   SessionMutationAuthorizationChangedError,
 } from "./session-sharing.js";
@@ -273,6 +284,9 @@ export async function authorizeGatewayRequestPreDispatch(params: {
   error: ErrorShape | null;
   sessionMutationAuthorization?: SessionMutationAuthorization;
 }> {
+  if (params.context.ensureSessionRowProjection) {
+    await params.context.ensureSessionRowProjection();
+  }
   while (true) {
     // Dynamic scope lookup must use the same registry as the eventual handler.
     const authError = withPluginRuntimeRegistryScope(
@@ -318,14 +332,28 @@ export async function authorizeGatewayRequestPreDispatch(params: {
         ),
       };
     }
-    const preparedSessionMutation = withCanonicalSessionValidationDeferral(() =>
+    const projection =
+      params.method === "sessions.describe" && !isGatewayAdmin(params.client)
+        ? getSessionRowProjection(params.context)
+        : undefined;
+    const authorizeSession = (sessionRowRead?: SessionRowReadView) =>
       resolveSessionMutationAuthorization({
         client: params.client ?? null,
         method: params.method,
         requestParams: params.requestParams,
         context: params.context,
-      }),
-    );
+        sessionRowRead,
+      });
+    const preparedSessionMutation = projection
+      ? await projection.withPreparedExactRows(
+          (cfg) =>
+            resolveDirectSessionTargets(params.method, params.requestParams).flatMap((target) => {
+              const agent = resolveRequestedSessionAgentId(cfg, target.sessionKey, target.agentId);
+              return agent.ok ? [{ key: target.sessionKey, agentId: agent.agentId }] : [];
+            }),
+          authorizeSession,
+        )
+      : withCanonicalSessionValidationDeferral(() => authorizeSession());
     if (preparedSessionMutation.kind === "pending") {
       const { certifySessionCanonicalValidationPending } =
         await import("../config/sessions/session-canonical-validation-readiness.js");
@@ -361,7 +389,7 @@ export async function authorizeGatewayRequestPreDispatch(params: {
 
 type GatewayRequestEnvelopeOptions<T> = Pick<
   GatewayRequestOptions,
-  "context" | "isWebchatConnect"
+  "context" | "isWebchatConnect" | "signal" | "hasCurrentClientAuthority"
 > & {
   methodRegistry: GatewayMethodRegistry;
   requestParams?: unknown;
@@ -475,6 +503,7 @@ export async function runWithGatewayRequestEnvelope<T>(
     if (postAdmissionRateLimitError) {
       return await options.reject(postAdmissionRateLimitError);
     }
+    const releaseForegroundWork = retainSessionListForegroundWork();
     try {
       const pluginRegistry =
         (options.methodRegistry.pluginRegistry as PluginRegistry | undefined) ??
@@ -487,6 +516,8 @@ export async function runWithGatewayRequestEnvelope<T>(
           // Detached turn admission needs the live instance resolver, not a captured request context.
           resolveGatewayContext: options.context.resolveGatewayContext,
           client,
+          signal: options.signal,
+          hasCurrentClientAuthority: options.hasCurrentClientAuthority,
           isWebchatConnect: options.isWebchatConnect,
           // Only an owner-bound in-process stream may retain admitted Full authority.
           ...(client?.internal?.nodeInvokeStream ? getPluginRuntimeGatewayNodeAuthorities() : {}),
@@ -503,6 +534,8 @@ export async function runWithGatewayRequestEnvelope<T>(
         return await options.reject(staleInstall.error);
       }
       throw error;
+    } finally {
+      releaseForegroundWork();
     }
   }
   if (!rootWorkAdmission) {
@@ -539,6 +572,7 @@ export async function handleGatewayRequest(
       }
     : opts.sessionMutationCommitGuard;
   const entry = opts.requestEntry ?? context.requestEntryLifetime?.enter(opts);
+  const releaseForegroundWork = retainSessionListForegroundWork();
   try {
     entry?.assertOpen();
     // Prefer the caller-attached registry when it owns the requested method so plugin dispatch
@@ -577,18 +611,22 @@ export async function handleGatewayRequest(
     );
     const invokeHandler = async () => {
       const preparedHandler = await prepareGatewayRequestHandler(handler, entry);
-      const handlerOptions = {
-        req,
-        params: (req.params ?? {}) as Record<string, unknown>,
-        client,
-        isWebchatConnect,
-        respond,
-        context,
-        signal,
-        ...(hasCurrentClientAuthority ? { hasCurrentClientAuthority } : {}),
-        sessionMutationCommitGuard,
-        sessionMutationAuthorization,
-      };
+      const handlerOptions = bindGatewayRequestHandlerMutationAuthority(
+        opts,
+        {
+          req,
+          params: (req.params ?? {}) as Record<string, unknown>,
+          client,
+          isWebchatConnect,
+          respond,
+          context,
+          signal,
+          ...(hasCurrentClientAuthority ? { hasCurrentClientAuthority } : {}),
+          sessionMutationCommitGuard,
+          sessionMutationAuthorization,
+        },
+        profileBinding,
+      );
       sessionMutationCommitGuard?.();
       entry?.assertOpen();
       if (signal?.aborted) {
@@ -605,12 +643,15 @@ export async function handleGatewayRequest(
     await runWithGatewayRequestEnvelope(req.method, client, invokeHandler, {
       context,
       isWebchatConnect,
+      signal,
+      hasCurrentClientAuthority,
       methodRegistry,
       requestParams: req.params,
       admission: opts.admission,
       reject: (error) => respond(false, undefined, error),
     });
   } finally {
+    releaseForegroundWork();
     // Transport/import owners retain failures through their response and logging paths.
     if (!opts.requestEntry) {
       entry?.release();

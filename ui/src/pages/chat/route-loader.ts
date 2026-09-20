@@ -1,9 +1,10 @@
-import type { RouteLocation } from "@openclaw/uirouter";
+import type { RouteLoaderOptions, RouteLocation } from "@openclaw/uirouter";
 import { notFound } from "@openclaw/uirouter";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { INTERNAL_SESSION_PATH_PARAM } from "../../app-route-paths.ts";
 import { pathForSession } from "../../app-session-path-builder.ts";
 import { sessionRefFromPath, type SessionPathTarget } from "../../app-session-route-paths.ts";
+import type { ApplicationContext as FullApplicationContext } from "../../app/context.ts";
 import { waitForGatewayClient } from "../../app/gateway-readiness.ts";
 import type { BoardFace } from "../../lib/board/settings.ts";
 import {
@@ -626,4 +627,42 @@ export async function loadChatRoute(
           : { routeLoadingSkeleton: true as const }),
       }
     : notFound({ routeId: face });
+}
+
+/** Page-level revalidation and preview preparation stay with the lazy loader. */
+export async function loadSessionPage(
+  context: FullApplicationContext,
+  face: BoardFace,
+  { location, signal, cause, deps }: RouteLoaderOptions,
+) {
+  const current =
+    cause === "revalidate"
+      ? context.router
+          .getState()
+          .matches.find((match) => match.routeId === face && match.deps === deps)
+      : undefined;
+  // SAFETY: Matching this face selects only this page's loadChatRoute result.
+  const data = current?.data as ChatRouteData | undefined;
+  // Revalidating an established link must not adopt another session with the same prefix.
+  const result = await loadChatRoute(
+    context,
+    location,
+    face,
+    signal,
+    cause === "revalidate"
+      ? { sessionKey: data?.kind === "session" ? data.sessionKey : undefined }
+      : undefined,
+  );
+  const creation = context.chatSubmissions.creation;
+  if ("kind" in result && result.kind === "session") {
+    if (creation?.sessionKey === result.sessionKey) {
+      result.creation = creation;
+    }
+    if (result.creation || context.placementStartup.get(result.sessionKey)?.initialTurn) {
+      // Startup owns a display-only view even if an interrupted temporary session is cleaned up.
+      await import("./pending-session-create.ts");
+      signal.throwIfAborted();
+    }
+  }
+  return result;
 }

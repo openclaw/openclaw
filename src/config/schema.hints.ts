@@ -100,6 +100,7 @@ const SECTION_DOCS_URLS = {
 
 const FIELD_PLACEHOLDERS: Record<string, string> = {
   "gateway.cliAgents.enabled": "Default (enabled)",
+  "nodeHost.autoUpdate.enabled": "Default (enabled)",
   "tools.loopDetection.enabled": "Default (post-compaction protection only)",
   "gateway.publicOrigin": "https://gateway.example.com",
   "gateway.remote.url": "ws://host:18789",

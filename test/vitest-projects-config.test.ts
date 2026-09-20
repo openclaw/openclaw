@@ -43,6 +43,7 @@ import { createExtensionDatabaseWorkersVitestConfig } from "./vitest/vitest.exte
 import { createExtensionImessageVitestConfig } from "./vitest/vitest.extension-imessage.config.ts";
 import { createExtensionSlackVitestConfig } from "./vitest/vitest.extension-slack.config.ts";
 import { createExtensionsVitestConfig } from "./vitest/vitest.extensions.config.ts";
+import { diagnosticForksPool } from "./vitest/vitest.forks-pool.ts";
 import { createGatewayMethodsIsolatedVitestConfig } from "./vitest/vitest.gateway-methods-isolated.config.ts";
 import { createGatewayMethodsVitestConfig } from "./vitest/vitest.gateway-methods.config.ts";
 import { createGatewayServerIsolatedVitestConfig } from "./vitest/vitest.gateway-server-isolated.config.ts";
@@ -57,6 +58,7 @@ import {
   createGatewayVitestConfig,
 } from "./vitest/vitest.gateway.config.ts";
 import { createInfraVitestConfig } from "./vitest/vitest.infra.config.ts";
+import liveConfig from "./vitest/vitest.live.config.ts";
 import { createPluginSdkLightVitestConfig } from "./vitest/vitest.plugin-sdk-light.config.ts";
 import { createProjectShardVitestConfig } from "./vitest/vitest.project-shard-config.ts";
 import {
@@ -75,6 +77,10 @@ import { createUnitFastVitestConfig } from "./vitest/vitest.unit-fast.config.ts"
 
 const patternFiles = createPatternFileHelper("openclaw-vitest-projects-config-");
 const scopedGatewayMethodsIsolatedTestFiles = [
+  "server-methods/chat-metadata-runtime.cache.test.ts",
+  "server-methods/tasks.access.test.ts",
+  "server-methods/tasks.test.ts",
+  "server-methods/agent.task-runtime.test.ts",
   "server-methods/agent.test.ts",
   "server-methods/board.runtime-boundaries.test.ts",
   "server-methods/chat.reset-visible-yield.test.ts",
@@ -83,6 +89,7 @@ const scopedGatewayMethodsIsolatedTestFiles = [
   "server-methods/sessions.send-yield-resume.test.ts",
   "server-methods/system-agent-nested-inference.integration.test.ts",
   "server-methods/system-agent-setup-control-ui.test.ts",
+  "server-methods/transcripts.test.ts",
   "server-methods/users-preferences.test.ts",
   "server-methods/usage.test.ts",
   "server-methods/usage.sessions-usage.test.ts",
@@ -253,6 +260,9 @@ describe("projects vitest config", () => {
     expect(gatewayFallback.exclude).toContain(overrideFixture);
     expect(methodsConfig.exclude).toContain("src/gateway/server-methods/agent.test.ts");
     expect(methodsConfig.exclude).toContain(
+      "src/gateway/server-methods/agent.task-runtime.test.ts",
+    );
+    expect(methodsConfig.exclude).toContain(
       "src/gateway/server-methods/health.owner-routing.test.ts",
     );
     expect(methodsConfig.exclude).toContain(
@@ -265,6 +275,9 @@ describe("projects vitest config", () => {
       "src/gateway/server-methods/system-agent-setup-control-ui.test.ts",
     );
     expect(gatewayFallback.exclude).toContain("src/gateway/server-methods/agent.test.ts");
+    expect(gatewayFallback.exclude).toContain(
+      "src/gateway/server-methods/agent.task-runtime.test.ts",
+    );
     expect(gatewayFallback.exclude).toContain(
       "src/gateway/server-methods/health.owner-routing.test.ts",
     );
@@ -687,19 +700,35 @@ describe("projects vitest config", () => {
   it.each([
     "src/wizard/setup.inference-recovery.integration.test.ts",
     "src/plugins/loader.trust-diagnostics.test.ts",
+    "src/plugins/public-artifact-environment.test.ts",
+    "src/agents/embedded-agent-runner/model.test.ts",
+    "src/agents/embedded-agent-runner/model.forward-compat.test.ts",
+    "src/agents/embedded-agent-runner/model.generation-scope.test.ts",
+    "src/agents/embedded-agent-runner/model.skip-agent-discovery-hooks.test.ts",
+    "src/agents/embedded-agent-runner/run/model-setup.ownership.test.ts",
+    "src/agents/embedded-agent-runner/run/model-setup.selected-model.test.ts",
+    "src/agents/embedded-agent-runner/run/runtime-preparation.thinking.test.ts",
+    "src/agents/tools-effective-inventory.cold-provider.test.ts",
+    "src/tts/tts-summary.static-catalog.test.ts",
   ])("routes host-owned SQLite caller %s through the infra process", (file) => {
     const project = "test/vitest/vitest.infra.config.ts";
     const testConfig = requireTestConfig(createInfraVitestConfig({}));
     expect(buildVitestRunPlans([file]).map((plan) => plan.config)).toEqual([project]);
     expect(testConfig.include).toContain(file);
-    expect(testConfig.pool).toBe("forks");
+    expect(testConfig.pool).toBe(diagnosticForksPool);
     expect(rootVitestProjects).toContain(project);
     expect(fullSuiteVitestShards.flatMap((shard) => shard.projects ?? [])).toContain(project);
   });
 
+  it("runs live Gateway hosts in process forks for shared-state admission", () => {
+    const testConfig = requireTestConfig(liveConfig);
+    expect(testConfig.pool).toBe("forks");
+    expect(testConfig.maxWorkers).toBe(1);
+  });
+
   it("keeps Slack's real cooldown store in its forked project", () => {
     const project = "test/vitest/vitest.extension-slack.config.ts";
-    expect(requireTestConfig(createExtensionSlackVitestConfig({})).pool).toBe("forks");
+    expect(requireTestConfig(createExtensionSlackVitestConfig({})).pool).toBe(diagnosticForksPool);
     expect(
       buildVitestRunPlans(["extensions/slack/src/monitor/presence-cooldown-store.test.ts"]).map(
         (plan) => plan.config,
@@ -724,7 +753,7 @@ describe("projects vitest config", () => {
       expect(
         fullSuiteVitestShards.find((shard) => shard.name === "extensions")?.projects,
       ).toContain(project);
-      expect(testConfig.pool).toBe("forks");
+      expect(testConfig.pool).toBe(diagnosticForksPool);
       expect(testConfig.isolate).toBe(true);
       expect(testConfig.include).toEqual([
         ...databaseWorkerExtensionTestRoots.map(
@@ -745,7 +774,7 @@ describe("projects vitest config", () => {
       const config = requireTestConfig(createExtensionDatabaseWorkersVitestConfig({}));
       expect(buildVitestRunPlans([file]).map((plan) => plan.config)).toEqual([project]);
       expect(config.include).toContain(file.replace(/^extensions\//u, ""));
-      expect(config.pool).toBe("forks");
+      expect(config.pool).toBe(diagnosticForksPool);
       expect(config.isolate).toBe(true);
     },
   );
@@ -785,7 +814,7 @@ describe("projects vitest config", () => {
       }
       const workerConfig = requireTestConfig(createExtensionDatabaseWorkersVitestConfig({}));
       expect(workerConfig.include).toContain(`imessage/src/${basename}`);
-      expect(workerConfig.pool).toBe("forks");
+      expect(workerConfig.pool).toBe(diagnosticForksPool);
       expect(workerConfig.isolate).toBe(true);
       expect(requireTestConfig(createExtensionImessageVitestConfig({})).exclude).toContain(
         `imessage/src/${basename}`,

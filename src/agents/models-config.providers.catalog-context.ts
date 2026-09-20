@@ -3,6 +3,7 @@ import {
   normalizeProviderId,
 } from "@openclaw/model-catalog-core/provider-id";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import type {
   ProviderCatalogOutcome,
   ProviderCatalogResult,
@@ -14,9 +15,13 @@ import {
 import { matchesProviderPluginRef } from "../plugins/provider-registry-shared.js";
 import type { ProviderPlugin } from "../plugins/types.js";
 import { isTrustedSecretSurfaceUnavailableError } from "../secrets/runtime-degraded-state.js";
+import { resolveRegisteredAgentIdForDir } from "./agent-dir-registry.js";
+import { buildOAuthRefreshFailureLoginCommand } from "./auth-profiles/oauth-refresh-failure.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
 import type { ProviderConfig } from "./models-config.providers.secret-helpers.js";
 import { resolveProviderIdForAuth } from "./provider-auth-aliases.js";
+
+const log = createSubsystemLogger("agents/model-providers");
 
 type CatalogContext = {
   config?: OpenClawConfig;
@@ -77,59 +82,83 @@ export async function prepareProviderCatalogRun(
   ) {
     return catalogParams;
   }
+  const agentId = resolveRegisteredAgentIdForDir(params.agentDir, params.env);
   // Preparation stays internal and provider-generic. The helper exits before
   // materialization unless this catalog's selected credential is expiring OAuth.
   const { prepareProviderCatalogOAuthAuth } =
     await import("./models-config.providers.discovery-auth.runtime.js");
   const failedProfileIds = new Set<string>();
   const reportedOutcomes: ProviderCatalogOutcome[] = [];
+  const { resolveProviderAuth, failures } = await prepareProviderCatalogOAuthAuth(
+    {
+      agentDir: params.agentDir,
+      authStore,
+      env: params.env,
+      provider: params.provider.id,
+      resolveProviderAuth: params.resolveProviderAuth,
+      isActive,
+      onPreparationFailure: (profileIds) => {
+        for (const profileId of profileIds) {
+          failedProfileIds.add(profileId);
+        }
+      },
+    },
+    params.config,
+  );
   return {
     ...catalogParams,
     reportCatalogOutcome: (outcome) => {
       reportedOutcomes.push({ ...outcome });
       params.reportCatalogOutcome?.(outcome);
     },
-    resolveProviderAuth: await prepareProviderCatalogOAuthAuth(
-      {
-        agentDir: params.agentDir,
-        authStore,
-        env: params.env,
-        provider: params.provider.id,
-        resolveProviderAuth: params.resolveProviderAuth,
-        isActive,
-        onPreparationFailure: (profileIds) => {
-          for (const profileId of profileIds) {
-            failedProfileIds.add(profileId);
-          }
-        },
-      },
-      params.config,
-    ),
+    resolveProviderAuth,
     finalizeCatalogResult: (result) => {
-      if (failedProfileIds.size === 0) {
+      if (failedProfileIds.size === 0 && failures.length === 0) {
         return result;
       }
       const providers = normalizePluginDiscoveryResult({ provider: params.provider, result });
-      const providersWithOutcomes = new Set(
-        reportedOutcomes.map((outcome) => normalizeProviderId(outcome.provider)),
-      );
-      const aliasContext = { config: params.config, env: params.env };
-      const authProvider = resolveProviderIdForAuth(params.provider.id, aliasContext);
-      for (const provider of params.providerIds ?? [params.provider.id]) {
-        const normalized = normalizeProviderId(provider);
-        if (
-          resolveProviderIdForAuth(provider, aliasContext) !== authProvider ||
-          providers[normalized] ||
-          providersWithOutcomes.has(normalized)
-        ) {
-          continue;
-        }
-        // A plugin's selected result wins; only otherwise-unreported exhaustion
-        // carries every attempted profile into compatible inventory retention.
-        for (const profileId of failedProfileIds) {
-          const outcome: ProviderCatalogOutcome = { provider, profileId, status: "unavailable" };
-          reportedOutcomes.push(outcome);
-          params.reportCatalogOutcome?.(outcome);
+      const origins = [
+        ...new Set(
+          Object.values(providers).flatMap(({ baseUrl }) => {
+            const origin = URL.parse(baseUrl)?.origin;
+            return origin ? [origin] : [];
+          }),
+        ),
+      ];
+      const destination = origins.length
+        ? `the live catalog returned ${origins.join(", ")}`
+        : "no live provider catalog was returned";
+      for (const failure of failures) {
+        const login = buildOAuthRefreshFailureLoginCommand(params.provider.id, {
+          profileId: failure.profileId,
+          agentId,
+        });
+        log.warn(
+          `${params.provider.id}: OAuth profile ${JSON.stringify(failure.profileId)} could not be resolved (${failure.message}); ${destination}. Re-authenticate with ${login}.`,
+        );
+      }
+      if (failedProfileIds.size > 0) {
+        const providersWithOutcomes = new Set(
+          reportedOutcomes.map((outcome) => normalizeProviderId(outcome.provider)),
+        );
+        const aliasContext = { config: params.config, env: params.env };
+        const authProvider = resolveProviderIdForAuth(params.provider.id, aliasContext);
+        for (const provider of params.providerIds ?? [params.provider.id]) {
+          const normalized = normalizeProviderId(provider);
+          if (
+            resolveProviderIdForAuth(provider, aliasContext) !== authProvider ||
+            providers[normalized] ||
+            providersWithOutcomes.has(normalized)
+          ) {
+            continue;
+          }
+          // A plugin's selected result wins; only otherwise-unreported exhaustion
+          // carries every attempted profile into compatible inventory retention.
+          for (const profileId of failedProfileIds) {
+            const outcome: ProviderCatalogOutcome = { provider, profileId, status: "unavailable" };
+            reportedOutcomes.push(outcome);
+            params.reportCatalogOutcome?.(outcome);
+          }
         }
       }
       // Carry the accepted snapshot forward without evaluating plugin getters again.

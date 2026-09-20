@@ -4,6 +4,7 @@ import { parseArgs as parseNodeArgs } from "node:util";
 import { z } from "zod";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
 import { execGhJson, workflowRunsApiArgs } from "./lib/plain-gh.mjs";
+import { readPrMetadata } from "./pr-lib/github.mjs";
 
 const USAGE =
   "Usage: node scripts/watch-pr-ci.mjs <pr-number> <head-sha> [--repo owner/repo] [--after run-id] [--attach-timeout 900] [--timeout 3600] [--interval 120] [--completion rollup|ci-run]";
@@ -85,7 +86,21 @@ const RunListSchema = z
   .transform((response) => response.workflow_runs)
   .catch([]);
 const RunStatusSchema = z
-  .object({ status: optionalString, conclusion: optionalNullable(z.string()) })
+  .object({
+    status: optionalString,
+    conclusion: optionalNullable(z.string()),
+    jobs: optional(
+      z
+        .array(
+          z.object({
+            name: z.string().min(1),
+            status: z.string().min(1),
+            conclusion: z.string().nullable(),
+          }),
+        )
+        .max(1_000),
+    ),
+  })
   .catch({});
 const evidenceId = z.number().int().positive();
 const CompletedRunSchema = z.object({
@@ -390,13 +405,15 @@ function ghReadOptions(deadline?: number) {
   return { ...GH_READ_OPTIONS, timeout: Math.min(GH_READ_OPTIONS.timeout, remaining) };
 }
 
-const readPr = (pr: number, repo: string, deadline?: number) =>
-  RollupPageSchema.parse(
-    execGhJson(
-      `pr view ${pr} --repo ${repo} --json state,mergeable,headRefOid`.split(" "),
-      ghReadOptions(deadline),
+function readPr(pr: number, repo: string, deadline?: number) {
+  // Repository resolution and metadata share one read budget, including diagnostics.
+  const readDeadline = Date.now() + ghReadOptions(deadline).timeout;
+  return RollupPageSchema.parse(
+    readPrMetadata(pr, repo, ["state", "mergeable", "headRefOid"], () =>
+      ghReadOptions(readDeadline),
     ),
   );
+}
 export const buildFindRunArgs = (repo: string, sha: string) =>
   workflowRunsApiArgs(repo, sha, "pull_request", 20);
 export const selectRunAfter = (runs: RunListItem[], after?: number) =>
@@ -417,14 +434,33 @@ function findRun(repo: string, sha: string, after?: number, pr?: number) {
   }
   return { run, runs: new Map(runs.map((item) => [item.id, item])) };
 }
-const readRun = (repo: string, runId: number, deadline?: number) =>
+const readRun = (repo: string, runId: number, deadline?: number, includeJobs = false) =>
   RunStatusSchema.parse(
-    execGhJson(`run view ${runId} --repo ${repo} --json status,conclusion`.split(" "), {
-      ...ghReadOptions(deadline),
-      // Revalidate changing run status instead of reusing a cached snapshot.
-      env: { ...process.env, OCTOPOOL_FRESH: "1" },
-    }),
+    execGhJson(
+      `run view ${runId} --repo ${repo} --json status,conclusion${includeJobs ? ",jobs" : ""}`.split(
+        " ",
+      ),
+      {
+        ...ghReadOptions(deadline),
+        // Revalidate changing run status instead of reusing a cached snapshot.
+        env: { ...process.env, OCTOPOOL_FRESH: "1" },
+      },
+    ),
   );
+
+function formatRunJobs(run: RunStatus) {
+  if (!run.jobs) {
+    return "jobs=unknown";
+  }
+  const running = run.jobs.filter((job) => job.status === "in_progress").length;
+  const queued = run.jobs.filter((job) => job.status === "queued").length;
+  const completed = run.jobs.filter((job) => job.status === "completed").length;
+  const failing = run.jobs.filter((job) =>
+    FAILURE_CONCLUSIONS.has(job.conclusion?.toUpperCase() ?? ""),
+  );
+  const names = failing.slice(0, 10).map((job) => sanitizeCheckName(job.name).slice(0, 160));
+  return `jobs=${run.jobs.length} running=${running} queued=${queued} completed=${completed} other=${run.jobs.length - running - queued - completed} failing=${failing.length} failed=${JSON.stringify(names)}`;
+}
 
 function readQueuedPlaceholderEvidence(
   repo: string,
@@ -766,10 +802,10 @@ export async function pollUntilDeadline<T>({
 }
 function retry(phase: string, error: unknown) {
   const message = (error instanceof Error ? error.message : String(error)).replaceAll(/\s+/gu, " ");
-  // Run-scoped proxy credentials cannot recover while this process keeps polling.
+  // Revoked proxy credentials cannot recover while this process keeps polling.
   if (/\bProxy Authentication Required\b/iu.test(message)) {
     throw new Error(
-      `PROXY-AUTH-FAILED phase=${phase} status=407 hint="Restart the watcher in an active run with valid proxy authentication; run-scoped credentials expire when their owning run closes."`,
+      `PROXY-AUTH-FAILED phase=${phase} status=407 hint="Restart the watcher in an active run to obtain a new proxy grant."`,
     );
   }
   console.log(`RETRY phase=${phase} error=${message}`);
@@ -858,11 +894,11 @@ async function main(argv = process.argv.slice(2)) {
           if (blocked !== null) {
             return blocked;
           }
-          const run = readRun(args.repo, runId, watchDeadline);
+          const run = readRun(args.repo, runId, watchDeadline, true);
           const result = classifyAttachedCiRun(run);
           const runStatus = run.status ?? "undefined";
           const runConclusion = run.conclusion ?? "pending";
-          console.log(`STATUS run=${runStatus} conclusion=${runConclusion}`);
+          console.log(`STATUS run=${runStatus} conclusion=${runConclusion} ${formatRunJobs(run)}`);
           if (result.verdict === "FAILING") {
             return emit(`FAILING checks=CI workflow (${result.conclusion})`, 15);
           }

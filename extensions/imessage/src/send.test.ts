@@ -5,7 +5,7 @@ import path from "node:path";
 import { isChannelPartialDeliveryError } from "openclaw/plugin-sdk/channel-inbound";
 import { sanitizeForPlainText } from "openclaw/plugin-sdk/channel-outbound";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import type { OpenKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
+import type { OpenAsyncKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { createOpenClawTestState, type OpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { IMessageRpcClient } from "./client.js";
@@ -1465,7 +1465,7 @@ describe("sendMessageIMessage receipts", () => {
     const deleteGate = createDeferred<void>();
     const openSpy = vi
       .spyOn(state, "openKeyedStore")
-      .mockImplementation(<T>(options: OpenKeyedStoreOptions) => {
+      .mockImplementation(<T>(options: OpenAsyncKeyedStoreOptions) => {
         const store = openStore<T>(options);
         if (options.namespace === "imessage.sent-echoes") {
           const register = store.register.bind(store);

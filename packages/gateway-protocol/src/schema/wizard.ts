@@ -25,6 +25,11 @@ export const WizardStartParamsSchema = closedObject({
   channel: Type.Optional(NonEmptyString),
 });
 
+export const McpAuthLoginParamsSchema = closedObject({
+  sessionId: NonEmptyString,
+  serverName: NonEmptyString,
+});
+
 /** Client answer payload for the current wizard step. */
 export const WizardAnswerSchema = closedObject({
   stepId: NonEmptyString,
@@ -114,6 +119,7 @@ const WizardResultFields = {
   modelActivation: Type.Optional(
     closedObject({
       modelRef: NonEmptyString,
+      modelTarget: Type.Optional(Type.Literal("utility")),
       gatewayRestartRequired: Type.Optional(Type.Literal(true)),
     }),
   ),
@@ -140,6 +146,7 @@ export const WizardStatusResultSchema = closedObject({
 // Wire types derive directly from local schema consts so public d.ts graphs never
 // pull in the ProtocolSchemas registry.
 export type WizardStartParams = Static<typeof WizardStartParamsSchema>;
+export type McpAuthLoginParams = Static<typeof McpAuthLoginParamsSchema>;
 export type WizardAnswer = Static<typeof WizardAnswerSchema>;
 export type WizardNextParams = Static<typeof WizardNextParamsSchema>;
 export type WizardCancelParams = Static<typeof WizardCancelParamsSchema>;

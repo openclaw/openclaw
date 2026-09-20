@@ -1,7 +1,8 @@
+import fs from "node:fs";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ErrorCodes } from "../../../packages/gateway-protocol/src/index.js";
-import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { resolveEmbeddedSessionLane } from "../../agents/embedded-agent-runner/lanes.js";
 import {
   clearSessionQueues,
@@ -16,9 +17,17 @@ import {
   getCommandLaneSnapshot,
   setCommandLaneConcurrency,
 } from "../../process/command-queue.js";
-import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
-import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import { registerOpenClawAgentDatabaseAsyncResource } from "../../state/openclaw-agent-db-resources.js";
+import {
+  closeOpenClawAgentDatabasesForTest,
+  openOpenClawAgentDatabase,
+} from "../../state/openclaw-agent-db.js";
+import {
+  closeOpenClawStateDatabaseForTest,
+  openOpenClawStateDatabase,
+} from "../../state/openclaw-state-db.js";
 import { ensureProfileForEmail, setUserProfileRole } from "../../state/user-profiles.js";
+import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
 import type { GatewayRequestContext, RespondFn, GatewayClient } from "./types.js";
 
 const mocks = vi.hoisted(() => ({
@@ -49,7 +58,8 @@ import { upsertSessionUpstreamLink } from "../../sessions/session-upstream-links
 import { createDeferredCore } from "../../shared/deferred.js";
 import { sessionRewindHandlers } from "./sessions-rewind.js";
 
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+// One teardown owns drainage and deletion so a failed drain retains the fixture root.
+const tempDirs = createTempDirTracker();
 const sessionKey = "agent:main:rewind-handler";
 const sourceSessionId = "rewind-handler-source";
 const sessionLane = resolveEmbeddedSessionLane(sessionKey);
@@ -139,10 +149,48 @@ afterEach(async () => {
   setCommandLaneConcurrency(sessionLane, 1);
   await Promise.all(queuedCommandSettlements);
   queuedCommandSettlements.clear();
-  resetPluginRuntimeStateForTest();
-  closeOpenClawAgentDatabasesForTest();
-  closeOpenClawStateDatabaseForTest();
-  vi.unstubAllEnvs();
+  try {
+    for (const stateDir of tempDirs.dirs) {
+      await cleanupSessionStateForTest({ stateDir });
+    }
+    resetPluginRuntimeStateForTest();
+    closeOpenClawAgentDatabasesForTest();
+    closeOpenClawStateDatabaseForTest();
+    tempDirs.cleanup();
+  } finally {
+    vi.unstubAllEnvs();
+  }
+});
+
+it("drains rewind fixture owners before closing handles and restoring selectors", ({
+  onTestFinished,
+}) => {
+  const stateDir = process.env.OPENCLAW_STATE_DIR!;
+  const agent = openOpenClawAgentDatabase({ agentId: "main" });
+  const state = openOpenClawStateDatabase();
+  const closing: unknown[] = [];
+  registerOpenClawAgentDatabaseAsyncResource({
+    agentId: "main",
+    path: agent.path,
+    revoke: () => {},
+    close: async () => {
+      await Promise.resolve();
+      closing.push({
+        agentOpen: agent.db.isOpen,
+        stateOpen: state.db.isOpen,
+        rootExists: fs.existsSync(stateDir),
+        selector: process.env.OPENCLAW_STATE_DIR,
+      });
+    },
+  });
+  onTestFinished(() => {
+    expect(closing).toEqual([
+      { agentOpen: true, stateOpen: true, rootExists: true, selector: stateDir },
+    ]);
+    expect(agent.db.isOpen).toBe(false);
+    expect(state.db.isOpen).toBe(false);
+    expect(fs.existsSync(stateDir)).toBe(false);
+  });
 });
 
 function context(active = false): GatewayRequestContext {

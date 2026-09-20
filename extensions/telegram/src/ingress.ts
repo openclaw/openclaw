@@ -1,4 +1,3 @@
-// Telegram plugin module implements ingress behavior.
 import type { Message } from "grammy/types";
 import {
   createChannelIngressResolver,

@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { normalizeReplyPayload } from "../../../auto-reply/reply/normalize-reply.js";
 import { SILENT_REPLY_TOKEN } from "../../../auto-reply/tokens.js";
 import { classifyAgentExecResult } from "../../../commands/agent-exec-result.js";
 import {
@@ -273,19 +274,31 @@ describe("terminal resolution", () => {
     expect(text).not.toContain("Couldn't sign in");
   });
 
-  it("retries a required empty reply even when deliberate silence is enabled", async () => {
-    const activateInternalPrompt = vi.fn();
-    const input = makeTerminalInput({
-      runParams: { allowEmptyAssistantReplyAsSilent: true, terminalReplyExpectation: "required" },
-      activateInternalPrompt,
-    });
+  it.each(["", SILENT_REPLY_TOKEN])(
+    "retries required empty output %j even when legacy silence is enabled",
+    async (text) => {
+      const assistant = emptyAssistant({ content: [{ type: "text", text }] });
+      const attempt = makeEmbeddedRunnerAttempt({
+        assistantTexts: text ? [text] : [],
+        lastAssistant: assistant,
+        currentAttemptAssistant: assistant,
+        currentAttemptReplayMetadata: { hadPotentialSideEffects: false, replaySafe: true },
+      });
+      const activateInternalPrompt = vi.fn();
+      const input = makeTerminalInput({
+        attempt,
+        attemptAssistant: assistant,
+        runParams: { allowEmptyAssistantReplyAsSilent: true, terminalReplyExpectation: "required" },
+        activateInternalPrompt,
+      });
 
-    await expect(resolveEmbeddedRunTerminal(input)).resolves.toEqual({ action: "retry" });
-    expect(input.retryState.emptyResponseAttempts).toBe(1);
-    expect(activateInternalPrompt).toHaveBeenCalledWith(EMPTY_RESPONSE_RETRY_INSTRUCTION);
-  });
+      await expect(resolveEmbeddedRunTerminal(input)).resolves.toEqual({ action: "retry" });
+      expect(input.retryState.emptyResponseAttempts).toBe(1);
+      expect(activateInternalPrompt).toHaveBeenCalledWith(EMPTY_RESPONSE_RETRY_INSTRUCTION);
+    },
+  );
 
-  it("completes an explicit silent reply without retrying", async () => {
+  it("completes optional NO_REPLY without retrying even when legacy silence is disabled", async () => {
     const assistant = buildEmbeddedRunnerAssistant({
       content: [{ type: "text", text: SILENT_REPLY_TOKEN }],
     });
@@ -299,7 +312,7 @@ describe("terminal resolution", () => {
     const input = makeTerminalInput({
       attempt,
       attemptAssistant: assistant,
-      runParams: { allowEmptyAssistantReplyAsSilent: true, terminalReplyExpectation: "required" },
+      runParams: { allowEmptyAssistantReplyAsSilent: false, terminalReplyExpectation: "optional" },
       activateInternalPrompt,
     });
 
@@ -335,7 +348,9 @@ describe("terminal resolution", () => {
 
     expect(resolved).toMatchObject({
       result: {
-        payloads: [{ text: "I’m continuing this work and will send the result when it is ready." }],
+        payloads: undefined,
+        meta: { continuationPending: true },
+        acceptedSessionSpawns: attempt.acceptedSessionSpawns,
       },
     });
   });
@@ -606,7 +621,7 @@ describe("terminal resolution", () => {
   ])(
     "keeps reply-optional subagent $label distinct at the terminal producer",
     async ({ rawText, expectedKind }) => {
-      const assistant = emptyAssistant();
+      const assistant = emptyAssistant({ content: [{ type: "text", text: rawText ?? "" }] });
       const attempt = makeEmbeddedRunnerAttempt({
         assistantTexts: rawText ? [rawText] : [],
         toolMetas: [{ toolName: "write", replaySafe: false }],
@@ -867,11 +882,14 @@ describe("terminal resolution", () => {
       if (expectedError) {
         expect(resolved.result.payloads?.[0]).toMatchObject({ isError: true });
         expect(resolved.result.meta.error?.kind).toBe("incomplete_turn");
-        expect(resolved.result.meta.terminalReplyKind).toBeUndefined();
+        expect(resolved.result.meta.terminalReplyKind).not.toBe("silent-empty");
       } else {
-        expect(resolved.result.payloads).toBeUndefined();
+        expect(
+          (resolved.result.payloads ?? []).flatMap(
+            (payload) => normalizeReplyPayload(payload, { applyChannelTransforms: false }) ?? [],
+          ),
+        ).toEqual([]);
         expect(resolved.result.meta.error).toBeUndefined();
-        expect(resolved.result.meta.terminalReplyKind).toBeUndefined();
       }
     },
   );

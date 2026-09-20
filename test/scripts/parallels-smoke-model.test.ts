@@ -416,17 +416,16 @@ function drainableProcessTreeScript(delayMs: number): string {
   const descendantScript = `const { writeFileSync } = require('node:fs'); process.on('SIGTERM', () => setTimeout(() => { writeFileSync(process.env.DRAIN_FILE, 'drained'); process.exit(0); }, ${delayMs})); writeFileSync(process.env.READY_FILE, 'ready'); setInterval(() => {}, 1000);`;
   return `
 const { spawn } = require('node:child_process');
-const { existsSync, watch } = require('node:fs');
-const { dirname } = require('node:path');
+const { existsSync } = require('node:fs');
 process.on('SIGTERM', () => process.exit(0));
 let started = false;
 const start = () => {
   if (started || !existsSync(process.env.DEADLINE_FILE)) return;
   started = true;
-  watcher.close();
+  clearInterval(probe);
   spawn(process.execPath, ['-e', ${JSON.stringify(descendantScript)}], { env: process.env, stdio: 'ignore' });
 };
-const watcher = watch(dirname(process.env.DEADLINE_FILE), start);
+const probe = setInterval(start, 5);
 start();
 setInterval(() => {}, 1000);
 `;
@@ -450,14 +449,14 @@ if (fs.readFileSync(owner, 'utf8') === String(process.pid)) {
     globalThis.setTimeout = schedule;
     return schedule(() => {
       let released = false;
+      let probe;
       const release = () => {
         if (released || !fs.existsSync(process.env.READY_FILE)) return;
         released = true;
-        watcher.close();
+        clearInterval(probe);
         callback(...args);
       };
-      const watcher = fs.watch(path.dirname(process.env.READY_FILE), { persistent: false }, release);
-      watcher.once('error', (error) => { throw error; });
+      probe = setInterval(release, 5);
       fs.writeFileSync(process.env.DEADLINE_FILE, 'elapsed');
       release();
     }, ms);

@@ -1,4 +1,3 @@
-// Imessage plugin module implements sanitize outbound behavior.
 import {
   findCodeRegions,
   isInsideCode,

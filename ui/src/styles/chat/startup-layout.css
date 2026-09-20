@@ -55,15 +55,21 @@
   overflow: hidden;
   background: transparent !important;
   border: none !important;
+  border-radius: var(--radius-lg);
   box-shadow: none !important;
+}
+
+@supports (corner-shape: superellipse(1.5)) {
+  .chat.chat {
+    border-radius: calc(14px * var(--openclaw-corner-radius-scale));
+    corner-shape: superellipse(1.5);
+  }
 }
 
 /* Chat thread - scrollable middle section, transparent */
 .chat-thread {
   --chat-thread-padding-top: clamp(20px, 3vh, 28px);
-  --chat-thread-padding-bottom: calc(
-    6px + var(--chat-transcript-composer-underlap, 0px) + var(--chat-transcript-fade-height, 0px)
-  );
+  --chat-thread-padding-bottom: calc(6px + var(--chat-transcript-fade-height, 0px));
 
   container: chat-transcript / size;
   flex: 1 1 0;
@@ -93,28 +99,39 @@
   padding: 0;
 }
 
-/* Extend only the scroll viewport behind the composer's own surface. The
-   bottom padding keeps resting content above the fade; the following
-   zero-height anchor keeps its original layout position. */
-.chat-main__conversation > .chat-thread {
-  margin-bottom: calc(
-    0px - var(--chat-composer-top-margin) - var(--chat-transcript-composer-underlap)
-  );
-}
-
 .chat-main__conversation {
   --chat-composer-top-margin: 8px;
-  --chat-transcript-composer-underlap: 30px;
   --chat-transcript-fade-height: 24px;
-  --chat-transcript-fade-stack-overlap: calc(20px * var(--openclaw-corner-radius-scale));
+  --chat-footer-max-height: calc(100cqh - clamp(60px, 20cqh, 160px));
 
   position: relative;
+  container: chat-conversation / size;
   display: flex;
   min-width: 0;
   min-height: 0;
   flex: 1 1 auto;
   flex-direction: column;
   overflow: hidden;
+}
+
+.chat-footer {
+  position: relative;
+  display: flex;
+  flex: 0 1 auto;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  max-height: var(--chat-footer-max-height);
+}
+
+/* The fade stays inside the transcript viewport; footer controls never cover it. */
+.chat-footer::before {
+  position: absolute;
+  inset: calc(0px - var(--chat-transcript-fade-height)) var(--chat-thread-gutter) auto;
+  height: var(--chat-transcript-fade-height);
+  background: linear-gradient(to bottom, transparent, var(--chat-surface));
+  content: "";
+  pointer-events: none;
 }
 
 .chat-text {
@@ -149,6 +166,11 @@
   align-items: flex-start;
   padding-bottom: var(--chat-turn-gap);
   margin-inline: 4px 16px;
+}
+
+/* Both sides share the content edge inside the trailing avatar gutter. */
+.chat-group:where(:not(.user), .chat-group--peer) {
+  padding-inline-end: var(--chat-avatar-gutter);
 }
 
 /* User messages on right */
@@ -295,6 +317,7 @@
 }
 
 .chat-pane__header-trailing {
+  flex-shrink: 0;
   margin-left: auto;
   justify-self: end;
 }

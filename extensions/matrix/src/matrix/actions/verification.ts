@@ -1,4 +1,3 @@
-// Matrix plugin module implements verification behavior.
 import { setTimeout as sleep } from "node:timers/promises";
 import { requireRuntimeConfig } from "openclaw/plugin-sdk/plugin-config-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -505,6 +504,7 @@ export async function getMatrixVerificationStatus(
       } else {
         await client.prepareForOneOff();
       }
+      await client.refreshOwnDeviceKeys();
       return await readMatrixVerificationStatus(client, opts);
     },
     "discard",

@@ -658,18 +658,18 @@ describe("mutable file operand binding", () => {
           command: { kind: "argv", argv: ["bash", "-c", "source loaded.sh"] },
           cwd,
         }),
-      ).resolves.toEqual({
+      ).resolves.toMatchObject({
         ok: false,
-        message: "SYSTEM_RUN_DENIED: approval cannot safely bind this interpreter/runtime command",
+        reason: "unsupported-command-shape",
       });
       await expect(
         prepareSystemRunMutableFileBinding({
           command: { kind: "argv", argv: ["bash", "-c", "echo ok; source loaded.sh"] },
           cwd,
         }),
-      ).resolves.toEqual({
+      ).resolves.toMatchObject({
         ok: false,
-        message: "SYSTEM_RUN_DENIED: approval cannot safely bind this interpreter/runtime command",
+        reason: "unsupported-command-shape",
       });
       await expect(
         prepareSystemRunMutableFileBinding({
@@ -698,18 +698,18 @@ describe("mutable file operand binding", () => {
           command: { kind: "argv", argv: ["node", "--env-file=approved.env", "app.js"] },
           cwd,
         }),
-      ).resolves.toEqual({
+      ).resolves.toMatchObject({
         ok: false,
-        message: "SYSTEM_RUN_DENIED: approval cannot safely bind this interpreter/runtime command",
+        reason: "unsupported-command-shape",
       });
       await expect(
         prepareSystemRunMutableFileBinding({
           command: { kind: "argv", argv: ["bash", "-c", "sh < payload.sh"] },
           cwd,
         }),
-      ).resolves.toEqual({
+      ).resolves.toMatchObject({
         ok: false,
-        message: "SYSTEM_RUN_DENIED: approval cannot safely bind this interpreter/runtime command",
+        reason: "unsupported-command-shape",
       });
       await expect(
         prepareSystemRunMutableFileBinding({
@@ -752,10 +752,9 @@ describe("mutable file operand binding", () => {
       ]) {
         await expect(
           prepareSystemRunMutableFileBinding({ command: { kind: "argv", argv: command }, cwd }),
-        ).resolves.toEqual({
+        ).resolves.toMatchObject({
           ok: false,
-          message:
-            "SYSTEM_RUN_DENIED: approval cannot safely bind this interpreter/runtime command",
+          reason: "unsupported-command-shape",
         });
       }
       await expect(
@@ -763,18 +762,18 @@ describe("mutable file operand binding", () => {
           command: { kind: "argv", argv: ["ruby", "--require=loader.rb", "app.rb"] },
           cwd,
         }),
-      ).resolves.toEqual({
+      ).resolves.toMatchObject({
         ok: false,
-        message: "SYSTEM_RUN_DENIED: approval cannot safely bind this interpreter/runtime command",
+        reason: "unsupported-command-shape",
       });
       await expect(
         prepareSystemRunMutableFileBinding({
           command: { kind: "argv", argv: ["ruby", "-Csub", "app.rb"] },
           cwd,
         }),
-      ).resolves.toEqual({
+      ).resolves.toMatchObject({
         ok: false,
-        message: "SYSTEM_RUN_DENIED: approval cannot safely bind this interpreter/runtime command",
+        reason: "unsupported-command-shape",
       });
       await expect(
         prepareSystemRunMutableFileBinding({
@@ -950,18 +949,18 @@ describe("mutable file operand binding", () => {
           },
           cwd,
         }),
-      ).resolves.toEqual({
+      ).resolves.toMatchObject({
         ok: false,
-        message: "SYSTEM_RUN_DENIED: approval cannot safely bind this interpreter/runtime command",
+        reason: "unsupported-command-shape",
       });
       await expect(
         prepareSystemRunMutableFileBinding({
           command: { kind: "argv", argv: ["bash", "-c", "./payload.sh"] },
           cwd,
         }),
-      ).resolves.toEqual({
+      ).resolves.toMatchObject({
         ok: false,
-        message: "SYSTEM_RUN_DENIED: approval cannot safely bind this interpreter/runtime command",
+        reason: "unsupported-command-shape",
       });
     });
   });

@@ -1,9 +1,21 @@
 // Covers detached task runtime spawning, events, and cancellation handling.
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
+import { createPluginRecord } from "../plugins/loader-records.js";
+import { PluginInstance } from "../plugins/plugin-instance.js";
+import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
+import {
+  markPluginRegistryActive,
+  markPluginRegistryRetired,
+  revokePluginRecord,
+} from "../plugins/registry-lifecycle.js";
+import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
+import type { CreatedDetachedTaskRun } from "./detached-task-runtime-contract.js";
 import {
   completeTaskRunByRunId,
   createQueuedTaskRun,
   createRunningTaskRun,
+  prepareRunningTaskRun,
   failTaskRunByRunId,
   findDetachedTaskRun,
   finalizeTaskRunByRunId,
@@ -19,12 +31,32 @@ import {
   setDetachedTaskLifecycleRuntime,
 } from "./task-runtime.test-helpers.js";
 
-const { mockFindTaskByRunIdForStatus, mockListTasksForSessionKeyForStatus, mockLogWarn } =
-  vi.hoisted(() => ({
-    mockFindTaskByRunIdForStatus: vi.fn(),
-    mockListTasksForSessionKeyForStatus: vi.fn(() => [] as TaskRecord[]),
-    mockLogWarn: vi.fn(),
-  }));
+const {
+  mockFindTaskByRunIdForStatus,
+  mockListTasksForSessionKeyForStatus,
+  mockLogWarn,
+  mockCreateQueuedTaskRunCore,
+  mockCreateRunningTaskRunCore,
+  mockCreateRunningTaskRunCoreWithReceiptAsync,
+} = vi.hoisted(() => ({
+  mockFindTaskByRunIdForStatus: vi.fn(),
+  mockListTasksForSessionKeyForStatus: vi.fn(() => [] as TaskRecord[]),
+  mockLogWarn: vi.fn(),
+  mockCreateQueuedTaskRunCore: vi.fn<typeof import("./task-executor.js").createQueuedTaskRunCore>(
+    () => {
+      throw new Error("Unexpected synchronous core task creation");
+    },
+  ),
+  mockCreateRunningTaskRunCore: vi.fn<typeof import("./task-executor.js").createRunningTaskRunCore>(
+    () => {
+      throw new Error("Unexpected synchronous core task creation");
+    },
+  ),
+  mockCreateRunningTaskRunCoreWithReceiptAsync:
+    vi.fn<
+      typeof import("./task-executor-create.async.js").createRunningTaskRunCoreWithReceiptAsync
+    >(),
+}));
 vi.mock("../logging/subsystem.js", () => ({
   createSubsystemLogger: () => ({
     subsystem: "tasks/detached-runtime",
@@ -45,6 +77,16 @@ vi.mock("./task-status-access.js", () => ({
   listTasksForSessionKeyForStatus: mockListTasksForSessionKeyForStatus,
 }));
 
+vi.mock("./task-executor.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./task-executor.js")>()),
+  createQueuedTaskRunCore: mockCreateQueuedTaskRunCore,
+  createRunningTaskRunCore: mockCreateRunningTaskRunCore,
+}));
+
+vi.mock("./task-executor-create.async.js", () => ({
+  createRunningTaskRunCoreWithReceiptAsync: mockCreateRunningTaskRunCoreWithReceiptAsync,
+}));
+
 function createFakeTaskRecord(overrides?: Partial<TaskRecord>): TaskRecord {
   return {
     taskId: "task-fake",
@@ -60,6 +102,17 @@ function createFakeTaskRecord(overrides?: Partial<TaskRecord>): TaskRecord {
     createdAt: 1,
     ...overrides,
   };
+}
+
+function createPreparedRunningTask(...args: Parameters<typeof prepareRunningTaskRun>) {
+  const prepared = prepareRunningTaskRun(...args);
+  return prepared.kind === "receipt"
+    ? prepared.create()
+    : Promise.resolve(prepared.task ? { task: prepared.task } : null);
+}
+
+function createFakeTaskReceipt(task: TaskRecord): CreatedDetachedTaskRun {
+  return { task, settleUnstarted: async () => false };
 }
 
 function findWarningPayload(message: string): Record<string, unknown> | undefined {
@@ -89,6 +142,233 @@ describe("detached-task-runtime", () => {
     mockListTasksForSessionKeyForStatus.mockReset();
     mockListTasksForSessionKeyForStatus.mockReturnValue([]);
     mockLogWarn.mockClear();
+    mockCreateQueuedTaskRunCore.mockReset();
+    mockCreateRunningTaskRunCore.mockReset();
+    mockCreateRunningTaskRunCoreWithReceiptAsync.mockReset();
+  });
+
+  describe("awaited creation", () => {
+    async function withRuntimeOwner(
+      run: (registry: ReturnType<typeof createEmptyPluginRegistry>) => Promise<void>,
+    ) {
+      const registry = createEmptyPluginRegistry();
+      registry.plugins.push(
+        createPluginRecord({
+          id: "__test__",
+          source: "/plugins/task-owner/index.js",
+          origin: "config",
+          enabled: true,
+          configSchema: true,
+        }),
+      );
+      markPluginRegistryActive(registry);
+      try {
+        await withPluginRuntimeRegistryScope(registry, () => run(registry));
+      } finally {
+        markPluginRegistryRetired(registry);
+      }
+    }
+
+    const params = {
+      runtime: "cli",
+      ownerKey: "agent:main:main",
+      runId: "run-owned",
+      task: "Owned task",
+    } as const;
+
+    it.each(["adopted", "revoked", "runtime replaced", "instance retired"] as const)(
+      "retains legacy finalization only while its adopted instance is live: %s",
+      async (lifecycle) =>
+        withRuntimeOwner(async (registry) => {
+          const record = registry.plugins[0]!;
+          const instance = new PluginInstance(record.id, { record, registry });
+          const successor = createEmptyPluginRegistry();
+          let task = createFakeTaskRecord({ runId: params.runId });
+          const finalize = vi.fn((terminal: { status: TaskRecord["status"]; endedAt: number }) => {
+            task = { ...task, status: terminal.status, endedAt: terminal.endedAt };
+            return [task];
+          });
+          const runtime = instance.wrap({
+            ...getDetachedTaskLifecycleRuntime(),
+            createRunningTaskRun: () => task,
+            finalizeTaskRunByRunId: finalize,
+          });
+          setDetachedTaskLifecycleRuntime(runtime);
+          try {
+            const prepared = prepareRunningTaskRun(params);
+            if (prepared.kind !== "legacy") {
+              throw new Error("Expected the registered synchronous runtime");
+            }
+            successor.plugins.push(record);
+            successor.detachedTaskRuntimes.push({ pluginId: record.id, runtime });
+            markPluginRegistryActive(successor);
+            markPluginRegistryRetired(registry);
+            if (lifecycle === "revoked") {
+              revokePluginRecord(successor, record);
+            } else if (lifecycle === "runtime replaced") {
+              successor.detachedTaskRuntimes[0] = {
+                pluginId: record.id,
+                runtime: { ...runtime },
+              };
+            } else if (lifecycle === "instance retired") {
+              await instance.dispose();
+            }
+            const finish = () =>
+              prepared.finalizeRun({ runId: params.runId, status: "succeeded", endedAt: 200 });
+            if (lifecycle === "adopted") {
+              expect(finish()).toEqual([task]);
+              expect(task.status).toBe("succeeded");
+              expect(finalize).toHaveBeenCalledOnce();
+            } else {
+              expect(finish).toThrow("Detached task runtime owner changed");
+              expect(task.status).toBe("running");
+              expect(finalize).not.toHaveBeenCalled();
+            }
+          } finally {
+            markPluginRegistryRetired(successor);
+            await instance.dispose();
+          }
+        }),
+    );
+
+    it.each(["core", "legacy"] as const)(
+      "keeps receipt creation with the selected %s owner",
+      async (owner) =>
+        withRuntimeOwner(async () => {
+          const continueWrite = createDeferred();
+          const persisted: TaskRecord[] = [];
+          const persist = (mode: string, status: TaskRecord["status"]) => {
+            const task = createFakeTaskRecord({ taskId: `${mode}-${status}`, status });
+            persisted.push(task);
+            return task;
+          };
+          mockCreateRunningTaskRunCoreWithReceiptAsync.mockImplementation(
+            async (_input, assertCurrent) => {
+              await continueWrite.promise;
+              assertCurrent?.();
+              return createFakeTaskReceipt(persist("core", "running"));
+            },
+          );
+          if (owner === "legacy") {
+            setDetachedTaskLifecycleRuntime({
+              ...getDetachedTaskLifecycleRuntime(),
+              createRunningTaskRun: () => persist("legacy", "running"),
+            });
+          }
+
+          const creation = createPreparedRunningTask(params);
+          if (owner === "core") {
+            expect(persisted).toEqual([]);
+          } else {
+            expect(persisted.map((task) => task.taskId)).toEqual(["legacy-running"]);
+          }
+          continueWrite.resolve();
+          const receipt = await creation;
+
+          expect(receipt?.task.taskId).toBe(`${owner}-running`);
+          expect(persisted).toEqual([receipt?.task]);
+        }),
+    );
+
+    it("propagates a core async creation failure without synchronous replay", async () =>
+      withRuntimeOwner(async () => {
+        const failure = new Error("Core worker refused persistence");
+        const persisted: TaskRecord[] = [];
+        mockCreateRunningTaskRunCore.mockImplementation(() => {
+          const task = createFakeTaskRecord();
+          persisted.push(task);
+          return task;
+        });
+        mockCreateRunningTaskRunCoreWithReceiptAsync.mockRejectedValue(failure);
+
+        await expect(createPreparedRunningTask(params)).rejects.toBe(failure);
+        expect(persisted).toEqual([]);
+      }));
+
+    it.each([
+      "caller",
+      "registered runtime",
+      "registry reactivation",
+      "registry activation epoch",
+      "registration replacement",
+    ] as const)(
+      "refuses persistence when the %s changes during core preparation",
+      async (retiredOwner) =>
+        withRuntimeOwner(async (registry) => {
+          const prepared = createDeferred();
+          const continueWrite = createDeferred();
+          const persisted: TaskRecord[] = [];
+          let callerCurrent = true;
+          const selectedDefault = getDetachedTaskLifecycleRuntime();
+          mockCreateRunningTaskRunCoreWithReceiptAsync.mockImplementation(
+            async (_input, assertCurrent) => {
+              if (!assertCurrent) {
+                throw new Error("Expected task creation admission");
+              }
+              prepared.resolve();
+              await continueWrite.promise;
+              assertCurrent();
+              const task = createFakeTaskRecord();
+              persisted.push(task);
+              return createFakeTaskReceipt(task);
+            },
+          );
+          const creation = createPreparedRunningTask(params, () => {
+            if (!callerCurrent) {
+              throw new Error("Caller retired");
+            }
+          });
+          await Promise.race([prepared.promise, creation]);
+          if (retiredOwner === "caller") {
+            callerCurrent = false;
+          } else if (retiredOwner === "registered runtime") {
+            setDetachedTaskLifecycleRuntime({ ...selectedDefault });
+          } else if (retiredOwner === "registry reactivation") {
+            markPluginRegistryRetired(registry);
+            markPluginRegistryActive(registry);
+          } else if (retiredOwner === "registry activation epoch") {
+            markPluginRegistryActive(registry);
+          } else {
+            // The runtime pointer stays identical while its registration ownership changes.
+            setDetachedTaskLifecycleRuntime(selectedDefault);
+          }
+          continueWrite.resolve();
+
+          await expect(creation).rejects.toThrow();
+          expect(persisted).toEqual([]);
+        }),
+    );
+
+    it("retains a committed result after rotation and closes its admission", async () =>
+      withRuntimeOwner(async () => {
+        const committed = createDeferred<() => void>();
+        const finishSettlement = createDeferred();
+        const persisted: TaskRecord[] = [];
+        const task = createFakeTaskRecord({ taskId: "committed-before-rotation" });
+        const receipt = createFakeTaskReceipt(task);
+        const selectedDefault = getDetachedTaskLifecycleRuntime();
+        mockCreateRunningTaskRunCoreWithReceiptAsync.mockImplementation(
+          async (_input, assertCurrent) => {
+            if (!assertCurrent) {
+              throw new Error("Expected task creation admission");
+            }
+            assertCurrent();
+            persisted.push(task);
+            committed.resolve(assertCurrent);
+            await finishSettlement.promise;
+            return receipt;
+          },
+        );
+        const creation = createPreparedRunningTask(params);
+        const assertCurrent = await committed.promise;
+        setDetachedTaskLifecycleRuntime({ ...selectedDefault });
+        finishSettlement.resolve();
+
+        await expect(creation).resolves.toBe(receipt);
+        expect(persisted).toEqual([task]);
+        resetDetachedTaskLifecycleRuntimeForTests();
+        expect(() => assertCurrent()).toThrow(/admission is closed/);
+      }));
   });
 
   it("finds a replacement task within the requested session generation", () => {

@@ -15,6 +15,7 @@ import { resolveSessionLane } from "./embedded-agent-runner/lanes.js";
 import { resolveEmbeddedRunSessionLanePolicy } from "./embedded-agent-runner/run/lane-runtime.js";
 import type { RunEmbeddedAgentParams } from "./embedded-agent-runner/run/params.js";
 import type { EmbeddedAgentRunResult } from "./embedded-agent-runner/types.js";
+import { settleRequesterRun } from "./requester-run-settlement.js";
 import { createSessionPlacementSettlementClosedAbortError } from "./run-termination.js";
 import type { SandboxContext } from "./sandbox/types.js";
 import { beginForegroundSessionMaintenance } from "./session-maintenance/coordinator.js";
@@ -23,7 +24,6 @@ import {
   resolveSessionPlacementTurnSettlementAssertion,
   withoutSessionPlacementForcedTerminalSettlement,
 } from "./session-placement-forced-terminal-settlement.js";
-import { settleRequesterAfterSessionSpawns } from "./subagents/registry/subagent-registry.js";
 import {
   getGatewayToolCallerIdentity,
   withoutGatewayToolCallerIdentity,
@@ -47,6 +47,7 @@ type SessionPlacementSandboxParams = {
 };
 
 export type SessionPlacementAdmissionProvider = {
+  resolveRuntimeOverride?: (identity: Omit<LocalTurnPlacementClaim, "runId">) => string | undefined;
   assertCompactionSuccessorAllowed: (params: {
     currentTarget: SessionTranscriptRuntimeTarget;
     successorSessionId: string;
@@ -85,6 +86,13 @@ export function installSessionPlacementAdmissionProvider(
       state.provider = undefined;
     }
   };
+}
+
+/** Carries placement-owned runtime selection into candidate preparation and execution. */
+export function resolveSessionPlacementRuntimeOverride(
+  identity: Omit<LocalTurnPlacementClaim, "runId">,
+): string | undefined {
+  return state.provider?.resolveRuntimeOverride?.(identity);
 }
 
 /** Captures the exact placement owner, including standalone absence, before awaited work. */
@@ -176,8 +184,10 @@ export async function withSessionPlacementTurnAdmission(
         : runAdmittedLocalTurn(),
     ),
   );
-  if (result.meta.executionTrace?.runner === "cli") {
-    settleYieldedRequesterAfterPlacementRelease(claim, result);
+  if (result.meta.executionTrace?.runner === "cli" && params.isFinalFallbackAttempt === undefined) {
+    // Standalone CLI completion releases placement before admitting a successor;
+    // fallback candidates leave the handoff to their logical run entry.
+    settleRequesterRun({ ...params, ...claim }, result, assertCurrent);
   }
   return result;
 }
@@ -194,11 +204,15 @@ export async function withLocalSessionPlacementTurnSettlement(
     | "inputProvenance"
     | "admittedRunContext"
     | "preparedRunAdmission"
+    | "isFinalFallbackAttempt"
   > = {},
 ): Promise<EmbeddedAgentRunResult> {
   const provider = state.provider;
   const lifecycleGeneration =
     options.lifecycleGeneration ?? captureAgentRunLifecycleGeneration(claim.runId);
+  const assertAdmittedRunCurrent = options.admittedRunContext
+    ? resolveAdmittedRunActiveAssertion(options.admittedRunContext, options.abortSignal)
+    : undefined;
   const assertOwnerCurrent = () => {
     assertAgentRunLifecycleGenerationCurrent(lifecycleGeneration);
     if (state.provider !== provider) {
@@ -254,7 +268,20 @@ export async function withLocalSessionPlacementTurnSettlement(
             provider ? provider.executeLocalTurn(claim, runLocal) : runLocal(),
           ),
         );
-        settleYieldedRequesterAfterPlacementRelease(claim, result);
+        if (options.isFinalFallbackAttempt === undefined) {
+          // Candidate classification is provisional until the outer entry accepts it.
+          settleRequesterRun({ ...options, ...claim }, result, () => {
+            assertCurrent();
+            options.preparedRunAdmission?.assertSourceCurrent();
+            if (options.admittedRunContext && !assertAdmittedRunCurrent) {
+              throw createAbortError("admitted run authority is no longer active");
+            }
+            assertAdmittedRunCurrent?.();
+            if (!isCommandLaneTaskMarkerCurrent(taskMarker)) {
+              throw createSessionPlacementSettlementClosedAbortError();
+            }
+          });
+        }
         return result;
       },
       {
@@ -269,27 +296,6 @@ export async function withLocalSessionPlacementTurnSettlement(
     releaseForeground?.();
     releaseCapacityWait?.();
     releaseQueuedContext?.("abandoned");
-  }
-}
-
-function settleYieldedRequesterAfterPlacementRelease(
-  claim: LocalTurnPlacementClaim,
-  result: EmbeddedAgentRunResult,
-): void {
-  if (!claim.sessionKey || result.meta.yielded !== true || !result.acceptedSessionSpawns?.length) {
-    return;
-  }
-  const settled = settleRequesterAfterSessionSpawns({
-    requesterSessionKey: claim.sessionKey,
-    requesterAgentId: claim.agentId,
-    requesterTurnRunId: claim.runId,
-    requesterYielded: true,
-    acceptedSessionSpawns: result.acceptedSessionSpawns,
-  });
-  if (settled) {
-    // Native attempts may already have settled before placement released.
-    // A second no-op must preserve their earlier successful result.
-    result.requesterContinuationSettled = true;
   }
 }
 

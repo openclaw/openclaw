@@ -1,10 +1,12 @@
 // Resource loader tests cover prompt loading and transforms.
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import { Type } from "typebox";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { withMockedWindowsPlatform } from "../../test-utils/vitest-spies.js";
 import { clearExtensionCache } from "./extensions/loader.js";
+import type { ExtensionFactory } from "./extensions/types.js";
 import { DefaultPackageManager } from "./package-manager.js";
 import { DefaultResourceLoader } from "./resource-loader.js";
 import { SettingsManager } from "./settings-manager.js";
@@ -155,6 +157,41 @@ describe("DefaultResourceLoader", () => {
     } finally {
       consoleError.mockRestore();
     }
+  });
+
+  it("reports tool and flag conflicts in extension order while retaining the first owner", async () => {
+    const root = tempDirs.make("openclaw-resource-loader-conflicts-");
+    const factory: ExtensionFactory = (api) => {
+      api.registerTool({
+        name: "shared",
+        label: "Shared",
+        description: "Synthetic conflict fixture",
+        parameters: Type.Object({}),
+        execute: async () => ({ content: [], details: undefined }),
+      });
+      api.registerFlag("shared", { type: "boolean" });
+    };
+    const loader = new DefaultResourceLoader({
+      cwd: root,
+      agentDir: root,
+      settingsManager: SettingsManager.inMemory(),
+      extensionFactories: [factory, factory, factory],
+      noExtensions: true,
+      noSkills: true,
+      noPromptTemplates: true,
+      noThemes: true,
+      noContextFiles: true,
+    });
+
+    await loader.reload();
+
+    expect(loader.getExtensions().errors).toEqual([
+      { path: "<inline:2>", error: 'Tool "shared" conflicts with <inline:1>' },
+      { path: "<inline:2>", error: 'Flag "--shared" conflicts with <inline:1>' },
+      { path: "<inline:3>", error: 'Tool "shared" conflicts with <inline:1>' },
+      { path: "<inline:3>", error: 'Flag "--shared" conflicts with <inline:1>' },
+    ]);
+    expect(loader.getExtensions().extensions).toHaveLength(3);
   });
 
   it("inherits Windows source metadata across case-variant resource roots", async () => {

@@ -189,6 +189,7 @@ export async function restoreUpdateRecoveryBackup(
 ): Promise<void> {
   const prepared = await prepareVerifiedBackup(ref);
   let restored = false;
+  let restorationFailure: { error: unknown } | undefined;
   try {
     await withUpdateRecoveryConfigWrites(ref, authority, () =>
       withUpdateRecoveryConfigValidation(
@@ -268,6 +269,7 @@ export async function restoreUpdateRecoveryBackup(
     );
   } catch (error) {
     if (!restored) {
+      restorationFailure = { error };
       throw error;
     }
     authority.assertOwned();
@@ -277,6 +279,13 @@ export async function restoreUpdateRecoveryBackup(
   } finally {
     await prepared.close().catch((error: unknown) => {
       if (!restored) {
+        if (restorationFailure) {
+          throw new AggregateError(
+            [restorationFailure.error, error],
+            `State restoration failed and temporary verification files could not be removed. Capture retained at ${ref.manifestPath}.`,
+            { cause: restorationFailure.error },
+          );
+        }
         throw error;
       }
       authority.assertOwned();

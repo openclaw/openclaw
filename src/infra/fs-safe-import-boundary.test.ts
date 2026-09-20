@@ -72,32 +72,36 @@ function walkSourceFiles(dir: string): string[] {
 
 const PLUGIN_OWNED_FS_SAFE_IMPORTS: Record<
   string,
-  { module: string; values: readonly string[]; types?: readonly string[] }
+  Record<string, { values: readonly string[]; types?: readonly string[] }>
 > = {
   "extensions/openshell/src/backend.ts": {
-    module: "@openclaw/fs-safe/atomic",
-    values: ["movePathWithCopyFallback"],
-    types: ["MovePathPublicationReceipt"],
+    "@openclaw/fs-safe/atomic": {
+      values: ["movePathWithCopyFallback"],
+      types: ["MovePathPublicationReceipt"],
+    },
   },
   "extensions/file-transfer/src/node-host/file-write.ts": {
-    module: "@openclaw/fs-safe/advanced",
-    values: ["overwriteFileHandle"],
+    "@openclaw/fs-safe/advanced": { values: ["overwriteFileHandle"] },
+  },
+  "extensions/file-transfer/src/tools/dir-fetch-tool.ts": {
+    "@openclaw/fs-safe/durability": { values: ["sha256File"] },
+    "@openclaw/fs-safe/walk": { values: ["walkDirectory"] },
   },
 };
 
 function sourceWithoutPluginOwnedImports(filePath: string, source: string): string {
-  const allowed = PLUGIN_OWNED_FS_SAFE_IMPORTS[filePath];
-  if (!allowed) {
+  const modules = PLUGIN_OWNED_FS_SAFE_IMPORTS[filePath];
+  if (!modules) {
     return source;
   }
   const parsed = ts.createSourceFile(filePath, source, ts.ScriptTarget.Latest);
   let checkedSource = source;
   for (const statement of parsed.statements.toReversed()) {
-    if (
-      !ts.isImportDeclaration(statement) ||
-      !ts.isStringLiteral(statement.moduleSpecifier) ||
-      statement.moduleSpecifier.text !== allowed.module
-    ) {
+    if (!ts.isImportDeclaration(statement) || !ts.isStringLiteral(statement.moduleSpecifier)) {
+      continue;
+    }
+    const allowed = modules[statement.moduleSpecifier.text];
+    if (!allowed) {
       continue;
     }
     const clause = statement.importClause;
@@ -135,6 +139,24 @@ function hasDisallowedFsSafeImport(filePath: string, source: string): boolean {
 }
 
 describe("fs-safe import boundary", () => {
+  it("limits File Transfer's archive inventory helpers", () => {
+    const owner = "extensions/file-transfer/src/tools/dir-fetch-tool.ts";
+    const source =
+      'import { sha256File as hash } from "@openclaw/fs-safe/durability";\n' +
+      'import { walkDirectory as walk } from "@openclaw/fs-safe/walk";';
+    expect(hasDisallowedFsSafeImport(owner, source)).toBe(false);
+    expect(hasDisallowedFsSafeImport(`${owner}.other.ts`, source)).toBe(true);
+    expect(
+      hasDisallowedFsSafeImport(
+        owner,
+        'import { sha256File, publishFileExclusive } from "@openclaw/fs-safe/durability";',
+      ),
+    ).toBe(true);
+    expect(
+      hasDisallowedFsSafeImport(owner, `${source}\nimport { root } from "@openclaw/fs-safe/root";`),
+    ).toBe(true);
+  });
+
   it("limits File Transfer's descriptor overwrite helper", () => {
     const owner = "extensions/file-transfer/src/node-host/file-write.ts";
     const source = 'import { overwriteFileHandle as operation } from "@openclaw/fs-safe/advanced";';

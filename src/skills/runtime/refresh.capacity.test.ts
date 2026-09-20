@@ -33,6 +33,7 @@ describe("ensureSkillsWatcher", () => {
   });
 
   beforeEach(() => {
+    vi.stubEnv("CHOKIDAR_USEPOLLING", "false");
     watchMock.mockClear();
     createdWatchers.length = 0;
     fixtureWorkspaceDir = fixture.workspaceDir;

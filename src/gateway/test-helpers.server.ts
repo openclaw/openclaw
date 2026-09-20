@@ -20,7 +20,7 @@ import {
   resetConfigRuntimeState,
   setRuntimeConfigSnapshot,
 } from "../config/config.js";
-import { resolveSystemMainSessionKey, type SessionEntry } from "../config/sessions.js";
+import { resolveSystemMainSessionTarget, type SessionEntry } from "../config/sessions.js";
 import {
   applySessionEntryLifecycleMutation,
   listSessionEntriesCore,
@@ -45,6 +45,7 @@ import {
   setPreRestartDeferralCheck,
 } from "../infra/restart.js";
 import { normalizeLegacySessionEntryDelivery } from "../infra/state-migrations.legacy-session-store.js";
+import { resolveSystemEventQueueKey } from "../infra/system-event-ownership.js";
 import { peekSystemEvents, resetSystemEventsForTest } from "../infra/system-events.js";
 import { resetLogger, setLoggerOverride } from "../logging.js";
 import type { ChannelRouteRef } from "../plugin-sdk/channel-route.js";
@@ -68,7 +69,6 @@ import {
   resetTaskRegistryForTests,
 } from "../tasks/task-runtime.test-helpers.js";
 import { captureEnv } from "../test-utils/env.js";
-import { getDeterministicFreePortBlock } from "../test-utils/ports.js";
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { buildDeviceAuthPayloadV3 } from "./device-auth.js";
@@ -77,6 +77,7 @@ import type { GatewayServerOptions } from "./server.js";
 import { invalidateSessionSharingSnapshot } from "./session-sharing.js";
 import { loadGatewayTestConfig } from "./test-helpers.config-runtime.js";
 import { GATEWAY_STARTUP_MUTATED_ENV_KEYS } from "./test-helpers.env.js";
+import { getGatewayTestPort, canRetryPort, startClaimedGateway } from "./test-helpers.listener.js";
 import { resetTestPluginRegistry } from "./test-helpers.plugin-registry.js";
 import {
   agentCommandMock,
@@ -128,14 +129,9 @@ const DEFAULT_GATEWAY_TEST_BIND = "loopback" as const;
 
 function resolveGatewayTestMainSessionKeys(): string[] {
   // Use the fixture's config seam; transitive runtime readers can retain real IO bindings.
-  const resolved = resolveSystemMainSessionKey(getRuntimeConfig());
-  const keys = new Set<string>();
-  if (resolved) {
-    keys.add(resolved);
-  }
+  const { sessionKey: resolved, agentId } = resolveSystemMainSessionTarget(getRuntimeConfig());
+  const keys = new Set([resolveSystemEventQueueKey(resolved, agentId)]);
   if (resolved !== "global") {
-    const parsed = parseAgentSessionKey(resolved);
-    const agentId = parsed?.agentId ?? DEFAULT_AGENT_ID;
     keys.add(`agent:${agentId}:main`);
     const configuredMainKey = normalizeMainKey(
       (testState.sessionConfig as { mainKey?: unknown } | undefined)?.mainKey as string | undefined,
@@ -675,9 +671,7 @@ export function installGatewayTestHooks(
   });
 }
 
-export async function getGatewayTestPort(): Promise<number> {
-  return await getDeterministicFreePortBlock({ offsets: [0, 1, 2, 3, 4] });
-}
+export { getGatewayTestPort } from "./test-helpers.listener.js";
 
 type GatewayTestMessage = {
   type?: string;
@@ -782,7 +776,7 @@ export async function startTestGatewayServer(port: number, opts?: GatewayServerO
     };
   }
   return await gatewayFixtureLifetime.ownServer(
-    () => mod.startGatewayServer(port, resolvedOpts),
+    () => startClaimedGateway(port, () => mod.startGatewayServer(port, resolvedOpts)),
     tempHome,
   );
 }
@@ -799,8 +793,7 @@ export async function startGatewayServerWithRetries(params: {
         server: await startTestGatewayServer(port, params.opts),
       };
     } catch (err) {
-      const code = (err as { cause?: { code?: string } }).cause?.code;
-      if (code !== "EADDRINUSE") {
+      if (!canRetryPort(err)) {
         throw err;
       }
       port = await getGatewayTestPort();

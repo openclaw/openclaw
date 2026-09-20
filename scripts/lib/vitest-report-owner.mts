@@ -16,6 +16,7 @@ type Invocation = { config: string; args: string[]; includePatterns?: string[] |
 type Attempt = { json: string; blob: string; outcome?: VitestReportOutcome; error?: string };
 
 const captureReporter = fileURLToPath(new URL("./vitest-report-capture.mts", import.meta.url));
+const reporterConfigModule = new URL("../../test/vitest/vitest.reporters.ts", import.meta.url).href;
 const consoleReporters = new Set([
   "json",
   "default",
@@ -256,22 +257,25 @@ export async function createVitestReportOwner(invocations: Invocation[], cwd: st
         const config = path.join(directory, "vitest.merge.config.mjs");
         fs.writeFileSync(
           config,
-          `export default ${JSON.stringify({
-            root: cwd,
-            test: {
-              // An omitted list lets native Vitest host a wholly empty blob replay.
-              projects: projectConfigs.length ? projectConfigs : undefined,
-              coverage: { enabled: false },
-              passWithNoTests: captures.every((capture) => capture.passWithNoTests),
-              dangerouslyIgnoreUnhandledErrors: captures.every(
-                (capture) => capture.ignoreUnhandledErrors || capture.ended!.unhandledErrors === 0,
-              ),
-              reporters: [
-                ["json", {}],
-                [captureReporter, { expected: captures }],
-              ],
+          `import { createRedactingReporterPlugin } from ${JSON.stringify(reporterConfigModule)};\nconst config = ${JSON.stringify(
+            {
+              root: cwd,
+              test: {
+                // An omitted list lets native Vitest host a wholly empty blob replay.
+                projects: projectConfigs.length ? projectConfigs : undefined,
+                coverage: { enabled: false },
+                passWithNoTests: captures.every((capture) => capture.passWithNoTests),
+                dangerouslyIgnoreUnhandledErrors: captures.every(
+                  (capture) =>
+                    capture.ignoreUnhandledErrors || capture.ended!.unhandledErrors === 0,
+                ),
+                reporters: [
+                  ["json", {}],
+                  [captureReporter, { expected: captures }],
+                ],
+              },
             },
-          })};\n`,
+          )};\nexport default { ...config, plugins: [createRedactingReporterPlugin()] };\n`,
         );
         const mergeArgs = [
           "run",

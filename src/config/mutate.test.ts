@@ -24,6 +24,12 @@ import {
   transformConfigFileWithRetry,
   withConfigMutationExclusive,
 } from "./mutate.js";
+import {
+  createPluginIncludeFixture,
+  createSnapshot,
+  mockIncludeRollbackRename,
+  resolveIncludeTarget,
+} from "./mutate.test-support.js";
 import { resolveConfigPath } from "./paths.js";
 import {
   registerRuntimeConfigWriteListener,
@@ -91,50 +97,6 @@ vi.mock("../infra/file-lock.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../infra/file-lock.js")>()),
   withFileLock: fileLockMocks.withFileLock,
 }));
-
-function createSnapshot(params: {
-  hash: string;
-  path?: string;
-  parsed?: unknown;
-  sourceConfig: OpenClawConfig;
-  runtimeConfig?: OpenClawConfig;
-}): ConfigFileSnapshot {
-  const runtimeConfig = (params.runtimeConfig ??
-    params.sourceConfig) as ConfigFileSnapshot["config"];
-  const sourceConfig = params.sourceConfig as ConfigFileSnapshot["sourceConfig"];
-  const parsed = params.parsed ?? params.sourceConfig;
-  return {
-    path: params.path ?? "/tmp/openclaw.json",
-    exists: true,
-    raw: `${JSON.stringify(parsed, null, 2)}\n`,
-    parsed,
-    sourceConfig,
-    resolved: sourceConfig,
-    valid: true,
-    runtimeConfig,
-    config: runtimeConfig,
-    hash: params.hash,
-    issues: [],
-    warnings: [],
-    legacyIssues: [],
-  };
-}
-
-async function createPluginIncludeFixture(home: string) {
-  const configPath = path.join(home, ".openclaw", "openclaw.json");
-  const pluginsPath = path.join(home, ".openclaw", "config", "plugins.json5");
-  await fs.mkdir(path.dirname(pluginsPath), { recursive: true });
-  await fs.writeFile(
-    configPath,
-    `${JSON.stringify({ plugins: { $include: "./config/plugins.json5" } }, null, 2)}\n`,
-    "utf-8",
-  );
-  return { configPath, pluginsPath };
-}
-
-async function resolveIncludeTarget(filePath: string): Promise<string> {
-  return path.join(await fs.realpath(path.dirname(filePath)), path.basename(filePath));
-}
 
 const allowConfigPathWrite = () => {};
 
@@ -1056,7 +1018,7 @@ describe("config mutate helpers", () => {
     });
   });
 
-  it("refuses guarded include publication before changing config or backups", async () => {
+  it("publishes guarded includes and calls beforeCommit once", async () => {
     const home = await suiteRootTracker.make("guarded-include");
     const { configPath, pluginsPath } = await createPluginIncludeFixture(home);
     const plugins = { entries: { demo: { enabled: false } } };
@@ -1080,20 +1042,24 @@ describe("config mutate helpers", () => {
           assertConfigPathForWrite: allowConfigPathWrite,
           includeFileTargetsForWrite: { [pluginsPath]: await resolveIncludeTarget(pluginsPath) },
           beforeCommit,
+          skipRuntimeSnapshotRefresh: true,
         },
         nextConfig: { plugins: { entries: { demo: { enabled: true } } } },
       }),
-    ).rejects.toThrow("cannot update include-owned configuration. Use a trusted shell");
+    ).resolves.toBeDefined();
 
-    expect(beforeCommit).not.toHaveBeenCalled();
-    expect(backupMocks.prepareConfigFileWrite).not.toHaveBeenCalled();
+    expect(beforeCommit).toHaveBeenCalledOnce();
+    expect(backupMocks.prepareConfigFileWrite).toHaveBeenCalledOnce();
     expect(ioMocks.writeConfigFile).not.toHaveBeenCalled();
     expect(await fs.readFile(configPath, "utf-8")).toBe(rootRaw);
-    expect(await fs.readFile(pluginsPath, "utf-8")).toBe(includedRaw);
+    expect(JSON.parse(await fs.readFile(pluginsPath, "utf-8"))).toEqual({
+      entries: { demo: { enabled: true } },
+    });
+    expect(await fs.readFile(`${pluginsPath}.bak`, "utf-8")).toBe(includedRaw);
   });
 
   it.each([false, true])(
-    "refuses custom-IO include authority before effects (revoked: %s)",
+    "preserves custom-IO include authority through effects (revoked: %s)",
     async (revoke) => {
       const home = await suiteRootTracker.make("custom-include-authority");
       const { configPath, pluginsPath } = await createPluginIncludeFixture(home);
@@ -1118,29 +1084,40 @@ describe("config mutate helpers", () => {
             throw refusal;
           }
         });
-        await expect(
-          mutateConfigFile({
-            io: { ...io, writeConfigFile: fallbackWrite },
-            writeOptions: {
-              assertCurrent,
-              observe: false,
-              skipPluginValidation: true,
-              skipRuntimeSnapshotRefresh: true,
-            },
-            mutate: async (draft) => {
-              await Promise.resolve();
-              current = !revoke;
-              draft.plugins = { entries: { demo: { enabled: true } } };
-            },
-          }),
-        ).rejects.toThrow("cannot update include-owned configuration. Use a trusted shell");
-        expect(assertCurrent).toHaveBeenCalledOnce();
+        const operation = mutateConfigFile({
+          io: { ...io, writeConfigFile: fallbackWrite },
+          writeOptions: {
+            assertCurrent,
+            observe: false,
+            skipPluginValidation: true,
+            skipRuntimeSnapshotRefresh: true,
+          },
+          mutate: async (draft) => {
+            await Promise.resolve();
+            current = !revoke;
+            draft.plugins = { entries: { demo: { enabled: true } } };
+          },
+        });
+        if (revoke) {
+          await expect(operation).rejects.toThrow(refusal);
+        } else {
+          await operation;
+        }
+        expect(assertCurrent).toHaveBeenCalled();
         expect(fallbackWrite).not.toHaveBeenCalled();
-        expect(backupMocks.prepareConfigFileWrite).not.toHaveBeenCalled();
+        expect(backupMocks.prepareConfigFileWrite).toHaveBeenCalledTimes(revoke ? 0 : 1);
         expect(await fs.readFile(configPath, "utf8")).toBe(rootRaw);
-        expect(await fs.readFile(pluginsPath, "utf8")).toBe(includedRaw);
-        expect(await fs.readFile(`${pluginsPath}.bak`, "utf8")).toBe(backupRaw);
-        await expect(fs.stat(`${pluginsPath}.bak.1`)).rejects.toMatchObject({ code: "ENOENT" });
+        if (revoke) {
+          expect(await fs.readFile(pluginsPath, "utf8")).toBe(includedRaw);
+          expect(await fs.readFile(`${pluginsPath}.bak`, "utf8")).toBe(backupRaw);
+          await expect(fs.stat(`${pluginsPath}.bak.1`)).rejects.toMatchObject({ code: "ENOENT" });
+        } else {
+          expect(JSON.parse(await fs.readFile(pluginsPath, "utf8"))).toEqual({
+            entries: { demo: { enabled: true } },
+          });
+          expect(await fs.readFile(`${pluginsPath}.bak`, "utf8")).toBe(includedRaw);
+          expect(await fs.readFile(`${pluginsPath}.bak.1`, "utf8")).toBe(backupRaw);
+        }
         await expect(fs.stat(path.dirname(selectedPath))).rejects.toMatchObject({ code: "ENOENT" });
       });
     },
@@ -2229,73 +2206,6 @@ describe("config mutate helpers", () => {
     }
   });
 
-  it("preserves auth-store refresh scope for managed top-level include writes", async () => {
-    const home = await suiteRootTracker.make("include-managed-refresh-scope");
-    const { configPath, pluginsPath } = await createPluginIncludeFixture(home);
-    await fs.writeFile(pluginsPath, `${JSON.stringify({ entries: {} }, null, 2)}\n`, "utf-8");
-    const snapshot = createSnapshot({
-      hash: "hash-include-managed-refresh-scope",
-      path: configPath,
-      parsed: { plugins: { $include: "./config/plugins.json5" } },
-      sourceConfig: { plugins: { entries: {} } },
-    });
-    const nextConfig = {
-      plugins: { entries: { demo: { enabled: true } } },
-    } satisfies OpenClawConfig;
-    ioMocks.readConfigFileSnapshotForWrite.mockResolvedValue({
-      snapshot: createSnapshot({
-        hash: "hash-include-managed-refresh-scope-written",
-        path: configPath,
-        parsed: { plugins: { $include: "./config/plugins.json5" } },
-        sourceConfig: nextConfig,
-      }),
-      writeOptions: { expectedConfigPath: configPath },
-    });
-    const preflight = vi.fn(
-      async (sourceConfig: OpenClawConfig, refreshOptions?: { includeAuthStoreRefs?: boolean }) => {
-        if (refreshOptions?.includeAuthStoreRefs !== false) {
-          throw new Error("unavailable auth-profile SecretRef");
-        }
-        return { runtimeConfig: sourceConfig, compareConfig: sourceConfig };
-      },
-    );
-    const releaseOwner = registerManagedRuntimeConfigWriteOwner(configPath, preflight);
-    const notifications: Array<{ includeAuthStoreRefs?: boolean } | undefined> = [];
-    const releaseListener = registerRuntimeConfigWriteListener((event) => {
-      if (event.configPath === configPath) {
-        notifications.push(event.runtimeRefresh);
-      }
-    });
-
-    try {
-      await replaceConfigFile({
-        baseHash: snapshot.hash,
-        snapshot,
-        writeOptions: {
-          expectedConfigPath: snapshot.path,
-          assertConfigPathForWrite: allowConfigPathWrite,
-          includeFileTargetsForWrite: {
-            [pluginsPath]: await resolveIncludeTarget(pluginsPath),
-          },
-          runtimeRefresh: { includeAuthStoreRefs: false },
-        },
-        nextConfig,
-      });
-    } finally {
-      releaseListener();
-      releaseOwner();
-    }
-
-    expect(preflight).toHaveBeenCalledWith(expect.any(Object), {
-      includeAuthStoreRefs: false,
-    });
-    expect(notifications).toEqual([{ includeAuthStoreRefs: false }]);
-    const persisted = JSON.parse(
-      await fs.readFile(pluginsPath, "utf-8"),
-    ) as OpenClawConfig["plugins"];
-    expect(persisted?.entries?.demo?.enabled).toBe(true);
-  });
-
   it("uses the published restart env source for isolated managed include writes", async () => {
     const home = await suiteRootTracker.make("include-managed-deferred-restart-env");
     const configPath = path.join(home, ".openclaw", "openclaw.json");
@@ -2602,65 +2512,69 @@ describe("config mutate helpers", () => {
     }
   });
 
-  it("rolls back an include write when config path ownership changes during commit", async () => {
-    const home = await suiteRootTracker.make("include-active-path-commit-concurrent");
-    const configPath = path.join(home, ".openclaw", "openclaw.json");
-    const pluginsPath = path.join(home, ".openclaw", "plugins.json5");
-    const rootConfig = { plugins: { $include: "./plugins.json5" } };
-    const initialPluginsRaw = `${JSON.stringify({ entries: {} }, null, 2)}\n`;
-    await fs.mkdir(path.dirname(configPath), { recursive: true });
-    await fs.writeFile(configPath, `${JSON.stringify(rootConfig, null, 2)}\n`, "utf-8");
-    await fs.writeFile(pluginsPath, initialPluginsRaw, "utf-8");
-    const snapshot = createSnapshot({
-      hash: "hash-include-active-path-commit-concurrent",
-      path: configPath,
-      parsed: rootConfig,
-      sourceConfig: { plugins: { entries: {} } },
-    });
-    let activeConfigPath = configPath;
-    const assertConfigPathForWrite = () => {
-      if (fsNode.readFileSync(pluginsPath, "utf-8") !== initialPluginsRaw) {
-        activeConfigPath = "/tmp/other-openclaw.json";
-      }
-      if (activeConfigPath !== configPath) {
-        throw new ConfigMutationConflictError("config path changed since last load", {
-          retryable: false,
-        });
-      }
-    };
+  it.each(["rename", "permission-fallback"] as const)(
+    "rolls back an include write when config path ownership changes during commit via %s",
+    async (method) => {
+      const home = await suiteRootTracker.make("include-active-path-commit-concurrent");
+      const configPath = path.join(home, ".openclaw", "openclaw.json");
+      const pluginsPath = path.join(home, ".openclaw", "plugins.json5");
+      const rootConfig = { plugins: { $include: "./plugins.json5" } };
+      mockIncludeRollbackRename(pluginsPath, method);
+      const initialPluginsRaw = `${JSON.stringify({ entries: {} }, null, 2)}\n`;
+      await fs.mkdir(path.dirname(configPath), { recursive: true });
+      await fs.writeFile(configPath, `${JSON.stringify(rootConfig, null, 2)}\n`, "utf-8");
+      await fs.writeFile(pluginsPath, initialPluginsRaw, "utf-8");
+      const snapshot = createSnapshot({
+        hash: "hash-include-active-path-commit-concurrent",
+        path: configPath,
+        parsed: rootConfig,
+        sourceConfig: { plugins: { entries: {} } },
+      });
+      let activeConfigPath = configPath;
+      const assertConfigPathForWrite = () => {
+        if (fsNode.readFileSync(pluginsPath, "utf-8") !== initialPluginsRaw) {
+          activeConfigPath = "/tmp/other-openclaw.json";
+        }
+        if (activeConfigPath !== configPath) {
+          throw new ConfigMutationConflictError("config path changed since last load", {
+            retryable: false,
+          });
+        }
+      };
 
-    const operation = replaceConfigFile({
-      baseHash: snapshot.hash,
-      snapshot,
-      writeOptions: {
-        expectedConfigPath: snapshot.path,
-        assertConfigPathForWrite,
-        includeFileTargetsForWrite: { [pluginsPath]: await resolveIncludeTarget(pluginsPath) },
-      },
-      nextConfig: {
-        plugins: {
-          entries: {
-            demo: { enabled: true },
+      const operation = replaceConfigFile({
+        baseHash: snapshot.hash,
+        snapshot,
+        writeOptions: {
+          expectedConfigPath: snapshot.path,
+          assertConfigPathForWrite,
+          includeFileTargetsForWrite: { [pluginsPath]: await resolveIncludeTarget(pluginsPath) },
+        },
+        nextConfig: {
+          plugins: {
+            entries: {
+              demo: { enabled: true },
+            },
           },
         },
-      },
-    });
-    await expect(operation).rejects.toBeInstanceOf(Error);
-    await expect(operation).rejects.not.toBeInstanceOf(ConfigMutationConflictError);
-    await expect(operation).rejects.toMatchObject({
-      name: "ConfigWritePostCommitError",
-      configPath: pluginsPath,
-      rollbackStatus: "restored",
-      cause: expect.objectContaining({
-        name: "ConfigMutationConflictError",
-        message: "config path changed since last load",
-      }),
-    });
+      });
+      await expect(operation).rejects.toBeInstanceOf(Error);
+      await expect(operation).rejects.not.toBeInstanceOf(ConfigMutationConflictError);
+      await expect(operation).rejects.toMatchObject({
+        name: "ConfigWritePostCommitError",
+        configPath: pluginsPath,
+        rollbackStatus: "restored",
+        cause: expect.objectContaining({
+          name: "ConfigMutationConflictError",
+          message: "config path changed since last load",
+        }),
+      });
 
-    await expect(fs.readFile(pluginsPath, "utf-8")).resolves.toBe(initialPluginsRaw);
-    await expect(fs.readFile(`${pluginsPath}.bak`, "utf-8")).resolves.toBe(initialPluginsRaw);
-    await expect(fs.readFile(configPath, "utf-8")).resolves.toBe(snapshot.raw);
-  });
+      await expect(fs.readFile(pluginsPath, "utf-8")).resolves.toBe(initialPluginsRaw);
+      await expect(fs.readFile(`${pluginsPath}.bak`, "utf-8")).resolves.toBe(initialPluginsRaw);
+      await expect(fs.readFile(configPath, "utf-8")).resolves.toBe(snapshot.raw);
+    },
+  );
 
   it.each(["active path", "refreshed snapshot path"] as const)(
     "rolls back an include write when the %s changes during the post-write read",
@@ -3089,79 +3003,83 @@ describe("config mutate helpers", () => {
     expect(persisted.entries?.demo).toEqual({ enabled: true });
   });
 
-  it("rolls back single-file top-level include writes when runtime refresh fails", async () => {
-    const home = await suiteRootTracker.make("include-runtime-refresh-rollback");
-    const env = {} as NodeJS.ProcessEnv;
-    const envKey = "OPENCLAW_TEST_INCLUDE_ROLLBACK_ENV";
-    const { configPath, pluginsPath } = await createPluginIncludeFixture(home);
-    const initialPluginsRaw = `${JSON.stringify({ entries: {} }, null, 2)}\n`;
-    await fs.writeFile(pluginsPath, initialPluginsRaw, "utf-8");
-    const snapshot = createSnapshot({
-      hash: "hash-include-refresh-rollback",
-      path: configPath,
-      parsed: { plugins: { $include: "./config/plugins.json5" } },
-      sourceConfig: { plugins: { entries: {} } },
-    });
-    const nextConfig = {
-      plugins: {
-        entries: {
-          demo: { enabled: true },
+  it.each(["rename", "permission-fallback"] as const)(
+    "rolls back single-file top-level include writes when runtime refresh fails via %s",
+    async (method) => {
+      const home = await suiteRootTracker.make("include-runtime-refresh-rollback");
+      const env = {} as NodeJS.ProcessEnv;
+      const envKey = "OPENCLAW_TEST_INCLUDE_ROLLBACK_ENV";
+      const { configPath, pluginsPath } = await createPluginIncludeFixture(home);
+      mockIncludeRollbackRename(pluginsPath, method);
+      const initialPluginsRaw = `${JSON.stringify({ entries: {} }, null, 2)}\n`;
+      await fs.writeFile(pluginsPath, initialPluginsRaw, "utf-8");
+      const snapshot = createSnapshot({
+        hash: "hash-include-refresh-rollback",
+        path: configPath,
+        parsed: { plugins: { $include: "./config/plugins.json5" } },
+        sourceConfig: { plugins: { entries: {} } },
+      });
+      const nextConfig = {
+        plugins: {
+          entries: {
+            demo: { enabled: true },
+          },
         },
-      },
-    };
-    ioMocks.readConfigFileSnapshotForWrite.mockImplementation(async () => {
-      env[envKey] = "written-env-value";
-      return {
-        snapshot: createSnapshot({
-          hash: "hash-include-refresh-written",
-          path: configPath,
-          parsed: { plugins: { $include: "./config/plugins.json5" } },
-          sourceConfig: nextConfig,
-        }),
-        writeOptions: { expectedConfigPath: configPath },
       };
-    });
-    const refreshError = new Error("lost include secret");
-
-    try {
-      delete env[envKey];
-      setRuntimeConfigSnapshotRefreshHandler({
-        preflight: () => true,
-        refresh: () => {
-          throw refreshError;
-        },
+      ioMocks.readConfigFileSnapshotForWrite.mockImplementation(async () => {
+        env[envKey] = "written-env-value";
+        return {
+          snapshot: createSnapshot({
+            hash: "hash-include-refresh-written",
+            path: configPath,
+            parsed: { plugins: { $include: "./config/plugins.json5" } },
+            sourceConfig: nextConfig,
+          }),
+          writeOptions: { expectedConfigPath: configPath },
+        };
       });
+      const refreshError = new Error("lost include secret");
 
-      const operation = replaceConfigFile({
-        baseHash: snapshot.hash,
-        snapshot,
-        io: { ...ioMocks, env },
-        writeOptions: {
-          expectedConfigPath: snapshot.path,
-          assertConfigPathForWrite: allowConfigPathWrite,
-          includeFileTargetsForWrite: { [pluginsPath]: await resolveIncludeTarget(pluginsPath) },
-        },
-        nextConfig,
-      });
-      await expect(operation).rejects.toBeInstanceOf(Error);
-      await expect(operation).rejects.not.toBeInstanceOf(ConfigMutationConflictError);
-      await expect(operation).rejects.toMatchObject({
-        name: "ConfigWritePostCommitError",
-        configPath: pluginsPath,
-        rollbackStatus: "restored",
-        message: expect.stringMatching(/runtime snapshot refresh failed: lost include secret/),
-        cause: expect.objectContaining({ cause: refreshError }),
-      });
+      try {
+        delete env[envKey];
+        setRuntimeConfigSnapshotRefreshHandler({
+          preflight: () => true,
+          refresh: () => {
+            throw refreshError;
+          },
+        });
 
-      await expect(fs.readFile(pluginsPath, "utf-8")).resolves.toBe(initialPluginsRaw);
-      await expect(fs.readFile(`${pluginsPath}.bak`, "utf-8")).resolves.toBe(initialPluginsRaw);
-      await expect(fs.readFile(configPath, "utf-8")).resolves.toBe(snapshot.raw);
-      expect(env[envKey]).toBeUndefined();
-    } finally {
-      setRuntimeConfigSnapshotRefreshHandler(null);
-      delete env[envKey];
-    }
-  });
+        const operation = replaceConfigFile({
+          baseHash: snapshot.hash,
+          snapshot,
+          io: { ...ioMocks, env },
+          writeOptions: {
+            expectedConfigPath: snapshot.path,
+            assertConfigPathForWrite: allowConfigPathWrite,
+            includeFileTargetsForWrite: { [pluginsPath]: await resolveIncludeTarget(pluginsPath) },
+          },
+          nextConfig,
+        });
+        await expect(operation).rejects.toBeInstanceOf(Error);
+        await expect(operation).rejects.not.toBeInstanceOf(ConfigMutationConflictError);
+        await expect(operation).rejects.toMatchObject({
+          name: "ConfigWritePostCommitError",
+          configPath: pluginsPath,
+          rollbackStatus: "restored",
+          message: expect.stringMatching(/runtime snapshot refresh failed: lost include secret/),
+          cause: expect.objectContaining({ cause: refreshError }),
+        });
+
+        await expect(fs.readFile(pluginsPath, "utf-8")).resolves.toBe(initialPluginsRaw);
+        await expect(fs.readFile(`${pluginsPath}.bak`, "utf-8")).resolves.toBe(initialPluginsRaw);
+        await expect(fs.readFile(configPath, "utf-8")).resolves.toBe(snapshot.raw);
+        expect(env[envKey]).toBeUndefined();
+      } finally {
+        setRuntimeConfigSnapshotRefreshHandler(null);
+        delete env[envKey];
+      }
+    },
+  );
 
   it("does not overwrite concurrent include edits during failed refresh rollback", async () => {
     const home = await suiteRootTracker.make("include-runtime-refresh-concurrent");

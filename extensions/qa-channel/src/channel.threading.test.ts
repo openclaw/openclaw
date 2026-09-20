@@ -211,7 +211,7 @@ describe("qa-channel thread delivery contracts", () => {
     });
   });
 
-  it("extracts thread replies as canonical QA thread targets", () => {
+  it("extracts thread replies with structured thread identity", () => {
     expect(
       qaChannelPlugin.actions?.extractToolSend?.({
         args: {
@@ -221,6 +221,6 @@ describe("qa-channel thread delivery contracts", () => {
           message: "hello thread",
         },
       }),
-    ).toEqual({ to: "thread:qa-room/thread-1" });
+    ).toEqual({ to: "channel:qa-room", threadId: "thread-1" });
   });
 });

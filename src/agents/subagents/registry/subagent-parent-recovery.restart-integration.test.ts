@@ -297,6 +297,7 @@ describe("subagent parent recovery — durable yielded continuation", () => {
       child.delivery = { status: "delivered", disposition: "delivered", deliveredAt: now };
       child.cleanupCompletedAt = now;
       if (scenario === "settled batch") {
+        persistSubagentRunsToDiskOrThrow(subagentRuns, [child.runId]);
         // Settle through the lifecycle's exact batch callback, not by deleting a flag.
         const deliverBatch = vi.fn<
           SubagentRegistryDeps["maybeWakeRequesterAfterAllChildrenSettled"]

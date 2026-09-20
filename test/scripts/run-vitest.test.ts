@@ -1485,7 +1485,7 @@ registerHooks({resolve(specifier, context, nextResolve) {
       const forceKillSpy = vi.fn();
       const logSpy = vi.fn();
 
-      const teardown = installVitestNoOutputWatchdog({
+      const watchdog = installVitestNoOutputWatchdog({
         streams: [stdout],
         timeoutMs: 1000,
         forceKillAfterMs: 5000,
@@ -1515,41 +1515,49 @@ registerHooks({resolve(specifier, context, nextResolve) {
         "[vitest] process group still alive after 5000ms; sending SIGKILL.",
       );
 
-      teardown();
+      watchdog.teardown();
     } finally {
       vi.useRealTimers();
     }
   });
 
-  it("keeps force-kill scheduled when output arrives after the idle timeout", () => {
-    vi.useFakeTimers();
-    try {
-      const stdout = new EventEmitter();
-      const timeoutSpy = vi.fn();
-      const forceKillSpy = vi.fn();
+  it.each(["output", "preparation"] as const)(
+    "keeps force-kill scheduled when %s arrives after the idle timeout",
+    (activity) => {
+      vi.useFakeTimers();
+      try {
+        const stdout = new EventEmitter();
+        const timeoutSpy = vi.fn();
+        const forceKillSpy = vi.fn();
 
-      installVitestNoOutputWatchdog({
-        streams: [stdout],
-        timeoutMs: 1000,
-        forceKillAfterMs: 5000,
-        onTimeout: timeoutSpy,
-        onForceKill: forceKillSpy,
-        setTimeoutFn: setTimeout,
-        clearTimeoutFn: clearTimeout,
-      });
+        const watchdog = installVitestNoOutputWatchdog({
+          streams: [stdout],
+          timeoutMs: 1000,
+          forceKillAfterMs: 5000,
+          onTimeout: timeoutSpy,
+          onForceKill: forceKillSpy,
+          setTimeoutFn: setTimeout,
+          clearTimeoutFn: clearTimeout,
+        });
 
-      vi.advanceTimersByTime(1000);
-      expect(timeoutSpy).toHaveBeenCalledTimes(1);
+        vi.advanceTimersByTime(1000);
+        expect(timeoutSpy).toHaveBeenCalledTimes(1);
 
-      stdout.emit("data", "too late");
-      vi.advanceTimersByTime(5000);
+        if (activity === "output") {
+          stdout.emit("data", "too late");
+        } else {
+          watchdog.recordActivity();
+        }
+        vi.advanceTimersByTime(5000);
 
-      expect(timeoutSpy).toHaveBeenCalledTimes(1);
-      expect(forceKillSpy).toHaveBeenCalledTimes(1);
-    } finally {
-      vi.useRealTimers();
-    }
-  });
+        expect(timeoutSpy).toHaveBeenCalledTimes(1);
+        expect(forceKillSpy).toHaveBeenCalledTimes(1);
+        watchdog.teardown();
+      } finally {
+        vi.useRealTimers();
+      }
+    },
+  );
 
   it("prints bounded heartbeats before killing silent vitest runs", () => {
     vi.useFakeTimers();

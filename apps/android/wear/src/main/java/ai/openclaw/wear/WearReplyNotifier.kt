@@ -78,6 +78,7 @@ internal class WearReplyNotifier(
         .setSmallIcon(R.drawable.ic_notification)
         .setContentTitle(context.getString(R.string.notification_reply_failed_title))
         .setContentText(context.getString(R.string.notification_reply_failed_text))
+        .setContentIntent(createOpenAppIntent(NOTIFICATION_ID))
         .setAutoCancel(true)
         .setLocalOnly(true)
         .addAction(createReplyAction(sessionKey, notificationTag, phoneNodeId))

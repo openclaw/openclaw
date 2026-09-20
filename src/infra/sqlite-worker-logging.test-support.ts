@@ -18,6 +18,9 @@ export function createSqliteWorkerBackend(input: {
     },
     async close() {
       await Promise.resolve();
+      for (let index = 0; index < 128; index++) {
+        log.debug(`worker teardown diagnostic ${index}`);
+      }
       log.debug("worker fixture close");
     },
   };

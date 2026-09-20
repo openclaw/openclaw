@@ -57,6 +57,14 @@ describe("chat metadata with published model owners", () => {
             ...fixture.config.agents.defaults,
             authInheritance: { agentId: "main" },
           },
+          ...(shape === "entries" ? { entries } : { list }),
+        },
+      };
+      // Publication consumes config data; read-counting proxies belong only to the observer.
+      const observedConfig: OpenClawConfig = {
+        ...config,
+        agents: {
+          ...config.agents,
           ...(shape === "entries"
             ? {
                 entries: new Proxy(entries, {
@@ -127,7 +135,7 @@ describe("chat metadata with published model owners", () => {
       // Projection leaves are supplied below; the real roster and published-owner chain is retained.
       const context = {} as GatewayRequestContext;
       const runtime = createGatewayChatMetadataRuntime({
-        getConfig: () => config,
+        getConfig: () => observedConfig,
         getContext: () => context,
         log: {
           warn: (message) => {
@@ -157,6 +165,7 @@ describe("chat metadata with published model owners", () => {
           counting = false;
         }
         const unchangedReads = reads;
+        expect(unchangedReads).toBeGreaterThan(0);
         expect(builds).toBe(0);
         for (const entry of configured) {
           await expect(runtime.readStartup({ agentId: entry.id })).resolves.toBeUndefined();

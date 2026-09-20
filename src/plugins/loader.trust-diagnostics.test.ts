@@ -119,6 +119,7 @@ describe("recorded plugin trust diagnostics", () => {
         });
         expect(loaded.status).toBe(trusted ? "loaded" : "error");
         if (!trusted) {
+          expect(loaded.error).toContain(`loaded from ${JSON.stringify(plugin.file)}`);
           expect(loaded.error).toContain(`reason=${reason}`);
           expect(loaded.error).toContain(
             `registryPath=${JSON.stringify(path.join(stateDir, "state", "openclaw.sqlite"))}`,

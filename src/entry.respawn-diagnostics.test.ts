@@ -9,7 +9,10 @@ const boundary = vi.hoisted(() => ({
 }));
 
 vi.mock("./infra/is-main.js", () => ({ isMainModule: () => true }));
-vi.mock("./infra/openclaw-exec-env.js", () => ({ ensureOpenClawExecMarkerOnProcess: vi.fn() }));
+vi.mock("./infra/openclaw-exec-env.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./infra/openclaw-exec-env.js")>()),
+  ensureOpenClawExecMarkerOnProcess: vi.fn(),
+}));
 vi.mock("./infra/warning-filter.js", () => ({ installProcessWarningFilter: vi.fn() }));
 vi.mock("./infra/runtime-guard.js", () => ({
   isCurrentRuntimeSupported: async () => boundary.runtimeSupported,

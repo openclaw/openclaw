@@ -4,6 +4,7 @@
  * Shared by registry read/write helpers for active in-memory run state.
  */
 import { isDeepStrictEqual } from "node:util";
+import { publishSubagentRunChanges } from "./subagent-registry-publication.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 
 // Preflight consults the collector lookup on every Gateway agent request, so it
@@ -130,6 +131,7 @@ class SubagentRunMap extends Map<string, SubagentRunRecord> {
             : { state: "superseded" };
       }
     }
+    publishSubagentRunChanges([entry.childSessionKey]);
   }
 
   /** Normal cleanup calls this only after its deletion commits; raw map deletion is not evidence. */
@@ -144,6 +146,7 @@ class SubagentRunMap extends Map<string, SubagentRunRecord> {
         observed.state = "retired";
       }
     }
+    publishSubagentRunChanges([entry.childSessionKey]);
   }
 
   override set(runId: string, entry: SubagentRunRecord): this {
@@ -193,6 +196,7 @@ class SubagentRunMap extends Map<string, SubagentRunRecord> {
     runsByChildSessionKey.clear();
     runsByRequesterSessionKey.clear();
     runsByCollectorGroupKey.clear();
+    publishSubagentRunChanges();
   }
 }
 

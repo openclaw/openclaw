@@ -48,10 +48,15 @@ import {
 } from "./browser/routes/test-helpers.js";
 import type { BrowserRouteContext } from "./browser/server-context.js";
 import { makeBrowserProfile } from "./browser/server-context.test-harness.js";
+import { readColdNativeActivity } from "./browser/session-tab-process-state.js";
 import {
   closeTrackedBrowserTabsForSessions,
   sweepTrackedBrowserTabs,
+  touchSessionBrowserTab,
+  trackSessionBrowserTab,
+  untrackSessionBrowserTab,
 } from "./browser/session-tab-registry.js";
+import { durableOwnership } from "./browser/session-tab-registry.sqlite.test-helpers.js";
 import {
   assertBrowserDashboardTabCanClose,
   browserSessionTabStorageKey,
@@ -66,6 +71,27 @@ const request = { sessionKey, agentId: "main", name: "service" };
 
 describe("Browser dashboard lifetime", () => {
   const fixture = useBrowserDashboardTestHarness(browser, sessionKey);
+
+  it("retains cold activity through dashboard Stop and retires it after final deletion", async () => {
+    await requestBrowserDashboard(request);
+    const siblingOwnership = durableOwnership("target-1", "profile-one", "browser-older");
+    const params = { sessionKey, targetId: "target-1", profile: "openclaw" };
+    trackSessionBrowserTab({ ...params, ownership: siblingOwnership });
+    touchSessionBrowserTab({ ...params, now: 2_000 });
+    const coldIdentity = `${sessionKey}\u0000openclaw\u0000target-1`;
+    expect(readColdNativeActivity(coldIdentity)).toBe(2_000);
+    untrackSessionBrowserTab({ ...params, ownership: siblingOwnership });
+    expect(readColdNativeActivity(coldIdentity)).toBe(2_000);
+
+    await stopBrowserDashboard(request);
+    expect(readBrowserDashboardTabs()[0]?.dashboard?.state).toBe("stopped");
+    expect(readColdNativeActivity(coldIdentity)).toBe(2_000);
+    fixture.widgets = [];
+    await reconcileBrowserDashboards();
+
+    expect(readBrowserDashboardTabs()).toEqual([]);
+    expect(readColdNativeActivity(coldIdentity)).toBeUndefined();
+  });
 
   it("shares one HTTP target across simultaneous views, plugin reload, idle sweep, and transcript reset", async () => {
     const [first, second] = await Promise.all([

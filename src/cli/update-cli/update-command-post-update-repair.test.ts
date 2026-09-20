@@ -19,11 +19,15 @@ import {
   recordUpdateRunPhase,
   recordUpdateRunVerification,
 } from "../../infra/update-run-ledger.js";
+import { renderUpdateRunReport } from "../../infra/update-run-report.js";
 import { defaultRuntime } from "../../runtime.js";
+import { classifyUpdateOutcome } from "../../shared/update-outcome.js";
+import { registerCurrentCoreRuntimeRefreshTests } from "./update-command-post-update-runtime-refresh.test-support.js";
 import { finishUpdate, type FinishUpdateParams } from "./update-command-post-update.js";
 import { taskRecovery } from "./update-command-post-update.test-support.js";
 import { repairUpdateService } from "./update-command-repair-service.js";
 import { revalidateManagedGatewayServiceAfterUpdate } from "./update-command-service-maintenance.js";
+import { inspectManagedGatewayServiceBeforeUpdate } from "./update-command-service-plan.js";
 import { verifyUpdatedGateway } from "./update-command-verification.js";
 import { createWindowsTaskAutoStartRecovery } from "./update-command-windows-task.js";
 
@@ -240,9 +244,11 @@ describe("post-activation repair after rollback refusal or failure", () => {
     vi.spyOn(defaultRuntime, "error").mockImplementation(() => undefined);
   });
 
-  it.each([false, true])(
-    "records the bounded readiness outcome and retains only unverified backups (ready=%s)",
-    async (ready) => {
+  it.each(["ok", "readiness-pending", "still-starting"] as const)(
+    "records the bounded readiness outcome and retains only unverified backups (%s)",
+    async (outcome) => {
+      const ready = outcome === "ok";
+      const reason = outcome === "still-starting" ? outcome : "gateway-readiness-unverified";
       const params = fixture();
       const run = params.opts.run!;
       const { transaction, packageRoot } = await createRetainedPackageSwap(
@@ -284,12 +290,16 @@ describe("post-activation repair after rollback refusal or failure", () => {
           termination: "timeout",
           advisory: { kind: "recoverable-maintenance", message: observation },
         });
+        if (outcome === "still-starting") {
+          result.reason = outcome;
+        }
         return "readiness-pending";
       });
 
-      await expect(finishUpdate(params)).resolves.toMatchObject(
-        ready ? { status: "ok" } : { status: "skipped", reason: "gateway-readiness-unverified" },
-      );
+      const result = await finishUpdate(params);
+      expect(result).toMatchObject(ready ? { status: "ok" } : { status: "skipped", reason });
+      expect(classifyUpdateOutcome(result)).toBe(ready ? "succeeded" : "noop");
+      expect(result.recovery).toBeUndefined();
 
       expect(mocks.restart).toHaveBeenCalledOnce();
       expect(mocks.rollback).not.toHaveBeenCalled();
@@ -312,7 +322,7 @@ describe("post-activation repair after rollback refusal or failure", () => {
       const recorded = getUpdateRun(run.runId, { env: run.env });
       expect(recorded).toMatchObject({
         status: ready ? "succeeded" : "skipped",
-        reason: ready ? null : "gateway-readiness-unverified",
+        reason: ready ? null : reason,
         phase: "finished",
         finishedAtMs: expect.any(Number),
         confirmedAtMs: ready ? expect.any(Number) : null,
@@ -323,9 +333,15 @@ describe("post-activation repair after rollback refusal or failure", () => {
         expect(recorded?.steps).toContainEqual(
           expect.objectContaining({ step: "warning:gateway verification", detail: observation }),
         );
+        expect(recorded?.origin.nextAction).not.toContain("Keep the gateway stopped");
+        if (outcome === "still-starting" && recorded) {
+          expect(renderUpdateRunReport(recorded).markdown).toContain("Gateway still starting");
+        }
       }
     },
   );
+
+  registerCurrentCoreRuntimeRefreshTests(fixture, mocks);
 
   it("terminalizes a failed final native read after current-core plugin parking", async () => {
     const params = fixture();
@@ -417,8 +433,10 @@ describe("post-activation repair after rollback refusal or failure", () => {
         ] as const) {
           await fs.writeFile(
             path.join(root, "package.json"),
-            JSON.stringify({ type: "module", version }),
+            JSON.stringify({ name: "openclaw", type: "module", version }),
           );
+          await fs.mkdir(path.join(root, "dist"), { recursive: true });
+          await fs.writeFile(path.join(root, "dist", "entry.js"), "// fixture entrypoint\n");
         }
         const worker = "dist/infra/update-candidate-state.worker.js";
         await fs.mkdir(path.dirname(path.join(candidateRoot, worker)), { recursive: true });
@@ -428,14 +446,29 @@ describe("post-activation repair after rollback refusal or failure", () => {
         );
         params.result.root = candidateRoot;
         params.root = previousRoot;
+        const originalService: GatewayServiceState = {
+          installed: true,
+          loadState: { status: "loaded" },
+          running: false,
+          runtime: { status: "stopped", systemd: { managerUid: 2001 } },
+          env: run.env,
+          command: {
+            programArguments: ["node", path.join(previousRoot, "dist", "entry.js"), "gateway"],
+          },
+        };
+        const originalVerdict = await inspectManagedGatewayServiceBeforeUpdate({
+          root: previousRoot,
+          state: originalService,
+        });
+        expect(originalVerdict.kind).toBe("owned");
+        if (originalVerdict.kind !== "owned") {
+          throw new Error("Original service fixture must belong to the previous installation.");
+        }
+        mocks.readService.mockResolvedValue(originalService);
         params.preManagedServiceStop = {
           ...params.preManagedServiceStop!,
-          serviceUpdateVerdict: {
-            kind: "owned",
-            root: candidateRoot,
-            fingerprint: "fixture",
-            refreshDefinition: false,
-          },
+          serviceManagerUid: 2001,
+          serviceUpdateVerdict: { ...originalVerdict, refreshDefinition: false },
         };
         const actual = await vi.importActual<typeof import("./update-command-rollback.js")>(
           "./update-command-rollback.js",
@@ -547,6 +580,15 @@ describe("post-activation repair after rollback refusal or failure", () => {
       );
       expect(mocks.repair).toHaveBeenCalledOnce();
       if (rollback === "restored") {
+        expect(mocks.print.mock.calls.at(-1)?.[0]).toMatchObject({
+          recovery: {
+            serviceRestartSafe: true,
+            packageRollbackVerified: true,
+            version: "2026.9.1",
+            service: repaired ? "healthy" : "failed",
+            ...(!repaired ? { reason: "readyz-unhealthy" } : {}),
+          },
+        });
         expect(completeRecovery).toHaveBeenCalled();
         if (repaired) {
           expect(completeRecovery).not.toHaveBeenCalledWith(false);
@@ -570,7 +612,6 @@ describe("post-activation repair after rollback refusal or failure", () => {
           signal: expect.any(AbortSignal),
         }),
         "restart",
-        true,
       );
       expect(getUpdateRun(run.runId, { env: run.env })).toMatchObject({
         status:

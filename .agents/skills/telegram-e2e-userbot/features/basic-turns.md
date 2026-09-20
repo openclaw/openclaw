@@ -19,8 +19,8 @@ receive the deterministic provider response in the same chat.
 
 Preconditions:
 
-- Baseline doctor passes.
-- The QA user and SUT bot share a direct chat; use the configured QA group for group paths.
+- Setup and strict readiness pass on the scenario's own credential lease.
+- The runner selects the SUT for DMs and prepares its test group for group paths.
 
 - **Drive a DM.** Run:
 

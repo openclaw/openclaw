@@ -30,6 +30,7 @@ import {
   hasUnchangedCronSchedule,
   buildCronSchedule,
 } from "./form-schedule.ts";
+import { cronRunNotStartedMessage } from "./run-feedback.ts";
 import { clearCronRunsPage, loadCronRuns, retireCronRunsRequest } from "./runs.ts";
 import type { CronFieldErrors, CronFormState, CronState } from "./types.ts";
 
@@ -455,19 +456,25 @@ export function resolveConfiguredCronModelSuggestions(
 
 async function withCronBusy(
   state: CronState,
-  run: (client: GatewayBrowserClient) => Promise<void>,
+  job: Pick<CronJob, "id" | "name" | "displayName"> | undefined,
+  run: (client: GatewayBrowserClient, reportFeedback: (message: string) => void) => Promise<void>,
 ) {
   const client = state.client;
   if (!client || !state.connected || state.cronBusy) {
     return;
   }
+  const target = job ? { id: job.id, name: job.displayName ?? job.name } : null;
+  const reportFeedback = (message: string) => {
+    state.cronError =
+      target && state.cronEditingJob?.id !== target.id ? `${target.name}: ${message}` : message;
+  };
   retireCronStatusFeedback(state);
   state.cronBusy = true;
   state.cronError = null;
   try {
-    await run(client);
+    await run(client, reportFeedback);
   } catch (err) {
-    state.cronError = formatUiError(err);
+    reportFeedback(formatUiError(err));
   } finally {
     retireCronStatusFeedback(state);
     state.cronBusy = false;
@@ -916,7 +923,7 @@ function extractSavedCronJobId(response: unknown): string | null {
 
 export async function addCronJob(state: CronState): Promise<CronSaveResult> {
   let result: CronSaveResult = { saved: false };
-  await withCronBusy(state, async (client) => {
+  await withCronBusy(state, undefined, async (client) => {
     const form = normalizeCronFormState(state.cronForm);
     if (form !== state.cronForm) {
       state.cronForm = form;
@@ -1101,7 +1108,7 @@ export async function toggleCronJob(
   // Report whether the update RPC itself succeeded; the follow-up list reload
   // can be queued or fail without invalidating the confirmed toggle.
   let updated = false;
-  await withCronBusy(state, async (client) => {
+  await withCronBusy(state, job, async (client) => {
     const updatedJob = await client.request<CronJob>("cron.update", {
       id: job.id,
       expectedConfigRevision: requireCronConfigRevision(job.configRevision),
@@ -1120,30 +1127,15 @@ export async function toggleCronJob(
   return updated;
 }
 
-function cronRunNotStartedMessage(result: CronRunResult): string {
-  if (!("reason" in result)) {
-    return t("cron.runNotStarted.unknown");
-  }
-  switch (result.reason) {
-    case "not-due":
-      return t("cron.runNotStarted.notDue");
-    case "already-running":
-      return t("cron.runNotStarted.alreadyRunning");
-    case "restart-recovery-pending":
-      return t("cron.runNotStarted.recoveryPending");
-    case "invalid-spec":
-      return t("cron.runNotStarted.invalidSpec");
-    case "stopped":
-      return t("cron.runNotStarted.stopped");
-  }
-  return t("cron.runNotStarted.unknown");
-}
-
 export async function runCronJob(state: CronState, jobId: string, mode: "force" | "due" = "force") {
-  await withCronBusy(state, async (client) => {
+  const job =
+    state.cronEditingJob?.id === jobId
+      ? state.cronEditingJob
+      : (state.cronJobs.find((candidate) => candidate.id === jobId) ?? { id: jobId, name: jobId });
+  await withCronBusy(state, job, async (client, reportFeedback) => {
     const result = await client.request<CronRunResult>("cron.run", { id: jobId, mode });
     if (!result.ok || ("ran" in result && !result.ran)) {
-      state.cronError = cronRunNotStartedMessage(result);
+      reportFeedback(cronRunNotStartedMessage(result));
       // Invalid persisted specs create a skipped history entry with diagnostics;
       // true no-op outcomes have no new history to fetch.
       if ("reason" in result && result.reason === "invalid-spec") {
@@ -1153,13 +1145,13 @@ export async function runCronJob(state: CronState, jobId: string, mode: "force" 
     }
     await loadCronRuns(state);
     if ("enqueued" in result && result.enqueued) {
-      state.cronError = `Run queued. Run ID: ${result.runId}`;
+      reportFeedback(`Run queued. Run ID: ${result.runId}`);
     }
   });
 }
 
 export async function removeCronJob(state: CronState, job: CronJob) {
-  await withCronBusy(state, async (client) => {
+  await withCronBusy(state, job, async (client) => {
     await client.request("cron.remove", { id: job.id });
     const previousLength = state.cronJobs.length;
     state.cronJobs = state.cronJobs.filter((candidate) => candidate.id !== job.id);

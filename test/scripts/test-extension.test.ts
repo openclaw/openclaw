@@ -535,6 +535,8 @@ describe("scripts/test-extension.mts", () => {
         config: "test/vitest/vitest.extension-database-workers.config.ts",
         extensionIds: [
           "acpx",
+          "browser",
+          "feishu",
           "matrix",
           "mattermost",
           "memory-core",
@@ -542,18 +544,26 @@ describe("scripts/test-extension.mts", () => {
           "qa-lab",
           "telegram",
           "voice-call",
+          "whatsapp",
           "zalo",
           "zalouser",
         ],
         roots: [
-          ...["matrix", "telegram", "mattermost", "voice-call", "zalo", "zalouser"].flatMap(
-            (extensionId) =>
-              databaseWorkerExtensionTestFiles.filter((file) =>
-                file.startsWith(`extensions/${extensionId}/`),
-              ),
+          ...[
+            "matrix",
+            "telegram",
+            "mattermost",
+            "voice-call",
+            "whatsapp",
+            "zalo",
+            "zalouser",
+          ].flatMap((extensionId) =>
+            databaseWorkerExtensionTestFiles.filter((file) =>
+              file.startsWith(`extensions/${extensionId}/`),
+            ),
           ),
           bundledPluginRoot("memory-core"),
-          ...["msteams", "acpx", "qa-lab"].flatMap((extensionId) =>
+          ...["msteams", "feishu", "acpx", "browser", "qa-lab"].flatMap((extensionId) =>
             databaseWorkerExtensionTestFiles.filter((file) =>
               file.startsWith(`extensions/${extensionId}/`),
             ),

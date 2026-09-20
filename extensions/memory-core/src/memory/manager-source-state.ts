@@ -1,4 +1,3 @@
-// Memory Core plugin module implements manager source state behavior.
 import type { DatabaseSync } from "node:sqlite";
 import type { ResolvedMemorySearchConfig } from "openclaw/plugin-sdk/memory-core-host-engine-foundation";
 import {

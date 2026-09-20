@@ -1,4 +1,3 @@
-// Matrix plugin module implements replies behavior.
 import {
   createAcceptedChannelDeliveryResult,
   createChannelPartialDeliveryError,

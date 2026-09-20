@@ -17,6 +17,7 @@ import {
   createResponsesStreamWithEncryptedContentRetry,
   convertProviderResponsesMessages,
 } from "../transports/openai-responses-replay-internal.js";
+import { hasOnlyResponsesFunctionTools } from "../transports/openai-responses-stream-errors.js";
 import { processResponsesStream } from "../transports/openai-responses-stream-internal.js";
 import { createOpenAIProviderAcceptanceHook } from "../transports/openai-transport-shared.js";
 import {
@@ -288,6 +289,7 @@ export async function runResponsesStreamLifecycle<TApi extends Api>(params: {
         : undefined;
     const terminal = await processResponsesStream(hookedOpenAIStream, output, stream, model, {
       ...processStreamOptions,
+      canRetryIdentityConflict: () => hasOnlyResponsesFunctionTools(admittedRequest),
       reasoningReplayMetadata: buildOpenAIResponsesReasoningReplayMetadata(model, {
         sessionId: options?.sessionId,
         authProfileId: options?.authProfileId,

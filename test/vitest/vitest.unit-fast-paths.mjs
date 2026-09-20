@@ -185,6 +185,8 @@ const ownerRoutedUnitTestPatterns = [
   "src/agents/embedded-agent-runner/run/attempt.abort-race.test.ts",
   "src/agents/embedded-agent-runner/run/attempt.settled-turn-finalization-context.test.ts",
   "src/agents/openai-transport-stream.*.test.ts",
+  // Split transport suites install module mocks through their shared harness.
+  "src/agents/provider-transport-fetch.*.test.ts",
   "src/agents/embedded-agent-runner/run.inherited-auth-owner.test.ts",
   "src/agents/embedded-agent-runner/run.session-permissions.test.ts",
   "src/agents/embedded-agent-runner/run.shared-integration.test.ts",
@@ -375,9 +377,9 @@ function collectRepoTestFilesFromGit(cwd) {
       "packages",
       "test",
     ],
-    { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] },
+    { cwd, encoding: "utf8", maxBuffer: 16 * 1024 * 1024, stdio: ["ignore", "pipe", "ignore"] },
   );
-  if (result.status !== 0) {
+  if (result.error || result.status !== 0) {
     return null;
   }
   return result.stdout

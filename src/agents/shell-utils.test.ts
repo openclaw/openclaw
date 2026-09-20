@@ -16,7 +16,11 @@ import {
   sanitizeBinaryOutput,
 } from "./shell-utils.js";
 
-vi.mock("node:child_process", { spy: true });
+vi.mock("node:child_process", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("node:child_process")>();
+  // Whole-module autospy mutates native ChildProcess prototypes across shared-worker files.
+  return { ...actual, spawnSync: vi.fn(actual.spawnSync) };
+});
 
 const isWin = process.platform === "win32";
 

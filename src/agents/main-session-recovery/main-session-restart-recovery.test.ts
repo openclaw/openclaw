@@ -109,6 +109,7 @@ import {
 import { subagentRuns } from "../subagents/registry/subagent-registry-memory.js";
 import { registerHarnessCompletionRecoveryCases } from "./main-session-harness-completion.test-harness.js";
 import * as recoveryOwnerRelease from "./main-session-recovery-owner-release.js";
+import { createRecoveryRuntimeFixture } from "./main-session-recovery-runtime.test-support.js";
 import {
   claimMainSessionRecoveryOwner,
   commitMainSessionRecovery,
@@ -148,30 +149,11 @@ const sendRecoveryNotice = vi.fn<GatewayRecoveryRuntime["sendRecoveryNotice"]>(a
   suppressed: false,
 }));
 let dispatchSettlement = createDeferred();
-const mockRecoveryRuntime = {
-  dispatchSessionMethod: vi.fn(),
-  dispatchAgent: async <T>(
-    params: Record<string, unknown>,
-    timeoutMs?: number,
-    options?: Parameters<GatewayRecoveryRuntime["dispatchAgent"]>[2],
-  ) => {
-    const result = (await callGateway({ method: "agent", params, timeoutMs })) as T;
-    const status = (result as { status?: unknown } | undefined)?.status;
-    if (status === undefined) {
-      options?.onStartOwner?.({
-        observe: () => ({ executionStarted: true, expiresAtMs: Date.now() + 60_000 }),
-        abort: () => false,
-      });
-      options?.onAccepted?.(result);
-      options?.onExecutionStarted?.();
-      await dispatchSettlement.promise;
-    }
-    return result;
-  },
-  waitForAgent: async <T>(params: Record<string, unknown>, timeoutMs?: number) =>
-    (await callGateway({ method: "agent.wait", params, timeoutMs })) as T,
+const mockRecoveryRuntime = createRecoveryRuntimeFixture({
+  callGateway,
+  getDispatchSettlement: () => dispatchSettlement.promise,
   sendRecoveryNotice,
-};
+});
 
 type RecoveryParams<T extends { gatewayRuntime: unknown }> = Omit<T, "gatewayRuntime"> &
   Partial<Pick<T, "gatewayRuntime">>;
@@ -3796,6 +3778,8 @@ describe("main-session-restart-recovery", () => {
       stateDir: tmpDir,
     });
     try {
+      await waitForFast(() => expect(callGateway).toHaveBeenCalledOnce());
+      dispatchSettlement.resolve(); // The second store waits for the first recovery slot.
       await waitForFast(() => expect(callGateway).toHaveBeenCalledTimes(2));
       await recovery.stop();
 
@@ -4215,6 +4199,8 @@ describe("main-session-restart-recovery", () => {
       try {
         await failedMark.promise;
         if (transient) {
+          await waitForFast(() => expect(callGateway).toHaveBeenCalledOnce());
+          dispatchSettlement.resolve(); // Retried stores share the same bounded recovery slot.
           await waitForFast(() => expect(callGateway).toHaveBeenCalledTimes(2));
         }
         await waitForFast(() => expect(getActiveGatewayRootWorkCount()).toBe(0));

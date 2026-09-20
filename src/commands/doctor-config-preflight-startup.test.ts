@@ -5,7 +5,7 @@ import { expect, it, vi } from "vitest";
 import { resolveDeferredPluginMigrationConfigPaths } from "../config/deferred-plugin-migration-config.js";
 import { readConfigFileSnapshot } from "../config/io.js";
 import { readBundledDiscoveryMode } from "../plugins/bundled-discovery-state.js";
-import { readPersistedInstalledPluginIndexRowSync } from "../plugins/installed-plugin-index-row.js";
+import { readPersistedInstalledPluginIndexRowSync } from "../plugins/installed-plugin-index-record-state.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,

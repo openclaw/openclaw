@@ -28,18 +28,19 @@ function supervisedBinding(pluginConfig: unknown, agentDir?: string) {
 }
 
 describe("Codex binding app-server connection", () => {
-  it("preserves ordinary harness runtime and auth ownership", async () => {
+  it.each(["agent", "user"] as const)("preserves %s-home auth ownership", async (homeScope) => {
     const connection = await resolveCodexBindingAppServerConnection({
       binding: {},
       authProfileId: "openai:work",
+      pluginConfig: { appServer: { homeScope } },
       env: {},
       requirementsToml: null,
     });
 
-    expect(connection.appServer.start.homeScope).toBe("agent");
+    expect(connection.appServer.start.homeScope).toBe(homeScope);
     expect(connection.usesSupervisionConnection).toBe(false);
     expect(connection.requestAuthProfileId).toBe("openai:work");
-    expect(connection.clientAuthProfileId).toBe("openai:work");
+    expect(connection.clientAuthProfileId).toBe(homeScope === "user" ? null : "openai:work");
   });
 
   it("uses native user-home auth only for an enabled supervised binding", async () => {

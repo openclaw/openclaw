@@ -12,10 +12,25 @@ export const updateExecutorNativeEntrypoints = {
     sourceWorkerName: "update-command-repair",
     distWorkerPath: "cli/update-cli/update-command-repair.js",
   },
+  retainedService: {
+    currentModuleUrl,
+    sourceWorkerName: "update-command-retained-service",
+    distWorkerPath: "cli/update-cli/update-command-retained-service.js",
+  },
+  sealedRuntime: {
+    currentModuleUrl,
+    sourceWorkerName: "../../infra/sealed-runtime-registry",
+    distWorkerPath: "infra/sealed-runtime-registry.js",
+  },
   commandRun: {
     currentModuleUrl,
     sourceWorkerName: "update-command-run",
     distWorkerPath: "cli/update-cli/update-command-run.js",
+  },
+  commandTarget: {
+    currentModuleUrl,
+    sourceWorkerName: "update-command-target",
+    distWorkerPath: "cli/update-cli/update-command-target.js",
   },
   retainedRecovery: {
     currentModuleUrl,

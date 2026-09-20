@@ -26,9 +26,7 @@ import { createTestChatPane } from "./chat-pane.test-support.ts";
 import { enqueueChatMessage, subscribeChatOutboxProjection } from "./chat-queue.ts";
 import {
   captureChatCommandComposerRecovery,
-  clearOwnedCommandComposerFallback,
-  releaseCommandComposerAttachments,
-  restoreFailedCommandComposer,
+  settleChatCommandComposer,
 } from "./chat-send-composer.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
 import {
@@ -156,9 +154,7 @@ describe("cross-region Home composer ownership", () => {
         dock.edit(input === "text" ? "Newer dock draft" : "", newer ? [newer] : []);
       }
 
-      if (!restoreFailedCommandComposer(page.current, recovery)) {
-        releaseCommandComposerAttachments(page.current, recovery, [submitted]);
-      }
+      settleChatCommandComposer(page.current, recovery, false, [submitted]);
 
       expect(page.current.chatMessage).toBe("");
       expect(dock.current.chatMessage).toBe(
@@ -217,17 +213,18 @@ describe("cross-region Home composer ownership", () => {
         currentPage.handoff.claim();
       }
 
-      if (result === "rejected") {
-        expect(restoreFailedCommandComposer(page.current, recovery)).toBe(true);
-        expect(currentPage.current.chatMessage).toBe("/steer submitted");
-        expect(currentPage.current.chatAttachments).toEqual([submitted]);
-      } else {
+      if (result === "accepted") {
         currentPage.edit("Keep this file", [submitted]);
-        expect(clearOwnedCommandComposerFallback(page.current, recovery)).toBe(true);
-        expect(currentPage.current.chatComposerFallbackByScope).toEqual({});
-        expect(currentPage.current.chatMessage).toBe("Keep this file");
       }
-      releaseCommandComposerAttachments(page.current, recovery, [submitted]);
+      settleChatCommandComposer(page.current, recovery, result === "accepted", [submitted]);
+
+      expect(currentPage.current.chatMessage).toBe(
+        result === "rejected" ? "/steer submitted" : "Keep this file",
+      );
+      expect(currentPage.current.chatAttachments).toEqual([submitted]);
+      if (result === "accepted") {
+        expect(currentPage.current.chatComposerFallbackByScope).toEqual({});
+      }
       expect(getChatAttachmentDataUrl(submitted)).not.toBeNull();
       expect(page.current.chatMessage).toBe("");
       expect(dock.current.chatMessage).toBe("");
@@ -243,7 +240,7 @@ describe("cross-region Home composer ownership", () => {
     );
 
     expect(recovery.owner).toBeUndefined();
-    expect(restoreFailedCommandComposer(page.current, recovery)).toBe(true);
+    settleChatCommandComposer(page.current, recovery, false, []);
     expect(page.current.chatMessage).toBe("/steer submitted");
   });
 
@@ -261,7 +258,7 @@ describe("cross-region Home composer ownership", () => {
     page.handoff.dispose();
 
     expect(recovery.owner).toBeDefined();
-    expect(restoreFailedCommandComposer(page.current, recovery)).toBe(false);
+    settleChatCommandComposer(page.current, recovery, false, []);
     expect(page.current.chatMessage).toBe("");
     expect(page.current.chatComposerFallbackByScope).toEqual({});
   });
@@ -297,8 +294,7 @@ describe("cross-region Home composer ownership", () => {
     dock.handoff.dispose();
 
     expect(recovery.owner?.resolveOwner()).toBeUndefined();
-    expect(restoreFailedCommandComposer(page.current, recovery)).toBe(false);
-    releaseCommandComposerAttachments(page.current, recovery, [staged, fallback, unreferenced]);
+    settleChatCommandComposer(page.current, recovery, false, [staged, fallback, unreferenced]);
 
     expect(getChatAttachmentDataUrl(staged)).not.toBeNull();
     expect(getChatAttachmentDataUrl(fallback)).not.toBeNull();
@@ -329,17 +325,22 @@ describe("cross-region Home composer ownership", () => {
     dock.edit("Keep this file", [submitted]);
     page.handoff.dispose();
 
-    expect(clearOwnedCommandComposerFallback(page.current, recovery)).toBe(true);
-    releaseCommandComposerAttachments(page.current, recovery, [submitted]);
+    settleChatCommandComposer(page.current, recovery, true, [submitted]);
 
     expect(dock.current.chatComposerFallbackByScope).toEqual({});
     expect(dock.current.chatMessage).toBe("Keep this file");
     expect(getChatAttachmentDataUrl(submitted)).not.toBeNull();
   });
 
-  it.each(["current", "replacement", "reconnect"] as const)(
-    "recovers after source disposal only for the original connection (%s)",
-    (connection) => {
+  it.each([
+    ["current", "rejected"],
+    ["replacement", "rejected"],
+    ["replacement", "accepted"],
+    ["reconnect", "rejected"],
+    ["reconnect", "accepted"],
+  ] as const)(
+    "settles after source disposal only for the original connection (%s, %s command)",
+    (connection, result) => {
       const context = {} as ApplicationContext;
       const owner = { recoveryScope: "profile-a", connectionGeneration: 1 } as GatewayBrowserClient;
       const page = presentation(context, owner, "page");
@@ -370,13 +371,17 @@ describe("cross-region Home composer ownership", () => {
         dock.current.connectionEpoch = 2;
       }
 
-      expect(restoreFailedCommandComposer(page.current, recovery)).toBe(true);
+      settleChatCommandComposer(page.current, recovery, result === "accepted", [submitted]);
       expect(dock.current.chatMessage).toBe(connection === "current" ? "/steer submitted" : "");
       expect(dock.current.chatAttachments).toEqual(connection === "current" ? [submitted] : []);
       if (connection !== "current") {
-        expect(clearOwnedCommandComposerFallback(page.current, recovery)).toBe(false);
+        expect(
+          dock.current.chatComposerFallbackByScope[storedChatOutboxScopeKey(scope)],
+        ).toMatchObject({
+          message: "/steer submitted",
+          attachments: [submitted],
+        });
       }
-      releaseCommandComposerAttachments(page.current, recovery, [submitted]);
       expect(getChatAttachmentDataUrl(submitted)).not.toBeNull();
     },
   );

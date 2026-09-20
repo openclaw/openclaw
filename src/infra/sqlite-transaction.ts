@@ -107,6 +107,13 @@ export function retainSqliteWriteAdmissionService(
   };
 }
 
+/** Native coordinator waits must keep the same worker's current-authority grants serviceable. */
+export function sqliteWriteAdmissionServicesForLocation(
+  location: string,
+): ReadonlySet<() => void> | undefined {
+  return writeAdmissionServices.get(normalizeWriteAdmissionLocation(location));
+}
+
 type SqliteBeginAdmissionDiagnostics = {
   nativeAttempts: number;
   nativeMs: number;
@@ -342,7 +349,7 @@ function commitImmediateTransaction(
 
 function discardUnsafeConnection(db: TransactionDatabase, error: unknown): void {
   db[abortedTransactionSymbol] ??= { error };
-  discardSqliteTransactionState(db);
+  discardSqliteTransactionState(db, error);
   clearNodeSqliteKyselyCacheForDatabase(db);
   try {
     db.close();

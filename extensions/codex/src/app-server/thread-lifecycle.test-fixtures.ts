@@ -263,7 +263,7 @@ export function createCodexLifecycleTurnHarness(
     completeTurn: async ({ threadId, turnId }: { threadId: string; turnId: string }) => {
       await notify({
         method: "turn/completed",
-        params: { threadId, turn: { id: turnId, status: "completed" } },
+        params: { threadId, turn: { id: turnId, status: "completed", items: [] } },
       });
     },
     close: () => client.close(),
@@ -362,39 +362,8 @@ export function startOrResumeThread(
 }
 
 export function threadStartResult(threadId = "thread-1"): Record<string, unknown> {
-  return {
-    thread: {
-      id: threadId,
-      sessionId: "session-1",
-      forkedFromId: null,
-      preview: "",
-      ephemeral: false,
-      modelProvider: "openai",
-      createdAt: 1,
-      updatedAt: 1,
-      status: { type: "idle" },
-      path: null,
-      cwd: "/tmp",
-      projectId: null,
-      cliVersion: "0.149.0",
-      source: "unknown",
-      agentNickname: null,
-      agentRole: null,
-      gitInfo: null,
-      name: null,
-      turns: [],
-    },
-    model: "gpt-5.4-codex",
-    modelProvider: "openai",
-    serviceTier: null,
-    cwd: "/tmp",
-    instructionSources: [],
-    approvalPolicy: "never",
-    approvalsReviewer: "user",
-    sandbox: { type: "dangerFullAccess" },
-    permissionProfile: null,
-    reasoningEffort: null,
-  };
+  const result = nativeThreadStartResult(threadId, "/tmp");
+  return { ...result, thread: { ...result.thread, cliVersion: "0.149.0" } };
 }
 
 export function threadResumeResult(threadId = "thread-existing"): Record<string, unknown> {

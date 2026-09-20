@@ -96,7 +96,19 @@ export interface SubagentLifecycleAnnounceCleanupContext
   completeCleanupBookkeeping(args: CleanupBookkeepingParams): void;
 }
 
+export type PendingRequesterSettleWakeCommit = {
+  entries: readonly SubagentRunRecord[];
+  isCurrent(entry: SubagentRunRecord): boolean;
+  commit(entries: readonly SubagentRunRecord[]): boolean;
+  failures: number;
+  nextAttemptAt: number;
+};
+
 export interface SubagentLifecycleWakeContext extends SubagentLifecycleCommonContext {
+  readonly pendingRequesterSettleWakeCommits: WeakMap<
+    SubagentRunRecord,
+    PendingRequesterSettleWakeCommit
+  >;
   resumeAncestorCleanup(settledEntry: SubagentRunRecord): void;
   deleteRequesterSettleWakeTimer(runId: string): void;
   getRequesterSettleWakeTimer(runId: string): ScheduledRequesterSettleWake | undefined;

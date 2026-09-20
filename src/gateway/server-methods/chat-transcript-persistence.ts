@@ -392,6 +392,7 @@ export async function appendAssistantTranscriptMessage(params: {
     runId: string;
   };
   ttsSupplement?: GatewayInjectedTtsSupplementMarker;
+  contextFreeCommand?: true;
   cfg?: OpenClawConfig;
 }): Promise<TranscriptAppendResult> {
   const scope = assistantTranscriptScope(params);
@@ -415,6 +416,7 @@ export async function appendAssistantTranscriptMessage(params: {
     stopReason: params.stopReason,
     abortMeta: params.abortMeta,
     ttsSupplement: params.ttsSupplement,
+    ...(params.contextFreeCommand === true ? { contextFreeCommand: true } : {}),
     config: params.cfg,
   });
   return appended;

@@ -1,10 +1,37 @@
 /** Renders and parses systemd unit snippets for managed gateway services. */
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import { escape as escapeGlob } from "minimatch";
+import { GATEWAY_SERVICE_STOP_TIMEOUT_MS } from "../infra/gateway-shutdown-budget.js";
 import { splitArgsPreservingQuotes } from "./arg-split.js";
 import type { GatewayServiceRenderArgs } from "./service-types.js";
 
 const SYSTEMD_LINE_BREAKS = /[\r\n]/;
+
+export const SYSTEMD_FIXED_POLICY: Readonly<Record<string, string>> = {
+  "Unit.After": "network-online.target",
+  "Unit.Wants": "network-online.target",
+  // Ten starts cover the five-minute lifecycle ownership wait without crash loops.
+  "Unit.StartLimitBurst": "10",
+  "Unit.StartLimitIntervalSec": "300",
+  "Service.Restart": "always",
+  "Service.RestartSec": "5",
+  "Service.RestartPreventExitStatus": "78",
+  // Include the Gateway drain, teardown reserve, and supervisor exit margin.
+  "Service.TimeoutStopSec": String(GATEWAY_SERVICE_STOP_TIMEOUT_MS / 1_000),
+  "Service.TimeoutStartSec": "30",
+  "Service.SuccessExitStatus": "0 143",
+  // An OOM-killed child must not take down the Gateway that supervises it.
+  "Service.OOMPolicy": "continue",
+  // Signal only the Gateway during drain; clean up children after it exits.
+  "Service.KillMode": "mixed",
+  "Install.WantedBy": "default.target",
+};
+
+function renderFixedPolicy(section: string): string[] {
+  return Object.entries(SYSTEMD_FIXED_POLICY)
+    .filter(([key]) => key.startsWith(`${section}.`))
+    .map(([key, value]) => `${key.slice(section.length + 1)}=${value}`);
+}
 
 function assertNoSystemdLineBreaks(value: string, label: string): void {
   if (SYSTEMD_LINE_BREAKS.test(value)) {
@@ -49,11 +76,15 @@ function renderEnvironmentFileLines(environmentFiles: string[] | undefined): str
   if (!environmentFiles) {
     return [];
   }
-  return normalizeStringEntries(environmentFiles).map((entry) => {
-    assertNoSystemdLineBreaks(entry, "Systemd EnvironmentFile values");
-    // EnvironmentFile is one scalar glob, not a quoted argv word.
-    return `EnvironmentFile=-${escapeGlob(entry).replaceAll("%", "%%")}`;
-  });
+  return normalizeStringEntries(environmentFiles).map(
+    (entry) => `EnvironmentFile=${renderSystemdEnvironmentFile(entry)}`,
+  );
+}
+
+export function renderSystemdEnvironmentFile(entry: string): string {
+  assertNoSystemdLineBreaks(entry, "Systemd EnvironmentFile values");
+  // EnvironmentFile is one scalar glob, not a quoted argv word.
+  return `-${escapeGlob(entry).replaceAll("%", "%%")}`;
 }
 
 export function buildSystemdUnit({
@@ -92,35 +123,17 @@ export function buildSystemdUnit({
   return [
     "[Unit]",
     descriptionLine,
-    "After=network-online.target",
-    "Wants=network-online.target",
-    // A five-minute lifecycle ownership wait spans this interval. Ten starts
-    // allow surrounding immediate failures while still bounding crash loops.
-    "StartLimitBurst=10",
-    "StartLimitIntervalSec=300",
+    ...renderFixedPolicy("Unit"),
     "",
     "[Service]",
     `ExecStart=${execStart}`,
-    "Restart=always",
-    "RestartSec=5",
-    "RestartPreventExitStatus=78",
-    // Cover the gateway's five-minute SIGTERM drain plus its teardown reserve.
-    "TimeoutStopSec=330",
-    "TimeoutStartSec=30",
-    "SuccessExitStatus=0 143",
-    // Transient child processes may be selected by the OOM killer before the
-    // gateway. Keep the service running when that happens; the child surface is
-    // already responsible for reporting the failed command/session.
-    "OOMPolicy=continue",
-    // Signal only the gateway during drain; systemd still kills remaining
-    // children when the gateway exits or TimeoutStopSec expires.
-    "KillMode=mixed",
+    ...renderFixedPolicy("Service"),
     workingDirLine,
     ...environmentFileLines,
     ...envLines,
     "",
     "[Install]",
-    "WantedBy=default.target",
+    ...renderFixedPolicy("Install"),
     "",
   ]
     .filter((line) => line !== null)

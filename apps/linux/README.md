@@ -325,6 +325,33 @@ package-managed installs still link to the existing release page. The
 Changing them requires separate release-owner approval and signed
 installed-client migration proof.
 
+## Keep computer awake
+
+Enable **Keep computer awake** beside **Start at Login** in the native tray menu
+to prevent idle sleep while this companion is running. It starts off and remembers
+your choice across restarts using the companion's existing system credential
+store. The checkmark shows the saved preference. If a saved request cannot be
+restored, the menu says **Keep computer awake (inactive)** and reports an error;
+you can still uncheck it without retrying the unavailable power service. A new
+enable request is saved only after the native request succeeds.
+Turning it off or quitting releases the request. Closing the dashboard to the
+tray does not release it.
+
+Linux uses GNOME’s native session inhibitor when available, or another desktop’s
+xdg-desktop-portal idle inhibitor, such as KDE’s backend. A working session or
+portal backend that supports idle inhibition is required; a
+logind sleep-delay inhibitor alone is not a keep-awake implementation. Desktop
+idle inhibition may also keep the display from dimming and delay automatic
+locking. Windows and the macOS Tauri build inhibit system idle sleep without
+requesting that the display stay on. Manual locking, manual sleep, and lid-close
+behavior remain under the operating system's control. This option does not wake
+or unlock a computer and does not replace the Gateway's sleep preparation.
+
+If turning the option off cannot save the preference, idle sleep is still allowed
+for this run, but the error warns that the saved choice may enable it again after
+a restart. The checked menu item is marked **inactive**; restore access to the
+credential store and uncheck it again to save the off preference.
+
 ## Quick Chat widgets
 
 Quick Chat advertises the Gateway `inline-widgets` capability and renders hosted `show_widget` results in isolated child WebViews. The parent Quick Chat WebView is the only one granted Tauri commands; widget WebViews match no capability and therefore have no IPC access. Quick Chat accepts only assistant-message widget previews under the capability-scoped `/__openclaw__/canvas/documents/` route, blocks navigation away from the original document, uses nonpersistent WebViews, and keeps stable widget instances while switching among multiple previews. Connections that require a custom Gateway TLS leaf pin remain text-only because the platform WebView cannot bind that pin. Like the other native clients, Quick Chat does not expose the Control UI `sendPrompt` bridge.

@@ -1,8 +1,16 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { createRetainedUpdateRecovery } from "../../infra/update-retained-recovery.test-support.js";
-import { createUpdateRun, recordUpdateRunStep } from "../../infra/update-run-ledger.js";
+import {
+  createUpdateRun,
+  getUpdateRun,
+  recordUpdateRunStep,
+} from "../../infra/update-run-ledger.js";
 import { loadUpdateRecovery } from "../../infra/update-run-recovery.js";
+import {
+  renderUpdateRunReport,
+  updateRunReportInputFromResult,
+} from "../../infra/update-run-report.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { verifyUpdatedGateway } from "./update-command-verification.js";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -387,6 +395,61 @@ describe("maybeRestartService", () => {
       expect(onVerified).not.toHaveBeenCalled();
     },
   );
+
+  it("records changed-key warnings before health verification and retains them in the outcome and report", async () => {
+    const home = tempDirs.make("service-warning-history-");
+    const options = { env: { HOME: home, OPENCLAW_STATE_DIR: home } };
+    const admitted = createUpdateRun({ trigger: "cli" }, options);
+    const liveRun = { ...run, runId: admitted.runId, env: options.env };
+    const ledger = await vi.importActual<typeof import("../../infra/update-run-ledger.js")>(
+      "../../infra/update-run-ledger.js",
+    );
+    const warning = "Reconciled Gateway service definition: Service.KillMode. Backup retained.";
+    mocks.runUpdatedInstallGatewayCommand.mockImplementationOnce(async (params) => {
+      params.onWarnings?.([warning]);
+      return "unverified";
+    });
+    const healthy = await mocks.waitForGatewayHealthyRestart();
+    let observedDuringHealth: ReturnType<typeof getUpdateRun>;
+    mocks.waitForGatewayHealthyRestart.mockImplementationOnce(async () => {
+      observedDuringHealth = getUpdateRun(admitted.runId, options);
+      return healthy;
+    });
+    const result: UpdateRunResult = {
+      status: "ok",
+      mode: "npm",
+      after: { version: gateway.version, buildId: gateway.buildId },
+      steps: [],
+      durationMs: 0,
+    };
+    await vi
+      .mocked(recordUpdateRunStep)
+      .withImplementation(ledger.recordUpdateRunStep, async () => {
+        await expect(
+          maybeRestartService({
+            shouldRestart: true,
+            result,
+            opts: { json: true, run: liveRun },
+            refreshServiceEnv: true,
+            serviceEnv: { HOME: "/home/operator" },
+            serviceInstallEnv: {},
+            gatewayPort: 18789,
+            timeoutMs: 1_000,
+          }),
+        ).resolves.toBe("ok");
+      });
+    expect(observedDuringHealth?.steps).toContainEqual(
+      expect.objectContaining({
+        step: "warning:managed-service-reconciliation",
+        status: "completed",
+        detail: warning,
+      }),
+    );
+    expect(result.steps).toContainEqual(expect.objectContaining({ warnings: [warning] }));
+    expect(renderUpdateRunReport(updateRunReportInputFromResult(result)).markdown).toContain(
+      warning,
+    );
+  });
 
   it.each(["new-build", undefined])(
     "enforces the available Git identity after restart: %s",

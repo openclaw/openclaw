@@ -97,7 +97,12 @@ it("does not force a Windows process tree after losing the owner during graceful
   vi.spyOn(process, "platform", "get").mockReturnValue("win32");
   vi.spyOn(Date, "now").mockImplementation(() => native.now);
   native.spawn.mockImplementation((command) => {
-    const stdout = command.toLowerCase().endsWith("taskkill.exe") ? "" : '[{"ProcessId":4242}]';
+    const executable = command.toLowerCase();
+    const stdout = executable.endsWith("taskkill.exe")
+      ? ""
+      : executable.endsWith("tasklist.exe")
+        ? '"node.exe","4242","Console","1","1 K"'
+        : '[{"ProcessId":4242}]';
     return { pid: 0, output: [null, stdout, ""], stdout, stderr: "", status: 0, signal: null };
   });
   await expect(terminateGatewayProcessTree(4242, 300, assertCurrent)).rejects.toThrow(

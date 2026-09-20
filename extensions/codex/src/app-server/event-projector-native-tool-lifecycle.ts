@@ -22,7 +22,7 @@ import {
   type CodexNativePreToolUseFailure,
 } from "./native-hook-relay.js";
 import { isCodexNotificationForTurn } from "./notification-correlation.js";
-import { readCodexTurn } from "./protocol-validators.js";
+import { readCodexTurnCompletedNotification } from "./protocol-validators.js";
 import {
   isJsonObject,
   type CodexServerNotification,
@@ -181,7 +181,7 @@ export class CodexNativeToolLifecycleProjector {
       this.pendingMcpNotifications += 1;
     } else if (
       notification.method === "turn/completed" &&
-      readCodexTurn(params.turn)?.id === this.turnId
+      readCodexTurnCompletedNotification(params)?.turn.id === this.turnId
     ) {
       this.turnCompleted = true;
     }
@@ -199,12 +199,12 @@ export class CodexNativeToolLifecycleProjector {
       this.pendingMcpNotifications -= 1;
     }
     if (notification.method === "turn/completed") {
-      const turn = readCodexTurn(params.turn);
+      const turn = readCodexTurnCompletedNotification(params)?.turn;
       if (!turn || turn.id !== this.turnId) {
         return;
       }
       this.turnCompleted = true;
-      for (const item of turn.items ?? []) {
+      for (const item of turn.items) {
         this.recordSnapshotItem(item);
       }
       return;

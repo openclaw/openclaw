@@ -1,4 +1,33 @@
-export const stdioWorkerSource = String.raw`
+import { createHash } from "node:crypto";
+import fs from "node:fs";
+import path from "node:path";
+import { createNodeWorkerSupervisor } from "./node-worker-supervisor.js";
+import { writeNodeWorkerFixture } from "./node-worker-supervisor.test-support.js";
+
+export const hostLabel = "openclaw.node-worker.host";
+export const gatewayLabel = "openclaw.node-worker.gateway";
+export const launchLabel = "openclaw.node-worker.launch";
+
+type FakeContainer = {
+  id: string;
+  labels: Record<string, string>;
+  env: Record<string, string>;
+  mounts: string[];
+  image: string;
+  entry: string;
+  workerArgs: string[];
+  status: "created" | "running" | "exited";
+  pid: number | null;
+};
+
+type EngineEvent = {
+  argv: string[];
+  container?: FakeContainer;
+  daemonId?: string;
+  journal?: { state: string; container_json: string | null };
+};
+
+const stdioWorkerSource = String.raw`
 import fs from "node:fs";
 import { createInterface } from "node:readline";
 let active;
@@ -48,7 +77,7 @@ lines.on("line", (line) => {
 lines.once("close", () => process.exit(0));
 `;
 
-export const fakeEngineSource = String.raw`
+const fakeEngineSource = String.raw`
 const { spawn } = require("node:child_process");
 const { createHash } = require("node:crypto");
 const { DatabaseSync } = require("node:sqlite");
@@ -285,3 +314,99 @@ if (command === "version") {
   process.exit(2);
 }
 `;
+
+export function createNodeWorkerContainerFixture(
+  root: string,
+  fileLockModule: string,
+  options: {
+    image?: string;
+    env?: NodeJS.ProcessEnv;
+    capacity?: number;
+    onCapacityChanged?: (capacity: { total: number; available: number }) => void;
+  } = {},
+) {
+  const { bundleRoot, env, stateDir, workspaceDir } = writeNodeWorkerFixture(root);
+  const bundleEntry = path.join(bundleRoot, "gateway-1", "bundles", "a".repeat(64), "worker.mjs");
+  fs.writeFileSync(bundleEntry, stdioWorkerSource);
+  const engineRoot = path.join(root, "fake-engine");
+  const commandLog = path.join(engineRoot, "commands.jsonl");
+  const command = path.join(engineRoot, "docker");
+  const daemonId = "fake-original-daemon";
+  const engineTarget = createHash("sha256").update(`docker\0${daemonId}`).digest("hex");
+  fs.mkdirSync(engineRoot);
+  // The extensionless fake CLI must stay CommonJS under repository-local temp roots.
+  fs.writeFileSync(path.join(engineRoot, "package.json"), JSON.stringify({ type: "commonjs" }));
+  fs.writeFileSync(path.join(engineRoot, "daemon-id"), daemonId);
+  fs.writeFileSync(
+    command,
+    `#!${process.execPath}\nconst engineRoot = ${JSON.stringify(engineRoot)};\nconst stateRoot = ${JSON.stringify(stateDir)};\nconst commandLog = ${JSON.stringify(commandLog)};\nconst expectedEngineTarget = ${JSON.stringify(engineTarget)};\nconst fileLockModule = ${JSON.stringify(fileLockModule)};\n${fakeEngineSource}`,
+    { mode: 0o755 },
+  );
+  const containerEngine = {
+    id: "docker" as const,
+    command,
+    target: engineTarget,
+    env: { PATH: process.env.PATH, DOCKER_HOST: "unix:///fake-node-worker-daemon.sock" },
+  };
+  const workerEnv = { ...env, ...options.env };
+  const supervisor = createNodeWorkerSupervisor({
+    bundleRoot,
+    env: workerEnv,
+    containerEngine,
+    ...(options.image ? { containerImage: options.image } : {}),
+    ...(options.capacity ? { capacity: options.capacity } : {}),
+    ...(options.onCapacityChanged ? { onCapacityChanged: options.onCapacityChanged } : {}),
+  });
+  const owner = createHash("sha256").update(bundleRoot).digest("hex").slice(0, 32);
+  return {
+    bundleEntry,
+    bundleRoot,
+    containerEngine,
+    engineRoot,
+    env: workerEnv,
+    owner,
+    stateDir,
+    supervisor,
+    workspaceDir,
+    events(): EngineEvent[] {
+      if (!fs.existsSync(commandLog)) {
+        return [];
+      }
+      return fs
+        .readFileSync(commandLog, "utf8")
+        .trim()
+        .split("\n")
+        .map((line) => JSON.parse(line) as EngineEvent);
+    },
+    seed(params: {
+      id: string;
+      launchId: string;
+      owner?: string;
+      status?: FakeContainer["status"];
+    }) {
+      const container: FakeContainer = {
+        id: params.id,
+        labels: {
+          [hostLabel]: params.owner ?? owner,
+          [gatewayLabel]: "gateway-1",
+          [launchLabel]: Buffer.from(params.launchId).toString("base64url"),
+        },
+        env: {},
+        mounts: [],
+        image: "node:24.19.0-slim",
+        entry: bundleEntry,
+        workerArgs: ["--internal-worker-session"],
+        status: params.status ?? "running",
+        pid: null,
+      };
+      fs.writeFileSync(
+        path.join(engineRoot, `${params.id}.container.json`),
+        JSON.stringify(container),
+      );
+      return container;
+    },
+    exists(id: string) {
+      return fs.existsSync(path.join(engineRoot, `${id}.container.json`));
+    },
+  };
+}

@@ -1,9 +1,7 @@
 import { randomUUID } from "node:crypto";
-import path from "node:path";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 // Zalouser plugin module implements zalo js behavior.
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
-import { extensionForMime } from "openclaw/plugin-sdk/media-mime";
 import {
   asDateTimestampMs,
   asFiniteNumberInRange,
@@ -13,7 +11,6 @@ import {
   resolveExpiresAtMsFromDurationMs,
   resolveTimerTimeoutMs,
 } from "openclaw/plugin-sdk/number-runtime";
-import { loadOutboundMediaFromUrl } from "openclaw/plugin-sdk/outbound-media";
 import { withTimeout } from "openclaw/plugin-sdk/security-runtime";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -21,8 +18,10 @@ import {
   normalizeOptionalString,
   normalizeOptionalStringifiedId,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { sleep, truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import { sleep } from "openclaw/plugin-sdk/text-utility-runtime";
 import { normalizeZaloReactionIcon } from "./reaction.js";
+import { sendZaloTextWithApi } from "./send-api.js";
+import { withZaloSendContext } from "./send-context.js";
 import { createZalouserSendReceipt } from "./send-receipt.js";
 import {
   clearStoredZaloCredentials,
@@ -41,12 +40,12 @@ import type {
   ZaloGroupMember,
   ZaloInboundMessage,
   ZaloSendOptions,
+  ZaloSendHandoff,
   ZaloSendResult,
   ZcaFriend,
   ZcaUserInfo,
 } from "./types.js";
 import {
-  TextStyle,
   type API,
   type Credentials,
   type GroupInfo,
@@ -103,39 +102,6 @@ const activeListeners = new Map<string, ActiveZaloListener>();
 const groupContextCache = new Map<string, { value: ZaloGroupContext; expiresAt: number }>();
 
 type AccountInfoResponse = Awaited<ReturnType<API["fetchAccountInfo"]>>;
-
-function clampTextStyles(
-  text: string,
-  styles?: ZaloSendOptions["textStyles"],
-): ZaloSendOptions["textStyles"] {
-  if (!styles || styles.length === 0) {
-    return undefined;
-  }
-  const maxLength = text.length;
-  const clamped = styles
-    .map((style) => {
-      const start = Math.max(0, Math.min(style.start, maxLength));
-      const end = Math.min(style.start + style.len, maxLength);
-      if (end <= start) {
-        return null;
-      }
-      if (style.st === TextStyle.Indent) {
-        return {
-          start,
-          len: end - start,
-          st: style.st,
-          indentSize: style.indentSize,
-        };
-      }
-      return {
-        start,
-        len: end - start,
-        st: style.st,
-      };
-    })
-    .filter((style): style is NonNullable<typeof style> => style !== null);
-  return clamped.length > 0 ? clamped : undefined;
-}
 
 function toNumberId(value: unknown): string {
   if (typeof value === "number" && Number.isFinite(value)) {
@@ -383,93 +349,6 @@ function buildEventMessage(data: Record<string, unknown>): ZaloEventMessage | un
     cmd: toInteger(data.cmd, 0),
     ts: toStringValue(data.ts) || Date.now(),
   };
-}
-
-function extractSendMessageId(result: unknown): string | undefined {
-  if (!result || typeof result !== "object") {
-    return undefined;
-  }
-  const payload = result as {
-    msgId?: string | number;
-    message?: { msgId?: string | number } | null;
-    attachment?: Array<{ msgId?: string | number }>;
-  };
-  const direct = payload.msgId;
-  if (direct !== undefined && direct !== null) {
-    return String(direct);
-  }
-  const primary = payload.message?.msgId;
-  if (primary !== undefined && primary !== null) {
-    return String(primary);
-  }
-  const attachmentId = payload.attachment?.[0]?.msgId;
-  if (attachmentId !== undefined && attachmentId !== null) {
-    return String(attachmentId);
-  }
-  return undefined;
-}
-
-function resolveMediaFileName(params: {
-  mediaUrl: string;
-  fileName?: string;
-  contentType?: string;
-  kind?: string;
-}): string {
-  const explicit = params.fileName?.trim();
-  if (explicit) {
-    return explicit;
-  }
-
-  try {
-    const parsed = new URL(params.mediaUrl);
-    const fromPath = path.basename(parsed.pathname).trim();
-    if (fromPath) {
-      return fromPath;
-    }
-  } catch {
-    // ignore URL parse failures
-  }
-
-  const ext =
-    extensionForMime(params.contentType)?.replace(/^\./u, "") ??
-    (params.kind === "video"
-      ? "mp4"
-      : params.kind === "audio"
-        ? "mp3"
-        : params.kind === "image"
-          ? "jpg"
-          : "bin");
-
-  return `upload.${ext}`;
-}
-
-function resolveUploadedVoiceAsset(
-  uploaded: Array<{
-    fileType?: string;
-    fileUrl?: string;
-    fileName?: string;
-  }>,
-): { fileUrl: string; fileName?: string } | undefined {
-  for (const item of uploaded) {
-    if (!item || typeof item !== "object") {
-      continue;
-    }
-    const fileType = normalizeOptionalLowercaseString(item.fileType);
-    const fileUrl = item.fileUrl?.trim();
-    if (!fileUrl) {
-      continue;
-    }
-    if (fileType === "others" || fileType === "video") {
-      return { fileUrl, fileName: normalizeOptionalString(item.fileName) };
-    }
-  }
-  return undefined;
-}
-
-function buildZaloVoicePlaybackUrl(asset: { fileUrl: string; fileName?: string }): string {
-  // zca-js uses uploadAttachment(...).fileUrl directly for sendVoice.
-  // Appending filename can produce URLs that play only in the local session.
-  return asset.fileUrl.trim();
 }
 
 function mapFriend(friend: User): ZcaFriend {
@@ -724,12 +603,18 @@ async function withZaloApi<T>(
     timeoutMs?: number;
     shouldPersist?: (result: T) => boolean;
     credentialPersistence?: CredentialPersistenceMode;
+    handoff?: ZaloSendHandoff;
   } = {},
 ): Promise<T> {
   const profile = normalizeProfile(profileInput);
   const credentialPersistence = options.credentialPersistence ?? "persist";
+  options.handoff?.signal?.throwIfAborted();
+  options.handoff?.assertDirectAdapterHandoff?.();
   const api = await ensureApi(profile, options.timeoutMs, credentialPersistence);
-  const result = await operation(api);
+  // Shared profile restoration must not inherit one waiting sender's lifetime.
+  const result = options.handoff
+    ? await withZaloSendContext(options.handoff, () => operation(api))
+    : await operation(api);
   if (credentialPersistence === "persist" && (options.shouldPersist?.(result) ?? true)) {
     await persistApiCredentialsIfChanged(profile, api);
   }
@@ -929,10 +814,6 @@ export function normalizeZaloInboundMessage(
     eventMessage,
     raw: message,
   };
-}
-
-function truncatePayloadText(text: string): string {
-  return truncateUtf16Safe(text, 2000);
 }
 
 export async function checkZaloAuthenticated(
@@ -1173,6 +1054,7 @@ export async function sendZaloTextMessage(
   threadId: string,
   text: string,
   options: ZaloSendOptions = {},
+  onDeliveryResult?: (result: ZaloSendResult) => Promise<void> | void,
 ): Promise<ZaloSendResult> {
   const profile = normalizeProfile(options.profile);
   const trimmedThreadId = threadId.trim();
@@ -1186,123 +1068,8 @@ export async function sendZaloTextMessage(
 
   return await withZaloApi(
     profile,
-    async (api) => {
-      const type = options.isGroup ? ThreadType.Group : ThreadType.User;
-
-      try {
-        if (options.mediaUrl?.trim()) {
-          const media = await loadOutboundMediaFromUrl(options.mediaUrl.trim(), {
-            maxBytes: options.mediaMaxBytes,
-            mediaLocalRoots: options.mediaLocalRoots,
-            mediaReadFile: options.mediaReadFile,
-          });
-          const fileName = resolveMediaFileName({
-            mediaUrl: options.mediaUrl,
-            fileName: media.fileName,
-            contentType: media.contentType,
-            kind: media.kind,
-          });
-          const payloadText = truncatePayloadText(text || options.caption || "");
-          const textStyles = clampTextStyles(payloadText, options.textStyles);
-
-          if (media.kind === "audio") {
-            let textMessageId: string | undefined;
-            if (payloadText) {
-              const textResponse = await api.sendMessage(
-                textStyles ? { msg: payloadText, styles: textStyles } : payloadText,
-                trimmedThreadId,
-                type,
-              );
-              textMessageId = extractSendMessageId(textResponse);
-            }
-
-            const attachmentFileName = fileName.includes(".") ? fileName : `${fileName}.bin`;
-            const uploaded = await api.uploadAttachment(
-              [
-                {
-                  data: media.buffer,
-                  filename: attachmentFileName as `${string}.${string}`,
-                  metadata: {
-                    totalSize: media.buffer.length,
-                  },
-                },
-              ],
-              trimmedThreadId,
-              type,
-            );
-            const voiceAsset = resolveUploadedVoiceAsset(uploaded);
-            if (!voiceAsset) {
-              throw new Error("Failed to resolve uploaded audio URL for voice message");
-            }
-            const voiceUrl = buildZaloVoicePlaybackUrl(voiceAsset);
-            const response = await api.sendVoice({ voiceUrl }, trimmedThreadId, type);
-            const voiceMessageId = extractSendMessageId(response);
-            return {
-              ok: true,
-              messageId: voiceMessageId ?? textMessageId,
-              receipt: createZalouserSendReceipt({
-                platformMessageIds: [textMessageId, voiceMessageId],
-                threadId: trimmedThreadId,
-                kind: "voice",
-              }),
-            };
-          }
-
-          const response = await api.sendMessage(
-            {
-              msg: payloadText,
-              ...(textStyles ? { styles: textStyles } : {}),
-              attachments: [
-                {
-                  data: media.buffer,
-                  filename: fileName.includes(".") ? fileName : `${fileName}.bin`,
-                  metadata: {
-                    totalSize: media.buffer.length,
-                  },
-                },
-              ],
-            },
-            trimmedThreadId,
-            type,
-          );
-          const messageId = extractSendMessageId(response);
-          return {
-            ok: true,
-            messageId,
-            receipt: createZalouserSendReceipt({
-              messageId,
-              threadId: trimmedThreadId,
-              kind: "media",
-            }),
-          };
-        }
-
-        const payloadText = truncatePayloadText(text);
-        const textStyles = clampTextStyles(payloadText, options.textStyles);
-        const response = await api.sendMessage(
-          textStyles ? { msg: payloadText, styles: textStyles } : payloadText,
-          trimmedThreadId,
-          type,
-        );
-        const messageId = extractSendMessageId(response);
-        return {
-          ok: true,
-          messageId,
-          receipt: createZalouserSendReceipt({
-            messageId,
-            threadId: trimmedThreadId,
-            kind: "text",
-          }),
-        };
-      } catch (error) {
-        return {
-          ok: false,
-          error: formatErrorMessage(error),
-          receipt: createZalouserSendReceipt({ threadId: trimmedThreadId, kind: "unknown" }),
-        };
-      }
-    },
-    { shouldPersist: (result) => result.ok },
+    (api) => sendZaloTextWithApi(api, trimmedThreadId, text, options, onDeliveryResult),
+    { shouldPersist: (result) => result.ok, handoff: options },
   );
 }
 
@@ -1455,7 +1222,7 @@ export async function sendZaloLink(
           }),
         };
       },
-      { shouldPersist: (result) => result.ok },
+      { shouldPersist: (result) => result.ok, handoff: options },
     );
   } catch (error) {
     return {

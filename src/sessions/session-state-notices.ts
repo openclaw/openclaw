@@ -43,12 +43,14 @@ function shouldWakeWatcher(watcherSessionKey: string): boolean {
 
 export function enqueueSessionStateNotice(params: {
   watcherSessionKey: string;
+  watcherStorePath?: string | null;
   targetSessionKey: string;
   lastSeenSequence: number;
   queueOnly?: boolean;
 }): void {
   enqueueSystemEvent(sessionStateNoticeText(params.targetSessionKey, params.lastSeenSequence), {
     sessionKey: params.watcherSessionKey,
+    sessionStorePath: params.watcherStorePath ?? null,
     contextKey: `${SESSION_STATE_CONTEXT_PREFIX}${encodeNoticeTarget(params.targetSessionKey)}`,
     ...(params.queueOnly ? { replace: true } : {}),
   });
@@ -67,6 +69,7 @@ export function enqueueSessionStateNotice(params: {
     intent: "immediate",
     reason: `session-state:${params.targetSessionKey}`,
     sessionKey: params.watcherSessionKey,
+    sessionStorePath: params.watcherStorePath ?? null,
     coalesceMs: SESSION_STATE_WAKE_COALESCE_MS,
   });
 }

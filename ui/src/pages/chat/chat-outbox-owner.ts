@@ -8,15 +8,20 @@ import { sameQueuedDeliveryVersion } from "../../lib/chat/outbox-store-codec.ts"
 import {
   applyStoredChatOutboxScope,
   subscribeStoredChatOutboxChanges,
+  type captureChatOutboxAdmission,
 } from "../../lib/chat/outbox-store.ts";
 import { resolveUiConversationIdentity } from "../../lib/sessions/session-key.ts";
 import { getSafeSessionStorage } from "../../local-storage.ts";
 import { getChatAttachmentDataUrl } from "./attachment-payload-store.ts";
 import {
+  admitStoredChatComposerQueueItemResult,
   listStoredChatOutboxes,
+  removeStoredChatComposerQueueItem,
   updateStoredChatComposerQueueItem,
+  updateStoredChatComposerQueueItems,
   storedChatOutboxScopeKey,
   type ChatComposerScope as Composer,
+  type StoredChatQueueReplacement,
   type StoredChatOutboxScope as Scope,
 } from "./composer-persistence.ts";
 import {
@@ -30,7 +35,12 @@ type HostProjection = {
   durableSeen: Set<string>;
   retryable: Set<string>;
 };
-type LiveProjection = { item: ChatQueueItem; owner: Host };
+type LiveProjection = {
+  item: ChatQueueItem;
+  owner: Host;
+  expectedDurableVersion?: ChatQueueItem;
+  submissionIsCurrent?: () => boolean;
+};
 const LIVE_VERSION_KEYS = ["sendRunId", "sendAttempts", "sendState", "sendError"] as const;
 const storageIds = new WeakMap<Storage, number>();
 let nextStorageId = 0;
@@ -101,6 +111,25 @@ class ChatOutboxGatewayOwner {
     }
     return projected;
   }
+  private readLive(key: string, id: string, durable?: ChatQueueItem): LiveProjection | undefined {
+    const entries = this.live.get(key);
+    if (!entries) {
+      return undefined;
+    }
+    const live = entries.get(id);
+    if (
+      (live?.expectedDurableVersion &&
+        (!durable || !sameQueuedDeliveryVersion(live.expectedDurableVersion, durable))) ||
+      (live?.submissionIsCurrent && !live.submissionIsCurrent())
+    ) {
+      entries.delete(id);
+      if (!entries.size) {
+        this.live.delete(key);
+      }
+      return undefined;
+    }
+    return live;
+  }
   snapshot(
     host: Host,
     scope: Scope,
@@ -113,7 +142,7 @@ class ChatOutboxGatewayOwner {
     const visible = durable.map((item) => {
       state.durableSeen.add(item.id);
       const pending = localById.get(item.id);
-      const live = this.live.get(key)?.get(item.id)?.item;
+      const live = this.readLive(key, item.id, item)?.item;
       return pending?.pendingRunId || pending?.sendState === "waiting-model"
         ? pending
         : live && live.sendRunId === item.sendRunId
@@ -292,29 +321,19 @@ class ChatOutboxGatewayOwner {
       );
     }
   }
-  replace(
-    host: Host,
-    { sessionKey, agentId }: Scope,
-    queue: ChatQueueItem[],
-    options: { requestUpdate?: boolean } = {},
-  ): void {
-    const scope = { sessionKey, agentId };
+  retirePendingRun(host: Host, runId: string): ChatQueueItem[] {
+    const removed = host.chatQueue.filter((item) => item.pendingRunId === runId);
+    const scope = resolveUiConversationIdentity(host, host.sessionKey);
     const state = this.state(host);
-    const key = storedChatOutboxScopeKey(scope);
-    const previous = state.byScope.get(key)?.queue ?? [];
-    const previousById = new Map(previous.map((item) => [item.id, item]));
-    const retainedIds = new Set(queue.map((item) => item.id));
-    for (const item of previous) {
-      if (!retainedIds.has(item.id)) {
-        state.retryable.delete(item.id);
-      }
+    const local = state.byScope.get(storedChatOutboxScopeKey(scope));
+    if (local) {
+      local.queue = local.queue.filter((item) => item.pendingRunId !== runId);
     }
-    this.outbox(host, scope)?.queue.forEach((item) => state.durableSeen.add(item.id));
-    state.byScope.set(key, {
-      scope,
-      queue: queue.map((item) => this.project(item, previousById.get(item.id) ?? item)),
-    });
-    this.syncHost(host, options);
+    for (const item of removed) {
+      state.retryable.delete(item.id);
+    }
+    this.syncHost(host);
+    return removed;
   }
   keep(host: Host, { sessionKey, agentId }: Scope, item: ChatQueueItem, retryable = false): void {
     const scope = { sessionKey, agentId };
@@ -371,6 +390,97 @@ class ChatOutboxGatewayOwner {
     this.syncHost(host);
     return current;
   }
+  update(
+    host: Host,
+    updates: readonly { id: string; update: (item: ChatQueueItem) => ChatQueueItem }[],
+  ): Array<ChatQueueItem | null> | null {
+    const rows: Array<{
+      item: ChatQueueItem;
+      scope: Scope;
+      durable?: ChatQueueItem;
+      next: ChatQueueItem;
+    }> = [];
+    for (const { id, update } of updates) {
+      const located = this.locate(host, id);
+      if (!located) {
+        return null;
+      }
+      rows.push({ ...located, next: update(located.item) });
+    }
+    const durableRows = rows.filter((row) => row.durable);
+    const outboxScope = durableRows[0]?.scope;
+    // A reorder commits every captured row together before publishing any local changes.
+    const applied =
+      !outboxScope ||
+      updateStoredChatComposerQueueItems(
+        host,
+        outboxScope.sessionKey,
+        durableRows.map(({ item, next }) => ({ expected: item, next })),
+        outboxScope.agentId,
+      );
+    for (const { item, scope, next } of durableRows) {
+      const live = next.sendState === "sending" || next.sendState === "executing-command";
+      if (applied) {
+        if (next.sendState === "waiting-model") {
+          this.keep(host, scope, next);
+        } else {
+          this.change(host, item.id);
+        }
+        this.projectLive(host, scope, item.id, live ? next : undefined);
+      } else if (live) {
+        this.syncHost(host);
+      } else {
+        this.projectLive(host, scope, item.id);
+      }
+    }
+    if (!applied) {
+      return null;
+    }
+    return rows.map(({ item, durable, next }) =>
+      durable ? next : this.change(host, item.id, () => next),
+    );
+  }
+  admit(
+    host: Host,
+    captured: ReturnType<typeof captureChatOutboxAdmission>,
+    item: ChatQueueItem,
+    replaces?: StoredChatQueueReplacement,
+  ) {
+    this.keep(host, captured.scope, item);
+    const result = admitStoredChatComposerQueueItemResult(host, captured, item, replaces);
+    if (result === "admitted" && item.sendState !== "waiting-model") {
+      this.change(host, item.id);
+    }
+    return result;
+  }
+  remove(host: Host, id: string): ChatQueueItem | null {
+    const located = this.locate(host, id);
+    const durable = located?.durable;
+    const local = host.chatQueue.find((item) => item.id === id);
+    const live = located && this.readLive(storedChatOutboxScopeKey(located.scope), id, durable);
+    if (
+      (live &&
+        live.owner !== host &&
+        !(local && durable && LIVE_VERSION_KEYS.every((key) => local[key] === durable[key]))) ||
+      (located?.durable &&
+        !removeStoredChatComposerQueueItem(
+          host,
+          located.scope.sessionKey,
+          id,
+          located.item,
+          located.scope.agentId,
+        ))
+    ) {
+      this.syncHost(host);
+      return null;
+    }
+    if (located) {
+      this.projectLive(host, located.scope, id);
+      this.change(host, id);
+    }
+    this.publish(undefined, true);
+    return located?.item ?? null;
+  }
   hasVolatile(host: Host, id: string): boolean {
     return this.hosts.get(host)?.retryable.has(id) ?? false;
   }
@@ -384,17 +494,48 @@ class ChatOutboxGatewayOwner {
     }
     return false;
   }
-  mayRemove(host: Host, scope: Scope, id: string): boolean {
-    const live = this.live.get(storedChatOutboxScopeKey(scope))?.get(id);
-    const local = host.chatQueue.find((item) => item.id === id);
-    const durable = this.outbox(host, scope)?.queue.find((item) => item.id === id);
+  hasPendingSubmission(scope: Scope, item: ChatQueueItem): boolean {
     return Boolean(
-      !live ||
-      live.owner === host ||
-      (local && durable && LIVE_VERSION_KEYS.every((key) => local[key] === durable[key])),
+      this.readLive(storedChatOutboxScopeKey(scope), item.id, item)?.submissionIsCurrent,
     );
   }
-  projectLive(host: Host, scope: Scope, id: string, item?: ChatQueueItem): void {
+  beginSubmission(
+    host: Host,
+    id: string,
+    options: { inline: boolean; isCurrent: () => boolean },
+  ): { release(): void } | undefined {
+    const located = this.locate(host, id);
+    if (
+      !located?.durable ||
+      located.item.sendState !== "waiting-idle" ||
+      located.durable.sendState !== "waiting-idle" ||
+      !located.item.sendRunId ||
+      (located.item.sendAttempts ?? 0) !== 0 ||
+      located.item.sendRequestStartedAtMs !== undefined
+    ) {
+      return undefined;
+    }
+    const key = storedChatOutboxScopeKey(located.scope);
+    const entries = this.live.get(key) ?? new Map<string, LiveProjection>();
+    const projection: LiveProjection = {
+      item: options.inline ? { ...located.item, sendState: "submitting" } : located.item,
+      owner: host,
+      expectedDurableVersion: located.durable,
+      submissionIsCurrent: options.isCurrent,
+    };
+    entries.set(id, projection);
+    this.live.set(key, entries);
+    this.publish(host);
+    return {
+      release: () => {
+        if (this.live.get(key)?.get(id) !== projection) {
+          return;
+        }
+        this.projectLive(host, located.scope, id);
+      },
+    };
+  }
+  private projectLive(host: Host, scope: Scope, id: string, item?: ChatQueueItem): void {
     const key = storedChatOutboxScopeKey(scope);
     const live = this.live.get(key) ?? new Map<string, LiveProjection>();
     if (item) {

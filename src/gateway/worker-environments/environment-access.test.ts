@@ -33,7 +33,6 @@ describe("worker environment service", () => {
       stopAll: vi.fn().mockRejectedValueOnce(shutdownError).mockResolvedValue(undefined),
     } as unknown as WorkerTunnelManager;
     const nodeTunnelManager = {
-      bindWorkspaceBindingResolver: vi.fn(),
       status: () => "stopped" as const,
       start: vi.fn(),
       stop: vi.fn(async () => {}),
@@ -207,7 +206,6 @@ describe("worker environment service", () => {
         stop: vi.fn(async () => {}),
       };
       const nodeTunnelManager = {
-        bindWorkspaceBindingResolver: vi.fn(),
         status: () => "stopped" as const,
         start: vi.fn(async (request) => ({
           ...nodeHandle,
@@ -232,12 +230,11 @@ describe("worker environment service", () => {
           ensureNodeWorkerBundle: async () => structuredClone(support.BOOTSTRAP_RECEIPT),
         },
       );
-      const environment = await workerService.create(
-        "development",
-        "cloud-node-tunnel-gate",
-        undefined,
+      const environment = await workerService.createWithRequest({
+        profileId: "development",
+        idempotencyKey: "cloud-node-tunnel-gate",
         executionMode,
-      );
+      });
       const credential = await workerService.attachSession({
         environmentId: environment.environmentId,
         ownerEpoch: environment.ownerEpoch,
@@ -313,7 +310,6 @@ describe("worker environment service", () => {
       stopAll: vi.fn(async () => {}),
     } as unknown as WorkerTunnelManager;
     const nodeTunnelManager = {
-      bindWorkspaceBindingResolver: vi.fn(),
       status: () => "connecting" as const,
       start: vi.fn(() => {
         signalStarted();
@@ -337,7 +333,10 @@ describe("worker environment service", () => {
         ensureNodeWorkerBundle: async () => structuredClone(support.BOOTSTRAP_RECEIPT),
       },
     );
-    const environment = await workerService.create("development", "device-tunnel-timeout");
+    const environment = await workerService.createWithRequest({
+      profileId: "development",
+      idempotencyKey: "device-tunnel-timeout",
+    });
     const credential = await workerService.attachSession({
       environmentId: environment.environmentId,
       ownerEpoch: environment.ownerEpoch,
@@ -597,11 +596,21 @@ describe("worker environment service", () => {
     },
   );
 
-  it.each([true, false, undefined])(
-    "carries provider resize permission %s through node observe",
-    async (allowsDesktopResize) => {
+  it.each([
+    { allowsDesktopResize: true, allowsResize: undefined },
+    { allowsDesktopResize: false, allowsResize: undefined },
+    { allowsDesktopResize: undefined, allowsResize: undefined },
+    { allowsDesktopResize: true, allowsResize: false },
+    { allowsDesktopResize: false, allowsResize: true },
+  ])(
+    "carries provider $allowsDesktopResize and endpoint $allowsResize resize permission through node observe",
+    async ({ allowsDesktopResize, allowsResize }) => {
       const requester = { signal: new AbortController().signal, isCurrent: () => true };
-      const record = support.seedReadyNodeDesktop("worker-node-desktop-access");
+      const desktop = {
+        ...support.DESKTOP,
+        ...(allowsResize === undefined ? {} : { allowsResize }),
+      };
+      const record = support.seedReadyNodeDesktop("worker-node-desktop-access", desktop);
       const order: string[] = [];
       const observe = vi.fn(async () => ({
         transport: "rfb" as const,
@@ -645,14 +654,14 @@ describe("worker environment service", () => {
         wsPath: "/desktop/observe?token=node-carrier",
         expiresAtMs: support.testState.nowMs + 60_000,
         control: true,
-        ...(allowsDesktopResize === true ? { canResize: true } : {}),
+        ...(allowsDesktopResize === true && allowsResize !== false ? { canResize: true } : {}),
       });
       expect(observe).toHaveBeenCalledWith({
         record: expect.objectContaining({
           environmentId: record.environmentId,
           nodeDeviceId: record.nodeDeviceId,
           sshEndpoint: null,
-          desktop: support.DESKTOP,
+          desktop,
         }),
         control: true,
         requester,

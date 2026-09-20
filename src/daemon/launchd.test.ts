@@ -3,10 +3,22 @@ import fs from "node:fs/promises";
 import { PassThrough } from "node:stream";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { DEFAULT_VITEST_TEST_TIMEOUT_MS } from "../../test/vitest/vitest.timeouts.js";
 import type { PortListener } from "../infra/ports-types.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { GATEWAY_SERVICE_KIND, GATEWAY_SERVICE_MARKER } from "./constants.js";
 import type { ExecResult } from "./exec-file.js";
+import {
+  capturePassThroughOutput,
+  createDefaultLaunchdEnv,
+  createLaunchdEnvWithGatewayPort,
+  createTestLaunchAgentPlist,
+  launchAgentFixture,
+  defaultLaunchAgentFixture,
+  launchAgentControlFixture,
+  defaultProgramArguments,
+} from "./launchd-install.test-support.js";
 import {
   LAUNCH_AGENT_ENV_WRAPPER_SHELL,
   LAUNCH_AGENT_EXIT_TIMEOUT_SECONDS,
@@ -63,6 +75,7 @@ const state = vi.hoisted(() => ({
   serviceRunning: true,
   serviceStates: new Map<string, "running" | "stopped" | "not-loaded">(),
   stopLeavesRunning: false,
+  fsRoot: "",
   dirs: new Set<string>(),
   dirModes: new Map<string, number>(),
   files: new Map<string, string>(),
@@ -126,8 +139,6 @@ const formatPortDiagnostics = vi.hoisted(() => vi.fn(() => ["Port 18789 is alrea
 const resolveGatewayServiceProbeHosts = vi.hoisted(() =>
   vi.fn<(_params?: unknown) => Promise<readonly string[]>>(async () => ["127.0.0.1"]),
 );
-const defaultProgramArguments = ["node", "-e", "process.exit(0)"];
-
 function countMatching<T>(items: readonly T[], predicate: (item: T) => boolean): number {
   let count = 0;
   for (const item of items) {
@@ -143,26 +154,6 @@ function readPlistProgramArgumentStrings(plist: string): string[] {
   return Array.from((match?.[1] ?? "").matchAll(/<string>([\s\S]*?)<\/string>/gi)).map(
     (item) => item[1] ?? "",
   );
-}
-
-function createDefaultLaunchdEnv(): Record<string, string | undefined> {
-  return {
-    HOME: "/Users/test",
-    OPENCLAW_PROFILE: "default",
-  };
-}
-
-function createLaunchdEnvWithGatewayPort(port: string): Record<string, string | undefined> {
-  return { ...createDefaultLaunchdEnv(), OPENCLAW_GATEWAY_PORT: port };
-}
-
-function capturePassThroughOutput(
-  append: (text: string) => void,
-  encoding?: BufferEncoding,
-): PassThrough {
-  const stdout = new PassThrough();
-  stdout.on("data", (chunk: Buffer) => append(chunk.toString(encoding)));
-  return stdout;
 }
 
 function setLegacyGatewayLaunchAgentPlist(plistPath: string, extraLines: string[]): void {
@@ -203,40 +194,6 @@ async function installLaunchAgent(
   return await installLaunchAgentImpl(args);
 }
 
-function createTestLaunchAgentPlist(params: {
-  label: string;
-  programArguments: string[];
-  environment?: Record<string, string>;
-}): string {
-  const argsXml = params.programArguments.map((arg) => `      <string>${arg}</string>`).join("\n");
-  const envXml = params.environment
-    ? [
-        "    <key>EnvironmentVariables</key>",
-        "    <dict>",
-        ...Object.entries(params.environment).flatMap(([key, value]) => [
-          `      <key>${key}</key>`,
-          `      <string>${value}</string>`,
-        ]),
-        "    </dict>",
-      ].join("\n")
-    : "";
-  return [
-    '<?xml version="1.0" encoding="UTF-8"?>',
-    '<plist version="1.0">',
-    "  <dict>",
-    "    <key>Label</key>",
-    `    <string>${params.label}</string>`,
-    "    <key>ProgramArguments</key>",
-    "    <array>",
-    argsXml,
-    "    </array>",
-    envXml,
-    "  </dict>",
-    "</plist>",
-    "",
-  ].join("\n");
-}
-
 function setLaunchAgentPlist(
   env: Record<string, string | undefined>,
   label: string,
@@ -249,44 +206,23 @@ function setLaunchAgentPlist(
   );
 }
 
-type LaunchAgentInstallFixture = Parameters<typeof installLaunchAgentImpl>[0];
-type LaunchAgentInstallOverrides = Omit<
-  LaunchAgentInstallFixture,
-  "env" | "stdout" | "programArguments"
->;
-
-function launchAgentFixture(
-  env: LaunchAgentInstallFixture["env"],
-  programArguments: string[],
-  overrides: LaunchAgentInstallOverrides = {},
-): LaunchAgentInstallFixture {
-  return { env, stdout: new PassThrough(), programArguments, ...overrides };
-}
-
-function defaultLaunchAgentFixture(
-  env: LaunchAgentInstallFixture["env"],
-  overrides: LaunchAgentInstallOverrides = {},
-): LaunchAgentInstallFixture {
-  return launchAgentFixture(env, defaultProgramArguments, overrides);
-}
-
-type LaunchAgentControlFixture = Parameters<typeof stopLaunchAgent>[0] &
-  Parameters<typeof uninstallLaunchAgent>[0];
-
-function launchAgentControlFixture(
-  env: LaunchAgentControlFixture["env"],
-  overrides: Omit<LaunchAgentControlFixture, "env" | "stdout"> = {},
-): LaunchAgentControlFixture {
-  return { env, stdout: new PassThrough(), ...overrides };
-}
-
 async function runStopLaunchAgentWithFakeTimers(args: Parameters<typeof stopLaunchAgent>[0]) {
   vi.useFakeTimers();
   try {
+    let settled = false;
     const stopPromise = stopLaunchAgent(args)
       .then(() => ({ ok: true as const }))
-      .catch((error: unknown) => ({ ok: false as const, error }));
-    await vi.runAllTimersAsync();
+      .catch((error: unknown) => ({ ok: false as const, error }))
+      .finally(() => {
+        settled = true;
+      });
+    await vi.waitFor(
+      async () => {
+        await vi.runAllTimersAsync();
+        expect(settled).toBe(true);
+      },
+      { timeout: DEFAULT_VITEST_TEST_TIMEOUT_MS - 1000 },
+    );
     const result = await stopPromise;
     if (!result.ok) {
       throw result.error;
@@ -299,10 +235,20 @@ async function runStopLaunchAgentWithFakeTimers(args: Parameters<typeof stopLaun
 async function runRestartLaunchAgentWithFakeTimers(args: Parameters<typeof restartLaunchAgent>[0]) {
   vi.useFakeTimers();
   try {
+    let settled = false;
     const restartPromise = restartLaunchAgent(args)
       .then((value) => ({ ok: true as const, value }))
-      .catch((error: unknown) => ({ ok: false as const, error }));
-    await vi.runAllTimersAsync();
+      .catch((error: unknown) => ({ ok: false as const, error }))
+      .finally(() => {
+        settled = true;
+      });
+    await vi.waitFor(
+      async () => {
+        await vi.runAllTimersAsync();
+        expect(settled).toBe(true);
+      },
+      { timeout: DEFAULT_VITEST_TEST_TIMEOUT_MS - 1000 },
+    );
     const result = await restartPromise;
     if (!result.ok) {
       throw result.error;
@@ -448,9 +394,17 @@ function executeLaunchctlMock(file: string, args: string[]) {
     return { stdout: "", stderr: "", code: 0 };
   }
   if (call[0] === "enable") {
+    state.printDisabledOutput = 'disabled services = {\n\t"ai.openclaw.gateway" => enabled\n}';
+    return { stdout: "", stderr: "", code: 0 };
+  }
+  if (call[0] === "disable") {
+    state.printDisabledOutput = 'disabled services = {\n\t"ai.openclaw.gateway" => disabled\n}';
     return { stdout: "", stderr: "", code: 0 };
   }
   if (call[0] === "bootstrap") {
+    if (state.printDisabledOutput.includes('"ai.openclaw.gateway" => disabled')) {
+      return { stdout: "", stderr: "Service is disabled", code: 5 };
+    }
     if (state.bootstrapError) {
       const detail = state.bootstrapError;
       // Transient failures clear after one attempt so recovery paths that retry
@@ -489,8 +443,8 @@ function executeLaunchctlMock(file: string, args: string[]) {
 vi.mock("../process/exec.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../process/exec.js")>()),
   runExec: vi.fn(
-    async (_command: string, _args: string[], options: { input: string | Uint8Array }) =>
-      decodeLaunchAgentPlistFixture(options.input),
+    async (_command: string, args: string[], options: { input: string | Uint8Array }) =>
+      decodeLaunchAgentPlistFixture(options.input, args[1]),
   ),
 }));
 
@@ -558,101 +512,17 @@ vi.mock("./gateway-service-probe-hosts.js", () => ({
 
 vi.mock("node:fs/promises", async () => {
   const actual = await vi.importActual<typeof import("node:fs/promises")>("node:fs/promises");
-  const wrapped = {
-    ...actual,
-    access: vi.fn(async (p: string) => {
-      const key = p;
-      if (
-        (state.files.has(key) && state.files.get(key) !== "dangling-launchagent-symlink") ||
-        state.dirs.has(key)
-      ) {
-        return;
-      }
-      throw Object.assign(new Error(`ENOENT: no such file or directory, access '${key}'`), {
-        code: "ENOENT",
-      });
-    }),
-    lstat: vi.fn(async (p: string) => {
-      const key = p;
-      if (state.files.has(key) || state.dirs.has(key)) {
-        return {
-          isSymbolicLink: () => state.files.get(key) === "dangling-launchagent-symlink",
-        };
-      }
-      throw Object.assign(new Error(`ENOENT: no such file or directory, lstat '${key}'`), {
-        code: "ENOENT",
-      });
-    }),
-    mkdir: vi.fn(async (p: string, opts?: { mode?: number }) => {
-      const key = p;
-      state.dirs.add(key);
-      state.dirModes.set(key, opts?.mode ?? 0o777);
-    }),
-    stat: vi.fn(async (p: string) => {
-      const key = p;
-      if (state.dirs.has(key)) {
-        return { mode: state.dirModes.get(key) ?? 0o777 };
-      }
-      if (state.files.has(key)) {
-        return { mode: state.fileModes.get(key) ?? 0o666 };
-      }
-      throw new Error(`ENOENT: no such file or directory, stat '${key}'`);
-    }),
-    chmod: vi.fn(async (p: string, mode: number) => {
-      const key = p;
-      if (state.dirs.has(key)) {
-        state.dirModes.set(key, mode);
-        return;
-      }
-      if (state.files.has(key)) {
-        state.fileModes.set(key, mode);
-        return;
-      }
-      throw new Error(`ENOENT: no such file or directory, chmod '${key}'`);
-    }),
-    readFile: vi.fn(async (p: string) => {
-      const key = p;
-      const data = state.files.get(key);
-      if (data !== undefined) {
-        return data;
-      }
-      throw Object.assign(new Error(`ENOENT: no such file or directory, open '${key}'`), {
-        code: "ENOENT",
-      });
-    }),
-    unlink: vi.fn(async (p: string) => {
-      state.files.delete(p);
-    }),
-    rename: vi.fn(async (from: string, to: string) => {
-      const data = state.files.get(from);
-      if (data === undefined) {
-        throw Object.assign(new Error(`ENOENT: no such file or directory, rename '${from}'`), {
-          code: "ENOENT",
-        });
-      }
-      state.files.delete(from);
-      state.files.set(to, data);
-      const mode = state.fileModes.get(from);
-      state.fileModes.delete(from);
-      if (mode !== undefined) {
-        state.fileModes.set(to, mode);
-      }
-      state.fileWrites.push({ path: to, data });
-    }),
-    writeFile: vi.fn(async (p: string, data: string, opts?: { mode?: number }) => {
-      const key = p;
-      state.files.set(key, data);
-      state.fileWrites.push({ path: key, data });
-      state.dirs.add(key.split("/").slice(0, -1).join("/"));
-      state.fileModes.set(key, opts?.mode ?? 0o666);
-    }),
-  };
+  const { createLaunchdFileSystem } = await import("./launchd-fs.test-support.js");
+  const wrapped = createLaunchdFileSystem(actual, state);
   return { ...wrapped, default: wrapped };
 });
+
+const filesystemDirs = useAutoCleanupTempDirTracker(afterEach);
 
 afterEach(() => vi.unstubAllEnvs());
 
 beforeEach(() => {
+  state.fsRoot = filesystemDirs.make("openclaw-launchd-fs-");
   state.launchctlCalls.length = 0;
   state.listOutput = "";
   state.printOutput = "";
@@ -1890,6 +1760,13 @@ describe("launchd uninstall", () => {
 });
 
 describe("launchd install", () => {
+  it.each([false, true])("preserves install enable policy=%s", async (preserveAutoStart) => {
+    const env = createDefaultLaunchdEnv();
+    await installLaunchAgent({ ...defaultLaunchAgentFixture(env), preserveAutoStart });
+    expect(launchctlCommandNames().includes("enable")).toBe(!preserveAutoStart);
+    expect(launchctlCommandNames()).toContain("bootstrap");
+  });
+
   it("refuses an in-band reinstall before booting out its own LaunchAgent", async () => {
     const env = createDefaultLaunchdEnv();
 
@@ -2077,63 +1954,114 @@ describe("launchd install", () => {
     expect(launchctlCommandNames()).toEqual(["print", "print", "enable", "bootstrap", "print"]);
   });
 
-  it("restores the exact prior plist and supervision after external bootstrap failure", async () => {
-    const env = createDefaultLaunchdEnv();
-    const plistPath = resolveLaunchAgentPlistPath(env);
-    const envFilePath = "/Users/test/.openclaw/service-env/ai.openclaw.gateway.env";
-    const wrapperPath = "/Users/test/.openclaw/service-env/ai.openclaw.gateway-env-wrapper.sh";
-    const previousEnv = "export OPENCLAW_GATEWAY_PORT='18789'\n";
-    const previousWrapper = '#!/bin/sh\n. "$1"\nshift\nexec "$@"\n';
-    const previous = createTestLaunchAgentPlist({
-      label: "ai.openclaw.gateway",
-      programArguments: [
-        "/bin/sh",
-        wrapperPath,
-        envFilePath,
-        "/previous/node",
-        "/previous/openclaw.mjs",
-        "gateway",
-      ],
-    });
-    state.files.set(plistPath, previous);
-    state.files.set(envFilePath, previousEnv);
-    state.files.set(wrapperPath, previousWrapper);
-    state.fileModes.set(envFilePath, 0o600);
-    state.fileModes.set(wrapperPath, 0o700);
-    state.serviceLoaded = true;
-    state.serviceRunning = true;
-    state.bootstrapError = "Operation not permitted";
-    state.bootstrapTransient = true;
+  it.each([false, true])(
+    "restores prior supervision with preserveAutoStart=%s",
+    async (preserveAutoStart) => {
+      const env = createDefaultLaunchdEnv();
+      const plistPath = resolveLaunchAgentPlistPath(env);
+      const envFilePath = "/Users/test/.openclaw/service-env/ai.openclaw.gateway.env";
+      const wrapperPath = "/Users/test/.openclaw/service-env/ai.openclaw.gateway-env-wrapper.sh";
+      const previousEnv = "export OPENCLAW_GATEWAY_PORT='18789'\n";
+      const previousWrapper = '#!/bin/sh\n. "$1"\nshift\nexec "$@"\n';
+      const previous = createTestLaunchAgentPlist({
+        label: "ai.openclaw.gateway",
+        programArguments: [
+          "/bin/sh",
+          wrapperPath,
+          envFilePath,
+          "/previous/node",
+          "/previous/openclaw.mjs",
+          "gateway",
+        ],
+      });
+      state.files.set(plistPath, previous);
+      state.fileModes.set(plistPath, 0o600);
+      state.files.set(envFilePath, previousEnv);
+      state.files.set(wrapperPath, previousWrapper);
+      state.fileModes.set(envFilePath, 0o600);
+      state.fileModes.set(wrapperPath, 0o700);
+      state.serviceLoaded = true;
+      state.serviceRunning = true;
+      state.bootstrapError = "Operation not permitted";
+      state.bootstrapTransient = true;
 
-    await expect(
-      installLaunchAgent({
+      await expect(
+        installLaunchAgent({
+          env,
+          stdout: new PassThrough(),
+          programArguments: defaultProgramArguments,
+          preserveAutoStart,
+          environment: { OPENCLAW_GATEWAY_PORT: "19000" },
+        }),
+      ).rejects.toThrow("launchctl bootstrap failed: Operation not permitted");
+
+      expect(state.files.get(plistPath)).toBe(previous);
+      expect(state.fileModes.get(plistPath)).toBe(0o600);
+      expect(state.files.get(envFilePath)).toBe(previousEnv);
+      expect(state.files.get(wrapperPath)).toBe(previousWrapper);
+      expect(state.fileModes.get(envFilePath)).toBe(0o600);
+      expect(state.fileModes.get(wrapperPath)).toBe(0o700);
+      expect(state.serviceLoaded).toBe(true);
+      expect(state.serviceRunning).toBe(true);
+      expect(launchctlCommandNames()).toEqual([
+        "print",
+        ...(preserveAutoStart ? ["print-disabled"] : []),
+        "print",
+        "bootout",
+        "unload",
+        ...(preserveAutoStart ? [] : ["enable"]),
+        "bootstrap",
+        "print",
+        ...(preserveAutoStart ? [] : ["enable"]),
+        "bootstrap",
+      ]);
+    },
+  );
+
+  it.each([false, true])(
+    "preserves disabled policy and available supervision after bootstrap failure=%s",
+    async (fail) => {
+      const env = createDefaultLaunchdEnv();
+      const plistPath = resolveLaunchAgentPlistPath(env);
+      const previous = createTestLaunchAgentPlist({
+        label: "ai.openclaw.gateway",
+        programArguments: ["/previous/node", "/previous/openclaw.mjs", "gateway"],
+      });
+      state.files.set(plistPath, previous);
+      state.fileModes.set(plistPath, 0o600);
+      state.serviceLoaded = true;
+      state.serviceRunning = true;
+      state.printDisabledOutput = 'disabled services = {\n\t"ai.openclaw.gateway" => disabled\n}';
+      if (fail) {
+        state.bootstrapError = "injected activation failure";
+        state.bootstrapTransient = true;
+      }
+      const operation = installLaunchAgent({
         env,
         stdout: new PassThrough(),
         programArguments: defaultProgramArguments,
-        environment: { OPENCLAW_GATEWAY_PORT: "19000" },
-      }),
-    ).rejects.toThrow("launchctl bootstrap failed: Operation not permitted");
-
-    expect(state.files.get(plistPath)).toBe(previous);
-    expect(state.files.get(envFilePath)).toBe(previousEnv);
-    expect(state.files.get(wrapperPath)).toBe(previousWrapper);
-    expect(state.fileModes.get(envFilePath)).toBe(0o600);
-    expect(state.fileModes.get(wrapperPath)).toBe(0o700);
-    expect(state.serviceLoaded).toBe(true);
-    expect(state.serviceRunning).toBe(true);
-    expect(launchctlCommandNames()).toEqual([
-      "print",
-      "print",
-      "bootout",
-      "unload",
-      "enable",
-      "bootstrap",
-      "print",
-      "enable",
-      "bootstrap",
-    ]);
-  });
-
+        preserveAutoStart: true,
+      });
+      if (fail) {
+        await expect(operation).rejects.toThrow("injected activation failure");
+        expect(state.files.get(plistPath)).toBe(previous);
+      } else {
+        await operation;
+      }
+      expect(state.serviceLoaded).toBe(true);
+      expect(state.serviceRunning).toBe(true);
+      expect(await isLaunchAgentEnabled({ env })).toBe(false);
+      expect(
+        launchctlCommandNames().filter((command) =>
+          ["enable", "bootstrap", "disable"].includes(command),
+        ),
+      ).toEqual(
+        fail
+          ? ["enable", "bootstrap", "disable", "enable", "bootstrap", "disable"]
+          : ["enable", "bootstrap", "disable"],
+      );
+    },
+  );
   it("refuses install and stage before any user LaunchAgent mutation", async () => {
     const env = createDefaultLaunchdEnv();
     launchdSystemState.assertNoSystemLaunchDaemonOwnership.mockRejectedValue(
@@ -2154,10 +2082,11 @@ describe("launchd install", () => {
 
   it("rolls back a post-publication ownership race before activation", async () => {
     const env = createDefaultLaunchdEnv();
-    launchdSystemState.assertNoSystemLaunchDaemonOwnership
-      .mockResolvedValueOnce()
-      .mockResolvedValueOnce()
-      .mockRejectedValueOnce(createSystemOwnershipError("installed"));
+    launchdSystemState.assertNoSystemLaunchDaemonOwnership.mockImplementation(async () => {
+      if (state.files.has(resolveLaunchAgentPlistPath(env))) {
+        throw createSystemOwnershipError("installed");
+      }
+    });
 
     await expect(
       installLaunchAgent({
@@ -2167,7 +2096,6 @@ describe("launchd install", () => {
       }),
     ).rejects.toThrow("system ownership blocked: installed");
 
-    expect(launchdSystemState.assertNoSystemLaunchDaemonOwnership).toHaveBeenCalledTimes(3);
     expect(state.files.has(resolveLaunchAgentPlistPath(env))).toBe(false);
     expect(launchctlCommandNames()).toEqual(["print", "print"]);
   });
@@ -2175,8 +2103,10 @@ describe("launchd install", () => {
   it("restores the previous plist when staged publication loses ownership", async () => {
     const env = createDefaultLaunchdEnv();
     const plistPath = resolveLaunchAgentPlistPath(env);
-    const previous = "<plist><dict><key>Label</key><string>previous</string></dict></plist>";
+    const previous =
+      "<plist><dict><key>Label</key><string>previous</string><key>EnvironmentVariables</key><dict><key>SYNTHETIC_INLINE</key><string>private fixture value</string></dict></dict></plist>";
     state.files.set(plistPath, previous);
+    state.fileModes.set(plistPath, 0o600);
     launchdSystemState.assertNoSystemLaunchDaemonOwnership
       .mockResolvedValueOnce()
       .mockResolvedValueOnce()
@@ -2191,6 +2121,7 @@ describe("launchd install", () => {
     ).rejects.toThrow("system ownership blocked: loaded");
 
     expect(state.files.get(plistPath)).toBe(previous);
+    expect(state.fileModes.get(plistPath)).toBe(0o600);
     expect(state.launchctlCalls).toEqual([]);
   });
 
@@ -2599,21 +2530,27 @@ describe("launchd install", () => {
     expect(rewriteIndex).toBeLessThan(bootstrapIndex);
   });
 
-  it("tightens writable bits on launch agent dirs and plist", async () => {
-    const env = createDefaultLaunchdEnv();
-    state.dirs.add(env.HOME!);
-    state.dirModes.set(env.HOME!, 0o777);
-    state.dirs.add("/Users/test/Library");
-    state.dirModes.set("/Users/test/Library", 0o777);
+  it.each([
+    { mode: 0o777, expected: 0o755 },
+    { mode: 0o700, expected: 0o700 },
+  ])(
+    "tightens directory mode $mode without widening private directories",
+    async ({ mode, expected }) => {
+      const env = createDefaultLaunchdEnv();
+      state.dirs.add(env.HOME!);
+      state.dirModes.set(env.HOME!, mode);
+      state.dirs.add("/Users/test/Library");
+      state.dirModes.set("/Users/test/Library", mode);
 
-    await installLaunchAgent(defaultLaunchAgentFixture(env));
+      await installLaunchAgent(defaultLaunchAgentFixture(env));
 
-    const plistPath = resolveLaunchAgentPlistPath(env);
-    expect(state.dirModes.get(env.HOME!)).toBe(0o755);
-    expect(state.dirModes.get("/Users/test/Library")).toBe(0o755);
-    expect(state.dirModes.get("/Users/test/Library/LaunchAgents")).toBe(0o755);
-    expect(state.fileModes.get(plistPath)).toBe(0o644);
-  });
+      const plistPath = resolveLaunchAgentPlistPath(env);
+      expect(state.dirModes.get(env.HOME!)).toBe(expected);
+      expect(state.dirModes.get("/Users/test/Library")).toBe(expected);
+      expect(state.dirModes.get("/Users/test/Library/LaunchAgents")).toBe(0o755 & ~process.umask());
+      expect(state.fileModes.get(plistPath)).toBe(0o644);
+    },
+  );
 
   it("stops LaunchAgent via bootout by default, preserving KeepAlive for future crashes", async () => {
     const env = createDefaultLaunchdEnv();

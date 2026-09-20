@@ -3,7 +3,7 @@ import type { ExecutionIdentityContextV1 } from "../../packages/gateway-protocol
 import { trackSqliteStatementExecutions } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { activityRunInspectorSearch } from "../../ui/src/pages/activity/run-inspector-model.js";
-import { presentExecutionDecisionReceipts } from "../audit/execution-decision-receipts.js";
+import { presentExecutionDecisionReceiptsInDatabase } from "../audit/execution-decision-receipts.js";
 import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import {
   closeOpenClawStateDatabaseForTest,
@@ -12,9 +12,9 @@ import {
 import {
   forceDenyOperatorApproval,
   insertOperatorApproval,
-  pageOperatorApprovalReceiptsForRun,
+  pageOperatorApprovalReceiptsForRunInDatabase,
   resolveOperatorApproval,
-  summarizeOperatorApprovalReceiptsForRun,
+  summarizeOperatorApprovalReceiptsForRunInDatabase,
 } from "./operator-approval-store.js";
 
 const RETENTION_MS = 30 * 24 * 60 * 60_000;
@@ -112,12 +112,10 @@ describe("operator approval decision receipts", () => {
         nowMs: 2_000,
         databaseOptions: database,
       });
-      const receipt = pageOperatorApprovalReceiptsForRun({
-        context,
-        limit: 1,
-        nowMs: 3_000,
-        databaseOptions: database,
-      }).entries[0]?.receipt;
+      const receipt = pageOperatorApprovalReceiptsForRunInDatabase(
+        openOpenClawStateDatabase(database).db,
+        { context, limit: 1, nowMs: 3_000 },
+      ).entries[0]?.receipt;
       expect(receipt?.remediation).toEqual([
         expect.objectContaining({
           code: resolverId === null ? "start_new_run" : "request_approval_again",
@@ -196,12 +194,10 @@ describe("operator approval decision receipts", () => {
       .db.prepare("UPDATE operator_approvals SET presentation_json = ? WHERE approval_id = ?")
       .run("{", "payload-corrupt");
 
-    const page = pageOperatorApprovalReceiptsForRun({
-      context,
-      limit: 20,
-      nowMs: 3_000,
-      databaseOptions: database,
-    });
+    const page = pageOperatorApprovalReceiptsForRunInDatabase(
+      openOpenClawStateDatabase(database).db,
+      { context, limit: 20, nowMs: 3_000 },
+    );
     const receipts = page.entries.map((entry) => entry.receipt);
     expect(page.entries.map((entry) => entry.selectorId)).toEqual([
       "approval-decision:1",
@@ -214,10 +210,9 @@ describe("operator approval decision receipts", () => {
     ]);
     expect(page.entries).toHaveLength(receipts.length);
     expect(
-      summarizeOperatorApprovalReceiptsForRun({
+      summarizeOperatorApprovalReceiptsForRunInDatabase(openOpenClawStateDatabase(database).db, {
         context,
         nowMs: 3_000,
-        databaseOptions: database,
       }),
     ).toEqual({
       count: 7,
@@ -262,12 +257,10 @@ describe("operator approval decision receipts", () => {
       expect(encoded).not.toContain(secret);
     }
 
-    const displays = presentExecutionDecisionReceipts({
-      context: identityContext,
-      decisionCursor: "a:0:0",
-      decisionLimit: 20,
-      options: { ...database, now: 3_000 },
-    }).decisionDisplays;
+    const displays = presentExecutionDecisionReceiptsInDatabase(
+      openOpenClawStateDatabase(database).db,
+      { context: identityContext, decisionCursor: "a:0:0", decisionLimit: 20, now: 3_000 },
+    ).decisionDisplays;
     expect(displays?.[0]).toMatchObject({
       action: {
         family: "exec",
@@ -302,11 +295,10 @@ describe("operator approval decision receipts", () => {
       }),
     ).toMatchObject({ outcome: "already-resolved", retry: "conflict" });
     expect(
-      pageOperatorApprovalReceiptsForRun({
+      pageOperatorApprovalReceiptsForRunInDatabase(openOpenClawStateDatabase(database).db, {
         context,
         limit: 10,
         nowMs: 2_001,
-        databaseOptions: database,
       }).entries[0]?.receipt,
     ).toMatchObject({
       decision: { outcome: "denied", reasonCode: "operator_approval_denied_by_reviewer" },
@@ -333,10 +325,9 @@ describe("operator approval decision receipts", () => {
     }
 
     expect(
-      summarizeOperatorApprovalReceiptsForRun({
+      summarizeOperatorApprovalReceiptsForRunInDatabase(openOpenClawStateDatabase(database).db, {
         context,
         nowMs: 3_000,
-        databaseOptions: database,
       }),
     ).toEqual({
       count: 129,
@@ -363,20 +354,16 @@ describe("operator approval decision receipts", () => {
       "page-b",
     );
 
-    const first = pageOperatorApprovalReceiptsForRun({
-      context,
-      limit: 1,
-      nowMs: 3_000,
-      databaseOptions: database,
-    });
+    const first = pageOperatorApprovalReceiptsForRunInDatabase(
+      openOpenClawStateDatabase(database).db,
+      { context, limit: 1, nowMs: 3_000 },
+    );
     expect(first.entries[0]?.receipt.receiptId).toContain("approval:");
     expect(first.nextCursor).toEqual({ occurredAt: 2_000, rowId: expect.any(Number) });
-    const firstDisplay = presentExecutionDecisionReceipts({
-      context: identityContext,
-      decisionCursor: "a:0:0",
-      decisionLimit: 1,
-      options: { ...database, now: 3_000 },
-    }).decisionDisplays[0];
+    const firstDisplay = presentExecutionDecisionReceiptsInDatabase(
+      openOpenClawStateDatabase(database).db,
+      { context: identityContext, decisionCursor: "a:0:0", decisionLimit: 1, now: 3_000 },
+    ).decisionDisplays[0];
     expect(firstDisplay?.selectorId).toBe(`approval-decision:${first.nextCursor?.rowId}`);
     expect(first.entries[0]?.selectorId).toBe(firstDisplay?.selectorId);
     expect(firstDisplay?.selectorId).not.toBe(first.entries[0]?.receipt.receiptId);
@@ -391,12 +378,11 @@ describe("operator approval decision receipts", () => {
       encodeURIComponent(first.entries[0]?.receipt.receiptId ?? ""),
     );
     expect(
-      pageOperatorApprovalReceiptsForRun({
+      pageOperatorApprovalReceiptsForRunInDatabase(openOpenClawStateDatabase(database).db, {
         context,
         after: first.nextCursor,
         limit: 2,
         nowMs: 3_000,
-        databaseOptions: database,
       }).entries.map((entry) => entry.receipt),
     ).toEqual([
       expect.objectContaining({
@@ -455,19 +441,14 @@ describe("operator approval decision receipts", () => {
     );
 
     try {
-      const first = pageOperatorApprovalReceiptsForRun({
-        context,
-        limit: 2,
-        nowMs: 3_000,
-        databaseOptions: database,
-      });
-      const second = pageOperatorApprovalReceiptsForRun({
-        context,
-        after: first.nextCursor,
-        limit: 10,
-        nowMs: 3_000,
-        databaseOptions: database,
-      });
+      const first = pageOperatorApprovalReceiptsForRunInDatabase(
+        openOpenClawStateDatabase(database).db,
+        { context, limit: 2, nowMs: 3_000 },
+      );
+      const second = pageOperatorApprovalReceiptsForRunInDatabase(
+        openOpenClawStateDatabase(database).db,
+        { context, after: first.nextCursor, limit: 10, nowMs: 3_000 },
+      );
       const entries = [...first.entries, ...second.entries];
       expect(tracker.counts.approvalPage).toBe(2);
       expect(entries).toHaveLength(4);
@@ -512,11 +493,10 @@ describe("operator approval decision receipts", () => {
     }
 
     expect(
-      pageOperatorApprovalReceiptsForRun({
+      pageOperatorApprovalReceiptsForRunInDatabase(openOpenClawStateDatabase(database).db, {
         context,
         limit: 10,
         nowMs: 4_000,
-        databaseOptions: database,
       }).entries.map((entry) => entry.receipt.enforcement.coverageState),
     ).toEqual(["enforced", "unknown"]);
   });
@@ -554,11 +534,10 @@ describe("operator approval decision receipts", () => {
       });
 
       expect(
-        pageOperatorApprovalReceiptsForRun({
+        pageOperatorApprovalReceiptsForRunInDatabase(openOpenClawStateDatabase(database).db, {
           context,
           limit: 10,
           nowMs: 4_000,
-          databaseOptions: database,
         }).entries.map((entry) => entry.receipt),
       ).toEqual([
         expect.objectContaining({
@@ -585,11 +564,10 @@ describe("operator approval decision receipts", () => {
       databaseOptions: database,
     });
     expect(
-      pageOperatorApprovalReceiptsForRun({
+      pageOperatorApprovalReceiptsForRunInDatabase(openOpenClawStateDatabase(database).db, {
         context,
         limit: 10,
         nowMs: RETENTION_MS + 2,
-        databaseOptions: database,
       }).entries.map((entry) => entry.receipt),
     ).toEqual([]);
     expect(tableExists(openOpenClawStateDatabase(database).db, "execution_decision_facts")).toBe(

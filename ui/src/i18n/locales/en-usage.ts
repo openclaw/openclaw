@@ -5,6 +5,8 @@ import { en } from "./en.ts";
 const enUsage = {
   usage: {
     filters: {
+      rangeTitle: "Reporting range",
+      rangeHint: "Choose the dates to include in every chart and total.",
       title: "Filters",
       to: "to",
       startDate: "Start date",
@@ -47,15 +49,24 @@ const enUsage = {
       paused:
         "Usage data may be incomplete. Automatic checks paused; select Refresh to check again.",
     },
+    creators: {
+      title: "Started by",
+      description:
+        "Usage grouped by who started each session. This is session attribution, not per-turn billing.",
+      all: "All identities",
+      select: "Filter by session creator",
+      selected: "Selected identity",
+      identity: "Identity",
+      unattributed: "Unattributed",
+      system: "System",
+      empty: "No usage for these dates and filters.",
+      more: "Show {count} more identities",
+    },
     empty: {
-      title: "Start with a date range",
-      subtitle:
-        "Load usage data to compare costs, inspect sessions, and drill into timelines without leaving the dashboard.",
-      hint: "Select a date range and click Refresh to load usage.",
+      title: "No usage in this date range",
+      subtitle: "Try a wider date range or another identity to explore more history.",
+      hint: "Choose a wider date range or another identity.",
       noData: "No data",
-      featureOverview: "Overview cards",
-      featureSessions: "Session ranking",
-      featureTimeline: "Timeline drilldown",
     },
     daily: {
       title: "Daily Usage",

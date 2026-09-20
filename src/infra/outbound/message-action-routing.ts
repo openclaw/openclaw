@@ -343,6 +343,7 @@ type PreparedMessageRoute = {
   dryRun: boolean;
   defersExternalTargetResolution: boolean;
   assertReadAuthorityCurrent?: () => void;
+  assertTargetAuthorityCurrent?: () => void;
 };
 
 export async function prepareMessageRoute(params: {
@@ -438,6 +439,7 @@ export async function prepareMessageRoute(params: {
       messageActionAuthorization: input.messageActionAuthorization,
     });
   let assertReadAuthorityCurrent: (() => void) | undefined;
+  let assertTargetAuthorityCurrent: (() => void) | undefined;
   if (!delegatesActionToGateway || dryRun) {
     const authorization = input.messageActionAuthorization;
     const preparedRead = prepareExternalMessageActionTargetForResolution({
@@ -446,10 +448,18 @@ export async function prepareMessageRoute(params: {
       cfg,
       params: actionParams,
       accountId: accountId ?? undefined,
+      agentId,
+      sessionKey: input.sessionKey,
+      sessionId: input.sessionId,
       requesterAccountId:
         authorization !== undefined
           ? authorization.requesterAccountId
           : (input.requesterAccountId ?? undefined),
+      requesterSenderId:
+        authorization !== undefined
+          ? authorization.requesterSenderId
+          : (input.requesterSenderId ?? undefined),
+      senderIsOwner: input.senderIsOwner,
       conversationReadOrigin: normalizeConversationReadInvocationOrigin(
         input.conversationReadOrigin,
       ),
@@ -458,7 +468,9 @@ export async function prepareMessageRoute(params: {
       assertDirectAdapterHandoff: input.assertDirectAdapterHandoff,
     });
     actionParams = preparedRead.params;
+    accountId = preparedRead.accountId ?? accountId;
     assertReadAuthorityCurrent = preparedRead.assertReadAuthorityCurrent;
+    assertTargetAuthorityCurrent = preparedRead.assertTargetAuthorityCurrent;
   }
 
   return {
@@ -469,6 +481,7 @@ export async function prepareMessageRoute(params: {
     dryRun,
     defersExternalTargetResolution,
     assertReadAuthorityCurrent,
+    assertTargetAuthorityCurrent,
   };
 }
 

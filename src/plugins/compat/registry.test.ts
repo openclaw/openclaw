@@ -40,7 +40,7 @@ const deprecationMarkingSurfaceCounts: Record<(typeof deprecationMarkingCodes)[n
   "agent-harness-terminal-result-aliases": 10,
   "official-plugin-export-aliases": 7,
   "memory-host-compatibility-aliases": 4,
-  "plugin-runtime-api-compat-aliases": 27,
+  "plugin-runtime-api-compat-aliases": 28,
   "plugin-provider-manifest-compat-aliases": 9,
 };
 function expectNonEmptyStringList(values: readonly string[], label: string) {

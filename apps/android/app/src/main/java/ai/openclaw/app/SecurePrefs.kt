@@ -111,6 +111,7 @@ class SecurePrefs(
     private const val preferredAudioInputDeviceKey = "voice.preferredAudioInputDevice"
     private const val voiceWakeEnabledKey = "voiceWake.enabled"
     private const val voiceWakeWordsKey = "voiceWake.triggerWords"
+    private const val appearanceTextScaleKey = "appearance.textScale"
     private const val appearanceThemeModeKey = "appearance.themeMode"
     private const val appearanceThemeFamilyKey = "appearance.themeFamily"
     private const val appearanceAccentArgbKey = "appearance.accentArgb"
@@ -271,6 +272,10 @@ class SecurePrefs(
   private val _preferredAudioInputDevice =
     MutableStateFlow(plainPrefs.getString(preferredAudioInputDeviceKey, null)?.takeIf(String::isNotBlank))
   val preferredAudioInputDevice: StateFlow<String?> = _preferredAudioInputDevice
+
+  private val _appearanceTextScale =
+    MutableStateFlow(AppearanceTextScale.fromPercent(plainPrefs.all[appearanceTextScaleKey] as? Int))
+  val appearanceTextScale: StateFlow<AppearanceTextScale> = _appearanceTextScale
 
   private val _appearanceThemeMode =
     MutableStateFlow(AppearanceThemeMode.fromRawValue(plainPrefs.getString(appearanceThemeModeKey, null)))
@@ -822,6 +827,12 @@ class SecurePrefs(
       )
     }
     return emptyList()
+  }
+
+  @Synchronized
+  fun setAppearanceTextScale(scale: AppearanceTextScale) {
+    plainPrefs.edit { putInt(appearanceTextScaleKey, scale.percent) }
+    _appearanceTextScale.value = scale
   }
 
   @Synchronized

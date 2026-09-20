@@ -15,7 +15,6 @@ import type { ChannelGatewayContext } from "../channels/plugins/types.adapters.j
 import type { ChannelAccountSnapshot, ChannelPlugin } from "../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { tryReadSecretFileSync } from "../infra/secret-file.js";
-import { selectAgentSystemEvents } from "../infra/system-event-ownership.js";
 import {
   peekSystemEventEntries,
   peekSystemEvents,
@@ -178,12 +177,11 @@ describe("Gateway startup SecretRef owner isolation", () => {
 
         expect(reload.ok, JSON.stringify(reload)).toBe(true);
         expect(reload.payload?.warningCount).toBeGreaterThan(0);
-        expect(peekSystemEvents("global")).toEqual([
+        expect(peekSystemEvents("agent:ops:global")).toEqual([
           expect.stringContaining("[SECRETS_RELOADER_DEGRADED]"),
         ]);
-        const events = peekSystemEventEntries("global");
-        expect(selectAgentSystemEvents(events, "ops")).toHaveLength(1);
-        expect(selectAgentSystemEvents(events, "main")).toEqual([]);
+        expect(peekSystemEventEntries("agent:ops:global")).toHaveLength(1);
+        expect(peekSystemEventEntries("agent:main:global")).toEqual([]);
       } finally {
         ws.close();
       }

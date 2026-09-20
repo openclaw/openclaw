@@ -7,24 +7,19 @@ import { readStringValue } from "@openclaw/normalization-core/string-coerce";
 import pMap from "p-map";
 import { Type } from "typebox";
 import { Value } from "typebox/value";
+import { SessionsListParamsSchema } from "../../../packages/gateway-protocol/src/schema/sessions-list.js";
 import {
-  SessionCreatedActorSchema,
-  SessionRowSchema,
   SessionRunStatusSchema,
   type SessionRunStatus,
 } from "../../../packages/gateway-protocol/src/schema/sessions-row.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { readSessionTitleFieldsFromTranscript } from "../../gateway/session-transcript-title-reader.js";
-import { deriveSessionTitle } from "../../gateway/session-utils.js";
+import { deriveSessionTitle, prepareSessionTitleRead } from "../../gateway/session-utils-core.js";
 import { classifySessionKeyShape, isIncognitoSessionKey } from "../../routing/session-key.js";
 import { getSessionStateVersions } from "../../sessions/session-state-events.js";
 import { resolveSessionAgentIds } from "../agent-scope.js";
-import {
-  optionalNonNegativeIntegerSchema,
-  optionalPositiveIntegerSchema,
-  stringEnum,
-} from "../schema/typebox.js";
+import { stringEnum } from "../schema/typebox.js";
 import {
   describeSessionLinkRule,
   describeSessionsListTool,
@@ -53,93 +48,43 @@ import {
   resolveInternalSessionKey,
   resolveSessionToolContext,
   SESSION_LIST_KINDS,
+  SessionListRowSchema,
   type GatewaySessionListRow,
   type SessionListRow,
 } from "./sessions-helpers.js";
 
 const SessionsListToolSchema = Type.Object({
   kinds: Type.Optional(Type.Array(stringEnum(SESSION_LIST_KINDS))),
-  limit: optionalPositiveIntegerSchema(),
-  offset: optionalNonNegativeIntegerSchema({ maximum: Number.MAX_SAFE_INTEGER }),
-  activeMinutes: optionalPositiveIntegerSchema(),
-  activeOnly: Type.Optional(Type.Boolean()),
-  excludeSubagents: Type.Optional(Type.Boolean()),
+  limit: SessionsListParamsSchema.properties.limit,
+  offset: Type.Optional(Type.Integer({ minimum: 0, maximum: Number.MAX_SAFE_INTEGER })),
+  activeMinutes: SessionsListParamsSchema.properties.activeMinutes,
+  activeOnly: SessionsListParamsSchema.properties.activeOnly,
+  excludeSubagents: SessionsListParamsSchema.properties.excludeSubagents,
   relationship: Type.Optional(
     stringEnum(["owned", "created", "involving"], {
       description:
         "Relation to the authenticated requesting user; unavailable without a trusted user identity.",
     }),
   ),
-  ownerId: Type.Optional(Type.String({ minLength: 1 })),
-  creatorId: Type.Optional(Type.String({ minLength: 1 })),
-  projectId: Type.Optional(Type.String({ minLength: 1 })),
-  workspaceDir: Type.Optional(Type.String({ minLength: 1 })),
-  group: Type.Optional(Type.String()),
-  pinned: Type.Optional(Type.Boolean()),
-  messageLimit: optionalNonNegativeIntegerSchema(),
+  ownerId: SessionsListParamsSchema.properties.ownerId,
+  creatorId: SessionsListParamsSchema.properties.creatorId,
+  projectId: SessionsListParamsSchema.properties.projectId,
+  workspaceDir: SessionsListParamsSchema.properties.workspaceDir,
+  group: SessionsListParamsSchema.properties.group,
+  pinned: SessionsListParamsSchema.properties.pinned,
+  messageLimit: Type.Optional(Type.Integer({ minimum: 0 })),
   label: Type.Optional(Type.String({ minLength: 1 })),
   agentId: Type.Optional(Type.String({ minLength: 1, maxLength: 64 })),
   search: Type.Optional(Type.String({ minLength: 1 })),
-  archived: Type.Optional(Type.Union([Type.Boolean(), Type.Literal("all")])),
-  includeDerivedTitles: Type.Optional(Type.Boolean()),
-  includeLastMessage: Type.Optional(Type.Boolean()),
+  archived: SessionsListParamsSchema.properties.archived,
+  includeDerivedTitles: SessionsListParamsSchema.properties.includeDerivedTitles,
+  includeLastMessage: SessionsListParamsSchema.properties.includeLastMessage,
 });
-
-const SessionInventoryActorSchema = Type.Pick(SessionCreatedActorSchema, [
-  "type",
-  "id",
-  "label",
-  "identity",
-]);
-
-const SessionListRowOutputSchema = Type.Object(
-  {
-    key: Type.String(),
-    sessionId: Type.Optional(Type.String()),
-    agentId: Type.String(),
-    kind: stringEnum(SESSION_LIST_KINDS),
-    channel: Type.String(),
-    archived: Type.Boolean(),
-    pinned: Type.Boolean(),
-    label: Type.Optional(Type.String()),
-    createdActor: Type.Optional(SessionInventoryActorSchema),
-    owner: Type.Optional(
-      Type.Object({ actor: SessionInventoryActorSchema }, { additionalProperties: false }),
-    ),
-    worktree: SessionRowSchema.properties.worktree,
-    repositoryWorkspaceId: SessionRowSchema.properties.repositoryWorkspaceId,
-    repository: SessionRowSchema.properties.repository,
-    execCwd: SessionRowSchema.properties.execCwd,
-    spawnedCwd: SessionRowSchema.properties.spawnedCwd,
-    spawnedWorkspaceDir: SessionRowSchema.properties.spawnedWorkspaceDir,
-    projectId: SessionRowSchema.properties.projectId,
-    workspaceDir: SessionRowSchema.properties.workspaceDir,
-    group: Type.Optional(
-      Type.String({
-        description: 'Custom sidebar group membership; unrelated to kind "group" (group chats).',
-      }),
-    ),
-    displayName: Type.Optional(Type.String()),
-    derivedTitle: Type.Optional(Type.String()),
-    lastMessagePreview: Type.Optional(Type.String()),
-    parentSessionKey: Type.Optional(Type.String()),
-    updatedAt: Type.Optional(Type.Number()),
-    stateVersion: Type.Optional(Type.Number()),
-    model: Type.Optional(Type.String()),
-    contextTokens: Type.Optional(Type.Number()),
-    totalTokens: Type.Optional(Type.Number()),
-    status: Type.Optional(SessionRunStatusSchema),
-    abortedLastRun: Type.Optional(Type.Boolean()),
-    childSessions: Type.Optional(Type.Array(Type.String())),
-    messages: Type.Optional(Type.Array(Type.Unknown())),
-  },
-  { additionalProperties: false },
-);
 
 const SessionsListOutputSchema = Type.Object(
   {
     count: Type.Number(),
-    sessions: Type.Array(SessionListRowOutputSchema),
+    sessions: Type.Array(SessionListRowSchema),
     hasMore: Type.Boolean(),
     nextOffset: Type.Optional(Type.Integer({ minimum: 0 })),
     limitApplied: Type.Integer({ minimum: 1, maximum: 200 }),
@@ -597,17 +542,30 @@ export function createSessionsListTool(opts?: {
       }
 
       for (const target of titleTargets) {
-        const fields = readSessionTitleFieldsFromTranscript({
-          agentId: target.agentId,
-          sessionEntry: target.titleEntry,
-          sessionId: target.sessionId,
-          sessionKey: target.sessionKey,
-          storePath,
+        // Admission still counts the first 100 eligible sessions, including named
+        // rows. Existing Gateway titles remain authoritative even when whitespace.
+        const titleRead = prepareSessionTitleRead(target.titleEntry, undefined, {
+          includeDerivedTitles: includeDerivedTitles && !target.row.derivedTitle,
+          includeLastMessage,
         });
-        if (includeDerivedTitles && !target.row.derivedTitle) {
-          target.row.derivedTitle = deriveSessionTitle(target.titleEntry, fields.firstUserMessage);
+        if (!titleRead) {
+          continue;
         }
-        if (includeLastMessage && fields.lastMessagePreview) {
+        const fields = titleRead.needsTranscript
+          ? readSessionTitleFieldsFromTranscript({
+              agentId: target.agentId,
+              sessionEntry: target.titleEntry,
+              sessionId: target.sessionId,
+              sessionKey: target.sessionKey,
+              storePath,
+            })
+          : undefined;
+        if (includeDerivedTitles && !target.row.derivedTitle) {
+          target.row.derivedTitle =
+            titleRead.derivedTitle ??
+            deriveSessionTitle(target.titleEntry, fields?.firstUserMessage);
+        }
+        if (includeLastMessage && fields?.lastMessagePreview) {
           target.row.lastMessagePreview = fields.lastMessagePreview;
         }
       }

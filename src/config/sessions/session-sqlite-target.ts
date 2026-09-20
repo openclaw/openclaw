@@ -3,7 +3,7 @@ import path from "node:path";
 import { LEGACY_IMPLICIT_AGENT_ID, normalizeAgentId } from "../../routing/session-key.js";
 import type { OpenClawRegisteredAgentDatabase } from "../../state/openclaw-agent-db-contract.js";
 import {
-  isSameOpenClawAgentDatabasePath,
+  createOpenClawAgentDatabasePathMatcher,
   listOpenClawRegisteredAgentDatabases,
 } from "../../state/openclaw-agent-db-registry.js";
 import {
@@ -80,7 +80,8 @@ function resolveCustomStoreSqlitePath(params: {
   const registeredDatabases =
     params.options.registeredDatabases ??
     listOpenClawRegisteredAgentDatabases(params.options.env ? { env: params.options.env } : {});
-  const isSameDatabasePath = params.options.isSameDatabasePath ?? isSameOpenClawAgentDatabasePath;
+  const isSameDatabasePath =
+    params.options.isSameDatabasePath ?? createOpenClawAgentDatabasePathMatcher();
   const resolvePersistedOwner = (candidatePath: string) => {
     const registeredOwners = resolveRegisteredOwners(
       candidatePath,
@@ -269,7 +270,7 @@ export function resolveSqliteTargetFromSessionStorePath(
     const registeredOwners = resolveRegisteredOwners(
       unsuffixedTarget.path,
       registeredDatabases,
-      options.isSameDatabasePath ?? isSameOpenClawAgentDatabasePath,
+      options.isSameDatabasePath ?? createOpenClawAgentDatabasePathMatcher(),
     );
     let databaseOwner: string | undefined;
     if (registeredOwners.length === 1) {

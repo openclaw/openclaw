@@ -281,5 +281,14 @@ export function copySqliteSessionGenerationRows(params: {
   // Cross-store repair must atomically finish copied projections before publishing the new owner.
   markSessionTranscriptIndexDirtyInTransaction(params.destination.db, params.sessionId);
   reconcileSessionTranscriptIndexInTransaction(params.destination.db, params.sessionId);
-  publishSessionEntryCacheInvalidation(params.destination);
+  const owner = executeSqliteQueryTakeFirstSync(
+    params.destination.db,
+    destinationDb
+      .selectFrom("session_windows")
+      .select("session_key")
+      .where("session_id", "=", params.sessionId),
+  );
+  if (owner) {
+    publishSessionEntryCacheInvalidation(params.destination, { sessionKey: owner.session_key });
+  }
 }

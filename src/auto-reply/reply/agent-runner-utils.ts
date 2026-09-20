@@ -342,7 +342,13 @@ export function mintReplyMessageActionTurnCapability(
   >,
   runId: string,
 ): string | undefined {
-  if (turn.isHeartbeat || !isTrustedMessageActionTurnIngress(turn.sessionCtx.Provider)) {
+  const channelIngress = isTrustedMessageActionTurnIngress(turn.sessionCtx.Provider);
+  const dashboardAdmission = turn.opts?.dashboardReadAdmission;
+  if (
+    turn.isHeartbeat ||
+    (!channelIngress &&
+      (turn.sessionCtx.Provider !== "webchat" || dashboardAdmission?.runId !== runId))
+  ) {
     return undefined;
   }
   const context = buildEmbeddedContextFromTemplate({
@@ -352,7 +358,31 @@ export function mintReplyMessageActionTurnCapability(
     hasRepliedRef: turn.opts?.hasRepliedRef,
   });
   const sessionKey = turn.runtimePolicySessionKey ?? context.sessionKey;
-  if (!context.agentId || !sessionKey || !context.messageProvider || !context.currentChannelId) {
+  if (!context.agentId || !sessionKey) {
+    return undefined;
+  }
+  if (!channelIngress) {
+    // Queue options may come from another input. Match the original admission,
+    // not opts.runId, which followup execution replaces with its own run ID.
+    if (
+      !dashboardAdmission ||
+      dashboardAdmission.agentId !== context.agentId ||
+      dashboardAdmission.sessionKey !== sessionKey ||
+      dashboardAdmission.sessionId !== context.sessionId
+    ) {
+      return undefined;
+    }
+    dashboardAdmission.assertCurrent();
+    return mintMessageActionTurnCapability({
+      agentId: context.agentId,
+      runId,
+      sessionKey,
+      sessionId: context.sessionId,
+      assertDashboardReadCurrent: dashboardAdmission.assertCurrent,
+      expiresWithRun: true,
+    });
+  }
+  if (!context.messageProvider || !context.currentChannelId) {
     return undefined;
   }
   const sender = buildTemplateSenderContext(turn.sessionCtx);

@@ -10,6 +10,11 @@ title: "Agent"
 
 Run one agent turn through the Gateway. The explicit `--local` flag and `agent exec` are the embedded execution paths.
 
+Gateway-backed turns are operator input. An agent's `exec` subprocess carrying
+`OPENCLAW_SHELL=exec` cannot use this command to report back to another session;
+use its attributed session tool or normal subagent completion instead. This
+does not change operator terminal use or the separate embedded execution paths.
+
 Pass at least one session selector: `--to`, `--session-key`, `--session-id`, or `--agent`. Explicitly blank or whitespace-only selector values are rejected before local or Gateway dispatch, even when another selector supplies a valid target. Omit an unused selector instead of passing an empty value.
 
 A completed turn exits `0`. Error, timeout, and cancellation outcomes exit `1`, after any text or JSON result is written. A received `SIGINT` or `SIGTERM` instead preserves the signal-specific exit status described below.

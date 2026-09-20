@@ -6,7 +6,7 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import { loadGatewaySessionRow } from "../session-utils.js";
+import { createSessionRowProjection } from "../session-row-projection.js";
 import { sessionMutationHandlers } from "./sessions-mutations.js";
 import type { GatewayClient, GatewayRequestContext, RespondFn } from "./types.js";
 
@@ -152,20 +152,25 @@ describe("sessions.patch archive attribution", () => {
         { sessionId: "session-alias-happy-archive", updatedAt: 2 },
       );
 
-      await patchSession(
-        {
-          key: aliasKey,
+      const projection = await createSessionRowProjection({ cfg: {} });
+      try {
+        await patchSession(
+          {
+            key: aliasKey,
+            archived: true,
+            expectedSessionId: "session-alias-happy-archive",
+          },
+          client("profile-ada", "Ada"),
+        );
+        await projection.ensureMaterialized();
+        expect(projection.snapshot({ key: canonicalKey, agentId: "main" }).row).toMatchObject({
           archived: true,
-          expectedSessionId: "session-alias-happy-archive",
-        },
-        client("profile-ada", "Ada"),
-      );
-
-      expect(loadGatewaySessionRow(canonicalKey, { agentId: "main" })).toMatchObject({
-        archived: true,
-        archivedAt: expect.any(Number),
-        archivedBy: { type: "human", id: "profile-ada" },
-      });
+          archivedAt: expect.any(Number),
+          archivedBy: { type: "human", id: "profile-ada" },
+        });
+      } finally {
+        projection.dispose();
+      }
     });
   });
 });

@@ -3,7 +3,7 @@ import { t } from "../../i18n/index.ts";
 
 /** What a lab row writes at its gate. Most gates are booleans; some are modes. */
 type LabFeatureValue = boolean | string;
-type LabFeatureResetScope = "gate" | "parent";
+type LabFeatureResetScope = "gate" | "parent" | null;
 
 export type LabFeature = {
   id: string;
@@ -42,7 +42,8 @@ export type LabFeature = {
   /**
    * Ownership boundary for default provenance and reset. Most rows own only
    * their gate; features whose runtime default depends on any parent config
-   * own and reset that parent as a unit.
+   * own and reset that parent as a unit. Required gates use null to keep their
+   * explicit off value instead of deleting it.
    */
   resetScope: LabFeatureResetScope;
   restartHint: (() => string) | null;
@@ -133,7 +134,7 @@ export const LAB_FEATURES = [
     activeValues: [true],
     readEnabled: null,
     enableAlso: null,
-    resetScope: "gate",
+    resetScope: null,
     // Method advertisement is resolved at Gateway startup, so the panel appears after restart.
     restartHint: () => t("labsPage.restartRequired"),
   },
@@ -253,6 +254,9 @@ export function labFeatureResetPatch(
   config: Record<string, unknown> | null,
   feature: LabFeature,
 ): Record<string, unknown> | null {
+  if (feature.resetScope === null) {
+    return null;
+  }
   const path = labFeatureOverridePath(config ?? {}, feature);
   if (!path?.length) {
     return null;

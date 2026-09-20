@@ -44,16 +44,6 @@ const loadChannelBootstrapRuntime = createLazyRuntimeModule(
   () => import("./channel-bootstrap.runtime.js"),
 );
 const loadChannelPluginFromRegistry = createChannelRegistryLoader((entry) => entry.plugin);
-export async function resolveChannelOutboundDirectiveOptions(params: {
-  cfg: OpenClawConfig;
-  agentId?: string;
-  channel: string;
-}): Promise<{ extractMarkdownImages?: boolean }> {
-  const { plugin } = await loadBootstrappedChannelPlugin(params);
-  return {
-    extractMarkdownImages: plugin?.outbound?.extractMarkdownImages === true ? true : undefined,
-  };
-}
 
 export async function createChannelHandler(params: ChannelHandlerParams): Promise<ChannelHandler> {
   const { plugin, pluginRegistry } = await loadBootstrappedChannelPlugin(params);
@@ -79,8 +69,8 @@ async function loadBootstrappedChannelPlugin(params: {
     // surface. A second lookup could attach another plugin's send lifecycle.
     return { plugin, pluginRegistry: scopedRegistry };
   }
-  const { bootstrapOutboundChannelPlugin } = await loadChannelBootstrapRuntime();
-  const pluginRegistry = bootstrapOutboundChannelPlugin({
+  const { bootstrapOutboundChannelPluginAsync } = await loadChannelBootstrapRuntime();
+  const pluginRegistry = await bootstrapOutboundChannelPluginAsync({
     channel: params.channel,
     cfg: params.cfg,
     agentId: params.agentId,
@@ -322,6 +312,7 @@ function createPluginHandler(
     chunkerMode,
     chunkedTextFormatting: outbound?.chunkedTextFormatting,
     textChunkLimit: outbound?.textChunkLimit,
+    extractMarkdownImages: outbound?.extractMarkdownImages === true ? true : undefined,
     preserveMarkdownDetails:
       outbound?.preserveMarkdownDetails?.({
         cfg: params.cfg,
@@ -402,13 +393,14 @@ function createPluginHandler(
         }
       : undefined,
     pinDeliveredMessage: outbound?.pinDeliveredMessage
-      ? async ({ target, messageId, pin, gatewayClientScopes }) =>
+      ? async ({ target, messageId, pin, gatewayClientScopes, assertDirectAdapterHandoff }) =>
           outbound.pinDeliveredMessage!({
             cfg: params.cfg,
             target,
             messageId,
             pin,
             gatewayClientScopes,
+            assertDirectAdapterHandoff,
           })
       : undefined,
     afterDeliverPayload: outbound?.afterDeliverPayload

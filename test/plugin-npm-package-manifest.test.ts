@@ -955,6 +955,7 @@ process.stdout.write("PACKED_PLUGIN_CHANNEL_STATE_OK\\n");
     "split destination",
     "failed command",
     "ancestor optional",
+    "legacy shrinkwrap",
   ])("preserves source dependencies while staging npm bundles with %s", (scenario) => {
     const repoDir = makeTempRepoRoot(tempDirs, "openclaw-plugin-npm-package-portable-optional-");
     const packageDir = writePublishablePluginPackage(repoDir);
@@ -994,6 +995,16 @@ process.stdout.write("PACKED_PLUGIN_CHANNEL_STATE_OK\\n");
     const sourceOnlyPath = join(packageDir, "node_modules", "source-only", "marker");
     writeFileText(sourceOnlyPath, "keep\n");
     const originalText = readFileSync(join(packageDir, "package.json"), "utf8");
+    const shrinkwrapPath = join(packageDir, "npm-shrinkwrap.json");
+    const legacyShrinkwrap = `${JSON.stringify({
+      name: "@openclaw/diffs",
+      version: "2026.5.3",
+      lockfileVersion: 3,
+      packages: {},
+    })}\n`;
+    if (scenario === "legacy shrinkwrap") {
+      writeFileText(shrinkwrapPath, legacyShrinkwrap);
+    }
     const outputDir =
       scenario.includes("destination") && scenario !== "default destination"
         ? join(packageDir, "artifacts")
@@ -1041,6 +1052,9 @@ process.stdout.write("PACKED_PLUGIN_CHANNEL_STATE_OK\\n");
     expect(readFileSync(sourceOnlyPath, "utf8")).toBe("keep\n");
     expect(existsSync(join(packageDir, "package-lock.json"))).toBe(false);
     expect(readFileSync(join(packageDir, "package.json"), "utf8")).toBe(originalText);
+    if (scenario === "legacy shrinkwrap") {
+      expect(readFileSync(shrinkwrapPath, "utf8")).toBe(legacyShrinkwrap);
+    }
     if (scenario === "failed command") {
       const stagingDir = result.stdout.trim();
       expect(stagingDir).not.toBe("");

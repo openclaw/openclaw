@@ -324,9 +324,12 @@ vi.mock("../../infra/update-channels.js", async () => {
   return { ...actual, normalizeUpdateChannel: normalizeUpdateChannelMock };
 });
 
-vi.mock("../../infra/update-startup.js", () => ({
+vi.mock("../../infra/update-status-state.js", () => ({
   getUpdateAvailable: getUpdateAvailableMock,
   getUpdateSchedule: getUpdateScheduleMock,
+}));
+
+vi.mock("../../infra/update-startup.js", () => ({
   initializeGatewayUpdateStatus: initializeGatewayUpdateStatusMock,
   refreshGatewayUpdateStatus: refreshGatewayUpdateStatusMock,
 }));

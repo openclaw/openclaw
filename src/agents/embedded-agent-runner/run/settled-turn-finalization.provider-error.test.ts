@@ -46,18 +46,24 @@ function prepareRequest(
 }
 
 describe("prepared provider errors after settled tools", () => {
-  it("does not mistake the generated provider error for an authored answer", () => {
-    const request = prepareRequest();
-    expect(request.payloadsWithToolMedia).toEqual([
-      expect.objectContaining({
-        isError: true,
-        text: expect.stringContaining("connection refused"),
-      }),
-    ]);
-    expect(resolveSettledTurnFinalizationRequest(request)).toContain(
-      "Do not repeat completed tool calls",
-    );
-  });
+  it.each([
+    { name: "no prior text", assistantTexts: [] },
+    { name: "prior NO_REPLY", assistantTexts: ["NO_REPLY"] },
+  ])(
+    "does not mistake the generated provider error for a required answer after $name",
+    ({ assistantTexts }) => {
+      const request = prepareRequest(createSettledProviderFailureAttempt({ assistantTexts }));
+      expect(request.payloadsWithToolMedia).toEqual([
+        expect.objectContaining({
+          isError: true,
+          text: expect.stringContaining("connection refused"),
+        }),
+      ]);
+      expect(resolveSettledTurnFinalizationRequest(request)).toContain(
+        "Do not repeat completed tool calls",
+      );
+    },
+  );
 
   it("finalizes a provider error reported through the completed assistant", () => {
     const attempt = createAssistantReportedProviderFailureAttempt();
@@ -129,7 +135,6 @@ describe("prepared provider errors after settled tools", () => {
       name: "authored assistant output",
       change: { assistantTexts: ["The note is already saved."] },
     },
-    { name: "intentional silence", change: { assistantTexts: ["NO_REPLY"] } },
     {
       name: "unfinished tool",
       change: { itemLifecycle: { startedCount: 1, completedCount: 0, activeCount: 1 } },
@@ -139,8 +144,12 @@ describe("prepared provider errors after settled tools", () => {
       change: { toolMetas: [{ toolName: "write", asyncStarted: true }] },
     },
     {
-      name: "delivered reply",
-      change: { didSendViaMessagingTool: true, messagingToolSentTexts: ["Note saved."] },
+      name: "delivered source reply",
+      change: {
+        sourceReplyDelivered: true,
+        didSendViaMessagingTool: true,
+        messagingToolSentTexts: ["Note saved."],
+      },
     },
     { name: "delivered media", change: { hasToolMediaBlockReply: true } },
     { name: "pending media", change: { toolMediaUrls: ["/tmp/note.png"] } },
@@ -152,6 +161,21 @@ describe("prepared provider errors after settled tools", () => {
       expect(resolveSettledTurnFinalizationRequest(request)).toBeNull();
     },
   );
+
+  it("does not let a send to another conversation settle the required source reply", () => {
+    const request = prepareRequest(
+      createSettledProviderFailureAttempt({
+        didSendViaMessagingTool: true,
+        messagingToolSentTexts: ["Sent elsewhere."],
+        messagingToolSentTargets: [
+          { tool: "message", provider: "telegram", to: "other-chat", text: "Sent elsewhere." },
+        ],
+      }),
+    );
+    expect(resolveSettledTurnFinalizationRequest(request)).toContain(
+      "Do not repeat completed tool calls",
+    );
+  });
 
   it.each(["provider refusal", "permanent WebSocket close"])(
     "preserves %s even with stale transient context",

@@ -9,6 +9,7 @@ import {
   createApplicationContextProvider,
   createApplicationGateway,
 } from "../../test-helpers/application-context.ts";
+import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { settleLitElement, settleLitElements } from "../../test-helpers/lit-settle.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import { ConfigPage, configSelectionFromSearch, type ConfigPageId } from "./config-page.ts";
@@ -191,6 +192,68 @@ function routeContext(): ApplicationContext {
 }
 
 describe("ConfigPage route selections", () => {
+  it.each([
+    { profile: "coding", writes: 1 },
+    { profile: undefined, writes: 1 },
+    { profile: "full", writes: 0 },
+  ])("Security Full preserves an explicit choice from $profile", async ({ profile, writes }) => {
+    const baseContext = routeContext();
+    const patchForm = vi.fn();
+    const removeFormValue = vi.fn();
+    const context: ApplicationContext = {
+      ...baseContext,
+      gateway: {
+        ...baseContext.gateway,
+        snapshot: {
+          ...baseContext.gateway.snapshot,
+          phase: "connected",
+          hello: gatewayHelloForMethods(["config.set"]),
+        },
+      },
+      runtimeConfig: {
+        ...baseContext.runtimeConfig,
+        canSet: true,
+        patchForm,
+        removeFormValue,
+        state: {
+          ...baseContext.runtimeConfig.state,
+          connected: true,
+          configForm: profile ? { tools: { profile } } : {},
+        },
+      },
+    };
+    const provider = createApplicationContextProvider(context);
+    document.body.append(provider);
+    const page = new ConfigPage();
+    page.pageId = "security";
+    provider.append(page);
+    await settleLitElement(page);
+
+    expect(patchForm).not.toHaveBeenCalled();
+    expect(removeFormValue).not.toHaveBeenCalled();
+    const full = expectDefined(
+      page.querySelector<HTMLElement>('wa-radio[value="full"]'),
+      "Full tool choice",
+    );
+    expect(page.querySelectorAll("wa-radio")).toHaveLength(4);
+    expect(page.querySelectorAll(".settings-segmented__btn--active")).toHaveLength(profile ? 1 : 0);
+    if (profile !== "full") {
+      const group = expectDefined(
+        full.closest<HTMLElement & { value: string }>("wa-radio-group"),
+        "tool choices",
+      );
+      group.value = "full";
+      group.dispatchEvent(new Event("change", { bubbles: true }));
+    } else {
+      full.click();
+    }
+    expect(patchForm).toHaveBeenCalledTimes(writes);
+    if (writes > 0) {
+      expect(patchForm).toHaveBeenCalledWith(["tools", "profile"], "full");
+    }
+    expect(removeFormValue).not.toHaveBeenCalled();
+  });
+
   it.each([
     ["communications", "", "config-section-messages", "config-section-tts"],
     ["communications", "?section=tts", "config-section-tts", "config-section-messages"],

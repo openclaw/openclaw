@@ -374,8 +374,9 @@ export function renderSettingsToggleRow(props: {
   `;
 }
 
+// Controls already show inherited values; reserve default references for overrides.
 export function renderSettingsDefaultDescription(value: string, overridden: boolean) {
-  return html`${t(overridden ? "configForm.defaultValue" : "configForm.usingDefault", { value })}`;
+  return overridden ? html`${t("configForm.defaultValue", { value })}` : undefined;
 }
 
 export function renderSettingsSegmented<T extends string>(

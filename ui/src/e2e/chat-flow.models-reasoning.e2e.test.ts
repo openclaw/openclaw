@@ -93,8 +93,8 @@ suite.define(() => {
         key: sessionKey,
         contextWindow: "200k",
       });
-      await gateway.setMethodResponse(
-        "sessions.list",
+      // Patch acknowledgements and history must see the same committed context window.
+      await gateway.setSessionsListResponse(
         chatSessionListResponse([{ ...session, contextWindow: "200k" }]),
       );
       await gateway.resolveDeferred("sessions.patch");
@@ -558,10 +558,9 @@ suite.define(() => {
 
       await selectModel("bedrock/claude-opus-4.5");
       const patchRequest = await gateway.waitForRequest("sessions.patch");
-      expect(requireRecord(patchRequest.params)).toMatchObject({
+      expect(requireRecord(patchRequest.params)).toEqual({
         key: "agent:main:session-a",
         model: "bedrock/claude-opus-4.5",
-        agentRuntime: null,
       });
       expect(await modelSelect.getAttribute("data-chat-select-value")).toBe(
         "bedrock/claude-opus-4.5",
@@ -680,10 +679,9 @@ suite.define(() => {
       await modelSelect.click();
       await main.locator('[data-chat-model-option="openai/gpt-5.5"]').click();
       const firstPatch = await gateway.waitForRequest("sessions.patch");
-      expect(requireRecord(firstPatch.params)).toMatchObject({
+      expect(requireRecord(firstPatch.params)).toEqual({
         key: "agent:ops:session-a",
         model: "openai/gpt-5.5",
-        agentRuntime: null,
       });
       expect(await modelSelect.textContent()).toContain("GPT-5.5");
 

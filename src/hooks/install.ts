@@ -78,6 +78,7 @@ const defaultLogger: HookInstallLogger = {};
 type HookInstallForwardParams = InstallSafetyOverrides & {
   hooksDir?: string;
   timeoutMs?: number;
+  workTimeoutMs?: number | null;
   logger?: HookInstallLogger;
   mode?: "install" | "update";
   dryRun?: boolean;
@@ -103,6 +104,7 @@ function buildHookInstallForwardParams(params: HookInstallForwardParams): HookIn
     trustedSourceLinkedOfficialInstall: params.trustedSourceLinkedOfficialInstall,
     hooksDir: params.hooksDir,
     timeoutMs: params.timeoutMs,
+    workTimeoutMs: params.workTimeoutMs,
     logger: params.logger,
     mode: params.mode,
     dryRun: params.dryRun,
@@ -407,6 +409,7 @@ async function installValidatedHookDirectory(
       mode: "install" | "update";
       dryRun: boolean;
       timeoutMs: number;
+      workTimeoutMs?: number | null;
     };
     metadata: Pick<
       Extract<InstallHooksResult, { ok: true }>,
@@ -415,7 +418,7 @@ async function installValidatedHookDirectory(
   },
 ): Promise<InstallHooksResult> {
   const runtime = await loadHookInstallRuntime();
-  const { logger, mode, dryRun, timeoutMs } = source.options;
+  const { logger, mode, dryRun, timeoutMs, workTimeoutMs } = source.options;
   const { hookPackId, version } = source.metadata;
   if (params.inspection === "package-kind") {
     const target = resolveHookInstallTargetPath(hookPackId, params.hooksDir);
@@ -458,6 +461,7 @@ async function installValidatedHookDirectory(
       targetDir,
       mode: effectiveMode,
       timeoutMs,
+      workTimeoutMs,
       logger,
       copyErrorPrefix: `failed to copy ${source.label}`,
       depsLogMessage: `Installing ${source.label} dependencies…`,
@@ -619,8 +623,10 @@ async function installHooksFromArchive(
   params: HookArchiveInstallParams,
 ): Promise<InstallHooksResult> {
   const runtime = await loadHookInstallRuntime();
-  const logger = params.logger ?? defaultLogger;
-  const timeoutMs = params.timeoutMs ?? 120_000;
+  const { logger, timeoutMs, workTimeoutMs } = runtime.resolveTimedInstallModeOptions(
+    params,
+    defaultLogger,
+  );
   const archivePathResult = await runtime.resolveArchiveSourcePath(params.archivePath);
   if (!archivePathResult.ok) {
     return archivePathResult;
@@ -636,6 +642,7 @@ async function installHooksFromArchive(
     archivePath,
     tempDirPrefix: "openclaw-hook-",
     timeoutMs,
+    workTimeoutMs,
     logger,
     onExtracted: async (rootDir) =>
       await installFromResolvedHookDir(
@@ -643,6 +650,7 @@ async function installHooksFromArchive(
         buildHookInstallForwardParams({
           ...params,
           timeoutMs,
+          workTimeoutMs,
           logger,
           installPolicyRequest,
         }),
@@ -656,6 +664,7 @@ export async function installHooksFromNpmSpec(
     spec: string;
     hooksDir?: string;
     timeoutMs?: number;
+    workTimeoutMs?: number | null;
     logger?: HookInstallLogger;
     mode?: "install" | "update";
     dryRun?: boolean;
@@ -668,7 +677,7 @@ export async function installHooksFromNpmSpec(
   } & InstallSafetyOverrides,
 ): Promise<InstallHooksResult> {
   const runtime = await loadHookInstallRuntime();
-  const { logger, timeoutMs, mode, dryRun } = runtime.resolveTimedInstallModeOptions(
+  const { logger, timeoutMs, workTimeoutMs, mode, dryRun } = runtime.resolveTimedInstallModeOptions(
     params,
     defaultLogger,
   );
@@ -679,6 +688,7 @@ export async function installHooksFromNpmSpec(
     tempDirPrefix: "openclaw-hook-pack-",
     spec,
     timeoutMs,
+    workTimeoutMs,
     expectedIntegrity: params.expectedIntegrity,
     onIntegrityDrift: params.onIntegrityDrift,
     warn: (message) => {
@@ -688,6 +698,7 @@ export async function installHooksFromNpmSpec(
     archiveInstallParams: buildHookInstallForwardParams({
       ...params,
       timeoutMs,
+      workTimeoutMs,
       logger,
       mode,
       dryRun,

@@ -15,7 +15,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { tryResolveAmbientHeartbeatAgentId } from "./heartbeat-agent-resolution.js";
 import {
-  resolveHeartbeatAgents,
+  resolveHeartbeatAgentIds,
   resolveHeartbeatConfig,
   resolveHeartbeatIntervalMs,
 } from "./heartbeat-config.js";
@@ -35,7 +35,7 @@ export type HeartbeatSummary = {
 const DEFAULT_HEARTBEAT_TARGET = "owner";
 
 export function enrolledHeartbeatAgentIds(cfg: OpenClawConfig): ReadonlySet<string> {
-  return new Set(resolveHeartbeatAgents(cfg).map((agent) => agent.agentId));
+  return new Set(resolveHeartbeatAgentIds(cfg));
 }
 
 export function isEnrolledHeartbeatAgent(

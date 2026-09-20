@@ -142,7 +142,7 @@ export async function readDoctorConfigPreflightSnapshot(params: {
     }
     const readOptions = {
       ...sharedOptions,
-      ...(deferred?.length ? { deferredPluginMigrations: deferred } : {}),
+      deferredPluginMigrations: deferred,
     };
     return withDeferredPluginDoctorMigrations(
       deferred?.map((entry) => entry.pluginId) ?? [],

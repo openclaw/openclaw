@@ -29,6 +29,29 @@ describe("renderTelegramProgressDraftPreview", () => {
     expect(preview.text).toContain(`<b>${line.icon} ${line.label}</b>`);
   });
 
+  it.each(["running", "failed"])(
+    "renders a prepared named %s row once in both transports",
+    (status) => {
+      const line = buildChannelProgressDraftLine({
+        event: "item",
+        itemId: "agents",
+        name: "agents_list",
+        title: "Agents",
+        status,
+      });
+      if (!line) {
+        throw new Error("Expected prepared tool line");
+      }
+      const html = renderTelegramProgressDraftPreview({ lines: [line] }, options);
+      const rich = renderTelegramProgressDraftPreview(
+        { lines: [line] },
+        { ...options, richMessages: true },
+      );
+      expect(html.text).toBe(`<b>🧭 Agents</b> <i>${status}</i>`);
+      expect(rich.text).toBe(`🧭 Agents ${status}`);
+    },
+  );
+
   it("renders native checkboxes and equivalent readable HTML from the same plan", () => {
     const snapshot: ChannelProgressDraftCompositorSnapshot = {
       lines: [],

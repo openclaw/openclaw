@@ -4,10 +4,10 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
-  closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
+import { closeStateDatabaseForTest } from "../test-utils/database-cleanup.js";
 import { createTrackedTempDirs } from "../test-utils/tracked-temp-dirs.js";
 import { persistDevicePairingStoreState } from "./device-pairing-store.js";
 import { resolveNodePairingGeneration, type PairedDevice } from "./device-pairing.js";
@@ -52,7 +52,7 @@ function databaseEnv(baseDir: string): NodeJS.ProcessEnv {
 
 afterEach(async () => {
   vi.useRealTimers();
-  closeOpenClawStateDatabaseForTest();
+  await closeStateDatabaseForTest();
   await tempDirs.cleanup();
 });
 

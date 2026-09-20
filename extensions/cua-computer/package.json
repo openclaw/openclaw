@@ -1,12 +1,12 @@
 {
   "name": "@openclaw/cua-computer",
-  "version": "2026.9.4",
+  "version": "2026.9.5",
   "description": "Experimental CUA Driver computer control for macOS, Windows, and Linux node hosts",
   "type": "module",
   "dependencies": {
     "@trycua/cua-driver": "0.24.0",
     "rastermill": "0.3.3",
-    "zod": "4.5.4"
+    "zod": "4.6.2"
   },
   "devDependencies": {
     "@openclaw/plugin-sdk": "workspace:*"

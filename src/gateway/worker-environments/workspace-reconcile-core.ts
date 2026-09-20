@@ -8,22 +8,21 @@ import {
   sameEntry,
   type WorkspaceNode,
 } from "./workspace-manifest-comparison.js";
-import { captureWorkspaceManifest, preflightWorkspaceApply } from "./workspace-manifest-worker.js";
+import {
+  captureWorkspaceManifest,
+  preflightWorkspaceApply,
+  readWorkspaceNodes,
+} from "./workspace-manifest-worker.js";
 import type {
   WorkerWorkspaceManifest,
   WorkerWorkspaceManifestEntry,
 } from "./workspace-manifest.js";
 import { reconciliationDirectories } from "./workspace-reconcile-derived-paths.js";
-import {
-  entryMatches,
-  localWorkspaceNode,
-  removeEmptyWorkspaceDirectory,
-} from "./workspace-reconcile-fs.js";
+import { removeEmptyWorkspaceDirectory } from "./workspace-reconcile-fs.js";
 export { preflightWorkspaceApply } from "./workspace-manifest-worker.js";
 export { changedPaths, manifestNodes } from "./workspace-manifest-comparison.js";
 export { localWorkspaceNode } from "./workspace-reconcile-fs.js";
 export {
-  MAX_RECONCILIATION_ENTRIES,
   MAX_RECONCILIATION_FILE_BYTES,
   MAX_RECONCILIATION_TOTAL_BYTES,
   parseWorkerWorkspaceReconciliationPlan,
@@ -52,12 +51,12 @@ export async function assertWorkspaceMatchesManifest(params: {
     : [...manifestNodes(params.manifest).values()].filter(
         (entry): entry is Exclude<WorkspaceNode, undefined> => entry !== undefined,
       );
+  const actual = await readWorkspaceNodes(
+    root,
+    expectedNodes.map((entry) => entry.path),
+  );
   for (const entry of expectedNodes) {
-    const matches =
-      entry.type === "file" || entry.type === "symlink"
-        ? await entryMatches(root, entry)
-        : sameEntry(await localWorkspaceNode(root, entry.path), entry);
-    if (!matches) {
+    if (!sameEntry(actual.get(entry.path), entry)) {
       throw new ConcurrentWorkspacePathError(
         `Gateway workspace changed after cloud dispatch: ${entry.path}`,
       );

@@ -9,12 +9,17 @@ import {
   errorShape,
   validateSessionsUsageParams,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { sessionCreatorProfileId } from "../../config/sessions/session-entry-provenance.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { loadSessionLogs, loadSessionUsageTimeSeries } from "../../infra/session-cost-usage.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
-import { createUsageAggregateAccumulator } from "../../shared/usage-aggregates.js";
+import {
+  createUsageAggregateAccumulator,
+  UNKNOWN_USAGE_CREATOR_KEY,
+} from "../../shared/usage-aggregates.js";
 import type {
   SessionUsageEntry,
+  SessionUsageCreator,
   SessionsUsageAggregates,
   SessionsUsageResult,
 } from "../../shared/usage-types.js";
@@ -23,6 +28,7 @@ import {
   sessionDeliveryOrigin,
 } from "../../utils/delivery-context.shared.js";
 import { operatorSessionCap } from "../operator-role-policy.js";
+import { projectSessionActor } from "../session-identity-projection.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import { createSessionListEntryFilter, isGatewayAdmin } from "../session-sharing.js";
 import { gatewayClientSessionCreator } from "./gateway-client-identity.js";
@@ -39,10 +45,12 @@ import {
 import { loadCostUsageSummaryCached, loadSessionsUsageResultCached } from "./usage-result-cache.js";
 import { loadUsageSessionSummaries } from "./usage-session-loading.js";
 import {
+  loadUsageSessionContext,
   resolveSessionUsageTarget,
   selectUsageSessions,
   UsageSessionInvalidRequestError,
   type UsageGroupingMode,
+  type UsageSessionSelection,
 } from "./usage-session-selection.js";
 import { assertValidParams } from "./validation.js";
 
@@ -106,6 +114,49 @@ function resolveUsageDateRangeOrRespond(
 }
 
 export type { SessionUsageEntry, SessionsUsageAggregates, SessionsUsageResult };
+
+function projectUsageCreator(
+  session: UsageSessionSelection,
+  profiles: Parameters<typeof projectSessionActor>[1],
+  config: OpenClawConfig,
+): SessionUsageCreator {
+  const entry = session.storeEntry ?? session.creatorEntry;
+  const actor = entry?.createdActor;
+  if (!actor) {
+    return { key: UNKNOWN_USAGE_CREATOR_KEY };
+  }
+  const projected = projectSessionActor(
+    actor,
+    profiles,
+    config,
+    Boolean(sessionCreatorProfileId(actor)),
+  );
+  if (!projected?.id && actor.type !== "system") {
+    return { key: UNKNOWN_USAGE_CREATOR_KEY };
+  }
+  const identity = projected?.identity;
+  const origin = sessionDeliveryOrigin(entry);
+  const channel = sessionDeliveryChannel(entry);
+  if (actor.type === "human" && actor.source !== "profile" && !channel) {
+    return { key: UNKNOWN_USAGE_CREATOR_KEY };
+  }
+  const key =
+    identity?.type === "profile"
+      ? JSON.stringify(["profile", identity.id])
+      : actor.type === "human"
+        ? JSON.stringify([
+            "human",
+            actor.source,
+            session.agentId,
+            channel ?? null,
+            origin?.accountId ?? null,
+            projected?.id,
+          ])
+        : actor.type === "agent"
+          ? JSON.stringify([identity?.type ?? "agent", identity?.id ?? projected?.id])
+          : JSON.stringify(["system", projected?.id ?? null]);
+  return { key, ...(projected ? { actor: projected } : {}) };
+}
 
 export const usageHandlers: GatewayRequestHandlers = {
   "usage.status": async ({ respond, context, client }) => {
@@ -197,6 +248,7 @@ export const usageHandlers: GatewayRequestHandlers = {
     const dayBucket = resolveDayBucket(dateInterpretation);
     const limit = typeof p.limit === "number" && Number.isFinite(p.limit) ? p.limit : 50;
     const includeContextWeight = p.includeContextWeight ?? false;
+    const creatorKey = normalizeOptionalString(p.creatorKey);
     const specificKey = normalizeOptionalString(p.key) ?? null;
     const requestedAgentId = normalizeOptionalString(p.agentId);
     const requestedAllAgents = p.agentScope === "all";
@@ -247,10 +299,11 @@ export const usageHandlers: GatewayRequestHandlers = {
         groupingMode,
         specificKey,
         includeContextWeight,
+        creatorKey,
         ...(visibilityIdentity ? { visibilityIdentity } : {}),
         load: async () => {
           const now = Date.now();
-          const mergedEntries = await selectUsageSessions({
+          const visibleEntries = await selectUsageSessions({
             config,
             agentId: effectiveAgentId,
             specificKey,
@@ -259,6 +312,14 @@ export const usageHandlers: GatewayRequestHandlers = {
             endMs,
             visibilityFilter,
           });
+          const profiles: Parameters<typeof projectSessionActor>[1] = new Map();
+          const creatorOptions = new Map<string, SessionUsageCreator>();
+          const matchedEntries = visibleEntries.flatMap((entry) => {
+            const creator = projectUsageCreator(entry, profiles, config);
+            creatorOptions.set(creator.key, creator);
+            return !creatorKey || creator.key === creatorKey ? [{ entry, creator }] : [];
+          });
+          const mergedEntries = matchedEntries.map(({ entry }) => entry);
 
           // Load usage for each session
           const sessions: SessionUsageEntry[] = [];
@@ -271,15 +332,22 @@ export const usageHandlers: GatewayRequestHandlers = {
             includeUntimestamped,
             dayBucket,
           });
+          loadUsageSessionContext(mergedEntries.slice(0, limit), visibilityFilter);
 
-          for (const [entryIndex, merged] of mergedEntries.entries()) {
+          for (const [entryIndex, { entry: merged, creator }] of matchedEntries.entries()) {
             const agentId = merged.agentId;
             const usage = usageByEntryIndex[entryIndex] ?? null;
             const channel = sessionDeliveryChannel(merged.storeEntry);
             const origin = sessionDeliveryOrigin(merged.storeEntry);
             const chatType = merged.storeEntry?.chatType ?? origin?.chatType;
             // Aggregate every matched row before limiting the visible list.
-            accumulator.add({ usage, agentId, channel });
+            accumulator.add({
+              usage,
+              agentId,
+              channel,
+              creatorKey: creator.key,
+              createdActor: creator.actor,
+            });
 
             if (entryIndex < limit) {
               sessions.push({
@@ -293,6 +361,8 @@ export const usageHandlers: GatewayRequestHandlers = {
                 historicalInstanceCount: merged.includedSessionIds?.length,
                 updatedAt: merged.updatedAt,
                 agentId,
+                creatorKey: creator.key,
+                createdActor: creator.actor,
                 channel,
                 chatType,
                 origin,
@@ -301,10 +371,8 @@ export const usageHandlers: GatewayRequestHandlers = {
                 modelProvider: merged.storeEntry?.modelProvider,
                 model: merged.storeEntry?.model,
                 usage,
-                hasContextWeight: Boolean(merged.storeEntry?.systemPromptReport),
-                contextWeight: includeContextWeight
-                  ? (merged.storeEntry?.systemPromptReport ?? null)
-                  : undefined,
+                hasContextWeight: Boolean(merged.contextWeight),
+                contextWeight: includeContextWeight ? (merged.contextWeight ?? null) : undefined,
               });
             }
           }
@@ -316,6 +384,7 @@ export const usageHandlers: GatewayRequestHandlers = {
             sessions,
             totals: accumulator.totals,
             aggregates: accumulator.finish(),
+            creatorOptions: Array.from(creatorOptions.values()),
             cacheStatus,
           };
         },

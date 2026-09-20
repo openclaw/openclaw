@@ -909,7 +909,7 @@ describe("runCodexAppServerAttempt native lifecycle", () => {
       method: "turn/completed",
       params: {
         threadId: "thread-existing",
-        turn: { id: "turn-1", status: "interrupted" },
+        turn: { id: "turn-1", status: "interrupted", items: [] },
       },
     });
     const firstResult = await firstRun;
@@ -996,7 +996,11 @@ describe("runCodexAppServerAttempt native lifecycle", () => {
     "bounds pre-bind terminal projection after client closure with %s",
     async (termination) => {
       const projection = createDeferred<void>();
-      const onReasoningStream = vi.fn(() => projection.promise);
+      const projectionStarted = createDeferred<void>();
+      const onReasoningStream = vi.fn(() => {
+        projectionStarted.resolve();
+        return projection.promise;
+      });
       const controller = new AbortController();
       const harness = createStartedThreadHarness(async (method) => {
         if (method === "turn/start") {
@@ -1024,7 +1028,13 @@ describe("runCodexAppServerAttempt native lifecycle", () => {
       const run = runCodexAppServerAttempt(params);
       void run.then(settled, settled);
       try {
-        await vi.waitFor(() => expect(onReasoningStream).toHaveBeenCalledOnce(), fastWait);
+        await Promise.race([
+          projectionStarted.promise,
+          run.then(() => {
+            throw new Error("Codex attempt ended before reasoning projection");
+          }),
+        ]);
+        expect(onReasoningStream).toHaveBeenCalledOnce();
         harness.close();
         if (termination === "caller cancellation") {
           controller.abort("caller stopped while draining");
@@ -1381,37 +1391,6 @@ describe("runCodexAppServerAttempt native lifecycle", () => {
       stopReason: "timeout",
       timeoutPhase: "provider",
       providerStarted: true,
-    });
-  });
-
-  it("releases completion when the app-server client closes during an active turn", async () => {
-    const harness = createStartedThreadHarness();
-    const run = runCodexAppServerAttempt(createTestParams());
-
-    await harness.waitForMethod("turn/start");
-    await new Promise<void>((resolve) => {
-      setImmediate(resolve);
-    });
-    harness.close(
-      new Error('codex app-server exited: code=137 signal=SIGKILL stderr="worker exhausted"'),
-    );
-
-    const result = await run;
-    expect(readAttemptTerminal(result).promptError).toBe(
-      "codex app-server client closed before turn completed",
-    );
-    expect(readAttemptTerminal(result).aborted).toBe(false);
-    expect(readAttemptTerminal(result).timedOut).toBe(false);
-    expect(result.codexAppServerFailure).toEqual({
-      kind: "client_closed_before_turn_completed",
-      transport: "stdio",
-      threadId: "thread-1",
-      turnId: "turn-1",
-      replaySafe: true,
-      diagnostics: {
-        transportError:
-          'codex app-server exited: code=137 signal=SIGKILL stderr="worker exhausted"',
-      },
     });
   });
 

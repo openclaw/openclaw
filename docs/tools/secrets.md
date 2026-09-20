@@ -164,9 +164,11 @@ replacements, deletions, and host edits do not refresh that run's snapshot. Star
 a new run to observe them. A successful credential request does not promise that
 an already-running exec tool can use the new value.
 
-When the owning run closes, its proxy authorization and existing connections are
-revoked, including background subprocess tunnels. Bytes already handed to the
-upstream transport cannot be recalled.
+Each managed command receives its own proxy grant from that snapshot. Background
+commands retain access after the originating turn ends. Process exit, cancellation,
+timeout, or Gateway shutdown revokes the grant and closes its connections; other
+commands keep their own grants. Bytes already handed to the upstream transport
+cannot be recalled.
 
 ## Related
 

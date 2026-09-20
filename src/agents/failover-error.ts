@@ -1,9 +1,9 @@
-/**
- * Provider/model failover error classification.
- * Converts nested provider, transport, timeout, auth, and local coordination
- * failures into structured failover reasons and remediation metadata.
- */
 import { parseStrictNonNegativeInteger } from "@openclaw/normalization-core/number-coercion";
+import {
+  asOptionalObjectRecord,
+  readStringField,
+} from "@openclaw/normalization-core/record-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { formatCliCommand } from "../cli/command-format.js";
 import { isAgentRunStaleLifecycleError } from "../infra/agent-lifecycle-error.js";
 import { copyErrorDiagnostic } from "../infra/error-diagnostics.js";
@@ -90,11 +90,7 @@ function resolveNestedErrors(candidate: Record<string, unknown>): unknown[] {
   return nested;
 }
 
-/**
- * True when the provider refused the request for its own size rather than for context pressure or
- * bucket state.  An error that never became a `FailoverError` still carries the provider's text in
- * its message, so it is read directly.
- */
+/** Distinguishes the provider's request ceiling from context pressure and bucket state. */
 export function hasProviderRequestSizeCeiling(err: unknown): boolean {
   return collectErrorGraphCandidates(err, resolveNestedErrors).some((candidate) =>
     isFailoverError(candidate)
@@ -172,43 +168,27 @@ export function findCliTimeoutError(
 
 /** Map a failover reason to the closest HTTP-like status code. */
 export function resolveFailoverStatus(reason: FailoverReason): number | undefined {
-  switch (reason) {
-    case "billing":
-      return 402;
-    case "server_error":
-      return 500;
-    case "rate_limit":
-      return 429;
-    case "overloaded":
-      return 503;
-    case "auth":
-      return 401;
-    case "auth_permanent":
-      return 403;
-    case "timeout":
-      return 408;
-    case "tls_certificate":
-      return 502;
-    case "context_overflow":
-      return 413;
-    case "format":
-      return 400;
-    case "model_not_found":
-      return 404;
-    case "session_expired":
-      return 410; // Gone - session no longer exists
-    default:
-      return undefined;
-  }
+  return FAILOVER_STATUS.get(reason);
 }
 
+const FAILOVER_STATUS = new Map<FailoverReason, number>([
+  ["billing", 402],
+  ["server_error", 500],
+  ["rate_limit", 429],
+  ["overloaded", 503],
+  ["auth", 401],
+  ["auth_permanent", 403],
+  ["timeout", 408],
+  ["tls_certificate", 502],
+  ["context_overflow", 413],
+  ["format", 400],
+  ["model_not_found", 404],
+  ["session_expired", 410],
+]);
+
 function readDirectStatusCode(err: unknown): number | undefined {
-  if (!err || typeof err !== "object") {
-    return undefined;
-  }
-  const candidate =
-    (err as { status?: unknown; statusCode?: unknown }).status ??
-    (err as { statusCode?: unknown }).statusCode;
+  const record = asOptionalObjectRecord(err);
+  const candidate = record?.status ?? record?.statusCode;
   if (typeof candidate === "number") {
     return candidate;
   }
@@ -218,77 +198,44 @@ function readDirectStatusCode(err: unknown): number | undefined {
   return undefined;
 }
 
-function getStatusCode(err: unknown): number | undefined {
-  return findErrorProperty(err, readDirectStatusCode);
-}
-
-function isStableProviderErrorType(value: string): boolean {
-  if (
-    /^(?:api|authentication|invalid_request|not_found|overloaded|permission|rate_limit|server)_error$/i.test(
+function readStableProviderErrorType(raw: string): string | undefined {
+  const value = raw.trim();
+  return /^[A-Z][A-Z0-9_:-]*$/.test(value) &&
+    !/^(?:api|authentication|invalid_request|not_found|overloaded|permission|rate_limit|server)_error$/i.test(
       value,
     )
-  ) {
-    return false;
-  }
-  return /^[A-Z][A-Z0-9_:-]*$/.test(value);
+    ? value
+    : undefined;
 }
 
 function readDirectErrorType(err: unknown): string | undefined {
-  if (!err || typeof err !== "object") {
+  const record = asOptionalObjectRecord(err);
+  if (!record) {
     return undefined;
   }
-  const directType = (err as { errorType?: unknown }).errorType;
+  const directType = record.errorType;
   if (typeof directType === "string") {
-    const trimmed = directType.trim();
-    return trimmed && isStableProviderErrorType(trimmed) ? trimmed : undefined;
+    return readStableProviderErrorType(directType);
   }
-  const detailType = (err as { detail?: { type?: unknown } }).detail?.type;
+  const detailType = (record.detail as { type?: unknown } | undefined)?.type;
   if (typeof detailType === "string") {
-    const trimmed = detailType.trim();
-    return trimmed && isStableProviderErrorType(trimmed) ? trimmed : undefined;
+    return readStableProviderErrorType(detailType);
   }
-  const type = (err as { type?: unknown }).type;
-  if (typeof type === "string") {
-    const trimmed = type.trim();
-    if (!trimmed || /^(?:error|exception)$/i.test(trimmed)) {
-      return undefined;
-    }
-    return isStableProviderErrorType(trimmed) ? trimmed : undefined;
-  }
-  return undefined;
-}
-
-function getErrorType(err: unknown): string | undefined {
-  return findErrorProperty(err, readDirectErrorType);
+  const type = normalizeOptionalString(record.type);
+  return type && !/^(?:error|exception)$/i.test(type)
+    ? readStableProviderErrorType(type)
+    : undefined;
 }
 
 function readDirectProvider(err: unknown): string | undefined {
-  if (!err || typeof err !== "object") {
-    return undefined;
-  }
-  const provider = (err as { provider?: unknown }).provider;
-  if (typeof provider !== "string") {
-    return undefined;
-  }
-  const trimmed = provider.trim();
-  return trimmed || undefined;
-}
-
-function getProvider(err: unknown): string | undefined {
-  return findErrorProperty(err, readDirectProvider);
+  return normalizeOptionalString(asOptionalObjectRecord(err)?.provider);
 }
 
 function readDirectErrorDetails(err: unknown): string[] | undefined {
-  if (!err || typeof err !== "object") {
+  const candidate = asOptionalObjectRecord(err);
+  if (!candidate) {
     return undefined;
   }
-  const candidate = err as {
-    body?: unknown;
-    detail?: unknown;
-    error?: unknown;
-    errorBody?: unknown;
-    param?: unknown;
-  };
   return extractFailoverSignalDetails(
     candidate.param,
     candidate.errorBody,
@@ -314,21 +261,14 @@ function hasSessionTranscriptWriterClaimRebound(
   err: unknown,
   seen: Set<object> = new Set(),
 ): boolean {
-  if (
-    err &&
-    typeof err === "object" &&
-    readErrorName(err) === "SessionTranscriptWriterClaimReboundError"
-  ) {
+  if (readErrorName(err) === "SessionTranscriptWriterClaimReboundError") {
     return true;
   }
-  if (!err || typeof err !== "object") {
+  const candidate = asOptionalObjectRecord(err);
+  if (!candidate || seen.has(candidate)) {
     return false;
   }
-  if (seen.has(err)) {
-    return false;
-  }
-  seen.add(err);
-  const candidate = err as { error?: unknown; cause?: unknown; reason?: unknown };
+  seen.add(candidate);
   return (
     hasSessionTranscriptWriterClaimRebound(candidate.error, seen) ||
     hasSessionTranscriptWriterClaimRebound(candidate.cause, seen) ||
@@ -336,43 +276,23 @@ function hasSessionTranscriptWriterClaimRebound(
   );
 }
 
-function readField(value: unknown, key: string): unknown {
-  if (!value || typeof value !== "object") {
-    return undefined;
-  }
-  return (value as Record<string, unknown>)[key];
-}
-
-function readErrorStringField(value: unknown, key: string): string | undefined {
-  const field = readField(value, key);
-  return typeof field === "string" ? field : undefined;
-}
-
-function isMissingToolResultMessage(value: string): boolean {
-  return MISSING_TOOL_RESULT_TEXT_RE.test(value);
-}
-
-function isMissingToolResultMarker(value: string): boolean {
-  return value.trim() === MISSING_TOOL_RESULT_REASON;
-}
-
 function readMissingToolResultMarker(err: unknown): true | undefined {
   const message = readDirectErrorMessage(err);
-  if (message && isMissingToolResultMessage(message)) {
+  if (message && MISSING_TOOL_RESULT_TEXT_RE.test(message)) {
     return true;
   }
+  const record = asOptionalObjectRecord(err);
   for (const key of ["code", "reason", "status"] as const) {
-    const value = readErrorStringField(err, key);
-    if (value && isMissingToolResultMarker(value)) {
+    if (readStringField(record, key)?.trim() === MISSING_TOOL_RESULT_REASON) {
       return true;
     }
   }
-  const output = readErrorStringField(err, "output");
-  if (output && isMissingToolResultMessage(output)) {
+  const output = readStringField(record, "output");
+  if (output && MISSING_TOOL_RESULT_TEXT_RE.test(output)) {
     return true;
   }
-  const resultReason = readErrorStringField(readField(err, "result"), "reason");
-  const detailReason = readErrorStringField(readField(err, "detail"), "reason");
+  const resultReason = readStringField(asOptionalObjectRecord(record?.result), "reason");
+  const detailReason = readStringField(asOptionalObjectRecord(record?.detail), "reason");
   if (resultReason === MISSING_TOOL_RESULT_REASON || detailReason === MISSING_TOOL_RESULT_REASON) {
     return true;
   }
@@ -405,12 +325,7 @@ function hasDirectProviderFailureIdentity(err: unknown): boolean {
   return Boolean(signal.status || signal.code || signal.errorType || signal.provider);
 }
 
-/**
- * True when the error is a local runtime coordination/tool-execution error
- * rather than a provider/model failure. The model fallback chain must abort on
- * these instead of consuming candidate slots — retrying any model would hit the
- * same local condition. See #83510 and #95474.
- */
+/** Local coordination failures stop fallback because changing models cannot repair them. */
 export function isNonProviderRuntimeCoordinationError(err: unknown): boolean {
   return resolveModelFallbackError(err).kind === "coordination";
 }
@@ -418,21 +333,18 @@ export function isNonProviderRuntimeCoordinationError(err: unknown): boolean {
 function normalizeErrorSignal(err: unknown, providerHint?: string): FailoverSignal {
   const message = getErrorMessage(err);
   return {
-    status: getStatusCode(err),
+    status: findErrorProperty(err, readDirectStatusCode),
     code: findErrorProperty(err, readDirectErrorCode),
-    errorType: getErrorType(err),
+    errorType: findErrorProperty(err, readDirectErrorType),
     message: message || undefined,
-    provider: getProvider(err) ?? providerHint,
+    provider: findErrorProperty(err, readDirectProvider) ?? providerHint,
     details: readDirectErrorDetails(err),
   };
 }
 
 function getNestedErrorCandidates(err: unknown): unknown[] {
-  if (!err || typeof err !== "object") {
-    return [];
-  }
-  const candidate = err as { error?: unknown; cause?: unknown };
-  return [candidate.error, candidate.cause].filter(
+  const candidate = asOptionalObjectRecord(err);
+  return [candidate?.error, candidate?.cause].filter(
     (value): value is unknown => value !== undefined && value !== err,
   );
 }
@@ -570,16 +482,7 @@ export function resolveFailoverReasonFromError(
   );
 }
 
-/**
- * Build an actionable remediation hint for a failover error when the failure
- * reason is `auth` / `auth_permanent` and we have enough provider attribution
- * to suggest a re-authentication command. Returns `undefined` for any other
- * failure shape so callers can opportunistically append the hint without
- * branching on every reason themselves.
- *
- * Keep the string short and copy-pasteable — operators see it in fallback
- * summary errors and TUI status lines.
- */
+/** Build a copy-pasteable reauthentication hint for attributed auth failures. */
 export function buildFailoverRemediationHint(err: unknown): string | undefined {
   if (!isFailoverError(err)) {
     return undefined;

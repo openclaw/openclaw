@@ -192,6 +192,7 @@ vi.mock("./doctor/cron/legacy-repair.js", () => ({
 }));
 
 vi.mock("../infra/startup-migration-checkpoint.js", () => ({
+  STARTUP_MIGRATION_HEARTBEAT_INTERVAL_MS: 60_000,
   acquireStartupMigrationLeaseWithWait,
   readMigrationCheckpointStatus,
   recordSuccessfulStateMigrations,

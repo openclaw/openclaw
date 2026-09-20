@@ -22,7 +22,7 @@ import { sessionSharingTestContext, soloClient } from "./sessions-sharing.test-s
 import type { GatewayRequestHandler, RespondFn } from "./types.js";
 
 const chatSend = vi.hoisted(() => vi.fn<GatewayRequestHandler>());
-vi.mock("./chat.js", () => ({ chatHandlers: { "chat.send": chatSend } }));
+vi.mock("./chat-send-external-entry.js", () => ({ handleDirectExternalChatSend: chatSend }));
 
 const fixture = useSubagentControlFixture();
 afterEach(() => {

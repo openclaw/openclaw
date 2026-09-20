@@ -5,7 +5,7 @@ import fs from "node:fs";
 import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import chokidar from "chokidar";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, assert, beforeEach, describe, expect, it, vi } from "vitest";
 import { createInfoWarnErrorLogger } from "../../test/helpers/mock-logger.js";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
@@ -2191,6 +2191,8 @@ describe("gateway hot reload model state", () => {
       const markerPath = path.join(fixtureDir, "watcher-runs.txt");
       const releasePath = path.join(fixtureDir, "release-watcher");
       const config = {
+        // This fixture runs cron without a heartbeat wake handler.
+        agents: { defaults: { heartbeat: { every: "0m" } } },
         session: { mainKey: "main", store: path.join(fixtureDir, "sessions.json") },
         cron: { enabled: true, store: path.join(fixtureDir, "jobs.json") },
       } as OpenClawConfig;
@@ -2209,9 +2211,7 @@ describe("gateway hot reload model state", () => {
       const supervisor = getProcessSupervisor();
       const spawn = vi.spyOn(supervisor, "spawn");
       const previousCronFactory = hoisted.buildGatewayCronService.getMockImplementation();
-      if (!previousCronFactory) {
-        throw new Error("expected the default cron test factory");
-      }
+      assert(previousCronFactory, "expected the default cron test factory");
       let state: ReturnType<ReloadHandlerParams["getState"]> | undefined;
 
       vi.stubEnv("OPENCLAW_STATE_DIR", fixtureDir);

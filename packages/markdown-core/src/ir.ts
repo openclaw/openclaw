@@ -1,4 +1,3 @@
-import { avoidTrailingHighSurrogateBreak } from "@openclaw/normalization-core/utf16-slice";
 import MarkdownIt, {
   type MarkdownIt as MarkdownItParser,
   type StateCore,
@@ -16,11 +15,19 @@ import { matchMarkdownHtmlTag, tokenizeHtmlTags } from "./html-tags.js";
 import { appendAssistantTranscriptRoleText, appendImageAlternative } from "./ir-annotations.js";
 import {
   appendHtmlTags,
+  attachBlockMetadata,
+  attachListItemMetadata,
   copyHtmlTags,
   defineMetadata,
   RAW_HTML_TOKEN_TYPE,
+  sliceListMarker,
   type MarkdownHtmlMetadata,
+  type MarkdownListItemMarker,
+  type MarkdownListItemWithMetadata,
+  type MarkdownBlockSpan,
+  type MarkdownIRWithMetadata,
 } from "./ir-metadata.js";
+import { sliceMarkdownIR, sliceMarkdownIRRanges } from "./ir-slice.js";
 import { computeNextMappedBlockStarts, sourceBlockNewlineCount } from "./ir-source-spacing.js";
 import {
   clampAnnotationSpans,
@@ -31,9 +38,6 @@ import {
   createStyleSpan,
   mergeAnnotationSpans,
   mergeStyleSpans,
-  sliceAnnotationSpans,
-  sliceLinkSpans,
-  sliceStyleSpans,
   type MarkdownAnnotationSpan,
   type MarkdownLinkSpan,
   type MarkdownStyle,
@@ -42,6 +46,7 @@ import {
 import { renderMarkdownCodeTable, renderMarkdownTableBullets } from "./table-layout.js";
 import type { MarkdownTableMode } from "./types.js";
 
+export { sliceMarkdownIR } from "./ir-slice.js";
 export type { MarkdownLinkSpan, MarkdownStyle, MarkdownStyleSpan } from "./ir-spans.js";
 
 type ListState = {
@@ -103,62 +108,12 @@ type MarkdownToken = {
   taskListMarker?: boolean;
 };
 
-type MarkdownListItemMarker = {
-  kind: "bullet" | "ordered";
-  listMarker?: { start: number; end: number };
-  task?: true;
-  taskMarker?: { start: number; end: number };
-  /** Parser-owned identity and rendered span for block-native list emitters. */
-  listId?: number;
-  parentListId?: number;
-  depth?: number;
-  start?: number;
-  end?: number;
-};
-
-type MarkdownListItemMetadata = {
-  /** Rendered content owned by this item after its native marker. */
-  contentStart?: number;
-  contentEnd?: number;
-  /** True when the source marker line itself contains no item content. */
-  markerOnly?: true;
-  /** Original Markdown source ownership, attached without changing legacy serialization. */
-  sourceMarker?: { start: number; end: number };
-  sourceContent?: { start: number; end: number };
-  sourceIndent?: number;
-  sourceStartLine?: number;
-  sourceEndLine?: number;
-};
-
-type MarkdownListItemWithMetadata = MarkdownListItemMarker & MarkdownListItemMetadata;
-
-type MarkdownBlockSpan = {
-  kind: "blockquote" | "code_block" | "heading" | "thematic_break";
-  start: number;
-  end: number;
-  /** Parser-owned container nesting depth, starting at one. */
-  depth: number;
-  blockquoteDepth?: number;
-  codeOrigin?: "fenced" | "indented";
-  codeClosed?: boolean;
-  headingLevel?: number;
-  headingOrigin?: "atx" | "setext";
-  language?: string;
-  sourceStartLine?: number;
-  sourceEndLine?: number;
-};
-
 export type MarkdownIR = MarkdownHtmlMetadata & {
   text: string;
   styles: MarkdownStyleSpan[];
   links: MarkdownLinkSpan[];
   annotations?: MarkdownAnnotationSpan[];
   listItems?: MarkdownListItemMarker[];
-};
-
-type MarkdownIRWithMetadata = MarkdownIR & {
-  /** Parser-owned block metadata, attached without changing legacy serialization. */
-  blocks?: MarkdownBlockSpan[];
 };
 
 type MarkdownTableAlignment = "left" | "center" | "right";
@@ -252,33 +207,6 @@ type RenderState = RenderTarget & {
   source: string;
   sourceIndex: ReturnType<typeof indexSourceLines> | undefined;
 };
-
-function attachListItemMetadata(
-  item: MarkdownListItemMarker,
-  metadata: MarkdownListItemMetadata,
-): MarkdownListItemWithMetadata {
-  const itemWithMetadata = item as MarkdownListItemWithMetadata;
-  for (const key of [
-    "contentStart",
-    "contentEnd",
-    "markerOnly",
-    "sourceMarker",
-    "sourceContent",
-    "sourceIndent",
-    "sourceStartLine",
-    "sourceEndLine",
-  ] as const) {
-    defineMetadata(itemWithMetadata, key, metadata[key]);
-  }
-  return itemWithMetadata;
-}
-
-function attachBlockMetadata(ir: MarkdownIR, blocks: MarkdownBlockSpan[]): MarkdownIR {
-  if (blocks.length > 0) {
-    defineMetadata(ir as MarkdownIRWithMetadata, "blocks", blocks);
-  }
-  return ir;
-}
 
 export type MarkdownParseOptions = {
   /** Mark assistant-authored transcript-role headers after Markdown parsing. */
@@ -1402,110 +1330,6 @@ export function appendMarkdownIR(target: MarkdownIR, source: MarkdownIR): void {
   }
 }
 
-function sliceListMarker(
-  marker: { start: number; end: number },
-  start: number,
-  end: number,
-): { start: number; end: number } | undefined {
-  const sliceStart = Math.max(marker.start, start);
-  const sliceEnd = Math.min(marker.end, end);
-  return sliceEnd > sliceStart ? { start: sliceStart - start, end: sliceEnd - start } : undefined;
-}
-
-export function sliceMarkdownIR(ir: MarkdownIR, start: number, end: number): MarkdownIR {
-  const textLength = ir.text.length;
-  const integerStart = Math.trunc(start) || 0;
-  const integerEnd = Math.trunc(end) || 0;
-  let normalizedStart =
-    integerStart < 0 ? Math.max(textLength + integerStart, 0) : Math.min(integerStart, textLength);
-  let normalizedEnd =
-    integerEnd < 0 ? Math.max(textLength + integerEnd, 0) : Math.min(integerEnd, textLength);
-
-  if (normalizedStart < normalizedEnd) {
-    // Normalize once so text, formatting, links, and structural metadata share
-    // the same complete-code-point boundaries.
-    const safeStart = avoidTrailingHighSurrogateBreak(ir.text, 0, normalizedStart);
-    if (safeStart !== normalizedStart) {
-      normalizedStart = safeStart < normalizedStart ? safeStart : normalizedStart - 1;
-    }
-
-    const safeEnd = avoidTrailingHighSurrogateBreak(ir.text, 0, normalizedEnd);
-    if (safeEnd !== normalizedEnd) {
-      normalizedEnd = safeEnd > normalizedEnd ? safeEnd : normalizedEnd + 1;
-    }
-  }
-
-  const metadataIR = ir as MarkdownIRWithMetadata;
-  const annotations = sliceAnnotationSpans(ir.annotations ?? [], normalizedStart, normalizedEnd);
-  const listItems = ((ir.listItems ?? []) as MarkdownListItemWithMetadata[]).flatMap((item) => {
-    const listMarker = item.listMarker
-      ? sliceListMarker(item.listMarker, normalizedStart, normalizedEnd)
-      : undefined;
-    const taskMarker = item.taskMarker
-      ? sliceListMarker(item.taskMarker, normalizedStart, normalizedEnd)
-      : undefined;
-    const content =
-      item.contentStart !== undefined && item.contentEnd !== undefined
-        ? sliceListMarker(
-            { start: item.contentStart, end: item.contentEnd },
-            normalizedStart,
-            normalizedEnd,
-          )
-        : undefined;
-    return listMarker || taskMarker
-      ? [
-          attachListItemMetadata(
-            {
-              kind: item.kind,
-              ...(listMarker ? { listMarker } : {}),
-              ...(item.task ? { task: true as const } : {}),
-              ...(taskMarker ? { taskMarker } : {}),
-              ...(item.listId !== undefined ? { listId: item.listId } : {}),
-              ...(item.parentListId !== undefined ? { parentListId: item.parentListId } : {}),
-              ...(item.depth !== undefined ? { depth: item.depth } : {}),
-              ...(item.start !== undefined
-                ? { start: Math.max(item.start, normalizedStart) - normalizedStart }
-                : {}),
-              ...(item.end !== undefined
-                ? { end: Math.min(item.end, normalizedEnd) - normalizedStart }
-                : {}),
-            },
-            {
-              ...(content ? { contentStart: content.start, contentEnd: content.end } : {}),
-              ...(item.markerOnly ? { markerOnly: true as const } : {}),
-              sourceMarker: item.sourceMarker,
-              sourceContent: item.sourceContent,
-              sourceIndent: item.sourceIndent,
-              sourceStartLine: item.sourceStartLine,
-              sourceEndLine: item.sourceEndLine,
-            },
-          ),
-        ]
-      : [];
-  });
-  const blocks = (metadataIR.blocks ?? []).flatMap((block) => {
-    if (block.start === block.end) {
-      const containsPoint =
-        normalizedStart === normalizedEnd
-          ? block.start === normalizedStart
-          : block.start >= normalizedStart && block.start < normalizedEnd;
-      return containsPoint
-        ? [{ ...block, start: block.start - normalizedStart, end: block.end - normalizedStart }]
-        : [];
-    }
-    const sliced = sliceListMarker(block, normalizedStart, normalizedEnd);
-    return sliced ? [{ ...block, ...sliced }] : [];
-  });
-  const sliced: MarkdownIR = {
-    text: ir.text.slice(normalizedStart, normalizedEnd),
-    styles: sliceStyleSpans(ir.styles, normalizedStart, normalizedEnd),
-    links: sliceLinkSpans(ir.links, normalizedStart, normalizedEnd),
-    ...(annotations.length > 0 ? { annotations } : {}),
-    ...(listItems.length > 0 ? { listItems } : {}),
-  };
-  return copyHtmlTags(ir, attachBlockMetadata(sliced, blocks), normalizedStart, normalizedEnd);
-}
-
 export function markdownToIR(markdown: string, options: MarkdownParseOptions = {}): MarkdownIR {
   return markdownToIRWithMeta(markdown, options).ir;
 }
@@ -1674,7 +1498,8 @@ export function chunkMarkdownIR(ir: MarkdownIR, limit: number): MarkdownIR[] {
   }
 
   const chunks = chunkText(ir.text, limit);
-  const results: MarkdownIR[] = [];
+  const ranges: Array<{ start: number; end: number }> = [];
+  const texts: string[] = [];
   let cursor = 0;
 
   chunks.forEach((chunk, index) => {
@@ -1688,12 +1513,14 @@ export function chunkMarkdownIR(ir: MarkdownIR, limit: number): MarkdownIR[] {
     }
     const start = cursor;
     const end = Math.min(ir.text.length, start + chunk.length);
-    const sliced = sliceMarkdownIR(ir, start, end);
-    sliced.text = chunk;
-    results.push(sliced);
+    ranges.push({ start, end });
+    texts.push(chunk);
     cursor = end;
   });
 
-  return results;
+  return sliceMarkdownIRRanges(ir, ranges).map((slice, index) => {
+    slice.text = texts[index] ?? slice.text;
+    return slice;
+  });
 }
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

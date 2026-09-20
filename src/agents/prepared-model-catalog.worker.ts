@@ -2,6 +2,7 @@
 import { parentPort, workerData } from "node:worker_threads";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { withClawInstallSchemaVersionFacts } from "../claws/provenance-runtime-read.js";
 import {
   copyConfigResolutionFacts,
   restoreConfigResolutionFacts,
@@ -20,11 +21,17 @@ import { restorePreparedSyntheticAuthFacts } from "../plugins/provider-synthetic
 import { manifestPluginResolvesRuntimeModelCatalogAugment } from "../plugins/providers.js";
 import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
 import { resolveRuntimeSyntheticAuthProviderRefs } from "../plugins/synthetic-auth.runtime.js";
+import { normalizeAgentId } from "../routing/session-key.js";
 import {
   resolveAgentCredentialMapFromStore,
   resolveUsableAgentCredentialModes,
 } from "./agent-auth-credentials.js";
 import { resolveAmbientAgentCredentialsForDiscovery } from "./agent-auth-discovery.js";
+import {
+  registerResolvedAgentDir,
+  resolveRegisteredAgentIdForDir,
+  unregisterResolvedAgentDir,
+} from "./agent-dir-registry.js";
 import { overlayExternalAuthProfiles } from "./auth-profiles/external-auth-runtime.js";
 import { listExternalCliSyncProviderIds } from "./auth-profiles/external-cli-sync.js";
 import { mergeRuntimeExternalProfileReferences } from "./auth-profiles/runtime-external-profile-references.js";
@@ -39,10 +46,15 @@ import {
   fingerprintPreparedModelWorkerRequest,
   type PreparedModelCatalogWorkerInput,
   type PreparedModelCatalogWorkerData,
+  type PreparedModelCatalogWorkerTask,
   type PreparedModelWorkerRequest,
   type PreparedModelWorkerResult,
 } from "./prepared-model-catalog-worker.js";
 import { prepareOwnedPluginLoadContext } from "./prepared-model-runtime.plugin-context.js";
+import {
+  discardPreparedPluginGeneration,
+  retainPreparedPluginGeneration,
+} from "./prepared-model-runtime.plugin-lifetime.js";
 import { scopeSyntheticAuthProviderRefs } from "./prepared-model-runtime.synthetic-auth.js";
 import { loadAgentRuntimePluginRegistryHandle } from "./runtime-plugins.js";
 import { AuthStorage } from "./sessions/auth-storage.js";
@@ -163,7 +175,30 @@ export async function runPreparedModelCatalogWorkerRequest(
   request: PreparedModelWorkerRequest,
   prepareGeneration = () => prepareWorkerGeneration(value),
 ): Promise<PreparedModelWorkerResult> {
+  return withClawInstallSchemaVersionFacts(request.clawInstallSchemaVersions, () =>
+    runCatalogRequest(value, request, prepareGeneration),
+  );
+}
+
+async function runCatalogRequest(
+  value: PreparedModelCatalogWorkerInput,
+  request: PreparedModelWorkerRequest,
+  prepareGeneration: () => ReturnType<typeof prepareWorkerGeneration>,
+): Promise<PreparedModelWorkerResult> {
+  const directoryOwner = value.input.agentId
+    ? { agentId: value.input.agentId, agentDir: value.input.agentDir, env: value.input.env }
+    : undefined;
+  let registeredDirectoryOwner = false;
   try {
+    if (directoryOwner) {
+      registeredDirectoryOwner = registerResolvedAgentDir(directoryOwner);
+      if (
+        resolveRegisteredAgentIdForDir(directoryOwner.agentDir, directoryOwner.env) !==
+        normalizeAgentId(directoryOwner.agentId)
+      ) {
+        throw new Error(`Conflicting registered agent owners for ${directoryOwner.agentDir}`);
+      }
+    }
     restorePreparedSyntheticAuthFacts(value.input.config, request.syntheticAuth, {
       env: value.input.env,
       workspaceDir: value.input.workspaceDir,
@@ -342,7 +377,11 @@ export async function runPreparedModelCatalogWorkerRequest(
       ...credentials,
     };
     const runtimeModels = new Map<string, Model[]>();
-    for (const model of facts.templateModelRegistry.getAll()) {
+    // Lazy normalization must keep provider hooks on the selected catalog generation.
+    const catalogModels = withPluginRuntimeGenerationScope(pluginGenerationScope, () =>
+      facts.templateModelRegistry.getAll(),
+    );
+    for (const model of catalogModels) {
       const provider = normalizeProviderId(model.provider);
       const models = runtimeModels.get(provider) ?? [];
       models.push(model);
@@ -390,6 +429,10 @@ export async function runPreparedModelCatalogWorkerRequest(
       status: "failed",
       error: error instanceof Error ? error.message : String(error),
     };
+  } finally {
+    if (directoryOwner && registeredDirectoryOwner) {
+      unregisterResolvedAgentDir(directoryOwner);
+    }
   }
 }
 
@@ -397,6 +440,9 @@ function isWorkerRequest(value: unknown): value is PreparedModelWorkerRequest {
   return (
     isRecord(value) &&
     Array.isArray(value.syntheticAuth) &&
+    isRecord(value.clawInstallSchemaVersions) &&
+    typeof value.clawInstallSchemaVersions.path === "string" &&
+    isRecord(value.clawInstallSchemaVersions.snapshot) &&
     ((value.kind === "catalog" &&
       (value.providerIds === undefined ||
         (Array.isArray(value.providerIds) &&
@@ -411,18 +457,43 @@ function isWorkerRequest(value: unknown): value is PreparedModelWorkerRequest {
 }
 
 if (parentPort) {
-  const value = workerData as PreparedModelCatalogWorkerData;
+  const data = workerData as PreparedModelCatalogWorkerData;
   let preparedGeneration: ReturnType<typeof prepareWorkerGeneration> | undefined;
-  serveWorkerTasks((request) => {
-    if (!isWorkerRequest(request)) {
+  // Registrations and captured modules are inventory-owned. Agent/auth facts only live for
+  // their task; retaining one generation per registry prevents disposal between borrowers.
+  const retainedRegistries = new Set<
+    Awaited<ReturnType<typeof prepareWorkerGeneration>>["pluginGeneration"]["pluginRegistry"]
+  >();
+  serveWorkerTasks(async (input) => {
+    // SAFETY: The Gateway pool is the sole producer of this private task envelope.
+    const task = data.kind === "gateway" ? (input as PreparedModelCatalogWorkerTask) : undefined;
+    const value = task?.value ?? data;
+    const request = task?.request ?? input;
+    if (value.kind !== "catalog" || !isWorkerRequest(request)) {
       throw new Error("invalid prepared model catalog worker request");
     }
-    return withPluginSourceCaptureDirectory(value.sourceCaptureDirectory, () =>
-      runPreparedModelCatalogWorkerRequest(
-        value,
-        request,
-        () => (preparedGeneration ??= prepareWorkerGeneration(value)),
-      ),
-    );
+    return withPluginSourceCaptureDirectory(data.sourceCaptureDirectory, async () => {
+      let taskGeneration: Awaited<ReturnType<typeof prepareWorkerGeneration>> | undefined;
+      try {
+        return await runPreparedModelCatalogWorkerRequest(value, request, () => {
+          if (!task) {
+            return (preparedGeneration ??= prepareWorkerGeneration(value));
+          }
+          return prepareWorkerGeneration(value).then((prepared) => {
+            taskGeneration = prepared;
+            const registry = prepared.pluginGeneration.pluginRegistry;
+            if (!retainedRegistries.has(registry)) {
+              retainedRegistries.add(registry);
+              retainPreparedPluginGeneration(prepared.pluginGeneration);
+            }
+            return prepared;
+          });
+        });
+      } finally {
+        if (taskGeneration) {
+          await discardPreparedPluginGeneration(taskGeneration.pluginGeneration);
+        }
+      }
+    });
   });
 }

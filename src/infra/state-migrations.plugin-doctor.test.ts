@@ -1,11 +1,16 @@
 import fs from "node:fs";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { listPluginDoctorStateMigrationEntries } from "../plugins/doctor-contract-registry.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { createTrackedTempDirs } from "../test-utils/tracked-temp-dirs.js";
-import { runPostSessionPluginDoctorStateRepairs } from "./state-migrations.plugin-doctor.js";
+import {
+  autoMigrateLegacyPluginDoctorState,
+  runPostSessionPluginDoctorStateRepairs,
+} from "./state-migrations.plugin-doctor.js";
+import { resetAutoMigrateLegacyStateDirForTest } from "./state-migrations.state-dir.js";
 
 const controls = vi.hoisted(() => ({
   entries: [] as ReturnType<typeof listPluginDoctorStateMigrationEntries>,
@@ -39,12 +44,85 @@ const tempDirs = createTrackedTempDirs();
 afterEach(async () => {
   controls.entries = [];
   controls.failSettlement = false;
+  resetAutoMigrateLegacyStateDirForTest();
   closeOpenClawAgentDatabasesForTest();
   closeOpenClawStateDatabaseForTest();
   await tempDirs.cleanup();
 });
 
-describe("plugin Doctor migration settlement", () => {
+describe("plugin Doctor migrations", () => {
+  it("requires explicit Doctor to repair shared schema before plugin migrations", async () => {
+    const root = await tempDirs.make("openclaw-plugin-doctor-shared-schema-");
+    const stateDir = path.join(root, ".openclaw");
+    const env = { ...process.env, HOME: root, OPENCLAW_STATE_DIR: stateDir };
+    const cfg = {};
+    const stateDbPath = path.join(stateDir, "state", "openclaw.sqlite");
+    fs.mkdirSync(path.dirname(stateDbPath), { recursive: true });
+    const db = new DatabaseSync(stateDbPath);
+    try {
+      db.exec(`
+        CREATE TABLE agent_databases (
+          agent_id TEXT PRIMARY KEY,
+          path TEXT NOT NULL,
+          schema_version INTEGER NOT NULL,
+          last_seen_at INTEGER NOT NULL,
+          size_bytes INTEGER
+        );
+        INSERT INTO agent_databases VALUES ('main', 'agent.sqlite', 1, 10, 20);
+      `);
+    } finally {
+      db.close();
+    }
+    const migrateLegacyState = vi.fn(() => ({
+      changes: ["plugin state migrated"],
+      warnings: [],
+    }));
+    controls.entries = [
+      {
+        pluginId: "memory-core",
+        channelIds: [],
+        migration: {
+          id: "memory-core-test",
+          label: "Memory Core test migration",
+          detectLegacyState: () => ({ preview: ["plugin state"] }),
+          migrateLegacyState,
+        },
+      },
+    ];
+
+    await expect(
+      autoMigrateLegacyPluginDoctorState({ config: cfg, env, homedir: () => root }),
+    ).rejects.toThrow("agent-databases-composite-primary-key");
+    expect(migrateLegacyState).not.toHaveBeenCalled();
+    const preserved = new DatabaseSync(stateDbPath, { readOnly: true });
+    try {
+      expect(preserved.prepare("SELECT * FROM agent_databases").all()).toEqual([
+        {
+          agent_id: "main",
+          path: "agent.sqlite",
+          schema_version: 1,
+          last_seen_at: 10,
+          size_bytes: 20,
+        },
+      ]);
+    } finally {
+      preserved.close();
+    }
+
+    const result = await autoMigrateLegacyPluginDoctorState({
+      config: cfg,
+      env,
+      homedir: () => root,
+      doctorOnlyStateMigrations: true,
+    });
+
+    expect(result.warnings).toStrictEqual([]);
+    expect(result.changes).toContain(
+      "Migrated shared state agent database registry primary key → agent_id,path",
+    );
+    expect(result.changes).toContain("plugin state migrated");
+    expect(migrateLegacyState).toHaveBeenCalledOnce();
+  });
   it.each([
     {
       name: "reordered",

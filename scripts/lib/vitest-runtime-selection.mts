@@ -10,9 +10,10 @@ export function resolveVitestRuntimeCliSelections(
   args: string[],
   env: NodeJS.ProcessEnv,
 ): VitestRuntimeTestSelection[] {
-  return resolveVitestRuntimeConfigScopes(config).map(({ configs, dir }) => ({
+  return resolveVitestRuntimeConfigScopes(config).map(({ file: scopedFile, configs, dir }) => ({
     configs,
     matchesFile: (file, included, includePatterns) =>
+      file === scopedFile &&
       matchesVitestCliSelection(file, included ? [file] : [], args, dir, env, includePatterns),
   }));
 }

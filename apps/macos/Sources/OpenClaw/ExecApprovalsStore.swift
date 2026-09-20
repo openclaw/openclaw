@@ -251,52 +251,6 @@ enum ExecApprovalsStore {
             agents: agents.isEmpty ? nil : agents)
     }
 
-    static func readSnapshot() -> ExecApprovalsSnapshot {
-        do {
-            let record = try ExecApprovalsSQLiteStore.read(stateDirectoryURL: self.stateDirURL())
-            return self.snapshot(record)
-        } catch {
-            self.logger.warning("exec approvals snapshot read failed: \(error.localizedDescription, privacy: .public)")
-            return ExecApprovalsSnapshot(
-                path: ExecApprovalsSQLiteStore.locator,
-                exists: false,
-                hash: "",
-                file: self.failClosedFallbackFile())
-        }
-    }
-
-    private static func snapshot(_ record: ExecApprovalsSQLiteRecord?) -> ExecApprovalsSnapshot {
-        guard let record else {
-            return ExecApprovalsSnapshot(
-                path: ExecApprovalsSQLiteStore.locator,
-                exists: false,
-                hash: self.hashRaw(nil),
-                file: ExecApprovalsFile(version: 1, socket: nil, defaults: nil, agents: [:]))
-        }
-        return ExecApprovalsSnapshot(
-            path: ExecApprovalsSQLiteStore.locator,
-            exists: true,
-            hash: self.hashRaw(record.rawJSON),
-            file: self.normalizeIncoming(record.document))
-    }
-
-    static func loadFile() -> ExecApprovalsFile {
-        do {
-            return try self.loadFileForMutation(
-                ExecApprovalsSQLiteStore.read(stateDirectoryURL: self.stateDirURL()))
-        } catch {
-            self.logger.warning("exec approvals read failed: \(error.localizedDescription, privacy: .public)")
-            return self.failClosedFallbackFile()
-        }
-    }
-
-    private static func loadFileForMutation(
-        _ record: ExecApprovalsSQLiteRecord?) throws -> ExecApprovalsFile
-    {
-        self.normalizeIncoming(
-            record?.document ?? ExecApprovalsFile(version: 1, socket: nil, defaults: nil, agents: [:]))
-    }
-
     static func ensureFile() -> ExecApprovalsFile {
         do {
             return try ExecApprovalsSQLiteStore.withImmediateTransaction(
@@ -355,56 +309,6 @@ enum ExecApprovalsStore {
             }
         }
         return false
-    }
-
-    static func saveFile(
-        _ incoming: ExecApprovalsFile,
-        ifBaseHash baseHash: String?) -> ExecApprovalsConditionalSaveResult
-    {
-        do {
-            return try ExecApprovalsSQLiteStore.withImmediateTransaction(
-                stateDirectoryURL: self.stateDirURL())
-            { record in
-                // A conditional write must not create or normalize policy state
-                // before it proves the caller still owns the observed snapshot.
-                let snapshot = self.snapshot(record)
-                let expected = baseHash?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-                if snapshot.exists {
-                    if snapshot.hash.isEmpty {
-                        return ExecApprovalsSQLiteMutation(value: .baseHashUnavailable)
-                    }
-                    if expected.isEmpty {
-                        return ExecApprovalsSQLiteMutation(value: .baseHashRequired)
-                    }
-                    if expected != snapshot.hash {
-                        return ExecApprovalsSQLiteMutation(value: .conflict)
-                    }
-                } else if !expected.isEmpty, expected != snapshot.hash {
-                    return ExecApprovalsSQLiteMutation(value: .conflict)
-                }
-
-                let current = self.ensureFile(record).file
-                var normalized = self.normalizeIncoming(incoming)
-                let socketPath = normalized.socket?.path?.trimmingCharacters(in: .whitespacesAndNewlines)
-                let token = normalized.socket?.token?.trimmingCharacters(in: .whitespacesAndNewlines)
-                let resolvedPath = (socketPath?.isEmpty == false)
-                    ? socketPath!
-                    : current.socket?.path?.trimmingCharacters(in: .whitespacesAndNewlines) ??
-                    self.socketPath()
-                let resolvedToken = (token?.isEmpty == false)
-                    ? token!
-                    : current.socket?.token?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-                normalized.socket = ExecApprovalsSocketConfig(path: resolvedPath, token: resolvedToken)
-                let rawJSON = try ExecApprovalsSQLiteStore.serialize(normalized)
-                let saved = self.snapshot(ExecApprovalsSQLiteRecord(
-                    rawJSON: rawJSON,
-                    document: normalized))
-                return ExecApprovalsSQLiteMutation(value: .saved(saved), documentToWrite: normalized)
-            }
-        } catch {
-            self.logger.error("exec approvals conditional save failed: \(error.localizedDescription, privacy: .public)")
-            return .unavailable
-        }
     }
 
     static func resolve(agentId: String?) -> ExecApprovalsResolved {
@@ -531,46 +435,6 @@ extension ExecApprovalsStore {
             return .success(())
         } catch {
             self.logger.error("exec approval execution commit failed: \(error.localizedDescription, privacy: .public)")
-            return .failure(.unavailable)
-        }
-    }
-
-    @discardableResult
-    static func recordAllowlistUses(
-        agentId: String?,
-        uses: [ExecAllowlistUse],
-        command: String,
-        authorization: ExecApprovalAuthorization? = nil) -> Result<Void, ExecApprovalsMutationError>
-    {
-        if let authorization {
-            return self.commitExecution(ExecApprovalExecutionCommit(
-                agentId: agentId,
-                command: command,
-                authorization: authorization,
-                uses: uses))
-        }
-        guard !uses.isEmpty else { return .success(()) }
-        let usesByKey = Dictionary(
-            uses.map { (self.allowlistEntryMatchKey($0.match), $0) },
-            uniquingKeysWith: { first, _ in first })
-        do {
-            try ExecApprovalsSQLiteStore.withImmediateTransaction(
-                stateDirectoryURL: self.stateDirURL())
-            { record in
-                let ensured = self.ensureFile(record)
-                var file = ensured.file
-                let changed = self.applyAllowlistUsesUnlocked(
-                    file: &file,
-                    agentId: agentId,
-                    usesByKey: usesByKey,
-                    command: command)
-                return ExecApprovalsSQLiteMutation(
-                    value: (),
-                    documentToWrite: ensured.needsWrite || changed ? file : nil)
-            }
-            return .success(())
-        } catch {
-            self.logger.error("exec approvals usage update failed: \(error.localizedDescription, privacy: .public)")
             return .failure(.unavailable)
         }
     }
@@ -787,13 +651,6 @@ extension ExecApprovalsStore {
                 .replacingOccurrences(of: "=", with: "")
         }
         return UUID().uuidString
-    }
-
-    private static func hashRaw(_ raw: String?) -> String {
-        let data = Data((raw ?? "").utf8)
-        let digest = SHA256.hash(data: data)
-        let hash = digest.map { String(format: "%02x", $0) }.joined()
-        return raw == nil ? "missing:\(hash)" : hash
     }
 
     static func expandPath(_ raw: String) -> String {

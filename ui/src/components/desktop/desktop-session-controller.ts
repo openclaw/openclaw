@@ -9,6 +9,7 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { readSessionChangedEvent } from "../../lib/sessions/reconcile.ts";
 import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
+import { PollController } from "../../lit/poll-controller.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import { resolveChatPaneDesktopTarget } from "../../pages/chat/chat-pane-placement.ts";
 import { loadDesktopEnvironments } from "./desktop-source.ts";
@@ -44,11 +45,23 @@ type NodeAvailability = {
   availability: DesktopAvailability | undefined;
 };
 
+type DesktopInventory = Awaited<ReturnType<typeof loadDesktopEnvironments>>;
+type DesktopStartup = {
+  load: () => Promise<DesktopInventory>;
+  isCurrent: () => boolean;
+  resolve: (inventory: DesktopInventory) => void;
+  reject: (error: unknown) => void;
+  busy: boolean;
+};
+
 export class DesktopSessionController {
   private refreshId = 0;
   private availabilityRequestId = 0;
   private desktopSource: NodeAvailability | null = null;
   private availabilitySnapshot: NodeAvailability | null = null;
+  private startup: DesktopStartup | undefined;
+  startupEnvironment: EnvironmentSummary | undefined;
+  private readonly startupPoll: PollController;
 
   constructor(
     private readonly host: DesktopSessionHost,
@@ -58,6 +71,7 @@ export class DesktopSessionController {
     private readonly requestedAvailabilityTarget: () => string | null,
     private readonly onTargetError: (error: unknown) => void,
   ) {
+    this.startupPoll = new PollController(host, 2_000, () => void this.refreshStartup(), false);
     new SubscriptionsController(host).effect(
       () => (host.available && host.suppliedEnvironments === null ? host.client : null),
       (client) =>
@@ -119,6 +133,71 @@ export class DesktopSessionController {
 
   invalidate(): void {
     this.refreshId += 1;
+    this.stopStartup()?.resolve(undefined);
+  }
+
+  private stopStartup(): DesktopStartup | undefined {
+    this.startupPoll.stop();
+    const startup = this.startup;
+    this.startup = undefined;
+    if (this.startupEnvironment) {
+      this.startupEnvironment = undefined;
+      this.host.requestUpdate();
+    }
+    return startup;
+  }
+
+  private async refreshStartup(): Promise<void> {
+    const startup = this.startup;
+    if (!startup || startup.busy) {
+      return;
+    }
+    if (!startup.isCurrent()) {
+      this.stopStartup()?.resolve(undefined);
+      return;
+    }
+    startup.busy = true;
+    try {
+      const inventory = await startup.load();
+      if (this.startup !== startup) {
+        return;
+      }
+      if (!startup.isCurrent() || !inventory?.pendingSource) {
+        this.stopStartup()?.resolve(startup.isCurrent() ? inventory : undefined);
+      } else {
+        this.startupEnvironment = inventory.environments.find(
+          (environment) => environment.id === inventory.pendingSource,
+        );
+        this.host.requestUpdate();
+      }
+    } catch (error) {
+      if (this.startup === startup) {
+        this.stopStartup()?.reject(error);
+      }
+    } finally {
+      startup.busy = false;
+    }
+  }
+
+  private async waitForStartup(
+    load: DesktopStartup["load"],
+    isCurrent: () => boolean,
+  ): Promise<DesktopInventory> {
+    const inventory = await load();
+    if (!isCurrent()) {
+      return undefined;
+    }
+    if (!inventory?.pendingSource) {
+      return inventory;
+    }
+    return await new Promise<DesktopInventory>((resolve, reject) => {
+      this.startupEnvironment = inventory.environments.find(
+        (environment) => environment.id === inventory.pendingSource,
+      );
+      this.host.requestUpdate();
+      this.startup = { load, isCurrent, resolve, reject, busy: false };
+      this.startupPoll.start();
+    });
   }
 
   loadInventory(options: {
@@ -141,11 +220,15 @@ export class DesktopSessionController {
       isCurrent,
       result:
         client && resolution
-          ? loadDesktopEnvironments(client, {
-              target: resolution.target,
+          ? this.waitForStartup(
+              () =>
+                loadDesktopEnvironments(client, {
+                  target: resolution.target,
+                  isCurrent,
+                  recoverToPicker: this.host.documentMode && !this.host.embedded,
+                }),
               isCurrent,
-              recoverToPicker: this.host.documentMode && !this.host.embedded,
-            })
+            )
           : Promise.resolve(undefined),
     };
   }

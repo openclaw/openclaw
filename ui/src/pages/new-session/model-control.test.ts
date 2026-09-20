@@ -127,7 +127,7 @@ describe("new-session model runtime", () => {
     await waitForFast(() =>
       expect(request).toHaveBeenCalledWith(
         "sessions.catalog.list",
-        { agentId: "main", limitPerHost: 1 },
+        { agentId: "main", metadataOnly: true },
         { signal: expect.any(AbortSignal) },
       ),
     );

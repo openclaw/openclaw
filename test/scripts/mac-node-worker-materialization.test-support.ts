@@ -202,9 +202,11 @@ console.log(target);
     `
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
+import path from 'node:path';
 import recordScratch from './record-scratch.cjs';
 assert.equal(process.argv[3], ${JSON.stringify(path.join(root, "dist/build-info.json"))});
 assert.equal(fs.readFileSync(process.argv[2]+'/build-info.json', 'utf8'), fs.readFileSync(process.argv[3], 'utf8'));
+assert.equal(fs.existsSync(path.join(process.argv[2], 'lib/node_modules/openclaw/dist/control-ui')), false, 'worker retained Control UI');
 recordScratch('verify', process.argv[2]);
 if (process.argv[2].includes('/x86_64/') && fs.existsSync(${JSON.stringify(path.join(root, "reject-verification"))})) process.exit(42);
 `,
@@ -222,6 +224,14 @@ if (process.argv[2].includes('/x86_64/') && fs.existsSync(${JSON.stringify(path.
       path.join(canonical, "nested/win32/build.mjs"),
       "// preserve Windows source\n",
       0o755,
+    );
+    await write(
+      path.join(canonical, "lib/node_modules/openclaw/dist/control-ui/index.html"),
+      "<!doctype html>\n",
+    );
+    await write(
+      path.join(canonical, "lib/node_modules/openclaw/dist/control-ui/assets/app.js"),
+      "// Gateway-owned UI\n",
     );
     await cp(path.join(root, "dist/build-info.json"), path.join(canonical, "build-info.json"));
     // The fixture Node is an explicit execution mock; no native payload is launched.
@@ -355,7 +365,9 @@ export function registerMacWorkerMaterializationTests() {
             ).toBe(verified!.productInode);
             expect(snapshot(path.join(fixture.destination, arch))).toEqual(
               snapshot(path.join(fixture.root, "canonical", arch)).filter(
-                (entry) => !["foreign.node", "opposite.node"].includes(entry.path),
+                (entry) =>
+                  !["foreign.node", "opposite.node"].includes(entry.path) &&
+                  !entry.path.startsWith("lib/node_modules/openclaw/dist/control-ui"),
               ),
             );
           }
@@ -429,6 +441,34 @@ export function registerMacWorkerMaterializationTests() {
           );
           expect(fixture.readScratchObservations()).toHaveLength(5);
           expectWorkerScratchCleaned(fixture);
+        }),
+    );
+
+    it.for(["arm64", "x86_64"])(
+      "omits the Gateway Control UI subtree from the %s private worker",
+      (arch, { mac }) =>
+        mac.lifetime.run(async () => {
+          const fixture = await materializationFixture(mac);
+          const uiRoot = path.join(fixture.source, "lib/node_modules/openclaw/dist/control-ui");
+          await write(path.join(uiRoot, "index.html"), "<!doctype html>\n");
+          await write(path.join(uiRoot, "assets/app.js"), "// Gateway-owned UI\n");
+          await write(
+            path.join(fixture.source, "lib/node_modules/openclaw/dist/entry.js"),
+            "// private worker entry\n",
+          );
+          const before = snapshot(fixture.source);
+
+          const result = await fixture.run(arch);
+
+          expect(result.status, result.stderr).toBe(0);
+          expect(snapshot(fixture.source)).toEqual(before);
+          expect(
+            existsSync(path.join(fixture.destination, "lib/node_modules/openclaw/dist/entry.js")),
+          ).toBe(true);
+          expect(
+            existsSync(path.join(fixture.destination, "lib/node_modules/openclaw/dist/control-ui")),
+          ).toBe(false);
+          expect(result.stderr).toContain("unused Control UI entries");
         }),
     );
 

@@ -31,6 +31,32 @@
   "name": "ACPX Runtime",
   "description": "OpenClaw ACP runtime backend with plugin-owned session and transport management.",
   "skills": ["./skills"],
+  "configGroups": [
+    {
+      "id": "agent-runtime",
+      "title": "Agent runtime",
+      "order": 10,
+      "properties": ["cwd", "stateDir", "probeAgent", "agents", "timeoutSeconds"]
+    },
+    {
+      "id": "permissions",
+      "title": "Permissions",
+      "order": 20,
+      "properties": ["permissionMode", "nonInteractivePermissions"]
+    },
+    {
+      "id": "tools-and-mcp-servers",
+      "title": "Tools and MCP servers",
+      "order": 30,
+      "properties": ["pluginToolsMcpBridge", "openClawToolsMcpBridge", "mcpServers"]
+    },
+    {
+      "id": "pi-sessions",
+      "title": "Pi sessions",
+      "order": 40,
+      "properties": ["piSessionCatalog"]
+    }
+  ],
   "configSchema": {
     "type": "object",
     "additionalProperties": false,

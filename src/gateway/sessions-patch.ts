@@ -7,7 +7,7 @@ import {
   errorShape,
   type SessionsPatchParams,
 } from "../../packages/gateway-protocol/src/index.js";
-import { readAcpSessionMetaForEntry } from "../acp/runtime/session-meta.js";
+import { readAcpSessionMetaForEntry } from "../acp/runtime/session-meta-readonly.js";
 import {
   resolveAgentDir,
   resolveAgentWorkspaceDir,
@@ -590,27 +590,28 @@ function* projectSessionPatchSteps(
       selection = resolved;
     }
     if (selection) {
-      if (typeof patch.agentRuntime === "string") {
-        if (
-          splitTrailingAuthProfile(raw ?? "").model !== `${selection.provider}/${selection.model}`
-        ) {
-          return invalid("agentRuntime requires an explicit canonical provider/model selection");
-        }
-        const runtime = resolveModelRuntimeDirective({
-          cfg,
-          provider: selection.provider,
-          rawRuntime: patch.agentRuntime,
-          sessionEntry: next,
-        });
-        if (runtime.kind !== "set" || runtime.runtime !== patch.agentRuntime) {
-          return invalid(
-            runtime.kind === "invalid"
-              ? runtime.errorText
-              : "Use a canonical agentRuntime id, or null to follow configured routing",
-          );
-        }
-        applyModelRuntimeDirective(next, runtime);
+      if (
+        typeof patch.agentRuntime === "string" &&
+        splitTrailingAuthProfile(raw ?? "").model !== `${selection.provider}/${selection.model}`
+      ) {
+        return invalid("agentRuntime requires an explicit canonical provider/model selection");
       }
+      const runtime = resolveModelRuntimeDirective({
+        cfg,
+        provider: selection.provider,
+        rawRuntime: patch.agentRuntime ?? undefined,
+        sessionEntry: next,
+      });
+      if (runtime.kind === "invalid") {
+        return invalid(runtime.errorText);
+      }
+      if (
+        typeof patch.agentRuntime === "string" &&
+        (runtime.kind !== "set" || runtime.runtime !== patch.agentRuntime)
+      ) {
+        return invalid("Use a canonical agentRuntime id, or null to follow configured routing");
+      }
+      applyModelRuntimeDirective(next, runtime);
       if (selection.profile && isUserModelAuthProfileId(selection.profile)) {
         if (params.personalModelSelection?.authProfileId !== selection.profile) {
           return {

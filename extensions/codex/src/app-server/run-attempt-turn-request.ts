@@ -35,7 +35,12 @@ export async function prepareCodexAttemptTurnRequest(
   waitForActiveNativeTurnCompletion: () => Promise<boolean>,
 ) {
   const { prompt, state: resourceState, releaseCurrentRoute } = resources;
-  const { context, turnState, buildRenderedCodexDeveloperInstructions } = prompt;
+  const {
+    context,
+    turnState,
+    buildRenderedCodexDeveloperInstructions,
+    nativeHistoryProvenancePrefix,
+  } = prompt;
   const { runtime, attemptTools, hookContextWindowFields, workspaceBootstrapContext } = context;
   const { connection, runtimeParams, effectiveRuntimeProviderId, effectiveRuntimeModelId } =
     runtime;
@@ -141,6 +146,7 @@ export async function prepareCodexAttemptTurnRequest(
       cwd: resourceState.codexExecutionCwd,
       appServer: turnAppServer,
       promptText: turnState.codexTurnPromptText,
+      historyProvenancePrefix: nativeHistoryProvenancePrefix,
       contextImageGroups: prompt.contextImageGroups,
       explicitSkillInputs,
       sandboxPolicy: resourceState.codexSandboxPolicy,
@@ -268,7 +274,7 @@ export async function prepareCodexAttemptTurnRequest(
             await retireUnsafeCodexTurnClientBestEffort(resourceState.client, "startup interrupt");
           }
         } finally {
-          releaseCurrentRoute();
+          await releaseCurrentRoute();
         }
       } else {
         await activeTurnRoute.cancelTurn();

@@ -595,7 +595,11 @@ export function handleMessageUpdate(
     return undefined;
   }
   if (ctx.params.onBlockReply && ctx.blockChunking) {
-    ctx.blockChunker.drain({ force: false, emit: ctx.emitBlockChunk });
+    ctx.blockChunker.drain({
+      force: false,
+      emit: (text, metadata) =>
+        ctx.emitBlockChunk(text, { ...metadata, completeMarkdownChunk: true }),
+    });
   }
   if (evtType === "text_end") {
     const assistantMessageIndex = ctx.state.assistantMessageIndex;

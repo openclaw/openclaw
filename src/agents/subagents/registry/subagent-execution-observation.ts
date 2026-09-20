@@ -1,13 +1,18 @@
 import {
   getSubagentRunsForChildSession,
   getSubagentRunsForRequesterSession,
+  subagentRuns,
 } from "./subagent-registry-memory.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import {
   compareSubagentRunGeneration,
   recordLatestSubagentRun,
 } from "./subagent-run-generation.js";
-import { hasSubagentRunEnded, isRetainedUnendedSubagentRun } from "./subagent-run-liveness.js";
+import {
+  hasSubagentRunEnded,
+  isSubagentRunLive,
+  isSubagentRunQueued,
+} from "./subagent-run-liveness.js";
 
 export type SubagentExecutionObservation = {
   state: "queued" | "running" | "waiting" | "finished" | "unknown";
@@ -74,10 +79,27 @@ export function observeSubagentExecution(
   if (hasSubagentRunEnded(entry)) {
     return { state: "finished" };
   }
-  if (entry.execution.status === "interrupted" || !isRetainedUnendedSubagentRun(entry)) {
+  if (entry.execution.status === "interrupted") {
     return { state: "unknown" };
   }
-  return { state: entry.execution.status === "queued" ? "queued" : "running" };
+  // Snapshots must match the current registration before using live or queued ownership.
+  const current = subagentRuns.get(entry.runId);
+  if (
+    !current ||
+    current.childSessionKey !== entry.childSessionKey ||
+    current.requesterSessionKey !== entry.requesterSessionKey ||
+    (current.taskRunId ?? current.runId) !== (entry.taskRunId ?? entry.runId) ||
+    compareSubagentRunGeneration(current, entry) !== 0
+  ) {
+    return { state: "unknown" };
+  }
+  if (isSubagentRunLive(current)) {
+    return { state: current.execution.status === "queued" ? "queued" : "running" };
+  }
+  if (isSubagentRunQueued(current)) {
+    return { state: "queued" };
+  }
+  return { state: "unknown" };
 }
 
 /** Observe only the current memory owner of this exact delegated task. */

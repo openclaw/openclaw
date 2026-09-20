@@ -23,6 +23,16 @@ function textMessage(role: AgentMessage["role"], text: string): AgentMessage {
   } as AgentMessage;
 }
 
+function senderAttributedTextMessage(
+  text: string,
+  sender: { senderId?: string; senderName?: string; senderUsername?: string },
+): AgentMessage {
+  return {
+    ...textMessage("user", text),
+    __openclaw: sender,
+  } as unknown as AgentMessage;
+}
+
 function summaryMessages(type: "compaction" | "branch_summary", summary: string): AgentMessage[] {
   const entry = { id: "summary", parentId: null, timestamp: "2026-01-01T00:00:00.000Z", summary };
   return buildSessionContext([
@@ -215,6 +225,34 @@ describe("projectContextEngineAssemblyForCodex", () => {
     });
     expect(ordered.promptText).toContain("[user]\none\n\n[assistant]\ntwo\n\n[toolResult]\nthree");
     expect(ordered.prePromptMessageCount).toBe(1);
+  });
+
+  it("preserves stable user provenance while leaving legacy user rows unattributed", async () => {
+    const result = await projectContextEngineAssemblyForCodex({
+      assembledMessages: [
+        senderAttributedTextMessage("Ada owns the deployment decision.", {
+          senderId: "ada-id",
+          senderName: "Ada",
+        }),
+        senderAttributedTextMessage("Bea owns the rollback decision.", {
+          senderId: "bea-id",
+          senderName: "Bea",
+        }),
+        senderAttributedTextMessage("A legacy note has no authenticated author.", {
+          senderName: "Ada",
+        }),
+      ],
+      originalHistoryMessages: [],
+      prompt: "Continue.",
+    });
+
+    expect(result.promptText).toContain(
+      '[user sender={"id":"ada-id","name":"Ada"}]\nAda owns the deployment decision.',
+    );
+    expect(result.promptText).toContain(
+      '[user sender={"id":"bea-id","name":"Bea"}]\nBea owns the rollback decision.',
+    );
+    expect(result.promptText).toContain("[user]\nA legacy note has no authenticated author.");
   });
 
   it("neutralizes explicit mention sigils in projected history but not the current request", async () => {

@@ -4,6 +4,7 @@
 import { parseModelCatalogRef } from "@openclaw/model-catalog-core/model-catalog-refs";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
+import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveProviderModelCatalogId } from "../plugins/provider-model-routes.js";
 import { resolveAgentDir } from "./agent-scope-config.js";
@@ -17,6 +18,7 @@ import {
   resolveCliRuntimeModelBackendBinding,
 } from "./cli-backends.js";
 import { resolveLegacyInheritedAuthDir } from "./legacy-inherited-auth-dir.js";
+import type { ModelRef } from "./model-ref-shared.js";
 import { resolveModelRuntimePolicy } from "./model-runtime-policy.js";
 import {
   resolveProviderIdForAuth,
@@ -24,6 +26,23 @@ import {
 } from "./provider-auth-aliases.js";
 
 const RETIRED_MODEL_PICKER_PROVIDERS = new Set(["codex", "codex-cli"]);
+
+/** Canonicalize a bound CLI provider without renaming an already selected model. */
+export function resolveCliBoundModelRef(
+  ref: ModelRef,
+  cfg?: OpenClawConfig,
+  sessionEntry?: SessionEntry,
+): ModelRef {
+  const canonicalProvider =
+    cfg && sessionEntry?.cliSessionBindings?.[ref.provider] !== undefined
+      ? resolveCliRuntimeCanonicalProvider({
+          runtime: ref.provider,
+          config: cfg,
+          includeSetupRegistry: true,
+        })
+      : undefined;
+  return { provider: canonicalProvider ?? ref.provider, model: ref.model };
+}
 
 /** True for retired provider ids that should stay out of model selection surfaces. */
 export function isRetiredModelPickerProvider(provider: string): boolean {

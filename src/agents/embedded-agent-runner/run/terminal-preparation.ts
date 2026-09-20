@@ -6,9 +6,13 @@ import type { AgentRunTerminalReceipt } from "../../agent-run-terminal-receipt.j
 import type { AuthProfileStore } from "../../auth-profiles.js";
 import type { PreparedProviderFailoverOwner } from "../../failover/provider-patterns.js";
 import { isProviderModelRerouted } from "../../provider-model-route.js";
+import type { ReplyDeliveryState } from "../../reply-completion.js";
 import { getCoreTtsAttemptResultMediaUrls } from "../../tools/tts-tool-result-provenance.js";
 import type { NormalizedUsage, UsageLike } from "../../usage.js";
-import { hasMessagingToolDeliveryEvidence } from "../delivery-evidence.js";
+import {
+  hasMessagingToolDeliveryEvidence,
+  resolveSourceReplyDelivery,
+} from "../delivery-evidence.js";
 import { resolveEmbeddedRunFailureSignal } from "../failure-signal.js";
 import { resolveEmbeddedRunTerminalToolFailure } from "../terminal-tool-failure.js";
 import type { EmbeddedAgentMeta, EmbeddedAgentRunResult } from "../types.js";
@@ -21,6 +25,7 @@ import {
   resolveFinalAssistantVisibleText,
   resolveReportedModelRef,
 } from "./helpers.js";
+import type { RunEmbeddedAgentInternalParams } from "./internal-params.js";
 import type { RunEmbeddedAgentParams } from "./params.js";
 import { buildEmbeddedRunPayloads } from "./payloads.js";
 import { resolveProviderRefusal } from "./provider-refusal.js";
@@ -38,7 +43,8 @@ import {
 
 export function prepareEmbeddedRunTerminal(input: {
   mergeToolMedia?: ReturnType<typeof createPendingToolMediaCarry>["merge"];
-  runParams: RunEmbeddedAgentParams;
+  runParams: RunEmbeddedAgentInternalParams;
+  replyDeliveryState?: ReplyDeliveryState;
   attempt: EmbeddedRunAttemptWithReceiptEvidence;
   currentAttemptCompletedAssistant?: AssistantMessage;
   provider: string;
@@ -57,6 +63,7 @@ export function prepareEmbeddedRunTerminal(input: {
   terminalState: EmbeddedRunTerminalState;
 }): {
   agentMeta: EmbeddedAgentMeta;
+  replyDeliveryState: ReplyDeliveryState;
   reportedModelRef: { provider: string; model: string };
   finalAssistantVisibleText: string | undefined;
   finalAssistantRawText: string | undefined;
@@ -172,7 +179,7 @@ export function prepareEmbeddedRunTerminal(input: {
       },
       successfulToolNames: resolveSuccessfulToolNames(attempt),
       assistantTranscriptIdempotencyKey: attempt.assistantTranscriptIdempotencyKey,
-      sourceReplyDelivered: attempt.sourceReplyDelivered,
+      sourceReplyDelivered: resolveSourceReplyDelivery(attempt) === "delivered" ? true : undefined,
       rerouted: isProviderModelRerouted(
         { provider: input.provider, model: input.model },
         { ...reportedModelRef, responseModel },
@@ -208,7 +215,7 @@ export function prepareEmbeddedRunTerminal(input: {
     thinkingLevel: runParams.thinkLevel,
     toolResultFormat: input.resolvedToolResultFormat,
     didSendViaMessagingTool: attempt.didSendViaMessagingTool,
-    didDeliverSourceReplyViaMessageTool: attempt.didDeliverSourceReplyViaMessageTool === true,
+    didDeliverSourceReplyViaMessageTool: resolveSourceReplyDelivery(attempt) === "delivered",
     messagingToolSentTargets: attempt.messagingToolSentTargets,
     messagingToolSourceReplyPayloads: attempt.messagingToolSourceReplyPayloads,
     sourceReplyDeliveryMode: runParams.sourceReplyDeliveryMode,
@@ -284,7 +291,7 @@ export function prepareEmbeddedRunTerminal(input: {
     (attempt.toolMetas?.length ?? 0) === 0;
   const attemptToolSummary = buildTraceToolSummary({
     toolMetas: attempt.toolMetas,
-    fallbackHadFailure: Boolean(attempt.lastToolError),
+    lastToolError: attempt.lastToolError,
   });
   const failureSignal = resolveEmbeddedRunFailureSignal({
     trigger: runParams.trigger,
@@ -297,6 +304,7 @@ export function prepareEmbeddedRunTerminal(input: {
   });
   return {
     agentMeta,
+    replyDeliveryState: input.replyDeliveryState ?? "missing",
     reportedModelRef,
     finalAssistantVisibleText,
     finalAssistantRawText,

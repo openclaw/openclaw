@@ -27,7 +27,7 @@ import {
   getAgentEventLifecycleGeneration,
 } from "../../infra/agent-events.js";
 import { normalizeAgentId, parseAgentSessionKey } from "../../routing/session-key.js";
-import { setGatewayDedupeEntry } from "../agent-turn/agent-job.js";
+import { captureAgentJobSession, setGatewayDedupeEntry } from "../agent-turn/agent-job.js";
 import { waitForChatAbortTerminalPersistence } from "../chat-abort-lifecycle-internal.js";
 import type { ChatAbortControllerEntry } from "../chat-abort.js";
 import { resolveChatRunOwnerAgentId } from "../chat-run-owner.js";
@@ -403,6 +403,9 @@ export const sessionAbortHandlers: GatewayRequestHandlers = {
     // Snapshot before abort can remove controllers. Agent run IDs are idempotency
     // keys, so preserve their dedupe namespace instead of colliding with chat.send.
     const preAbortRuns = new Map(context.chatAbortControllers);
+    const preAbortSessions = new Map(
+      [...preAbortRuns].map(([runId, entry]) => [runId, captureAgentJobSession(entry)]),
+    );
     let abortedRunIds: string[] = [];
     let abortedRunId: string | null = null;
     let aborted = false;
@@ -554,6 +557,7 @@ export const sessionAbortHandlers: GatewayRequestHandlers = {
             setGatewayDedupeEntry({
               dedupe: context.dedupe,
               key: `${dedupePrefix}:${firstAbortedRunId}`,
+              session: preAbortSessions.get(firstAbortedRunId),
               entry: {
                 ts: endedAt,
                 ok: true,

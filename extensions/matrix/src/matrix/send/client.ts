@@ -4,6 +4,7 @@ import { requireRuntimeConfig } from "openclaw/plugin-sdk/plugin-config-runtime"
 import type { CoreConfig } from "../../types.js";
 import { resolveMatrixAccountConfig } from "../account-config.js";
 import type { MatrixClient } from "../sdk.js";
+import { withMatrixSendCurrentness } from "../sdk/send-currentness.js";
 
 const loadMatrixSendClientRuntime = createLazyRuntimeModule(() => import("../client-bootstrap.js"));
 
@@ -31,6 +32,8 @@ export async function withResolvedMatrixSendClient<T>(
     cfg?: CoreConfig;
     timeoutMs?: number;
     accountId?: string | null;
+    signal?: AbortSignal;
+    assertDirectAdapterHandoff?: () => void;
   },
   run: (client: MatrixClient, abortSignal?: AbortSignal) => Promise<T>,
 ): Promise<T> {
@@ -41,7 +44,20 @@ export async function withResolvedMatrixSendClient<T>(
       // state and live crypto sessions are available before sendMessage/sendEvent.
       readiness: "started",
     },
-    run,
+    (client, abortSignal) => {
+      if (!opts.signal && !opts.assertDirectAdapterHandoff) {
+        return run(client, abortSignal);
+      }
+      return withMatrixSendCurrentness(
+        client,
+        () => {
+          opts.assertDirectAdapterHandoff?.();
+          opts.signal?.throwIfAborted();
+          abortSignal?.throwIfAborted();
+        },
+        () => run(client, abortSignal),
+      );
+    },
     // Started one-off send clients should flush sync/crypto state before CLI
     // shutdown paths can tear down the process.
     "persist",

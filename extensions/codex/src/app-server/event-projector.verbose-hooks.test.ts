@@ -446,7 +446,7 @@ describe("CodexAppServerEventProjector verbose output and hook projection", () =
         expect(hook).toHaveBeenCalledTimes(pendingStage === "hook" ? 1 : 0);
         expect(onAgentEvent).not.toHaveBeenCalled();
         expect(persistActivity).not.toHaveBeenCalled();
-        expect(read.mock.calls[0]?.[3]).toBe(runAbort.signal);
+        expect(read.mock.calls[0]?.[2]).toBe(runAbort.signal);
       });
     },
   );

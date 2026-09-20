@@ -12,6 +12,7 @@ import {
   closeOpenClawAgentDatabasesForTest,
   runOpenClawAgentWriteTransaction,
 } from "../state/openclaw-agent-db.js";
+import * as stateDatabase from "../state/openclaw-state-db.js";
 import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
@@ -41,6 +42,7 @@ describe("session groups catalog", () => {
   });
 
   afterEach(async () => {
+    vi.restoreAllMocks();
     closeOpenClawAgentDatabasesForTest();
     closeOpenClawStateDatabaseForTest();
     await fs.rm(root, { recursive: true, force: true });
@@ -285,6 +287,43 @@ describe("session groups catalog", () => {
       { name: "Work", position: 0 },
       { name: "Travel", position: 1 },
     ]);
+  });
+
+  it("does not admit a write transaction for an existing normalized category", () => {
+    putSessionGroups({ cfg, names: ["Work"], env });
+    const transaction = vi.spyOn(stateDatabase, "runOpenClawStateWriteTransaction");
+
+    expect(ensureSessionGroupRegistered("  Work  ", env)).toBe(false);
+
+    expect(transaction).not.toHaveBeenCalled();
+    expect(listSessionGroups(env)).toEqual([{ name: "Work", position: 0 }]);
+  });
+
+  it("rechecks a missing category after another writer registers it", () => {
+    putSessionGroups({ cfg, names: ["Work"], env });
+    const originalTransaction = stateDatabase.runOpenClawStateWriteTransaction;
+    vi.spyOn(stateDatabase, "runOpenClawStateWriteTransaction").mockImplementationOnce(
+      (operation, options, transactionOptions) => {
+        // Commit a competing registration between the optimistic read and admission.
+        originalTransaction(
+          ({ db }) => {
+            db.prepare(
+              "INSERT INTO session_groups (name, position, created_at) VALUES (?, ?, ?)",
+            ).run("Travel", 1, 123);
+          },
+          { env },
+        );
+        return originalTransaction(operation, options, transactionOptions);
+      },
+    );
+
+    expect(ensureSessionGroupRegistered("Travel", env)).toBe(false);
+    expect(listSessionGroups(env)).toEqual([
+      { name: "Work", position: 0 },
+      { name: "Travel", position: 1 },
+    ]);
+    expect(ensureSessionGroupRegistered("Later", env)).toBe(true);
+    expect(listSessionGroups(env).at(-1)).toEqual({ name: "Later", position: 2 });
   });
 
   it("renames a group and repoints member categories without bumping updatedAt", async () => {

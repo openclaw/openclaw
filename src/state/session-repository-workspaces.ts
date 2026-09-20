@@ -4,6 +4,7 @@ import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import type { Selectable, Updateable } from "kysely";
 import { executeSqliteQueryTakeFirstSync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
+import { sessionChanges } from "../sessions/session-row-changes.js";
 import { ensureSessionRepositoryWorkspaceSchema } from "./openclaw-state-db-schema-additive.js";
 import { tableExists } from "./openclaw-state-db-schema-helpers.js";
 import type { DB, SessionRepositoryWorkspaces } from "./openclaw-state-db.generated.js";
@@ -149,6 +150,7 @@ export function createSessionRepositoryWorkspaceStore(
       if (!updated) {
         throw new Error("Repository workspace revision changed");
       }
+      sessionChanges.emit({ agentId: updated.agent_id, sessionKey: updated.session_key }, db);
       return project(updated);
     });
   const artifactPath = (workspaceId: string): string => {
@@ -219,6 +221,7 @@ export function createSessionRepositoryWorkspaceStore(
         if (!inserted) {
           throw new Error("Repository workspace creation failed");
         }
+        sessionChanges.emit({ agentId: inserted.agent_id, sessionKey: inserted.session_key }, db);
         return project(inserted);
       });
     },
@@ -267,10 +270,16 @@ export function createSessionRepositoryWorkspaceStore(
       write((db) => {
         input.assertCurrent();
         if (tableExists(db, table)) {
-          executeSqliteQueryTakeFirstSync(
+          const deleted = executeSqliteQueryTakeFirstSync(
             db,
-            query(db).deleteFrom(table).where("workspace_id", "=", input.workspaceId),
+            query(db)
+              .deleteFrom(table)
+              .where("workspace_id", "=", input.workspaceId)
+              .returning(["agent_id", "session_key"]),
           );
+          if (deleted) {
+            sessionChanges.emit({ agentId: deleted.agent_id, sessionKey: deleted.session_key }, db);
+          }
         }
       });
       // The row disappears first: an interrupted cleanup leaves only unowned artifacts.

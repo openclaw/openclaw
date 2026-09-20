@@ -3,13 +3,16 @@ import {
   errorShape,
   validateTranscriptsListParams,
   validateTranscriptsGetParams,
+  validateTranscriptsSummarizeParams,
   validateTranscriptsExportParams,
   validateTranscriptsStatusParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { resolveStateDir } from "../../config/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createTranscriptsStore } from "../../transcripts/capture-operations.js";
+import { ensureTranscriptSummary } from "../../transcripts/capture-summary.js";
 import { resolveSourceProvider } from "../../transcripts/capture.js";
+import { resolveTranscriptsConfig } from "../../transcripts/config.js";
 import {
   exportTranscriptLibrary,
   getTranscriptLibrary,
@@ -21,15 +24,22 @@ import type { TranscriptsStore } from "../../transcripts/store.js";
 import { operatorSessionCap } from "../operator-role-policy.js";
 import { isGatewayAdmin } from "../session-sharing.js";
 import { formatForLog } from "../ws-log.js";
+import { readGatewayRequestMutationAuthority } from "./session-mutation-guards.js";
 import type { GatewayRequestHandler, GatewayRequestHandlers } from "./types.js";
 import { assertValidParams, type Validator } from "./validation.js";
 
-function transcriptReadMethod<T>(
+function transcriptMethod<T>(
   method: string,
   validate: Validator<T>,
-  read: (store: TranscriptsStore, params: T, cfg: OpenClawConfig) => Promise<unknown>,
+  read: (
+    store: TranscriptsStore,
+    params: T,
+    cfg: OpenClawConfig,
+    assertCurrent: () => void,
+  ) => Promise<unknown>,
 ): GatewayRequestHandler {
-  return async ({ params, context, client, respond }) => {
+  return async (options) => {
+    const { params, context, client, respond } = options;
     if (!assertValidParams(params, validate, method, respond)) {
       return;
     }
@@ -53,7 +63,17 @@ function transcriptReadMethod<T>(
         config: cfg,
         logger: console,
       });
-      respond(true, await read(store, params, cfg));
+      const authority = readGatewayRequestMutationAuthority(options);
+      const assertCurrent = () => {
+        authority.assertCurrent();
+        if (
+          !isGatewayAdmin(client) &&
+          operatorSessionCap(client, context.getRuntimeConfig()) === "none"
+        ) {
+          throw new Error("Transcript archive access changed");
+        }
+      };
+      respond(true, await read(store, params, cfg, assertCurrent));
     } catch (error) {
       if (!(error instanceof TranscriptLibraryError)) {
         context.logGateway.warn(`${method} failed: ${formatForLog(error)}`);
@@ -70,7 +90,7 @@ function transcriptReadMethod<T>(
             })
           : errorShape(
               ErrorCodes.UNAVAILABLE,
-              "The transcript archive could not be read. Check Gateway diagnostics and retry.",
+              `${method === "transcripts.summarize" ? "The meeting summary could not be generated" : "The transcript archive could not be read"}. Check Gateway diagnostics and retry.`,
             ),
       );
     }
@@ -78,22 +98,44 @@ function transcriptReadMethod<T>(
 }
 
 export const transcriptsHandlers: GatewayRequestHandlers = {
-  "transcripts.list": transcriptReadMethod(
+  "transcripts.list": transcriptMethod(
     "transcripts.list",
     validateTranscriptsListParams,
     (store, params, cfg) => listTranscriptLibrary(store, params, providerNames(cfg)),
   ),
-  "transcripts.get": transcriptReadMethod(
+  "transcripts.get": transcriptMethod(
     "transcripts.get",
     validateTranscriptsGetParams,
     (store, params, cfg) => getTranscriptLibrary(store, params, providerNames(cfg)),
   ),
-  "transcripts.export": transcriptReadMethod(
+  "transcripts.summarize": transcriptMethod(
+    "transcripts.summarize",
+    validateTranscriptsSummarizeParams,
+    async (store, params, cfg, assertCurrent) => {
+      const { entry } = await store.readLibraryEntry(params);
+      assertCurrent();
+      if (!entry.hasSummary && entry.utteranceCount > 0) {
+        await ensureTranscriptSummary({
+          store,
+          session: entry.session,
+          config: resolveTranscriptsConfig(cfg.transcripts),
+          cfg,
+          allowAppends: entry.session.stoppedAt === undefined,
+          assertCurrent,
+        });
+      }
+      assertCurrent();
+      const result = await getTranscriptLibrary(store, params, providerNames(cfg));
+      assertCurrent();
+      return result;
+    },
+  ),
+  "transcripts.export": transcriptMethod(
     "transcripts.export",
     validateTranscriptsExportParams,
     exportTranscriptLibrary,
   ),
-  "transcripts.status": transcriptReadMethod(
+  "transcripts.status": transcriptMethod(
     "transcripts.status",
     validateTranscriptsStatusParams,
     (store, _params, cfg) => readTranscriptLibraryStatus(store, cfg),

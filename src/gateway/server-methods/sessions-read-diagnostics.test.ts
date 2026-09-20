@@ -2,7 +2,10 @@ import { channel } from "node:diagnostics_channel";
 import { performance } from "node:perf_hooks";
 import { isMainThread, threadId } from "node:worker_threads";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
-import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
+import {
+  replaceSessionEntrySync,
+  upsertSessionEntryCore,
+} from "../../config/sessions/session-accessor.js";
 import {
   areDiagnosticsEnabledForProcess,
   setDiagnosticsEnabledForProcess,
@@ -15,37 +18,42 @@ import {
 } from "../../infra/diagnostic-trace-context.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import * as titleReader from "../session-transcript-title-reader.js";
+import { getSessionRowProjection } from "../session-row-projection-access.js";
+import * as sessionModels from "../session-utils-model.js";
+import * as sessionRows from "../session-utils-row.js";
 import {
   identifiedClient,
+  initializeSessionReadContext,
   listSessions,
   requestContext,
   seedSessions,
+  sessionReadHandlers,
 } from "./sessions-read-cache.test-support.js";
 import { sessionLog } from "./sessions-shared.js";
 import { sessionSubscriptionHandlers } from "./sessions-subscriptions.js";
 import type { RespondFn } from "./types.js";
 
-const scheduler = vi.hoisted(() => ({ onYield: undefined as (() => Promise<void>) | undefined }));
-vi.mock("node:timers/promises", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("node:timers/promises")>();
-  return {
-    ...actual,
-    setImmediate: async (...args: Parameters<typeof actual.setImmediate>) => {
-      const result = await actual.setImmediate(...args);
-      await scheduler.onYield?.();
-      return result;
-    },
-  };
-});
-
 let previousDiagnostics: boolean;
 let clock: number;
+let cpu: NodeJS.CpuUsage;
+let cpuProbeFailure: Error | undefined;
+const threadCpuProbe = vi.fn<(previous?: NodeJS.CpuUsage) => NodeJS.CpuUsage>();
+const threadCpuFields = ["prepareThreadCpuMs", "rowThreadCpuMs", "responseThreadCpuMs"];
 let records: Array<{ trace: DiagnosticTraceContext | undefined; fields: Record<string, unknown> }>;
 beforeEach(() => {
+  vi.spyOn(Date, "now").mockReturnValue(1_800_000_000_000);
   previousDiagnostics = areDiagnosticsEnabledForProcess();
   setDiagnosticsEnabledForProcess(true);
   clock = 0;
+  cpu = { user: 0, system: 0 };
+  cpuProbeFailure = undefined;
+  threadCpuProbe.mockReset().mockImplementation((previous = { user: 0, system: 0 }) => {
+    if (cpuProbeFailure) {
+      throw cpuProbeFailure;
+    }
+    return { user: cpu.user - previous.user, system: cpu.system - previous.system };
+  });
+  vi.spyOn(process, "threadCpuUsage").mockImplementation(threadCpuProbe);
   records = [];
   vi.spyOn(sessionLog, "isEnabled").mockReturnValue(true);
   vi.spyOn(sessionLog, "warn").mockImplementation((message, fields) => {
@@ -55,22 +63,50 @@ beforeEach(() => {
   });
 });
 afterEach(() => {
-  scheduler.onYield = undefined;
   setDiagnosticsEnabledForProcess(previousDiagnostics);
   vi.restoreAllMocks();
 });
 
-function controlProjectionClock() {
+function expectNoCpuFields(record: unknown) {
+  for (const field of threadCpuFields) {
+    expect(record).not.toHaveProperty(field);
+  }
+}
+
+function controlProjectionClock(
+  projection: NonNullable<ReturnType<typeof getSessionRowProjection>>,
+  afterRow?: () => void,
+) {
   vi.spyOn(performance, "now").mockImplementation(() => clock);
-  const read = titleReader.readSessionTitleFieldsFromTranscriptBatch;
-  return vi
-    .spyOn(titleReader, "readSessionTitleFieldsFromTranscriptBatch")
-    .mockImplementation((...args) => {
-      const result = read(...args);
-      // Advance only the synchronous preparation interval; the real yield remains in production.
+  const select = projection.selectEntries.bind(projection);
+  vi.spyOn(projection, "selectEntries").mockImplementation((...args) => {
+    try {
+      return select(...args);
+    } finally {
+      cpu.user += 1_250;
+      cpu.system += 250;
+    }
+  });
+  const defaults = sessionModels.getSessionDefaults;
+  vi.spyOn(sessionModels, "getSessionDefaults").mockImplementation((...args) => {
+    try {
+      return defaults(...args);
+    } finally {
+      cpu.user += 250;
+      cpu.system += 125;
+    }
+  });
+  const present = sessionRows.presentSessionRow;
+  return vi.spyOn(sessionRows, "presentSessionRow").mockImplementation((...args) => {
+    try {
+      return present(...args);
+    } finally {
       clock += 20;
-      return result;
-    });
+      cpu.user += 750;
+      cpu.system += 250;
+      afterRow?.();
+    }
+  });
 }
 
 test.each(["channel-only", "slow-warning"])("attributes %s operations", async (mode) => {
@@ -79,15 +115,19 @@ test.each(["channel-only", "slow-warning"])("attributes %s operations", async (m
     context.subscribeSessionEvents = vi.fn();
     const client = { ...identifiedClient("owner@example.com"), connId: "private-connection" };
     const request = { agentId: "main", limit: 1, includeDerivedTitles: true };
+    await initializeSessionReadContext(context);
+    await getSessionRowProjection(context)!.ensureMaterialized();
+    const owner = getSessionRowProjection(context)!;
+    const ensure = owner.ensureMaterialized.bind(owner);
     const warn = mode === "slow-warning";
-    const catalogDelay = warn ? 1_100 : 0;
+    const waitMs = warn ? 1_100 : 0;
     setDiagnosticsEnabledForProcess(warn);
     vi.mocked(sessionLog.isEnabled).mockReturnValue(warn);
-    context.readPreparedGatewayModelCatalog = async () => {
-      clock += catalogDelay;
-      return undefined;
-    };
-    const projection = controlProjectionClock();
+    vi.spyOn(owner, "ensureMaterialized").mockImplementation(async () => {
+      await ensure();
+      clock += waitMs;
+    });
+    const presentation = controlProjectionClock(owner);
     const trace = createDiagnosticTraceContext();
     const events: unknown[] = [];
     const diagnostics = channel("openclaw.session.list");
@@ -104,34 +144,41 @@ test.each(["channel-only", "slow-warning"])("attributes %s operations", async (m
         client,
         context,
         isWebchatConnect: () => true,
-        respond: (...response) => responses.push(response),
+        respond: (...response) => {
+          cpu.user += 750;
+          cpu.system += 375;
+          responses.push(response);
+        },
       });
-      expect(responses).toEqual([[true, { subscribed: true, list: listed }, undefined, undefined]]);
+      expect(responses).toMatchObject([
+        [true, { subscribed: true, list: { sessions: listed.sessions } }, undefined, undefined],
+      ]);
       expect(context.subscribeSessionEvents).toHaveBeenCalledWith(client.connId);
-      expect(projection).toHaveBeenCalledOnce();
+      expect(presentation).toHaveBeenCalledTimes(2);
       expect(events).toHaveLength(2);
-      expect(events[0]).toMatchObject({
-        operation: "sessions.list",
-        pid: process.pid,
-        threadId,
-        isMainThread,
-        handlerElapsedMs: 20 + catalogDelay,
-        cacheRole: "projection-owner",
-        prepareSyncMs: 20,
-        projectionPasses: 1,
-        selectedRowCount: 1,
-        handlerOutcome: "returned",
-        responseOutcome: "ok",
-      });
-      expect(events[1]).toMatchObject({
-        operation: "sessions.subscribe",
-        handlerElapsedMs: catalogDelay,
-        cacheRole: "completed-hit",
-        selectedRowCount: 1,
-        handlerOutcome: "returned",
-        responseOutcome: "ok",
-      });
-      expect(events[1]).not.toHaveProperty("projectionPasses");
+      for (const [index, operation] of ["sessions.list", "sessions.subscribe"].entries()) {
+        expect(events[index]).toMatchObject({
+          operation,
+          pid: process.pid,
+          threadId,
+          isMainThread,
+          handlerElapsedMs: 20 + waitMs,
+          prepareSyncMs: 0,
+          rowSyncMs: 20,
+          prepareThreadCpuMs: 1.5,
+          rowThreadCpuMs: 1.375,
+          responseThreadCpuMs: index === 0 ? 0 : 1.125,
+          yieldWaitMs: waitMs,
+          yieldCount: 1,
+          selectedRowCount: 1,
+          dirtyRowCount: 0,
+          materializedRowCount: 0,
+          reusedRowCount: 1,
+          handlerOutcome: "returned",
+          responseOutcome: "ok",
+        });
+        expect(events[index]).not.toHaveProperty("cacheRole");
+      }
       const serialized = JSON.stringify(events);
       for (const privateValue of [
         client.connId,
@@ -150,42 +197,89 @@ test.each(["channel-only", "slow-warning"])("attributes %s operations", async (m
     } finally {
       diagnostics.unsubscribe(collect);
     }
+    threadCpuProbe.mockClear();
     await listSessions({ client, context, request });
     expect(events).toHaveLength(2);
+    if (warn) {
+      expect(threadCpuProbe).toHaveBeenCalled();
+    } else {
+      expect(threadCpuProbe).not.toHaveBeenCalled();
+    }
   });
 });
 
-test("captures a fast failed projection while preserving the original error", async () => {
+test("reports materialized and reused selected rows after a keyed commit", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const context = requestContext(await seedSessions());
+    const client = identifiedClient("owner@example.com");
+    await initializeSessionReadContext(context);
+    await getSessionRowProjection(context)!.ensureMaterialized();
+    const projection = getSessionRowProjection(context)!;
+    const initial = await listSessions({ client, context, request: { agentId: "main", limit: 1 } });
+    const query = { agentId: "main", key: initial.sessions[0]!.key };
+    const entry = projection.describe(query)!.entry;
+    controlProjectionClock(projection);
+    const events: unknown[] = [];
+    const diagnostics = channel("openclaw.session.list");
+    const collect = (event: unknown) => events.push(event);
+    diagnostics.subscribe(collect);
+    try {
+      replaceSessionEntrySync(
+        { agentId: "main", sessionKey: query.key },
+        { ...entry, label: "Committed label" },
+      );
+      const result = await listSessions({
+        client,
+        context,
+        request: { agentId: "main", limit: 1 },
+      });
+      expect(result.sessions[0]?.label).toBe("Committed label");
+      expect(events[0]).toMatchObject({
+        selectedRowCount: 1,
+        dirtyRowCount: 1,
+        materializedRowCount: 1,
+        reusedRowCount: 0,
+      });
+    } finally {
+      diagnostics.unsubscribe(collect);
+    }
+  });
+});
+
+test("captures a fast failed readiness wait while preserving the original error", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const context = requestContext(await seedSessions());
+    const client = identifiedClient("owner@example.com");
+    await initializeSessionReadContext(context);
+    await getSessionRowProjection(context)!.ensureMaterialized();
     setDiagnosticsEnabledForProcess(false);
     vi.spyOn(performance, "now").mockImplementation(() => clock);
     const failure = new Error("synthetic-private-projection-error");
-    vi.spyOn(titleReader, "readSessionTitleFieldsFromTranscriptBatch").mockImplementation(() => {
-      clock += 25;
-      throw failure;
-    });
+    vi.spyOn(getSessionRowProjection(context)!, "ensureMaterialized").mockImplementationOnce(
+      async () => {
+        clock += 25;
+        cpu.user += 500_000;
+        throw failure;
+      },
+    );
     const events: unknown[] = [];
     const diagnostics = channel("openclaw.session.list");
     const collect = (event: unknown) => events.push(event);
     diagnostics.subscribe(collect);
     try {
       await expect(
-        listSessions({
-          client: identifiedClient("owner@example.com"),
-          context,
-          request: { agentId: "main", limit: 1, includeDerivedTitles: true },
-        }),
+        listSessions({ client, context, request: { agentId: "main", limit: 1 } }),
       ).rejects.toBe(failure);
       expect(events).toHaveLength(1);
       expect(events[0]).toMatchObject({
         operation: "sessions.list",
         handlerElapsedMs: 25,
-        cacheRole: "projection-owner",
         handlerOutcome: "threw",
         responseOutcome: "none",
       });
       expect(JSON.stringify(events)).not.toContain(failure.message);
+      expectNoCpuFields(events[0]);
+      expect(threadCpuProbe).not.toHaveBeenCalled();
       expect(sessionLog.warn).not.toHaveBeenCalled();
     } finally {
       diagnostics.unsubscribe(collect);
@@ -193,95 +287,141 @@ test("captures a fast failed projection while preserving the original error", as
   });
 });
 
-test("separates producer work, follower wait, and completed hits under their own request traces", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const config = await seedSessions();
-    const context = requestContext(config);
-    const client = identifiedClient("owner@example.com");
-    const request = { agentId: "main", limit: 1, includeDerivedTitles: true };
-    const catalog = vi.fn(async () => undefined);
-    context.readPreparedGatewayModelCatalog = catalog;
-    const projection = controlProjectionClock();
-    const entered = createDeferredCore();
-    const release = createDeferredCore();
-    scheduler.onYield = async () => {
-      entered.resolve();
-      await release.promise;
-    };
-    const ownerTrace = createDiagnosticTraceContext();
-    const followerTrace = createDiagnosticTraceContext();
-    const owner = runWithDiagnosticTraceContext(ownerTrace, () =>
-      listSessions({ client, context, request }),
-    );
-    await entered.promise;
-    const follower = runWithDiagnosticTraceContext(followerTrace, () =>
-      listSessions({ client, context, request }),
-    );
-    await vi.waitFor(() => expect(catalog).toHaveBeenCalledTimes(2));
-    await new Promise<void>((resolve) => {
-      setImmediate(resolve);
+test.each([
+  { stage: "selection", cpuFailure: "none" },
+  { stage: "row", cpuFailure: "none" },
+  { stage: "response", cpuFailure: "none" },
+  { stage: "selection", cpuFailure: "start" },
+  { stage: "selection", cpuFailure: "finish" },
+] as const)(
+  "preserves a fast $stage error when CPU probe failure is $cpuFailure",
+  async ({ stage, cpuFailure }) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const context = requestContext(await seedSessions());
+      await initializeSessionReadContext(context);
+      await getSessionRowProjection(context)!.ensureMaterialized();
+      setDiagnosticsEnabledForProcess(false);
+      vi.spyOn(performance, "now").mockImplementation(() => clock);
+      const failure = new Error("synthetic-private-synchronous-error");
+      const fail = () => {
+        clock += 25;
+        cpu.user += 250;
+        cpu.system += 125;
+        if (cpuFailure === "finish") {
+          cpuProbeFailure = new Error("synthetic CPU probe failure");
+        }
+        throw failure;
+      };
+      if (stage === "selection") {
+        vi.spyOn(getSessionRowProjection(context)!, "selectEntries").mockImplementation(fail);
+      } else if (stage === "row") {
+        vi.spyOn(sessionRows, "presentSessionRow").mockImplementation(fail);
+      }
+      if (cpuFailure === "start") {
+        cpuProbeFailure = new Error("synthetic CPU probe failure");
+      }
+      const events: unknown[] = [];
+      const diagnostics = channel("openclaw.session.list");
+      const collect = (event: unknown) => events.push(event);
+      diagnostics.subscribe(collect);
+      try {
+        await expect(
+          sessionReadHandlers["sessions.list"]!({
+            req: { type: "req", id: "private-request", method: "sessions.list" },
+            params: { agentId: "main", limit: 1 },
+            client: identifiedClient("owner@example.com"),
+            context,
+            respond: stage === "response" ? fail : vi.fn(),
+            isWebchatConnect: () => true,
+          }),
+        ).rejects.toBe(failure);
+        expect(events).toHaveLength(1);
+        expect(events[0]).toMatchObject({
+          handlerElapsedMs: 25,
+          handlerOutcome: "threw",
+          responseOutcome: stage === "response" ? "threw" : "none",
+        });
+        if (cpuFailure === "none") {
+          const metric = stage === "selection" ? "prepare" : stage;
+          expect(events[0]).toHaveProperty(`${metric}ThreadCpuMs`, 0.375);
+        } else {
+          expect(threadCpuProbe.mock.results).toContainEqual({
+            type: "throw",
+            value: cpuProbeFailure,
+          });
+          expectNoCpuFields(events[0]);
+        }
+        expect(JSON.stringify(events)).not.toContain(failure.message);
+        expect(sessionLog.warn).not.toHaveBeenCalled();
+      } finally {
+        diagnostics.unsubscribe(collect);
+      }
     });
-    clock += 1_500;
-    release.resolve();
-    const [owned, followed] = await Promise.all([owner, follower]);
-    expect(followed).toBe(owned);
-    expect(projection).toHaveBeenCalledOnce();
-    expect(records).toHaveLength(2);
-    const ownerRecord = records.find((record) => record.trace?.traceId === ownerTrace.traceId);
-    const followerRecord = records.find(
-      (record) => record.trace?.traceId === followerTrace.traceId,
-    );
-    expect(ownerRecord).toMatchObject({
-      trace: ownerTrace,
-      fields: {
-        cacheRole: "projection-owner",
-        pid: process.pid,
-        threadId,
-        isMainThread,
-        prepareSyncMs: 20,
-        rowSyncMs: 0,
-        yieldWaitMs: 1_500,
-        yieldCount: 1,
-        projectionPasses: 1,
-        selectedRowCount: 1,
-      },
-    });
-    expect(followerRecord).toMatchObject({
-      trace: followerTrace,
-      fields: {
-        cacheRole: "in-flight-follower",
-        selectedRowCount: 1,
-        workTraceId: ownerTrace.traceId,
-        workSpanId: ownerTrace.spanId,
-      },
-    });
-    expect(followerRecord?.fields).not.toHaveProperty("prepareSyncMs");
-    expect(followerRecord?.fields).not.toHaveProperty("yieldWaitMs");
-    expect(followerRecord?.fields).not.toHaveProperty("projectionPasses");
+  },
+);
 
-    scheduler.onYield = undefined;
-    catalog.mockImplementation(async () => {
-      clock += 1_100;
-      return undefined;
+test("attributes concurrent presentation and readiness waits to each request trace", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const context = requestContext(await seedSessions());
+    const client = identifiedClient("owner@example.com");
+    const request = { agentId: "main", limit: 1 };
+    await initializeSessionReadContext(context);
+    await getSessionRowProjection(context)!.ensureMaterialized();
+    const projection = getSessionRowProjection(context)!;
+    const ensure = projection.ensureMaterialized.bind(projection);
+    const release = createDeferredCore();
+    const readiness = vi.spyOn(projection, "ensureMaterialized").mockImplementation(async () => {
+      await release.promise;
+      await ensure();
+      queueMicrotask(() => {
+        cpu.user += 500_000;
+      });
     });
-    const hitTrace = createDiagnosticTraceContext();
-    const hit = await runWithDiagnosticTraceContext(hitTrace, () =>
-      listSessions({ client, context, request }),
+    const presentation = controlProjectionClock(projection);
+    const traces = [createDiagnosticTraceContext(), createDiagnosticTraceContext()];
+    const pending = traces.map((trace) =>
+      runWithDiagnosticTraceContext(trace, () => listSessions({ client, context, request })),
     );
-    expect(hit).toBe(owned);
-    expect(projection).toHaveBeenCalledOnce();
-    expect(records).toHaveLength(3);
-    expect(records[2]).toMatchObject({
-      trace: hitTrace,
-      fields: { cacheRole: "completed-hit", selectedRowCount: 1 },
-    });
-    expect(records[2]?.fields).not.toHaveProperty("projectionPasses");
-    expect(records[2]?.fields).not.toHaveProperty("workTraceId");
-    expect(records[2]?.fields).not.toHaveProperty("rowSyncMs");
+    await vi.waitFor(() => expect(readiness).toHaveBeenCalledTimes(2));
+    clock += 1_500;
+    cpu.user += 900_000;
+    cpu.system += 100_000;
+    release.resolve();
+    const results = await Promise.all(pending);
+    expect(results[0]?.sessions).toEqual(results[1]?.sessions);
+    expect(presentation).toHaveBeenCalledTimes(2);
+    expect(records).toHaveLength(2);
+    for (const trace of traces) {
+      const record = records.find((value) => value.trace?.traceId === trace.traceId);
+      expect(record).toMatchObject({
+        trace,
+        fields: {
+          pid: process.pid,
+          threadId,
+          isMainThread,
+          rowSyncMs: 20,
+          prepareSyncMs: 0,
+          prepareThreadCpuMs: 1.5,
+          rowThreadCpuMs: 1.375,
+          responseThreadCpuMs: 0,
+          yieldCount: 1,
+          selectedRowCount: 1,
+          materializedRowCount: 0,
+          reusedRowCount: 1,
+        },
+      });
+      expect(record?.fields.yieldWaitMs).toBeGreaterThanOrEqual(1_500);
+      expect(record?.fields.phaseDurationsMs).toHaveProperty(
+        "materialize",
+        record?.fields.yieldWaitMs,
+      );
+      expect(record?.fields.phaseDurationsMs).not.toHaveProperty("modelCatalog");
+      expect(record?.fields).not.toHaveProperty("workTraceId");
+    }
   });
 });
 
-test("accumulates the bounded visibility repairs without counting yielded waits as synchronous work", async () => {
+test("reports fresh visibility after a readiness yield without charging the wait as row CPU", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const config = { agents: { list: [{ id: "main", default: true }] } };
     const newest = Date.now();
@@ -299,97 +439,141 @@ test("accumulates the bounded visibility repairs without counting yielded waits 
       );
     }
     updatedAt.mockRestore();
-    controlProjectionClock();
-    let pass = 0;
-    scheduler.onYield = async () => {
-      const name = ["first", "second", "third"][pass++];
-      if (name) {
+    const client = identifiedClient("viewer@example.com");
+    const context = requestContext(config);
+    await initializeSessionReadContext(context);
+    await getSessionRowProjection(context)!.ensureMaterialized();
+    const projection = getSessionRowProjection(context)!;
+    controlProjectionClock(projection);
+    const ensure = projection.ensureMaterialized.bind(projection);
+    vi.spyOn(projection, "ensureMaterialized").mockImplementationOnce(async () => {
+      for (const name of ["first", "second", "third"]) {
         await upsertSessionEntryCore(
           { agentId: "main", sessionKey: `agent:main:repair-${name}` },
           { visibility: "draft" },
         );
       }
-      clock += 500;
-    };
-    const result = await listSessions({
-      client: identifiedClient("viewer@example.com"),
-      context: requestContext(config),
-      request: { agentId: "main", limit: 1, includeDerivedTitles: true },
+      await ensure();
+      clock += 2_000;
+      cpu.user += 300_000;
     });
+    const result = await listSessions({ client, context, request: { agentId: "main", limit: 1 } });
     expect(result.sessions.map((row) => row.key)).toEqual(["agent:main:repair-fourth"]);
     expect(records).toHaveLength(1);
     expect(records[0]?.fields).toMatchObject({
-      cacheRole: "projection-owner",
-      projectionPasses: 4,
-      rowRepairCount: 2,
-      fullReloadCount: 1,
-      prepareSyncMs: 80,
-      rowSyncMs: 0,
+      selectedRowCount: 1,
+      materializedRowCount: 0,
+      reusedRowCount: 1,
+      prepareSyncMs: 0,
+      rowSyncMs: 20,
+      prepareThreadCpuMs: 1.5,
+      rowThreadCpuMs: 1.375,
       yieldWaitMs: 2_000,
-      yieldCount: 4,
-      phaseDurationsMs: { rows: 2_080 },
+      yieldCount: 1,
+      phaseDurationsMs: { rows: 20 },
     });
   });
 });
 
-test.each(["disabled", "sink-disabled", "sink-throws", "disabled-during-request"])(
-  "preserves the response when diagnostics are %s",
-  async (mode) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      const context = requestContext(await seedSessions());
-      if (mode === "disabled") {
-        setDiagnosticsEnabledForProcess(false);
-      }
-      if (mode === "sink-disabled") {
-        vi.mocked(sessionLog.isEnabled).mockReturnValue(false);
-      }
-      if (mode === "sink-throws") {
-        vi.mocked(sessionLog.warn).mockImplementation(() => {
-          throw new Error("synthetic sink failure");
-        });
-      }
-      vi.spyOn(performance, "now").mockImplementation(() => clock);
-      context.readPreparedGatewayModelCatalog = async () => {
-        clock += 1_100;
-        if (mode === "disabled-during-request") {
-          setDiagnosticsEnabledForProcess(false);
-        }
-        return undefined;
-      };
-      const result = await listSessions({
-        client: identifiedClient("owner@example.com"),
-        context,
-        request: { agentId: "main", limit: 1 },
-      });
-      expect(result.sessions).toHaveLength(1);
-      if (mode === "sink-throws") {
-        expect(sessionLog.warn).toHaveBeenCalledOnce();
-      } else {
-        expect(sessionLog.warn).not.toHaveBeenCalled();
-      }
-    });
-  },
-);
-
-test("preserves the original projection error even when its slow diagnostic sink throws", async () => {
+test.each([
+  "disabled",
+  "sink-disabled",
+  "sink-throws",
+  "disabled-during-request",
+  "cpu-start-throws",
+  "cpu-finish-throws",
+])("preserves the response when diagnostics are %s", async (mode) => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const context = requestContext(await seedSessions());
+    const client = identifiedClient("owner@example.com");
+    await initializeSessionReadContext(context);
+    await getSessionRowProjection(context)!.ensureMaterialized();
+    const projection = getSessionRowProjection(context)!;
+    const cpuThrows = mode === "cpu-start-throws" || mode === "cpu-finish-throws";
+    controlProjectionClock(projection, () => {
+      if (mode === "cpu-finish-throws") {
+        cpuProbeFailure = new Error("synthetic CPU probe failure");
+      }
+    });
+    threadCpuProbe.mockClear();
+    if (mode === "cpu-start-throws") {
+      cpuProbeFailure = new Error("synthetic CPU probe failure");
+    }
+    if (mode === "disabled") {
+      setDiagnosticsEnabledForProcess(false);
+    }
+    if (mode === "sink-disabled") {
+      vi.mocked(sessionLog.isEnabled).mockReturnValue(false);
+    }
+    if (mode === "sink-throws") {
+      vi.mocked(sessionLog.warn).mockImplementation(() => {
+        throw new Error("synthetic sink failure");
+      });
+    }
+    const ensure = projection.ensureMaterialized.bind(projection);
+    vi.spyOn(projection, "ensureMaterialized").mockImplementationOnce(async () => {
+      await ensure();
+      clock += 1_100;
+      if (mode === "disabled-during-request") {
+        setDiagnosticsEnabledForProcess(false);
+      }
+    });
+    const result = await listSessions({
+      client,
+      context,
+      request: { agentId: "main", limit: 1 },
+    });
+    expect(result.sessions).toHaveLength(1);
+    if (mode === "sink-throws" || cpuThrows) {
+      expect(sessionLog.warn).toHaveBeenCalledOnce();
+    } else {
+      expect(sessionLog.warn).not.toHaveBeenCalled();
+    }
+    if (mode === "disabled" || mode === "sink-disabled") {
+      expect(threadCpuProbe).not.toHaveBeenCalled();
+    }
+    if (cpuThrows) {
+      expect(threadCpuProbe.mock.results).toContainEqual({
+        type: "throw",
+        value: cpuProbeFailure,
+      });
+      expect(records).toHaveLength(1);
+      expectNoCpuFields(records[0]?.fields);
+      if (mode === "cpu-finish-throws") {
+        expect(
+          threadCpuProbe.mock.results.some(
+            (reading) => reading.type === "return" && reading.value.user + reading.value.system > 0,
+          ),
+        ).toBe(true);
+      }
+    }
+  });
+});
+
+test("preserves the original selection error even when its slow diagnostic sink throws", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const context = requestContext(await seedSessions());
+    const client = identifiedClient("owner@example.com");
+    await initializeSessionReadContext(context);
+    await getSessionRowProjection(context)!.ensureMaterialized();
     vi.spyOn(performance, "now").mockImplementation(() => clock);
     const failure = new Error("synthetic projection failure");
-    vi.spyOn(titleReader, "readSessionTitleFieldsFromTranscriptBatch").mockImplementation(() => {
+    vi.spyOn(getSessionRowProjection(context)!, "selectEntries").mockImplementationOnce(() => {
       clock += 1_500;
+      cpu.user += 500;
+      cpu.system += 125;
       throw failure;
     });
     vi.mocked(sessionLog.warn).mockImplementation(() => {
       throw new Error("synthetic sink failure");
     });
     await expect(
-      listSessions({
-        client: identifiedClient("owner@example.com"),
-        context,
-        request: { agentId: "main", includeDerivedTitles: true },
-      }),
+      listSessions({ client, context, request: { agentId: "main", limit: 1 } }),
     ).rejects.toBe(failure);
     expect(sessionLog.warn).toHaveBeenCalledOnce();
+    expect(sessionLog.warn).toHaveBeenCalledWith(
+      "slow session list",
+      expect.objectContaining({ prepareThreadCpuMs: 0.625, handlerOutcome: "threw" }),
+    );
   });
 });

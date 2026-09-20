@@ -27,6 +27,48 @@ afterEach(async () => {
 });
 
 describe("task maintenance session metadata", () => {
+  it("retains task payloads without cloning them when only expired siblings need maintenance", async () => {
+    await withStateDirEnv("openclaw-task-maintenance-payloads-", async () => {
+      resetTaskRegistryForTests({ persist: false });
+      const now = Date.now();
+      const detail = { maintenancePayload: "retained-task-payload".repeat(1024) };
+      const retained = Array.from({ length: 30 }, (_, index) =>
+        createTaskFixture("cli", {
+          task: `Retained task ${index}`,
+          runId: `retained-${index}`,
+          status: "succeeded",
+          cleanupAfter: now + 86_400_000,
+          detail,
+          notifyPolicy: "silent",
+        }),
+      );
+      const expired = createTaskFixture("cli", {
+        task: "Expired task",
+        runId: "expired",
+        status: "succeeded",
+        cleanupAfter: now - 1,
+        notifyPolicy: "silent",
+      });
+      const clone = vi.spyOn(globalThis, "structuredClone");
+
+      expect(await runTaskRegistryMaintenance()).toEqual({
+        reconciled: 0,
+        recovered: 0,
+        cleanupStamped: 0,
+        pruned: 1,
+      });
+      expect(
+        clone.mock.calls.filter(
+          ([value]) => value && typeof value === "object" && "maintenancePayload" in value,
+        ),
+      ).toHaveLength(0);
+      expect(getTaskById(expired.taskId)).toBeUndefined();
+      for (const task of retained) {
+        expect(getTaskById(task.taskId)?.detail).toEqual(detail);
+      }
+    });
+  });
+
   it("reconciles backing and wedged children without decoding their saved prompts", async () => {
     await withStateDirEnv("openclaw-task-maintenance-metadata-", async () => {
       resetTaskRegistryForTests({ persist: false });

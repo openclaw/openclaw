@@ -1,6 +1,7 @@
 import { copyFile, mkdir, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
+import { projectAgentToolActivity } from "../../../../src/infra/agent-activity-events.js";
 import {
   focusChatSidePanel,
   openChatSidePanelType,
@@ -323,6 +324,18 @@ suite.define(() => {
                 {
                   match: { taskId: nativeSubagent.id, cursor: "task-earlier" },
                   response: {
+                    activity: ["task-check", "task-check-result"].map((messageId) => ({
+                      messageId,
+                      items: [
+                        projectAgentToolActivity({
+                          toolCallId: "routing-check",
+                          name: "exec",
+                          phase: "result",
+                          status: "completed",
+                          // The native task owns the outcome, not executed host arguments.
+                        }),
+                      ],
+                    })),
                     messages: [
                       {
                         role: "user",
@@ -494,12 +507,17 @@ suite.define(() => {
           hasText: "pnpm test routing",
         });
         await toolRow.waitFor();
-        const toolSummary = toolRow.locator("summary");
-        expect((await toolSummary.textContent())?.trim()).toBe("pnpm test routing");
+        const toolSummary = toolRow.locator(":scope > summary");
+        expect((await toolSummary.textContent())?.replace(/\s+/gu, " ").trim()).toBe(
+          "1 operation 1 command",
+        );
         const toolBody = toolRow.locator(".chat-task-feed__calls");
         expect(await toolBody.isVisible()).toBe(false);
         await toolSummary.click();
         await toolBody.waitFor();
+        expect(await toolBody.locator("pre").isVisible()).toBe(false);
+        await toolBody.locator(".chat-task-feed__tool-line > summary").click();
+        await toolBody.locator("pre").waitFor({ state: "visible" });
         expect(await toolBody.locator("code").textContent()).toBe(
           "pnpm test routing\npnpm tsgo:ui",
         );

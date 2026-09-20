@@ -138,6 +138,7 @@ internal fun prepareChatHistory(
         append(':')
         append(latest?.timestampMs ?: "")
         latest?.content?.forEach { appendContentVersion(it) }
+        append(latest?.activity)
         append(":turnBoundary=")
         append(latest?.turnBoundary ?: false)
       },
@@ -158,7 +159,7 @@ internal fun PreparedChatHistory.buildTimeline(
 ): ChatTimeline {
   val stream = streamingAssistantText?.trim()?.takeIf { it.isNotEmpty() }
   val visibleSubagents = visibleSubagentActivities(subagentActivities.values)
-  val latestTurnLive = pendingRunCount > 0 || pendingToolCalls.isNotEmpty() || stream != null
+  val latestTurnLive = pendingRunCount > 0 || pendingToolCalls.any { !it.isComplete } || stream != null
   var latestUserIndex: Int? = null
   val items =
     buildList {
@@ -447,6 +448,10 @@ private fun latestContentVersion(
       append(call.isError)
       append(',')
       append(call.liveDiff)
+      append(',')
+      append(call.isComplete)
+      append(',')
+      append(call.activity)
       append(';')
     }
     append(":subagents=")
@@ -619,7 +624,7 @@ private fun projectTranscriptToolActivity(messages: List<ChatMessage>): List<Tra
       }
     }
     message.content.forEach { content ->
-      val tool = content.toolActivity ?: return@forEach
+      val tool = content.toolActivity?.let { raw -> raw.copy(activity = message.activity?.firstOrNull { it.toolCallId == raw.toolCallId }, activityPrepared = message.activity != null) } ?: return@forEach
       val result = content.type.equals("toolResult", ignoreCase = true)
       val candidates = if (result) tool.toolCallId?.let(calls::get) else null
       val owner =
@@ -672,6 +677,8 @@ private fun mergeToolActivity(
     result = next.result ?: previous.result,
     isError = previous.isError || next.isError,
     arguments = previous.arguments ?: next.arguments,
+    activity = if (next.activityPrepared) next.activity else previous.activity,
+    activityPrepared = next.activityPrepared || previous.activityPrepared,
   )
 
 private fun coalesceToolActivity(parts: List<TranscriptTool>): List<ChatToolActivity> {

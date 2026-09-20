@@ -45,6 +45,8 @@ import {
   consumeTrustedToolNoStartError,
   copyInternalToolResultState,
   getCoreTtsToolResultMediaUrls,
+  normalizeAcceptedSessionSpawnResult,
+  type AcceptedSessionSpawn,
 } from "openclaw/plugin-sdk/agent-harness-tool-runtime";
 import { emitTrustedDiagnosticEvent } from "openclaw/plugin-sdk/diagnostic-runtime";
 import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
@@ -57,7 +59,6 @@ import {
   asNonArrayRecord,
   asOptionalRecord,
   isRecord,
-  normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import {
   DEFAULT_MAX_LIVE_TOOL_RESULT_CHARS,
@@ -79,16 +80,12 @@ import {
 import {
   createFailedDynamicToolResponse,
   type CodexDynamicToolRuntimeResponse,
-  withDynamicToolExecutionState,
-  withDynamicToolTranscriptDetails,
 } from "./dynamic-tool-response-state.js";
 import { invalidInlineImageText, sanitizeInlineImageDataUrl } from "./image-payload-sanitizer.js";
 import type {
   CodexDynamicToolCallOutputContentItem,
   CodexDynamicToolCallParams,
-  CodexDynamicToolCallResponse,
   CodexDynamicToolDiagnosticTerminalReason,
-  CodexDynamicToolDiagnosticTerminalType,
   CodexDynamicToolSpec,
 } from "./protocol.js";
 import { flattenCodexDynamicToolFunctions } from "./protocol.js";
@@ -441,23 +438,10 @@ export type CodexDynamicToolBridge = {
     coreTtsToolResults: object[];
     toolAudioAsVoice: boolean;
     successfulCronAdds?: number;
-    acceptedSessionSpawns: Array<{ runId: string; childSessionKey: string }>;
+    acceptedSessionSpawns: AcceptedSessionSpawn[];
     quarantinedTools: CodexDynamicToolSchemaQuarantine[];
   };
 };
-
-function normalizeAcceptedSessionSpawn(result: unknown): {
-  runId: string;
-  childSessionKey: string;
-} | null {
-  const details = asOptionalRecord(asOptionalRecord(result)?.details);
-  if (!details || details.status !== "accepted") {
-    return null;
-  }
-  const runId = normalizeOptionalString(details.runId);
-  const childSessionKey = normalizeOptionalString(details.childSessionKey);
-  return runId && childSessionKey ? { runId, childSessionKey } : null;
-}
 
 const EXPLICIT_MESSAGE_PROVIDER_KEYS = ["channel", "provider"];
 const EXPLICIT_MESSAGE_TARGET_KEYS = ["target", "to", "channelId"];
@@ -790,7 +774,7 @@ export function createCodexDynamicToolBridge(params: {
         // A successful spawn is durable before presentation middleware can rewrite details.
         const acceptedSessionSpawn =
           toolName === "sessions_spawn" && !rawIsError
-            ? normalizeAcceptedSessionSpawn(telemetryRawResult)
+            ? normalizeAcceptedSessionSpawnResult(telemetryRawResult)
             : null;
         if (acceptedSessionSpawn) {
           telemetry.acceptedSessionSpawns.push(acceptedSessionSpawn);
@@ -842,7 +826,11 @@ export function createCodexDynamicToolBridge(params: {
             ? extractMessagingToolSendResult(messagingTarget, telemetryRawResult)
             : messagingTarget;
         const terminalType =
-          resultFailureKind === "blocked" ? "blocked" : resultIsError ? "error" : "completed";
+          resultFailureKind === "blocked"
+            ? "blocked"
+            : resultIsError || resultFailureKind
+              ? "error"
+              : "completed";
         const contentItems = convertToolContents(result.content, toolResultMaxChars);
         const deliveredFrameImages = contentItems.filter((item) => item.type === "inputImage");
         const finalFrameImageIdentity = computerFrameImageIdentity(result.content);
@@ -856,18 +844,13 @@ export function createCodexDynamicToolBridge(params: {
           // Middleware may replace screenshots; retain coordinates only for exact frame bytes.
           invalidateComputerFrame(params.computerContextEpoch);
         }
-        const response = withDiagnosticTerminalType(
-          {
-            contentItems,
-            success: !resultIsError,
-          },
-          terminalType,
-        );
-        withDynamicToolTranscriptDetails(
-          response,
-          asOptionalRecord(sanitizeToolResult(result))?.details,
-        );
-        withDiagnosticFailureDisposition(response, resultFailureKind);
+        const response: CodexDynamicToolRuntimeResponse = {
+          contentItems,
+          success: !resultIsError,
+          diagnosticTerminalType: terminalType,
+          diagnosticTerminalReason: resultFailureKind === "blocked" ? undefined : resultFailureKind,
+          transcriptDetails: asOptionalRecord(sanitizeToolResult(result))?.details,
+        };
         const blocksSourceReplyTermination = hasExplicitNonSourceMessageRoute(
           executedArgs,
           params.hookContext,
@@ -928,30 +911,29 @@ export function createCodexDynamicToolBridge(params: {
           telemetry.didDeliverSourceReplyViaMessageTool = true;
         }
         const continuesSourceReplyProgress = confirmedSourceReply && sourceReplyFinal === false;
-        withDynamicToolTermination(
-          response,
+        response.terminate =
           ((rawResult.terminate === true || result.terminate === true) &&
             !continuesSourceReplyProgress) ||
-            // Yield is an explicit owner-level turn handoff, not termination
-            // inferred from source-reply delivery, so finality does not mask it.
-            isToolResultYield(rawResult) ||
-            isToolResultYield(result) ||
-            (confirmedSourceReply && sourceReplyFinal === true),
-        );
+          // Yield is an explicit owner-level turn handoff, not termination
+          // inferred from source-reply delivery, so finality does not mask it.
+          isToolResultYield(rawResult) ||
+          isToolResultYield(result) ||
+          (confirmedSourceReply && sourceReplyFinal === true) ||
+          undefined;
         const asyncStarted =
           isAsyncStartedToolResult(rawResult) || isAsyncStartedToolResult(result);
-        withDynamicToolAsyncStarted(response, asyncStarted);
+        response.asyncStarted = asyncStarted || undefined;
         const replaySafe =
           executionPrevented ||
           (!asyncStarted &&
             isReplaySafeToolInstance(toolEntry.tool) &&
             isReplaySafeToolCall(toolName, executedArgs));
         copyInternalToolResultState(rawResult, response);
-        return withDynamicToolExecutionState(response, {
-          executedArguments: executedArgs,
-          executionStarted: didStartExecution && !executionPrevented,
-          sideEffectEvidence: !replaySafe,
-        });
+        response.executedArguments = executedArgs;
+        response.executionStarted = didStartExecution && !executionPrevented;
+        response.replaySafe = replaySafe;
+        response.sideEffectEvidence = !replaySafe || undefined;
+        return response;
       } catch (error) {
         const trustedNoStart = consumeTrustedToolNoStartError(error);
         executionPrevented ||= trustedNoStart;
@@ -1006,25 +988,17 @@ export function createCodexDynamicToolBridge(params: {
           executionPrevented ||
           (isReplaySafeToolInstance(toolEntry.tool) &&
             isReplaySafeToolCall(toolName, executedArgs));
-        return withDynamicToolExecutionState(
-          withDiagnosticFailureDisposition(
-            {
-              contentItems: [
-                {
-                  type: "inputText",
-                  text: errorMessage,
-                },
-              ],
-              success: false,
-            },
-            executionDisposition,
-          ),
-          {
-            executedArguments: executedArgs,
-            executionStarted: didStartExecution && !executionPrevented,
-            sideEffectEvidence: didStartExecution && !replaySafe,
-          },
-        );
+        return {
+          contentItems: [{ type: "inputText", text: errorMessage }],
+          success: false,
+          diagnosticTerminalType: executionDisposition === "blocked" ? "blocked" : "error",
+          diagnosticTerminalReason:
+            executionDisposition === "blocked" ? undefined : executionDisposition,
+          executedArguments: executedArgs,
+          executionStarted: didStartExecution && !executionPrevented,
+          replaySafe,
+          sideEffectEvidence: (didStartExecution && !replaySafe) || undefined,
+        };
       } finally {
         if (
           executionSnapshotStates.get(call.callId) === executionSnapshotState &&
@@ -1347,62 +1321,6 @@ function isToolResultYield(result: AgentToolResult<unknown>): boolean {
 function isAsyncStartedToolResult(result: AgentToolResult<unknown>): boolean {
   const details = result.details;
   return isRecord(details) && details.async === true && details.status === "started";
-}
-function withDiagnosticTerminalType<T extends CodexDynamicToolCallResponse>(
-  response: T,
-  terminalType: CodexDynamicToolDiagnosticTerminalType,
-): T {
-  Object.defineProperty(response, "diagnosticTerminalType", {
-    configurable: true,
-    enumerable: false,
-    value: terminalType,
-  });
-  return response;
-}
-function withDiagnosticFailureDisposition<T extends CodexDynamicToolCallResponse>(
-  response: T,
-  disposition: "blocked" | CodexDynamicToolDiagnosticTerminalReason | undefined,
-): T {
-  if (!disposition) {
-    return response;
-  }
-  withDiagnosticTerminalType(response, disposition === "blocked" ? "blocked" : "error");
-  if (disposition !== "blocked") {
-    Object.defineProperty(response, "diagnosticTerminalReason", {
-      configurable: true,
-      enumerable: false,
-      value: disposition,
-    });
-  }
-  return response;
-}
-function withDynamicToolTermination<T extends CodexDynamicToolCallResponse>(
-  response: T,
-  terminate: boolean,
-): T {
-  if (!terminate) {
-    return response;
-  }
-  Object.defineProperty(response, "terminate", {
-    configurable: true,
-    enumerable: false,
-    value: true,
-  });
-  return response;
-}
-function withDynamicToolAsyncStarted<T extends CodexDynamicToolCallResponse>(
-  response: T,
-  asyncStarted: boolean,
-): T {
-  if (!asyncStarted) {
-    return response;
-  }
-  Object.defineProperty(response, "asyncStarted", {
-    configurable: true,
-    enumerable: false,
-    value: true,
-  });
-  return response;
 }
 function normalizeToolResultMaxChars(maxChars: number): number {
   return typeof maxChars === "number" && Number.isFinite(maxChars) && maxChars > 0

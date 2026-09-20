@@ -229,11 +229,16 @@ suite.define(() => {
                 const title = row
                   .querySelector(".sidebar-recent-session__name")!
                   .getBoundingClientRect();
+                const icon = row
+                  .querySelector(".sidebar-session-indicator")!
+                  .getBoundingClientRect();
                 const state = row
                   .querySelector(".sidebar-session-team-state")
                   ?.getBoundingClientRect();
                 return {
                   left: title.left,
+                  iconLeft: icon.left,
+                  iconRight: icon.right,
                   right: row.getBoundingClientRect().right,
                   stateLeft: state?.left,
                   stateRight: state?.right,
@@ -251,10 +256,11 @@ suite.define(() => {
           const beforeFocus = await geometry();
           expect(beforeFocus.avatarWidth).toBe(36);
           expect(beforeFocus.headerHeight).toBe(48);
-          expect(beforeFocus.rows[0]!.left).toBeCloseTo(beforeFocus.avatarLeft, 1);
+          expect(beforeFocus.rows[0]!.iconLeft).toBeCloseTo(beforeFocus.avatarLeft, 1);
           expect(beforeFocus.rows[1]!.left - beforeFocus.rows[0]!.left).toBeCloseTo(16, 1);
           expect(beforeFocus.rows[2]!.left - beforeFocus.rows[1]!.left).toBeCloseTo(16, 1);
           for (const row of beforeFocus.rows) {
+            expect(row.left - row.iconRight).toBeGreaterThanOrEqual(8);
             expect(row.right).toBeCloseTo(beforeFocus.rows[0]!.right, 1);
             expect(row.height).toBe(touch ? 44 : 32);
             if (row.stateLeft !== undefined) {

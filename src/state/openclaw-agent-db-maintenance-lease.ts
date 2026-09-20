@@ -1,5 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import path from "node:path";
+import { withSqliteIntegrityWorkerScope } from "../infra/sqlite-integrity-worker.js";
 import {
   AGENT_DATABASE_MAINTENANCE_LEASE,
   assertNoOpenClawAgentDatabaseLeases,
@@ -108,50 +109,54 @@ async function runMaintenanceScope<T>(
         }
       : {}),
   };
-  return activeMaintenance.run(scope, () =>
-    runWithAgentDatabaseMaintenanceAuthority(lease, databasePath, async () => {
-      let outcome: { value: T } | { error: unknown };
-      try {
-        assertCurrent();
-        outcome = { value: await run(lease) };
-      } catch (error) {
-        outcome = { error };
-      }
-      scope.accepting = false;
-      const errors: unknown[] = "error" in outcome ? [outcome.error] : [];
-      let joined = 0;
-      while (joined < scope.pending.length) {
-        const admitted = scope.pending.slice(joined);
-        joined += admitted.length;
-        for (const result of await Promise.allSettled(admitted)) {
-          if (result.status === "rejected" && !errors.includes(result.reason)) {
-            errors.push(result.reason);
+  try {
+    return await withSqliteIntegrityWorkerScope(assertCurrent, () =>
+      activeMaintenance.run(scope, () =>
+        runWithAgentDatabaseMaintenanceAuthority(lease, databasePath, async () => {
+          let outcome: { value: T } | { error: unknown };
+          try {
+            assertCurrent();
+            outcome = { value: await run(lease) };
+          } catch (error) {
+            outcome = { error };
           }
-        }
-      }
-      try {
-        assertCurrent();
-      } catch (error) {
-        if (!errors.includes(error)) {
-          errors.push(error);
-        }
-      } finally {
-        scope.active = false;
-      }
-      if (errors.length > 1) {
-        throw new AggregateError(errors, "Agent maintenance and nested work failed", {
-          cause: errors[0],
-        });
-      }
-      if (errors.length === 1) {
-        throw errors[0];
-      }
-      if ("error" in outcome) {
-        throw outcome.error;
-      }
-      return outcome.value;
-    }),
-  );
+          scope.accepting = false;
+          const errors: unknown[] = "error" in outcome ? [outcome.error] : [];
+          let joined = 0;
+          while (joined < scope.pending.length) {
+            const admitted = scope.pending.slice(joined);
+            joined += admitted.length;
+            for (const result of await Promise.allSettled(admitted)) {
+              if (result.status === "rejected" && !errors.includes(result.reason)) {
+                errors.push(result.reason);
+              }
+            }
+          }
+          try {
+            assertCurrent();
+          } catch (error) {
+            if (!errors.includes(error)) {
+              errors.push(error);
+            }
+          }
+          if (errors.length > 1) {
+            throw new AggregateError(errors, "Agent maintenance and nested work failed", {
+              cause: errors[0],
+            });
+          }
+          if (errors.length === 1) {
+            throw errors[0];
+          }
+          if ("error" in outcome) {
+            throw outcome.error;
+          }
+          return outcome.value;
+        }),
+      ),
+    );
+  } finally {
+    scope.active = false;
+  }
 }
 
 /** Retain one real lease through nested Doctor work; serialized selectors grant no authority. */

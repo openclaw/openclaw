@@ -4,6 +4,7 @@ import { tryResolveAmbientOwnerAgentId } from "../../agents/agent-scope-config.j
 import { canonicalizePath } from "../../agents/utils/paths.js";
 import { isDefaultStateDir } from "../../config/paths.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { sha256Hex } from "../../infra/crypto-digest.js";
 import { pruneMapToMaxSize } from "../../infra/map-size.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { shouldRejectHardlinkedPluginFiles } from "../../plugins/hardlink-policy.js";
@@ -18,7 +19,7 @@ import {
 import { normalizeSkillFilter } from "../discovery/filter.js";
 import { assertUnambiguousManagedSkillNames } from "../library/command-name.js";
 import { loadSkillLibrarySelection } from "../library/selection.js";
-import { getSkillsSnapshotVersion } from "../runtime/refresh-state.js";
+import { getSkillsSourceVersion, observeSkillsSnapshotSource } from "../runtime/refresh-state.js";
 import { mergeRemoteNodeSkillEntries } from "../runtime/remote-skills.js";
 import { fingerprintSkillSnapshotConfig } from "../runtime/snapshot-config-fingerprint.js";
 import type { SkillEligibilityContext, SkillEntry, SkillSnapshot } from "../types.js";
@@ -51,9 +52,15 @@ import {
 const skillsLogger = createSubsystemLogger("skills");
 const CUSTODIAN_SKILLS_DIR_NAME = "custodian-skills";
 const MAX_SKILL_ENTRY_CACHE_SIZE = 64;
-type LocalSkillTiers = { agent: SkillEntry[]; execution: SkillEntry[] };
+type SkillCollision = { winner: Skill; loser: Skill };
+type LocalSkillTiers = {
+  sourceKey: string;
+  agent: SkillEntry[];
+  execution: SkillEntry[];
+  collisions: SkillCollision[];
+};
 const skillEntryCache = new Map<string, LocalSkillTiers>();
-const reportedSkillCollisions = new Map<string, true>();
+const reportedSkillCollisions = new Set<string>();
 
 type WorkspaceSkillLoadOptions = {
   executionWorkspaceDir?: string;
@@ -76,26 +83,37 @@ type WorkspaceSkillLoadOptions = {
   pluginMetadataSnapshot?: PluginMetadataSnapshot;
 };
 
-// Local-source and workspace-tier collisions share diagnostics and deduplication.
-function warnSkillPrecedenceCollision(winner: Skill, loser: Skill, workspaceDir: string): void {
-  const collisionKey = JSON.stringify([
-    workspaceDir,
-    getSkillsSnapshotVersion(workspaceDir),
-    winner.name,
-    winner.source,
-    winner.filePath,
-    loser.source,
-    loser.filePath,
-  ]);
-  if (reportedSkillCollisions.has(collisionKey)) {
-    return;
+// Content includes declared frontmatter. Paths identify copies, not new conflicts.
+function warnSkillPrecedenceCollisions(collisions: SkillCollision[]): void {
+  for (const { winner, loser } of collisions) {
+    if (
+      winner.contentHash &&
+      winner.contentHash === loser.contentHash &&
+      winner.name === loser.name &&
+      winner.description === loser.description &&
+      winner.disableModelInvocation === loser.disableModelInvocation
+    ) {
+      continue;
+    }
+    const fingerprint = sha256Hex(
+      JSON.stringify(
+        [winner, loser].map((skill) => [
+          skill.name,
+          skill.contentHash ?? skill.filePath,
+          skill.description,
+          skill.disableModelInvocation,
+        ]),
+      ),
+    );
+    if (reportedSkillCollisions.has(fingerprint)) {
+      continue;
+    }
+    reportedSkillCollisions.add(fingerprint);
+    warnSkillPrecedenceCollision(winner, loser);
   }
-  // Lexically distinct workspace roots can reach the same file through a symlink.
-  if (canonicalizePath(winner.filePath) === canonicalizePath(loser.filePath)) {
-    return;
-  }
-  reportedSkillCollisions.set(collisionKey, true);
-  pruneMapToMaxSize(reportedSkillCollisions, MAX_SKILL_ENTRY_CACHE_SIZE * 4);
+}
+
+function warnSkillPrecedenceCollision(winner: Skill, loser: Skill): void {
   const collisionName = winner.name.slice(0, 128);
   skillsLogger.warn("Skill precedence collision resolved.", {
     skill: collisionName,
@@ -187,8 +205,8 @@ function loadLocalSkillTiers(
       : undefined;
   const osHomeDir = resolveSkillsUserHomeDir();
   const pluginSkillsDir = opts?.pluginSkillsDir ?? resolvePluginSkillsDir();
-  // Snapshot versions are the watcher-owned invalidation boundary; cache hits must do no IO.
-  const cacheKey = JSON.stringify([
+  // Source revisions invalidate discovery even when resolved content stays unchanged.
+  const sourceKey = JSON.stringify([
     workspaceDir,
     executionWorkspaceDir,
     workspaceOnly,
@@ -197,10 +215,13 @@ function loadLocalSkillTiers(
     opts?.managedSkillsDir,
     opts?.bundledSkillsDir,
     pluginSkillsDir,
-    opts?.config ? fingerprintSkillSnapshotConfig(opts.config) : undefined,
     osHomeDir,
     process.env.OPENCLAW_STATE_DIR,
-    getSkillsSnapshotVersion(workspaceDir),
+  ]);
+  const cacheKey = JSON.stringify([
+    sourceKey,
+    opts?.config ? fingerprintSkillSnapshotConfig(opts.config) : undefined,
+    getSkillsSourceVersion(workspaceDir, opts),
   ]);
   const cachedEntries = skillEntryCache.get(cacheKey);
   if (cachedEntries) {
@@ -279,12 +300,16 @@ function loadLocalSkillTiers(
     loadSkills,
   );
 
+  const collisions: SkillCollision[] = [];
   const mergeRecords = (records: LoadedSkillRecord[]) => {
     const merged = new Map<string, LoadedSkillRecord>();
     for (const record of records) {
       const replaced = merged.get(record.skill.name);
-      if (replaced) {
-        warnSkillPrecedenceCollision(record.skill, replaced.skill, workspaceDir);
+      if (
+        replaced &&
+        canonicalizePath(record.skill.filePath) !== canonicalizePath(replaced.skill.filePath)
+      ) {
+        collisions.push({ winner: record.skill, loser: replaced.skill });
       }
       merged.set(record.skill.name, record);
     }
@@ -308,6 +333,8 @@ function loadLocalSkillTiers(
     ...workspaceSkills,
   ]);
   const entries = {
+    sourceKey,
+    collisions,
     agent: records.map(createSkillEntry),
     execution:
       executionWorkspaceDir && !workspaceOnly
@@ -318,25 +345,69 @@ function loadLocalSkillTiers(
   };
   skillEntryCache.set(cacheKey, entries);
   pruneMapToMaxSize(skillEntryCache, MAX_SKILL_ENTRY_CACHE_SIZE);
+  const winners = new Map(entries.agent.map((entry) => [entry.skill.name, entry]));
+  for (const entry of entries.execution) {
+    const winner = winners.get(entry.skill.name);
+    if (!winner) {
+      winners.set(entry.skill.name, entry);
+    } else if (canonicalizePath(winner.skill.filePath) !== canonicalizePath(entry.skill.filePath)) {
+      collisions.push({ winner: winner.skill, loser: entry.skill });
+    }
+  }
+  // Retain only discovery inputs, never the turn's assertions, eligibility, or session state.
+  const sourceOptions: WorkspaceSkillLoadOptions = {
+    executionWorkspaceDir,
+    workspaceOnly,
+    agentId: opts?.agentId,
+    config: opts?.config,
+    managedSkillsDir: opts?.managedSkillsDir,
+    bundledSkillsDir: opts?.bundledSkillsDir,
+    pluginSkillsDir: opts?.pluginSkillsDir,
+    pluginMetadataSnapshot: opts?.pluginMetadataSnapshot,
+  };
+  observeSkillsSnapshotSource({
+    workspaceDir,
+    sourceKey,
+    sourceScope: sourceOptions,
+    entries: Array.from(winners.values())
+      .toSorted((a, b) => a.skill.name.localeCompare(b.skill.name, "en"))
+      .map((entry) => ({ skill: entry.skill, skillKey: resolveSkillKey(entry.skill, entry) })),
+    reconcile: (inputs) => {
+      if (inputs) {
+        sourceOptions.config = inputs.config;
+        sourceOptions.pluginMetadataSnapshot = inputs.pluginMetadataSnapshot;
+      }
+      return loadLocalSkillTiers(workspaceDir, sourceOptions).sourceKey;
+    },
+    suspend: () => {
+      sourceOptions.config = undefined;
+      sourceOptions.pluginMetadataSnapshot = undefined;
+    },
+  });
   return entries;
 }
 
 function loadSkillEntries(workspaceDir: string, opts?: WorkspaceSkillLoadOptions): SkillEntry[] {
   const tiers = loadLocalSkillTiers(workspaceDir, opts);
   const entries = mergeRemoteNodeSkillEntries(tiers.agent, opts?.eligibility?.nodeSkills);
+  const collisions = [...tiers.collisions];
   if (tiers.execution.length > 0) {
     const agentByName = new Map(entries.map((entry) => [entry.skill.name, entry]));
+    const localNames = new Set(tiers.agent.map((entry) => entry.skill.name));
     // Include node skills in the agent tier before admitting execution-local names.
     // Agent entries also stay first when the prompt budget truncates the catalog.
     for (const entry of tiers.execution) {
       const agentEntry = agentByName.get(entry.skill.name);
       if (agentEntry) {
-        warnSkillPrecedenceCollision(agentEntry.skill, entry.skill, workspaceDir);
+        if (!localNames.has(entry.skill.name)) {
+          collisions.push({ winner: agentEntry.skill, loser: entry.skill });
+        }
       } else {
         entries.push(entry);
       }
     }
   }
+  warnSkillPrecedenceCollisions(collisions);
   if (opts?.librarySelections?.length) {
     entries.push(...loadSkillLibrarySelection(opts.librarySelections));
   }
@@ -377,13 +448,13 @@ export async function resolveWorkspaceSkillPromptEntries(
 ): Promise<{ eligible: SkillEntry[]; skillFilter: string[] | undefined }> {
   for (;;) {
     opts?.assertCurrent?.();
-    const sourceVersion = getSkillsSnapshotVersion(workspaceDir);
+    const sourceVersion = getSkillsSourceVersion(workspaceDir, opts);
     const skillFilter = resolveEffectiveWorkspaceSkillFilter(opts);
     const skillEntries = opts?.entries ?? loadSkillEntries(workspaceDir, opts);
     const probe = await prepareSkillBinaryProbe(skillEntries, opts, opts?.assertCurrent);
     if (
       probe.needsRetry() ||
-      (!opts?.entries && getSkillsSnapshotVersion(workspaceDir) !== sourceVersion)
+      (!opts?.entries && getSkillsSourceVersion(workspaceDir, opts) !== sourceVersion)
     ) {
       continue;
     }
@@ -478,7 +549,7 @@ export async function prepareWorkspaceSkills(
 ): Promise<SkillEntry[]> {
   for (;;) {
     assertCurrent?.();
-    const sourceVersion = getSkillsSnapshotVersion(workspaceDir);
+    const sourceVersion = getSkillsSourceVersion(workspaceDir, opts);
     const { entries, effectiveSkillFilter, shouldFilter } = resolveWorkspaceSkillLoad(
       workspaceDir,
       opts,
@@ -487,7 +558,7 @@ export async function prepareWorkspaceSkills(
       return entries;
     }
     const probe = await prepareSkillBinaryProbe(entries, opts, assertCurrent);
-    if (probe.needsRetry() || getSkillsSnapshotVersion(workspaceDir) !== sourceVersion) {
+    if (probe.needsRetry() || getSkillsSourceVersion(workspaceDir, opts) !== sourceVersion) {
       continue;
     }
     const eligible = filterSkillEntries(

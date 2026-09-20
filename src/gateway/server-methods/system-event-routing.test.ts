@@ -136,7 +136,7 @@ describe("system-event routing", () => {
       'systemHandlers["system-event"] test invariant',
     )(request);
 
-    expect(peekSystemEvents("global")).toEqual(["Wake the system owner."]);
+    expect(peekSystemEvents("agent:main:global")).toEqual(["Wake the system owner."]);
     expect(peekSystemEvents("agent:main:main")).toEqual([]);
     expect(mocks.requestHeartbeat).toHaveBeenCalledWith({
       source: "notifications-event",

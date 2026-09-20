@@ -446,24 +446,6 @@
       }
     },
     {
-      "name": "@openclaw/logbook",
-      "description": "OpenClaw automatic work journal plugin",
-      "source": "official",
-      "kind": "plugin",
-      "openclaw": {
-        "plugin": {
-          "id": "logbook",
-          "label": "Logbook"
-        },
-        "install": {
-          "clawhubSpec": "clawhub:@openclaw/logbook",
-          "npmSpec": "@openclaw/logbook",
-          "defaultChoice": "clawhub",
-          "minHostVersion": ">=2026.9.5"
-        }
-      }
-    },
-    {
       "name": "@openclaw/memory-lancedb",
       "description": "OpenClaw LanceDB-backed long-term memory plugin with auto-recall/capture",
       "source": "official",
@@ -482,28 +464,6 @@
           "npmSpec": "@openclaw/memory-lancedb",
           "defaultChoice": "npm",
           "minHostVersion": ">=2026.5.31"
-        }
-      }
-    },
-    {
-      "name": "@openclaw/memory-wiki",
-      "description": "OpenClaw persistent wiki plugin",
-      "source": "official",
-      "kind": "plugin",
-      "openclaw": {
-        "plugin": {
-          "id": "memory-wiki",
-          "label": "Memory Wiki"
-        },
-        "catalog": {
-          "featured": true,
-          "order": 30
-        },
-        "install": {
-          "clawhubSpec": "clawhub:@openclaw/memory-wiki",
-          "npmSpec": "@openclaw/memory-wiki",
-          "defaultChoice": "clawhub",
-          "minHostVersion": ">=2026.9.4"
         }
       }
     },
@@ -563,29 +523,6 @@
           "npmSpec": "@openclaw/openshell-sandbox",
           "defaultChoice": "npm",
           "minHostVersion": ">=2026.5.12-beta.1"
-        }
-      }
-    },
-    {
-      "name": "@openclaw/onepassword",
-      "description": "1Password SecretRef resolver and audited agent secrets broker for OpenClaw",
-      "source": "official",
-      "kind": "plugin",
-      "openclaw": {
-        "plugin": {
-          "id": "onepassword",
-          "label": "1Password"
-        },
-        "contracts": {
-          "tools": [
-            "onepassword"
-          ]
-        },
-        "install": {
-          "clawhubSpec": "clawhub:@openclaw/onepassword",
-          "npmSpec": "@openclaw/onepassword",
-          "defaultChoice": "clawhub",
-          "minHostVersion": ">=2026.9.4"
         }
       }
     },

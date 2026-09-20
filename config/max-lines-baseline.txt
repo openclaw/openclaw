@@ -22,7 +22,6 @@ extensions/browser/src/cli/browser-cli-manage.ts
 extensions/codex/doctor-contract-api.test.ts
 extensions/codex/src/app-server/approval-bridge.test.ts
 extensions/codex/src/app-server/approval-bridge.ts
-extensions/codex/src/app-server/attempt-context.ts
 extensions/codex/src/app-server/auth-bridge.test.ts
 extensions/codex/src/app-server/auth-bridge.ts
 extensions/codex/src/app-server/client.ts
@@ -40,7 +39,6 @@ extensions/codex/src/app-server/elicitation-bridge.ts
 extensions/codex/src/app-server/native-subagent-monitor.test.ts
 extensions/codex/src/app-server/native-subagent-monitor.ts
 extensions/codex/src/app-server/plugin-thread-config.test.ts
-extensions/codex/src/app-server/rate-limits.ts
 extensions/codex/src/app-server/run-attempt.context-engine.test.ts
 extensions/codex/src/app-server/run-attempt.test.ts
 extensions/codex/src/app-server/run-attempt.turn-watches.test.ts
@@ -131,7 +129,6 @@ extensions/memory-core/src/cli.test.ts
 extensions/memory-core/src/dreaming-phases.test.ts
 extensions/memory-core/src/dreaming-phases.ts
 extensions/memory-core/src/dreaming.test.ts
-extensions/memory-core/src/dreaming.ts
 extensions/memory-core/src/memory/index.test.ts
 extensions/memory-core/src/memory/manager-embedding-ops.ts
 extensions/memory-core/src/memory/manager-search.test.ts
@@ -172,7 +169,6 @@ extensions/policy/src/doctor/register.models-and-mcp.test-utils.ts
 extensions/policy/src/doctor/register.sandbox-and-tools.test-utils.ts
 extensions/qa-lab/src/cli.runtime.test.ts
 extensions/qa-lab/src/cli.runtime.ts
-extensions/qa-lab/src/cli.ts
 extensions/qa-lab/src/confidence-report.ts
 extensions/qa-lab/src/evidence-gallery.ts
 extensions/qa-lab/src/gateway-child.test.ts
@@ -272,7 +268,6 @@ packages/markdown-core/src/ir.ts
 packages/memory-host-sdk/src/host/session-files.ts
 packages/sdk/src/client.ts
 packages/sdk/src/index.test.ts
-packages/tool-call-repair/src/stream-normalizer.test.ts
 packages/tool-call-repair/src/stream-normalizer.ts
 src/acp/control-plane/manager.test.ts
 src/acp/control-plane/manager.turn-results.test.ts
@@ -330,7 +325,6 @@ src/agents/embedded-agent-runner/run.overflow-compaction.harness.ts
 src/agents/embedded-agent-runner/run/attempt-spawn-workspace.test-support.ts
 src/agents/embedded-agent-runner/run/attempt.spawn-workspace.context-engine.test.ts
 src/agents/embedded-agent-runner/run/attempt.test.ts
-src/agents/embedded-agent-runner/run/attempt.tool-call-argument-repair.ts
 src/agents/embedded-agent-runner/runs.ts
 src/agents/embedded-agent-runner/thinking.test.ts
 src/agents/embedded-agent-runner/tool-result-context-guard.test.ts
@@ -640,7 +634,6 @@ src/gateway/test-helpers.server.ts
 src/gateway/tools-invoke-http.test.ts
 src/gateway/watch-node-http.ts
 src/gateway/worker-environments/bootstrap.ts
-src/gateway/worker-environments/inference-runtime.ts
 src/gateway/worker-environments/store.ts
 src/infra/approval-handler-runtime.ts
 src/infra/backup-create.test.ts
@@ -667,7 +660,6 @@ src/infra/restart.ts
 src/infra/run-node.test.ts
 src/infra/session-cost-usage.test.ts
 src/infra/state-migrations.doctor.ts
-src/infra/state-migrations.runtime-state.ts
 src/infra/state-migrations.session-store.ts
 src/infra/state-migrations.storage.ts
 src/infra/state-migrations.test.ts
@@ -703,7 +695,6 @@ src/plugin-sdk/provider-stream-shared.test.ts
 src/plugin-sdk/test-helpers/plugin-runtime-mock.ts
 src/plugin-sdk/test-helpers/provider-discovery-contract.ts
 src/plugin-sdk/test-helpers/provider-runtime-contract.ts
-src/plugin-state/plugin-state-store.sqlite.ts
 src/plugins/capability-provider-runtime.test.ts
 src/plugins/channel-plugin-ids.test.ts
 src/plugins/clawhub.test.ts
@@ -759,11 +750,9 @@ src/secrets/runtime-web-tools.ts
 src/security/audit-extra.async.ts
 src/security/audit-extra.sync.ts
 src/security/audit.ts
-src/sessions/session-state-events.ts
 src/shared/json-schema-defaults.ts
 src/shared/text/assistant-visible-text.ts
 src/skills/lifecycle/clawhub.test.ts
-src/skills/lifecycle/install.ts
 src/skills/security/scanner.ts
 src/skills/workshop/service.test.ts
 src/snapshot/local-repository.test.ts

@@ -1,3 +1,4 @@
+import { resolvePhysicalSessionStorePath } from "../../../config/sessions/session-store-path.js";
 import type { GatewayContextResolver } from "../../../gateway/server-methods/types.js";
 /** Owns subagent registration and queued collector launch transitions. */
 import {
@@ -6,6 +7,7 @@ import {
 } from "../../../infra/agent-events.js";
 import { createSubsystemLogger } from "../../../logging/subsystem.js";
 import { bindGatewayContextResolver } from "../../../plugins/runtime/gateway-request-scope.js";
+import { resolveAgentIdFromSessionKey } from "../../../routing/session-key.js";
 import { emitSessionLifecycleEvent } from "../../../sessions/session-lifecycle-events.js";
 import {
   createQueuedTaskRun,
@@ -93,6 +95,25 @@ export class SubagentLaunchManager extends SubagentRecoveryManager {
             )
           : undefined,
     });
+    const previous = this.options.runs.get(runId);
+    entry.requesterStorePath = previous
+      ? previous.requesterStorePath
+      : resolvePhysicalSessionStorePath(
+          { sessionKey: requesterSessionKey, agentId: entry.requesterAgentId },
+          cfg,
+        );
+    entry.controllerStorePath = previous
+      ? previous.controllerStorePath
+      : resolvePhysicalSessionStorePath(
+          {
+            sessionKey: entry.controllerSessionKey,
+            agentId: resolveAgentIdFromSessionKey(
+              entry.controllerSessionKey,
+              entry.requesterAgentId,
+            ),
+          },
+          cfg,
+        );
     this.options.runs.set(runId, entry);
     bindGatewayContextResolver(entry, registerParams.gatewayContextResolver);
     const killReconciliationSnapshots = this.markOlderKillReconciliationsSuperseded(entry);

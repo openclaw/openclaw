@@ -5,6 +5,16 @@ import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime
 import { describe, expect, it, vi } from "vitest";
 
 describe("createPluginRuntimeMock", () => {
+  it.each(["inbound", "turn"] as const)("reflects %s overrides through both aliases", (surface) => {
+    const overrides = createPluginRuntimeMock().channel.inbound;
+    const runtime = createPluginRuntimeMock({
+      channel: { [surface]: { run: overrides.run, dispatch: overrides.dispatch } },
+    });
+    expect(runtime.channel.turn).toBe(runtime.channel.inbound);
+    expect(runtime.channel.turn.run).toBe(overrides.run);
+    expect(runtime.channel.turn.dispatch).toBe(overrides.dispatch);
+  });
+
   it("clones the initializer callback input and applies its final extension patch", async () => {
     const runtime = createPluginRuntimeMock();
     const pluginExtensions = { codex: { marker: "original" } };
@@ -78,7 +88,7 @@ describe("createPluginRuntimeMock", () => {
     unsubscribe();
   });
 
-  it("exposes channel inbound helpers without the removed turn aliases", async () => {
+  it.each(["inbound", "turn"] as const)("runs channel events through %s", async (surface) => {
     const channel = "test";
 
     const input = vi.fn((raw: { id: string }) => ({
@@ -105,7 +115,8 @@ describe("createPluginRuntimeMock", () => {
         reply: { dispatchReplyWithBufferedBlockDispatcher },
       },
     });
-    expect("turn" in runtime.channel).toBe(false);
+    expect(runtime.channel.turn).toBe(runtime.channel.inbound);
+    expect(runtime.channel.turn.dispatch).toBe(runtime.channel.inbound.dispatch);
     const resolveTurn = vi.fn(async () => ({
       cfg: {},
       channel,
@@ -122,7 +133,7 @@ describe("createPluginRuntimeMock", () => {
       delivery: { deliver: vi.fn(async () => undefined) },
     }));
 
-    const result = await runtime.channel.inbound.run({
+    const result = await runtime.channel[surface].run({
       channel,
       raw: { id: "m1" },
       adapter: {
@@ -153,53 +164,56 @@ describe("createPluginRuntimeMock", () => {
     );
   });
 
-  it("uses merged channel overrides when dispatching an inbound turn", async () => {
-    const resolveStorePath = vi.fn(() => "/tmp/override-sessions.json");
-    const recordInboundSession = vi.fn(async () => undefined);
-    const dispatchReplyWithBufferedBlockDispatcher = vi.fn(async () => ({
-      queuedFinal: false,
-      counts: { tool: 0, block: 0, final: 0 },
-    }));
-    const runtime = createPluginRuntimeMock({
-      channel: {
-        session: { resolveStorePath, recordInboundSession },
-        reply: { dispatchReplyWithBufferedBlockDispatcher },
-      },
-    });
+  it.each(["inbound", "turn"] as const)(
+    "%s dispatch uses merged channel overrides",
+    async (surface) => {
+      const resolveStorePath = vi.fn(() => "/tmp/override-sessions.json");
+      const recordInboundSession = vi.fn(async () => undefined);
+      const dispatchReplyWithBufferedBlockDispatcher = vi.fn(async () => ({
+        queuedFinal: false,
+        counts: { tool: 0, block: 0, final: 0 },
+      }));
+      const runtime = createPluginRuntimeMock({
+        channel: {
+          session: { resolveStorePath, recordInboundSession },
+          reply: { dispatchReplyWithBufferedBlockDispatcher },
+        },
+      });
 
-    await runtime.channel.inbound.dispatch({
-      cfg: {},
-      channel: "test",
-      route: {
-        agentId: "main",
-        sessionKey: "agent:main:test:direct:u1",
-      },
-      ctxPayload: {
-        Body: "hello",
-        CommandAuthorized: false,
-        SessionKey: "agent:main:test:direct:u1",
-      },
-      replyPipeline: {},
-      delivery: { deliver: vi.fn(async () => undefined) },
-    });
+      await runtime.channel[surface].dispatch({
+        cfg: {},
+        channel: "test",
+        route: {
+          agentId: "main",
+          sessionKey: "agent:main:test:direct:u1",
+        },
+        ctxPayload: {
+          Body: "hello",
+          CommandAuthorized: false,
+          SessionKey: "agent:main:test:direct:u1",
+        },
+        replyPipeline: {},
+        delivery: { deliver: vi.fn(async () => undefined) },
+      });
 
-    expect(resolveStorePath).toHaveBeenCalledWith(undefined, { agentId: "main" });
-    expect(recordInboundSession).toHaveBeenCalledWith(
-      expect.objectContaining({
-        storePath: "/tmp/override-sessions.json",
-        sessionKey: "agent:main:test:direct:u1",
-      }),
-    );
-    expect(dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledOnce();
-    expect(dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledWith(
-      expect.objectContaining({
-        dispatcherOptions: expect.objectContaining({
-          responsePrefixContextProvider: expect.any(Function),
+      expect(resolveStorePath).toHaveBeenCalledWith(undefined, { agentId: "main" });
+      expect(recordInboundSession).toHaveBeenCalledWith(
+        expect.objectContaining({
+          storePath: "/tmp/override-sessions.json",
+          sessionKey: "agent:main:test:direct:u1",
         }),
-        replyOptions: expect.objectContaining({ onModelSelected: expect.any(Function) }),
-      }),
-    );
-  });
+      );
+      expect(dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledOnce();
+      expect(dispatchReplyWithBufferedBlockDispatcher).toHaveBeenCalledWith(
+        expect.objectContaining({
+          dispatcherOptions: expect.objectContaining({
+            responsePrefixContextProvider: expect.any(Function),
+          }),
+          replyOptions: expect.objectContaining({ onModelSelected: expect.any(Function) }),
+        }),
+      );
+    },
+  );
 
   it("rejects prepared turns whose dispatch does not own top-level adoption", async () => {
     const recordInboundSession = vi.fn(async () => undefined);
@@ -341,6 +355,20 @@ describe("createPluginRuntimeMock", () => {
         dispatched: true,
       }),
     );
+  });
+
+  it("keeps defined canonical overrides ahead of legacy overrides", () => {
+    const legacy = createPluginRuntimeMock().channel.inbound;
+    const canonical = createPluginRuntimeMock().channel.inbound;
+    const runtime = createPluginRuntimeMock({
+      channel: {
+        turn: { run: legacy.run, dispatch: legacy.dispatch },
+        inbound: { run: undefined, dispatch: canonical.dispatch },
+      },
+    });
+    expect(runtime.channel.turn).toBe(runtime.channel.inbound);
+    expect(runtime.channel.turn.run).toBe(legacy.run);
+    expect(runtime.channel.turn.dispatch).toBe(canonical.dispatch);
   });
 
   it("routes untrusted group prompt facts into untrusted structured context", () => {

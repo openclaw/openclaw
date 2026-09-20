@@ -3,8 +3,12 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseForTest,
+} from "../../state/openclaw-state-db.js";
 import { activeSessions, startTranscripts } from "../../transcripts/capture.js";
+import { clearTranscriptCapturesForTest } from "../../transcripts/capture.test-support.js";
 import type {
   TranscriptSourceProvider,
   TranscriptStartRequest,
@@ -21,10 +25,11 @@ vi.mock("../../transcripts/provider-registry.js", () => ({
 }));
 const tempDirs = createTempDirTracker();
 
-afterEach(() => {
+afterEach(async () => {
+  await clearTranscriptCapturesForTest();
   vi.restoreAllMocks();
   vi.useRealTimers();
-  activeSessions.clear();
+  await closeOpenClawStateDatabaseAsync();
   closeOpenClawStateDatabaseForTest();
   tempDirs.cleanup();
 });
@@ -576,7 +581,7 @@ describe("transcript capture ownership", () => {
     },
   );
 
-  it.each(["writeSession", "readUtterancesForSession", "writeSummary"] as const)(
+  it.each(["writeSession", "readSummarySnapshot", "writeSummary"] as const)(
     "exposes terminal %s failures and recovers without another provider stop",
     async (operation) => {
       const h = harness();
@@ -628,9 +633,9 @@ describe("transcript capture ownership", () => {
       const session = (await h.store.readSession(sessionId))!;
       const entered = createDeferred();
       const release = createDeferred();
-      const originalRead = h.store.readUtterancesForSession.bind(h.store);
+      const originalRead = h.store.readSummarySnapshot.bind(h.store);
       if (phase === "inference") {
-        vi.spyOn(TranscriptsStore.prototype, "readUtterancesForSession").mockImplementationOnce(
+        vi.spyOn(TranscriptsStore.prototype, "readSummarySnapshot").mockImplementationOnce(
           async (...args) => {
             const utterances = await originalRead(...args);
             entered.resolve();
@@ -649,6 +654,7 @@ describe("transcript capture ownership", () => {
         );
       }
       const historical = h.execute({ action: "summarize", sessionId });
+      let stopping: ReturnType<typeof h.execute> | undefined;
       try {
         await Promise.race([entered.promise, historical]);
         // Only the configured generated-session path may reopen its durable tuple.
@@ -666,15 +672,18 @@ describe("transcript capture ownership", () => {
         });
         expect((await h.store.readSession(sessionId))?.startedAt).toBe(session.startedAt);
         await h.requests[1]!.onUtterance({ text: "Reopened meeting" });
-        await h.execute({ action: "stop", sessionId });
+        const previousStops = vi.mocked(h.provider.stop!).mock.calls.length;
+        stopping = h.execute({ action: "stop", sessionId });
+        await vi.waitFor(() => expect(h.provider.stop).toHaveBeenCalledTimes(previousStops + 1));
         release.resolve();
+        await stopping;
         await expect.soft(historical).resolves.toMatchObject({ details: { skipped: true } });
         expect(await h.store.readSummary(session)).toMatchObject({
           summary: { transcript: ["Original meeting", "Reopened meeting"] },
         });
       } finally {
         release.resolve();
-        await Promise.allSettled([historical]);
+        await Promise.allSettled([historical, stopping]);
         await h.execute({ action: "stop", sessionId });
       }
     },
@@ -689,9 +698,9 @@ describe("transcript capture ownership", () => {
     const releaseRead = createDeferred();
     const exportEntered = createDeferred();
     const releaseExport = createDeferred();
-    const originalRead = h.store.readUtterancesForSession.bind(h.store);
+    const originalRead = h.store.readSummarySnapshot.bind(h.store);
     const originalExport = h.store.materializeSessionArtifacts.bind(h.store);
-    vi.spyOn(TranscriptsStore.prototype, "readUtterancesForSession").mockImplementationOnce(
+    vi.spyOn(TranscriptsStore.prototype, "readSummarySnapshot").mockImplementationOnce(
       async (...args) => {
         const utterances = await originalRead(...args);
         readEntered.resolve();
@@ -712,8 +721,9 @@ describe("transcript capture ownership", () => {
         },
       );
       stop = h.execute({ action: "stop", sessionId: "notes" });
-      await exportEntered.promise;
+      await vi.waitFor(() => expect(h.provider.stop).toHaveBeenCalledOnce());
       releaseRead.resolve();
+      await exportEntered.promise;
       await expect(summary).resolves.toMatchObject({ details: { skipped: true } });
       expect(await h.store.readSummary(session)).toMatchObject({
         summary: { transcript: ["Before summary", "Before stop"] },
@@ -785,7 +795,7 @@ describe("transcript capture ownership", () => {
       await h.start();
       const replacement = (await h.store.readSession("2026-07-02/notes"))!;
       const savedSummary = await h.store.readSummary(replacement);
-      const read = vi.spyOn(TranscriptsStore.prototype, "readUtterancesForSession");
+      const read = vi.spyOn(TranscriptsStore.prototype, "readSummarySnapshot");
       const write = vi.spyOn(TranscriptsStore.prototype, "writeSummary");
       const materialize = vi.spyOn(TranscriptsStore.prototype, "materializeSessionArtifacts");
       releaseAuthorization();
@@ -814,8 +824,8 @@ describe("transcript capture ownership", () => {
     await h.requests[0]!.onUtterance({ text: "before retirement" });
     const entered = createDeferred();
     const release = createDeferred();
-    const originalRead = h.store.readUtterancesForSession.bind(h.store);
-    vi.spyOn(TranscriptsStore.prototype, "readUtterancesForSession").mockImplementationOnce(
+    const originalRead = h.store.readSummarySnapshot.bind(h.store);
+    vi.spyOn(TranscriptsStore.prototype, "readSummarySnapshot").mockImplementationOnce(
       async (...args) => {
         const utterances = await originalRead(...args);
         entered.resolve();
@@ -829,7 +839,9 @@ describe("transcript capture ownership", () => {
     });
     try {
       await Promise.race([entered.promise, delayed]);
-      await h.requests[0]!.onStatus?.({ active: false });
+      const retiring = h.requests[0]!.onStatus?.({ active: false });
+      release.resolve();
+      await retiring;
       vi.setSystemTime(new Date("2026-07-02T10:00:00.000Z"));
       await h.start();
       await h.requests[1]!.onUtterance({ text: "replacement note" });

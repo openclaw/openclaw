@@ -2,7 +2,9 @@ import { on, once } from "node:events";
 import type { DatabaseSync } from "node:sqlite";
 import { isDeepStrictEqual } from "node:util";
 import type { MessagePort } from "node:worker_threads";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { clearNodeSqliteKyselyCacheForDatabase } from "../../infra/kysely-sync-cache-state.js";
+import { recordOpenClawAgentCanonicalValidation } from "../../state/openclaw-agent-canonical-validation-receipt.js";
 import {
   createOpenClawAgentDatabaseClaim,
   type OpenClawAgentDatabaseClaim,
@@ -15,7 +17,6 @@ import { readOpenClawAgentDatabaseWorkerLeaseReceipt } from "../../state/opencla
 import { withFreshOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly-open.js";
 import {
   getOpenClawAgentDatabaseValidation,
-  hasOpenClawAgentCanonicalValidation,
   type OpenClawAgentDatabaseValidation,
 } from "../../state/openclaw-agent-db-validation-cache.js";
 import {
@@ -28,6 +29,7 @@ import {
   type OpenClawAgentDatabaseWorkerCloseResult,
   type OpenClawAgentDatabaseWriteAdmission,
 } from "../../state/openclaw-agent-db.js";
+import { closeOpenClawStateDatabaseByPath } from "../../state/openclaw-state-db-cache.js";
 import type { CanonicalSessionValidationResult } from "./session-accessor.sqlite-contract.js";
 import type { SqliteSessionReclamationPlan } from "./session-accessor.sqlite-lifecycle-types.js";
 import {
@@ -244,15 +246,14 @@ async function runColdMutationWorker(port: MessagePort, data: SessionColdWorkerD
 export async function runReclamationWorkerPort(
   port: MessagePort,
   databaseOptions: SqliteSessionReclamationPlan["databaseOptions"],
-): Promise<void> {
-  // Archive-only operations never load the write/lifecycle graph.
-  const { reclaimSqliteSessionInTransaction } =
-    await import("./session-accessor.sqlite-reclamation.js");
+  pooledTask?: { operationId: number },
+): Promise<{ cleanupWarnings: string[]; settled: boolean }> {
+  let reclaimSqliteSessionInTransaction: typeof import("./session-accessor.sqlite-reclamation.js").reclaimSqliteSessionInTransaction;
   let claim: OpenClawAgentDatabaseClaim | undefined;
   let retainedDatabase: DatabaseSync | undefined;
   let lease: OpenClawAgentDatabaseWorkerLeaseReceipt | undefined;
   let commitGate: SharedArrayBuffer | undefined;
-  let operationId = 0;
+  let operationId = pooledTask?.operationId ?? 0;
   let failureCleanup: Awaited<ReturnType<typeof settleReclamationDatabase>> | undefined;
   const closeDatabase = async () => {
     const cleanup = await settleReclamationDatabase(databaseOptions.path);
@@ -284,6 +285,9 @@ export async function runReclamationWorkerPort(
       ) {
         throw new Error("SQLite session reclamation database owner is no longer current");
       }
+      if (pooledTask) {
+        pooledTask.operationId = operationId;
+      }
       failureCleanup = undefined;
       const response = await runWithSqliteMutationWorkerCoordination(
         request.coordination,
@@ -291,14 +295,27 @@ export async function runReclamationWorkerPort(
         databaseOptions,
         async (options) => {
           if (request.type === "close") {
+            const cleanup = await closeDatabase();
+            if (pooledTask) {
+              if (!cleanup.settled) {
+                throw new Error("Canonical validation task could not close its agent database");
+              }
+              // Keep native close under this task's coordinator and parent's writer admission.
+              closeOpenClawStateDatabaseByPath(request.coordination.databasePath);
+            }
             return {
               type: "closed",
-              ...(await closeDatabase()),
+              ...cleanup,
             } satisfies SqliteReclamationWorkerMessage;
           }
           commitGate = request.commitGate;
           try {
             claim?.assertCurrent();
+            if (request.type === "reclaim") {
+              // Canonical-only workers do not need the deletion graph; load it before admission.
+              ({ reclaimSqliteSessionInTransaction } =
+                await import("./session-accessor.sqlite-reclamation.js"));
+            }
             // Parsing and validation stay outside foreground write admission. The batch
             // never crosses threads; certification compares the exact captured inputs.
             const canonical =
@@ -368,17 +385,18 @@ export async function runReclamationWorkerPort(
                               throw new Error("Canonical validation lost its prepared batch");
                             }
                             if (request.initializeCanonicalValidation) {
-                              if (!hasOpenClawAgentCanonicalValidation(transactionDatabase)) {
-                                canonical.seedCanonicalSessionValidation(transactionDatabase);
-                              }
+                              // The parent may have revoked proof this fresh worker still sees on disk.
+                              canonical.seedCanonicalSessionValidation(transactionDatabase);
+                              const hasMore =
+                                canonical.hasPendingCanonicalSessionValidation(transactionDatabase);
                               authorizeCommit();
+                              if (!hasMore) {
+                                recordOpenClawAgentCanonicalValidation(transactionDatabase);
+                              }
                               return {
                                 validatedRows: 0,
                                 certifiedRows: 0,
-                                hasMore:
-                                  canonical.hasPendingCanonicalSessionValidation(
-                                    transactionDatabase,
-                                  ),
+                                hasMore,
                                 oversizedRows: 0,
                               } satisfies CanonicalSessionValidationResult;
                             }
@@ -391,12 +409,16 @@ export async function runReclamationWorkerPort(
                                 transactionDatabase,
                                 batch,
                               );
+                            const hasMore =
+                              canonical.hasPendingCanonicalSessionValidation(transactionDatabase);
                             authorizeCommit();
+                            if (!hasMore) {
+                              recordOpenClawAgentCanonicalValidation(transactionDatabase);
+                            }
                             return {
                               validatedRows: batch.rows.length,
                               certifiedRows,
-                              hasMore:
-                                canonical.hasPendingCanonicalSessionValidation(transactionDatabase),
+                              hasMore,
                               oversizedRows: batch.oversizedRows,
                             } satisfies CanonicalSessionValidationResult;
                           },
@@ -447,8 +469,18 @@ export async function runReclamationWorkerPort(
       );
       if (response.type === "closed") {
         port.postMessage(response);
+        if (pooledTask) {
+          const [release]: unknown[] = await once(port, "message");
+          if (
+            !isRecord(release) ||
+            release.type !== "release" ||
+            release.operationId !== operationId
+          ) {
+            throw new Error("Canonical validation task received an invalid close release");
+          }
+        }
         port.close();
-        return;
+        return response;
       }
       // The matching settlement releases this victim's admission and all plan buffers.
       if (request.type === "reclaim") {

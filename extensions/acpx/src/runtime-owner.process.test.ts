@@ -181,3 +181,83 @@ it.each(["global", "shared-project"])(
     });
   },
 );
+
+it("closes a completed oneshot without mixing its replacement record identity", async () => {
+  await withOpenClawTestState({ label: "acpx-oneshot-owner-process" }, async (state) => {
+    const cfg = {
+      agents: { ownership: "explicit" as const, entries: { main: {} } },
+      acp: { backend: "acpx" },
+    };
+    await state.writeConfig(cfg);
+    const peerDirectory = path.join(state.root, "peer");
+    await fs.mkdir(peerDirectory);
+    const store = createFileSessionStore({ stateDir: state.root });
+    const runtime = new AcpxRuntime({
+      cwd: state.root,
+      sessionStore: store,
+      agentRegistry: createAgentRegistry({
+        overrides: { [harness]: [process.execPath, script, peerDirectory] },
+      }),
+      permissionMode: "deny-all",
+      timeoutMs: 5_000,
+    });
+    registerAcpRuntimeBackend({ id: "acpx", runtime });
+    testing.resetAcpSessionManagerForTests();
+    const manager = getAcpSessionManager();
+    const target = { cfg, sessionKey: "agent:main:acp:oneshot-record", agentId: "main" };
+    try {
+      const { handle } = await manager.initializeSession({
+        ...target,
+        agent: harness,
+        mode: "oneshot",
+      });
+      const admission = await createAdmittedHostCapabilityTestFixture({
+        config: cfg,
+        runId: "oneshot-record",
+        agentId: target.agentId,
+        sessionId: "oneshot-core-session",
+        sessionKey: target.sessionKey,
+        workspaceDir: state.workspaceDir,
+        abortSignal: new AbortController().signal,
+      });
+      const chunks: string[] = [];
+      try {
+        await manager.runTurn({
+          ...target,
+          admittedRunContext: admission.admittedRunContext,
+          provenance: "human",
+          text: "oneshot-owned-history",
+          mode: "prompt",
+          requestId: "oneshot-record",
+          onEvent(event) {
+            if (event.type === "text_delta") {
+              chunks.push(event.text);
+            }
+          },
+        });
+      } finally {
+        admission.closeHost();
+        admission.closeAdmission();
+      }
+      expect(JSON.parse(chunks.join(""))).toMatchObject({ history: ["oneshot-owned-history"] });
+      expect(readAcpSessionEntry(target)?.acp?.identity).toMatchObject({
+        state: "resolved",
+        acpxRecordId: handle.acpxRecordId,
+      });
+      expect(manager.getObservabilitySnapshot().runtimeCache.activeSessions).toBe(0);
+      await expect(
+        manager.closeSession({
+          ...target,
+          reason: "oneshot-delete",
+          discardPersistentState: true,
+          clearMeta: true,
+        }),
+      ).resolves.toMatchObject({ runtimeClosed: true, metaCleared: true });
+      expect(readAcpSessionEntry(target)?.acp).toBeUndefined();
+    } finally {
+      testing.resetAcpSessionManagerForTests();
+      unregisterAcpRuntimeBackend("acpx");
+      await runtime.shutdown();
+    }
+  });
+});

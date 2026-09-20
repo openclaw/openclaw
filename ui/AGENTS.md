@@ -22,10 +22,14 @@ This directory owns Control UI-specific guidance that should not live in the rep
 
 ## Session Roster Refresh
 
-- The session capability applies nested Gateway row snapshots to existing active
-  primary-roster members through the shared reconciler. Lifecycle snapshots do
-  not create membership; mutation reasons, archive changes, missing snapshots,
-  and Gateway-owned membership filters still require an authoritative list read.
+- Session rosters apply nested Gateway row snapshots through the shared reconciler.
+  `lib/sessions/session-list-query.ts` owns whether a snapshot preserves a held
+  window: standalone lifecycle, patch/send/steer, run-start/settlement/capacity,
+  and title updates can avoid list reads
+  when membership and pin/owner/archive facts stay unchanged and recency does not
+  move backwards. Unknown rows, broad changes, catalog changes, Gateway-owned
+  filters, linked ancestor facts, failed reads, owner-prefix boundary uncertainty, and overlapping reads retain an
+  authoritative refresh. Events never create list membership.
 - `lib/sessions/event-refresh-coordinator.ts` owns automatic refresh pacing:
   debounce the first event after idle by 200 ms, coalesce continuous events within
   one second, and after each automatic refresh wait three times its duration

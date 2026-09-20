@@ -90,7 +90,13 @@ function isStoredAttachment(value: unknown): value is DurableComposerDraftAttach
   }
   // SAFETY: IDB data is untrusted; every consumed field is validated below.
   const attachment = value as Partial<DurableComposerDraftAttachment>;
-  return attachment.blob instanceof Blob && typeof attachment.mimeType === "string";
+  return (
+    attachment.blob instanceof Blob &&
+    typeof attachment.mimeType === "string" &&
+    (attachment.origin === undefined ||
+      attachment.origin === "paste" ||
+      attachment.origin === "file")
+  );
 }
 
 function parseStoredDraft(value: unknown): StoredDurableComposerDraft | null {

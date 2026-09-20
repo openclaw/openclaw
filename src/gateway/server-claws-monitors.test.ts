@@ -31,7 +31,10 @@ import { applyHeartbeatMonitorJobs } from "../cron/heartbeat-monitor.js";
 import { cronJobReadView } from "../cron/job-read-view.js";
 import { normalizeCronJobCreate } from "../cron/normalize.js";
 import { CronService } from "../cron/service.js";
-import { getSuspensionVisibleCronTaskRunCount } from "../cron/service/active-run-cancellation.js";
+import {
+  getSuspensionVisibleCronTaskRunCount,
+  waitForActiveCronTaskRuns,
+} from "../cron/service/active-run-cancellation.js";
 import type { CronServiceDeps } from "../cron/service/state.js";
 import * as sessionReaper from "../cron/session-reaper.js";
 import { upsertCronJobRow } from "../cron/store/row-codec.js";
@@ -788,10 +791,9 @@ describe("Claw serving monitor cleanup", () => {
     const signal = await started.promise;
     try {
       const plan = await current.plan();
-      const removal = current.apply(plan);
-      await vi.waitFor(() => expect(signal.aborted).toBe(true));
+      const result = await current.apply(plan);
+      expect(signal.aborted).toBe(true);
       await run;
-      const result = await removal;
       expect(result).toMatchObject({
         status: "partial",
         agentRemoved: false,
@@ -804,12 +806,12 @@ describe("Claw serving monitor cleanup", () => {
       closeOpenClawStateDatabaseForTest();
       expect(readAgentDeletionJournal("worker")).toBeDefined();
       release.resolve();
-      await vi.waitFor(() => expect(signal.aborted).toBe(true));
       const retry = await current.plan();
       expect(await current.apply(retry)).toMatchObject({ status: "complete" });
     } finally {
       release.resolve();
       await run;
+      expect(await waitForActiveCronTaskRuns(1_000)).toEqual({ drained: true, active: 0 });
     }
   });
 });

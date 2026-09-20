@@ -282,13 +282,20 @@ export function ensureFirstUseAdditiveStateColumnsForStrictMigration(db: Databas
 function ensureColumns(
   db: DatabaseSync,
   definitions: readonly (readonly [string, string])[],
-): void {
-  for (const definition of definitions) {
-    ensureColumn(db, ...definition);
+): Array<{ tableName: string; columnName: string }> {
+  const added: Array<{ tableName: string; columnName: string }> = [];
+  for (const [tableName, definition] of definitions) {
+    const columnName = definition.trim().split(/\s+/, 1)[0];
+    if (columnName && ensureColumn(db, tableName, definition)) {
+      added.push({ tableName, columnName });
+    }
   }
+  return added;
 }
 
-export function ensureAdditiveStateColumns(db: DatabaseSync): void {
+/** Runtime pairs new columns with their transforms; full historical repair stays explicit. */
+export function ensureAdditiveStateColumns(db: DatabaseSync, scope: "runtime" | "repair"): void {
+  const repairHistoricalRows = scope === "repair";
   ensureWorkerSessionToolStateSchema(db);
   for (const {
     columnName,
@@ -323,15 +330,35 @@ export function ensureAdditiveStateColumns(db: DatabaseSync): void {
       );
     `);
   }
-  db.exec("DROP INDEX IF EXISTS idx_diagnostic_events_scope_created;");
-  ensureColumns(db, columns.cronRunLogs);
-  backfillCronRunLogEntryJson(db);
-  ensureColumns(db, columns.acpReplay);
-  backfillAcpReplayEstimatedBytes(db);
-  ensureColumns(db, columns.cronJobs);
-  backfillCronJobsFromJobJson(db);
-  ensureColumns(db, columns.deliveryQueue);
-  backfillDeliveryQueueEntriesFromEntryJson(db);
+  if (addedDiagnosticEventSequence || repairHistoricalRows) {
+    db.exec("DROP INDEX IF EXISTS idx_diagnostic_events_scope_created;");
+  }
+  const addedCronLogColumns = ensureColumns(db, columns.cronRunLogs);
+  if (
+    repairHistoricalRows ||
+    addedCronLogColumns.some(({ tableName }) => tableName === "cron_run_logs")
+  ) {
+    backfillCronRunLogEntryJson(db);
+  }
+  if (ensureColumns(db, columns.acpReplay).length > 0 || repairHistoricalRows) {
+    backfillAcpReplayEstimatedBytes(db);
+  }
+  const addedCronJobColumns = ensureColumns(db, columns.cronJobs);
+  if (
+    repairHistoricalRows ||
+    addedCronJobColumns.some(({ columnName }) =>
+      ["name", "enabled", "agent_id", "payload_kind", "runtime_updated_at_ms"].includes(columnName),
+    )
+  ) {
+    backfillCronJobsFromJobJson(db);
+  }
+  const addedDeliveryColumns = ensureColumns(db, columns.deliveryQueue);
+  if (
+    repairHistoricalRows ||
+    addedDeliveryColumns.some(({ tableName }) => tableName === "delivery_queue_entries")
+  ) {
+    backfillDeliveryQueueEntriesFromEntryJson(db);
+  }
   // The shipped JSON runtime predeclared this table but never populated it.
   // The transitional default makes ADD COLUMN portable; schema-v2 tables are
   // rebuilt from canonical STRICT SQL immediately afterward, removing it.
@@ -344,12 +371,18 @@ export function ensureAdditiveStateColumns(db: DatabaseSync): void {
   if (addedTaskRequesterAgentId) {
     repairLegacyTaskAgentAttribution(db);
   }
-  repairLegacyTaskDeliveryStatuses(db);
+  if (repairHistoricalRows) {
+    repairLegacyTaskDeliveryStatuses(db);
+  }
   ensureColumns(db, columns.taskRunDetails);
-  repairLegacySubagentSuspensionReasons(db);
-  repairLegacySubagentExecutionPayloads(db);
-  repairLegacySubagentTaskBindings(db);
-  repairLegacySubagentRetainedResults(db);
+  if (repairHistoricalRows) {
+    repairLegacySubagentSuspensionReasons(db);
+    repairLegacySubagentExecutionPayloads(db);
+    repairLegacySubagentTaskBindings(db);
+    repairLegacySubagentRetainedResults(db);
+  }
   ensureColumns(db, columns.workerEnvironments);
-  ensureOperatorApprovalResolutionRefs(db);
+  if (repairHistoricalRows || !tableHasColumn(db, "operator_approvals", "resolution_ref")) {
+    ensureOperatorApprovalResolutionRefs(db);
+  }
 }

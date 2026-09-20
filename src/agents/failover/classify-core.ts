@@ -45,6 +45,7 @@ import {
   isProviderCompletedErrorFinishReasonMessage,
   isRateLimitErrorMessage,
   isServerErrorMessage,
+  isSessionTranscriptValidationErrorMessage,
   isTimeoutErrorMessage,
   matchesFormatErrorPattern,
 } from "./message-patterns.js";
@@ -98,6 +99,9 @@ function classifyFailoverClassificationFromMessage(
   }
   if (isClaudeCliAuthError(raw, provider)) {
     return toReasonClassification("auth");
+  }
+  if (isSessionTranscriptValidationErrorMessage(raw)) {
+    return toReasonClassification("format");
   }
   if (isCliSessionExpiredErrorMessage(raw)) {
     return toReasonClassification("session_expired");
@@ -306,7 +310,14 @@ export function classifyFailoverSignalCore(
     isTransportHtmlErrorStatus(inferredStatus) &&
     isHtmlErrorResponse(signal.message, inferredStatus)
   ) {
-    return toReasonClassification("timeout");
+    // CDN page text is not a provider signal; classify its HTTP status through the shared owner.
+    return classifyFailoverClassificationFromHttpStatus(
+      inferredStatus,
+      undefined,
+      null,
+      signal.status,
+      signal.provider,
+    );
   }
   // Message/detail semantics stay ahead of generic structured types so an
   // invalid-request wrapper cannot hide billing, context, or provider policy.

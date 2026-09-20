@@ -119,7 +119,7 @@ describe("native device settings pages", () => {
     expect(page.textContent).not.toContain(title);
   });
 
-  it("shows native desktop state and reconciles unattended hosting with the native owner", async () => {
+  it("shows native desktop state and reconciles Keep computer awake with the native owner", async () => {
     const snapshot = createNativeDeviceSettingsSnapshot();
     const native = createCapability({
       ...snapshot,
@@ -127,12 +127,12 @@ describe("native device settings pages", () => {
       desktopAvailability: { state: "locked" },
     });
     const page = await mount("openclaw-device-page", native.capability);
-    const hosting = row(page, "Unattended desktop hosting");
+    const hosting = row(page, "Keep computer awake");
     expect(hosting.textContent).toContain("between jobs");
     expect(hosting.textContent).toContain("Manual lock and logout");
     expect(row(page, "Desktop availability").textContent).toContain("Locked");
     expect(native.capability.set).not.toHaveBeenCalled();
-    toggle(page, "Unattended desktop hosting", true);
+    toggle(page, "Keep computer awake", true);
     expect(native.capability.set).toHaveBeenCalledWith(
       "capabilities.unattendedDesktopEnabled",
       true,
@@ -150,7 +150,7 @@ describe("native device settings pages", () => {
     native.publish({ ...snapshot, capabilities, desktopAvailability: { state: "unlocked" } });
     await page.updateComplete;
     expect(row(page, "Desktop availability").textContent).toContain("Unlocked");
-    expect(page.textContent).not.toContain("Unattended desktop hosting");
+    expect(page.textContent).not.toContain("Keep computer awake");
   });
 
   it("requests setup only on click and reports Chrome approval separately from installation", async () => {

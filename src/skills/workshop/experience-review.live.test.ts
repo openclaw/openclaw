@@ -17,7 +17,7 @@ import {
 } from "../../test-utils/openclaw-test-state.js";
 import { createTrackedTempDirs } from "../../test-utils/tracked-temp-dirs.js";
 import {
-  readSkillReviewOutcomes,
+  readSkillCuratorReviewStatus,
   recordSkillExperienceReviewOutcome,
 } from "./collection-review-state.js";
 import { assertExperienceReviewDecision } from "./experience-review-decision.test-support.js";
@@ -78,7 +78,7 @@ beforeAll(async () => {
 });
 
 function logReviewOutcomes(
-  reviews: ReturnType<typeof readSkillReviewOutcomes>["experienceReviews"],
+  reviews: ReturnType<typeof readSkillCuratorReviewStatus>["experienceReviews"],
 ) {
   // Persisted failures contain raw provider errors; keep only structured
   // outcome metadata in CI logs, regardless of secret spelling or format.
@@ -100,7 +100,7 @@ afterAll(async () => {
   unsubscribeDiagnostics();
   if (LIVE) {
     console.log("WORKSHOP_RUNTIME_DIAGNOSTICS", JSON.stringify([...reviewDiagnostics.values()]));
-    logReviewOutcomes(readSkillReviewOutcomes().experienceReviews);
+    logReviewOutcomes(readSkillCuratorReviewStatus().experienceReviews);
   }
   await testState.cleanup();
   await tempDirs.cleanup();
@@ -116,7 +116,7 @@ async function candidate(
 
 describe("skill experience review diagnostics", () => {
   it("logs persisted failure outcomes without raw provider error text", async () => {
-    const liveOutcomesBefore = readSkillReviewOutcomes();
+    const liveOutcomesBefore = readSkillCuratorReviewStatus();
     const diagnosticWorkspace = await tempDirs.make("openclaw-live-skill-review-diagnostic-");
     // Workspace keys share one database. Isolate synthetic failures so the
     // live afterAll output contains only outcomes from actual review runs.
@@ -134,7 +134,7 @@ describe("skill experience review diagnostics", () => {
         },
         diagnosticStore,
       );
-      logReviewOutcomes(readSkillReviewOutcomes(diagnosticStore).experienceReviews);
+      logReviewOutcomes(readSkillCuratorReviewStatus(diagnosticStore).experienceReviews);
       expect(log).toHaveBeenCalledOnce();
       const [label, json] = log.mock.calls[0]!;
       expect(label).toBe("WORKSHOP_REVIEW_OUTCOMES");
@@ -144,7 +144,7 @@ describe("skill experience review diagnostics", () => {
         usage: { inputTokens: 3, cachedInputTokens: 1, outputTokens: 2 },
       });
       expect(json).not.toContain("synthetic-workshop-credential");
-      expect(readSkillReviewOutcomes()).toEqual(liveOutcomesBefore);
+      expect(readSkillCuratorReviewStatus()).toEqual(liveOutcomesBefore);
     } finally {
       log.mockRestore();
       closeOpenClawStateDatabaseByPath(diagnosticStore.path);
@@ -223,7 +223,7 @@ describeLive("skill experience draft-only review live OpenAI eval", () => {
         agentId: "main",
         runId,
       });
-      const outcomes = Object.values(readSkillReviewOutcomes().experienceReviews);
+      const outcomes = Object.values(readSkillCuratorReviewStatus().experienceReviews);
       expect(outcomes).toHaveLength(1);
       const decision = assertExperienceReviewDecision({
         observation,

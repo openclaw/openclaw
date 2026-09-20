@@ -15,9 +15,11 @@ import {
   renderPluginCapabilitySection,
   renderPluginMetadata,
   renderPluginPublisher,
+  renderPluginAskAction,
 } from "./overview.ts";
 
 export type PluginCatalogDetailProps = {
+  onAskPlugin?: () => void;
   skillsSection?: TemplateResult;
   connected: boolean;
   result: PluginDiscoveryDetailResult | null;
@@ -58,7 +60,7 @@ function renderDetail(result: PluginDiscoveryDetailResult, props: PluginCatalogD
     backLabel: t("tabs.plugins"),
     onBack: props.onBack,
     icon: html`${imageWithFallback(packageIcon, (url, onError) => (url ? html`<img src=${url} alt="" @error=${onError} />` : icons.box))}`,
-    titleAction:
+    titleAction: html`${
       plugin.local.action === "install"
         ? renderReasonedDisabledControl(
             props.installBlockedReason,
@@ -76,7 +78,8 @@ function renderDetail(result: PluginDiscoveryDetailResult, props: PluginCatalogD
               ${t("pluginsPage.install")}
             </button>`,
           )
-        : undefined,
+        : nothing
+    }${renderPluginAskAction(props.onAskPlugin)}`,
     identity: renderPluginPublisher(result),
     sidebar: renderPluginMetadata(result),
     panel: html`${props.skillsSection ?? renderPluginCapabilitySection(t("pluginsPage.detailTabs.skills"), detail.skills, icons.book)}

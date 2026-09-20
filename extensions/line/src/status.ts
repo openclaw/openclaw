@@ -1,4 +1,3 @@
-// Line plugin module implements status behavior.
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
 import type {
   ChannelAccountSnapshot,

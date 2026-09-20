@@ -72,9 +72,11 @@ jobs:
           path: .release-harness
           fetch-depth: 1
           persist-credentials: false
+          # The native artifact entrypoint imports the shared private-plugin policy.
           sparse-checkout: |
-            scripts
-            src/shared/non-packaged-plugin-dirs.ts
+            /package.json
+            /scripts/
+            /src/shared/non-packaged-plugin-dirs.ts
           sparse-checkout-cone-mode: false
       - name: Setup Node environment
         uses: ./.github/actions/setup-node-env

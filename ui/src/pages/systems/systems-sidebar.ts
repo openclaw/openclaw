@@ -12,12 +12,32 @@ import "../../styles/systems.css";
 registerSystemsEnglish();
 
 export function systemName(row: SystemsInventoryRow): string {
-  return (
-    row.gatewaySystemInfo?.machineName ??
-    row.environment.label ??
-    row.node?.displayName ??
-    (row.environment.id === "gateway" ? t("systems.host") : row.environment.id)
-  );
+  const named =
+    row.gatewaySystemInfo?.machineName ?? row.environment.label ?? row.node?.displayName;
+  if (named) {
+    return named;
+  }
+  if (row.environment.id === "gateway") {
+    return t("systems.host");
+  }
+  const worker = row.environment.worker;
+  if (worker) {
+    // A worker is best known by the session placed on it; otherwise by its
+    // provider profile, matching the chat placement label.
+    const placed = row.sessions.find((relation) => relation.kind === "placement")?.session;
+    if (placed) {
+      return placed.displayName ?? placed.label ?? placed.key;
+    }
+    if (worker.profileId) {
+      return `${worker.providerId} · ${worker.profileId}`;
+    }
+  }
+  return row.environment.id;
+}
+
+/** Short, stable fragment of a Gateway-owned id for telling same-profile workers apart. */
+function shortId(id: string): string {
+  return id.slice(id.lastIndexOf(":") + 1, id.lastIndexOf(":") + 7);
 }
 
 export function systemKind(row: SystemsInventoryRow): "host" | "worker" | "node" {
@@ -62,22 +82,34 @@ class SystemsSidebar extends OpenClawLightDomElement {
         row.environment.platform ?? row.node?.platform ?? "",
       ].some((value) => value.toLocaleLowerCase().includes(query)),
     );
-    return html`<section class="systems-sidebar" aria-label=${t("systems.inventory")}>
-      <header class="systems-sidebar__header">
-        <h2>${t("systems.inventory")}</h2>
-        <span>${controller.rows.length}</span>
-        <button
-          type="button"
-          class="systems-icon-button"
-          aria-label=${t("systems.refresh")}
-          title=${t("systems.refresh")}
-          ?disabled=${controller.loading || !controller.connected}
-          @click=${() => void controller.refresh()}
+    const renderRow = (row: SystemsInventoryRow) => {
+      const online = row.environment.status === "available";
+      const platform = row.environment.platform ?? row.node?.platform;
+      const status = systemStatus(row);
+      return html`<button
+        class="systems-machine"
+        type="button"
+        data-status=${row.environment.status}
+        aria-pressed=${row.environment.id === controller.selectedId}
+        title=${platform ? `${status} · ${platform}` : status}
+        @click=${() => controller.select(row.environment.id)}
+      >
+        <i class="systems-machine__dot" aria-hidden="true"></i>
+        <span class="systems-machine__name">${systemName(row)}</span>
+        <span class="systems-machine__meta"
+          >${!online ? status : row.environment.worker ? shortId(row.environment.id) : (platform ?? nothing)}</span
         >
-          ${icons.refresh}
-        </button>
-      </header>
-      <label class="systems-search">
+        ${
+          row.environment.desktop
+            ? html`<span class="systems-machine__desktop" title=${t("systems.desktop")}
+                >${icons.monitor}<span class="sr-only">${t("systems.desktop")}</span></span
+              >`
+            : nothing
+        }
+      </button>`;
+    };
+    return html`<section class="systems-sidebar" aria-label=${t("systems.inventory")}>
+      <div class="systems-filter">
         <span aria-hidden="true">${icons.search}</span>
         <input
           type="search"
@@ -90,42 +122,29 @@ class SystemsSidebar extends OpenClawLightDomElement {
             }
           }}
         />
-      </label>
+        <button
+          type="button"
+          class="systems-filter__refresh"
+          aria-label=${t("systems.refresh")}
+          title=${t("systems.refresh")}
+          ?disabled=${controller.loading || !controller.connected}
+          @click=${() => void controller.refresh()}
+        >
+          ${icons.refresh}
+        </button>
+      </div>
       <div class="systems-sidebar__list" aria-busy=${controller.loading}>
         ${controller.loading && !controller.inventory ? html`<p class="systems-sidebar__empty" role="status">${t("systems.loading")}</p>` : nothing}
-        ${(["host", "worker", "node"] as const).map((kind) => {
+        ${rows.filter((row) => systemKind(row) === "host").map(renderRow)}
+        ${(["node", "worker"] as const).map((kind) => {
           const group = rows.filter((row) => systemKind(row) === kind);
           return group.length
             ? html`<section class="systems-group">
                 <h3>
-                  ${t(kind === "host" ? "systems.hosts" : kind === "worker" ? "systems.workers" : "systems.nodes")}
+                  <span>${t(kind === "node" ? "systems.nodes" : "systems.workers")}</span>
+                  <span class="systems-group__count">${group.length}</span>
                 </h3>
-                ${group.map(
-                  (row) => html`<button
-                    class="systems-machine"
-                    type="button"
-                    aria-pressed=${row.environment.id === controller.selectedId}
-                    @click=${() => controller.select(row.environment.id)}
-                  >
-                    <span class="systems-machine__icon" aria-hidden="true"
-                      >${row.environment.desktop ? icons.monitor : icons.server}</span
-                    >
-                    <span class="systems-machine__copy"
-                      ><strong>${systemName(row)}</strong>
-                      <span
-                        ><i
-                          class="systems-status-dot"
-                          data-online=${row.environment.status === "available"}
-                        ></i
-                        >${systemStatus(row)}</span
-                      >
-                      <small
-                        >${row.environment.platform ?? row.node?.platform ?? t("systems.unknown")} ·
-                        ${t(row.environment.desktop ? "systems.desktop" : "systems.headless")}</small
-                      >
-                    </span>
-                  </button>`,
-                )}
+                ${group.map(renderRow)}
               </section>`
             : nothing;
         })}

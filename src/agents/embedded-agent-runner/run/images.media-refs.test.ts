@@ -2,9 +2,10 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { normalizeMediaFacts, resolveMediaFacts } from "../../../media/media-facts.js";
 import { captureEnv, setTestEnvValue } from "../../../test-utils/env.js";
+import * as utils from "../../../utils.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import { createHostSandboxFsBridge } from "../../test-helpers/host-sandbox-fs-bridge.js";
 import {
@@ -16,6 +17,33 @@ import {
 const TINY_PNG_BASE64 =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAACXBIWXMAAAsTAAALEwEAmpwYAAAADUlEQVR4nGP4////KwAJ5gPoxLp9owAAAABJRU5ErkJggg==";
 describe("fact-carried image references", () => {
+  it("preserves later conversion errors after finding a hydratable image", () => {
+    const events: string[] = [];
+    const failure = new Error("later path conversion failed");
+    const resolvePath = vi.spyOn(utils, "resolveUserPath").mockImplementation((value) => {
+      events.push(`convert:${value}`);
+      throw failure;
+    });
+    const media = ["/tmp/first.png", "~/later.png"].map((value) => ({
+      get path() {
+        events.push(`normalize:${value}`);
+        return value;
+      },
+      contentType: "image/png",
+    }));
+
+    try {
+      expect(() => hasHydratableMediaImages(media)).toThrow(failure);
+      expect(events).toEqual([
+        "normalize:/tmp/first.png",
+        "normalize:~/later.png",
+        "convert:~/later.png",
+      ]);
+    } finally {
+      resolvePath.mockRestore();
+    }
+  });
+
   it("counts only facts that will hydrate an image attachment", () => {
     expect(hasHydratableMediaImages([{ path: "/tmp/photo.png", kind: "image" }])).toBe(true);
     // Legacy transcript projections persist bare kinds as the media type.

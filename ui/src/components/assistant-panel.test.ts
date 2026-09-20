@@ -12,6 +12,10 @@ import {
 import { publishChatWorkContext, type ChatWorkContext } from "../pages/chat/chat-work-context.ts";
 import { createContext } from "../pages/custodian/custodian-page.test-harness.ts";
 import { CustodianSessionStore } from "../pages/custodian/custodian-session-store.ts";
+import {
+  publishPluginHelpContext,
+  createPluginHelpRequest,
+} from "../pages/custodian/plugin-help.ts";
 import { createApplicationContextProvider } from "../test-helpers/application-context.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
 import { CUSTODIAN_PANEL_TOGGLE_EVENT, HOME_PANEL_TOGGLE_EVENT } from "./panel-toggle-contract.ts";
@@ -471,6 +475,65 @@ describe("assistant panel", () => {
     panel.custodianSuppressed = true;
     await panel.updateComplete;
     expect(panel.assistantPanelOpen).toBe(false);
+  });
+
+  it.each([900, 1342])(
+    "opens installed plugin help once on a wide overview and preserves dismissal (%s)",
+    async (width) => {
+      vi.stubGlobal("innerWidth", width);
+      const { context, panel, request } = await mountPanel();
+      panel.custodianSuppressed = false;
+      panel.pageRouteId = "plugin-settings";
+      await panel.updateComplete;
+      const owner = {};
+      publishPluginHelpContext(
+        context,
+        owner,
+        { id: "first", name: "First" },
+        { overview: true, installed: true },
+      );
+      await panel.updateComplete;
+      expect(panel.assistantPanelOpen).toBe(width > 1100);
+      await createPluginHelpRequest(context, { id: "first", name: "First" })();
+      await panel.updateComplete;
+      expect(panel.assistantPanelOpen).toBe(true);
+      window.dispatchEvent(
+        new CustomEvent(CUSTODIAN_PANEL_TOGGLE_EVENT, { detail: { open: false } }),
+      );
+      await panel.updateComplete;
+      publishPluginHelpContext(
+        context,
+        owner,
+        { id: "second", name: "Second" },
+        { overview: true, installed: true },
+      );
+      await panel.updateComplete;
+      expect(panel.assistantPanelOpen).toBe(false);
+      publishPluginHelpContext(
+        context,
+        owner,
+        { id: "second", name: "Second" },
+        { overview: false, installed: true },
+      );
+      await panel.updateComplete;
+      expect(panel.assistantPanelOpen).toBe(false);
+      expect(request.mock.calls.every((call) => call[1]?.message === undefined)).toBe(true);
+    },
+  );
+
+  it("opens catalog help only on an explicit request even at a wide viewport", async () => {
+    vi.stubGlobal("innerWidth", 1342);
+    const { context, panel, request } = await mountPanel();
+    panel.custodianSuppressed = false;
+    await panel.updateComplete;
+    const plugin = { id: "catalog-example", name: "Catalog Example" };
+    publishPluginHelpContext(context, {}, plugin, { overview: true, installed: false });
+    await panel.updateComplete;
+    expect(panel.assistantPanelOpen).toBe(false);
+    await createPluginHelpRequest(context, plugin)();
+    await panel.updateComplete;
+    expect(panel.assistantPanelOpen).toBe(true);
+    expect(request.mock.calls.every((call) => call[1]?.message === undefined)).toBe(true);
   });
 
   it("opens and closes from the global toggle event", async () => {

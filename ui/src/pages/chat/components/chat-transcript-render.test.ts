@@ -709,20 +709,30 @@ describe("chat transcript rendering", () => {
     },
   );
 
-  it.each(["click", "Enter", " "])("opens focused transcript file links with %j", async (key) => {
+  it.each(
+    [
+      "qa-café/index.md",
+      "qa241-unicode/café note.md",
+      "qa241-unicode/emoji-🌱.md",
+      "qa241-unicode/100% ready.txt",
+      "qa241-unicode/日本語.txt",
+    ].flatMap((path) => ["click", "Enter", " "].map((key) => ({ path, key }))),
+  )("opens focused transcript file $path with $key", async ({ path, key }) => {
     const transcript = createTestTranscript();
     const onOpenWorkspaceFile = vi.fn();
+    const onOpenSessionLink = vi.fn();
     const onHistoryIntent = vi.fn();
     const container = document.body.appendChild(document.createElement("div"));
     const props = {
       ...threadProps("pane-file-link", "agent:main:main", [
         {
           role: "assistant",
-          content: "Inspect [index.md](qa-caf%C3%A9/index.md:17)",
+          content: `Inspect [Read file](${encodeURI(path)}:17)`,
           timestamp: 1_000,
         },
       ]),
       onOpenWorkspaceFile,
+      onOpenSessionLink,
       onHistoryIntent,
     };
     render(renderChatThread(props, transcript), container);
@@ -741,7 +751,8 @@ describe("chat transcript rendering", () => {
       link?.dispatchEvent(event);
       expect(event.defaultPrevented).toBe(true);
     }
-    expect(onOpenWorkspaceFile).toHaveBeenCalledWith({ path: "qa-café/index.md", line: 17 });
+    expect(onOpenWorkspaceFile).toHaveBeenCalledExactlyOnceWith({ path, line: 17 });
+    expect(onOpenSessionLink).not.toHaveBeenCalled();
     expect(onHistoryIntent).not.toHaveBeenCalled();
     transcript.hostDisconnected();
   });

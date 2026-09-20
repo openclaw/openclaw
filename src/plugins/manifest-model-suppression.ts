@@ -1,6 +1,10 @@
 // Resolves model suppression metadata declared by plugin manifests.
-import { buildModelCatalogMergeKey } from "@openclaw/model-catalog-core/model-catalog-refs";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
+import {
+  findConfiguredProviderModel,
+  projectModelProviderConfig,
+} from "../config/model-provider-config.js";
+import type { ModelProviderConfig } from "../config/types.models.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   planManifestModelCatalogSuppressions,
@@ -13,18 +17,23 @@ import {
 } from "./manifest-contract-eligibility.js";
 import type { ManifestModelSuppressionResolver } from "./manifest-model-suppression.types.js";
 import { getPluginMetadataSnapshotCache } from "./plugin-cache.js";
+import {
+  matchesPluginProviderEndpoint,
+  normalizePluginProviderBaseUrl,
+} from "./plugin-metadata-provider-facts.js";
 import type { PluginMetadataSnapshot } from "./plugin-metadata-snapshot.types.js";
 
 type PreparedManifestSuppression = {
   entry: ManifestModelCatalogSuppressionEntry;
   allowedApis: ReadonlySet<string> | undefined;
   allowedHosts: ReadonlySet<string> | undefined;
+  nativeHosts: ReadonlySet<string> | undefined;
 };
 
 function listManifestModelCatalogSuppressions(params: {
   config?: OpenClawConfig;
   snapshot: PluginMetadataSnapshot;
-}): readonly ManifestModelCatalogSuppressionEntry[] {
+}) {
   const snapshot = params.snapshot;
   const normalizedConfig = normalizePluginsConfig(params.config?.plugins);
   const registry = {
@@ -39,7 +48,43 @@ function listManifestModelCatalogSuppressions(params: {
     ),
   };
   const planned = planManifestModelCatalogSuppressions({ registry });
-  return planned.suppressions;
+  return { plugins: registry.plugins, suppressions: planned.suppressions };
+}
+
+function prepareNativeCatalogOwners(plugins: PluginMetadataSnapshot["plugins"]) {
+  const owners = new Map<string, { pluginId: string; provider: string; native: boolean } | null>();
+  for (const plugin of plugins) {
+    for (const [provider, catalog] of Object.entries(plugin.modelCatalog?.providers ?? {})) {
+      const normalizedBaseUrl = catalog.baseUrl && normalizePluginProviderBaseUrl(catalog.baseUrl);
+      if (!normalizedBaseUrl) {
+        continue;
+      }
+      const host = normalizeSuppressionHost(new URL(normalizedBaseUrl).hostname);
+      const owner = {
+        pluginId: plugin.id,
+        provider: normalizeLowercaseStringOrEmpty(provider),
+        native: (plugin.providerEndpoints ?? []).some(
+          (endpoint) =>
+            endpoint.endpointClass !== "custom" &&
+            endpoint.endpointClass !== "local" &&
+            matchesPluginProviderEndpoint(endpoint, { host, normalizedBaseUrl }),
+        ),
+      };
+      const previous = owners.get(host);
+      if (previous === undefined) {
+        owners.set(host, owner);
+      } else if (
+        previous &&
+        previous.pluginId === owner.pluginId &&
+        previous.provider === owner.provider
+      ) {
+        owners.set(host, { ...owner, native: previous.native || owner.native });
+      } else {
+        owners.set(host, null);
+      }
+    }
+  }
+  return owners;
 }
 
 function buildManifestSuppressionError(params: {
@@ -70,7 +115,7 @@ function normalizeSuppressionHost(host: string): string {
 function resolveConfiguredProviderValue(params: {
   provider: string;
   config?: OpenClawConfig;
-}): { api?: string; baseUrl?: string } | undefined {
+}): ModelProviderConfig | undefined {
   const providers = params.config?.models?.providers;
   if (!providers) {
     return undefined;
@@ -79,10 +124,7 @@ function resolveConfiguredProviderValue(params: {
     if (normalizeLowercaseStringOrEmpty(providerId) !== params.provider) {
       continue;
     }
-    return {
-      api: normalizeLowercaseStringOrEmpty(entry?.api),
-      baseUrl: typeof entry?.baseUrl === "string" ? entry.baseUrl : undefined,
-    };
+    return entry;
   }
   return undefined;
 }
@@ -91,6 +133,7 @@ function manifestSuppressionMatchesConditions(params: {
   suppression: PreparedManifestSuppression;
   provider: string;
   baseUrl?: string | null;
+  api?: ModelProviderConfig["api"];
   config?: OpenClawConfig;
 }): boolean {
   const { entry, allowedApis, allowedHosts } = params.suppression;
@@ -108,9 +151,12 @@ function manifestSuppressionMatchesConditions(params: {
     config: params.config,
   });
   if (allowedApis) {
-    const effectiveApi = configuredProvider
-      ? normalizeLowercaseStringOrEmpty(configuredProvider.api)
-      : params.provider;
+    const effectiveApi =
+      params.api !== undefined
+        ? normalizeLowercaseStringOrEmpty(params.api)
+        : configuredProvider
+          ? normalizeLowercaseStringOrEmpty(configuredProvider.api)
+          : params.provider;
     if (!effectiveApi || !allowedApis.has(effectiveApi)) {
       return false;
     }
@@ -147,46 +193,104 @@ export function buildManifestBuiltInModelSuppressionResolver(params: {
   if (cached) {
     return cached;
   }
+  const plan = listManifestModelCatalogSuppressions({ snapshot, config: params.config });
+  const declaredProviders = new Set(
+    plan.plugins.flatMap((plugin) =>
+      [
+        ...(plugin.providers ?? []),
+        ...Object.keys(plugin.modelCatalog?.providers ?? {}),
+        ...Object.keys(plugin.modelCatalog?.aliases ?? {}),
+      ].map(normalizeLowercaseStringOrEmpty),
+    ),
+  );
+  const nativeOwners = prepareNativeCatalogOwners(plan.plugins);
   const suppressions = new Map<string, PreparedManifestSuppression[]>();
-  for (const entry of listManifestModelCatalogSuppressions({
-    snapshot,
-    config: params.config,
-  })) {
+  for (const entry of plan.suppressions) {
+    const allowedHosts = entry.when?.baseUrlHosts?.length
+      ? new Set(entry.when.baseUrlHosts.map(normalizeSuppressionHost))
+      : undefined;
     const prepared: PreparedManifestSuppression = {
       entry,
       allowedApis: entry.when?.providerConfigApiIn?.length
         ? new Set(entry.when.providerConfigApiIn.map(normalizeLowercaseStringOrEmpty))
         : undefined,
-      allowedHosts: entry.when?.baseUrlHosts?.length
-        ? new Set(entry.when.baseUrlHosts.map(normalizeSuppressionHost))
-        : undefined,
+      allowedHosts,
+      nativeHosts:
+        entry.retirement && allowedHosts
+          ? new Set(
+              [...allowedHosts].filter((host) => {
+                const owner = nativeOwners.get(host);
+                return (
+                  owner?.native &&
+                  owner.pluginId === entry.pluginId &&
+                  owner.provider === entry.provider
+                );
+              }),
+            )
+          : undefined,
     };
     // Preserve planner order when a route condition skips an earlier same-model rule.
-    const rules = suppressions.get(entry.mergeKey);
+    const rules = suppressions.get(entry.model);
     if (rules) {
       rules.push(prepared);
     } else {
-      suppressions.set(entry.mergeKey, [prepared]);
+      suppressions.set(entry.model, [prepared]);
     }
   }
 
-  const resolver: ManifestModelSuppressionResolver = (input) => {
+  const physicalRetirement = (
+    provider: string,
+    id: string,
+    baseUrl: string | null | undefined,
+    config: OpenClawConfig | undefined,
+    api?: ModelProviderConfig["api"],
+  ) => {
+    if (!baseUrl || declaredProviders.has(provider)) {
+      return undefined;
+    }
+    const host = normalizeBaseUrlHost(baseUrl);
+    return suppressions.get(id)?.find(
+      (prepared) =>
+        prepared.nativeHosts?.has(host) &&
+        manifestSuppressionMatchesConditions({
+          suppression: prepared,
+          provider,
+          baseUrl,
+          config,
+          api,
+        }),
+    );
+  };
+  const resolve = (
+    input: Parameters<ManifestModelSuppressionResolver>[0],
+  ): ReturnType<ManifestModelSuppressionResolver> => {
     const provider = normalizeLowercaseStringOrEmpty(input.provider);
     const modelId = normalizeLowercaseStringOrEmpty(input.id);
     if (!provider || !modelId) {
       return undefined;
     }
-    const mergeKey = buildModelCatalogMergeKey(provider, modelId);
-    const suppression = suppressions.get(mergeKey)?.find(
-      (prepared) =>
-        (!input.unconditionalOnly || !prepared.entry.when) &&
-        manifestSuppressionMatchesConditions({
-          suppression: prepared,
-          provider,
-          baseUrl: input.baseUrl,
-          config: params.config,
-        }),
-    )?.entry;
+    const candidates = suppressions.get(modelId);
+    if (!candidates) {
+      return undefined;
+    }
+    const matches = (prepared: PreparedManifestSuppression) =>
+      (!input.unconditionalOnly || !prepared.entry.when) &&
+      manifestSuppressionMatchesConditions({
+        suppression: prepared,
+        provider,
+        baseUrl: input.baseUrl,
+        config: params.config,
+        api: input.api,
+      });
+    const direct = candidates.find(
+      (prepared) => prepared.entry.provider === provider && matches(prepared),
+    );
+    // Endpoint policy does not transfer the logical provider or its account ownership.
+    const physical =
+      !direct && !input.unconditionalOnly
+        ? physicalRetirement(provider, modelId, input.baseUrl, params.config, input.api)
+        : undefined;
+    const suppression = (direct ?? physical)?.entry;
     if (!suppression) {
       return undefined;
     }
@@ -202,6 +306,38 @@ export function buildManifestBuiltInModelSuppressionResolver(params: {
       ...(suppression.retirement ? { retirement: suppression.retirement } : {}),
     };
   };
+  const resolver: ManifestModelSuppressionResolver = Object.assign(resolve, {
+    hasRetirementCandidate(input: { provider?: string | null; id?: string | null }) {
+      const provider = normalizeLowercaseStringOrEmpty(input.provider);
+      const id = normalizeLowercaseStringOrEmpty(input.id);
+      const candidates = suppressions.get(id);
+      if (!candidates) {
+        return false;
+      }
+      if (candidates.some((rule) => rule.entry.provider === provider && rule.entry.retirement)) {
+        return true;
+      }
+      if (declaredProviders.has(provider)) {
+        return false;
+      }
+      const configured = resolveConfiguredProviderValue({ provider, config: params.config });
+      const model = findConfiguredProviderModel(
+        configured,
+        provider,
+        id,
+        normalizeLowercaseStringOrEmpty,
+      );
+      const baseUrl = model?.baseUrl ?? configured?.baseUrl;
+      if (!baseUrl) {
+        return false;
+      }
+      const config = projectModelProviderConfig(params.config, provider, {
+        api: model?.api ?? configured?.api,
+        baseUrl,
+      });
+      return Boolean(physicalRetirement(provider, id, baseUrl, config));
+    },
+  });
   if (params.config) {
     compiled.byConfig.set(params.config, resolver);
   } else {

@@ -20,13 +20,12 @@ import { tracePluginLifecyclePhaseAsync } from "../plugins/plugin-lifecycle-trac
 import { defaultRuntime } from "../runtime.js";
 import { shortenHomeInString, shortenHomePath } from "../utils.js";
 import { formatMissingPluginMessage } from "./error-format.js";
-import { ExpectedCliError, formatCliJsonFailure } from "./failure-output.js";
+import { formatCliJsonFailure } from "./failure-output.js";
 import { exitCliAfterOutput } from "./one-shot-exit.js";
 import { resolvePluginCapabilityConsentCliOptions } from "./plugin-capability-consent.js";
 import type {
   PluginDoctorOptions,
   PluginMarketplaceEntriesOptions,
-  PluginMarketplaceListOptions,
   PluginMarketplaceRefreshOptions,
   PluginRegistryOptions,
 } from "./plugins-cli.js";
@@ -46,7 +45,6 @@ function createModuleLoader<T>(load: () => Promise<T>): () => Promise<T> {
 }
 
 const loadPluginsStatus = createModuleLoader(() => import("../plugins/status.js"));
-const loadPluginsCommandHelpers = createModuleLoader(() => import("./plugins-command-helpers.js"));
 
 function countEnabledPlugins(plugins: readonly { enabled: boolean }[]): number {
   return plugins.filter((plugin) => plugin.enabled).length;
@@ -1019,43 +1017,4 @@ export async function runPluginMarketplaceRefreshCommand(
   }
 }
 
-/** List plugins from a configured marketplace manifest. */
-export async function runPluginMarketplaceListCommand(
-  source: string,
-  opts: PluginMarketplaceListOptions,
-): Promise<void> {
-  const { listMarketplacePlugins } = await import("../plugins/marketplace.js");
-  const { createPluginInstallLogger, quietPluginJsonLogger } = await loadPluginsCommandHelpers();
-  const result = await listMarketplacePlugins({
-    marketplace: source,
-    logger: opts.json ? quietPluginJsonLogger : createPluginInstallLogger(),
-  });
-  if (!result.ok) {
-    const message = result.error;
-    throw new ExpectedCliError({ message, humanOutput: message, machineOutput: message });
-  }
-
-  if (opts.json) {
-    return defaultRuntime.writeJson({
-      source: result.sourceLabel,
-      name: result.manifest.name,
-      version: result.manifest.version,
-      plugins: result.manifest.plugins,
-    });
-  }
-
-  if (result.manifest.plugins.length === 0) {
-    defaultRuntime.log(`No plugins found in marketplace ${result.sourceLabel}.`);
-    return;
-  }
-
-  defaultRuntime.log(
-    `${theme.heading("Marketplace")} ${theme.muted(result.manifest.name ?? result.sourceLabel)}`,
-  );
-  for (const plugin of result.manifest.plugins) {
-    const suffix = plugin.version ? theme.muted(` v${plugin.version}`) : "";
-    const desc = plugin.description ? ` - ${theme.muted(plugin.description)}` : "";
-    defaultRuntime.log(`${theme.command(plugin.name)}${suffix}${desc}`);
-  }
-}
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

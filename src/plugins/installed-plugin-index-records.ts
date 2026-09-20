@@ -5,12 +5,7 @@ import {
 } from "../config/plugin-install-record-map.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
-import {
-  clearLoadInstalledPluginIndexInstallRecordsCache,
-  loadInstalledPluginIndexInstallRecords,
-  loadInstalledPluginIndexInstallRecordsSync,
-  readPersistedInstalledPluginIndexInstallRecords,
-} from "./installed-plugin-index-record-reader.js";
+import "./installed-plugin-index-record-reader.js";
 import {
   refreshPersistedInstalledPluginIndexWithLeaseSync,
   type InstalledPluginIndexWriteLease,
@@ -18,13 +13,12 @@ import {
 } from "./installed-plugin-index-store-write.js";
 import type { RefreshInstalledPluginIndexParams } from "./installed-plugin-index.js";
 import { recordPluginInstall, type PluginInstallUpdate } from "./installs.js";
-
 export {
   clearLoadInstalledPluginIndexInstallRecordsCache,
   loadInstalledPluginIndexInstallRecords,
   loadInstalledPluginIndexInstallRecordsSync,
   readPersistedInstalledPluginIndexInstallRecords,
-};
+} from "./installed-plugin-index-record-reader.js";
 
 /** Config path for legacy plugin install records kept for migration/doctor flows. */
 export const PLUGIN_INSTALLS_CONFIG_PATH = ["plugins", "installs"] as const;

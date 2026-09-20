@@ -70,13 +70,18 @@ function latestReceiptStatus(storePath: string, jobId: string): string | undefin
 }
 
 describe("cron run receipt settlement", () => {
-  it.each(["on-exit", "stream", "empty-stream", "manual"] as const)(
-    "retains the execution owner through an awaited %s payload",
+  it.each(["on-exit", "stream", "empty-stream", "startup", "manual"] as const)(
+    "retains the execution owner through %s execution and settlement",
     async (source) => {
       const { storePath } = await makeStorePath();
       const context = new AsyncLocalStorage<"caller" | "scheduler">();
       const observed: Array<string | undefined> = [];
       let schedulerEntries = 0;
+      const runPayload = async () => {
+        await Promise.resolve();
+        observed.push(context.getStore());
+        return { status: "ok" as const };
+      };
       const service = new CronService({
         storePath,
         cronEnabled: true,
@@ -87,11 +92,13 @@ describe("cron run receipt settlement", () => {
           schedulerEntries += 1;
           return context.run("scheduler", run);
         },
-        runIsolatedAgentJob: async () => {
-          await Promise.resolve();
-          observed.push(context.getStore());
-          return { status: "ok" };
+        onEvent: (event) => {
+          if (event.action === "started" || event.action === "finished") {
+            observed.push(`${event.action}:${context.getStore()}`);
+          }
         },
+        runIsolatedAgentJob: runPayload,
+        runCommandJob: runPayload,
       });
       try {
         const job = await service.add({
@@ -99,40 +106,48 @@ describe("cron run receipt settlement", () => {
           name: `execution context ${source}`,
           enabled: true,
           schedule:
-            source === "on-exit"
-              ? onExitSchedule
-              : source === "manual"
-                ? { kind: "every", everyMs: 60_000 }
-                : { kind: "stream", command: ["true"] },
+            source === "startup"
+              ? { kind: "at", at: new Date(Date.now() - 1_000).toISOString() }
+              : source === "on-exit"
+                ? onExitSchedule
+                : source === "manual"
+                  ? { kind: "every", everyMs: 60_000 }
+                  : { kind: "stream", command: ["true"] },
           sessionTarget: "isolated",
           wakeMode: "next-heartbeat",
-          payload: { kind: "agentTurn", message: "Read the scheduled result." },
+          payload:
+            source === "startup"
+              ? { kind: "command", argv: ["true"] }
+              : { kind: "agentTurn", message: "Read the scheduled result." },
           delivery: { mode: "none" },
         });
         await context.run("caller", async () => {
           const outcome =
-            source === "on-exit"
-              ? await service.runOnExit(job.id, {
-                  schedule: onExitSchedule,
-                  signal: new AbortController().signal,
-                  commitGuard: () => {},
-                  onReserved: () => {},
-                })
-              : await service.run(
-                  job.id,
-                  "force",
-                  job.schedule.kind === "stream"
-                    ? {
-                        streamBatch: source === "empty-stream" ? "" : "one observed batch",
-                        streamScheduleKey: cronStreamScheduleKey(job.schedule),
-                        streamSourceIdentity: job.state.streamSourceIdentity,
-                      }
-                    : undefined,
-                );
-          expect(outcome).toEqual({ ok: true, ran: true });
+            source === "startup"
+              ? await service.start()
+              : source === "on-exit"
+                ? await service.runOnExit(job.id, {
+                    schedule: onExitSchedule,
+                    signal: new AbortController().signal,
+                    commitGuard: () => {},
+                    onReserved: () => {},
+                  })
+                : await service.run(
+                    job.id,
+                    "force",
+                    job.schedule.kind === "stream"
+                      ? {
+                          streamBatch: source === "empty-stream" ? "" : "one observed batch",
+                          streamScheduleKey: cronStreamScheduleKey(job.schedule),
+                          streamSourceIdentity: job.state.streamSourceIdentity,
+                        }
+                      : undefined,
+                  );
+          expect(outcome).toEqual(source === "startup" ? undefined : { ok: true, ran: true });
           expect(context.getStore()).toBe("caller");
         });
-        expect(observed).toEqual([source === "manual" ? "caller" : "scheduler"]);
+        const owner = source === "manual" ? "caller" : "scheduler";
+        expect(observed).toEqual([`started:${owner}`, owner, `finished:${owner}`]);
         expect(schedulerEntries).toBe(source === "manual" ? 0 : 1);
       } finally {
         service.stop();
@@ -460,8 +475,13 @@ describe("cron run receipt settlement", () => {
       }));
       await saveCronStore(storePath, { version: 1, jobs: [...blockers, job] });
       const releaseBlockers = createDeferred<{ status: "ok" }>();
+      const blockersStarted = createDeferred();
+      let startedBlockers = 0;
       const runCommandJob = vi.fn(async ({ job: running }: { job: CronJob }) => {
         if (running.id !== job.id) {
+          if (++startedBlockers === blockers.length) {
+            blockersStarted.resolve();
+          }
           return await releaseBlockers.promise;
         }
         return { status: "ok" as const };
@@ -471,7 +491,8 @@ describe("cron run receipt settlement", () => {
       const runningBlockers = blockers.map((blocker) => service.run(blocker.id, "force"));
       let observedExit: ReturnType<CronService["runOnExit"]> | undefined;
       try {
-        await vi.waitFor(() => expect(runCommandJob).toHaveBeenCalledTimes(blockers.length));
+        await blockersStarted.promise;
+        expect(runCommandJob).toHaveBeenCalledTimes(blockers.length);
         expect((await service.readJob(job.id))?.state.nextRunAtMs).toBeUndefined();
         const reserved = createDeferred();
         observedExit = service.runOnExit(job.id, {

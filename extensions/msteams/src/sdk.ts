@@ -1,10 +1,10 @@
-// Msteams plugin module implements sdk behavior.
 import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import { readSecretFile } from "openclaw/plugin-sdk/secret-file";
 import { normalizeBotFrameworkServiceUrl } from "./bot-framework-service-url.js";
 import type { MSTeamsCloudName } from "./cloud.js";
 import { resolveMSTeamsPrivateQaRuntime } from "./qa/private-runtime.js";
 import { MSTEAMS_REQUEST_TIMEOUT_MS } from "./request-timeout.js";
+import { msteamsConnectorHandoffInterceptor } from "./send-handoff.js";
 import type { MSTeamsCredentials, MSTeamsFederatedCredentials } from "./token.js";
 import { buildOpenClawUserAgentFragment } from "./user-agent.js";
 
@@ -277,6 +277,7 @@ async function createMSTeamsApp(
       options?.httpClient ?? {
         headers: { "User-Agent": buildOpenClawUserAgentFragment() },
         timeout: MSTEAMS_REQUEST_TIMEOUT_MS,
+        interceptors: [msteamsConnectorHandoffInterceptor],
       },
     ...(privateQaRuntime
       ? {

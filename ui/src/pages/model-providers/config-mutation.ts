@@ -5,6 +5,7 @@ import { t } from "../../i18n/index.ts";
 import { currentConfigObject } from "../../lib/config/config-state-model.ts";
 import type { RuntimeConfigCapability } from "../../lib/config/runtime-config-capability.ts";
 import { formatUiError } from "../../lib/format-error.ts";
+import { invalidateModelAuthStatusRequests } from "../../lib/model-auth-request-state.ts";
 import type { DefaultModelSelection } from "./data.ts";
 
 export type ModelBehaviorConfig = {
@@ -38,6 +39,7 @@ export function modelDefaultsActions(
       });
     },
     onUtilityChange: (model: string | null) => stageDefaults({ utilityModel: model }),
+    onDecisionChange: (model: string | null) => stageDefaults({ decisionModel: model }),
     onThinkingChange: (level: string) =>
       stageDefaults({ thinkingLevel: level, thinkingOverridden: true }),
     onThinkingReset: () => stageDefaults({ thinkingLevel: undefined, thinkingOverridden: false }),
@@ -71,6 +73,7 @@ export function buildDefaultsPatch(params: {
   primary: string;
   fallbacks: readonly string[];
   utilityModel: string | null;
+  decisionModel?: string | null;
   thinkingLevel: string | undefined;
   thinkingOverridden: boolean;
   fastMode: FastMode | undefined;
@@ -88,6 +91,7 @@ export function buildDefaultsPatch(params: {
             }
           : {}),
         utilityModel: params.utilityModel,
+        ...(params.decisionModel !== undefined ? { decisionModel: params.decisionModel } : {}),
         thinkingDefault:
           params.thinkingOverridden && params.thinkingLevel ? params.thinkingLevel : null,
         fastModeDefault:
@@ -270,12 +274,12 @@ export async function runModelProviderApiKeyMutation(
   owner.setMessage(null);
   try {
     const result = await owner.runtimeConfig.runExternalMutation(
-      (client) => {
+      async (client) => {
         if (client !== params.client) {
           throw new Error(t("modelProviders.requestFailed"));
         }
         const target = { provider: params.provider, agentId: params.agentId };
-        return params.apiKey === null
+        const receipt = await (params.apiKey === null
           ? client.request<{ warning?: string }>("models.authLogout", {
               ...target,
               credentialType: "api_key",
@@ -283,7 +287,9 @@ export async function runModelProviderApiKeyMutation(
           : client.request<{ warning?: string }>("models.authSetApiKey", {
               ...target,
               apiKey: params.apiKey,
-            });
+            }));
+        invalidateModelAuthStatusRequests(client);
+        return receipt;
       },
       { canDispatch: () => isCurrent() && owner.canMutate() },
     );

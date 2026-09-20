@@ -3,7 +3,7 @@ import { isPromise } from "node:util/types";
 import { serialize } from "node:v8";
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { createDeferredCore } from "../shared/deferred.js";
-import type { OperationScope, StoreClient } from "./sqlite-worker-broker.types.js";
+import type { Actor, OperationScope, StoreClient } from "./sqlite-worker-broker.types.js";
 import {
   SqliteWorkerError,
   type SqliteWorkerOperations,
@@ -13,14 +13,19 @@ import type { SqliteWorkerAdmissionFactory } from "./sqlite-worker-operation-adm
 import type { SqliteWorkerStateContext } from "./sqlite-worker-state-context.js";
 
 export function runSqliteWorkerClientOperation<Operations extends SqliteWorkerOperations, T>(
-  client: StoreClient,
+  client: StoreClient | undefined,
   operation: (scope: Pick<SqliteWorkerStore<Operations>, "execute">) => T | Promise<T>,
   stateContext: SqliteWorkerStateContext | undefined,
   track: (pending: Promise<void>) => () => void,
   assertCurrent?: (commandType: PropertyKey) => void,
   createAdmission?: SqliteWorkerAdmissionFactory,
+  requireStateLifecycle = false,
 ): Promise<T> {
+  if (!client || client.sealed) {
+    return Promise.reject(new SqliteWorkerError("SQLite worker store is closed", "closed"));
+  }
   const scope: OperationScope = {
+    requireStateLifecycle,
     createAdmission,
     assertCurrent,
     active: true,
@@ -30,6 +35,7 @@ export function runSqliteWorkerClientOperation<Operations extends SqliteWorkerOp
           stateContext: {
             environment: { ...stateContext.environment },
             coordinatorRuntime: { ...stateContext.coordinatorRuntime },
+            existingSchemaPath: stateContext.existingSchemaPath,
           },
         }
       : {}),
@@ -59,6 +65,7 @@ export function runSqliteWorkerClientOperation<Operations extends SqliteWorkerOp
 }
 
 export function createSqliteWorkerClient<Operations extends SqliteWorkerOperations>(owner: {
+  actor: Actor;
   isDraining: () => boolean;
   isAvailable: () => boolean;
   dispatch: (
@@ -73,6 +80,8 @@ export function createSqliteWorkerClient<Operations extends SqliteWorkerOperatio
   let closed: Promise<void> | undefined;
   const pending = new Set<Promise<unknown>>();
   const client: StoreClient = {
+    actor: owner.actor,
+    close: () => store.close(),
     sealed: owner.isDraining(),
     isAvailable: owner.isAvailable,
     scopes: new Set(),

@@ -1531,44 +1531,14 @@ export interface ExtensionShortcut {
 
 type HandlerFn = (...args: unknown[]) => Promise<unknown>;
 
-type SendMessageHandler = <T = unknown>(
-  message: Pick<CustomMessage<T>, "customType" | "content" | "display" | "details">,
-  options?: { triggerTurn?: boolean; deliverAs?: "steer" | "followUp" | "nextTurn" },
-) => void;
-
-type SendUserMessageHandler = (
-  content: string | (TextContent | ImageContent)[],
-  options?: { deliverAs?: "steer" | "followUp" },
-) => void;
-
-type AppendEntryHandler = (customType: string, data?: unknown) => void;
-
-export type SetSessionNameHandler = (name: string) => void;
-
-export type GetSessionNameHandler = () => string | undefined;
-
-type GetActiveToolsHandler = () => string[];
+export type SetSessionNameHandler = ExtensionAPI["setSessionName"];
+export type GetSessionNameHandler = ExtensionAPI["getSessionName"];
+export type RefreshToolsHandler = () => void;
 
 /** Tool info with name, description, parameter schema, and source metadata */
 export type ToolInfo = Pick<ToolDefinition, "name" | "description" | "parameters"> & {
   sourceInfo: SourceInfo;
 };
-
-type GetAllToolsHandler = () => ToolInfo[];
-
-type GetCommandsHandler = () => SlashCommandInfo[];
-
-type SetActiveToolsHandler = (toolNames: string[]) => void;
-
-export type RefreshToolsHandler = () => void;
-
-type SetModelHandler = (model: Model) => Promise<boolean>;
-
-type GetThinkingLevelHandler = () => ThinkingLevel;
-
-type SetThinkingLevelHandler = (level: ThinkingLevel) => void;
-
-type SetLabelHandler = (entryId: string, label: string | undefined) => void;
 
 /**
  * Shared state created by loader, used during registration and runtime.
@@ -1600,72 +1570,45 @@ export interface ExtensionRuntimeState {
  * Action implementations for ExtensionAPI methods.
  * Provided to runner.initialize(), copied into the shared runtime.
  */
-export interface ExtensionActions {
-  sendMessage: SendMessageHandler;
-  sendUserMessage: SendUserMessageHandler;
-  appendEntry: AppendEntryHandler;
-  setSessionName: SetSessionNameHandler;
-  getSessionName: GetSessionNameHandler;
-  setLabel: SetLabelHandler;
-  getActiveTools: GetActiveToolsHandler;
-  getAllTools: GetAllToolsHandler;
-  setActiveTools: SetActiveToolsHandler;
+export interface ExtensionActions extends Pick<
+  ExtensionAPI,
+  | "sendMessage"
+  | "sendUserMessage"
+  | "appendEntry"
+  | "setSessionName"
+  | "getSessionName"
+  | "setLabel"
+  | "getActiveTools"
+  | "getAllTools"
+  | "setActiveTools"
+  | "getCommands"
+  | "setModel"
+  | "getThinkingLevel"
+  | "setThinkingLevel"
+> {
   refreshTools: RefreshToolsHandler;
-  getCommands: GetCommandsHandler;
-  setModel: SetModelHandler;
-  getThinkingLevel: GetThinkingLevelHandler;
-  setThinkingLevel: SetThinkingLevelHandler;
 }
 
-/**
- * Actions for ExtensionContext (ctx.* in event handlers).
- * Required by all modes.
- */
-export interface ExtensionContextActions {
-  getModel: () => Model | undefined;
-  isIdle: () => boolean;
-  getSignal: () => AbortSignal | undefined;
-  abort: () => void;
-  hasPendingMessages: () => boolean;
-  shutdown: () => void;
-  getContextUsage: () => ContextUsage | undefined;
-  compact: (options?: CompactOptions) => void;
-  getSystemPrompt: () => string;
+/** Actions for the live extension context, supplied by each runtime mode. */
+export interface ExtensionContextActions extends Pick<
+  ExtensionContext,
+  | "isIdle"
+  | "abort"
+  | "hasPendingMessages"
+  | "shutdown"
+  | "getContextUsage"
+  | "compact"
+  | "getSystemPrompt"
+> {
+  getModel: () => ExtensionContext["model"];
+  getSignal: () => ExtensionContext["signal"];
 }
 
-/**
- * Actions for ExtensionCommandContext (ctx.* in command handlers).
- * Only needed for interactive mode where extension commands are invokable.
- */
-export interface ExtensionCommandContextActions {
-  waitForIdle: () => Promise<void>;
-  newSession: (options?: {
-    parentSession?: string;
-    setup?: (sessionManager: SessionManager) => Promise<void>;
-    withSession?: (ctx: ReplacedSessionContext) => Promise<void>;
-  }) => Promise<{ cancelled: boolean }>;
-  fork: (
-    entryId: string,
-    options?: {
-      position?: "before" | "at";
-      withSession?: (ctx: ReplacedSessionContext) => Promise<void>;
-    },
-  ) => Promise<{ cancelled: boolean }>;
-  navigateTree: (
-    targetId: string,
-    options?: {
-      summarize?: boolean;
-      customInstructions?: string;
-      replaceInstructions?: boolean;
-      label?: string;
-    },
-  ) => Promise<{ cancelled: boolean }>;
-  switchSession: (
-    sessionPath: string,
-    options?: { withSession?: (ctx: ReplacedSessionContext) => Promise<void> },
-  ) => Promise<{ cancelled: boolean }>;
-  reload: () => Promise<void>;
-}
+/** Session controls provided by modes that support extension commands. */
+export interface ExtensionCommandContextActions extends Pick<
+  ExtensionCommandContext,
+  "waitForIdle" | "newSession" | "fork" | "navigateTree" | "switchSession" | "reload"
+> {}
 
 /**
  * Full runtime = state + actions.

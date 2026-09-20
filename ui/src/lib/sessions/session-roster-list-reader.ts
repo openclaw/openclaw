@@ -1,7 +1,11 @@
 import type { SessionsListResult } from "../../api/types.ts";
 import { formatUiError } from "../format-error.ts";
-import type { SessionListOptions, SessionListScope, SessionState } from "./session-capability.ts";
-import type { SessionRefreshOutcome } from "./session-list-query.ts";
+import type {
+  SessionListOptions,
+  SessionListScope,
+  SessionRefreshOutcome,
+  SessionState,
+} from "./session-capability.ts";
 import type { SessionListRefreshHost } from "./session-managed-list-refresh.ts";
 import { requestSessionList } from "./session-requests.ts";
 import type { createSessionRosterObservations } from "./session-roster-observations.ts";

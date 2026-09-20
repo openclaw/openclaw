@@ -23,6 +23,7 @@ const repoRoot = resolveRepoRoot(import.meta.url);
 function runShard(config: string, env: NodeJS.ProcessEnv): Promise<number> {
   return runManagedCommand({
     bin: process.execPath,
+    shell: false,
     args: distArtifactEntryArgs(path.join(repoRoot, "scripts/run-tsgo.mts"), [
       "-b",
       config,

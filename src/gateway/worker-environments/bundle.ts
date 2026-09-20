@@ -51,7 +51,7 @@ export type WorkerInstallationArtifact = WorkerBundleArtifact | WorkerNpmArtifac
 
 export type WorkerBundleProducer = {
   prepare: () => Promise<WorkerBundleArtifact>;
-  prune: (retainedBundleHashes: readonly string[]) => Promise<void>;
+  prune: (readRetainedBundleHashes: () => readonly string[]) => Promise<void>;
 };
 
 type WorkerBundleProducerOptions = {
@@ -398,14 +398,9 @@ async function writeTarball(params: {
 async function pruneWorkerBundleCache(params: {
   cacheDir: string;
   currentBundleHash: string;
-  retainedBundleHashes: readonly string[];
+  readRetainedBundleHashes: () => readonly string[];
   onError?: (error: unknown) => void;
 }): Promise<void> {
-  const retained = new Set(
-    [params.currentBundleHash, ...params.retainedBundleHashes].filter((hash) =>
-      /^[a-f0-9]{64}$/u.test(hash),
-    ),
-  );
   let entries: Dirent[];
   try {
     entries = await fs.readdir(params.cacheDir, { withFileTypes: true });
@@ -415,6 +410,24 @@ async function pruneWorkerBundleCache(params: {
     }
     return;
   }
+  if (
+    !entries.some((entry) => {
+      const bundleHash = BUNDLE_TARBALL_NAME_PATTERN.exec(entry.name)?.[1];
+      return (
+        (bundleHash !== undefined && bundleHash !== params.currentBundleHash) ||
+        BUNDLE_STAGING_NAME_PATTERN.test(entry.name) ||
+        BUNDLE_TEMP_NAME_PATTERN.test(entry.name)
+      );
+    })
+  ) {
+    return;
+  }
+  // Read current references only after this queued prune finds possible cleanup work.
+  const retained = new Set(
+    [params.currentBundleHash, ...params.readRetainedBundleHashes()].filter((hash) =>
+      /^[a-f0-9]{64}$/u.test(hash),
+    ),
+  );
   for (const entry of entries.toSorted((left, right) =>
     compareWorkerBundlePaths(left.name, right.name),
   )) {
@@ -503,7 +516,7 @@ export function createWorkerBundleProducer(
       }
       return prepared;
     },
-    async prune(retainedBundleHashes) {
+    async prune(readRetainedBundleHashes) {
       const artifact = currentArtifact;
       if (options.cacheOwnership !== "exclusive" || !artifact) {
         return;
@@ -512,7 +525,7 @@ export function createWorkerBundleProducer(
         await pruneWorkerBundleCache({
           cacheDir: resolveBundleCacheDir(options.cacheDir),
           currentBundleHash: artifact.bundleHash,
-          retainedBundleHashes,
+          readRetainedBundleHashes,
           onError: options.onCacheCleanupError,
         });
       });

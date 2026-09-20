@@ -5,7 +5,6 @@ import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { createChannelParticipantAdmissionEvidence } from "../../../test/helpers/channel-admission-evidence.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
-import { attachToolAllowlistIntersection } from "../../agents/tool-policy.js";
 import {
   configureChannelAdmissionEvidenceCollection,
   consumeChannelAdmissionEvidence,
@@ -27,9 +26,11 @@ import {
 } from "./queue.js";
 import {
   createQueueTestRun as createRun,
+  createQueueSettings,
+  createDrainRecorder,
   installQueueRuntimeErrorSilencer,
 } from "./queue.test-helpers.js";
-import { resolveFollowupDeliveryContextKey } from "./queue/drain.js";
+import { resolveFollowupDeliveryContextKey } from "./queue/delivery-context.js";
 import { clearFollowupQueue, getExistingFollowupQueue } from "./queue/state.js";
 import type { ReplyOperationRunState } from "./reply-operation-run-state.js";
 
@@ -42,16 +43,6 @@ type InternalFollowupRun = FollowupRun & {
 };
 
 installQueueRuntimeErrorSilencer();
-
-function createQueueSettings(overrides: Partial<QueueSettings> = {}): QueueSettings {
-  return {
-    mode: "collect",
-    debounceMs: 0,
-    cap: 50,
-    dropPolicy: "summarize",
-    ...overrides,
-  };
-}
 
 function enqueueTestRun(
   key: string,
@@ -79,18 +70,6 @@ function enqueueSlackRun(
     settings,
     runOverrides,
   );
-}
-
-function createDrainRecorder(expectedCalls = 1) {
-  const calls: Array<FollowupRun & { currentTurnImagesPrepared?: true }> = [];
-  const done = createDeferred();
-  const runFollowup = async (run: FollowupRun) => {
-    calls.push(run);
-    if (calls.length >= expectedCalls) {
-      done.resolve();
-    }
-  };
-  return { calls, done, runFollowup };
 }
 
 function createQueueCase(key: string, overrides: Partial<QueueSettings> = {}, expectedCalls = 1) {
@@ -618,31 +597,25 @@ describe("followup queue collect routing", () => {
     expect(calls.map((call) => call.originatingChatType)).toEqual(["direct", "channel"]);
   });
 
-  it("does not collect when source delivery policy differs", async () => {
+  it.each([
+    ["sourceReplyDeliveryMode", "automatic", "message_tool_only"],
+    ["terminalReplyExpectation", "required", "optional"],
+  ] as const)("does not collect when %s differs", async (policy, first, second) => {
     const { key, calls, done, runFollowup, settings } = createQueueCase(
-      `test-collect-diff-delivery-policy-${Date.now()}`,
+      `test-collect-diff-${policy}-${Date.now()}`,
       {},
       2,
     );
     const route = { originatingChatType: "channel" };
-    enqueueSlackRun(key, settings, "automatic", { sourceReplyDeliveryMode: "automatic" }, route);
-    enqueueSlackRun(
-      key,
-      settings,
-      "private",
-      { sourceReplyDeliveryMode: "message_tool_only" },
-      route,
-    );
+    enqueueSlackRun(key, settings, "first", { [policy]: first }, route);
+    enqueueSlackRun(key, settings, "second", { [policy]: second }, route);
     await drainRecordedQueue(key, runFollowup, done);
 
-    expect(calls.map((call) => call.prompt)).toEqual([
-      "[Queued messages while agent was busy]\n\n---\nQueued #1\nautomatic",
-      "[Queued messages while agent was busy]\n\n---\nQueued #1\nprivate",
-    ]);
-    expect(calls.map((call) => call.run.sourceReplyDeliveryMode)).toEqual([
-      "automatic",
-      "message_tool_only",
-    ]);
+    expect(calls.map((call) => call.run[policy])).toEqual([first, second]);
+    expect(calls[0]?.prompt).toContain("first");
+    expect(calls[0]?.prompt).not.toContain("second");
+    expect(calls[1]?.prompt).toContain("second");
+    expect(calls[1]?.prompt).not.toContain("first");
   });
 
   it("does not collect when task suggestion delivery differs", async () => {
@@ -1238,27 +1211,18 @@ describe("followup queue collect routing", () => {
     expect(calls[2]?.prompt).toContain("survivor");
   });
 
-  it("splits overflow groups when source delivery policy changes", async () => {
+  it.each([
+    ["sourceReplyDeliveryMode", "automatic", "message_tool_only"],
+    ["terminalReplyExpectation", "required", "optional"],
+  ] as const)("splits overflow groups when %s changes", async (policy, first, second) => {
     const { key, calls, done, runFollowup, settings } = createQueueCase(
-      `test-collect-overflow-delivery-policy-${Date.now()}`,
+      `test-collect-overflow-${policy}-${Date.now()}`,
       { cap: 2 },
       3,
     );
     const route = { originatingChatType: "channel" };
-    enqueueSlackRun(
-      key,
-      settings,
-      "automatic source",
-      { sourceReplyDeliveryMode: "automatic" },
-      route,
-    );
-    enqueueSlackRun(
-      key,
-      settings,
-      "private source",
-      { sourceReplyDeliveryMode: "message_tool_only" },
-      route,
-    );
+    enqueueSlackRun(key, settings, "first source", { [policy]: first }, route);
+    enqueueSlackRun(key, settings, "second source", { [policy]: second }, route);
     for (const prompt of ["survivor one", "survivor two"]) {
       enqueueTestRun(
         key,
@@ -1275,10 +1239,12 @@ describe("followup queue collect routing", () => {
     await drainRecordedQueue(key, runFollowup, done);
 
     expect(calls).toHaveLength(3);
-    expect(calls[0]?.prompt).toContain("- automatic source");
-    expect(calls[0]?.run.sourceReplyDeliveryMode).toBe("automatic");
-    expect(calls[1]?.prompt).toContain("- private source");
-    expect(calls[1]?.run.sourceReplyDeliveryMode).toBe("message_tool_only");
+    expect(calls[0]?.prompt).toContain("- first source");
+    expect(calls[0]?.prompt).not.toContain("- second source");
+    expect(calls[0]?.run[policy]).toBe(first);
+    expect(calls[1]?.prompt).toContain("- second source");
+    expect(calls[1]?.prompt).not.toContain("- first source");
+    expect(calls[1]?.run[policy]).toBe(second);
     expect(calls[2]?.prompt).toContain("survivor one");
     expect(calls[2]?.prompt).toContain("survivor two");
   });
@@ -2292,152 +2258,6 @@ describe("followup queue collect routing", () => {
     expect(calls[1]?.prompt).not.toContain("first");
   });
 
-  it("splits collect batches when queued authority facts change", async () => {
-    const key = `test-collect-queued-authority-split-${Date.now()}`;
-    const { calls, done, runFollowup } = createDrainRecorder(3);
-    const settings: QueueSettings = { mode: "collect", debounceMs: 0 };
-    const route = { originatingChannel: "slack" as const, originatingTo: "channel:A" };
-    const pluginGrant = createRun({ prompt: "plugin grant", ...route });
-    pluginGrant.run.runtimePluginToolGrant = {
-      pluginId: "workboard",
-      toolNames: ["workboard_complete"],
-    };
-    const scheduled = createRun({ prompt: "scheduled authority", ...route });
-    scheduled.run.scheduledToolPolicy = { version: 1, mode: "trusted" };
-    const handoff = createRun({ prompt: "trusted handoff", ...route });
-    handoff.run.trustedInternalHandoff = {
-      kind: "subagent-completion",
-      sourceSessionKey: "agent:child",
-      targetSessionKey: "agent:parent",
-      targetSessionId: "session-1",
-      provider: "openai",
-      model: "gpt-5.6-luna",
-    };
-
-    enqueueFollowupRun(key, pluginGrant, settings);
-    enqueueFollowupRun(key, scheduled, settings);
-    enqueueFollowupRun(key, handoff, settings);
-    scheduleFollowupDrain(key, runFollowup);
-    await done.promise;
-
-    expect(calls.map((call) => call.prompt)).toEqual([
-      expect.stringContaining("plugin grant"),
-      expect.stringContaining("scheduled authority"),
-      expect.stringContaining("trusted handoff"),
-    ]);
-    expect(calls[0]?.run.runtimePluginToolGrant).toEqual(pluginGrant.run.runtimePluginToolGrant);
-    expect(calls[1]?.run.scheduledToolPolicy).toEqual(scheduled.run.scheduledToolPolicy);
-    expect(calls[2]?.run.trustedInternalHandoff).toEqual(handoff.run.trustedInternalHandoff);
-  });
-
-  it("drains different provider and model routes under their own run snapshots", async () => {
-    const key = `test-collect-route-authority-split-${Date.now()}`;
-    const { calls, done, runFollowup } = createDrainRecorder(3);
-    const settings: QueueSettings = { mode: "collect", debounceMs: 0 };
-    const route = { originatingChannel: "slack" as const, originatingTo: "channel:A" };
-    const first = createRun({ prompt: "first route", ...route });
-    first.run.provider = "openai";
-    first.run.model = "gpt-primary";
-    const second = createRun({ prompt: "second route", ...route });
-    second.run.provider = "openai";
-    second.run.model = "gpt-fallback";
-    const third = createRun({ prompt: "third route", ...route });
-    third.run.provider = "anthropic";
-    third.run.model = "gpt-fallback";
-
-    enqueueFollowupRun(key, first, settings);
-    enqueueFollowupRun(key, second, settings);
-    enqueueFollowupRun(key, third, settings);
-    scheduleFollowupDrain(key, runFollowup);
-    await done.promise;
-
-    expect(calls.map((call) => [call.prompt, call.run.provider, call.run.model])).toEqual([
-      [expect.stringContaining("first route"), "openai", "gpt-primary"],
-      [expect.stringContaining("second route"), "openai", "gpt-fallback"],
-      [expect.stringContaining("third route"), "anthropic", "gpt-fallback"],
-    ]);
-  });
-
-  it.each(["enabled", "disabled", "policy-deny", "runtime-cap", "non-owner"])(
-    "collects turns using the effective screen capability: %s",
-    async (screenMode) => {
-      const key = `test-collect-ui-requester-${Date.now()}`;
-      const { calls, runFollowup } = createDrainRecorder();
-      const settings = createQueueSettings();
-      const targets = [
-        { connId: "browser-a", profileId: "profile-a" },
-        { connId: "browser-b", profileId: "profile-a" },
-        { connId: "browser-b", profileId: "profile-a" },
-      ];
-      for (const [index, gatewayUiCommandTarget] of targets.entries()) {
-        const run = createRun({ prompt: `selection ${index + 1}`, originatingChannel: "webchat" });
-        run.run.gatewayUiCommandTarget = gatewayUiCommandTarget;
-        run.run.clientCaps = ["ui-commands"];
-        run.run.senderIsOwner = screenMode !== "non-owner";
-        run.run.approvalReviewerDeviceId = "shared-device";
-        run.disableTools = screenMode === "disabled";
-        if (screenMode === "policy-deny") {
-          run.run.config = { tools: { deny: ["screen"] } };
-        }
-        if (screenMode === "runtime-cap") {
-          run.toolsAllow = ["read"];
-        }
-        enqueueFollowupRun(key, run, settings);
-      }
-
-      scheduleFollowupDrain(key, runFollowup);
-      await vi.waitFor(() => expect(getExistingFollowupQueue(key)).toBeUndefined());
-
-      if (screenMode === "enabled") {
-        expect(calls).toHaveLength(2);
-        expect(calls[0]?.prompt).toContain("selection 1");
-        expect(calls[0]?.prompt).not.toContain("selection 2");
-        expect(calls[1]?.prompt).toContain("selection 2");
-        expect(calls[1]?.prompt).toContain("selection 3");
-        expect(calls.map((call) => call.run.gatewayUiCommandTarget)).toEqual([
-          targets[0],
-          targets[1],
-        ]);
-      } else {
-        expect(calls).toHaveLength(1);
-        for (const selection of ["selection 1", "selection 2", "selection 3"]) {
-          expect(calls[0]?.prompt).toContain(selection);
-        }
-      }
-    },
-  );
-
-  it("keys collect batches by turn allowlists, intersections, disablement, and roles", () => {
-    const createAuthorityRun = () =>
-      createRun({
-        prompt: "authority",
-        originatingChannel: "slack",
-        originatingTo: "channel:A",
-      });
-    const baseline = createAuthorityRun();
-    const toolsAllow = createAuthorityRun();
-    toolsAllow.toolsAllow = ["exec"];
-    const disabled = createAuthorityRun();
-    disabled.disableTools = true;
-    const roles = createAuthorityRun();
-    roles.run.memberRoleIds = ["operator"];
-    const firstIntersection = createAuthorityRun();
-    firstIntersection.toolsAllow = attachToolAllowlistIntersection(["exec"], [["exec"]]);
-    const secondIntersection = createAuthorityRun();
-    secondIntersection.toolsAllow = attachToolAllowlistIntersection(
-      ["exec"],
-      [["exec"], ["message"]],
-    );
-
-    const baselineKey = resolveFollowupDeliveryContextKey(baseline);
-    expect(resolveFollowupDeliveryContextKey(toolsAllow)).not.toBe(baselineKey);
-    expect(resolveFollowupDeliveryContextKey(disabled)).not.toBe(baselineKey);
-    expect(resolveFollowupDeliveryContextKey(roles)).not.toBe(baselineKey);
-    expect(resolveFollowupDeliveryContextKey(firstIntersection)).not.toBe(
-      resolveFollowupDeliveryContextKey(secondIntersection),
-    );
-  });
-
   it("keeps one collect batch when authorization context matches", async () => {
     const { key, calls, done, runFollowup, settings } = createQueueCase(
       `test-collect-auth-match-${Date.now()}`,
@@ -3052,11 +2872,11 @@ describe("followup queue collect routing", () => {
     expect(calls[1]?.deliveryCorrelations?.[0]?.begin).toBe(begin);
   });
 
-  it("keeps mixed overflow summaries as normal followups", async () => {
+  it("keeps room-event and user-request overflow summaries separate", async () => {
     const { key, calls, done, runFollowup, settings } = createQueueCase(
       `test-overflow-summary-mixed-kind-${Date.now()}`,
       { mode: "followup", cap: 1 },
-      2,
+      3,
     );
 
     enqueueFollowupRun(
@@ -3079,10 +2899,14 @@ describe("followup queue collect routing", () => {
 
     await drainRecordedQueue(key, runFollowup, done);
 
-    expect(calls).toHaveLength(2);
-    expect(calls[0]?.prompt).toContain("[Queue overflow] Dropped 2 messages due to cap.");
-    expect(calls[0]?.currentInboundEventKind).toBeUndefined();
-    expect(calls[1]?.prompt).toBe("live followup");
+    expect(calls).toHaveLength(3);
+    expect(calls[0]?.prompt).toContain("- dropped ambient");
+    expect(calls[0]?.prompt).not.toContain("- dropped request");
+    expect(calls[0]?.currentInboundEventKind).toBe("room_event");
+    expect(calls[1]?.prompt).toContain("- dropped request");
+    expect(calls[1]?.prompt).not.toContain("- dropped ambient");
+    expect(calls[1]?.currentInboundEventKind).toBeUndefined();
+    expect(calls[2]?.prompt).toBe("live followup");
   });
 
   it("drops an aborted summarized room event before overflow delivery", async () => {

@@ -42,7 +42,11 @@ import {
   type ComputerUseCapabilityDescriptor,
 } from "../plugins/computer-use-contract.js";
 import { hasExactOwnKeys, workerProtocolObject } from "./protocol-record.js";
-import { isWorkerToolName, type WorkerToolName } from "./tool-authority.js";
+import {
+  isWorkerToolName,
+  type WorkerToolAuthority,
+  type WorkerToolName,
+} from "./tool-authority.js";
 import { isWorkerTranscriptMessageFrameSafe } from "./transcript-message.js";
 import {
   parseWorkerConnectionEndpoint,
@@ -91,16 +95,43 @@ const AbsoluteHostPath = z
 const WorkspacePath = AbsoluteHostPath.refine(
   (value) => value.trim() === value && value.length <= 4_096 && !value.includes("\0"),
 );
+const ExecAuthorityFields = {
+  security: z.enum(["deny", "allowlist", "full"]),
+  ask: z.enum(["off", "on-miss", "always"]),
+  safeBins: z.tuple([]).optional(),
+};
+const ExecAuthoritySchema = z
+  .union([
+    z
+      .unknown()
+      .refine((value) => isRecord(value) && value.node === undefined)
+      .pipe(workerProtocolObject({ host: z.enum(["sandbox", "gateway"]), ...ExecAuthorityFields })),
+    workerProtocolObject({
+      host: z.literal("node"),
+      ...ExecAuthorityFields,
+      node: z
+        .string()
+        .min(1)
+        .refine((value) => value.trim() === value)
+        .optional(),
+    }).transform(({ node, ...authority }) =>
+      node === undefined ? authority : { ...authority, node },
+    ),
+  ])
+  .refine((value) => !Object.hasOwn(value, "safeBins") || value.safeBins !== undefined);
 const ToolAuthoritySchema = workerProtocolObject({
   allowedToolNames: z
     .custom<WorkerToolName[]>(
-      (value) =>
-        Array.isArray(value) &&
-        value.every(isWorkerToolName) &&
-        new Set(value).size === value.length,
+      (names) =>
+        Array.isArray(names) &&
+        names.every(isWorkerToolName) &&
+        new Set(names).size === names.length,
     )
     .transform((names) => [...names]),
-});
+  exec: ExecAuthoritySchema.optional(),
+}).transform(({ exec, ...authority }): WorkerToolAuthority =>
+  exec === undefined ? authority : { ...authority, exec },
+);
 const BrowserLaunchSchema = workerProtocolObject({
   cdpUrl: z.string().refine((value) => {
     const url = URL.parse(value);

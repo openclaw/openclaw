@@ -2,8 +2,9 @@ import { copyReplyPayloadMetadata } from "../../auto-reply/reply-payload.js";
 // Finalizes outbound modifying policy before durable queue custody is created.
 import type { ReplyPayload } from "../../auto-reply/types.js";
 import { getGlobalHookRunner } from "../../plugins/hook-runner-global.js";
+import type { HookRunner } from "../../plugins/hooks.js";
 import { throwIfAborted } from "./abort.js";
-import { createChannelHandler, resolveChannelOutboundDirectiveOptions } from "./deliver-channel.js";
+import { createChannelHandler } from "./deliver-channel.js";
 import type { DeliverOutboundPayloadsParams } from "./deliver-contracts.js";
 import { applyMessageSendingHook, applyReplyPayloadSendingHook } from "./deliver-hooks.js";
 import {
@@ -119,21 +120,16 @@ function compactPreparedPayload(payload: ReplyPayload): ReplyPayload {
  */
 export async function prepareOutboundPayloadBatch(
   params: DeliverOutboundPayloadsParams,
-  options?: { onBeforeFirstModifier?: () => Promise<void> },
+  options?: { onBeforeFirstModifier?: () => Promise<void>; hookRunner?: HookRunner },
 ): Promise<PreparedOutboundBatch> {
-  const directiveOptions = await resolveChannelOutboundDirectiveOptions({
-    cfg: params.cfg,
-    agentId: params.session?.agentId,
-    channel: params.channel,
-  });
+  const handler = await createPreparationHandler(params);
   const plan = createOutboundPayloadPlan(params.payloads, {
     cfg: params.cfg,
     sessionKey: params.session?.policyKey ?? params.session?.key,
     surface: params.channel,
     conversationType: params.session?.conversationType,
-    extractMarkdownImages: directiveOptions.extractMarkdownImages,
+    extractMarkdownImages: handler.extractMarkdownImages,
   });
-  const handler = await createPreparationHandler(params);
   const normalized = normalizePayloadsForChannelDelivery(plan, handler);
   const normalizedIndexes = new Set(normalized.map((entry) => entry.index));
   const entries: PreparedOutboundBatchEntry[] = [];
@@ -143,7 +139,7 @@ export async function prepareOutboundPayloadBatch(
     }
   }
 
-  const hookRunner = getGlobalHookRunner();
+  const hookRunner = options?.hookRunner ?? getGlobalHookRunner();
   const hasReplyPayloadSendingHooks =
     params.replyPayloadSendingHook !== undefined &&
     (hookRunner?.hasHooks("reply_payload_sending") ?? false);
@@ -162,10 +158,13 @@ export async function prepareOutboundPayloadBatch(
     }
     let replyHookResult: Awaited<ReturnType<typeof applyReplyPayloadSendingHook>>;
     try {
-      replyHookResult = await applyReplyPayloadSendingHook({
-        hook: params.replyPayloadSendingHook,
-        payload,
-      });
+      replyHookResult = await applyReplyPayloadSendingHook(
+        {
+          hook: params.replyPayloadSendingHook,
+          payload,
+        },
+        hookRunner,
+      );
     } catch (error) {
       throw new OutboundPayloadPreparationError(error, sourceIndex, payload);
     }

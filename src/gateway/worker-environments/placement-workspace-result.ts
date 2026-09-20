@@ -1,5 +1,6 @@
 import type { DatabaseSync } from "node:sqlite";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../../infra/kysely-sync.js";
+import { sessionChanges } from "../../sessions/session-row-changes.js";
 import {
   ensureRepositoryWorkspacePendingResultSchema,
   hasRepositoryWorkspacePendingResultSchema,
@@ -237,6 +238,7 @@ export function insertWorkerWorkspacePendingResult(
       .onConflict((conflict) => conflict.column("session_id").doNothing()),
   );
   if (result.numAffectedRows === 1n) {
+    sessionChanges.emit({ agentId: placement.agentId, sessionKey: placement.sessionKey }, db);
     return;
   }
   const existing = executeSqliteQuerySync(
@@ -301,6 +303,7 @@ export function createPlacementWorkspaceResultOps(runtime: PlacementStoreRuntime
     if (!row || !matchesWorkspaceResultClaim(placement, row, claim)) {
       throw new Error(`Cannot update stale worker workspace result for ${claim.sessionId}`);
     }
+    sessionChanges.emit({ agentId: placement.agentId, sessionKey: placement.sessionKey }, db);
     return row;
   };
   return {

@@ -13,11 +13,15 @@ import {
   replaceSessionEntry,
 } from "../../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
+import { createDeferredCore } from "../../../shared/deferred.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../../../test-utils/openclaw-test-state.js";
 import { prepareSystemAgentRunAdmission } from "../../admitted-run-context.js";
+import * as authRows from "../../auth-profiles/sqlite-read.js";
+import { loadAuthProfileStoreForRuntimeAsync } from "../../auth-profiles/store-runtime.js";
+import { persistAuthProfileBatch } from "../../auth-profiles/upsert-with-lock.js";
 import { registerAgentHarness } from "../../harness/registry.js";
 import { withPreparedEmbeddedRunToolAuthority } from "../../harness/tool-authority.runtime.js";
 import type { AgentHarness } from "../../harness/types.js";
@@ -117,8 +121,9 @@ async function createFixture(
         }),
   };
   await replaceSessionEntry(target, entry);
-  const resolve = () =>
+  const resolve = (assertCurrent = () => {}) =>
     resolveEmbeddedRunModelSetup({
+      assertCurrent,
       runParams,
       sessionAdmission: assertAgentHarnessRunAdmission(runParams),
       provider: generation.provider,
@@ -151,6 +156,7 @@ async function createFixture(
     let runtime: Awaited<ReturnType<typeof prepareEmbeddedRunRuntime>> | undefined;
     try {
       runtime = await prepareEmbeddedRunRuntime({
+        assertCurrent: () => {},
         runParams: { ...actualParams, preparedRunAdmission: admission },
         sessionAdmission: assertAgentHarnessRunAdmission(actualParams),
         provider: actualParams.provider ?? generation.provider,
@@ -175,6 +181,101 @@ async function createFixture(
 }
 
 describe("model chat and native model ownership", () => {
+  it.each(["current", "changed-again", "revoked"] as const)(
+    "reacquires initial model preparation after a shared OAuth refresh while authority is %s",
+    async (outcome) => {
+      const fixture = await createFixture();
+      fixture.generation.resolveDynamicModel.mockClear();
+      const profileId = "openai:refresh-race";
+      const credential = {
+        type: "oauth" as const,
+        provider: "openai",
+        access: "synthetic-original-access",
+        refresh: "synthetic-original-refresh",
+        expires: Date.now() + 86_400_000,
+        accountId: "synthetic-account",
+      };
+      await persistAuthProfileBatch({
+        stateDir: fixture.state.stateDir,
+        profiles: [{ profileId, credential }],
+      });
+      fixture.runParams.authProfileId = profileId;
+      const entered = createDeferredCore();
+      const release = createDeferredCore();
+      let active = true;
+      const revoked = new Error("Model setup authority revoked");
+      const rotated = {
+        ...credential,
+        access: "synthetic-refreshed-access",
+        refresh: "synthetic-refreshed-refresh",
+      };
+      const latest = { ...rotated, access: "synthetic-latest-access" };
+      const publish = (next: typeof credential) =>
+        persistAuthProfileBatch({
+          stateDir: fixture.state.stateDir,
+          profiles: [{ profileId, credential: next }],
+          allowOAuthGenerationReplacement: true,
+        });
+      let reads = 0;
+      const readShared = authRows.readSharedAuthProfileRows;
+      const read = vi
+        .spyOn(authRows, "readSharedAuthProfileRows")
+        .mockImplementation(async (ctx) => {
+          const rows = await readShared(ctx);
+          reads += 1;
+          if (reads === 1) {
+            entered.resolve();
+            await release.promise;
+          } else if (outcome === "changed-again") {
+            await publish(latest);
+          }
+          return rows;
+        });
+      const loading = fixture.resolve(() => {
+        if (!active) {
+          throw revoked;
+        }
+      });
+      try {
+        await Promise.race([
+          entered.promise,
+          loading.then(() => {
+            throw new Error("Model setup completed before the shared auth read barrier");
+          }),
+        ]);
+        expect(fixture.generation.resolveDynamicModel).not.toHaveBeenCalled();
+        await publish(rotated);
+        active = outcome !== "revoked";
+        release.resolve();
+        if (outcome === "current") {
+          expect((await loading).model.id).toBe("fixture-model");
+          expect(fixture.generation.resolveDynamicModel).toHaveBeenCalled();
+        } else if (outcome === "revoked") {
+          await expect(loading).rejects.toBe(revoked);
+        } else {
+          await expect(loading).rejects.toThrow(
+            "Auth profile store changed during its runtime read",
+          );
+        }
+        if (outcome === "changed-again") {
+          expect(read).toHaveBeenCalledTimes(2);
+        }
+        if (outcome !== "current") {
+          expect(fixture.generation.resolveDynamicModel).not.toHaveBeenCalled();
+        }
+        const current = await loadAuthProfileStoreForRuntimeAsync(fixture.state.agentDir(), {
+          readOnly: true,
+          externalCli: { mode: "none" },
+        });
+        expect(current.profiles[profileId]).toEqual(outcome === "changed-again" ? latest : rotated);
+      } finally {
+        release.resolve();
+        await Promise.allSettled([loading]);
+        read.mockRestore();
+      }
+    },
+  );
+
   it("resolves the concrete locked model instead of treating a runtime request as native ownership", async () => {
     const fixture = await createFixture();
     const setup = await fixture.resolve();

@@ -5,7 +5,7 @@ import type { Model } from "../../llm/types.js";
 import { setCurrentPluginMetadataSnapshot } from "../../plugins/current-plugin-metadata.test-support.js";
 import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
 import { resolveAgentToolSurfacePlan } from "../tool-surface-plan.js";
-import { DEFAULT_PROVIDER_RUNTIME_HOOKS, normalizeResolvedModel } from "./model.provider-hooks.js";
+import { normalizeResolvedModel, resolveRuntimeHooks } from "./model.provider-hooks.js";
 
 vi.mock("../../plugins/provider-runtime.js", () => ({
   applyProviderResolvedTransportWithPlugin: () => undefined,
@@ -44,6 +44,25 @@ function toolSearchEnabled(resolvedModel: Model, config: OpenClawConfig = {}): b
     isRawModelRun: false,
   }).toolSearchControlsEnabled;
 }
+
+it("preserves hook selection precedence and stable default tables", () => {
+  const defaults = resolveRuntimeHooks();
+  const target = resolveRuntimeHooks({ skipAgentDiscovery: true });
+  const skipped = resolveRuntimeHooks({ skipProviderRuntimeHooks: true });
+  const explicit = { ...defaults };
+
+  expect(resolveRuntimeHooks()).toBe(defaults);
+  expect(resolveRuntimeHooks({ skipAgentDiscovery: true })).toBe(target);
+  expect(target).not.toBe(defaults);
+  expect(resolveRuntimeHooks({ runtimeHooks: explicit, skipAgentDiscovery: true })).toBe(explicit);
+  expect(
+    resolveRuntimeHooks({
+      runtimeHooks: explicit,
+      skipAgentDiscovery: true,
+      skipProviderRuntimeHooks: true,
+    }),
+  ).toBe(skipped);
+});
 
 describe("resolved model Tool Search policy", () => {
   beforeAll(() => {
@@ -85,7 +104,7 @@ describe("resolved model Tool Search policy", () => {
       provider: original.provider,
       model: local,
       runtimeHooks: {
-        ...DEFAULT_PROVIDER_RUNTIME_HOOKS,
+        ...resolveRuntimeHooks(),
         normalizeProviderTransportWithPlugin: () => ({
           api: "openai-responses",
           baseUrl: "https://hosted.example/v1",

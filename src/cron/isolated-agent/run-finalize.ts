@@ -27,6 +27,7 @@ import {
 } from "../run-diagnostics.js";
 import type { CronDeliveryTrace, CronRunTelemetry } from "../types.js";
 import { resolveCronChannelOutputPolicy } from "./channel-output-policy.js";
+import type { DispatchCronDeliveryState } from "./delivery-dispatch-types.js";
 import { resolveCronPayloadOutcome } from "./helpers.js";
 import { buildCronDeliveryTrace, loadCronDeliveryRuntime } from "./run-delivery-trace.js";
 import type { PreparedCronRunContext } from "./run-prepare.js";
@@ -241,42 +242,52 @@ export async function finalizeCronRun(params: {
     finalStatus: hasFatalErrorPayload ? "error" : "ok",
   });
   const runDiagnostics = mergeCronRunDiagnostics(prepared.preflightDiagnostics, agentDiagnostics);
-  const resolveRunOutcome = (result?: {
-    deliveryState?: RunCronAgentTurnResult["deliveryState"];
-    delivered?: boolean;
-    deliveryAttempted?: boolean;
-    deliveryError?: string;
-    deliverySuppressionReason?: RunCronAgentTurnResult["deliverySuppressionReason"];
-    delivery?: CronDeliveryTrace;
-  }) =>
-    prepared.withRunSession({
-      status: hasFatalErrorPayload ? "error" : "ok",
-      ...(hasFatalErrorPayload
-        ? { error: embeddedRunError ?? "cron isolated run returned an error payload" }
-        : {}),
-      summary,
-      outputText,
+  const resolveRunOutcome = (
+    result?: Partial<DispatchCronDeliveryState> & { delivery?: CronDeliveryTrace },
+  ) => {
+    const disposition = result?.disposition;
+    const failure = disposition?.kind === "error" ? disposition : undefined;
+    // A failed handoff wins; a non-error delivery stop must retain the run's fatal outcome.
+    const useRunFailure = hasFatalErrorPayload && !failure;
+    const runError = embeddedRunError ?? "cron isolated run returned an error payload";
+    const deliveryError = disposition && useRunFailure ? undefined : result?.deliveryError;
+    const deliveryDiagnosticError = deliveryError ?? failure?.error;
+    const output =
+      failure && failure.errorKind !== "delivery-target"
+        ? {}
+        : disposition && !useRunFailure
+          ? { summary: result?.summary, outputText: result?.outputText }
+          : { summary, outputText };
+    return prepared.withRunSession({
+      status: failure || hasFatalErrorPayload ? "error" : "ok",
+      ...(failure
+        ? { error: failure.error, ...(failure.errorKind ? { errorKind: failure.errorKind } : {}) }
+        : hasFatalErrorPayload
+          ? { error: runError }
+          : {}),
+      ...output,
       replyDisposition,
       deliveryState: result?.deliveryState,
-      delivered: result?.delivered,
+      delivered:
+        useRunFailure && disposition?.kind === "pending"
+          ? undefined
+          : (failure?.delivered ?? result?.delivered),
       deliveryAttempted: result?.deliveryAttempted,
-      deliveryError: result?.deliveryError,
+      deliveryError,
       deliverySuppressionReason: result?.deliverySuppressionReason,
       delivery: result?.delivery,
       diagnostics: mergeCronRunDiagnostics(
         runDiagnostics,
-        hasFatalErrorPayload && !hasTerminalToolFailure
-          ? createCronRunDiagnosticsFromError(
-              "agent-run",
-              embeddedRunError ?? "cron isolated run returned an error payload",
-            )
+        useRunFailure && !hasTerminalToolFailure
+          ? createCronRunDiagnosticsFromError("agent-run", runError)
           : undefined,
-        result?.deliveryError
-          ? createCronRunDiagnosticsFromError("delivery", result.deliveryError)
+        deliveryDiagnosticError
+          ? createCronRunDiagnosticsFromError("delivery", deliveryDiagnosticError)
           : undefined,
       ),
       ...telemetry,
     });
+  };
   const failPendingPresentationWarningUnlessDelivered = (delivered?: boolean) => {
     if (pendingPresentationWarningError && delivered !== true) {
       hasFatalErrorPayload = true;
@@ -382,7 +393,6 @@ export async function finalizeCronRun(params: {
   params.markCronRunSessionCleanupHandled();
   const { dispatchCronDelivery, resolveCronDeliveryBestEffort } = await loadCronDeliveryRuntime();
   const deliveryResult = await dispatchCronDelivery({
-    cfg: prepared.input.cfg,
     cfgWithAgentDefaults: prepared.cfgWithAgentDefaults,
     deps: prepared.input.deps,
     job: prepared.input.job,
@@ -396,7 +406,6 @@ export async function finalizeCronRun(params: {
     sessionUpdatedAt: prepared.cronSession.sessionEntry.updatedAt,
     beforeSessionDelete: params.beforeSessionDelete,
     runStartedAt: execution.runStartedAt,
-    runEndedAt: execution.runEndedAt,
     timeoutMs: prepared.timeoutMs,
     resolvedDelivery: prepared.resolvedDelivery,
     deliveryPlan: prepared.deliveryPlan,
@@ -417,11 +426,9 @@ export async function finalizeCronRun(params: {
     ttsAuto: prepared.cronSession.sessionEntry.ttsAuto,
     summary,
     outputText,
-    telemetry,
     abortSignal: prepared.input.abortSignal ?? prepared.input.signal,
     isAborted: params.isAborted,
     abortReason: params.abortReason,
-    withRunSession: prepared.withRunSession,
   });
   const deliveryTrace = buildCronDeliveryTrace({
     deliveryPlan: prepared.deliveryPlan,
@@ -433,54 +440,10 @@ export async function finalizeCronRun(params: {
       !sourceDeliveryOutcome.satisfiesSourceDelivery,
     delivered: deliveryResult.delivered,
   });
-  if (deliveryResult.result) {
-    const deliveryError = deliveryResult.result.deliveryError ?? deliveryResult.deliveryError;
-    const deliveryDiagnosticError =
-      deliveryError ??
-      (deliveryResult.result.status === "error" ? deliveryResult.result.error : undefined);
-    const resultWithDeliveryMeta: RunCronAgentTurnResult = {
-      ...deliveryResult.result,
-      replyDisposition,
-      deliveryState: deliveryResult.deliveryState,
-      delivered: deliveryResult.result.delivered ?? deliveryResult.delivered,
-      deliveryAttempted:
-        deliveryResult.result.deliveryAttempted ?? deliveryResult.deliveryAttempted,
-      deliveryError,
-      delivery: deliveryTrace,
-      diagnostics: mergeCronRunDiagnostics(
-        runDiagnostics,
-        deliveryResult.result.diagnostics,
-        deliveryDiagnosticError
-          ? createCronRunDiagnosticsFromError("delivery", deliveryDiagnosticError)
-          : undefined,
-      ),
-    };
-    failPendingPresentationWarningUnlessDelivered(
-      resultWithDeliveryMeta.delivered ?? deliveryResult.delivered,
-    );
-    if (!hasFatalErrorPayload) {
-      return resultWithDeliveryMeta;
-    }
-    if (deliveryResult.result.status !== "ok") {
-      return resultWithDeliveryMeta;
-    }
-    return resolveRunOutcome({
-      deliveryState: deliveryResult.deliveryState,
-      delivered: deliveryResult.result.delivered,
-      deliveryAttempted: resultWithDeliveryMeta.deliveryAttempted,
-      deliverySuppressionReason: resultWithDeliveryMeta.deliverySuppressionReason,
-      delivery: deliveryTrace,
-    });
+  if (!deliveryResult.disposition) {
+    summary = deliveryResult.summary;
+    outputText = deliveryResult.outputText;
   }
-  summary = deliveryResult.summary;
-  outputText = deliveryResult.outputText;
   failPendingPresentationWarningUnlessDelivered(deliveryResult.delivered);
-  return resolveRunOutcome({
-    deliveryState: deliveryResult.deliveryState,
-    delivered: deliveryResult.delivered,
-    deliveryAttempted: deliveryResult.deliveryAttempted,
-    deliveryError: deliveryResult.deliveryError,
-    deliverySuppressionReason: deliveryResult.deliverySuppressionReason,
-    delivery: deliveryTrace,
-  });
+  return resolveRunOutcome({ ...deliveryResult, delivery: deliveryTrace });
 }

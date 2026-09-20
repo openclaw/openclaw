@@ -409,6 +409,7 @@ function assertOwnerCanBeIsolated(
   });
   const isolatableFailure =
     reason === AUTH_STORE_PROVIDER_UNCONFIGURED_REASON ||
+    reason === "resolved secret value is a redaction placeholder" ||
     (reason !== undefined && isRetryableSecretDegradationReason(reason));
   if (
     !reason ||
@@ -490,7 +491,11 @@ export async function resolveAndApplySecretAssignments(params: {
           )
         ) {
           existing.providerFailures.push(providerFailure);
-        } else if (!providerFailure && !existing.refFailureReason) {
+        } else if (
+          !providerFailure &&
+          (!existing.refFailureReason ||
+            reason === "resolved secret value is a redaction placeholder")
+        ) {
           existing.refFailureReason = reason;
         }
       }
@@ -540,6 +545,9 @@ export async function resolveAndApplySecretAssignments(params: {
           ),
           forceColdRefKeys: params.forceColdRefKeys,
         });
+        if (failure.refFailureReason === "resolved secret value is a redaction placeholder") {
+          degradationState = "cold";
+        }
         const activeOwner =
           degradationState === "stale"
             ? getActiveSecretsRuntimeSnapshotState()?.secretOwners?.find(

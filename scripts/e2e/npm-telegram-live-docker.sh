@@ -429,6 +429,14 @@ EOF
 
 # Mount the trusted current-source QA harness separately from the installed
 # package candidate. The candidate remains the absolute CLI/runtime SUT.
+command_scenario_mount_args=()
+if [ -n "${OPENCLAW_NPM_TELEGRAM_COMMAND_SCENARIO:-}" ]; then
+  if [ ! -f "$OPENCLAW_NPM_TELEGRAM_COMMAND_SCENARIO" ]; then
+    echo "Frozen Telegram command scenario is missing" >&2
+    exit 1
+  fi
+  command_scenario_mount_args=(-v "$OPENCLAW_NPM_TELEGRAM_COMMAND_SCENARIO:/app/qa/scenarios/channels/telegram-repeated-command-authorization.yaml:ro")
+fi
 run_logged_print_heartbeat "npm-telegram-live-suite" 60 docker_e2e_run_with_harness \
   "${docker_env[@]}" \
   -v "$ROOT_DIR/.artifacts:/app/.artifacts" \
@@ -442,6 +450,7 @@ run_logged_print_heartbeat "npm-telegram-live-suite" 60 docker_e2e_run_with_harn
   -v "$ROOT_DIR/.agents:/app/.agents:ro" \
   -v "$ROOT_DIR/taxonomy.yaml:/app/taxonomy.yaml:ro" \
   -v "$ROOT_DIR/qa/scenarios:/app/qa/scenarios:ro" \
+  ${command_scenario_mount_args[@]+"${command_scenario_mount_args[@]}"} \
   ${prepublish_registry_mount_args[@]+"${prepublish_registry_mount_args[@]}"} \
   -v "$npm_prefix_host:/npm-global" \
   -i "$IMAGE_NAME" bash -s <<'EOF'

@@ -1994,6 +1994,7 @@ describe("release validation no-push transport", () => {
       "resolve_release_target",
       "publish",
       "verify_core_npm_registry",
+      "finalize_github_release_before_docker",
     ]);
     expect(dockerCall.if).toContain("needs.publish.result == 'success'");
     expect(dockerCall.if).toContain("needs.verify_core_npm_registry.result == 'success'");
@@ -2026,16 +2027,17 @@ describe("release validation no-push transport", () => {
         "Validate OpenClaw npm preflight manifest",
       ).run,
     ).toContain("Preflight manifest SHA mismatch");
-    expect(
-      step(
-        job(releasePublish, "resolve_release_target"),
-        "Validate full release validation manifest",
-      ).run,
-    ).toContain("Full release validation target SHA mismatch");
+    const validation = step(
+      job(releasePublish, "resolve_release_target"),
+      "Validate full release validation manifest",
+    );
+    expect(validation.env?.EXPECTED_SHA).toBe("${{ steps.ref.outputs.sha }}");
+    expect(validation.run).toContain('--consumer publisher --manifest "$manifest"');
     expect(job(releasePublish, "finalize_github_release").needs).toEqual([
       "publish",
       "publish_docker",
       "approve_github_release",
+      "finalize_github_release_before_docker",
     ]);
 
     const identity = step(
@@ -2051,8 +2053,15 @@ describe("release validation no-push transport", () => {
     expect(reusablePermissionViolations(DOCKER_RELEASE, "prepare")).toEqual([]);
   });
 
-  it("finalizes npm-only alpha releases while retaining required Docker gates for other trains", () => {
+  it("keeps Docker required by default and activates early only after explicit approval", () => {
     const workflow = readWorkflow(".github/workflows/openclaw-release-publish.yml");
+    expect(workflow.on?.workflow_dispatch?.inputs?.finalize_release_before_docker).toMatchObject({
+      type: "boolean",
+      default: false,
+    });
+    const early = job(workflow, "finalize_github_release_before_docker");
+    expect(early.needs).toEqual(["publish", "approve_github_release_before_docker"]);
+    expect(early.steps).toEqual(job(workflow, "finalize_github_release").steps);
     const cases = [
       {
         tag: "v2026.9.1-alpha.1",
@@ -2090,14 +2099,52 @@ describe("release validation no-push transport", () => {
         publishDocker: false,
         finalize: false,
       },
+      {
+        tag: "v2026.9.1",
+        npm: "success",
+        docker: "failure",
+        beforeDocker: true,
+        early: "success",
+        publishDocker: true,
+        finalize: false,
+      },
+      {
+        tag: "v2026.9.1",
+        npm: "success",
+        docker: "success",
+        beforeDocker: true,
+        early: "success",
+        publishDocker: true,
+        finalize: true,
+      },
+      {
+        tag: "v2026.9.1",
+        npm: "failure",
+        docker: "skipped",
+        beforeDocker: true,
+        early: "skipped",
+        publishDocker: false,
+        finalize: false,
+      },
+      {
+        tag: "v2026.9.1",
+        npm: "success",
+        docker: "skipped",
+        beforeDocker: true,
+        early: "failure",
+        publishDocker: false,
+        finalize: false,
+      },
     ];
     for (const scenario of cases) {
+      const beforeDocker = scenario.beforeDocker === true;
       const evaluate = (name: string, preparedPlugins = "") =>
         runInNewContext(job(workflow, name).if!.slice(3, -2), {
           always: () => true,
           contains: (value: string, search: string) => value.includes(search),
           inputs: {
             tag: scenario.tag,
+            finalize_release_before_docker: beforeDocker,
             publish_openclaw_npm: true,
             publish_docker_only: false,
             prepared_plugins: preparedPlugins,
@@ -2105,10 +2152,19 @@ describe("release validation no-push transport", () => {
           needs: {
             publish: { result: scenario.npm },
             publish_docker: { result: scenario.docker },
-            approve_github_release: { result: "success" },
+            approve_github_release: { result: beforeDocker ? "skipped" : "success" },
+            approve_github_release_before_docker: { result: beforeDocker ? "success" : "skipped" },
+            finalize_github_release_before_docker: { result: scenario.early ?? "skipped" },
             verify_core_npm_registry: { result: "skipped" },
           },
         });
+      expect(evaluate("approve_github_release_before_docker")).toBe(
+        beforeDocker && scenario.npm === "success",
+      );
+      expect(evaluate("approve_github_release")).toBe(!beforeDocker && scenario.finalize);
+      expect(evaluate("finalize_github_release_before_docker")).toBe(
+        beforeDocker && scenario.npm === "success",
+      );
       expect(evaluate("publish_docker"), JSON.stringify(scenario)).toBe(scenario.publishDocker);
       expect(evaluate("finalize_github_release"), JSON.stringify(scenario)).toBe(scenario.finalize);
       expect(evaluate("finalize_github_release", '{"npm":{},"clawhub":{}}')).toBe(false);

@@ -10,6 +10,7 @@ import {
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
+import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { WebSocketServer } from "ws";
 import { withZalouserIngressTestQueue } from "./ingress.test-support.js";
@@ -117,6 +118,9 @@ describe("Zalo listener startup lifecycle", () => {
             }
             handle.stop();
           }
+          // Storage has its own idle actor timer; retire it before asserting
+          // that listener startup left no timeout or reconnect work behind.
+          await closeOpenClawStateDatabaseAsync();
           expect(vi.getTimerCount()).toBe(0);
           expect(listener.eventNames()).toEqual([]);
           const next = new TestListener();

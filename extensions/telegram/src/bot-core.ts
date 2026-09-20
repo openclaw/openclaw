@@ -1,4 +1,3 @@
-// Telegram plugin module implements bot core behavior.
 import {
   buildChannelGroupsScopeTree,
   resolveChannelGroupPolicy,
@@ -16,7 +15,6 @@ import {
   resolveNativeCommandsEnabled,
   resolveNativeSkillsEnabled,
 } from "openclaw/plugin-sdk/native-command-config-runtime";
-import type { HistoryEntry } from "openclaw/plugin-sdk/reply-history";
 import {
   danger,
   logVerbose,
@@ -33,10 +31,7 @@ import { resolveTelegramAccount } from "./accounts.js";
 import { normalizeTelegramApiRoot } from "./api-root.js";
 import type { TelegramBotDeps } from "./bot-deps.js";
 import { createTelegramHandlers } from "./bot-handlers.runtime.js";
-import {
-  createTelegramMessageProcessor,
-  resolveTelegramMessageTurnSettings,
-} from "./bot-message.js";
+import { createTelegramMessageProcessor } from "./bot-message.js";
 import { defaultTelegramNativeCommandDeps } from "./bot-native-command-deps.runtime.js";
 import { registerTelegramNativeCommands } from "./bot-native-commands.js";
 import {
@@ -51,7 +46,6 @@ import { createTelegramUpdateTracker } from "./bot-update-tracker.js";
 import type { TelegramUpdateKeyContext } from "./bot-updates.js";
 import { apiThrottler, Bot, sequentialize, type ApiClientOptions } from "./bot.runtime.js";
 import type { TelegramBotOptions } from "./bot.types.js";
-import { buildTelegramGroupPeerId } from "./bot/helpers.js";
 import {
   setTelegramCallbackQueryAnswerPromise,
   startTelegramCallbackQueryAnswer,
@@ -66,11 +60,6 @@ import {
 } from "./client-fetch.js";
 import { resolveTelegramTransport } from "./fetch.js";
 import { resolveTelegramScopedGroupConfig } from "./group-config-helpers.js";
-import {
-  buildTelegramSelfSenderName,
-  recordTelegramGroupHistoryEntry,
-} from "./group-history-window.js";
-import { registerTelegramOutboundGroupHistoryRecorder } from "./outbound-message-context.js";
 import {
   prepareTelegramPollAnswerContextAsync,
   settleTelegramPollAnswerContext,
@@ -300,33 +289,6 @@ export function createTelegramBotCore(
     await next();
   });
 
-  const { historyLimit } = resolveTelegramMessageTurnSettings({
-    accountId: account.accountId,
-    cfg,
-    telegramCfg,
-    opts: runtimeOpts,
-  });
-  const groupHistories = new Map<string, HistoryEntry[]>();
-  const botHistorySender = buildTelegramSelfSenderName(account.name, opts.botInfo);
-  const unregisterOutboundGroupHistoryRecorder = registerTelegramOutboundGroupHistoryRecorder({
-    accountId: account.accountId,
-    recorder: (record) => {
-      if (!String(record.chatId).startsWith("-")) {
-        return;
-      }
-      recordTelegramGroupHistoryEntry({
-        historyMap: groupHistories,
-        historyKey: buildTelegramGroupPeerId(record.chatId, record.threadSpec),
-        limit: historyLimit,
-        entry: {
-          sender: botHistorySender,
-          body: record.text?.trim() || "<media>",
-          timestamp: record.timestamp,
-          messageId: String(record.messageId),
-        },
-      });
-    },
-  });
   const nativeEnabled = resolveNativeCommandsEnabled({
     providerId: "telegram",
     providerSetting: telegramCfg.commands?.native,
@@ -419,7 +381,6 @@ export function createTelegramBotCore(
     nativeCommandNames,
     bot,
     account,
-    groupHistories,
     logger,
     resolveGroupActivation,
     resolveGroupRequireMention,
@@ -476,7 +437,6 @@ export function createTelegramBotCore(
   const originalStop = bot.stop.bind(bot);
   bot.stop = ((...args: Parameters<typeof originalStop>) => {
     threadBindingManager?.stop();
-    unregisterOutboundGroupHistoryRecorder();
     return originalStop(...args);
   }) as typeof bot.stop;
 

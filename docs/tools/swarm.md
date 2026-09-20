@@ -151,7 +151,7 @@ Spawn or bridge failures can reject with other errors. Read the exact generated
 declarations and short orchestration idioms from `API.read("agents.d.ts")`
 inside Code Mode.
 
-Use `label` for a recognizable child name in the dashboard and sidebar. Use
+Use `label` for a recognizable child name in transcript activity and Tasks views. Use
 `phase` in the options to publish a phase immediately before that child
 starts, or call `phase()` when several children belong to the same stage.
 `log()` publishes a short progress note. Progress calls are fire-and-forget.
@@ -406,8 +406,11 @@ identify each child's status. Native clients present killed and timed-out childr
 as failed. Native groups leave the widget when none of their children are queued
 or running. The native widget disappears when no active groups remain.
 
-The session sidebar keeps the normal parent/child tree. Expand the parent row to
-inspect a collector child or open its transcript without losing the swarm hierarchy.
+Collector children appear in inline transcript activity rows, the chat **Tasks**
+tab, and the [Tasks page](/automation/tasks#control-ui). They have no session-sidebar
+rows. Their activity and unread failures still contribute to the parent’s sidebar
+ring and attention signals. Persistent spawned sessions and forks keep their
+normal sidebar nesting.
 
 Delete-mode collector children can clean up their child sessions immediately after
 completion while retaining their waitable results. Those collector records remain

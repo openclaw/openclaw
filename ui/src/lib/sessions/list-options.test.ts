@@ -885,7 +885,7 @@ describe("session list replacement options", () => {
     const listCallsBeforeTail = request.mock.calls.filter(
       ([method]) => method === "sessions.list",
     ).length;
-    await sessions.refreshReplacement("main");
+    await sessions.reconcileMutation("main");
 
     // One seeding list, none from the patches, one authoritative tail refresh.
     expect(listCallsBeforeTail).toBe(1);

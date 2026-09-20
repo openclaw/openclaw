@@ -1,25 +1,38 @@
 import { execFile } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
+import type { StatementSync } from "node:sqlite";
 import { promisify } from "node:util";
 import { beforeEach, expect, test, vi } from "vitest";
 import { insertRegistryWorktree } from "../../agents/worktrees/registry.js";
+import { loadCombinedSessionStoreForGatewayCore } from "../../config/sessions/combined-store-gateway.js";
 import {
   replaceSessionEntrySync,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
+import * as transcriptWorker from "../../config/sessions/session-transcript-worker-runtime.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { sha256HexPrefixCore } from "../../infra/crypto-digest.js";
+import { requireNodeSqlite } from "../../infra/node-sqlite.js";
 import { registerProjectRegistry } from "../../projects/project-registry.js";
 import { registerClonedProjectRegistry } from "../../projects/project-registry.test-support.js";
+import { SecretSurfaceUnavailableError } from "../../secrets/runtime-degraded-state.js";
+import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { getSessionRepositoryWorkspaceStore } from "../../state/session-repository-workspaces.js";
+import { retainUserProfileCatalog } from "../../state/user-profile-list.js";
 import { ensureProfileForEmail, linkEmail } from "../../state/user-profiles.js";
 import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import { createProjectsHandlers } from "./projects.js";
+import { bumpGatewayAccessRevision } from "../gateway-access-revision.js";
+import { gitHubPublicApi } from "../github-public-api.js";
+import * as projectGitHubSearch from "../project-github-search.js";
+import {
+  createProjectsHandlers,
+  projectsHandlers as registeredProjectsHandlers,
+} from "./projects.js";
 
 const execFileAsync = promisify(execFile);
-const listRegistryRecords = vi.fn(() => []);
+const listRegistryRecords = vi.fn(async () => []);
 const resolveRepositoryIdentity = vi.fn(async (checkoutPath: string) => ({
   checkoutRoot: checkoutPath,
   repoRoot: checkoutPath,
@@ -59,6 +72,7 @@ async function invokeProjectMethod(
   cfg = {},
   scopes: string[] = ["operator.write"],
   profileId?: string,
+  handlers = projectsHandlers,
 ) {
   const capture: {
     result: {
@@ -67,7 +81,7 @@ async function invokeProjectMethod(
       error?: { code?: string; message?: string };
     } | null;
   } = { result: null };
-  await projectsHandlers[method]!({
+  await handlers[method]!({
     req: {} as never,
     params,
     respond: (ok, payload, error) => {
@@ -82,6 +96,77 @@ async function invokeProjectMethod(
   });
   return capture.result;
 }
+
+test.each([
+  {
+    failure: "rate limit",
+    error: () =>
+      new gitHubPublicApi.ControlUiGitHubError(429, "quota exhausted", {
+        upstreamStatus: 403,
+        retryAtMs: Date.now() + 30_000,
+      }),
+    message: "GitHub API rate limit exceeded (HTTP 403). Wait 30 seconds and retry.",
+    retryable: true,
+    retryAfterMs: 30_000,
+  },
+  {
+    failure: "authentication",
+    error: () => new gitHubPublicApi.ControlUiGitHubError(401, "credential rejected"),
+    message: "GitHub authentication failed (HTTP 401). Reconnect the GitHub identity in Settings.",
+    retryable: false,
+  },
+  {
+    failure: "repository access",
+    error: () => new gitHubPublicApi.ControlUiGitHubError(403, "repository denied"),
+    message:
+      "GitHub access denied (HTTP 403). Check the configured GitHub identity's repository access.",
+    retryable: false,
+  },
+  {
+    failure: "unavailable configured credential",
+    error: () =>
+      new SecretSurfaceUnavailableError({
+        ownerKind: "capability",
+        ownerId: "control-ui-github",
+        state: "unavailable",
+        paths: ["gateway.controlUi.github.token"],
+        refKeys: [],
+        reason: "synthetic-secret",
+      }),
+    message:
+      "The configured Control UI GitHub credential is unavailable. Resolve gateway.controlUi.github.token and retry.",
+    retryable: false,
+  },
+  {
+    failure: "unexpected diagnostic",
+    error: () => new Error("GitHub request failed with token=synthetic-secret"),
+    message: "GitHub project search is unavailable. Retry shortly.",
+    retryable: true,
+  },
+])(
+  "projects.searchRemote preserves safe $failure diagnostics and retry metadata",
+  async ({ error, message, retryable, retryAfterMs }) => {
+    const clock = vi.spyOn(Date, "now").mockReturnValue(1_800_000_000_000);
+    const search = vi.spyOn(projectGitHubSearch, "searchRemoteProjects").mockRejectedValue(error());
+    try {
+      const result = await invokeProjectMethod("projects.searchRemote", { query: "openclaw" });
+      expect(result).toEqual({
+        ok: false,
+        payload: undefined,
+        error: {
+          code: "UNAVAILABLE",
+          message,
+          retryable,
+          ...(retryAfterMs === undefined ? {} : { retryAfterMs }),
+        },
+      });
+      expect(JSON.stringify(result)).not.toContain("synthetic-secret");
+    } finally {
+      search.mockRestore();
+      clock.mockRestore();
+    }
+  },
+);
 
 test("projects.list merges synthesized workspaces with stored rows deterministically", async () => {
   const state = await createOpenClawTestState({ layout: "state-only", prefix: "projects-rpc-" });
@@ -220,6 +305,171 @@ test("project responses redact credentials and URL suffixes from registered orig
   }
 });
 
+test("registered projects.list reads recents and observed session rows off the caller thread", async () => {
+  const state = await createOpenClawTestState({ layout: "state-only", prefix: "projects-worker-" });
+  try {
+    const repo = await initializeRepository(state.root);
+    const profile = ensureProfileForEmail("projects-worker@example.test");
+    const cfg = {
+      agents: { list: [{ id: "main", default: true, workspace: state.workspaceDir }] },
+    };
+    replaceSessionEntrySync(
+      { agentId: "main", sessionKey: "agent:main:project-worker" },
+      {
+        sessionId: "project-worker",
+        updatedAt: 20,
+        spawnedCwd: repo,
+        execCwd: repo,
+        createdActor: { type: "human", source: "profile", id: profile.id },
+      },
+    );
+    const database = openOpenClawAgentDatabase({ agentId: "main" });
+    const prototype: StatementSync = Object.getPrototypeOf(database.db.prepare("SELECT 1"));
+    const observers = [
+      vi.spyOn(prototype, "all"),
+      vi.spyOn(prototype, "get"),
+      vi.spyOn(prototype, "iterate"),
+    ];
+    const rowQueries = () =>
+      observers
+        .flatMap((observer) => observer.mock.contexts)
+        .map((statement) => (statement as StatementSync).sourceSQL)
+        .filter((sql) => /session_nodes/i.test(sql));
+    try {
+      loadCombinedSessionStoreForGatewayCore(cfg);
+      expect(rowQueries().length).toBeGreaterThan(0);
+      for (const observer of observers) {
+        observer.mockClear();
+      }
+      for (let round = 0; round < 2; round++) {
+        expect(
+          await invokeProjectMethod(
+            "projects.list",
+            { includeObserved: true },
+            cfg,
+            ["operator.write"],
+            profile.id,
+            registeredProjectsHandlers,
+          ),
+        ).toMatchObject({
+          ok: true,
+          payload: {
+            recents: [{ kind: "folder", folder: repo, displayName: "registered" }],
+            observedProjects: [
+              { checkouts: [{ runnerId: "gateway", path: repo }], lastUsedAt: 20 },
+            ],
+          },
+        });
+      }
+      expect(rowQueries()).toEqual([]);
+    } finally {
+      for (const observer of observers) {
+        observer.mockRestore();
+      }
+    }
+  } finally {
+    await state.cleanup();
+  }
+});
+
+test.each(["write scope", "session access", "registry access", "probe access"])(
+  "projects.list rechecks %s after preparation",
+  async (change) => {
+    const state = await createOpenClawTestState({
+      layout: "state-only",
+      prefix: "projects-worker-scope-",
+    });
+    const read = transcriptWorker.withSessionHistoryWorkerDatabases;
+    let restoreRead = () => {};
+    try {
+      const profile = ensureProfileForEmail("projects-scope@example.test");
+      const cfg = {
+        agents: { list: [{ id: "main", default: true, workspace: state.workspaceDir }] },
+      };
+      replaceSessionEntrySync(
+        { agentId: "main", sessionKey: "agent:main:scope" },
+        {
+          sessionId: "scope",
+          updatedAt: 1,
+          spawnedCwd: "/private/project",
+          execCwd: "/private/project",
+          createdActor: { type: "human", source: "profile", id: profile.id },
+        },
+      );
+      const scopes = ["operator.write"];
+      const observer = vi
+        .spyOn(transcriptWorker, "withSessionHistoryWorkerDatabases")
+        .mockImplementation(async (options, operation) => {
+          const result = await read(options, operation);
+          if (change === "write scope") {
+            scopes.splice(0, scopes.length, "operator.read");
+          } else if (change === "session access") {
+            bumpGatewayAccessRevision();
+          }
+          return result;
+        });
+      restoreRead = () => observer.mockRestore();
+      if (change === "probe access") {
+        resolveRepositoryIdentity.mockImplementationOnce(async (checkoutPath) => {
+          bumpGatewayAccessRevision();
+          return {
+            checkoutRoot: checkoutPath,
+            repoRoot: checkoutPath,
+            originUrl: "",
+            fingerprint: checkoutPath,
+          };
+        });
+      }
+      if (change === "registry access") {
+        listRegistryRecords.mockImplementationOnce(async () => {
+          bumpGatewayAccessRevision();
+          return [];
+        });
+      }
+      const result = await invokeProjectMethod(
+        "projects.list",
+        { includeObserved: true },
+        cfg,
+        scopes,
+        profile.id,
+        change === "probe access" || change === "registry access"
+          ? projectsHandlers
+          : registeredProjectsHandlers,
+      );
+      if (change !== "write scope") {
+        expect(result).toMatchObject({
+          ok: false,
+          error: {
+            code: "UNAVAILABLE",
+            message: expect.stringContaining("Project access changed"),
+          },
+        });
+        expect(result?.payload).toBeUndefined();
+        return;
+      }
+      expect(result).toEqual({
+        ok: true,
+        payload: {
+          projects: [
+            {
+              id: "workspace:main",
+              displayName: path.basename(state.workspaceDir),
+              source: "workspace",
+              agentId: "main",
+            },
+          ],
+          recents: [],
+        },
+        error: undefined,
+      });
+      expect(observer).toHaveBeenCalled();
+    } finally {
+      restoreRead();
+      await state.cleanup();
+    }
+  },
+);
+
 test("projects.remove returns INVALID_REQUEST for an unknown id", async () => {
   const state = await createOpenClawTestState({ layout: "state-only", prefix: "projects-rpc-" });
   try {
@@ -234,11 +484,13 @@ test("projects.remove returns INVALID_REQUEST for an unknown id", async () => {
 
 test("projects.list returns only the caller's deterministic resolved recents", async () => {
   const state = await createOpenClawTestState({ layout: "state-only", prefix: "projects-rpc-" });
+  let releaseCatalog: (() => void) | undefined;
   try {
     const repo = await initializeRepository(state.root);
     const project = await registerProjectRegistry({ path: repo, name: "Registered" });
     const sourceProfile = ensureProfileForEmail("source@example.test");
     const targetProfile = ensureProfileForEmail("target@example.test");
+    const foreignProfile = ensureProfileForEmail("foreign@example.test");
     const actor = { type: "human" as const, source: "profile" as const, id: sourceProfile.id };
     const repository = getSessionRepositoryWorkspaceStore().create({
       agentId: "main",
@@ -289,6 +541,7 @@ test("projects.list returns only the caller's deterministic resolved recents", a
     );
     const cfg = { agents: { list: [{ id: "main", default: true, workspace: "/workspace" }] } };
     linkEmail("source@example.test", targetProfile.id);
+    releaseCatalog = retainUserProfileCatalog();
     const readResult = await invokeProjectMethod(
       "projects.list",
       {},
@@ -321,7 +574,24 @@ test("projects.list returns only the caller's deterministic resolved recents", a
     ]);
     const anonymous = await invokeProjectMethod("projects.list", {}, cfg, ["operator.read"]);
     expect(anonymous?.payload).not.toHaveProperty("recents");
+    const external = new (requireNodeSqlite().DatabaseSync)(openOpenClawStateDatabase().path);
+    try {
+      external
+        .prepare("UPDATE user_profiles SET merged_into = ? WHERE id = ?")
+        .run(foreignProfile.id, sourceProfile.id);
+    } finally {
+      external.close();
+    }
+    const afterAliasChange = await invokeProjectMethod(
+      "projects.list",
+      {},
+      cfg,
+      ["operator.write"],
+      targetProfile.id,
+    );
+    expect(afterAliasChange?.payload).toMatchObject({ recents: [] });
   } finally {
+    releaseCatalog?.();
     await state.cleanup();
   }
 });

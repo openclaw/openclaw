@@ -69,7 +69,7 @@ enum DeviceSettingsConsent: Equatable {
         case .computerControl:
             String(localized: "Allow the Gateway to control this Mac?")
         case .unattendedDesktop:
-            String(localized: "Keep this Mac available for unattended desktop work?")
+            String(localized: "Keep this computer awake?")
         case .peekabooBridge:
             String(localized: "Enable the Peekaboo bridge on this Mac?")
         case .camera:

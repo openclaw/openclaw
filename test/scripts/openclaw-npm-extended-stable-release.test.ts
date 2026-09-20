@@ -494,6 +494,45 @@ describe("extended-stable npm run identity", () => {
     }
   });
 
+  it("accepts plugin recovery only with authenticated main tooling and the exact source identity", () => {
+    const toolingSha = "b".repeat(40);
+    const run = {
+      workflowName: "Plugin NPM Release",
+      displayTitle: `Plugin NPM Release [extended-stable] ${sha}`,
+      event: "workflow_dispatch",
+      status: "completed",
+      conclusion: "success",
+      headBranch: "main",
+      headSha: toolingSha,
+    };
+    const request = {
+      run,
+      kind: "plugin",
+      npmDistTag: "extended-stable",
+      expectedBranch: branch,
+      expectedSha: sha,
+      workflowPath: ".github/workflows/plugin-npm-release.yml",
+      trustedPluginWorkflowSha: toolingSha,
+    };
+    expect(validateExtendedStableRunIdentity(request)).toBe(run);
+    for (const changes of [
+      { trustedPluginWorkflowSha: "" },
+      { trustedPluginWorkflowSha: "c".repeat(40) },
+      { workflowPath: ".github/workflows/ci.yml" },
+      { expectedBranch: "extended-stable/2026.6.34" },
+      { expectedSha: "c".repeat(40) },
+      { kind: "preflight" },
+      { kind: "validation" },
+      { run: { ...run, headBranch: "feature/recovery" } },
+      { run: { ...run, event: "push" } },
+      { run: { ...run, status: "in_progress" } },
+      { run: { ...run, conclusion: "failure" } },
+      { run: { ...run, displayTitle: `Plugin NPM Release [default] ${sha}` } },
+    ]) {
+      expect(() => validateExtendedStableRunIdentity({ ...request, ...changes })).toThrow();
+    }
+  });
+
   it.each([
     ["wrong branch", { headBranch: "main" }],
     ["missing branch", { headBranch: undefined }],

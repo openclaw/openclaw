@@ -9,6 +9,18 @@ describe("renderAssistantRequestFailureCopy", () => {
   const runFailure = "⚠️ Agent run failed (model: openai/test-model).";
 
   it.each([
+    [
+      "Invalid session transcript entry: model_change PRIVATE_CANARY",
+      "LLM request failed: the Gateway rejected a session transcript entry. Compact or reset this session and try again.",
+    ],
+    ["invalid session", "⚠️ openai/test-model request failed (provider session expired)."],
+  ])("distinguishes local transcript errors from provider expiry: %s", (errorMessage, expected) => {
+    expect(
+      formatUserFacingAssistantErrorText(makeAssistantMessageFixture({ ...target, errorMessage })),
+    ).toBe(expected);
+  });
+
+  it.each([
     [{ errcode: 261 }, "SQLITE_BUSY"],
     [{ errcode: 13, message: "database is locked" }, "SQLITE_FULL"],
     [{ errstr: "attempt to write a readonly database" }, "SQLITE_READONLY"],

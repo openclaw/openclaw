@@ -25,6 +25,7 @@ const streamLog = createSubsystemLogger("gateway/node-stream");
 
 type NodeDesktopStreamMetadata = {
   auth: "vnc-password" | "ard-account";
+  /** Managed RFB password for VncAuth or ARD; never returned to a browser. */
   vncPassword?: string;
 };
 
@@ -95,9 +96,6 @@ function parseStreamMetadata(
     throw new Error("invalid node desktop attach metadata");
   }
   if (value.vncPassword !== undefined && typeof value.vncPassword !== "string") {
-    throw new Error("invalid node desktop attach metadata");
-  }
-  if (value.auth === "ard-account" && value.vncPassword !== undefined) {
     throw new Error("invalid node desktop attach metadata");
   }
   const vncPassword = typeof value.vncPassword === "string" ? value.vncPassword : undefined;

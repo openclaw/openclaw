@@ -1,34 +1,23 @@
 /* @vitest-environment jsdom */
 
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
-import { GIT_COAUTHOR_PREFERENCE_KEY } from "../../../../packages/gateway-protocol/src/index.ts";
 import type { UserProfile } from "../../../../packages/gateway-protocol/src/index.ts";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import type { RouteId } from "../../app-route-paths.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
 import type { AuthenticatedUser } from "../../app/user-profile.ts";
 import { i18n, t } from "../../i18n/index.ts";
 import { setAvatarGatewayOrigin } from "../../lib/identity-avatar-context.ts";
-import { createApplicationContextProvider } from "../../test-helpers/application-context.ts";
 import { choosePickerValue } from "../../test-helpers/select-picker.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import type { ModelAccounts } from "./model-accounts.ts";
-import { createConnectedContext } from "./profile-page.test-support.ts";
-import { ProfilePage } from "./profile-page.ts";
+import {
+  createConnectedContext,
+  modelAccountProfile,
+  mountProfilePage,
+  type ProfilePageElement,
+} from "./profile-page.test-support.ts";
 
-const PROFILE_PAGE_TEST_TAG = "test-openclaw-profile-page";
-const modelAccountProfile: UserProfile = {
-  id: "profile-1",
-  displayName: "Ada",
-  avatarMime: null,
-  mergedInto: null,
-  createdAt: 1,
-  updatedAt: 2,
-  emails: ["ada@example.test"],
-  githubIdentity: null,
-  hasAvatar: false,
-};
 const modelAccountCatalog = {
   providers: [
     { id: "openai", label: "OpenAI", methods: [{ id: "browser", label: "Browser sign-in" }] },
@@ -40,27 +29,10 @@ const modelAccountStep = {
   message: "Paste the redirect URL or wait for sign-in to finish.",
   externalUrl: "https://auth.openai.com/oauth/authorize?state=s",
 };
-// Keep the element class on the same post-reset i18n module as this test.
-if (!customElements.get(PROFILE_PAGE_TEST_TAG)) {
-  customElements.define(PROFILE_PAGE_TEST_TAG, class extends ProfilePage {});
-}
-
-type ProfilePageElement = HTMLElement & {
-  updateComplete: Promise<boolean>;
-};
-
-function mountProfilePage(context: ApplicationContext<RouteId>) {
-  const provider = createApplicationContextProvider(context);
-  const page = document.createElement(PROFILE_PAGE_TEST_TAG) as ProfilePageElement;
-  provider.append(page);
-  document.body.append(provider);
-  return page;
-}
-
 function createContext(
   client: GatewayBrowserClient | null = null,
   connected = false,
-): ApplicationContext<RouteId> {
+): ApplicationContext {
   const snapshot: ApplicationGatewaySnapshot = {
     client,
     phase: connected ? "connected" : "stopped",
@@ -87,7 +59,7 @@ function createContext(
     },
     agents: { subscribe, ensureList: vi.fn(async () => null) },
     agentIdentity: { subscribe, ensure: vi.fn(async () => undefined) },
-  } as unknown as ApplicationContext<RouteId>;
+  } as unknown as ApplicationContext;
 }
 
 function stubProfileAvatarProcessing(decode = vi.fn<() => Promise<void>>(async () => undefined)) {
@@ -248,10 +220,7 @@ it("shows the authenticated user in the profile hero when the default agent diff
       agents: [{ id: "clipper", name: "Clipper" }],
     },
   };
-  const provider = createApplicationContextProvider(harness.context);
-  const page = document.createElement(PROFILE_PAGE_TEST_TAG) as ProfilePageElement;
-  provider.append(page);
-  document.body.append(provider);
+  const page = mountProfilePage(harness.context);
 
   await waitForFast(() =>
     expect(page.querySelector(".profile-hero__name")?.textContent).toBe("Ada"),
@@ -264,133 +233,6 @@ it("shows the authenticated user in the profile hero when the default agent diff
   await waitForFast(() =>
     expect(page.querySelector(".profile-hero__name")?.textContent).toBe("Ada Lovelace"),
   );
-});
-
-it("loads and updates co-author consent separately from verified GitHub identity", async () => {
-  const profile: UserProfile = {
-    ...modelAccountProfile,
-    emails: [],
-    githubIdentity: {
-      login: "octocat",
-      profileUrl: "https://github.com/octocat",
-      avatarUrl: "https://avatars.githubusercontent.com/u/583231?v=4",
-    },
-  };
-  const request = vi.fn(async (method: string, params?: unknown) => {
-    if (method === "users.self") {
-      return { profile };
-    }
-    if (method === "users.listModelAccounts") {
-      return { profileId: "profile-1", accounts: [], links: [] };
-    }
-    if (method === "users.prefs.get") {
-      expect(params).toEqual({ keys: [GIT_COAUTHOR_PREFERENCE_KEY] });
-      return { status: "ok", entries: { [GIT_COAUTHOR_PREFERENCE_KEY]: false } };
-    }
-    if (method === "users.prefs.set") {
-      expect(params).toEqual({ entries: { [GIT_COAUTHOR_PREFERENCE_KEY]: true } });
-      return { status: "ok" };
-    }
-    throw new Error(`unexpected method: ${method}`);
-  });
-  const harness = createConnectedContext(request as GatewayBrowserClient["request"], {
-    id: profile.id,
-    name: profile.displayName ?? undefined,
-  });
-  const page = mountProfilePage(harness.context);
-
-  await waitForFast(() => expect(page.querySelector(".settings-account")).not.toBeNull());
-  expect(request.mock.calls.map(([method]) => method).toSorted()).toEqual(
-    ["users.self", "users.listModelAccounts", "users.prefs.get"].toSorted(),
-  );
-  expect(page.querySelector(".identity-github-form")).toBeNull();
-  const toggle = page.querySelector<HTMLElement & { checked: boolean }>("wa-switch");
-  expect(toggle?.checked).toBe(false);
-
-  toggle!.checked = true;
-  toggle?.dispatchEvent(new Event("change", { bubbles: true }));
-
-  await waitForFast(() =>
-    expect(request.mock.calls.filter(([method]) => method === "users.prefs.set")).toHaveLength(1),
-  );
-  await waitForFast(() => expect(toggle?.checked).toBe(true));
-  expect(request.mock.calls.map(([method]) => method).toSorted()).toEqual(
-    ["users.self", "users.listModelAccounts", "users.prefs.get", "users.prefs.set"].toSorted(),
-  );
-});
-
-it("treats a malformed co-author preference as opted out", async () => {
-  const profile: UserProfile = {
-    ...modelAccountProfile,
-    emails: [],
-    githubIdentity: {
-      login: "octocat",
-      profileUrl: "https://github.com/octocat",
-      avatarUrl: "https://avatars.githubusercontent.com/u/583231?v=4",
-    },
-  };
-  const request = vi.fn(async (method: string) => {
-    if (method === "users.self") {
-      return { profile };
-    }
-    if (method === "users.prefs.get") {
-      // The preference API stores arbitrary JSON; a non-boolean row must not publish a trailer.
-      return { status: "ok", entries: { [GIT_COAUTHOR_PREFERENCE_KEY]: "not-a-boolean" } };
-    }
-    throw new Error(`unexpected method: ${method}`);
-  });
-  const harness = createConnectedContext(request as GatewayBrowserClient["request"], {
-    id: profile.id,
-    name: profile.displayName ?? undefined,
-  });
-  const page = mountProfilePage(harness.context);
-
-  await waitForFast(() => expect(page.querySelector(".settings-account")).not.toBeNull());
-  const toggle = page.querySelector<HTMLElement & { checked: boolean }>("wa-switch");
-  await waitForFast(() => expect(toggle?.checked).toBe(false));
-});
-
-it("keeps co-author credit on until the person opts out", async () => {
-  const profile: UserProfile = {
-    ...modelAccountProfile,
-    emails: [],
-    githubIdentity: {
-      login: "octocat",
-      profileUrl: "https://github.com/octocat",
-      avatarUrl: "https://avatars.githubusercontent.com/u/583231?v=4",
-    },
-  };
-  const request = vi.fn(async (method: string, params?: unknown) => {
-    if (method === "users.self") {
-      return { profile };
-    }
-    if (method === "users.prefs.get") {
-      // No stored row: the verified account is credited without an explicit opt-in.
-      return { status: "ok", entries: {} };
-    }
-    if (method === "users.prefs.set") {
-      expect(params).toEqual({ entries: { [GIT_COAUTHOR_PREFERENCE_KEY]: false } });
-      return { status: "ok" };
-    }
-    throw new Error(`unexpected method: ${method}`);
-  });
-  const harness = createConnectedContext(request as GatewayBrowserClient["request"], {
-    id: profile.id,
-    name: profile.displayName ?? undefined,
-  });
-  const page = mountProfilePage(harness.context);
-
-  await waitForFast(() => expect(page.querySelector(".settings-account")).not.toBeNull());
-  const toggle = page.querySelector<HTMLElement & { checked: boolean }>("wa-switch");
-  await waitForFast(() => expect(toggle?.checked).toBe(true));
-
-  toggle!.checked = false;
-  toggle?.dispatchEvent(new Event("change", { bubbles: true }));
-
-  await waitForFast(() =>
-    expect(request.mock.calls.filter(([method]) => method === "users.prefs.set")).toHaveLength(1),
-  );
-  await waitForFast(() => expect(toggle?.checked).toBe(false));
 });
 
 it("renders a write-access note without calling users.self for read-only viewers", async () => {

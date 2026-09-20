@@ -29,7 +29,7 @@ export type { AgentRunDelegatedAuthority } from "./agent-run-authority.types.js"
 export type { ProjectedAgentRunIndex } from "./agent-run-registry.types.js";
 
 /** Reads the process-local version of the active-run projection inputs. */
-export function readAgentRunIndexVersion(): number {
+function readAgentRunIndexVersion(): number {
   return getAgentRunRegistryState().version;
 }
 
@@ -117,7 +117,7 @@ export function registerAgentRunContext(
   const existing = state.contexts.get(runId);
   if (!existing) {
     storeRunContext(runId, { ...context, lifecycleGeneration });
-    bumpAgentRunIndexVersion();
+    bumpAgentRunIndexVersion(context);
     return;
   }
   if (
@@ -128,6 +128,7 @@ export function registerAgentRunContext(
     return;
   }
   const runIndexInputBefore = projectedAgentRunInputKey(existing);
+  const previous = { sessionKey: existing.sessionKey, agentId: existing.agentId };
   if (context.sessionKey && existing.sessionKey !== context.sessionKey) {
     existing.sessionKey = context.sessionKey;
   }
@@ -174,10 +175,10 @@ export function registerAgentRunContext(
   if (context.lastActiveAt !== undefined) {
     existing.lastActiveAt = context.lastActiveAt;
   }
-  if (runIndexInputBefore !== projectedAgentRunInputKey(existing)) {
-    bumpAgentRunIndexVersion();
-  }
   recordAgentEventRouting(runId, existing);
+  if (runIndexInputBefore !== projectedAgentRunInputKey(existing)) {
+    bumpAgentRunIndexVersion(existing, previous);
+  }
 }
 
 /** Claims a run id for a newly admitted execution, replacing stale ownership. */
@@ -254,14 +255,14 @@ export function claimAgentRunContext(
     const versionBeforeRegister = readAgentRunIndexVersion();
     registerAgentRunContext(runId, { ...context, lifecycleGeneration }, claimId);
     if (readAgentRunIndexVersion() === versionBeforeRegister) {
-      bumpAgentRunIndexVersion();
+      bumpAgentRunIndexVersion(existing);
     }
     return claimId;
   }
   storeRunContext(runId, { ...context, lifecycleGeneration }, existing);
   state.sequenceResetHandler?.(runId);
   clearAgentRunUsage(runId);
-  bumpAgentRunIndexVersion();
+  bumpAgentRunIndexVersion(context, existing);
   return claimId;
 }
 
@@ -285,8 +286,12 @@ export function retainQueuedAgentRunContext(
     return undefined;
   }
 
+  const wasLive = hasLiveAgentRunContext(runId);
   const leases = (state.queuedRunContextLeases ??= new WeakMap<AgentRunContext, number>());
   leases.set(context, (leases.get(context) ?? 0) + 1);
+  if (!wasLive) {
+    bumpAgentRunIndexVersion(context);
+  }
   let released = false;
 
   return (outcome) => {
@@ -303,12 +308,16 @@ export function retainQueuedAgentRunContext(
 
     // A recycled run id or rotated lifecycle must not inherit the old queue's activity.
     if (
-      outcome === "admitted" &&
       state.contexts.get(runId) === context &&
       context.lifecycleGeneration === lifecycleGeneration &&
       state.lifecycleGeneration === lifecycleGeneration
     ) {
-      context.lastActiveAt = Date.now();
+      if (outcome === "admitted") {
+        context.lastActiveAt = Date.now();
+      }
+      if (!hasLiveAgentRunContext(runId)) {
+        bumpAgentRunIndexVersion(context);
+      }
     }
   };
 }
@@ -568,7 +577,7 @@ export function recordAgentRunModel(runId: string, model: AgentRunModel | undefi
   } else {
     delete context.activeModel;
   }
-  bumpAgentRunIndexVersion();
+  bumpAgentRunIndexVersion(context);
 }
 
 export function resolveProjectedAgentRunModel(params: {
@@ -662,7 +671,7 @@ export function clearAgentRunContext(
         listener(ownerClaimId);
       }
       if (!wasClearRequested) {
-        bumpAgentRunIndexVersion();
+        bumpAgentRunIndexVersion(existing);
       }
     }
     return;
@@ -671,7 +680,7 @@ export function clearAgentRunContext(
   state.sequenceResetHandler?.(runId);
   clearAgentRunUsage(runId, lifecycleGeneration ?? existing?.lifecycleGeneration);
   if (removed) {
-    bumpAgentRunIndexVersion();
+    bumpAgentRunIndexVersion(existing);
   }
 }
 
@@ -699,7 +708,7 @@ export function releaseAgentRunContext(runId: string, claimId: string | undefine
     owners.exclusiveClaimId = undefined;
   }
   if (owners.claimIds.size > 0) {
-    bumpAgentRunIndexVersion();
+    bumpAgentRunIndexVersion(context);
     return;
   }
   state.owners.delete(runId);
@@ -707,7 +716,7 @@ export function releaseAgentRunContext(runId: string, claimId: string | undefine
     clearAgentRunContext(runId, owners.lifecycleGeneration);
   }
   if (readAgentRunIndexVersion() === versionBeforeRelease) {
-    bumpAgentRunIndexVersion();
+    bumpAgentRunIndexVersion(context);
   }
 }
 

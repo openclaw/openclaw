@@ -15,9 +15,45 @@ fi
 #
 # Environment:
 #   OPENCLAW_UPDATE_RESTART_CMD  restart command (default: openclaw gateway restart)
-#                                set to "" to skip the restart step
+#                                set to "" for operator-owned manual lifecycle
+#   OPENCLAW_UPDATE_STOP_CMD     stop command (default: openclaw gateway stop --force)
+#                                custom automatic stop/restart must be set together
 #   OPENCLAW_UPDATE_REMOTE       git remote to update from (default: origin)
 set -euo pipefail
+
+trim_command() {
+  local value="$1"
+  value="${value#"${value%%[![:space:]]*}"}"
+  value="${value%"${value##*[![:space:]]}"}"
+  printf '%s' "$value"
+}
+
+# Preserve the documented exact-empty restart override as manual lifecycle.
+# Validate automatic commands before even Corepack/Git can have side effects.
+restart_cmd="${OPENCLAW_UPDATE_RESTART_CMD-openclaw gateway restart}"
+stop_cmd="${OPENCLAW_UPDATE_STOP_CMD-openclaw gateway stop --force}"
+manual_lifecycle=0
+if [ "${OPENCLAW_UPDATE_RESTART_CMD+x}" = x ] && [ -z "$restart_cmd" ]; then
+  if [ "${OPENCLAW_UPDATE_STOP_CMD+x}" = x ]; then
+    echo "[update-gateway] manual lifecycle must not set OPENCLAW_UPDATE_STOP_CMD" >&2
+    exit 1
+  fi
+  manual_lifecycle=1
+else
+  if [ "${OPENCLAW_UPDATE_RESTART_CMD+x}" != "${OPENCLAW_UPDATE_STOP_CMD+x}" ]; then
+    echo "[update-gateway] automatic OPENCLAW_UPDATE_STOP_CMD and OPENCLAW_UPDATE_RESTART_CMD must be set together" >&2
+    exit 1
+  fi
+  restart_cmd="$(trim_command "$restart_cmd")"
+  stop_cmd="$(trim_command "$stop_cmd")"
+  for command_name in RESTART STOP; do
+    if { [ "$command_name" = RESTART ] && [ -z "$restart_cmd" ]; } ||
+      { [ "$command_name" = STOP ] && [ -z "$stop_cmd" ]; }; then
+      echo "[update-gateway] OPENCLAW_UPDATE_${command_name}_CMD is blank" >&2
+      exit 1
+    fi
+  done
+fi
 
 pnpm_dir=""
 log() { echo "[update-gateway] $*"; }
@@ -140,17 +176,15 @@ for build_path in dist dist-runtime .artifacts; do
     exit 1
   fi
 done
-# The build owns cleanup under its checkout-local artifact lock. Deleting here
-# would race declaration writers and readers before that ownership is acquired.
-# Match CLI updates: build runtime artifacts unless declarations were explicitly requested.
-OPENCLAW_UPDATE_IN_PROGRESS=1 run_pnpm build
-
-restart_cmd="${OPENCLAW_UPDATE_RESTART_CMD-openclaw gateway restart}"
-if [ -n "$restart_cmd" ]; then
-  log "restarting gateway: $restart_cmd"
-  bash -c "$restart_cmd"
+# The update adapter consumes the build's artifact ownership and output list.
+# Manual lifecycle remains operator-owned: stop this checkout's Gateway before
+# invoking the update and restart it yourself once the update has finished.
+if [ "$manual_lifecycle" -eq 1 ]; then
+  log "manual lifecycle: automatic stop/restart skipped (OPENCLAW_UPDATE_RESTART_CMD is empty)"
+  OPENCLAW_UPDATE_IN_PROGRESS=1 run_pnpm build
 else
-  log "restart skipped (OPENCLAW_UPDATE_RESTART_CMD is empty)"
+  node --import ./scripts/tsx.mjs \
+    scripts/update-gateway-build.mts "$stop_cmd" "$restart_cmd" "$pnpm_dir"
 fi
 
 log "OK $(git rev-parse --short HEAD) ($branch)"

@@ -16,6 +16,10 @@ export type InputProvenance = {
   sourceSessionKey?: string;
   sourceChannel?: string;
   sourceTool?: string;
+  sourceRole?: "subagent";
+  sourcePromptPrefix?: string;
+  jobId?: string;
+  runId?: string;
 };
 
 export const MAIN_SESSION_RESTART_RECOVERY_SOURCE_TOOL = "main_session_restart_recovery" as const;
@@ -47,12 +51,18 @@ export function normalizeInputProvenance(value: unknown): InputProvenance | unde
     return undefined;
   }
   const provenance: InputProvenance = { kind: record.kind };
+  if (record.sourceRole === "subagent") {
+    provenance.sourceRole = "subagent";
+  }
   // Admission snapshots must match their persisted JSON without undefined properties.
   for (const key of [
     "originSessionId",
     "sourceSessionKey",
     "sourceChannel",
     "sourceTool",
+    "sourcePromptPrefix",
+    "jobId",
+    "runId",
   ] as const) {
     const normalized = normalizeOptionalString(record[key]);
     if (normalized) {
@@ -64,10 +74,10 @@ export function normalizeInputProvenance(value: unknown): InputProvenance | unde
 
 // Only attach provenance to user messages that do not already carry it. Existing
 // provenance is preserved because upstream channel/runtime code owns that fact.
-export function applyInputProvenanceToUserMessage(
-  message: AgentMessage,
+export function applyInputProvenanceToUserMessage<T extends AgentMessage>(
+  message: T,
   inputProvenance: InputProvenance | undefined,
-): AgentMessage {
+): T {
   if (!inputProvenance) {
     return message;
   }
@@ -85,6 +95,17 @@ export function applyInputProvenanceToUserMessage(
 
 export function isInterSessionInputProvenance(value: unknown): boolean {
   return normalizeInputProvenance(value)?.kind === "inter_session";
+}
+
+/** Child coordination stays available to the model without becoming a chat reply. */
+export function isSubagentCoordinationInputProvenance(
+  provenance: InputProvenance | undefined,
+): boolean {
+  return (
+    provenance?.kind === "inter_session" &&
+    normalizeOptionalString(provenance.sourceTool) === "sessions_send" &&
+    provenance.sourceRole === "subagent"
+  );
 }
 
 export function isMainSessionRestartRecoveryInputProvenance(value: unknown): boolean {

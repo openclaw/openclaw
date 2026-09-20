@@ -15,6 +15,19 @@ export type UpdateServiceLoadBoundary = {
 export class UpdateServiceLoadBoundaryError extends Error {
   override name = "UpdateServiceLoadBoundaryError";
 }
+/** A local admission rejection before any native child or definition effect. */
+export class UpdateServiceLoadPreMutationError extends UpdateServiceLoadBoundaryError {
+  override name = "UpdateServiceLoadPreMutationError";
+}
+/** Only the explicit pre-mutation refusal can bypass staged-load retention. */
+export function isPendingUpdateServiceLoad(
+  error: unknown,
+): error is UpdateServiceLoadBoundaryError {
+  return (
+    error instanceof UpdateServiceLoadBoundaryError &&
+    !(error instanceof UpdateServiceLoadPreMutationError)
+  );
+}
 const stagedMessage = z.strictObject({
   type: z.literal("openclaw-service-staged"),
   id: z.uuid(),
@@ -29,6 +42,7 @@ export async function runGatewayInstallWithLoadBoundary(params: {
   signal?: AbortSignal;
   timeoutMs: number;
   boundary: UpdateServiceLoadBoundary;
+  onResult?: (stdout: string) => void;
 }): Promise<"unverified"> {
   const controller = new AbortController();
   const signal = AbortSignal.any([
@@ -101,6 +115,7 @@ export async function runGatewayInstallWithLoadBoundary(params: {
     await handoff;
     params.signal?.throwIfAborted();
     params.boundary.assertCurrent();
+    params.onResult?.(result.stdout);
     if (failure || !approved || result.failed || result.exitCode !== 0) {
       throw new UpdateServiceLoadBoundaryError(
         "Staged gateway install did not complete its sealed load.",

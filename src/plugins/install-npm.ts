@@ -45,6 +45,7 @@ export async function installPluginFromNpmSpec(
     extensionsDir?: string;
     npmDir?: string;
     timeoutMs?: number;
+    workTimeoutMs?: number | null;
     signal?: AbortSignal;
     logger?: PluginInstallLogger;
     mode?: "install" | "update";
@@ -58,7 +59,7 @@ export async function installPluginFromNpmSpec(
   },
 ): Promise<InstallPluginResult> {
   const runtime = await loadPluginInstallRuntime();
-  const { logger, timeoutMs, mode, dryRun } = runtime.resolveTimedInstallModeOptions(
+  const { logger, timeoutMs, workTimeoutMs, mode, dryRun } = runtime.resolveTimedInstallModeOptions(
     params,
     defaultLogger,
   );
@@ -247,6 +248,7 @@ export async function installPluginFromNpmSpec(
       extensionsDir: params.extensionsDir,
       npmDir: params.npmDir,
       timeoutMs,
+      workTimeoutMs,
       signal: params.signal,
       logger,
       mode,

@@ -5,11 +5,9 @@ import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js"
 import * as packageMetadata from "../../infra/update-check-package-target.js";
 import * as updateCheck from "../../infra/update-check.js";
 import { createFreeBsdPkgOwnershipInspection } from "../../infra/update-freebsd-pkg-ownership.js";
-import {
-  globalInstallArgs,
-  resolveNpmGlobalPrefixLayoutFromGlobalRoot,
-} from "../../infra/update-global.js";
+import { globalInstallArgs } from "../../infra/update-global.js";
 import * as updateGlobal from "../../infra/update-global.js";
+import { resolveNpmGlobalPrefixLayoutFromGlobalRoot } from "../../infra/update-npm-prefix.js";
 import * as processOwner from "../../process/exec.js";
 import * as shared from "./shared.js";
 import { resolveUpdateCommandTarget } from "./update-command-target.js";

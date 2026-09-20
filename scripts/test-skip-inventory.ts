@@ -6,6 +6,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import ts from "typescript";
 import { isCodeFile, isTestRelatedFile, listRepoFilesSync } from "./check-file-utils.js";
+import { renderFindingGroups } from "./lib/grouped-findings.js";
 import { parseInventoryReportCliArgs } from "./lib/report-cli-helpers.mts";
 
 type SkipInventoryKind = "alias" | "call";
@@ -312,52 +313,11 @@ export function collectTestSkipInventoryReport(
   };
 }
 
-function groupFindingsByFile(
-  findings: TestSkipInventoryFinding[],
-): Map<string, TestSkipInventoryFinding[]> {
-  const grouped = new Map<string, TestSkipInventoryFinding[]>();
-  for (const finding of findings) {
-    const fileFindings = grouped.get(finding.file);
-    if (fileFindings) {
-      fileFindings.push(finding);
-    } else {
-      grouped.set(finding.file, [finding]);
-    }
-  }
-  return grouped;
-}
-
 function renderReasonCounts(reasonCounts: Record<SkipInventoryReason, number>): string {
   return Object.entries(reasonCounts)
     .filter(([, count]) => count > 0)
     .map(([reason, count]) => `${reason}: ${count}`)
     .join(", ");
-}
-
-function renderFindingGroups(findings: TestSkipInventoryFinding[], limit: number): string[] {
-  const lines: string[] = [];
-  let shown = 0;
-  for (const [file, fileFindings] of groupFindingsByFile(findings)) {
-    if (shown >= limit) {
-      break;
-    }
-    lines.push(`- ${file} (${fileFindings.length})`);
-    for (const finding of fileFindings) {
-      if (shown >= limit) {
-        break;
-      }
-      lines.push(
-        `  L${finding.line} ${finding.target}.${finding.method} ${finding.reason}: ${finding.excerpt}`,
-      );
-      shown += 1;
-    }
-  }
-  if (findings.length > shown) {
-    lines.push(
-      `... ${findings.length - shown} more finding(s) not shown; pass --limit 0 to show all.`,
-    );
-  }
-  return lines;
 }
 
 export function renderTestSkipInventoryReport(
@@ -378,7 +338,14 @@ export function renderTestSkipInventoryReport(
     lines.push("Findings: none");
   } else {
     lines.push("Findings:");
-    lines.push(...renderFindingGroups(report.findings, limit));
+    lines.push(
+      ...renderFindingGroups(
+        report.findings,
+        limit,
+        (finding) =>
+          `  L${finding.line} ${finding.target}.${finding.method} ${finding.reason}: ${finding.excerpt}`,
+      ),
+    );
   }
 
   return `${lines.join("\n")}\n`;

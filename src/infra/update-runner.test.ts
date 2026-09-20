@@ -2292,7 +2292,7 @@ describe("runGatewayUpdate", () => {
     expect(result).toMatchObject({ status: "error", reason: "preflight-no-good-commit" });
     expect(result.steps).toContainEqual(
       expect.objectContaining({
-        name: "preflight candidate clean check (upstream)",
+        name: "preflight update clean check (upstream)",
         exitCode: 1,
         stdoutTail: diagnostic,
       }),
@@ -3030,7 +3030,7 @@ describe("runGatewayUpdate", () => {
 
     expect(result).toMatchObject({
       status: "skipped",
-      mode: "unknown",
+      mode: "npm",
       root: pkgRoot,
       reason: "package-update-requires-cli",
       before: { version: "1.0.0" },
@@ -3109,7 +3109,12 @@ describe("runGatewayUpdate", () => {
             doctorRan = true;
             await fs.writeFile(stateFile, "candidate-migrated-state");
             if (failure === "doctor-throw") {
-              throw new Error("doctor crashed after migration");
+              throw Object.assign(
+                new Error(
+                  "EACCES: permission denied, open '/home/update-user/private/config.json' token=synthetic-update-secret\nsecond-line-private-detail",
+                ),
+                { code: "EACCES" },
+              );
             }
             if (failure === "doctor-error") {
               return { code: 1, stderr: "doctor failed after migration" };
@@ -3129,6 +3134,22 @@ describe("runGatewayUpdate", () => {
               : "head-verification-failed",
         recovery: { serviceRestartSafe: false, reason: "state-migration-started" },
       });
+      if (failure === "doctor-throw") {
+        const doctor = result.steps.find((step) => step.name === "openclaw doctor");
+        expect(doctor).toMatchObject({
+          exitCode: 1,
+          failureFacts: [
+            {
+              check: "openclaw doctor",
+              code: "EACCES",
+              message: expect.stringContaining("permission denied, open [redacted-path]"),
+            },
+          ],
+        });
+        expect(JSON.stringify(doctor?.failureFacts)).not.toMatch(
+          /update-user|private\/config|synthetic-update-secret|second-line-private-detail/,
+        );
+      }
       expect(await fs.readFile(stateFile, "utf8")).toBe("candidate-migrated-state");
       expect(
         JSON.parse(await fs.readFile(path.join(tempDir, "dist", "build-info.json"), "utf8")),

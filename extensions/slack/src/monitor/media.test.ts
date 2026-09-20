@@ -1326,7 +1326,7 @@ describe("Slack message file intake", () => {
         unavailableWithSameMetadata,
         unavailableWithoutId,
       ],
-      preloadedMedia: new Map([
+      preloadedMedia: new Map<SlackFile, SlackMediaResult[number]>([
         [
           downloaded,
           {

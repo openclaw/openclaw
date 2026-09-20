@@ -10,7 +10,6 @@ import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { BlockReplyContext, ReplyPayload, ReplyThreadingPolicy } from "../types.js";
 import { deliverBlockReply } from "./block-reply-delivery.js";
 import type { BlockReplyPipeline } from "./block-reply-pipeline.js";
-import { createBlockReplyContentKey } from "./block-reply-pipeline.js";
 import { parseReplyDirectives } from "./reply-directives.js";
 import { resolveReplyDispatchErrorOutcome } from "./reply-dispatch-outcome.js";
 import { applyReplyTagsToPayload, isRenderablePayload } from "./reply-payloads.js";
@@ -20,7 +19,24 @@ type ReplyDirectiveParseMode = "always" | "auto" | "never";
 
 export type DirectBlockDelivery = Awaited<ReturnType<typeof deliverBlockReply>> & {
   payload: ReplyPayload;
+  /** Captured at settlement; later source-completeness changes do not rewrite this fact. */
+  terminalDeliveryConfirmed?: true;
 };
+
+/** Visible progress needs a failure outcome, but retained or suppressed sends are not visibility. */
+export async function resolveReplyFailureVisibility(
+  resolveVisibleReplyDelivery: (() => Promise<boolean>) | undefined,
+  directBlockDeliveries: readonly DirectBlockDelivery[],
+): Promise<boolean> {
+  return (
+    (await resolveVisibleReplyDelivery?.()) === true ||
+    directBlockDeliveries.some(
+      (delivery) =>
+        delivery.outcome === "delivered" &&
+        hasOutboundReplyContent(delivery.payload, { trimText: true }),
+    )
+  );
+}
 
 /** Parses inline reply directives into payload fields and silent-reply state. */
 export function normalizeReplyPayloadDirectives(params: {
@@ -78,7 +94,6 @@ export function normalizeReplyPayloadDirectives(params: {
 
 async function sendDirectBlockReply(params: {
   onBlockReply: (payload: ReplyPayload, context?: BlockReplyContext) => Promise<void> | void;
-  directlySentBlockKeys: Set<string>;
   directBlockDeliveries: DirectBlockDelivery[];
   payload: ReplyPayload;
 }) {
@@ -102,7 +117,7 @@ async function sendDirectBlockReply(params: {
     delivery.source?.complete !== false &&
     isReplyPayloadTerminalContent(params.payload)
   ) {
-    params.directlySentBlockKeys.add(createBlockReplyContentKey(params.payload));
+    attempt.terminalDeliveryConfirmed = true;
   }
 }
 
@@ -119,7 +134,6 @@ export function createBlockReplyDeliveryHandler(params: {
   commentaryPayloadsEnabled?: boolean;
   blockStreamingEnabled: boolean;
   blockReplyPipeline: BlockReplyPipeline | null;
-  directlySentBlockKeys: Set<string>;
   directBlockDeliveries: DirectBlockDelivery[];
 }): (payload: ReplyPayload) => Promise<void> {
   return async (payload) => {
@@ -212,7 +226,6 @@ export function createBlockReplyDeliveryHandler(params: {
       // even when block streaming is off.
       await sendDirectBlockReply({
         onBlockReply: params.onBlockReply,
-        directlySentBlockKeys: params.directlySentBlockKeys,
         directBlockDeliveries: params.directBlockDeliveries,
         payload: blockPayload,
       });

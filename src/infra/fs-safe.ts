@@ -3,7 +3,7 @@ import "./fs-safe-defaults.js";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { ensureDirectoryWithinRoot, findExistingAncestor } from "@openclaw/fs-safe/advanced";
-import { FsSafeError } from "@openclaw/fs-safe/errors";
+import "@openclaw/fs-safe/errors";
 import { writeExternalFileWithinRoot as writeExternalFileWithinRootBase } from "@openclaw/fs-safe/output";
 import {
   root as fsSafeRoot,
@@ -12,8 +12,7 @@ import {
   type RootDefaults,
 } from "@openclaw/fs-safe/root";
 
-export { FsSafeError };
-export type { FsSafeErrorCode } from "@openclaw/fs-safe/errors";
+export { FsSafeError, type FsSafeErrorCode } from "@openclaw/fs-safe/errors";
 export {
   assertAbsolutePathInput,
   canonicalPathFromExistingAncestor,

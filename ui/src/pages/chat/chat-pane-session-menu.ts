@@ -8,7 +8,9 @@ import type {
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { serializeSidebarEntry } from "../../app-navigation.ts";
+import { resolveSidebarSessionParentKey } from "../../components/app-sidebar-session-parent.ts";
 import type { SidebarSessionMutationScope } from "../../components/app-sidebar-session-types.ts";
+import type { SessionMenuData } from "../../components/session-menu-actions.ts";
 import type { SessionActionHost } from "../../components/session-organizer-operations.runtime.ts";
 import { isCloudWorkerPlacementState } from "../../components/session-row-badges.ts";
 import { t } from "../../i18n/index.ts";
@@ -22,6 +24,7 @@ import { collectKnownSessionGroups } from "../../lib/sessions/grouping.ts";
 import {
   areUiSessionKeysEquivalent,
   parseAgentSessionKey,
+  resolveUiConversationIdentity,
 } from "../../lib/sessions/session-key.ts";
 import { runSessionNavigationAction } from "../../lib/sessions/session-menu-navigation.ts";
 import { showToast } from "../../lib/toast.ts";
@@ -33,6 +36,33 @@ import type { ChatPaneHeaderAction } from "./components/chat-pane-header.ts";
 import { buildContinueInTerminalCommand } from "./continue-in-terminal-command.ts";
 
 export abstract class ChatPaneSessionMenu extends ChatPaneContext {
+  protected headerSessionMenuData(row: GatewaySessionRow, pinnable: boolean): SessionMenuData {
+    const mainSessionKey = resolveUiConversationIdentity(
+      {
+        agentsList: this.context.agents.state.agentsList,
+        hello: this.context.gateway.snapshot.hello,
+      },
+      "main",
+      parseAgentSessionKey(row.key)?.agentId ?? row.agentId,
+    ).sessionKey;
+    return {
+      label:
+        normalizeOptionalString(row.label) ?? normalizeOptionalString(this.paneTitle) ?? row.key,
+      sessionId: row.sessionId ?? null,
+      isChild: Boolean(resolveSidebarSessionParentKey(row, new Set([mainSessionKey]))),
+      pinned: row.pinned === true,
+      pinnable,
+      unread: row.unread === true,
+      hiddenFromInvolvingMe: row.hiddenFromInvolvingMe,
+      archived: row.archived === true,
+      archiving: this.context.sessions.archiveVisibility(row.key) === "pending",
+      category: normalizeOptionalString(row.category) ?? null,
+      icon: normalizeOptionalString(row.icon) ?? null,
+      color: normalizeOptionalString(row.color) ?? null,
+      categoryClearReturnsToGroups: false,
+    };
+  }
+
   private headerSessionOperationsLoad: Promise<
     typeof import("../../components/session-organizer-operations.runtime.ts")
   > | null = null;
@@ -144,7 +174,10 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
             }
           },
           refreshSidebarSessions: async (agentId) => {
-            await scope.sessions.refreshReplacement(agentId);
+            const outcome = await scope.sessions.reconcileMutation(agentId);
+            if (outcome.status === "failed" && this.isHeaderSessionActionCurrent(scope, owner)) {
+              this.publishHeaderError(outcome.error, owner);
+            }
           },
         },
         pruneSidebarSessionEntry: (key) => {
@@ -175,6 +208,9 @@ export abstract class ChatPaneSessionMenu extends ChatPaneContext {
           }
           break;
         }
+        case "toggle-involving-me":
+          await operations.setSessionInvolvement(host, session, !row.hiddenFromInvolvingMe, scope);
+          break;
         case "toggle-unread": {
           const currentSession = resolveCurrentSession(true);
           if (currentSession) {

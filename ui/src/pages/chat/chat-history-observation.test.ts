@@ -8,6 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from 
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { GatewayRequestError } from "../../api/gateway.ts";
 import type { GatewaySessionRow, ModelCatalogEntry } from "../../api/types.ts";
+import type { RouteId } from "../../app-route-paths.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { resolveChatThinkingSelectState } from "../../lib/chat/thinking.ts";
 import {
@@ -454,7 +455,7 @@ describe("history descriptor observation order", () => {
     async (retried) => {
       const h = await fixture({ ...initial, key: "agent:main:unrelated", sessionId: "unrelated" });
       const lifecycle = new AbortController();
-      const router = createRouter<"chat", ApplicationContext, null, ChatRouteData>({
+      const router = createRouter<RouteId, ApplicationContext, null, ChatRouteData>({
         routes: [
           definePage({
             id: "chat",

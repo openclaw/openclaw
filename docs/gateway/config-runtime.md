@@ -132,6 +132,11 @@ Setup: `openclaw dns setup --apply`.
 - `checkOnStart`: check for updates through `https://telemetry.openclaw.ai/api/latest-version` when the Gateway starts and at most once every 24 hours afterward (default: `true`). The default request shares only the OpenClaw version and platform information in its `User-Agent`; anonymous feature statistics are included only when `telemetry.enabled` is `true`. Setting this to `false`, or setting `OPENCLAW_NO_AUTO_UPDATE=1`, prevents all automatic update requests, feature statistics, and update notices, even when `auto.enabled` is `true`. Stored extended-stable selections use the same read-only hint and 24-hour hint schedule.
 - `auto.enabled`: enable background auto-update campaigns for stable and beta package installs and dev git installs when `checkOnStart` is also enabled (default: `false`). Extended-stable never applies automatically.
 
+Headless nodes have a separate default-on `nodeHost.autoUpdate.enabled` policy
+with hourly checks and idle-only activation. `update.checkOnStart: false` and
+`OPENCLAW_NO_AUTO_UPDATE=1` disable that policy too. See
+[Headless node updates](/install/updating/automatic-updates#headless-node-updates).
+
 ---
 
 ## ACP

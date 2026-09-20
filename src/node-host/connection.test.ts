@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { GATEWAY_SERVER_CAPS } from "../../packages/gateway-protocol/src/schema/frames.js";
 import { createDeferred } from "../../test/helpers/promise.js";
 import {
   NODE_RUNNER_INVENTORY_UPDATE_METHOD,
@@ -11,6 +12,36 @@ import * as hostStats from "./host-stats.js";
 const stats = { cpuCount: 8, memoryTotalBytes: 100, memoryFreeBytes: 50 };
 const gateway = { url: "wss://gateway.example.test", protocol: 4, capabilities: [] };
 
+it("negotiates captured exec policy per connection without widening older inventory", async () => {
+  const { connection, request, start, prepared } = startConnectionFixture(true);
+  try {
+    start.mock.calls[0]![0].onRunnerCapacityChanged?.({ total: 2, available: 2 });
+    for (const supported of [false, true, false]) {
+      connection.connect({
+        ...gateway,
+        capabilities: supported ? [GATEWAY_SERVER_CAPS.NODE_WORKER_CAPTURED_EXEC_POLICY] : [],
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      const declaration = request.mock.calls.findLast(
+        ([method]) => method === NODE_RUNNER_INVENTORY_UPDATE_METHOD,
+      )?.[1];
+      expect(declaration).toEqual({
+        protocolFeatures: ["node-worker-supervisor-v6"],
+        workerHost: {
+          enabled: true,
+          capacity: { total: 2, available: 2 },
+          bundlePrewarm: 1,
+          ...(supported ? { capturedExecPolicy: true } : {}),
+        },
+      });
+      expect(parseNodeRunnerInventoryDeclaration(declaration)).toEqual(declaration);
+      expect(prepared.manifest).toEqual({ commands: [], caps: [], pathEnv: "/bin" });
+    }
+  } finally {
+    await connection.close();
+  }
+});
+
 function startConnectionFixture(workerHostingEnabled = false, preparedWorkspacesEnabled = false) {
   const request = vi.fn().mockResolvedValue({ ok: true, handled: false });
   const runtime = {
@@ -18,6 +49,8 @@ function startConnectionFixture(workerHostingEnabled = false, preparedWorkspaces
     handleInput: vi.fn(),
     cancel: vi.fn(),
     cancelAll: vi.fn(),
+    tryPauseForUpdate: vi.fn(() => true),
+    resumeAfterUpdate: vi.fn(),
     updateGatewayConnection: vi.fn(),
     close: vi.fn().mockResolvedValue(undefined),
   };

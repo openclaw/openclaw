@@ -2,7 +2,11 @@
 import { z } from "zod";
 import { isValidNonNegativeByteSizeString } from "./byte-size.js";
 import { AgentModelMapSchema, AgentModelPolicySchema } from "./zod-schema.agent-entry-base.js";
-import { AgentModelSchema, AgentToolModelSchema } from "./zod-schema.agent-model.js";
+import {
+  AgentModelSchema,
+  AgentToolModelSchema,
+  DecisionModelSchema,
+} from "./zod-schema.agent-model.js";
 
 const SilentReplyPolicySchema = z.union([z.literal("allow"), z.literal("disallow")]);
 
@@ -61,6 +65,7 @@ export const AgentDefaultsBaseSchema = z
     model: AgentModelSchema.optional(),
     modelSelectionScope: z.enum(["session", "agent", "global"]).optional(),
     utilityModel: z.string().optional(),
+    decisionModel: DecisionModelSchema.optional(),
     imageModel: AgentToolModelSchema.optional(),
     mediaModels: z
       .object({

@@ -12,7 +12,7 @@ import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 
 const STATE_DATABASE_READ_ADMISSION_INVALIDATED = "STATE_DATABASE_READ_ADMISSION_INVALIDATED";
 
-class StateDatabaseReadAdmissionInvalidatedError extends Error {
+export class StateDatabaseReadAdmissionInvalidatedError extends Error {
   readonly code = STATE_DATABASE_READ_ADMISSION_INVALIDATED;
 }
 
@@ -39,6 +39,7 @@ type CloseAttempt = {
   seal: ReadSeal;
   retained: Set<OpenClawStateDatabaseAsyncResource>;
   pending?: Promise<boolean>;
+  queue?: Set<OpenClawStateDatabaseAsyncResource>;
 };
 
 type MaintenanceResource = {
@@ -84,6 +85,11 @@ export function getOpenClawDatabaseMaintenanceScope():
   | OpenClawDatabaseMaintenanceScope
   | undefined {
   return maintenanceResources.current.getStore()?.scope;
+}
+
+/** Delayed work acquires its own resources instead of inheriting the completed scope. */
+export function runOutsideOpenClawDatabaseMaintenanceScope<T>(operation: () => T): T {
+  return maintenanceResources.current.exit(operation);
 }
 
 export function isOpenClawDatabaseMaintenanceResourceOwned(
@@ -217,6 +223,10 @@ export function createOpenClawDatabaseMaintenanceScope(
               "shared-handles",
             ] as const) {
               while ([...resources.values()].some((resource) => resource.phase === phase)) {
+                // Earlier cleanup can start tracked work using resources in this batch.
+                while (pending.size) {
+                  await Promise.allSettled(pending);
+                }
                 const batch = [...resources].filter(([, resource]) => resource.phase === phase);
                 const results = await Promise.allSettled(
                   batch.map(async ([key, resource]) => {
@@ -283,7 +293,10 @@ export function createOpenClawStateDatabaseAsyncLifecycle() {
     const resolvedPath = path.resolve(pathname);
     const cached = known(resolvedPath);
     if (cached && (!preparedIdentity || cached.identity.key === preparedIdentity.key)) {
-      return cached;
+      // Resolve first creation without replacing an established file's admission.
+      return !preparedIdentity && cached.identity.key.startsWith("path:")
+        ? resolve(resolvedPath, readDatabasePathIdentitySync(resolvedPath))
+        : cached;
     }
     const identity = preparedIdentity ?? readDatabasePathIdentitySync(resolvedPath);
     let record = records.get(identity.key);
@@ -346,7 +359,7 @@ export function createOpenClawStateDatabaseAsyncLifecycle() {
     identity(pathname: string): DatabasePathIdentity | undefined {
       return known(pathname)?.identity ?? inspectDatabasePathIdentitySync(pathname);
     },
-    knownIdentity(pathname: string): DatabasePathIdentity | undefined {
+    knownIdentity(this: void, pathname: string): DatabasePathIdentity | undefined {
       return known(pathname)?.identity;
     },
     publish(pathname: string): DatabasePathIdentity {
@@ -384,11 +397,14 @@ export function createOpenClawStateDatabaseAsyncLifecycle() {
     },
     register(resource: OpenClawStateDatabaseAsyncResource): () => void {
       resources.add(resource);
+      for (const attempt of attempts.values()) {
+        attempt.queue?.add(resource);
+      }
       return () => {
         resources.delete(resource);
       };
     },
-    capture(pathname: string): OpenClawStateDatabaseReadAdmission {
+    capture(this: void, pathname: string): OpenClawStateDatabaseReadAdmission {
       const databasePath = path.resolve(pathname);
       const record = resolve(databasePath);
       assertOpen(record);
@@ -440,55 +456,64 @@ export function createOpenClawStateDatabaseAsyncLifecycle() {
         attempts.set(record, attempt);
       }
       const current = attempt;
-      const pending = tail.then(async () => {
-        const closing = new Set([...resources, ...current.retained]);
-        for (const entry of attempts.values()) {
-          for (const resource of entry.retained) {
-            closing.add(resource);
-          }
-        }
-        const errors: unknown[] = [];
-        await Promise.all(
-          [...closing].map(async (resource) => {
-            try {
-              await resource.close(record?.identity);
-              current.retained.delete(resource);
-            } catch (error) {
-              // Unregistration cannot abandon a resource whose close failed.
-              current.retained.add(resource);
-              errors.push(error);
-            }
-          }),
-        );
-        if (errors.length === 1) {
-          throw errors[0];
-        }
-        if (errors.length > 1) {
-          throw createSqliteLifecycleAggregateError(
-            errors,
-            "OpenClaw state resource drainage failed",
-            errors[0],
-          );
-        }
-        const retired = retireNative(record?.identity);
-        attempts.delete(record);
-        seals.delete(current.seal);
-        if (record === undefined) {
-          // A successful whole-cache retry also discharges prior failed path closes.
-          for (const [key, entry] of attempts) {
-            if (!entry.pending) {
-              attempts.delete(key);
-              seals.delete(entry.seal);
+      const pending = tail
+        .then(async () => {
+          const closing = new Set([...resources, ...current.retained]);
+          for (const entry of attempts.values()) {
+            for (const resource of entry.retained) {
+              closing.add(resource);
             }
           }
-          for (const entry of records.values()) {
-            forget(entry);
+          current.queue = closing;
+          const errors: unknown[] = [];
+          while (current.queue.size) {
+            const batch = [...current.queue];
+            current.queue.clear();
+            await Promise.all(
+              batch.map(async (resource) => {
+                try {
+                  await resource.close(record?.identity);
+                  current.retained.delete(resource);
+                } catch (error) {
+                  // Unregistration cannot abandon a resource whose close failed.
+                  current.retained.add(resource);
+                  errors.push(error);
+                }
+              }),
+            );
           }
-        } else {
-          forget(record);
-        }
-        return retired;
-      });
+          if (errors.length === 1) {
+            throw errors[0];
+          }
+          if (errors.length > 1) {
+            throw createSqliteLifecycleAggregateError(
+              errors,
+              "OpenClaw state resource drainage failed",
+              errors[0],
+            );
+          }
+          const retired = retireNative(record?.identity);
+          attempts.delete(record);
+          seals.delete(current.seal);
+          if (record === undefined) {
+            // A successful whole-cache retry also discharges prior failed path closes.
+            for (const [key, entry] of attempts) {
+              if (!entry.pending) {
+                attempts.delete(key);
+                seals.delete(entry.seal);
+              }
+            }
+            for (const entry of records.values()) {
+              forget(entry);
+            }
+          } else {
+            forget(record);
+          }
+          return retired;
+        })
+        .finally(() => {
+          current.queue = undefined;
+        });
       current.pending = pending;
       tail = pending.then(
         () => undefined,

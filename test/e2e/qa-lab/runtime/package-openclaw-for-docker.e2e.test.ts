@@ -680,6 +680,7 @@ describe("package-openclaw-for-docker", () => {
       "scripts/lib/optional-bundled-clusters.mjs",
       "scripts/lib/output-root-guard.mjs",
       "scripts/lib/package-lifecycle-marker.mjs",
+      "scripts/lib/packed-openclaw-tarballs.mts",
       "scripts/lib/record-shared.mjs",
       "scripts/lib/release-changelog.mjs",
       "scripts/lib/release-notes-compaction.mjs",

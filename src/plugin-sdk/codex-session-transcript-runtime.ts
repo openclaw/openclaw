@@ -73,6 +73,7 @@ export type CodexSessionTranscriptMirrorWriteLockContext =
     appendMessageWithMessageSequence: <TMessage>(
       options: Omit<TranscriptMessageAppendOptions<TMessage>, "config">,
     ) => Promise<{
+      lifecycleRevision?: string;
       messageSeq?: number;
       result: TranscriptMessageAppendResult<TMessage> | undefined;
     }>;

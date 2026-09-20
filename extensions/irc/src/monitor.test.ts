@@ -7,6 +7,7 @@ import {
   closeOpenClawStateDatabaseForTest,
   createChannelIngressQueueForTests,
 } from "openclaw/plugin-sdk/channel-ingress-test-runtime";
+import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { withTimeout } from "openclaw/plugin-sdk/security-runtime";
 import { describe, expect, it, vi } from "vitest";
@@ -26,6 +27,7 @@ type DisconnectingIrcServer = {
 
 type InboundIrcServer = {
   port: number;
+  lines: string[];
   sendInbound(target: string, colonlessBody?: boolean, senderNick?: string): void;
   close(): Promise<void>;
 };
@@ -124,9 +126,11 @@ async function startDisconnectingIrcServer(): Promise<DisconnectingIrcServer> {
 
 async function startInboundIrcServer(welcomeNick = "bot"): Promise<InboundIrcServer> {
   let clientSocket: net.Socket;
+  const lines: string[] = [];
   const server = await startIrcTestServer((socket) => {
     clientSocket = socket;
     onIrcTestLine(socket, (line) => {
+      lines.push(line);
       if (line.startsWith("USER ")) {
         socket.write(`:server 001 ${welcomeNick} :welcome\r\n`);
       }
@@ -134,6 +138,7 @@ async function startInboundIrcServer(welcomeNick = "bot"): Promise<InboundIrcSer
   });
   return {
     ...server,
+    lines,
     sendInbound: (target, colonlessBody = false, senderNick = "alice") => {
       const bodySeparator = colonlessBody ? " " : " :";
       clientSocket.write(
@@ -224,6 +229,63 @@ function installPairingMonitorRuntime(
     },
   } as never);
 }
+
+describe("IRC automatic reply outcomes", () => {
+  it("reports sanitized-empty replies without recording outbound delivery", async () => {
+    await withIngressQueue(async (ingressQueue) => {
+      const completed = observeIngressCompletion(ingressQueue);
+      const core = createPluginRuntimeMock();
+      vi.mocked(core.channel.reply.dispatchReplyWithBufferedBlockDispatcher).mockImplementation(
+        async ({ dispatcherOptions }) => {
+          try {
+            await dispatcherOptions.deliver({ text: String.raw`\n` }, { kind: "final" });
+          } catch (error) {
+            await dispatcherOptions.onError?.(error, { kind: "final" });
+          }
+          return { queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } };
+        },
+      );
+      setIrcRuntime(core);
+      const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+      const statusSink = vi.fn();
+      const server = await startInboundIrcServer();
+      let monitor: Awaited<ReturnType<typeof monitorIrcProvider>> | undefined;
+      try {
+        monitor = await monitorIrcProvider({
+          config: {
+            channels: {
+              irc: {
+                host: "127.0.0.1",
+                port: server.port,
+                tls: false,
+                nick: "bot",
+                dmPolicy: "open",
+                allowFrom: ["*"],
+              },
+            },
+          },
+          ingressQueue,
+          runtime,
+          statusSink,
+        });
+        server.sendInbound("bot");
+        await withTimeout(completed, 3_000, "sanitized-empty IRC reply completion");
+
+        expect(runtime.error).toHaveBeenCalledWith(
+          expect.stringContaining("Message must be non-empty for IRC sends"),
+        );
+        expect(server.lines.some((line) => line.startsWith("PRIVMSG "))).toBe(false);
+        expect(statusSink.mock.calls.some(([patch]) => patch.lastOutboundAt)).toBe(false);
+        expect(core.channel.activity.record).not.toHaveBeenCalledWith(
+          expect.objectContaining({ direction: "outbound" }),
+        );
+      } finally {
+        await monitor?.stop();
+        await server.close();
+      }
+    });
+  });
+});
 
 describe("IRC configured-unavailable credential connection boundaries", () => {
   it("opens no connection when an active NickServ SecretRef is unavailable", async () => {

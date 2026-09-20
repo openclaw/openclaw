@@ -14,7 +14,8 @@ import {
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { writeConfigFile } from "../config/config.js";
 import type { GatewayAuthConfig, GatewayOperatorRolesConfig } from "../config/types.gateway.js";
-import { loadOriginDeviceToken, storeOriginDeviceToken } from "../infra/device-auth-store.js";
+import { loadOriginDeviceToken } from "../infra/device-auth-store.js";
+import { seedOriginDeviceToken } from "../infra/device-auth-store.test-support.js";
 import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
 import { getPairedDevice, listDevicePairing } from "../infra/device-pairing.js";
 import { connectUserModelAccount } from "../state/user-model-accounts.js";
@@ -561,13 +562,13 @@ describe("gateway identity scope grants", () => {
         if (!auth.deviceToken) {
           throw new Error("expected a Gateway-issued device token");
         }
-        storeOriginDeviceToken({ ...cacheKey, token: auth.deviceToken, scopes: auth.scopes });
+        seedOriginDeviceToken({ ...cacheKey, token: auth.deviceToken, scopes: auth.scopes });
       } finally {
         initialWs.close();
         expect(await waitForWsClose(initialWs, 1_000)).toBe(true);
       }
 
-      const cached = loadOriginDeviceToken(cacheKey);
+      const cached = await loadOriginDeviceToken(cacheKey);
       if (!cached) {
         throw new Error("expected the first connection's cached device token");
       }

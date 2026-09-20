@@ -114,7 +114,7 @@ export function startChannelHealthMonitor(deps: ChannelHealthMonitorDeps): Chann
       const globalAutostartSuppression = channelManager.getAutostartSuppression();
 
       for (const [channelId, accounts] of Object.entries(snapshot.channelAccounts)) {
-        if (!accounts) {
+        if (!accounts || snapshot.reloadingChannels?.has(channelId)) {
           continue;
         }
         const autostartSuppressed =

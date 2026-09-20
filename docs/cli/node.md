@@ -91,6 +91,9 @@ Options:
 - `--pair <code-or-url>`: Read the Gateway endpoint, bootstrap token, TLS mode,
   and optional certificate pin from a setup code or `oc-pair://` URL. Explicit
   gateway flags override values from `--pair`.
+- `--pair-if-needed <code-or-url>`: Use the same endpoint options as `--pair`, but
+  prefer the saved device token when present. A supervisor can restart the same
+  command after pairing. Cannot be combined with `--pair`.
 - `--port <port>`: Gateway WebSocket port (default: `18789`)
 - `--context-path <path>`: Gateway WebSocket context path (e.g. `/openclaw-gw`). Appended to the WebSocket URL.
 - `--tls`: Use TLS for the gateway connection
@@ -98,6 +101,7 @@ Options:
 - `--tls-fingerprint <sha256>`: Expected TLS certificate fingerprint (sha256)
 - `--node-id <id>`: Override the client instance ID stored in shared SQLite state (does not reset pairing)
 - `--display-name <name>`: Override the node display name
+- `--session-host`: Host worker sessions for this foreground process without changing the saved worker-hosting preference
 - `--commands <ids>`: Persist an exact comma-separated command allowlist (repeatable); advertise only available matches and their required capabilities. Disables computer use, skills, plugin tools, MCP servers, and worker hosting. Omitting the flag preserves the saved list.
 - `--all-commands`: Advertise the full default command surface and forget any saved `--commands` allowlist. Cannot be combined with `--commands`.
 - `--share-installed-apps`: On macOS, advertise installed applications through `device.apps`
@@ -115,6 +119,11 @@ Local exec approvals default to `full` with `ask: "off"`; configure them before
 using a setup link if that access is too broad. `node install --pair` is
 intentionally unavailable because a short-lived bearer setup link must not be
 persisted in service arguments.
+
+For a managed foreground process, `--pair-if-needed` reuses native device-token
+storage across restarts; it does not keep a separate enrollment marker. Preserve
+the node state directory. An expired setup code cannot enroll a new state
+directory or replace a revoked device token; provision a fresh code when needed.
 
 `openclaw node run` and `openclaw node install` resolve gateway auth from config/env (no `--token`/`--password` flags on node commands):
 
@@ -174,7 +183,14 @@ Options:
 - `--share-installed-apps`: On macOS, advertise installed applications through `device.apps`
 - `--no-share-installed-apps`: Disable installed application sharing
 - `--runtime <node|bun>`: Service runtime (default: `node`). Bun 1.4+ with WAL-reset-safe `node:sqlite` is an explicit opt-in; Node remains recommended.
+- `--runtime-path <path>`: Pin an absolute Node/Bun executable that passes runtime capability checks.
 - `--force`: Reinstall/overwrite if already installed
+
+The explicit pin is saved in machine-state metadata and retained
+across restarts and forced reinstalls. Replace it with another `--runtime-path`,
+or use `openclaw node install --runtime node --force` without `--runtime-path`
+to return to automatic selection. An unavailable or unsupported pin fails
+instead of silently selecting another runtime. Quote paths containing spaces.
 
 Set `OPENCLAW_WRAPPER` to an executable wrapper file to use it instead of the
 selected runtime and CLI entrypoint. The wrapper receives `node run` and the
@@ -218,6 +234,29 @@ Gateway reports a terminal token/password/bootstrap auth pause, the node host
 logs the close detail and exits non-zero so launchd/systemd/Task Scheduler can
 restart it with fresh config and credentials. Pairing-required pauses stay in
 the foreground flow so the pending request can be approved.
+
+## Automatic updates
+
+Long-running packaged `node run` processes and installed node services check
+hourly for updates by default. A new version is prepared in a separate node
+runtime, leaving the global CLI package and a co-located Gateway in place.
+Activation waits until commands, terminals, workers, plugin work, pending output,
+and cleanup are idle. The node then restarts with its existing identity, pairing,
+settings, and launch options. Automatic activations are at least 12 hours apart;
+there is no deadline that interrupts busy work.
+
+Disable this on the node machine with:
+
+```bash
+openclaw config set nodeHost.autoUpdate.enabled false
+```
+
+`update.checkOnStart: false` and `OPENCLAW_NO_AUTO_UPDATE=1` also disable node
+automatic updates. The Gateway's `update.auto.enabled` preference is separate.
+Source checkouts, native app nodes, private workers, `dev`, and
+`extended-stable` installs do not auto-apply. Releases requiring database
+migrations defer to the normal update workflow. See
+[Headless node updates](/install/updating/automatic-updates#headless-node-updates).
 
 ## Pairing
 

@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferredCore } from "../shared/deferred.js";
 import { createGatewayMaintenanceStateForTest } from "./test-helpers.maintenance-state.js";
 
 const { checkTelemetryUpdateMock, generateSecureIntMock } = vi.hoisted(() => ({
@@ -26,6 +27,7 @@ async function stopMaintenanceTimers(
   clearInterval(timers.healthInterval);
   clearInterval(timers.dedupeCleanup);
   clearInterval(timers.worktreeCleanup);
+  await timers.stopTelemetryChecks();
   await timers.stopMediaCleanup();
   await timers.stopSessionColdStorageMaintenance();
 }
@@ -44,8 +46,9 @@ describe("gateway telemetry maintenance", () => {
     checkTelemetryUpdateMock.mockRejectedValueOnce(new Error("offline")).mockResolvedValue(null);
     const logHealth = { info: vi.fn(), error: vi.fn() };
     const { startGatewayMaintenanceTimers } = await import("./server-maintenance.js");
+    const maintenanceState = createGatewayMaintenanceStateForTest();
     const timers = startGatewayMaintenanceTimers({
-      ...createGatewayMaintenanceStateForTest(),
+      ...maintenanceState,
       logHealth,
       runWorktreeGc: async () => undefined,
       runDeliveryQueueMediaGc: async () => undefined,
@@ -57,7 +60,10 @@ describe("gateway telemetry maintenance", () => {
     expect(checkTelemetryUpdateMock).not.toHaveBeenCalled();
 
     await vi.advanceTimersByTimeAsync(30_000);
-    expect(checkTelemetryUpdateMock).toHaveBeenCalledWith({}, { surface: "gateway" });
+    expect(checkTelemetryUpdateMock).toHaveBeenCalledWith(maintenanceState.getRuntimeConfig, {
+      surface: "gateway",
+    });
+    expect(checkTelemetryUpdateMock.mock.lastCall?.[0]()).toEqual({});
     expect(logHealth.error).not.toHaveBeenCalled();
     expect(generateSecureIntMock).toHaveBeenNthCalledWith(2, 5 * 60_000);
 
@@ -68,6 +74,45 @@ describe("gateway telemetry maintenance", () => {
     expect(checkTelemetryUpdateMock).toHaveBeenCalledTimes(2);
 
     await stopMaintenanceTimers(timers);
+  });
+
+  it("coalesces pending checks and joins them before stopping future telemetry admission", async () => {
+    vi.useFakeTimers();
+    generateSecureIntMock.mockReturnValue(0);
+    const check = createDeferredCore<null>();
+    checkTelemetryUpdateMock.mockReturnValue(check.promise);
+    const { startGatewayMaintenanceTimers } = await import("./server-maintenance.js");
+    const timers = startGatewayMaintenanceTimers({
+      ...createGatewayMaintenanceStateForTest(),
+      runWorktreeGc: async () => undefined,
+      runDeliveryQueueMediaGc: async () => undefined,
+      runManagedOutgoingMediaGc: async () => undefined,
+    });
+
+    try {
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(checkTelemetryUpdateMock).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(10 * 60_000);
+      expect(checkTelemetryUpdateMock).toHaveBeenCalledTimes(1);
+
+      let stopped = false;
+      const stopping = timers.stopTelemetryChecks().then(() => {
+        stopped = true;
+      });
+      await vi.advanceTimersByTimeAsync(10 * 60_000);
+      expect(stopped).toBe(false);
+      expect(checkTelemetryUpdateMock).toHaveBeenCalledTimes(1);
+
+      check.resolve(null);
+      await stopping;
+      expect(stopped).toBe(true);
+      await timers.stopTelemetryChecks();
+      await vi.advanceTimersByTimeAsync(10 * 60_000);
+      expect(checkTelemetryUpdateMock).toHaveBeenCalledTimes(1);
+    } finally {
+      check.resolve(null);
+      await stopMaintenanceTimers(timers);
+    }
   });
 
   it("never checks telemetry for Nix-managed gateways", async () => {

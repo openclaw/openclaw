@@ -412,12 +412,33 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
   );
 
   it.each([
-    { label: "progress", sourceReplyFinal: false, expectedFinalization: true },
-    { label: "final reply", sourceReplyFinal: true, expectedFinalization: false },
-    { label: "legacy unmarked send", sourceReplyFinal: undefined, expectedFinalization: false },
+    {
+      label: "progress",
+      sourceReplyFinal: false,
+      didDeliverSourceReplyViaMessageTool: false,
+      expectedFinalization: true,
+    },
+    {
+      label: "final reply",
+      sourceReplyFinal: true,
+      didDeliverSourceReplyViaMessageTool: false,
+      expectedFinalization: false,
+    },
+    {
+      label: "legacy source-confirmed send",
+      sourceReplyFinal: undefined,
+      didDeliverSourceReplyViaMessageTool: true,
+      expectedFinalization: false,
+    },
+    {
+      label: "legacy coarse outbound send",
+      sourceReplyFinal: undefined,
+      didDeliverSourceReplyViaMessageTool: false,
+      expectedFinalization: true,
+    },
   ])(
     "handles $label delivery evidence before settled finalization",
-    ({ sourceReplyFinal, expectedFinalization }) => {
+    ({ sourceReplyFinal, didDeliverSourceReplyViaMessageTool, expectedFinalization }) => {
       const emptyStopAssistant = makeLastAssistant();
       const instruction = resolveSettledToolTerminalContinuationInstruction(
         makeSettledContinuationParams(
@@ -426,6 +447,7 @@ describe("runEmbeddedAgent incomplete-turn safety", () => {
             toolMetas: [{ toolName: "write" }],
             itemLifecycle: { startedCount: 1, completedCount: 1, activeCount: 0 },
             didSendViaMessagingTool: true,
+            didDeliverSourceReplyViaMessageTool,
             messagingToolSentTexts: ["Writing note.txt…"],
             messagingToolSentTargets: [
               {

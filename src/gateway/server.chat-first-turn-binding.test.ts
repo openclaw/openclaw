@@ -172,11 +172,49 @@ it("binds a first native chat.send before streaming and persists its stopped par
     expect(lifecycle).toContainEqual(
       expect.objectContaining({ phase: "start", sessionId: committed.entry.sessionId }),
     );
+    const history = await gateway.client.request<{
+      sessionId: string;
+      sessionInfo: { activeLeafEntryId: string | null };
+    }>("chat.history", { sessionKey });
+    expect(history).toMatchObject({
+      sessionId: committed.entry.sessionId,
+      sessionInfo: { activeLeafEntryId: expect.any(String) },
+    });
+    const transcriptScope = {
+      sessionKey,
+      sessionId: committed.entry.sessionId,
+      agentId: "main",
+    };
+    const beforeRejectedStops = await loadTranscriptEvents(transcriptScope);
+    for (const guard of [
+      {
+        idempotencyKey: "stop-stale-first-native-leaf",
+        expectedLeafEntryId: "stale-first-native-leaf",
+        sessionId: history.sessionId,
+      },
+      {
+        idempotencyKey: "stop-copied-first-native-leaf",
+        expectedLeafEntryId: history.sessionInfo.activeLeafEntryId,
+        sessionId: "previous-first-native-session",
+      },
+    ]) {
+      await expect(
+        gateway.client.request("chat.send", { sessionKey, message: "/stop", ...guard }),
+      ).rejects.toMatchObject({ details: { reason: "active-leaf-changed" } });
+      expect(original.controller.signal.aborted).toBe(false);
+      expect(runtime.chatAbortControllers.get(runId)).toBe(original);
+      expect(runtime.chatRunState.resolveBuffer(runId).text).toBe(partial);
+      expect(response.destroyed).toBe(false);
+      expect(requestBodies).toHaveLength(1);
+      expect(await loadTranscriptEvents(transcriptScope)).toEqual(beforeRejectedStops);
+    }
     const stop = await gateway.client
       .request("chat.send", {
         sessionKey,
         message: "/stop",
         idempotencyKey: "stop-first-native-turn",
+        expectedLeafEntryId: history.sessionInfo.activeLeafEntryId,
+        sessionId: history.sessionId,
       })
       .then(
         (result) => ({ result }),
@@ -194,20 +232,18 @@ it("binds a first native chat.send before streaming and persists its stopped par
         status: "killed",
         abortedLastRun: true,
       });
-    expect(lifecycle).toContainEqual(
-      expect.objectContaining({
-        phase: "end",
-        status: "cancelled",
-        aborted: true,
-        stopReason: "stop",
-        sessionId: committed.entry.sessionId,
-      }),
+    await vi.waitFor(() =>
+      expect(lifecycle).toContainEqual(
+        expect.objectContaining({
+          phase: "end",
+          status: "cancelled",
+          aborted: true,
+          stopReason: "stop",
+          sessionId: committed.entry.sessionId,
+        }),
+      ),
     );
-    const events = await loadTranscriptEvents({
-      sessionKey,
-      sessionId: committed.entry.sessionId,
-      agentId: "main",
-    });
+    const events = await loadTranscriptEvents(transcriptScope);
     expect(events).toContainEqual(
       expect.objectContaining({
         message: expect.objectContaining({

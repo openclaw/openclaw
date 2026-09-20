@@ -1,6 +1,6 @@
 import { asNonArrayRecord } from "@openclaw/normalization-core/record-coerce";
 import type { GatewaySessionRow } from "../../../api/types.ts";
-import type { ImageLightboxItem } from "../../../components/image-lightbox.ts";
+import type { ImageLightboxItem } from "../../../components/image-lightbox.types.ts";
 import { t } from "../../../i18n/index.ts";
 import { formatBytes } from "../../../lib/agents/display.ts";
 import type { MessageContentItem, MessageImageSource } from "../../../lib/chat/chat-types.ts";
@@ -32,6 +32,7 @@ export type ArtifactDownloadResolver = (params: {
 }) => Promise<{ url: string; expiresAt?: string } | null>;
 
 export type ImageRenderOptions = {
+  galleryImages?: readonly ImageBlock[];
   sessionKey?: string;
   agentId?: string;
   policyKey?: string;
@@ -578,6 +579,7 @@ export function projectMessageMedia(
     path: mediaPath,
     mediaType,
     fileName,
+    origin,
     sizeBytes,
     durationMs,
     width,
@@ -609,6 +611,7 @@ export function projectMessageMedia(
                 ? "video"
                 : "document",
           label: fileName?.trim() || labelForMediaPath(mediaPath),
+          ...(origin ? { origin } : {}),
           ...(typeof mediaType === "string" ? { mimeType: mediaType } : {}),
           ...(sizeBytes !== undefined ? { sizeBytes } : {}),
           ...(durationMs !== undefined ? { durationMs } : {}),

@@ -538,6 +538,7 @@ export async function applyPluginNodeInvokePolicy(params: {
         displayName: params.nodeSession.displayName,
         platform: params.nodeSession.platform,
         deviceFamily: params.nodeSession.deviceFamily,
+        caps: params.nodeSession.caps,
         commands: params.nodeSession.commands,
       },
       client: params.client

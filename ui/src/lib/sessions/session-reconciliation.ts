@@ -42,7 +42,7 @@ type Host = {
   snapshot: () => SessionGateway["snapshot"];
   permissions: Pick<
     ReturnType<typeof createSessionPermissionProjection>,
-    "observeEventRow" | "applyRow"
+    "observeEventRow" | "applyRow" | "reconcileRow"
   >;
   mutations: Pick<
     ReturnType<typeof createSessionMutations>,
@@ -86,7 +86,7 @@ type Host = {
 };
 
 export function createSessionReconciliation(host: Host) {
-  const pendingFields = ["pinned", "pinnedAt", "unread"] as const;
+  const pendingFields = ["pinned", "pinnedAt", "unread", "category"] as const;
   const projectRowFields = (
     row: GatewaySessionRow,
     agentId?: string | null,
@@ -281,8 +281,11 @@ export function createSessionReconciliation(host: Host) {
               host.roster.rowRevision(existing) === 0,
             project: (accepted, donor) => {
               const select = observation?.observe(row, historyAgentId);
+              const inherited = host.roster.inheritRow(accepted, row, donor);
               const projected = projectRowFields(
-                host.roster.inheritRow(accepted, row, donor),
+                observation
+                  ? host.permissions.reconcileRow(inherited, observation.revision, historyAgentId)
+                  : inherited,
                 historyAgentId,
               );
               if (select) {
@@ -398,7 +401,11 @@ export function createSessionReconciliation(host: Host) {
               project: (accepted, donor) => {
                 const select = captured.observe(row, owned.agentId);
                 const projected = projectRowFields(
-                  roster.inheritRow(accepted, row, donor),
+                  host.permissions.reconcileRow(
+                    roster.inheritRow(accepted, row, donor),
+                    captured.revision,
+                    owned.agentId,
+                  ),
                   owned.agentId,
                 );
                 host.mutations.observePendingFields(

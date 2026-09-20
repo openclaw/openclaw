@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { ZodError } from "zod";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { withOpenClawStateDatabaseReadSnapshot } from "../state/openclaw-state-db-readonly.js";
 import {
@@ -26,6 +27,7 @@ import {
   resolveStateDatabaseCoordinatorPath,
   resolveStateLifecycleRuntimeDirectory,
 } from "./state-database-coordinator.js";
+import { recordLegacyMigrationRun } from "./state-migrations.receipts.js";
 
 const log = vi.hoisted(() => ({ warn: vi.fn(), info: vi.fn() }));
 vi.mock("../logging/subsystem.js", async (importOriginal) => {
@@ -273,6 +275,25 @@ describe("deferred configured-plugin migrations", () => {
     expect(log.warn).not.toHaveBeenCalled();
 
     recordDeferredPluginMigrations({ env, pending: [], resolvedPluginIds: ["alpha"] });
+    runOpenClawStateWriteTransaction(
+      ({ db }) => {
+        for (const [runId, status] of [
+          ["deferred-plugin-migration:alpha", "completed"],
+          ["deferred-plugin-migration:failed", "failed"],
+          ["unrelated-migration", "pending"],
+        ] as const) {
+          recordLegacyMigrationRun(db, {
+            runId,
+            startedAt: 1,
+            finishedAt: 2,
+            status,
+            reportJson: "{",
+            upsert: true,
+          });
+        }
+      },
+      { env },
+    );
     closeOpenClawStateDatabaseForTest();
     expect(readDeferredPluginMigrations({ env })).toEqual([beta]);
     expect(log.info).toHaveBeenCalledWith(
@@ -333,4 +354,39 @@ describe("deferred configured-plugin migrations", () => {
     recordDeferredPluginMigrations({ env, pending: [unavailable] });
     expect(readDeferredPluginMigrations({ env })).toEqual([unavailable]);
   });
+
+  it.each([
+    { reportJson: "{", error: SyntaxError },
+    { reportJson: "{}", error: ZodError },
+  ])(
+    "rejects malformed pending reports and rolls back new deferrals: $reportJson",
+    ({ reportJson, error }) => {
+      const { env } = fixture();
+      const writeReceipt = (status: string) =>
+        runOpenClawStateWriteTransaction(
+          ({ db }) =>
+            recordLegacyMigrationRun(db, {
+              runId: "deferred-plugin-migration:malformed",
+              startedAt: 1,
+              finishedAt: null,
+              status,
+              reportJson,
+              upsert: true,
+            }),
+          { env },
+        );
+      writeReceipt("pending");
+      closeOpenClawStateDatabaseForTest();
+      expect(() => readDeferredPluginMigrations({ env })).toThrow(error);
+      expect(() =>
+        recordDeferredPluginMigrations({
+          env,
+          pending: [{ pluginId: "new", reason: "Not installed", command: "openclaw doctor --fix" }],
+        }),
+      ).toThrow(error);
+      writeReceipt("completed");
+      closeOpenClawStateDatabaseForTest();
+      expect(readDeferredPluginMigrations({ env })).toEqual([]);
+    },
+  );
 });

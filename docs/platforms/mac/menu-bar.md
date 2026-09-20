@@ -29,6 +29,8 @@ The app's main **Gateways** menu is always present. It lists the primary Gateway
 
 Right-click the OpenClaw Dock icon for **Open Dashboard** and **Settings…**. When more than one Gateway is configured, the Dock menu also lists every Gateway from the same catalog, including the primary Gateway, **This Mac** when available, and saved profiles. Selecting one opens or focuses it in the chosen experience; a checkmark identifies that experience's frontmost Gateway window.
 
+Gateway status dots follow each open Dashboard’s live connection, including saved Gateways that are not primary. Green means connected, red means a connection error, and gray means no current connection result. If multiple windows show the same Gateway, it stays green while any of them is connected. The checkmark identifies the selected window’s Gateway; **Primary** is a separate setting.
+
 Gateway health probes run only while the main **Gateways** menu is open. Cards show cached facts while refreshing, or **checking…** before the first result. After a failure they show **unreachable** with the last successful contact time. Closing the menu cancels its probes and disconnects probed saved Gateways with no open Web or Native windows. The primary connection stays connected, and cached facts remain available until the app quits.
 
 The Devices and Automations summaries refresh while the menu is open. Closing it stops their menu-owned polling. Cached summaries remain available when reopening the same Primary Gateway. Changing Primary refreshes Devices, Automations, Usage, and cost details from the newly selected Gateway. Manage jobs in the Dashboard's **Cron Jobs** page.

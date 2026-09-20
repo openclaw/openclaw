@@ -8,12 +8,14 @@ import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { createSessionEventSubscriberRegistry } from "../server-chat-state.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { createTranscriptUpdateBroadcastHandler } from "../server-session-events.js";
+import { getSessionRowProjection } from "../session-row-projection-access.js";
 import {
   roleClient,
   rolePolicyConfig,
   sharingPolicyClient,
 } from "../session-sharing.test-utils.js";
 import { chatHistoryHandlers } from "./chat-history-handler.js";
+import { initializeSessionReadContext } from "./sessions-read-cache.test-support.js";
 import type { RespondFn } from "./types.js";
 
 describe("chat.startup short references", () => {
@@ -37,7 +39,13 @@ describe("chat.startup short references", () => {
         };
         const subscribers = createSessionEventSubscriberRegistry(() => live);
         const broadcastToConnIds = vi.fn();
+        const context = createDirectChatContext({
+          subscribeSessionEvents: subscribers.subscribe,
+          getSessionEventSubscriberConnIds: subscribers.getAll,
+        });
+        await initializeSessionReadContext(context);
         const emit = createTranscriptUpdateBroadcastHandler({
+          getSessionRowProjection: () => getSessionRowProjection(context),
           broadcastToConnIds,
           sessionEventSubscribers: subscribers,
           sessionMessageSubscribers: { get: () => new Set() },
@@ -54,17 +62,14 @@ describe("chat.startup short references", () => {
           });
           return undefined;
         });
+        context.readChatStartupProjection = readChatStartupProjection;
         const respond = vi.fn<RespondFn>();
         await expectDefined(
           chatHistoryHandlers["chat.startup"],
           "startup handler",
         )({
           params: { shortId: "12345678", agentId: "main" },
-          context: createDirectChatContext({
-            subscribeSessionEvents: subscribers.subscribe,
-            getSessionEventSubscriberConnIds: subscribers.getAll,
-            readChatStartupProjection,
-          }),
+          context,
           req: { type: "req", id: "observer", method: "chat.startup" },
           client,
           isWebchatConnect: () => false,
@@ -117,12 +122,14 @@ describe("chat.startup short references", () => {
           },
         );
         const respond = vi.fn<RespondFn>();
+        const context = createDirectChatContext({ getRuntimeConfig: () => cfg });
+        await initializeSessionReadContext(context);
         await expectDefined(
           chatHistoryHandlers["chat.startup"],
           "startup handler",
         )({
           params: { shortId: "12345678", agentId: "main" },
-          context: createDirectChatContext({ getRuntimeConfig: () => cfg }),
+          context,
           req: { type: "req", id: "hidden", method: "chat.startup" },
           client,
           isWebchatConnect: () => false,
@@ -146,6 +153,7 @@ describe("chat.startup short references", () => {
       });
       const handler = expectDefined(chatHistoryHandlers["chat.startup"], "startup handler");
       const context = createDirectChatContext();
+      await initializeSessionReadContext(context);
       const call = async (shortId: string) => {
         const respond = vi.fn<RespondFn>();
         await handler({

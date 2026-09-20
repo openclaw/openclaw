@@ -230,14 +230,13 @@ describe("gateway startup import boundaries", () => {
   it("defers retained plugin generation cleanup to the post-ready idle scheduler", () => {
     const serverImpl = readServerImplementation();
     const cleanup = readSource("src/gateway/server-retained-plugin-cleanup.ts");
-    const importBoundary = serverImpl.indexOf("type LoadGatewayModelCatalog");
+    const staticImports = staticValueSpecifiers("server-implementation.ts", serverImpl);
     const serverStart = serverImpl.indexOf("export async function startGatewayServerCore");
     const postReadyStart = serverImpl.indexOf("scheduleGatewayPostReadyMaintenance({", serverStart);
     const cleanupCall = serverImpl.lastIndexOf("cleanupRetainedPluginInstallGenerations(");
 
-    expect(importBoundary).toBeGreaterThan(-1);
-    expect(serverImpl.slice(0, importBoundary)).not.toContain("managed-npm-retention");
-    expect(serverImpl.slice(0, importBoundary)).not.toContain("installed-plugin-index-records");
+    expect(staticImports).not.toContain("../plugins/managed-npm-retention.js");
+    expect(staticImports).not.toContain("../plugins/installed-plugin-index-records.js");
     expect(cleanup).toContain('import("../plugins/managed-npm-retention.js")');
     expect(cleanup).toContain('import("../plugins/installed-plugin-index-records.js")');
     expect(postReadyStart).toBeGreaterThan(serverStart);

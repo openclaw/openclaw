@@ -300,9 +300,11 @@ async function runMainCronCase(
       expect(getReplySpy.mock.calls[1]?.[0].Body).not.toContain("Exec completed");
       await vi.waitFor(() => expect(sendTelegram).toHaveBeenCalledTimes(2));
       expect(sendTelegram.mock.calls.map(([to]) => to)).toEqual(["-100155462274", "-100155462274"]);
-      expect(peekSystemEventEntries(expectedMainSessionKey).map((event) => event.text)).toEqual([
-        "Reminder: Late arrival",
-      ]);
+      await vi.waitFor(() =>
+        expect(peekSystemEventEntries(expectedMainSessionKey).map((event) => event.text)).toEqual([
+          "Reminder: Late arrival",
+        ]),
+      );
       expect(cron.getJob(job.id)).toBeUndefined();
       return undefined;
     }

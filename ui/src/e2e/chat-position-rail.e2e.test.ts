@@ -203,10 +203,6 @@ suite.define(() => {
           const visibilityMatchesViewport = () =>
             transcript.evaluate((element) => {
               const viewport = element.getBoundingClientRect();
-              const covered =
-                Number.parseFloat(
-                  getComputedStyle(element).getPropertyValue("--chat-transcript-composer-underlap"),
-                ) || 0;
               const marks = [
                 ...element.querySelectorAll<HTMLElement>(".chat-position-rail__marker"),
               ];
@@ -220,7 +216,7 @@ suite.define(() => {
                     ids.has(bubble.dataset.entryId) &&
                     rect.height > 0 &&
                     rect.bottom > viewport.top &&
-                    rect.top < viewport.bottom - covered
+                    rect.top < viewport.bottom
                   );
                 })
                 .map((bubble) => bubble.dataset.entryId);

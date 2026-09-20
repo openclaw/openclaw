@@ -379,6 +379,7 @@ export async function verifyCompositeAcquisition({
         const started =
           helper === "GatewayClient"
             ? startGatewayWithClient({
+                port: peer.port,
                 cfg: {},
                 configPath: state.statePath("client-config.json"),
                 token: "synthetic-token",
@@ -684,6 +685,7 @@ it("retains a failed acquisition owner", async () => {
             const previousConfig = process.env.OPENCLAW_CONFIG_PATH;
             const previousPort = process.env.OPENCLAW_GATEWAY_PORT;
             const started = await startGatewayWithClient({
+              port: peer.port,
               cfg: {},
               configPath,
               token: "synthetic-token",

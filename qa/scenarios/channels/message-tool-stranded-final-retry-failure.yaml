@@ -65,14 +65,18 @@ flow:
             senderName: Alice
             text:
               expr: config.prompt
-        - call: waitForOutboundMessage
+        - call: state.waitFor
           saveAs: outbound
           args:
-            - ref: state
-            - lambda:
-                params: [candidate]
-                expr: "candidate.conversation.id === config.conversationId && candidate.conversation.kind === 'direct' && String(candidate.text ?? '') === config.expectedDiagnostic"
-            - expr: liveTurnTimeoutMs(env, 180000)
+            - kind: message-text
+              direction: outbound
+              textIncludes:
+                ref: config.expectedDiagnostic
+              timeoutMs:
+                expr: liveTurnTimeoutMs(env, 180000)
+        - assert:
+            expr: "!outbound.deleted && outbound.accountId === env.transport.accountId && outbound.conversation.id === config.conversationId && outbound.conversation.kind === 'direct' && outbound.isError === true && outbound.text === config.expectedDiagnostic"
+            message: expected one classified delivery failure on the original account and conversation
         - set: scenarioRequests
           value:
             expr: "env.mock ? (await fetchJson(`${env.mock.baseUrl}/debug/requests?after=${requestCursorBefore}`)).filter((request) => String(request.allInputText ?? '').includes(config.rawMarker)) : []"
@@ -91,6 +95,9 @@ flow:
             expr: "!env.mock || retryRequests.length === 1"
             message:
               expr: "`expected exactly one stranded-reply retry request, saw ${retryRequests.length}`"
+        - call: sleep
+          args:
+            - expr: liveTurnTimeoutMs(env, 8000)
         - set: diagnosticOutbound
           value:
             expr: "state.getSnapshot().messages.filter((message) => message.direction === 'outbound' && message.conversation.id === config.conversationId && String(message.text ?? '') === config.expectedDiagnostic)"
@@ -105,9 +112,6 @@ flow:
             expr: rawOutbound.length === 0
             message:
               expr: "`raw stranded final text must not be delivered, saw ${rawOutbound.length} raw outbound messages`"
-        - call: sleep
-          args:
-            - expr: liveTurnTimeoutMs(env, 8000)
         - set: settledRequests
           value:
             expr: "env.mock ? (await fetchJson(`${env.mock.baseUrl}/debug/requests?after=${requestCursorBefore}`)).filter((request) => String(request.allInputText ?? '').includes(config.rawMarker)) : []"

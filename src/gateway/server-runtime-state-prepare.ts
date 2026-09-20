@@ -25,6 +25,7 @@ import { createGatewayControlUiRootLifecycle } from "./server-control-ui-root.js
 import type { GatewayInstanceRuntime } from "./server-instance-runtime.types.js";
 import type { GatewayServerLiveState } from "./server-live-state.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
+import type { GatewayPluginReloadStatus } from "./server-plugin-runtime-generation.js";
 import type { SharedGatewaySessionGenerationState } from "./server-shared-auth-generation.js";
 import type { prepareGatewayServerBootstrap } from "./server-startup-bootstrap.js";
 import { createGatewayTransportBridge } from "./server-transport-bridge.js";
@@ -44,6 +45,7 @@ export async function prepareGatewayKernelState(params: {
   bootstrap: GatewayBootstrap;
   bootId: string;
   pluginRegistryOwner: ReturnType<typeof createPluginRegistryOwner>;
+  getPluginReloadStatus: () => GatewayPluginReloadStatus | undefined;
   port: number;
   opts: GatewayBootstrap["opts"];
   log: GatewayLogger;
@@ -438,6 +440,7 @@ export async function prepareGatewayKernelState(params: {
     getEventLoopHealth: readinessEventLoopHealth.snapshot,
     getStateDatabaseFailure: () =>
       openClawStateDatabaseCache.getOpenClawStateDatabaseRuntimeFailure(resolveDatabasePath()),
+    getPluginReloadStatus: params.getPluginReloadStatus,
     shouldSkipChannelReadiness: () =>
       isTruthyEnvValue(process.env.OPENCLAW_SKIP_CHANNELS) ||
       isTruthyEnvValue(process.env.OPENCLAW_SKIP_PROVIDERS),
@@ -580,6 +583,8 @@ export async function prepareGatewayKernelState(params: {
     createHttpTransportOptions,
     transportBridge,
     connectionWork: connectionState.connectionWork,
+    getSessionRowProjection: connectionState.getSessionRowProjection,
+    attachSessionRowProjection: connectionState.attachSessionRowProjection,
     clients,
     mentionInbox,
     broadcast,

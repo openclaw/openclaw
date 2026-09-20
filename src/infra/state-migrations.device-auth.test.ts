@@ -5,7 +5,10 @@ import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
-import { loadDeviceAuthToken, storeDeviceAuthToken } from "./device-auth-store.js";
+import {
+  readDeviceAuthTokenForTest,
+  seedDeviceAuthToken,
+} from "./device-auth-store.test-support.js";
 import { detectLegacyDeviceAuth, migrateLegacyDeviceAuth } from "./state-migrations.device-auth.js";
 
 describe("legacy device-auth Doctor migration", () => {
@@ -70,7 +73,7 @@ describe("legacy device-auth Doctor migration", () => {
 
     expect(result.warnings).toEqual([]);
     expect(result.changes).toEqual(["Migrated 1 device-auth token to SQLite."]);
-    expect(loadDeviceAuthToken({ deviceId: "device-1", role: "operator", env })).toEqual({
+    expect(readDeviceAuthTokenForTest({ deviceId: "device-1", role: "operator", env })).toEqual({
       token: "legacy-token",
       role: "operator",
       scopes: ["operator.read", "operator.write"],
@@ -81,7 +84,7 @@ describe("legacy device-auth Doctor migration", () => {
 
   it("preserves canonical SQLite rows instead of replaying stale JSON", async () => {
     const { stateDir, env, sourcePath } = useStateDir();
-    storeDeviceAuthToken({
+    seedDeviceAuthToken({
       deviceId: "device-1",
       role: "operator",
       token: "canonical-token",
@@ -93,7 +96,7 @@ describe("legacy device-auth Doctor migration", () => {
 
     expect(result.warnings).toEqual([]);
     expect(result.notices).toContain("Preserved 1 canonical SQLite device-auth token.");
-    expect(loadDeviceAuthToken({ deviceId: "device-1", role: "operator", env })?.token).toBe(
+    expect(readDeviceAuthTokenForTest({ deviceId: "device-1", role: "operator", env })?.token).toBe(
       "canonical-token",
     );
     expect(fs.existsSync(sourcePath)).toBe(false);
@@ -110,7 +113,7 @@ describe("legacy device-auth Doctor migration", () => {
 
     await migrate(stateDir, env);
 
-    expect(loadDeviceAuthToken({ deviceId: "device-1", role: "operator", env })?.token).toBe(
+    expect(readDeviceAuthTokenForTest({ deviceId: "device-1", role: "operator", env })?.token).toBe(
       "current",
     );
   });

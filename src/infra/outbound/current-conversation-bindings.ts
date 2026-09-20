@@ -18,9 +18,11 @@ import {
 import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel-constants.js";
 import {
   executeSqliteQuerySync,
-  executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
+  prepareSqliteQuerySync,
+  prepareSqliteQueryTakeFirstSync,
 } from "../kysely-sync.js";
+import { currentConversationBindingRow } from "./current-conversation-binding-row.js";
 import {
   buildChannelAccountKey,
   normalizeConversationRef,
@@ -49,6 +51,132 @@ type CurrentConversationBindingRow = {
   target_session_key: string;
   record_json: string;
 };
+
+function createCurrentConversationBindingQueries(db: DatabaseSync) {
+  const bindingDb = getNodeSqliteKysely<CurrentConversationBindingDatabase>(db);
+  const select = bindingDb
+    .selectFrom("current_conversation_bindings")
+    .select(["binding_key", "binding_id", "target_session_key", "record_json"]);
+  function lists(genericOnly: boolean) {
+    // Generic lookups must not load or decode rows belonging to account-owned adapters.
+    const query = genericOnly
+      ? select.where("binding_id", "like", `${CURRENT_BINDINGS_ID_PREFIX}%`)
+      : select;
+    return {
+      bySession: prepareSqliteQuerySync<string, CurrentConversationBindingRow>(db, (parameter) =>
+        query
+          .where(
+            "target_session_key",
+            "=",
+            parameter((target) => target),
+          )
+          .orderBy("binding_id", "asc"),
+      ),
+      byScope: prepareSqliteQuerySync<
+        { targetSessionKey: string; scope: CurrentConversationBindingScope },
+        CurrentConversationBindingRow
+      >(db, (parameter) =>
+        query
+          .where(
+            "target_session_key",
+            "=",
+            parameter((params) => params.targetSessionKey),
+          )
+          .where(
+            "channel",
+            "=",
+            parameter((params) => params.scope.channel),
+          )
+          .where(
+            "account_id",
+            "=",
+            parameter((params) => params.scope.accountId),
+          )
+          .orderBy("binding_id", "asc"),
+      ),
+    };
+  }
+  return {
+    exact: prepareSqliteQueryTakeFirstSync<string, CurrentConversationBindingRow>(db, (parameter) =>
+      select.where(
+        "binding_key",
+        "=",
+        parameter((key) => key),
+      ),
+    ),
+    legacy: prepareSqliteQuerySync<ConversationRef, CurrentConversationBindingRow>(
+      db,
+      (parameter) =>
+        select
+          .where(
+            "channel",
+            "=",
+            parameter((conversation) => conversation.channel),
+          )
+          .where(
+            "account_id",
+            "=",
+            parameter((conversation) => conversation.accountId),
+          )
+          .where("conversation_kind", "=", CURRENT_BINDING_CONVERSATION_KIND)
+          .where(
+            "conversation_id",
+            "=",
+            parameter((conversation) => conversation.conversationId),
+          ),
+    ),
+    remove: prepareSqliteQuerySync<string>(db, (parameter) =>
+      bindingDb.deleteFrom("current_conversation_bindings").where(
+        "binding_key",
+        "=",
+        parameter((key) => key),
+      ),
+    ),
+    upsert: prepareSqliteQuerySync<ReturnType<typeof currentConversationBindingRow>>(
+      db,
+      (parameter) => {
+        const row = {
+          binding_key: parameter((value) => value.binding_key),
+          binding_id: parameter((value) => value.binding_id),
+          target_session_key: parameter((value) => value.target_session_key),
+          channel: parameter((value) => value.channel),
+          account_id: parameter((value) => value.account_id),
+          conversation_kind: parameter((value) => value.conversation_kind),
+          parent_conversation_id: parameter((value) => value.parent_conversation_id),
+          conversation_id: parameter((value) => value.conversation_id),
+          target_kind: parameter((value) => value.target_kind),
+          status: parameter((value) => value.status),
+          bound_at: parameter((value) => value.bound_at),
+          expires_at: parameter((value) => value.expires_at),
+          metadata_json: parameter((value) => value.metadata_json),
+          record_json: parameter((value) => value.record_json),
+          updated_at: parameter((value) => value.updated_at),
+        };
+        return bindingDb
+          .insertInto("current_conversation_bindings")
+          .values(row)
+          .onConflict((conflict) => conflict.column("binding_key").doUpdateSet(row));
+      },
+    ),
+    generic: lists(true),
+    all: lists(false),
+  };
+}
+
+// Cache SQL templates per handle; native statements and their invalidation remain executor-owned.
+const currentConversationBindingQueries = new WeakMap<
+  DatabaseSync,
+  ReturnType<typeof createCurrentConversationBindingQueries>
+>();
+
+function getCurrentConversationBindingQueries(db: DatabaseSync) {
+  let queries = currentConversationBindingQueries.get(db);
+  if (!queries) {
+    queries = createCurrentConversationBindingQueries(db);
+    currentConversationBindingQueries.set(db, queries);
+  }
+  return queries;
+}
 
 function buildConversationKey(ref: ConversationRef): string {
   return [ref.channel, ref.accountId, ref.parentConversationId ?? "", ref.conversationId].join(
@@ -110,65 +238,22 @@ function readCurrentConversationBindingRow(
   conversation: ConversationRef,
   bindingKey: string,
 ): CurrentConversationBindingRow | undefined {
-  const bindingDb = getNodeSqliteKysely<CurrentConversationBindingDatabase>(db);
-  const exact = executeSqliteQueryTakeFirstSync(
-    db,
-    bindingDb
-      .selectFrom("current_conversation_bindings")
-      .select(["binding_key", "binding_id", "target_session_key", "record_json"])
-      .where("binding_key", "=", bindingKey),
-  );
+  const queries = getCurrentConversationBindingQueries(db);
+  const exact = queries.exact(bindingKey);
   if (exact) {
     return exact;
   }
   // Shipped self-parent rows have a stale key; use the existing conversation
   // index and normalize the candidate before accepting the same conversation.
-  const candidates = executeSqliteQuerySync(
-    db,
-    bindingDb
-      .selectFrom("current_conversation_bindings")
-      .select(["binding_key", "binding_id", "target_session_key", "record_json"])
-      .where("channel", "=", conversation.channel)
-      .where("account_id", "=", conversation.accountId)
-      .where("conversation_kind", "=", CURRENT_BINDING_CONVERSATION_KIND)
-      .where("conversation_id", "=", conversation.conversationId),
-  ).rows;
+  const candidates = queries.legacy(conversation).rows;
   return candidates.find((candidate) => {
     const record = bindingRowsToRecords([candidate])[0];
     return record !== undefined && buildConversationKey(record.conversation) === bindingKey;
   });
 }
 
-function currentConversationBindingRow(
-  record: SessionBindingRecord,
-  conversation: ConversationRef,
-  bindingKey: string,
-) {
-  return {
-    binding_key: bindingKey,
-    binding_id: record.bindingId,
-    target_session_key: record.targetSessionKey,
-    channel: conversation.channel,
-    account_id: conversation.accountId,
-    conversation_kind: CURRENT_BINDING_CONVERSATION_KIND,
-    parent_conversation_id: conversation.parentConversationId ?? null,
-    conversation_id: conversation.conversationId,
-    target_kind: record.targetKind,
-    status: record.status,
-    bound_at: record.boundAt,
-    expires_at: record.expiresAt ?? null,
-    metadata_json: record.metadata ? JSON.stringify(record.metadata) : null,
-    record_json: JSON.stringify(record),
-    updated_at: Date.now(),
-  };
-}
-
 function deleteCurrentConversationBindingRow(db: DatabaseSync, bindingKey: string): void {
-  const bindingDb = getNodeSqliteKysely<CurrentConversationBindingDatabase>(db);
-  executeSqliteQuerySync(
-    db,
-    bindingDb.deleteFrom("current_conversation_bindings").where("binding_key", "=", bindingKey),
-  );
+  getCurrentConversationBindingQueries(db).remove(bindingKey);
 }
 
 /** Updates one binding from its currently committed row in one synchronous transaction. */
@@ -197,14 +282,7 @@ export function updateCurrentConversationBindingRecord(
       deleteCurrentConversationBindingRow(db, existingRow.binding_key);
     }
     const row = currentConversationBindingRow(current, conversation, bindingKey);
-    const bindingDb = getNodeSqliteKysely<CurrentConversationBindingDatabase>(db);
-    executeSqliteQuerySync(
-      db,
-      bindingDb
-        .insertInto("current_conversation_bindings")
-        .values(row)
-        .onConflict((conflict) => conflict.column("binding_key").doUpdateSet(row)),
-    );
+    getCurrentConversationBindingQueries(db).upsert(row);
     return { previous, current };
   });
 }
@@ -243,25 +321,16 @@ function listCurrentConversationBindingRowsBySession(
   scope?: CurrentConversationBindingScope,
   genericOnly = !scope,
 ): CurrentConversationBindingRow[] {
-  const bindingDb = getNodeSqliteKysely<CurrentConversationBindingDatabase>(db);
-  let query = bindingDb
-    .selectFrom("current_conversation_bindings")
-    .select(["binding_key", "binding_id", "target_session_key", "record_json"])
-    .where("target_session_key", "=", targetSessionKey);
+  const queries = getCurrentConversationBindingQueries(db);
+  const list = genericOnly ? queries.generic : queries.all;
   if (scope) {
     const normalized = normalizeConversationRef({
       ...scope,
       conversationId: "binding-scope",
     });
-    query = query
-      .where("channel", "=", normalized.channel)
-      .where("account_id", "=", normalized.accountId);
+    return list.byScope({ targetSessionKey, scope: normalized }).rows;
   }
-  if (genericOnly) {
-    // Generic lookups must not load or decode rows belonging to account-owned adapters.
-    query = query.where("binding_id", "like", `${CURRENT_BINDINGS_ID_PREFIX}%`);
-  }
-  return executeSqliteQuerySync(db, query.orderBy("binding_id", "asc")).rows;
+  return list.bySession(targetSessionKey).rows;
 }
 
 /** Lists latest durable bindings using the exact target key and optional account scope. */

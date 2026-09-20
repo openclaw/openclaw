@@ -1,14 +1,15 @@
 // Plugin state store exposes persisted per-plugin state operations.
+import { toUSVString } from "node:util";
 import type { Result } from "@openclaw/normalization-core/result";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { validatePluginStateComparison } from "./plugin-state-store.comparison.js";
 import { preparePluginStateJournalValue } from "./plugin-state-store.journal.js";
+import { isRetainedPluginStateNamespace } from "./plugin-state-store.kernel.js";
 import {
   validatePluginStateKeyRange,
   type PluginStateKeyRangeParams,
 } from "./plugin-state-store.reads.js";
 import {
-  clearPluginStateDatabaseForTests,
   closePluginStateDatabase,
   MAX_PLUGIN_STATE_VALUE_BYTES,
   PLUGIN_STATE_DOCTOR_IMPORT_BATCH_ROWS,
@@ -24,19 +25,33 @@ import {
   pluginStateRegister,
   pluginStateRegisterIfAbsent,
   pluginStateUpdate,
-  resolveMaxPluginStateEntriesPerPlugin,
 } from "./plugin-state-store.sqlite.js";
 import type {
+  OpenAsyncKeyedStoreOptions,
   OpenKeyedStoreOptions,
   PluginStateCompareResult,
   PluginStateEntry,
   PluginStateKeyedStore,
   PluginStateObservation,
+  PluginStateStoreError,
   PluginStateSyncKeyedStore,
   PluginStateOverflowPolicy,
-  PluginStateStoreOperation,
 } from "./plugin-state-store.types.js";
-import { PluginStateStoreError } from "./plugin-state-store.types.js";
+import {
+  invalidInput,
+  optionPolicy,
+  prepareKeyedStoreOptions,
+  prepareLookupKeys,
+  prepareRegisterParams,
+  requireBoundedOptions,
+  validateNamespace,
+  validateKey,
+  validateMaxEntries,
+  validateOptionalTtlMs,
+  type PluginStateImportEntry,
+  type PreparedKeyedStoreOptions,
+  type PreparedRegisterParams,
+} from "./plugin-state-store.validation.js";
 import {
   comparePluginStateDeleteInWorker,
   comparePluginStateUpdateInWorker,
@@ -48,29 +63,28 @@ import {
   deletePluginStateInWorker,
   listPluginStateInWorker,
   listPluginStateInKeyRangeInWorker,
+  movePluginStateEntriesInWorker,
   registerPluginStateJournalInWorker,
   lookupManyPluginStateInWorker,
   lookupPluginStateInWorker,
   registerPluginStateIfAbsentInWorker,
   registerPluginStateInWorker,
 } from "./plugin-state-worker-client.js";
-import {
-  createPluginStoreOptionPolicy,
-  serializePluginStoreJson,
-  validateOptionalPluginStoreTtlMs,
-  validatePluginStoreKey,
-  validatePluginStoreNamespace,
-} from "./plugin-store-validation.js";
+import { serializePluginStoreJson } from "./plugin-store-validation.js";
 
 // Public plugin-state facade over the sqlite-backed store. It validates plugin
-// ids, namespaces, JSON values, TTLs, and per-plugin limits before persistence.
+// ids, namespaces, JSON values, TTLs, and namespace limits before persistence.
 export type {
+  OpenAsyncKeyedStoreOptions,
+  OpenRetainedKeyedStoreOptions,
   OpenKeyedStoreOptions,
   PluginStateCompareIntent,
   PluginStateCompareResult,
   PluginStateEntry,
+  PluginStateKeyRange,
   PluginStateKeyedStore,
   PluginStateObservation,
+  PluginStateMoveEntries,
   PluginStateSyncKeyedStore,
 } from "./plugin-state-store.types.js";
 
@@ -78,142 +92,33 @@ export type { PluginDoctorRawStateEntry } from "./plugin-state-store.sqlite.js";
 
 export {
   closePluginStateDatabaseAsync,
-  countPluginStateLiveEntries,
   getPluginStateCapacity,
   MAX_PLUGIN_STATE_BULK_DELETE_ENTRIES,
   pluginStateDeleteEntriesIfUnchanged,
   pluginStateDoctorEntriesInKeyRange,
-  resolveMaxPluginStateEntriesPerPlugin,
   sweepExpiredPluginStateEntries,
 } from "./plugin-state-store.sqlite.js";
 
-type StoreOptionSignature = {
-  maxEntries: number;
-  overflowPolicy: PluginStateOverflowPolicy;
-  defaultTtlMs?: number;
-};
-
-type PreparedRegisterParams = {
-  key: string;
-  valueJson: string;
-  ttlMs?: number;
-};
-
-type PluginStateImportEntry = {
-  key: string;
-  value: unknown;
-  createdAt: number;
-  ttlMs?: number;
-};
-
-function invalidInput(
-  message: string,
-  operation: PluginStateStoreOperation = "register",
-): PluginStateStoreError {
-  return new PluginStateStoreError(message, {
-    code: "PLUGIN_STATE_INVALID_INPUT",
-    operation,
-  });
-}
-
-function validateNamespace(value: string, operation: PluginStateStoreOperation = "open"): string {
-  return validatePluginStoreNamespace({
-    value,
-    label: "plugin state",
-    errors: {
-      invalid: (message) => invalidInput(message, operation),
-      limit: (message) => invalidInput(message, operation),
-    },
-  });
-}
-
-function validateKey(value: string, operation: PluginStateStoreOperation = "register"): string {
-  return validatePluginStoreKey({
-    value,
-    label: "plugin state",
-    errors: {
-      invalid: (message) => invalidInput(message, operation),
-      limit: (message) => invalidInput(message, operation),
-    },
-  });
-}
-
-function validateMaxEntries(value: number): number {
-  if (!Number.isInteger(value) || value < 1) {
-    throw invalidInput("plugin state maxEntries must be an integer >= 1", "open");
-  }
-  return value;
-}
-
-const optionPolicy = createPluginStoreOptionPolicy<StoreOptionSignature>({
-  label: "plugin state",
-  invalid: (message) => invalidInput(message, "open"),
-});
-
-function validateOptionalTtlMs(
-  value: number | undefined,
-  operation: PluginStateStoreOperation = "register",
-): number | undefined {
-  return validateOptionalPluginStoreTtlMs({
-    value,
-    label: "plugin state ttlMs",
-    errors: {
-      invalid: (message) => invalidInput(message, operation),
-      limit: (message) => invalidInput(message, operation),
-    },
-  });
-}
-
-function prepareRegisterParams(
-  key: string,
-  value: unknown,
-  defaultTtlMs?: number,
-  opts?: { ttlMs?: number },
-): PreparedRegisterParams {
-  const normalizedKey = validateKey(key, "register");
-  const json = serializePluginStoreJson({
-    value,
-    label: "plugin state value",
-    maxBytes: MAX_PLUGIN_STATE_VALUE_BYTES,
-    errors: {
-      invalid: (message) => invalidInput(message, "register"),
-      limit: (message) =>
-        new PluginStateStoreError(message, {
-          code: "PLUGIN_STATE_LIMIT_EXCEEDED",
-          operation: "register",
-        }),
-    },
-  });
-  const ttlMs = validateOptionalTtlMs(opts?.ttlMs, "register") ?? defaultTtlMs;
-  return {
-    key: normalizedKey,
-    valueJson: json,
-    ...(ttlMs != null ? { ttlMs } : {}),
-  };
-}
-
-function prepareLookupKeys(keys: readonly string[]): string[] {
-  if (keys.length > 10_000) {
-    throw invalidInput("plugin state lookupMany accepts at most 10000 keys", "lookup");
-  }
-  return Array.from(keys, (key) => validateKey(key, "lookup"));
-}
-
 function createKeyedStoreForPluginId<T>(
   pluginId: string,
-  options: OpenKeyedStoreOptions,
+  options: OpenAsyncKeyedStoreOptions,
+  assertActive?: () => void,
 ): Required<PluginStateKeyedStore<T>> {
   const prepared = prepareKeyedStoreOptions(pluginId, options);
-  const store = createSyncKeyedStore<T>(prepared);
-  const scope = { pluginId, namespace: prepared.namespace, env: prepared.env };
+  const assertRetainedActive = options.retention === "retained" ? assertActive : undefined;
+  const store = createSyncKeyedStore<T>(prepared, assertRetainedActive);
+  const scope = {
+    pluginId,
+    namespace: prepared.namespace,
+    env: prepared.env,
+    assertActive: assertRetainedActive,
+  };
 
   return {
     observe: async (key) => {
       const observation = await observePluginStateInWorker({
-        pluginId,
-        namespace: prepared.namespace,
+        ...scope,
         key: validateKey(key, "lookup"),
-        env: prepared.env,
       });
       // SAFETY: The namespace's JSON value type is caller-owned, as with lookup.
       return observation as PluginStateObservation<T>;
@@ -226,20 +131,21 @@ function createKeyedStoreForPluginId<T>(
       const normalizedKey = validateKey(key, operation);
       validatePluginStateComparison(comparison, operation);
       const common = {
-        pluginId,
-        namespace: prepared.namespace,
+        ...scope,
         key: normalizedKey,
         comparison,
         maxEntries: prepared.maxEntries,
         overflowPolicy: prepared.overflowPolicy,
-        maxPluginEntries: resolveMaxPluginStateEntriesPerPlugin(),
-        env: prepared.env,
       };
       let result: PluginStateCompareResult<unknown>;
       if (intent.operation === "update" && intent.action === "set") {
-        const next = prepareRegisterParams(normalizedKey, intent.value, prepared.defaultTtlMs, {
-          ttlMs: intent.ttlMs,
-        });
+        const next = prepareRegisterParams(
+          normalizedKey,
+          intent.value,
+          prepared.defaultTtlMs,
+          { ttlMs: intent.ttlMs },
+          prepared.namespace,
+        );
         result = await comparePluginStateUpdateInWorker({
           ...common,
           ...next,
@@ -268,25 +174,33 @@ function createKeyedStoreForPluginId<T>(
       return result as PluginStateCompareResult<T>;
     },
     register: async (key, value, opts) => {
-      const entry = prepareRegisterParams(key, value, prepared.defaultTtlMs, opts);
+      const entry = prepareRegisterParams(
+        key,
+        value,
+        prepared.defaultTtlMs,
+        opts,
+        prepared.namespace,
+      );
       await registerPluginStateInWorker({
         ...scope,
         ...entry,
         maxEntries: prepared.maxEntries,
         overflowPolicy: prepared.overflowPolicy,
-        maxPluginEntries: resolveMaxPluginStateEntriesPerPlugin(),
       });
     },
     registerIfAbsent: async (key, value, opts) => {
-      const entry = prepareRegisterParams(key, value, prepared.defaultTtlMs, opts);
+      const entry = prepareRegisterParams(
+        key,
+        value,
+        prepared.defaultTtlMs,
+        opts,
+        prepared.namespace,
+      );
       return await registerPluginStateIfAbsentInWorker({
-        pluginId,
-        namespace: prepared.namespace,
+        ...scope,
         maxEntries: prepared.maxEntries,
         overflowPolicy: prepared.overflowPolicy,
-        env: prepared.env,
         ...entry,
-        maxPluginEntries: resolveMaxPluginStateEntriesPerPlugin(),
       });
     },
     update: async (...args) => store.update(...args),
@@ -306,11 +220,9 @@ function createKeyedStoreForPluginId<T>(
         },
       });
       return await deletePluginStateIfEqualInWorker({
-        pluginId,
-        namespace: prepared.namespace,
+        ...scope,
         key: normalizedKey,
         expected,
-        env: prepared.env,
       });
     },
     lookup: async (key) => {
@@ -338,6 +250,49 @@ function createKeyedStoreForPluginId<T>(
       // SAFETY: Entries come from this namespace and retain the caller's JSON value type.
       return (await listPluginStateInWorker(scope)) as PluginStateEntry<T>[];
     },
+    entriesInKeyRange: async (range) => {
+      const params = {
+        ...scope,
+        keyStartInclusive: range.keyStartInclusive,
+        keyEndExclusive: range.keyEndExclusive,
+        limit: range.limit,
+        order: range.order,
+        assertActive,
+      };
+      validatePluginStateKeyRange(params);
+      // SAFETY: The range remains bound to this store's namespace and JSON value type.
+      return (await listPluginStateInKeyRangeInWorker(params)) as PluginStateEntry<T>[];
+    },
+    moveEntriesFrom: async (source) => {
+      assertActive?.();
+      if (!isRetainedPluginStateNamespace(prepared.namespace)) {
+        throw invalidInput("Plugin state moves require a retained destination.");
+      }
+      const sourceNamespace = validateNamespace(source.namespace, "register");
+      if (source.entries.length > 10_000) {
+        throw invalidInput("Plugin state moves accept at most 10000 entries.");
+      }
+      const targets = new Set<string>();
+      const sources = new Set<string>();
+      const entries = source.entries.map(({ sourceKey, targetKey }) => {
+        const entry = {
+          sourceKey: toUSVString(validateKey(sourceKey)),
+          targetKey: toUSVString(validateKey(targetKey)),
+        };
+        if (targets.has(entry.targetKey) || sources.has(entry.sourceKey)) {
+          throw invalidInput("Plugin state moves require unique source and target keys.");
+        }
+        targets.add(entry.targetKey);
+        sources.add(entry.sourceKey);
+        return entry;
+      });
+      return movePluginStateEntriesInWorker({
+        ...scope,
+        sourceNamespace,
+        entries,
+        assertActive,
+      });
+    },
     count: async () => await countPluginStateInWorker(scope),
     clear: async () => {
       await clearPluginStateInWorker(scope);
@@ -349,140 +304,82 @@ function createSyncKeyedStoreForPluginId<T>(
   pluginId: string,
   options: OpenKeyedStoreOptions,
 ): Required<PluginStateSyncKeyedStore<T>> {
+  requireBoundedOptions(options);
   return createSyncKeyedStore<T>(prepareKeyedStoreOptions(pluginId, options));
 }
 
-function prepareKeyedStoreOptions(pluginId: string, options: OpenKeyedStoreOptions) {
-  const namespace = validateNamespace(options.namespace);
-  const maxEntries = validateMaxEntries(options.maxEntries);
-  const overflowPolicy = optionPolicy.resolveOverflowPolicy(options.overflowPolicy);
-  const defaultTtlMs = validateOptionalTtlMs(options.defaultTtlMs);
-  const env = options.env;
-  optionPolicy.assertConsistent(pluginId, namespace, {
-    maxEntries,
-    overflowPolicy,
-    defaultTtlMs,
-  });
-  return { pluginId, namespace, maxEntries, overflowPolicy, defaultTtlMs, env };
-}
-
-function createSyncKeyedStore<T>({
-  pluginId,
-  namespace,
-  maxEntries,
-  overflowPolicy,
-  defaultTtlMs,
-  env,
-}: ReturnType<typeof prepareKeyedStoreOptions>): Required<PluginStateSyncKeyedStore<T>> {
+function createSyncKeyedStore<T>(
+  { pluginId, namespace, maxEntries, overflowPolicy, defaultTtlMs, env }: PreparedKeyedStoreOptions,
+  assertActive?: () => void,
+): Required<PluginStateSyncKeyedStore<T>> {
+  const scope = { pluginId, namespace, env };
+  const writeScope = { ...scope, maxEntries, overflowPolicy };
   return {
     register(key, value, opts) {
-      const params = prepareRegisterParams(key, value, defaultTtlMs, opts);
       pluginStateRegister({
-        pluginId,
-        namespace,
-        key: params.key,
-        valueJson: params.valueJson,
-        maxEntries,
-        overflowPolicy,
-        ...(env ? { env } : {}),
-        ...(params.ttlMs != null ? { ttlMs: params.ttlMs } : {}),
+        ...writeScope,
+        ...prepareRegisterParams(key, value, defaultTtlMs, opts),
       });
     },
     registerIfAbsent(key, value, opts) {
-      const params = prepareRegisterParams(key, value, defaultTtlMs, opts);
       return pluginStateRegisterIfAbsent({
-        pluginId,
-        namespace,
-        key: params.key,
-        valueJson: params.valueJson,
-        maxEntries,
-        overflowPolicy,
-        ...(env ? { env } : {}),
-        ...(params.ttlMs != null ? { ttlMs: params.ttlMs } : {}),
+        ...writeScope,
+        ...prepareRegisterParams(key, value, defaultTtlMs, opts),
       });
     },
     update(key, updateValue, opts) {
+      assertActive?.();
+      if (isRetainedPluginStateNamespace(namespace) && opts?.ttlMs !== undefined) {
+        throw invalidInput("Retained plugin state does not accept a TTL.");
+      }
       const normalizedKey = validateKey(key, "register");
       return pluginStateUpdate({
-        pluginId,
-        namespace,
+        ...writeScope,
         key: normalizedKey,
-        maxEntries,
-        overflowPolicy,
         updateValueJson: (current) => {
           const next = updateValue(current as T | undefined);
-          if (next === undefined) {
-            return undefined;
-          }
-          const params = prepareRegisterParams(normalizedKey, next, defaultTtlMs, opts);
-          return {
-            valueJson: params.valueJson,
-            ...(params.ttlMs != null ? { ttlMs: params.ttlMs } : {}),
-          };
+          assertActive?.();
+          return next === undefined
+            ? undefined
+            : prepareRegisterParams(normalizedKey, next, defaultTtlMs, opts, namespace);
         },
-        ...(env ? { env } : {}),
       });
     },
     deleteIf(key, predicate) {
-      const normalizedKey = validateKey(key, "delete");
+      assertActive?.();
       return pluginStateDeleteIf({
-        pluginId,
-        namespace,
-        key: normalizedKey,
-        predicate: (current) => predicate(current as T),
-        ...(env ? { env } : {}),
+        ...scope,
+        key: validateKey(key, "delete"),
+        predicate: (current) => {
+          const result = predicate(current as T);
+          assertActive?.();
+          return result;
+        },
       });
     },
     lookup(key) {
-      const normalizedKey = validateKey(key, "lookup");
-      return pluginStateLookup({
-        pluginId,
-        namespace,
-        key: normalizedKey,
-        ...(env ? { env } : {}),
-      }) as T | undefined;
+      return pluginStateLookup({ ...scope, key: validateKey(key, "lookup") }) as T | undefined;
     },
     lookupMany(keys) {
-      const normalizedKeys = prepareLookupKeys(keys);
-      const values = pluginStateLookupMany({
-        pluginId,
-        namespace,
-        keys: normalizedKeys,
-        ...(env ? { env } : {}),
-      });
       // SAFETY: This namespace uses the caller's JSON value type, as with lookup.
-      return values as Array<Result<T | undefined, PluginStateStoreError>>;
+      return pluginStateLookupMany({ ...scope, keys: prepareLookupKeys(keys) }) as Array<
+        Result<T | undefined, PluginStateStoreError>
+      >;
     },
     consume(key) {
-      const normalizedKey = validateKey(key, "consume");
-      return pluginStateConsume({
-        pluginId,
-        namespace,
-        key: normalizedKey,
-        ...(env ? { env } : {}),
-      }) as T | undefined;
+      return pluginStateConsume({ ...scope, key: validateKey(key, "consume") }) as T | undefined;
     },
     delete(key) {
-      const normalizedKey = validateKey(key, "delete");
-      return pluginStateDelete({
-        pluginId,
-        namespace,
-        key: normalizedKey,
-        ...(env ? { env } : {}),
-      });
+      return pluginStateDelete({ ...scope, key: validateKey(key, "delete") });
     },
     entries() {
-      return pluginStateEntries({
-        pluginId,
-        namespace,
-        ...(env ? { env } : {}),
-      }) as PluginStateEntry<T>[];
+      return pluginStateEntries(scope) as PluginStateEntry<T>[];
     },
     count() {
-      return pluginStateCount({ pluginId, namespace, ...(env ? { env } : {}) });
+      return pluginStateCount(scope);
     },
     clear() {
-      pluginStateClear({ pluginId, namespace, ...(env ? { env } : {}) });
+      pluginStateClear(scope);
     },
   };
 }
@@ -535,12 +432,13 @@ export function registerMigratedPluginStateEntry(params: {
 /** Opens an async plugin-state namespace for a non-core plugin id. */
 export function createPluginStateKeyedStore<T>(
   pluginId: string,
-  options: OpenKeyedStoreOptions,
+  options: OpenAsyncKeyedStoreOptions,
+  assertActive?: () => void,
 ): Required<PluginStateKeyedStore<T>> {
   if (pluginId.startsWith("core:")) {
     throw invalidInput("Plugin ids starting with 'core:' are reserved for core consumers.", "open");
   }
-  return createKeyedStoreForPluginId<T>(pluginId, options);
+  return createKeyedStoreForPluginId<T>(pluginId, options, assertActive);
 }
 
 /**
@@ -580,6 +478,8 @@ export async function registerPluginStateSequencedJournalEntry(params: {
   if (params.journalKeyRange.keyStartInclusive >= params.journalKeyRange.keyEndExclusive) {
     throw invalidInput("Plugin state key range must have an increasing exclusive upper bound.");
   }
+  requireBoundedOptions(params.cursorOptions);
+  requireBoundedOptions(params.journalOptions);
   const cursorNamespace = validateNamespace(params.cursorOptions.namespace);
   const cursorMaxEntries = validateMaxEntries(params.cursorOptions.maxEntries);
   const cursorOverflowPolicy = optionPolicy.resolveOverflowPolicy(
@@ -631,7 +531,6 @@ export async function registerPluginStateSequencedJournalEntry(params: {
     },
     journalKeyPrefix,
     journalValueJson,
-    maxPluginEntries: resolveMaxPluginStateEntriesPerPlugin(),
     ...(params.cursorOptions.env ? { env: params.cursorOptions.env } : {}),
   });
 }
@@ -653,20 +552,12 @@ export function importPluginStateEntriesForDoctor(
   if (pluginId.startsWith("core:")) {
     throw invalidInput("Plugin ids starting with 'core:' are reserved for core consumers.", "open");
   }
-  const namespace = validateNamespace(options.namespace);
-  const maxEntries = validateMaxEntries(options.maxEntries);
-  const overflowPolicy = optionPolicy.resolveOverflowPolicy(options.overflowPolicy);
-  const defaultTtlMs = validateOptionalTtlMs(options.defaultTtlMs);
-  const env = options.env;
-  optionPolicy.assertConsistent(pluginId, namespace, {
-    maxEntries,
-    overflowPolicy,
-    defaultTtlMs,
-  });
+  requireBoundedOptions(options);
+  const preparedOptions = prepareKeyedStoreOptions(pluginId, options);
 
   let batch: Array<PreparedRegisterParams & { createdAtMs: number }> = [];
   const flush = () => {
-    pluginStateImportBatch({ pluginId, namespace, maxEntries, overflowPolicy, env }, batch);
+    pluginStateImportBatch(preparedOptions, batch);
     batch = [];
   };
   for (const entry of entries) {
@@ -677,7 +568,7 @@ export function importPluginStateEntriesForDoctor(
       const prepared = prepareRegisterParams(
         entry.key,
         entry.value,
-        defaultTtlMs,
+        preparedOptions.defaultTtlMs,
         entry.ttlMs != null ? { ttlMs: entry.ttlMs } : undefined,
       );
       batch.push({ ...prepared, createdAtMs: entry.createdAt });
@@ -695,7 +586,7 @@ export function importPluginStateEntriesForDoctor(
 
 /** Opens an async plugin-state namespace for a trusted core owner id. */
 export function createCorePluginStateKeyedStore<T>(
-  options: OpenKeyedStoreOptions & { ownerId: `core:${string}` },
+  options: OpenAsyncKeyedStoreOptions & { ownerId: `core:${string}` },
 ): Required<PluginStateKeyedStore<T>> {
   return createKeyedStoreForPluginId<T>(options.ownerId, options);
 }
@@ -707,12 +598,6 @@ export function createCorePluginStateSyncKeyedStore<T>(
   return createSyncKeyedStoreForPluginId<T>(options.ownerId, options);
 }
 
-/** Clears plugin-state rows and option signatures for tests. */
-function clearPluginStateStoreForTests(): void {
-  clearPluginStateDatabaseForTests();
-  optionPolicy.clear();
-}
-
 /** Resets plugin-state module/database state for isolated tests. */
 export function resetPluginStateStoreForTests(options: { closeDatabase?: boolean } = {}): void {
   if (options.closeDatabase !== false) {
@@ -720,10 +605,4 @@ export function resetPluginStateStoreForTests(options: { closeDatabase?: boolean
     closeOpenClawStateDatabaseForTest();
   }
   optionPolicy.clear();
-}
-
-if (process.env.VITEST || process.env.NODE_ENV === "test") {
-  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.pluginStateStoreTestApi")] = {
-    clearPluginStateStoreForTests,
-  };
 }

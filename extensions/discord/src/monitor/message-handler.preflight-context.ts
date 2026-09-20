@@ -1,4 +1,3 @@
-// Discord plugin module implements message handler.preflight context behavior.
 import type {
   DiscordMessagePreflightContext,
   DiscordMessagePreflightParams,

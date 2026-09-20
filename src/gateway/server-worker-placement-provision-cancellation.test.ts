@@ -137,15 +137,13 @@ describe("dispatch Stop before provider allocation", () => {
       harness.markEnvironmentOwnerEpoch(active.activeOwnerEpoch);
 
       if (outcome === "published") {
-        vi.mocked(harness.environments.create).mockImplementation(
-          async (_profile, _key, _machine, _mode, _path, signal) => {
-            destinationSignal = signal;
-            entered.resolve();
-            await release.promise;
-            signal?.throwIfAborted();
-            throw new Error("published destination must be canceled");
-          },
-        );
+        vi.mocked(harness.environments.createWithRequest).mockImplementation(async ({ signal }) => {
+          destinationSignal = signal;
+          entered.resolve();
+          await release.promise;
+          signal?.throwIfAborted();
+          throw new Error("published destination must be canceled");
+        });
       }
       const environments = {
         ...support.createService(support.createProvider()),
@@ -248,7 +246,9 @@ describe("dispatch Stop before provider allocation", () => {
             expect(stopped).toBeInstanceOf(Error);
           }
         }
-        expect(harness.environments.create).toHaveBeenCalledTimes(outcome === "published" ? 1 : 0);
+        expect(harness.environments.createWithRequest).toHaveBeenCalledTimes(
+          outcome === "published" ? 1 : 0,
+        );
         expect(placements.listPendingWorkspaceResults()).toEqual([]);
       } finally {
         release.resolve();
@@ -356,7 +356,7 @@ describe("dispatch Stop before provider allocation", () => {
         entered.resolve();
         await release.promise;
       });
-      const create = vi.spyOn(environments, "create");
+      const create = vi.spyOn(environments, "createWithRequest");
       const runtime = createGatewayWorkerPlacementRuntime({
         placements,
         environments,
@@ -791,7 +791,11 @@ describe("dispatch Stop before provider allocation", () => {
         patch: { environmentId: intent.environmentId },
       });
       await expect(
-        environments.create("development", key, undefined, REQUEST.executionMode),
+        environments.createWithRequest({
+          profileId: "development",
+          idempotencyKey: key,
+          executionMode: REQUEST.executionMode,
+        }),
       ).rejects.toMatchObject({ code: "provider_failure" });
       const cancelSessionWork = vi.fn(
         async (

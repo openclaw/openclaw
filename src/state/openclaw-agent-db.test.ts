@@ -32,7 +32,6 @@ import {
   claimOpenClawAgentDatabaseLease,
   releaseOpenClawAgentDatabaseLease,
 } from "./openclaw-agent-db-lease.js";
-import { withFreshOpenClawAgentDatabaseReadOnly } from "./openclaw-agent-db-readonly-open.js";
 import { withOpenClawAgentDatabaseReadOnly } from "./openclaw-agent-db-readonly.js";
 import {
   createOpenClawAgentDatabasePathMatcher,
@@ -1241,41 +1240,6 @@ describe("openclaw agent database", () => {
       expect(admitted).toBe(false);
     },
   );
-
-  it.each([false, true])("preserves missing-table adaptation (fresh-only: %s)", (freshOnly) => {
-    const stateDir = createTempStateDir();
-    const options = {
-      agentId: "worker-1",
-      env: { OPENCLAW_STATE_DIR: stateDir },
-    };
-    const databasePath = materializeCurrentWorkerAgentDatabase(stateDir);
-    const owner = openOpenClawAgentDatabase(options);
-    owner.db.exec("DROP TABLE session_nodes;");
-    let readDb: DatabaseSync | undefined;
-    const readOnly = freshOnly
-      ? withFreshOpenClawAgentDatabaseReadOnly
-      : withOpenClawAgentDatabaseReadOnly;
-    const read = (throwOnMissingTable = false) =>
-      readOnly(
-        ({ db }) => {
-          readDb = db;
-          return db.prepare("SELECT * FROM session_nodes").all();
-        },
-        options,
-        { throwOnMissingTable },
-      );
-
-    expect(read()).toEqual({ found: false, reason: "table-missing" });
-    expect(() => read(true)).toThrow(/no such table: session_nodes/);
-    expect(readDb === owner.db).toBe(!freshOnly);
-    expect(readDb?.isOpen).toBe(!freshOnly);
-    expect(owner.db.isOpen).toBe(true);
-    expect(closeOpenClawAgentDatabaseByPath(databasePath)).toBe(true);
-    expect(read()).toEqual({ found: false, reason: "table-missing" });
-    expect(readDb?.isOpen).toBe(false);
-    expect(() => read(true)).toThrow(/no such table: session_nodes/);
-    expect(readDb?.isOpen).toBe(false);
-  });
 
   it("reads committed rows without joining or closing the owner's transaction", () => {
     const stateDir = createTempStateDir();
@@ -2615,15 +2579,15 @@ describe("openclaw agent database", () => {
       const movedFirstPath = path.join(movedFirstParent, "future.sqlite");
       const secondPath = path.join(secondParent, "future.sqlite");
 
-      const originalRealpathNative = fs.realpathSync.native;
+      const originalLstatSync = fs.lstatSync;
       let retargeted = false;
-      const realpathNative = vi.spyOn(fs.realpathSync, "native").mockImplementation((pathname) => {
-        if (!retargeted && path.resolve(String(pathname)) === firstParent) {
+      const lstatSync = vi.spyOn(fs, "lstatSync").mockImplementation((pathname, options) => {
+        if (!retargeted && path.resolve(String(pathname)) === racedPath) {
           fs.renameSync(firstParent, movedFirstParent);
           fs.symlinkSync(secondParent, firstParent, "dir");
           retargeted = true;
         }
-        return originalRealpathNative(pathname);
+        return originalLstatSync(pathname, options as never);
       });
       try {
         const matchesPath = createOpenClawAgentDatabasePathMatcher();
@@ -2631,7 +2595,7 @@ describe("openclaw agent database", () => {
         expect(matchesPath(racedPath, secondPath)).toBe(true);
         expect(retargeted).toBe(true);
       } finally {
-        realpathNative.mockRestore();
+        lstatSync.mockRestore();
       }
     },
   );

@@ -15,6 +15,7 @@ import { normalizeCronRunErrorText } from "./execution-errors.js";
 import { enrollForeignReceipt } from "./foreign-receipt-monitor.js";
 import { recomputeJobNextRunAtMs } from "./jobs-scheduling.js";
 import { locked } from "./locked.js";
+import { retainManualOneShotOccurrence } from "./one-shot-schedule.js";
 import { runWithCronAdmission } from "./run-admission-capacity.js";
 import { skipCronJobsWithoutOwners } from "./run-owner.js";
 import {
@@ -333,6 +334,7 @@ export async function persistQueuedCronRunReservations(params: {
               ),
             };
           });
+          const ownershipAtMs = params.manualRun?.scheduleOwnershipAtMs ?? params.reservedAtMs;
           for (const { job } of reservations) {
             if (params.manualRun?.onExit) {
               job.enabled = false;
@@ -342,6 +344,8 @@ export async function persistQueuedCronRunReservations(params: {
               delete job.state.startupCatchupAtMs;
               delete job.state.pacedNextRunAtMs;
               delete job.state.forcePreservedNextRunAtMs;
+            } else if (params.scheduleMode === "preserve") {
+              retainManualOneShotOccurrence(job, ownershipAtMs);
             }
             job.state.queuedAtMs = params.reservedAtMs;
           }
@@ -667,21 +671,17 @@ export async function executeQueuedCronRun(params: {
     };
     let outcome: TimedCronRunOutcome;
     try {
-      const execute = async () =>
-        await executeJobCoreWithTimeout(state, executionJob, {
-          runId: taskRunId,
-          activeJobMarker,
+      const result = await executeJobCoreWithTimeout(state, executionJob, {
+        runId: taskRunId,
+        activeJobMarker,
+        runReceipt: started.runReceipt,
+        executionIdentity: createCronOwnerExecutionIdentityAdmission({
+          state,
           runReceipt: started.runReceipt,
-          executionIdentity: createCronOwnerExecutionIdentityAdmission({
-            state,
-            runReceipt: started.runReceipt,
-            taskId: taskRun?.taskId,
-            flowId: taskRun?.flowId,
-          }),
-        });
-      const result = state.deps.runSchedulerOwned
-        ? await state.deps.runSchedulerOwned(execute)
-        : await execute();
+          taskId: taskRun?.taskId,
+          flowId: taskRun?.flowId,
+        }),
+      });
       outcome = { ...base, ...result, endedAt: state.deps.nowMs() };
     } catch (error) {
       const receiptSettlementDisposition =

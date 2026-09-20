@@ -438,6 +438,12 @@ sources. A custom agent root becomes a distinct `agent` asset only when no
 existing asset covers it; the manifest still records its agent id and root when
 another asset contains it. Missing paths are reported as skipped.
 
+Legacy audit raw archives, import claims, and scrub journals are excluded as raw
+files; recoverable audit sources receive sanitized backup replacements. Their
+`.quarantined-*` variants remain excluded and are retained locally without being
+imported or rewritten. Sanitized `.migrated` companions and retained SQLite audit
+history remain included in the backup.
+
 During archive creation, OpenClaw excludes known live-mutation paths before `tar` reads them. This avoids races between a file's recorded size and concurrent writes. The filter applies these state-relative rules under each backed-up state directory:
 
 | State-relative scope                         | Skipped entries                                       |

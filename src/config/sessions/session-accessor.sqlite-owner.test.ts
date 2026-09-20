@@ -33,8 +33,8 @@ describe("SQLite session owner assignment", () => {
         createdActor: { type: "human", source: "profile", id: "profile-creator" },
       });
       const initial = openOpenClawAgentDatabase({ agentId: "main", env: state.env });
-      for (const { columnName } of FIRST_USE_ADDITIVE_AGENT_COLUMN_DEFINITIONS) {
-        initial.db.exec(`ALTER TABLE session_nodes DROP COLUMN ${columnName};`);
+      for (const { columnName, tableName } of FIRST_USE_ADDITIVE_AGENT_COLUMN_DEFINITIONS) {
+        initial.db.exec(`ALTER TABLE ${tableName} DROP COLUMN ${columnName};`);
       }
       closeOpenClawAgentDatabasesForTest();
 

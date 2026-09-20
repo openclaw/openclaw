@@ -124,6 +124,7 @@ export function createModelGenerationFixture(params: {
     allowGatewaySubagentBinding: false,
     modelCatalog: { entries: [], routeVariants: [] },
     configuredRuntimeModels: [],
+    findConfiguredRuntimeModel: () => undefined,
     inlineProviderModels: [],
     createStores,
   } satisfies PreparedModelRuntimeSnapshot;

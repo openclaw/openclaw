@@ -131,6 +131,7 @@ export async function readOutboxPayload(
         !isRecord(entry) ||
         !(entry.blob instanceof Blob) ||
         typeof entry.mimeType !== "string" ||
+        (entry.origin !== undefined && entry.origin !== "paste" && entry.origin !== "file") ||
         (entry.fileName !== undefined && typeof entry.fileName !== "string") ||
         (entry.sizeBytes !== undefined && entry.sizeBytes !== entry.blob.size)
       ) {
@@ -140,6 +141,7 @@ export async function readOutboxPayload(
       attachments.push({
         blob: entry.blob,
         mimeType: entry.mimeType,
+        ...(entry.origin ? { origin: entry.origin } : {}),
         ...(selectionAnnotation ? { selectionAnnotation } : {}),
         ...(typeof entry.fileName === "string" ? { fileName: entry.fileName } : {}),
         ...(typeof entry.sizeBytes === "number" ? { sizeBytes: entry.sizeBytes } : {}),

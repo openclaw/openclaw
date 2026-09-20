@@ -85,6 +85,13 @@ export async function createGatewayChatMetadataLifecycle(params: {
     const unregisterPreparedModelRuntimePublication =
       registerPreparedModelRuntimePublicationListener((event) => {
         if (event.phase === "catalog-published" || event.phase === "catalog-failed") {
+          if (
+            event.phase === "catalog-published" &&
+            event.modelFactsChanged === false &&
+            !event.refreshStatusChanged
+          ) {
+            return;
+          }
           refreshForSubordinateChange();
           return;
         }

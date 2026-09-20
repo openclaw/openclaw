@@ -4,7 +4,7 @@ import type {
   ChatGoalDraftMode,
   HumanMention,
 } from "../lib/chat/chat-types.ts";
-import { releaseChatAttachmentPayloads } from "../pages/chat/attachment-payload-store.ts";
+import { releaseChatAttachmentPayloads } from "../pages/chat/attachment-payload-lifecycle.ts";
 import type { NewSessionDraftHandoff } from "../pages/new-session/draft-persistence.ts";
 import type { ApplicationChatAttachmentHandoff } from "./context.ts";
 

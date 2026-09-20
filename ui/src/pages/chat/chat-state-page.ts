@@ -237,7 +237,7 @@ export function createPageState(
     refreshSessionsAfterChat: new Map<string, { sessionKey: string; agentId?: string }>(),
     pendingAbort: null,
     pendingSessionMessageReloadSessionKey: null,
-    chatSubmitGuards: new Map<string, Promise<void>>(),
+    chatSubmitGuards: new Set<string>(),
     chatGoalDraftMode: null,
     chatSendTimingsByRun: new Map(),
     chatQueue: [],
@@ -363,6 +363,12 @@ export function createPageState(
   state.editQueuedChatMessage = (id) => {
     if (beginQueuedMessageEdit(state, id) === "unavailable") {
       setChatError(state, QUEUED_MESSAGE_EDIT_CONFLICT_ERROR);
+    } else {
+      for (const key of ["lastError", "chatError"] as const) {
+        if (state[key] === QUEUED_MESSAGE_EDIT_CONFLICT_ERROR) {
+          state[key] = null;
+        }
+      }
     }
     renderLifecycle.invalidate();
   };
@@ -407,7 +413,9 @@ export function createPageState(
     }
     // Every close route commits here; tab switches retain the pending selection.
     if (
-      (state.sidebarContent?.kind === "loading" || state.sidebarContent?.kind === "unavailable") &&
+      (state.sidebarContent?.kind === "loading" ||
+        state.sidebarContent?.kind === "unavailable" ||
+        state.sidebarContent?.kind === "task") &&
       !normalized.columns.some((column) => column.panels.some((panel) => panel.slot === "detail"))
     ) {
       state.sidebarContent = null;
@@ -468,6 +476,13 @@ export function createPageState(
       .flatMap((column) => column.panels)
       .find((panel) => panel.slot === targetSlot);
     if (targetPanel) {
+      if (targetSlot === "detail") {
+        if (content?.kind === "task") {
+          targetPanel.taskId = content.taskId;
+        } else {
+          delete targetPanel.taskId;
+        }
+      }
       opened = activatePanel(opened, targetPanel.id);
     }
     const availableWidth = page.getBoundingClientRect?.().width ?? 0;

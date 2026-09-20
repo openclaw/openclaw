@@ -260,23 +260,6 @@ function resolveOpenAICompletionsCompatDefaults(
   };
 }
 
-function resolveOpenAICompletionsCompatDefaultsFromCapabilities(
-  input: Pick<
-    ProviderRequestCapabilities,
-    | "endpointClass"
-    | "knownProviderFamily"
-    | "supportsNativeStreamingUsageCompat"
-    | "supportsOpenAICompletionsStreamingUsageCompat"
-    | "usesExplicitProxyLikeEndpoint"
-  > & {
-    provider?: string;
-    modelId?: string;
-    baseUrl?: string;
-  },
-): OpenAICompletionsCompatDefaults {
-  return resolveOpenAICompletionsCompatDefaults(input);
-}
-
 /** Detects endpoint capabilities and defaults for an OpenAI-completions model. */
 export function detectOpenAICompletionsCompat(
   model: Pick<Model<"openai-completions">, "provider" | "baseUrl" | "id"> & {
@@ -300,7 +283,7 @@ export function detectOpenAICompletionsCompat(
   });
   return {
     capabilities,
-    defaults: resolveOpenAICompletionsCompatDefaultsFromCapabilities({
+    defaults: resolveOpenAICompletionsCompatDefaults({
       provider: model.provider,
       modelId: model.id,
       baseUrl: model.baseUrl,

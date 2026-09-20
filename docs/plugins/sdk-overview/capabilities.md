@@ -91,7 +91,7 @@ retaining its producer's actual generation receipt until confirmed source stop.
 Before capturing, call `options.prepareNodeRuntime()` to obtain artifact access without creating a node identity or enrollment code. The result includes `nodeBootstrap`, `workerBundle`, and the operation's cancellation `signal`. The worker archive descriptor supplies `url`, secret `token`, `sha256`, `bytes`, optional `tlsFingerprint`, and the core-owned `packageRelativePath` within the installed node package. Download and verify both archives, install the runtime, and publish the compressed worker archive at that exact contained location before capture. Keep one published worker archive per runtime package, exclude credentials and receipts, and never add the standalone payload to the slim runtime archive. The normal authenticated installer validates the prepared bytes and creates a fresh installation after enrollment; the raw archive grants no admission authority. Finish capture before calling `beginNodeEnrollment()`. Beginning enrollment, cancellation, replacement, or closure revokes both preparation grants. A native capture with an uncertain outcome must settle or be explicitly recovered before enrollment can introduce credentials into its source machine. Persist the original cold/checkpoint allocation decision before contacting the provider, retain checkpoint references until confirmed release, and never switch images when replaying the same operation.
 
 Core persists the validated profile settings with the lease and supplies that snapshot to `destroy({ leaseId, profile })`, which must be idempotent, and `inspect({ leaseId, profile })`, which returns `active`, `dormant`, `destroyed`, or `unknown`. This lets providers route lifecycle calls after a gateway restart or named-profile removal. SSH endpoints use a `SecretRef` for `keyRef`, never inline key material, and include a `hostKey` from trusted provisioning output as exactly `algorithm base64`, without a hostname or comment. Core pins `hostKey` and never trusts a key from the first connection. Providers may also return up to 10 ordered, unique `fallbackPorts` (integer ports from 1 through 65535, excluding the primary `port`); core validates and persists those advertised candidates for idempotent probes, content-addressed transfers, receipt/lock-guarded artifact installation, convergent managed-worktree mirroring, and tunnel reconnects. Ambiguous unguarded stateful commands fail closed and are not replayed across candidates. A lease may set `sharedHost: true` when the SSH account also owns unrelated processes; core then avoids host-wide process freezing during workspace reconciliation. For ordinary leases, omission retains the legacy dedicated-host behavior; prepared-workspace registration requires an explicit `sharedHost: false` in the provision result. Active inspection repeats this fact so core can reconcile provider-owned isolation for leases persisted before the field existed; tunnel startup waits for that first authoritative inspection. A provider that mints a dynamic `keyRef` can implement `resolveSshIdentity({ leaseId, profile, keyRef })`; when present, that resolver is authoritative, while providers without it use the configured generic secret resolver.
-`WorkerLease.desktop` is optional and has the shape `{ protocol: "rfb"; port: number; passwordFilePath?: string; apps?: WorkerDesktopApp[] }`; `passwordFilePath`, when present, must be absolute. Providers report this warm-time capability from `provision`; it cannot be retrofitted onto a live lease. The owning SSH or node carrier reads the password on the worker when needed and never persists it in the Gateway store. `WorkerDesktopApp` is a closed union: `{ id: "browser"; executablePath: string; cdpPort: number }` or `{ id: "terminal"; executablePath: string }`. App ids must be unique, executable paths must be absolute, browser CDP ports must be integers from 1 through 65535, and the list accepts at most eight entries. Core rejects unknown ids and fields.
+`WorkerLease.desktop` is optional and has the shape `{ protocol: "rfb"; port: number; passwordFilePath?: string; username?: string; allowsResize?: boolean; apps?: WorkerDesktopApp[] }`; `passwordFilePath`, when present, must be an absolute path on the worker (POSIX or Windows). A managed macOS desktop can supply `username` with its password file for ARD account authentication over the node carrier; credentials remain between the node and Gateway, never in the browser. Setting `allowsResize: false` restricts a native desktop from provider-wide virtual-display resizing. Providers report this warm-time capability from `provision`; it cannot be retrofitted onto a live lease. The owning SSH or node carrier reads the password on the worker when needed and never persists it in the Gateway store. `WorkerDesktopApp` is a closed union: `{ id: "browser"; executablePath: string; cdpPort: number }` or `{ id: "terminal"; executablePath: string }`. App ids must be unique, executable paths must be absolute, browser CDP ports must be integers from 1 through 65535, and the list accepts at most eight entries. Core rejects unknown ids and fields.
 Providers with renewable leases can also implement `renew(leaseId)`.
 `inspect` must throw on transient or indeterminate failures; return `unknown` only for authoritative absence. Core fences the environment and invokes canonical teardown; shared or unknown host isolation still requires acknowledgment that the exact worker stopped. A shared host must not be stopped or unpaired merely to release its logical lease.
 
@@ -113,3 +113,122 @@ split provider jobs before their upload-size cap as well as their request-count
 cap. The provider must return one embedding per input chunk in the same order as
 `batch.chunks`; omit the flag when the provider expects file-local batches or
 cannot preserve input ordering across a larger source-wide job.
+
+## Decision models (contract version 1)
+
+`api.registerDecisionProvider({ id, contractVersion: 1, isReady, evaluate })` registers
+an optional decision provider, separate from conversational model providers and
+agent tools. Declare the ID in manifest `contracts.decisionProviders`; duplicate
+IDs are rejected. Registration and optional `isReady()` must be local, synchronous,
+and network-free. Import types from `openclaw/plugin-sdk/decisions`.
+
+Consumers call `api.runtime.decisions.evaluate(batch, { agentId?, purpose, rubricVersion,
+timeoutMs, signal })`. State and rubric entries are finite JSON. Choices preserve
+all offered labels and probabilities; the chosen label is the provider's decision
+and need not equal the largest rounded probability. Consumers choose whether to
+use that label or an explicit distribution policy. Ordered scores are fractional
+estimated zero-based positions, with index-aligned probabilities; Boolean answers
+carry `probabilityTrue`. The host validates the entire batch atomically: exact answer
+keys, finite probabilities in [0, 1], positive distribution mass, and scores within
+the submitted rubric. Reported probabilities may be rounded and need not sum
+exactly to one; scores need not equal the expectation of that rounded distribution.
+The host preserves those values. Consumers that require normalized weights must
+apply their own explicit policy. Provider confidence is a provider-specific metric,
+not calibrated correctness. Results include model, optional token usage, and local
+rubric and runtime-generation provenance.
+
+Set `agents.defaults.decisionModel` to an explicit `provider/model` reference.
+Unset or empty means off. `agents.entries.<id>.decisionModel` overrides the global
+default; an empty agent value disables decisions for that agent. There is no
+automatic conversational-model fallback. Selection makes the provider available
+to supported consumers. Consumers own their feature activation and evidence
+selection; provider configuration alone does not schedule background work. Evidence
+sent to the selected provider may incur its normal usage charges. Plugin disablement
+wins; installing a tool or credential alone does not select a provider. Vendor adapters
+own transport and model-specific translation; no vendor is a core dependency.
+
+The bundled [TypeSafe AI plugin](/plugins/typesafe) supplies a Jev adapter. It remains
+disabled until explicitly configured.
+
+### Calling from a third-party plugin
+
+Like `api.runtime.llm.complete`, `api.runtime.decisions.evaluate` lets a plugin
+consume a host-configured provider without handling its credentials. The consumer
+does not need the provider's SDK, API key, SecretRef, or a provider registration.
+Only the provider plugin registers `contracts.decisionProviders` and owns its
+vendor transport and prepared credential input. This does not make conversational
+model credentials interchangeable with decision-provider credentials.
+
+The operator must enable and configure the provider plugin and select
+`agents.defaults.decisionModel` (or an agent override). Third-party plugins own
+their feature's activation, evidence selection, and permission to send that
+evidence. Having credentials alone must not activate background collection or
+spending.
+
+Call from a live plugin tool, hook, or other owned operation, carrying its
+cancellation signal:
+
+```ts
+const outcome = await api.runtime.decisions.evaluate(
+  {
+    state: { message: "Can you help me with this?", directlyAddressed: true },
+    questions: {
+      respond: {
+        type: "boolean",
+        instructions: "Is this message asking the assistant to respond?",
+      },
+    },
+  },
+  {
+    agentId, // The agent that owns this operation; omit only for global-default selection.
+    purpose: "example-plugin.response-eligibility",
+    rubricVersion: "1",
+    timeoutMs: 1500,
+    signal,
+  },
+);
+```
+
+An `ok` outcome contains validated answers, model/usage, and provider/rubric/runtime
+provenance. It is evidence for the consumer's decision, not permission to send a
+message or perform another effect. An `unavailable` outcome carries a reason for
+the consumer's existing fallback. Do not catch cancellation or closed-authority
+errors and turn them into fallback work.
+
+The provider receives the selected `model` and optional `agentId` in its evaluation
+context. Concurrent agent/model selections share provider health without retiring
+each other. A changed selection fences the affected request before returning it.
+
+Consumers share the selected provider's host-owned concurrency, circuit, and
+credential-refresh lifecycle; each plugin does not create its own provider client.
+No credential is returned to the consumer. Provider setup and refresh use the
+same prepared-secret path whether the caller is built-in or third-party.
+
+The host admits at most four requests, with no queue and a five-second maximum.
+Consumers choose their own bounded deadlines and fallback policy.
+Three unhealthy responses open a ten-second circuit; recovery admits one trial.
+Retry-After is bounded to one minute. Auth errors latch until the prepared-secret
+or configuration generation changes. There are no host retries or health probes.
+
+Caller cancellation and closed consumer authority reject: do not start fallback.
+Provider retirement returns unavailable while a live consumer can fall back.
+Providers must honor the composed abort signal and physically settle transport
+and body cleanup; an uncooperative provider stays owned and fenced by normal
+failed-drain recovery. Old generation outcomes cannot update new health.
+
+Manifest capability credentials use `configContracts.secretInputs` and authored
+SecretRefs. `getPreparedPluginSecretInput(pluginId, path)` from
+`openclaw/plugin-sdk/secret-input-runtime` reads only a prepared, available snapshot;
+it never resolves a cold reference or consults ambient environment credentials.
+Refresh with `secrets.reload`; capability failure does not retain an old key.
+
+`plugins.inspect` reports configuration, credential readiness, current callability,
+last success, usage, latency, and bounded unavailable counts. Counts are
+instance-local diagnostics, not durable audit records or write authority.
+
+For discovery, declare static `decisionModels` entries in the provider manifest
+with `provider`, `id`, and `name`. Each provider must be owned by
+`contracts.decisionProviders`. The Control UI Decision picker reads this metadata
+through a separate `models.list.decisionModels` projection; no provider runtime
+or credential probe runs to populate the picker. These entries never enter the
+chat, primary, fallback, or utility model catalogs.

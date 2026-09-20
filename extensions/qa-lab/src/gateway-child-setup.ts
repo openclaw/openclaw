@@ -87,7 +87,12 @@ export type QaGatewayChildParams = {
   onListening?: (context: QaGatewayChildListeningContext) => Promise<void> | void;
   mutateConfig?: (cfg: OpenClawConfig) => OpenClawConfig;
   runtimeEnvPatch?: NodeJS.ProcessEnv;
+  runtimePreloads?: readonly string[];
 };
+
+function buildQaRuntimePreloadArgs(preloads: readonly string[] | undefined): string[] {
+  return (preloads ?? []).flatMap((specifier) => ["--import", specifier]);
+}
 
 function createQaGatewayEmptyTransport() {
   return {
@@ -121,6 +126,21 @@ async function runQaPackagedBootstrap<T>(
     // oxlint-disable-next-line preserve-caught-error -- Candidate CLI output can contain credentials; only the bounded redacted message crosses this boundary, never its raw cause.
     throw new Error(`${failureMessage}: ${details}`);
   }
+}
+
+function createQaPackagedBootstrapEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  const bootstrapEnv = { ...env };
+  const gatewayOnlyKeys = new Set([
+    "OPENCLAW_BUILD_PRIVATE_QA",
+    "OPENCLAW_ENABLE_PRIVATE_QA_CLI",
+    "NODE_OPTIONS",
+  ]);
+  for (const envKey of Object.keys(bootstrapEnv)) {
+    if (gatewayOnlyKeys.has(envKey.toUpperCase())) {
+      delete bootstrapEnv[envKey];
+    }
+  }
+  return bootstrapEnv;
 }
 
 async function stageQaPackagedMockAuthProfiles(params: {
@@ -174,6 +194,7 @@ export async function prepareQaGatewayChild(
   const gatewayExecutablePath = gatewayCommand?.executablePath;
   const gatewayArgsPrefix = gatewayCommand?.argsPrefix ?? [];
   const gatewayArgsSuffix = gatewayCommand?.argsSuffix ?? [];
+  const runtimePreloadArgs = buildQaRuntimePreloadArgs(params.runtimePreloads);
   const gatewayCwd = gatewayCommand?.cwd ?? runtimeCwd;
   const workspaceDir = path.join(tempRoot, "workspace");
   const stateDir = path.join(tempRoot, "state");
@@ -300,11 +321,16 @@ export async function prepareQaGatewayChild(
   let packagedMockAuthStaged = false;
 
   const nodeExecPath = gatewayExecutablePath ?? (await resolveQaNodeExecPath());
-  const cliArgsPrefix = gatewayExecutablePath
+  const cliArgsPrefix = gatewayCommand?.processBoundary
     ? gatewayArgsPrefix
-    : [distEntryPath, ...gatewayArgsPrefix];
+    : gatewayExecutablePath
+      ? [...runtimePreloadArgs, ...gatewayArgsPrefix]
+      : [...runtimePreloadArgs, distEntryPath, ...gatewayArgsPrefix];
+  const gatewayLaunchArgsPrefix = gatewayCommand?.processBoundary
+    ? gatewayArgsPrefix
+    : cliArgsPrefix;
   const buildGatewayArgs = () => [
-    ...cliArgsPrefix,
+    ...gatewayLaunchArgsPrefix,
     "gateway",
     "run",
     "--port",
@@ -316,7 +342,13 @@ export async function prepareQaGatewayChild(
   ];
   lifetime.controller = gatewayCommand?.processBoundary
     ? await createQaGatewayProcessBoundaryController({
-        config: gatewayCommand.processBoundary,
+        config: {
+          ...gatewayCommand.processBoundary,
+          runtimeArgsPrefix: [
+            ...runtimePreloadArgs,
+            ...gatewayCommand.processBoundary.runtimeArgsPrefix,
+          ],
+        },
         launcherPath: nodeExecPath,
         tempRoot,
       })
@@ -431,7 +463,7 @@ export async function prepareQaGatewayChild(
             command: gatewayCommand,
             configPath: packagedAuthConfigPath,
             cwd: gatewayCwd,
-            env,
+            env: createQaPackagedBootstrapEnv(env),
             providers: mockAuthProviders,
           });
           if (!canonicalConfig.equals(await fs.readFile(configPath))) {
@@ -462,7 +494,7 @@ export async function prepareQaGatewayChild(
           executablePath: gatewayCommand.executablePath,
           argsPrefix: gatewayCommand.argsPrefix ?? [],
           cwd: gatewayCwd,
-          env,
+          env: createQaPackagedBootstrapEnv(env),
         };
         // The separate onboarding smoke cannot prepare this child's state.
         // Converge every freshly written config; a new-port retry can otherwise

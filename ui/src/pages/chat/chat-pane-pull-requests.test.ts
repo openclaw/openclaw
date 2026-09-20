@@ -6,8 +6,10 @@ import {
   CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT,
   type ControlUiSessionPullRequest,
 } from "../../../../src/gateway/control-ui-contract.js";
+import { createDeferred } from "../../../../test/helpers/promise.ts";
 import type { GatewayBrowserClient, GatewayEventListener } from "../../api/gateway.ts";
 import type { ApplicationContext } from "../../app/context.ts";
+import { projectsForGateway } from "../../lib/projects.ts";
 import {
   SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD,
   sessionPullRequestsForGateway,
@@ -91,6 +93,9 @@ function createPublicationPane(scope?: "global" | "per-sender") {
     latestShared: null,
   };
   const request = vi.fn(async (method: string, _params?: unknown): Promise<unknown> => {
+    if (method === "projects.list") {
+      return { projects: [] };
+    }
     if (method === "sessions.github.options") {
       return options;
     }
@@ -106,7 +111,7 @@ function createPublicationPane(scope?: "global" | "per-sender") {
   const initial = createInitializationContext();
   const eventListeners = new Set<GatewayEventListener>();
   const hello = gatewayHelloForMethods(
-    ["sessions.github.publish", SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD],
+    ["sessions.github.publish", SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD, "projects.list"],
     ["operator.read", "operator.write"],
   );
   if (scope) {
@@ -242,10 +247,40 @@ describe("chat pane pushed pull request state", () => {
     },
   );
 
+  it("withholds checkout fallback while the project catalog is pending or failed", async () => {
+    const { pane, request, context, state, emitGatewayEvent } = createPublicationPane();
+    pane.refreshSessionPullRequests();
+    await Promise.resolve();
+    emitSnapshot(emitGatewayEvent, state.sessionKey, {
+      repository: { owner: "openclaw", repo: "openclaw" },
+      pullRequests: [],
+      rateLimited: false,
+      status: "ready",
+    });
+    pane.refreshSessionPullRequests();
+    const pending = createDeferred<{ projects: [] }>();
+    request.mockReturnValueOnce(pending.promise);
+    const catalog = projectsForGateway(context.gateway);
+    const read = catalog.refresh();
+    pane.render();
+    expect(pane.chatProps?.githubRepo).toBeNull();
+    pending.reject(new Error("Project catalog unavailable"));
+    await read;
+    pane.render();
+    expect(pane.chatProps?.githubRepo).toBeNull();
+    request.mockResolvedValueOnce({
+      projects: [{ id: "clawsweeper", displayName: "ClawSweeper", source: "cloned" }],
+    });
+    await catalog.refresh();
+    pane.render();
+    expect(pane.chatProps?.githubRepo).toEqual({ owner: "openclaw", repo: "openclaw" });
+    expect(pane.chatProps?.githubRepositories).toEqual([{ aliases: ["ClawSweeper"] }]);
+  });
+
   it.each(["ready", "unavailable", "rate-limited"] as const)(
     "passes repository context and %s status to chat rendering and clears both on a session switch",
     async (status) => {
-      const { pane, state, emitGatewayEvent } = createPublicationPane();
+      const { pane, state, context, emitGatewayEvent } = createPublicationPane();
       pane.refreshSessionPullRequests();
       await Promise.resolve();
       emitSnapshot(emitGatewayEvent, state.sessionKey, {
@@ -255,6 +290,7 @@ describe("chat pane pushed pull request state", () => {
         status,
       });
       pane.refreshSessionPullRequests();
+      await projectsForGateway(context.gateway).refresh();
       pane.render();
       expect(pane.chatProps?.githubRepo).toEqual({ owner: "openclaw", repo: "openclaw" });
       expect(pane.chatProps?.pullRequestsStatus).toBe(status);

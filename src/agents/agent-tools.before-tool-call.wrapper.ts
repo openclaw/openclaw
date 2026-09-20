@@ -582,12 +582,13 @@ export function wrapToolWithBeforeToolCallHook(
         if (!signal?.aborted) {
           rememberPendingTerminalPresentation(preparedTerminalPresentation, ctx?.runId, toolCallId);
         }
+        const terminalDiagnostic = resolveToolResultTerminalDiagnostic(result, durationMs);
         const skillMatch = findSkillUsageMatch({
           toolName: normalizedToolName,
           toolParams: executeParams,
           ctx,
         });
-        if (skillMatch) {
+        if (skillMatch && terminalDiagnostic.type === "tool.execution.completed") {
           recordRunSkillUsage({
             runId: ctx?.runId,
             name: skillMatch.skillName,
@@ -595,20 +596,18 @@ export function wrapToolWithBeforeToolCallHook(
             activation: skillMatch.activation,
             ...(skillMatch.skillFile ? { skillFile: skillMatch.skillFile } : {}),
           });
+          emitSkillUsedDiagnostic({
+            ctx,
+            match: skillMatch,
+            toolName: normalizedToolName,
+            toolCallId,
+          });
         }
         if (hookOptions.emitDiagnostics) {
-          if (skillMatch) {
-            emitSkillUsedDiagnostic({
-              ctx,
-              match: skillMatch,
-              toolName: normalizedToolName,
-              toolCallId,
-            });
-          }
           emitTrustedDiagnosticEventWithPrivateData(
             {
               ...eventBase,
-              ...resolveToolResultTerminalDiagnostic(result, durationMs),
+              ...terminalDiagnostic,
             },
             buildToolContentPrivateData(toolContentPolicy, {
               input: executeParams,

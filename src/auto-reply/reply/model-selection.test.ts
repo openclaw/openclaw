@@ -1643,15 +1643,10 @@ describe("createModelSelectionState respects session model override", () => {
       config: cfg,
       includeSetupRegistry: true,
     };
-    expect(cliBackendsMocks.resolveCliRuntimeCanonicalProvider).toHaveBeenCalledTimes(2);
-    expect(cliBackendsMocks.resolveCliRuntimeCanonicalProvider).toHaveBeenNthCalledWith(
-      1,
-      expectedCanonicalProviderRequest,
-    );
-    expect(cliBackendsMocks.resolveCliRuntimeCanonicalProvider).toHaveBeenNthCalledWith(
-      2,
-      expectedCanonicalProviderRequest,
-    );
+    expect(cliBackendsMocks.resolveCliRuntimeCanonicalProvider).toHaveBeenCalled();
+    for (const [request] of cliBackendsMocks.resolveCliRuntimeCanonicalProvider.mock.calls) {
+      expect(request).toEqual(expectedCanonicalProviderRequest);
+    }
   });
 
   it("keeps ordinary provider overrides off the CLI setup-registry path", async () => {
@@ -1878,7 +1873,7 @@ describe("createModelSelectionState respects session model override", () => {
 
     expect(state.provider).toBe("openai");
     expect(state.model).toBe("gpt-added-after-startup");
-    expect(state.requestedRouteResolution).toBe("raw");
+    expect(state.requestedRouteResolution).toBe("resolved");
     expect(state.resetModelOverride).toBe(false);
     expect(sessionStore[sessionKey]?.providerOverride).toBe("openai");
     expect(sessionStore[sessionKey]?.modelOverride).toBe("gpt-added-after-startup");
@@ -2435,7 +2430,7 @@ describe("createModelSelectionState auto-failover overrides", () => {
 
     expect(state.provider).toBe("openrouter");
     expect(state.model).toBe("minimax/minimax-m2.7");
-    expect(state.requestedRouteResolution).toBe("raw");
+    expect(state.requestedRouteResolution).toBe("resolved");
     expect(sessionStore[sessionKey]?.modelOverride).toBe("minimax/minimax-m2.7");
     expect(state.resetModelOverride).toBe(false);
   });

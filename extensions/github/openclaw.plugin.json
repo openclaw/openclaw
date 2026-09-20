@@ -1,0 +1,17 @@
+{
+  "id": "github",
+  "name": "GitHub",
+  "description": "Public GitHub link previews and document reader.",
+  "enabledByDefault": true,
+  "activation": {
+    "onStartup": true
+  },
+  "contracts": {
+    "gatewayMethodDispatch": ["authenticated-request"]
+  },
+  "configSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "properties": {}
+  }
+}

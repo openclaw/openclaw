@@ -13,6 +13,7 @@ import {
   createSidebarAttentionStore,
   type SidebarAttentionStore,
 } from "../app/sidebar-attention-store.ts";
+import { invalidateModelAuthStatusRequests } from "../lib/model-auth-request-state.ts";
 import {
   createApplicationContextProvider,
   hiddenScopeUpgradeCapability,
@@ -575,6 +576,8 @@ describe("sidebar attention refresh ownership", () => {
 
       now = 200_000;
       document.dispatchEvent(new Event("visibilitychange"));
+      invalidateModelAuthStatusRequests(client);
+      eventListener?.({ type: "event", event: "chat.metadata.changed", payload: {} });
       await waitForFast(() => expect(request).toHaveBeenCalledTimes(6));
 
       selectionState.selectedId = "writer";

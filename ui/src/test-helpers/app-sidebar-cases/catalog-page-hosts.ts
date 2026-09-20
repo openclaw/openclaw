@@ -10,7 +10,7 @@ import type { ApplicationGatewaySnapshot } from "../../app/context.ts";
 import { catalogPage, createGatewayHarness, createSessions, mountSidebar } from "../app-sidebar.ts";
 
 export function registerCatalogPageHostTests() {
-  it("pages only cursor hosts and preserves exhausted hosts through the next poll refresh", async () => {
+  it("pages only cursor hosts and preserves exhausted hosts through a catalog change", async () => {
     vi.useFakeTimers();
     try {
       const exhaustedHost: SessionCatalogHost = {
@@ -44,7 +44,7 @@ export function registerCatalogPageHostTests() {
       const gateway = createGatewayHarness({ request } as unknown as GatewayBrowserClient);
       gateway.publish({
         hello: {
-          features: { methods: ["sessions.catalog.list"] },
+          features: { methods: ["sessions.catalog.list"], events: ["sessions.catalog.changed"] },
         } as ApplicationGatewaySnapshot["hello"],
       });
       const { sidebar } = await mountSidebar(
@@ -85,7 +85,8 @@ export function registerCatalogPageHostTests() {
       expect(sidebar.textContent).toContain("Retained remote session");
       expect(retainedHost()).toEqual(exhaustedHost);
 
-      await vi.advanceTimersByTimeAsync(30_000);
+      gateway.publishEvent("sessions.catalog.changed", { agentId: "main" });
+      await vi.advanceTimersByTimeAsync(200);
       await sidebar.updateComplete;
       expect(request).toHaveBeenNthCalledWith(3, "sessions.catalog.list", {
         agentId: "main",
@@ -138,7 +139,7 @@ export function registerCatalogPageHostTests() {
       const gateway = createGatewayHarness({ request } as unknown as GatewayBrowserClient);
       gateway.publish({
         hello: {
-          features: { methods: ["sessions.catalog.list"] },
+          features: { methods: ["sessions.catalog.list"], events: ["sessions.catalog.changed"] },
         } as ApplicationGatewaySnapshot["hello"],
       });
       const { sidebar } = await mountSidebar(
@@ -151,7 +152,8 @@ export function registerCatalogPageHostTests() {
 
       sidebar.querySelector<HTMLButtonElement>('[data-session-catalog-load-more="codex"]')?.click();
       await vi.advanceTimersByTimeAsync(0);
-      await vi.advanceTimersByTimeAsync(30_000);
+      gateway.publishEvent("sessions.catalog.changed", { agentId: "main" });
+      await vi.advanceTimersByTimeAsync(200);
       expect(request).toHaveBeenCalledTimes(4);
 
       const progressId = (request.mock.calls[2]?.[1] as { progressId?: string })?.progressId;

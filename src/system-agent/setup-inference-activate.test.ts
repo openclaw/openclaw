@@ -56,6 +56,51 @@ afterEach(async () => {
 });
 
 describe("setup activation credentials and configuration", () => {
+  it.each([
+    { target: "utility" as const, requested: undefined },
+    { target: undefined, requested: "utility" as const },
+  ])(
+    "rejects mismatched setup-role acknowledgement before login ($target/$requested)",
+    async ({ target, requested }) => {
+      const setup = await fixture({ modelTarget: target });
+      const result = await setup.activate("provider-auth", undefined, { modelTarget: requested });
+      expect(result).toMatchObject({ ok: false, status: "unavailable" });
+      expect(setup.login).not.toHaveBeenCalled();
+      expect(setup.run).not.toHaveBeenCalled();
+      expect(await fs.readFile(setup.configPath, "utf8")).toBe(setup.before);
+    },
+  );
+
+  it.each([
+    { primaryModel: undefined, fail: false },
+    { primaryModel: "stable/working-model", fail: false },
+    { primaryModel: "stable/working-model", fail: true },
+  ])(
+    "isolates utility activation from primary $primaryModel (failure: $fail)",
+    async ({ primaryModel, fail }) => {
+      const setup = await fixture({ modelTarget: "utility", primaryModel });
+      if (fail) {
+        setup.run.mockRejectedValueOnce(new Error("Utility inference unavailable"));
+      }
+      const result = await setup.activate();
+      expect(result).toMatchObject({ ok: !fail });
+      const saved = await readConfigFileSnapshot();
+      expect(saved.sourceConfig.agents?.defaults?.model).toEqual(
+        setup.config.agents?.defaults?.model,
+      );
+      if (fail) {
+        expect(saved.sourceConfig.agents?.defaults?.utilityModel).toBeUndefined();
+      } else {
+        expect(result).toMatchObject({ modelTarget: "utility", modelRef });
+        expect(saved.sourceConfig.agents?.defaults?.utilityModel).toContain(modelRef);
+        expect(setup.run.mock.calls[0]?.[0]).toMatchObject({
+          provider: "openai",
+          model: "gpt-5.4-mini",
+        });
+      }
+    },
+  );
+
   it.each([true, false])(
     "signs in before verifying an isolated detected Codex installation (fresh: %s)",
     async (fresh) => {
@@ -96,7 +141,7 @@ describe("setup activation credentials and configuration", () => {
       params.onSuccessfulAuthBinding?.({
         agentHarnessId: "codex",
         authFingerprint: fingerprintResolvedProviderAuth(nativeAuth),
-        modelId: "gpt-4.1-mini",
+        modelId: "gpt-5.4-mini",
         modelApi: "openai-responses",
         runtimeOwnerKind: "plugin-harness",
         runtimeOwnerId: "codex",
@@ -106,7 +151,7 @@ describe("setup activation credentials and configuration", () => {
         payloads: [{ text: "OK" }],
         meta: {
           durationMs: 1,
-          executionTrace: { winnerProvider: "openai", winnerModel: "gpt-4.1-mini" },
+          executionTrace: { winnerProvider: "openai", winnerModel: "gpt-5.4-mini" },
         },
       };
     });
@@ -582,7 +627,7 @@ describe("setup activation credentials and configuration", () => {
           openai: {
             baseUrl: "https://provider.example/v1",
             api: "openai-responses",
-            models: [{ id: "gpt-4.1-mini", name: "Sparse saved model" }],
+            models: [{ id: "gpt-5.4-mini", name: "Sparse saved model" }],
           },
         },
       },
@@ -607,7 +652,7 @@ describe("setup activation credentials and configuration", () => {
     expect(setup.readProfile()).toEqual([saved.profile.profileId, credential]);
     const snapshot = await readConfigFileSnapshot();
     expect(snapshot.sourceConfig.models?.providers?.openai?.models).toEqual([
-      { id: "gpt-4.1-mini", name: "Sparse saved model" },
+      { id: "gpt-5.4-mini", name: "Sparse saved model" },
     ]);
   });
 

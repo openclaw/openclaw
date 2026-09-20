@@ -138,7 +138,7 @@ export async function setupCommand(
     }
     const formatConfigFilePath = deps.formatConfigFilePath ?? formatDefaultConfigPath;
     runtime.error(
-      `Config invalid at ${await formatConfigFilePath(configPath)}. Run \`${formatCliCommand("openclaw doctor")}\` to repair it, then re-run setup.`,
+      `Config invalid at ${await formatConfigFilePath(configPath)}. Run \`${formatCliCommand("openclaw doctor --fix")}\` to apply supported repairs, then re-run setup.`,
     );
     runtime.exit(1);
     return;

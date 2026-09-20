@@ -20,6 +20,10 @@ import {
   resolveSessionSqliteMigrationRunsDir,
 } from "../commands/doctor-session-sqlite-migration-run.js";
 import {
+  resolveTrajectoryPath,
+  resolveTrajectoryPointerPath,
+} from "../config/sessions/artifacts.js";
+import {
   isLegacySessionRecordOwnedByTarget,
   readLegacySessionStoreEntries,
   resolveLegacyTranscriptPaths,
@@ -102,18 +106,6 @@ export function captureDeferredPluginSessionSources(params: {
     }
   }
   return [...sources].map(([sourcePath, identity]) => ({ path: sourcePath, identity }));
-}
-
-export function resolveTrajectoryPath(transcriptPath: string): string | undefined {
-  return transcriptPath.endsWith(".jsonl")
-    ? `${transcriptPath.slice(0, -".jsonl".length)}.trajectory.jsonl`
-    : undefined;
-}
-
-export function resolveTrajectoryPointerPath(transcriptPath: string): string | undefined {
-  return transcriptPath.endsWith(".jsonl")
-    ? `${transcriptPath.slice(0, -".jsonl".length)}.trajectory-path.json`
-    : undefined;
 }
 
 export function deferredPluginSessionStoreIds(params: {

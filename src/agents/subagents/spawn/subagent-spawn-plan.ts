@@ -6,13 +6,19 @@
 import { formatThinkingLevels } from "../../../auto-reply/thinking.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import type { FastMode } from "../../../shared/fast-mode.js";
+import {
+  modelFallbackOverrideFromAvailability,
+  resolveModelFallbackAvailability,
+} from "../../agent-scope.js";
 import { splitTrailingAuthProfile } from "../../model-ref-profile.js";
 import {
   type ModelRef,
-  resolveDefaultModelForAgent,
   resolveSubagentConfiguredModelSelection,
   resolveSubagentSpawnModelSelection,
 } from "../../model-selection.js";
+import { supportsModelTools } from "../../model-tool-support.js";
+import { summarizeSpawnError } from "../../spawn-pipeline.js";
+import { getSubagentSpawnDeps } from "./subagent-spawn-deps.js";
 import { resolveSubagentThinkingOverride } from "./subagent-spawn-thinking.js";
 
 /** Splits a provider/model ref while preserving model-only refs. */
@@ -28,11 +34,6 @@ export function splitModelRef(ref?: string) {
   if (slash > 0 && slash < trimmed.length - 1) {
     const provider = trimmed.slice(0, slash);
     const model = trimmed.slice(slash + 1);
-    return { provider, model };
-  }
-  const provider = undefined;
-  const model = trimmed;
-  if (model) {
     return { provider, model };
   }
   return { provider: undefined, model: trimmed };
@@ -54,7 +55,7 @@ export function resolveConfiguredSubagentRunTimeoutSeconds(params: {
 }
 
 /** Resolves the subagent model plus thinking patch to apply to the spawned session. */
-export function resolveSubagentModelAndThinkingPlan(params: {
+export async function resolveSubagentModelAndThinkingPlan(params: {
   cfg: OpenClawConfig;
   targetAgentId: string;
   requesterAgentConfig?: unknown;
@@ -64,6 +65,8 @@ export function resolveSubagentModelAndThinkingPlan(params: {
   callerThinkingRaw?: string;
   inheritedModel?: ModelRef;
   fastMode?: FastMode;
+  workspaceDir?: string;
+  requiresTools?: boolean;
 }) {
   const { model: rawResolvedModel, resolvedModel: inheritedModel } =
     resolveSubagentSpawnModelSelection({
@@ -72,7 +75,7 @@ export function resolveSubagentModelAndThinkingPlan(params: {
       modelOverride: params.modelOverride,
       inheritedModel: params.inheritedModel,
     });
-  const { model: resolvedModel, profile: authProfileId } =
+  const { model: requestedModel, profile: authProfileId } =
     splitTrailingAuthProfile(rawResolvedModel);
 
   const thinkingPlan = resolveSubagentThinkingOverride({
@@ -83,17 +86,62 @@ export function resolveSubagentModelAndThinkingPlan(params: {
     callerThinkingRaw: params.callerThinkingRaw,
   });
   if (thinkingPlan.status === "error") {
-    const { provider, model } = splitModelRef(resolvedModel);
+    const { provider, model } = splitModelRef(requestedModel);
     // The hint is provider/model-specific because valid thinking levels vary by backend.
     const hint = formatThinkingLevels(provider, model);
     return {
       status: "error" as const,
-      resolvedModel,
+      resolvedModel: requestedModel,
       error: `Invalid thinking level "${thinkingPlan.thinkingCandidateRaw}". Use one of: ${hint}.`,
     };
   }
 
   const modelOverrideSource = params.modelOverride?.trim() ? "user" : "auto";
+  let choice;
+  try {
+    choice = await getSubagentSpawnDeps().prepareModelChoice({
+      cfg: params.cfg,
+      agentId: params.targetAgentId,
+      workspaceDir: params.workspaceDir,
+      raw: rawResolvedModel,
+      source: modelOverrideSource === "user" ? "override" : "automatic",
+      ...(inheritedModel ? { resolvedRef: inheritedModel } : {}),
+      ...(modelOverrideSource === "auto"
+        ? {
+            fallbacks: modelFallbackOverrideFromAvailability(
+              resolveModelFallbackAvailability({
+                cfg: params.cfg,
+                agentId: params.targetAgentId,
+                hasSessionModelOverride: true,
+                modelOverrideSource: "auto",
+                subagentSpawnLineage: true,
+              }),
+            ),
+          }
+        : {}),
+    });
+  } catch (error) {
+    return {
+      status: "error" as const,
+      resolvedModel: requestedModel,
+      error: `sessions_spawn could not verify the selected model: ${summarizeSpawnError(error)}`,
+    };
+  }
+  if (choice.kind === "unavailable") {
+    return {
+      status: "error" as const,
+      resolvedModel: requestedModel,
+      error: `sessions_spawn model "${requestedModel}" is not usable: ${choice.error}`,
+    };
+  }
+  const resolvedModel = `${choice.ref.provider}/${choice.ref.model}`;
+  if (params.requiresTools && choice.kind === "resolved" && !supportsModelTools(choice.model)) {
+    return {
+      status: "error" as const,
+      resolvedModel,
+      error: `sessions_spawn outputSchema requires a tool-capable target model; "${resolvedModel}" declares compat.supportsTools=false.`,
+    };
+  }
   const hasSelectedAutoModel =
     modelOverrideSource === "auto" &&
     Boolean(
@@ -103,38 +151,23 @@ export function resolveSubagentModelAndThinkingPlan(params: {
         agentId: params.targetAgentId,
       }),
     );
-  const configuredModelRef = hasSelectedAutoModel ? splitModelRef(resolvedModel) : undefined;
-  const modelOrigin = configuredModelRef?.model
-    ? {
-        provider:
-          configuredModelRef.provider ??
-          resolveDefaultModelForAgent({
-            cfg: params.cfg,
-            agentId: params.targetAgentId,
-          }).provider,
-        model: configuredModelRef.model,
-      }
-    : undefined;
+  const modelOrigin = hasSelectedAutoModel ? choice.ref : undefined;
 
   return {
     status: "ok" as const,
     resolvedModel,
-    ...(inheritedModel ? { inheritedModel } : {}),
-    modelApplied: Boolean(resolvedModel),
+    ...(inheritedModel ? { inheritedModel: choice.ref } : {}),
+    modelApplied: true,
     thinkingOverride: thinkingPlan.thinkingOverride,
     initialSessionPatch: {
-      ...(resolvedModel
+      model: resolvedModel,
+      modelOverrideSource,
+      ...(modelOrigin
         ? {
-            model: resolvedModel,
-            modelOverrideSource,
-            ...(modelOrigin
-              ? {
-                  // Selected child models are session overrides, not legacy fallback residue.
-                  // Self-origin metadata keeps cleanup from discarding them before first use.
-                  modelOverrideFallbackOriginProvider: modelOrigin.provider,
-                  modelOverrideFallbackOriginModel: modelOrigin.model,
-                }
-              : {}),
+            // Selected child models are session overrides, not legacy fallback residue.
+            // Self-origin metadata keeps cleanup from discarding them before first use.
+            modelOverrideFallbackOriginProvider: modelOrigin.provider,
+            modelOverrideFallbackOriginModel: modelOrigin.model,
           }
         : {}),
       ...(authProfileId

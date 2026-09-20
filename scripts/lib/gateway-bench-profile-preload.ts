@@ -1,5 +1,6 @@
-import { writeFileSync } from "node:fs";
+import { readFileSync, writeFileSync } from "node:fs";
 import { Session } from "node:inspector/promises";
+import { availableParallelism } from "node:os";
 import { isMainThread } from "node:worker_threads";
 import { startGatewayBenchDiagnostics } from "./gateway-bench-diagnostics.ts";
 import {
@@ -37,6 +38,15 @@ if (isMainThread) {
         action: message.action,
         cpuUsage: {
           pid: process.pid,
+          cpuEnvironment: {
+            availableParallelism: availableParallelism(),
+            affinity:
+              process.platform === "linux"
+                ? readFileSync("/proc/self/status", "utf8").match(
+                    /^Cpus_allowed_list:\s*(.+)$/mu,
+                  )?.[1]
+                : undefined,
+          },
           atMonotonicMicros: Number(process.hrtime.bigint() / 1_000n),
           process: process.cpuUsage(),
           mainThread: process.threadCpuUsage(),

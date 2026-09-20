@@ -1,8 +1,9 @@
 import { render, type TemplateResult } from "lit";
-import { vi } from "vitest";
+import { onTestFinished, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import type { SessionToolOverrides } from "../../lib/sessions/patch.ts";
+import { installChatComposerPickerDismissal } from "../chat/components/chat-picker-overlay.ts";
 import { NewSessionAttachmentDraft } from "./attachment-draft.ts";
 import { NewSessionComposerTextareaController } from "./composer-controller.ts";
 import type { NewSessionVisibility } from "./create-params.ts";
@@ -51,6 +52,7 @@ export function renderComposer(
     textareaController?: NewSessionComposerTextareaController;
   } = {},
 ) {
+  onTestFinished(installChatComposerPickerDismissal(document));
   const container = document.createElement("div");
   const attachmentDraft = new NewSessionAttachmentDraft(
     () => undefined,

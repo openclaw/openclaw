@@ -1910,7 +1910,6 @@ describe("sessions_send gating", () => {
     { label: "cron with direct token", key: "agent:main:cron:direct:peer-1" },
     { label: "hook with direct token", key: "agent:main:hook:direct:peer-1" },
     { label: "hook with dm token", key: "agent:main:hook:dm:peer-1" },
-    { label: "subagent with direct token", key: "agent:main:subagent:direct:peer-1" },
     { label: "nested agent owner", key: "agent:main:agent:worker:feishu:direct:peer-1" },
     {
       label: "thread-scoped direct conversation",

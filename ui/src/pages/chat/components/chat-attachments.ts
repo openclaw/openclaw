@@ -1,24 +1,27 @@
 // Shared attachment controls for chat and new-session composers.
-import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { html, nothing } from "lit";
+import { repeat } from "lit/directives/repeat.js";
+import { styleMap } from "lit/directives/style-map.js";
 import { icons } from "../../../components/icons.ts";
 import { scrollState } from "../../../components/scroll-state.ts";
 import "../../../components/tooltip.ts";
 import "../../../components/web-awesome.ts";
 import { t } from "../../../i18n/index.ts";
 import type { BrowserAnnotationAttachment, ChatAttachment } from "../../../lib/chat/chat-types.ts";
-import { showToast } from "../../../lib/toast.ts";
 import {
   generateAttachmentId,
-  getChatAttachmentDataUrl,
   getChatAttachmentPreviewUrl,
   registerChatAttachmentPayload,
   releaseChatAttachmentPayload,
 } from "../attachment-payload-store.ts";
 import { admitAttachmentFiles } from "./chat-attachment-admission.ts";
 import type { ChatAttachmentControlsProps } from "./chat-attachment-controls.types.ts";
+import { renderAttachmentFileIcon } from "./chat-attachment-file-icon.ts";
 import { renderCompactAttachmentFile } from "./chat-attachment-file.ts";
+import { ChatAttachmentReadLifecycle, type ChatAttachmentRead } from "./chat-attachment-reads.ts";
 import { encodeTextAsDataUrl } from "./chat-attachment-text.ts";
+import { renderComposerPastedText } from "./chat-composer-pasted-text.ts";
+import { isPastedTextAttachment } from "./chat-pasted-text.ts";
 import { renderChatSelectionAnnotations } from "./chat-selection-annotations.ts";
 
 const CHAT_ATTACHMENT_ACCEPT =
@@ -27,35 +30,6 @@ const CHAT_ATTACHMENT_ACCEPT =
 const LARGE_PASTE_TEXT_THRESHOLD = 1000;
 const LARGE_PASTE_TEXT_MIME_TYPE = "text/plain";
 const LARGE_PASTE_TEXT_FILE_PREFIX = "pasted-text-";
-const PASTED_TEXT_PREVIEW_MAX_LENGTH = 20;
-const largePastedTextAttachments = new WeakSet<ChatAttachment>();
-const pastedTextPreviews = new WeakMap<ChatAttachment, string>();
-
-export class ChatAttachmentReadLifecycle {
-  pendingReads = 0;
-  private controller = new AbortController();
-
-  constructor(private readonly notify: () => void) {}
-
-  get readSignal(): AbortSignal {
-    return this.controller.signal;
-  }
-
-  updatePending(readSignal: AbortSignal, delta: 1 | -1): void {
-    if (this.controller.signal !== readSignal) {
-      return;
-    }
-    this.pendingReads = Math.max(0, this.pendingReads + delta);
-    this.notify();
-  }
-
-  abortReads(): void {
-    this.controller.abort();
-    this.controller = new AbortController();
-    this.pendingReads = 0;
-    this.notify();
-  }
-}
 
 function isFileDrag(dataTransfer: DataTransfer | null): boolean {
   return Array.from(dataTransfer?.types ?? []).includes("Files");
@@ -102,78 +76,19 @@ function clickComposerInput(target: HTMLElement, selector: string) {
     ?.click();
 }
 
-function chatAttachmentFromFile(file: File, dataUrl: string): ChatAttachment {
+function chatAttachmentFromFile(
+  file: File,
+  dataUrl: string,
+  origin: ChatAttachment["origin"] = "file",
+): ChatAttachment {
   const attachment = {
     id: generateAttachmentId(),
+    origin,
     mimeType: file.type || "application/octet-stream",
     fileName: file.name || undefined,
     sizeBytes: file.size,
   };
   return registerChatAttachmentPayload({ attachment, dataUrl, file });
-}
-
-export function isLargePastedTextAttachment(attachment: ChatAttachment): boolean {
-  return largePastedTextAttachments.has(attachment);
-}
-
-function createLargePastedTextAttachment(text: string, file: File): ChatAttachment {
-  const attachment = chatAttachmentFromFile(file, encodeTextAsDataUrl(text));
-  largePastedTextAttachments.add(attachment);
-  const preview = compactPastedTextPreview(text);
-  if (preview) {
-    pastedTextPreviews.set(attachment, preview);
-  }
-  return attachment;
-}
-
-function readTextFromDataUrl(dataUrl: string): string | null {
-  const match = /^data:([^,]*),(.*)$/s.exec(dataUrl);
-  if (!match) {
-    return null;
-  }
-  const metadata = match[1];
-  const payload = match[2];
-  if (metadata === undefined || payload === undefined) {
-    return null;
-  }
-  if (metadata.toLowerCase().includes(";base64")) {
-    try {
-      const binary = atob(payload);
-      const bytes = Uint8Array.from(binary, (char) => char.charCodeAt(0));
-      return new TextDecoder().decode(bytes);
-    } catch {
-      return null;
-    }
-  }
-  try {
-    return decodeURIComponent(payload.replace(/\+/g, "%20"));
-  } catch {
-    return null;
-  }
-}
-
-function compactPastedTextPreview(text: string): string | null {
-  const normalized = text.replace(/\s+/gu, " ").trim();
-  if (!normalized) {
-    return null;
-  }
-  if (normalized.length <= PASTED_TEXT_PREVIEW_MAX_LENGTH) {
-    return normalized;
-  }
-  return `${truncateUtf16Safe(normalized, PASTED_TEXT_PREVIEW_MAX_LENGTH).trimEnd()}...`;
-}
-
-function pastedTextPreview(attachment: ChatAttachment): string {
-  return (
-    pastedTextPreviews.get(attachment) ?? attachment.fileName ?? t("chat.attachments.attachedFile")
-  );
-}
-
-function appendPastedTextToDraft(draft: string, text: string): string {
-  if (!draft.trim()) {
-    return text;
-  }
-  return `${draft.replace(/\s+$/u, "")}\n\n${text}`;
 }
 
 function handleLargeTextPaste(e: ClipboardEvent, props: ChatAttachmentControlsProps): boolean {
@@ -192,7 +107,7 @@ function handleLargeTextPaste(e: ClipboardEvent, props: ChatAttachmentControlsPr
     // The rejection toast named the file; the clipboard still holds the text.
     return true;
   }
-  const attachment = createLargePastedTextAttachment(text, file);
+  const attachment = chatAttachmentFromFile(file, encodeTextAsDataUrl(text), "paste");
   props.onAttachmentsChange([...currentAttachments(props), attachment]);
   return true;
 }
@@ -248,88 +163,86 @@ export function chatAttachmentFromDataUrl(
 
 function readAttachmentFile(
   file: File,
+  entry: ChatAttachmentRead,
+  reads: ChatAttachmentReadLifecycle,
   props: ChatAttachmentControlsProps,
-): Promise<ChatAttachment | null> {
-  if (props.readSignal?.aborted) {
-    return Promise.resolve(null);
+): void {
+  const signal = props.readSignal ?? reads.readSignal;
+  if (signal.aborted) {
+    reads.remove(entry);
+    return;
   }
-  return new Promise((resolve) => {
-    const reader = new FileReader();
-    let settled = false;
-    const finish = (attachment: ChatAttachment | null) => {
-      if (settled) {
-        return;
-      }
-      settled = true;
-      props.readSignal?.removeEventListener("abort", abort);
-      resolve(attachment);
-    };
-    const abort = () => {
-      reader.abort();
-      finish(null);
-    };
-    props.readSignal?.addEventListener("abort", abort, { once: true });
-    reader.addEventListener("error", () => finish(null), { once: true });
-    reader.addEventListener("abort", () => finish(null), { once: true });
-    reader.addEventListener(
-      "load",
-      () => {
-        const dataUrl = typeof reader.result === "string" ? reader.result : null;
-        finish(
-          dataUrl && !props.readSignal?.aborted ? chatAttachmentFromFile(file, dataUrl) : null,
-        );
-      },
-      { once: true },
-    );
-    reader.readAsDataURL(file);
+  const reader = new FileReader();
+  let settled = false;
+  const finish = (outcome: "ready" | "error" | "aborted") => {
+    if (settled) {
+      return;
+    }
+    settled = true;
+    signal.removeEventListener("abort", abort);
+    entry.cancel = undefined;
+    if (outcome === "ready" && typeof reader.result === "string" && !signal.aborted) {
+      const completedAttachment = registerChatAttachmentPayload({
+        attachment: entry.attachment,
+        dataUrl: reader.result,
+        file,
+      });
+      const ready = [...currentAttachments(props), completedAttachment];
+      const readyIds = new Set(ready.map(({ id }) => id));
+      // Publish only readable payloads, in admission order, before releasing send.
+      props.onAttachmentsChange?.(
+        reads
+          .project(ready)
+          .filter(({ attachment }) => readyIds.has(attachment.id))
+          .map(({ attachment }) => attachment),
+      );
+      reads.complete(entry);
+    } else if (outcome === "aborted" || signal.aborted) {
+      reads.remove(entry);
+    } else {
+      reads.fail(entry);
+    }
+    props.onPendingReadsChange?.(-1);
+  };
+  const abort = () => {
+    finish("aborted");
+    reader.abort();
+  };
+  entry.cancel = abort;
+  signal.addEventListener("abort", abort, { once: true });
+  reader.addEventListener("error", () => finish("error"), { once: true });
+  reader.addEventListener("abort", () => finish("aborted"), { once: true });
+  reader.addEventListener("load", () => finish("ready"), { once: true });
+  reader.addEventListener("progress", (event) => {
+    if (!settled && event.lengthComputable && event.total > 0) {
+      reads.updateProgress(entry, Math.min(1, Math.max(0, event.loaded / event.total)));
+    }
   });
+  props.onPendingReadsChange?.(1);
+  try {
+    reader.readAsDataURL(file);
+  } catch {
+    finish("error");
+  }
 }
 
-async function appendAttachmentFiles(
-  candidates: readonly File[],
-  props: ChatAttachmentControlsProps,
-) {
-  if (!props.onAttachmentsChange || candidates.length === 0) {
+function appendAttachmentFiles(candidates: readonly File[], props: ChatAttachmentControlsProps) {
+  if (!props.onAttachmentsChange || candidates.length === 0 || props.readSignal?.aborted) {
     return;
   }
   const files = admitAttachmentFiles(candidates, props.attachmentLimits);
   if (files.length === 0) {
     return;
   }
-  props.onPendingReadsChange?.(1);
-  try {
-    const results = await Promise.all(files.map((file) => readAttachmentFile(file, props)));
-    const additions = results.filter(
-      (attachment): attachment is ChatAttachment => attachment !== null,
-    );
-    if (props.readSignal?.aborted) {
-      for (const attachment of additions) {
-        releaseChatAttachmentPayload(attachment.id);
-      }
-      return;
+  const reads =
+    props.attachmentReads ?? new ChatAttachmentReadLifecycle(() => props.onRequestUpdate?.());
+  const entries = reads.begin(files, currentAttachments(props));
+  entries.forEach((entry, index) => {
+    const file = files[index];
+    if (file) {
+      readAttachmentFile(file, entry, reads, props);
     }
-    // Unreadable drops (folders, permission-denied files) must not vanish
-    // silently: name what was skipped so the user knows it never attached.
-    const failed = results
-      .map((attachment, index) => (attachment === null ? files[index]?.name : undefined))
-      .filter((name): name is string => Boolean(name));
-    if (failed.length > 0) {
-      showToast({
-        message: t("chat.attachments.readFailed", {
-          names: failed.slice(0, 3).join(", "),
-          more: failed.length > 3 ? ` +${failed.length - 3}` : "",
-        }),
-      });
-    }
-    if (additions.length === 0) {
-      return;
-    }
-    // Keep the batch pending until its payloads are in the composer so an
-    // immediate send cannot slip between FileReader completion and insertion.
-    props.onAttachmentsChange([...currentAttachments(props), ...additions]);
-  } finally {
-    props.onPendingReadsChange?.(-1);
-  }
+  });
 }
 
 export function handleChatAttachmentPaste(e: ClipboardEvent, props: ChatAttachmentControlsProps) {
@@ -359,22 +272,7 @@ export function handleChatAttachmentPaste(e: ClipboardEvent, props: ChatAttachme
     return;
   }
   e.preventDefault();
-  void appendAttachmentFiles(imageFiles, props);
-}
-
-function showPastedTextInComposer(att: ChatAttachment, props: ChatAttachmentControlsProps): void {
-  const dataUrl = getChatAttachmentDataUrl(att);
-  const text = dataUrl ? readTextFromDataUrl(dataUrl) : null;
-  if (!text || !props.onDraftChange) {
-    return;
-  }
-  const nextAttachments = currentAttachments(props).filter(
-    (attachment) => attachment.id !== att.id,
-  );
-  releaseChatAttachmentPayload(att.id);
-  props.onAttachmentsChange?.(nextAttachments);
-  props.onDraftChange(appendPastedTextToDraft(props.getDraft?.() ?? props.draft ?? "", text));
-  props.onRequestUpdate?.();
+  appendAttachmentFiles(imageFiles, props);
 }
 
 function handleChatAttachmentFileSelect(e: Event, props: ChatAttachmentControlsProps) {
@@ -384,12 +282,12 @@ function handleChatAttachmentFileSelect(e: Event, props: ChatAttachmentControlsP
   }
   const files = [...(input.files ?? [])];
   input.value = "";
-  void appendAttachmentFiles(files, props);
+  appendAttachmentFiles(files, props);
 }
 
 function handleChatAttachmentDrop(e: DragEvent, props: ChatAttachmentControlsProps) {
   e.preventDefault();
-  void appendAttachmentFiles([...(e.dataTransfer?.files ?? [])], props);
+  appendAttachmentFiles([...(e.dataTransfer?.files ?? [])], props);
 }
 
 type ChatAttachmentDropProps = ChatAttachmentControlsProps & {
@@ -626,18 +524,22 @@ function renderBrowserAnnotationAttachment(
   `;
 }
 
-// Keep one live region mounted across batches; the counter counts batches, not files.
+// Keep the live region mounted so changes in the number of files are announced.
 export function renderAttachmentReadStatus(pendingReads: number) {
   return html`<div
-    class="chat-attachments-status"
+    class="chat-attachments-status sr-only"
     role="status"
     aria-live="polite"
     aria-atomic="true"
   >
     ${
       pendingReads > 0
-        ? html`<span class="btn__spinner" aria-hidden="true"></span
-            >${t("chat.composer.preparingAttachments")}`
+        ? t(
+            pendingReads === 1
+              ? "chat.composer.preparingAttachmentCount"
+              : "chat.composer.preparingAttachmentsCount",
+            { count: String(pendingReads) },
+          )
         : nothing
     }
   </div>`;
@@ -645,79 +547,96 @@ export function renderAttachmentReadStatus(pendingReads: number) {
 
 export function renderAttachmentPreview(props: ChatAttachmentControlsProps) {
   const attachments = props.attachments ?? [];
-  if (attachments.length === 0) {
+  const entries =
+    props.attachmentReads?.project(attachments) ??
+    attachments.map((attachment): ChatAttachmentRead => ({ attachment, state: "ready" }));
+  if (entries.length === 0) {
     return nothing;
   }
   return html`
     <div class="chat-attachments-preview" ${scrollState(true)}>
       ${renderChatSelectionAnnotations(props)}
-      ${attachments
-        .filter((attachment) => !attachment.selectionAnnotation)
-        .map((att) => {
+      ${repeat(
+        entries.filter(({ attachment }) => !attachment.selectionAnnotation),
+        ({ attachment }) => attachment.id,
+        (entry) => {
+          const att = entry.attachment;
+          const reading = entry.state === "reading";
+          const failed = entry.state === "error";
+          const failureLabel = t("chat.attachments.readFailed", {
+            names: att.fileName ?? t("chat.attachments.attachedFile"),
+            more: "",
+          });
           const removeLabel = att.fileName?.trim()
             ? t("chat.composer.removeNamedAttachment", { name: att.fileName })
             : t("chat.composer.removeAttachment");
           return att.browserAnnotation
             ? renderBrowserAnnotationAttachment(att, att.browserAnnotation, props)
-            : html`
-                <div
-                  class=${[
-                    "chat-attachment-thumb",
-                    att.mimeType.startsWith("image/") ? "" : "chat-attachment-thumb--file",
-                    isLargePastedTextAttachment(att) ? "chat-attachment-thumb--pasted-text" : "",
-                  ]
-                    .filter(Boolean)
-                    .join(" ")}
-                >
-                  ${
-                    att.mimeType.startsWith("image/") && getChatAttachmentPreviewUrl(att)
-                      ? renderAttachmentImage(
-                          att,
-                          att.fileName?.trim() || t("chat.composer.attachmentPreview"),
-                          att.fileName?.trim() || t("chat.imageLightbox.untitled"),
-                          props,
-                        )
-                      : isLargePastedTextAttachment(att)
-                        ? html`
-                            <div class="chat-attachment-file chat-attachment-file--pasted-text">
-                              <span class="chat-attachment-file__icon">${icons.fileText}</span>
-                              <span class="chat-attachment-file__body">
-                                <span class="chat-attachment-file__name"
-                                  >${pastedTextPreview(att)}</span
-                                >
-                                <button
-                                  class="chat-attachment-text-action"
-                                  type="button"
-                                  aria-label=${t("chat.attachments.showInTextField")}
-                                  ?disabled=${props.disabled}
-                                  @click=${() => showPastedTextInComposer(att, props)}
-                                >
-                                  ${t("chat.attachments.showInTextField")}
-                                  <span aria-hidden="true">${icons.chevronRight}</span>
-                                </button>
-                              </span>
-                            </div>
-                          `
-                        : renderCompactAttachmentFile(att)
-                  }
-                  <openclaw-tooltip .content=${removeLabel}>
-                    <button
-                      class="chat-attachment-remove"
-                      type="button"
-                      aria-label=${removeLabel}
-                      ?disabled=${props.disabled}
-                      @click=${() => {
-                        const next = currentAttachments(props).filter((a) => a.id !== att.id);
-                        releaseChatAttachmentPayload(att.id);
-                        props.onAttachmentsChange?.(next);
-                      }}
-                    >
-                      ${icons.x}
-                    </button>
-                  </openclaw-tooltip>
-                </div>
-              `;
-        })}
+            : isPastedTextAttachment(att)
+              ? renderComposerPastedText(att, props)
+              : html`
+                  <div
+                    class=${[
+                      "chat-attachment-thumb",
+                      att.mimeType.startsWith("image/") ? "" : "chat-attachment-thumb--file",
+                      failed ? "chat-attachment-thumb--error" : "",
+                    ]
+                      .filter(Boolean)
+                      .join(" ")}
+                    aria-busy=${reading ? "true" : "false"}
+                  >
+                    ${
+                      failed
+                        ? html`<openclaw-tooltip .content=${failureLabel}>
+                            <span
+                              class="chat-attachment-error"
+                              tabindex="0"
+                              role="img"
+                              aria-label=${failureLabel}
+                            >
+                              ${renderAttachmentFileIcon({ filename: att.fileName ?? "", mimeType: att.mimeType, mode: "large-placeholder", unavailable: true })}
+                            </span>
+                          </openclaw-tooltip>`
+                        : reading
+                          ? nothing
+                          : att.mimeType.startsWith("image/") && getChatAttachmentPreviewUrl(att)
+                            ? renderAttachmentImage(
+                                att,
+                                att.fileName?.trim() || t("chat.composer.attachmentPreview"),
+                                att.fileName?.trim() || t("chat.imageLightbox.untitled"),
+                                props,
+                              )
+                            : renderCompactAttachmentFile(att)
+                    }
+                    <span
+                      class="chat-attachment-loading"
+                      data-state=${entry.state}
+                      data-indeterminate=${reading && entry.progress === undefined ? "true" : "false"}
+                      aria-hidden="true"
+                      ><span
+                        style=${styleMap({ transform: entry.progress === undefined ? undefined : `scaleX(${entry.progress})` })}
+                      ></span
+                    ></span>
+                    <openclaw-tooltip .content=${removeLabel}>
+                      <button
+                        class="chat-attachment-remove"
+                        type="button"
+                        aria-label=${removeLabel}
+                        ?disabled=${props.disabled}
+                        @click=${() => {
+                          props.attachmentReads?.remove(entry);
+                          const next = currentAttachments(props).filter((a) => a.id !== att.id);
+                          releaseChatAttachmentPayload(att.id);
+                          props.onAttachmentsChange?.(next);
+                        }}
+                      >
+                        ${icons.x}
+                      </button>
+                    </openclaw-tooltip>
+                  </div>
+                `;
+        },
+      )}
     </div>
   `;
 }

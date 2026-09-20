@@ -16,6 +16,7 @@ import { readBuiltGatewayBuildId } from "../../infra/update-git-runtime.js";
 import { recordUpdateRunStep } from "../../infra/update-run-ledger.js";
 import type { UpdateRunStep } from "../../infra/update-run-record.js";
 import { isUpdateGatewayReadinessPending } from "../../infra/update-run-step.js";
+import { createUpdateTimeoutHandoff } from "../../infra/update-timeout-provenance.js";
 import { retireCommandProcessJobForHandoff } from "../../process/exec-spawn.js";
 import { runUtf8CommandWithTimeout } from "../../process/exec.js";
 import { defaultRuntime } from "../../runtime.js";
@@ -26,6 +27,7 @@ import { printResult } from "./progress.js";
 import { readPackageVersion, resolveNodeRunner } from "./shared.js";
 import { completeUpdateCommandBackup } from "./update-command-backup-lifecycle.js";
 import {
+  requiresRetainedUpdateCommandOwner,
   withUpdateCommandExecutor,
   withUpdateCommandExecutorChild,
   type UpdateCommandChildGrant,
@@ -136,6 +138,7 @@ async function recoverMigratedUpdateInParent(
   bufferedSteps: UpdateRunStep[],
   windowsHandedOff: boolean,
   assertCurrent: () => void,
+  definitionRecovery: import("./update-command-service-context-types.js").UpdateServiceDefinitionRecovery,
 ): Promise<MigratedUpdateOutcome> {
   const run = params.opts.run;
   assertCurrent();
@@ -164,6 +167,10 @@ async function recoverMigratedUpdateInParent(
         result,
         previousRoot: params.root,
         packageTransaction: params.packageTransaction,
+        unchangedCore: params.unchangedCore,
+        originalManagedServiceRuntime: params.originalManagedServiceRuntime,
+        allowGatewayRestart: params.shouldRestart,
+        definitionRecovery,
         updateRecoveryBackup: params.updateRecoveryBackup,
         rollbackBlockedReason: params.rollbackBlockedReason,
         schemaVersions: params.schemaVersions,
@@ -271,6 +278,8 @@ export async function continueMigratedUpdateInFreshProcess(
   let windowsHandedOff = false;
   let parentRecoverySupported = false;
   let captureRetirementSupported = false;
+  let definitionRecovery: import("./update-command-service-context-types.js").UpdateServiceDefinitionRecovery =
+    { unverified: true };
   const recover = async (failure: FinishUpdateParams["result"]) => {
     recoveryAttempted = true;
     assertCurrent();
@@ -280,13 +289,14 @@ export async function continueMigratedUpdateInFreshProcess(
       bufferedSteps,
       windowsHandedOff,
       assertCurrent,
+      definitionRecovery,
     );
   };
   try {
     assertCurrent();
     const root = result.root;
     if (!root) {
-      throw new Error("The active installation root is unknown; candidate finalization is unsafe.");
+      throw new Error("The active installation root is unknown; update finalization is unsafe.");
     }
     const workerCommand = [
       params.packageUpdateNodeRunner ?? resolveNodeRunner(),
@@ -305,6 +315,9 @@ export async function continueMigratedUpdateInFreshProcess(
     };
     if (run.executorFence || params.updateRecoveryBackup) {
       assertCurrent();
+      const requiresRetainedOwner = Boolean(
+        run.executorFence && requiresRetainedUpdateCommandOwner(run.executorFence),
+      );
       // Compatibility only, never authority. An older installed worker ignores
       // new JSON fields, so refuse before exposing any continuation input.
       const { check, contract, parseError } = await inspectUpdateRuntimeCapability({
@@ -317,7 +330,7 @@ export async function continueMigratedUpdateInFreshProcess(
       assertCurrent();
       if (parseError) {
         throw new UpdateCommandRecoveryPendingError(
-          "Candidate live executor delegation capability could not be inspected.",
+          "Update live executor delegation capability could not be inspected.",
           { cause: parseError },
         );
       }
@@ -326,10 +339,11 @@ export async function continueMigratedUpdateInFreshProcess(
         check.code !== 0 ||
         check.cleanup !== "normal" ||
         !isRecord(contract) ||
-        contract.executorDelegation !== "pid-start-v1"
+        contract.executorDelegation !== "pid-start-v1" ||
+        (requiresRetainedOwner && contract.retainedOwnerBinding !== true)
       ) {
         throw new UpdateCommandRecoveryPendingError(
-          "Candidate runtime does not support the required live executor delegation.",
+          "Update runtime does not support live executor delegation; recovery remains pending.",
         );
       }
       parentRecoverySupported = contract.updateRecovery === "parent-v1";
@@ -360,23 +374,28 @@ export async function continueMigratedUpdateInFreshProcess(
       const { windowsTaskAutoStartRecovery: _windows, ...serializableStop } = preManagedServiceStop;
       stopState = serializableStop;
     }
-    run.activationTimeoutMs ??= await resolveUpdateFinalizationTimeoutMs(
-      params.updateStepTimeoutMs,
-      {
-        env: params.ownedManagedUpdateEnv ?? run.env,
-        databases: params.schemaVersions,
-        pluginCount: Object.keys(params.preUpdatePluginInstallRecords).length,
-        nodeRunner: params.packageUpdateNodeRunner,
-      },
-    );
+    if (params.opts.timeout !== undefined) {
+      run.activationTimeoutMs ??= await resolveUpdateFinalizationTimeoutMs(
+        params.updateStepTimeoutMs,
+        {
+          env: params.ownedManagedUpdateEnv ?? run.env,
+          databases: params.schemaVersions,
+          pluginCount: Object.keys(params.preUpdatePluginInstallRecords).length,
+          nodeRunner: params.packageUpdateNodeRunner,
+        },
+      );
+    }
+    const handoff = createUpdateTimeoutHandoff(params.opts.timeout, params.updateStepTimeoutMs);
     assertCurrent();
     const resultPath = path.join(scratchDir, "result.json");
     const { requesterAuthority, executorFence, ...runIdentity } = run;
     const input: MigratedUpdateFinalizationInput = {
+      ...handoff,
       params: {
         ...serializable,
         opts: {
           ...params.opts,
+          timeout: handoff.timeout.serialized,
           run: {
             ...runIdentity,
             ...(requesterAuthority
@@ -473,9 +492,7 @@ export async function continueMigratedUpdateInFreshProcess(
       response.result.runId !== run.runId ||
       !Number.isInteger(response.exitCode)
     ) {
-      throw new Error(
-        "Candidate finalization did not confirm the admitted run's terminal outcome.",
-      );
+      throw new Error("Update finalization did not confirm the admitted run's terminal outcome.");
     }
     if (params.updateRecoveryBackup && response.result.reason === "update-processes-unsettled") {
       throw new UpdateCommandPendingRecoveryFailure(
@@ -483,6 +500,7 @@ export async function continueMigratedUpdateInFreshProcess(
         `Candidate descendants have not settled. Capture retained at ${params.updateRecoveryBackup.manifestPath}. Inspect with openclaw update status --json; keep the Gateway stopped and run npx openclaw@latest doctor --fix after resolving child ownership.`,
       );
     }
+    definitionRecovery = response.definitionRecovery ?? { unverified: true };
     candidateSettlementConfirmed = true;
     if (params.updateRecoveryBackup && response.result.status === "error") {
       return await recover(response.result);
@@ -628,7 +646,7 @@ export async function continueMigratedUpdateInFreshProcess(
     } catch (cause) {
       throw new AggregateError(
         [error, cause],
-        `Candidate finalization failed (${formatErrorMessage(error)}) and Windows task autostart compensation failed (${formatErrorMessage(cause)})`,
+        `Update finalization failed (${formatErrorMessage(error)}) and Windows task autostart compensation failed (${formatErrorMessage(cause)})`,
         { cause },
       );
     }

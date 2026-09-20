@@ -25,7 +25,7 @@ import {
 } from "../delivery-recovery.shared.js";
 import { formatErrorMessage } from "../errors.js";
 import { resolveOutboundChannelMessageAdapter } from "./channel-resolution.js";
-import { resolveDeferredDeliveryAdmission } from "./deferred-delivery-admission.js";
+import { prepareDeferredDeliveryAdmission } from "./deferred-delivery-admission.js";
 import type { DeliverOutboundPayloadsParams } from "./deliver-contracts.js";
 import { OUTBOUND_DELIVERY_LOG_SCOPE } from "./deliver-log.js";
 import { buildPayloadSummary } from "./deliver-payload.js";
@@ -64,6 +64,11 @@ import {
   reconcileUnknownQueuedDelivery,
 } from "./delivery-queue-reconciliation.js";
 import {
+  isPermanentDeliveryError,
+  resolveMaxRetries,
+  resolveAttemptCount,
+} from "./delivery-queue-recovery-policy.js";
+import {
   claimDeliveryPlatformSendAttempt,
   failDelivery,
   failDeliveryAfterPlatformSend,
@@ -99,21 +104,6 @@ export interface RecoveryLogger {
   warn(msg: string): void;
   error(msg: string): void;
 }
-
-const DEFAULT_MAX_RETRIES = 5;
-
-const PERMANENT_ERROR_PATTERNS: readonly RegExp[] = [
-  /no conversation reference found/i,
-  /chat not found/i,
-  /user not found/i,
-  /bot.*not.*member/i,
-  /bot was blocked by the user/i,
-  /forbidden: bot was kicked/i,
-  /chat_id is empty/i,
-  /recipient is not a valid/i,
-  /ambiguous .* recipient/i,
-  /User .* not in room/i,
-];
 
 const recoveryCoordinator = createDeliveryRecoveryCoordinator<QueuedDelivery>();
 
@@ -220,20 +210,6 @@ function emitRecoveredTerminalSuccess(entry: QueuedDelivery, result: OutboundDel
       return event;
     }),
   );
-}
-
-function resolveMaxRetries(entry: QueuedDelivery): number {
-  const configured = entry.maxRetries;
-  return typeof configured === "number" && Number.isInteger(configured) && configured > 0
-    ? configured
-    : DEFAULT_MAX_RETRIES;
-}
-
-function resolveAttemptCount(entry: QueuedDelivery): number {
-  const persisted = entry.attemptCount;
-  const attemptCount =
-    typeof persisted === "number" && Number.isInteger(persisted) && persisted >= 0 ? persisted : 0;
-  return Math.max(attemptCount, entry.retryCount);
 }
 
 function emitQueuedAuditTerminals(
@@ -413,12 +389,15 @@ async function settleQueuedFailure(
             })),
       );
       if (settlement.unknownSendCleanup) {
-        const cleanup = resolveOutboundChannelMessageAdapter({
-          channel: entry.channel,
-          cfg: params.cfg,
-          agentId: entry.session?.agentId,
-          allowBootstrap: true,
-        })?.durableFinal?.afterUnknownSendTerminal;
+        const cleanup = (
+          await resolveOutboundChannelMessageAdapter({
+            channel: entry.channel,
+            cfg: params.cfg,
+            agentId: entry.session?.agentId,
+            allowBootstrap: true,
+            assertCurrent: () => stateContext.workerContext.admission.assertCurrent(),
+          })
+        )?.durableFinal?.afterUnknownSendTerminal;
         try {
           await cleanup?.(
             buildUnknownSendContext({
@@ -526,16 +505,19 @@ async function runReconciledSentCommitHooks(params: {
   cfg: OpenClawConfig;
   reconciliation: Extract<ChannelMessageUnknownSendReconciliationResult, { status: "sent" }>;
   log: RecoveryLogger;
+  assertCurrent: () => void;
 }): Promise<void> {
   if (params.entry.legacyPreparedContentUnavailable) {
     return;
   }
-  const adapter = resolveOutboundChannelMessageAdapter({
+  const adapter = await resolveOutboundChannelMessageAdapter({
     channel: params.entry.channel,
     cfg: params.cfg,
     agentId: params.entry.session?.agentId,
     allowBootstrap: true,
+    assertCurrent: params.assertCurrent,
   });
+  params.assertCurrent();
   const afterCommit = adapter?.send?.lifecycle?.afterCommit;
   if (!afterCommit) {
     return;
@@ -666,10 +648,6 @@ async function resolveCompletedOwnerBeforeRecovery(
   return "recovered";
 }
 
-function isPermanentDeliveryError(error: string): boolean {
-  return PERMANENT_ERROR_PATTERNS.some((re) => re.test(error));
-}
-
 async function persistRecoveredPostSendState(
   opts: {
     owner: QueuedDeliveryOwner;
@@ -741,6 +719,7 @@ async function drainQueuedEntry(
         payloads: queuedDeliveryPayloads(entry),
         cfg: opts.cfg,
         warn: (message) => opts.log.warn(message),
+        assertCurrent: () => stateContext.workerContext.admission.assertCurrent(),
       }));
     if (reconciliation?.status === "sent") {
       try {
@@ -760,6 +739,7 @@ async function drainQueuedEntry(
           cfg: opts.cfg,
           reconciliation,
           log: opts.log,
+          assertCurrent: () => stateContext.workerContext.admission.assertCurrent(),
         });
         emitQueuedAuditTerminals(entry, () =>
           completedOutboundAuditTerminals({
@@ -1240,7 +1220,7 @@ async function processQueuedRecovery(
     }
     return "continue";
   }
-  const admission = resolveDeferredDeliveryAdmission(
+  const resolveAdmission = await prepareDeferredDeliveryAdmission(
     {
       cfg: opts.cfg,
       channel: entry.channel,
@@ -1248,8 +1228,15 @@ async function processQueuedRecovery(
       accountId: entry.accountId,
       phase: "recovery",
     },
-    { agentId: entry.session?.agentId },
+    {
+      agentId: entry.session?.agentId,
+      assertCurrent: () => stateContext.workerContext.admission.assertCurrent(),
+    },
   );
+  if (context.shouldContinue?.() === false) {
+    return "stop";
+  }
+  const admission = resolveAdmission();
   if (admission.status !== "allowed") {
     const settled = await settleQueuedFailure({ ...opts, error: admission.reason }, stateContext);
     const logLabel = context.kind === "startup" ? "Recovery" : context.logLabel;
@@ -1400,7 +1387,7 @@ export async function drainPendingDeliveriesCore(
 
 /**
  * Scan the canonical delivery queue and retry any pending entries.
- * The gateway startup owner runs legacy migration before invoking this recovery pass.
+ * Doctor imports and prepares legacy entries before this runtime recovery pass.
  * Uses exponential backoff and moves entries that exhaust their retry budget to failed/.
  */
 export async function recoverPendingDeliveries(

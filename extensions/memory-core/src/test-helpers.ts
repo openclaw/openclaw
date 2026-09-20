@@ -6,6 +6,7 @@ import {
   createPluginStateKeyedStoreForTests,
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import { openOpenClawAgentDatabase } from "openclaw/plugin-sdk/sqlite-runtime";
 import {
   closeOpenClawAgentDatabasesForTest,
   closeOpenClawStateDatabaseAsync,
@@ -34,6 +35,7 @@ import {
   writeMemoryCoreWorkspaceEntries,
   writeMemoryCoreWorkspaceEntry,
 } from "./dreaming-state.js";
+import { recordMemorySessionTombstonesInDatabase } from "./memory-entry-origins.js";
 import { applyShortTermPromotions } from "./short-term-promotion-apply.js";
 import {
   normalizeShortTermPhaseSignalStore,
@@ -44,6 +46,13 @@ import { normalizeShortTermRecallStore } from "./short-term-promotion-utils.js";
 
 const MEMORY_CORE_PLUGIN_ID = "memory-core";
 const MEMORY_CORE_TEST_AGENT_ID = "memory-core-test";
+
+export function seedMemoryForgetTombstones(
+  params: Parameters<typeof recordMemorySessionTombstonesInDatabase>[1],
+): number {
+  const { db } = openOpenClawAgentDatabase({ agentId: params.agentId });
+  return recordMemorySessionTombstonesInDatabase(db, params);
+}
 
 export function consolidateMemoryForTests(
   params: Omit<Parameters<typeof consolidateMemory>[0], "agentId">,

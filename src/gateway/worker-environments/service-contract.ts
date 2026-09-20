@@ -19,6 +19,13 @@ import type {
   WorkerSessionPlacementRecord,
   WorkerPlacementExecutionMode,
 } from "./placement-record.js";
+import type {
+  WorkerEnvironmentAttachment,
+  WorkerEnvironmentAttachmentRecord,
+  WorkerEnvironmentSessionCreateRequest,
+  WorkerEnvironmentSessionIdentity,
+  WorkerEnvironmentSessionReservationHandler,
+} from "./session-attachment.js";
 import type { WorkerEnvironmentState } from "./state.js";
 import type {
   WorkerTunnelHandle,
@@ -74,6 +81,44 @@ export type WorkerDesktopLaunchResult = {
 
 /** Request-facing lifecycle methods, kept separate from persistence and provider internals. */
 export type WorkerEnvironmentServiceContract = {
+  getSessionAttachment(sessionId: string): WorkerEnvironmentAttachment | undefined;
+  findSessionAttachment(
+    identity: Pick<WorkerEnvironmentSessionIdentity, "agentId" | "sessionKey">,
+  ): WorkerEnvironmentAttachment | undefined;
+  getSessionAttachmentStatus(sessionId: string):
+    | {
+        attachment: WorkerEnvironmentAttachmentRecord & { ownerEpoch: number };
+        environment: WorkerEnvironmentServiceRecord;
+      }
+    | undefined;
+  assertSessionAttachment(binding: WorkerEnvironmentAttachment): void;
+  touchSessionAttachment(binding: WorkerEnvironmentAttachment): void;
+  execSessionAttachment(
+    binding: WorkerEnvironmentAttachment,
+    command: import("./tunnel-contract.js").WorkerWorkspaceCommand,
+  ): Promise<import("../../worker/node-workspace-protocol.js").NodeWorkerWorkspaceExecResult>;
+  createSessionAttachment(
+    request: WorkerEnvironmentSessionCreateRequest,
+    authorize: () => void,
+    signal?: AbortSignal,
+    onReserved?: WorkerEnvironmentSessionReservationHandler,
+  ): Promise<{
+    attachment: WorkerEnvironmentAttachmentRecord & { ownerEpoch: number };
+    environment: WorkerEnvironmentServiceRecord;
+    reused: boolean;
+  }>;
+  destroySessionAttachment(
+    request: { sessionId: string; environmentId?: string },
+    authorize: () => void,
+  ): Promise<WorkerEnvironmentServiceRecord | undefined>;
+  prepareAttachedComputer?: (
+    authority: import("./computer-transport.js").WorkerEnvironmentComputerAuthority,
+  ) => Promise<import("./computer-transport.js").PreparedWorkerComputer | undefined>;
+  openNodePortal(request: {
+    environmentId: string;
+    ownerEpoch: number;
+    remotePort: number;
+  }): Promise<{ connect: () => Promise<import("node:stream").Duplex>; close: () => Promise<void> }>;
   list(): WorkerEnvironmentServiceRecord[];
   get(environmentId: string): WorkerEnvironmentServiceRecord | undefined;
   inventoryVersion(): number;
@@ -190,6 +235,7 @@ export type WorkerPlacementDispatchContract = {
     request: WorkerPlacementDispatchRequest,
     onTransition?: (placement: WorkerSessionPlacementRecord) => void,
     authorize?: WorkerPlacementAuthorization,
+    callerSignal?: AbortSignal,
   ): Promise<Extract<WorkerSessionPlacementRecord, { state: "active" }>>;
   move?(
     request: WorkerPlacementMoveRequest,

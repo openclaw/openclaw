@@ -32,6 +32,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { triggerSessionPatchHook } from "../gateway/session-patch-hooks.js";
 import { resolveSessionWorkerPlacementContext } from "../gateway/session-worker-placement-context.js";
 import { resolveWorkerPlacementSessionRuntimeCapabilities } from "../gateway/worker-environments/placement-session-runtime.js";
+import { resolveSystemEventQueueKey } from "../infra/system-event-ownership.js";
 import { enqueueSystemEvent } from "../infra/system-events.js";
 import { applyModelOverrideWithAuthProfileCompatibility } from "../sessions/auth-profile-preservation.js";
 import {
@@ -217,7 +218,7 @@ export async function applySessionModelSelection(
       cfg: params.cfg,
       catalog: [...params.modelCatalog],
       defaultProvider: params.defaultProvider,
-      defaultModel: params.defaultModel,
+      defaultModel: { provider: params.defaultProvider, model: params.defaultModel },
       agentId: params.agentId,
     });
   if (!resetToDefault && !policy.allows(request)) {
@@ -418,6 +419,7 @@ export async function applySessionModelSelection(
       sessionKey: params.sessionKey,
       agentId: params.agentId,
       reason: "patch",
+      catalogChanged: true,
     });
     triggerSessionPatchHook({
       cfg: params.cfg,
@@ -443,7 +445,7 @@ export async function applySessionModelSelection(
 
   if (`${params.currentProvider}/${params.currentModel}` !== effectiveModelRef) {
     enqueueSystemEvent(formatModelSwitchEvent(provider, model, request.alias), {
-      sessionKey: params.sessionKey,
+      sessionKey: resolveSystemEventQueueKey(params.sessionKey, params.agentId),
       contextKey: `model:${effectiveModelRef}`,
     });
   }

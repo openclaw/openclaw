@@ -986,11 +986,7 @@
   width: 100%;
   min-height: 420px;
   border: 0;
-  /* Widget documents keep a transparent body; the host provides the themed
-     backdrop so transparent regions match the active theme instead of
-     flashing white in dark mode. Documents from the pre-token wrapper assumed
-     white; accepted tradeoff — they are transient (32-doc LRU) and age out. */
-  background: var(--card);
+  background: transparent;
 }
 
 .chat-tool-card__widget-raw {

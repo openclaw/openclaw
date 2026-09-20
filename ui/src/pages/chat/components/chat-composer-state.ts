@@ -66,7 +66,9 @@ export function isCurrentSessionSubmittedProgress(
   return (
     item.sessionKey === sessionKey &&
     !item.pendingRunId &&
-    (item.sendState === "sending" || item.sendState === "waiting-model") &&
+    (item.sendState === "submitting" ||
+      item.sendState === "sending" ||
+      item.sendState === "waiting-model") &&
     (status == null || item.sendRunId !== status.runId)
   );
 }

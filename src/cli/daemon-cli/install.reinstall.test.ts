@@ -5,6 +5,7 @@ import { createInstallPlanFixture, nodeProbeOutput } from "./install.test-helper
 
 const {
   actionState,
+  pinSnapshotMock,
   buildGatewayInstallPlanMock,
   expectFields,
   expectLastEmittedResult,
@@ -22,6 +23,45 @@ const {
 
 describe("runDaemonInstall reinstall", () => {
   setupInstallTests();
+  it.each(["preserve", "replace", "reset"] as const)(
+    "handles a runtime pin during %s reinstall",
+    async (mode) => {
+      const pin = resolveTestNodeExecPath();
+      service.readCommand.mockResolvedValue({
+        programArguments: [pin, "/opt/openclaw/dist/index.js", "gateway"],
+      });
+      pinSnapshotMock.mockReturnValue({
+        revision: "prior",
+        stored: true,
+        pin: { runtime: "node", path: mode === "preserve" ? pin : "/removed/node" },
+      });
+      await runDaemonInstall({
+        json: true,
+        force: true,
+        ...(mode === "replace" ? { runtimePath: pin } : {}),
+        ...(mode === "reset" ? { runtime: "node" } : {}),
+      });
+      expect(actionState.failed).toEqual([]);
+      expect(readFirstInstallPlanArg()?.pinnedRuntimePath).toBe(mode === "reset" ? undefined : pin);
+      expect(installDaemonServiceAndEmitMock).toHaveBeenCalledOnce();
+    },
+  );
+
+  it("rejects a missing preserved pin before generating credentials or installing", async () => {
+    service.readCommand.mockResolvedValue({
+      programArguments: ["/removed/node", "/opt/openclaw/dist/index.js", "gateway"],
+    });
+    pinSnapshotMock.mockReturnValue({
+      revision: "prior",
+      stored: true,
+      pin: { runtime: "node", path: "/removed/node" },
+    });
+    await runDaemonInstall({ json: true, force: true });
+    expect(actionState.failed[0]?.message).toContain("Pinned runtime is not executable");
+    expect(buildGatewayInstallPlanMock).not.toHaveBeenCalled();
+    expect(replaceConfigFileMock).not.toHaveBeenCalled();
+    expect(installDaemonServiceAndEmitMock).not.toHaveBeenCalled();
+  });
 
   it.each([
     { mode: "local", installedOverride: false, plannedOverride: false },

@@ -17,6 +17,11 @@ Swift and TypeScript state-database contracts declare different schema versions.
 [`openclaw doctor --fix`](/cli/doctor) owns file-to-SQLite migrations and records a
 receipt for each one in the shared `migration_runs` and `migration_sources` tables.
 
+Execution step receipts are separate from these persisted import receipts.
+A step blocked by an earlier refusal includes optional `originatingRefusal`
+fields `stepId`, `code`, and `message` naming the first failure. See
+[legacy state migration](/cli/doctor/state-migrations) for how to resolve it.
+
 This page is an index. The reference is documented on seven pages, one per
 reader job. Open the page that matches your task and stay there.
 

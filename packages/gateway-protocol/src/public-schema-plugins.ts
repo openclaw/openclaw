@@ -3,6 +3,7 @@ export {
   CapabilityConsentErrorDetailsSchema,
   PluginCatalogEntrySchema,
   PluginCatalogInstallActionSchema,
+  PluginDecisionProviderStatusSchema,
   PluginDeclaredSurfaceSchema,
   PluginDeclaredSurfaceWideningSchema,
   PluginHookGrantSchema,

@@ -55,6 +55,7 @@ const DIAGNOSTIC_EVENT_LISTENER_PRESENCE = Symbol.for(
   "openclaw.diagnosticEventListenerPresence.v1",
 );
 const SESSION_SUSPENSION_TEST_API = Symbol.for("openclaw.sessionSuspensionTestApi");
+const SECRET_REDACTION_TEST_API = Symbol.for("openclaw.secretRedactionRegistryTestApi");
 // Shared-worker scoped: the registry lives on the worker global, not in the module graph.
 const CUSTOM_ELEMENT_TRACKING = Symbol.for("openclaw.nonIsolatedCustomElementTracking");
 const nativeConsoleMethods = {
@@ -183,9 +184,10 @@ function resetSharedDocumentBody(): void {
     body.removeAttribute(attribute);
   }
   // jsdom can retain detached shadow focus even after the fixture removes its DOM.
-  // Native body focus clears that state; blur cannot reach an already-detached target.
+  // Focus body to clear it, then blur while focusable to restore fresh-document state.
   body.tabIndex = -1;
   body.focus();
+  body.blur();
   body.removeAttribute("tabindex");
 }
 
@@ -269,6 +271,10 @@ type DiagnosticEventsStateForTest = {
 
 type SessionSuspensionTestApi = {
   resetSessionSuspensionStateForTest?: () => void;
+};
+
+type SecretRedactionTestApi = {
+  resetSecretRedactionRegistryForTest?: () => void;
 };
 
 function runCleanupActions(actions: CleanupAction[]): unknown {
@@ -373,6 +379,12 @@ function resetOpenClawSessionSuspensionState(): void {
   api?.resetSessionSuspensionStateForTest?.();
 }
 
+function resetOpenClawSecretRedactionState(): void {
+  const globalStore = globalThis as Record<PropertyKey, unknown>;
+  const api = globalStore[SECRET_REDACTION_TEST_API] as SecretRedactionTestApi | undefined;
+  api?.resetSecretRedactionRegistryForTest?.();
+}
+
 // Join the native owner's latest pass, including imports queued while cleanup waits.
 async function drainMockerResolveMocks(mocker: ModuleMocker | undefined): Promise<void> {
   if (!mocker) {
@@ -445,6 +457,8 @@ export default class OpenClawNonIsolatedRunner extends TestRunner {
     // Lifecycle-owned singletons survive module resets; close them before the next file
     // can observe a previous file's sessions, caches, or registered resources.
     await drainGlobalSingletonLifecycleState();
+    // Teardown can still register or log secrets; retire them only after its writers settle.
+    resetOpenClawSecretRedactionState();
     if (this.config.isolate) {
       return;
     }

@@ -25,6 +25,7 @@ import {
   resolvePersistedUserTurnMessage,
 } from "./user-turn-transcript.message.js";
 import {
+  buildRunUserTurnIdempotencyKey,
   normalizePersistedSteerTargetRunId,
   preparePersistedUserTurnMessageForTranscriptWrite,
   restorePreparedUserTurnOperationalMetaForRuntime,
@@ -67,13 +68,10 @@ export {
 } from "./user-turn-transcript.message.js";
 
 export {
+  buildRunUserTurnIdempotencyKey,
   preparePersistedUserTurnMessageForTranscriptWrite,
   restorePreparedUserTurnOperationalMetaForRuntime,
 };
-
-export function buildRunUserTurnIdempotencyKey(runId: string): string {
-  return `${runId}:user`;
-}
 
 // Store-backed persistence resolves the current session transcript file lazily
 // so callers can pass a session entry/store without knowing the final path.

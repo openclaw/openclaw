@@ -170,7 +170,7 @@ describe("hydrateDiscordMessageIfNeeded", () => {
     expect(hydrated.referencedMessage?.content).toBe("the replied-to message");
   });
 
-  it("fetches the referenced message when the hydrated reply still omits it", async () => {
+  it.each([undefined, "u2"])("fetches missing reply context (botUserId=%s)", async (botUserId) => {
     const client = createInternalTestClient();
     const rest = createFakeRestClient([
       createReferencedMessagePayload("the directly fetched message"),
@@ -201,6 +201,7 @@ describe("hydrateDiscordMessageIfNeeded", () => {
     expect(hydrated.referencedMessage?.content).toBe("the directly fetched message");
 
     const ctx = await createBaseDiscordMessageContext({
+      botUserId,
       message: hydrated,
       author: hydrated.author,
       baseText: hydrated.content,

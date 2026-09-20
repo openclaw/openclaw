@@ -4,8 +4,13 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
-import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
+import {
+  openOpenClawStateDatabase,
+  runOpenClawStateWriteTransaction,
+} from "../../state/openclaw-state-db.js";
 import { failPendingDelivery } from "./delivery-queue-ack.js";
+import { ackDeliveryInDatabase } from "./delivery-queue-ack.kernel.js";
+import { releaseSpoolArtifacts } from "./delivery-queue-media-spool.js";
 import { OUTBOUND_DELIVERY_QUEUE_NAME } from "./delivery-queue-media-staging.js";
 import { renewDeliveryPlatformSendLease } from "./delivery-queue-platform-lease.js";
 import {
@@ -214,7 +219,15 @@ describe("delivery-queue storage", () => {
             : null,
         );
         try {
-          await ackDelivery(id, stateDir, { expectedPlatformSendAttemptId: secondAttemptId });
+          // Count the native kernel's reads; the public ACK now runs in a separate worker.
+          const spoolPaths = runOpenClawStateWriteTransaction(
+            (database) =>
+              ackDeliveryInDatabase(database, id, stateDir, {
+                expectedPlatformSendAttemptId: secondAttemptId,
+              }),
+            { env: { ...process.env, OPENCLAW_STATE_DIR: stateDir } },
+          );
+          await releaseSpoolArtifacts(spoolPaths, stateDir);
           expect(reads.rowCounts.queue).toBeGreaterThan(0);
           expect(reads.textBytes.queue).toBeGreaterThan(0);
           expect.soft(reads.counts.queue).toBeLessThanOrEqual(3);

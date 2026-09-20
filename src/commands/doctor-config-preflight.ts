@@ -192,7 +192,7 @@ async function runDoctorConfigPreflightOperation(
             ? error
             : new Error("OpenClaw startup migration lease heartbeat failed.");
       }
-    }, 60_000);
+    }, migrationCheckpoint.STARTUP_MIGRATION_HEARTBEAT_INTERVAL_MS);
     startupMigrationHeartbeat.unref?.();
     // Another process may have completed the same work between our pre-lease read and acquisition.
     // Refresh every checkpoint input under the lease so only work still missing from state runs.
@@ -236,7 +236,7 @@ async function runDoctorConfigPreflightOperation(
     measure: measurePreflightStep,
   });
   const readConfigSnapshotForPreflight = async (allowCurrentPluginMetadata = true) =>
-    await measurePreflightStep("config-snapshot", () =>
+    await measurePreflightStep("config-snapshot", async () =>
       readDoctorConfigPreflightSnapshot({
         allowCurrentPluginMetadata,
         includePluginMetadata:
@@ -246,10 +246,10 @@ async function runDoctorConfigPreflightOperation(
         preparePluginMetadataSnapshot: options.preparePluginMetadataSnapshot === true,
         skipPluginValidation: shouldSkipPluginValidationForDoctorConfigPreflight(),
         prepareSnapshot: getSnapshotPreparation(options.doctorOnlyStateMigrations === true),
-        ...pluginMigrations.snapshotOptions(),
+        ...(await pluginMigrations.snapshotOptions()),
       }),
     );
-  const readAdmittedStartupSnapshot = () =>
+  const readAdmittedStartupSnapshot = async () =>
     readStartupMigrationSnapshot({
       env: startupMigrationEnv,
       readSnapshot: () => readConfigSnapshotForPreflight(false),
@@ -262,7 +262,7 @@ async function runDoctorConfigPreflightOperation(
       validateConfig: options.validateStartupConfig,
       beforeStateMigrations: options.beforeStateMigrations,
       preparePluginMigrations: pluginMigrations.prepare,
-      deferredPluginMigrations: pluginMigrations.snapshotOptions().deferredPluginMigrations,
+      deferredPluginMigrations: (await pluginMigrations.snapshotOptions()).deferredPluginMigrations,
     });
   try {
     if (migrationCheckpoint && !skipPristineStartupStateMigrations) {
@@ -562,6 +562,9 @@ async function runDoctorConfigPreflightOperation(
                 log: migrationLog,
                 recoverCorruptTargetStore: options.recoverCorruptTargetStore,
                 doctorOnlyStateMigrations: options.doctorOnlyStateMigrations,
+                ...(options.agentDatabaseMigrationDiscovery
+                  ? { agentDatabaseMigrationDiscovery: options.agentDatabaseMigrationDiscovery }
+                  : {}),
                 beforeWorkspaceStateMigration: options.beforeWorkspaceStateMigration,
                 onStepReceipt: (receipt) => stateMigrationStepReceipts.push(receipt),
                 ...(gatewayStartupCheckpointRequired

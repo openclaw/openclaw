@@ -369,14 +369,18 @@ describe("cli json stdout contract", () => {
               : arg,
         );
         const message = testCase.message.replace("$MISSING_STORE", missingStore);
-        const result = runBuiltCli(tempHome, args, {
-          NODE_OPTIONS: `--import=data:text/javascript;base64,${preload}`,
-          OPENCLAW_CONFIG_PATH: path.join(tempHome, "missing-openclaw.json"),
-          OPENCLAW_GATEWAY_PORT: "29791",
-          OPENCLAW_STATE_DIR: path.join(tempHome, "isolated-state"),
-          ...("commander" in testCase ? { OPENCLAW_DISABLE_ROUTE_FIRST: "1" } : {}),
-          ...("tty" in testCase ? { FORCE_COLOR: "1" } : {}),
-        });
+        const result = runBuiltCli(
+          tempHome,
+          args,
+          {
+            OPENCLAW_CONFIG_PATH: path.join(tempHome, "missing-openclaw.json"),
+            OPENCLAW_GATEWAY_PORT: "29791",
+            OPENCLAW_STATE_DIR: path.join(tempHome, "isolated-state"),
+            ...("commander" in testCase ? { OPENCLAW_DISABLE_ROUTE_FIRST: "1" } : {}),
+            ...("tty" in testCase ? { FORCE_COLOR: "1" } : {}),
+          },
+          { execArgv: [`--import=data:text/javascript;base64,${preload}`] },
+        );
 
         expect(result.status, result.stderr).toBe(1);
         expect(result.stdout, result.stderr).not.toContain("\u001B");

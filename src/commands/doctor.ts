@@ -2,6 +2,7 @@
 import { exitCliAfterOutput } from "../cli/one-shot-exit.js";
 import { LEGACY_IMPLICIT_AGENT_ID, normalizeAgentId } from "../routing/session-key.js";
 import { defaultRuntime, type RuntimeEnv, writeRuntimeJson } from "../runtime.js";
+import type { DoctorDatabasePreflight } from "./doctor-database-preflight.js";
 import type { DoctorOptions } from "./doctor-prompter.js";
 import type { DoctorSessionSqliteReport } from "./doctor-session-sqlite.js";
 import type { DoctorSqliteMaintenanceAuthority } from "./doctor-sqlite-maintenance-lock.js";
@@ -45,7 +46,11 @@ async function resolveExplicitSessionSqliteMaintenancePaths(
 }
 
 /** Runs doctor or the post-upgrade probe submode using the provided runtime. */
-export async function doctorCommand(runtime?: RuntimeEnv, options?: DoctorOptions): Promise<void> {
+export async function doctorCommand(
+  runtime?: RuntimeEnv,
+  options?: DoctorOptions,
+  databasePreflight?: DoctorDatabasePreflight,
+): Promise<void> {
   const outputRuntime = runtime ?? defaultRuntime;
   if (options?.stateSqlite) {
     const { runDoctorStateSqliteCompact } = await import("./doctor-state-sqlite-compact.js");
@@ -67,6 +72,7 @@ export async function doctorCommand(runtime?: RuntimeEnv, options?: DoctorOption
   }
   if (options?.sessionSqlite) {
     const sessionSqliteMode = options.sessionSqlite;
+    const { countBlockingSessionSqliteIssues } = await import("./doctor-session-sqlite-types.js");
     const { isDestructiveDoctorSessionSqliteMode, withDoctorSqliteMaintenanceLock } =
       await import("./doctor-sqlite-maintenance-lock.js");
     const { runDoctorSessionSqlite, reconcileDoctorSessionSqlitePublication } =
@@ -144,11 +150,16 @@ export async function doctorCommand(runtime?: RuntimeEnv, options?: DoctorOption
         }
       }
     }
-    exitCliAfterOutput(outputRuntime, report.totals.issues > 0 ? 1 : 0);
+    const hasBlockingIssues = report.targets.some(
+      (target) => countBlockingSessionSqliteIssues(target) > 0,
+    );
+    exitCliAfterOutput(outputRuntime, hasBlockingIssues ? 1 : 0);
   }
   if (options?.postUpgrade) {
     const { runPostUpgradeProbes } = await import("./doctor-post-upgrade.js");
-    const report = await runPostUpgradeProbes({});
+    const { readSourceConfigBestEffort } = await import("../config/io.runtime.js");
+    const config = await readSourceConfigBestEffort();
+    const report = await runPostUpgradeProbes({ updateChannel: config.update?.channel });
     if (options.json) {
       writeRuntimeJson(outputRuntime, report);
     } else {
@@ -167,7 +178,12 @@ export async function doctorCommand(runtime?: RuntimeEnv, options?: DoctorOption
   await withDoctorUpdateRecovery(outputRuntime, async () => {
     await prepareDoctorUpdateRecovery(options);
     const doctorHealth = await import("../flows/doctor-health.js");
-    await doctorHealth.runDoctorHealthFlow(doctorUpdateRecoveryRuntime(outputRuntime), options);
+    await doctorHealth.runDoctorHealthFlow(
+      doctorUpdateRecoveryRuntime(outputRuntime),
+      options,
+      undefined,
+      databasePreflight,
+    );
   });
 }
 

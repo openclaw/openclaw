@@ -207,6 +207,7 @@ vi.mock("../infra/outbound/channel-bootstrap.runtime.js", () => ({
   // Every channel fixture in this suite is already active. Bootstrap discovery
   // and its plugin-loader graph have focused owner coverage.
   bootstrapOutboundChannelPlugin: vi.fn(() => undefined),
+  bootstrapOutboundChannelPluginAsync: vi.fn(() => undefined),
   resetOutboundChannelBootstrapStateForTests: vi.fn(),
 }));
 
@@ -410,8 +411,7 @@ function createDefaultAgentResult(params?: {
 }
 
 function getLastEmbeddedCall() {
-  const calls = vi.mocked(runEmbeddedAgent).mock.calls;
-  return calls[calls.length - 1]?.[0];
+  return vi.mocked(runEmbeddedAgent).mock.calls.at(-1)?.[0];
 }
 
 function expectLastRunProviderModel(provider: string, model: string): void {
@@ -1722,11 +1722,7 @@ describe("agentCommand", () => {
 
       expect(readPreparedModelCatalog).not.toHaveBeenCalled();
       expectLastRunProviderModel("openrouter", "openrouter/auto");
-      const thinkingDefaultCall = vi.mocked(modelSelectionModule.resolveThinkingDefault).mock
-        .calls[0]?.[0];
-      expect(thinkingDefaultCall?.provider).toBe("openrouter");
-      expect(thinkingDefaultCall?.model).toBe("openrouter/auto");
-      expect(thinkingDefaultCall?.catalog).toBeUndefined();
+      expect(getLastEmbeddedCall()?.thinkLevel).toBe("off");
     });
   });
 

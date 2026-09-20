@@ -141,7 +141,10 @@ export class CodexAssistantProjection {
     }
   }
 
-  recordItemStarted(item: CodexThreadItem | undefined, itemId: string | undefined): void {
+  async recordItemStarted(
+    item: CodexThreadItem | undefined,
+    itemId: string | undefined,
+  ): Promise<void> {
     this.noteNativeWorkBarrier(item);
     this.rememberAssistantPhase(item);
     if (
@@ -166,6 +169,15 @@ export class CodexAssistantProjection {
       if (this.latestTerminalAssistantCandidateSuperseded) {
         this.pendingRawTerminalAssistantEchoItemId = undefined;
       }
+    }
+    if (
+      item?.type === "agentMessage" &&
+      itemId &&
+      item.text &&
+      !this.assistantTextByItem.has(itemId)
+    ) {
+      // Codex may seed visible text in item/started before sending further deltas.
+      await this.handleAssistantDelta({ itemId, delta: item.text });
     }
   }
 

@@ -1,16 +1,19 @@
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import type { SessionsListResult } from "../../api/types.ts";
 import type { createSessionEventRefreshCoordinator } from "./event-refresh-coordinator.ts";
+import { sessionMatchesArchivedFilter } from "./navigation.ts";
 import type {
   SessionGateway,
   SessionListOptions,
   SessionListScope,
   SessionListSnapshot,
   SessionRefreshOptions,
+  SessionRefreshOutcome,
 } from "./session-capability.ts";
 import {
   normalizeAgentId,
   areUiSessionKeysEquivalent,
+  isSubagentSessionKey,
   parseAgentSessionKey,
 } from "./session-key.ts";
 import {
@@ -18,7 +21,92 @@ import {
   DEFAULT_SESSION_LIST_QUERY,
   normalizeManagedSessionListQuery,
 } from "./session-requests.ts";
-import { parseSessionChangedEvent } from "./session-row-reconcile.ts";
+import {
+  matchesExistingSession,
+  parseSessionChangedEvent,
+  reconcileSessionChangedRow,
+} from "./session-row-reconcile.ts";
+
+const ROW_SNAPSHOT_REASONS = new Set([
+  "patch",
+  "send",
+  "steer",
+  "agent.run.started",
+  "agent.input.settled",
+  "run-capacity",
+  "chat.title",
+]);
+
+/** Only a held member moving within a known roster can replace a list read. */
+export function canApplySessionListSnapshot(
+  result: SessionsListResult | null,
+  payload: unknown,
+  options: SessionListOptions,
+): boolean {
+  const parsed = parseSessionChangedEvent(payload);
+  if (!result || !parsed || !isPrimarySessionListQuery({ ...options, archivedFilter: "active" })) {
+    return false;
+  }
+  const [info, event] = parsed;
+  if (
+    !asOptionalRecord(event.session) ||
+    event.catalogChanged === true ||
+    event.phase === "reset" ||
+    (info.reason !== null && !ROW_SNAPSHOT_REASONS.has(info.reason)) ||
+    (options.offset ?? 0) > 0
+  ) {
+    return false;
+  }
+  const existing = result.sessions.find((row) =>
+    matchesExistingSession(row, info.key, info.agentId ?? options.agentId ?? null),
+  );
+  const next = reconcileSessionChangedRow(existing, payload, {
+    resultAgentId: options.agentId,
+    archivedFilter: "all",
+  }).admittedRow;
+  if (
+    !existing ||
+    !next ||
+    !sessionMatchesArchivedFilter(existing, options.archivedFilter ?? "active") ||
+    existing.sessionId !== next.sessionId ||
+    existing.kind !== next.kind ||
+    (existing.archived === true) !== (next.archived === true) ||
+    (existing.pinned === true) !== (next.pinned === true) ||
+    existing.pinnedAt !== next.pinnedAt ||
+    JSON.stringify(existing.owner) !== JSON.stringify(next.owner) ||
+    JSON.stringify(existing.createdActor) !== JSON.stringify(next.createdActor)
+  ) {
+    return false;
+  }
+  // A child's snapshot does not refresh its ancestors' aggregate activity or
+  // child links. Keep those Gateway-owned facts behind an authoritative read.
+  if (
+    isSubagentSessionKey(existing.key) ||
+    [existing, next].some(
+      (row) => row.spawnedBy || row.controlOwnerSessionKey || row.parentSessionKey,
+    ) ||
+    result.sessions.some((row) =>
+      row.childSessions?.some((key) => areUiSessionKeysEquivalent(key, existing.key)),
+    )
+  ) {
+    return false;
+  }
+  // A member whose rank only improves cannot evict another member. Missing rows,
+  // pin/archive/owner changes and backwards clocks need authoritative admission.
+  if (info.updatedAt === null || info.updatedAt < (existing.updatedAt ?? 0)) {
+    return false;
+  }
+  // Owner-first and retained selection can add rows outside the shared page.
+  // Promoting one can displace its boundary despite already being displayed.
+  return !(
+    info.updatedAt !== existing.updatedAt &&
+    result.sessions.length >
+      (result.nextOffset ??
+        result.limitApplied ??
+        options.limit ??
+        DEFAULT_SESSION_LIST_QUERY.limit)
+  );
+}
 
 export function isForegroundReplacement(options: SessionRefreshOptions): boolean {
   return options.append !== true && options.backgroundHydrate !== true;
@@ -76,10 +164,6 @@ export function sessionListEventMatcher(payload: unknown) {
     );
   };
 }
-
-export type SessionRefreshOutcome =
-  | { status: "refreshed" | "stale" }
-  | { status: "failed"; error: string };
 
 export type SessionRefreshAttempt = {
   options: SessionRefreshOptions;

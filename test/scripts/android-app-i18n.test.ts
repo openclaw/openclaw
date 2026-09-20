@@ -475,4 +475,93 @@ describe("Android app i18n resources", () => {
       ).map((finding) => finding.source),
     ).toEqual(["Developer surface"]);
   });
+
+  it.each([
+    {
+      name: "a quoted closing parenthesis",
+      source: 'fun statusText(token: String = ")"): String = "Ready"',
+      expected: [
+        {
+          line: 1,
+          source: "Ready",
+        },
+      ],
+    },
+    {
+      name: "an escaped quote before a closing delimiter",
+      source: 'fun statusText(token: String = "\\")"): String = "Ready"',
+      expected: [
+        {
+          line: 1,
+          source: "Ready",
+        },
+      ],
+    },
+    {
+      name: "a doubled backslash before the closing quote",
+      source: 'fun statusText(token: String = "\\\\"): String = "Ready"',
+      expected: [
+        {
+          line: 1,
+          source: "Ready",
+        },
+      ],
+    },
+    {
+      name: "a quoted closing brace in a helper body",
+      source: 'fun statusText(): String { val marker = "}"; return "Ready" }',
+      expected: [
+        {
+          line: 1,
+          source: "Ready",
+        },
+      ],
+    },
+    {
+      name: "quoted commas and delimiters in positional model arguments",
+      source:
+        'data class State(val metadata: List<String>, val statusText: String)\nState(listOf("a,b", ")").map { it }, "🦊 Ready, ) ] }")',
+      expected: [
+        {
+          line: 2,
+          source: "🦊 Ready, ) ] }",
+        },
+      ],
+    },
+    {
+      name: "a default comparison after nested generic types",
+      source:
+        'data class State(val metadata: Map<String, List<Int>>, val enabled: Boolean = 1 < 2, val statusText: String)\nState(emptyMap(), true, "Ready")',
+      expected: [
+        {
+          line: 2,
+          source: "Ready",
+        },
+      ],
+    },
+    {
+      name: "quoted newlines before the next helper declaration",
+      source: 'fun statusText(): String = """First\nsecond"""\nfun helperText(): String = "Next"',
+      expected: [
+        {
+          line: 1,
+          source: "First\nsecond",
+        },
+        {
+          line: 3,
+          source: "Next",
+        },
+      ],
+    },
+    {
+      name: "an unclosed quoted parameter",
+      source: 'fun statusText(token: String = "unterminated): String = "Ready"',
+      expected: [],
+    },
+  ])("keeps scanner boundaries for $name", ({ source, expected }) => {
+    const repoPath = "apps/android/app/src/main/java/ai/openclaw/app/ui/Scanner.kt";
+    expect(findUnlocalizedAndroidUiLiterals(source, repoPath)).toEqual(
+      expected.map((finding) => ({ ...finding, path: repoPath })),
+    );
+  });
 });

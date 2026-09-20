@@ -34,7 +34,7 @@ function snapshot(path) {
 function trailers(body) {
   // Parse only: mutating interpret-trailers can execute configured commands.
   const parsed = spawnSync(
-    "git",
+    process.env.OPENCLAW_PR_GIT || process.env.GIT_EXEC || "git",
     [
       "-c",
       "trailer.separators=:",

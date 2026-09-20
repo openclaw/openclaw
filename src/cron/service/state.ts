@@ -97,6 +97,17 @@ export type CronSystemEventEnqueueResult =
 /** Notifications queued by cron mutations until their state is durable. */
 export type DeferredCronNotifications = Array<() => void>;
 
+export type CronRunDeliveryResult = {
+  /** True after verified delivery, including a matching messaging-tool send. */
+  delivered?: boolean;
+  /** Delivery may have been attempted without a confirmed transport acknowledgment. */
+  deliveryAttempted?: boolean;
+  deliveryError?: string;
+  deliverySuppressionReason?: NormalizeReplySkipReason;
+  deliveryState?: CronResolvedDeliveryState;
+  delivery?: CronDeliveryTrace;
+};
+
 /** Dependency injection surface for the cron service runtime. */
 export type CronServiceDeps = {
   nowMs?: () => number;
@@ -165,7 +176,7 @@ export type CronServiceDeps = {
     sessionKey?: string;
     agentId?: string;
   }) => DeliveryContext | undefined;
-  /** Runs timer and startup work inside the owning Gateway's detached scope. */
+  /** Binds the Gateway for complete scheduled operations, including admission and settlement. */
   runSchedulerOwned?: <T>(run: () => Promise<T>) => Promise<T>;
   requestHeartbeat: (opts: HeartbeatWakeRequest) => void;
   /** Waits for the terminal result of a cron-owned coalesced heartbeat wake. */
@@ -186,58 +197,32 @@ export type CronServiceDeps = {
     onLaneWait?: (info?: { waiting?: boolean }) => void;
     executionIdentity?: CronExecutionIdentityAdmission;
   }) => Promise<
-    {
-      summary?: string;
-      /** Last non-empty agent text output (not truncated). */
-      outputText?: string;
-      /**
-       * `true` when the isolated run already delivered its output to the target
-       * channel (including matching messaging-tool sends). See:
-       * https://github.com/openclaw/openclaw/issues/15692
-       */
-      delivered?: boolean;
-      deliveryError?: string;
-      deliverySuppressionReason?: NormalizeReplySkipReason;
-      deliveryState?: CronResolvedDeliveryState;
-      /**
-       * `true` when announce/direct delivery was attempted for this run, even
-       * if the final per-message ack status is uncertain.
-       */
-      deliveryAttempted?: boolean;
-      delivery?: CronDeliveryTrace;
-      nextCheck?: CronNextCheckProposal;
-    } & CronRunOutcome &
-      CronRunTelemetry
+    CronRunOutcome &
+      CronRunTelemetry &
+      CronRunDeliveryResult & {
+        /** Last non-empty agent text output (not truncated). */
+        outputText?: string;
+        nextCheck?: CronNextCheckProposal;
+      }
   >;
-  runCommandJob?: (params: { job: CronJob; abortSignal?: AbortSignal }) => Promise<
-    {
-      delivered?: boolean;
-      deliveryAttempted?: boolean;
-      deliveryError?: string;
-      deliverySuppressionReason?: NormalizeReplySkipReason;
-      deliveryState?: CronResolvedDeliveryState;
-      delivery?: CronDeliveryTrace;
-    } & CronRunOutcome
-  >;
+  runCommandJob?: (params: {
+    job: CronJob;
+    abortSignal?: AbortSignal;
+  }) => Promise<CronRunOutcome & CronRunDeliveryResult>;
   runScriptJob?: (params: {
     job: CronStoredJob;
     streamBatch?: string;
     abortSignal?: AbortSignal;
     executionIdentity?: CronExecutionIdentityAdmission;
   }) => Promise<
-    {
-      delivered?: boolean;
-      deliveryAttempted?: boolean;
-      deliveryError?: string;
-      deliverySuppressionReason?: NormalizeReplySkipReason;
-      deliveryState?: CronResolvedDeliveryState;
-      delivery?: CronDeliveryTrace;
-      notify?: string;
-      wake?: "now" | "next-heartbeat";
-      stateChanged?: boolean;
-      state?: unknown;
-      nextCheck?: CronNextCheckProposal;
-    } & CronRunOutcome
+    CronRunOutcome &
+      CronRunDeliveryResult & {
+        notify?: string;
+        wake?: "now" | "next-heartbeat";
+        stateChanged?: boolean;
+        state?: unknown;
+        nextCheck?: CronNextCheckProposal;
+      }
   >;
   /** Deliver a primary cron webhook before the run outcome is finalized. */
   sendCronWebhook?: (params: {

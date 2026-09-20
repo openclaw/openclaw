@@ -2,14 +2,11 @@
 
 import type { RouteLoaderOptions, RouteLocation } from "@openclaw/uirouter";
 import { render } from "lit";
-import { afterEach, describe, expect, it } from "vitest";
-import type {
-  ApplicationContext,
-  ApplicationGateway,
-  ApplicationGatewaySnapshot,
-} from "../../app/context.ts";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import type { ApplicationContext } from "../../app/context.ts";
 import { createApplicationContextProvider } from "../../test-helpers/application-context.ts";
 import "./custodian-page.ts";
+import { createContext as createCustodianContext } from "./custodian-page.test-harness.ts";
 import { renderCustodianRoute } from "./route-view.ts";
 import { page, type CustodianRouteData } from "./route.ts";
 
@@ -32,35 +29,10 @@ function loadRoute(search: string): CustodianRouteData {
 }
 
 function createContext(): ApplicationContext {
-  const snapshot: ApplicationGatewaySnapshot = {
-    client: null,
-    phase: "stopped",
-    offlineStable: false,
-    canvasPluginSurfaceUrl: null,
-    hello: null,
-    assistantAgentId: "main",
-    sessionKey: "main",
-    lastError: null,
-    lastErrorCode: null,
-  };
-  const gateway = {
-    snapshot,
-    connection: {
-      gatewayUrl: "ws://gateway.test/control",
-      token: "",
-      bootstrapToken: "",
-      password: "",
-    },
-    subscribe: () => () => undefined,
-    subscribeEvents: () => () => undefined,
-  } as unknown as ApplicationGateway;
-  return {
-    gateway,
-    agents: {
-      state: { agentsList: null },
-      subscribe: () => () => undefined,
-    },
-  } as unknown as ApplicationContext;
+  const harness = createCustodianContext(vi.fn(), []);
+  harness.setGatewaySnapshot({ client: null, phase: "stopped", hello: null });
+  harness.context.agents.state.agentsList = null;
+  return harness.context;
 }
 
 afterEach(() => {

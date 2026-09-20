@@ -1,5 +1,4 @@
 import { randomUUID } from "node:crypto";
-import type { DatabaseSync } from "node:sqlite";
 import { isDeepStrictEqual } from "node:util";
 import {
   UPDATE_RUN_DRIVER_LIMIT,
@@ -26,7 +25,6 @@ import {
 } from "./update-recovery-backup-contract.js";
 import {
   inspectUpdateRepairDriverAdmission,
-  isAbandonedUpdateRun,
   isStaleIdentitylessUpdateRun,
   recordedUpdateRunDrivers,
 } from "./update-run-activity.js";
@@ -44,7 +42,6 @@ import {
   sameUpdateRunDriver,
   type UpdateRunDriver,
 } from "./update-run-driver.js";
-import { updateRunLedgerSchema as schema } from "./update-run-ledger-schema.js";
 import { LEGACY_UPDATE_RUN_EXPIRED_REASON } from "./update-run-legacy-expiry.js";
 import {
   canReconcileCandidates,
@@ -56,6 +53,8 @@ import {
 } from "./update-run-reader.js";
 import {
   finishUpdateRunRecord,
+  isAbandonedUpdateRun,
+  isUnacknowledgedPackageOwnerRefusal,
   upsertUpdateRunStep,
   type FinishUpdateRunResult,
   type UpdateRunRecord,
@@ -65,6 +64,14 @@ import {
 import { isUpdateRecoveryPending } from "./update-run-recovery-schema.js";
 import { hasStoredUpdateRecovery, readRecoveries } from "./update-run-recovery-store.js";
 import { recordUpdateRunVerificationRecord } from "./update-run-verification.js";
+import {
+  mutateRun,
+  mutateRunInTransaction,
+  persistRun,
+  updateRunLedgerSchema as schema,
+  upsertStep,
+} from "./update-run-write.js";
+
 export {
   findActiveUpdateRun,
   getLatestUpdateFetchFailure,
@@ -74,56 +81,12 @@ export {
   listUpdateRunsAsync,
 } from "./update-run-reader.js";
 
+export { recordUpdateRunDiagnostics } from "./update-run-write.js";
+
 type LedgerDatabase = Pick<DB, "update_runs">;
 type RunPatch = Partial<
   Pick<UpdateRunRecord, "origin" | "target" | "before" | "after" | "trigger">
 >;
-
-function persistRun(
-  db: DatabaseSync,
-  record: UpdateRunRecord,
-  options: LedgerOptions,
-): UpdateRunRecord {
-  record.updatedAtMs = Math.max(Date.now(), record.updatedAtMs + 1);
-  const row = encodeRun(record, options);
-  executeSqliteQuerySync(
-    db,
-    getNodeSqliteKysely<LedgerDatabase>(db)
-      .updateTable("update_runs")
-      .set(row)
-      .where("run_id", "=", record.runId),
-  );
-  return decodeRun(row);
-}
-
-function mutateRunInTransaction(
-  db: DatabaseSync,
-  runId: string,
-  update: (record: UpdateRunRecord) => void,
-  options: LedgerOptions,
-): UpdateRunRecord {
-  const record = readRun(db, runId);
-  if (!record) {
-    throw new Error(`Unknown update run: ${runId}`);
-  }
-  const before = JSON.stringify(record);
-  update(record);
-  return before === JSON.stringify(record) ? record : persistRun(db, record, options);
-}
-
-function mutateRun(
-  runId: string,
-  update: (record: UpdateRunRecord) => void,
-  options: LedgerOptions,
-): UpdateRunRecord {
-  // An existing run can belong to a restored older runtime. History updates
-  // must never reopen through bootstrap/migration merely to report its outcome.
-  return runExistingOpenClawStateWriteTransaction(
-    ({ db }) => mutateRunInTransaction(db, runId, update, options),
-    options,
-    { schemaSql: schema, operationLabel: "update.run", busyTimeoutMs: options.busyTimeoutMs },
-  );
-}
 
 export function createUpdateRun(
   input: RunPatch & {
@@ -466,6 +429,7 @@ export function recordUpdateRunPhase(
   phase: UpdateRunPhase,
   patch: RunPatch & { step?: UpdateRunStep } = {},
   options: LedgerOptions = {},
+  captureBefore?: Parameters<typeof mutateRun>[3],
 ): UpdateRunRecord {
   return mutateRun(
     runId,
@@ -513,6 +477,7 @@ export function recordUpdateRunPhase(
       }
     },
     options,
+    captureBefore,
   );
 }
 
@@ -614,6 +579,60 @@ export function finishUpdateRun(
   options: LedgerOptions = {},
 ): UpdateRunRecord {
   return mutateRun(runId, (record) => finishUpdateRunRecord(record, result), options);
+}
+
+/** Correct the shipped refusal classification only after its install target was satisfied. */
+export function reconcilePackageOwnerRefusal(
+  expected: UpdateRunRecord,
+  options: LedgerOptions = {},
+): boolean {
+  if (!isUnacknowledgedPackageOwnerRefusal(expected)) {
+    return false;
+  }
+  return runExistingOpenClawStateWriteTransaction(
+    ({ db }) => {
+      const query = getNodeSqliteKysely<LedgerDatabase>(db).selectFrom("update_runs");
+      const latest = executeSqliteQueryTakeFirstSync(
+        db,
+        query.selectAll().orderBy("created_at_ms", "desc").orderBy("run_id", "desc").limit(1),
+      );
+      if (
+        !latest ||
+        !isDeepStrictEqual(decodeRun(latest), expected) ||
+        executeSqliteQueryTakeFirstSync(
+          db,
+          query.select("run_id").where("status", "=", "running").limit(1),
+        ) ||
+        readRecoveries(db).some(
+          (entry) => entry.runId === expected.runId || isUpdateRecoveryPending(entry),
+        )
+      ) {
+        return false;
+      }
+      mutateRunInTransaction(
+        db,
+        expected.runId,
+        (record) => {
+          record.status = "skipped";
+          record.reason = "unmanaged-package-install";
+          for (const step of record.steps) {
+            if (step.step === "requested") {
+              step.status = "skipped";
+            }
+          }
+          upsertStep(record, {
+            step: "reconcile:acknowledged",
+            status: "completed",
+            endedAtMs: Date.now(),
+          });
+        },
+        options,
+      );
+      return true;
+    },
+    options,
+    { schemaSql: schema, operationLabel: "update.run", busyTimeoutMs: options.busyTimeoutMs },
+  );
 }
 
 /** Close only this local preview, excluding recovery in the same stable-schema transaction. */

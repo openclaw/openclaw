@@ -226,7 +226,7 @@ export async function start(state: CronServiceState): Promise<void> {
   }
   await runMissedJobs(state, {
     skipJobIds: skipJobIds.size > 0 ? skipJobIds : undefined,
-    deferAgentTurnJobs: true,
+    deferAgentWork: true,
   });
 
   await locked(state, async () => {

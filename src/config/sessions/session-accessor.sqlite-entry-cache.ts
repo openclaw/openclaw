@@ -1,20 +1,25 @@
 import type { DatabaseSync } from "node:sqlite";
 import { toUSVString } from "node:util";
+import { err, ok, type Result } from "@openclaw/normalization-core/result";
 import {
   executeSqliteQuerySync,
+  getNodeSqliteKysely,
   iterateSqliteQuerySync,
   sqliteStringSet,
 } from "../../infra/kysely-sync.js";
 import { readSqliteDataVersion } from "../../infra/node-sqlite.js";
 import { stageSqliteTransactionState } from "../../infra/sqlite-post-commit.js";
+import { sessionChanges } from "../../sessions/session-row-changes.js";
+import { readOpenClawAgentDatabase } from "../../state/openclaw-agent-db-readonly-open.js";
+import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { tableExists } from "../../state/openclaw-state-db-schema-helpers.js";
-import { validateDeliveryCanonicalSessionEntry } from "./session-accessor.sqlite-entry-read.js";
-import type { SqliteSessionEntryRevision } from "./session-accessor.sqlite-entry-revision.js";
+import type { ExactSessionEntry } from "./session-accessor.sqlite-contract.js";
 import {
-  advanceSessionEntryMaintenanceAgeFact,
-  hasSessionEntryMaintenanceAgeFact,
-} from "./session-accessor.sqlite-maintenance-age.js";
+  prepareExactSessionEntryRowReads,
+  validateDeliveryCanonicalSessionEntry,
+} from "./session-accessor.sqlite-entry-read.js";
+import type { SqliteSessionEntryRevision } from "./session-accessor.sqlite-entry-revision.js";
 import {
   hasSqliteSessionOwnerColumns,
   readSqliteSessionOwner,
@@ -23,13 +28,15 @@ import {
   projectSqliteSessionParticipantsBatch,
   readSqliteSessionParticipantProjection,
 } from "./session-accessor.sqlite-participant-projection.js";
-import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
 import { parseSessionEntryJson, selectSessionEntryRows } from "./session-accessor.sqlite-status.js";
+import type { SessionEntryReadScope } from "./session-accessor.types.js";
 import {
   assertCanonicalSqliteSessionKeysCurrent,
   type ValidatedSessionMetadata,
 } from "./session-canonical-key.js";
-import type { SessionEntry } from "./types.js";
+import type { InternalSessionEntry, SessionEntry } from "./types.js";
+
+type SessionEntryCacheTables = Pick<OpenClawAgentKyselyDatabase, "session_nodes">;
 
 type SessionEntryCacheDatabase = Pick<OpenClawAgentDatabase, "agentId" | "db">;
 
@@ -54,6 +61,10 @@ type SqliteSessionEntryCacheWriteGeneration = {
 // structural/unknown writes invalidate. Without both, every read would re-query and re-parse
 // every entry_json document.
 const sessionEntryCaches = new WeakMap<DatabaseSync, SqliteSessionEntryCache>();
+/** Commit-driven projections borrow owner memory; ordinary reads still validate SQLite. */
+export function readCommittedSessionEntryCache(database: DatabaseSync) {
+  return sessionEntryCaches.get(database)?.entries;
+}
 const sessionNodesGenerationTrackerSchemaVersions = new WeakMap<DatabaseSync, number>();
 
 function ensureSessionNodesGenerationTracker(database: DatabaseSync): void {
@@ -124,9 +135,7 @@ function readSessionNodesGeneration(database: DatabaseSync): number {
   return row.generation;
 }
 
-export function readSessionEntryCacheValidityToken(
-  database: DatabaseSync,
-): SqliteSessionEntryRevision {
+function readSessionEntryCacheValidityToken(database: DatabaseSync): SqliteSessionEntryRevision {
   return {
     dataVersion: readSqliteDataVersion(database),
     sessionNodesGeneration: readSessionNodesGeneration(database),
@@ -144,7 +153,7 @@ function cacheValidityTokensEqual(
 }
 
 /** Reuse only complete, current metadata; exact reads still own misses and invalid rows. */
-export function readCachedExactSessionEntries(
+function readCachedExactSessionEntries(
   database: SessionEntryCacheDatabase,
   sessionKeys: readonly string[],
 ): Map<string, SessionEntry> | undefined {
@@ -165,7 +174,7 @@ export function readCachedExactSessionEntries(
     // cannot prove exact identity after a raw edit followed by a list reload.
     const rows = executeSqliteQuerySync(
       database.db,
-      getSessionKysely(database.db)
+      getNodeSqliteKysely<SessionEntryCacheTables>(database.db)
         .selectFrom("session_nodes")
         .select(["session_key", "current_session_id", "updated_at"])
         .where("session_key", "in", sqliteStringSet(keys)),
@@ -201,22 +210,66 @@ export function readCachedExactSessionEntries(
   }
 }
 
+/** Decode one admitted physical store without changing exact per-request error isolation. */
+export function readExactSessionEntryCandidatesInDatabase(
+  database: Pick<OpenClawAgentDatabase, "agentId" | "db" | "path">,
+  requests: readonly (readonly string[])[],
+  projection: SessionEntryReadScope["projection"],
+): Array<Result<ExactSessionEntry[], unknown>> {
+  const entries = new Map<string, Result<ExactSessionEntry | undefined, unknown>>();
+  const keys = [...new Set(requests.flat())];
+  const cachedEntries =
+    projection === "list" ? readCachedExactSessionEntries(database, keys) : undefined;
+  let readPrepared: (sessionKey: string) => InternalSessionEntry | undefined;
+  if (cachedEntries) {
+    readPrepared = (sessionKey) => cachedEntries.get(sessionKey);
+  } else {
+    const readRows = prepareExactSessionEntryRowReads(database, keys, projection);
+    readPrepared = (sessionKey) => readRows(sessionKey)?.entry;
+  }
+  const readEntry = (sessionKey: string): Result<ExactSessionEntry | undefined, unknown> => {
+    const cached = entries.get(sessionKey);
+    if (cached) {
+      return cached;
+    }
+    let result: Result<ExactSessionEntry | undefined, unknown>;
+    try {
+      const entry = readOpenClawAgentDatabase(database, () => readPrepared(sessionKey)).value;
+      result = ok(entry ? { sessionKey, entry } : undefined);
+    } catch (error) {
+      result = err(error);
+    }
+    entries.set(sessionKey, result);
+    return result;
+  };
+  return requests.map((sessionKeys) => {
+    const matches: ExactSessionEntry[] = [];
+    for (const sessionKey of sessionKeys) {
+      const entry = readEntry(sessionKey);
+      if (!entry.ok) {
+        return err(entry.error);
+      }
+      if (entry.value) {
+        matches.push(entry.value);
+      }
+    }
+    return ok(matches);
+  });
+}
+
 /** Bracket one accessor-owned row write so its publication cannot hide earlier raw DML. */
 export function trackSessionEntryCacheWrite(
   database: OpenClawAgentDatabase,
   write: () => void,
-  entryUpdate?: { sessionKey: string; entry: SessionEntry; previousEntry?: SessionEntry },
 ): SqliteSessionEntryCacheWriteGeneration | undefined {
-  const before =
-    sessionEntryCaches.has(database.db) || hasSessionEntryMaintenanceAgeFact(database.db)
-      ? readSessionNodesGeneration(database.db)
-      : undefined;
+  const before = sessionEntryCaches.has(database.db)
+    ? readSessionNodesGeneration(database.db)
+    : undefined;
   write();
   if (before === undefined) {
     return undefined;
   }
   const generation = { before, after: readSessionNodesGeneration(database.db) };
-  advanceSessionEntryMaintenanceAgeFact(database.db, generation, entryUpdate);
   return generation;
 }
 
@@ -301,7 +354,7 @@ export function readSessionEntryCache(
   return next;
 }
 
-function publishTrackedCacheUpdate(database: OpenClawAgentDatabase, publish: () => void): void {
+function publishTrackedCacheUpdate(database: SessionEntryCacheDatabase, publish: () => void): void {
   // Committed cache state must settle before observers can reenter with newer writes.
   if (
     stageSqliteTransactionState(database.db, {
@@ -323,13 +376,13 @@ function publishTrackedCacheUpdate(database: OpenClawAgentDatabase, publish: () 
 type SessionEntrySideMetadata = Pick<SessionEntry, "owner" | "participants" | "participantCount">;
 
 function readSessionEntrySideMetadata(
-  database: OpenClawAgentDatabase,
+  database: SessionEntryCacheDatabase,
   sessionKey: string,
 ): SessionEntrySideMetadata {
   const ownerRow = hasSqliteSessionOwnerColumns(database.db)
     ? executeSqliteQuerySync(
         database.db,
-        getSessionKysely(database.db)
+        getNodeSqliteKysely<SessionEntryCacheTables>(database.db)
           .selectFrom("session_nodes")
           .select([
             "owner_actor_type",
@@ -374,7 +427,7 @@ function advanceSessionEntryCacheGeneration(
 }
 
 function publishSqliteSessionEntryCacheUpsert(
-  database: OpenClawAgentDatabase,
+  database: SessionEntryCacheDatabase,
   update: { sessionKey: string; entry?: SessionEntry },
   writeGeneration: SqliteSessionEntryCacheWriteGeneration,
 ): void {
@@ -425,16 +478,20 @@ function publishSqliteSessionEntryCacheUpsert(
 }
 
 export function publishSessionEntryCacheInvalidation(
-  database: OpenClawAgentDatabase,
-  update?: { sessionKey: string; entry?: SessionEntry },
+  database: SessionEntryCacheDatabase & { path: string },
+  update: { sessionKey: string; entry?: SessionEntry },
   writeGeneration?: SqliteSessionEntryCacheWriteGeneration,
 ): void {
-  if (update && writeGeneration) {
+  if (writeGeneration) {
     publishSqliteSessionEntryCacheUpsert(database, update, writeGeneration);
-    return;
+  } else {
+    // A cold write has no snapshot to patch; do not hydrate owner/participants or prompt JSON.
+    publishTrackedCacheUpdate(database, () => sessionEntryCaches.delete(database.db));
   }
-  // A cold write has no snapshot to patch; do not hydrate owner/participants or prompt JSON.
-  publishTrackedCacheUpdate(database, () => sessionEntryCaches.delete(database.db));
+  sessionChanges.emit(
+    { agentId: database.agentId, storePath: database.path, sessionKey: update.sessionKey },
+    database.db,
+  );
 }
 
 /** Refresh participant projections without reloading unchanged session-entry JSON. */

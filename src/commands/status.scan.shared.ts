@@ -2,7 +2,6 @@
 // This file owns the cross-command contracts reused by normal, JSON, and status-all scans.
 
 import { existsSync } from "node:fs";
-import type { DatabaseSync } from "node:sqlite";
 import {
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
@@ -14,7 +13,6 @@ import { normalizeControlUiBasePath } from "../gateway/control-ui-shared.js";
 import { isLoopbackGatewayUrl } from "../gateway/net.js";
 import { resolveGatewayProbeTarget } from "../gateway/probe-target.js";
 import type { GatewayProbeResult, probeGateway as probeGatewayFn } from "../gateway/probe.js";
-import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import type { MemoryProviderStatus } from "../memory-host-sdk/engine-storage.js";
 import { defaultSlotIdForKey } from "../plugins/slots.js";
 import { normalizeAgentId } from "../routing/session-key.js";
@@ -28,10 +26,13 @@ import { isProbeReachable } from "./gateway-status/helpers.js";
 const gatewayProbeModuleLoader = createLazyImportLoader(() => import("./status.gateway-probe.js"));
 const probeGatewayModuleLoader = createLazyImportLoader(() => import("../gateway/probe.js"));
 const gatewayCallModuleLoader = createLazyImportLoader(() => import("../gateway/call.js"));
-const memoryEngineStorageModuleLoader = createLazyImportLoader(
-  () => import("../memory-host-sdk/engine-storage.js"),
-);
-const MEMORY_INDEX_META_KEY = "memory_index_meta_v1";
+const memoryPresenceModuleLoader = createLazyImportLoader(async () => {
+  const { loadBundledPluginPublicArtifactModuleSync } =
+    await import("../plugins/public-surface-loader.js");
+  return loadBundledPluginPublicArtifactModuleSync<{
+    inspectMemoryIndexPresence: (databasePath: string) => Promise<boolean>;
+  }>({ dirName: "memory-core", artifactBasename: "status-api.js" });
+});
 
 export function resolveStatusGatewayProbeTimeoutMs(opts: {
   timeoutMs?: number;
@@ -56,65 +57,8 @@ async function hasBuiltInMemoryState(databasePath: string): Promise<boolean> {
   if (!existsSync(databasePath)) {
     return false;
   }
-  const { MEMORY_INDEX_CHUNKS_TABLE, MEMORY_INDEX_META_TABLE, MEMORY_INDEX_SOURCES_TABLE } =
-    await memoryEngineStorageModuleLoader.load();
-  let db: DatabaseSync | undefined;
-  try {
-    db = openNodeSqliteDatabase(databasePath, { readOnly: true });
-    const builtInMemoryTableSets = [
-      {
-        meta: MEMORY_INDEX_META_TABLE,
-        sources: MEMORY_INDEX_SOURCES_TABLE,
-        chunks: MEMORY_INDEX_CHUNKS_TABLE,
-      },
-      {
-        meta: "meta",
-        sources: "files",
-        chunks: "chunks",
-      },
-    ] as const;
-    const builtInMemoryTables = builtInMemoryTableSets.flatMap(({ meta, sources, chunks }) => [
-      meta,
-      sources,
-      chunks,
-    ]);
-    const tableNames = new Set(
-      (
-        db
-          .prepare(
-            `SELECT name FROM sqlite_master WHERE type = 'table' AND name IN (${builtInMemoryTables.map(() => "?").join(", ")})`,
-          )
-          .all(...builtInMemoryTables) as Array<{ name?: unknown }>
-      )
-        .map((row) => row.name)
-        .filter((name): name is string => typeof name === "string"),
-    );
-    for (const tables of builtInMemoryTableSets) {
-      if (
-        tableNames.has(tables.meta) &&
-        db
-          .prepare(`SELECT 1 AS ok FROM ${tables.meta} WHERE key = ? LIMIT 1`)
-          .get(MEMORY_INDEX_META_KEY)
-      ) {
-        return true;
-      }
-      for (const tableName of [tables.sources, tables.chunks]) {
-        if (
-          tableNames.has(tableName) &&
-          db.prepare(`SELECT 1 AS ok FROM ${tableName} LIMIT 1`).get()
-        ) {
-          return true;
-        }
-      }
-    }
-    return false;
-  } catch {
-    return false;
-  } finally {
-    try {
-      db?.close();
-    } catch {}
-  }
+  const { inspectMemoryIndexPresence } = await memoryPresenceModuleLoader.load();
+  return await inspectMemoryIndexPresence(databasePath);
 }
 
 export type MemoryStatusSnapshot = MemoryProviderStatus & {

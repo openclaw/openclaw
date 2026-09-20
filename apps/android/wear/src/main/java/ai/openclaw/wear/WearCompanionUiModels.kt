@@ -44,6 +44,9 @@ internal data class WearModelSummary(
 
 internal data class WearConversationSnapshot(
   val gatewayState: WearGatewayState,
+  val phoneNodeId: String? = null,
+  val activeAgentId: String? = null,
+  val replyTextSupported: Boolean = false,
   val agents: List<WearAgentSummary> = emptyList(),
   val agentControlsSupported: Boolean = false,
   val gatewayControlsSupported: Boolean = false,
@@ -113,6 +116,9 @@ internal fun WearUiState.toConversationSnapshot(): WearConversationSnapshot? {
     )
 
   return WearConversationSnapshot(
+    phoneNodeId = phoneNodeId,
+    activeAgentId = selectedSession?.agentId ?: activeAgentId,
+    replyTextSupported = WearProxyCapability.ReplyText in proxyCapabilities,
     gatewayState = if (connected) WearGatewayState.CONNECTED else WearGatewayState.DISCONNECTED,
     agents =
       agents.map { agent ->

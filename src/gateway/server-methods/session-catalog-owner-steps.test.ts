@@ -4,6 +4,7 @@ import { PluginInstance } from "../../plugins/plugin-instance.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import {
   hoisted,
+  createSessionCatalogTestContext,
   markPluginRegistryActive,
   provider,
   resetSessionCatalogTestState,
@@ -31,11 +32,10 @@ describe("catalog list step owner", () => {
       let sourceSignal: AbortSignal | undefined;
       let currentContext = true;
       const config = {};
-      const context: Record<string, unknown> = {
-        getRuntimeConfig: () => config,
+      const context: Record<string, unknown> = createSessionCatalogTestContext(config, {
         requestEntryLifetime: { signal: entryOwner.signal },
         broadcastToConnIds: vi.fn(),
-      };
+      });
       context.resolveGatewayContext = () => (currentContext ? context : undefined);
       const catalog = instance.wrap(
         provider("source", {

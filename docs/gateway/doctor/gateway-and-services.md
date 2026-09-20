@@ -33,6 +33,7 @@ warnings, workspace status, gateway auth and health, and supervisors.
     - paired tokens whose scopes drift outside the approved pairing baseline
     - local cached device-token entries for the current machine that predate a gateway-side token rotation or carry stale scope metadata
     - a retired `identity/device-auth.json` file that is still present and blocks inspection of locally cached tokens, including in remote Gateway mode; stop the Gateway and run `openclaw doctor --fix` to finish migration or cleanup
+    - retired `devices/*.json` and `nodes/*.json` stores on a local Gateway; stop the Gateway and run `openclaw doctor --fix` to import device approvals before node capabilities and archive the originals. Existing SQLite records take precedence; unreadable sources remain in place for repair.
 
     Doctor does not auto-approve pair requests or auto-rotate device tokens. It prints the exact next steps:
 
@@ -138,6 +139,27 @@ warnings, workspace status, gateway auth and health, and supervisors.
     and must not be copied into shared reports. The redacted name identifies the
     entry but is not its literal Git config key.
 
+    Git can retain `objects/pack/*.promisor` sidecars after the remote keys are
+    unset and the repository is repacked. The sidecars are harmless: OpenClaw
+    determines partial-clone repair availability from Git configuration, not from
+    those files. To remove the stale on-disk label, first confirm that the missing
+    object command below prints nothing and that `git fsck` succeeds:
+
+    ```bash
+    git rev-list --objects --missing=print --all | sed -n 's/^?//p'
+    git fsck --full
+    ```
+
+    Then move only the sidecars out of the pack directory, keeping them as a
+    recoverable backup until the next successful Doctor and managed-worktree run:
+
+    ```bash
+    promisor_marker_backup="$(git rev-parse --git-dir)/retired-promisor-markers"
+    mkdir -p "$promisor_marker_backup"
+    find "$(git rev-parse --git-dir)/objects/pack" -maxdepth 1 -type f -name '*.promisor' -exec mv -n {} "$promisor_marker_backup"/ \;
+    git fsck --full
+    ```
+
     Rerun Doctor afterward. If history or objects remain missing, recover them
     from the original repository. Origin may not contain local-only snapshots;
     see [snapshot restore](/concepts/managed-worktrees#snapshots-cleanup-and-restore).
@@ -148,7 +170,8 @@ warnings, workspace status, gateway auth and health, and supervisors.
 
     - If token mode needs a token and no token source exists, doctor offers to generate one.
     - If `gateway.auth.token` is SecretRef-managed but unavailable, doctor warns and does not overwrite it with plaintext.
-    - `openclaw doctor --generate-gateway-token` forces generation only when no token SecretRef is configured.
+    - `openclaw doctor --generate-gateway-token` reports when a healthy SecretRef makes generation unnecessary.
+    - If a store-backed token resolves to a known redaction placeholder, `--fix` or `--generate-gateway-token` verifies a database backup and regenerates that entry while preserving its SecretRef. Doctor prints the backup path and restart/re-pair guidance. Other external secrets require replacement at their source.
 
   </Accordion>
   <Accordion title="12b. Read-only SecretRef-aware repairs">
@@ -212,6 +235,12 @@ warnings, workspace status, gateway auth and health, and supervisors.
   </Accordion>
   <Accordion title="17. Gateway runtime best practices">
     Doctor accepts Bun 1.4+ runtimes that provide WAL-reset-safe `node:sqlite` and warns when the gateway service runs on an older or unsafe Bun or a version-managed Node path (`nvm`, `fnm`, `volta`, `asdf`, etc.). Repairs migrate unsupported Bun services to Node. Version-manager paths can break after upgrades because the service does not load your shell init. Doctor offers to migrate to a system Node install when available (Homebrew/apt/choco).
+
+    Explicit runtime-path pins are retained during service repair.
+    Doctor still checks their runtime capabilities, but does not migrate a valid
+    pin away from a version manager. Replace or remove an invalid pin with
+    `openclaw gateway install --runtime-path <path> --force` or
+    `openclaw gateway install --runtime node --force`.
 
     Service installation and repair recognize current Node executables named `node`, `nodejs`, or versioned names such as `node24` and `node-24`, including Windows `.exe` variants. Each candidate still has to pass the Node and SQLite capability checks before selection.
 

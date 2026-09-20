@@ -18,12 +18,9 @@ type GatewayRespawnResult = {
   handoffSpawned?: Promise<boolean>;
 };
 
-type GatewayUpdateRespawnResult = {
-  mode: "spawned" | "disabled" | "failed";
-  pid?: number;
-  detail?: string;
-  child?: ChildProcess;
-};
+type GatewayUpdateRespawnResult =
+  | { mode: "spawned"; pid?: number; child: ChildProcess }
+  | { mode: "disabled" | "failed"; detail?: string };
 type GatewayRespawnOptions = {
   env?: NodeJS.ProcessEnv;
 };

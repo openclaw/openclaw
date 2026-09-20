@@ -28,17 +28,21 @@ the snapshot is being built. Reconcile those events with the response and issue
 a trailing `sessions.list` refresh when needed, including when an event only
 invalidates the cached list. Reconnects require a new subscription and snapshot.
 
-Matching list requests can reuse a completed page containing live runs or child
-sessions for up to one second, matching the Control UI's maximum refresh wait.
-Session identity, visibility/access, profile, database membership, and
-configuration changes invalidate reuse immediately. Transcript, activity,
-run-index, and worker-inventory changes preserve an already-cached live page
-until its original deadline; an earlier agent-status expiry still forces a
-refresh. A mutation that also publishes an access invalidation ends reuse early,
-including conservative notifications at run boundaries. Clients should continue
-reconciling `sessions.changed` events with list responses. Active-only,
-activity-window, search, and parent-filtered lists share only concurrent work and
-do not reuse completed pages.
+The Gateway keeps durable session metadata in memory and fills materialized rows
+incrementally. Committed owner changes refresh affected rows; there is no
+completed-page cache or one-second staleness window. Keyed descriptions,
+resolution, and chat startup prepare their requested row without waiting for the
+bulk refresh. Newly admitted or replaced stores load their metadata once, and
+rows disappear when their store leaves the current topology. Each response
+applies the current viewer's visibility and current activity time.
+
+Resident rows use stored titles and usage. Optional message previews and terminal
+fallback-model metadata fill in through bounded read-only background transcript
+reads; they can be absent from an early response. Foreground requests take priority.
+These reads do not restore cold archives, parse oversized messages, call a model,
+or change stored metadata or session activity ordering. Missing historical titles
+and legacy ACP keys are repaired only by `openclaw doctor --fix`. Missing usage
+remains absent until the normal usage writer records it.
 
 Both methods accept `activeOnly: true` to select currently running or queued sessions before pagination. Activity comes from the live runtime owners, not a stored status flag. Ordinary listing behavior is unchanged when the option is omitted or false. Active-only results include each visible agent-owned `global` and `unknown` session with its raw key and captured `agentId`; callers identify rows by agent, key, and `sessionId` together. Literal `agent:<id>:global` and `agent:<id>:unknown` sessions remain different rows. Active-only raw sentinel rows omit the optional `childSessions` and `hasActiveSubagentRun` fields; use `hasActiveRun` for direct activity. Normal permissions, archive/inclusion filters, and page limits still apply. Sessionless/internal runs are outside the session index.
 
@@ -84,11 +88,40 @@ count.
   The optional `sessionId` and opaque `lifecycleRevision` identify the session
   lifecycle; `lifecycleRevision` can be absent before the first reset. Revisions
   increase across runs within that lifecycle but can restart after a reset.
-  Critical notice history starts fresh when the identity pair changes, including
-  when `/clear` preserves `sessionId` and changes `lifecycleRevision`.
+  `/clear` preserves `sessionId` and changes `lifecycleRevision`.
   Clients show its headline or inspector link only while the digest's exact `runId`
   is present in `activeRunIds`.
-- `sessions.changed`: session index or metadata changed. Active-run fields use the
+- `sessions.changed`: session index or metadata changed. Keyed changes carry the
+  affected row in `session`, presented for that connection. Nested rows in
+  `sessions.changed` and `session.message` use the same full prepared metadata,
+  viewer permissions, and clock as `sessions.list` with title, last-message,
+  and activity-summary enrichment enabled. This adds catalog-backed fields such
+  as thinking options and replaces legacy model aliases with canonical model IDs
+  in event rows. The Control UI applies these rows locally to existing roster
+  members, so their values match the list. A `reason: "patch"` event that commits a
+  model, account, or runtime selection also carries `catalogChanged: true`; clients
+  may treat other patches as session-only and keep cached catalogs. Top-level lifecycle and capacity fields
+  remain event receipts, including explicit clearing values. When a nested row
+  omits an optional field, honor its top-level clearing tombstone; nested values
+  take precedence when present. Merge an existing
+  roster member's snapshot locally when the query's membership and pagination
+  window remain valid. The Control UI reuses lifecycle and ordinary `patch`,
+  `send`, `steer`, `agent.run.started`, `agent.input.settled`, `run-capacity`, and
+  `chat.title` snapshots for held standalone rows with unchanged identity, archive,
+  pin, and owner facts and nondecreasing recency. It coalesces an authoritative
+  refresh for missing rows or snapshots, broad/keyless changes, `catalogChanged`,
+  membership filters, linked ancestor facts, and uncertain boundaries (including owner-first rows
+  promoted into the shared page). Events overlapping a roster read retain a
+  trailing refresh so its response cannot lose an update. A retained list with a
+  read error also refreshes on the next relevant event. Profile identity, runner
+  availability, and loaded cron bindings can produce broad invalidations.
+  Authorized incognito descriptions and events use the same row presentation from
+  transient process-local state. Incognito rows remain excluded from the session
+  roster, and queued events cannot cross a reset or database replacement.
+  Tool/progress events keep delivering while rows refresh; their optional row
+  metadata can be absent until ready. Full roster rows remain guaranteed on
+  keyed `sessions.changed` and `session.message` snapshots.
+  Active-run fields use the
   same aggregate and complete-exact semantics as `sessions.list`; `activeRunIds: null`
   clears cached exact identities to unavailable, omission leaves the cache unchanged,
   and an array replaces it. Delete notifications from `sessions.delete` and incognito

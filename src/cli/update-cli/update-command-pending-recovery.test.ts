@@ -8,6 +8,7 @@ import * as triageUpdate from "../../commands/triage-update.js";
 import * as config from "../../config/config.js";
 import * as launchd from "../../daemon/launchd.js";
 import * as gatewayService from "../../daemon/service.js";
+import { createMockGatewayService } from "../../daemon/service.test-helpers.js";
 import { resolvePackageActivationAnchor } from "../../infra/package-update-activation-journal.js";
 import * as temporaryState from "../../infra/tmp-openclaw-dir.js";
 import * as updateCheck from "../../infra/update-check.js";
@@ -134,7 +135,10 @@ function pendingPackageInvocation(
   const manager = vi
     .spyOn(updateShared, "resolveGlobalManager")
     .mockResolvedValue(params.manager ?? "npm");
-  const service = gatewayService.resolveGatewayService();
+  const service = createMockGatewayService({
+    isLoaded: async () => true,
+    readRuntime: async () => ({ status: "running", systemd: { managerUid: 2001 } }),
+  });
   const readCommand = vi.fn(async () =>
     params.redirected
       ? { programArguments: [process.execPath, path.join(target, "dist", "entry.js"), "gateway"] }

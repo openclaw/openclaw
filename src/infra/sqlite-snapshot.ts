@@ -23,11 +23,8 @@ import {
   type FileMutationFingerprint,
 } from "./file-descriptor.js";
 import { sameFileIdentity } from "./fs-safe-advanced.js";
-import {
-  openNodeSqliteDatabase,
-  requireNodeSqlite,
-  resolveSqliteFilesystemPath,
-} from "./node-sqlite.js";
+import { openNodeSqliteDatabase } from "./node-sqlite.js";
+import { backupNodeSqliteDatabase } from "./sqlite-backup.js";
 import { assertSqliteIntegrity } from "./sqlite-integrity.js";
 import { createPrivateSqliteTempDirectory } from "./sqlite-private-directory.js";
 import { withSqliteSnapshotSource } from "./sqlite-snapshot-source.js";
@@ -575,7 +572,6 @@ export async function createVerifiedSqliteSnapshot(
   );
   await fs.chmod(stagingDir, 0o700);
   const stagedPath = path.join(stagingDir, "database.sqlite");
-  const sqlite = requireNodeSqlite();
   let stagedIdentity: Stats | undefined;
   try {
     await withSqliteSnapshotSource(
@@ -588,19 +584,21 @@ export async function createVerifiedSqliteSnapshot(
         });
         try {
           source.exec("PRAGMA busy_timeout = 30000; PRAGMA trusted_schema = OFF; BEGIN;");
-          try {
-            // Pin validation and backup together; Node restarts stepped backups on concurrent writes.
-            source.prepare("PRAGMA schema_version;").get();
-            await loadSqliteVecExtension({ db: source });
-            assertSqliteIntegrity(source, options.sourcePath);
-            options.validate?.(source, options.sourcePath);
-            await sqlite.backup(source, resolveSqliteFilesystemPath(stagedPath));
-          } finally {
-            source.exec("ROLLBACK;");
-          }
+          // Pin validation and backup together; Node restarts stepped backups on concurrent writes.
+          source.prepare("PRAGMA schema_version;").get();
+          await loadSqliteVecExtension({ db: source });
+          assertSqliteIntegrity(source, options.sourcePath);
+          options.validate?.(source, options.sourcePath);
+          await backupNodeSqliteDatabase(source, stagedPath);
         } finally {
           if (source.isOpen) {
-            source.close();
+            try {
+              if (source.isTransaction) {
+                source.exec("ROLLBACK;");
+              }
+            } finally {
+              source.close();
+            }
           }
         }
       },

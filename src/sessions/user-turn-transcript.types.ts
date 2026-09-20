@@ -25,6 +25,7 @@ export type PersistedUserTurnMediaInput = Pick<
   | "contentType"
   | "durationMs"
   | "fileName"
+  | "origin"
   | "height"
   | "hydrationSuppressed"
   | "messageId"

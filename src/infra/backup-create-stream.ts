@@ -15,14 +15,16 @@ export function appendBackupManifest(payload: AsyncIterable<Buffer>, createManif
     async function* (source: AsyncIterable<Buffer>) {
       // node-tar ends each uncompressed Pack with two 512-byte zero blocks.
       // Replace only that terminator; the payload headers and bytes stay intact.
-      let tail = Buffer.alloc(0);
+      let tail: Buffer = Buffer.alloc(0);
       for await (const chunk of source) {
-        const bytes = Buffer.concat([tail, chunk]);
-        const length = Math.max(0, bytes.length - 1024);
+        const length = Math.max(0, tail.length - Math.max(0, 1024 - chunk.length));
         if (length) {
-          yield bytes.subarray(0, length);
+          yield tail.subarray(0, length);
         }
-        tail = bytes.subarray(length);
+        tail = length < tail.length ? Buffer.concat([tail.subarray(length), chunk]) : chunk;
+      }
+      if (tail.length > 1024) {
+        yield tail.subarray(0, -1024);
       }
       yield createManifest();
     },

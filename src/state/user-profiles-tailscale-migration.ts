@@ -11,8 +11,9 @@ import {
   type OpenClawStateDatabaseOptions,
 } from "./openclaw-state-db.js";
 import { githubAuthenticationSubject } from "./user-profile-github-identity.js";
-import { ensureUserProfilesSchema, type UserProfilesDatabase } from "./user-profiles-schema.js";
+import { ensureUserProfilesSchema } from "./user-profiles-schema.js";
 import { classifyTailscaleLogin } from "./user-profiles-tailscale-login.js";
+import type { UserProfilesDatabase } from "./user-profiles.types.js";
 
 type UserProfileIdentityMigrationResult = {
   changes: string[];

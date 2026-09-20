@@ -266,6 +266,7 @@ export interface SessionInputCompletions {
 }
 
 export interface SessionKeyContract {
+  canonical_ready: string | null;
   id: Generated<number>;
   main_key: string;
   updated_at: number;

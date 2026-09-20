@@ -290,7 +290,7 @@ describe("web push Gateway reconciliation", () => {
     capability.dispose();
   });
 
-  it("refreshes matching defaults without publishing a stale invalidation", async () => {
+  it("refreshes routed canonical profile defaults without publishing a stale invalidation", async () => {
     const initial = notificationPreferences(true);
     const stale = { ...notificationPreferences(true), detailLevel: "detailed" as const };
     const latest = notificationPreferences(false);
@@ -323,14 +323,14 @@ describe("web push Gateway reconciliation", () => {
     harness.emit({
       type: "event",
       event: "users.prefs.changed",
-      payload: { profileId: "other-profile", keys: ["notifications.web.v1"] },
+      payload: { profileId: "canonical-profile", keys: ["ui.theme"] },
     });
     expect(preferenceRead).toBe(1);
 
     const invalidation = {
       type: "event" as const,
       event: "users.prefs.changed",
-      payload: { profileId: "profile-owner", keys: ["notifications.web.v1"] },
+      payload: { profileId: "canonical-profile", keys: ["notifications.web.v1"] },
     };
     harness.emit(invalidation);
     await vi.waitFor(() => expect(preferenceRead).toBe(2));

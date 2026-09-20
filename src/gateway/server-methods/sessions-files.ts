@@ -307,6 +307,26 @@ async function loadSessionFiles(params: {
   if (!entry?.sessionId || !storePath || !agentId) {
     return { files: [] };
   }
+  if (entry.worktree?.id && loaded.root) {
+    const { withSettledLocalWorkspacePath } =
+      await import("../worker-environments/local-workspace-projection.js");
+    await withSettledLocalWorkspacePath(
+      {
+        cwd: loaded.root,
+        assertCurrent: () => {
+          const current = loadGatewaySessionEntryReadOnly(canonicalKey, { agentId }).entry;
+          if (
+            current?.sessionId !== entry.sessionId ||
+            current.lifecycleRevision !== entry.lifecycleRevision ||
+            current.worktree?.id !== entry.worktree?.id
+          ) {
+            throw new Error("Session workspace changed during file read");
+          }
+        },
+      },
+      async () => {},
+    );
+  }
   const repository = resolveRepositoryWorkspaceAccess(loaded, params.context);
   const scope = {
     agentId,

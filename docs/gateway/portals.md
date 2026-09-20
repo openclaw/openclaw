@@ -26,6 +26,15 @@ reply. Later turns in the same worker environment can inspect or stop it with
 See [Worker background processes](/gateway/background-process#worker-environments)
 for process lifetime and capacity details.
 
+An agent can also use a temporary Crabbox attached to its existing conversation
+without moving the session's primary workspace. It passes the attachment's
+`environmentId` to the `portal` tool and uses `screen` with `portal_show` and the
+returned `portalId` to open that exact preview in the chat side panel. Commands
+for the app run through the Crabbox tool on that environment. Its managed
+background processes survive completed turns; stopping the attachment closes
+its apps and portals. The portal retains the same separate-origin network and
+access contract described below.
+
 ## Declare development servers
 
 Optionally commit `.openclaw/portals.json` to the workspace repository so the agent can discover the available development servers:

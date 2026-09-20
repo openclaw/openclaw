@@ -75,6 +75,7 @@ vi.mock("../../logging/subsystem.js", async () => {
 });
 
 import { createGatewaySession } from "../session-create-service.js";
+import { flushPendingSessionsChangedEvents } from "./session-change-event.js";
 import { sessionMutationHandlers } from "./sessions-mutations.js";
 import { registerSessionRuntimeWindowTests } from "./sessions-mutations.runtime-windows.test-support.js";
 
@@ -424,10 +425,14 @@ describe("sessions.patch sticky model persistence", () => {
   });
 
   it.each([
-    { name: "omitted", patch: { label: "Sticky" } },
-    { name: "cleared", patch: { model: null } },
-    { name: "reset to the current default", patch: { model: "anthropic/claude-opus-4-6" } },
-  ])("does not persist when model is $name", async ({ name, patch }) => {
+    { name: "omitted", patch: { label: "Sticky" }, catalogChanged: false },
+    { name: "cleared", patch: { model: null }, catalogChanged: true },
+    {
+      name: "reset to the current default",
+      patch: { model: "anthropic/claude-opus-4-6" },
+      catalogChanged: true,
+    },
+  ])("does not persist when model is $name", async ({ name, patch, catalogChanged }) => {
     const sessionKey = `agent:main:dm:no-sticky-${name}`;
     await upsertSessionEntryCore(
       { agentId: "main", sessionKey },
@@ -441,10 +446,26 @@ describe("sessions.patch sticky model persistence", () => {
       },
     );
 
-    const response = await patchSession({ key: sessionKey, ...patch });
+    const requestContext = {
+      ...context(),
+      getSessionEventSubscriberConnIds: () => new Set(["reader"]),
+    };
+    const response = await patchSession(
+      { key: sessionKey, ...patch },
+      ["operator.admin"],
+      requestContext,
+    );
+    await flushPendingSessionsChangedEvents(requestContext);
 
     expect(response[0]).toBe(true);
     expect(effects.mutateConfigFileWithRetry).not.toHaveBeenCalled();
+    const event = requestContext.broadcastToConnIds.mock.calls.at(-1)?.[1];
+    expect(event).toMatchObject({ sessionKey, reason: "patch" });
+    if (catalogChanged) {
+      expect(event).toHaveProperty("catalogChanged", true);
+    } else {
+      expect(event).not.toHaveProperty("catalogChanged");
+    }
   });
 });
 
@@ -744,7 +765,25 @@ describe("explicit session model runtimes", () => {
         contextTokens: 1000,
       },
     );
-    expect((await patchSession({ key: sessionKey, agentRuntime: null }))[0]).toBe(true);
+    const requestContext = {
+      ...context(),
+      getSessionEventSubscriberConnIds: () => new Set(["reader"]),
+    };
+    expect(
+      (
+        await patchSession(
+          { key: sessionKey, agentRuntime: null },
+          ["operator.admin"],
+          requestContext,
+        )
+      )[0],
+    ).toBe(true);
+    await flushPendingSessionsChangedEvents(requestContext);
+    expect(requestContext.broadcastToConnIds.mock.calls.at(-1)?.[1]).toMatchObject({
+      sessionKey,
+      reason: "patch",
+      catalogChanged: true,
+    });
     const stored = loadSessionEntry({ agentId: "main", sessionKey });
     expect(stored).toMatchObject({
       modelOverride: "gpt-5.6-sol",

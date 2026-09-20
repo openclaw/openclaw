@@ -33,7 +33,10 @@ describe("worker provider teardown deadlines", () => {
       const operation = (
         entrance === "destroy"
           ? service.destroy("slow-destroy")
-          : service.create("development", "failed-bootstrap-slow-destroy")
+          : service.createWithRequest({
+              profileId: "development",
+              idempotencyKey: "failed-bootstrap-slow-destroy",
+            })
       ).then(
         (result) => {
           settled = true;
@@ -95,7 +98,10 @@ describe("worker provider teardown deadlines", () => {
         });
       } else {
         await expect(
-          service.create("development", "override-bootstrap-cleanup"),
+          service.createWithRequest({
+            profileId: "development",
+            idempotencyKey: "override-bootstrap-cleanup",
+          }),
         ).rejects.toMatchObject({ code: "bootstrap_failure" });
         expect(support.testState.store.list()[0]?.state).toBe("failed");
       }

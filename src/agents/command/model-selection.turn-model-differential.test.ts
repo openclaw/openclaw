@@ -23,7 +23,6 @@ vi.mock("../agent-scope.js", () => ({
 }));
 vi.mock("../../auto-reply/thinking.js", () => ({
   formatThinkingLevels: () => "",
-  isThinkingLevelSupported: () => true,
   normalizeThinkLevel: (value: string | undefined) => value,
 }));
 vi.mock("../../channels/model-overrides.js", () => ({
@@ -87,10 +86,10 @@ vi.mock("../model-selection.js", () => ({
       : { provider: TURN_MODEL_DEFAULT_REF.provider, model: raw };
   },
   resolveModelAliasFromPair: () => null,
-  resolveThinkingDefault: () => "off",
 }));
 vi.mock("../model-thinking-default.js", () => ({
   resolveConfiguredThinkingDefault: () => undefined,
+  resolveThinkingSelection: () => ({ requestedLevel: "off", level: "off", supported: true }),
 }));
 vi.mock("../model-visibility-policy.js", () => ({
   createModelVisibilityPolicy: () => ({
@@ -130,11 +129,6 @@ vi.mock("./attempt-execution.shared.js", () => ({
   persistAgentSession: async ({ entry }: { entry?: SessionEntry }) => entry,
 }));
 vi.mock("./model-ref.js", () => ({
-  normalizeAgentCommandDefaultModelRef: (
-    _cfg: OpenClawConfig,
-    provider: string,
-    model: string,
-  ) => ({ provider, model }),
   normalizeAgentCommandModelRef: (_cfg: OpenClawConfig, provider: string, model: string) => ({
     provider,
     model,

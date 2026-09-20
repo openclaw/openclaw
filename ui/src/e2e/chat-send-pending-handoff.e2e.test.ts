@@ -647,7 +647,7 @@ suite.define(() => {
           mimeType: "image/png",
         });
         // A locally submitted turn plays the composer entry animation exactly once.
-        expect(await currentPage.locator(".chat-bubble--user-turn-enter").count()).toBe(1);
+        expect(await currentPage.locator(".chat-bubble--enter").count()).toBe(1);
         await expect
           .poll(() =>
             currentPage.evaluate(() =>
@@ -740,9 +740,7 @@ suite.define(() => {
         // The single stable key above proves the node never remounted, so the
         // entry animation cannot have replayed; at most the one submitted turn
         // still carries the (inert, completed) animation class.
-        expect(
-          await currentPage.locator(".chat-bubble--user-turn-enter").count(),
-        ).toBeLessThanOrEqual(1);
+        expect(await currentPage.locator(".chat-bubble--enter").count()).toBeLessThanOrEqual(1);
       },
     );
   });

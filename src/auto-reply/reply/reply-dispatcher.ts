@@ -11,6 +11,7 @@ import {
 import { toErrorObject } from "../../infra/errors.js";
 import { settlePendingFinalDelivery } from "../../infra/outbound/delivery-completion.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import type { SilentReplyConversationType } from "../../shared/silent-reply-policy.js";
 import { sleep } from "../../utils.js";
 import { getGroupThreadParticipant } from "../group-thread-context.js";
@@ -91,9 +92,12 @@ export type { ReplyDispatchBeforeDeliver };
 export { composeReplyDispatchBeforeDeliver, markReplyDispatchBeforeDeliverDeadlineOwned };
 
 const silentReplyLogger = createSubsystemLogger("silent-reply/dispatcher");
-const deliveryOutcomeTrackers = new WeakMap<ReplyPayload, ReplyDispatchDeliveryOutcomeTracker>();
-const undeliveredFallbacks = new WeakMap<ReplyPayload, ReplyPayload>();
-const conversationContextsByDispatcher = new WeakMap<ReplyDispatcher, string>();
+const { deliveryOutcomeTrackers, undeliveredFallbacks, conversationContextsByDispatcher } =
+  resolveGlobalSingleton(Symbol.for("openclaw.replyDispatcherState"), () => ({
+    deliveryOutcomeTrackers: new WeakMap<ReplyPayload, ReplyDispatchDeliveryOutcomeTracker>(),
+    undeliveredFallbacks: new WeakMap<ReplyPayload, ReplyPayload>(),
+    conversationContextsByDispatcher: new WeakMap<ReplyDispatcher, string>(),
+  }));
 
 /** Associate this turn's finalized prompt with its exact dispatcher without changing the SDK. */
 export function bindReplyDispatcherConversationContext(
@@ -451,7 +455,14 @@ export function createReplyDispatcher(options: ReplyDispatcherOptions): ReplyDis
         }
       }
       deliveryStarted = true;
-      const result = await options.deliver(deliverPayload, info);
+      const continuation =
+        info.kind === "final"
+          ? getReplyPayloadMetadata(deliverPayload)?.progressContinuation
+          : undefined;
+      const result = await options.deliver(
+        deliverPayload,
+        continuation ? { ...info, adoptProgressContinuation: continuation.adopt } : info,
+      );
       const finalization =
         isRecord(result) && result.finalization instanceof Promise
           ? result.finalization

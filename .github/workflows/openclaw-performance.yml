@@ -158,7 +158,7 @@ jobs:
               if (typeof version !== "string") process.exit(1);
               process.stdout.write(version);
             ' "$TARGET_CHECKOUT_DIR/package.json")"
-            if [[ "$target_version" == "2026.7.33" ]]; then
+            if [[ "$target_version" == "2026.7.33" || "$target_version" == "2026.7.34" ]]; then
               # This compatibility ref keeps Kova #116's historical 250% status CLI calibration
               # while backporting #118-#120's complete CPU-accounting fixes for this release only.
               kova_ref="18c9eb8c3950a35794d196f4e40ad471e9308e27"

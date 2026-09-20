@@ -109,6 +109,16 @@ describe("plugin subagent initial override policy", () => {
     },
   );
 
+  it.each([{ provider: "fixture", model: "literal" }, { model: "fixture/literal" }])(
+    "preserves an explicit API owner without configured model rows for %j",
+    async (override) => {
+      config.models!.providers!.fixture!.api = "openai-completions";
+      config.models!.providers!.fixture!.models = [];
+      await expect(run(override)).rejects.toThrow(/not allowlisted/u);
+      expect(dispatch).not.toHaveBeenCalled();
+    },
+  );
+
   it.each([
     { override: { provider: "fixture", model: "literal" }, chainedAlias: false },
     { override: { model: "fixture/literal" }, chainedAlias: false },

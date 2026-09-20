@@ -1,52 +1,45 @@
-import { performance } from "node:perf_hooks";
 import { setImmediate as yieldToEventLoop } from "node:timers/promises";
+import { createDeferredCore, type Deferred } from "../shared/deferred.js";
 
-const SESSION_PROJECTION_YIELD_INTERVAL_MS = 12;
-let activeProjections = 0;
-let sharedWorkStartedAt = 0;
 let pendingYield: Promise<void> | undefined;
+let foregroundCount = 0;
+let foregroundIdle: Deferred | undefined;
 
-type SessionProjectionWorkBudget = {
-  shouldYield: () => boolean;
-  yieldIfNeeded: () => Promise<void> | undefined;
-  resumeAfterAwait: () => void;
-};
-
-function yieldProjectionWork(): Promise<void> {
-  return (pendingYield ??= yieldToEventLoop().then(() => {
-    sharedWorkStartedAt = performance.now();
+/** Resident projection drains share one pending event-loop yield. */
+export function yieldSessionListWork(): Promise<void> {
+  return (pendingYield ??= yieldToEventLoop().finally(() => {
     pendingYield = undefined;
   }));
 }
 
-/** Concurrent session projections share one event-loop slice and one pending yield. */
-export async function withSessionProjectionWorkBudget<T>(
-  run: (budget: SessionProjectionWorkBudget) => Promise<T>,
-  startedAt?: number,
-): Promise<T> {
-  let workStartedAt = startedAt ?? performance.now();
-  if (activeProjections++ === 0) {
-    sharedWorkStartedAt = workStartedAt;
-  }
-  let checkedItems = 0;
-  const workIsDue = () => {
-    const now = performance.now();
-    return (
-      now - workStartedAt >= SESSION_PROJECTION_YIELD_INTERVAL_MS ||
-      now - sharedWorkStartedAt >= SESSION_PROJECTION_YIELD_INTERVAL_MS
-    );
+/** Optional transcript work must not invalidate a request's asynchronous read or mutation. */
+export function retainSessionListForegroundWork(): () => void {
+  foregroundCount++;
+  let retained = true;
+  return () => {
+    if (!retained) {
+      return;
+    }
+    retained = false;
+    if (--foregroundCount === 0) {
+      const idle = foregroundIdle;
+      foregroundIdle = undefined;
+      idle?.resolve();
+    }
   };
-  const resumeAfterAwait = () => {
-    workStartedAt = performance.now();
-  };
-  try {
-    return await run({
-      // Sample the clock in small batches without stacking per-caller work slices.
-      shouldYield: () => ++checkedItems % 16 === 0 && workIsDue(),
-      yieldIfNeeded: () => (workIsDue() ? yieldProjectionWork().then(resumeAfterAwait) : undefined),
-      resumeAfterAwait,
-    });
-  } finally {
-    activeProjections--;
+}
+
+export function canRunSessionListBackgroundWork(): boolean {
+  return foregroundCount === 0;
+}
+
+export async function yieldSessionListBackgroundWork(): Promise<void> {
+  for (;;) {
+    await yieldSessionListWork();
+    if (canRunSessionListBackgroundWork()) {
+      return;
+    }
+    foregroundIdle ??= createDeferredCore();
+    await foregroundIdle.promise;
   }
 }

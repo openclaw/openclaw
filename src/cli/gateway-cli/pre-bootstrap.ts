@@ -232,8 +232,13 @@ async function isSameGatewayRunConfigSnapshot(
   return (
     (options.allowPathChange || current.path === expected.path) &&
     current.exists === expected.exists &&
+    current.valid === expected.valid &&
     (current.hash ?? current.raw) === (expected.hash ?? expected.raw) &&
-    hashRuntimeConfigValue(current.sourceConfig) === hashRuntimeConfigValue(expected.sourceConfig)
+    // Invalid snapshots have no resolved config facts. Reset admission uses
+    // their selected target and raw revision, never the valid-config hash cache.
+    (!current.valid ||
+      hashRuntimeConfigValue(current.sourceConfig) ===
+        hashRuntimeConfigValue(expected.sourceConfig))
   );
 }
 

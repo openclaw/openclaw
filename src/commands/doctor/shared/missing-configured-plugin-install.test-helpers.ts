@@ -1,4 +1,40 @@
+import path from "node:path";
+import { afterAll, afterEach, aroundAll } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
+import { withIsolatedTestHome } from "../../../../test/test-env.js";
+import { withStateDatabaseCoordinatorRuntimeDirectory } from "../../../infra/state-database-coordinator.js";
+import { closeOpenClawStateDatabaseAsync } from "../../../state/openclaw-state-db-cache.js";
+
 const DEFAULT_RESOLVED_AT = "2026-05-01T00:00:00.000Z";
+
+export function setupPluginInstallTestState(): {
+  testEnv: NodeJS.ProcessEnv;
+  tempDirs: ReturnType<typeof useAutoCleanupTempDirTracker>;
+} {
+  const testHome = withIsolatedTestHome({ mode: "hermetic" });
+  // Keep coordinator files outside the per-case homes removed during cleanup.
+  aroundAll((runSuite) =>
+    withStateDatabaseCoordinatorRuntimeDirectory(
+      path.join(testHome.tempHome, "coordinator-runtime"),
+      runSuite,
+    ),
+  );
+  afterAll(testHome.cleanup);
+  const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
+    afterEach(async () => {
+      await closeOpenClawStateDatabaseAsync();
+      cleanup();
+    }),
+  );
+  return {
+    testEnv: {
+      HOME: testHome.tempHome,
+      OPENCLAW_HOME: testHome.tempHome,
+      OPENCLAW_STATE_DIR: path.join(testHome.tempHome, ".openclaw"),
+    },
+    tempDirs,
+  };
+}
 
 export function officialPluginEntry(params: {
   id: string;

@@ -11,6 +11,8 @@ const LEGACY_PYTHON_ONLY_CONTRACTS = new Set([
   "*:0.3.0",
   // 2026.7.33 upgraded the package without adopting the native durability API.
   "2026.7.33:0.4.1",
+  // 2026.7.34 retains the same Python-only dependency and runtime contract.
+  "2026.7.34:0.4.1",
 ]);
 
 function listContainingBranches(ref) {

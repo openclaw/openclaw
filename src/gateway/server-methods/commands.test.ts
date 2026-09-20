@@ -527,6 +527,30 @@ describe("commands.list handler", () => {
     expect(commands.some((c) => c.source === "plugin")).toBe(false);
   });
 
+  it.each(["text", "native", "both"] as const)(
+    "projects registered plugin commands without native support for scope=%s",
+    async (scope) => {
+      setGatewayRegistry([
+        { pluginId: "demo", command: { name: "demo", description: "Demo command" } },
+      ]);
+      const commands = await listCommands({ provider: "whatsapp", scope });
+      expect(commands.filter((command) => command.source === "plugin")).toEqual(
+        scope === "text"
+          ? [
+              {
+                name: "demo",
+                textAliases: ["/demo"],
+                description: "Demo command",
+                source: "plugin",
+                scope: "both",
+                acceptsArgs: false,
+              },
+            ]
+          : [],
+      );
+    },
+  );
+
   it("uses text-surface names when scope=text even with provider-native aliases", async () => {
     const commands = await listCommands({ provider: "discord", scope: "text" });
     const model = commands.find((c) => c.source === "native" && c.name === "model");

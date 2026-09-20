@@ -1,8 +1,9 @@
 import { spawn, spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { constants, tmpdir } from "node:os";
-import { basename, join, resolve } from "node:path";
+import { basename, delimiter, dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { inspectManagedProcessGroup } from "../lib/managed-child-process.mts";
 
 const SIGNAL_GRACE_MS = 5000;
 const KILL_DRAIN_MS = 5000;
@@ -42,7 +43,7 @@ if (process.platform === "darwin") {
       lockScript,
       String(process.pid),
     ],
-    { encoding: "utf8", timeout: 5000, maxBuffer: 4096, stdio: ["ignore", "pipe", "pipe"] },
+    { encoding: "utf8", timeout: 15_000, maxBuffer: 4096, stdio: ["ignore", "pipe", "pipe"] },
   );
   if (identity.status !== 0 || !identity.stdout?.trim()) {
     console.error(
@@ -68,6 +69,32 @@ process.once("exit", () => {
 });
 // merge-run can delete this revision's script directory before lock release.
 writeFileSync(lockScriptSnapshot, readFileSync(lockScript));
+writeFileSync(
+  join(lockSnapshotDir, "host-tools.sh"),
+  readFileSync(new URL("./host-tools.sh", import.meta.url)),
+);
+// GC may delete the linked wrapper before reading the next PR. Retain this
+// stdlib-only adapter under the same supervisor-owned cleanup lifetime.
+for (const relative of [
+  "pr-lib/github.sh",
+  "pr-lib/github.mjs",
+  "pr-lib/gh-api-preflight.mjs",
+  "lib/plain-gh.mjs",
+  "lib/direct-run.mjs",
+]) {
+  const target = join(lockSnapshotDir, "scripts", relative);
+  mkdirSync(dirname(target), { recursive: true });
+  writeFileSync(target, readFileSync(new URL(`../${relative}`, import.meta.url)));
+}
+// Imported Git owners and package-manager children use PATH. Keep the selected
+// binary available even after merge cleanup removes the wrapper's worktree.
+const selectedGit = process.env.OPENCLAW_PR_GIT || process.env.GIT_EXEC;
+const childPath = selectedGit
+  ? `${lockSnapshotDir}${delimiter}${process.env.PATH ?? ""}`
+  : process.env.PATH;
+if (selectedGit) {
+  symlinkSync(selectedGit, join(lockSnapshotDir, "git"));
+}
 if (process.platform === "darwin") {
   // Keep the complete stdlib-only provider beside the release shell. No app
   // node_modules, dynamic package loader or deleted source path is retained.
@@ -85,6 +112,7 @@ let notificationEnded = false;
 let notificationFailure;
 let receivedSignal;
 let escalationTimer;
+let cleanupGraceMs = SIGNAL_GRACE_MS;
 let killDeadline;
 const operationGroup = { pid: undefined };
 let operationGroupGone = false;
@@ -111,25 +139,21 @@ function exitCodeForSignal(signal) {
   return typeof signalNumber === "number" ? 128 + signalNumber : 1;
 }
 
-function processGroupStatus(pgid) {
+function processGroupStatus() {
   if (operationGroupGone) {
     return "dead";
   }
-  if (!Number.isSafeInteger(pgid) || pgid <= 1 || pgid > 0x7fffffff) {
-    return "indeterminate";
+  // The shared owner distinguishes exited Linux threads awaiting reaping from
+  // live descendants. Only this supervisor's observed child exit permits that check.
+  const state = inspectManagedProcessGroup(child, {
+    deadlineAt: killDeadline,
+    errorPolicy: "indeterminate",
+  });
+  if (state === "dead") {
+    // Never let later PGID reuse redirect a delayed signal or liveness probe.
+    operationGroupGone = true;
   }
-  try {
-    process.kill(-pgid, 0);
-    return "live";
-  } catch (error) {
-    if (error?.code === "ESRCH") {
-      // Once absent, this operation group is gone forever. Never let later
-      // PGID reuse redirect a delayed signal or liveness probe.
-      operationGroupGone = true;
-      return "dead";
-    }
-    return "indeterminate";
-  }
+  return state;
 }
 
 function processGroupRows(pgid) {
@@ -229,18 +253,22 @@ for (const signal of FORWARDED_SIGNALS) {
       return;
     }
     receivedSignal = signal;
+    if (cleanupGraceMs > SIGNAL_GRACE_MS) {
+      console.error("Waiting for PR provisioning cleanup; interrupt again to force termination.");
+    }
     signalProcessGroup(signal);
-    escalationTimer = setTimeout(escalateSignal, SIGNAL_GRACE_MS);
+    escalationTimer = setTimeout(escalateSignal, cleanupGraceMs);
   };
   signalHandlers.set(signal, handler);
   process.on(signal, handler);
 }
 
-// Git maintenance must join before leader completion, not daemonize with fd 3.
-// Append to Git's inherited -c transport so nested tools share this lifetime
-// without changing repository config or discarding the caller's other settings.
+// Suppress automatic maintenance; explicit maintenance must still join before completion.
+// Preserve inherited Git settings for nested tools without changing repository config.
 const gitConfigParameters = [
   process.env.GIT_CONFIG_PARAMETERS,
+  "'maintenance.auto=false'",
+  "'gc.auto=0'",
   "'maintenance.autoDetach=false'",
   "'gc.autoDetach=false'",
 ]
@@ -252,10 +280,12 @@ const child = spawn(script, args, {
   detached: true,
   env: {
     ...process.env,
+    PATH: childPath,
     GIT_CONFIG_PARAMETERS: gitConfigParameters,
     OPENCLAW_PR_DEDICATED_PROCESS_GROUP: "1",
     OPENCLAW_PR_LOCK_NOTIFY_FD: "3",
     OPENCLAW_PR_LOCK_SUPERVISOR_PID: String(process.pid),
+    OPENCLAW_PR_GITHUB_SNAPSHOT_ROOT: lockSnapshotDir,
   },
   stdio: ["inherit", "inherit", "inherit", "pipe"],
 });
@@ -269,6 +299,28 @@ if (killDeadline) {
 function consumeNotificationLine(line) {
   if (operationCompleteReceived) {
     notificationFailure ??= new Error("scripts/pr emitted metadata after operation completion");
+    return;
+  }
+  if (line.startsWith("phase\tcleanup-grace\t")) {
+    const value = line.slice("phase\tcleanup-grace\t".length);
+    const milliseconds = Number(value);
+    if (
+      !locks.size ||
+      !/^(0|[1-9][0-9]*)$/u.test(value) ||
+      !Number.isSafeInteger(milliseconds) ||
+      milliseconds > 0x7fffffff
+    ) {
+      notificationFailure ??= new Error("scripts/pr emitted invalid cleanup-grace metadata");
+      return;
+    }
+    const nextGraceMs = Math.max(SIGNAL_GRACE_MS, milliseconds);
+    // A signal can arrive before its queued provisioning budget. Grant that
+    // cleanup window without shortening an already-admitted cancellation.
+    if (receivedSignal && !killDeadline && nextGraceMs > cleanupGraceMs) {
+      clearTimeout(escalationTimer);
+      escalationTimer = setTimeout(escalateSignal, nextGraceMs);
+    }
+    cleanupGraceMs = nextGraceMs;
     return;
   }
   if (line === "phase\toperation-complete") {
@@ -297,10 +349,14 @@ function consumeNotificationLine(line) {
     return;
   }
 
-  const owner = spawnSync("git", ["-C", repoRoot, "cat-file", "blob", ownerOid], {
-    encoding: "utf8",
-    stdio: ["ignore", "pipe", "ignore"],
-  });
+  const owner = spawnSync(
+    process.env.OPENCLAW_PR_GIT || process.env.GIT_EXEC || "git",
+    ["-C", repoRoot, "cat-file", "blob", ownerOid],
+    {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    },
+  );
   const ownerMatch =
     owner.status === 0
       ? /^version=3\nstate=active\npgid=([1-9][0-9]*)\nsupervisor_pid=([1-9][0-9]*)\nsupervisor_birth=[^\t\n]+\ntoken=[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\n?$/u.exec(
@@ -421,7 +477,7 @@ function childResultAllowsLockRelease() {
   return completedCleanly || failedDuringValidation;
 }
 
-const postExitGroupStatus = child.pid ? processGroupStatus(child.pid) : "dead";
+const postExitGroupStatus = child.pid ? processGroupStatus() : "dead";
 if (postExitGroupStatus === "indeterminate") {
   notificationFailure ??= new Error("scripts/pr process-group state became indeterminate");
 } else if (postExitGroupStatus === "live") {
@@ -431,7 +487,7 @@ if (postExitGroupStatus === "indeterminate") {
   lingeringGroupProcesses = processGroupRows(child.pid);
   notificationFailure ??= new Error("scripts/pr process group remained active after wrapper exit");
   signalProcessGroup("SIGTERM");
-  escalationTimer ??= setTimeout(escalateSignal, SIGNAL_GRACE_MS);
+  escalationTimer ??= setTimeout(escalateSignal, cleanupGraceMs);
 } else if (!notificationEnded) {
   // A detached descendant may be the last writer. It cannot be signalled by
   // this group supervisor, so bound the wait and retain the lock on timeout.
@@ -440,7 +496,7 @@ if (postExitGroupStatus === "indeterminate") {
 
 async function waitForOperationDrain() {
   while (true) {
-    const groupStatus = child.pid ? processGroupStatus(child.pid) : "dead";
+    const groupStatus = child.pid ? processGroupStatus() : "dead";
     if (groupStatus === "indeterminate") {
       throw new Error("scripts/pr process-group state became indeterminate");
     }

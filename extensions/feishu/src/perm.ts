@@ -1,4 +1,3 @@
-// Feishu plugin module implements perm behavior.
 import type * as Lark from "@larksuiteoapi/node-sdk";
 import type { OpenClawPluginApi } from "../runtime-api.js";
 import { FeishuPermSchema, type FeishuPermParams } from "./perm-schema.js";

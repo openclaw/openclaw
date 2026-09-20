@@ -38,7 +38,7 @@ type AuditManagedNpmRootResult = {
 type OpenClawPeerLinkResult = "linked" | "skipped" | "unchanged";
 
 type OpenClawHostDependency = {
-  declaration: "peerDependencies" | "dependencies";
+  declaration: "peerDependencies" | "dependencies" | "optionalDependencies";
   spec: string;
 };
 
@@ -49,12 +49,13 @@ type RegisteredOpenClawHostLinkResult = {
   issues: OpenClawPeerLinkAuditIssue[];
 };
 
-/** Resolve the host declaration consistently for peer and direct runtime dependencies. */
+/** Resolve the host declaration consistently for peer, direct, and optional dependencies. */
 export function resolveOpenClawHostDependency(manifest: {
   dependencies?: unknown;
+  optionalDependencies?: unknown;
   peerDependencies?: unknown;
 }): OpenClawHostDependency | null {
-  for (const declaration of ["peerDependencies", "dependencies"] as const) {
+  for (const declaration of ["peerDependencies", "optionalDependencies", "dependencies"] as const) {
     const dependencies = manifest[declaration];
     const spec =
       typeof dependencies === "object" && dependencies !== null && !Array.isArray(dependencies)

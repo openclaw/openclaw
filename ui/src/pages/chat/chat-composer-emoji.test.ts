@@ -1,12 +1,13 @@
 import { nothing, render } from "lit";
 import MarkdownIt from "markdown-it";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { TextareaTokenAnchor } from "../../components/textarea-token-anchor.ts";
 /* @vitest-environment jsdom */
 import { NewSessionComposerTextareaController } from "../new-session/composer-controller.ts";
 import { renderNewSessionComposer } from "../new-session/composer.ts";
 import { createComposerProps, resetComposerFixture } from "./chat-composer.test-support.ts";
 import { renderChatComposer } from "./components/chat-composer.ts";
+import { installChatComposerPickerDismissal } from "./components/chat-picker-overlay.ts";
 
 const controllers: NewSessionComposerTextareaController[] = [];
 const originalExecCommand = Object.getOwnPropertyDescriptor(document, "execCommand");
@@ -20,6 +21,7 @@ afterEach(async () => {
   await resetComposerFixture();
 });
 beforeEach(() => {
+  onTestFinished(installChatComposerPickerDismissal(document));
   // jsdom has no layout/ResizeObserver; real-browser tests cover placement and cleanup.
   vi.spyOn(TextareaTokenAnchor.prototype, "update").mockImplementation(() => {});
   // jsdom has no editing engine. Exercise the browser command's input contract;

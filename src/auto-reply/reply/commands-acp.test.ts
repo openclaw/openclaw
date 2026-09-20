@@ -15,6 +15,7 @@ import {
   createChannelTestPluginBase,
   createTestRegistry,
 } from "../../test-utils/channel-plugins.js";
+import { createInMemoryTaskRegistryStore } from "../../test-utils/task-registry-store.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
 
 const hoisted = vi.hoisted(() => {
@@ -160,10 +161,7 @@ const { failTaskRunByRunIdCore } = await import("../../tasks/task-executor.js");
 function configureInMemoryTaskRegistryStoreForTests(): void {
   configureTaskRegistryRuntime({
     store: {
-      loadSnapshot: () => ({
-        tasks: new Map(),
-        deliveryStates: new Map(),
-      }),
+      ...createInMemoryTaskRegistryStore(),
       upsertTaskWithDeliveryState: () => {},
       deleteTaskWithDeliveryState: () => {},
       upsertDeliveryState: () => {},

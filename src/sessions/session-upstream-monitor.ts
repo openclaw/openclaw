@@ -188,7 +188,10 @@ async function runSessionUpstreamMonitorTick(
     return;
   }
   const dbOptions = databaseOptions(options);
-  const linksByCatalog = listWatchedSessionUpstreamLinks(dbOptions);
+  const linksByCatalog = await listWatchedSessionUpstreamLinks(dbOptions);
+  if (options.signal?.aborted) {
+    return;
+  }
   const watchedLinkKeys = new Set(
     [...linksByCatalog.values()].flatMap((links) => links.map(upstreamMonitorLinkKey)),
   );

@@ -93,7 +93,6 @@ function createNarratorHarness(params?: {
       onNarrationUpdate: onUpdate,
       abortSignal: params?.abortSignal,
       onToolStart: vi.fn(),
-      onCommandOutput: vi.fn(),
       onItemEvent: vi.fn(),
       onProgressNarratorLifecycle: (value) => {
         lifecycleRef.current = value;

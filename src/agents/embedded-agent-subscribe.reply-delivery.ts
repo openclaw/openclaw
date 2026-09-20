@@ -5,7 +5,7 @@ import {
   setReplyPayloadMetadata,
 } from "../auto-reply/reply-payload.js";
 import { isSilentReplyText, SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
-import { emitAgentEvent } from "../infra/agent-events.js";
+import { emitAgentEventIfCurrent } from "../infra/agent-events.js";
 import { normalizeTextForComparison } from "./embedded-agent-helpers.js";
 import type { BlockReplyPayload } from "./embedded-agent-payloads.js";
 import { runBestEffortCallback } from "./embedded-agent-subscribe.callback.js";
@@ -20,6 +20,7 @@ import type {
   AssistantStreamData,
   EmbeddedAgentSubscribeContext,
 } from "./embedded-agent-subscribe.handlers.types.js";
+import type { EmbeddedAgentEvent } from "./embedded-agent-subscribe.shared-types.js";
 import type { SubscribeEmbeddedAgentSessionParams } from "./embedded-agent-subscribe.types.js";
 import type { AgentMessage } from "./runtime/index.js";
 
@@ -95,6 +96,24 @@ export function createReplyDelivery({ params, state, log }: ReplyDeliveryParams)
   let prefix = "";
   let streamedText = "";
   let finalized = false;
+  const publishAgentEvent = (event: EmbeddedAgentEvent) => {
+    if (
+      !emitAgentEventIfCurrent({
+        runId: params.runId,
+        lifecycleGeneration: params.lifecycleGeneration,
+        ...event,
+      })
+    ) {
+      return;
+    }
+    if (params.onAgentEvent) {
+      runBestEffortCallback({
+        label: "assistant agent event",
+        log,
+        callback: () => params.onAgentEvent?.(event),
+      });
+    }
+  };
   const emitAssistantStreamDataSafely = (scope: AssistantStreamScope) => {
     if (!scope.delivery || scope.emitted || state.unsubscribed) {
       return;
@@ -132,14 +151,7 @@ export function createReplyDelivery({ params, state, log }: ReplyDeliveryParams)
       if (event.stream === "item") {
         lastEmittedCommentaryByItem.set(itemId, commentarySignature);
       }
-      emitAgentEvent({ runId: params.runId, ...event });
-      if (params.onAgentEvent) {
-        runBestEffortCallback({
-          label: "assistant agent event",
-          log,
-          callback: () => params.onAgentEvent?.(event),
-        });
-      }
+      publishAgentEvent(event);
     }
     drainPartialReply(scope);
   };
@@ -192,6 +204,17 @@ export function createReplyDelivery({ params, state, log }: ReplyDeliveryParams)
         }
         streamedText = text;
         finalized = options?.finalMessage === true;
+      }
+      if (options?.finalMessage && state.lastAssistant?.stopReason === "error") {
+        const itemId = assistantItemId;
+        const text = streamedText;
+        params.assistantErrorTranscript?.bindStream(state.lastAssistant, (visible) => {
+          clearAssistantStream();
+          publishAgentEvent({
+            stream: "assistant",
+            data: { itemId, text: visible ? text : "", delta: "", replace: true },
+          });
+        });
       }
     }
     // Capture both coordinate domains before any callback can advance message state.

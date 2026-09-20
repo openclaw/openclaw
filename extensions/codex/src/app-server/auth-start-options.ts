@@ -29,6 +29,9 @@ export function resolveCodexAppServerLocalHomeDir(
   agentDir: string | undefined,
   env: NodeJS.ProcessEnv = process.env,
 ): string {
+  if (startOptions.codexHome) {
+    return startOptions.codexHome;
+  }
   const configured = startOptions.env?.CODEX_HOME;
   if (configured?.trim()) {
     return configured;

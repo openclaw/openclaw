@@ -36,18 +36,34 @@ it.runIf(process.platform === "darwin").each([0o700, 0o755])(
   },
 );
 
-it.runIf(process.platform === "darwin")(
-  "keeps the live launcher intact when symlink metadata cannot be preserved",
-  async () => {
+it.runIf(process.platform === "darwin").each([
+  { operation: "lchmod", code: "EPERM", continues: true },
+  { operation: "lchown", code: "EPERM", continues: true },
+  { operation: "lchmod", code: "ENOSYS", continues: true },
+  { operation: "lchmod", code: "EIO", continues: false },
+] as const)(
+  "handles symlink $operation failure $code without following the target",
+  async ({ operation, code, continues }) => {
     const root = dirs.make("package-launcher-metadata-");
     const source = path.join(root, "source");
     const destination = path.join(root, "destination");
     await fs.symlink("missing", source);
     await fs.writeFile(destination, "live launcher");
-    vi.spyOn(fs, "lchmod").mockRejectedValueOnce(new Error("link mode denied"));
+    vi.spyOn(fs, operation).mockRejectedValueOnce(
+      Object.assign(new Error("link metadata denied"), { code }),
+    );
 
-    await expect(copyPackagePathEntry(source, destination)).rejects.toThrow("link mode denied");
-    expect(await fs.readFile(destination, "utf8")).toBe("live launcher");
+    if (continues) {
+      await expect(copyPackagePathEntry(source, destination)).resolves.toEqual({
+        ownershipPreserved: operation !== "lchown",
+      });
+      expect(await fs.readlink(destination)).toBe("missing");
+    } else {
+      await expect(copyPackagePathEntry(source, destination)).rejects.toThrow(
+        "link metadata denied",
+      );
+      expect(await fs.readFile(destination, "utf8")).toBe("live launcher");
+    }
     expect((await fs.readdir(root)).toSorted()).toEqual(["destination", "source"]);
   },
 );

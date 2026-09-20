@@ -1,5 +1,5 @@
 // @vitest-environment node
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { GatewayRequestError } from "../../api/gateway.ts";
 import type { ChatAttachment } from "../../lib/chat/chat-types.ts";
@@ -8,12 +8,8 @@ import {
   readStoredOutboxStore,
   storageTargetForGateway,
 } from "../../lib/chat/outbox-store.ts";
-import { createStorageMock } from "../../test-helpers/storage.ts";
-import {
-  getChatAttachmentDataUrl,
-  registerChatAttachmentPayload,
-  releaseChatAttachmentPayloads,
-} from "./attachment-payload-store.ts";
+import { getChatAttachmentDataUrl } from "./attachment-payload-store.ts";
+import { createStagedAttachment } from "./chat-delivery-attachments.test-support.ts";
 import { handleChatGatewayEvent } from "./chat-gateway.ts";
 import type { ChatHistoryResult } from "./chat-history-snapshot.ts";
 import { loadChatHistory } from "./chat-history.ts";
@@ -24,47 +20,17 @@ import {
   makeChatHost,
 } from "./chat-host.test-support.ts";
 import { syncVisibleChatQueueProjection } from "./chat-queue.ts";
-import { retryQueuedChatMessage, retryReconnectableQueuedChatSends } from "./chat-send-actions.ts";
+import { retryQueuedChatMessage, resumeStoredChatOutboxes } from "./chat-send-actions.ts";
 import type { ChatHost } from "./chat-send-contract.ts";
 import { handleSendChat } from "./chat-send-submit.ts";
 import { formatChatWorkContext } from "./chat-work-context.ts";
 import { getChatSessionProjection } from "./history-merge.ts";
-import { installOutboxBrowserStorage } from "./outbox-browser.test-support.ts";
+import { useChatSendBrowserFixture } from "./outbox-browser.test-support.ts";
 import { reconcileChatRunLifecycle } from "./run-lifecycle.ts";
 
-const attachmentsToRelease: ChatAttachment[] = [];
 const attachmentDataUrl = "data:application/pdf;base64,JVBERi0xLjQK";
 
-beforeEach(() => {
-  installOutboxBrowserStorage();
-  vi.stubGlobal("sessionStorage", createStorageMock());
-  vi.stubGlobal("requestAnimationFrame", () => 1);
-  vi.stubGlobal("cancelAnimationFrame", () => undefined);
-});
-
-afterEach(async () => {
-  releaseChatAttachmentPayloads(attachmentsToRelease);
-  attachmentsToRelease.length = 0;
-  await Promise.resolve();
-  vi.restoreAllMocks();
-  vi.unstubAllGlobals();
-});
-
-function createStagedAttachment(id: string): ChatAttachment {
-  const file = new File(["%PDF-1.4\n"], "brief.pdf", { type: "application/pdf" });
-  const attachment = registerChatAttachmentPayload({
-    attachment: {
-      id,
-      mimeType: "application/pdf",
-      fileName: "brief.pdf",
-      sizeBytes: file.size,
-    },
-    dataUrl: attachmentDataUrl,
-    file,
-  });
-  attachmentsToRelease.push(attachment);
-  return attachment;
-}
+useChatSendBrowserFixture();
 
 describe("structured Goal admission", () => {
   const intent = { kind: "session-goal-start", version: 1, issuedAtMs: 1_788_000_000_000 } as const;
@@ -330,27 +296,101 @@ describe("Home work context admission", () => {
 });
 
 describe("handleSendChat immediate local commands", () => {
+  it.each(["draft", "session"])("keeps a newer %s intact when export finishes", async (change) => {
+    const exported = createDeferred<"downloaded">();
+    const attachment = createStagedAttachment("pending-export-att");
+    const exportCurrentChat = vi.fn(() => exported.promise);
+    const host = makeChatHost({
+      chatMessage: "/export",
+      chatAttachments: [attachment],
+      exportCurrentChat,
+      requestHandlers: {},
+    });
+    const sending = handleSendChat(host);
+    await vi.waitFor(() => expect(exportCurrentChat).toHaveBeenCalledOnce());
+    const nextDraft = change === "draft" ? "Keep this new draft" : "/export";
+    if (change === "session") {
+      host.sessionKey = "agent:main:other";
+    }
+    host.chatMessage = nextDraft;
+    exported.resolve("downloaded");
+    await sending;
+
+    expect(host.chatMessage).toBe(nextDraft);
+    expect(host.chatAttachments).toEqual([attachment]);
+    expect(getChatAttachmentDataUrl(attachment)).toBe(attachmentDataUrl);
+    expect(host.request).not.toHaveBeenCalled();
+  });
+
   it.each(["/export-session", "/export"])(
-    "shows an empty export outcome and preserves staged attachments for %s",
+    "preserves a rejected %s path draft and clears the error after correction",
     async (command) => {
+      const draft = `${command} reports/conversation.html`;
+      const attachment = createStagedAttachment("export-path-att");
+      const exportCurrentChat = vi.fn(() => "downloaded" as const);
+      const host = makeChatHost({
+        chatMessage: draft,
+        chatAttachments: [attachment],
+        exportCurrentChat,
+        requestHandlers: {},
+      });
+
+      await handleSendChat(host);
+
+      expect(exportCurrentChat).not.toHaveBeenCalled();
+      expect(host.request).not.toHaveBeenCalled();
+      expect(host.chatError).toBe(
+        "Control UI exports Markdown through your browser. Run /export without a file path.",
+      );
+      expect(host.chatMessage).toBe(draft);
+      expect(host.chatAttachments).toEqual([attachment]);
+      expect(getChatAttachmentDataUrl(attachment)).toBe(attachmentDataUrl);
+      expect(host.chatQueue).toEqual([]);
+
+      host.chatMessage = command;
+      await handleSendChat(host);
+
+      expect(exportCurrentChat).toHaveBeenCalledOnce();
+      expect(host.chatError).toBeNull();
+      expect(host.lastError).toBeNull();
+      expect(host.chatMessage).toBe("");
+      expect(host.chatAttachments).toEqual([attachment]);
+    },
+  );
+
+  it.each(
+    ["/export-session", "/export"].flatMap((command) =>
+      (["empty", "downloaded"] as const).map((result) => ({ command, result })),
+    ),
+  )(
+    "handles a $result export and preserves staged attachments for $command",
+    async ({ command, result }) => {
       const attachment = createStagedAttachment("export-att");
-      const exportCurrentChat = vi.fn(() => "empty" as const);
+      const exportCurrentChat = vi.fn(() => result);
       const afterCommit = vi.fn(() => () => undefined);
-      const host = createImmediateCommandHost(command, attachment, {
+      const host = makeChatHost({
+        chatMessage: command,
+        chatAttachments: [attachment],
         exportCurrentChat,
         renderLifecycle: { invalidate: vi.fn(), afterCommit },
+        requestHandlers: {},
       });
 
       await handleSendChat(host);
 
       expect(exportCurrentChat).toHaveBeenCalledOnce();
-      expect(host.chatMessages).toEqual([
-        expect.objectContaining({
-          role: "system",
-          content: "There are no messages to export yet.",
-        }),
-      ]);
-      expect(afterCommit).toHaveBeenCalledOnce();
+      expect(host.request).not.toHaveBeenCalled();
+      expect(host.chatMessages).toEqual(
+        result === "empty"
+          ? [
+              expect.objectContaining({
+                role: "system",
+                content: "There are no messages to export yet.",
+              }),
+            ]
+          : [],
+      );
+      expect(afterCommit).toHaveBeenCalledTimes(result === "empty" ? 1 : 0);
       expect(host.chatMessage).toBe("");
       expect(host.chatAttachments).toEqual([attachment]);
       expect(getChatAttachmentDataUrl(attachment)).toBe(attachmentDataUrl);
@@ -605,7 +645,7 @@ describe("handleSendChat session ownership", () => {
     const originalId = host.chatQueue[0]!.sendRunId;
     host.connected = true;
     readiness.mockReturnValue(true);
-    const drain = retryReconnectableQueuedChatSends(host);
+    const drain = resumeStoredChatOutboxes(host);
     const loading = loadChatHistory(host);
     await vi.waitFor(() =>
       expect(host.request).toHaveBeenCalledWith("chat.history", expect.anything()),
@@ -630,10 +670,10 @@ describe("handleSendChat session ownership", () => {
     ]);
     pending = true;
     readiness.mockReturnValue(true);
-    await retryReconnectableQueuedChatSends(host);
+    await resumeStoredChatOutboxes(host);
     expect(host.request).not.toHaveBeenCalledWith("chat.send", expect.anything());
     pending = false;
-    await retryReconnectableQueuedChatSends(host);
+    await resumeStoredChatOutboxes(host);
     expect(host.chatRunError).toBeNull();
     expect(findChatSendPayload(host)).toMatchObject({
       message: "offline later turn",

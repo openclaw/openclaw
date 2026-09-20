@@ -11,6 +11,7 @@ import type {
   SessionDeleteTarget,
   SessionGateway,
   SessionListScope,
+  SessionRefreshOutcome,
   SessionState,
 } from "./session-capability.ts";
 import {
@@ -18,7 +19,6 @@ import {
   resolveUiConversationIdentity,
   resolveUiSelectedGlobalAgentId,
 } from "./session-key.ts";
-import type { SessionRefreshOutcome } from "./session-list-query.ts";
 import { requestSessionDelete } from "./session-requests.ts";
 
 type Deletion = {

@@ -202,8 +202,8 @@ describe("AppSidebar multi-select", () => {
       { archived: true },
     );
     expect(harness.patch).not.toHaveBeenCalled();
-    await waitForFast(() => expect(harness.refreshReplacement).toHaveBeenCalledTimes(1));
-    expect(harness.refreshReplacement).toHaveBeenCalledWith("main");
+    await waitForFast(() => expect(harness.reconcileMutation).toHaveBeenCalledTimes(1));
+    expect(harness.reconcileMutation).toHaveBeenCalledWith("main");
   });
 
   it("marks every selected session unread through patchMany", async () => {
@@ -225,7 +225,7 @@ describe("AppSidebar multi-select", () => {
       { unread: true },
     );
     expect(harness.patch).not.toHaveBeenCalled();
-    await waitForFast(() => expect(harness.refreshReplacement).toHaveBeenCalledOnce());
+    await waitForFast(() => expect(harness.reconcileMutation).toHaveBeenCalledOnce());
   });
 
   it.each([
@@ -249,7 +249,7 @@ describe("AppSidebar multi-select", () => {
     expect(harness.patch).not.toHaveBeenCalled();
     expect(request.mock.calls.filter(([method]) => method === "sessions.patchMany")).toEqual([]);
     expect(harness.patchMany).not.toHaveBeenCalled();
-    expect(harness.refreshReplacement).not.toHaveBeenCalled();
+    expect(harness.reconcileMutation).not.toHaveBeenCalled();
   });
 
   it("hides an archiving current thread immediately without navigating away", async () => {

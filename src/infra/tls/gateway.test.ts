@@ -62,7 +62,7 @@ vi.mock("../../process/exec.js", async (importOriginal) => ({
 
 vi.mock("../resolve-system-bin.js", () => ({ resolveSystemBin: resolveSystemBinMock }));
 
-import { loadGatewayTlsServerRuntime } from "./gateway.js";
+import { inspectGatewayTlsCertificate, loadGatewayTlsServerRuntime } from "./gateway.js";
 
 const tempDirs = createTrackedTempDirs();
 const createTempDir = () => tempDirs.make("openclaw-gateway-tls-test-");
@@ -127,14 +127,15 @@ describe("loadGatewayTlsServerRuntime", () => {
     });
   });
 
-  it("loads existing cert, key, and optional ca files", async () => {
+  it.each([1, 100])("loads existing cert/key with a %i-certificate CA bundle", async (count) => {
     const dir = await createTempDir();
     const certPath = path.join(dir, "gateway-cert.pem");
     const keyPath = path.join(dir, "gateway-key.pem");
     const caPath = path.join(dir, "gateway-ca.pem");
     await fs.writeFile(certPath, CERT_PEM, "utf8");
     await fs.writeFile(keyPath, KEY_PEM, "utf8");
-    await fs.writeFile(caPath, CERT_PEM, "utf8");
+    const caBundle = (CERT_PEM + "\n").repeat(count);
+    await fs.writeFile(caPath, caBundle, "utf8");
 
     const result = await loadGatewayTlsServerRuntime({
       enabled: true,
@@ -154,7 +155,7 @@ describe("loadGatewayTlsServerRuntime", () => {
     );
     expect(result.tlsOptions?.cert).toBe(CERT_PEM);
     expect(result.tlsOptions?.key).toBe(KEY_PEM);
-    expect(result.tlsOptions?.ca).toBe(CERT_PEM);
+    expect(result.tlsOptions?.ca).toBe(caBundle);
     expect(result.tlsOptions?.minVersion).toBe("TLSv1.3");
     expect(result.error).toBeUndefined();
   });
@@ -545,4 +546,88 @@ describe("loadGatewayTlsServerRuntime", () => {
     expect(result.certPath).not.toContain("gateway-cert.pem");
     expect(result.keyPath).not.toContain("gateway-key.pem");
   });
+});
+
+describe("configured TLS leaf byte limits", () => {
+  const limit = 64 * 1024;
+
+  it.each([
+    ["cert", limit],
+    ["cert", limit + 1],
+    ["key", limit],
+    ["key", limit + 1],
+    ["inspection", limit],
+    ["inspection", limit + 1],
+  ] as const)("bounds %s at %i bytes and closes its descriptors", async (target, bytes) => {
+    const dir = await createTempDir();
+    const certPath = path.join(dir, "cert.pem");
+    const keyPath = path.join(dir, "key.pem");
+    const cert = target === "key" ? CERT_PEM : CERT_PEM.padEnd(bytes, "\n");
+    const key = target === "key" ? KEY_PEM.padEnd(bytes, "\n") : KEY_PEM;
+    await fs.writeFile(certPath, cert);
+    await fs.writeFile(keyPath, key);
+    const handles: Awaited<ReturnType<typeof fs.open>>[] = [];
+    const originalOpen = fs.open.bind(fs);
+    vi.spyOn(fs, "open").mockImplementation(async (...args) => {
+      const handle = await originalOpen(...args);
+      handles.push(handle);
+      return handle;
+    });
+
+    if (target === "inspection") {
+      const result = await inspectGatewayTlsCertificate({ enabled: true, certPath });
+      expect(result.ok).toBe(bytes === limit);
+      if (result.ok) {
+        expect(result.value.cert).toBe(cert);
+        expect(result.value.fingerprintSha256).toBe(
+          normalizeTlsFingerprint(new X509Certificate(CERT_PEM).fingerprint256),
+        );
+      } else {
+        expect(result.error).toContain("File exceeds 65536 bytes");
+      }
+    } else {
+      const result = await loadGatewayTlsServerRuntime({
+        enabled: true,
+        certPath,
+        keyPath,
+        autoGenerate: false,
+      });
+      expect(result.enabled).toBe(bytes === limit);
+      expect(result.required).toBe(true);
+      if (bytes === limit) {
+        expect(result.tlsOptions?.cert).toBe(cert);
+        expect(result.tlsOptions?.key).toBe(key);
+      } else {
+        expect(result.error).toContain("File exceeds 65536 bytes");
+        expect(result.tlsOptions).toBeUndefined();
+      }
+    }
+    expect(handles.length).toBeGreaterThan(0);
+    expect(handles.every((handle) => handle.fd === -1)).toBe(true);
+    expect(runExecMock).not.toHaveBeenCalled();
+  });
+
+  it.runIf(process.platform !== "win32")(
+    "accepts symlinked chains in both entry points",
+    async () => {
+      const dir = await createTempDir();
+      const certPath = path.join(dir, "cert-link.pem");
+      const keyPath = path.join(dir, "key-link.pem");
+      const chain = [CERT_PEM, CERT_PEM].join("\n");
+      await fs.writeFile(path.join(dir, "cert.pem"), chain);
+      await fs.writeFile(path.join(dir, "key.pem"), KEY_PEM);
+      await fs.symlink("cert.pem", certPath);
+      await fs.symlink("key.pem", keyPath);
+      const inspection = await inspectGatewayTlsCertificate({ enabled: true, certPath });
+      expect(inspection).toMatchObject({ ok: true, value: { cert: chain } });
+      const runtime = await loadGatewayTlsServerRuntime({
+        enabled: true,
+        certPath,
+        keyPath,
+        autoGenerate: false,
+      });
+      expect(runtime).toMatchObject({ enabled: true, tlsOptions: { cert: chain, key: KEY_PEM } });
+      expect(runExecMock).not.toHaveBeenCalled();
+    },
+  );
 });

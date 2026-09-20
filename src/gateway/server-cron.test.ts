@@ -24,7 +24,6 @@ import {
   OutboundDeliveryError,
   PlatformMessageNotDispatchedError,
 } from "../infra/outbound/deliver-types.js";
-import { resolveSystemEventOwnerAgentId } from "../infra/system-event-ownership.js";
 import {
   beginGatewayRestartSignalAdmission,
   getActiveGatewayRootWorkCount,
@@ -36,6 +35,7 @@ import {
 import type { RunExit } from "../process/supervisor/types.js";
 import { writeConfigMachineState } from "../state/config-machine-state-write.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
+import { registerGatewayCronContextTests } from "./server-cron.context.test-support.js";
 
 type RunCronIsolatedAgentTurnMock = (params: {
   abortSignal?: AbortSignal;
@@ -243,7 +243,6 @@ vi.mock("../cron/trigger-script.js", () => ({
   createCronScriptRuntime: createCronScriptRuntimeMock,
 }));
 
-import { getInProcessGatewayToolContext } from "../agents/tools/in-process-gateway.js";
 import {
   abortActiveCronTaskRuns,
   registerActiveCronTaskRun,
@@ -252,12 +251,7 @@ import {
 } from "../cron/service/active-run-cancellation.js";
 import { resetActiveCronTaskRunsForTests } from "../cron/service/active-run-cancellation.test-support.js";
 import type { CronExecutionIdentityAdmission, CronServiceState } from "../cron/service/state.js";
-import { armTimer } from "../cron/service/timer.js";
 import type { CronJob, CronJobCreate } from "../cron/types.js";
-import {
-  getPluginRuntimeGatewayRequestScope,
-  withPluginRuntimeGatewayRequestScope,
-} from "../plugins/runtime/gateway-request-scope.js";
 import {
   buildGatewayCronService as buildGatewayCronServiceRuntime,
   fireOnExitJob,
@@ -415,6 +409,35 @@ function runExit(overrides: Partial<RunExit> = {}): RunExit {
     noOutputTimedOut: false,
     ...overrides,
   };
+}
+
+function createWatchedRun(settleOnCancel = true, exitResult: Partial<RunExit> = {}) {
+  const exit = createDeferred<RunExit>();
+  return {
+    exit,
+    startedAtMs: Date.now(),
+    cancel: vi.fn(() => {
+      if (settleOnCancel) {
+        exit.resolve(runExit(exitResult));
+      }
+    }),
+    detachOutput: vi.fn(),
+    wait: vi.fn(() => exit.promise),
+  };
+}
+
+function mockCronSupervisor(...runs: ReturnType<typeof createWatchedRun>[]) {
+  let nextRun = 0;
+  const spawn = vi.fn(async () => {
+    const index = nextRun++;
+    return {
+      ...(runs.length ? expectDefined(runs[index], "watched process") : createWatchedRun()),
+      runId: `cron-watch-${index}`,
+    };
+  });
+  const cancelScope = vi.fn();
+  getProcessSupervisorMock.mockReturnValue({ spawn, cancelScope });
+  return { spawn, cancelScope };
 }
 
 const requireRecord = createRequireRecord("object", "expected-label");
@@ -923,19 +946,15 @@ describe("buildGatewayCronService", () => {
         },
       } satisfies OpenClawConfig);
 
-      await vi.advanceTimersByTimeAsync(60_000);
+      vi.setSystemTime(new Date("2026-08-14T12:01:00.000Z"));
+      await onCronTimer(getCronState(state));
 
-      await vi.waitFor(
-        () => {
-          expect(state.cron.getJob(job.id)?.state).toMatchObject({
-            lastStatus: "ok",
-            consecutiveErrors: 0,
-            lastError: undefined,
-          });
-          expect(getCronState(state).activeTimerTicks).toBe(0);
-        },
-        { interval: 0 },
-      );
+      expect(state.cron.getJob(job.id)?.state).toMatchObject({
+        lastStatus: "ok",
+        consecutiveErrors: 0,
+        lastError: undefined,
+      });
+      expect(getCronState(state).activeTimerTicks).toBe(0);
       expectIsolatedRunFields({ agentId: "main" });
     } finally {
       state.cron.stop();
@@ -1022,15 +1041,9 @@ describe("buildGatewayCronService", () => {
 
   it("stops on-exit watcher children when the direct cron service stops", async () => {
     vi.stubEnv("OPENCLAW_SKIP_CRON", "0");
-    const cancelRun = vi.fn();
-    const cancelScope = vi.fn();
-    const spawn = vi.fn(async () => ({
-      runId: "run-on-exit",
-      startedAtMs: 0,
-      wait: () => new Promise(() => {}),
-      cancel: cancelRun,
-    }));
-    getProcessSupervisorMock.mockReturnValue({ spawn, cancelScope });
+    const watched = createWatchedRun(false);
+    const { cancel: cancelRun } = watched;
+    const { spawn, cancelScope } = mockCronSupervisor(watched);
     const cfg = createCronConfig("server-cron-stop-exit-watchers");
     const state = loadCronService(cfg);
 
@@ -1060,16 +1073,7 @@ describe("buildGatewayCronService", () => {
   });
 
   it("restarts on-exit watchers only after their scheduler successfully restarts", async () => {
-    const spawn = vi.fn(async () => {
-      const runDone = createDeferred<RunExit>();
-      return {
-        runId: `run-on-exit-restart-${spawn.mock.calls.length}`,
-        startedAtMs: Date.now(),
-        cancel: vi.fn(() => runDone.resolve(runExit())),
-        wait: () => runDone.promise,
-      };
-    });
-    getProcessSupervisorMock.mockReturnValue({ spawn, cancelScope: vi.fn() });
+    const { spawn } = mockCronSupervisor();
     const cfg = createCronConfig("server-cron-restart-exit-watchers");
     const state = loadCronService(cfg);
 
@@ -1101,20 +1105,11 @@ describe("buildGatewayCronService", () => {
   it.each(["start", "start failure", "stop"] as const)(
     "holds adopted on-exit work until the previous scheduler drains (%s)",
     async (outcome) => {
-      const exits = [createDeferred<RunExit>(), createDeferred<RunExit>()] as const;
+      const watched = [createWatchedRun(false), createWatchedRun(false)] as const;
+      const exits = [watched[0].exit, watched[1].exit] as const;
       const releaseFirst = createDeferred();
       const releaseSecond = createDeferred();
-      let nextExit = 0;
-      const spawn = vi.fn(async () => {
-        const index = nextExit++;
-        return {
-          runId: `handoff-watch-${index}`,
-          startedAtMs: Date.now(),
-          cancel: vi.fn(),
-          wait: () => expectDefined(exits[index], "watched exit").promise,
-        };
-      });
-      getProcessSupervisorMock.mockReturnValue({ spawn, cancelScope: vi.fn() });
+      const { spawn } = mockCronSupervisor(...watched);
       requestHeartbeatAndWaitMock
         .mockImplementationOnce(async () => {
           await releaseFirst.promise;
@@ -1212,20 +1207,14 @@ describe("buildGatewayCronService", () => {
     "settles an on-exit %s while the Gateway restart fence remains closed",
     async (action) => {
       resetGatewayWorkAdmission();
-      const watchedExit = createDeferred<RunExit>();
+      const watched = createWatchedRun(false);
+      const watchedExit = watched.exit;
       const waitingForExit = createDeferred();
-      getProcessSupervisorMock.mockReturnValue({
-        spawn: vi.fn(async () => ({
-          runId: "closed-admission-watch",
-          startedAtMs: Date.now(),
-          cancel: vi.fn(),
-          wait: () => {
-            waitingForExit.resolve();
-            return watchedExit.promise;
-          },
-        })),
-        cancelScope: vi.fn(),
+      watched.wait.mockImplementation(() => {
+        waitingForExit.resolve();
+        return watchedExit.promise;
       });
+      mockCronSupervisor(watched);
       const cfg = createCronConfig("server-cron-on-exit-closed-admission");
       const previous = loadCronService(cfg);
       const next = loadCronService(cfg);
@@ -1280,16 +1269,9 @@ describe("buildGatewayCronService", () => {
   it.each(["add", "remove"] as const)(
     "does not apply a stale on-exit watcher snapshot after a concurrent %s",
     async (mutation) => {
-      const runDone = createDeferred<RunExit>();
-      const cancel = vi.fn(() => runDone.resolve(runExit()));
-      const cancelScope = vi.fn();
-      const spawn = vi.fn(async () => ({
-        runId: `run-on-exit-${mutation}-race`,
-        startedAtMs: Date.now(),
-        cancel,
-        wait: () => runDone.promise,
-      }));
-      getProcessSupervisorMock.mockReturnValue({ spawn, cancelScope });
+      const watched = createWatchedRun();
+      const { cancel } = watched;
+      const { spawn, cancelScope } = mockCronSupervisor(watched);
       const cfg = createCronConfig(`server-cron-on-exit-${mutation}-race`);
       const state = loadCronService(cfg);
       const captured = createDeferred();
@@ -1353,23 +1335,9 @@ describe("buildGatewayCronService", () => {
   );
 
   it("fires an on-exit payload after persisting its terminal disable", async () => {
-    const { promise: wait, resolve: resolveWait } = createDeferred<{
-      reason: "exit";
-      exitCode: number;
-      exitSignal: null;
-      durationMs: number;
-      stdout: string;
-      stderr: string;
-      timedOut: false;
-      noOutputTimedOut: false;
-    }>();
-    const spawn = vi.fn(async () => ({
-      runId: "run-on-exit-fire",
-      startedAtMs: Date.now(),
-      cancel: vi.fn(),
-      wait: () => wait,
-    }));
-    getProcessSupervisorMock.mockReturnValue({ spawn, cancelScope: vi.fn() });
+    const watched = createWatchedRun(false);
+    const { resolve: resolveWait } = watched.exit;
+    mockCronSupervisor(watched);
     const cfg = createCronConfig("server-cron-on-exit-fire");
     const state = loadCronService(cfg);
 
@@ -1411,23 +1379,13 @@ describe("buildGatewayCronService", () => {
   ])(
     "re-arms on-exit $command when its next exit arrives $exitTiming the previous payload finishes",
     async ({ command, exitTiming }) => {
-      const firstExit = createDeferred<RunExit>();
-      const secondExit = createDeferred<RunExit>();
+      const first = createWatchedRun(false);
+      const second = createWatchedRun(false);
+      const firstExit = first.exit;
+      const secondExit = second.exit;
       const releasePayload = createDeferred();
       const payloadFinished = createDeferred();
-      const spawn = vi.fn().mockImplementationOnce(async () => ({
-        runId: "on-exit-first",
-        startedAtMs: Date.now(),
-        cancel: vi.fn(),
-        wait: () => firstExit.promise,
-      }));
-      spawn.mockImplementation(async () => ({
-        runId: "on-exit-rearmed",
-        startedAtMs: Date.now(),
-        cancel: vi.fn(),
-        wait: () => secondExit.promise,
-      }));
-      getProcessSupervisorMock.mockReturnValue({ spawn, cancelScope: vi.fn() });
+      const { spawn } = mockCronSupervisor(first, second);
       requestHeartbeatAndWaitMock.mockImplementationOnce(async () => {
         await releasePayload.promise;
         return { status: "ran", durationMs: 1 };
@@ -1500,25 +1458,16 @@ describe("buildGatewayCronService", () => {
   ] as const)(
     "retains an on-exit receipt after rearming $rearm ($action)",
     async ({ rearm, action }) => {
-      const exits = [
-        createDeferred<RunExit>(),
-        createDeferred<RunExit>(),
-        createDeferred<RunExit>(),
+      const watched = [
+        createWatchedRun(false),
+        createWatchedRun(false),
+        createWatchedRun(false),
       ] as const;
+      const exits = [watched[0].exit, watched[1].exit, watched[2].exit] as const;
       const runnerStarted = createDeferred();
       const releaseRunner = createDeferred<{ status: "ok"; summary: string }>();
       const callbackReturned = createDeferred();
-      let nextExit = 0;
-      const spawn = vi.fn(async () => {
-        const index = nextExit++;
-        return {
-          runId: `receipt-watch-${index}`,
-          startedAtMs: Date.now(),
-          cancel: vi.fn(),
-          wait: () => expectDefined(exits[index], "watched exit").promise,
-        };
-      });
-      getProcessSupervisorMock.mockReturnValue({ spawn, cancelScope: vi.fn() });
+      const { spawn } = mockCronSupervisor(...watched);
       const state = loadCronService(createCronConfig("server-cron-on-exit-receipt"));
       const runCommandJob = vi.fn<NonNullable<CronServiceState["deps"]["runCommandJob"]>>(
         async () => ({ status: "ok", summary: "next payload" }),
@@ -1638,14 +1587,9 @@ describe("buildGatewayCronService", () => {
 
   it("persists an existing watcher exit during drain but fences its new scheduled run", async () => {
     resetGatewayWorkAdmission();
-    const commandExit = createDeferred<RunExit>();
-    const spawn = vi.fn(async () => ({
-      runId: "run-on-exit-draining",
-      startedAtMs: Date.now(),
-      cancel: vi.fn(),
-      wait: () => commandExit.promise,
-    }));
-    getProcessSupervisorMock.mockReturnValue({ spawn, cancelScope: vi.fn() });
+    const watched = createWatchedRun(false);
+    const commandExit = watched.exit;
+    const { spawn } = mockCronSupervisor(watched);
     const state = loadCronService(createCronConfig("server-cron-on-exit-draining"));
     let suspensionAdmission: ReturnType<typeof tryBeginGatewaySuspendAdmission> | undefined;
 
@@ -1689,7 +1633,8 @@ describe("buildGatewayCronService", () => {
   it.each(["main", "isolated"] as const)(
     "retains a watched exit behind an active %s run",
     async (sessionTarget) => {
-      const commandExit = createDeferred<RunExit>();
+      const watched = createWatchedRun(false);
+      const commandExit = watched.exit;
       const predecessorStarted = createDeferred();
       const predecessorRelease = createDeferred();
       const holdPredecessor = async () => {
@@ -1707,13 +1652,7 @@ describe("buildGatewayCronService", () => {
           return { status: "ok", summary: "manual run finished" };
         });
       }
-      const spawn = vi.fn(async () => ({
-        runId: "watched-exit-admission",
-        startedAtMs: Date.now(),
-        cancel: vi.fn(),
-        wait: () => commandExit.promise,
-      }));
-      getProcessSupervisorMock.mockReturnValue({ spawn, cancelScope: vi.fn() });
+      const { spawn } = mockCronSupervisor(watched);
       const state = loadCronService(createCronConfig(`cron-exit-admission-${sessionTarget}`));
       let predecessor: ReturnType<typeof state.cron.run> | undefined;
 
@@ -1760,18 +1699,11 @@ describe("buildGatewayCronService", () => {
     async (mutation) => {
       resetGatewayWorkAdmission();
       let suspensionAdmission: ReturnType<typeof tryBeginGatewaySuspendAdmission> | undefined;
-      const commandExit = createDeferred<RunExit>();
+      const watched = createWatchedRun(false);
+      const { exit: commandExit, cancel } = watched;
       const completionPersistCommitted = createDeferred();
       const allowCompletionPersist = createDeferred();
-      const cancel = vi.fn();
-      const cancelScope = vi.fn();
-      const spawn = vi.fn(async () => ({
-        runId: "run-on-exit-explicit-disable",
-        startedAtMs: Date.now(),
-        cancel,
-        wait: () => commandExit.promise,
-      }));
-      getProcessSupervisorMock.mockReturnValue({ spawn, cancelScope });
+      const { spawn, cancelScope } = mockCronSupervisor(watched);
       const state = loadCronService(
         createCronConfig(`server-cron-on-exit-explicit-disable-${mutation}`),
       );
@@ -1861,17 +1793,9 @@ describe("buildGatewayCronService", () => {
   });
 
   it("keeps a stream source running when a conditional or invalid update is rejected", async () => {
-    const { promise: wait, resolve: resolveWait } = createDeferred<RunExit>();
-    const cancel = vi.fn(() => resolveWait(runExit()));
-    const detachOutput = vi.fn();
-    const spawn = vi.fn(async () => ({
-      runId: "run-stream",
-      startedAtMs: Date.now(),
-      cancel,
-      detachOutput,
-      wait: () => wait,
-    }));
-    getProcessSupervisorMock.mockReturnValue({ spawn, cancelScope: vi.fn() });
+    const watched = createWatchedRun();
+    const { cancel, detachOutput } = watched;
+    const { spawn } = mockCronSupervisor(watched);
     const cfg = createCronConfig("server-cron-stream-rejected-update");
     cfg.cron = { ...cfg.cron, triggers: { enabled: true } };
     const state = loadCronService(cfg);
@@ -1909,17 +1833,9 @@ describe("buildGatewayCronService", () => {
   });
 
   it("discards a stale reconcile list snapshot that raced a direct mutation route", async () => {
-    const { promise: wait, resolve: resolveWait } = createDeferred<RunExit>();
-    const cancel = vi.fn(() => resolveWait(runExit()));
-    const detachOutput = vi.fn();
-    const spawn = vi.fn(async () => ({
-      runId: "run-stale-snapshot",
-      startedAtMs: Date.now(),
-      cancel,
-      detachOutput,
-      wait: () => wait,
-    }));
-    getProcessSupervisorMock.mockReturnValue({ spawn, cancelScope: vi.fn() });
+    const watched = createWatchedRun();
+    const { cancel, detachOutput } = watched;
+    const { spawn } = mockCronSupervisor(watched);
     const cfg = createCronConfig("server-cron-stream-stale-snapshot");
     cfg.cron = { ...cfg.cron, triggers: { enabled: true } };
     const state = loadCronService(cfg);
@@ -1965,22 +1881,9 @@ describe("buildGatewayCronService", () => {
   });
 
   it("drains stream teardown once when stop and stopAndDrain overlap", async () => {
-    const cancel = vi.fn();
-    const { promise: wait, resolve: resolveWait } = createDeferred();
-    const spawn = vi.fn(async () => ({
-      runId: "run-single-drain-stream",
-      startedAtMs: Date.now(),
-      cancel: vi.fn(() => {
-        cancel();
-        resolveWait();
-      }),
-      detachOutput: vi.fn(),
-      wait: async () => {
-        await wait;
-        return runExit();
-      },
-    }));
-    getProcessSupervisorMock.mockReturnValue({ spawn, cancelScope: vi.fn() });
+    const watched = createWatchedRun();
+    const { cancel } = watched;
+    mockCronSupervisor(watched);
     const cfg = createCronConfig("server-cron-stream-single-drain");
     cfg.cron = { ...cfg.cron, triggers: { enabled: true } };
     const state = loadCronService(cfg);
@@ -2003,25 +1906,10 @@ describe("buildGatewayCronService", () => {
 
   it("retries stream teardown after a prior drain failure", async () => {
     vi.useFakeTimers();
-    const { promise: wait, resolve: resolveWait } = createDeferred();
-    let cancelAttempts = 0;
-    const cancel = vi.fn(() => {
-      cancelAttempts += 1;
-      if (cancelAttempts === 2) {
-        resolveWait();
-      }
-    });
-    const spawn = vi.fn(async () => ({
-      runId: "run-retry-drain-stream",
-      startedAtMs: Date.now(),
-      cancel,
-      detachOutput: vi.fn(),
-      wait: async () => {
-        await wait;
-        return runExit({ durationMs: 10_000 });
-      },
-    }));
-    getProcessSupervisorMock.mockReturnValue({ spawn, cancelScope: vi.fn() });
+    const watched = createWatchedRun(true, { durationMs: 10_000 });
+    const { cancel } = watched;
+    cancel.mockImplementationOnce(() => {});
+    mockCronSupervisor(watched);
     const cfg = createCronConfig("server-cron-stream-retry-drain");
     cfg.cron = { ...cfg.cron, triggers: { enabled: true } };
     const state = loadCronService(cfg);
@@ -2049,25 +1937,10 @@ describe("buildGatewayCronService", () => {
 
   it("reports a committed stream update as successful when source teardown fails", async () => {
     vi.useFakeTimers();
-    const { promise: wait, resolve: resolveWait } = createDeferred();
-    let cancelAttempts = 0;
-    const cancel = vi.fn(() => {
-      cancelAttempts += 1;
-      if (cancelAttempts === 2) {
-        resolveWait();
-      }
-    });
-    const spawn = vi.fn(async () => ({
-      runId: "run-stubborn-update-stream",
-      startedAtMs: Date.now(),
-      cancel,
-      detachOutput: vi.fn(),
-      wait: async () => {
-        await wait;
-        return runExit({ durationMs: 10_000 });
-      },
-    }));
-    getProcessSupervisorMock.mockReturnValue({ spawn, cancelScope: vi.fn() });
+    const watched = createWatchedRun(true, { durationMs: 10_000 });
+    const { cancel } = watched;
+    cancel.mockImplementationOnce(() => {});
+    mockCronSupervisor(watched);
     const cfg = createCronConfig("server-cron-stream-update-teardown-failure");
     cfg.cron = { ...cfg.cron, triggers: { enabled: true } };
     const state = loadCronService(cfg);
@@ -2096,26 +1969,10 @@ describe("buildGatewayCronService", () => {
 
   it("keeps a failed stream removal in an explicit terminal error state", async () => {
     vi.useFakeTimers();
-    const { promise: wait, resolve: resolveWait } = createDeferred();
-    let cancelAttempts = 0;
-    const cancel = vi.fn(() => {
-      cancelAttempts += 1;
-      if (cancelAttempts === 2) {
-        resolveWait();
-      }
-    });
-    const detachOutput = vi.fn();
-    const spawn = vi.fn(async () => ({
-      runId: "run-stubborn-stream",
-      startedAtMs: Date.now(),
-      cancel,
-      detachOutput,
-      wait: async () => {
-        await wait;
-        return runExit({ durationMs: 10_000 });
-      },
-    }));
-    getProcessSupervisorMock.mockReturnValue({ spawn, cancelScope: vi.fn() });
+    const watched = createWatchedRun(true, { durationMs: 10_000 });
+    const { cancel, detachOutput } = watched;
+    cancel.mockImplementationOnce(() => {});
+    mockCronSupervisor(watched);
     const cfg = createCronConfig("server-cron-stream-remove-failure");
     cfg.cron = { ...cfg.cron, triggers: { enabled: true } };
     const state = loadCronService(cfg);
@@ -2390,7 +2247,6 @@ describe("buildGatewayCronService", () => {
         "options",
       );
       expect(eventOptions.sessionKey).toBe("agent:main:main");
-      expect(resolveSystemEventOwnerAgentId(eventOptions)).toBe("main");
       const heartbeatRequest = requireRecord(
         callArg(requestHeartbeatMock, 0, 0, "heartbeat request"),
         "request",
@@ -3405,8 +3261,7 @@ describe("buildGatewayCronService", () => {
         callArg(enqueueSystemEventMock, 0, 1, "system event options"),
         "options",
       );
-      expect(eventOptions.sessionKey).toBe("global");
-      expect(resolveSystemEventOwnerAgentId(eventOptions)).toBe("main");
+      expect(eventOptions.sessionKey).toBe("agent:main:global");
       const heartbeatRequest = requireRecord(
         callArg(requestHeartbeatMock, 0, 0, "heartbeat request"),
         "request",
@@ -3436,7 +3291,7 @@ describe("buildGatewayCronService", () => {
         callArg(enqueueSystemEventMock, 0, 1, "system event options"),
         "options",
       );
-      expect(eventOptions.sessionKey).toBe("global");
+      expect(eventOptions.sessionKey).toBe("agent:main:global");
       const heartbeatRun = requireRecord(
         callArg(requestHeartbeatAndWaitMock, 0, 0, "heartbeat run options"),
         "heartbeat run options",
@@ -4432,191 +4287,15 @@ describe("buildGatewayCronService", () => {
     }
   });
 
-  it("replaces the request scope inherited by a scheduler timer", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-08-21T01:00:00.000Z"));
-    const cfg = createCronConfig("server-cron-scheduled-gateway-context");
-    loadConfigMock.mockReturnValue(cfg);
-    const gatewayContext = {
-      terminalSessions: {},
-      resolveGatewayContext: () => gatewayContext,
-    } as never;
-    let requestContextActive = true;
-    const retiredRequestContext = {
-      terminalSessions: { retired: true },
-      resolveGatewayContext: () => (requestContextActive ? retiredRequestContext : undefined),
-    } as never;
-    const retiredRequestClient = { id: "retired-request" } as never;
-    let observed: unknown = "never-ran";
-    let observedClient: unknown = "never-ran";
-    const ran = createDeferred();
-    runCronIsolatedAgentTurnMock.mockImplementationOnce(async () => {
-      observed = getInProcessGatewayToolContext();
-      observedClient = getPluginRuntimeGatewayRequestScope()?.client;
-      ran.resolve();
-      return { status: "ok", text: "done" } as never;
-    });
-
-    const state = createCronService(cfg, { resolveGatewayContext: () => gatewayContext });
-    try {
-      await state.cron.start();
-      await addAgentTurnJob(state, "scheduled-isolated", "run it", {
-        deleteAfterRun: false,
-        schedule: { kind: "at", at: new Date(Date.now() + 60_000).toISOString() },
-      });
-      const cronState = getCronState(state);
-      withPluginRuntimeGatewayRequestScope(
-        {
-          context: retiredRequestContext,
-          client: retiredRequestClient,
-          isWebchatConnect: () => false,
-        } as never,
-        () => armTimer(cronState),
-      );
-      requestContextActive = false;
-
-      await vi.advanceTimersByTimeAsync(60_000);
-      await ran.promise;
-
-      expect(observed).toBe(gatewayContext);
-      expect(observedClient).toBeUndefined();
-    } finally {
-      state.cron.stop();
-      vi.useRealTimers();
-    }
-  });
-
-  it("leaves a scheduler-triggered isolated run without context when no resolver is wired", async () => {
-    const cfg = createCronConfig("server-cron-scheduled-gateway-context-absent");
-    loadConfigMock.mockReturnValue(cfg);
-    let observed: unknown = "never-ran";
-    runCronIsolatedAgentTurnMock.mockImplementationOnce(async () => {
-      observed = getInProcessGatewayToolContext();
-      return { status: "ok", text: "done" } as never;
-    });
-
-    const state = createCronService(cfg);
-    try {
-      const job = await addAgentTurnJob(state, "scheduled-isolated-no-resolver", "run it", {
-        deleteAfterRun: false,
-      });
-
-      await state.cron.run(job.id, "force");
-
-      expect(observed).toBeUndefined();
-    } finally {
-      state.cron.stop();
-    }
-  });
-
-  it("withholds a retired gateway context from a scheduled run", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-08-21T02:00:00.000Z"));
-    // The process-wide context holder is not cleared on shutdown, so an
-    // unfenced resolver would hand a queued run a retired context. No context
-    // fails visibly; a retired one operates against a dead Gateway generation.
-    const cfg = createCronConfig("server-cron-retired-gateway-context");
-    loadConfigMock.mockReturnValue(cfg);
-    const retiredContext = {
-      terminalSessions: {},
-      // Instance retired: its own lifecycle resolver reports unavailable.
-      resolveGatewayContext: () => undefined,
-    } as never;
-    let observed: unknown = "never-ran";
-    const ran = createDeferred();
-    runCronIsolatedAgentTurnMock.mockImplementationOnce(async () => {
-      observed = getInProcessGatewayToolContext();
-      ran.resolve();
-      return { status: "ok", text: "done" } as never;
-    });
-
-    const state = createCronService(cfg, { resolveGatewayContext: () => retiredContext });
-    try {
-      await state.cron.start();
-      await addAgentTurnJob(state, "retired-context", "run it", {
-        deleteAfterRun: false,
-        schedule: { kind: "at", at: new Date(Date.now() + 60_000).toISOString() },
-      });
-
-      await vi.advanceTimersByTimeAsync(60_000);
-      await ran.promise;
-
-      expect(observed).toBeUndefined();
-    } finally {
-      state.cron.stop();
-      vi.useRealTimers();
-    }
-  });
-
-  it("gives a scheduled heartbeat wake a resolvable gateway context", async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-08-21T03:00:00.000Z"));
-    // Main-session cron jobs and heartbeat monitors reach the agent through the
-    // heartbeat adapter, which shares the isolated path's contextless defect.
-    const cfg = createCronConfig("server-cron-heartbeat-gateway-context");
-    loadConfigMock.mockReturnValue(cfg);
-    const gatewayContext = {
-      terminalSessions: {},
-      resolveGatewayContext: () => gatewayContext,
-    } as never;
-    let observed: unknown = "never-ran";
-    const ran = createDeferred();
-    requestHeartbeatAndWaitMock.mockImplementationOnce(async () => {
-      observed = getInProcessGatewayToolContext();
-      ran.resolve();
-      return { status: "ran", durationMs: 1 };
-    });
-
-    const state = createCronService(cfg, { resolveGatewayContext: () => gatewayContext });
-    try {
-      await state.cron.start();
-      await addSystemEventJob(state, "scheduled-heartbeat", "run it", {
-        deleteAfterRun: false,
-        schedule: { kind: "at", at: new Date(Date.now() + 60_000).toISOString() },
-        sessionTarget: "main",
-        wakeMode: "now",
-      });
-      await vi.advanceTimersByTimeAsync(60_000);
-      await ran.promise;
-
-      expect(observed).toBe(gatewayContext);
-    } finally {
-      state.cron.stop();
-      vi.useRealTimers();
-    }
-  });
-
-  it("keeps an RPC-inherited gateway context instead of the scheduler resolver", async () => {
-    const cfg = createCronConfig("server-cron-rpc-gateway-context");
-    loadConfigMock.mockReturnValue(cfg);
-    const rpcContext = { terminalSessions: { rpc: true } } as never;
-    const schedulerContext = {
-      terminalSessions: { scheduler: true },
-      resolveGatewayContext: () => schedulerContext,
-    } as never;
-    const resolveGatewayContext = vi.fn(() => schedulerContext);
-    let observed: unknown = "never-ran";
-    runCronIsolatedAgentTurnMock.mockImplementationOnce(async () => {
-      observed = getInProcessGatewayToolContext();
-      return { status: "ok", text: "done" } as never;
-    });
-
-    const state = createCronService(cfg, { resolveGatewayContext });
-    try {
-      const job = await addAgentTurnJob(state, "rpc-isolated", "run it", {
-        deleteAfterRun: false,
-      });
-
-      await withPluginRuntimeGatewayRequestScope(
-        { context: rpcContext, isWebchatConnect: () => false } as never,
-        () => state.cron.run(job.id, "force"),
-      );
-
-      expect(observed).toBe(rpcContext);
-      expect(resolveGatewayContext).not.toHaveBeenCalled();
-    } finally {
-      state.cron.stop();
-    }
+  registerGatewayCronContextTests({
+    createCronConfig,
+    createCronService,
+    getCronState,
+    addAgentTurnJob,
+    addSystemEventJob,
+    loadConfigMock,
+    runCronIsolatedAgentTurnMock,
+    requestHeartbeatAndWaitMock,
   });
 
   it("cleans a failed scheduled activation before a later cron-expression tick executes", async () => {

@@ -281,30 +281,6 @@ describe("dispatchReplyFromConfig", () => {
     expect(dispatcher.sendFinalReply).toHaveBeenCalledTimes(1);
   });
 
-  it("does not route external origin replies when current surface is internal webchat without explicit delivery", async () => {
-    setNoAbort();
-    mocks.routeReply.mockClear();
-    installThreadingTestPlugin({ id: "imessage" });
-    const cfg = emptyConfig;
-    const dispatcher = createDispatcher();
-    const ctx = buildTestCtx({
-      Provider: "webchat",
-      Surface: "webchat",
-      OriginatingChannel: "imessage",
-      OriginatingTo: "imessage:+15550001111",
-    });
-
-    const replyResolver = async (
-      _ctx: MsgContext,
-      _opts?: GetReplyOptions,
-      _cfg?: OpenClawConfig,
-    ) => ({ text: "hi" }) satisfies ReplyPayload;
-    await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
-
-    expect(mocks.routeReply).not.toHaveBeenCalled();
-    expect(dispatcher.sendFinalReply).toHaveBeenCalledTimes(1);
-  });
-
   it("never lets a durable block intent route a private webchat turn to an inherited external recipient", async () => {
     setNoAbort();
     mocks.routeReply.mockClear();
@@ -832,31 +808,6 @@ describe("dispatchReplyFromConfig", () => {
     await expect(
       dispatchReplyFromConfig({ ctx, cfg: emptyConfig, dispatcher, replyResolver }),
     ).rejects.toThrow();
-  });
-
-  it("delivers approval-unavailable notices when verbose tool progress is disabled", async () => {
-    setNoAbort();
-    const payload = {
-      text: "Exec approval is unavailable.",
-      channelData: {
-        execApprovalUnavailable: { reason: "no-approval-route" },
-      },
-    } satisfies ReplyPayload;
-    const dispatcher = createDispatcher();
-    const ctx = buildTestCtx({ Provider: "telegram", ChatType: "direct" });
-    const replyResolver = async (
-      _ctx: MsgContext,
-      opts?: GetReplyOptions,
-      _cfg?: OpenClawConfig,
-    ) => {
-      await requireToolResultHandler(opts?.onToolResult)(payload);
-      return undefined;
-    };
-
-    await dispatchReplyFromConfig({ ctx, cfg: emptyConfig, dispatcher, replyResolver });
-
-    expect(dispatcher.sendToolResult).toHaveBeenCalledWith(payload);
-    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
   });
 
   it("drops ask_user prompts that terminalize before dispatcher delivery", async () => {

@@ -99,6 +99,7 @@ async function runNodeDesktopStreamCommand(params: {
   gatewayCloudflareAccess?: CloudflareAccessCredentials;
   target: NodeDesktopStreamTarget;
   passwordFile?: string;
+  username?: string;
   signal: AbortSignal;
   emitStatus?: (status: string) => Promise<void>;
 }): Promise<void> {
@@ -127,7 +128,11 @@ async function runNodeDesktopStreamCommand(params: {
     );
   }
   try {
-    const auth = classifyRfbSecurity(probe.securityTypes);
+    const auth = params.username
+      ? probe.securityTypes.includes(30)
+        ? "ard-account"
+        : "unsupported"
+      : classifyRfbSecurity(probe.securityTypes);
     if (auth === "none") {
       throw new Error("refusing unauthenticated loopback RFB server");
     }
@@ -135,7 +140,7 @@ async function runNodeDesktopStreamCommand(params: {
       throw new Error("loopback RFB server security is unsupported");
     }
     const vncPassword =
-      auth === "vnc-password"
+      auth === "vnc-password" || (auth === "ard-account" && params.username)
         ? await readVncPassword(params.passwordFile, params.signal)
         : undefined;
     if (params.signal.aborted) {
@@ -218,6 +223,7 @@ export async function invokeNodeWorkerDesktopStream(params: {
       : {}),
     target: { host: "127.0.0.1", port: command.port },
     ...(command.passwordFilePath ? { passwordFile: command.passwordFilePath } : {}),
+    ...(command.username ? { username: command.username } : {}),
     signal: params.signal,
   });
 }

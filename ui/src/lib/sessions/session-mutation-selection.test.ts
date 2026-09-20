@@ -9,7 +9,7 @@ import {
   sessionsResult,
 } from "./session-capability.test-support.ts";
 
-it.each(["rename", "archive", "delete"] as const)(
+it.each(["rename", "archive", "delete", "category"] as const)(
   "%s completion preserves loaded and queued foreground queries and reconciles affected managed lists",
   async (operation) => {
     for (const foreground of ["loaded", "queued", "global"] as const) {
@@ -49,6 +49,7 @@ it.each(["rename", "archive", "delete"] as const)(
                   ...row,
                   label: committed && operation === "rename" ? "Renamed" : row.label,
                   archived: committed && operation === "archive",
+                  category: committed && operation === "category" ? "Moved" : undefined,
                 },
               ];
         return sessionsResult(params.agentId === "writer" ? [writer] : mainRows, committed ? 2 : 1);
@@ -69,7 +70,11 @@ it.each(["rename", "archive", "delete"] as const)(
             ? sessions.delete(row.key, options)
             : sessions.patch(
                 row.key,
-                operation === "archive" ? { archived: true } : { label: "Renamed" },
+                operation === "archive"
+                  ? { archived: true }
+                  : operation === "category"
+                    ? { category: "Moved" }
+                    : { label: "Renamed" },
                 options,
               );
         if (foreground === "queued") {
@@ -90,7 +95,12 @@ it.each(["rename", "archive", "delete"] as const)(
             : {
                 ok: true,
                 key: row.key,
-                entry: { ...row, label: "Renamed", archived: operation === "archive" },
+                entry: {
+                  ...row,
+                  label: "Renamed",
+                  archived: operation === "archive",
+                  category: operation === "category" ? "Moved" : undefined,
+                },
               },
         );
         if (foreground === "queued") {
@@ -112,7 +122,11 @@ it.each(["rename", "archive", "delete"] as const)(
           expect(affected).toEqual([]);
         } else {
           expect(affected[0]).toMatchObject(
-            operation === "rename" ? { label: "Renamed" } : { archived: true },
+            operation === "rename"
+              ? { label: "Renamed" }
+              : operation === "category"
+                ? { category: "Moved" }
+                : { archived: true },
           );
         }
         expect(

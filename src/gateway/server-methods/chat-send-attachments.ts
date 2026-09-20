@@ -2,12 +2,7 @@ import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import { resolveAgentWorkspaceDir } from "../../agents/agent-scope.js";
-import { ensureSandboxWorkspaceForSession } from "../../agents/sandbox/context.js";
-import {
-  SANDBOX_MEDIA_MAX_BYTES,
-  stageSandboxMedia,
-  type StageSandboxMediaResult,
-} from "../../auto-reply/reply/stage-sandbox-media.js";
+import type { StageSandboxMediaResult } from "../../auto-reply/reply/stage-sandbox-media.js";
 import type { MsgContext, TemplateContext } from "../../auto-reply/templating.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { clearAgentRunContext } from "../../infra/agent-run-registry.js";
@@ -56,11 +51,6 @@ function isManagedInboundPdfOffloadRef(ref: OffloadedRef): boolean {
   }
 }
 
-function shouldPassThroughManagedInboundPdfOffloadRef(ref: OffloadedRef): boolean {
-  // Host-readable managed PDFs above the staging cap do not need a sandbox copy.
-  return ref.sizeBytes > SANDBOX_MEDIA_MAX_BYTES && isManagedInboundPdfOffloadRef(ref);
-}
-
 // Stage media before ACK so permanent client errors stay 4xx and retryable
 // staging failures stay 5xx. Managed PDFs retain their host-readable fallback.
 async function prestageMediaPathOffloads(params: {
@@ -70,6 +60,7 @@ async function prestageMediaPathOffloads(params: {
   sessionKey: string;
   agentId: string;
   abortSignal: AbortSignal;
+  assertWorkAdmissionCurrent: () => void;
 }): Promise<{ paths: string[]; types: string[]; workspaceDir?: string }> {
   const mediaPathRefs = params.offloadedRefs.filter(
     (ref) => params.includeImageRefs || !ref.mimeType.startsWith("image/"),
@@ -77,20 +68,31 @@ async function prestageMediaPathOffloads(params: {
   if (mediaPathRefs.length === 0) {
     return { paths: [], types: [] };
   }
-  const refsByManagedPath = (refs: OffloadedRef[]) => ({
-    paths: refs.map((ref) => ref.path),
-    types: refs.map((ref) => ref.mimeType),
-  });
-  const passThroughRefs: OffloadedRef[] = [];
-  const refsToStage: OffloadedRef[] = [];
-  for (const ref of mediaPathRefs) {
-    (shouldPassThroughManagedInboundPdfOffloadRef(ref) ? passThroughRefs : refsToStage).push(ref);
-  }
-  if (refsToStage.length === 0) {
-    return refsByManagedPath(mediaPathRefs);
-  }
-
   try {
+    const [{ ensureSandboxWorkspaceForSession }, { SANDBOX_MEDIA_MAX_BYTES, stageSandboxMedia }] =
+      await Promise.all([
+        import("../../agents/sandbox/context.js"),
+        import("../../auto-reply/reply/stage-sandbox-media.js"),
+      ]);
+    params.abortSignal.throwIfAborted();
+    params.assertWorkAdmissionCurrent();
+    const refsByManagedPath = (refs: OffloadedRef[]) => ({
+      paths: refs.map((ref) => ref.path),
+      types: refs.map((ref) => ref.mimeType),
+    });
+    const passThroughRefs: OffloadedRef[] = [];
+    const refsToStage: OffloadedRef[] = [];
+    for (const ref of mediaPathRefs) {
+      // Host-readable managed PDFs above the staging cap do not need a sandbox copy.
+      (ref.sizeBytes > SANDBOX_MEDIA_MAX_BYTES && isManagedInboundPdfOffloadRef(ref)
+        ? passThroughRefs
+        : refsToStage
+      ).push(ref);
+    }
+    if (refsToStage.length === 0) {
+      return refsByManagedPath(mediaPathRefs);
+    }
+
     const workspaceDir = resolveAgentWorkspaceDir(params.cfg, params.agentId);
     const sandbox = await ensureSandboxWorkspaceForSession({
       config: params.cfg,
@@ -265,6 +267,7 @@ export async function prepareChatSendAttachments(params: {
             sessionKey,
             agentId,
             abortSignal: activeRunAbort.controller.signal,
+            assertWorkAdmissionCurrent: admission.assertWorkAdmissionCurrent,
           }));
         },
         {

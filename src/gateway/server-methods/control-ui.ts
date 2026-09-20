@@ -12,22 +12,13 @@ import { getActiveSecretsRuntimeConfigSnapshot } from "../../secrets/runtime-sta
 import { getSessionRepositoryWorkspaceStore } from "../../state/session-repository-workspaces.js";
 import { truncateUtf16Safe } from "../../utils.js";
 import type { ControlUiSessionPreview } from "../control-ui-contract.js";
-import {
-  ControlUiGitHubError,
-  formatControlUiGitHubPreviewError,
-} from "../control-ui-github-api.js";
-import {
-  loadControlUiGitHubPreview,
-  parseControlUiGitHubPreviewTarget,
-  type ControlUiGitHubPreviewIdentity,
-  type ControlUiGitHubPreviewTarget,
-} from "../control-ui-github-preview.js";
 import type {
   ControlUiSessionPullRequestChecksParams,
   loadControlUiSessionPullRequestChecks,
 } from "../control-ui-session-pr-check-details.js";
 import { parseControlUiSessionPullRequestsSubscribeParams } from "../control-ui-session-pr-subscriptions.js";
 import { requestCurrentGitHubOAuthRefresh } from "../github-oauth-lifecycle.js";
+import { gitHubPublicApi, type ControlUiGitHubPreviewIdentity } from "../github-public-api.js";
 import { resolveRequestedSessionAgentId as resolveRequestedGlobalAgentId } from "../session-request-agent.js";
 import { createSessionListEntryFilter } from "../session-sharing.js";
 import { buildGatewaySessionRow } from "../session-utils.js";
@@ -40,10 +31,7 @@ import type {
   GatewayRequestHandlers,
 } from "./types.js";
 
-type LoadGitHubPreview = (
-  target: ControlUiGitHubPreviewTarget,
-  identity?: ControlUiGitHubPreviewIdentity,
-) => ReturnType<typeof loadControlUiGitHubPreview>;
+type LoadGitHubPreview = typeof gitHubPublicApi.loadControlUiGitHubPreview;
 
 async function prepareControlUiGitHubIdentity(
   { context, client, signal }: GatewayRequestHandlerOptions,
@@ -215,7 +203,7 @@ function parseCheckDetailsParams(
   }
   const sessionKey = typeof params.sessionKey === "string" ? params.sessionKey.trim() : "";
   const headSha = typeof params.headSha === "string" ? params.headSha : "";
-  const target = parseControlUiGitHubPreviewTarget({ ...params, kind: "pull" });
+  const target = gitHubPublicApi.parseControlUiGitHubPreviewTarget({ ...params, kind: "pull" });
   return target && sessionKey && sessionKey.length <= 512 && /^[0-9a-f]{40}$/i.test(headSha)
     ? {
         sessionKey,
@@ -275,15 +263,39 @@ async function loadSessionCheckDetails(
 }
 
 export function createControlUiHandlers(
-  loadGitHubPreview: LoadGitHubPreview = loadControlUiGitHubPreview,
+  loadGitHubPreview: LoadGitHubPreview = (...args) =>
+    gitHubPublicApi.loadControlUiGitHubPreview(...args),
   loadSessionPreview: LoadSessionPreview = loadControlUiSessionPreview,
   loadChecks: typeof loadControlUiSessionPullRequestChecks = loadSessionCheckDetails,
 ): GatewayRequestHandlers {
   return {
+    "controlUi.linkPreview": async ({ params, context, respond, signal }) => {
+      const isEnabled = () =>
+        context.getRuntimeConfig().gateway?.controlUi?.automaticallyFetchFavicons !== false;
+      if (!isEnabled()) {
+        respond(true, {}, undefined);
+        return;
+      }
+      const { parseControlUiLinkPreviewUrl, loadControlUiLinkPreview } =
+        await import("../control-ui-link-preview.js");
+      const url = Object.keys(params).every((key) => key === "url")
+        ? parseControlUiLinkPreviewUrl(params.url)
+        : null;
+      if (!url) {
+        respond(
+          false,
+          undefined,
+          errorShape(ErrorCodes.INVALID_REQUEST, "invalid controlUi.linkPreview params"),
+        );
+        return;
+      }
+      const preview = await loadControlUiLinkPreview(url, isEnabled);
+      respond(true, !signal?.aborted && isEnabled() ? preview : {}, undefined);
+    },
     "controlUi.githubPreview": async (options) => {
       const { params, respond, context } = options;
-      const target = parseControlUiGitHubPreviewTarget(params);
-      if (!target) {
+      const target = gitHubPublicApi.parseControlUiGitHubPreviewTarget(params);
+      if (!target || (params.refresh !== undefined && typeof params.refresh !== "boolean")) {
         respond(
           false,
           undefined,
@@ -305,14 +317,17 @@ export function createControlUiHandlers(
           options,
           resolved.agentId,
         );
-        const preview = await loadGitHubPreview(target, identity);
+        const preview =
+          params.refresh === true
+            ? await loadGitHubPreview(target, identity, undefined, true)
+            : await loadGitHubPreview(target, identity);
         assertSelected();
         respond(true, preview, undefined);
       } catch (error) {
         const { message, ...details } =
           error instanceof GitHubIdentityError
             ? { message: error.message, retryable: error.reason !== "unavailable" }
-            : formatControlUiGitHubPreviewError(error);
+            : gitHubPublicApi.formatControlUiGitHubPreviewError(error);
         respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, message, details));
       }
     },
@@ -362,7 +377,7 @@ export function createControlUiHandlers(
       try {
         const binding = resolveCheckDetailsSession(parsed.sessionKey, context, client);
         if (!binding) {
-          throw new ControlUiGitHubError(404, "Session CI details unavailable");
+          throw new gitHubPublicApi.ControlUiGitHubError(404, "Session CI details unavailable");
         }
         const assertCurrent = () => {
           const current = resolveCheckDetailsSession(parsed.sessionKey, context, client);
@@ -372,7 +387,10 @@ export function createControlUiHandlers(
             (client?.connId &&
               !context.getClientConnIds?.((candidate) => candidate === client).has(client.connId))
           ) {
-            throw new ControlUiGitHubError(409, "Session changed; reopen CI details");
+            throw new gitHubPublicApi.ControlUiGitHubError(
+              409,
+              "Session changed; reopen CI details",
+            );
           }
         };
         const result = await loadChecks(
@@ -383,10 +401,10 @@ export function createControlUiHandlers(
         respond(true, result, undefined);
       } catch (error) {
         const message =
-          error instanceof ControlUiGitHubError &&
+          error instanceof gitHubPublicApi.ControlUiGitHubError &&
           (error.statusCode === 404 || error.statusCode === 409)
             ? error.message
-            : formatControlUiGitHubPreviewError(error).message;
+            : gitHubPublicApi.formatControlUiGitHubPreviewError(error).message;
         respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, message));
       }
     },

@@ -13,8 +13,10 @@ export function createRelayCommandHandler({
   requireNavigatedTab,
   navigateTab,
 }) {
+  const inputDispatches = new Map();
   return async (message) => {
     const { seq } = message;
+    let releaseInput;
     const assertCurrent = () => {
       if (!isCurrent()) {
         throw new Error("relay connection was replaced or closed");
@@ -49,6 +51,21 @@ export function createRelayCommandHandler({
         case "cdp": {
           const assertAttachment = captureDebugger(message.tabId);
           const epoch = captureAccess(message.tabId, message.method);
+          if (typeof message.method === "string" && message.method.startsWith("Input.")) {
+            // Clients pipeline press/release. Keep each tab's native dispatch order
+            // across policy awaits without serializing unrelated commands or replies.
+            const previous = inputDispatches.get(message.tabId);
+            const dispatched = new Promise((resolve) => {
+              releaseInput = () => {
+                resolve();
+                if (inputDispatches.get(message.tabId) === dispatched) {
+                  inputDispatches.delete(message.tabId);
+                }
+              };
+            });
+            inputDispatches.set(message.tabId, dispatched);
+            await previous;
+          }
           await requireTab(message.tabId, epoch);
           assertAttachment();
           const target = message.sessionId
@@ -58,7 +75,10 @@ export function createRelayCommandHandler({
           // native generation, including policy awaits before either dispatch.
           const sendCommand = async (method, params) => {
             assertAttachment();
-            const result = await chrome.debugger.sendCommand(target, method, params);
+            const pending = chrome.debugger.sendCommand(target, method, params);
+            releaseInput?.();
+            releaseInput = undefined;
+            const result = await pending;
             assertAttachment();
             return result;
           };
@@ -120,6 +140,8 @@ export function createRelayCommandHandler({
           message: error instanceof Error ? error.message : String(error),
         });
       }
+    } finally {
+      releaseInput?.();
     }
   };
 }

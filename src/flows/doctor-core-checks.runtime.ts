@@ -8,29 +8,13 @@ import type {
   BundleMcpToolRuntime,
   McpToolCatalogDiagnostic,
 } from "../agents/agent-bundle-mcp-types.js";
-import {
-  listAgentEntries,
-  listAgentIds,
-  resolveAgentDir,
-  resolveAgentWorkspaceDir,
-  tryResolveSoleAgentId,
-} from "../agents/agent-scope.js";
+import { tryResolveSoleAgentId } from "../agents/agent-scope.js";
 import { resolveEffectiveToolPolicy } from "../agents/agent-tools.policy.js";
 import { resolveConversationCapabilityProfile } from "../agents/conversation-capability-profile.js";
-import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import { applyFinalEffectiveToolPolicy } from "../agents/embedded-agent-runner/effective-tool-policy.js";
 import { shouldCreateBundleMcpRuntimeForAttempt } from "../agents/embedded-agent-runner/run/attempt-tool-construction-plan.js";
 import { partitionMcpServersByConnectionScope } from "../agents/mcp-connection-resolver.js";
-import { findModelInCatalog, type ModelCatalogEntry } from "../agents/model-catalog.js";
-import { resolveDefaultModelForAgent } from "../agents/model-selection.js";
-import { supportsModelTools } from "../agents/model-tool-support.js";
-import { readPreparedModelCatalog } from "../agents/prepared-model-catalog.js";
-import { normalizeAgentRuntimeTools } from "../agents/runtime-plan/tools.js";
 import { collectExplicitAllowlist, normalizeToolPolicyName } from "../agents/tool-policy.js";
-import {
-  inspectRuntimeToolInputSchemas,
-  type RuntimeToolSchemaDiagnostic,
-} from "../agents/tool-schema-projection.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
 import { projectDoctorSecretRuntimeDegradations } from "../commands/doctor-secret-runtime-degradation.js";
 import { shouldManageGatewayService } from "../commands/doctor-service-repair-policy.js";
@@ -60,15 +44,16 @@ import {
   formatLocalAudioSelection,
   inspectLocalAudioSelection,
 } from "../media-understanding/local-audio.js";
-import type { PluginMetadataSnapshotScopeRunner } from "../plugins/current-plugin-metadata-snapshot.js";
 import type { ProviderRuntimeModel } from "../plugins/provider-runtime-model.types.js";
-import { getPluginToolMeta, setPluginToolMeta } from "../plugins/tool-metadata.js";
+import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-request-scope.js";
+import { appendRuntimePluginToolGrant } from "../plugins/tool-grant-allowlist.js";
+import { setPluginToolMeta } from "../plugins/tool-metadata.js";
 import type { ProviderCatalogOrder, ProviderPlugin } from "../plugins/types.js";
-import { normalizeAgentId } from "../routing/session-key.js";
 import { buildWorkspaceSkillStatus } from "../skills/discovery/status.js";
 import type { StatusSummary } from "../status/summary.js";
 import { scrubDoctorErrorMessage } from "./doctor-error-message.js";
 import { hasActiveGatewayExecCredential } from "./doctor-gateway-exec-credential.js";
+import type { DoctorToolSchemaOptions } from "./doctor-tool-schema-frames.js";
 import type { HealthCheckContext, HealthFinding } from "./health-checks.js";
 
 const PROVIDER_CATALOG_ORDERS = ["simple", "profile", "paired", "late"] as const;
@@ -788,135 +773,16 @@ export async function collectProviderCatalogProjectionFindings(
   return findings;
 }
 
-function buildDoctorRuntimeModel(params: {
-  entry?: ModelCatalogEntry;
-  provider: string;
-  modelId: string;
-}): ProviderRuntimeModel {
-  const provider = params.provider || DEFAULT_PROVIDER;
-  const id = params.modelId || DEFAULT_MODEL;
-  const api = params.entry?.api ?? (provider === "openai" ? "openai-responses" : undefined);
-  const entryBaseUrl = (params.entry as { baseUrl?: string } | undefined)?.baseUrl;
-  const baseUrl =
-    entryBaseUrl ??
-    (api === "openai-chatgpt-responses"
-      ? "https://chatgpt.com/backend-api"
-      : provider === "openai"
-        ? "https://api.openai.com/v1"
-        : undefined);
-  return {
-    ...params.entry,
-    provider,
-    id,
-    name: params.entry?.name ?? id,
-    ...(api ? { api } : {}),
-    ...(baseUrl ? { baseUrl } : {}),
-  } as ProviderRuntimeModel;
-}
-
-function toolSchemaDiagnosticToFinding(params: {
-  agentId: string;
-  tools: readonly AnyAgentTool[];
-  diagnostic: RuntimeToolSchemaDiagnostic;
-}): HealthFinding {
-  let tool: AnyAgentTool | undefined;
-  try {
-    tool = params.tools[params.diagnostic.toolIndex];
-  } catch {
-    tool = undefined;
-  }
-  const pluginId = tool ? getPluginToolMeta(tool)?.pluginId : undefined;
-  const owner = pluginId ? ` from plugin ${pluginId}` : "";
-  const agent = `Agent ${params.agentId} `;
-  const path =
-    pluginId === "bundle-mcp"
-      ? "mcp.servers"
-      : pluginId
-        ? `plugins.entries.${pluginId}`
-        : `tools.${params.diagnostic.toolName}`;
-  const fixHint =
-    pluginId === "bundle-mcp"
-      ? "Disable or update the offending MCP server/tool so its parameters are a JSON object schema, then rerun doctor."
-      : "Disable or update the offending plugin/tool so its parameters are a JSON object schema, then rerun doctor.";
-  return {
-    checkId: "core/doctor/runtime-tool-schemas",
-    severity: "error",
-    message: `${agent}tool ${params.diagnostic.toolName}${owner} has an unsupported input schema for runtime projection.`,
-    path,
-    target: params.diagnostic.toolName,
-    requirement: params.diagnostic.violations.join(", "),
-    fixHint,
-  };
-}
-
-function collectToolSchemaFindings(params: {
-  agentId: string;
-  tools: readonly AnyAgentTool[];
-}): HealthFinding[] {
-  return inspectRuntimeToolInputSchemas(params.tools).map((diagnostic) =>
-    toolSchemaDiagnosticToFinding({
-      agentId: params.agentId,
-      tools: params.tools,
-      diagnostic,
-    }),
-  );
-}
-
-function collectNormalizedToolSchemaFindings(params: {
-  agentId: string;
-  tools: AnyAgentTool[];
-  cfg: OpenClawConfig;
-  workspaceDir: string;
-  modelRef: { provider: string; model: string };
-  model: ProviderRuntimeModel;
-  normalizationFailureFinding: (error: unknown) => HealthFinding;
-}): readonly HealthFinding[] {
-  const preNormalizationFindings: HealthFinding[] = [];
-
-  let normalizedTools: AnyAgentTool[];
-  try {
-    normalizedTools = normalizeAgentRuntimeTools({
-      tools: params.tools,
-      provider: params.modelRef.provider,
-      config: params.cfg,
-      workspaceDir: params.workspaceDir,
-      env: process.env,
-      modelId: params.modelRef.model,
-      modelApi: params.model.api,
-      model: params.model,
-      onPreNormalizationSchemaDiagnostics: (diagnostics, sourceTools) => {
-        preNormalizationFindings.push(
-          ...diagnostics.map((diagnostic) =>
-            toolSchemaDiagnosticToFinding({
-              agentId: params.agentId,
-              tools: sourceTools,
-              diagnostic,
-            }),
-          ),
-        );
-      },
-    });
-  } catch (error) {
-    return [...preNormalizationFindings, params.normalizationFailureFinding(error)];
-  }
-
-  return [
-    ...preNormalizationFindings,
-    ...collectToolSchemaFindings({
-      agentId: params.agentId,
-      tools: normalizedTools,
-    }),
-  ];
-}
-
-function collectBundleMcpRuntimeToolSchemaFindings(params: {
+async function collectBundleMcpRuntimeToolSchemaFindings(params: {
   bundleRuntime: BundleMcpToolRuntime;
   cfg: OpenClawConfig;
   agentId: string;
   workspaceDir: string;
   modelRef: { provider: string; model: string };
   model: ProviderRuntimeModel;
-}): readonly HealthFinding[] {
+}): Promise<readonly HealthFinding[]> {
+  const { collectNormalizedToolSchemaFindings } =
+    await import("./doctor-tool-schema-projection.js");
   const activeBundleTools = applyFinalEffectiveToolPolicy({
     bundledTools: params.bundleRuntime.tools,
     config: params.cfg,
@@ -936,77 +802,6 @@ function collectBundleMcpRuntimeToolSchemaFindings(params: {
     modelRef: params.modelRef,
     model: params.model,
     normalizationFailureFinding: bundleMcpRuntimeNormalizationFailureFinding,
-  });
-}
-
-function agentRuntimeToolLoadFailureFinding(params: {
-  agentId: string;
-  error: unknown;
-}): HealthFinding {
-  return {
-    checkId: "core/doctor/runtime-tool-schemas",
-    severity: "error",
-    message: `Agent ${params.agentId} runtime tool schema validation could not load the runtime tool set.`,
-    path: `agents.${params.agentId}.tools`,
-    requirement: formatErrorMessage(params.error),
-    fixHint:
-      "Fix provider/plugin tool loading errors, then rerun doctor before relying on assistant tool startup.",
-  };
-}
-
-function agentRuntimeToolNormalizationFailureFinding(params: {
-  agentId: string;
-  error: unknown;
-}): HealthFinding {
-  return {
-    checkId: "core/doctor/runtime-tool-schemas",
-    severity: "error",
-    message: `Agent ${params.agentId} runtime tool schema validation could not normalize the runtime tool set.`,
-    path: `agents.${params.agentId}.tools`,
-    requirement: formatErrorMessage(params.error),
-    fixHint:
-      "Fix provider/plugin schema normalization errors, then rerun doctor before relying on assistant tool startup.",
-  };
-}
-
-async function collectAgentRuntimeToolSchemaFindings(params: {
-  cfg: OpenClawConfig;
-  agentId: string;
-  workspaceDir: string;
-  modelRef: { provider: string; model: string };
-  model: ProviderRuntimeModel;
-}): Promise<readonly HealthFinding[]> {
-  let tools: AnyAgentTool[];
-  try {
-    const { createOpenClawCodingTools } = await import("../agents/agent-tools.js");
-    tools = createOpenClawCodingTools({
-      agentId: params.agentId,
-      workspaceDir: params.workspaceDir,
-      config: params.cfg,
-      modelProvider: params.modelRef.provider,
-      modelId: params.modelRef.model,
-      modelApi: params.model.api,
-      modelCompat: params.model.compat,
-      modelContextWindowTokens: params.model.contextWindow,
-      allowGatewaySubagentBinding: true,
-      emitBeforeToolCallDiagnostics: false,
-    });
-  } catch (error) {
-    return [agentRuntimeToolLoadFailureFinding({ agentId: params.agentId, error })];
-  }
-
-  return collectNormalizedToolSchemaFindings({
-    agentId: params.agentId,
-    tools,
-    cfg: params.cfg,
-    workspaceDir: params.workspaceDir,
-    modelRef: params.modelRef,
-    model: params.model,
-    normalizationFailureFinding: (error) =>
-      agentRuntimeToolNormalizationFailureFinding({
-        agentId: params.agentId,
-        error,
-      }),
   });
 }
 
@@ -1170,64 +965,102 @@ function filterPolicyActiveBundleMcpDiagnostics(params: {
   );
 }
 
-function isAcpRuntimeAgent(cfg: OpenClawConfig, agentId: string): boolean {
-  const entry = listAgentEntries(cfg).find(
-    (candidate) => normalizeAgentId(candidate.id) === agentId,
-  );
-  return entry?.runtime?.type === "acp";
-}
-
 export async function collectRuntimeToolSchemaFindings(
-  cfg: OpenClawConfig,
-  options?: {
-    env?: NodeJS.ProcessEnv;
-    runWithPluginMetadataSnapshot?: PluginMetadataSnapshotScopeRunner;
-  },
+  sourceConfig: OpenClawConfig,
+  options: DoctorToolSchemaOptions = {},
 ): Promise<readonly HealthFinding[]> {
-  const findings: HealthFinding[] = [];
-  const deferMcpProbes = isUpdateDoctorLintPass(options?.env ?? process.env);
+  const [
+    { captureRuntimeConfig },
+    { prepareDoctorToolSchemaFrames },
+    { collectAgentRuntimeToolSchemaFindings },
+  ] = await Promise.all([
+    import("../config/runtime-source-projection.js"),
+    import("./doctor-tool-schema-frames.js"),
+    import("./doctor-tool-schema-projection.js"),
+  ]);
+  const cfg = captureRuntimeConfig(sourceConfig);
+  const env = options.env ?? process.env;
+  const runWithPluginMetadataSnapshot =
+    options.runWithPluginMetadataSnapshot ??
+    (
+      await import("../commands/doctor/shared/plugin-metadata-snapshot-scope.js")
+    ).createDoctorPluginMetadataSnapshotScope({ env }).run;
+  const { frames, findings } = await prepareDoctorToolSchemaFrames(cfg, {
+    ...options,
+    env,
+    runWithPluginMetadataSnapshot,
+  });
+  const deferMcpProbes = isUpdateDoctorLintPass(env);
   const deferredServers = new Set<string>();
   const bundleRuntimeByContext = new Map<string, BundleMcpToolRuntime>();
   const bundleRuntimeLoadErrorsByContext = new Map<string, HealthFinding>();
   const reportedBundleRuntimeDiagnostics = new Set<string>();
   const reportedBundleRuntimeLoadErrors = new Set<string>();
   const reportedRequesterScopedServers = new Set<string>();
+  let inspection:
+    | Awaited<ReturnType<typeof import("../plugins/tools.js").acquirePluginToolInspectionRegistry>>
+    | undefined;
   try {
-    for (const agentId of listAgentIds(cfg)) {
-      if (isAcpRuntimeAgent(cfg, agentId)) {
-        continue;
+    if (frames.length > 0) {
+      try {
+        const [{ acquirePluginToolInspectionRegistry }, { resolvePluginRuntimeLoadContext }] =
+          await Promise.all([
+            import("../plugins/tools.js"),
+            import("../plugins/runtime/load-context.resolve.js"),
+          ]);
+        inspection = await runWithPluginMetadataSnapshot({ config: cfg }, () =>
+          acquirePluginToolInspectionRegistry({
+            loadContext: resolvePluginRuntimeLoadContext({ config: cfg, env }),
+            runWithPluginMetadataSnapshot,
+            scopes: frames.map((frame) => ({
+              context: {
+                config: cfg,
+                runtimeConfig: cfg,
+                agentId: frame.agentId,
+                agentDir: frame.agentDir,
+                workspaceDir: frame.workspaceDir,
+              },
+              env,
+              allowGatewaySubagentBinding: true,
+              toolAllowlist: appendRuntimePluginToolGrant(
+                frame.capabilityProfile.policy.explicitToolAllowlist,
+                frame.capabilityProfile.policy.runtimePluginToolGrant,
+              ),
+              toolDenylist: frame.capabilityProfile.policy.explicitToolDenylist,
+            })),
+          }),
+        );
+      } catch (error) {
+        findings.push({
+          checkId: "core/doctor/runtime-tool-schemas",
+          severity: "warning",
+          message: "Runtime tool schema inspection could not prepare plugin registrations.",
+          requirement: formatErrorMessage(error),
+          fixHint: "Fix plugin loading errors, then rerun doctor to inspect active tools.",
+        });
+        return findings;
       }
-      const workspaceDir = resolveAgentWorkspaceDir(cfg, agentId);
-      const collectForAgent = async () => {
-        const agentDir = resolveAgentDir(cfg, agentId);
-        const catalog = await readPreparedModelCatalog({
-          config: cfg,
-          agentId,
-          agentDir,
-          readOnly: true,
-          providerDiscoveryProviderIds: [],
-        });
-        const modelRef = resolveDefaultModelForAgent({
-          cfg,
-          agentId,
-          allowPluginNormalization: true,
-        });
-        const model = buildDoctorRuntimeModel({
-          entry: findModelInCatalog(catalog, modelRef.provider, modelRef.model),
-          provider: modelRef.provider,
-          modelId: modelRef.model,
-        });
-        if (!supportsModelTools(model)) {
-          return;
+      for (const plugin of inspection.registry?.plugins ?? []) {
+        if (plugin.status === "error") {
+          findings.push({
+            checkId: "core/doctor/runtime-tool-schemas",
+            severity: "warning",
+            message: `Plugin ${plugin.id} tool schemas were not inspected because registration failed.`,
+            path: `plugins.entries.${plugin.id}`,
+            target: plugin.id,
+            requirement: plugin.error ?? "plugin-registration-failed",
+            fixHint: "Fix or disable the plugin, then rerun doctor.",
+          });
         }
+      }
+    }
+    for (const frame of frames) {
+      const { agentId, agentDir, workspaceDir, modelRef, model } = frame;
+      const collectForAgent = async () => {
         findings.push(
-          ...(await collectAgentRuntimeToolSchemaFindings({
-            cfg,
-            agentId,
-            workspaceDir,
-            modelRef,
-            model,
-          })),
+          ...(await withPluginRuntimeRegistryScope(inspection?.registry, () =>
+            collectAgentRuntimeToolSchemaFindings({ ...frame, cfg }),
+          )),
         );
         if (!shouldCreateBundleMcpRuntimeForAttempt({ toolsEnabled: true })) {
           return;
@@ -1362,22 +1195,18 @@ export async function collectRuntimeToolSchemaFindings(
             }
           }
           findings.push(
-            ...collectBundleMcpRuntimeToolSchemaFindings({
+            ...(await collectBundleMcpRuntimeToolSchemaFindings({
               bundleRuntime,
               cfg,
               agentId,
               workspaceDir,
               modelRef,
               model,
-            }),
+            })),
           );
         }
       };
-      if (options?.runWithPluginMetadataSnapshot) {
-        await options.runWithPluginMetadataSnapshot({ config: cfg, workspaceDir }, collectForAgent);
-      } else {
-        await collectForAgent();
-      }
+      await runWithPluginMetadataSnapshot({ config: cfg, workspaceDir }, collectForAgent);
     }
   } finally {
     const cleanup = await Promise.allSettled(
@@ -1394,6 +1223,17 @@ export async function collectRuntimeToolSchemaFindings(
           fixHint: "Inspect or stop the configured MCP server processes, then rerun doctor.",
         });
       }
+    }
+    try {
+      await inspection?.release();
+    } catch (error) {
+      findings.push({
+        checkId: "core/doctor/runtime-tool-schemas",
+        severity: "warning",
+        message: "Runtime tool schema inspection could not confirm plugin cleanup.",
+        requirement: formatErrorMessage(error),
+        fixHint: "Inspect the plugin cleanup error, then rerun doctor.",
+      });
     }
   }
   return findings;

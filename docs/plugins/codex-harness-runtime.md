@@ -102,6 +102,10 @@ marked `catalogMode: "direct-only"` use `openclaw_direct`, which Codex keeps
 directly model-visible as `DirectModelOnly` instead of exposing it to nested
 Code Mode execution.
 
+Background dynamic-tool launches count as potential side effects, including
+launches from tools that normally perform read-only work. Turn recovery preserves
+that evidence so it does not repeat an already accepted background task.
+
 Tool-schema repairs preserve literal property and definition names, including
 `__proto__`. The schema advertised to Codex and the schema used to validate
 OpenClaw tool calls retain the same required fields and constraints.

@@ -380,22 +380,19 @@ describe.skipIf(process.platform === "win32")("Doctor native repair authority or
     },
   );
 
-  it.each(refusals)(
-    "preserves config and service when $scenario update staging is refused",
-    async ({ scenario, kind, reason }) => {
-      const { observations, diagnostics } = await runRepair(scenario, { update: true });
-      expect(observations.capability).toMatchObject({ kind, reason });
-      expect(diagnostics).toContain(`SERVICE_DEFINITION_${kind.toUpperCase()}: [${reason}]`);
-      expect(observations.configBytesPreserved).toBe(true);
-      expect(observations.configTokenPreserved).toBe(true);
-      expect(observations.returnedConfigPreserved).toBe(true);
-      expect(observations.unitBytesPreserved).toBe(true);
-      expect(observations.environmentBytesPreserved).toBe(true);
-      expect(observations.unitDirectoryEntries).toEqual(["openclaw-gateway.service"]);
-      expect(observations.events).not.toContain("service-published");
-      expect(observations.nativeActions).toEqual([]);
-    },
-  );
+  it("preserves writable config and service during a forced updater Doctor", async () => {
+    const { observations, diagnostics } = await runRepair("writable", { update: true });
+    expect(observations.capability).toEqual({ kind: "writable" });
+    expect(diagnostics).toContain("deferred to update finalization");
+    expect(observations.configBytesPreserved).toBe(true);
+    expect(observations.configTokenPreserved).toBe(true);
+    expect(observations.returnedConfigPreserved).toBe(true);
+    expect(observations.unitBytesPreserved).toBe(true);
+    expect(observations.environmentBytesPreserved).toBe(true);
+    expect(observations.unitDirectoryEntries).toEqual(["openclaw-gateway.service"]);
+    expect(observations.events).not.toContain("service-published");
+    expect(observations.nativeActions).toEqual([]);
+  });
 
   it.each(["installed", "planned"] as const)(
     "preserves both generated environments when only the %s target is protected",

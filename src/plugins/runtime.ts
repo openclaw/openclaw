@@ -192,7 +192,9 @@ function preparePluginRegistryRetirement(
           });
         } else {
           await waitForPluginCommandExecutions(registry);
-          markPluginRegistryRetired(registry);
+          if (!isRegistryLive(registry)) {
+            markPluginRegistryRetired(registry);
+          }
         }
       });
     } finally {

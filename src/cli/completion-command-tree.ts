@@ -58,7 +58,7 @@ export function collectShellCompletionCommandTree(program: Command): ShellComple
       ],
       valueOptions: [
         ...new Set([
-          ...inheritedValueOptions,
+          ...inheritedValueOptions.filter((flag) => !ownOptionFlags.has(flag)),
           ...command.options.flatMap((option) =>
             option.required || option.optional ? completionFlags(option) : [],
           ),

@@ -124,9 +124,7 @@ export type ConfigPatchOptions = {
 };
 
 export type ConfigPatchBuildResult = { options: ConfigPatchOptions } | { error: string };
-export type ConfigPatchBuilder = (
-  config: Readonly<Record<string, unknown>>,
-) => ConfigPatchBuildResult;
+type ConfigPatchBuilder = (config: Readonly<Record<string, unknown>>) => ConfigPatchBuildResult;
 // Gateway commitGatewayConfigWrite returns persisted hashes; only a no-op patch omits one.
 export type ConfigPatchAck =
   | { noop: true; config: Record<string, unknown> }
@@ -154,7 +152,7 @@ export type RuntimeConfigExternalMutationOptions<T = unknown> = {
   configWriteAck?: (value: T) => ConfigPatchAck;
 };
 
-export type RuntimeConfigDispatchOptions = {
+type RuntimeConfigDispatchOptions = {
   canDispatch?: () => boolean;
 };
 
@@ -354,7 +352,11 @@ async function readConfig(
   if (!options.background) {
     state.configLoading = true;
   }
-  if (state.configAutoSaveStatus !== "error" && state.configAutoSaveStatus !== "conflict") {
+  // Foreground reads replace transient errors, but a retained draft conflict still needs resolution.
+  if (
+    state.configAutoSaveStatus !== "conflict" &&
+    (!options.background || state.configAutoSaveStatus !== "error")
+  ) {
     state.lastError = null;
     state.chatError = null;
   }

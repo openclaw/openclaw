@@ -1,3 +1,4 @@
+import { WEBSOCKET_NON_RETRYABLE_CLOSE_ERROR_CODE } from "@openclaw/ai/diagnostics";
 import { APIError } from "openai/core/error";
 import { describe, expect, it, vi } from "vitest";
 import { projectProviderError } from "../../../../packages/ai/src/utils/provider-error.js";
@@ -135,7 +136,7 @@ describe("recoverEmbeddedRunAttempt", () => {
     const { recovery, recover, failoverRetryController, continueFromCurrentTranscript } =
       await recoverAfterTransportDrop(outputLimitScenario);
     expect(recovery.action).toBe("retry");
-    failoverRetryController.setTransientRetryBudget(1);
+    failoverRetryController.observeAttempt({ providerRetryMaxRetries: 1 });
 
     expect(await recover()).toEqual({ action: "proceed" });
     expect(failoverRetryController.transientRetryCount).toBe(1);
@@ -418,6 +419,11 @@ describe("recoverEmbeddedRunAttempt", () => {
 
   it.each([
     { errorMessage: "WebSocket error" },
+    {
+      errorMessage: "WebSocket closed: reason included ECONNRESET",
+      errorCode: "ERR_WEBSOCKET_TRANSPORT",
+      diagnostics: [],
+    },
     { errorMessage: "Responses stream ended with unresolved tool calls", diagnostics: [] },
   ])("continues a settled exec batch after $errorMessage", async (scenario) => {
     const {
@@ -577,6 +583,14 @@ describe("recoverEmbeddedRunAttempt", () => {
     ["the run timed out", { terminal: { kind: "timeout", phase: "prompt", source: "runtime" } }],
     ["the attempt yielded", { yieldDetected: true }],
     ["the assistant error is not transient", { errorMessage: "invalid request: bad schema" }],
+    [
+      "a permanent WebSocket close has transient-looking reason text",
+      {
+        errorMessage: "WebSocket closed: policy reason included ECONNRESET",
+        errorCode: WEBSOCKET_NON_RETRYABLE_CLOSE_ERROR_CODE,
+        diagnostics: [],
+      },
+    ],
     ["Gateway storage is locked", { errorMessage: "database is locked", diagnostics: [] }],
     ["the provider requires authentication", { errorMessage: "401 unauthorized" }],
     [

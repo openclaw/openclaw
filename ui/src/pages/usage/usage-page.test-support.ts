@@ -2,7 +2,7 @@ import type { RouteLoaderOptions } from "@openclaw/uirouter";
 import { nothing } from "lit";
 import { expect, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import type { CostUsageSummary, SessionsUsageResult } from "../../api/types.ts";
+import type { SessionsUsageResult } from "../../api/types.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
 import type { UsageDetailsController } from "./detail-controller.ts";
 import { page as usageRoute } from "./route.ts";
@@ -109,10 +109,7 @@ export function contextWeight(name: string): NonNullable<UsageSessionEntry["cont
   };
 }
 
-export function cacheSnapshot(
-  source: "sessions" | "cost",
-  status: "fresh" | "partial" | "stale" | "refreshing",
-) {
+export function cacheSnapshot(status: "fresh" | "partial" | "stale" | "refreshing") {
   const cacheStatus = {
     status,
     cachedFiles: 1,
@@ -147,16 +144,10 @@ export function cacheSnapshot(
         byAgent: [],
         byChannel: [],
         daily: [],
+        costDaily: [],
       },
-      cacheStatus: source === "sessions" ? cacheStatus : undefined,
+      cacheStatus,
     } satisfies SessionsUsageResult,
-    costSummary: {
-      updatedAt: Date.now(),
-      days: 1,
-      daily: [],
-      totals,
-      cacheStatus: source === "cost" ? cacheStatus : undefined,
-    } satisfies CostUsageSummary,
   };
 }
 

@@ -1,4 +1,3 @@
-// Telegram plugin module implements native plugin command behavior.
 import { randomUUID } from "node:crypto";
 import type { Bot, Context } from "grammy";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";

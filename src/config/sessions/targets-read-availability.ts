@@ -21,7 +21,7 @@ type SessionStoreTargetsReadResult =
   | { available: true; targets: SessionStoreTarget[] }
   | {
       available: false;
-      reason: "database-missing" | "schema-missing" | "table-missing" | "read-failed";
+      reason: "database-missing" | "schema-missing" | "read-failed";
     };
 type FixedSessionStoreReadSnapshot =
   | {
@@ -57,25 +57,30 @@ function readSessionStoreTargetSnapshot(params: {
   if (!fs.existsSync(params.sqlitePath)) {
     snapshot = { available: false, reason: "database-missing" };
   } else {
-    const result = withOpenClawAgentDatabaseReadOnly(
-      (database) => {
-        const scopedAgentIds = new Set<string>();
-        let hasUnscopedRow = false;
-        for (const sessionKey of iterateSessionEntryKeys(database)) {
-          const parsed = parseAgentSessionKey(sessionKey);
-          if (parsed) {
-            scopedAgentIds.add(normalizeAgentId(parsed.agentId));
-          } else {
-            hasUnscopedRow = true;
+    try {
+      const result = withOpenClawAgentDatabaseReadOnly(
+        (database) => {
+          const scopedAgentIds = new Set<string>();
+          let hasUnscopedRow = false;
+          for (const sessionKey of iterateSessionEntryKeys(database)) {
+            const parsed = parseAgentSessionKey(sessionKey);
+            if (parsed) {
+              scopedAgentIds.add(normalizeAgentId(parsed.agentId));
+            } else {
+              hasUnscopedRow = true;
+            }
           }
-        }
-        return { databaseAgentId: params.databaseAgentId, hasUnscopedRow, scopedAgentIds };
-      },
-      { agentId: params.databaseAgentId, env: params.env, path: params.sqlitePath },
-    );
-    snapshot = result.found
-      ? { available: true, ...result.value }
-      : { available: false, reason: result.reason };
+          return { databaseAgentId: params.databaseAgentId, hasUnscopedRow, scopedAgentIds };
+        },
+        { agentId: params.databaseAgentId, env: params.env, path: params.sqlitePath },
+      );
+      snapshot = result.found
+        ? { available: true, ...result.value }
+        : { available: false, reason: result.reason };
+    } catch {
+      // An unreadable candidate cannot prove absence for cleanup or placement.
+      snapshot = { available: false, reason: "read-failed" };
+    }
   }
   params.cache?.set(cacheKey, snapshot);
   return snapshot;

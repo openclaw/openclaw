@@ -8,6 +8,7 @@ import { sourceDeliveryTargetsMatch } from "../../../infra/outbound/source-deliv
 import { shouldPreserveUserFacingSessionStateForInputProvenance } from "../../../sessions/input-provenance.js";
 import { deriveSessionChatTypeFromKey } from "../../../sessions/session-chat-type-shared.js";
 import { isNonTerminalAgentRunStatus } from "../../../shared/agent-run-status.js";
+import { buildAgentRunTerminalOutcomeFromWaitResult } from "../../agent-run-terminal-outcome.js";
 import { sanitizeAgentRunTerminalReplyText } from "../../agent-run-terminal-reply.js";
 import {
   hasCommittedSourceReplyDeliveryEvidence,
@@ -40,10 +41,12 @@ export async function runAnnounceAgentCall(params: {
   signal?: AbortSignal;
   timeoutMs?: number;
   isExecutionAllowed: () => boolean;
+  isSourceSessionAdmissionAllowed?: () => boolean;
   resolveGatewayContext?: import("../../../gateway/server-methods/types.js").GatewayContextResolver;
 }): Promise<unknown> {
   const deadline = new AbortController();
   const sourceLifecycle = new AbortController();
+  const isSourceSessionAdmissionAllowed = params.isSourceSessionAdmissionAllowed;
   const lifecycleSignal = params.signal
     ? AbortSignal.any([params.signal, sourceLifecycle.signal])
     : sourceLifecycle.signal;
@@ -71,6 +74,17 @@ export async function runAnnounceAgentCall(params: {
       operatorRoleActor: { kind: "system" },
       delegatedToolPolicyHandoff: params.delegatedToolPolicyHandoff,
       signal: executionSignal,
+      ...(isSourceSessionAdmissionAllowed
+        ? {
+            sessionMutationCommitGuard: () => {
+              if (!isSourceSessionAdmissionAllowed()) {
+                const error = new SourceOwnerChangedError();
+                sourceLifecycle.abort(error);
+                throw error;
+              }
+            },
+          }
+        : {}),
       // Accepted queue waits belong to session admission; execution belongs to
       // the requester runtime budget, not the announcement handoff deadline.
       onAccepted: () => clearTimeout(timer),
@@ -106,6 +120,33 @@ export function isGatewayAgentRunPending(response: unknown): boolean {
   }
   const status = (response as { status?: unknown }).status;
   return isNonTerminalAgentRunStatus(status);
+}
+
+export function resolvePrivateCompletionDeliveryResult(
+  response: Record<string, unknown> | undefined,
+): SubagentAnnounceDeliveryResult {
+  const outcome = buildAgentRunTerminalOutcomeFromWaitResult(response);
+  if (outcome?.reason === "cancelled" && outcome.stopReason !== "restart") {
+    return {
+      delivered: false,
+      path: "direct",
+      terminal: true,
+      reason: "delivery_suppressed",
+      disposition: "intentional_non_delivery",
+      error: "private requester continuation was cancelled",
+    };
+  }
+  // Successful internal consumption may be silent or start the next child.
+  // Queue acceptance alone is not consumption, and no external receipt is owed.
+  return response?.status === "ok" && response?.inputProcessingCompleted === true
+    ? { delivered: true, path: "direct" }
+    : {
+        delivered: false,
+        path: "direct",
+        reason: "completion_handoff_pending",
+        error: "private requester turn has not completed successfully",
+        disposition: "retryable",
+      };
 }
 
 export function isDirectMessageDeliveryTarget(

@@ -40,7 +40,7 @@ function sessionActionPresentation(button: Locator) {
 }
 
 suite.define(() => {
-  it.each([false, true])("nests and manages child sessions (pinned: %s)", async (pinned) => {
+  it.each([false, true])("nests and manages spawned sessions (pinned: %s)", async (pinned) => {
     const baseTime = Date.parse("2026-07-01T16:00:00.000Z");
     const parentKey = "agent:main:release-plan";
     const childOneKey = "agent:main:research-sources";

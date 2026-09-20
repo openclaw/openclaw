@@ -1,4 +1,3 @@
-// Matrix plugin module implements media behavior.
 import { parseBuffer, type IFileInfo } from "music-metadata";
 import type { MediaKind } from "openclaw/plugin-sdk/media-runtime";
 import { getMatrixRuntime } from "../../runtime.js";
@@ -7,8 +6,6 @@ import type {
   EncryptedFile,
   FileWithThumbnailInfo,
   MatrixClient,
-  TimedFileInfo,
-  VideoFileInfo,
 } from "../sdk.js";
 import type {
   MatrixMediaContent,
@@ -30,31 +27,14 @@ function buildMatrixMediaInfo(params: {
   if (params.mimetype) {
     base.mimetype = params.mimetype;
   }
-  if (params.imageInfo) {
-    const dimensional: DimensionalFileInfo = {
-      ...base,
-      ...params.imageInfo,
-    };
-    if (typeof params.durationMs === "number") {
-      const videoInfo: VideoFileInfo = {
-        ...dimensional,
-        duration: params.durationMs,
-      };
-      return videoInfo;
-    }
-    return dimensional;
-  }
+  const info = params.imageInfo ? { ...base, ...params.imageInfo } : base;
   if (typeof params.durationMs === "number") {
-    const timedInfo: TimedFileInfo = {
-      ...base,
-      duration: params.durationMs,
-    };
-    return timedInfo;
+    return { ...info, duration: params.durationMs };
   }
-  if (Object.keys(base).length === 0) {
+  if (!params.imageInfo && Object.keys(info).length === 0) {
     return undefined;
   }
-  return base;
+  return info;
 }
 
 export function buildMediaContent(params: {

@@ -562,9 +562,6 @@ test("preserves complete base rows across time and caller presentation fixtures"
         ...subagentRunInputs,
         now: TIMES[0],
       });
-      if (fixture.entry) {
-        rowContext.acpSessionMetaByEntry.set(fixture.entry, fixture.entry.acp);
-      }
       const rowParams = {
         cfg,
         agentId: "main",

@@ -4,6 +4,102 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { applySystemAgentModelSelection } from "./setup-model-selection.js";
 
 describe("applySystemAgentModelSelection", () => {
+  it("adds a utility without replacing primary, fallback, runtime, or credential bindings", async () => {
+    const config: OpenClawConfig = {
+      agents: {
+        defaults: {
+          model: {
+            primary: "openai/gpt-5.5@openai:primary",
+            fallbacks: ["openai/gpt-5.4@openai:backup"],
+          },
+          models: { "openai/gpt-5.5": { agentRuntime: { id: "codex" } } },
+        },
+        entries: {
+          main: { default: true, agentDir: "/tmp/main-auth" },
+          ops: { model: "openai/gpt-5.4" },
+        },
+      },
+      auth: {
+        profiles: {
+          "openai:primary": { provider: "openai", mode: "api_key" },
+          "openai:utility": { provider: "openai", mode: "api_key" },
+        },
+        order: { openai: ["openai:primary", "openai:utility"] },
+      },
+    };
+    const original = structuredClone(config);
+
+    const result = await applySystemAgentModelSelection({
+      config,
+      model: "openai/gpt-5.5",
+      modelTarget: "utility",
+      authProfileId: "openai:utility",
+    });
+
+    expect(result.agents?.defaults).toEqual({
+      ...config.agents?.defaults,
+      utilityModel: "openai/gpt-5.5@openai:utility",
+    });
+    expect(result.agents?.entries).toEqual(config.agents?.entries);
+    expect(result.auth).toEqual(config.auth);
+    expect(config).toEqual(original);
+  });
+
+  it.each([
+    { targetAgentId: "ops", priorUtility: undefined },
+    { targetAgentId: undefined, priorUtility: "" },
+    { targetAgentId: undefined, priorUtility: "local-utility/old" },
+    { targetAgentId: undefined, priorUtility: undefined, ownership: "explicit" as const },
+  ])("writes a utility selection only to its agent owner: %j", async (scenario) => {
+    const config: OpenClawConfig = {
+      agents: {
+        ...(scenario.ownership ? { ownership: scenario.ownership } : {}),
+        defaults: {
+          systemAgent: { agentId: "ops" },
+          model: "openai/gpt-5.5",
+          utilityModel: "local-utility/shared",
+        },
+        entries: {
+          main: { default: true },
+          ops: {
+            model: { primary: "openai/gpt-5.4", fallbacks: ["openai/gpt-5.5"] },
+            agentDir: "/tmp/ops-auth",
+            ...(scenario.priorUtility !== undefined ? { utilityModel: scenario.priorUtility } : {}),
+          },
+        },
+      },
+    };
+
+    const result = await applySystemAgentModelSelection({
+      config,
+      model: "local-utility/tiny",
+      modelTarget: "utility",
+      targetAgentId: scenario.targetAgentId,
+    });
+
+    expect(result.agents?.defaults).toEqual(config.agents?.defaults);
+    expect(result.agents?.entries?.main).toEqual(config.agents?.entries?.main);
+    expect(result.agents?.entries?.ops).toEqual({
+      ...config.agents?.entries?.ops,
+      utilityModel: "local-utility/tiny",
+      models: { "local-utility/tiny": {} },
+    });
+  });
+
+  it("can configure first-run utility inference without authoring a primary or agent roster", async () => {
+    const result = await applySystemAgentModelSelection({
+      config: {},
+      model: "local-utility/tiny",
+      modelTarget: "utility",
+    });
+
+    expect(result.agents?.defaults?.utilityModel).toBe("local-utility/tiny");
+    expect(result.agents?.defaults?.model).toBeUndefined();
+    expect(result.agents?.entries).toBeUndefined();
+    expect(result.agents?.list).toBeUndefined();
+    expect(result.meta?.migrations?.utilityModelSeparation).toBe(true);
+  });
+
   it("keeps a newly approved model allowed when migrating a first-run legacy model map", async () => {
     const cfg = await applySystemAgentModelSelection({
       config: { agents: { defaults: { models: { "fixture/old": {} } } } },

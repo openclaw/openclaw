@@ -35,6 +35,10 @@ import {
   publishPreparedBackupArchive,
   type BackupArchivePublication,
 } from "./backup-archive-publication.js";
+import {
+  hasLegacyAuditBackupSources,
+  isLegacyAuditMigrationBackupPath,
+} from "./backup-audit-paths.js";
 import { stageBackupConfigCapture } from "./backup-config-capture.js";
 import {
   appendBackupManifest,
@@ -51,10 +55,8 @@ import { createBackupVolatileStatCache } from "./backup-volatile-stat-cache.js";
 import { isErrno } from "./errors.js";
 import {
   createLegacyAuditBackupCapture,
-  hasLegacyAuditBackupSources,
   legacyAuditBackupCapturesMatch,
   LegacyAuditBackupStateChangedError,
-  isLegacyAuditMigrationBackupPath,
   type LegacyAuditBackupSnapshot,
 } from "./state-migrations.audit-backup.js";
 import { withLegacyAuditMigrationLease } from "./state-migrations.audit-coordination.js";

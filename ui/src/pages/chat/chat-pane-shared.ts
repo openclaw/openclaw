@@ -1,6 +1,5 @@
 import { asNullableRecord as catalogRawRecord } from "@openclaw/normalization-core/record-coerce";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import type { RouteId } from "../../app-routes.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import type { BoardProvider } from "../../lib/board/provider.ts";
 import type { BoardFace } from "../../lib/board/settings.ts";
@@ -25,7 +24,7 @@ type PendingPaneSessionHandoff = PaneSessionHandoff & { expiresAt: number; sessi
 const PANE_SESSION_HANDOFF_TTL_MS = 30_000;
 const PANE_SESSION_HANDOFF_LIMIT = 4;
 const paneSessionHandoffs = new WeakMap<
-  ApplicationContext<RouteId>,
+  ApplicationContext,
   Map<string, PendingPaneSessionHandoff[]>
 >();
 
@@ -114,7 +113,7 @@ export function clearPaneSessionHandoff(
 }
 
 export function retireSessionPaneHandoffs(
-  context: ApplicationContext<RouteId>,
+  context: ApplicationContext,
   targets: readonly { key: string; retireBeforeRevision: number }[],
 ): void {
   for (const pending of paneSessionHandoffs.get(context)?.values() ?? []) {

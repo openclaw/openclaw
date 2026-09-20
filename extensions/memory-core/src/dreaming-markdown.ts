@@ -1,4 +1,3 @@
-// Memory Core plugin module implements dreaming markdown behavior.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { extractErrorCode } from "openclaw/plugin-sdk/error-runtime";

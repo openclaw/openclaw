@@ -1,4 +1,3 @@
-// Shared harness and mocks for embedded attempt spawn-workspace tests.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -20,6 +19,8 @@ import type {
 import { formatErrorMessage } from "../../../infra/errors.js";
 import { bindStreamLlmRuntime } from "../../../llm/model-runtime-binding.js";
 import type { Model } from "../../../llm/types.js";
+// Shared harness and mocks for embedded attempt spawn-workspace tests.
+import { makeEmptyPluginMetadataOwners } from "../../../plugins/current-plugin-metadata.test-support.js";
 import type { PluginMetadataSnapshot } from "../../../plugins/plugin-metadata-snapshot.js";
 import { createLazyPromise } from "../../../shared/lazy-runtime.js";
 import { prepareSystemAgentRunAdmission } from "../../admitted-run-context.js";
@@ -287,17 +288,7 @@ const emptyPluginMetadataSnapshot: PluginMetadataSnapshot = {
   byPluginId: new Map(),
   normalizePluginId: (pluginId: string) => pluginId,
   declaredProviderOwners: new Map(),
-  owners: {
-    channels: new Map(),
-    channelConfigs: new Map(),
-    providers: new Map(),
-    modelCatalogProviders: new Map(),
-    cliBackends: new Map(),
-    setupProviders: new Map(),
-    commandAliases: new Map(),
-    contracts: new Map(),
-    modelIdNormalizationPolicies: new Map(),
-  },
+  owners: makeEmptyPluginMetadataOwners(),
   metrics: {
     registrySnapshotMs: 0,
     manifestRegistryMs: 0,

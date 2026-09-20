@@ -1,8 +1,7 @@
 import { isResponsesOutputLimitToolCallError } from "@openclaw/ai/diagnostics";
-import { isProviderRefusalAssistantError } from "@openclaw/llm-core/diagnostics";
 import { emitAgentEvent } from "../../../infra/agent-events.js";
 import { formatErrorMessage, toErrorObject } from "../../../infra/errors.js";
-import { isRetryableAssistantError } from "../../../llm/utils/retry.js";
+import { isRetryableAssistantError, isTerminalAssistantError } from "../../../llm/utils/retry.js";
 import { projectAgentRunAttemptTerminal } from "../../agent-run-terminal-outcome.js";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../../defaults.js";
 import type { FailoverReason } from "../../embedded-agent-helpers.js";
@@ -118,10 +117,15 @@ export async function recoverEmbeddedRunAttempt(input: {
   const terminalInterrupted = isEmbeddedRunTerminalInterrupted(terminalState.outcome);
   const currentAttemptReplaySafe = isCurrentAttemptReplaySafe(attempt);
   const settledEvidence = resolveSettledToolBatchEvidence(attempt);
+  const asyncActivity = hasAsyncActivity(attempt.toolMetas);
+  const toolsAllowContinuation =
+    !settledEvidence.intentionalTermination &&
+    !asyncActivity &&
+    !attempt.didSendDeterministicApprovalPrompt;
   // Embedded settings disable session retries; this owner must resume output limits.
-  const outputLimitAssistant = currentAttemptCompletedAssistant ?? attemptAssistant;
+  const recoveryAssistant = currentAttemptCompletedAssistant ?? attemptAssistant;
   const outputLimitFailure = Boolean(
-    outputLimitAssistant && isResponsesOutputLimitToolCallError(outputLimitAssistant),
+    recoveryAssistant && isResponsesOutputLimitToolCallError(recoveryAssistant),
   );
   const canContinueOutputLimit =
     !runtime.pluginHarnessOwnsTransport &&
@@ -129,17 +133,11 @@ export async function recoverEmbeddedRunAttempt(input: {
     !promptError &&
     (currentAttemptReplaySafe || settledEvidence.allToolsProvenSettled) &&
     attempt.itemLifecycle.activeCount === 0 &&
-    !settledEvidence.intentionalTermination &&
-    !hasAsyncActivity(attempt.toolMetas) &&
-    !attempt.didSendDeterministicApprovalPrompt;
+    toolsAllowContinuation;
   // A model idle timeout after settled tools can resume their recorded results.
   // Side effects still forbid replaying the original prompt or switching models.
   const canContinueSettledIdleTimeout =
-    idleTimedOut &&
-    settledEvidence.allToolsProvenSettled &&
-    !settledEvidence.intentionalTermination &&
-    !hasAsyncActivity(attempt.toolMetas) &&
-    !attempt.didSendDeterministicApprovalPrompt;
+    idleTimedOut && settledEvidence.allToolsProvenSettled && toolsAllowContinuation;
   // Mid-turn overflow continues from the persisted tool results and never
   // replays the assistant call. Generic tools must still be fully settled; only
   // a batch whose exec result parked a Code Mode run (producer-recorded) may
@@ -151,7 +149,7 @@ export async function recoverEmbeddedRunAttempt(input: {
     promptErrorSource === "precheck" &&
     attempt.preflightRecovery?.source === "mid-turn" &&
     midTurnBatchSettled &&
-    !hasAsyncActivity(attempt.toolMetas);
+    !asyncActivity;
   // A provider can reject the next prompt after writes have settled. Compact
   // their recorded results under this owner without replaying the original task.
   const canRecoverSettledToolResults =
@@ -159,21 +157,14 @@ export async function recoverEmbeddedRunAttempt(input: {
     !terminalInterrupted &&
     (!promptError || promptErrorSource === "prompt") &&
     settledEvidence.allToolsProvenSettled &&
-    !settledEvidence.intentionalTermination &&
-    !hasAsyncActivity(attempt.toolMetas) &&
+    toolsAllowContinuation &&
     !attempt.yieldDetected &&
-    !attempt.clientToolCalls &&
-    !attempt.didSendDeterministicApprovalPrompt;
+    !attempt.clientToolCalls;
   const { signalOwnedInterruption } = terminalState;
   const assistantOverflowCandidate =
-    currentAttemptCompletedAssistant !== undefined
-      ? currentAttemptCompletedAssistant.stopReason === "error" ||
-        currentAttemptCompletedAssistant.stopReason === "length"
-        ? currentAttemptCompletedAssistant
-        : undefined
-      : attemptAssistant?.stopReason === "error" || attemptAssistant?.stopReason === "length"
-        ? attemptAssistant
-        : undefined;
+    recoveryAssistant?.stopReason === "error" || recoveryAssistant?.stopReason === "length"
+      ? recoveryAssistant
+      : undefined;
   const retry = (updates?: {
     authRetryPending?: boolean;
     codexAppServerRecoveryRetries?: number;
@@ -350,7 +341,7 @@ export async function recoverEmbeddedRunAttempt(input: {
     !attempt.codexAppServerFailure &&
     !findCliTerminalStopError(promptError) &&
     (!promptError || promptErrorSource === "prompt") &&
-    !isProviderRefusalAssistantError(attemptAssistant) &&
+    !isTerminalAssistantError(attemptAssistant) &&
     (!outputLimitFailure || canContinueOutputLimit) &&
     recoveryReason &&
     (await failoverRetryController.maybeRetryTransient({

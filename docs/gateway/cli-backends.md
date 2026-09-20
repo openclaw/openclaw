@@ -114,6 +114,12 @@ openclaw config set agents.defaults.timeoutSeconds 43200
 
 Background work started inside a CLI is still part of that CLI subprocess. If the parent turn reaches its overall limit, OpenClaw stops the subprocess and its CLI-internal background tasks together. For durable long work, use a detached OpenClaw [sub-agent](/tools/subagents) or [ACP agent](/tools/acp-agents). Detached sub-agents have no run timeout by default.
 
+When Claude Code moves a foreground Bash command to the background after its tool timeout,
+OpenClaw keeps the turn active until Claude processes the completion and returns its final answer.
+Follow-up tools still require the current turn's host permissions. Commands started explicitly
+in the background do not hold the turn open. If the turn fails or is cancelled while one of these
+commands still needs a follow-up, OpenClaw closes that subprocess and starts a fresh one for the next turn.
+
 The `openclaw agent` command also has its own request deadline. Its 600-second fallback default applies to that command invocation, not to ordinary Gateway turns. See [`openclaw agent`](/cli/agent).
 
 ### Claude CLI specifics

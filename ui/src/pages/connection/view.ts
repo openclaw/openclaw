@@ -46,6 +46,8 @@ type ConnectionProps = {
   sessionDirty: boolean;
   sessionSaved: boolean;
   showGatewaySecret: boolean;
+  canForgetDevice: boolean;
+  onForgetDevice: () => void;
   onConnectionChange: (patch: Partial<Pick<UiSettings, "gatewayUrl" | "token">>) => void;
   onSecretChange: (next: string) => void;
   onSessionKeyChange: (next: string) => void;
@@ -350,5 +352,16 @@ export function renderConnection(props: ConnectionProps) {
       `,
     ),
     renderSystemSection(props),
+    props.canForgetDevice
+      ? renderSettingsSection(
+          { title: t("connection.browser.title") },
+          renderSettingsRow({
+            title: t("connection.browser.savedSignIn"),
+            control: html`<button class="btn" @click=${props.onForgetDevice}>
+              ${t("connection.browser.forgetDevice")}
+            </button>`,
+          }),
+        )
+      : nothing,
   ]);
 }

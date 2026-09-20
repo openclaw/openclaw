@@ -319,13 +319,13 @@ export async function probeGateway(opts: {
       const cachedOperatorToken = opts.suppressStoredDeviceAuth
         ? null
         : deviceAuthScope
-          ? loadOriginDeviceTokenReadOnly({
+          ? await loadOriginDeviceTokenReadOnly({
               gatewayScope: deviceAuthScope,
               deviceId: identity.deviceId,
               role: "operator",
               env: opts.env,
             })
-          : loadDeviceAuthTokenReadOnly({
+          : await loadDeviceAuthTokenReadOnly({
               deviceId: identity.deviceId,
               role: "operator",
               env: opts.env,

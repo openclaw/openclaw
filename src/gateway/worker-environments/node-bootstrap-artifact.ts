@@ -50,6 +50,7 @@ const BOOTSTRAP_LAUNCHER_FILES = [
   "node-sqlite.mjs",
   "node-runtime-update.mjs",
   "node-runtime-recovery.mjs",
+  "node-host-launcher.mjs",
 ];
 const READ_CONCURRENCY = 16;
 const IGNORED_PLUGIN_DIRECTORIES = new Set(["node_modules", "src", "test", "tests"]);

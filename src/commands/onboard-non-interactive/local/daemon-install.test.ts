@@ -5,6 +5,9 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../config/config.js";
 import { installGatewayDaemonNonInteractive } from "./daemon-install.js";
 
+const readDaemonRuntimePinForInstall = vi.hoisted(() => vi.fn());
+vi.mock("../../../daemon/runtime-pin-state.js", () => ({ readDaemonRuntimePinForInstall }));
+
 const buildGatewayInstallPlan = vi.hoisted(() => vi.fn());
 const gatewayInstallErrorHint = vi.hoisted(() => vi.fn(() => "hint"));
 const resolveGatewayInstallToken = vi.hoisted(() => vi.fn());
@@ -45,6 +48,7 @@ vi.mock("../../systemd-linger.js", () => ({
 describe("installGatewayDaemonNonInteractive", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    readDaemonRuntimePinForInstall.mockReturnValue({ revision: "empty", stored: false });
     serviceReadCommand.mockResolvedValue(null);
     isSystemdUserServiceAvailable.mockResolvedValue(true);
     resolveGatewayInstallToken.mockResolvedValue({
@@ -189,4 +193,37 @@ describe("installGatewayDaemonNonInteractive", () => {
       });
     }
   });
+  it.each([undefined, "node", "bun"] as const)(
+    "carries installed pin intent through setup (explicit=%s)",
+    async (daemonRuntime) => {
+      const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+      const pin = { runtime: "bun", path: "/opt/pinned/bun" };
+      const expected = { revision: "installed-pin", stored: true, pin };
+      const existingCommand = {
+        programArguments: [pin.path, "/app/openclaw.mjs", "gateway"],
+        environment: { OPENCLAW_WRAPPER: "/opt/wrapper" },
+      };
+      serviceReadCommand.mockResolvedValue(existingCommand);
+      readDaemonRuntimePinForInstall.mockReturnValue(expected);
+      await installGatewayDaemonNonInteractive({
+        nextConfig: {},
+        opts: { installDaemon: true, daemonRuntime },
+        runtime,
+        port: 18789,
+      });
+      expect(buildGatewayInstallPlan).toHaveBeenCalledWith(
+        expect.objectContaining({
+          runtime: daemonRuntime ?? "bun",
+          pinnedRuntimePath: daemonRuntime ? undefined : pin.path,
+          existingCommand,
+          env: expect.objectContaining({ OPENCLAW_WRAPPER: "/opt/wrapper" }),
+        }),
+      );
+      expect(serviceInstall).toHaveBeenCalledWith(
+        expect.objectContaining({
+          runtimePinUpdate: { expected, pin: daemonRuntime ? undefined : pin },
+        }),
+      );
+    },
+  );
 });

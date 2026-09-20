@@ -1,7 +1,10 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { PluginManifestRecord } from "../../plugins/manifest-registry.types.js";
 import { clearPluginMetadataLifecycleCaches } from "../../plugins/plugin-metadata-lifecycle.js";
 import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
+import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
+import { withPluginRuntimeGenerationScope } from "../../plugins/runtime/generation-scope.js";
 
 const manifestMocks = vi.hoisted(() => ({
   getGatewayPluginMetadataSnapshot: vi.fn(),
@@ -137,6 +140,132 @@ beforeEach(() => {
   providerMocks.resolveRuntimePluginDiscoveryProviders.mockResolvedValue([]);
   providerMocks.runProviderStaticCatalog.mockResolvedValue(undefined);
   providerMocks.normalizePluginDiscoveryResult.mockReturnValue({});
+});
+
+it("caches native donor facts and misses without unrelated provider hooks", () => {
+  const plugin = createMistralManifestPlugin();
+  const metadataSnapshot = setCurrentManifestPlugins([plugin]);
+  const normalizeTransport = vi.fn(() => undefined);
+  const unrelatedTransport = vi.fn(() => {
+    throw new Error("Unrelated provider hook reached");
+  });
+  const pluginRegistry = createEmptyPluginRegistry();
+  pluginRegistry.providers.push(
+    {
+      pluginId: "mistral",
+      source: "test",
+      provider: { id: "mistral", label: "Mistral", auth: [], normalizeTransport },
+    },
+    {
+      pluginId: "unrelated",
+      source: "test",
+      provider: {
+        id: "unrelated",
+        label: "Unrelated",
+        auth: [],
+        normalizeTransport: unrelatedTransport,
+      },
+    },
+  );
+  const nativeConfig = {
+    models: {
+      providers: {
+        personal: {
+          api: "openai-completions" as const,
+          baseUrl: "https://api.mistral.ai/v1",
+          models: [],
+        },
+      },
+    },
+  };
+  const proxyConfig = {
+    models: {
+      providers: {
+        personal: {
+          api: "openai-completions" as const,
+          baseUrl: "http://localhost:4000",
+          models: [],
+        },
+      },
+    },
+  };
+  const lookup = { provider: "personal", modelId: "mistral-medium-3-5" };
+  withPluginRuntimeGenerationScope({ metadataSnapshot, pluginRegistry }, () => {
+    const resolve = createBundledStaticCatalogModelResolver({
+      cfg: nativeConfig,
+      metadataSnapshot,
+    });
+    const first = expectDefined(resolve(lookup), "Expected the native donor model");
+    first.name = "Changed by caller";
+    const second = resolve(lookup);
+    expect(second).toMatchObject({ provider: "personal", name: "Mistral Medium 3.5" });
+    expect(second).not.toBe(first);
+    expect(normalizeTransport).toHaveBeenCalledTimes(1);
+    const resolveProxy = createBundledStaticCatalogModelResolver({
+      cfg: proxyConfig,
+      metadataSnapshot,
+    });
+    expect(resolveProxy(lookup)).toBeUndefined();
+    expect(resolveProxy(lookup)).toBeUndefined();
+    expect(normalizeTransport).toHaveBeenCalledTimes(2);
+    expect(unrelatedTransport).not.toHaveBeenCalled();
+  });
+  const replacement = setCurrentManifestPlugins([
+    {
+      ...plugin,
+      modelCatalog: {
+        ...plugin.modelCatalog,
+        providers: {
+          mistral: { ...plugin.modelCatalog.providers.mistral, baseUrl: "http://localhost:4000" },
+        },
+      },
+    },
+  ]);
+  withPluginRuntimeGenerationScope({ metadataSnapshot: replacement, pluginRegistry }, () => {
+    expect(
+      resolveBundledStaticCatalogModel({
+        ...lookup,
+        cfg: proxyConfig,
+        metadataSnapshot: replacement,
+      }),
+    ).toMatchObject({ provider: "personal" });
+    expect(normalizeTransport).toHaveBeenCalledTimes(3);
+  });
+});
+
+it("keeps a static donor miss separate from an allowed refreshable lookup", () => {
+  const plugin = createMistralManifestPlugin();
+  const metadataSnapshot = setCurrentManifestPlugins([
+    {
+      ...plugin,
+      modelCatalog: { ...plugin.modelCatalog, discovery: { mistral: "refreshable" } },
+    },
+  ]);
+  const cfg = {
+    models: {
+      providers: {
+        personal: {
+          api: "openai-completions" as const,
+          baseUrl: "https://api.mistral.ai/v1",
+          models: [],
+        },
+      },
+    },
+  };
+  const lookup = { provider: "personal", modelId: "mistral-medium-3-5", cfg, metadataSnapshot };
+  const pluginRegistry = createEmptyPluginRegistry();
+  pluginRegistry.providers.push({
+    pluginId: "mistral",
+    source: "test",
+    provider: { id: "mistral", label: "Mistral", auth: [], normalizeTransport: () => undefined },
+  });
+  withPluginRuntimeGenerationScope({ metadataSnapshot, pluginRegistry }, () => {
+    expect(resolveBundledStaticCatalogModel(lookup)).toBeUndefined();
+    expect(
+      resolveBundledStaticCatalogModel({ ...lookup, includeRuntimeDiscovery: true }),
+    ).toMatchObject({ provider: "personal" });
+    expect(resolveBundledStaticCatalogModel(lookup)).toBeUndefined();
+  });
 });
 
 describe("bundled static model catalog snapshot cache", () => {

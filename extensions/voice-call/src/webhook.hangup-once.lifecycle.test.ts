@@ -1,7 +1,7 @@
 // Voice Call tests cover webhook.hangup once.lifecycle plugin behavior.
 import crypto from "node:crypto";
 import fs from "node:fs";
-import type { OpenKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
+import type { OpenAsyncKeyedStoreOptions } from "openclaw/plugin-sdk/plugin-state-runtime";
 import {
   createPluginStateKeyedStoreForTests,
   resetPluginStateStoreForTests,
@@ -25,7 +25,7 @@ function installStateRuntime(): void {
   setVoiceCallStateRuntime({
     state: {
       resolveStateDir: () => "",
-      openKeyedStore: (options: OpenKeyedStoreOptions) =>
+      openKeyedStore: (options: OpenAsyncKeyedStoreOptions) =>
         createPluginStateKeyedStoreForTests("voice-call", options),
       openChannelIngressQueue: (() => {
         throw new Error(
@@ -244,7 +244,7 @@ describe("Voice-call webhook hangup-once lifecycle", () => {
       const openStore = state.openKeyedStore.bind(state);
       const fault = vi
         .spyOn(state, "openKeyedStore")
-        .mockImplementation(<T>(options: OpenKeyedStoreOptions) => {
+        .mockImplementation(<T>(options: OpenAsyncKeyedStoreOptions) => {
           const store = openStore<T>(options);
           store.entries = async () => {
             throw new Error("synthetic signed callback history failure");

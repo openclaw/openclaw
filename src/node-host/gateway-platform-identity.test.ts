@@ -1,7 +1,19 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveNodeHostGatewayPlatformIdentity } from "./gateway-platform-identity.js";
 
+const { resolveModel } = vi.hoisted(() => ({
+  resolveModel: vi.fn<typeof import("../infra/machine-model.js").resolveMachineModelIdentifier>(),
+}));
+
+vi.mock("../infra/machine-model.js", () => ({
+  resolveMachineModelIdentifier: resolveModel,
+}));
+
 describe("resolveNodeHostGatewayPlatformIdentity", () => {
+  beforeEach(() => {
+    resolveModel.mockReset();
+  });
+
   it.each([
     { runtime: "darwin", platform: "macos", deviceFamily: "Mac", modelIdentifier: "Mac16,1" },
     { runtime: "linux", platform: "linux", deviceFamily: "Linux", modelIdentifier: "Test Board" },
@@ -15,8 +27,8 @@ describe("resolveNodeHostGatewayPlatformIdentity", () => {
   ] as const)(
     "reports $runtime hardware identity",
     ({ runtime, platform, deviceFamily, modelIdentifier }) => {
-      const resolveModel = vi.fn(() => modelIdentifier);
-      expect(resolveNodeHostGatewayPlatformIdentity(runtime, resolveModel)).toEqual({
+      resolveModel.mockReturnValue(modelIdentifier);
+      expect(resolveNodeHostGatewayPlatformIdentity(runtime)).toEqual({
         platform,
         ...(deviceFamily ? { deviceFamily, modelIdentifier } : {}),
       });

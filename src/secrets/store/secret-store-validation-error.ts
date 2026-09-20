@@ -2,6 +2,8 @@ type SecretStoreValidationCode =
   | "SECRET_STORE_INVALID_NAME"
   | "SECRET_STORE_INVALID_ALLOWED_HOST"
   | "SECRET_STORE_VALUE_TOO_LARGE"
+  | "SECRET_STORE_VALUE_REDACTED"
+  | "SECRET_STORE_VALUE_CHANGED"
   | "SECRET_STORE_VALUE_EMPTY";
 
 export class SecretStoreValidationError extends Error {

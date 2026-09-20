@@ -8,9 +8,10 @@ import {
   symlinkSync,
   writeFileSync,
 } from "node:fs";
-import { join, relative, resolve } from "node:path";
-import ts from "typescript";
+import { join, relative } from "node:path";
+import { pathToFileURL } from "node:url";
 import { afterEach, describe, expect, it } from "vitest";
+import { collectRuntimeImportClosure } from "../../scripts/lib/runtime-import-closure.mts";
 import { detectWorktreeFilesystemBackend } from "../../src/agents/worktrees/filesystem-backend.js";
 import { listTemplates } from "../../src/agents/worktrees/template-registry.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
@@ -20,56 +21,20 @@ import { copyPrWrapperSources } from "./pr-wrapper.test-support.js";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const describePosix = process.platform === "win32" ? describe.skip : describe;
 
-it("extracts the complete eager runtime import closure of every wrapper component", () => {
+it("extracts the complete eager runtime import closure without duplicate wrapper components", () => {
   const extracted = tempDirs.make("openclaw-pr-import-closure-");
-  copyPrWrapperSources(extracted);
-  const { config } = ts.readConfigFile("tsconfig.json", (file) => ts.sys.readFile(file));
-  const { options } = ts.convertCompilerOptionsFromJson(config.compilerOptions, process.cwd());
-  const runtimeHost = {
-    ...ts.sys,
-    fileExists: (file: string) => !/\.d\.[cm]?ts$/.test(file) && ts.sys.fileExists(file),
-  };
-  const missing = new Set<string>();
-  for (const entry of readdirSync(extracted, { recursive: true, withFileTypes: true })) {
-    if (!entry.isFile() || !/\.[cm]?[jt]s$/.test(entry.name)) {
-      continue;
-    }
-    const file = relative(extracted, join(entry.parentPath, entry.name));
-    // Emit erases type-only imports; only top-level imports/re-exports must load
-    // with the wrapper. Lazy application commands retain their own source tree.
-    const { outputText } = ts.transpileModule(readFileSync(join(extracted, file), "utf8"), {
-      fileName: file,
-      compilerOptions: { ...options, module: ts.ModuleKind.ESNext },
-    });
-    const source = ts.createSourceFile(file, outputText, ts.ScriptTarget.Latest, true);
-    for (const statement of source.statements) {
-      if (
-        (!ts.isImportDeclaration(statement) && !ts.isExportDeclaration(statement)) ||
-        !statement.moduleSpecifier ||
-        !ts.isStringLiteral(statement.moduleSpecifier)
-      ) {
-        continue;
-      }
-      const specifier = statement.moduleSpecifier.text;
-      const dependency = ts.resolveModuleName(
-        specifier,
-        resolve(file),
-        options,
-        runtimeHost,
-      ).resolvedModule;
-      if (!dependency) {
-        if (specifier.startsWith(".")) {
-          missing.add(`${file}: unresolved ${specifier}`);
-        }
-        continue;
-      }
-      const dependencyPath = relative(process.cwd(), dependency.resolvedFileName);
-      if (!dependency.isExternalLibraryImport && !existsSync(join(extracted, dependencyPath))) {
-        missing.add(`${file}: ${dependencyPath}`);
-      }
-    }
-  }
-  expect([...missing].toSorted()).toEqual([]);
+  const components = copyPrWrapperSources(extracted);
+  expect(components.filter((component, index) => components.indexOf(component) !== index)).toEqual(
+    [],
+  );
+  const files = readdirSync(extracted, { recursive: true, withFileTypes: true })
+    .filter((entry) => entry.isFile())
+    .map((entry) => relative(extracted, join(entry.parentPath, entry.name)));
+  expect(
+    collectRuntimeImportClosure(process.cwd(), files).filter(
+      (file) => !existsSync(join(extracted, file)),
+    ),
+  ).toEqual([]);
 });
 
 function coldFixture(perWorktreeConfig = true) {
@@ -127,6 +92,21 @@ describePosix("native PR source provisioning", () => {
         f.env.OPENCLAW_CONFIG_PATH!,
         JSON.stringify({ worktreeAcceleration: acceleration }),
       );
+      const preload = join(f.root, "native-provision-imports.mjs");
+      writeFileSync(
+        preload,
+        `import { registerHooks } from "node:module";
+if (process.argv[1]?.endsWith("/worktree-provision.mts")) {
+  registerHooks({ load(url, context, nextLoad) {
+    if (url.endsWith("/src/config/config.ts")) {
+      throw new Error("Native Git provisioning must not load acceleration configuration.");
+    }
+    return nextLoad(url, context);
+  } });
+}
+`,
+      );
+      f.env.NODE_OPTIONS = `--import=${pathToFileURL(preload).href}`;
       const parent = join(f.canonical, ".worktrees");
       const physicalParent = join(f.root, "pr-worktrees");
       rmdirSync(parent);
@@ -424,7 +404,10 @@ ${changeLock}
       const templateNames = readdirSync(templates).toSorted();
       expect(templateNames.length).toBeGreaterThan(0);
       expect(first.stderr).toContain("PR source checkout: filesystem template clone.");
-      const template = listTemplates(f.env).find((entry) => entry.sourceCommit === f.main);
+      const template = listTemplates({
+        ...f.env,
+        OPENCLAW_STATE_DIR: join(f.canonical, ".local", "pr-state"),
+      }).find((entry) => entry.sourceCommit === f.main);
       expect(template?.backend).toBe("apfs");
       expect(template?.status).toBe("ready");
       const warmResult = nextPr(f, 43);

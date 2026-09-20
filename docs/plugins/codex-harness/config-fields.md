@@ -87,5 +87,5 @@ If the normal app-server runtime would be `danger-full-access`, enabling
 `networkProxy` uses workspace-style filesystem access for the generated
 permission profile: Codex managed network enforcement is sandboxed
 networking, so a full-access profile would not protect outbound traffic.
-Domain entries use `allow` or `deny`; Unix socket entries use Codex's
-`allow` or `none` values.
+Domain entries use `allow` or `deny`. Unix socket entries use `allow` or `none`;
+OpenClaw translates `none` to Codex's native `deny` permission.

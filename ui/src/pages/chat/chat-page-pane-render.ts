@@ -3,11 +3,13 @@ import { keyed } from "lit/directives/keyed.js";
 import "../../components/resizable-divider.ts";
 import { repeat } from "lit/directives/repeat.js";
 import type { ApplicationContext } from "../../app/context.ts";
+import { readDeletedSessionStartup } from "../../app/deleted-session-startup.ts";
 import { t } from "../../i18n/index.ts";
 import type { BoardFace } from "../../lib/board/settings.ts";
 import { resolveSessionDisplayName } from "../../lib/session-display.ts";
 import { resolveSessionKey } from "../../lib/sessions/index.ts";
 import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
+import type { DropIndicator } from "./chat-page-drop-indicator.ts";
 import type { PaneSessionChangeOptions } from "./chat-pane-shared.ts";
 import type { RouteDraftComposerFocus } from "./route-draft-focus-handoff.ts";
 import { routeDraft } from "./route-draft.ts";
@@ -90,6 +92,20 @@ export function renderChatPagePaneCell(options: ChatPagePaneRenderOptions) {
             resolvedKey,
             sessions.find((row) => areUiSessionKeysEquivalent(row.key, resolvedKey)),
           );
+          if (options.context && readDeletedSessionStartup(options.context, sessionKey)) {
+            return keyed(
+              sessionKey,
+              html`<openclaw-pending-session-create
+                class="chat-pane-cache__pane ${visible ? "chat-pane-cache__pane--visible" : ""}
+                ${active ? "chat-pane-cache__pane--active" : ""}
+                ${options.splitMode ? "chat-split-view__pane" : ""}"
+                aria-hidden=${String(!presented)}
+                ?inert=${!presented}
+                .context=${options.context}
+                .sessionKey=${sessionKey}
+              ></openclaw-pending-session-create>`,
+            );
+          }
           return keyed(
             sessionKey,
             html`<openclaw-chat-pane
@@ -221,4 +237,41 @@ export function renderChatPageSplitLayout(
       )}
     </div>
   `;
+}
+
+export function renderChatPageBody(content: unknown, indicator: DropIndicator | null) {
+  return html`<div class="chat-split-view__drop-container">
+    ${content}${
+      indicator
+        ? html`<div
+            class="chat-split-view__drop-indicator ${
+              indicator.zone.kind === "center" ? "chat-split-view__drop-indicator--center" : ""
+            }"
+            style=${`left: ${indicator.rect.left}px; top: ${indicator.rect.top}px; width: ${indicator.rect.width}px; height: ${indicator.rect.height}px;`}
+          >
+            <span class="chat-split-view__drop-indicator-label"
+              >${
+                indicator.zone.kind === "center"
+                  ? t("chat.splitView.dropOpenHere")
+                  : t("chat.splitView.dropSplit")
+              }</span
+            >
+          </div>`
+        : nothing
+    }
+  </div>`;
+}
+
+export function renderPendingChatPage(
+  context: ApplicationContext,
+  sessionKey: string,
+  presented: boolean,
+) {
+  if (!presented) {
+    return nothing;
+  }
+  return html`<openclaw-pending-session-create
+    .context=${context}
+    .sessionKey=${sessionKey}
+  ></openclaw-pending-session-create>`;
 }

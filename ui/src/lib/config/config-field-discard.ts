@@ -14,6 +14,7 @@ import {
 export function createConfigFieldDiscard(options: {
   state: RuntimeConfigState;
   serialize: (task: () => Promise<boolean>) => Promise<boolean>;
+  run: <T>(task: () => Promise<T>, loadKey: "config") => Promise<T>;
   holdAutoSave: () => (resume: boolean) => void;
   isDisposed: () => boolean;
   publish: () => void;
@@ -66,7 +67,7 @@ export function createConfigFieldDiscard(options: {
       try {
         discarded = await options.serialize(async () => {
           const submitted = lastSubmission;
-          if (!current() || !(await loadConfig(state)) || !current()) {
+          if (!current() || !(await options.run(() => loadConfig(state), "config")) || !current()) {
             return false;
           }
           if (state.configRecoveryError !== null) {

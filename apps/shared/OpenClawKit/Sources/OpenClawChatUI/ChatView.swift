@@ -602,8 +602,8 @@ public struct OpenClawChatView: View {
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
 
-        if self.displayOptions.contains(.toolActivity), !self.viewModel.pendingToolCalls.isEmpty {
-            ChatPendingToolsBubble(toolCalls: self.viewModel.pendingToolCalls)
+        if self.displayOptions.contains(.toolActivity), !self.viewModel.toolActivities.isEmpty {
+            ChatPendingToolsBubble(toolCalls: self.viewModel.toolActivities)
                 .equatable()
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
@@ -1262,7 +1262,10 @@ extension OpenClawChatView {
                 phase: last.phase,
                 turnBoundary: last.turnBoundary,
                 steerTargetRunID: last.steerTargetRunID,
-                streamFallback: last.streamFallback)
+                streamFallback: last.streamFallback,
+                activity: message.activity.map { terminal in
+                    (last.activity ?? []).filter { $0.toolCallId != toolCallId } + terminal
+                } ?? last.activity)
             result[result.count - 1] = merged
         }
 

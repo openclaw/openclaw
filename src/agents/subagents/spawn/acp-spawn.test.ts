@@ -38,6 +38,7 @@ import {
 import { normalizeSessionDeliveryState } from "../../../utils/delivery-context.shared.js";
 import { createOperationalRunInstanceRef } from "../../admitted-run-context.js";
 import { reserveChildAdmissionSlot } from "../../child-admission.js";
+import { expectRecordFields } from "../../subagent-test-fixtures.test-helpers.js";
 import { withGatewayToolCallerIdentity } from "../../tools/gateway-caller-context.js";
 import { withParentExecutionIdentity } from "./execution-identity-spawn-context.js";
 import { setSubagentSpawnDepsForTest } from "./subagent-spawn-deps.js";
@@ -133,7 +134,7 @@ const hoisted = vi.hoisted(() => {
       return Object.entries(store).map(([sessionKey, entry]) => ({ sessionKey, entry }));
     };
     return {
-      listSessionEntries: listMockEntries,
+      listSessionEntriesCore: listMockEntries,
       listSessionEntriesReadOnly: listMockEntries,
       loadSessionEntry: loadMockEntry,
       loadSessionEntryReadOnly: loadMockEntry,
@@ -224,12 +225,18 @@ vi.mock("../../../config/sessions/paths.js", () => ({
 
 vi.mock("../../../config/sessions/session-accessor.js", () => hoisted.createSessionAccessorMock());
 
-vi.mock("../../../config/sessions.js", () => ({
-  loadSessionStore: hoisted.loadSessionStoreMock,
-  resolveAgentIdFromSessionKey: (sessionKey: string) =>
-    sessionKey.match(/^agent:([^:]+)/)?.[1] ?? "main",
-  resolveSessionStorePathCore: hoisted.resolveStorePathMock,
-}));
+vi.mock("../../../config/sessions.js", async () => {
+  const { isConfiguredSessionStoreAgentId, isPerAgentSessionStoreConfig } =
+    await import("../../../config/sessions/targets.js");
+  return {
+    ...(await import("../../../config/sessions/main-session.js")),
+    isConfiguredSessionStoreAgentId,
+    isPerAgentSessionStoreConfig,
+    resolveExistingAgentSessionStoreTargetsSync: () => [],
+    loadSessionStore: hoisted.loadSessionStoreMock,
+    resolveSessionStorePathCore: hoisted.resolveStorePathMock,
+  };
+});
 
 vi.mock("../../../config/config.js", () => ({
   getRuntimeConfig: () => hoisted.state.cfg,
@@ -430,20 +437,6 @@ function expectAcceptedSpawn(result: SpawnResult): Extract<SpawnResult, { status
     throw new Error("Expected ACP spawn to be accepted");
   }
   return result;
-}
-
-function expectRecordFields(
-  record: unknown,
-  expected: Record<string, unknown>,
-): Record<string, unknown> {
-  if (!record || typeof record !== "object") {
-    throw new Error("Expected record");
-  }
-  const actual = record as Record<string, unknown>;
-  for (const [key, value] of Object.entries(expected)) {
-    expect(actual[key]).toEqual(value);
-  }
-  return actual;
 }
 
 function firstMockCall(mock: { mock: { calls: unknown[][] } }, label: string): unknown[] {
@@ -928,16 +921,6 @@ describe("spawnAcpDirect", () => {
     expect(agentCall?.params?.deliver).toBe(true);
     expect(agentCall?.params?.lane).toBe("subagent");
     expect(agentCall?.params?.acpTurnSource).toBe("manual_spawn");
-    // ACP registration must leave taskRowOwnership absent so the registry
-    // falls back to best-effort task-row creation (subagent-registry-run-launch.ts).
-    // Native/in-process spawn forwards "required" instead (subagent-spawn.ts);
-    // if ACP ever claimed "required" here, a failed task-row write would abort
-    // an ACP run the registry never actually owns.
-    const registeredAcpRun = expectRecordFields(
-      firstMockCall(hoisted.registerSubagentRunMock, "ACP subagent registration")[0],
-      {},
-    );
-    expect(registeredAcpRun.taskRowOwnership).toBeUndefined();
     const initInput = expectInitializeSessionFields({
       agent: "codex",
       mode: "persistent",

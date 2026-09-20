@@ -19,16 +19,13 @@ import {
 } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { normalizeAgentId } from "openclaw/plugin-sdk/routing";
 import { createPluginRuntimeStore } from "openclaw/plugin-sdk/runtime-store";
-import {
-  borrowOpenClawAgentDatabase,
-  withOpenClawAgentDatabaseWrite,
-} from "openclaw/plugin-sdk/sqlite-runtime";
+import { withOpenClawAgentDatabaseWrite } from "openclaw/plugin-sdk/sqlite-runtime";
 import { runInMemoryBackgroundContext } from "./background-context.js";
 import type { MemoryCoreAcquireLocalService } from "./embedding-local-service.js";
 import type { EmbeddingProvider, EmbeddingProviderRequest } from "./embeddings.js";
 import { getMemoryManagerLifecycle } from "./lifecycle.js";
 import { MemoryIndexDatabase } from "./manager-database-context.js";
-import { memoryDatabaseTableExists, openMemoryDatabaseReadOnlyAtPath } from "./manager-db.js";
+import { memoryDatabaseTableExists } from "./manager-db-kernel.js";
 import {
   resolveEffectiveMemorySearchSettings,
   resolveMemoryEmbeddingProviderRequirement,
@@ -249,24 +246,17 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
     for (const memorySource of effectiveSettings.sources) {
       this.sources.add(memorySource);
     }
-    const vectorEnabled = effectiveSettings.store.vector.enabled;
     const readOnly = this.purpose === "status";
     if (source && (!source.publishedDatabase.db.isOpen || this.purpose !== "maintenance")) {
       throw new Error("Memory maintenance source connection is unavailable");
     }
-    const connection = readOnly
-      ? openMemoryDatabaseReadOnlyAtPath(dbPath, vectorEnabled, this.agentId)
-      : borrowOpenClawAgentDatabase(params.databaseOptions);
-    if (source && connection.db !== source.publishedDatabase.db) {
-      connection.release();
-      throw new Error("Memory maintenance source connection changed");
-    }
-    this.publishedDatabase = new MemoryIndexDatabase(
-      connection.db,
-      connection.release,
+    this.publishedDatabase = MemoryIndexDatabase.openPublished({
+      agentId: this.agentId,
+      writeOptions: params.databaseOptions,
       readOnly,
-      params.databaseOptions,
-    );
+      allowExtension: effectiveSettings.store.vector.enabled,
+      maintenanceSource: source?.publishedDatabase,
+    });
     try {
       this.providerKey = this.computeProviderKey();
       this.cache = {
@@ -694,10 +684,6 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
     this.closed = true;
     const pendingProviderInit = this.providerInitPromise;
     const pendingFallbackInit = this.getPendingFallbackProviderInitialization();
-    if (this.watchTimer) {
-      clearTimeout(this.watchTimer);
-      this.watchTimer = null;
-    }
     if (this.sessionWatchTimer) {
       clearTimeout(this.sessionWatchTimer);
       this.sessionWatchTimer = null;
@@ -706,15 +692,7 @@ export class MemoryIndexManager extends MemorySearchOrchestration implements Mem
       clearInterval(this.intervalTimer);
       this.intervalTimer = null;
     }
-    if (this.memoryWatchPressureStartupTimer) {
-      clearTimeout(this.memoryWatchPressureStartupTimer);
-      this.memoryWatchPressureStartupTimer = null;
-    }
-    if (this.watcher) {
-      await this.watcher.close();
-      this.watcher = null;
-    }
-    this.closeNativeMemoryWatchPairs();
+    await this.closeMemoryWatcher();
     if (this.sessionUnsubscribe) {
       this.sessionUnsubscribe();
       this.sessionUnsubscribe = null;

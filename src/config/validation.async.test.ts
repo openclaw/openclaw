@@ -4,10 +4,10 @@ import type { PluginManifestRegistry } from "../plugins/manifest-registry.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import type { OpenClawConfig } from "./types.js";
 import {
-  type PreparedConfigValidationPluginMetadata,
   validateConfigObjectWithPlugins,
   validateConfigObjectWithPluginsAsync,
 } from "./validation.js";
+import type { PreparedConfigValidationPluginMetadata } from "./validation.types.js";
 
 const env = {
   HOME: "/fixture/home",

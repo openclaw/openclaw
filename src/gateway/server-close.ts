@@ -9,6 +9,7 @@ import { closePreparedModelRuntimeSnapshots } from "../agents/prepared-model-run
 import { fenceSessionSuspensionWritesForGatewayShutdown } from "../agents/session-suspension.js";
 import { closeSwarmScheduler } from "../agents/subagents/swarm/swarm-scheduler.js";
 import { type ChannelId, listChannelPlugins } from "../channels/plugins/index.js";
+import { closeSessionTranscriptReconcileWorkerPool } from "../config/sessions/session-transcript-reconcile-pool.js";
 import { createInternalHookEvent, triggerInternalHook } from "../hooks/internal-hooks.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import type { HeartbeatRunner } from "../infra/heartbeat-runner.js";
@@ -21,6 +22,7 @@ import { getCanonicalGatewayContextResolver } from "../plugins/runtime/gateway-r
 import type { PluginServicesHandle } from "../plugins/services.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { drainGlobalSingletonLifecycleState } from "../shared/global-singleton.js";
+import { closeOpenClawAgentDatabasesAsync } from "../state/openclaw-agent-db-lifecycle.js";
 import {
   collectGatewayProcessMemoryUsageMb,
   markGatewayRestartTrace,
@@ -480,6 +482,7 @@ export async function completeGatewayClose(
       clearInterval(params.maintenance.worktreeCleanup);
       params.maintenance.skillUsageCleanup();
     }
+    await shutdownStep("telemetry", () => params.maintenance?.stopTelemetryChecks(), warnings);
     await shutdownStep(
       "session-cold-storage",
       () => params.maintenance?.stopSessionColdStorageMaintenance(),
@@ -651,7 +654,10 @@ export async function completeGatewayClose(
         return params.pluginMetadata.close(async (retire) => {
           await closeSwarmScheduler().catch(recordResourceCleanupFailure);
           await closePreparedModelRuntimeSnapshots();
+          await closeSessionTranscriptReconcileWorkerPool();
           await retire();
+          // Releasing agent leases still writes shared state; keep its owner alive until then.
+          await closeOpenClawAgentDatabasesAsync();
           if (mediaCleanupStopResult !== undefined) {
             await closePluginStateDatabaseAsync();
           }

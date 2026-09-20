@@ -20,7 +20,7 @@ import {
   buildCapabilityProviderIndex,
   normalizeCapabilityProviderId,
 } from "../plugins/provider-registry-shared.js";
-import { getProviderEnvVars } from "../secrets/provider-env-vars.js";
+import { getProviderEnvVarsCore } from "../secrets/provider-env-vars.js";
 import { resolveImageGenerationMaxInputImages } from "./capabilities.js";
 import { resolveImageGenerationOverrides } from "./normalization.js";
 import type { GenerateImageParams, GenerateImageRuntimeResult } from "./runtime-types.js";
@@ -34,7 +34,7 @@ const log = createSubsystemLogger("image-generation");
 type ImageGenerationRuntimeDeps = {
   getProvider?: typeof getImageGenerationProvider;
   listProviders?: typeof listImageGenerationProviders;
-  getProviderEnvVars?: typeof getProviderEnvVars;
+  getProviderEnvVars?: typeof getProviderEnvVarsCore;
   log?: Pick<typeof log, "warn">;
 };
 

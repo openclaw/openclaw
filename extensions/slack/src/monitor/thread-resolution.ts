@@ -1,4 +1,3 @@
-// Slack plugin module implements thread resolution behavior.
 import {
   type WebClient as SlackWebClient,
   WebAPIHTTPError,

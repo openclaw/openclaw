@@ -287,6 +287,7 @@ export async function runCliFallbackCandidate(
               ),
             ]);
           },
+          onItemEvent: turn.opts?.onItemEvent,
           onCommentaryText:
             bridgeCliPreambleProgress || bridgeCliDurableCommentary
               ? async (payload) => {
@@ -404,7 +405,7 @@ export async function runCliFallbackCandidate(
             ...(turn.isHeartbeat ? { requireExplicitMessageTarget: true } : {}),
             cleanupBundleMcpOnRunEnd: turn.opts?.cleanupBundleMcpOnRunEnd,
             silentReplyPromptMode: turn.followupRun.run.silentReplyPromptMode,
-            allowEmptyAssistantReplyAsSilent: turn.followupRun.run.allowEmptyAssistantReplyAsSilent,
+            terminalReplyExpectation: turn.followupRun.run.terminalReplyExpectation,
             extraSystemPromptStatic: turn.followupRun.run.extraSystemPromptStatic,
             cliSessionBindingFacts: turn.followupRun.run.cliSessionBindingFacts,
             ownerNumbers: turn.followupRun.run.ownerNumbers,
@@ -499,6 +500,7 @@ export async function runCliFallbackCandidate(
       {
         preparedRunAdmission: params.preparedRunAdmission,
         lifecycleGeneration: params.lifecycleGeneration,
+        isFinalFallbackAttempt: params.isFinalFallbackAttempt,
         abortSignal: params.runAbortSignal,
         trigger: turn.isHeartbeat ? "heartbeat" : "user",
         inputProvenance: turn.followupRun.run.inputProvenance,

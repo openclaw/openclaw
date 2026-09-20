@@ -1,4 +1,3 @@
-// Slack plugin module implements prepare thread context root behavior.
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 
 type SlackBotAuthorIdentity = {

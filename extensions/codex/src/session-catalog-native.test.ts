@@ -1,17 +1,18 @@
 import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import { CodexAppServerClient } from "./app-server/client.js";
 import { createCodexNativeTestState } from "./app-server/native-app-server.test-support.js";
 import type { CodexThreadListResponse } from "./app-server/protocol.js";
 import { CODEX_APP_SERVER_VERSION } from "./app-server/version.js";
+import { observeCodexCatalogClient } from "./session-catalog-events.js";
 import {
   commandRpcMocks,
   createCodexSessionCatalogControlFactory,
 } from "./session-catalog.test-helpers.js";
 
-it("pages and refreshes exact-millisecond ties through the real native app-server", async () => {
+it("keeps exact-millisecond ties resident and applies real native title notifications", async () => {
   const root = await fs.realpath(process.env.OPENCLAW_STATE_DIR!);
   const state = await createCodexNativeTestState(root);
   const directory = path.join(state.codexHome, "sessions", "2025", "01", "01");
@@ -48,7 +49,7 @@ it("pages and refreshes exact-millisecond ties through the real native app-serve
         .map((row) => JSON.stringify(row))
         .join("\n") + "\n",
     );
-    // Historical mtimes survive native repair; one newer row establishes its high-water mark.
+    // One newer row precedes the otherwise tied native inventory.
     const mtime = i === 0 ? 1_789_520_400 : 1_735_689_600;
     await fs.utimes(file, mtime, mtime);
   }
@@ -73,21 +74,25 @@ it("pages and refreshes exact-millisecond ties through the real native app-serve
       async (_plugin, method, request, options) => {
         expect(method).toBe("thread/list");
         const response = await client.request<CodexThreadListResponse>(method, request, {
-          catalogListKey: options.catalogListKey,
+          catalogPreview: options.catalogPreview,
           timeoutMs: 10_000,
         });
         batches.push(response.data.map((row) => row.id));
         return response;
       },
     );
-    let now = 1_000;
     const factory = createCodexSessionCatalogControlFactory({
       env: state.env,
       getPluginConfig: () => ({ supervision: { enabled: true } }),
       getRuntimeConfig: () => undefined,
-      now: () => now,
     });
-    const control = factory.forRequest("main", (await factory.homesForAgent("main"))[0]);
+    const source = (await factory.homesForAgent("main"))[0]!;
+    await observeCodexCatalogClient(client, {
+      startOptions: source.appServer.start,
+      agentDir: source.agentDir,
+    });
+    const control = factory.forRequest("main", source);
+    await control.initialize();
     const first = await control.listPage({ limit: 100 });
     const second = await control.listPage({ limit: 100, cursor: first.nextCursor });
     expect(first.sessions).toHaveLength(64);
@@ -96,47 +101,33 @@ it("pages and refreshes exact-millisecond ties through the real native app-serve
       ids.toSorted(),
     );
 
+    expect(batches.map((batch) => batch.length)).toEqual([64, 17]);
+    batches.length = 0;
     await client.request("thread/name/set", { threadId: ids[0], name: "Changed catalog head" });
-    now += 32_001;
-    batches.length = 0;
-    const refreshed = await control.listPage({ limit: 100 });
-    expect(refreshed.sessions[0]).toMatchObject({ threadId: ids[0], name: "Changed catalog head" });
-    expect(batches.map((batch) => batch.length)).toEqual([1, 64, 17]);
-    const remaining = await control.listPage({ limit: 100, cursor: refreshed.nextCursor });
-    expect(
-      [...refreshed.sessions, ...remaining.sessions].map((row) => row.threadId).toSorted(),
-    ).toEqual(ids.toSorted());
-
-    now += 32_001;
-    batches.length = 0;
-    await control.listPage({ limit: 100 });
-    expect(batches.map((batch) => batch.length)).toEqual([1]);
+    await vi.waitFor(async () => {
+      expect((await control.listPage({ limit: 100 })).sessions[0]).toMatchObject({
+        threadId: ids[0],
+        name: "Changed catalog head",
+      });
+    });
 
     const tail = second.sessions[0];
     if (!tail) {
       throw new Error("expected tied tail page");
     }
     await client.request("thread/name/set", { threadId: tail.threadId, name: "Changed tied tail" });
-    for (let i = 0; i < 8; i++) {
-      now += 32_001;
-      await control.listPage({ limit: 100 });
-    }
-    now += 32_001;
-    batches.length = 0;
-    const headAfterOverlap = await control.listPage({ limit: 100 });
-    expect(batches.map((batch) => batch.length)).toEqual([64, 17]);
-    const tailAfterOverlap = await control.listPage({
-      limit: 100,
-      cursor: headAfterOverlap.nextCursor,
+    await vi.waitFor(async () => {
+      const current = await control.listPage({ limit: 100, cursor: first.nextCursor });
+      expect(current.sessions.find((row) => row.threadId === tail.threadId)?.name).toBe(
+        "Changed tied tail",
+      );
     });
-    expect(tailAfterOverlap.sessions.find((row) => row.threadId === tail.threadId)?.name).toBe(
-      "Changed tied tail",
+    const current = await control.listPage({ limit: 100 });
+    const remaining = await control.listPage({ limit: 100, cursor: current.nextCursor });
+    expect([...current.sessions, ...remaining.sessions].map((row) => row.threadId)).toEqual(
+      [...first.sessions, ...second.sessions].map((row) => row.threadId),
     );
-    expect(
-      [...headAfterOverlap.sessions, ...tailAfterOverlap.sessions]
-        .map((row) => row.threadId)
-        .toSorted(),
-    ).toEqual(ids.toSorted());
+    expect(batches).toEqual([]);
   } finally {
     await client.closeAndWait();
   }

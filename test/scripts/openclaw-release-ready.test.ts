@@ -138,12 +138,14 @@ describe("release readiness contract", () => {
       inputs({
         tag,
         npm_dist_tag: channel,
+        stable_soak_waiver: "Operator accepted missing soak",
         publish_openclaw_npm: true,
         publish_docker_only: false,
       }),
     );
     expect(value).toEqual({
       ...inputs({ tag, npm_dist_tag: channel }),
+      stable_soak_waiver: "Operator accepted missing soak",
       plugin_publish_scope: "all-publishable",
       publish_openclaw_npm: "true",
       publish_docker_only: "false",

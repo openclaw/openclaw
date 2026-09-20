@@ -11,7 +11,7 @@ import {
   DEFAULT_WEB_PUSH_VAPID_SUBJECT,
   type VapidKeyPair,
   type WebPushSubscription,
-} from "./push-web-store.js";
+} from "./push-web-store.records.js";
 import { assertAllowedJsonFields } from "./state-migrations.json-fields.js";
 
 const SUBSCRIPTION_STORE_KEYS = new Set(["subscriptionsByEndpointHash"]);

@@ -1,7 +1,6 @@
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { Worker } from "node:worker_threads";
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import * as sqlite from "../../infra/node-sqlite.js";
@@ -22,8 +21,14 @@ import {
   waitForSessionTranscriptIndexReconcilesInStateDir,
   waitForSessionTranscriptProjection,
 } from "./session-transcript-reconcile.js";
+import { useReconcileWorkerObserver } from "./session-transcript-reconcile.test-support.js";
 import type { SessionTranscriptReconcileWorkerInput } from "./session-transcript-reconcile.worker.js";
 
+vi.mock("node:worker_threads", async () =>
+  (await import("./session-transcript-reconcile.test-support.js")).createObservedWorkerThreads(),
+);
+
+const observer = useReconcileWorkerObserver();
 const roots: string[] = [];
 const realOpen = sqlite.openNodeSqliteDatabase;
 
@@ -112,19 +117,10 @@ it.each(["direct", "deferred"] as const)(
     roots.push(nextRoot);
     const original = { ...options, env: { ...options.env } };
     const inputs: SessionTranscriptReconcileWorkerInput[] = [];
-    const params = {
-      ...options,
-      createWorker: (
-        filename: string | URL,
-        workerOptions: import("node:worker_threads").WorkerOptions,
-      ) => {
-        inputs.push(workerOptions.workerData as SessionTranscriptReconcileWorkerInput);
-        return new Worker(filename, workerOptions);
-      },
-    };
-    const task = mode === "direct" ? reconcileSessionTranscriptIndexes(params) : undefined;
+    observer.onTask = ({ input }) => inputs.push(input);
+    const task = mode === "direct" ? reconcileSessionTranscriptIndexes(options) : undefined;
     if (mode === "deferred") {
-      startSessionTranscriptIndexReconcile(params);
+      startSessionTranscriptIndexReconcile(options);
     }
     options.env.OPENCLAW_STATE_DIR = nextRoot;
     if (task) {

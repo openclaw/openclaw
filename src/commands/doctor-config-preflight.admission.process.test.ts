@@ -6,7 +6,7 @@ import { DatabaseSync } from "node:sqlite";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { gunzipSync } from "node:zlib";
 import { afterAll, describe, expect, it } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { createFixtureLifetime } from "../../test/helpers/fixture-lifetime.js";
 import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { repairAuditEventsSchema } from "../state/openclaw-state-db-audit-migration.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contract.js";
@@ -17,7 +17,8 @@ import {
 } from "./doctor-config-preflight.process.test-support.js";
 import { doctorConfigRuntimeEntrypoints } from "./doctor-config-runtime.test-support.js";
 
-const tempDirs = useAutoCleanupTempDirTracker(afterAll);
+const tempDirs = createFixtureLifetime();
+afterAll(() => tempDirs.cleanup());
 
 function manifest(root: string): Record<string, string> {
   // Coordinator locks under tmp/ are lifecycle scratch, not persisted operator state.
@@ -41,7 +42,7 @@ function manifest(root: string): Record<string, string> {
 
 function schemaMetadata(databasePath: string) {
   // Inspect a private copy: opening a consolidated WAL database can itself create a WAL.
-  const root = tempDirs.make("openclaw-admission-schema-");
+  const root = tempDirs.createTempDir("openclaw-admission-schema-");
   const copy = path.join(root, "database.sqlite");
   for (const suffix of ["", "-wal", "-shm"]) {
     if (fs.existsSync(`${databasePath}${suffix}`)) {
@@ -147,7 +148,7 @@ describe("startup admission before persistent writes", () => {
     },
   ])(
     "admits or preserves shipped state for $name",
-    ({
+    async ({
       workspace,
       repairable,
       config,
@@ -158,7 +159,7 @@ describe("startup admission before persistent writes", () => {
       repairedSession,
       restored,
     }) => {
-      const root = fs.realpathSync(tempDirs.make("openclaw-startup-admission-"));
+      const root = fs.realpathSync(tempDirs.createTempDir("openclaw-startup-admission-"));
       const preparedPreflightUrl = resolveRuntimeWorkerUrl(
         doctorConfigRuntimeEntrypoints.preflight,
       );
@@ -287,24 +288,25 @@ describe("startup admission before persistent writes", () => {
           throw new Error("Discarded clobbered config environment leaked through admission.");
         }
       `;
-        const result = runSourceRuntime(
-          runtimeRoot,
-          {
-            PATH: process.env.PATH,
-            HOME: root,
-            USERPROFILE: root,
-            OPENCLAW_STATE_DIR: stateDir,
-            OPENCLAW_CONFIG_PATH: configPath,
-            OPENCLAW_WORKSPACE_DIR:
-              config === "clobbered" ? path.join(stateDir, "empty-workspace") : workspaceDir,
-            OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
-            OPENCLAW_BUNDLED_PLUGINS_DIR: path.join(root, "bundled"),
-            NO_COLOR: "1",
-          },
-          [
-            "--input-type=module",
-            "--eval",
-            `
+        const result = await tempDirs.track(
+          runSourceRuntime(
+            runtimeRoot,
+            {
+              PATH: process.env.PATH,
+              HOME: root,
+              USERPROFILE: root,
+              OPENCLAW_STATE_DIR: stateDir,
+              OPENCLAW_CONFIG_PATH: configPath,
+              OPENCLAW_WORKSPACE_DIR:
+                config === "clobbered" ? path.join(stateDir, "empty-workspace") : workspaceDir,
+              OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1",
+              OPENCLAW_BUNDLED_PLUGINS_DIR: path.join(root, "bundled"),
+              NO_COLOR: "1",
+            },
+            [
+              "--input-type=module",
+              "--eval",
+              `
         try {
           ${entry}
         } catch (error) {
@@ -312,12 +314,12 @@ describe("startup admission before persistent writes", () => {
           process.exitCode = typeof error.code === "number" ? error.code : 1;
         }
       `,
-          ],
-          60_000,
+            ],
+            60_000,
+          ),
         );
         const output = `${result.stdout}\n${result.stderr}`;
-        expect(result.error, output).toBeUndefined();
-        expect(result.status, output).toBe(restored || unavailablePlugin ? 0 : 78);
+        expect(result.code, output).toBe(restored || unavailablePlugin ? 0 : 78);
         expect(output).toContain(reason);
         if (restored) {
           expect(fs.readFileSync(configPath, "utf8")).toBe(

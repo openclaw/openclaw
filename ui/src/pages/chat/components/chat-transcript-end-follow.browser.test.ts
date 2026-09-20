@@ -180,6 +180,32 @@ it("keeps a reader observed at the end pinned when a row grows without a follow"
   expect(host.transcript.isProgrammaticScroll).toBe(false);
 });
 
+it.each([
+  { deltaY: 120, follows: true },
+  { deltaY: -120, follows: false },
+])(
+  "preserves wheel intent when content grows at the end ($deltaY)",
+  async ({ deltaY, follows }) => {
+    const { host, thread, sizer, row, dock, distance } = await mountEndFollowFixture();
+    host.transcript.scrollToEnd();
+    await expect.poll(distance).toBe(0);
+    await settleFrames();
+
+    await commitTask(host, () => {
+      thread.dispatchEvent(new WheelEvent("wheel", { deltaY }));
+      host.lastRowHeight += 200;
+    });
+    await expect.poll(() => sizer.offsetHeight).toBe(1500);
+    await settleFrames();
+    expect(distance()).toBe(follows ? 0 : 200);
+    if (follows) {
+      expect(row.getBoundingClientRect().bottom).toBeLessThanOrEqual(
+        dock.getBoundingClientRect().top,
+      );
+    }
+  },
+);
+
 it("does not turn a resize-clamped reader into permission to follow", async () => {
   const { host, thread, sizer, distance } = await mountEndFollowFixture();
   host.transcript.scrollToEnd();

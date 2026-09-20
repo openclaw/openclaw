@@ -44,6 +44,7 @@ export const OpenClawSchemaShape = {
       migrations: z
         .strictObject({
           modelPolicyAllowlist: z.literal(true).optional(),
+          utilityModelSeparation: z.literal(true).optional(),
         })
         .optional(),
     })

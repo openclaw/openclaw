@@ -303,8 +303,10 @@ export function renderToolOutcome(outcome: ToolCardOutcome, exitCode?: number) {
           ? t("chat.toolCards.running")
           : outcome === "succeeded"
             ? t("chat.toolCards.completed")
-            : null;
-  return label ? html`<div class="chat-tool-card__outcome">${label}</div>` : nothing;
+            : outcome === "blocked"
+              ? t("chat.toolCards.blocked")
+              : t("chat.toolCards.outcomeUnknown");
+  return html`<div class="chat-tool-card__outcome">${label}</div>`;
 }
 
 function renderTerminalBlock(command: string, output: string | undefined) {

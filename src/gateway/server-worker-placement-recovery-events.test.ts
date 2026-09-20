@@ -1,11 +1,26 @@
 import { describe, expect, it, vi } from "vitest";
+import { sessionChanges } from "../sessions/session-row-changes.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 
 const runtimeMocks = vi.hoisted(() => ({
   createDispatch: vi.fn(),
   createDiskSpace: vi.fn(),
   createSessionEvidenceResolver: vi.fn(),
+  publicationWarn: vi.fn(),
 }));
+
+vi.mock("../logging/subsystem.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../logging/subsystem.js")>();
+  return {
+    ...actual,
+    createSubsystemLogger: (...args: Parameters<typeof actual.createSubsystemLogger>) => {
+      const logger = actual.createSubsystemLogger(...args);
+      return args[0] === "gateway/session-events"
+        ? { ...logger, warn: runtimeMocks.publicationWarn }
+        : logger;
+    },
+  };
+});
 
 vi.mock("./worker-environments/placement-dispatch.js", async (importOriginal) => {
   const actual =
@@ -23,10 +38,7 @@ vi.mock("./server-worker-placement-session-evidence.js", () => ({
   createWorkerPlacementSessionEvidenceResolver: runtimeMocks.createSessionEvidenceResolver,
 }));
 
-import {
-  flushPendingSessionsChangedEvents,
-  readSessionsMutationVersion,
-} from "./server-methods/session-change-event.js";
+import { flushPendingSessionsChangedEvents } from "./server-methods/session-change-event.js";
 import { createGatewayWorkerPlacementRuntime } from "./server-worker-placement-startup.js";
 
 type RecoveryPlacement = {
@@ -72,6 +84,7 @@ async function withRecoveryRuntime(
       getRuntimeConfig: () => object;
       getSessionEventSubscriberConnIds: () => Set<string>;
     };
+    changes: ReturnType<typeof vi.fn>;
     environments: { start: ReturnType<typeof vi.fn> };
     listPlacements: ReturnType<typeof vi.fn>;
     placements: Map<string, RecoveryPlacement>;
@@ -84,6 +97,13 @@ async function withRecoveryRuntime(
 ): Promise<void> {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     vi.useFakeTimers();
+    runtimeMocks.publicationWarn.mockClear();
+    const changes = vi.fn();
+    const unsubscribeChanges = sessionChanges.subscribe((change) => {
+      if ("sessionKey" in change && change.sessionKey === "agent:main:move-source") {
+        changes(change);
+      }
+    });
     const placements = new Map<string, RecoveryPlacement>();
     if (options.placement) {
       placements.set(options.placement.sessionId, options.placement);
@@ -155,6 +175,7 @@ async function withRecoveryRuntime(
     try {
       await verify({
         context,
+        changes,
         environments,
         listPlacements,
         placements,
@@ -177,7 +198,8 @@ async function withRecoveryRuntime(
       });
     } finally {
       await sidecar.current?.stop();
-      flushPendingSessionsChangedEvents(context);
+      await flushPendingSessionsChangedEvents(context);
+      unsubscribeChanges();
       vi.useRealTimers();
     }
   });
@@ -188,7 +210,7 @@ describe("worker placement recovery session events", () => {
     const placement = recoveryPlacement();
     await withRecoveryRuntime(
       { placement },
-      async ({ context, placements, start, stop, catalogChanged }) => {
+      async ({ context, changes, placements, start, stop, catalogChanged }) => {
         placements.set("stale-session", {
           ...placement,
           sessionId: "stale-session",
@@ -196,21 +218,21 @@ describe("worker placement recovery session events", () => {
           activeOwnerEpoch: 2,
         });
         await start();
-        const initialVersion = readSessionsMutationVersion(context);
+        const initialVersion = changes.mock.calls.length;
         catalogChanged("other-profile");
-        expect(readSessionsMutationVersion(context)).toBe(initialVersion);
+        expect(changes.mock.calls.length).toBe(initialVersion);
         catalogChanged("development");
-        flushPendingSessionsChangedEvents(context);
+        await flushPendingSessionsChangedEvents(context);
         expect(context.broadcastToConnIds).toHaveBeenCalledExactlyOnceWith(
           "sessions.changed",
           expect.objectContaining({ reason: "placement", sessionKey: placement.sessionKey }),
           new Set(["session-observer"]),
           expect.objectContaining({ agentId: placement.agentId, dropIfSlow: true }),
         );
-        expect(readSessionsMutationVersion(context)).toBe(initialVersion + 1);
+        expect(changes.mock.calls.length).toBe(initialVersion + 1);
         await stop();
         catalogChanged("development");
-        expect(readSessionsMutationVersion(context)).toBe(initialVersion + 1);
+        expect(changes.mock.calls.length).toBe(initialVersion + 1);
       },
     );
   });
@@ -227,12 +249,12 @@ describe("worker placement recovery session events", () => {
           }
         },
       },
-      async ({ context, start }) => {
-        const initialMutationVersion = readSessionsMutationVersion(context);
+      async ({ context, changes, start }) => {
+        const initialMutationVersion = changes.mock.calls.length;
         await start();
         await vi.advanceTimersByTimeAsync(60_000);
         expect(context.broadcastToConnIds).not.toHaveBeenCalled();
-        expect(readSessionsMutationVersion(context)).toBe(initialMutationVersion);
+        expect(changes.mock.calls.length).toBe(initialMutationVersion);
 
         await vi.advanceTimersByTimeAsync(60_000);
 
@@ -246,7 +268,7 @@ describe("worker placement recovery session events", () => {
           new Set(["session-observer"]),
           expect.objectContaining({ agentId: recovered.agentId, dropIfSlow: true }),
         );
-        expect(readSessionsMutationVersion(context)).toBe(initialMutationVersion + 1);
+        expect(changes.mock.calls.length).toBe(initialMutationVersion + 1);
         expect(runtimeMocks.createDispatch.mock.lastCall?.[0]).not.toHaveProperty(
           "onRecoveredMoveTransition",
         );
@@ -271,7 +293,7 @@ describe("worker placement recovery session events", () => {
           placement: current,
           ...(method === "reconcile" ? { startup: transition } : { sweep: transition }),
         },
-        async ({ context, runtime }) => {
+        async ({ context, changes, runtime }) => {
           if (method === "reconcile") {
             await runtime.dispatchService.reconcile("startup");
           } else {
@@ -284,7 +306,7 @@ describe("worker placement recovery session events", () => {
             new Set(["session-observer"]),
             expect.objectContaining({ agentId: current.agentId }),
           );
-          expect(readSessionsMutationVersion(context)).toBe(1);
+          expect(changes.mock.calls.length).toBe(1);
         },
       );
     },
@@ -304,18 +326,21 @@ describe("worker placement recovery session events", () => {
     );
   });
 
-  it("advances the sessions list fence without connected subscribers", async () => {
+  it("publishes keyed row changes without connected subscribers", async () => {
     const recovered = recoveryPlacement();
     await withRecoveryRuntime(
       {
         hasSubscribers: false,
         sweep: (placements) => void placements.set(recovered.sessionId, recovered),
       },
-      async ({ context, listPlacements, runtime }) => {
+      async ({ context, changes, listPlacements, runtime }) => {
         await runtime.dispatchService.reconcileActive();
 
         expect(listPlacements).toHaveBeenCalledTimes(2);
-        expect(readSessionsMutationVersion(context)).toBe(1);
+        expect(changes).toHaveBeenCalledExactlyOnceWith({
+          sessionKey: recovered.sessionKey,
+          agentId: recovered.agentId,
+        });
         expect(context.broadcastToConnIds).not.toHaveBeenCalled();
       },
     );
@@ -332,10 +357,10 @@ describe("worker placement recovery session events", () => {
           throw reconcileError;
         },
       },
-      async ({ context, runtime }) => {
+      async ({ context, changes, runtime }) => {
         await expect(runtime.dispatchService.reconcileActive()).rejects.toBe(reconcileError);
         expect(context.broadcastToConnIds).toHaveBeenCalledOnce();
-        expect(readSessionsMutationVersion(context)).toBe(1);
+        expect(changes.mock.calls.length).toBe(1);
       },
     );
   });
@@ -388,10 +413,15 @@ describe("worker placement recovery session events", () => {
         },
         sweep: (placements) => void placements.set(recovered.sessionId, recovered),
       },
-      async ({ context, runtime, warn }) => {
+      async ({ context, runtime }) => {
         await expect(runtime.dispatchService.reconcileActive()).resolves.toBeUndefined();
         expect(context.broadcastToConnIds).toHaveBeenCalledOnce();
-        expect(warn).toHaveBeenCalledWith(expect.stringContaining("session broadcast failed"));
+        expect(runtimeMocks.publicationWarn).toHaveBeenCalledWith(
+          "Session change publication failed",
+          {
+            error: expect.objectContaining({ message: "session broadcast failed" }),
+          },
+        );
       },
     );
   });

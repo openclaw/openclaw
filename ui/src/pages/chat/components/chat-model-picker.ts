@@ -162,7 +162,12 @@ export function renderChatModelPicker(params: ChatModelPickerParams) {
       return;
     }
     void params
-      .onModelSelect(entry.commitValue, params.sessionKey, entry.runtimeOverride ?? null)
+      .onModelSelect(
+        entry.commitValue,
+        params.sessionKey,
+        entry.runtimeOverride ??
+          (entry.isDefault || entry.agentRuntime !== undefined ? null : undefined),
+      )
       .finally(() => params.onRequestUpdate?.());
     params.onRequestUpdate?.();
   };

@@ -8,6 +8,7 @@ import { augmentChatHistoryWithCanvasBlocks } from "../chat-display-projection.c
 import {
   projectChatDisplayMessagesWithState,
   createChatHistoryRecoveryProjection,
+  type ChatDisplayProjectionOptions,
 } from "../chat-display-projection.core.js";
 import {
   dropPreSessionStartAnnouncePairs,
@@ -40,6 +41,7 @@ export type ChatHistoryPageKernelOptions = {
   readOnly?: boolean;
   deferProfileDisplay?: boolean;
   resolveCurrentUserProfileDisplay?: CurrentUserProfileDisplayResolver;
+  resolveCronJobName?: ChatDisplayProjectionOptions["resolveCronJobName"];
   cliSessionId?: string;
   readCliTailPage?: (tail: ChatHistoryCliTail) => Promise<ChatHistoryPage>;
 };
@@ -308,8 +310,10 @@ export async function readChatHistoryPageKernel(
         );
     const project = (messages: unknown[]) =>
       projectChatDisplayMessagesWithState(messages, {
+        subagentCoordination: options.readers.subagentCoordination,
         includeCommentaryFallbacks: true,
         maxChars: effectiveMaxChars,
+        resolveCronJobName: options.resolveCronJobName,
         ...(options.deferProfileDisplay
           ? {}
           : { resolveCurrentUserProfileDisplay: options.resolveCurrentUserProfileDisplay }),
@@ -327,7 +331,10 @@ export async function readChatHistoryPageKernel(
       const recoveryContext = await readChatHistoryRecoveryContext({
         messages: localMessages,
         createRecovery: (messages) => {
-          const recovery = createChatHistoryRecoveryProjection({ maxChars: effectiveMaxChars });
+          const recovery = createChatHistoryRecoveryProjection({
+            maxChars: effectiveMaxChars,
+            subagentCoordination: options.readers.subagentCoordination,
+          });
           recovery.append(messages);
           return recovery;
         },
@@ -352,7 +359,10 @@ export async function readChatHistoryPageKernel(
       : projected;
     if (messageId) {
       // Numeric offsets do not encode the selected historical transcript source.
-      return { messages: augmentChatHistoryWithCanvasBlocks(windowed) };
+      return {
+        messages: augmentChatHistoryWithCanvasBlocks(windowed),
+        ...(projection.activity.length ? { activity: projection.activity } : {}),
+      };
     }
     return {
       ...(isTailPage
@@ -366,6 +376,7 @@ export async function readChatHistoryPageKernel(
           }
         : {}),
       messages: augmentChatHistoryWithCanvasBlocks(windowed),
+      ...(projection.activity.length ? { activity: projection.activity } : {}),
       responseOffset: pageOffset,
       pagination: {
         offset: pageOffset,
@@ -401,6 +412,9 @@ export async function readChatHistoryPageKernel(
         ? { deltaCursor: readPage.deltaCursor }
         : {}),
       messages: augmentChatHistoryWithCanvasBlocks(windowedTailMessages),
+      ...(incrementalTail.projection.activity.length
+        ? { activity: incrementalTail.projection.activity }
+        : {}),
       pagination: {
         offset: offset ?? 0,
         totalMessages: readPage.totalMessages,

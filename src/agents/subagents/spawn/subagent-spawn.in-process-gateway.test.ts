@@ -1,3 +1,4 @@
+import "./subagent-spawn-model.mocks.shared.js";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -44,6 +45,7 @@ import {
   resetDetachedTaskLifecycleRuntimeForTests,
   setDetachedTaskLifecycleRuntime,
 } from "../../../tasks/detached-task-runtime.test-support.js";
+import { findTaskByRunId } from "../../../tasks/runtime-internal.js";
 import { captureEnv, setTestEnvValue } from "../../../test-utils/env.js";
 import { cleanupSessionStateForTest } from "../../../test-utils/session-state-cleanup.js";
 import { createOperationalRunInstanceRef } from "../../admitted-run-context.js";
@@ -897,7 +899,7 @@ describe("spawnSubagentDirect in-process Gateway collector launch", () => {
             resolveGatewayAgentTaskTrackingMode({
               client,
               sessionKey: requestParams.sessionKey as string,
-              runId: requestParams.idempotencyKey as string,
+              existingTask: findTaskByRunId(requestParams.idempotencyKey as string),
             }),
           );
         }

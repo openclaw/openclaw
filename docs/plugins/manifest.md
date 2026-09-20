@@ -82,6 +82,7 @@ The anchors from the single-page version still resolve here.
 [Manifest capability fields](/plugins/manifest/capabilities) — Manifest capability ownership, tool availability metadata, and activation planning.
 
 - <a id="contracts-reference"></a>[`contracts`](/plugins/manifest/capabilities#contracts-reference)
+- [`decisionModels`](/plugins/manifest/capabilities#decision-models-reference)
 - <a id="tool-metadata-reference"></a>[`toolMetadata`](/plugins/manifest/capabilities#tool-metadata-reference)
 - <a id="activation-reference"></a>[`activation`](/plugins/manifest/capabilities#activation-reference)
 
@@ -94,6 +95,7 @@ The anchors from the single-page version still resolve here.
 - <a id="backupresources-reference"></a>[`backupResources`](/plugins/manifest/surfaces#backupresources-reference)
 - <a id="mcp-server-reference"></a>[`mcpServers`](/plugins/manifest/surfaces#mcp-server-reference)
 - <a id="controlui-reference"></a>[`controlUi`](/plugins/manifest/surfaces#controlui-reference)
+- [`themes`](/plugins/manifest/surfaces#themes)
 - <a id="dashboard-reference"></a>[`dashboard`](/plugins/manifest/surfaces#dashboard-reference)
 - <a id="catalog-reference"></a>[`catalog`](/plugins/manifest/surfaces#catalog-reference)
 - <a id="clicommands-reference"></a>[`cliCommands`](/plugins/manifest/surfaces#clicommands-reference)
@@ -250,6 +252,7 @@ The anchors from the single-page version still resolve here.
 | `qaRunners`                          | No       | `object[]`                   | Cheap QA runner descriptors used by the shared `openclaw qa` host before plugin runtime loads.                                                                                                                                                                                                                                                                                                   |
 | `dashboard`                          | No       | `object`                     | Dashboard widget data bindings and action verbs. Each entry is validated against a Gateway method registered by this plugin with the required read or write scope. See [dashboard reference](/plugins/manifest/surfaces#dashboard-reference).                                                                                                                                                    |
 | `mcpServers`                         | No       | `Record<string, object>`     | Static MCP server definitions contributed while this plugin is enabled. Relative command arguments and working directories resolve from the plugin root. Operator `mcp.servers` entries override or disable definitions with the same name. See [MCP server reference](/plugins/manifest/surfaces#mcp-server-reference).                                                                         |
+| `themes`                             | No       | `object[]`                   | Static theme IDs, names, descriptions, and plugin-relative JSON sources. Enabled plugins contribute to the shared settings and agent theme catalog; plugin reload refreshes palette edits without a Gateway restart. See [Themes](/plugins/manifest/surfaces#themes).                                                                                                                            |
 | `contracts`                          | No       | `object`                     | Static capability ownership snapshot for external auth hooks, embeddings, speech, realtime transcription, realtime voice, media-understanding, image/video/music generation, web fetch, web search, worker providers, document/web-content extraction, and tool ownership.                                                                                                                       |
 | `transcriptSources`                  | No       | `Record<string, object>`     | Static transcript source names and auto-start locator requirements for IDs declared in `contracts.transcriptSourceProviders`. See [Transcript sources reference](/plugins/manifest/surfaces#transcript-sources-reference).                                                                                                                                                                       |
 | `configContracts`                    | No       | `object`                     | Manifest-owned config behavior consumed by generic core helpers: dangerous-flag detection, SecretRef migration targets, and legacy config-path narrowing. See [configContracts reference](/plugins/manifest/config-and-secrets#configcontracts-reference).                                                                                                                                       |

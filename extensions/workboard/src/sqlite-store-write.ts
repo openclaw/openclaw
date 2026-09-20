@@ -3,7 +3,7 @@ import type { WorkboardCard } from "@openclaw/workboard-contract";
 import {
   compileSqliteQueryBindings,
   getNodeSqliteKysely,
-} from "openclaw/plugin-sdk/sqlite-runtime";
+} from "openclaw/plugin-sdk/sqlite-worker-runtime";
 import {
   jsonValue,
   type CARD_CHILD_TABLES,

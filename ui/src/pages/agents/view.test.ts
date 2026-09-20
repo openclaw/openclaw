@@ -15,6 +15,7 @@ import { createSkill } from "../skills/view.test-support.ts";
 import {
   createAgentViewTestProps as createProps,
   inertAgentFileControls,
+  primaryModelPicker,
 } from "./agents-view.test-helpers.ts";
 import { renderAgentChannels, renderAgentFiles } from "./panels-status-files.ts";
 import { renderAgents } from "./view.ts";
@@ -276,9 +277,8 @@ describe("renderAgents", () => {
     );
 
     await updatePickers(container);
-    const defaultSelect = container.querySelector("openclaw-select-picker.model-picker__select");
     expect(
-      defaultSelect
+      primaryModelPicker(container)
         ?.querySelector('[role="option"][aria-selected="true"]')
         ?.getAttribute("data-value"),
     ).toBe("openai/gpt-5.4");
@@ -300,10 +300,10 @@ describe("renderAgents", () => {
     );
 
     await updatePickers(container);
-    const inheritedSelect = container.querySelector("openclaw-select-picker.model-picker__select");
-    expect(
-      inheritedSelect?.querySelector('[role="option"][aria-selected="true"]')?.textContent?.trim(),
-    ).toBe("Inherit default (openai/gpt-5.4)");
+    const inheritedSelection = primaryModelPicker(container)?.querySelector(
+      '[role="option"][aria-selected="true"]',
+    );
+    expect(inheritedSelection?.textContent?.trim()).toBe("Inherit default (openai/gpt-5.4)");
   });
 
   it("shows canonical model names alongside configured aliases in agent options", async () => {
@@ -368,7 +368,7 @@ describe("renderAgents", () => {
     );
 
     await updatePickers(container);
-    const select = container.querySelector("openclaw-select-picker.model-picker__select");
+    const select = primaryModelPicker(container);
     expect(
       select?.querySelector('[role="option"][aria-selected="true"]')?.getAttribute("data-value"),
     ).toBe("anthropic/claude-opus-4-8");
@@ -456,7 +456,7 @@ describe("renderAgents", () => {
     );
 
     await updatePickers(container);
-    const betaSelect = container.querySelector("openclaw-select-picker.model-picker__select");
+    const betaSelect = primaryModelPicker(container);
     expect(
       betaSelect?.querySelector('[role="option"][data-value="openai/gpt-5.4"]'),
     ).not.toBeNull();
@@ -478,7 +478,7 @@ describe("renderAgents", () => {
     );
 
     await updatePickers(container);
-    const alphaSelect = container.querySelector("openclaw-select-picker.model-picker__select");
+    const alphaSelect = primaryModelPicker(container);
     expect(
       alphaSelect?.querySelector('[role="option"][data-value="anthropic/claude-sonnet-4-6"]'),
     ).not.toBeNull();

@@ -1,5 +1,6 @@
 import type { Message } from "grammy/types";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import type { SavedRemoteMedia } from "openclaw/plugin-sdk/media-runtime";
 import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { createOpenClawTestState, type OpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { afterAll, afterEach, beforeAll, beforeEach, vi } from "vitest";
@@ -116,9 +117,12 @@ beforeEach(() => {
   resetPluginStateStoreForTests({ closeDatabase: false });
   apiCalls.mockClear();
   setTelegramPluginStateRuntimeForTests();
-  saveRemoteMedia
-    .mockReset()
-    .mockResolvedValue({ path: "/tmp/replied-photo.jpg", contentType: "image/jpeg" });
+  saveRemoteMedia.mockReset().mockResolvedValue({
+    id: "replied-photo.jpg",
+    path: "/tmp/replied-photo.jpg",
+    size: 4,
+    contentType: "image/jpeg",
+  } satisfies SavedRemoteMedia);
 });
 
 afterEach(async () => {

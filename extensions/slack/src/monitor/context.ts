@@ -1,4 +1,3 @@
-// Slack plugin module implements context behavior.
 import type { App } from "@slack/bolt";
 import { formatAllowlistMatchMeta } from "openclaw/plugin-sdk/allow-from";
 import type { ChannelRuntimeSurface } from "openclaw/plugin-sdk/channel-contract";
@@ -348,12 +347,12 @@ function createSlackMonitorContextFields(params: CreateSlackMonitorContextParams
       runtime: params.runtime,
     });
     if (!updated.ok || p.status !== "processing" || !p.threadTs || p.title === undefined) {
-      return;
+      return updated.ok;
     }
     const title = truncateUtf16Safe(p.title, 200);
     // A user rename received while the status request was in flight wins.
     if (readLruMapEntry(sessionTitles, key) !== previousTitle) {
-      return;
+      return true;
     }
     // setStatus only names newly created sessions. Rename existing sessions once
     // per display-name change; inbound user renames update this same cache.
@@ -372,6 +371,7 @@ function createSlackMonitorContextFields(params: CreateSlackMonitorContextParams
         recordSlackSessionTitle({ ...p, threadTs: p.threadTs, title });
       }
     }
+    return true;
   };
 
   const setSlackSuggestedPrompts = (input: SlackSuggestedPromptsInput) =>

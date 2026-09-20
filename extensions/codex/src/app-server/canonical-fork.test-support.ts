@@ -346,10 +346,7 @@ export async function createCanonicalForkFixture(params: {
           startup?.turnRoute.release();
           startup?.releaseSharedClientLease();
           runAbortController.abort();
-          await preparedTools.disposeMcpTools();
-          for (const cleanup of preparedTools.runCleanups) {
-            await cleanup("fixture complete");
-          }
+          await preparedTools.disposeTools("fixture complete");
         }
       });
     } finally {

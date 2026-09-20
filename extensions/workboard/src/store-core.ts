@@ -394,7 +394,7 @@ export class WorkboardCoreStore extends WorkboardStoreRuntime {
       if (await this.store.hasCards(boardId)) {
         throw new Error("board still has cards; archive it or move/delete the cards first.");
       }
-      for (const entry of await this.subscriptionStore.entries()) {
+      for (const entry of await this.subscriptionStore.entries({ boardId })) {
         if (entry.value?.version === 1 && entry.value.subscription?.boardId === boardId) {
           await this.subscriptionStore.delete(entry.key);
         }

@@ -45,6 +45,7 @@ JSON output is the scripting surface:
 
 ```json
 {
+  "schemaVersion": 1,
   "ok": false,
   "checksRun": 5,
   "checksSkipped": 0,

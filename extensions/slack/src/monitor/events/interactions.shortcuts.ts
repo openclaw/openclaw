@@ -1,4 +1,3 @@
-// Slack plugin module implements shortcut interaction behavior.
 import type {
   AllMiddlewareArgs,
   GlobalShortcut,

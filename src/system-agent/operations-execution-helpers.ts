@@ -190,6 +190,22 @@ export function resolveTuiAgentId(params: {
   return match?.id ?? requested;
 }
 
+/** Utility inference can power setup without making an ordinary agent ready. */
+export function getRegularAgentSetupNotice(
+  overview: SystemAgentOverview,
+  agentId = overview.defaultAgentId,
+): string | undefined {
+  const requestedId = normalizeAgentId(agentId);
+  const isDefault = requestedId === normalizeAgentId(overview.defaultAgentId);
+  const agent = overview.agents.find((entry) => normalizeAgentId(entry.id) === requestedId);
+  const primaryModel = agent?.model ?? (isDefault ? overview.defaultModel : undefined);
+  const utilityModel = agent?.utilityModel ?? (isDefault ? overview.setupModel : undefined);
+  if (primaryModel || !utilityModel) {
+    return undefined;
+  }
+  return "Your setup and utility model is ready, but this agent needs a primary model. Choose one in Model Setup or run `openclaw onboard`; you can continue setup here in the meantime.";
+}
+
 export type ExecuteOptions = {
   approved?: boolean;
   /** Host-owned origin for team members; never supplied by model tool arguments. */
@@ -374,22 +390,23 @@ export async function executeSetup(
   opts: ExecuteOptions,
 ): Promise<SystemAgentOperationResult> {
   const overview = await loadOverviewForOperation(opts.deps);
-  const defaultModel = overview.defaultModel?.trim();
-  if (!defaultModel) {
+  const setupModel = (overview.defaultModel ?? overview.setupModel)?.trim();
+  const modelRole = overview.defaultModel ? "default" : "setup";
+  if (!setupModel) {
     throw new Error(
       "OpenClaw setup requires working inference first. Run `openclaw onboard` on the machine running OpenClaw to configure and verify a default model, then start OpenClaw again.",
     );
   }
   const requestedModel = operation.model?.trim();
-  if (requestedModel && requestedModel !== defaultModel) {
+  if (requestedModel && requestedModel !== setupModel) {
     throw new Error(
-      `OpenClaw setup will preserve the verified default model ${defaultModel}. Staging, live-testing, and saving a different inference route is \`openclaw onboard\` on the machine running OpenClaw.`,
+      `OpenClaw setup will preserve the verified ${modelRole} model ${setupModel}. Staging, live-testing, and saving a different inference route is \`openclaw onboard\` on the machine running OpenClaw.`,
     );
   }
   if (!opts.approved) {
     const message = [
       formatSystemAgentPersistentPlan(operation, opts.operatorApprovalOnly),
-      `Model choice: keep verified default ${defaultModel}.`,
+      `Model choice: keep verified ${modelRole} ${setupModel}.`,
     ].join("\n");
     runtime.log(message);
     return { applied: false, message };
@@ -443,7 +460,9 @@ export async function executeSetup(
       for (const line of applied.lines) {
         ctx.runtime.log(line);
       }
-      ctx.runtime.log(`Default model: ${verified.modelRef} (verified and kept)`);
+      ctx.runtime.log(
+        `${modelRole === "default" ? "Default" : "Setup"} model: ${verified.modelRef} (verified and kept)`,
+      );
       return {
         summary: "Bootstrapped setup workspace",
         bootstrapPending: applied.bootstrapPending,
@@ -451,7 +470,7 @@ export async function executeSetup(
         details: {
           workspace,
           model: verified.modelRef,
-          modelSource: "live-verified default model",
+          modelSource: `live-verified ${modelRole} model`,
           inferenceLatencyMs: verified.latencyMs,
         },
       };

@@ -414,6 +414,44 @@ describe("subagent activity rows", () => {
     expect(container.querySelector(".chat-tasks-status")).toBeNull();
   });
 
+  it.each([
+    [11_000, 2_000],
+    ["1970-01-01T00:00:11.000Z", "1970-01-01T00:00:02.000Z"],
+    ["1970-01-01T00:00:11.000Z", 2_000],
+    [11_000, "1970-01-01T00:00:02.000Z"],
+  ] as const)(
+    "keeps the most recently active child in the visible five when its lifecycle is older (%s, %s)",
+    (freshActivityAt, quietActivityAt) => {
+      const tasks = Array.from({ length: 6 }, (_, index) =>
+        makeTask({
+          id: `running-${index}`,
+          updatedAt: 10_000 - index * 1_000,
+          execution: {
+            state: "running",
+            lastActivityAt: index === 5 ? freshActivityAt : quietActivityAt,
+          },
+        }),
+      );
+      const subagentActivity = deriveSubagentActivity({
+        tasks,
+        sessionKey: "agent:main:current",
+        terminalObservedAtByTask: new Map(),
+        canonicalizeSessionKey: (sessionKey) => sessionKey ?? "",
+        now: 20_000,
+      });
+      const container = renderStatusRow({ tasks, subagentActivity });
+
+      expect(
+        Array.from(container.querySelectorAll("[data-subagent-task-id]"), (row) =>
+          row.getAttribute("data-subagent-task-id"),
+        ),
+      ).toEqual(["running-5", "running-0", "running-1", "running-2", "running-3"]);
+      expect(
+        container.querySelector(".chat-subagent-activity__overflow")?.textContent?.trim(),
+      ).toBe("+1 more subagents");
+    },
+  );
+
   it("retires live text but retains diff stats through terminal activity", async () => {
     const running = makeTask({
       id: "retained-subagent",

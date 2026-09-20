@@ -1,4 +1,3 @@
-// Matrix plugin module implements approval handler behavior.
 import {
   createChannelApprovalNativeRuntimeAdapter,
   type ChannelApprovalCapabilityHandlerContext,

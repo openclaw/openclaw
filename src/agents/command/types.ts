@@ -7,6 +7,7 @@ import type { SpawnedRunMetadata } from "../../agents/spawned-context.js";
 import type { PromptMode } from "../../agents/system-prompt.types.js";
 import type { SourceReplyDeliveryMode } from "../../auto-reply/get-reply-options.types.js";
 import type { ChannelOutboundTargetMode } from "../../channels/plugins/types.public.js";
+import type { ImageContent as LlmImageContent } from "../../llm/types.js";
 import type { MediaFact } from "../../media/media-facts.js";
 import type { PromptImageOrderEntry } from "../../media/prompt-image-order.js";
 import type { PluginHookChannelContext } from "../../plugins/hook-types.js";
@@ -27,12 +28,7 @@ import type { ScheduledToolPolicyContext } from "../scheduled-tool-policy.js";
 import type { TrustedSubagentCompletionHandoff } from "../subagents/announce/subagent-announce-handoff.js";
 import type { AgentStreamParams, ClientToolDefinition } from "./shared-types.js";
 
-/** Image content block for Claude API multimodal messages. */
-export type ImageContent = {
-  type: "image";
-  data: string;
-  mimeType: string;
-};
+export type ImageContent = Pick<LlmImageContent, "type" | "data" | "mimeType">;
 
 /** ACP turn source markers accepted by trusted command callsites. */
 type AcpTurnSource = "manual_spawn";
@@ -240,23 +236,23 @@ export type AgentCommandOpts = {
   userTurnTranscriptRecorder?: UserTurnTranscriptRecorder;
 };
 
-/** Restricted option surface for external ingress callsites. */
-export type AgentCommandIngressOpts = Omit<
-  AgentCommandOpts,
+type AgentCommandGatewayOnlyKey =
   | "runtimeContextFragments"
-  | "senderIsOwner"
-  | "allowModelOverride"
   | "mainRestartRecoveryOwnerLease"
   | "mainRestartRecoveryAdmitted"
   | "mainRestartRecoveryAttempt"
   | "pinnedWidgetAuthoring"
   | "executionIdentityAdmission"
   | "operationalRunInstance"
-  | "assertSourceCurrent"
   | "skillLibraryAuthoring"
   | "cronCreatorAuthorityCapability"
   | "onAdmittedRunContext"
-  | "onPostAdmittedRunContext"
+  | "onPostAdmittedRunContext";
+
+/** Restricted option surface for external ingress callsites. */
+export type AgentCommandIngressOpts = Omit<
+  AgentCommandOpts,
+  AgentCommandGatewayOnlyKey | "senderIsOwner" | "allowModelOverride" | "assertSourceCurrent"
 > & {
   /** @deprecated Public ingress ignores owner claims; use the host-injected channel runtime. */
   senderIsOwner?: boolean;
@@ -266,17 +262,4 @@ export type AgentCommandIngressOpts = Omit<
 
 /** Gateway-only ingress extends the public Plugin SDK surface with private recovery correlation. */
 export type AgentCommandGatewayIngressOpts = AgentCommandIngressOpts &
-  Pick<
-    AgentCommandOpts,
-    | "runtimeContextFragments"
-    | "mainRestartRecoveryOwnerLease"
-    | "mainRestartRecoveryAdmitted"
-    | "mainRestartRecoveryAttempt"
-    | "pinnedWidgetAuthoring"
-    | "executionIdentityAdmission"
-    | "operationalRunInstance"
-    | "skillLibraryAuthoring"
-    | "cronCreatorAuthorityCapability"
-    | "onAdmittedRunContext"
-    | "onPostAdmittedRunContext"
-  >;
+  Pick<AgentCommandOpts, AgentCommandGatewayOnlyKey>;

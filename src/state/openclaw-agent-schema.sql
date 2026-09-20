@@ -96,6 +96,7 @@ CREATE TABLE IF NOT EXISTS session_participants (
 CREATE TABLE IF NOT EXISTS session_key_contract (
   id INTEGER NOT NULL PRIMARY KEY CHECK (id = 1),
   main_key TEXT NOT NULL,
+  canonical_ready TEXT,
   updated_at INTEGER NOT NULL
 ) STRICT;
 

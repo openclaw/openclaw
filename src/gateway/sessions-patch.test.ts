@@ -54,7 +54,7 @@ const providerThinkingMocks = vi.hoisted(() => ({
     vi.fn<typeof import("../plugins/provider-thinking.js").resolveEffectiveThinkingProfile>(),
 }));
 
-vi.mock("../acp/runtime/session-meta.js", () => ({
+vi.mock("../acp/runtime/session-meta-readonly.js", () => ({
   readAcpSessionMetaForEntry: acpSessionMetaMocks.readAcpSessionMetaForEntry,
 }));
 

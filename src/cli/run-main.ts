@@ -6,6 +6,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type { Command as CommanderCommand, Option as CommanderOption } from "commander";
 import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text.js";
+import type { DoctorDatabasePreflight } from "../commands/doctor-database-preflight.js";
 import {
   createInvalidConfigError,
   formatInvalidConfigDetails,
@@ -101,7 +102,7 @@ const UNKNOWN_COMMAND_DISPLAY_LIMIT = 128;
 
 const loadRootHelpLiveConfigModule = async () => await import("./root-help-live-config.js");
 const loadRootHelpMetadataModule = async () => await import("./root-help-metadata.js");
-const loadLoggingModule = async () => await import("../logging.js");
+const loadLoggingModule = async () => await import("../logging/console.js");
 const loadCliRegistryLoaderModule = async () => await import("../plugins/cli-registry-loader.js");
 const loadManifestCommandAliasesRuntimeModule = async () =>
   await import("../plugins/manifest-command-aliases.runtime.js");
@@ -1153,8 +1154,14 @@ async function runCliWithPreparedOutputMode(
       }
     });
   }
+  let doctorDatabasePreflight: DoctorDatabasePreflight | undefined;
   if (mutatingDoctor) {
-    await prepareDoctorBootstrapRecovery(normalizedArgv, options.builtInMachineOutput);
+    // Capture recovery and reusable preflight facts before any bootstrap writer.
+    // Read-only Doctor routes must not acquire update state or record refusals.
+    doctorDatabasePreflight = await prepareDoctorBootstrapRecovery(
+      normalizedArgv,
+      options.builtInMachineOutput,
+    );
   }
   await configureStartupTraces();
   if (!isHelpOrVersionInvocation && isGatewayRunInvocation) {
@@ -1590,7 +1597,9 @@ async function runCliWithPreparedOutputMode(
           import("../runtime.js"),
         ]),
       );
-      const program = await startupTrace.measure("build-program", () => buildProgram());
+      const program = await startupTrace.measure("build-program", () =>
+        buildProgram({ doctorDatabasePreflight, runtimeRecoveryEnv: options.runtimeRecoveryEnv }),
+      );
       await options.harnessCleanup?.pluginResources?.waitForRegistrations();
 
       // Global error handlers to prevent silent crashes from unhandled rejections/exceptions.

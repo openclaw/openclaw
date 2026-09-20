@@ -177,8 +177,9 @@ jobs:
             --argjson reusedBinding "${REUSED_CANDIDATE_BINDING_JSON:-null}" \
             '$ARGS.named' > "$input"
           result="$(node scripts/full-release-candidate-reuse.mjs resolve --input "$input")"
-          jq -e --arg sha "$EXPECTED_PACKAGE_SHA256" '.binding.package.packageSha256 == $sha' \
-            <<< "$result" >/dev/null || {
+          printf '%s\n' "$result" | \
+            jq -e --arg sha "$EXPECTED_PACKAGE_SHA256" \
+              '.binding.package.packageSha256 == $sha' >/dev/null || {
               echo "Release candidate must consume the prepared publishable npm package bytes." >&2
               exit 1
             }
@@ -189,8 +190,9 @@ jobs:
             else
               printf 'source=fresh\n'
             fi
-            printf 'binding_json=%s\n' "$(jq -c '.binding' <<< "$result")"
-            printf 'candidate_artifact_json=%s\n' "$(jq -r '.candidateArtifactJson' <<< "$result")"
+            printf 'binding_json=%s\n' "$(printf '%s\n' "$result" | jq -c '.binding')"
+            printf 'candidate_artifact_json=%s\n' \
+              "$(printf '%s\n' "$result" | jq -r '.candidateArtifactJson')"
           } >> "$GITHUB_OUTPUT"
 
       # A failed or cancelled binding must never publish ready, even if it wrote outputs.

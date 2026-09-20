@@ -1,4 +1,3 @@
-// Discord plugin module implements thread bindings.session adapter behavior.
 import {
   resolveThreadBindingConversationIdFromBindingId,
   type BindingTargetKind,

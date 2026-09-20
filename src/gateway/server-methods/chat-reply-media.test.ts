@@ -17,6 +17,7 @@ import {
   type MockInstance,
 } from "vitest";
 import { consumePendingToolMediaIntoReply } from "../../agents/embedded-agent-subscribe.handlers.messages.replies.js";
+import { setReplyPayloadMetadata } from "../../auto-reply/reply-payload.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { getAgentScopedMediaLocalRoots } from "../../media/local-roots.js";
 import {
@@ -24,6 +25,7 @@ import {
   withStoreRemoteFixture,
   wrapStoreSaveRemoteMedia,
 } from "../../media/store-network.test-support.js";
+import { drainGlobalSingletonLifecycleState } from "../../shared/global-singleton.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -81,6 +83,7 @@ describe("normalizeWebchatReplyMediaPathsForDisplay", () => {
   });
 
   afterEach(async () => {
+    await drainGlobalSingletonLifecycleState();
     await testState.cleanup();
   });
 
@@ -146,6 +149,7 @@ describe("normalizeWebchatReplyMediaPathsForDisplay", () => {
       cfg: params.cfg,
       sessionKey: TEST_SESSION_KEY,
       agentId: "main",
+      sessionEntry: undefined,
       payloads: params.payloads,
     });
     return payload;
@@ -215,6 +219,33 @@ describe("normalizeWebchatReplyMediaPathsForDisplay", () => {
       "⚠️ chart.png: Delivery failed. Try sending this file again.",
     );
   });
+
+  it.each(["file://attacker/share/probe.mp3", "file:///outside/secret.png"])(
+    "keeps deferred tool media rejection visible for %s",
+    async (mediaUrl) => {
+      const { cfg, stateDir } = createMediaTestContext({ allowRead: true });
+      const payload = await normalizeReplyMedia({
+        cfg,
+        payloads: [{ text: "NO_REPLY", mediaUrls: [mediaUrl] }],
+      });
+      const { assistantContent } = await buildAssistantReplyContent({
+        sessionKey: TEST_SESSION_KEY,
+        agentId: "main",
+        payloads: payload ? [payload] : [],
+        managedMediaLocalRoots: getAgentScopedMediaLocalRoots(cfg, "main"),
+      });
+      expect(assistantContent).toEqual([
+        expect.objectContaining({
+          type: "attachment_error",
+          attachment: expect.objectContaining({
+            code: "delivery-failed",
+            label: path.basename(new URL(mediaUrl).pathname),
+          }),
+        }),
+      ]);
+      await expectOutboundMediaMissing(stateDir);
+    },
+  );
 
   it("preserves ordered document and image metadata beside one rejected SVG", async () => {
     const { workspaceDir, cfg } = createMediaTestContext({ allowRead: true });
@@ -688,6 +719,57 @@ describe("normalizeWebchatReplyMediaPathsForDisplay", () => {
     const blocks = await createManagedImageBlocks({ cfg, mediaUrls: payload?.mediaUrls });
 
     expect(blocks).toHaveLength(2);
+  });
+
+  it("retains earlier and newly observed failures beside an inline image", async () => {
+    const { cfg, workspaceDir } = createMediaTestContext({ allowRead: false });
+    const payload = await normalizeReplyMedia({
+      cfg,
+      payloads: [
+        setReplyPayloadMetadata(
+          {
+            mediaUrls: [dataImageUrl(), path.join(workspaceDir, "missing.png")],
+          },
+          {
+            assistantMediaFailures: [
+              {
+                code: "file-not-found",
+                kind: "document",
+                label: "earlier.pdf",
+                mimeType: "application/pdf",
+              },
+            ],
+          },
+        ),
+      ],
+    });
+    const { assistantContent } = await buildAssistantReplyContent({
+      sessionKey: TEST_SESSION_KEY,
+      agentId: "main",
+      payloads: payload ? [payload] : [],
+      managedMediaLocalRoots: getAgentScopedMediaLocalRoots(cfg, "main"),
+    });
+    expect(assistantContent?.filter((block) => block.type === "attachment_error")).toEqual([
+      {
+        type: "attachment_error",
+        attachment: {
+          code: "file-not-found",
+          kind: "document",
+          label: "earlier.pdf",
+          mimeType: "application/pdf",
+        },
+      },
+      {
+        type: "attachment_error",
+        attachment: {
+          code: "file-not-found",
+          kind: "image",
+          label: "missing.png",
+          mimeType: "image/png",
+        },
+      },
+    ]);
+    expect(assistantContent?.filter((block) => block.type === "image")).toHaveLength(1);
   });
 
   it.each([

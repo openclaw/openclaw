@@ -543,45 +543,57 @@ export function runStateSchemaMigrationTransaction<T>(
   transactionOptions: SqliteTransactionOptions,
   prepareSchema?: () => void,
 ): T {
-  return runSqliteImmediateTransactionSync(
-    db,
-    () => {
-      // Doctor restores catalog readability before the publication prelude reads it.
-      prepareSchema?.();
-      const publishedVersion = readSqliteUserVersion(db);
-      const blocker =
-        publishedVersion < OPENCLAW_STATE_SCHEMA_VERSION
-          ? readStateSchemaPublicationBlocker(db)
-          : undefined;
-      if (!blocker) {
-        return migrate();
-      }
-      try {
-        // Check before canonical DDL could recreate the missing publication owner.
-        if (!tableExists(db, "config_machine_state")) {
-          throw new Error("Shared state schema publication requires config_machine_state.");
+  const foreignKeysWereEnabled =
+    Number(db.prepare("PRAGMA foreign_keys").get()?.foreign_keys) === 1;
+  // Referenced-table rebuilds require this before BEGIN, including runtime convergence.
+  if (foreignKeysWereEnabled) {
+    db.exec("PRAGMA foreign_keys = OFF;");
+  }
+  try {
+    return runSqliteImmediateTransactionSync(
+      db,
+      () => {
+        // Doctor restores catalog readability before the publication prelude reads it.
+        prepareSchema?.();
+        const publishedVersion = readSqliteUserVersion(db);
+        const blocker =
+          publishedVersion < OPENCLAW_STATE_SCHEMA_VERSION
+            ? readStateSchemaPublicationBlocker(db)
+            : undefined;
+        if (!blocker) {
+          return migrate();
         }
-        return migrate();
-      } catch (cause) {
-        if (cause instanceof OpenClawStateOwnershipError) {
-          throw cause;
+        try {
+          // Check before canonical DDL could recreate the missing publication owner.
+          if (!tableExists(db, "config_machine_state")) {
+            throw new Error("Shared state schema publication requires config_machine_state.");
+          }
+          return migrate();
+        } catch (cause) {
+          if (cause instanceof OpenClawStateOwnershipError) {
+            throw cause;
+          }
+          throw new UpdateSchemaRefusalError(
+            [
+              {
+                kind: "state",
+                path: pathname,
+                foundVersion: publishedVersion,
+                supportedVersion: OPENCLAW_STATE_SCHEMA_VERSION,
+              },
+            ],
+            blocker.updaterVersion,
+            { targetVersion: VERSION, cause },
+          );
         }
-        throw new UpdateSchemaRefusalError(
-          [
-            {
-              kind: "state",
-              path: pathname,
-              foundVersion: publishedVersion,
-              supportedVersion: OPENCLAW_STATE_SCHEMA_VERSION,
-            },
-          ],
-          blocker.updaterVersion,
-          { targetVersion: VERSION, cause },
-        );
-      }
-    },
-    transactionOptions,
-  );
+      },
+      transactionOptions,
+    );
+  } finally {
+    if (foreignKeysWereEnabled && db.isOpen) {
+      db.exec("PRAGMA foreign_keys = ON;");
+    }
+  }
 }
 
 export function writeCurrentStateSchemaMetadata(db: DatabaseSync, now: number): void {

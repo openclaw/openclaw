@@ -391,8 +391,35 @@ function writeCommandProperties(unit, scope) {
   );
 }
 
+function recordCaller(file, parentPid, action) {
+  const roles = [];
+  let pid = Number(parentPid);
+  for (let depth = 0; depth < 64 && Number.isSafeInteger(pid) && pid > 1; depth++) {
+    try {
+      // Commander replaces argv[0] with these titles before executing the action.
+      const title = fs.readFileSync(`/proc/${pid}/cmdline`, "utf8").split("\0")[0];
+      if (title === "openclaw-doctor" || title === "openclaw-update") {
+        roles.push(title.slice("openclaw-".length));
+      }
+      const stat = fs.readFileSync(`/proc/${pid}/stat`, "utf8");
+      pid = Number(stat.slice(stat.lastIndexOf(") ") + 2).split(" ")[1]);
+    } catch (error) {
+      if (error.code !== "ENOENT" && error.code !== "ESRCH") {
+        throw error;
+      }
+      break;
+    }
+  }
+  // Caller evidence contains roles only; never retain process arguments or environment values.
+  fs.appendFileSync(file, `${JSON.stringify({ action, roles })}\n`);
+}
+
 function run() {
   const [operation, ...args] = process.argv.slice(2);
+  if (operation === "record-caller" && args.length === 3) {
+    recordCaller(...args);
+    return;
+  }
   if (
     operation === "busctl" &&
     args.length === 7 &&

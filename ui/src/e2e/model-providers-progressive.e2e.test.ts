@@ -778,6 +778,9 @@ describeControlUiE2e("Control UI progressive Model Providers loading", () => {
           await waitForControlUiRoute(page, { routeId: "appearance" });
           await gateway.deferNext("models.authStatus");
           previousAuthLoads = (await gateway.getRequests("models.authStatus")).length;
+          if (moduleState === "cached") {
+            await gateway.emitGatewayEvent("chat.metadata.changed", {});
+          }
           await page.evaluate(async () => {
             const app = document.querySelector<
               HTMLElement & { runtime: { router: ApplicationRouter } }

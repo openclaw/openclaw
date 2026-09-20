@@ -76,6 +76,121 @@ describe("AppSidebar agent roster", () => {
     },
   );
 
+  it.each(["active", "all", "archived"] as const)(
+    "preserves archived Home children under the %s filter",
+    async (status) => {
+      const homeKey = "agent:working:main";
+      const childKey = "agent:working:archived-child";
+      const { sidebar } = await mountRoster(roster, [
+        session("working", 10, { childSessions: [childKey] }),
+        session("working", 9, {
+          key: childKey,
+          isMain: false,
+          spawnedBy: homeKey,
+          archived: true,
+        }),
+      ]);
+      sidebar.sidebarAgentsMode = "roster";
+      await vi.waitFor(() => expect(agentIds(sidebar)).toHaveLength(3));
+      await selectFilter(sidebar, `status:${status}`);
+      await vi.waitFor(() =>
+        expect(sessionKeys(sidebar)).toEqual(status === "active" ? [] : [childKey]),
+      );
+    },
+  );
+
+  it.each(
+    (["chip", "roster"] as const).flatMap((mode) =>
+      [false, true].flatMap((cached) =>
+        [undefined, "Saved work"].map((category) => ({ mode, cached, category })),
+      ),
+    ),
+  )(
+    "promotes Home descendants through parent-owned hidden-run lists ($mode, cached=$cached, category=$category)",
+    async ({ mode, cached, category }) => {
+      const agentId = mode === "chip" ? "main" : "working";
+      const runKey = `agent:${agentId}:subagent:bridge`;
+      const childKey = `agent:${agentId}:project`;
+      const descendants = [
+        session(agentId, 9, {
+          key: runKey,
+          isMain: false,
+          childSessions: [childKey],
+        }),
+        session(agentId, 8, { key: childKey, isMain: false, category }),
+      ];
+      const { sidebar } = await mountRoster(
+        roster,
+        [session(agentId, 10, { childSessions: [runKey] }), ...(cached ? [] : descendants)],
+        undefined,
+        [],
+        [],
+        cached ? descendants : undefined,
+      );
+      sidebar.sidebarAgentsMode = mode;
+      await vi.waitFor(() => expect(sessionKeys(sidebar)).toEqual([childKey]));
+      expect(sidebar.querySelector("[data-child-session-error]")).toBeNull();
+      if (mode === "chip" && category) {
+        const section = sidebar
+          .querySelector("[data-session-key]")
+          ?.closest("[data-session-section]");
+        expect(
+          section?.querySelector(".sidebar-recent-sessions__label-text")?.textContent?.trim(),
+        ).toBe(category);
+      }
+    },
+  );
+
+  it.each(
+    (["chip", "roster"] as const).flatMap((mode) =>
+      [false, true].map((backref) => ({ mode, backref })),
+    ),
+  )(
+    "loads descendants from a directly opened out-of-window Home ($mode, backref=$backref)",
+    async ({ mode, backref }) => {
+      const homeKey = "agent:working:main";
+      const childKey = "agent:working:older-child";
+      const home = session("working", 1, { childSessions: [childKey] });
+      const { sidebar, context, sessions, result } = await mountRoster(
+        roster,
+        [session("main", 10, { key: "agent:main:recent", isMain: false })],
+        undefined,
+        [home],
+      );
+      sessions.list.mockImplementation(async (options) =>
+        options?.spawnedBy === homeKey
+          ? {
+              ...result,
+              count: 1,
+              sessions: [
+                session("working", 2, {
+                  key: childKey,
+                  isMain: false,
+                  ...(backref ? { spawnedBy: homeKey } : {}),
+                }),
+              ],
+            }
+          : result,
+      );
+      sidebar.sidebarAgentsMode = mode;
+      sidebar.activeRouteId = "chat";
+      sidebar.sessionKey = homeKey;
+      context.agentSelection.set("working");
+      await vi.waitFor(() =>
+        expect(sessions.list).toHaveBeenCalledWith(expect.objectContaining({ spawnedBy: homeKey })),
+      );
+      await vi.waitFor(() =>
+        expect(sessionKeys(sidebar).filter((key) => key === childKey)).toHaveLength(1),
+      );
+      expect(sessionKeys(sidebar)).not.toContain(homeKey);
+      if (mode === "roster") {
+        expect(
+          sidebar.querySelector('[data-agent-id="working"]')?.getAttribute("aria-current"),
+        ).toBe("page");
+      }
+    },
+  );
+
   it("keeps configured agent order when session activity changes", async () => {
     const { sidebar, context, result } = await mountRoster();
     sidebar.sidebarAgentsMode = "roster";
@@ -86,11 +201,7 @@ describe("AppSidebar agent roster", () => {
         throw new Error(`Missing session group for ${id}`);
       }
       await vi.waitFor(() =>
-        expect(sessionKeys(group)).toEqual([
-          `agent:${id}:pinned`,
-          `agent:${id}:main`,
-          `agent:${id}:recent`,
-        ]),
+        expect(sessionKeys(group)).toEqual([`agent:${id}:pinned`, `agent:${id}:recent`]),
       );
       expect(group?.querySelector(`a[href="/new?agent=${id}"]`)).not.toBeNull();
       expect(group?.querySelector(".sidebar-agent-roster__row")?.getAttribute("href")).toBe(
@@ -324,43 +435,50 @@ describe("AppSidebar agent roster", () => {
     expect(loadSettings("ws://gateway.test").sidebarCollapsedAgentIds).toEqual(["working"]);
   });
 
-  it.each(["outside the window", "archived", "archived child", "child of main"])(
-    "keeps a directly opened session visible when %s",
-    async (variant) => {
-      const key = "agent:working:older";
-      const parentKey = variant === "child of main" ? "agent:main:main" : "agent:main:parent";
-      const current = session("working", 1, {
-        key,
-        isMain: false,
-        label: "Opened conversation",
-        archived: variant === "archived" || variant === "archived child",
-        ...(["archived child", "child of main"].includes(variant) ? { spawnedBy: parentKey } : {}),
-      });
-      const parent = session("main", 0, {
-        key: parentKey,
-        isMain: variant === "child of main",
-        archived: variant !== "child of main",
-        childSessions: [key],
-      });
-      const bounded = [
-        session("main", 10, { key: "agent:main:recent", isMain: false }),
-        ...(variant === "outside the window" ? [] : [current, parent]),
-      ];
-      const { sidebar, context } = await mountRoster(roster, bounded, undefined, [current, parent]);
-      sidebar.sidebarAgentsMode = "roster";
-      sidebar.activeRouteId = "chat";
-      sidebar.sessionKey = key;
-      context.agentSelection.set("working");
-      await vi.waitFor(() => {
-        const rows = sidebar.querySelectorAll(`[data-session-key="${key}"]`);
-        expect(rows).toHaveLength(1);
-        expect(rows[0]?.classList.contains("sidebar-recent-session--active")).toBe(true);
-      });
-      expect(sidebar.querySelector(`[data-session-key="${parentKey}"]`) !== null).toBe(
-        variant === "child of main",
-      );
-    },
-  );
+  it.each([
+    "outside the window",
+    "archived",
+    "archived child",
+    "child of main",
+    "child of main outside the window",
+  ])("keeps a directly opened session visible when %s", async (variant) => {
+    const childOutsideWindow = variant === "child of main outside the window";
+    const mainParent = variant === "child of main" || childOutsideWindow;
+    const key = "agent:working:older";
+    const parentKey = mainParent ? "agent:main:main" : "agent:main:parent";
+    const current = session("working", 1, {
+      key,
+      isMain: false,
+      label: "Opened conversation",
+      archived: variant === "archived" || variant === "archived child",
+      ...(variant === "archived child" || mainParent ? { spawnedBy: parentKey } : {}),
+    });
+    const parent = session("main", 0, {
+      key: parentKey,
+      isMain: mainParent,
+      archived: !mainParent,
+      childSessions: [key],
+    });
+    const bounded = [
+      session("main", 10, { key: "agent:main:recent", isMain: false }),
+      ...(variant === "outside the window"
+        ? []
+        : childOutsideWindow
+          ? [current]
+          : [current, parent]),
+    ];
+    const { sidebar, context } = await mountRoster(roster, bounded, undefined, [current, parent]);
+    sidebar.sidebarAgentsMode = "roster";
+    sidebar.activeRouteId = "chat";
+    sidebar.sessionKey = key;
+    context.agentSelection.set("working");
+    await vi.waitFor(() => {
+      const rows = sidebar.querySelectorAll(`[data-session-key="${key}"]`);
+      expect(rows).toHaveLength(1);
+      expect(rows[0]?.classList.contains("sidebar-recent-session--active")).toBe(true);
+    });
+    expect(sidebar.querySelector(`[data-session-key="${parentKey}"]`)).toBeNull();
+  });
 
   it("shows every agent beyond six with the global filter in the header", async () => {
     const agents: AgentsListResult = {
@@ -416,7 +534,7 @@ describe("AppSidebar agent roster", () => {
   it("applies owner and archived filters across all agent groups", async () => {
     const { sidebar } = await mountRoster();
     sidebar.sidebarAgentsMode = "roster";
-    await vi.waitFor(() => expect(sessionKeys(sidebar)).toHaveLength(9));
+    await vi.waitFor(() => expect(sessionKeys(sidebar)).toHaveLength(6));
     await selectFilter(sidebar, "owner:profile-ada");
     await vi.waitFor(() =>
       expect(sessionKeys(sidebar)).toEqual([
@@ -436,7 +554,7 @@ describe("AppSidebar agent roster", () => {
     expect(agentIds(sidebar)).toEqual(["main", "recent", "working"]);
   });
 
-  it("filters archived children while keeping main-session children nested", async () => {
+  it("filters archived children while promoting Home children", async () => {
     const { sidebar } = await mountRoster(roster, [
       session("working", 10, { childSessions: ["agent:working:main-child"] }),
       session("working", 9, {
@@ -459,13 +577,9 @@ describe("AppSidebar agent roster", () => {
     ]);
     sidebar.sidebarAgentsMode = "roster";
     await vi.waitFor(() =>
-      expect(sessionKeys(sidebar)).toEqual(["agent:working:main", "agent:working:parent"]),
+      expect(sessionKeys(sidebar)).toEqual(["agent:working:parent", "agent:working:main-child"]),
     );
     expect(sidebar.querySelector('[data-child-session-toggle="agent:working:parent"]')).toBeNull();
-    sidebar
-      .querySelector<HTMLButtonElement>('[data-child-session-toggle="agent:working:main"]')
-      ?.click();
-    await vi.waitFor(() => expect(sessionKeys(sidebar)).toContain("agent:working:main-child"));
     await selectFilter(sidebar, "status:archived");
     await vi.waitFor(() => expect(sessionKeys(sidebar)).toEqual(["agent:working:archived-child"]));
   });

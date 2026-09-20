@@ -51,6 +51,11 @@ everything before it is inherited reference context, not active instructions,
 and that only messages after the boundary are live. `/btw` requires an
 existing Codex thread; send a normal message first.
 
+Eligible Codex side questions can use the same OpenClaw Gateway shell tools as
+the main thread. Canceling a side question or reaching its timeout stops native
+background terminals owned by the side thread before releasing it. Main-thread
+terminals and OpenClaw-managed background jobs keep their existing lifetime.
+
 For CLI runtime aliases, BTW invokes the owning CLI backend in one-shot
 side-question mode: it seeds sanitized conversation context into a fresh CLI
 invocation with tool bundling and reusable session state disabled, and adds

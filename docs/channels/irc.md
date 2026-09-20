@@ -88,6 +88,9 @@ inline formatting remain consistent across chunk boundaries. `textChunkLimit`
 and `streaming.chunkMode` control text splitting; the socket also enforces
 IRC's line-size limit.
 
+If nonempty text becomes empty during formatting or IRC sanitization, the send
+fails instead of reporting delivery. Reply references do not count as message content.
+
 Send directly to a channel or nick with the message CLI:
 
 ```bash

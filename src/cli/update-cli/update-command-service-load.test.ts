@@ -5,6 +5,7 @@ import { formatCliProcessFailure, runCliProcessChild } from "../cli-process-chil
 
 it.each([
   "sealed",
+  "load-failed",
   "refused",
   "revoked",
   "owner-revoked",
@@ -44,6 +45,9 @@ it.each([
           const files = { files: [{ sourcePath: staged, before: null, after: {
             sha256: "a".repeat(64), mode: 384, dev: 1, ino: 2, size: 1, mtimeMs: 1, ctimeMs: 1,
           }}] };
+          const backup = { id: "00000000-0000-4000-8000-000000000001",
+            files: [{ sourcePath: staged, before: null, after: null }], guards: [] };
+          const warning = "Reconciled Gateway service definition: Service.KillMode";
           await fs.writeFile(path.join(root, "dist", "index.mjs"), [
             'import fs from "node:fs/promises";',
             'import { mock } from "node:test";',
@@ -56,11 +60,16 @@ it.each([
             'await loading;',
             'await fs.access(' + JSON.stringify(sealed) + ');',
             'await fs.writeFile(' + JSON.stringify(loaded) + ', process.env.OPENCLAW_CONFIG_PATH);',
+            'process.stdout.write(' + JSON.stringify(JSON.stringify({ action: "install", ok: scenario !== "load-failed", definitionBackup: backup, warnings: [warning] })) + ');',
+            scenario === "load-failed" ? 'process.exitCode = 1;' : '',
             'process.disconnect();',
           ].join("\n"));
           let calls = 0;
+          const definitionRecovery = {};
+          const warnings = [];
           const result = runUpdatedInstallGatewayCommand({
             result: { root, mode: "npm" }, opts: { json: true },
+            definitionRecovery, onWarnings: messages => warnings.push(...messages),
             invocationEnv: { ...process.env, OPENCLAW_CONFIG_PATH: "caller-profile" },
             serviceInstallEnv: { ...process.env, OPENCLAW_CONFIG_PATH: "owned-profile" },
             timeoutMs: scenario === "short-budget" ? 10_000 : 120_000,
@@ -95,7 +104,11 @@ it.each([
             assert.equal(await fs.readFile(loaded, "utf8"), "owned-profile");
           } else {
             await assert.rejects(result, { name: "UpdateServiceLoadBoundaryError" });
-            assert.equal(existsSync(loaded), false);
+            assert.equal(existsSync(loaded), scenario === "load-failed");
+          }
+          if (["sealed", "slow-seal", "slow-child", "load-failed"].includes(scenario)) {
+            assert.deepEqual(definitionRecovery, { backup, unverified: false });
+            assert.deepEqual(warnings, [warning]);
           }
           assert.equal(calls, scenario === "no-handoff" ? 0 : 1);
           console.log("STAGED_LOAD_OK");

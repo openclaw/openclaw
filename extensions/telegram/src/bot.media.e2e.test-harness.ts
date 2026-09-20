@@ -254,7 +254,7 @@ export const telegramBotDepsForTest: TelegramBotDeps = {
     code: "PAIRCODE",
     created: true,
   })) as TelegramBotDeps["upsertChannelPairingRequest"],
-  enqueueSystemEvent: vi.fn() as TelegramBotDeps["enqueueSystemEvent"],
+  enqueueRoutedSystemEvent: vi.fn() as TelegramBotDeps["enqueueRoutedSystemEvent"],
   dispatchReplyWithBufferedBlockDispatcher: mediaHarnessDispatchReplyWithBufferedBlockDispatcher,
   buildModelsProviderData: vi.fn(async () => ({
     byProvider: new Map<string, Set<string>>(),
@@ -310,7 +310,7 @@ vi.doMock("./bot.runtime.js", () => ({
   ...telegramBotRuntimeForTest,
 }));
 
-vi.mock("undici", async (importOriginal) => {
+vi.mock("undici/index.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("undici")>();
   return {
     ...actual,

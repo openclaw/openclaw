@@ -3,6 +3,7 @@ import { expect, onTestFinished, vi } from "vitest";
 import type { SessionsResolveResult } from "../../../../packages/gateway-protocol/src/index.js";
 import type { GatewayEventListener } from "../../api/gateway.ts";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
+import { createChatSubmissions } from "../../app/chat-submissions.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import type { sessionNavigationTarget } from "../../lib/sessions/route-navigation.ts";
 import { createTestSessionCapability } from "../../lib/sessions/session-capability.test-support.ts";
@@ -58,6 +59,8 @@ function contextFor(
   const client = { request };
   const context = {
     basePath: "",
+    chatSubmissions: createChatSubmissions(),
+    placementStartup: { get: vi.fn(() => null) },
     // These tests invoke the loader directly; there is no outlet-owned match.
     router,
     lifecycleAbortSignal: lifecycle.signal,

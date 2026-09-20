@@ -1,9 +1,9 @@
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
-import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { expect, it } from "vitest";
 import { applyJobPatch } from "../../../src/cron/service/jobs.js";
 import type { CronStoredJob } from "../../../src/cron/types.js";
+import { createRequireRecord } from "../../../test/helpers/record.js";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 

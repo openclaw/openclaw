@@ -556,15 +556,21 @@ async function collectBaselineCandidates(params: {
   const baseInfo = head
     ? await resolveSessionDiffBase({ branch, gitOut, head, root })
     : await resolveSessionDiffEmptyTree(root, objectFormat);
-  const trackedText = baseInfo
-    ? await gitOutForBaseline(root, ["diff", "-M", baseInfo.base, "--name-status", "-z"])
-    : "";
-  const untrackedText = await gitOutForBaseline(root, [
-    "ls-files",
-    "--others",
-    "--exclude-standard",
-    "-z",
+  const [trackedResult, untrackedResult] = await Promise.allSettled([
+    baseInfo
+      ? gitOutForBaseline(root, ["diff", "-M", baseInfo.base, "--name-status", "-z"])
+      : Promise.resolve(""),
+    gitOutForBaseline(root, ["ls-files", "--others", "--exclude-standard", "-z"]),
   ]);
+  // Join both command lifetimes before returning a failure to the capture owner.
+  if (trackedResult.status === "rejected") {
+    throw trackedResult.reason;
+  }
+  if (untrackedResult.status === "rejected") {
+    throw untrackedResult.reason;
+  }
+  const trackedText = trackedResult.value;
+  const untrackedText = untrackedResult.value;
   if (trackedText === null || untrackedText === null) {
     return { root, candidates: [], truncated: true };
   }

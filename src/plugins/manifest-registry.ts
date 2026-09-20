@@ -7,6 +7,7 @@ import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { resolveUserPath } from "../utils.js";
 import { resolveCompatibilityHostVersion } from "../version.js";
 import { loadBundleManifest } from "./bundle-manifest.js";
+import { isForeignBundledPluginRoot } from "./bundled-dir.js";
 import {
   isPluginCandidateInstallOwnerAmbiguous,
   resolvePluginCandidateInstallOwner,
@@ -143,14 +144,6 @@ function pushNonBundledChannelConfigDescriptorDiagnostic(params: {
   });
 }
 
-function pushManifestCompatibilityDiagnostics(params: {
-  record: PluginManifestRecord;
-  diagnostics: PluginDiagnostic[];
-  normalized?: ReturnType<typeof normalizePluginsConfigWithResolver>;
-}): void {
-  pushNonBundledChannelConfigDescriptorDiagnostic(params);
-}
-
 function dedupePluginDiagnostics(
   diagnostics: PluginDiagnostic[],
   discoveryDiagnostics: ReadonlySet<PluginDiagnostic>,
@@ -176,6 +169,16 @@ function dedupePluginDiagnostics(
   return deduped;
 }
 
+function isStaleForeignBundledPin(params: {
+  candidate: PluginCandidate;
+  env: NodeJS.ProcessEnv;
+}): boolean {
+  return (
+    isForeignBundledPluginRoot(params.candidate.rootDir, params.env) &&
+    !isBundledPluginInsideDevSourceRoot({ rootDir: params.candidate.rootDir, env: params.env })
+  );
+}
+
 function resolveDuplicatePrecedenceRank(params: {
   pluginId: string;
   candidate: PluginCandidate;
@@ -197,6 +200,7 @@ function resolveDuplicatePrecedenceRank(params: {
   }
   if (
     params.candidate.origin === "global" &&
+    !isStaleForeignBundledPin({ candidate: params.candidate, env: params.env }) &&
     matchesInstalledPluginRecord({
       pluginId: params.pluginId,
       candidate: params.candidate,
@@ -241,9 +245,11 @@ function isIntentionalInstalledBundledDuplicate(params: {
   });
   return (
     (leftIsInstalled &&
+      !isStaleForeignBundledPin({ candidate: params.left, env: params.env }) &&
       params.right.origin === "bundled" &&
       !isBundledPluginInsideDevSourceRoot({ rootDir: params.right.rootDir, env: params.env })) ||
     (rightIsInstalled &&
+      !isStaleForeignBundledPin({ candidate: params.right, env: params.env }) &&
       params.left.origin === "bundled" &&
       !isBundledPluginInsideDevSourceRoot({ rootDir: params.left.rootDir, env: params.env }))
   );
@@ -513,7 +519,6 @@ export function loadPluginManifestRegistryCore(
         // an unexpected order (config > workspace > global > bundled).
         if (PLUGIN_ORIGIN_RANK[candidate.origin] < PLUGIN_ORIGIN_RANK[existing.candidate.origin]) {
           seenIds.set(effectivePluginId, { candidate, record });
-          pushManifestCompatibilityDiagnostics({ record, diagnostics, normalized });
         }
         continue;
       }
@@ -537,7 +542,6 @@ export function loadPluginManifestRegistryCore(
       const overriddenCandidate = candidateWins ? existing.candidate : candidate;
       if (candidateWins) {
         seenIds.set(effectivePluginId, { candidate, record });
-        pushManifestCompatibilityDiagnostics({ record, diagnostics, normalized });
       }
       if (
         isIntentionalInstalledBundledDuplicate({
@@ -554,12 +558,22 @@ export function loadPluginManifestRegistryCore(
       if (isSameGlobalPackageDuplicate(candidate, existing.candidate)) {
         continue;
       }
+      const staleForeignPin =
+        winnerCandidate.origin === "bundled" &&
+        isStaleForeignBundledPin({ candidate: overriddenCandidate, env }) &&
+        matchesInstalledPluginRecord({
+          pluginId: effectivePluginId,
+          candidate: overriddenCandidate,
+          env,
+          installRecords: getInstallRecords(),
+        });
       diagnostics.push({
         level: "warn",
         pluginId: effectivePluginId,
         source: overriddenCandidate.source,
-        message:
-          winnerCandidate.origin === "config"
+        message: staleForeignPin
+          ? `stale plugin install record: "${effectivePluginId}" is pinned to ${overriddenCandidate.rootDir}, which belongs to a different OpenClaw installation. This installation's bundled plugin is being used instead. No uninstall is needed to use the bundled plugin. Uninstalling, even with \`--keep-files\`, removes plugin configuration; re-enabling does not restore it.`
+          : winnerCandidate.origin === "config"
             ? `duplicate plugin id resolved by explicit config-selected plugin; ${overriddenCandidate.origin} plugin will be overridden by config plugin (${winnerCandidate.source})`
             : `duplicate plugin id detected; ${overriddenCandidate.origin} plugin will be overridden by ${winnerCandidate.origin} plugin (${winnerCandidate.source})`,
       });
@@ -567,11 +581,13 @@ export function loadPluginManifestRegistryCore(
     }
 
     seenIds.set(effectivePluginId, { candidate, record });
-    pushManifestCompatibilityDiagnostics({ record, diagnostics, normalized });
   }
 
   const records = [...seenIds.values()].map(({ record }) => record);
   const plugins = rejectCaseFoldedIdCollisions(records, diagnostics);
+  for (const record of plugins) {
+    pushNonBundledChannelConfigDescriptorDiagnostic({ record, diagnostics, normalized });
+  }
   const registry = { plugins, diagnostics: dedupePluginDiagnostics(diagnostics, discovered) };
   return registry;
 }

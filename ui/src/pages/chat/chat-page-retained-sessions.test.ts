@@ -11,6 +11,7 @@ vi.mock("../../app/native-gateways.runtime.ts", () => ({
 
 import type { GatewayHelloOk } from "../../api/gateway.ts";
 import { chatInputOwnerForContext } from "../../app/chat-input-owner.ts";
+import { createChatSubmissions } from "../../app/chat-submissions.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { loadSettings } from "../../app/settings.ts";
 import { UI_COMMAND_EVENT } from "../../components/panel-toggle-contract.ts";
@@ -60,6 +61,8 @@ function setNavigationContext(page: ChatPage) {
   const context = {
     basePath: "",
     sessions: { ...createChatPageSessions(), patch },
+    chatSubmissions: createChatSubmissions(),
+    placementStartup: { get: vi.fn(() => null), subscribe: () => () => undefined },
     agents: { state: { agentsList: { defaultId: "main", mainKey: "main" } } },
     gateway: {
       snapshot: { hello: null },

@@ -45,13 +45,17 @@ export function resolveOpenAIRequestReasoning(
   const effort =
     !model.reasoning || supported?.length === 0 || intent === undefined
       ? undefined
-      : mapped !== undefined
-        ? intent
-        : supported === undefined
-          ? requested === "off"
+      : supported === undefined
+        ? mapped !== undefined
+          ? intent
+          : requested === "off"
             ? "none"
             : requested
-          : resolveOpenAIReasoningEffortForModel({ model, effort: requested });
+        : resolveOpenAIReasoningEffortForModel({
+            model,
+            effort: requested,
+            fallbackMap: { [requested]: intent },
+          });
   return {
     // Subscription routes do not inherit Platform none support from a shared model name.
     effort:

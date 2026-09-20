@@ -2,6 +2,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GatewaySessionRow } from "../../api/types.ts";
+import type { SessionCapability } from "../../lib/sessions/session-capability.ts";
 import { createSessionsListResult } from "../../test-helpers/chat-model.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import {
@@ -53,10 +54,12 @@ function repositoryRecoveryFixture(placementState: "local" | undefined, fails = 
     }
     return { ok: true };
   });
-  const refreshReplacement = vi.fn(async () => null);
+  const reconcileMutation = vi.fn<SessionCapability["reconcileMutation"]>(async () => ({
+    status: "refreshed",
+  }));
   const { pane, state } = createTestChatPane({
     client: createGatewayBrowserClientFixture({ request }),
-    sessions: createSessionCapabilityFixture({ refreshReplacement }),
+    sessions: createSessionCapabilityFixture({ reconcileMutation }),
   });
   pane.context.gateway.snapshot.hello = gatewayHelloForMethods(
     ["sessions.dispatch"],
@@ -92,7 +95,7 @@ function repositoryRecoveryFixture(placementState: "local" | undefined, fails = 
   state.sessionKey = session.key;
   state.currentSessionId = session.sessionId;
   state.sessionsResult = { ...createSessionsListResult(), sessions: [session] };
-  return { pane, state, session, request, refreshReplacement };
+  return { pane, state, session, request, reconcileMutation };
 }
 
 async function selectRepositoryWorker() {
@@ -117,13 +120,20 @@ describe("chat pane placement", () => {
     { placement: undefined, outcome: "success" },
     { placement: "local", outcome: "cancel" },
     { placement: "local", outcome: "failure" },
+    { placement: "local", outcome: "refresh failure" },
   ] as const)(
     "recovers a repository session with $placement placement: $outcome",
     async ({ placement, outcome }) => {
-      const { pane, state, session, request, refreshReplacement } = repositoryRecoveryFixture(
+      const { pane, state, session, request, reconcileMutation } = repositoryRecoveryFixture(
         placement,
         outcome === "failure",
       );
+      if (outcome === "refresh failure") {
+        reconcileMutation.mockResolvedValueOnce({
+          status: "failed",
+          error: "Worker session refresh unavailable",
+        });
+      }
       const dispatching = dialogs.track(pane.changeHeaderPlacement(session, "recover"));
       await selectRepositoryWorker();
       answerWorkerPicker(outcome === "cancel" ? "Cancel" : "Continue on worker");
@@ -132,16 +142,22 @@ describe("chat pane placement", () => {
       expect(request).toHaveBeenCalledWith("environments.list", { runtimeId: "openclaw" });
       if (outcome === "cancel") {
         expect(request).not.toHaveBeenCalledWith("sessions.dispatch", expect.anything());
-        expect(refreshReplacement).not.toHaveBeenCalled();
+        expect(reconcileMutation).not.toHaveBeenCalled();
       } else {
         expect(request).toHaveBeenCalledWith("sessions.dispatch", {
           key: session.key,
           agentId: "main",
           deviceId: "runner",
         });
-        expect(refreshReplacement).toHaveBeenCalledWith("main");
+        expect(reconcileMutation).toHaveBeenCalledWith("main");
       }
-      expect(state.lastError).toBe(outcome === "failure" ? "Worker could not start" : null);
+      expect(state.lastError).toBe(
+        outcome === "failure"
+          ? "Worker could not start"
+          : outcome === "refresh failure"
+            ? "Worker session refresh unavailable"
+            : null,
+      );
       expect(pane.headerPlacementRestartingKey).toBeNull();
     },
   );
@@ -209,10 +225,10 @@ describe("chat pane placement", () => {
       }
       return { ok: true };
     });
-    const refreshReplacement = vi.fn(async () => null);
+    const reconcileMutation = vi.fn(async () => ({ status: "refreshed" as const }));
     const { pane } = createTestChatPane({
       client: createGatewayBrowserClientFixture({ request }),
-      sessions: createSessionCapabilityFixture({ refreshReplacement }),
+      sessions: createSessionCapabilityFixture({ reconcileMutation }),
     });
     pane.context.gateway.snapshot.hello = gatewayHelloForMethods(
       ["sessions.move"],
@@ -256,7 +272,7 @@ describe("chat pane placement", () => {
       target: { kind: "device", deviceId: "runner" },
     });
     expect(request.mock.calls.some(([method]) => method === "node.list")).toBe(false);
-    expect(refreshReplacement).toHaveBeenCalledWith("main");
+    expect(reconcileMutation).toHaveBeenCalledWith("main");
   });
 
   it("moves an active placement to a selected profile machine", async () => {
@@ -278,10 +294,10 @@ describe("chat pane placement", () => {
       }
       return { ok: true };
     });
-    const refreshReplacement = vi.fn(async () => null);
+    const reconcileMutation = vi.fn(async () => ({ status: "refreshed" as const }));
     const { pane } = createTestChatPane({
       client: createGatewayBrowserClientFixture({ request }),
-      sessions: createSessionCapabilityFixture({ refreshReplacement }),
+      sessions: createSessionCapabilityFixture({ reconcileMutation }),
     });
     pane.context.gateway.snapshot.hello = gatewayHelloForMethods(
       ["sessions.move"],
@@ -311,7 +327,7 @@ describe("chat pane placement", () => {
       },
       target: { kind: "profile", profileId: "aws", machineClass: "beast" },
     });
-    expect(refreshReplacement).toHaveBeenCalledWith("main");
+    expect(reconcileMutation).toHaveBeenCalledWith("main");
   });
 
   it.each([
@@ -369,7 +385,7 @@ describe("chat pane placement", () => {
       const { pane } = createTestChatPane({
         client: createGatewayBrowserClientFixture({ request }),
         sessions: createSessionCapabilityFixture({
-          refreshReplacement: vi.fn(async () => null),
+          reconcileMutation: vi.fn(async () => ({ status: "refreshed" as const })),
         }),
       });
       pane.context.gateway.snapshot.hello = gatewayHelloForMethods(
@@ -451,10 +467,10 @@ describe("chat pane placement", () => {
 
   it("continues an offline device placement on the Gateway with exact abandonment", async () => {
     const request = dialogs.mockRequest(async () => ({ ok: true }));
-    const refreshReplacement = vi.fn(async () => null);
+    const reconcileMutation = vi.fn(async () => ({ status: "refreshed" as const }));
     const { pane } = createTestChatPane({
       client: createGatewayBrowserClientFixture({ request }),
-      sessions: createSessionCapabilityFixture({ refreshReplacement }),
+      sessions: createSessionCapabilityFixture({ reconcileMutation }),
     });
     pane.context.gateway.snapshot.hello = gatewayHelloForMethods(
       ["sessions.move"],
@@ -479,17 +495,17 @@ describe("chat pane placement", () => {
     });
     expect(request).not.toHaveBeenCalledWith("environments.list", expect.anything());
     expect(request).not.toHaveBeenCalledWith("node.list", expect.anything());
-    expect(refreshReplacement).toHaveBeenCalledWith("main");
+    expect(reconcileMutation).toHaveBeenCalledWith("main");
   });
 
   it("keeps the offline placement visible when continuation fails", async () => {
     const request = dialogs.mockRequest(async () => {
       throw new Error("device teardown is still pending; retry Continue on Gateway");
     });
-    const refreshReplacement = vi.fn(async () => null);
+    const reconcileMutation = vi.fn(async () => ({ status: "refreshed" as const }));
     const { pane, state } = createTestChatPane({
       client: createGatewayBrowserClientFixture({ request }),
-      sessions: createSessionCapabilityFixture({ refreshReplacement }),
+      sessions: createSessionCapabilityFixture({ reconcileMutation }),
     });
     pane.context.gateway.snapshot.hello = gatewayHelloForMethods(
       ["sessions.move"],
@@ -503,7 +519,7 @@ describe("chat pane placement", () => {
 
     expect(session.placement.runner).toEqual({ kind: "device", status: "offline" });
     expect(state.lastError).toContain("retry Continue on Gateway");
-    expect(refreshReplacement).toHaveBeenCalledWith("main");
+    expect(reconcileMutation).toHaveBeenCalledWith("main");
   });
 
   it("disables paired-device moves for a runtime that cannot dispatch there", async () => {
@@ -528,7 +544,7 @@ describe("chat pane placement", () => {
     const { pane } = createTestChatPane({
       client: createGatewayBrowserClientFixture({ request }),
       sessions: createSessionCapabilityFixture({
-        refreshReplacement: vi.fn(async () => null),
+        reconcileMutation: vi.fn(async () => ({ status: "refreshed" as const })),
       }),
     });
     pane.context.gateway.snapshot.hello = gatewayHelloForMethods(
@@ -597,10 +613,10 @@ describe("chat pane placement", () => {
         }
         return { ok: true };
       });
-      const refreshReplacement = vi.fn(async () => null);
+      const reconcileMutation = vi.fn(async () => ({ status: "refreshed" as const }));
       const { pane } = createTestChatPane({
         client: createGatewayBrowserClientFixture({ request }),
-        sessions: createSessionCapabilityFixture({ refreshReplacement }),
+        sessions: createSessionCapabilityFixture({ reconcileMutation }),
       });
       pane.context.gateway.snapshot.hello = gatewayHelloForMethods(
         ["sessions.move"],
@@ -644,7 +660,7 @@ describe("chat pane placement", () => {
         },
         target: { kind: "device", deviceId: "build-mac" },
       });
-      expect(refreshReplacement).toHaveBeenCalledWith("main");
+      expect(reconcileMutation).toHaveBeenCalledWith("main");
       expect(request).not.toHaveBeenCalledWith("node.list", expect.anything());
     },
   );
@@ -721,7 +737,7 @@ describe("chat pane placement", () => {
     const { pane } = createTestChatPane({
       client: createGatewayBrowserClientFixture({ request }),
       sessions: createSessionCapabilityFixture({
-        refreshReplacement: vi.fn(async () => null),
+        reconcileMutation: vi.fn(async () => ({ status: "refreshed" as const })),
       }),
     });
     pane.context.gateway.snapshot.hello = gatewayHelloForMethods(

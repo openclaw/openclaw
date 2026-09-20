@@ -239,3 +239,62 @@ export function formatExecSecretRefIdValidationMessage(): string {
     '(example: "vault/openai/api-key" or "aws/secret#json_key").',
   ].join(" ");
 }
+
+export type ProviderRefGroup = {
+  source: SecretRefSource;
+  providerName: string;
+  refs: SecretRef[];
+};
+
+export function normalizeAndGroupSecretRefs(refs: SecretRef[]): ProviderRefGroup[] {
+  if (refs.length === 0) {
+    return [];
+  }
+  const uniqueRefs = new Map<string, SecretRef>();
+  for (const ref of refs) {
+    const id = ref.id.trim();
+    if (!id) {
+      throw new Error("Secret reference id is empty.");
+    }
+    if (!isValidSecretProviderAlias(ref.provider)) {
+      throw new Error(
+        `Secret reference provider must match /^[a-z][a-z0-9_-]{0,63}$/ (ref: ${ref.source}:${ref.provider}:${id}).`,
+      );
+    }
+    if (ref.source === "env" && !isValidEnvSecretRefId(id)) {
+      throw new Error(
+        `Env secret reference id must match /^[A-Z][A-Z0-9_]{0,127}$/ (ref: ${ref.source}:${ref.provider}:${id}).`,
+      );
+    }
+    if (ref.source === "file" && !isValidFileSecretRefId(id)) {
+      throw new Error(
+        `File secret reference id must be an absolute JSON pointer or "value" (ref: ${ref.source}:${ref.provider}:${id}).`,
+      );
+    }
+    if (ref.source === "store" && !isValidEnvSecretRefId(id)) {
+      throw new Error(
+        `Store secret reference id must match /^[A-Z][A-Z0-9_]{0,127}$/ (ref: ${ref.source}:${ref.provider}:${id}).`,
+      );
+    }
+    if (ref.source === "exec" && !isValidExecSecretRefId(id)) {
+      throw new Error(
+        `${formatExecSecretRefIdValidationMessage()} (ref: ${ref.source}:${ref.provider}:${id}).`,
+      );
+    }
+    uniqueRefs.set(secretRefKey(ref), { ...ref, id });
+  }
+
+  const grouped = new Map<string, ProviderRefGroup>();
+  for (const ref of uniqueRefs.values()) {
+    // Provider calls are batched by source/provider so exec providers receive one request for
+    // many ids and file providers parse once per payload.
+    const key = `${ref.source}:${ref.provider}`;
+    const existing = grouped.get(key);
+    if (existing) {
+      existing.refs.push(ref);
+      continue;
+    }
+    grouped.set(key, { source: ref.source, providerName: ref.provider, refs: [ref] });
+  }
+  return [...grouped.values()];
+}

@@ -1,4 +1,3 @@
-// Slack plugin module implements prepare thread context behavior.
 import {
   formatInboundEnvelope,
   resolveInboundSupplementalSenderAllowed,

@@ -1,6 +1,9 @@
 import { describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
+import { resolveDirectBundledProviderPolicySurface } from "../plugins/provider-policy-surface.js";
+import { PREPARED_THINKING_POLICY } from "../plugins/provider-thinking-catalog.js";
+import type { ProviderThinkingRegistry } from "../plugins/provider-thinking.types.js";
 import { resolveThinkingDefault } from "./model-thinking-default.js";
 
 const metadataSnapshot = createPluginMetadataSnapshotFixture({ plugins: [] });
@@ -174,55 +177,115 @@ describe("resolveThinkingDefault", () => {
     ).toBe("off");
   });
 
-  it.each([
-    {
-      name: "defaults explicitly configured Anthropic Opus 5 to high adaptive thinking",
-      provider: "anthropic",
-      model: "claude-opus-5",
-      modelName: "Claude Opus 5",
-      expected: "high",
-    },
-    {
-      name: "keeps thinking off by default for explicitly configured Anthropic Opus 4.7",
-      provider: "anthropic",
-      model: "claude-opus-4-7",
-      modelName: "Claude Opus 4.7",
-      expected: "off",
-    },
-    {
-      name: "leaves explicitly configured Anthropic Opus 4.8 thinking off by default",
-      provider: "anthropic",
-      model: "claude-opus-4-8",
-      modelName: "Claude Opus 4.8",
-      expected: "off",
-    },
-    {
-      name: "leaves explicitly configured Anthropic Vertex Opus 4.8 thinking off by default",
-      provider: "anthropic-vertex",
-      model: "claude-opus-4-8",
-      modelName: "Claude Opus 4.8",
-      expected: "off",
-    },
-    {
-      name: "leaves explicitly configured Claude CLI Opus 4.8 thinking off by default",
-      provider: "claude-cli",
-      model: "claude-opus-4-8",
-      modelName: "Claude Opus 4.8",
-      expected: "off",
-    },
-  ])("$name", ({ provider, model, modelName, expected }) => {
-    const cfg: OpenClawConfig = {
-      agents: { defaults: { model: { primary: `${provider}/${model}` } } },
+  describe.each(["anthropic", "anthropic-vertex", "claude-cli"])("%s defaults", (provider) => {
+    const resolveThinkingProfile = resolveDirectBundledProviderPolicySurface(
+      provider === "anthropic-vertex" ? provider : "anthropic",
+    )?.resolveThinkingProfile;
+    if (!resolveThinkingProfile) {
+      throw new Error(`Missing thinking policy for ${provider}`);
+    }
+    const providerPolicySource: ProviderThinkingRegistry = {
+      providers: [
+        {
+          provider: {
+            id: provider,
+            resolveThinkingProfile,
+          },
+        },
+      ],
     };
 
-    expect(
-      resolveThinkingDefault({
-        cfg,
-        provider,
-        model,
-        catalog: [{ provider, id: model, name: modelName, reasoning: true }],
-      }),
-    ).toBe(expected);
+    it.each([
+      { model: "claude-opus-5", name: "Claude Opus 5", expected: "high" },
+      { model: "claude-opus-4-7", name: "Claude Opus 4.7", expected: "off" },
+      { model: "claude-opus-4-8", name: "Claude Opus 4.8", expected: "off" },
+      { model: "claude-sonnet-4-6", name: "Claude Sonnet 4.6", expected: "adaptive" },
+      { model: "claude-opus-4-80", name: "Unrelated model", expected: "medium" },
+    ])("uses the provider's default for $model", ({ model, name, expected }) => {
+      const configured: OpenClawConfig = {
+        agents: { defaults: { model: { primary: `${provider}/${model}` } } },
+      };
+      for (const cfg of [{}, configured]) {
+        expect(
+          resolveThinkingDefault({
+            cfg,
+            provider,
+            model,
+            agentRuntime: provider === "claude-cli" ? "claude-cli" : "openclaw",
+            catalog: [{ provider, id: model, name, reasoning: true }],
+            providerPolicySource,
+          }),
+        ).toBe(expected);
+      }
+    });
+
+    it.each([
+      { model: "claude-opus-5", name: "Claude Opus 5", expected: "off" },
+      { model: "claude-sonnet-4-6", name: "Claude Sonnet 4.6", expected: "off" },
+      { model: "claude-fable-5", name: "Claude Fable 5", expected: "medium" },
+    ])(
+      "honors the catalog reasoning contract for configured $model",
+      ({ model, name, expected }) => {
+        expect(
+          resolveThinkingDefault({
+            cfg: { agents: { defaults: { model: { primary: `${provider}/${model}` } } } },
+            provider,
+            model,
+            catalog: [{ provider, id: model, name, reasoning: false }],
+            providerPolicySource,
+          }),
+        ).toBe(expected);
+      },
+    );
+  });
+
+  describe.each(["registry", "prepared", "prepared-null"])("%s policy owner", (source) => {
+    it.each([
+      { model: "claude-opus-5", name: "Claude Opus 5" },
+      { model: "claude-opus-4-7", name: "Claude Opus 4.7" },
+      { model: "claude-opus-4-8", name: "Claude Opus 4.8" },
+      { model: "claude-sonnet-4-6", name: "Claude Sonnet 4.6" },
+    ])("owns the configured $model default", ({ model, name }) => {
+      const resolveThinkingProfile = vi.fn(() => ({
+        levels: [{ id: "off" }, { id: "low" }, { id: "medium" }, { id: "high" }] as const,
+        defaultLevel: "low" as const,
+      }));
+      const registryPolicy =
+        source === "registry"
+          ? resolveThinkingProfile
+          : vi.fn(() => ({ levels: [{ id: "high" }] as const, defaultLevel: "high" as const }));
+      const catalog = [
+        {
+          provider: "anthropic",
+          id: model,
+          name,
+          reasoning: true,
+          ...(source === "registry"
+            ? {}
+            : {
+                [PREPARED_THINKING_POLICY]:
+                  source === "prepared-null" ? null : resolveThinkingProfile,
+              }),
+        },
+      ];
+
+      expect(
+        resolveThinkingDefault({
+          cfg: { agents: { defaults: { model: { primary: `anthropic/${model}` } } } },
+          provider: "anthropic",
+          model,
+          catalog,
+          agentRuntime: "claude-cli",
+          providerPolicySource: {
+            providers: [{ provider: { id: "anthropic", resolveThinkingProfile: registryPolicy } }],
+          },
+        }),
+      ).toBe(source === "prepared-null" ? "medium" : "low");
+      expect(resolveThinkingProfile).toHaveBeenCalledTimes(source === "prepared-null" ? 0 : 1);
+      if (source !== "registry") {
+        expect(registryPolicy).not.toHaveBeenCalled();
+      }
+    });
   });
 
   it("uses provider policy thinking defaults when no explicit config overrides them", () => {

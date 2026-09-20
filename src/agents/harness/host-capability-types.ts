@@ -1,19 +1,12 @@
+import type {
+  ApprovalDecision,
+  ApprovalTerminalReason,
+} from "../../../packages/gateway-protocol/src/schema/approvals.js";
 import type { AnyAgentTool } from "../tools/common.js";
 
-type AgentHarnessHostApprovalDecision = "allow-once" | "allow-always" | "deny";
-
-type AgentHarnessHostApprovalTerminalReason =
-  | "user"
-  | "timeout"
-  | "malformed-verdict"
-  | "no-route"
-  | "run-aborted"
-  | "gateway-restart"
-  | "storage-corrupt";
-
 type AgentHarnessHostApprovalResult = Readonly<{
-  decision: AgentHarnessHostApprovalDecision | null | undefined;
-  terminalReason: AgentHarnessHostApprovalTerminalReason | null | undefined;
+  decision: ApprovalDecision | null | undefined;
+  terminalReason: ApprovalTerminalReason | null | undefined;
 }>;
 
 type AgentHarnessPreparedEnvironment = Readonly<{
@@ -91,10 +84,10 @@ export type AgentHarnessHostCapabilities = Readonly<{
     mcpTool?: { server: string; tool: string };
     /** Persistence-only proof; loss of correlation does not cancel a one-shot approval. */
     isMcpToolApprovalActive?: () => boolean;
-    allowedDecisions?: AgentHarnessHostApprovalDecision[];
+    allowedDecisions?: ApprovalDecision[];
     timeoutMs: number;
     transportTimeoutMs?: number;
-  }) => Promise<{ id?: string; decision?: AgentHarnessHostApprovalDecision | null } | undefined>;
+  }) => Promise<{ id?: string; decision?: ApprovalDecision | null } | undefined>;
   waitForApproval: (request: {
     approvalId: string;
     timeoutMs: number;

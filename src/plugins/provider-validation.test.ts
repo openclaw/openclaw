@@ -103,6 +103,8 @@ describe("normalizeRegisteredProvider", () => {
             kind: "custom",
             wizard: {
               choiceId: " demo-primary ",
+              modelTarget: "utility",
+              assistantVisibility: "detected-only",
               onboardingFeatured: true,
               modelAllowlist: {
                 allowedKeys: [" demo/model ", "demo/model"],
@@ -146,6 +148,8 @@ describe("normalizeRegisteredProvider", () => {
             kind: "custom",
             wizard: {
               choiceId: "demo-primary",
+              modelTarget: "utility",
+              assistantVisibility: "detected-only",
               onboardingFeatured: true,
               modelAllowlist: {
                 allowedKeys: ["demo/model"],

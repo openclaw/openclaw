@@ -328,6 +328,22 @@ describe("update schedule hydration", () => {
 });
 
 describe("update status localization", () => {
+  it("keeps external supervisor refusals visible without launching failure triage", () => {
+    const projected = projectUpdateSentinel({
+      kind: "update",
+      status: "skipped",
+      ts: 123,
+      stats: { reason: "external-supervisor-update-required" },
+    });
+
+    expect(projected?.banner?.tone).toBe("warn");
+    expect(projected?.banner?.text).toContain("managed by an external supervisor");
+    expect(projected?.banner?.text).toContain("Use your server or deployment's update workflow");
+    expect(projected?.banner?.text).not.toContain("openclaw triage");
+    expect(projected?.attempt?.reason).toBe("external-supervisor-update-required");
+    expect(projected?.failure).toBeNull();
+  });
+
   it("distinguishes a failed status check from a failed update", () => {
     const error = "gateway request timed out after 5000ms: update.status";
     expect(resolveUpdateStatusCheckBanner(new Error(error))).toEqual({

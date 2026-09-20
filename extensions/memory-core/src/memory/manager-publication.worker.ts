@@ -1,15 +1,15 @@
 import type { DatabaseSync } from "node:sqlite";
-import { supportsNodeSqliteExtensionLoading } from "openclaw/plugin-sdk/memory-core-host-engine-knn";
 import {
   assertTransactionUsable,
   openNodeSqliteDatabase,
   resolveExistingSqliteFileUri,
   requestSqliteWorkerOperationAdmission,
   runSqliteImmediateTransactionSync,
+  supportsNodeSqliteExtensionLoading,
   type SqliteWorkerBackend,
-} from "openclaw/plugin-sdk/sqlite-runtime";
+} from "openclaw/plugin-sdk/sqlite-worker-runtime";
 import { hasMemorySessionTombstone } from "../memory-session-tombstones.js";
-import { publishMemoryDatabaseTables, readMemoryDatabaseRevision } from "./manager-db.js";
+import { publishMemoryDatabaseTables, readMemoryDatabaseRevision } from "./manager-db-kernel.js";
 import type {
   MemoryPublicationConnection,
   MemoryPublicationOperations,

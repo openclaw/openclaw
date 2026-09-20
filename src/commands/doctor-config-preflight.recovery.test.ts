@@ -5,6 +5,7 @@ import {
   prepareGatewayRunBootstrap,
   recheckGatewayRunBootstrap,
 } from "../cli/gateway-cli/pre-bootstrap.js";
+import * as healthState from "../config/io.health-state.js";
 import * as checkpoint from "../infra/startup-migration-checkpoint.js";
 import { ExitError } from "../runtime.js";
 import {
@@ -19,6 +20,54 @@ afterEach(() => {
   vi.useRealTimers();
   vi.restoreAllMocks();
   closeOpenClawStateDatabaseForTest();
+});
+
+it("skips recovery health reads without a backup and admits a later backup", async () => {
+  await withDoctorConfigPreflightHome(async (home) => {
+    const stateDir = path.join(home, ".openclaw");
+    const configPath = path.join(stateDir, "openclaw.json");
+    const raw = JSON.stringify({ gateway: { mode: "local" }, plugins: { enabled: false } });
+    await fs.mkdir(stateDir, { recursive: true });
+    await fs.writeFile(configPath, raw);
+    openOpenClawStateDatabase({ path: path.join(stateDir, "state", "openclaw.sqlite") });
+    closeOpenClawStateDatabaseForTest();
+    const healthRead = vi.fn();
+    const capture = healthState.captureConfigHealthStateStore;
+    vi.spyOn(healthState, "captureConfigHealthStateStore").mockImplementation((...args) => {
+      const store = capture(...args);
+      return {
+        ...store,
+        read() {
+          healthRead();
+          return store.read();
+        },
+      };
+    });
+    const readiness = await import("../state/openclaw-database-preflight.js");
+    const assertReady = vi.spyOn(readiness, "assertOpenClawDatabasesReady");
+    const options = {
+      migrateState: false,
+      migrateLegacyConfig: false,
+      requireStartupMigrationCheckpoint: true,
+    };
+
+    const first = await runDoctorConfigPreflight(options);
+
+    expect(first.snapshot.valid).toBe(true);
+    expect(assertReady).toHaveBeenCalled();
+    expect(healthRead).not.toHaveBeenCalled();
+    expect(await fs.readFile(configPath, "utf8")).toBe(raw);
+    await expect(fs.stat(`${configPath}.bak`)).rejects.toMatchObject({ code: "ENOENT" });
+
+    await fs.writeFile(`${configPath}.bak`, raw);
+    await fs.writeFile(configPath, '{"update":{"channel":"stable"}}');
+    const recovered = await runDoctorConfigPreflight(options);
+
+    expect(healthRead).toHaveBeenCalled();
+    expect(recovered.snapshot.valid).toBe(true);
+    expect(await fs.readFile(configPath, "utf8")).toBe(raw);
+    expect(checkpoint.hasActiveStartupMigrationLease()).toBe(false);
+  });
 });
 
 it("restores the admitted backup after database readiness exceeds the lease TTL", async () => {

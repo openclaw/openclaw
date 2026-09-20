@@ -24,6 +24,9 @@ export function projectSessionPatchRowFields(
   if (typeof patch.archived === "boolean") {
     fields.push(projectSessionArchiveFields(patch.archived, entry));
   }
+  if (patch.category !== undefined) {
+    fields.push({ category: entry.category });
+  }
   if (patch.boardPresentation !== undefined) {
     fields.push({ boardPresentation: entry.boardPresentation });
   }

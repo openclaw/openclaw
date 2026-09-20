@@ -82,7 +82,7 @@ test.each([
       expect.any(Set),
       expect.objectContaining({ dropIfSlow: true }),
     );
-    flushPendingSessionsChangedEvents();
+    await flushPendingSessionsChangedEvents();
     expect(broadcastToConnIds).toHaveBeenCalledTimes(expectedBroadcasts);
   },
 );

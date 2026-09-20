@@ -31,6 +31,8 @@ import {
   snapshotCompactionSession,
   waitForCompactionRunSettlement,
   waitForCompactionReply,
+  waitForHeartbeatTerminal,
+  waitForInterruptedHeartbeatRecovery,
 } from "./gateway-compaction-state.fixture.js";
 
 const SCENARIO_ID = "gateway-codex-heartbeat-compaction";
@@ -249,36 +251,6 @@ async function forceHeartbeat(runtime: Runtime, gateway: QaGatewayChild, proof: 
   };
 }
 
-async function waitForHeartbeatTerminal(
-  runtime: Runtime,
-  gateway: QaGatewayChild,
-  monitorId: string,
-  runId: string,
-  timeoutMs = CHECKPOINT_TIMEOUT_MS,
-) {
-  const deadline = Date.now() + timeoutMs;
-  for (;;) {
-    const history = await gateway.call("cron.runs", { id: monitorId, runId, limit: 1 });
-    assert.ok(
-      runtime.isRecord(history) && Array.isArray(history.entries),
-      "cron.runs omitted entries",
-    );
-    const entry = history.entries.find(
-      (candidate) => runtime.isRecord(candidate) && candidate.runId === runId,
-    );
-    if (
-      runtime.isRecord(entry) &&
-      (entry.status === "ok" || entry.status === "error" || entry.status === "skipped")
-    ) {
-      return entry;
-    }
-    assert.ok(Date.now() < deadline, "forced heartbeat did not reach terminal history");
-    await new Promise<void>((resolve) => {
-      setTimeout(resolve, 50);
-    });
-  }
-}
-
 function requireBusySuspendPreflight(runtime: Runtime, value: unknown, label: string) {
   assert.ok(runtime.isRecord(value), `${label} omitted its result`);
   assert.equal(value.status, "busy", `${label} did not remain busy`);
@@ -425,7 +397,6 @@ async function runCase(params: {
                     command: process.execPath,
                     args: [fixturePath, "--app-server"],
                     requestTimeoutMs: CHECKPOINT_TIMEOUT_MS,
-                    turnCompletionIdleTimeoutMs: CHECKPOINT_TIMEOUT_MS,
                   },
                 },
               },
@@ -435,6 +406,8 @@ async function runCase(params: {
             ...config.agents,
             defaults: {
               ...config.agents?.defaults,
+              // Keep Activity recaps off the controlled compaction provider.
+              utilityModel: "",
               heartbeat: { every: "24h", session: sessionName, target: "last" },
               compaction: {
                 ...config.agents?.defaults?.compaction,
@@ -780,6 +753,15 @@ async function runCase(params: {
           "Restart barrier was reached after native compaction started",
         );
 
+        const interruptedJob = await gateway.call("cron.get", { id: heartbeat.monitorId });
+        assert.ok(
+          runtime.isRecord(interruptedJob) &&
+            runtime.isRecord(interruptedJob.state) &&
+            typeof interruptedJob.state.runningAtMs === "number",
+          "Held heartbeat omitted its durable running marker",
+        );
+        const interruptedRunningAtMs = interruptedJob.state.runningAtMs;
+        evidence.interruptedHeartbeatRunningAtMs = interruptedRunningAtMs;
         const gatewayPid = gateway.pid;
         assert.ok(gatewayPid && gatewayPid > 0, "Restart case Gateway omitted its owned pid");
         assert.notEqual(process.platform, "win32", "Restart case requires POSIX process groups");
@@ -793,6 +775,14 @@ async function runCase(params: {
         evidence.restartedGatewayPid = gateway.pid;
         assert.notEqual(gateway.pid, gatewayPid, "Gateway restart reused the killed process");
 
+        // Gateway readiness precedes the scheduler's repair of the killed occurrence.
+        evidence.restartHeartbeatRecovery = await waitForInterruptedHeartbeatRecovery(
+          runtime,
+          gateway,
+          heartbeat.monitorId,
+          interruptedRunningAtMs,
+        );
+        recordCompactionProofCheckpoint(proof, "interrupted-heartbeat-recovered");
         terminalHeartbeat = await forceHeartbeat(runtime, gateway, proof);
         assert.equal(
           terminalHeartbeat.monitorId,

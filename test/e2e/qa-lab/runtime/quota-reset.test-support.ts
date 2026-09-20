@@ -5,6 +5,7 @@ import { createRequire } from "node:module";
 import path from "node:path";
 import { zstdDecompressSync } from "node:zlib";
 import { rawDataToString } from "@openclaw/gateway-client/websocket-data";
+import { asRecord } from "@openclaw/normalization-core/record-coerce";
 import { expect, type TestContext } from "vitest";
 import { WebSocketServer } from "ws";
 import { readPersistedSharedAuthProfileStateRaw } from "../../../../src/agents/auth-profiles/sqlite.js";
@@ -15,9 +16,11 @@ import { createDeferredCore, type Deferred } from "../../../../src/shared/deferr
 import { resolveOpenClawStateSqlitePath } from "../../../../src/state/openclaw-state-db.paths.js";
 import {
   createOpenClawTestInstance,
+  formatGatewayReadinessDiagnostic,
   type OpenClawTestInstance,
 } from "../../../helpers/openclaw-test-instance.js";
 import { useAutoCleanupTempDirTracker } from "../../../helpers/temp-dir.js";
+import { quotaPublicDiagnostics, quotaRequestMode } from "./quota-reset-diagnostics.mjs";
 
 export const BACKUP_MODEL = "quota-backup/echo";
 export const BACKUP_MARKER = "QUOTA_BACKUP_OK";
@@ -45,6 +48,7 @@ type Phase =
   | "restored"
   | "revoked";
 type RequestRecord = {
+  atMs: number;
   phase: Phase;
   transport: "http" | "websocket";
   path: string;
@@ -112,7 +116,12 @@ export async function startQuotaProvider(source: BlockSource, responseText: stri
   const heldCatalogResponses: HeldProviderResponse[] = [];
   const resetAt = Math.floor(Date.now() / 1000) + 5 * 86_400;
   const requests: RequestRecord[] = [];
+  const upgrades: Array<{ atMs: number; path: string }> = [];
   const responses: Array<{
+    atMs: number;
+    status: number;
+    transport: "http" | "websocket";
+    mode?: string;
     phase: Phase;
     path: string;
     value: unknown;
@@ -128,6 +137,7 @@ export async function startQuotaProvider(source: BlockSource, responseText: stri
     bodyBytes?: Buffer,
   ) => {
     const recorded: RequestRecord = {
+      atMs: Date.now(),
       phase,
       transport,
       path: request.url ?? "",
@@ -227,13 +237,21 @@ export async function startQuotaProvider(source: BlockSource, responseText: stri
   const successEvents = (request: RequestRecord, marker = responseText) => {
     const observer = nextSuccessObserver;
     if (observer && new URL(request.path, "http://127.0.0.1").pathname === observer.path) {
-      let body: unknown;
+      let body: Record<string, unknown> | undefined;
       try {
-        body = JSON.parse(request.body ?? "null");
+        body = asRecord(JSON.parse(request.body ?? "null"));
       } catch {
         // An unidentified request cannot consume an inference-specific observer.
       }
-      if (body && typeof body === "object" && "model" in body && body.model === observer.model) {
+      // Codex prewarm completes successfully without generating the inference being observed.
+      if (
+        body?.model === observer.model &&
+        !(
+          request.transport === "websocket" &&
+          body.type === "response.create" &&
+          body.generate === false
+        )
+      ) {
         nextSuccessObserver = undefined;
         observer.observe();
       }
@@ -297,7 +315,15 @@ export async function startQuotaProvider(source: BlockSource, responseText: stri
         headers: Record<string, string> = {},
         responsePhase = phase,
       ) => {
-        responses.push({ phase: responsePhase, path: requestPath, value, headers });
+        responses.push({
+          atMs: Date.now(),
+          status,
+          transport: "http",
+          phase: responsePhase,
+          path: requestPath,
+          value,
+          headers,
+        });
         response.writeHead(status, { "content-type": "application/json", ...headers });
         response.end(JSON.stringify(value));
       };
@@ -353,7 +379,9 @@ export async function startQuotaProvider(source: BlockSource, responseText: stri
           json(200, {
             access_token: syntheticAccessToken(),
             refresh_token: "synthetic-rotated-refresh",
-            expires_in: 3600,
+            // Quota recovery should not introduce the CLI's one-day expiry warning.
+            // Expiry scenarios control the original credential with expiresDuringBlock.
+            expires_in: 2 * 86_400,
           });
         }
       } else if (requestPath === "/catalog/models") {
@@ -409,7 +437,14 @@ export async function startQuotaProvider(source: BlockSource, responseText: stri
           json(event.status, { error: event.error }, event.headers);
         } else {
           const events = successEvents(recorded, backup ? BACKUP_MARKER : responseText);
-          responses.push({ phase, path: requestPath, value: events });
+          responses.push({
+            atMs: Date.now(),
+            status: 200,
+            transport: "http",
+            phase,
+            path: requestPath,
+            value: events,
+          });
           response.writeHead(200, { "content-type": "text/event-stream" });
           for (const event of events) {
             response.write(`data: ${JSON.stringify(event)}\n\n`);
@@ -429,13 +464,22 @@ export async function startQuotaProvider(source: BlockSource, responseText: stri
   });
   const sockets = new WebSocketServer({ noServer: true });
   server.on("upgrade", (request, socket, head) => {
+    upgrades.push({ atMs: Date.now(), path: request.url ?? "" });
     sockets.handleUpgrade(request, socket, head, (websocket) => {
       websocket.on("error", (error) => errors.push(String(error)));
       websocket.on("message", (raw) => {
         const recorded = recordRequest(request, rawDataToString(raw), "websocket");
         const events = exhausted() || phase === "revoked" ? [failure()] : successEvents(recorded);
         for (const event of events) {
-          responses.push({ phase, path: request.url ?? "", value: event });
+          responses.push({
+            atMs: Date.now(),
+            status: "status" in event && typeof event.status === "number" ? event.status : 200,
+            transport: "websocket",
+            mode: quotaRequestMode(recorded.body),
+            phase,
+            path: request.url ?? "",
+            value: event,
+          });
           websocket.send(JSON.stringify(event));
         }
       });
@@ -452,6 +496,7 @@ export async function startQuotaProvider(source: BlockSource, responseText: stri
   return {
     baseUrl: `http://127.0.0.1:${address.port}`,
     requests,
+    upgrades,
     responses,
     heldUsageResponses,
     heldCatalogResponses,
@@ -529,6 +574,9 @@ export async function createQuotaResetFixture(
   const root = tempDirs.make("openclaw-quota-reset-");
   const provider = await startQuotaProvider(source, responseText);
   context.onTestFinished(() => provider.stop());
+  const nativeLogFile = path.join(root, "native.private.log");
+  const refreshReceipt = path.join(root, "refresh-receipt.jsonl");
+  await fs.writeFile(refreshReceipt, "");
   const clockFile = path.join(root, "clock-offset");
   await fs.writeFile(clockFile, "0");
   const storageFaultFile = path.join(root, "storage-fault");
@@ -546,6 +594,7 @@ export async function createQuotaResetFixture(
   preload.searchParams.set("clock", clockFile);
   if (controlUi) {
     preload.searchParams.set("catalog", "1");
+    preload.searchParams.set("refreshReceipt", refreshReceipt);
   }
   if (limitGatewayFileSize) {
     preload.searchParams.set("storageFault", storageFaultFile);
@@ -577,6 +626,9 @@ export async function createQuotaResetFixture(
       OPENCLAW_AGENT_HARNESS_FALLBACK: "none",
     },
     config: {
+      ...(controlUi
+        ? { logging: { level: "debug", consoleLevel: "info", file: nativeLogFile } }
+        : {}),
       gateway: { controlUi: { enabled: controlUi } },
       ...(enableIsolatedTool ? { tools: { alsoAllow: ["llm-task"] } } : {}),
       ...(scopedCooldown || includeBackup
@@ -660,7 +712,8 @@ export async function createQuotaResetFixture(
             [MODEL]: { agentRuntime: { id: runtime } },
             ...(includeBackup ? { [BACKUP_MODEL]: { agentRuntime: { id: "openclaw" } } } : {}),
           },
-          ...(scopedCooldown ? { utilityModel: `openai/${UTILITY_MODEL_ID}` } : {}),
+          // Keep background Activity recaps out of the scenario-controlled provider phases.
+          utilityModel: scopedCooldown ? `openai/${UTILITY_MODEL_ID}` : "",
           workspace: "~/workspace",
           skipBootstrap: true,
           timeoutSeconds: 90,
@@ -670,7 +723,12 @@ export async function createQuotaResetFixture(
     },
   });
   context.onTestFinished(() => gateway.cleanup());
-  context.onTestFailed(() => console.error(gateway.logs()));
+  context.onTestFailed(() => {
+    for (const diagnostic of gateway.readiness) {
+      console.error(formatGatewayReadinessDiagnostic(diagnostic));
+    }
+    console.error(gateway.logs());
+  });
   // Doctor imports without refreshing a credential outside its one-day warning window.
   const expires = expiresDuringBlock ? Date.now() + 2 * 86_400_000 : Date.UTC(2036, 0, 1);
   const access = syntheticAccessToken(expires);
@@ -790,6 +848,25 @@ export async function createQuotaResetFixture(
     turn,
     turns,
     storageFaultFile,
+    async publicDiagnostics(profile: unknown) {
+      const [refreshes, nativeLog] = await Promise.allSettled([
+        fs.readFile(refreshReceipt, "utf8").then((text) =>
+          text
+            .split("\n")
+            .filter(Boolean)
+            .map((line) => JSON.parse(line)),
+        ),
+        fs.readFile(nativeLogFile, "utf8"),
+      ]);
+      return quotaPublicDiagnostics({
+        profile,
+        requests: provider.requests,
+        upgrades: provider.upgrades,
+        authEvents: refreshes.status === "fulfilled" ? refreshes.value : undefined,
+        responses: provider.responses,
+        nativeLog: nativeLog.status === "fulfilled" ? nativeLog.value : undefined,
+      });
+    },
   };
 }
 

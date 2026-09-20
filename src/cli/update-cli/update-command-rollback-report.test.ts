@@ -135,7 +135,7 @@ describe("verified rollback failure actions", () => {
       }),
     );
     expect(mocks.prepare).toHaveBeenCalledExactlyOnceWith(
-      { attemptId: runId, result: f.result },
+      { attemptId: runId, action: "cli", result: f.result, recordedRun: undefined },
       { env: f.env, stateDir: f.env.OPENCLAW_STATE_DIR },
     );
     expect(mocks.confirm).toHaveBeenCalledExactlyOnceWith(

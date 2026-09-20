@@ -1,7 +1,6 @@
 import { randomUUID } from "node:crypto";
 import os from "node:os";
 import path from "node:path";
-// Verifies fallback cooldown probe decisions and diagnostic records.
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/config.js";
@@ -101,6 +100,7 @@ const emptyPluginMetadataSnapshot = vi.hoisted(() => ({
     setupProviders: new Map(),
     commandAliases: new Map(),
     contracts: new Map(),
+    providerAuthContributions: [],
     modelIdNormalizationPolicies: new Map(),
   },
   metrics: {
@@ -315,7 +315,7 @@ describe("runWithModelFallback – probe logic", () => {
       authRuntime: {
         getSoonestCooldownExpiry: mockedGetSoonestCooldownExpiry,
         resolveProfilesUnavailableReason: mockedResolveProfilesUnavailableReason,
-      } as unknown as Parameters<typeof resolveCooldownDecision>[0]["authRuntime"],
+      },
       authStore,
       profileIds: ["openai-profile-1"],
     });
@@ -328,7 +328,6 @@ describe("runWithModelFallback – probe logic", () => {
     expect(decision).toEqual({
       type: "suspend_session",
       reason,
-      leaderCandidate: OPENAI_PROBE_CANDIDATE,
     });
   }
 
@@ -349,10 +348,8 @@ describe("runWithModelFallback – probe logic", () => {
     Date.now = vi.fn(() => NOW);
     setLoggerOverride({ level: "silent", consoleLevel: "silent" });
 
-    // Clear throttle state between tests
     probeThrottleInternals.lastProbeAttempt.clear();
 
-    // Default: ensureAuthProfileStore returns a fake store
     const fakeStore: AuthProfileStore = {
       version: 1,
       profiles: {},
@@ -360,7 +357,6 @@ describe("runWithModelFallback – probe logic", () => {
     mockedHasAnyAuthProfileStoreSource.mockReturnValue(true);
     mockedEnsureAuthProfileStore.mockReturnValue(fakeStore);
 
-    // Default: resolveAuthProfileOrder returns profiles only for "openai" provider
     mockedResolveAuthProfileOrder.mockImplementation(({ provider }: { provider: string }) => {
       if (provider === "openai") {
         return ["openai-profile-1"];

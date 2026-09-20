@@ -74,7 +74,7 @@ function progressLineText(
   const detail = line.detail && line.detail !== line.label ? line.detail : undefined;
   if (detail) {
     parts.push(literalProgressText(compact(detail)));
-  } else if (line.text.trim() && line.text.trim() !== label) {
+  } else if (!line.toolName && line.text.trim() && line.text.trim() !== label) {
     parts.push(literalProgressText(compact(line.text)));
   }
   if (line.status && line.status !== "completed" && line.status !== line.detail) {
@@ -91,10 +91,7 @@ export function renderTelegramProgressDraftPreview(
   const activity =
     snapshot.statusHeadline || snapshot.plan?.length
       ? snapshot.lines.filter(
-          (line) =>
-            typeof line !== "string" &&
-            !line.id?.startsWith("reasoning:") &&
-            !line.id?.startsWith("commentary:"),
+          (line) => typeof line !== "string" && !line.id?.startsWith("reasoning:"),
         )
       : snapshot.lines;
   const isPriorityLine = options.toolProgress

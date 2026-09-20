@@ -75,6 +75,14 @@ Hot reload and secrets reload preserve that distinction: catalog compatibility
 metadata does not become a custom request override that switches a native runtime
 back to OpenClaw.
 
+Changing `session.store` does not migrate conversations. Queued notifications
+bound to the previous physical store end with a recorded `store-replaced` outcome.
+Pending child-result delivery is suspended while the result and completed task
+remain available for explicit recovery; selecting the old store again does not
+automatically re-arm that delivery.
+Replacement and in-process restart that keep the same store preserve queued
+notification handoff.
+
 | Category                  | Fields                                                                                                                                                                                                                                                             | Gateway restart needed?                |
 | ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------- |
 | Channels                  | `channels.*`, `web` (WhatsApp)                                                                                                                                                                                                                                     | Depends on setting and loaded plugin   |
@@ -247,6 +255,18 @@ Agent requests waiting to start pause while plugin hot reload drains the old
 runtime. They continue with the replacement when it is ready, or with the
 previous runtime after a successful rollback. You do not need to resend these
 requests. Failed restoration or Gateway shutdown still reports a failure.
+
+If plugin replacement times out after stopping channels, the plugin lifecycle
+owner retries the admitted-work drain for up to 60 seconds before restoring the
+previous code and configuration with fresh registrations. It restarts channels
+after successful restoration and preserves manual stops. Unfinished writes keep
+their resource ownership; they are never discarded to force a replacement.
+If recovery reaches its deadline or cleanup fails, the operation ends as failed
+and releases channel reload pauses. Detailed [`/ready`](/gateway/health#http-probes)
+reports `plugin-reload` with the affected plugins and recovery instructions.
+Retry `openclaw plugins reload <id>` once the outstanding work settles, or restart
+the Gateway. See [Plugin lifecycle](/plugins/architecture#plugin-metadata-snapshot-and-lookup-table)
+for cleanup and ownership details.
 
 During channel or plugin hot reload, Gateway-hosted channel webhook routes return
 `503` with `Retry-After: 1` until replacement ingress registers. Senders must honor

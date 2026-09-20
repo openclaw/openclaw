@@ -61,7 +61,8 @@ vi.mock("./chat-broadcast.js", () => ({
   broadcastChatFinal: vi.fn(),
   broadcastChatError: vi.fn(),
 }));
-vi.mock("../agent-turn/agent-job.js", () => ({
+vi.mock(import("../agent-turn/agent-job.js"), async (importOriginal) => ({
+  ...(await importOriginal()),
   setGatewayDedupeEntry: vi.fn(),
 }));
 vi.mock("../../auto-reply/reply/queue/settings-runtime.js", () => ({

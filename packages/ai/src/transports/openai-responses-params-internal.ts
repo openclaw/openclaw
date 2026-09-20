@@ -139,7 +139,7 @@ function buildOpenAIResponsesInstructionsText(context: Context): string | undefi
 // compared `input` array, so it can vary freely per turn with no effect on
 // continuation eligibility. Routes that opt out via `compat.supportsInstructions:
 // false` (see openai-responses-payload-policy.ts) get no instructions field at
-// all -- convertOpenAIResponsesMessagesForRequest embeds the prompt back into
+// all -- request construction embeds the prompt back into
 // `input` for those instead.
 function resolveOpenAIResponsesInstructions(
   model: Model,
@@ -211,30 +211,6 @@ export function resolveOpenAIResponsesTextFormat(
   return responseFormat as unknown as ResponseFormatTextConfig;
 }
 
-function convertOpenAIResponsesMessagesForRequest(
-  model: Model,
-  context: Context,
-  options: OpenAIResponsesOptions | undefined,
-  replayMode: OpenAIResponsesReplayMode,
-): ResponseInput {
-  const isNativeCodexResponses = usesNativeOpenAICodexResponsesBackend(model);
-  const payloadPolicy = resolveOpenAIResponsesPayloadPolicy(model, {
-    storeMode: "transport-default",
-  });
-  const policyAllowsReplayIds =
-    payloadPolicy.explicitStore !== false && !payloadPolicy.shouldStripStore;
-  const replayResponsesItemIds =
-    !isNativeCodexResponses && (options?.replayResponsesItemIds ?? policyAllowsReplayIds);
-  return convertResponsesMessages(model, context, OPENAI_RESPONSES_TOOL_CALL_PROVIDERS, {
-    includeSystemPrompt: !payloadPolicy.usesInstructionsField,
-    replayReasoningItems: true,
-    replayResponsesItemIds,
-    authProfileId: options?.authProfileId,
-    sessionId: options?.sessionId,
-    replayMode,
-  });
-}
-
 export function buildOpenAIResponsesParams(
   model: Model,
   context: Context,
@@ -245,7 +221,19 @@ export function buildOpenAIResponsesParams(
   const payloadPolicy = resolveOpenAIResponsesPayloadPolicy(model, {
     storeMode: "transport-default",
   });
-  const messages = convertOpenAIResponsesMessagesForRequest(model, context, options, replayMode);
+  const policyAllowsReplayIds =
+    payloadPolicy.explicitStore !== false && !payloadPolicy.shouldStripStore;
+  const replayResponsesItemIds =
+    !usesNativeOpenAICodexResponsesBackend(model) &&
+    (options?.replayResponsesItemIds ?? policyAllowsReplayIds);
+  const messages = convertResponsesMessages(model, context, OPENAI_RESPONSES_TOOL_CALL_PROVIDERS, {
+    includeSystemPrompt: !payloadPolicy.usesInstructionsField,
+    replayReasoningItems: true,
+    replayResponsesItemIds,
+    authProfileId: options?.authProfileId,
+    sessionId: options?.sessionId,
+    replayMode,
+  });
   ensureOpenAIResponsesNonEmptyInput(messages, context);
   const cacheRetention = resolveCacheRetention(options?.cacheRetention);
   const compat = getCompat(model);
@@ -291,6 +279,7 @@ export function buildOpenAIResponsesParams(
     const tools = context.tools;
     const strict = resolveOpenAIStrictToolSetting(model as OpenAIModeModel, {
       transport: "stream",
+      supportsStrictMode: compat.supportsStrictMode,
     });
     const { projection, tools: converted } = prepareResponsesTools(tools, strict, model);
     if (

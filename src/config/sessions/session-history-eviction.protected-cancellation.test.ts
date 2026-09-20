@@ -6,6 +6,8 @@ import { resetAgentRunRegistryForTest } from "../../infra/agent-run-registry.js"
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
 import * as lifecycle from "../../sessions/session-lifecycle-admission.js";
 import {
+  closeOpenClawAgentDatabaseByPathAsync,
+  closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
@@ -47,6 +49,7 @@ describe("protected historical session cancellation", () => {
       mode: "warn",
       maintenance: { maxDiskBytes: null, highWaterBytes: null },
     });
+    await closeOpenClawAgentDatabasesAsync();
     closeOpenClawAgentDatabasesForTest();
     await testState.cleanup();
   });
@@ -75,6 +78,7 @@ describe("protected historical session cancellation", () => {
       for (const history of histories) {
         await createCandidateTranscript(history, stage === "archived entry");
       }
+      await closeOpenClawAgentDatabaseByPathAsync(database().path);
       const protectedHistory = histories[0]!;
       const beforeEvents = histories.map((history) =>
         loadTranscriptEventsSync({ ...history, storePath }),

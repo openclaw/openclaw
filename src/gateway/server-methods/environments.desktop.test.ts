@@ -6,7 +6,10 @@ import { HostDesktopCredentialsRequiredError } from "../desktop/host-source-erro
 import { createHostDesktopService } from "../desktop/host-source.js";
 import { NODE_DESKTOP_SERVICE_CONTEXT } from "../desktop/node-source-context.js";
 import * as observeBridge from "../desktop/observe-bridge.js";
-import type { DesktopObserveRequester } from "../desktop/observe-requester.js";
+import {
+  resolveDesktopObserveRequester,
+  type DesktopObserveRequester,
+} from "../desktop/observe-requester.js";
 import { createDesktopSessionRegistry } from "../desktop/session-registry.js";
 import type { GatewayClient } from "./client-types.js";
 import { environmentsHandlers } from "./environments.js";
@@ -31,7 +34,7 @@ function createRequesterClient(signal: AbortSignal): GatewayClient {
 }
 
 async function invoke(
-  method: "desktop.observe" | "worker.desktop.observe",
+  method: "desktop.observe" | "worker.desktop.observe" | "desktop.release",
   params: unknown,
   context: object,
   client: GatewayClient | null = null,
@@ -53,6 +56,39 @@ async function invoke(
 }
 
 describe("desktop gateway methods", () => {
+  it("releases only the requesting connection's unclaimed observation once", async () => {
+    const controller = new AbortController();
+    const client = createRequesterClient(controller.signal);
+    let authorityCurrent = true;
+    const requester = resolveDesktopObserveRequester({
+      client,
+      hasCurrentClientAuthority: () => authorityCurrent,
+    });
+    const onAbandon = vi.fn(async () => {});
+    const { token } = observeBridge.mintDesktopObserverToken({
+      sourceKey: "desktop-release",
+      ownerEpoch: 1,
+      control: true,
+      attachment: { kind: "tcp", host: "127.0.0.1", port: 5900 },
+      requester,
+      onAbandon,
+    });
+    const params = { wsPath: `/desktop/observe?token=${token}` };
+    try {
+      const other = { ...client, connId: "another-desktop-requester" };
+      expect((await invoke("desktop.release", params, {}, other))[1]).toEqual({ released: false });
+      authorityCurrent = false;
+      expect((await invoke("desktop.release", params, {}, client))[1]).toEqual({ released: false });
+      expect(onAbandon).not.toHaveBeenCalled();
+      authorityCurrent = true;
+      expect((await invoke("desktop.release", params, {}, client))[1]).toEqual({ released: true });
+      expect((await invoke("desktop.release", params, {}, client))[1]).toEqual({ released: false });
+      expect(onAbandon).toHaveBeenCalledOnce();
+    } finally {
+      controller.abort();
+    }
+  });
+
   it.each([
     { source: "host", method: "desktop.observe", params: { source: { kind: "host" } } },
     {

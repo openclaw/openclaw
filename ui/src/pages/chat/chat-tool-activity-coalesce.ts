@@ -9,6 +9,7 @@ import {
 } from "../../../../src/chat/tool-content.js";
 import { readTranscriptDisplayPosition } from "../../../../src/chat/transcript-display-position.js";
 import type { ChatItem, ToolCard } from "../../lib/chat/chat-types.ts";
+import { readPreparedActivity } from "../../lib/chat/tool-call-grouping.ts";
 import { extractToolCardsCached } from "../../lib/chat/tool-cards.ts";
 import { resolveToolBlockId } from "./chat-thread-items.ts";
 import { chatItemStartsUserTurn } from "./chat-turn-boundary.ts";
@@ -300,8 +301,33 @@ function coalesceTurn(items: ChatItem[]): ChatItem[] {
       (names.get(identity(owner))?.size ?? 0) > 1 ? owner.name : undefined,
     ]);
     const bundle = bundles.get(bundleKey);
+    const prepared = new Map<string, ReturnType<typeof readPreparedActivity>[number]>();
+    for (const source of [message, invocation.live, result?.source.message]) {
+      const activityItems = readPreparedActivity(source).filter(
+        (activity) =>
+          (activity.toolCallId ?? activity.itemId) === owner.id &&
+          !activity.suppressChannelProgress,
+      );
+      if (
+        source === result?.source.message &&
+        Array.isArray(asRecord(source)?.activity) &&
+        activityItems.length === 0
+      ) {
+        prepared.clear();
+      }
+      for (const activity of activityItems) {
+        const previous = prepared.get(activity.itemId);
+        if (previous?.phase !== "end" || activity.phase === "end") {
+          prepared.set(activity.itemId, activity);
+        }
+      }
+    }
     if (bundle) {
       bundle.item.message.content.push(...content);
+      bundle.item.message.activity = [
+        ...readPreparedActivity(bundle.item.message),
+        ...prepared.values(),
+      ];
       bundle.index = Math.min(bundle.index, index);
       continue;
     }
@@ -313,6 +339,7 @@ function coalesceTurn(items: ChatItem[]): ChatItem[] {
         role: invocation.call ? "assistant" : message.role,
         runId: owner.runId,
         content,
+        activity: [...prepared.values()],
         ...(transcript ? { messageId: transcript } : {}),
         ...(invocation.live
           ? {

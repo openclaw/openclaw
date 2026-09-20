@@ -25,6 +25,7 @@ import {
 } from "./subagent-registry-helpers.js";
 import {
   beginSubagentCleanup,
+  isSubagentCompletionDeliveryAllowed,
   retireSupersededCleanupIfNeeded,
   retireSupersededCleanupInBackground,
   runDetachedCleanupAttempt,
@@ -530,6 +531,8 @@ export const startSubagentAnnounceCleanupFlow = (
   const requesterSettleGeneration = entry.requesterSettleWake?.rearmGeneration;
   const requesterTookCompletion = () =>
     entry.requesterTurnYielded === true ||
+    (entry.completionTarget === "parent" &&
+      entry.requesterSettleWake?.requesterYieldBatch === true) ||
     entry.requesterSettleWake?.rearmGeneration !== requesterSettleGeneration;
   let latestDeliveryError = getDeliveryLastError(entry);
   let committedDelivery: SubagentRunRecord["delivery"];
@@ -595,10 +598,7 @@ export const startSubagentAnnounceCleanupFlow = (
     suppressChildSessionEffects: suppressSessionEffects,
     isChildSessionEffectsAllowed: childSessionEffectsAllowed,
     isCompletionDeliveryAllowed: () =>
-      entry.suppressCompletionDelivery !== true &&
-      !isDeliverySuspended(entry) &&
-      (entry.delivery?.status !== "delivered" || entry.delivery === committedDelivery) &&
-      context.isCleanupAttemptCurrent(runId, entry, cleanupGeneration),
+      isSubagentCompletionDeliveryAllowed(context, entry, cleanupGeneration, committedDelivery),
     isCompletionOwnedByRequesterYield: () =>
       entry.requesterTurnYielded === true ||
       entry.requesterSettleWake?.requesterYieldBatch === true,

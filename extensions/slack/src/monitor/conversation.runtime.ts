@@ -1,4 +1,3 @@
-// Slack plugin module implements conversation behavior.
 export {
   buildPluginBindingResolvedText,
   parsePluginBindingApprovalCustomId,

@@ -116,6 +116,7 @@ export function startGatewayMaintenanceTimers(params: {
   startMediaCleanup: () => void;
   stopMediaCleanup: () => Promise<MediaCleanupStopResult>;
   stopSessionColdStorageMaintenance: () => Promise<void>;
+  stopTelemetryChecks: () => Promise<void>;
   worktreeCleanup: ReturnType<typeof setInterval>;
   skillUsageCleanup: () => void;
 } {
@@ -173,16 +174,32 @@ export function startGatewayMaintenanceTimers(params: {
   });
 
   let nextTelemetryCheckAtMs = Date.now() + generateSecureInt(TELEMETRY_MAINTENANCE_INTERVAL_MS);
+  let telemetryStopped = false;
+  let telemetryCheckInFlight: Promise<void> | undefined;
+  const performTelemetryCheck = () => {
+    telemetryCheckInFlight ??= checkTelemetryUpdate(params.getRuntimeConfig, {
+      surface: "gateway",
+    })
+      .then(() => undefined)
+      .catch(() => {})
+      .finally(() => {
+        telemetryCheckInFlight = undefined;
+      });
+  };
+  const stopTelemetryChecks = async () => {
+    telemetryStopped = true;
+    await telemetryCheckInFlight;
+  };
   // periodic keepalive
   const tickInterval = setInterval(() => {
     void hostThawRecovery.tick();
     const now = Date.now();
-    if (!params.isNixMode && now >= nextTelemetryCheckAtMs) {
+    if (!telemetryStopped && !params.isNixMode && now >= nextTelemetryCheckAtMs) {
       nextTelemetryCheckAtMs =
         now +
         TELEMETRY_MAINTENANCE_INTERVAL_MS +
         generateSecureInt(TELEMETRY_MAINTENANCE_INTERVAL_MS);
-      void checkTelemetryUpdate(params.getRuntimeConfig(), { surface: "gateway" }).catch(() => {});
+      performTelemetryCheck();
     }
     const payload = { ts: now };
     params.broadcast("tick", payload);
@@ -272,6 +289,7 @@ export function startGatewayMaintenanceTimers(params: {
   const dedupeCleanup = setInterval(() => {
     const AGENT_RUN_SEQ_MAX = 10_000;
     const now = Date.now();
+    params.chatRunState.toolEventRecipients.pruneExpired(now);
     void performDevicePairSetupCompletionGc(now);
     if (now - deliveryQueueMediaGcStartedAtMs >= DELIVERY_QUEUE_MEDIA_GC_INTERVAL_MS) {
       void performDeliveryQueueMediaGc();
@@ -548,6 +566,7 @@ export function startGatewayMaintenanceTimers(params: {
     tickInterval,
     healthInterval,
     dedupeCleanup,
+    stopTelemetryChecks,
     startMediaCleanup,
     stopMediaCleanup,
     stopSessionColdStorageMaintenance: sessionColdStorageMaintenance.stop,

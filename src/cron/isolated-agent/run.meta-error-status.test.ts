@@ -70,8 +70,8 @@ function mockAnnounceOutcome(overrides: Record<string, unknown> = {}) {
 }
 
 function mockDeliveryFailure(error: string, deliveryPayloads: unknown[] = []) {
-  dispatchCronDeliveryMock.mockImplementationOnce(({ withRunSession }) => ({
-    result: withRunSession({ status: "error", error, deliveryAttempted: true }),
+  dispatchCronDeliveryMock.mockImplementationOnce(() => ({
+    disposition: { kind: "error", error },
     delivered: false,
     deliveryAttempted: true,
     summary: undefined,
@@ -114,21 +114,49 @@ describe("runCronIsolatedAgentTurn - meta.error status propagation", () => {
     expect(result.outputText).toBe("cron isolated run failed: model provider unreachable");
   });
 
-  it("does not deliver partial success text when a run-level error is present", async () => {
-    mockAgentRun({
-      provider: "openai",
-      model: "gpt-5.4",
-      usage: { input: 0, output: 0 },
-      payloads: [{ text: "Partial success-looking text" }],
-      meta: { error: { kind: "retry_limit", message: "retry limit exceeded" } },
-    });
+  it.each(["none", "pending", "suppressed", "error"] as const)(
+    "preserves a run-level error with partial text when delivery disposition is %s",
+    async (kind) => {
+      mockAgentRun({
+        provider: "openai",
+        model: "gpt-5.4",
+        usage: { input: 0, output: 0 },
+        payloads: [{ text: "Partial success-looking text" }],
+        meta: { error: { kind: "retry_limit", message: "retry limit exceeded" } },
+      });
+      if (kind !== "none") {
+        dispatchCronDeliveryMock.mockResolvedValueOnce({
+          disposition: kind === "error" ? { kind, error: "delivery failed" } : { kind },
+          delivered: false,
+          deliveryAttempted: true,
+          deliveryError: "delivery failed",
+          summary: "Pending child summary",
+          outputText: "Pending child output",
+          deliveryPayloads: [],
+        });
+      }
 
-    const result = await runCronIsolatedAgentTurn(makeIsolatedAgentParamsFixture());
+      const result = await runCronIsolatedAgentTurn(makeIsolatedAgentParamsFixture());
 
-    expect(result.status).toBe("error");
-    expect(result.error).toBe("cron isolated run failed: retry limit exceeded");
-    expect(result.outputText).toBe("cron isolated run failed: retry limit exceeded");
-  });
+      expect(result.status).toBe("error");
+      const expectedError =
+        kind === "error" ? "delivery failed" : "cron isolated run failed: retry limit exceeded";
+      expect(result.error).toBe(expectedError);
+      expect(result.outputText).toBe(kind === "error" ? undefined : expectedError);
+      expect(result.diagnostics?.entries).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({
+            source: kind === "error" ? "delivery" : "agent-run",
+            message: expectedError,
+          }),
+        ]),
+      );
+      if (kind !== "none") {
+        expect(result.delivered).toBe(kind === "pending" ? undefined : false);
+        expect(result.deliveryError).toBe(kind === "error" ? "delivery failed" : undefined);
+      }
+    },
+  );
 
   it("marks an aborted embedded agent run without a run-level error as a cron error", async () => {
     mockAgentRun({

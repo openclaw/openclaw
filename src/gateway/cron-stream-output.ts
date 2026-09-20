@@ -178,8 +178,7 @@ export class CronStreamOutput {
     }
     const accepted = truncateUtf8Prefix(chunk, remaining);
     const truncatedTail = accepted !== chunk;
-    const truncatedTailContinuesLine =
-      truncatedTail && !chunk.slice(accepted.length).endsWith("\n");
+    const truncatedTailContinuesLine = truncatedTail && !chunk.endsWith("\n");
     const acceptedBytes = Buffer.byteLength(accepted, "utf8");
     if (acceptedBytes === 0 && chunk.length > 0) {
       this.droppedChunkTail[channel] = chunk.endsWith("\n") ? "clean" : "midline";
@@ -213,16 +212,13 @@ export class CronStreamOutput {
   }
 
   async drainBufferedOutput(generation: number): Promise<void> {
-    const buffered = this.bufferedOutput.filter((entry) => entry.generation === generation);
-    this.bufferedOutput = this.bufferedOutput.filter((entry) => entry.generation !== generation);
-    this.bufferedOutputBytes = this.bufferedOutput.reduce(
-      (total, entry) => total + Buffer.byteLength(entry.chunk, "utf8"),
-      0,
-    );
-    const overflowed = this.outputOverflowGenerations.delete(generation);
     if (generation !== this.params.getGeneration()) {
       return;
     }
+    const buffered = this.bufferedOutput;
+    this.bufferedOutput = [];
+    this.bufferedOutputBytes = 0;
+    const overflowed = this.outputOverflowGenerations.delete(generation);
     for (const entry of buffered) {
       if (!this.params.isDesiredRunning()) {
         this.interruptedOutput.push(entry);
@@ -477,20 +473,24 @@ export class CronStreamOutput {
     const capped = truncateCronStreamBatch(candidate, maxBatchBytes);
     this.batch = capped;
     this.batchHasLines = true;
-    clearTimer(this.quietTimer);
-    this.quietTimer = undefined;
-    const epoch = ++this.quietEpoch;
+    ++this.quietEpoch;
     if (capped !== candidate || Buffer.byteLength(capped, "utf8") >= maxBatchBytes) {
+      clearTimer(this.quietTimer);
+      this.quietTimer = undefined;
       const batch = this.takeOpenBatch();
       if (batch !== undefined) {
         await this.handleClosedBatch(batch, generation);
       }
       return true;
     }
-    this.quietTimer = setTimeout(() => {
-      void this.closeQuietBatch(generation, epoch);
-    }, batchMs);
-    this.quietTimer.unref?.();
+    if (this.quietTimer) {
+      this.quietTimer.refresh();
+    } else {
+      this.quietTimer = setTimeout(() => {
+        void this.closeQuietBatch(generation, this.quietEpoch);
+      }, batchMs);
+      this.quietTimer.unref?.();
+    }
     return true;
   }
 

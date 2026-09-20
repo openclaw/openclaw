@@ -90,6 +90,7 @@ export async function resolveCodexBindingAppServerConnection(
     appServer,
     usesSupervisionConnection,
     requestAuthProfileId: usesSupervisionConnection ? undefined : authProfileId,
-    clientAuthProfileId: usesSupervisionConnection ? null : authProfileId,
+    clientAuthProfileId:
+      usesSupervisionConnection || appServer.start.homeScope === "user" ? null : authProfileId,
   };
 }

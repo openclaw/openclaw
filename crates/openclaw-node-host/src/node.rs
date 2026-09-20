@@ -1020,7 +1020,6 @@ struct DecodedInvocation {
 
 fn decode_invocation(payload: Value) -> Result<DecodedInvocation, ClientError> {
     #[derive(Deserialize)]
-    #[serde(deny_unknown_fields)]
     #[serde(rename_all = "camelCase")]
     struct Payload {
         id: String,
@@ -1038,11 +1037,18 @@ fn decode_invocation(payload: Value) -> Result<DecodedInvocation, ClientError> {
         idempotency_key: Option<String>,
         #[serde(default)]
         session_key: Option<String>,
+        #[serde(default, flatten)]
+        extensions: BTreeMap<String, Value>,
     }
 
     let payload: Payload = serde_json::from_value(payload).map_err(|error| {
         ClientError::InvalidFrame(format!("invalid node.invoke.request: {error}"))
     })?;
+    if payload.extensions.contains_key("params") {
+        return Err(ClientError::InvalidFrame(
+            "invalid node.invoke.request: direct params are unsupported; use paramsJSON".into(),
+        ));
+    }
     let (params, received_params_bytes) = match payload.params_json {
         Some(value) => {
             let received_params_bytes = value.len();
@@ -1106,7 +1112,7 @@ mod tests {
             "/../../test/fixtures/node-invoke-lifecycle-contract.json"
         )))
         .expect("valid node invocation lifecycle fixture");
-        assert_eq!(fixture["version"], 1);
+        assert_eq!(fixture["version"], 3);
 
         let invocation = parse_invocation(fixture["request"]["canonical"].clone(), Instant::now())
             .expect("canonical invocation request");
@@ -1116,6 +1122,27 @@ mod tests {
         assert_eq!(invocation.timeout_ms, Some(0));
         assert_eq!(invocation.idempotency_key.as_deref(), Some("idem-1"));
         assert_eq!(invocation.session_key.as_deref(), Some("agent:main:main"));
+        let extended_fixture = fixture["request"]["withExtensions"]
+            .as_object()
+            .expect("invocation request with extensions");
+        assert_eq!(extended_fixture.get("unexpected"), Some(&Value::Bool(true)));
+        let extended = parse_invocation(Value::Object(extended_fixture.clone()), Instant::now())
+            .expect("invocation request with extensions");
+        assert_eq!(extended.id, invocation.id);
+        assert_eq!(extended.node_id, invocation.node_id);
+        assert_eq!(extended.command, invocation.command);
+        assert_eq!(extended.params, invocation.params);
+        assert_eq!(extended.timeout_ms, invocation.timeout_ms);
+        assert_eq!(extended.idempotency_key, invocation.idempotency_key);
+        assert_eq!(extended.session_key, invocation.session_key);
+        assert!(
+            parse_invocation(fixture["request"]["legacyParams"].clone(), Instant::now()).is_err()
+        );
+        assert!(parse_invocation(
+            fixture["request"]["ambiguousParams"].clone(),
+            Instant::now(),
+        )
+        .is_err());
         assert!(parse_invocation(fixture["request"]["invalid"].clone(), Instant::now(),).is_err());
 
         let inputs = fixture["input"]["canonical"]
@@ -1158,6 +1185,16 @@ mod tests {
         )
         .expect("canonical failure result");
         assert_eq!(failure_params, failure.clone());
+
+        assert_eq!(
+            parse_invocation_cancel(fixture["cancel"]["canonical"].clone())
+                .expect("canonical invocation cancellation"),
+            NodeSessionEvent::InvocationCancelled {
+                invoke_id: "invoke-1".into(),
+                node_id: "node-1".into(),
+            }
+        );
+        assert!(parse_invocation_cancel(fixture["cancel"]["invalid"].clone()).is_err());
     }
 
     #[test]

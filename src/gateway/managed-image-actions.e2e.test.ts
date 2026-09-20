@@ -14,6 +14,7 @@ import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-syn
 import { readImageProbeFromHeader } from "../media/image-ops.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import {
+  closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
@@ -236,6 +237,7 @@ describe("managed image actions Gateway E2E", () => {
         },
       ]);
       closeOpenClawAgentDatabasesForTest();
+      await closeOpenClawStateDatabaseAsync();
       closeOpenClawStateDatabaseForTest();
       await withGatewayServer(
         async ({ port }) => {
@@ -533,10 +535,10 @@ describe("managed image actions Gateway E2E", () => {
               .digest("hex"),
           ).toBe(archiveHash);
           expect(
-            readManagedImageRecord(
+            (await readManagedImageRecord(
               artifactId.slice(MANAGED_OUTGOING_IMAGE_ARTIFACT_ID_PREFIX.length),
               stateDir,
-            ) !== null,
+            )) !== null,
           ).toBe(true);
           // Retain only statuses and predicates so a failed denial never prints a new ticket.
           expect(denied).toEqual([
@@ -553,7 +555,7 @@ describe("managed image actions Gateway E2E", () => {
           expect(afterDisconnect.status).toBe(200);
           expect(Buffer.from(await afterDisconnect.arrayBuffer())).toEqual(source);
 
-          const record = readManagedImageRecord(
+          const record = await readManagedImageRecord(
             artifactId.slice(MANAGED_OUTGOING_IMAGE_ARTIFACT_ID_PREFIX.length),
             stateDir,
           );
@@ -571,7 +573,7 @@ describe("managed image actions Gateway E2E", () => {
             forceDeleteSessionRecords: true,
           });
           expect(cleanup).toMatchObject({ deletedRecordCount: 1, deletedFileCount: 1 });
-          expect(readManagedImageRecord(record.attachmentId, stateDir)).toBeNull();
+          expect(await readManagedImageRecord(record.attachmentId, stateDir)).toBeNull();
           await expect(fs.access(originalPath)).rejects.toMatchObject({ code: "ENOENT" });
 
           const afterCleanup = await fetch(fullUrl);

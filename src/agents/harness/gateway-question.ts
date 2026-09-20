@@ -416,7 +416,12 @@ export async function cancelPendingAgentQuestionForSession(params: {
   state.cancelRequested = !sourceBound;
   try {
     if (sourceBound && !state.answer) {
-      await state.registration;
+      try {
+        await state.registration;
+      } catch {
+        // Registration failed before cancellation dispatch; leave the input unclaimed.
+        return false;
+      }
     }
     reservation.assertCurrent();
     try {

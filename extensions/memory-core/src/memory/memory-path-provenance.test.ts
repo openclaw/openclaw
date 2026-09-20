@@ -5,6 +5,7 @@ import { readMemoryArtifactProvenance } from "openclaw/plugin-sdk/memory-core-ho
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createMemoryCoreTestHarness } from "../test-helpers.js";
+import { classifyWorkspaceMemoryPaths } from "../workspace-path-classifier.js";
 import { resolveMemoryPathClassification } from "./memory-path-provenance.js";
 
 vi.mock("openclaw/plugin-sdk/memory-core-host-runtime-core", { spy: true });
@@ -17,6 +18,53 @@ afterEach(() => {
 });
 
 describe("memory path provenance", () => {
+  it("classifies loaded remote sources without probing Gateway-local decoys", async () => {
+    const workspaceDir = tempDirs.make("remote-memory-provenance-");
+    await fs.writeFile(path.join(workspaceDir, "MEMORY.md"), "Gateway decoy");
+    const realpath = vi.spyOn(fs, "realpath");
+    vi.mocked(readMemoryArtifactProvenance).mockImplementation(async ({ relativePath }) =>
+      relativePath === "memory/tainted.md"
+        ? { fileHash: "0".repeat(64), originClass: "untrusted", observedAt: 1 }
+        : undefined,
+    );
+    await expect(
+      classifyWorkspaceMemoryPaths({
+        cfg: {},
+        agentId: "main",
+        workspaceDir,
+        relativePaths: ["USER.md", "MEMORY.md", "alias/MEMORY.md", "missing/MEMORY.md"],
+        readSources: [
+          { relativePath: "USER.md", canonicalRelativePath: "USER.md" },
+          { relativePath: "MEMORY.md" },
+          { relativePath: "alias/MEMORY.md", canonicalRelativePath: "memory/tainted.md" },
+        ],
+      }),
+    ).resolves.toEqual([
+      { relativePath: "USER.md", originClass: "agent" },
+      { relativePath: "MEMORY.md", originClass: "untrusted" },
+      { relativePath: "alias/MEMORY.md", originClass: "untrusted" },
+      { relativePath: "missing/MEMORY.md", originClass: "untrusted" },
+    ]);
+    expect(realpath).not.toHaveBeenCalled();
+    expect(readMemoryArtifactProvenance).toHaveBeenCalledWith({
+      workspaceDir,
+      relativePath: "memory/tainted.md",
+    });
+  });
+
+  it.each(["../USER.md", "/USER.md", "memory/../USER.md", "C:\\USER.md", "notes/USER.md"])(
+    "does not promote a remote source outside native memory paths: %s",
+    async (canonicalRelativePath) => {
+      await expect(
+        resolveMemoryPathClassification({
+          absolutePath: "/workspace/USER.md",
+          source: "memory",
+          workspaceDir: "/workspace",
+          readSource: { canonicalRelativePath },
+        }),
+      ).resolves.toEqual({ curatedRoot: false, originClass: "untrusted" });
+    },
+  );
   it("trusts canonical workspace memory while excluding system and lookalike paths", async () => {
     const root = tempDirs.make("memory-path-provenance-");
     const workspaceDir = path.join(root, "workspace");

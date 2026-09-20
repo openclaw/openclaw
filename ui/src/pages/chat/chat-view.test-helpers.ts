@@ -1,11 +1,11 @@
-import type { ReactiveControllerHost } from "lit";
+import { render, type ReactiveControllerHost } from "lit";
 import { vi } from "vitest";
 import {
   areUiSessionKeysEquivalent,
   isUiGlobalScopeConfigured,
   uiSessionRowMatchesSelectedChat,
 } from "../../lib/sessions/session-key.ts";
-import type { renderChat } from "./chat-view.ts";
+import { renderChat } from "./chat-view.ts";
 import {
   prepareChatMessageRender,
   resolveMessageActionDetails,
@@ -188,4 +188,14 @@ export function createChatProps(overrides: Partial<ChatProps> = {}): ChatProps {
     basePath: "",
     ...overrides,
   };
+}
+
+export function renderChatView(overrides: Partial<ChatProps> = {}) {
+  const container = document.createElement("div");
+  render(renderChat(createChatProps(overrides)), container);
+  return container;
+}
+
+export function renderChatInto(container: HTMLElement, overrides: Partial<ChatProps> = {}) {
+  render(renderChat(createChatProps(overrides)), container);
 }

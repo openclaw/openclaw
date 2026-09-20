@@ -173,8 +173,17 @@ export function main(root = process.cwd(), argv = process.argv.slice(2)) {
       throw new Error("No max-lines overrides found in .oxlintrc.json");
     }
     scratch = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-line-cap-"));
-    const before = collectViolations(path.join(scratch, "base"), baseSources, config);
+    // Stop ancestor Git ignores at the snapshot; explicit lint exclusions still apply.
+    fs.mkdirSync(path.join(scratch, ".git"));
     const after = collectViolations(path.join(scratch, "head"), headSources, config);
+    // Only over-cap head files need an inherited allowance. A broken base must
+    // not block a valid repair that already satisfies the current cap.
+    const debtPaths = new Set([...after.keys()].map((file) => oldPaths.get(file) ?? file));
+    const before = collectViolations(
+      path.join(scratch, "base"),
+      new Map([...baseSources].filter(([file]) => debtPaths.has(file))),
+      config,
+    );
     const increased = compareLineCapViolations(after, before, renames);
     if (
       reportRatchetFailures(

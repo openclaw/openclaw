@@ -78,7 +78,7 @@ function renderDocComment(
     const description = `${normalizeDocLines(param.description).join(" ")}${suffix}`.trim();
     if (description) {
       lines.push(
-        ` * @param ${param.name}${param.required ? "" : "?"} ${escapeDocComment(description)}`,
+        ` * ${escapeDocComment(`@param ${param.name}${param.required ? "" : "?"} ${description}`)}`,
       );
     }
   }
@@ -348,10 +348,14 @@ export function createMcpApiVirtualFiles(
   if (servers.length === 0) {
     return [];
   }
+  const indexServer = servers.find((server) => server.identifier === "index");
+  const separateServers = servers.filter((server) => server.identifier !== "index");
+  // Preserve MCP.index and its existing path without overwriting the root API.
   const rootContent = [
-    ...servers.map((server) => `/// <reference path="./${server.identifier}.d.ts" />`),
+    ...separateServers.map((server) => `/// <reference path="./${server.identifier}.d.ts" />`),
     "",
     renderMcpRootHeader(),
+    ...(indexServer ? ["", renderMcpServerHeader(indexServer, indexServer.tools)] : []),
   ].join("\n");
   return [
     {
@@ -360,7 +364,7 @@ export function createMcpApiVirtualFiles(
       content: rootContent,
       bytes: Buffer.byteLength(rootContent, "utf8"),
     },
-    ...servers.map((server) => {
+    ...separateServers.map((server) => {
       const content = renderMcpServerHeader(server, server.tools);
       return {
         path: `mcp/${server.identifier}.d.ts`,

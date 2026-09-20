@@ -243,9 +243,12 @@ class SidebarGatewayPickerTest {
     composeRule.onNodeWithText("Enter setup code").performScrollTo().performClick()
     composeRule.onNodeWithTag("gateway-add-code").performTextReplacement("not a setup code")
     composeRule.onNodeWithText("Continue").performScrollTo().performClick()
+    composeRule.onNodeWithText("Setup code has invalid gateway URL.").assertIsDisplayed()
+    composeRule.onNodeWithText("Setup code", useUnmergedTree = true).assertIsDisplayed()
     composeRule.onNodeWithTag("gateway-add-preview").assertDoesNotExist()
     composeRule.runOnIdle { assertEquals(before, prefs.gatewayRegistry.entries.value) }
     composeRule.onNodeWithTag("gateway-add-code").performTextReplacement(code)
+    composeRule.onNodeWithText("Setup code has invalid gateway URL.").assertDoesNotExist()
     composeRule.onNodeWithText("Continue").performScrollTo().performClick()
     composeRule.onNodeWithTag("gateway-add-preview").assertIsDisplayed()
     capture("add-gateway-confirmation", preferredDialogTag = "gateway-addition")
@@ -279,6 +282,7 @@ class SidebarGatewayPickerTest {
     val alpha = savedGateway("Gateway Alpha")
     focus(alpha)
     showSidebarAndComposer(showComposer = false)
+    awaitFocus(alpha)
     model.openGatewayAddition()
     val stale = requireNotNull(model.gatewayAdditionRequest.value)
     model.dismissGatewayAddition(stale)
@@ -460,6 +464,36 @@ class SidebarGatewayPickerTest {
     }
     composeRule.waitForIdle()
     composeRule.onAllNodes(isDialog()).assertCountEquals(0)
+  }
+
+  @Test
+  @Config(qualifiers = "w360dp-h800dp-mdpi")
+  fun manualGatewayAdditionKeepsPopulatedLabelsWithoutSavingBeforeReview() {
+    val gateway = savedGateway("Local QA Gateway")
+    savedGateway("Local QA Secondary")
+    focus(gateway)
+    showSidebarAndComposer(showShell = true)
+    val entries = prefs.gatewayRegistry.entries.value
+    composeRule.onNodeWithContentDescription("Show Sidebar").performClick()
+    openPicker()
+    composeRule.onNodeWithText("Add Gateway").performClick()
+    composeRule.onNodeWithText("Set up manually").performScrollTo().performClick()
+    val fields =
+      listOf(
+        "Gateway URL" to "wss://gateway.example.test",
+        "Token (optional)" to "synthetic-token",
+        "Password (optional)" to "synthetic-password",
+      )
+    for ((label, value) in fields) {
+      composeRule.onNodeWithContentDescription(label).performScrollTo().performTextReplacement(value)
+      composeRule.onNodeWithText(label, useUnmergedTree = true).assertIsDisplayed()
+    }
+    composeRule.onNodeWithText("Continue").performScrollTo().performClick()
+    composeRule.onNodeWithTag("gateway-add-preview").assertIsDisplayed()
+    composeRule.runOnIdle { assertEquals(entries, prefs.gatewayRegistry.entries.value) }
+    composeRule.onNodeWithText("Cancel").performScrollTo().performClick()
+    composeRule.onNodeWithTag("gateway-addition").assertDoesNotExist()
+    composeRule.runOnIdle { assertEquals(entries, prefs.gatewayRegistry.entries.value) }
   }
 
   @Test

@@ -1,5 +1,4 @@
 // Imported by agent.test.ts to keep its mocked suite in one Vitest module graph.
-import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { registerExecApprovalFollowupRuntimeHandoff } from "../../agents/bash-tools.exec-approval-followup-state.js";
@@ -45,7 +44,7 @@ import {
   handleChatAbortRequest,
   handleChatAbortRequestWithLifecycle,
 } from "./chat-abort-handler.js";
-import { chatHandlers } from "./chat.js";
+import { handleDirectExternalChatSend } from "./chat-send-external-entry.js";
 import type { GatewayRequestContext } from "./types.js";
 
 const mocks = getAgentTestMocks();
@@ -118,17 +117,17 @@ describe("gateway agent handler chat.abort integration", () => {
       },
       canonicalKey: "global",
     });
-    mocks.loadGatewaySessionRow.mockReturnValue({
+    const sessionRow = {
       key: "global",
       sessionId: "global-session-id",
       kind: "global",
       updatedAt: Date.now(),
       goal,
-    });
+    } satisfies GatewaySessionRow;
     mocks.updateSessionStore.mockResolvedValue(undefined);
     mocks.agentCommand.mockReturnValue(new Promise(() => {}));
 
-    const context = makeContext();
+    const context = makeContext({ agentId: "work", row: sessionRow });
     context.getSessionEventSubscriberConnIds = () => new Set(["conn-1"]);
     const runId = "idem-agent-global-goal-event";
     await invokeAgent(
@@ -141,7 +140,6 @@ describe("gateway agent handler chat.abort integration", () => {
     );
 
     await waitForAssertion(() => {
-      expect(mocks.loadGatewaySessionRow).toHaveBeenCalledWith("global", { agentId: "work" });
       expect(context.addChatRun).toHaveBeenCalledWith(
         runId,
         expect.objectContaining({ sessionKey: "global", agentId: "work" }),
@@ -153,6 +151,7 @@ describe("gateway agent handler chat.abort integration", () => {
           sessionKey: "global",
           agentId: "work",
           goal: expect.objectContaining({ id: "goal-work-global" }),
+          session: expect.objectContaining({ key: "global", sessionId: "global-session-id", goal }),
         }),
         new Set(["conn-1"]),
         { agentId: "work", dropIfSlow: true, sessionKeys: ["global"] },
@@ -303,10 +302,7 @@ describe("gateway agent handler chat.abort integration", () => {
     expect(context.chatAbortControllers.has(runId)).toBe(true);
 
     const stopRespond = vi.fn();
-    await expectDefined(
-      chatHandlers["chat.send"],
-      'chatHandlers["chat.send"] test invariant',
-    )({
+    await handleDirectExternalChatSend({
       params: {
         sessionKey: "agent:main:main",
         message: "/stop",
@@ -556,10 +552,7 @@ describe("gateway agent handler chat.abort integration", () => {
     });
 
     const stopRespond = vi.fn();
-    await expectDefined(
-      chatHandlers["chat.send"],
-      'chatHandlers["chat.send"] test invariant',
-    )({
+    await handleDirectExternalChatSend({
       params: {
         sessionKey: requestedSessionKey,
         message: "/stop",

@@ -1,10 +1,14 @@
 import { describe, expect, it, vi } from "vitest";
+import { SqliteCoordinatorError } from "../infra/sqlite-coordinator.js";
 import { SqliteSchemaVersionError } from "../infra/sqlite-user-version.js";
-import { decodeSqliteWorkerReplyError } from "../infra/sqlite-worker-broker-reply.js";
+import { receiveSqliteWorkerReply } from "../infra/sqlite-worker-broker-reply.js";
+import type { Job } from "../infra/sqlite-worker-broker.types.js";
 import {
   findStartupMaintenanceRequiredError,
   StartupMaintenanceRequiredError,
 } from "../infra/startup-maintenance-required.js";
+import { StateDatabaseCoordinatorContentionError } from "../infra/state-database-coordinator.js";
+import { SkillUploadRequestError } from "../skills/lifecycle/upload-store-error.js";
 import { OpenClawAgentDatabaseMediaMigrationRequiredError } from "./openclaw-agent-db-migration-required.js";
 import { OpenClawStateDatabaseSchemaMigrationRequiredError } from "./openclaw-state-db-schema-migration-required.js";
 import {
@@ -38,8 +42,43 @@ function roundTrip(error: Error): Error {
 
 describe("shared-state worker error transport", () => {
   it.each([
+    [RangeError, false],
+    [RangeError, true],
+    [SkillUploadRequestError, false],
+    [SkillUploadRequestError, true],
+  ] as const)("preserves %s identity with aggregate=%s", (ErrorType, aggregate) => {
+    const original = Object.assign(new ErrorType("Synthetic invalid request"), {
+      code: "ERR_OUT_OF_RANGE",
+      cause: new Error("Synthetic decoding cause"),
+    });
+    const root = aggregate
+      ? new AggregateError([original, original], "Read and cleanup", { cause: original })
+      : original;
+    const decoded = roundTrip(root);
+    const restored = aggregate ? decoded.cause : decoded;
+    expect(restored).toBeInstanceOf(ErrorType);
+    expect(restored).toMatchObject({
+      name: original.name,
+      message: original.message,
+      code: original.code,
+      cause: { message: "Synthetic decoding cause" },
+    });
+    if (aggregate) {
+      expect(decoded).toBeInstanceOf(AggregateError);
+      if (!(decoded instanceof AggregateError)) {
+        throw new Error("Expected aggregate read failure");
+      }
+      expect(decoded.errors).toHaveLength(2);
+      expect(decoded.errors[0]).toBe(restored);
+      expect(decoded.errors[1]).toBe(restored);
+    }
+    expect(hydrateOpenClawStateWorkerError(decoded)).toBe(decoded);
+  });
+
+  it.each([
     "OPENCLAW_STATE_LEASE_INVALID_INPUT",
     "OPENCLAW_STATE_LEASE_TIMEOUT",
+    "STATE_LEASE_BUSY",
     "OPENCLAW_STATE_LEASE_ABORTED",
     "OPENCLAW_STATE_LEASE_LOST",
     "OPENCLAW_STATE_LEASE_STORAGE_FAILED",
@@ -89,30 +128,55 @@ describe("shared-state worker error transport", () => {
     if (!payload) {
       throw new Error("Expected canonical payload");
     }
-    const failure = decodeSqliteWorkerReplyError(
+    const job: Job = {
+      request: {
+        type: "execute",
+        id: 1,
+        actor: 1,
+        input: new Uint8Array(),
+        stateContext: {
+          environment: { OPENCLAW_STATE_DIR: "/fixture" },
+          coordinatorRuntime: { directory: "/fixture/coordinator", keepAlive: false },
+        },
+      },
+      bytes: 0,
+      resolve: () => undefined,
+      reject: () => undefined,
+      detach: () => undefined,
+    };
+    let failure: unknown;
+    receiveSqliteWorkerReply(
       {
-        request: {
-          type: "execute",
-          id: 1,
-          actor: 1,
-          input: new Uint8Array(),
-          stateContext: {
-            environment: { OPENCLAW_STATE_DIR: "/fixture" },
-            coordinatorRuntime: { directory: "/fixture/coordinator", keepAlive: false },
+        current: job,
+        worker: {
+          postMessage: () => {
+            throw new Error("Unexpected native dispatch");
           },
         },
-        bytes: 0,
-        resolve: () => undefined,
-        reject: () => undefined,
-        detach: () => undefined,
       },
       {
-        name: "SqliteWorkerError",
-        message: "write outcome unknown",
-        code: "outcome-unknown",
-        sharedState: payload,
+        id: 1,
+        ok: false,
+        error: {
+          name: "SqliteWorkerError",
+          message: "write outcome unknown",
+          code: "outcome-unknown",
+          sharedState: payload,
+        },
+      },
+      {
+        fail(error) {
+          throw error;
+        },
+        finish(_job, error) {
+          failure = error;
+        },
+        dispatch() {},
       },
     );
+    if (!(failure instanceof Error)) {
+      throw new Error("Expected the broker to settle the original failure");
+    }
     expect(hydrateOpenClawStateWorkerError(failure)).toBe(failure);
     expect(failure).toMatchObject({ code: "outcome-unknown" });
     expect(findStartupMaintenanceRequiredError(failure)).toBeUndefined();
@@ -273,6 +337,18 @@ describe("shared-state worker error transport", () => {
       },
     },
     {
+      error: new OpenClawStateDatabaseSchemaMigrationRequiredError(
+        "legacy-cron-run-logs",
+        "/fixture/state.sqlite",
+      ),
+      constructor: OpenClawStateDatabaseSchemaMigrationRequiredError,
+      fields: {
+        kind: "legacy-cron-run-logs",
+        pathname: "/fixture/state.sqlite",
+        reason: "cron run history migration",
+      },
+    },
+    {
       error: new OpenClawAgentDatabaseMediaMigrationRequiredError("/fixture/agent.sqlite", 11),
       constructor: OpenClawAgentDatabaseMediaMigrationRequiredError,
       fields: {
@@ -363,11 +439,67 @@ describe("shared-state worker error transport", () => {
     const imitation = Object.assign(new Error("imitation"), { name: "SqliteSchemaVersionError" });
     for (const error of [
       new Error("ordinary"),
+      Object.assign(new Error("range imitation"), { name: "RangeError", code: "ERR_OUT_OF_RANGE" }),
+      Object.assign(new Error("upload imitation"), { name: "SkillUploadRequestError" }),
       imitation,
       new AggregateError([imitation], "ordinary aggregate"),
       { cause: new OpenClawStateOwnershipError("nested object") },
     ]) {
       expect(encodeOpenClawStateWorkerError(error)).toBeUndefined();
+    }
+  });
+
+  it("opts into complete ordinary graphs without promoting name-only classifications", () => {
+    const native = Object.assign(new Error("native read failed"), {
+      code: "ERR_SQLITE_ERROR",
+      errcode: 11,
+      privateState: "fixture-not-for-transport",
+    });
+    const integrity = Object.assign(new Error("read refused", { cause: native }), {
+      name: "SqliteIntegrityError",
+    });
+    const imitation = Object.assign(new Error("name only"), { name: "SqliteSchemaVersionError" });
+    const original = new AggregateError([integrity, native, imitation], "read and cleanup", {
+      cause: integrity,
+    });
+    original.errors.push(original);
+    const options = { includeOrdinary: true };
+    const payload = encodeOpenClawStateWorkerError(original, options);
+    expect(payload).toBeDefined();
+    expect(JSON.stringify(payload)).not.toContain("fixture-not-for-transport");
+    const retained = new Error("remote error");
+    retainOpenClawStateWorkerErrorPayload(retained, structuredClone(payload));
+    expect(hydrateOpenClawStateWorkerError(retained)).toBe(retained);
+
+    const decoded = hydrateOpenClawStateWorkerError(retained, options);
+    if (!(decoded instanceof AggregateError)) {
+      throw new Error("expected ordinary aggregate graph");
+    }
+    expect(decoded.cause).toBe(decoded.errors[0]);
+    expect(decoded.errors[0]).toMatchObject({ name: "SqliteIntegrityError" });
+    expect(decoded.errors[0].cause).toBe(decoded.errors[1]);
+    expect(decoded.errors[1]).toMatchObject({ code: "ERR_SQLITE_ERROR", errcode: 11 });
+    expect(decoded.errors[2]).not.toBeInstanceOf(SqliteSchemaVersionError);
+    expect(decoded.errors[3]).toBe(decoded);
+    expect(findStartupMaintenanceRequiredError(decoded)).toBeUndefined();
+    expect(hydrateOpenClawStateWorkerError(retained, options)).not.toBe(decoded);
+  });
+
+  it.each([
+    new SqliteCoordinatorError("admission refused", new Error("native cause")),
+    ...(["gateway-lifecycle", "state-lifecycle", "state-handles"] as const).map(
+      (family) => new StateDatabaseCoordinatorContentionError(family),
+    ),
+  ])("preserves coordinator classification for %s", (original) => {
+    const decoded = roundTrip(original);
+    expect(decoded).toBeInstanceOf(SqliteCoordinatorError);
+    expect(decoded).toMatchObject({ name: original.name, message: original.message });
+    if (original instanceof StateDatabaseCoordinatorContentionError) {
+      expect(decoded).toBeInstanceOf(StateDatabaseCoordinatorContentionError);
+      expect(decoded).toMatchObject({ family: original.family });
+    } else {
+      expect(decoded.cause).toBeInstanceOf(Error);
+      expect(decoded.cause).toMatchObject({ message: "native cause" });
     }
   });
 
@@ -387,6 +519,16 @@ describe("shared-state worker error transport", () => {
     { version: 1, root: 0, nodes: [{ ...validNode, cause: { ref: 1 } }] },
     { version: 1, root: 0, nodes: [{ ...validNode, cause: { value: {} } }] },
     { version: 1, root: 0, nodes: [{ ...validNode, code: {} }] },
+    { version: 1, root: 0, nodes: [{ ...validNode, errcode: -1 }] },
+    { version: 1, root: 0, nodes: [{ ...validNode, errcode: 0.5 }] },
+    { version: 1, root: 0, nodes: [{ ...validNode, errcode: 2 ** 31 }] },
+    {
+      version: 1,
+      root: 0,
+      nodes: [
+        { type: "coordinator-contention", name: "Error", message: "invalid", family: "other" },
+      ],
+    },
     {
       version: 1,
       root: 0,
@@ -428,5 +570,6 @@ describe("shared-state worker error transport", () => {
     const retained = new Error("ordinary transport failure");
     retainOpenClawStateWorkerErrorPayload(retained, payload);
     expect(hydrateOpenClawStateWorkerError(retained)).toBe(retained);
+    expect(hydrateOpenClawStateWorkerError(retained, { includeOrdinary: true })).toBe(retained);
   });
 });

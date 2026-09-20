@@ -8,7 +8,7 @@ import {
   createRootRunner,
   writePackageRoot,
 } from "./package-update-steps.test-support.js";
-import { resolveNpmGlobalPrefixLayoutFromPrefix } from "./update-global.js";
+import { resolveNpmGlobalPrefixLayoutFromPrefix } from "./update-npm-prefix.js";
 
 const SOURCE_VERSION = "2026.8.1";
 const SOURCE_SHA = "a".repeat(40);

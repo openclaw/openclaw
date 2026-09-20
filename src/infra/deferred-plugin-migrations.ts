@@ -72,26 +72,25 @@ export function mergeDeferredPluginMigration(
   };
 }
 
-function readMigrationRows(database: DatabaseSync) {
+function readPendingMigrationRows(database: DatabaseSync) {
   return executeSqliteQuerySync(
     database,
     getNodeSqliteKysely<Pick<DB, "migration_runs">>(database)
       .selectFrom("migration_runs")
-      .select(["id", "status", "report_json"])
+      .select(["id", "report_json"])
       .where("id", "like", `${RUN_PREFIX}%`)
+      .where("status", "=", "pending")
       .orderBy("id"),
   ).rows;
 }
 
-function pendingMigrationRecords(rows: ReturnType<typeof readMigrationRows>) {
-  return rows
-    .filter((row) => row.status === "pending")
-    .map((row) => deferredPluginMigrationSchema.parse(JSON.parse(row.report_json)));
+function pendingMigrationRecords(rows: ReturnType<typeof readPendingMigrationRows>) {
+  return rows.map((row) => deferredPluginMigrationSchema.parse(JSON.parse(row.report_json)));
 }
 
 function readPendingMigrationRecords(database: DatabaseSync) {
   return tableExists(database, "migration_runs")
-    ? pendingMigrationRecords(readMigrationRows(database))
+    ? pendingMigrationRecords(readPendingMigrationRows(database))
     : [];
 }
 
@@ -164,7 +163,7 @@ export function withDeferredPluginMigrationsCurrent<T>(
     }
     return runOpenClawStateWriteTransaction(
       ({ db }) => {
-        const pending = pendingMigrationRecords(readMigrationRows(db));
+        const pending = pendingMigrationRecords(readPendingMigrationRows(db));
         if (!isDeepStrictEqual(pending, params.expectedPending) && params.onConflict) {
           // Commit preservation facts against these rows; callers refuse publication after return.
           return params.onConflict(pending);
@@ -201,7 +200,7 @@ export function recordDeferredPluginMigrations(params: {
   );
   const transitions = runOpenClawStateWriteTransaction(
     ({ db }) => {
-      const currentRows = readMigrationRows(db);
+      const currentRows = readPendingMigrationRows(db);
       if (params.expectedPending) {
         assertPendingGeneration(pendingMigrationRecords(currentRows), params.expectedPending);
       }
@@ -213,13 +212,13 @@ export function recordDeferredPluginMigrations(params: {
         const runId = `${RUN_PREFIX}${current.pluginId}`;
         const previous = rows.get(runId);
         const pending = mergeDeferredPluginMigration(
-          previous?.status === "pending"
+          previous
             ? deferredPluginMigrationSchema.parse(JSON.parse(previous.report_json))
             : undefined,
           current,
         );
         const reportJson = JSON.stringify(pending);
-        if (previous?.status === "pending" && previous.report_json === reportJson) {
+        if (previous?.report_json === reportJson) {
           continue;
         }
         recordLegacyMigrationRun(db, {
@@ -235,7 +234,7 @@ export function recordDeferredPluginMigrations(params: {
       for (const pluginId of new Set(params.resolvedPluginIds)) {
         const runId = `${RUN_PREFIX}${pluginId}`;
         const previous = rows.get(runId);
-        if (pendingById.has(pluginId) || previous?.status !== "pending") {
+        if (pendingById.has(pluginId) || !previous) {
           continue;
         }
         recordLegacyMigrationRun(db, {
@@ -251,7 +250,7 @@ export function recordDeferredPluginMigrations(params: {
       if (deferred.length > 0) {
         invalidateSuccessfulMigrationCheckpointsInTransaction(db);
       }
-      return { deferred, resolved, pending: pendingMigrationRecords(readMigrationRows(db)) };
+      return { deferred, resolved, pending: pendingMigrationRecords(readPendingMigrationRows(db)) };
     },
     { env: params.env },
     { operationLabel: "state.plugin-migration-deferral" },

@@ -1,12 +1,12 @@
 import { once } from "node:events";
 import fs from "node:fs/promises";
 import { createServer } from "node:http";
+import path from "node:path";
 import { getGlobalDispatcher, setGlobalDispatcher } from "undici";
-import type { Mock } from "vitest";
-import { expect, it, vi } from "vitest";
-import * as diskSpace from "./disk-space.js";
+import { expect, it, onTestFinished, vi, type Mock } from "vitest";
 import { startProxy, stopProxy, type ProxyHandle } from "./net/proxy/proxy-lifecycle.js";
 import { validateUpdateCandidateCanary } from "./update-candidate-canary.js";
+import { FakeChild } from "./update-candidate-canary.test-support.js";
 import { prepareUpdateCandidateRehearsal } from "./update-candidate-rehearsal.js";
 import type { UpdateStepResult } from "./update-runner-types.js";
 
@@ -16,7 +16,7 @@ export function expectCanaryReadinessWarning(
   status: number,
 ) {
   expect(step).toMatchObject({
-    name: "candidate gateway canary",
+    name: "Checking Gateway startup",
     advisory: {
       kind: "candidate-runtime-unavailable",
       message: expect.stringContaining(`failed: HTTP ${status}`),
@@ -33,7 +33,12 @@ export function expectCanaryReadinessWarning(
 
 export function registerCanaryReadinessBudgetTests(
   root: () => string,
-  mocks: { snapshot: Mock; spawn: Mock },
+  mocks: {
+    spawn: Mock<
+      (command: string, args: string[], options: { env: NodeJS.ProcessEnv }) => FakeChild
+    >;
+    snapshot: Mock;
+  },
 ) {
   it("aborts further validation and removes private state when recording a step fails", async () => {
     await expect(
@@ -53,43 +58,6 @@ export function registerCanaryReadinessBudgetTests(
       targetStateDir: string;
     };
     await expect(fs.access(snapshotInput.targetStateDir)).rejects.toMatchObject({ code: "ENOENT" });
-  });
-
-  it("records a typed capacity refusal before notifying the snapshot failure", async () => {
-    const capacity = vi.spyOn(diskSpace, "tryReadDiskSpace").mockImplementation((targetPath) => ({
-      targetPath,
-      checkedPath: targetPath,
-      availableBytes: 0,
-      totalBytes: 1024,
-    }));
-    const onStep = vi.fn();
-    try {
-      const result = await validateUpdateCandidateCanary({
-        root: root(),
-        stateDir: root(),
-        config: {},
-        env: { TMPDIR: "/synthetic/tmp" },
-        onStep,
-      });
-      expect(result).toMatchObject({ status: "error", phase: "snapshot" });
-      const failed = result.steps.at(-1);
-      expect(failed).toMatchObject({
-        name: "candidate snapshot",
-        exitCode: 1,
-        snapshotCapacity: {
-          reason: "snapshot-capacity-insufficient",
-          selection: null,
-        },
-      });
-      expect(
-        failed?.snapshotCapacity?.candidates.map((candidate) => candidate.availableBytes),
-      ).toEqual([0, 0, 0]);
-      expect(onStep).toHaveBeenCalledExactlyOnceWith(failed);
-      expect(mocks.snapshot).not.toHaveBeenCalled();
-      expect(mocks.spawn).not.toHaveBeenCalled();
-    } finally {
-      capacity.mockRestore();
-    }
   });
 
   it.each(["gateway-only", "proxy", "block"] as const)(
@@ -203,9 +171,7 @@ export function registerCanaryReadinessBudgetTests(
     const params = { root: root(), stateDir: root(), config: {}, env: {}, timeoutMs: 250 };
     const unavailable = await validateUpdateCandidateCanary(params);
     expect(unavailable.status).toBe("ok");
-    expect(unavailable.logTail.join("\n")).toContain(
-      "Candidate stopped by the validation deadline",
-    );
+    expect(unavailable.logTail.join("\n")).toContain("Update checks reached their time limit");
     expect(unavailable.steps.at(-1)?.advisory?.message).toContain("ECONNREFUSED");
     expect(unavailable.steps.at(-1)?.failureFacts).toEqual([
       {
@@ -225,6 +191,72 @@ export function registerCanaryReadinessBudgetTests(
     expect(cancelled.status).toBe("error");
     expect(cancelled.steps.at(-1)?.advisory).toBeUndefined();
     expect(cancelled.logTail.join("\n")).toContain("operator cancelled");
+  });
+
+  it.each([
+    ["lint", "Checking data migrations", "Checking update health"],
+    ["startup", "Checking update recovery", "Checking Gateway startup"],
+    ["config", undefined, "Checking configuration"],
+  ] as const)("attributes %s failures to their check", async (phase, previous, name) => {
+    let now = 2_000_000;
+    const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
+    onTestFinished(() => clock.mockRestore());
+    const spawnNormally = mocks.spawn.getMockImplementation()!;
+    mocks.spawn.mockImplementation((command, args, options) => {
+      const fails = phase === "config" && args.includes("validate");
+      if (!args.includes("--fix") && !fails) {
+        return spawnNormally(command, args, options);
+      }
+      const child = new FakeChild(42_000);
+      queueMicrotask(() => {
+        child.stderr.write(
+          fails ? "Configuration unavailable\n" : "Earlier check completed successfully\n",
+        );
+        now += fails ? 25 : 0;
+        child.emit("close", fails ? 1 : 0);
+      });
+      return child;
+    });
+    const result = await validateUpdateCandidateCanary({
+      root: root(),
+      stateDir: root(),
+      config: {},
+      env: {},
+      timeoutMs: 1_000,
+      onStep: (step) => {
+        now += step.name === previous ? 1_000 : phase === "config" ? 100 : 0;
+      },
+    });
+    const failed = result.steps.at(-1);
+    const durationMs = phase === "config" ? 25 : 0;
+    expect(result).toMatchObject({ status: "error", phase });
+    expect(result.durationMs).toBe(phase === "config" ? 425 : 1_000);
+    expect(failed).toMatchObject({ name, durationMs, exitCode: 1 });
+    expect(failed?.failureFacts?.[0]?.message).toContain(
+      phase === "config" ? "Configuration unavailable" : "deadline exceeded",
+    );
+    expect(failed?.stderrTail).not.toContain("Earlier check");
+    expect(result.logTail.join("\n")).toContain("Earlier check completed successfully");
+  });
+
+  it("reports a runtime inspection failure before preparing a snapshot", async () => {
+    const directory = path.join(root(), "dist", "infra");
+    await fs.rm(directory, { recursive: true });
+    await fs.writeFile(directory, "not a directory");
+    const result = await validateUpdateCandidateCanary({
+      root: root(),
+      stateDir: root(),
+      config: {},
+      env: {},
+      timeoutMs: 3_000,
+    });
+    expect(result).toMatchObject({ status: "error", phase: "runtime" });
+    expect(result.steps).toEqual([
+      expect.objectContaining({ name: "Checking update runtime", exitCode: 1 }),
+    ]);
+    expect(result.steps[0]?.stderrTail).toContain("ENOTDIR");
+    expect(mocks.snapshot).not.toHaveBeenCalled();
+    expect(mocks.spawn).not.toHaveBeenCalled();
   });
 
   it.each(

@@ -62,12 +62,20 @@ whitespace. An empty present
 source uses line 1, column 1, and an empty excerpt; empty physical lines also
 use an empty excerpt at column 1. Source identity remains mandatory.
 
+Local selection honors `core.autocrlf` from external operator Git configuration,
+with repository-local values and attributes retaining precedence. Only its
+validated scalar value reaches diff/status; other global and system Git
+configuration stays disabled. Repository-owned or relative global-config
+overrides are not imported, and reviewed source bytes are not rewritten.
+
 ## Context and severity
 
 Use `--prompt` for task-specific guidance, or `--prompt-file` and `--dataset` for
 repository-relative context files. Context does not expand the selected Git
 target. The reviewer cannot read unchanged repository files from its empty
 sandbox; supply relevant source or dependency evidence when the diff is insufficient.
+`--prompt-file` also accepts an absolute path inside the repository; the same
+sensitive-path, symlink, and mutation checks apply. `--dataset` stays repo-relative.
 
 The default threshold is **P0 only**: material blockers to normal operation or
 safety. Use `--max-priority P1`, `P2`, or `P3` when the caller requests a wider
@@ -81,13 +89,28 @@ parent-relative patch; otherwise leave the attribution unknown.
 
 ## Engines
 
-Codex is the default: `gpt-6-astra`, high reasoning, with a `gpt-5.6-terra` retry
+Codex is the default: `gpt-5.6-sol`, high reasoning, with a `gpt-5.6-terra` retry
 only for an account-access failure. Honor explicit engine/model choices; do not
 switch because a review is slow or rate-limited.
 
 Use `--engine`, `--model`, and `--thinking` to override the defaults.
 `--codex-speed fast` selects priority service when supported. Only Claude accepts
 `--fallback-model`. Per-engine environment overrides use `AUTOREVIEW_<ENGINE>_*`.
+
+For GPT-6 Astra, select it explicitly on a Codex account with access:
+
+```bash
+"$AUTOREVIEW" --mode local --model gpt-6-astra --thinking high
+```
+
+Use `low`, `medium`, `high`, `xhigh`, or `max`; Astra does not support `none`
+or `minimal`. AutoReview defaults to `high` and does not fall back from an
+explicit Astra selection. Codex's `ultra` mode uses automatic
+delegation and is outside this helper's supported effort levels. Use `max`
+for its deepest supported review. For EU data residency, use
+`--codex-speed default`; Astra fast mode is unavailable there.
+See the [Astra migration guide](https://developers.openai.com/api/docs/guides/latest-model?model=gpt-6-astra)
+and [Codex reasoning modes](https://learn.chatgpt.com/docs/models#know-when-to-use-max-or-ultra).
 
 By default, Codex preserves only authentication settings from user configuration;
 provider, profile, context and catalogue settings remain ignored. To project a
@@ -137,6 +160,15 @@ split context overrides are unsupported when projection is selected.
 
 The helper owns reviewer isolation, sanitized authentication, process cleanup,
 Git scope, and structured result validation. Keep those controls enabled.
+Before repository detection or target selection, Git must pass `--version`
+within 10 seconds. Failure exits `2` with an `incomplete` diagnostic and the
+resolved executable (or the unresolved selection); it never means `scoped-clean`.
+Set `AUTOREVIEW_GIT` to a trusted external Git executable to override every
+helper-owned Git invocation. On macOS with a broken selected Xcode, use
+`DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer` for the invocation.
+Only `DEVELOPER_DIR` is additionally retained in Git's sanitized environment;
+neither override is forwarded to the isolated reviewer environment.
+
 Every reviewer pass must inspect its bundle for real credentials and report
 suspected credentials as P0 findings without reproducing their values. Harmless
 placeholders and test fixtures are not credentials. Autoreview does not require

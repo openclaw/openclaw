@@ -1,4 +1,6 @@
-import type {
+import type { SessionEntrySummary } from "./session-accessor.types.js";
+import type { InternalSessionEntry as SessionEntry } from "./types.js";
+export type {
   DeletedAgentSessionEntryPurgeParams,
   DeleteSessionEntryLifecycleParams,
   DeleteSessionEntryLifecycleResult,
@@ -11,8 +13,6 @@ import type {
   SessionLifecycleArtifactCleanupParams,
   SessionLifecycleArtifactCleanupResult,
 } from "./session-accessor.lifecycle-types.js";
-import type { SessionEntrySummary } from "./session-accessor.types.js";
-import type { InternalSessionEntry as SessionEntry } from "./types.js";
 
 export type SessionEntryStatus = NonNullable<SessionEntry["status"]>;
 
@@ -30,6 +30,9 @@ export type SqliteSessionReclamationDiagnostics = {
     | "lifecycle-artifacts"
     | "history-eviction"
     | "historical-generation"
+    | "maintenance-plan"
+    | "maintenance-finalize"
+    | "maintenance-statistics"
     | "cold-batch"
     | "cold-maintain"
     | "cold-restore";
@@ -171,20 +174,6 @@ type SessionEntryBatchProjectionMutation = {
 export type SessionEntryBatchProjectionUpdate<T> = {
   mutations?: Iterable<SessionEntryBatchProjectionMutation>;
   result: T;
-};
-
-export type {
-  DeletedAgentSessionEntryPurgeParams,
-  DeleteSessionEntryLifecycleParams,
-  DeleteSessionEntryLifecycleResult,
-  ResetSessionEntryLifecycleParams,
-  ResetSessionEntryLifecycleResult,
-  SessionEntryLifecycleMutationResult,
-  SessionEntryLifecycleRemoval,
-  SessionEntryLifecycleUpsert,
-  SessionLifecycleArchivedTranscript,
-  SessionLifecycleArtifactCleanupParams,
-  SessionLifecycleArtifactCleanupResult,
 };
 
 export type {

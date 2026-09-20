@@ -157,8 +157,14 @@ describe("buildDeveloperInstructions delegation guidance", () => {
 
     expect(instructions).toContain("## Delegation");
     expect(instructions).toContain("delegate via native `spawn_agent`");
+    expect(instructions).toContain(
+      "For follow-up work on an existing native child, use the native collaboration tool that starts or queues a new turn.",
+    );
     expect(instructions).toContain("spawn `sessions_spawn` with `visible=true`");
     expect(instructions).toContain("Announcing spawns notify when the run ends");
+    expect(instructions).toContain(
+      "When a kept OpenClaw session stops before the requested outcome, continue it with `sessions_send`",
+    );
     expect(instructions).toContain("Collectors require explicit result collection instead.");
     expect(instructions.indexOf("## Delegation")).toBeGreaterThan(
       instructions.indexOf("When a native child's result belongs in a later turn"),

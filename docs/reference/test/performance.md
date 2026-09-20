@@ -205,11 +205,14 @@ the agent model's automatic tool loop. `turnEvidence.observerModelDigestTurns`
 counts turns with a published model-derived observer digest. A short run can
 legitimately report zero; observer correctness proof requires a positive count.
 
-`mockRequests` retains five mock-server counter checkpoints and their parent
+`mockRequests` retains six mock-server counter checkpoints and their parent
 monotonic request bounds. Ingress deltas cover `startupAndWarmup` (readiness,
-connect, visibility, and probe warmup), `setup`, `loadBracket`, and `postLoad`
-(through Gateway shutdown). They distinguish Responses, Chat Completions,
-embeddings, and other routes, including rejected request bodies; health and
+connect, visibility, and probe warmup), `setup`, `agentWarmup` (optional agent
+turns on the same Gateway), `loadBracket`, and `postLoad` (through Gateway
+shutdown). The `agentWarmup` bracket remains present when `--agent-warmup-turns`
+is zero (the default); warmup turns are excluded from measured load. These
+deltas distinguish Responses, Chat Completions, embeddings, and other routes,
+including rejected request bodies; health and
 model-catalog reads are excluded. These HTTP brackets are not exact CPU capture
 windows or causal attribution. `selections` through the final checkpoint separately
 count model/global controlled responses and automatic tool/text branches, not completed

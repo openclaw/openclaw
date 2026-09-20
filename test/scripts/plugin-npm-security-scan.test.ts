@@ -504,6 +504,32 @@ describe("scripts/lib/plugin-npm-security-scan.mts", () => {
     },
   );
 
+  it("reviews the two Signal socket cleanup probes after 9.4", async () => {
+    const packageName = "@openclaw/signal";
+    const fixturePath = "src/socket-path.test.ts";
+    const fixtureKey = `${packageName}:dangerous-exec:${fixturePath}`;
+    const probe =
+      'import { spawnSync } from "node:child_process";\n' +
+      "spawnSync(process.execPath, []);\n".repeat(2);
+    const { artifact } = writePluginArtifact({
+      extensionId: "signal",
+      packageName,
+      files: { [fixturePath]: probe },
+    });
+
+    for (const context of ["release/2026.9.3", "release/2026.9.4", "release/2026.9.5", ""]) {
+      const admitted = context === "" || context === "release/2026.9.5";
+      const scanned = await scanPublishablePluginPackages([artifact], context);
+      expect(scanned.scanErrors, context).toEqual([]);
+      expect(scanned.packageResults[0]?.expectedReviewedCriticalFindings, context).toEqual(
+        admitted ? [fixtureKey, fixtureKey] : [],
+      );
+      expect(scanned.packageResults[0]?.unexpectedCriticalFindings, context).toHaveLength(
+        admitted ? 0 : 2,
+      );
+    }
+  });
+
   it.each([
     ["src/app-server/transport-process-snapshot.test.ts", 3, 1],
     ["src/app-server/transport-procfs.test-support.ts", 3, 0],
@@ -662,6 +688,81 @@ describe("scripts/lib/plugin-npm-security-scan.mts", () => {
         ).toHaveLength(
           current ? (count === null || count === 1 ? 0 : 1) : count === null || count === 0 ? 0 : 1,
         );
+      }
+    },
+  );
+
+  it.each([null, 0, 1, 2])(
+    "reviews exactly one packed native catalog fixture for current and 9.5 only: %s",
+    async (count) => {
+      const packageName = "@openclaw/codex";
+      const fixturePath = "src/session-catalog-native.test.ts";
+      const fixtureKey = `${packageName}:dangerous-exec:${fixturePath}`;
+      const probe = 'import { spawn } from "node:child_process";\nspawn(process.execPath, []);\n';
+      // Read as inert package input: never import or launch the native fixture here.
+      const nativeSource = readFileSync(
+        join(process.cwd(), "extensions/codex", fixturePath),
+        "utf8",
+      );
+      const artifact = writePluginArtifact({
+        extensionId: "codex",
+        packageName,
+        files: {
+          "src/app-server/transport-stdio.ts": probe,
+          "src/app-server/sandbox-exec-server/sandbox-child.ts": probe,
+          "src/app-server/transport-process-snapshot.ts": probe,
+          ...(count === null
+            ? {}
+            : {
+                [fixturePath]:
+                  count === 0 ? "export {};\n" : nativeSource + probe.repeat(count - 1),
+              }),
+          "src/session-catalog-unreviewed.test.ts": probe,
+        },
+      });
+      for (const context of [
+        "",
+        "release/2026.9.5",
+        "release/2026.9.1",
+        "release/2026.9.2",
+        "release/2026.9.3",
+        "release/2026.9.4",
+        "extended-stable/2026.6.33",
+        "extended-stable/2026.7.33",
+      ]) {
+        const current = context === "" || context === "release/2026.9.5";
+        const scanned = await scanPublishablePluginPackages([artifact.artifact], context);
+        expect(scanned.scanErrors, context).toEqual([]);
+        const result = scanned.packageResults[0]!;
+        expect(result.expectedReviewedCriticalFindings, context).toEqual(
+          current && count !== null ? [fixtureKey] : [],
+        );
+        expect(
+          result.reviewedCriticalFindings.filter((key) => key === fixtureKey),
+          context,
+        ).toEqual(current ? Array.from({ length: count ?? 0 }, () => fixtureKey) : []);
+        expect(
+          result.unexpectedCriticalFindings.filter((finding) => finding.path === fixturePath),
+          context,
+        ).toHaveLength(current ? 0 : (count ?? 0));
+        expect(result.unexpectedCriticalFindings, context).toContainEqual({
+          line: 2,
+          path: "src/session-catalog-unreviewed.test.ts",
+          ruleId: "dangerous-exec",
+        });
+        const report = buildPluginNpmSecurityScanReport({
+          candidateSha: CANDIDATE_SHA,
+          packageResults: scanned.packageResults,
+          targetContextRef: context,
+          toolingSha: TOOLING_SHA,
+        });
+        expect(report.status, context).toBe("fail"); // Unknown test sites are never admitted.
+        if (current) {
+          expect(
+            report.errors.filter((error) => error.includes("reviewed critical inventory mismatch")),
+            context,
+          ).toHaveLength(count === 0 || count === 2 ? 1 : 0);
+        }
       }
     },
   );

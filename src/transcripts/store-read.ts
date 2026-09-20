@@ -187,11 +187,8 @@ function readQuery(
       s.fn<string>("json_group_array", [s.ref("speakers.speaker_label")]).as("participants"),
     )
     .$asScalar();
-  const lastAt = eb
-    .selectFrom("meeting_transcript_utterances as u")
+  const lastAt = utterances
     .select((u) => u.fn.coalesce("u.ended_at", "u.started_at").as("at"))
-    .whereRef("u.session_id", "=", "meeting_transcript_sessions.session_id")
-    .whereRef("u.session_started_at", "=", "meeting_transcript_sessions.started_at")
     .orderBy("u.sequence", "desc")
     .limit(1)
     .$asScalar();
@@ -230,15 +227,7 @@ function readQuery(
         .$asScalar()
         .as("utterance_count"),
       "updated_at_ms",
-      eb
-        .exists(
-          eb
-            .selectFrom("meeting_transcript_summaries as summary")
-            .select("summary.session_id")
-            .whereRef("summary.session_id", "=", "meeting_transcript_sessions.session_id")
-            .whereRef("summary.session_started_at", "=", "meeting_transcript_sessions.started_at"),
-        )
-        .as("has_summary"),
+      eb.exists(notes.select("notes.session_id")).as("has_summary"),
     ] as const;
   if (maxBytes === undefined) {
     return query.select(columns(bytes));
@@ -624,7 +613,7 @@ function readTranscriptUtterancePage(
 /** Omit the duplicated transcript inside SQLite before materializing the stored summary. */
 export function readStoredTranscriptNotes(
   database: DatabaseSync,
-  session: TranscriptSessionDescriptor,
+  session: Pick<TranscriptSessionDescriptor, "sessionId" | "startedAt">,
   purpose: TranscriptReadPurpose = "page",
 ): { summary?: Omit<TranscriptsSummary, "transcript">; markdown?: string } {
   const row = executeSqliteQueryTakeFirstSync(
@@ -659,20 +648,6 @@ export function readStoredTranscriptNotes(
     summary,
     markdown: row.markdown ?? undefined,
   };
-}
-
-/** Iterate canonical rows for downloads without materializing export files or an unbounded array. */
-function* iterateTranscriptUtterances(
-  database: DatabaseSync,
-  session: TranscriptSessionDescriptor,
-): Generator<TranscriptUtterance> {
-  for (const row of iterateSqliteQuerySync(
-    database,
-    utteranceQuery(database, session, "export").orderBy("sequence", "asc"),
-  )) {
-    assertTranscriptByteCount(row.payload_bytes, TRANSCRIPTS_EXPORT_MAX_BYTES, true);
-    yield transcriptReadUtteranceFromRow(row);
-  }
 }
 
 function requireTranscriptReadEntry(
@@ -722,13 +697,20 @@ export type TranscriptExportRead = {
   notes: ReturnType<typeof readStoredTranscriptNotes> | undefined;
 };
 
+/** Stream canonical rows and notes in the caller's read snapshot without materializing files. */
 export function* iterateTranscriptExport(
   database: DatabaseSync,
   selector: string,
   includeNotes: boolean,
 ): Generator<TranscriptUtterance, TranscriptExportRead> {
   const entry = requireTranscriptReadEntry(database, selector, "export");
-  yield* iterateTranscriptUtterances(database, entry.session);
+  for (const row of iterateSqliteQuerySync(
+    database,
+    utteranceQuery(database, entry.session, "export").orderBy("sequence", "asc"),
+  )) {
+    assertTranscriptByteCount(row.payload_bytes, TRANSCRIPTS_EXPORT_MAX_BYTES, true);
+    yield transcriptReadUtteranceFromRow(row);
+  }
   const notes = includeNotes
     ? readStoredTranscriptNotes(database, entry.session, "export")
     : undefined;

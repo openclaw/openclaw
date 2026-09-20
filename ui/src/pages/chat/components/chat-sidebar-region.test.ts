@@ -273,7 +273,6 @@ describe("chat sidebar region", () => {
         terminalTabsInHeader: true,
         companionPresented: false,
         companionFocusRequest: undefined,
-        canFocusCompanion: () => true,
         browserRefreshOnPresentation: false,
         desktopPresented: false,
         desktopRefreshOnPresentation: false,

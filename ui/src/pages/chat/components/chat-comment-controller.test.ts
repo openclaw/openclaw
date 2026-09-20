@@ -20,7 +20,7 @@ afterEach(() => {
   payloads.clear();
 });
 
-async function mountComments() {
+async function mountComments(additional: ChatAttachment[] = []) {
   const attachment = createChatSelectionAttachment({
     text: "Selected passage",
     comment: "Original comment",
@@ -28,11 +28,13 @@ async function mountComments() {
     start: 0,
     end: 16,
   })!;
-  let attachments: ChatAttachment[] = [attachment];
-  payloads.add(attachment.id);
+  let attachments: ChatAttachment[] = [attachment, ...additional];
+  for (const item of attachments) {
+    payloads.add(item.id);
+  }
   const signalOwner = new AbortController();
   const card = document.createElement("section");
-  card.className = "card chat";
+  card.className = "chat";
   const controller = document.createElement("openclaw-chat-comment-controller") as HTMLElement & {
     props: ChatAttachmentControlsProps;
     sessionKey: string;
@@ -43,6 +45,7 @@ async function mountComments() {
   const props: ChatAttachmentControlsProps = {
     attachments,
     getAttachments: () => attachments,
+    gatewayScope: {},
     readSignal: signalOwner.signal,
     onAttachmentsChange: (next) => {
       attachments = next;
@@ -56,7 +59,8 @@ async function mountComments() {
   controller.props = props;
   controller.sessionKey = "agent:main:main";
   render(renderChatSelectionAnnotations(props), composer);
-  card.append(controller, composer);
+  const toast = document.createElement("openclaw-toast-host");
+  card.append(controller, composer, toast);
   document.body.append(card);
   await controller.updateComplete;
   const edit = () =>
@@ -70,6 +74,7 @@ async function mountComments() {
     controller,
     composer,
     card,
+    toast,
     signalOwner,
     edit,
     input,
@@ -95,6 +100,93 @@ describe("comment actions outside the transcript", () => {
     expect(fixture.input()).toBeNull();
   });
 
+  it("removes all current-session comments while retaining other attachments and their payloads", async () => {
+    const createComment = (sessionKey: string) =>
+      createChatSelectionAttachment({
+        text: "Another passage",
+        comment: "Keep its context",
+        sessionKey,
+        start: 0,
+        end: 15,
+      })!;
+    const second = createComment("agent:main:main");
+    const otherSession = createComment("agent:main:other");
+    const file: ChatAttachment = {
+      id: "ordinary-file",
+      mimeType: "text/plain",
+      fileName: "notes.txt",
+      dataUrl: "data:text/plain;base64,bm90ZXM=",
+    };
+    const fixture = await mountComments([second, file, otherSession]);
+    fixture.edit();
+    fixture.composer
+      .querySelector<HTMLButtonElement>('button[aria-label="Remove all comments"]')!
+      .click();
+    expect(fixture.attachments()).toEqual([file, otherSession]);
+    expect(getChatAttachmentDataUrl(fixture.attachment)).not.toBeNull();
+    expect(getChatAttachmentDataUrl(second)).not.toBeNull();
+    expect(fixture.input()).toBeNull();
+    await fixture.toast.updateComplete;
+    fixture.toast.querySelector<HTMLButtonElement>('button[aria-label="Dismiss"]')!.click();
+    expect(getChatAttachmentDataUrl(fixture.attachment)).toBeNull();
+    expect(getChatAttachmentDataUrl(second)).toBeNull();
+    expect(getChatAttachmentDataUrl(otherSession)).not.toBeNull();
+    expect(fixture.input()).toBeNull();
+  });
+
+  it("undoes clearing comments without replacing attachments added afterward", async () => {
+    const second = createChatSelectionAttachment({
+      text: "Second passage",
+      comment: "Second note",
+      sessionKey: "agent:main:main",
+      start: 0,
+      end: 14,
+    })!;
+    const fixture = await mountComments([second]);
+    fixture.composer
+      .querySelector<HTMLButtonElement>('button[aria-label="Remove all comments"]')!
+      .click();
+    expect(fixture.attachments()).toEqual([]);
+    const file: ChatAttachment = {
+      id: "new-file",
+      mimeType: "text/plain",
+      dataUrl: "data:text/plain;base64,bmV3",
+    };
+    fixture.controller.props.onAttachmentsChange!([file]);
+    await fixture.toast.updateComplete;
+    fixture.toast.querySelector<HTMLButtonElement>(".app-toast__action")!.click();
+    expect(fixture.attachments()).toEqual([fixture.attachment, second, file]);
+    expect(getChatAttachmentDataUrl(fixture.attachment)).not.toBeNull();
+    expect(getChatAttachmentDataUrl(second)).not.toBeNull();
+  });
+
+  it.each(["disabled", "hidden", "aborted", "session", "gateway", "disconnected"] as const)(
+    "rejects Undo and releases its payload when the comment owner is %s",
+    async (reason) => {
+      const fixture = await mountComments();
+      fixture.composer
+        .querySelector<HTMLButtonElement>('button[aria-label="Remove all comments"]')!
+        .click();
+      await fixture.toast.updateComplete;
+      if (reason === "disabled") {
+        fixture.controller.props = { ...fixture.controller.props, disabled: true };
+      } else if (reason === "hidden") {
+        fixture.controller.presented = false;
+      } else if (reason === "aborted") {
+        fixture.signalOwner.abort();
+      } else if (reason === "session") {
+        fixture.controller.sessionKey = "agent:main:other";
+      } else if (reason === "gateway") {
+        fixture.controller.props = { ...fixture.controller.props, gatewayScope: {} };
+      } else {
+        fixture.controller.remove();
+      }
+      fixture.toast.querySelector<HTMLButtonElement>(".app-toast__action")!.click();
+      expect(fixture.attachments()).toEqual([]);
+      expect(getChatAttachmentDataUrl(fixture.attachment)).toBeNull();
+    },
+  );
+
   it.each(["disabled", "hidden", "aborted"] as const)(
     "retires an open editor and rejects its detached Save control when %s",
     async (reason) => {
@@ -112,6 +204,13 @@ describe("comment actions outside the transcript", () => {
       await fixture.controller.updateComplete;
       expect(fixture.input()).toBeNull();
       save.click();
+      fixture.composer.dispatchEvent(
+        new CustomEvent("openclaw-comment-action", {
+          bubbles: true,
+          composed: true,
+          detail: { action: "delete-all" },
+        }),
+      );
       expect(fixture.attachments()[0]?.selectionAnnotation?.comment).toBe("Original comment");
     },
   );

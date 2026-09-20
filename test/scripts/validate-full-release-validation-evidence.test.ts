@@ -1,5 +1,12 @@
 // Full release validation evidence tests cover producer and candidate binding.
-import { describe, expect, it, vi } from "vitest";
+import { spawn } from "node:child_process";
+import { once } from "node:events";
+import { writeFileSync } from "node:fs";
+import { join } from "node:path";
+import { text } from "node:stream/consumers";
+import { setTimeout as delay } from "node:timers/promises";
+import { fileURLToPath } from "node:url";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   createPublicationSourceFact,
   publicationDispatchEnvelope,
@@ -12,6 +19,7 @@ import {
   normalizeFullReleaseValidationRun,
   validateFullReleaseValidationEvidence as validateEvidence,
 } from "../../scripts/validate-full-release-validation-evidence.mjs";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 function validateFullReleaseValidationEvidence(options: Parameters<typeof validateEvidence>[0]) {
   return validateEvidence({
@@ -25,6 +33,49 @@ const targetSha = "b".repeat(40);
 const workflowSha = "a".repeat(40);
 const publisherWorkflowSha = "c".repeat(40);
 const pinnedBranch = `release-ci/${workflowSha.slice(0, 12)}-1783705000000`;
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+it("reads delayed piped run metadata before enforcing the CLI consumer boundary", async () => {
+  const manifestPath = join(tempDirs.make("release-evidence-stdin-"), "manifest.json");
+  writeFileSync(manifestPath, "{}");
+  const child = spawn(
+    process.execPath,
+    [
+      fileURLToPath(
+        new URL("../../scripts/validate-full-release-validation-evidence.mjs", import.meta.url),
+      ),
+    ],
+    {
+      env: {
+        ...process.env,
+        MANIFEST_FILE: manifestPath,
+        PUBLICATION_CONSUMER: "invalid-consumer",
+      },
+      stdio: ["pipe", "pipe", "pipe"],
+    },
+  );
+  const exited = once(child, "exit");
+  const stdout = text(child.stdout);
+  const stderr = text(child.stderr);
+  const inputErrors: Error[] = [];
+  child.stdin.on("error", (error) => inputErrors.push(error));
+  try {
+    child.stdin.write('{"id":');
+    // Model gh api delivering a later chunk while the nonblocking pipe stays open.
+    await delay(250);
+    child.stdin.end("123}");
+    const [code] = await exited;
+    expect(await stderr).toBe("Unknown publication evidence consumer.\n");
+    expect(code).toBe(1);
+    expect(await stdout).toBe("");
+    expect(inputErrors).toEqual([]);
+  } finally {
+    if (child.exitCode === null && child.signalCode === null) {
+      child.kill();
+      await exited;
+    }
+  }
+});
 
 function releaseRun(overrides: Record<string, unknown> = {}) {
   return {

@@ -660,6 +660,56 @@ describe("restored historical cancellation ownership", () => {
     expectNoExecutionReplay();
   });
 
+  it.each([false, true])(
+    "settles an uncaptured retained cancellation wake before retiring it (yielded=%s)",
+    async (yielded) => {
+      const input = historicalCancellation();
+      const endedAt = Date.now() - 2 * 24 * 60 * 60_000;
+      input.subagent.createdAt = endedAt - 60_000;
+      input.subagent.execution.startedAt = endedAt - 50_000;
+      input.subagent.execution.endedAt = endedAt;
+      input.subagent.cleanupCompletedAt = endedAt + 30_000;
+      input.subagent.killReconciliation = {
+        killedAt: endedAt + 30_000,
+        taskCancellationAccepted: true,
+      };
+      input.subagent.completionTarget = "parent";
+      input.subagent.requesterSettleWake = {
+        status: "dispatching",
+        attemptCount: 3,
+        batchRunIds: [input.subagent.runId],
+        rearmGeneration: 1,
+        ...(yielded ? { requesterYieldBatch: true, afterRequesterYield: true } : {}),
+      };
+      input.task.createdAt = input.subagent.createdAt;
+      input.task.endedAt = endedAt + 30_000;
+      input.task.error = "Cancelled by operator.";
+      input.task.deliveryStatus = "pending";
+      delete input.task.terminalOutcome;
+      persistRetiredOwner(input, true);
+      restore();
+      resumeSubagentRun(input.subagent.runId, "restore");
+      await settleSubagentRegistryPersistenceWork();
+      await testing.sweepOnceForTests();
+      await settleSubagentRegistryPersistenceWork();
+
+      expect(
+        loadSubagentRegistryFromSqlite().get(input.subagent.runId)?.requesterSettleWake,
+      ).toBeUndefined();
+      expect(getTaskById(input.task.taskId)).toMatchObject({
+        status: "cancelled",
+        deliveryStatus: "failed",
+        endedAt: input.task.endedAt,
+        error: "Cancelled by operator.",
+      });
+      await testing.sweepOnceForTests();
+      await settleSubagentRegistryPersistenceWork();
+      expect(loadSubagentRegistryFromSqlite().has(input.subagent.runId)).toBe(false);
+      expect(wake).toHaveBeenCalledOnce();
+      expectNoExecutionReplay();
+    },
+  );
+
   it("leaves a newer persisted kill marker untouched by the restored snapshot", async () => {
     const input = historicalCancellation();
     persistRetiredOwner(input);

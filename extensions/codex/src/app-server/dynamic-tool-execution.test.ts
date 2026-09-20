@@ -14,6 +14,7 @@ import {
   toCodexDynamicToolProgressResponse,
   toCodexDynamicToolProtocolResponse,
 } from "./dynamic-tool-execution.js";
+import type { CodexDynamicToolRuntimeResponse } from "./dynamic-tool-response-state.js";
 import type { CodexDynamicToolCallParams, CodexDynamicToolCallResponse } from "./protocol.js";
 
 const dynamicCallContext = { threadId: "thread-1", turnId: "turn-1", namespace: null };
@@ -381,7 +382,7 @@ describe("dynamic tool execution helpers", () => {
 
     await vi.advanceTimersByTimeAsync(1);
 
-    await expect(response).resolves.toEqual({
+    expect(toCodexDynamicToolProtocolResponse(await response)).toEqual({
       success: false,
       contentItems: [
         {
@@ -637,7 +638,7 @@ describe("dynamic tool execution helpers", () => {
       onAgentToolResult,
     });
 
-    expect(result).toEqual({
+    expect(toCodexDynamicToolProtocolResponse(result)).toEqual({
       success: false,
       contentItems: [
         { type: "inputText", text: "OpenClaw dynamic tool call aborted before execution." },
@@ -886,27 +887,19 @@ describe("dynamic tool execution helpers", () => {
   });
 
   it("keeps async-start metadata on internal dynamic tool progress only", () => {
-    const response: CodexDynamicToolCallResponse = {
+    const mcpAppPreview = { resourceUri: "ui://fixture/preview", title: "Preview" };
+    const response: CodexDynamicToolRuntimeResponse = {
       contentItems: [{ type: "inputText", text: "Background task started." }],
       success: true,
+      asyncStarted: true,
+      executedArguments: { action: "send", to: "channel:123" },
+      executionStarted: true,
+      replaySafe: false,
+      sideEffectEvidence: true,
+      terminate: true,
+      diagnosticTerminalType: "completed",
+      transcriptDetails: { mcpAppPreview, privateModelPayload: "host only" },
     };
-    Object.defineProperty(response, "asyncStarted", {
-      configurable: true,
-      enumerable: false,
-      value: true,
-    });
-    Object.defineProperties(response, {
-      executedArguments: {
-        configurable: true,
-        enumerable: false,
-        value: { action: "send", to: "channel:123" },
-      },
-      executionStarted: {
-        configurable: true,
-        enumerable: false,
-        value: true,
-      },
-    });
 
     const protocolResponse = toCodexDynamicToolProtocolResponse(response);
     const progressResponse = toCodexDynamicToolProgressResponse(response, protocolResponse);
@@ -915,12 +908,9 @@ describe("dynamic tool execution helpers", () => {
       contentItems: [{ type: "inputText", text: "Background task started." }],
       success: true,
     });
-    expect(Object.keys(protocolResponse)).not.toContain("asyncStarted");
-    expect("executionStarted" in protocolResponse).toBe(false);
-    expect("executedArguments" in protocolResponse).toBe(false);
     expect(progressResponse).toEqual({
       contentItems: [{ type: "inputText", text: "Background task started." }],
-      details: { async: true, status: "started" },
+      details: { mcpAppPreview, async: true, status: "started" },
       success: true,
     });
   });
@@ -1006,12 +996,8 @@ describe("dynamic tool execution helpers", () => {
     const asyncStartedResponse = {
       contentItems: [{ type: "inputText" as const, text: "Background task started." }],
       success: true,
+      asyncStarted: true,
     };
-    Object.defineProperty(asyncStartedResponse, "asyncStarted", {
-      configurable: true,
-      enumerable: false,
-      value: true,
-    });
 
     expect(shouldBlockTerminalReleaseForNonTerminalDynamicToolResult(asyncStartedResponse)).toBe(
       false,

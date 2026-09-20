@@ -46,6 +46,18 @@ describe("Control UI build chunking", () => {
     expect(controlUiStableChunkName("\0virtual:openclaw-control-ui-locale/ru")).toBeUndefined();
   });
 
+  it.each(["lit", "lit-html"])(
+    "keeps the lazy cache directive out of %s startup vendor code",
+    (name) => {
+      expect(
+        controlUiStableChunkName(`/repo/node_modules/${name}/directives/cache.js`),
+      ).toBeUndefined();
+      expect(
+        controlUiStableChunkName(`C:\\repo\\node_modules\\${name}\\directives\\cache.js`),
+      ).toBeUndefined();
+    },
+  );
+
   it("bounds only the initial module graph without recursively absorbing dependencies", () => {
     expect(controlUiCodeSplitting.includeDependenciesRecursively).toBe(false);
     expect(controlUiCodeSplitting.groups[1]).toMatchObject({

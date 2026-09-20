@@ -67,12 +67,75 @@ afterEach(async () => {
 });
 
 describe("update readiness generation", () => {
+  it.each(["still-starting", "stopped-free"] as const)(
+    "preserves the readiness owner's bounded verdict (%s)",
+    async (waitOutcome) => {
+      const recoverHealth = vi.fn<
+        NonNullable<Parameters<typeof verifyUpdatedGateway>[0]["recoverHealth"]>
+      >(async (health) => ({ health, launchAgentRecovery: null }));
+      const result: UpdateRunResult = { status: "ok", mode: "npm", steps: [], durationMs: 0 };
+      const verification = await verifyUpdatedGateway({
+        result,
+        opts: { json: true, run: { runId: "bounded-startup", env: {} } },
+        serviceEnv: { HOME: "/synthetic-home" },
+        gatewayPort: 18789,
+        expectedVersion: "2026.9.4",
+        requireRunningService: true,
+        health: {
+          healthy: false,
+          waitOutcome,
+          runtime: { status: waitOutcome === "still-starting" ? "running" : "stopped", pid: 8000 },
+          portUsage: { port: 18789, status: "free", listeners: [], hints: [] },
+          staleGatewayPids: [],
+          expectedVersion: "2026.9.4",
+          startupPhase: "loading plugins",
+          elapsedMs: 300_000,
+        },
+        recoverHealth,
+      });
+      expect(verification).toMatchObject(
+        waitOutcome === "still-starting"
+          ? { ok: false, stopReason: "still-starting" }
+          : { ok: false, summary: "service-not-running" },
+      );
+      expect(recoverHealth).toHaveBeenCalledTimes(waitOutcome === "still-starting" ? 0 : 1);
+      expect(result.steps[0]?.exitCode).toBe(waitOutcome === "still-starting" ? 0 : 1);
+      expect(recordUpdateRunVerification).toHaveBeenLastCalledWith(
+        "bounded-startup",
+        expect.objectContaining({ versionMatch: undefined }),
+        expect.anything(),
+      );
+    },
+  );
+
   it.each([
-    { startupAtMs: 0, verified: true },
-    { startupAtMs: 1_500, verified: false },
+    {
+      startupAtMs: 0,
+      healthyAtMs: 0,
+      timeoutMs: 1_000,
+      verified: true,
+      minMs: 5_500,
+      maxMs: 6_500,
+    },
+    {
+      startupAtMs: 1_500,
+      healthyAtMs: 1_500,
+      timeoutMs: 1_000,
+      verified: false,
+      minMs: 6_500,
+      maxMs: 7_000,
+    },
+    {
+      startupAtMs: 12_500,
+      healthyAtMs: 20_000,
+      timeoutMs: undefined,
+      verified: true,
+      minMs: 25_500,
+      maxMs: 27_000,
+    },
   ])(
     "includes settling once without extending the startup allowance (startup=$startupAtMs)",
-    async ({ startupAtMs, verified }) => {
+    async ({ startupAtMs, healthyAtMs, timeoutMs, verified, minMs, maxMs }) => {
       mockProcessPlatform("linux");
       const service = makeGatewayService({ status: "running", pid: 8000 });
       vi.spyOn(gatewayService, "resolveGatewayService").mockReturnValue(service);
@@ -86,6 +149,9 @@ describe("update readiness generation", () => {
         const responseMs = 5;
         const remainingMs = opts.timeoutMs ?? responseMs;
         monotonicClock.nowMs += Math.min(responseMs, remainingMs);
+        if (monotonicClock.nowMs < healthyAtMs) {
+          throw new Error("Gateway is still starting");
+        }
         if (remainingMs < responseMs) {
           throw new Error("Gateway health response exceeded its remaining allowance");
         }
@@ -112,14 +178,14 @@ describe("update readiness generation", () => {
         expectedVersion: "2026.9.4",
         expectedBuildId: "candidate-build",
         requireRunningService: true,
-        timeoutMs: 1_000,
+        timeoutMs,
         signal: controller.signal,
       });
       pendingVerification = verification;
       expect((await verification).ok).toBe(verified);
       expect(httpRequests).toBe(verified ? 2 : 0);
-      expect(monotonicClock.nowMs).toBeGreaterThanOrEqual(verified ? 5_500 : 6_500);
-      expect(monotonicClock.nowMs).toBeLessThan(verified ? 6_500 : 7_000);
+      expect(monotonicClock.nowMs).toBeGreaterThanOrEqual(minMs);
+      expect(monotonicClock.nowMs).toBeLessThan(maxMs);
     },
   );
 

@@ -7,6 +7,7 @@ import { importFreshModule } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { clearPluginMetadataLifecycleCaches } from "../../plugins/plugin-metadata-lifecycle.js";
 import { expectNoReaddirSyncDuring } from "../../test-utils/fs-scan-assertions.js";
+import { mockChannelPluginModuleLoader } from "./bundled.shape-guard.test-helpers.js";
 
 vi.mock("../../plugins/bundled-dir.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../plugins/bundled-dir.js")>();
@@ -231,6 +232,7 @@ afterEach(() => {
   vi.doUnmock("../../plugins/manifest-registry.js");
   vi.doUnmock("../../plugins/channel-catalog-registry.js");
   vi.doUnmock("../../infra/boundary-file-read.js");
+  vi.doUnmock("./module-loader.js");
   vi.doUnmock("./bundled-root.js");
   vi.doUnmock("jiti");
 });
@@ -441,7 +443,7 @@ describe("bundled channel entry shape guards", () => {
     }
   });
 
-  it("falls back through the cached loader for package-local dist entries needing SDK aliases", async () => {
+  it("loads package-local dist entries with SDK aliases", async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-bundled-package-dist-"));
     const pluginDir = path.join(root, "extensions", "alpha", "dist");
     writeAlphaSdkAliasDistFixture(pluginDir, "Package dist Alpha");
@@ -479,7 +481,7 @@ describe("bundled channel entry shape guards", () => {
     }
   });
 
-  it("falls back through the cached loader for direct override dist entries needing SDK aliases", async () => {
+  it("loads direct override dist entries with SDK aliases", async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-bundled-direct-dist-"));
     const previousBundledPluginsDir = process.env.OPENCLAW_BUNDLED_PLUGINS_DIR;
     const pluginsRoot = path.join(root, "bundled-plugins");
@@ -1212,13 +1214,7 @@ module.exports = {
         resolveBundledChannelGeneratedPath: () => modulePath,
       };
     });
-    vi.doMock("../../infra/boundary-file-read.js", () => ({
-      openRootFileSync: ({ absolutePath }: { absolutePath: string }) => ({
-        ok: true,
-        path: absolutePath,
-        fd: fs.openSync(absolutePath, "r"),
-      }),
-    }));
+    mockChannelPluginModuleLoader();
     vi.doMock("../../plugins/channel-catalog-registry.js", () => ({
       listChannelCatalogEntries: () => [],
     }));

@@ -138,23 +138,34 @@ never needs the agent.
   Visited tabs stay loaded while the dashboard is retained, preserving local
   filters and widget interactions when you switch back. Unvisited tabs load on
   demand; changed content still refreshes, and removed tabs release their widgets.
+  Moving a loaded widget to another tab also preserves its unsaved input and interactions.
 - **Dashboard view.** The board can occupy the main area or a resizable side
   panel. With Dashboard active in the side panel, choose **Swap** in the task
   toolbar, then **Focus** for a dashboard-only view. **Restore split** brings
   the side panel back. A tab with one full-width widget fills the focused
   dashboard edge to edge, without a card border or surrounding padding.
+  Its widget controls move into the task toolbar’s **…** menu, leaving no
+  hover pill or drag and resize handles over the page. Granted permissions
+  remain available in that menu; approval requests and errors stay visible
+  in the widget.
   Restoring the split or adding another widget brings back the normal spacing.
 - **Shared default.** In the task menu’s **Layout** submenu, choose **Use current
   view as default** to save the current fullscreen or split view for this dashboard.
-  The action appears only while Dashboard is shown, you can edit the session, and
-  its current view differs from the shared default. Saving does not rearrange
+  While Dashboard is shown, **This is the default view** confirms that the current
+  fullscreen or split view matches the shared default, including for read-only
+  viewers. When the view differs, **Use current view as default** is available
+  if you can edit the session. Both explain that personal layout choices still
+  apply. Saving does not rearrange
   anyone already viewing the dashboard; the default applies on subsequent opens
   and revisits, including opens from the dashboard gallery.
   Your browser’s deliberate **Focus** / **Restore split** choice takes precedence
   over the shared default. Choosing the shared view again clears that personal
   override. Applying a shared default does not create a personal override.
-  Dock position, dimensions, and other panels remain local. Existing browser
-  layouts without presentation provenance retain their complete saved layout
+  Dock position, dimensions, and other panels remain local. Reopening or reloading
+  an unchanged dashboard view preserves the selected side-panel tab, including
+  Side chat or Files when Chat remains main. It also preserves a closed side panel
+  or a focused Chat view. Existing browser layouts without presentation provenance retain
+  their complete saved layout
   until you deliberately choose a presentation; OpenClaw does not guess whether
   an older expansion was automatic. Local layout retention remains 500 sessions.
   An explicit `?dashboard=expanded` link requests fullscreen for that visit only.

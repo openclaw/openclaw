@@ -31,7 +31,7 @@ export type PluginDoctorStateMigrationContext = {
     options: OpenKeyedStoreOptions,
     entries: readonly { key: string; value: unknown; createdAt: number; ttlMs?: number }[],
   ) => void;
-  /** Plugin-wide live-row capacity for import preflight. Older test hosts may omit it. */
+  /** Live plugin rows for import preflight; current hosts report no aggregate limit (Infinity). Older hosts may omit it. */
   getPluginStateCapacity?: () => { liveEntries: number; maxEntries: number };
   readPluginStateEntriesInKeyRange?: (
     namespace: string,

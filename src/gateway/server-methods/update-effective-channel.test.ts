@@ -32,10 +32,13 @@ const refreshLatestUpdateRestartSentinelMock = vi.hoisted(() =>
   vi.fn<() => Promise<TestUpdateSentinel>>(async () => null),
 );
 
-vi.mock("../../infra/update-startup.js", () => ({
+vi.mock("../../infra/update-status-state.js", () => ({
   getUpdateAvailable: getUpdateAvailableMock,
-  getUpdateEffectiveChannel: getUpdateEffectiveChannelMock,
   getUpdateSchedule: getUpdateScheduleMock,
+}));
+
+vi.mock("../../infra/update-startup.js", () => ({
+  getUpdateEffectiveChannel: getUpdateEffectiveChannelMock,
   refreshGatewayUpdateStatus: refreshGatewayUpdateStatusMock,
 }));
 

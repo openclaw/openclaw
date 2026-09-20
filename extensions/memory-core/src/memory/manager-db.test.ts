@@ -13,12 +13,14 @@ import {
   resetMemoryCoreDreamingStateForTests,
 } from "../test-helpers.js";
 import {
-  cleanupAgedMemoryReindexTempFiles,
-  closeMemoryDatabase,
-  openMemoryDatabaseAtPath,
   publishMemoryDatabaseTables,
   readMemoryDatabaseRevision,
   MemoryIndexRevisionConflictError,
+} from "./manager-db-kernel.js";
+import {
+  cleanupAgedMemoryReindexTempFiles,
+  closeMemoryDatabase,
+  openMemoryDatabaseAtPath,
   resetMemoryDatabase,
 } from "./manager-db.js";
 import { waitForMemoryReindexLock } from "./manager-reindex-lock.js";

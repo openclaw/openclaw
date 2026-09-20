@@ -4,6 +4,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
+import { resolveCoreToolProfilePolicy } from "../agents/tool-catalog.js";
 import type { OpenClawConfig } from "../config/config.js";
 import {
   applyLocalSetupWorkspaceConfig,
@@ -19,7 +20,8 @@ describe("applyLocalSetupWorkspaceConfig", () => {
     expect(result).not.toHaveProperty("session.dmScope");
     expect(result.gateway?.mode).toBe("local");
     expect(result.agents?.defaults?.workspace).toBe("/tmp/workspace");
-    expect(result.tools?.profile).toBe("coding");
+    expect(result.tools?.profile).toBe("full");
+    expect(resolveCoreToolProfilePolicy(result.tools?.profile)?.allow).toEqual(["*"]);
   });
 
   it("preserves existing dmScope when already configured", () => {
@@ -44,16 +46,36 @@ describe("applyLocalSetupWorkspaceConfig", () => {
     expect(result.session?.dmScope).toBe("per-account-channel-peer");
   });
 
-  it("preserves an explicit tools.profile when already configured", () => {
-    const baseConfig: OpenClawConfig = {
-      tools: {
-        profile: "full",
-      },
-    };
-    const result = applyLocalSetupWorkspaceConfig(baseConfig, "/tmp/workspace");
+  it.each([
+    { profile: undefined, expectedProfile: "full" },
+    { profile: "minimal", expectedProfile: "minimal" },
+    { profile: "coding", expectedProfile: "coding" },
+    { profile: "messaging", expectedProfile: "messaging" },
+    { profile: "full", expectedProfile: "full" },
+  ] as const)(
+    "selects $expectedProfile from $profile and preserves independent policies on rerun",
+    ({ profile, expectedProfile }) => {
+      const baseConfig: OpenClawConfig = {
+        tools: {
+          ...(profile ? { profile } : {}),
+          allow: ["group:openclaw"],
+          deny: ["exec"],
+          byProvider: { anthropic: { profile: "messaging", deny: ["browser"] } },
+          exec: { security: "deny", ask: "always" },
+          fs: { workspaceOnly: true },
+          sandbox: { tools: { deny: ["openclaw"] } },
+        },
+        agents: {
+          defaults: { sandbox: { mode: "all" } },
+          list: [{ id: "main", tools: { profile: "minimal", alsoAllow: ["message"] } }],
+        },
+      };
+      const result = applyLocalSetupWorkspaceConfig(baseConfig, "/tmp/workspace");
 
-    expect(result.tools?.profile).toBe("full");
-  });
+      expect(result.tools).toEqual({ ...baseConfig.tools, profile: expectedProfile });
+      expect(result.agents).toEqual(baseConfig.agents);
+    },
+  );
 
   it("preserves agents.list and bindings on onboard rerun (openclaw#84692)", () => {
     const baseConfig: OpenClawConfig = {

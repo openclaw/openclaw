@@ -4,9 +4,9 @@ import { formatTimestamp } from "../../logging/timestamps.js";
 import {
   beginGatewayRootWorkAdmissionWhenOpen,
   GatewayDrainingError,
-  runOutsideGatewayRootWorkAdmission,
 } from "../../process/gateway-work-admission.js";
 import { normalizeAgentId, resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
+import { runInDetachedAsyncContext } from "../../shared/async-work-scope.js";
 import { sweepCronRunSessions } from "../session-reaper.js";
 import {
   finishCronRunReceiptInDatabase,
@@ -121,8 +121,8 @@ function armRunningRecheckTimer(state: CronServiceState) {
 
 function setCronTimer(state: CronServiceState, delayMs: number): void {
   state.timer = setTimeout(() => {
-    // The timer outlives the tick that armed it, so it must own a new Gateway root.
-    runOutsideGatewayRootWorkAdmission(() => {
+    // A timer owns its whole tick; no request-local lifetime may cross this boundary.
+    runInDetachedAsyncContext(() => {
       void onTimer(state).catch((err: unknown) => {
         state.deps.log.error({ err: String(err) }, "cron: timer tick failed");
       });
@@ -147,7 +147,7 @@ function requestImmediateCronRecheck(state: CronServiceState): Promise<void> | u
 function requestIndependentImmediateCronRecheck(
   state: CronServiceState,
 ): Promise<void> | undefined {
-  return runOutsideGatewayRootWorkAdmission(() => requestImmediateCronRecheck(state));
+  return runInDetachedAsyncContext(() => requestImmediateCronRecheck(state));
 }
 
 /** Handles one cron timer tick under the process-wide root work admission. */
@@ -167,7 +167,10 @@ export async function onTimer(state: CronServiceState) {
   try {
     // Reopening admission cannot transfer a retired tick to a restarted scheduler.
     if (state.lifecycleGeneration === lifecycleGeneration) {
-      await admission.run(async () => await onAdmittedTimer(state));
+      const run = () => onAdmittedTimer(state);
+      await admission.run(() =>
+        state.deps.runSchedulerOwned ? state.deps.runSchedulerOwned(run) : run(),
+      );
     }
   } finally {
     admission.release();

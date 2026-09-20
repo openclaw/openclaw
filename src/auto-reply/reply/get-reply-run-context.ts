@@ -1,6 +1,7 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveAgentConfig } from "../../agents/agent-scope.js";
 import { resolveEmbeddedFullAccessState } from "../../agents/embedded-agent-runner/sandbox-info.js";
+import { resolveReplyCompletion } from "../../agents/reply-completion.js";
 import { resolveIngressWorkspaceOverrideForSessionRun } from "../../agents/spawned-context.js";
 import type { SilentReplyPromptMode } from "../../agents/system-prompt.types.js";
 import { resolveEffectiveAgentRuntime } from "../../agents/thinking-runtime.js";
@@ -44,6 +45,7 @@ import {
   resolveInboundUserContextPromptJoiner,
 } from "./inbound-meta.js";
 import { buildReplyPromptEnvelopeBase } from "./prompt-prelude.js";
+import { resolveReplyOperationRunState } from "./reply-operation-run-state.js";
 import { resolveRuntimePolicySessionKey } from "./runtime-policy-session-key.js";
 import {
   resolveBareResetBootstrapFileAccess,
@@ -51,7 +53,7 @@ import {
 } from "./session-reset-prompt.js";
 import { resolveSessionStableReplyMode } from "./session-stable-reply-mode.js";
 import {
-  isDirectedSourceReplyTurn,
+  resolveSourceReplyExpectation,
   isSyntheticSourceReplyTurn,
 } from "./source-reply-delivery-mode.js";
 import { shouldApplyStartupContext, buildSessionStartupContextPrelude } from "./startup-context.js";
@@ -219,14 +221,18 @@ export async function prepareReplyRunContext(params: RunPreparedReplyParams) {
   const groupIntro = isGroupChat
     ? buildGroupIntro({ activation: conversation.activation, defaultActivation })
     : "";
-  const isDirectedTurn = isDirectedSourceReplyTurn(ctx, cfg, isDirectChat, inboundEventKind);
-  const isAmbientRoomEvent = inboundEventKind === "room_event" && !isDirectedTurn;
-  const allowEmptyAssistantReplyAsSilent =
-    isHeartbeat ||
-    (isGroupChat &&
-      !isDirectedTurn &&
-      (isAmbientRoomEvent || silentReplySettings.policy === "allow"));
-  const terminalReplyExpectation = isHeartbeat || isAmbientRoomEvent ? "optional" : "required";
+  const terminalReplyExpectation = resolveSourceReplyExpectation({
+    ctx: promptSessionCtx,
+    cfg,
+    isHeartbeat,
+  });
+  const replyOperationRunState = resolveReplyOperationRunState(opts);
+  if (replyOperationRunState) {
+    replyOperationRunState.replyCompletion = resolveReplyCompletion(
+      terminalReplyExpectation,
+      "empty",
+    );
+  }
   const groupSystemPrompt = normalizeOptionalString(promptSessionCtx.GroupSystemPrompt) ?? "";
   const inboundMetaPrompt = buildInboundMetaSystemPrompt(
     isNewSession ? promptSessionCtx : { ...promptSessionCtx, ThreadStarterBody: undefined },
@@ -296,6 +302,12 @@ export async function prepareReplyRunContext(params: RunPreparedReplyParams) {
     (!commandAuthorized || !command.isAuthorizedSender) &&
     isRegisteredWholeMessageCommand
   ) {
+    if (replyOperationRunState) {
+      replyOperationRunState.replyCompletion = resolveReplyCompletion(
+        terminalReplyExpectation,
+        "blocked",
+      );
+    }
     opts?.onDeliberateSilentTerminalReply?.();
     typing.cleanup();
     return { kind: "reply", reply: undefined } as const;
@@ -467,7 +479,6 @@ export async function prepareReplyRunContext(params: RunPreparedReplyParams) {
     inboundUserContextPromptJoiner,
     getInboundContext: () => ({ activeGoalContext, inboundUserContext }),
     refreshInboundContextAfterAdmissionWait,
-    allowEmptyAssistantReplyAsSilent,
     terminalReplyExpectation,
   } as const;
 }

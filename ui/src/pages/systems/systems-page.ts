@@ -2,7 +2,6 @@ import type { SystemInfoResult } from "@openclaw/gateway-protocol";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { html, nothing, type PropertyValues } from "lit";
 import { property } from "lit/decorators.js";
-import type { RouteId } from "../../app-route-paths.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { icons } from "../../components/icons.ts";
 import "../../components/desktop/desktop-panel.ts";
@@ -369,6 +368,6 @@ export function renderSidebar(data: SystemsRouteData | undefined) {
     : nothing;
 }
 
-export function load(context: ApplicationContext<RouteId>): SystemsRouteData {
+export function load(context: ApplicationContext): SystemsRouteData {
   return { controller: new SystemsController(context) };
 }

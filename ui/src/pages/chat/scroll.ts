@@ -96,6 +96,7 @@ export type ChatScrollHost = {
   chatReadingHistory: boolean;
   chatNewMessagesBelow: boolean;
   chatIsProgrammaticScroll?: () => boolean;
+  chatIsMaintenanceScroll?: () => boolean;
   chatScrollElement?: () => HTMLElement | null;
   chatScrollToEnd?: (options: ChatScrollToEndOptions) => boolean;
 };
@@ -292,7 +293,7 @@ function updateChatScrollPosition(
   // Ignore downward scroll events that we triggered, including intermediate
   // smooth-scroll frames. A real user scroll-up must still pass through so
   // streaming stops pinning them back to the bottom.
-  const isUserScrollUp = takeover !== false || delta < 0;
+  const isUserScrollUp = takeover !== false || (delta < 0 && !host.chatIsMaintenanceScroll?.());
   if (host.chatIsProgrammaticScroll?.() && !isUserScrollUp) {
     return;
   }

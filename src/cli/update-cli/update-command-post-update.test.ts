@@ -125,6 +125,8 @@ vi.mock("./update-command-result.js", async (importOriginal) => ({
   writeControlPlaneUpdateRestartSentinelBestEffort: mocks.writeSentinel,
 }));
 
+import { registerBoundaryFinalizationControls } from "./update-command-post-update-boundary.test-support.js";
+
 type FinishUpdateParams = Parameters<typeof finishUpdate>[0];
 const stdinIsTTYDescriptor = Object.getOwnPropertyDescriptor(process.stdin, "isTTY");
 function expectFailureReport(reason: string, options: unknown = expect.any(Object)) {
@@ -203,6 +205,8 @@ describe("successful update finalization ordering", () => {
     expect(mocks.printResult).not.toHaveBeenCalled();
     expect(loadUpdateRecovery(run.runId, { env })).toEqual(record);
   });
+
+  registerBoundaryFinalizationControls({ makeTempDir: (prefix) => tempDirs.make(prefix), mocks });
 
   it("retains pending staged service load without legacy rollback or completion", async () => {
     const refusal = new UpdateServiceLoadBoundaryError("checkpoint seal refused");
@@ -339,6 +343,7 @@ describe("successful update finalization ordering", () => {
   });
 
   it("restarts when shell completion cache generation returns false", async () => {
+    vi.stubEnv("OPENCLAW_PROFILE", undefined);
     Object.defineProperty(process.stdin, "isTTY", { configurable: true, value: true });
     mocks.checkCompletionStatus.mockResolvedValueOnce({
       shell: "zsh",

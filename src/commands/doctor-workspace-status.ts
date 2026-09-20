@@ -11,6 +11,7 @@ import type { HealthFinding } from "../flows/health-checks.js";
 import { resolveOpenClawReleaseCohortVersion } from "../infra/npm-registry-spec.js";
 import type { PluginMetadataSnapshotScopeRunner } from "../plugins/current-plugin-metadata-snapshot.js";
 import {
+  resolvePluginVersionDriftRegistryLag,
   resolvePluginVersionDriftUpdateCommand,
   type PluginVersionDriftReport,
   type PluginVersionRestartReadiness,
@@ -21,7 +22,6 @@ import {
 } from "../plugins/status.js";
 import { loadTaskFlowRegistryStateFromSqliteReadOnly } from "../tasks/task-flow-registry.store.sqlite.js";
 import { loadTaskRegistryStateFromSqliteReadOnly } from "../tasks/task-registry.store.sqlite.js";
-import type { TaskRecord } from "../tasks/task-registry.types.js";
 
 type NoteWorkspaceStatusOptions = {
   pluginVersionReadiness?: PluginVersionRestartReadiness;
@@ -29,6 +29,27 @@ type NoteWorkspaceStatusOptions = {
 };
 
 const WORKSPACE_STATUS_CHECK_ID = "core/doctor/workspace-status";
+
+type WorkspacePluginDiagnostic = ReturnType<
+  typeof buildPluginRegistrySnapshotReport
+>["diagnostics"][number];
+
+function claimPluginDiagnostic(seen: Set<string>, diagnostic: WorkspacePluginDiagnostic): boolean {
+  const key = [
+    diagnostic.level,
+    diagnostic.pluginId ?? "",
+    diagnostic.code ?? "",
+    diagnostic.source ?? "",
+    diagnostic.message,
+  ]
+    .map((value) => `${value.length}:${value}`)
+    .join("");
+  if (seen.has(key)) {
+    return false;
+  }
+  seen.add(key);
+  return true;
+}
 
 type TaskFlowRecoveryFinding = {
   flowId: string;
@@ -39,25 +60,21 @@ function collectTaskFlowRecoveryFindings(): TaskFlowRecoveryFinding[] {
   const flows = [...loadTaskFlowRegistryStateFromSqliteReadOnly().flows.values()].toSorted(
     (left, right) => right.createdAt - left.createdAt,
   );
-  const tasksByFlowId = new Map<string, TaskRecord[]>();
-  for (const task of loadTaskRegistryStateFromSqliteReadOnly().tasks.values()) {
+  const tasksById = loadTaskRegistryStateFromSqliteReadOnly().tasks;
+  const flowsWithTasks = new Set<string>();
+  for (const task of tasksById.values()) {
     const flowId = task.parentFlowId?.trim();
     if (flowId) {
-      const linkedTasks = tasksByFlowId.get(flowId);
-      if (linkedTasks) {
-        linkedTasks.push(task);
-      } else {
-        tasksByFlowId.set(flowId, [task]);
-      }
+      flowsWithTasks.add(flowId);
     }
   }
-  return flows.flatMap((flow) => {
-    const linkedTasks = tasksByFlowId.get(flow.flowId) ?? [];
-    const findings: TaskFlowRecoveryFinding[] = [];
+  const findings: TaskFlowRecoveryFinding[] = [];
+  for (const flow of flows) {
+    const hasLinkedTasks = flowsWithTasks.has(flow.flowId);
     if (
       flow.syncMode === "managed" &&
       flow.status === "running" &&
-      linkedTasks.length === 0 &&
+      !hasLinkedTasks &&
       flow.waitJson === undefined
     ) {
       findings.push({
@@ -69,15 +86,15 @@ function collectTaskFlowRecoveryFindings(): TaskFlowRecoveryFinding[] {
       flow.endedAt == null &&
       flow.status === "blocked" &&
       flow.blockedTaskId &&
-      !linkedTasks.some((task) => task.taskId === flow.blockedTaskId)
+      (!hasLinkedTasks || tasksById.get(flow.blockedTaskId)?.parentFlowId?.trim() !== flow.flowId)
     ) {
       findings.push({
         flowId: flow.flowId,
         message: `${flow.flowId}: blocked TaskFlow points at missing task ${flow.blockedTaskId}; inspect before retrying.`,
       });
     }
-    return findings;
-  });
+  }
+  return findings;
 }
 
 function noteFlowRecoveryHints() {
@@ -120,7 +137,18 @@ function pluginVersionDriftToHealthFindings(
       },
     ];
   }
-  return drift.drifts.map((entry) => {
+  return drift.drifts.map((entry): HealthFinding => {
+    const registryLag = resolvePluginVersionDriftRegistryLag(entry);
+    if (registryLag) {
+      return {
+        checkId: WORKSPACE_STATUS_CHECK_ID,
+        severity: "info",
+        message: `Plugin ${entry.pluginId} is ${entry.installedVersion} and its registry publishes no newer release (registry version ${registryLag.registryVersion}), but a Gateway restart will load OpenClaw ${drift.gatewayVersion}.${runningGatewayVersion ? ` The running Gateway is ${runningGatewayVersion}.` : ""} No plugin update can reach ${registryLag.expectedVersion}.`,
+        path: `plugins.entries.${entry.pluginId}`,
+        target: entry.pluginId,
+        requirement: "plugin-version-drift",
+      };
+    }
     const updateCommand = resolvePluginVersionDriftUpdateCommand(entry);
     const targetResolution = entry.targetResolution;
     const targetError =
@@ -130,7 +158,7 @@ function pluginVersionDriftToHealthFindings(
     return {
       checkId: WORKSPACE_STATUS_CHECK_ID,
       severity: "warning",
-      message: `Plugin ${entry.pluginId} is ${entry.installedVersion}, but a Gateway restart will load OpenClaw ${drift.gatewayVersion}.${runningGatewayVersion ? ` The running Gateway is ${runningGatewayVersion}.` : ""}${updateCommand ? "" : ` Repair target resolution failed: ${targetError}.`}`,
+      message: `Plugin ${entry.pluginId} is ${entry.installedVersion}, but a Gateway restart will load OpenClaw ${drift.gatewayVersion}.${targetResolution?.status === "resolved" ? ` The confirmed plugin target is ${targetResolution.version}.` : ""}${runningGatewayVersion ? ` The running Gateway is ${runningGatewayVersion}.` : ""}${updateCommand ? "" : ` Repair target resolution failed: ${targetError}.`}`,
       path: `plugins.entries.${entry.pluginId}`,
       target: entry.pluginId,
       requirement: "plugin-version-drift",
@@ -225,6 +253,7 @@ export function collectWorkspaceStatusHealthFindings(
     workspaceDir: resolveAgentWorkspaceDir(cfg, agentId),
   }));
   const workspaceFindings: HealthFinding[] = [];
+  const reportedPluginDiagnostics = new Set<string>();
   for (const { agentId, workspaceDir } of scopes) {
     const collectForWorkspace = () => {
       const findings: HealthFinding[] = [];
@@ -239,6 +268,9 @@ export function collectWorkspaceStatusHealthFindings(
         findings.push(pluginCompatibilityWarningToHealthFinding(`${prefix}${message}`));
       }
       for (const diagnostic of pluginRegistry.diagnostics) {
+        if (!claimPluginDiagnostic(reportedPluginDiagnostics, diagnostic)) {
+          continue;
+        }
         findings.push(
           pluginDiagnosticToHealthFinding(diagnostic, `${prefix}${diagnostic.message}`),
         );
@@ -297,7 +329,12 @@ function notePluginVersionReadiness(readiness: PluginVersionRestartReadiness | u
     .map(({ command }) => command)
     .filter((command): command is string => Boolean(command))
     .map((command) => formatCliCommand(command));
-  const unresolvedRepairs = repairs.filter(({ command }) => !command);
+  const registryLagRepairs = repairs.filter(({ entry }) =>
+    Boolean(resolvePluginVersionDriftRegistryLag(entry)),
+  );
+  const unresolvedRepairs = repairs.filter(
+    ({ entry, command }) => !command && !resolvePluginVersionDriftRegistryLag(entry),
+  );
   const lines = [
     ...(readiness.runningGatewayVersion
       ? [`Running Gateway: OpenClaw ${readiness.runningGatewayVersion}`]
@@ -307,7 +344,15 @@ function notePluginVersionReadiness(readiness: PluginVersionRestartReadiness | u
     } not on post-restart OpenClaw ${drift.gatewayVersion}`,
     ...drift.drifts.map((entry) => {
       const sourceLabel = entry.source === "clawhub" ? "clawhub" : "npm";
-      return `- ${entry.pluginId}: ${entry.installedVersion} (${sourceLabel}) -> expected ${drift.gatewayVersion}`;
+      const expectedVersion =
+        entry.targetResolution?.status === "resolved"
+          ? entry.targetResolution.version
+          : drift.gatewayVersion;
+      return `- ${entry.pluginId}: ${entry.installedVersion} (${sourceLabel}) -> expected ${expectedVersion}`;
+    }),
+    ...registryLagRepairs.map(({ entry }) => {
+      const registryLag = resolvePluginVersionDriftRegistryLag(entry);
+      return `${entry.pluginId} already holds registry version ${registryLag?.registryVersion}; no release reaches ${registryLag?.expectedVersion} yet, so no update command applies.`;
     }),
     ...unresolvedRepairs.map(({ entry }) => {
       const targetResolution = entry.targetResolution;
@@ -343,6 +388,7 @@ export function noteWorkspaceStatus(cfg: OpenClawConfig, options: NoteWorkspaceS
     agentId,
     workspaceDir: resolveAgentWorkspaceDir(cfg, agentId),
   }));
+  const reportedPluginDiagnostics = new Set<string>();
   for (const { agentId, workspaceDir } of scopes) {
     const noteForWorkspace = () => {
       const prefix = agentIds.length > 1 ? `Agent "${agentId}":\n` : "";
@@ -371,8 +417,11 @@ export function noteWorkspaceStatus(cfg: OpenClawConfig, options: NoteWorkspaceS
           "Plugin compatibility",
         );
       }
-      if (pluginRegistry.diagnostics.length > 0) {
-        const lines = pluginRegistry.diagnostics.map((diag) => {
+      const diagnostics = pluginRegistry.diagnostics.filter((diagnostic) =>
+        claimPluginDiagnostic(reportedPluginDiagnostics, diagnostic),
+      );
+      if (diagnostics.length > 0) {
+        const lines = diagnostics.map((diag) => {
           const level = diag.level.toUpperCase();
           const plugin = diag.pluginId ? ` ${diag.pluginId}` : "";
           const source = diag.source ? ` (${diag.source})` : "";

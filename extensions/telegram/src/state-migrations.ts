@@ -1,4 +1,3 @@
-// Telegram plugin module implements state migrations behavior.
 import fs from "node:fs";
 import path from "node:path";
 import { listAgentIds } from "openclaw/plugin-sdk/agent-scope-runtime";

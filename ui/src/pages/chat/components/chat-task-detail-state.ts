@@ -4,6 +4,7 @@ import { extractTextCached } from "../../../lib/chat/message-extract.ts";
 import { visibleChatHistoryMessages } from "../../../lib/chat/message-visibility.ts";
 import type { UiSessionDefaultsHost } from "../../../lib/sessions/session-key.ts";
 import type { TaskSummary } from "../../../lib/tasks/task-summary.ts";
+import { attachHistoryActivity } from "../chat-history-request.ts";
 import type { AssistantMessageExpansionState } from "../chat-message-recovery.ts";
 import { readChatThreadMessageIdentity } from "../chat-thread-items.ts";
 import { setExpansionState } from "../chat-thread.ts";
@@ -189,7 +190,7 @@ async function loadTranscriptPage(
       limit: TASK_TRANSCRIPT_REQUEST_LIMIT,
       ...(cursor ? { cursor } : {}),
     });
-    const messages = visibleChatHistoryMessages(result.messages);
+    const messages = visibleChatHistoryMessages(attachHistoryActivity(result).messages);
     const previousMessages = previous?.messages ?? [];
     const earlier = cursor ? messages : previousMessages;
     const later = cursor ? previousMessages : messages;

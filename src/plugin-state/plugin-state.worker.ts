@@ -10,17 +10,21 @@ import {
   compareAndApplyPluginStateEntry,
   observePluginStateEntry,
 } from "./plugin-state-store.comparison.js";
+import {
+  withPluginStateDatabaseReadOnly,
+  wrapPluginStateError,
+} from "./plugin-state-store.database.js";
 import { registerPluginStateSequencedJournalEntryInDatabase } from "./plugin-state-store.journal.js";
 import {
   countLivePluginStateNamespaceEntries,
   deletePluginStateEntry,
   lookupPluginStateEntry,
-  registerPluginStateEntry,
 } from "./plugin-state-store.kernel.js";
 import {
   clearPluginStateNamespace,
   consumePluginStateEntry,
   deletePluginStateEntryIfEqual,
+  movePluginStateEntries,
   registerPluginStateEntryIfAbsent,
 } from "./plugin-state-store.mutations.js";
 import {
@@ -28,10 +32,7 @@ import {
   listPluginStateEntriesInKeyRange,
   lookupPluginStateEntries,
 } from "./plugin-state-store.reads.js";
-import {
-  withPluginStateDatabaseReadOnly,
-  wrapPluginStateError,
-} from "./plugin-state-store.sqlite.js";
+import { registerPluginStateEntry } from "./plugin-state-store.retention.js";
 import {
   type PluginStateWorkerOperations,
   pluginStateWorkerOperations,
@@ -152,14 +153,12 @@ export function executePluginStateCommand(
                 command.input,
                 captureOpenClawStateDatabaseReadAdmission(store.path).identity.key,
               );
+            case "pluginState.moveEntries":
+              return movePluginStateEntries(store, command.input);
             case "pluginState.register":
-              return registerPluginStateEntry(store, command.input, command.input.maxPluginEntries);
+              return registerPluginStateEntry(store, command.input);
             case "pluginState.registerIfAbsent":
-              return registerPluginStateEntryIfAbsent(
-                store,
-                command.input,
-                command.input.maxPluginEntries,
-              );
+              return registerPluginStateEntryIfAbsent(store, command.input);
             case "pluginState.deleteIfEqual":
               return deletePluginStateEntryIfEqual(store, command.input);
             case "pluginState.consume":

@@ -200,13 +200,15 @@ test.each([
   { name: "missing environment", ownerEpoch: undefined, expectedIdentity: false },
   { name: "mismatched owner epoch", ownerEpoch: 13, expectedIdentity: false },
 ])(
-  "sessions.list batch-projects durable worker placement: $name",
+  "sessions.list retains durable worker placement per resident row: $name",
   async ({ ownerEpoch, expectedIdentity }) => {
     await seedSessionRows();
     const placement = activePlacementRecord();
     const getMany = vi.fn<WorkerSessionPlacementReader["getMany"]>((sessionIds) => {
-      expect(sessionIds).toEqual(expect.arrayContaining(["sess-main", "sess-other"]));
-      return new Map([[placement.sessionId, placement]]);
+      expect(sessionIds).toHaveLength(1);
+      return new Map(
+        sessionIds.includes(placement.sessionId) ? [[placement.sessionId, placement]] : [],
+      );
     });
     const diskSpace = {
       status: "warning" as const,
@@ -224,29 +226,30 @@ test.each([
         ? { ...identity, ownerEpoch, state: "attached" }
         : undefined,
     );
+    const context = {
+      workerSessionPlacementService: { getMany },
+      workerEnvironmentService: {
+        get: getEnvironment,
+        readMachineShape: () => identity.machine,
+        machineShapeVersion: () => 0,
+        inventoryVersion: () => 0,
+      },
+      workerPlacementDiskSpaceReader: { read: () => diskSpace, version: () => 1 },
+      workerPlacementRunnerAvailabilityReader: {
+        read: () => ({ kind: "device", status: "offline" }),
+        version: () => 1,
+      },
+    };
     const result = await directSessionReq<{ sessions: GatewaySessionRow[] }>(
       "sessions.list",
       {},
-      {
-        context: {
-          workerSessionPlacementService: { getMany },
-          workerEnvironmentService: {
-            get: getEnvironment,
-            readMachineShape: () => identity.machine,
-            machineShapeVersion: () => 0,
-            inventoryVersion: () => 0,
-          },
-          workerPlacementDiskSpaceReader: { read: () => diskSpace, version: () => 1 },
-          workerPlacementRunnerAvailabilityReader: {
-            read: () => ({ kind: "device", status: "offline" }),
-            version: () => 1,
-          },
-        },
-      },
+      { context },
     );
 
     expect(result.ok).toBe(true);
-    expect(getMany).toHaveBeenCalledTimes(1);
+    expect(
+      getMany.mock.calls.flatMap(([ids]) => ids).toSorted((a, b) => a.localeCompare(b)),
+    ).toEqual(["sess-main", "sess-other"]);
     const main = result.payload?.sessions.find((session) => session.sessionId === "sess-main");
     const other = result.payload?.sessions.find((session) => session.sessionId === "sess-other");
     expect(main?.placement).toStrictEqual({
@@ -267,6 +270,9 @@ test.each([
       ...(expectedIdentity ? identity : {}),
     });
     expect(other?.placement).toBeUndefined();
+    getMany.mockClear();
+    expect((await directSessionReq("sessions.list", {}, { context })).ok).toBe(true);
+    expect(getMany).not.toHaveBeenCalled();
   },
 );
 
@@ -363,15 +369,21 @@ test("sessions.list projects durable placement move progress", async () => {
     updatedAtMs: 340,
   });
   expect(main?.placementMove).not.toHaveProperty("operationId");
-  expect(getPlacementMoves).toHaveBeenCalledOnce();
+  expect(
+    getPlacementMoves.mock.calls
+      .map(([ids]) => ids)
+      .toSorted((a, b) => a.join("\0").localeCompare(b.join("\0"))),
+  ).toEqual([["sess-main"], ["sess-other"]]);
 });
 
 test("sessions.describe projects durable worker placement", async () => {
   await seedSessionRows();
   const placement = activePlacementRecord();
   const getMany = vi.fn<WorkerSessionPlacementReader["getMany"]>((sessionIds) => {
-    expect(sessionIds).toEqual(["sess-main"]);
-    return new Map([[placement.sessionId, placement]]);
+    expect(sessionIds).toHaveLength(1);
+    return new Map(
+      sessionIds.includes(placement.sessionId) ? [[placement.sessionId, placement]] : [],
+    );
   });
   const diskSpace = {
     status: "critical" as const,
@@ -396,7 +408,9 @@ test("sessions.describe projects durable worker placement", async () => {
   );
 
   expect(result.ok).toBe(true);
-  expect(getMany).toHaveBeenCalledTimes(1);
+  expect(getMany.mock.calls.flatMap(([ids]) => ids).toSorted((a, b) => a.localeCompare(b))).toEqual(
+    ["sess-main", "sess-other"],
+  );
   expect(result.payload?.session?.placement).toEqual({
     state: "active",
     environmentId: "env-placement",

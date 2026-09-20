@@ -954,6 +954,11 @@ describe("gateway client capability tool filtering", () => {
     expect(hasTool(createOpenClawTools({ clientCaps: ["ui-commands"] }), "screen")).toBe(true);
   });
 
+  it("exposes profile theme actions without a connected UI capability", () => {
+    expect(hasTool(createOpenClawTools(), "theme")).toBe(true);
+    expect(hasTool(createOpenClawTools({ clientCaps: ["ui-commands"] }), "theme")).toBe(true);
+  });
+
   it("retains the requesting browser through coding tool assembly", async () => {
     const gatewayUiCommandTarget = { connId: "requester-tab", profileId: "requester" };
     const targets: unknown[] = [];

@@ -16,6 +16,7 @@ export function createScheduledMessageReadModel(params: {
   apiKey: string;
   actionParams: Record<string, unknown>;
   assertToolResult: (text: string) => void;
+  assertToolSchema?: (schema: unknown) => void;
 }) {
   const observation: ModelObservation = { requests: 0, messageToolAdvertised: false };
   return {
@@ -38,6 +39,7 @@ export function createScheduledMessageReadModel(params: {
         expect(tools).toContainEqual(
           expect.objectContaining({ type: "function", name: "message" }),
         );
+        params.assertToolSchema?.(tools.find((tool) => tool.name === "message")?.parameters);
         observation.messageToolAdvertised = true;
         const item = {
           type: "function_call",

@@ -1,5 +1,8 @@
 import { LEGACY_UPDATE_RUN_EXPIRED_REASON } from "../../../src/infra/update-run-legacy-expiry.js";
-import type { UpdateRunRecord } from "../../../src/infra/update-run-record.js";
+import {
+  isAcknowledgedAbandonedUpdateRun,
+  type UpdateRunRecord,
+} from "../../../src/infra/update-run-record.js";
 import { renderUpdateRunReport } from "../../../src/infra/update-run-report.js";
 import { classifyUpdateOutcome } from "../../../src/shared/update-outcome.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
@@ -53,6 +56,7 @@ const UPDATE_FAILURE_REASON_KEYS: Record<string, string> = {
   "global-install-failed": "updates.failureReasons.globalInstallFailed",
   "restart-disabled": "updates.failureReasons.restartDisabled",
   "restart-unavailable": "updates.failureReasons.restartUnavailable",
+  "external-supervisor-update-required": "updates.failureReasons.externalSupervisorUpdateRequired",
   "restart-unhealthy": "updates.failureReasons.restartUnhealthy",
   "restart-revision-mismatch": "updates.failureReasons.restartRevisionMismatch",
   "restart-revision-unavailable": "updates.failureReasons.restartRevisionUnavailable",
@@ -291,7 +295,10 @@ export function projectUpdateStatusResponse(
 }
 
 export function projectUpdateRunFailure(run: UpdateRunRecord): UpdateFailureTriage | null {
-  if (run.status !== "failed" && run.status !== "rolled-back") {
+  if (
+    isAcknowledgedAbandonedUpdateRun(run) ||
+    (run.status !== "failed" && run.status !== "rolled-back")
+  ) {
     return null;
   }
   const step = run.steps.findLast((entry) => entry.status === "failed");

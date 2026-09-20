@@ -598,17 +598,22 @@ describe("update failure report", () => {
     const validationGate = new Promise<boolean>((resolve) => {
       finishValidation = () => resolve(false);
     });
+    const { promise: validationStarted, resolve: markValidationStarted } = createDeferred();
     const validateCurrentAttempt = vi
       .fn<() => boolean | Promise<boolean>>()
       .mockReturnValueOnce(true)
-      .mockReturnValueOnce(validationGate);
+      .mockImplementationOnce(() => {
+        markValidationStarted();
+        return validationGate;
+      });
     const oldCreateIssue = vi.fn();
     const oldSubmission = submitUpdateFailureReport(prepared, prepared.previewDigest, {
       createIssue: oldCreateIssue,
       stateDir,
       validateCurrentAttempt,
     });
-    await vi.waitFor(() => expect(validateCurrentAttempt).toHaveBeenCalledTimes(2));
+    await validationStarted;
+    expect(validateCurrentAttempt).toHaveBeenCalledTimes(2);
     const oldReportPath = currentSavedReportArtifactPath(prepared, stateDir);
     expect(await fs.readFile(`${oldReportPath}.pending`, "utf8")).toBe(prepared.body);
 

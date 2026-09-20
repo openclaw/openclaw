@@ -54,6 +54,7 @@ export function runSqliteWorkerStoreOperation<Operations extends SqliteWorkerOpe
   stateContext?: SqliteWorkerStateContext,
   assertCurrent?: (commandType: PropertyKey) => void,
   createAdmission?: SqliteWorkerAdmissionFactory,
+  requireStateLifecycle = false,
 ): Promise<T> {
   return withCallerErrors(
     resolveSqliteWorkerBroker().runOperation(
@@ -62,6 +63,7 @@ export function runSqliteWorkerStoreOperation<Operations extends SqliteWorkerOpe
       stateContext,
       assertCurrent,
       createAdmission,
+      requireStateLifecycle,
     ),
   );
 }
@@ -111,6 +113,15 @@ export function runSqliteWorkerStoreWrite<Operations extends SqliteWorkerOperati
 /** Read the broker's recorded lifecycle state without probing native storage. */
 export function isSqliteWorkerStoreAvailable(store: object): boolean {
   return resolveSqliteWorkerBroker().isAvailable(store);
+}
+
+/** Internal identity for the existing canonical actor, never a transferable authority. */
+export function getSqliteWorkerActorIdentity(store: object): object {
+  return resolveSqliteWorkerBroker().getActorIdentity(store);
+}
+
+export function retireSqliteWorkerActor(identity: object): Promise<void> {
+  return withCallerErrors(resolveSqliteWorkerBroker().retireActor(identity));
 }
 
 /** Recorded orphan custody at its original shared-state opening path. */

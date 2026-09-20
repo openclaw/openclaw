@@ -99,7 +99,7 @@ describe("dashboards index", () => {
       expect(row?.textContent).toContain("Deploy monitor");
       expect(
         row?.querySelector<HTMLAnchorElement>(".dashboard-card__main")?.getAttribute("href"),
-      ).toBe(`${basePath}/dashboard/main/deploy-monitor-12345678`);
+      ).toBe(`${basePath}/dashboard/main/deploy-monitor-1234567890abcdef1234567890abcdef`);
     },
   );
 

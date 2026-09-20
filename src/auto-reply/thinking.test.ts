@@ -74,8 +74,8 @@ describe("normalizeThinkLevel", () => {
 
 describe("prepared thinking catalog identity", () => {
   it.each([
-    { provider: " demo ", model: " Mixed ", expected: ["high"], expectedDefault: "high" },
-    { provider: "DEMO", model: "Mixed", expected: ["high"], expectedDefault: "high" },
+    { provider: " demo ", model: " Mixed ", expected: ["off"], expectedDefault: "off" },
+    { provider: "DEMO", model: "Mixed", expected: ["off"], expectedDefault: "off" },
     { provider: "demo", model: "demo/Mixed", expected: ["high"], expectedDefault: "high" },
     {
       provider: "demo",
@@ -90,8 +90,14 @@ describe("prepared thinking catalog identity", () => {
       expectedDefault: "off",
     },
     { provider: "demo", model: "DEMO/Mixed", expected: ["off"], expectedDefault: "off" },
+    {
+      provider: "demo/team",
+      model: "Reader",
+      expected: ["off", "minimal", "low", "medium", "high"],
+      expectedDefault: "off",
+    },
   ])(
-    "aligns profile and default with first-match and case rules for $provider/$model",
+    "prefers the literal catalog identity for profile and default at $provider/$model",
     ({ provider, model, expected, expectedDefault }) => {
       const catalog = [
         {
@@ -101,7 +107,14 @@ describe("prepared thinking catalog identity", () => {
           thinkingLevelMap: { off: null, minimal: null, low: null, medium: null },
         },
         { provider: "demo", id: "Mixed", reasoning: false },
+        { provider: "demo", id: "Mixed", reasoning: true },
         { provider: "demo", id: "DEMO/Mixed", reasoning: false },
+        {
+          provider: "demo",
+          id: "team/Reader",
+          reasoning: true,
+          thinkingLevelMap: { off: null, minimal: null, low: null, medium: null },
+        },
       ];
       const catalogResolver = createThinkingCatalogResolver(catalog);
       for (const source of [{ catalog }, { catalog, catalogResolver }, { catalogResolver }]) {

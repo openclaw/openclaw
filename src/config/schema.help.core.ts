@@ -1,4 +1,5 @@
 // Defines user-facing config field help text for docs and UI surfaces.
+import { META_FIELD_HELP } from "./schema.meta.js";
 import { describeTalkSilenceTimeoutDefaults } from "./talk-defaults.js";
 import { CLOUD_WORKER_FIELD_HELP } from "./zod-schema.cloud-workers.js";
 import { DESKTOP_FIELD_HELP } from "./zod-schema.desktop.js";
@@ -15,11 +16,7 @@ export const CORE_FIELD_HELP: Record<string, string> = {
     "OAuth2 client secret for the Discord application that hosts Activities. Keep this value secret; DISCORD_CLIENT_SECRET is used when this field is unset.",
   "channels.discord.activities.applicationId":
     "Optional Discord application ID for Activities. Defaults to the bot application ID learned from Discord at gateway startup.",
-  meta: "Backward-readable compatibility metadata retained so older binaries can refuse unsafe config downgrades.",
-  "meta.lastTouchedVersion": "OpenClaw version that most recently wrote this config.",
-  "meta.migrations": "Bounded compatibility markers for completed config migrations.",
-  "meta.migrations.modelPolicyAllowlist":
-    "Records that legacy model-map restrictions were preserved or evaluated.",
+  ...META_FIELD_HELP,
   env: "Environment import and override settings used to supply runtime variables to the gateway process. Use this section to control shell-env loading and explicit variable injection behavior.",
   "env.shellEnv":
     "Shell environment import controls for loading variables from your login shell during startup. Keep this enabled when you depend on profile-defined secrets or PATH customizations.",
@@ -83,7 +80,7 @@ export const CORE_FIELD_HELP: Record<string, string> = {
   "update.channel":
     'Update channel for git + npm installs ("stable", "extended-stable", "beta", or "dev"). Extended-stable is package-only: installation is foreground-only, with optional read-only startup hints.',
   "update.checkOnStart":
-    "Checks the OpenClaw update endpoint when the gateway starts, including read-only extended-stable hints (default: true). Set false to disable update checks and anonymous update pings.",
+    "Checks for updates when the Gateway starts, including read-only extended-stable hints (default: true). Set false to disable automatic Gateway and headless-node update checks, applies, and anonymous update pings.",
   "update.auto.enabled":
     "Enable background auto-update for stable and beta package installs; extended-stable never auto-applies (default: false).",
   telemetry:

@@ -142,7 +142,7 @@ suite.define(() => {
     }
   });
 
-  it("refreshes stale auth attention after returning while the first auth read is pending", async () => {
+  it("refreshes stale auth attention after metadata changes while the first read is pending", async () => {
     const context = await suite.newBrowserContext({
       locale: "en-US",
       serviceWorkers: "block",
@@ -167,6 +167,10 @@ suite.define(() => {
         }
       });
       expect(await gateway.getRequests("models.authStatus")).toHaveLength(1);
+      for (let index = 0; index < 20; index++) {
+        await gateway.emitGatewayEvent("chat.metadata.changed", {});
+      }
+      expect(await gateway.getRequests("models.authStatus")).toHaveLength(1);
       await gateway.deferNext("models.authStatus");
       await gateway.resolveDeferred("models.authStatus", MISSING_AUTH_RESPONSE);
       await gateway.waitForRequest("models.authStatus", { after: 1 });
@@ -190,6 +194,8 @@ suite.define(() => {
       }
       await gateway.setMethodResponse("models.authStatus", MISSING_AUTH_RESPONSE);
       await page.evaluate(() => document.dispatchEvent(new Event("visibilitychange")));
+      expect(await gateway.getRequests("models.authStatus")).toHaveLength(2);
+      await gateway.emitGatewayEvent("chat.metadata.changed", {});
       await authWarning.waitFor({ state: "visible" });
       expect(await gateway.getRequests("models.authStatus")).toHaveLength(3);
     } finally {

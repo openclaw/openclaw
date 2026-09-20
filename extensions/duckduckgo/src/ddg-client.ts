@@ -90,7 +90,7 @@ async function readDuckDuckGoHtmlResponse(response: Response): Promise<string> {
   return await readProviderTextResponse(response, "DuckDuckGo search");
 }
 
-function parseDuckDuckGoHtml(html: string): DuckDuckGoResult[] {
+function parseDuckDuckGoHtml(html: string, count: number): DuckDuckGoResult[] {
   const results: DuckDuckGoResult[] = [];
   const resultRegex = /<a\b(?=[^>]*\bclass="[^"]*\bresult__a\b[^"]*")([^>]*)>([\s\S]*?)<\/a>/gi;
   const nextResultRegex = /<a\b(?=[^>]*\bclass="[^"]*\bresult__a\b[^"]*")[^>]*>/i;
@@ -112,6 +112,9 @@ function parseDuckDuckGoHtml(html: string): DuckDuckGoResult[] {
 
     if (title && url) {
       results.push({ title, url, snippet });
+      if (results.length >= count) {
+        break;
+      }
     }
   }
 
@@ -188,7 +191,7 @@ export async function runDuckDuckGoSearch(params: {
       if (isBotChallenge(html)) {
         throw new Error("DuckDuckGo returned a bot-detection challenge.");
       }
-      return parseDuckDuckGoHtml(html).slice(0, count);
+      return parseDuckDuckGoHtml(html, count);
     },
   );
 

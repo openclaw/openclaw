@@ -9,6 +9,7 @@ import { coerceRequiredSqliteNumber as sqliteNumber } from "../../infra/sqlite-n
 import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
 import { extractAssistantPhaseText } from "../../shared/chat-message-content.js";
 import { isTranscriptOnlyOpenClawAssistantModel } from "../../shared/transcript-only-openclaw-assistant.js";
+import { SessionMetadataUnavailableError } from "../../state/openclaw-agent-db-read-error.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import {
   openOpenClawAgentDatabase,
@@ -131,7 +132,6 @@ export function readTranscriptExportSnapshotReadOnlySync(scope: SessionTranscrip
         { operationLabel: "session transcript export snapshot" },
       ),
     toDatabaseOptions(resolved),
-    { throwOnMissingTable: true },
   );
   return result.found ? result.value : undefined;
 }
@@ -436,19 +436,25 @@ export function readTranscriptStatsBatchReadOnlySync(
     groups.set(key, group);
   }
   for (const group of groups.values()) {
-    const read = withOpenClawAgentDatabaseReadOnly((database) => {
-      const stats = readTranscriptStatsBatchFromDatabase(
-        database,
-        group.items.map((item) => item.sessionId),
+    try {
+      const read = withOpenClawAgentDatabaseReadOnly(
+        (database) =>
+          readTranscriptStatsBatchFromDatabase(
+            database,
+            group.items.map((item) => item.sessionId),
+          ),
+        group.options,
       );
-      for (const [index, item] of group.items.entries()) {
-        results[item.index] = stats[index]!;
+      if (read.found) {
+        for (const [index, item] of group.items.entries()) {
+          results[item.index] = read.value[index]!;
+        }
       }
-    }, group.options);
-    if (!read.found) {
-      for (const item of group.items) {
-        results[item.index] = null;
+    } catch (error) {
+      if (!(error instanceof SessionMetadataUnavailableError)) {
+        throw error;
       }
+      // A missing table leaves the whole store unavailable, including earlier chunks.
     }
   }
   return results;

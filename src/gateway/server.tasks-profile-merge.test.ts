@@ -8,6 +8,7 @@ import { writeConfigFile } from "../config/config.js";
 import { loadSessionEntry, upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import type { GatewayAuthConfig } from "../config/types.gateway.js";
 import { ensureProfileForEmail, setUserProfileRole } from "../state/user-profiles.js";
+import { runTaskRegistryMaintenance } from "../tasks/task-registry.maintenance.js";
 import { configureTaskRegistryRuntime } from "../tasks/task-registry.store.js";
 import type { TaskRecord } from "../tasks/task-registry.types.js";
 import { resetTaskRegistryForTests } from "../tasks/task-runtime.test-helpers.js";
@@ -63,6 +64,7 @@ test("expires task cursors when a profile merge changes the same caller's sessio
   const ownedKey = "agent:main:merge-owned";
   const sourceKey = "agent:main:merge-source";
   const tasks = new Map<string, TaskRecord>();
+  const now = Date.now();
   for (const [index, requesterSessionKey] of [ownedKey, ownedKey, sourceKey, sourceKey].entries()) {
     const taskId = `task-${index}`;
     tasks.set(taskId, {
@@ -77,8 +79,8 @@ test("expires task cursors when a profile merge changes the same caller's sessio
       status: "succeeded",
       deliveryStatus: "not_applicable",
       notifyPolicy: "done_only",
-      createdAt: 0,
-      lastEventAt: index,
+      createdAt: now,
+      lastEventAt: now + index,
     });
   }
   try {
@@ -92,7 +94,7 @@ test("expires task cursors when a profile merge changes the same caller's sessio
           {
             sessionId: `${sessionKey}-id`,
             lifecycleRevision: `${sessionKey}-generation`,
-            updatedAt: 1,
+            updatedAt: now,
             createdActor: { type: "human", source: "profile", id: profileId },
             visibility: "draft",
           },
@@ -100,10 +102,7 @@ test("expires task cursors when a profile merge changes the same caller's sessio
       }
       resetTaskRegistryForTests({ persist: false });
       configureTaskRegistryRuntime({
-        store: {
-          ...createInMemoryTaskRegistryStore(),
-          loadSnapshot: () => ({ tasks, deliveryStates: new Map() }),
-        },
+        store: createInMemoryTaskRegistryStore({ tasks, deliveryStates: new Map() }),
       });
       const stateDir = process.env.OPENCLAW_STATE_DIR;
       if (!stateDir) {
@@ -130,6 +129,8 @@ test("expires task cursors when a profile merge changes the same caller's sessio
       const admin = await connect("admin@example.test", ["operator.admin"]);
       const viewer = await connect("viewer@example.test", ["operator.read"]);
       try {
+        // Real startup maintenance must retain this pagination fixture.
+        expect((await runTaskRegistryMaintenance()).pruned).toBe(0);
         const before = await rpcReq<UsersSelfResult>(viewer, "users.self", {});
         expect(before).toMatchObject({ ok: true, payload: { profile: { id: viewerProfile.id } } });
         const first = await rpcReq<TasksListResult>(viewer, "tasks.list", { limit: 1 });

@@ -58,6 +58,7 @@ describe("runRespawnChildWithSignalBridge", () => {
       stdio: "inherit",
       env: { OPENCLAW_NODE_OPTIONS_READY: "1" },
       detached: process.platform !== "win32",
+      windowsHide: true,
     });
   });
 
@@ -245,6 +246,7 @@ describe("runRespawnChildWithSignalBridge", () => {
         stdio: "inherit",
         env: {},
         detached: false,
+        windowsHide: false,
       },
     );
   });

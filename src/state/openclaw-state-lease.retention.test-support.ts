@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { setImmediate } from "node:timers/promises";
+import type { Worker } from "node:worker_threads";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { withOpenClawStateLease, type OpenClawStateLeaseContext } from "./openclaw-state-lease.js";
 
@@ -26,16 +27,28 @@ async function assertCollected(reference: WeakRef<object>, scenario: string) {
 async function captureCompletedLease(options: LeaseOptions) {
   const caller = { label: "previous gateway generation" };
   const reference = new WeakRef(caller);
-  const retained: { lease?: OpenClawStateLeaseContext; timer?: NodeJS.Timeout } = {};
-  await callerScope.run(caller, () =>
-    withOpenClawStateLease(options, async (lease) => {
-      retained.lease = lease;
-      // The child keeps the real lease-owner scope, but its caller generation has advanced.
-      retained.timer = callerScope.run({ label: "next gateway generation" }, () =>
-        setInterval(() => undefined, 60_000),
-      );
-    }),
-  );
+  const retained: {
+    lease?: OpenClawStateLeaseContext;
+    timer?: NodeJS.Timeout;
+    worker?: Worker;
+  } = {};
+  const observeWorker = (worker: Worker) => {
+    retained.worker = worker;
+  };
+  process.once("worker", observeWorker);
+  try {
+    await callerScope.run(caller, () =>
+      withOpenClawStateLease(options, async (lease) => {
+        retained.lease = lease;
+        // The child keeps the real lease-owner scope, but its caller generation has advanced.
+        retained.timer = callerScope.run({ label: "next gateway generation" }, () =>
+          setInterval(() => undefined, 60_000),
+        );
+      }),
+    );
+  } finally {
+    process.removeListener("worker", observeWorker);
+  }
   return { reference, retained };
 }
 
@@ -62,6 +75,10 @@ await withOpenClawTestState({ label: "lease-retention" }, async (state) => {
       ...(scenario === "completed-worker" ? { heartbeat: "worker" as const } : {}),
     });
     try {
+      if (scenario === "completed-worker") {
+        assert.ok(retained.worker);
+        assert.equal(retained.worker.threadId, -1);
+      }
       await assertCollected(reference, scenario);
       assert.ok(retained.lease);
       assert.ok(retained.timer);

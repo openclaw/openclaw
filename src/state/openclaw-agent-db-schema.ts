@@ -9,7 +9,6 @@ import {
   ensureMemoryRecallMetadataSchema,
   migrateMemoryIndexSourcesIdentity,
 } from "../../packages/memory-host-sdk/src/host/memory-schema.js";
-import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import {
   repairCanonicalSqliteIndexes,
   verifyAndRepairCanonicalSqliteIndexes,
@@ -28,7 +27,6 @@ import { readSqliteUserVersion } from "../infra/sqlite-user-version.js";
 import { configureSqlitePreSchemaPragmas } from "../infra/sqlite-wal.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { normalizeAgentId } from "../routing/session-key.js";
-import { VERSION } from "../version.js";
 import { ensureOpenClawAgentBoardSchemaInTransaction } from "./openclaw-agent-board-schema.js";
 import {
   canonicalSessionValidationSchemaSql,
@@ -41,6 +39,7 @@ import {
   type OpenClawAgentDatabaseOptions,
 } from "./openclaw-agent-db-contract.js";
 import * as maintenanceAuthority from "./openclaw-agent-db-lease.js";
+import { persistAgentSchemaMetadata } from "./openclaw-agent-db-metadata-write.js";
 import { ensureOpenClawAgentDatabasePermissions } from "./openclaw-agent-db-permissions.js";
 import { registerOpenClawAgentDatabase } from "./openclaw-agent-db-registry.js";
 import {
@@ -78,7 +77,6 @@ import {
   backfillSessionEntryProvenance,
   backfillTranscriptMutationWatermarks,
 } from "./openclaw-agent-db-session-provenance.js";
-import type { DB as OpenClawAgentKyselyDatabase } from "./openclaw-agent-db.generated.js";
 import { resolveOpenClawAgentSqlitePath } from "./openclaw-agent-db.paths.js";
 import {
   migrateSessionParticipantsSchema,
@@ -88,7 +86,6 @@ import { hasPendingInputConsumptionColumnMigration } from "./openclaw-agent-pend
 import { OPENCLAW_AGENT_SCHEMA_SQL } from "./openclaw-agent-schema.js";
 import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "./openclaw-state-db.js";
 
-type OpenClawAgentMetadataDatabase = Pick<OpenClawAgentKyselyDatabase, "schema_meta">;
 type MigratedSessionEntry = Record<string, unknown>;
 
 const agentDbLog = createSubsystemLogger("state/agent-db");
@@ -452,13 +449,30 @@ export function* agentDatabaseIntegrityBeforeMutationSteps(
       hasPendingInputConsumptionColumnMigration(database) ||
       hasPendingSessionProjectColumn(database));
   if (userVersion === OPENCLAW_AGENT_SCHEMA_VERSION && !hasPendingCurrentVersionMigration) {
-    yield* verifyAndRepairCanonicalSqliteIndexSteps(database, pathname, OPENCLAW_AGENT_SCHEMA_SQL, {
-      allowMissingColumns: true,
-      validateAfterRepair: () =>
-        assertOpenClawAgentCurrentRuntimeSchema(database, { agentId, pathname }),
-      diagnostics,
-      reuseIntegrity,
-    });
+    const startedAt = performance.now();
+    const rebuiltIndexes = yield* verifyAndRepairCanonicalSqliteIndexSteps(
+      database,
+      pathname,
+      OPENCLAW_AGENT_SCHEMA_SQL,
+      {
+        allowMissingColumns: true,
+        validateAfterRepair: () =>
+          assertOpenClawAgentCurrentRuntimeSchema(database, { agentId, pathname }),
+        diagnostics,
+        reuseIntegrity,
+      },
+    );
+    if (rebuiltIndexes.length > 0) {
+      agentDbLog.warn(
+        `Rebuilt canonical agent SQLite indexes for ${agentId} (${pathname}): ${rebuiltIndexes.join(", ")}`,
+        {
+          agentId,
+          path: pathname,
+          indexes: rebuiltIndexes,
+          elapsedMs: Math.floor(performance.now() - startedAt),
+        },
+      );
+    }
     assertOpenClawAgentCurrentRuntimeSchema(database, { agentId, pathname });
   } else if (
     userVersion === 0 &&
@@ -473,42 +487,6 @@ export function* agentDatabaseIntegrityBeforeMutationSteps(
     yield* sqliteIntegrityCheckSteps(database, pathname, diagnostics);
   }
   return hasPendingCurrentVersionMigration;
-}
-
-function persistAgentSchemaMetadata(
-  db: DatabaseSync,
-  agentId: string,
-  targetVersion: number,
-): void {
-  const now = Date.now();
-  const metadata = {
-    role: "agent" as const,
-    schema_version: targetVersion,
-    agent_id: agentId,
-    app_version: VERSION,
-  };
-  executeSqliteQuerySync(
-    db,
-    getNodeSqliteKysely<OpenClawAgentMetadataDatabase>(db)
-      .insertInto("schema_meta")
-      .values({ meta_key: "primary", ...metadata, created_at: now, updated_at: now })
-      .onConflict((conflict) =>
-        conflict
-          .column("meta_key")
-          .doUpdateSet({ ...metadata, updated_at: now })
-          // updated_at records when schema metadata last changed, not when
-          // the database was last opened; unconditional bumps make every
-          // open dirty the row and defeat no-change backup detection.
-          .where((eb) =>
-            eb.or([
-              eb("schema_meta.schema_version", "!=", targetVersion),
-              eb("schema_meta.app_version", "is", null),
-              eb("schema_meta.app_version", "!=", VERSION),
-              eb("schema_meta.agent_id", "!=", agentId),
-            ]),
-          ),
-      ),
-  );
 }
 
 function seedCanonicalSessionValidationPending(db: DatabaseSync): void {

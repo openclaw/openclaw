@@ -5,7 +5,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { t } from "../../i18n/index.ts";
-import { createSessionsListResult } from "../../test-helpers/chat-model.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import {
   answerConfirmDialog,
@@ -129,10 +128,10 @@ describe("chat pane worker stop", () => {
     "stops $placement.state $targetKind startup from the placement menu",
     async ({ placement, targetKind, copy }) => {
       const request = dialogs.mockRequest(async () => ({ ok: true }));
-      const refreshReplacement = vi.fn(async () => createSessionsListResult());
+      const reconcileMutation = vi.fn(async () => ({ status: "refreshed" as const }));
       const { pane } = createTestChatPane({
         client: createGatewayBrowserClientFixture({ request }),
-        sessions: createSessionCapabilityFixture({ refreshReplacement }),
+        sessions: createSessionCapabilityFixture({ reconcileMutation }),
       });
       const session = startupSession(placement);
       const startup = targetKind
@@ -315,10 +314,10 @@ describe("chat pane worker stop", () => {
         }),
       );
       const request = dialogs.mockRequest(async () => ({ ok: true }));
-      const refreshReplacement = vi.fn(async () => createSessionsListResult());
+      const reconcileMutation = vi.fn(async () => ({ status: "refreshed" as const }));
       const { pane } = createTestChatPane({
         client: createGatewayBrowserClientFixture({ request }),
-        sessions: createSessionCapabilityFixture({ refreshReplacement }),
+        sessions: createSessionCapabilityFixture({ reconcileMutation }),
       });
       pane.context.gateway.snapshot.hello = gatewayHelloForMethods(
         ["sessions.reclaim"],
@@ -361,7 +360,7 @@ describe("chat pane worker stop", () => {
         }),
       );
       expect(pane.context.placementStartup.pause).toHaveBeenCalledBefore(request);
-      expect(refreshReplacement).toHaveBeenCalledWith("main");
+      expect(reconcileMutation).toHaveBeenCalledWith("main");
     },
   );
 
@@ -496,10 +495,10 @@ describe("chat pane worker stop", () => {
   it("keeps reclaim progress with its session when the pane switches rows", async () => {
     const response = createDeferred<{ ok: true }>();
     const request = dialogs.mockRequest(() => response.promise);
-    const refreshReplacement = vi.fn(async () => createSessionsListResult());
+    const reconcileMutation = vi.fn(async () => ({ status: "refreshed" as const }));
     const { pane, state } = createTestChatPane({
       client: createGatewayBrowserClientFixture({ request }),
-      sessions: createSessionCapabilityFixture({ refreshReplacement }),
+      sessions: createSessionCapabilityFixture({ reconcileMutation }),
     });
     pane.context.gateway.snapshot.hello = gatewayHelloForMethods(
       ["sessions.reclaim"],

@@ -279,7 +279,7 @@ describe("server-owned pending input display", () => {
     }
     await loadChatHistory(host);
     expect(host.chatMessages).toHaveLength(1);
-    expect(host.request).toHaveBeenLastCalledWith(
+    expect(host.request.mock.calls.findLast(([method]) => method === "chat.history")).toEqual([
       "chat.history",
       expect.objectContaining({
         inputRunIds: Array.from(
@@ -288,14 +288,14 @@ describe("server-owned pending input display", () => {
         ),
       }),
       { signal: expect.any(AbortSignal) },
-    );
+    ]);
     await loadChatHistory(host);
     expect(host.chatMessages).toEqual([]);
-    expect(host.request).toHaveBeenLastCalledWith(
+    expect(host.request.mock.calls.findLast(([method]) => method === "chat.history")).toEqual([
       "chat.history",
       expect.objectContaining({ inputRunIds: ["source-50"] }),
       { signal: expect.any(AbortSignal) },
-    );
+    ]);
   });
 
   it.each(["page", "delta"])(
@@ -484,7 +484,7 @@ describe("server-owned pending input display", () => {
               sendRunId,
             ),
           );
-          admitChatSubmission(host);
+          admitChatSubmission(host, getChatPendingInputs(host)?.page.items);
         } else {
           await retainDeliveredUserTurn(host, item);
         }
@@ -518,14 +518,16 @@ describe("server-owned pending input display", () => {
         { type: "snapshotLoaded", messages: history },
         { runActive: true },
       );
-      expect(admitChatSubmission(host)).toBe(false);
+      expect(admitChatSubmission(host, getChatPendingInputs(host)?.page.items)).toBe(false);
       const remounted = makeChatHost({
         sessionKey,
         currentSessionId: sessionId,
         client: host.client,
         chatSubmissions,
       });
-      expect(admitChatSubmission(remounted)).toBe(false);
+      expect(admitChatSubmission(remounted, getChatPendingInputs(remounted)?.page.items)).toBe(
+        false,
+      );
       expect(remounted.chatMessages).toEqual([]);
       // Retirement does not hide distinct or uncorrelated server-owned inputs.
       const otherInputs = ["other-accepted-source", undefined].map((runId) => ({
@@ -567,7 +569,7 @@ describe("server-owned pending input display", () => {
           ...history,
           unrelated,
         ]);
-        expect(admitChatSubmission(host)).toBe(false);
+        expect(admitChatSubmission(host, getChatPendingInputs(host)?.page.items)).toBe(false);
       }
     },
   );

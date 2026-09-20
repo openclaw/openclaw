@@ -10,6 +10,7 @@ const {
   settleTerminationMock,
   spawnMock,
   terminateMock,
+  waitForSpawnMock,
   windowsLegacyOutput,
 } = vi.hoisted(() => ({
   completionMock: vi.fn(),
@@ -17,6 +18,7 @@ const {
   settleTerminationMock: vi.fn(),
   spawnMock: vi.fn(),
   terminateMock: vi.fn(),
+  waitForSpawnMock: vi.fn(),
   windowsLegacyOutput: { enabled: false },
 }));
 
@@ -55,6 +57,10 @@ vi.mock("../../process/exec-termination.js", () => ({
   createCommandTerminationController: createTerminationControllerMock,
 }));
 
+vi.mock("../../process/exec-spawn.js", () => ({
+  waitForCommandSpawn: waitForSpawnMock,
+}));
+
 type StubChild = EventEmitter & {
   kill: ReturnType<typeof vi.fn>;
   nodeChildProcess: StubChild;
@@ -89,6 +95,7 @@ describe("execCommand", () => {
     });
     spawnMock.mockReset();
     completionMock.mockReset();
+    waitForSpawnMock.mockReset();
     windowsLegacyOutput.enabled = false;
     vi.useRealTimers();
   });
@@ -120,6 +127,37 @@ describe("execCommand", () => {
     expect(result.stderr.endsWith("stderr-tail")).toBe(true);
     expect(result.stdoutTruncatedChars).toBeGreaterThan(0);
     expect(result.stderrTruncatedChars).toBeGreaterThan(0);
+  });
+
+  it("captures output when the transport supplies process pipes asynchronously", async () => {
+    const child = createStubChild();
+    const stdout = child.stdout;
+    const stderr = child.stderr;
+    const spawned = createDeferred();
+    const completion = createDeferred<number | null>();
+    let ready = false;
+    child.pid = undefined;
+    Object.defineProperty(child, "stdout", { get: () => (ready ? stdout : undefined) });
+    Object.defineProperty(child, "stderr", { get: () => (ready ? stderr : undefined) });
+    spawnMock.mockReturnValue(child);
+    completionMock.mockReturnValue(completion.promise);
+    waitForSpawnMock.mockReturnValue(spawned.promise);
+    const { execCommand } = await import("./exec.js");
+
+    const result = execCommand("cmd", [], "/tmp");
+    child.pid = 1234;
+    ready = true;
+    spawned.resolve();
+    await spawned.promise;
+    stdout.emit("data", Buffer.from("stdout-after-spawn"));
+    stderr.emit("data", Buffer.from("stderr-after-spawn"));
+    completion.resolve(0);
+
+    await expect(result).resolves.toMatchObject({
+      code: 0,
+      stdout: "stdout-after-spawn",
+      stderr: "stderr-after-spawn",
+    });
   });
 
   it("spawns commands with process-tree cleanup options", async () => {
@@ -342,6 +380,51 @@ describe("execCommand", () => {
     const result = await resultPromise;
     expect(result.killed).toBe(true);
   });
+
+  it.each(["abort", "timeout"] as const)(
+    "settles %s while startup is pending and retains cleanup for a late process",
+    async (reason) => {
+      vi.useFakeTimers();
+      const child = createStubChild();
+      child.pid = undefined;
+      const started = createDeferred();
+      const completion = createDeferred<number | null>();
+      const controller = new AbortController();
+      spawnMock.mockReturnValue(child);
+      completionMock.mockReturnValue(completion.promise);
+      waitForSpawnMock.mockReturnValue(started.promise);
+      const { execCommand } = await import("./exec.js");
+      const result = execCommand("cmd", [], "/tmp", {
+        signal: controller.signal,
+        ...(reason === "timeout" ? { timeout: 10 } : {}),
+      });
+      let outcome: Awaited<typeof result> | undefined;
+      void result.then((value) => {
+        outcome = value;
+      });
+      try {
+        if (reason === "abort") {
+          controller.abort();
+        }
+        await vi.advanceTimersByTimeAsync(10);
+        expect(outcome).toMatchObject({ code: 1, killed: true, stdout: "", stderr: "" });
+        expect(spawnMock.mock.calls[0]?.[1].cancelSignal.aborted).toBe(true);
+        expect(createTerminationControllerMock).not.toHaveBeenCalled();
+        child.pid = 1234;
+        started.resolve();
+        await vi.advanceTimersByTimeAsync(0);
+        expect(terminateMock).toHaveBeenCalledOnce();
+        completion.resolve(null);
+        await vi.advanceTimersByTimeAsync(0);
+        expect(settleTerminationMock).toHaveBeenCalledOnce();
+      } finally {
+        child.pid = 1234;
+        started.resolve();
+        completion.resolve(null);
+        await result;
+      }
+    },
+  );
 
   it("does not resolve a killed command until process-tree cleanup settles", async () => {
     vi.useFakeTimers();

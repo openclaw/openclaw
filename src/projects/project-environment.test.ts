@@ -91,7 +91,7 @@ vi.mock("./project-clone-runtime.js", () => ({
 }));
 vi.mock("./project-registry.kernel.js", () => ({
   ensureProjectRegistrySchema: mocks.forbiddenSqlite,
-  rowToProject: mocks.forbiddenSqlite,
+  removeProjectCheckoutReferenceInDatabase: mocks.forbiddenSqlite,
 }));
 
 import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";

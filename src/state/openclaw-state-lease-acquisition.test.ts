@@ -40,7 +40,7 @@ function controlElapsedTime() {
   };
 }
 
-it.each(["maintenance", "generic"] as const)(
+it.each(["maintenance", "generic", "storage-contention-only"] as const)(
   "preserves the %s admission contract after a slow physical database open",
   async (caller) => {
     await withOpenClawTestState({ label: "lease-cold-admission" }, async (state) => {
@@ -65,10 +65,11 @@ it.each(["maintenance", "generic"] as const)(
                 database: { scope: "shared", options: { env: state.env } },
                 leaseMs: 60_000,
                 waitMs: 5_000,
+                waitForLease: caller !== "storage-contention-only",
               },
               run,
             );
-      if (caller === "maintenance") {
+      if (caller !== "generic") {
         await operation;
         expect(run).toHaveBeenCalledOnce();
       } else {

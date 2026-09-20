@@ -15,6 +15,7 @@ import {
 } from "../logging/redact.js";
 import { truncateUtf16Safe } from "../utils.js";
 import { collectTextContentBlocks } from "./content-blocks.js";
+import { memoizeSanitizedToolResult } from "./embedded-agent-tool-result-cache.js";
 import {
   isToolResultError,
   readToolResultDetails,
@@ -253,11 +254,15 @@ export function sanitizeToolResult(result: unknown): unknown {
   if (typeof result === "string") {
     return redactModelVisibleToolPayloadText(result);
   }
-  if (Array.isArray(result)) {
-    return redactModelVisibleSecrets(result);
-  }
   if (!result || typeof result !== "object") {
     return result;
+  }
+  return memoizeSanitizedToolResult(result, () => sanitizeStructuredToolResult(result));
+}
+
+function sanitizeStructuredToolResult(result: object): object {
+  if (Array.isArray(result)) {
+    return redactModelVisibleSecrets(result);
   }
   const record = result as Record<string, unknown>;
   // Strip image data first so the deep redaction pass doesn't waste work

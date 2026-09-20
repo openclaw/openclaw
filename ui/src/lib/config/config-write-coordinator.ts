@@ -401,6 +401,7 @@ export function createConfigWriteCoordinator({
   const fieldDiscard = createConfigFieldDiscard({
     state,
     serialize: (task) => afterPendingWritesSettled(task, () => false),
+    run,
     holdAutoSave,
     isDisposed,
     publish,

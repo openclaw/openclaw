@@ -55,9 +55,10 @@ export function getSupportedThinkingLevels<TApi extends Api>(
     }
     if (level === "xhigh" || level === "max") {
       return (
-        mapped !== undefined ||
-        mappedLevels.includes(level) ||
-        reasoningEfforts?.includes(level) === true
+        reasoningEfforts?.length !== 0 &&
+        (mapped !== undefined ||
+          mappedLevels.includes(level) ||
+          reasoningEfforts?.includes(level) === true)
       );
     }
     return true;
@@ -79,29 +80,20 @@ export function clampThinkingLevel<TApi extends Api>(
     return availableLevels[0] ?? "off";
   }
 
-  // Explicit provider opt-outs are hard caps. Downgrade them before considering
-  // stronger levels so unsupported xhigh/max requests cannot increase cost.
+  // Prefer lower effort for explicit xhigh/max opt-outs to avoid increasing cost.
+  // Other gaps prefer the next stronger available level before walking down.
   const thinkingLevelMap = resolveThinkingLevelMap(model);
-  if ((level === "xhigh" || level === "max") && thinkingLevelMap?.[level] === null) {
-    for (const candidate of MODEL_CATALOG_THINKING_LEVELS.slice(0, requestedIndex).toReversed()) {
-      if (availableLevels.includes(candidate)) {
-        return candidate;
-      }
-    }
-  }
-
-  // Prefer the next stronger available level, then walk down if the request was above the model cap.
-  for (const candidate of MODEL_CATALOG_THINKING_LEVELS.slice(requestedIndex)) {
-    if (availableLevels.includes(candidate)) {
-      return candidate;
-    }
-  }
-  for (const candidate of MODEL_CATALOG_THINKING_LEVELS.slice(0, requestedIndex).toReversed()) {
-    if (availableLevels.includes(candidate)) {
-      return candidate;
-    }
-  }
-  return availableLevels[0] ?? "off";
+  const lowerFirst = (level === "xhigh" || level === "max") && thinkingLevelMap?.[level] === null;
+  const lowerLevels = MODEL_CATALOG_THINKING_LEVELS.slice(0, requestedIndex).toReversed();
+  const upperLevels = MODEL_CATALOG_THINKING_LEVELS.slice(requestedIndex);
+  const candidates = lowerFirst
+    ? [...lowerLevels, ...upperLevels]
+    : [...upperLevels, ...lowerLevels];
+  return (
+    candidates.find((candidate) => availableLevels.includes(candidate)) ??
+    availableLevels[0] ??
+    "off"
+  );
 }
 
 /** Compares model identity by provider and id. */

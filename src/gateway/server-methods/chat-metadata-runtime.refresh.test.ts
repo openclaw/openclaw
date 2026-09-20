@@ -1,8 +1,9 @@
 import { createServer, get } from "node:http";
 import { setImmediate as nextEventLoopTurn } from "node:timers/promises";
-import { afterAll, beforeAll, describe, expect, test, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, test, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { AuthProfileStore } from "../../agents/auth-profiles.js";
+import { setPreparedModelRuntimeStartupStatus } from "../../agents/prepared-model-runtime.startup-status.js";
 import { handleGatewayProbeRequest } from "../server-http-probes.js";
 import {
   createChatMetadataHarness,
@@ -10,6 +11,10 @@ import {
 } from "./chat-metadata-runtime.test-support.js";
 
 describe("gateway chat metadata runtime", () => {
+  afterEach(() => {
+    setPreparedModelRuntimeStartupStatus(undefined);
+  });
+
   const server = createServer((req, res) => {
     void handleGatewayProbeRequest(
       req,
@@ -29,6 +34,51 @@ describe("gateway chat metadata runtime", () => {
     await new Promise<void>((resolve, reject) => {
       server.close((error) => (error ? reject(error) : resolve()));
     });
+  });
+
+  test("serves prepared agents during degraded first publication and adopts the recovered fleet", async () => {
+    const config = { agents: { entries: { main: {}, second: {} } } };
+    const harness = createChatMetadataHarness(config);
+    const mainOwner = createChatMetadataOwner(config, "main-model");
+    let secondOwner: ReturnType<typeof createChatMetadataOwner> | undefined;
+    harness.getPreparedOwner.mockImplementation((params) =>
+      params?.agentId === "second" ? secondOwner : mainOwner,
+    );
+
+    try {
+      await expect(harness.runtime.refresh()).rejects.toThrow(
+        'prepared chat metadata owner is unavailable for agent "second"',
+      );
+      setPreparedModelRuntimeStartupStatus({
+        degraded: true,
+        pendingAgents: ["second"],
+        stage: "workspace plugins; agent second",
+      });
+      await harness.runtime.refresh();
+      await expect(harness.runtime.read({ agentId: "main" })).resolves.toMatchObject({
+        models: [expect.objectContaining({ id: "main-model" })],
+      });
+      await expect(harness.runtime.read({ agentId: "second" })).rejects.toThrow(
+        'prepared chat metadata is unavailable for agent "second"',
+      );
+
+      secondOwner = createChatMetadataOwner(config, "second-model");
+      setPreparedModelRuntimeStartupStatus({ degraded: false, pendingAgents: [] });
+      await harness.runtime.refresh();
+      await expect(harness.runtime.read({ agentId: "main" })).resolves.toMatchObject({
+        models: [expect.objectContaining({ id: "main-model" })],
+      });
+      await expect(harness.runtime.read({ agentId: "second" })).resolves.toMatchObject({
+        models: [expect.objectContaining({ id: "second-model" })],
+      });
+
+      secondOwner = undefined;
+      await expect(harness.runtime.refresh()).rejects.toThrow(
+        'prepared chat metadata owner is unavailable for agent "second"',
+      );
+    } finally {
+      await harness.runtime.stop();
+    }
   });
 
   test.each(["commands", "projection"] as const)(
@@ -156,7 +206,7 @@ describe("gateway chat metadata runtime", () => {
     },
   );
 
-  test("publishes mutable catalog progress and failure changes once each", async () => {
+  test("ignores catalog progress and publishes failure transitions once each", async () => {
     const onChanged = vi.fn();
     const harness = createChatMetadataHarness(undefined, { onChanged });
     const catalog = harness.getPreparedOwner()!.modelCatalog;
@@ -166,20 +216,20 @@ describe("gateway chat metadata runtime", () => {
 
       catalog.pendingProviders = ["test"];
       await harness.runtime.refresh();
-      expect(onChanged).toHaveBeenCalledTimes(2);
+      expect(onChanged).toHaveBeenCalledOnce();
       catalog.pendingProviders = ["test"];
       await harness.runtime.refresh();
-      expect(onChanged).toHaveBeenCalledTimes(2);
+      expect(onChanged).toHaveBeenCalledOnce();
 
       catalog.pendingProviders = undefined;
       catalog.refreshFailed = true;
       await harness.runtime.refresh();
-      expect(onChanged).toHaveBeenCalledTimes(3);
+      expect(onChanged).toHaveBeenCalledTimes(2);
 
       catalog.refreshFailed = undefined;
       await harness.runtime.refresh();
       await harness.runtime.refresh();
-      expect(onChanged).toHaveBeenCalledTimes(4);
+      expect(onChanged).toHaveBeenCalledTimes(3);
     } finally {
       await harness.runtime.stop();
     }
@@ -257,7 +307,7 @@ describe("gateway chat metadata runtime", () => {
   );
 
   test.each(["resolve", "reject"] as const)(
-    "discards a late projection's %s after a usage-only revision changes",
+    "discards a late projection's %s after cooldown state changes",
     async (settlement) => {
       const harness = createChatMetadataHarness(undefined, { refreshOnRead: false });
       const blocked: AuthProfileStore = {

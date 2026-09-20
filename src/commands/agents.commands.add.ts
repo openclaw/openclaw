@@ -51,6 +51,7 @@ import { prepareAuthChoice, warnIfModelConfigLooksOff } from "./auth-choice.js";
 import { requireValidConfigForWrite } from "./config-validation.js";
 import {
   ensureOnboardingAgentWorkspace,
+  applyOnboardingUtilityModel,
   resolveOnboardingAgentTarget,
 } from "./onboard-agent-target.js";
 import { setupChannels } from "./onboard-channels.js";
@@ -418,6 +419,13 @@ export async function agentsAddCommand(
           continue;
         }
         stagedAuthProfiles.push(...authResult.authProfiles);
+        if (authResult.utilityModelOverride) {
+          nextConfig = applyOnboardingUtilityModel(
+            nextConfig,
+            resolveOnboardingAgentTarget(nextConfig, agentId),
+            authResult.utilityModelOverride,
+          );
+        }
         if (authResult.agentModelOverride) {
           nextConfig = applyAgentConfig(nextConfig, {
             agentId,

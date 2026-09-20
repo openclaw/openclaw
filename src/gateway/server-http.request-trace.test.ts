@@ -14,8 +14,7 @@ import {
   getActiveDiagnosticTraceContext,
   type DiagnosticTraceContext,
 } from "../infra/diagnostic-trace-context.js";
-import { getLogger, resetLogger, setLoggerOverride } from "../logging.js";
-import { flushLogger } from "../logging/logger.js";
+import { flushLogger, getLogger, resetLogger, setLoggerOverride } from "../logging/logger.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
 import { createGatewayHttpServer } from "./server-http.js";
 import { createGatewayTestRegistry } from "./server/__tests__/test-utils.js";

@@ -30,6 +30,54 @@ model discovery, auth preparation, or Responses parameters. An explicit
 observation, not a native ownership claim. Bound native sessions use the separate
 ownership contract below.
 
+Use `params.hostCapabilities.createToolSurface(options)` to construct OpenClaw
+tools. The host captures publication availability for the admitted attempt and
+applies it when building the surface; harnesses do not need to forward that fact,
+and plugin-supplied options cannot replace it. Tool profiles still filter the
+catalog, and each executable remains bound to the host's live authority.
+
+### Workspace files on the harness host
+
+A trusted host plugin can bind the existing `agents.files.list/get/set` methods
+and the `agents.update` identity form
+to a provisioned remote workspace using `AgentWorkspaceAccess`, exported from
+`openclaw/plugin-sdk/agent-workspace-runtime`. It supplies the `stat`, `readFile`,
+and `writeFile` methods of an existing `SandboxFsBridge`; no new file daemon is
+required.
+
+| Host lifecycle      | Action                                                                                    |
+| ------------------- | ----------------------------------------------------------------------------------------- |
+| Plugin registration | Call `declareAgentWorkspaceAccess(workspaceDir)` before file requests can arrive.         |
+| Service start       | Call `registerAgentWorkspaceAccess(workspaceDir, { bridge })` after host access is ready. |
+| Service stop        | Call the returned release function. Requests fail instead of using a stale local copy.    |
+
+The binding lasts across harness turns. The host provisions the workspace and
+selects and authenticates the remote target; Gateway does not seed a second
+workspace. Gateway keeps its existing document allowlist and authorization.
+Unconfigured workspaces keep local access. `expectedHash` retains the existing
+best-effort conflict check: native shell writers do not participate in the
+Gateway save queue, and a transport failure can leave the write outcome unknown.
+
+Bootstrap loading requires the bridge's `readFileWithSource` operation. It
+returns bytes and the canonical path pinned by that read, so the existing
+session filters can recognize aliases of protected root Memory files. A separate
+path lookup is not sufficient. Configured extra-file globs also require
+`readDirectory`. Missing capabilities fail explicitly. Post-compaction context
+also reads `AGENTS.md` through the binding; an unavailable host never selects a
+stale local copy.
+
+For automatic Memory context, the same read also returns `workspaceRelativePath`
+for files within the workspace mount. Memory Core classifies that source using
+its existing rules and Gateway provenance records, without probing Gateway-local
+files. Other Memory plugins must declare `supportsWorkspaceMemoryReadSources`
+and consume the classifier's `readSources` input; otherwise automatic remote
+Memory context is excluded. Missing source metadata cannot select a local copy.
+
+This binding provides remote document and bootstrap access. It does not enable
+a remote OpenClaw worker or move its agent loop. Memory search and maintenance,
+skills, attachments, and host provisioning require separate integration and
+verification before removing workspace synchronization.
+
 ### Native tool-policy enforcement
 
 Set `conversationToolPolicySupport: "exact"` only when `runAttempt` enforces every

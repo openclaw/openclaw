@@ -23,9 +23,7 @@ import {
   validateSessionsObserverVisibilityParams,
   validateSessionsPatchManyParams,
   validateSessionsPatchParams,
-  validateSessionsSearchParams,
   validateSessionsSendParams,
-  validateSessionsUsageParams,
   validateTalkConfigResult,
   validateTalkClientCreateParams,
   validateTalkClientCreateResult,
@@ -416,43 +414,6 @@ describe("lazy protocol validators", () => {
       { agentId: "work", view: "configured" },
       { sessionKey: "" },
       { sessionKey: "agent:work:main", authProfileId: "test:locked" },
-    ]);
-  });
-
-  it("accepts an IANA time zone for session usage while retaining UTC offsets", () => {
-    expectAccepted(validateSessionsUsageParams, [
-      { mode: "specific", timeZone: "Europe/Vienna" },
-      { mode: "specific", utcOffset: "UTC+2" },
-    ]);
-    expectRejected(validateSessionsUsageParams, [
-      { mode: "specific", timeZone: "" },
-      { mode: "specific", timeZone: 2 },
-    ]);
-  });
-
-  it("validates bounded session transcript search params", () => {
-    const search = (overrides: Record<string, unknown> = {}) => ({
-      query: "deployment failure",
-      ...overrides,
-    });
-    expectAccepted(validateSessionsSearchParams, [
-      search(),
-      search({
-        agentId: "work",
-        sessionKeys: ["agent:work:main", "agent:work:other"],
-        limit: 25,
-      }),
-    ]);
-    expectRejected(validateSessionsSearchParams, [
-      search({ agentId: "" }),
-      search({ sessionKey: "agent:work:main" }),
-      search({ sessionKeys: [] }),
-      search({
-        sessionKeys: Array.from({ length: 201 }, (_, index) => `session-${index}`),
-      }),
-      search({ limit: 26 }),
-      { query: "" },
-      { query: "x".repeat(4097) },
     ]);
   });
 

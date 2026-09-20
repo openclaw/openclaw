@@ -4,7 +4,11 @@ import {
   isExpiredLegacyUpdateRun,
   LEGACY_UPDATE_RUN_EXPIRED_REASON,
 } from "./update-run-legacy-expiry.js";
-import type { UpdateRunRecord } from "./update-run-record.js";
+import {
+  isAbandonedUpdateRun,
+  isAcknowledgedAbandonedUpdateRun,
+  type UpdateRunRecord,
+} from "./update-run-record.js";
 import { ABANDONED_UPDATE_RUN_MS } from "./update-run-timeouts.js";
 
 function updateRunLastActivity(record: UpdateRunRecord): number {
@@ -105,14 +109,7 @@ export function isUnacknowledgedAbandonedUpdateRun(record: UpdateRunRecord): boo
     record.finishedAtMs !== null &&
     record.finishedAtMs <= Date.now() &&
     Date.now() - record.finishedAtMs <= ABANDONED_UPDATE_RUN_MS &&
-    !record.steps.some((step) => step.step === "reconcile:acknowledged")
-  );
-}
-
-export function isAbandonedUpdateRun(record: UpdateRunRecord): boolean {
-  return (
-    record.status === "failed" &&
-    (record.reason === "abandoned" || record.reason === LEGACY_UPDATE_RUN_EXPIRED_REASON)
+    !isAcknowledgedAbandonedUpdateRun(record)
   );
 }
 

@@ -7,6 +7,50 @@ const promiseLimit = 4_096;
 let promisesTruncated = false;
 const startedAt = Date.now();
 
+// An exit-time native wait cannot service the later SIGUSR2 diagnostic request.
+if (process.execArgv.includes("--trace-exit") && require("node:worker_threads").isMainThread) {
+  const { writeSync } = require("node:fs");
+  // Keep the original method unbound: borrowed calls must retain their own receiver.
+  const emit = process.emit;
+  const writeExitBoundary = (phase, exitCode) => {
+    try {
+      const listeners = phase === "exit-listeners-enter" ? process.listeners("exit") : undefined;
+      writeSync(
+        2,
+        `[cli-process-diagnostics] ${JSON.stringify({
+          pid: process.pid,
+          phase,
+          exitCode,
+          elapsedMs: Date.now() - startedAt,
+          ...(listeners
+            ? {
+                listenerCount: listeners.length,
+                listenerNames: listeners.slice(0, 16).map((listener) => listener.name.slice(0, 64)),
+                listenersTruncated: listeners.length > 16,
+              }
+            : {}),
+        })}\n`,
+      );
+    } catch {
+      // Diagnostics must preserve the original exit dispatch and error.
+    }
+  };
+  process.emit = function (event, ...args) {
+    if (this !== process || event !== "exit") {
+      return Reflect.apply(emit, this, [event, ...args]);
+    }
+    writeExitBoundary("exit-listeners-enter", args[0]);
+    try {
+      const result = Reflect.apply(emit, this, [event, ...args]);
+      writeExitBoundary("exit-listeners-return", args[0]);
+      return result;
+    } catch (error) {
+      writeExitBoundary("exit-listeners-throw", args[0]);
+      throw error;
+    }
+  };
+}
+
 createHook({
   init(id, type) {
     if (type !== "PROMISE") {

@@ -12,6 +12,7 @@ import {
   createSidebarAttentionStore,
   type SidebarAttentionStore,
 } from "../app/sidebar-attention-store.ts";
+import { invalidateModelAuthStatusRequests } from "../lib/model-auth-request-state.ts";
 import { hiddenScopeUpgradeCapability } from "../test-helpers/application-context.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
 import { waitForFast } from "../test-helpers/wait-for.ts";
@@ -438,7 +439,7 @@ describe("sidebar attention source publication", () => {
     }
   });
 
-  it("queues explicit auth freshness while publishing progress during repeated refreshes", async () => {
+  it("queues auth invalidations while publishing progress during repeated events", async () => {
     vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
     let now = 120_000;
     vi.spyOn(Date, "now").mockImplementation(() => now);
@@ -463,7 +464,8 @@ describe("sidebar attention source publication", () => {
       for (const index of [0, 1]) {
         now += 60_001;
         for (let event = 0; event < 20; event++) {
-          document.dispatchEvent(new Event("visibilitychange"));
+          invalidateModelAuthStatusRequests(harness.gateway.snapshot.client!);
+          harness.emitEvent("chat.metadata.changed", {});
         }
         expect(authCalls).toBe(index + 1);
         auth[index]!.resolve({
@@ -496,7 +498,7 @@ describe("sidebar attention source publication", () => {
     }
   });
 
-  it("does not let current cron inventory postpone stale auth", async () => {
+  it("keeps auth cached across visibility changes until an auth event", async () => {
     vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
     let now = 120_000;
     vi.spyOn(Date, "now").mockImplementation(() => now);
@@ -533,6 +535,9 @@ describe("sidebar attention source publication", () => {
       expect(authCalls).toBe(1);
     }
     document.dispatchEvent(new Event("visibilitychange"));
+    expect(authCalls).toBe(1);
+    invalidateModelAuthStatusRequests(harness.gateway.snapshot.client!);
+    harness.emitEvent("chat.metadata.changed", {});
     await waitForFast(() => expect(store?.entries).toMatchObject([{ label: `cron-${now}` }]));
     expect(authCalls).toBe(2);
   });

@@ -105,6 +105,11 @@ async function resolveChannelPluginForMode(
   plugin: ChannelPlugin;
 } | null> {
   parseAccountSelector(opts.account);
+  // Only omission infers the channel. A blank value from an unset shell variable must
+  // not redirect login or logout to a channel the caller never named.
+  if (opts.channel !== undefined && !opts.channel.trim()) {
+    throw new Error("--channel must not be blank");
+  }
   const writeSnapshot = await requireValidConfigForWrite(runtime);
   if (!writeSnapshot) {
     return null;

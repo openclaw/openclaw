@@ -17,6 +17,33 @@ import {
 } from "./sidebar-layout.ts";
 
 describe("sidebar session layout settings", () => {
+  it("retains only a normalized task identity on the detail panel", () => {
+    const saved = normalizeSidebarSessionLayouts({
+      main: {
+        columns: [
+          {
+            id: "side",
+            side: "right",
+            activePanelId: "detail",
+            panels: [
+              {
+                id: "detail",
+                slot: "detail",
+                taskId: "  selected-task  ",
+                result: "not persisted",
+              },
+              { id: "workspace", slot: "workspace", taskId: "wrong-slot" },
+            ],
+          },
+        ],
+      },
+    });
+    expect(saved.main?.columns[0]?.panels).toEqual([
+      { id: "detail", slot: "detail", taskId: "selected-task" },
+      { id: "workspace", slot: "workspace" },
+    ]);
+  });
+
   it.each(["split", "expanded", null, undefined] as const)(
     "preserves the stored override %s during unrelated layout writes",
     (override) => {

@@ -1,3 +1,4 @@
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { t } from "../../i18n/index.ts";
 import { visibleChatHistoryMessages } from "../../lib/chat/message-visibility.ts";
@@ -34,12 +35,37 @@ export const CHAT_HISTORY_REQUEST_LIMIT = 80;
 const CHAT_HISTORY_REQUEST_MAX_BYTES = 256 * 1024;
 const CHAT_HISTORY_PREFETCH_BUDGET = { limit: 20, maxBytes: 64 * 1024 };
 
-// Back-scroll pages are larger than the startup tail: session open stays cheap
-// while older-history reads amortize round trips and prepend/re-anchor cycles.
-// The gateway independently bounds each response (entry cap + byte budget).
+// Keep startup small, then amortize older-history reads and prepend work across
+// larger pages. The Gateway owns the response byte and single-message limits.
 const CHAT_HISTORY_OLDER_PAGE_LIMIT = 1000;
 
 const CHAT_HISTORY_STARTUP_RETRY_TIMEOUT_MS = 60_000;
+
+export function attachHistoryActivity<Result extends ChatHistoryResponse>(result: Result): Result {
+  if (isHistoryCursor(result) && result.kind === "reset") {
+    return result;
+  }
+  if (!result.activity || !result.messages) {
+    return result;
+  }
+  const byId = new Map(result.activity.map((entry) => [entry.messageId, entry.items]));
+  const withActivity = (message: unknown) => {
+    const record = asOptionalRecord(message);
+    const id = record?.messageId ?? asOptionalRecord(record?.["__openclaw"])?.id;
+    const activity = typeof id === "string" ? byId.get(id) : undefined;
+    return record && activity ? { ...record, activity } : message;
+  };
+  return {
+    ...result,
+    messages: result.messages.map((entry) => {
+      if (!isHistoryCursor(result)) {
+        return withActivity(entry);
+      }
+      const envelope = asOptionalRecord(entry);
+      return envelope ? { ...envelope, message: withActivity(envelope.message) } : entry;
+    }),
+  };
+}
 
 type SharedChatHistoryResponse = ChatHistoryResponse & {
   observation?: ChatHistoryObservation;
@@ -193,9 +219,9 @@ export function requestSharedHistory(
         const observation = sessions
           ? { owner: sessions, reconcile: sessions.captureReconcile() }
           : undefined;
-        const response = await client.request<ChatHistoryResponse>(method, params, {
-          signal: controller.signal,
-        });
+        const response = attachHistoryActivity(
+          await client.request<ChatHistoryResponse>(method, params, { signal: controller.signal }),
+        );
         return observation ? { ...response, observation } : response;
       },
       shouldContinue,
@@ -290,12 +316,14 @@ async function requestOlderChatHistoryPage(
   requestAgentId: string | undefined,
   offset: number,
 ): Promise<ChatHistoryResult> {
-  const result = await client.request<ChatHistoryResult>("chat.history", {
-    sessionKey,
-    ...(requestAgentId ? { agentId: requestAgentId } : {}),
-    limit: CHAT_HISTORY_OLDER_PAGE_LIMIT,
-    offset,
-  });
+  const result = attachHistoryActivity(
+    await client.request<ChatHistoryResult>("chat.history", {
+      sessionKey,
+      ...(requestAgentId ? { agentId: requestAgentId } : {}),
+      limit: CHAT_HISTORY_OLDER_PAGE_LIMIT,
+      offset,
+    }),
+  );
   return {
     ...result,
     messages: visibleChatHistoryMessages(result.messages),

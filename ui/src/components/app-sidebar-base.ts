@@ -1,7 +1,6 @@
 import { consume } from "@lit/context";
 import { property, state } from "lit/decorators.js";
 import { DEFAULT_SIDEBAR_ENTRIES, type NavigationRouteId } from "../app-navigation.ts";
-import type { RouteId } from "../app-route-paths.ts";
 import type { ApplicationRouter } from "../app-routes.ts";
 import { selectApplicationSession } from "../app/agent-selection.ts";
 import {
@@ -72,7 +71,7 @@ export abstract class AppSidebarBase extends OpenClawLightDomContentsElement {
   @property({ attribute: false }) onPreloadRoute?: (routeId: NavigationRouteId) => Promise<void>;
 
   @consume({ context: applicationContext, subscribe: true })
-  protected context?: ApplicationContext<RouteId>;
+  protected context?: ApplicationContext;
 
   pluginNavigation() {
     return this.context?.plugins?.registrations("navigation") ?? [];

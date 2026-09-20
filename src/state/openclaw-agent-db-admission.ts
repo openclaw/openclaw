@@ -10,6 +10,7 @@ import {
 import { registerDeferredSqliteWalWriteAdmission } from "../infra/sqlite-wal-write-admission.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { assertAgentDatabaseAdmitted } from "./agent-database-admission.js";
 import {
   assertAgentDeletionDatabaseCleanupAccess,
   getAgentDeletionDatabaseCleanup,
@@ -75,6 +76,7 @@ function assertAgentDatabaseOperationCurrent(
   assertCurrent?: () => void,
 ): void {
   pending.controller.signal.throwIfAborted();
+  assertAgentDatabaseAdmitted(database.agentId, { env: options.env });
   if (cache.databases.get(pending.path) !== database || !database.db.isOpen) {
     throw new Error(`Agent database closed before its admitted operation: ${pending.path}`);
   }
@@ -324,6 +326,7 @@ export function createOpenClawAgentDatabaseAdmissionOwner(
   ): void {
     const pathname = pending.path;
     pending.controller.signal.throwIfAborted();
+    assertAgentDatabaseAdmitted(pending.agentId, { env: options.env });
     if (cache.pending.get(pathname) !== pending) {
       throw new Error(`Agent database open was replaced: ${pathname}`);
     }

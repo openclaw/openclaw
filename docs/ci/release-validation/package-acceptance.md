@@ -60,6 +60,15 @@ Docker seed CI resolves an exact published stable predecessor of the selected so
 
 The `published-upgrade-survivor` Docker lane validates one published package baseline per scenario. In Package Acceptance, the resolved `package-under-test` tarball is always the candidate and `published_upgrade_survivor_baseline` selects the fallback published baseline, defaulting to `openclaw@latest`; failed-lane rerun commands preserve that baseline. Current source release checks set `published_upgrade_survivor_baselines=supported-lines` for `legacy-operator-state`: npm's current `latest`, the preceding stable version, `extended-stable` when that tag exists, and the documented oldest supported baseline `2026.6.34`. The resolver reads `npm view openclaw versions` and `npm view openclaw dist-tags` at run time, pins exact versions before fanout, and deduplicates overlapping lines. Normal current-source release checks retain `base` and add `legacy-operator-state` and `custom-plugin-siblings`; release soak selects `reported-issues`, including these and the existing issue-shaped fixtures. The sibling-source scenario uses baselines from 2026.9.4 onward and requires actual custom-plugin Doctor contract execution from the private update canary, plus intact source files and plugin loading after the update.
 
+Before targeted Docker fanout, the trusted group planner installs each distinct published baseline in a throwaway npm prefix and checks `openclaw --version` plus `openclaw config set gateway.mode local` against synthetic isolated state. The config write loads the CLI setup path because version/help and config reads can use fast paths. An installed CLI that exits unsuccessfully is recorded as an **unusable published baseline**, with its skipped scenarios and captured error in the job summary and `upgrade-baseline-checks-*` artifact. Skipped scenarios are never counted as successful upgrades. Install errors, probe timeouts, and process-launch failures fail planning. Candidate installs and upgrades retain their existing failure gates.
+
+When a prerelease registry is mounted, the baseline package install and the
+initial manual baseline Gateway start use the configured published upstream.
+Published and candidate packages can share an exact version while containing
+different bytes; preserving published dist-tags alone does not isolate them.
+After those baseline commands, candidate installs keep using the verified
+candidate registry, including its exact-version dependencies.
+
 Expanded release qualification requires the candidate's `YYYY.M.PATCH` base version
 to be at least the trusted workflow package's base version, ignoring prerelease
 suffixes for this comparison. It then reads immutable source-directory metadata for

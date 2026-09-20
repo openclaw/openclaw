@@ -1,4 +1,3 @@
-// Imessage plugin module implements targets behavior.
 import {
   type ChatSenderAllowParams,
   createAllowedChatSenderMatcher,

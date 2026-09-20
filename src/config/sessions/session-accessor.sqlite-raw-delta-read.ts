@@ -1,9 +1,5 @@
 import { sql } from "kysely";
-import {
-  getNodeSqliteKysely,
-  executeSqliteQuerySync,
-  executeSqliteQueryTakeFirstSync,
-} from "../../infra/kysely-sync.js";
+import { getNodeSqliteKysely, executeSqliteQuerySync } from "../../infra/kysely-sync.js";
 import { coerceRequiredSqliteNumber as sqliteNumber } from "../../infra/sqlite-number.js";
 import type { DB } from "../../state/openclaw-agent-db.generated.js";
 import type {
@@ -12,6 +8,7 @@ import type {
 } from "./session-accessor.sqlite-contract.js";
 import type { CurrentTranscriptProjection } from "./session-accessor.sqlite-projection-read.js";
 import type { resolveSqliteTranscriptReadScope } from "./session-accessor.sqlite-scope.js";
+import { readSessionTranscriptHotWatermark } from "./session-accessor.sqlite-transcript-watermark-read.js";
 import { normalizeVisibleMessageLimit } from "./session-accessor.sqlite-visible-cursor.js";
 import {
   resolveSqliteSessionTranscriptReadFence,
@@ -31,8 +28,6 @@ type RawTranscriptCursor = {
   sessionId: string;
   version: typeof RAW_TRANSCRIPT_CURSOR_VERSION;
 };
-
-type SessionTranscriptRawDeltaPage = Extract<SessionTranscriptRawDeltaResult, { kind: "page" }>;
 
 type ResolvedTranscriptReadScope = ReturnType<typeof resolveSqliteTranscriptReadScope>;
 
@@ -136,17 +131,10 @@ export function readRawDeltaInTransaction(
   beforeEventSeq: number | undefined,
   snapshot?: { generation: string | undefined; indexedSeq: number },
 ): SessionTranscriptRawDeltaResult {
-  const db =
-    getNodeSqliteKysely<Pick<DB, "transcript_rewrite_watermarks" | "transcript_events">>(database);
-  const generation = snapshot
-    ? snapshot.generation
-    : executeSqliteQueryTakeFirstSync(
-        database,
-        db
-          .selectFrom("transcript_rewrite_watermarks")
-          .select("generation")
-          .where("session_id", "=", scope.sessionId),
-      )?.generation;
+  const watermark = snapshot
+    ? undefined
+    : readSessionTranscriptHotWatermark({ db: database }, scope.sessionId);
+  const generation = snapshot ? snapshot.generation : (watermark?.generation ?? undefined);
   if (generation === undefined) {
     return { kind: "missing" };
   }
@@ -170,19 +158,11 @@ export function readRawDeltaInTransaction(
   if (cursor.generation !== generation) {
     return reset("generation_mismatch");
   }
-  const frontier = snapshot
-    ? snapshot.indexedSeq
-    : executeSqliteQueryTakeFirstSync(
-        database,
-        db
-          .selectFrom("transcript_events")
-          .select("seq")
-          .where("session_id", "=", scope.sessionId)
-          .orderBy("seq", "desc")
-          .limit(1),
-      )?.seq;
+  const db = getNodeSqliteKysely<Pick<DB, "transcript_events">>(database);
+  const transcript = db.selectFrom("transcript_events").where("session_id", "=", scope.sessionId);
+  const frontier = snapshot ? snapshot.indexedSeq : watermark?.maxSeq;
   const maxSeq = Math.min(
-    frontier === undefined ? -1 : sqliteNumber(frontier),
+    sqliteNumber(frontier ?? -1),
     beforeEventSeq === undefined ? Number.POSITIVE_INFINITY : beforeEventSeq - 1,
   );
   if (cursor.lastSeq > maxSeq) {
@@ -194,48 +174,52 @@ export function readRawDeltaInTransaction(
     return reset("invalid_cursor");
   }
 
-  const metadata =
-    cursor.lastSeq === maxSeq
-      ? []
-      : executeSqliteQuerySync(
-          database,
-          db
-            .selectFrom("transcript_events")
-            .select([
-              "seq",
-              /* kysely-allow-raw: SQLite byte length avoids fetching or parsing excluded JSON. */
-              sql<number>`OCTET_LENGTH(event_json) + 1`.as("serialized_bytes"),
-            ])
-            .where("session_id", "=", scope.sessionId)
-            .where("seq", ">", cursor.lastSeq)
-            .$if(beforeEventSeq !== undefined, (query) => query.where("seq", "<", beforeEventSeq!))
-            .orderBy("seq", "asc")
-            .limit(maxEvents + 1),
-        ).rows.map((row) => ({
-          seq: sqliteNumber(row.seq),
-          serializedBytes: sqliteNumber(row.serialized_bytes),
-        }));
-
   let serializedBytes = 0;
   let selectedCount = 0;
-  for (const row of metadata) {
-    if (selectedCount >= maxEvents || serializedBytes + row.serializedBytes > maxBytes) {
-      break;
+  let lastSeq = cursor.lastSeq;
+  let hasMore = false;
+  let requiredBytes: number | undefined;
+  if (lastSeq < maxSeq) {
+    const metadataQuery = transcript
+      .select([
+        "seq",
+        /* kysely-allow-raw: SQLite byte length avoids fetching or parsing excluded JSON. */
+        sql<number>`OCTET_LENGTH(event_json) + 1`.as("serialized_bytes"),
+      ])
+      .$if(beforeEventSeq !== undefined, (query) => query.where("seq", "<", beforeEventSeq!))
+      .orderBy("seq", "asc");
+    // Grow bulk reads to preserve full-page throughput while bounding an early byte rejection.
+    for (let batchSize = 32; lastSeq < maxSeq; batchSize *= 2) {
+      const limit = Math.min(batchSize, maxEvents + 1 - selectedCount);
+      const metadata = executeSqliteQuerySync(
+        database,
+        metadataQuery.where("seq", ">", lastSeq).limit(limit),
+      ).rows;
+      for (const row of metadata) {
+        const rowBytes = sqliteNumber(row.serialized_bytes);
+        if (selectedCount >= maxEvents || serializedBytes + rowBytes > maxBytes) {
+          hasMore = true;
+          if (selectedCount === 0) {
+            requiredBytes = rowBytes;
+          }
+          break;
+        }
+        serializedBytes += rowBytes;
+        selectedCount += 1;
+        lastSeq = sqliteNumber(row.seq);
+      }
+      if (hasMore || metadata.length < limit) {
+        break;
+      }
     }
-    serializedBytes += row.serializedBytes;
-    selectedCount += 1;
   }
-  const selectedMetadata = metadata.slice(0, selectedCount);
-  const lastSeq = selectedMetadata.at(-1)?.seq ?? cursor.lastSeq;
   const rows =
     selectedCount === 0
       ? []
       : executeSqliteQuerySync(
           database,
-          db
-            .selectFrom("transcript_events")
+          transcript
             .select(["event_json", "seq"])
-            .where("session_id", "=", scope.sessionId)
             .where("seq", ">", cursor.lastSeq)
             .where("seq", "<=", lastSeq)
             .orderBy("seq", "asc"),
@@ -244,15 +228,12 @@ export function readRawDeltaInTransaction(
           seq: sqliteNumber(row.seq),
         }));
   const nextCursor = encodeRawTranscriptCursor({ ...cursor, lastSeq });
-  const requiredBytes =
-    selectedCount === 0 && metadata[0] ? metadata[0].serializedBytes : undefined;
-  const page: SessionTranscriptRawDeltaPage = {
+  return {
     kind: "page",
     cursor: nextCursor,
     events: rows,
-    hasMore: selectedCount < metadata.length,
+    hasMore,
     ...(requiredBytes !== undefined ? { requiredBytes } : {}),
     serializedBytes,
   };
-  return page;
 }

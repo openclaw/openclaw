@@ -80,8 +80,8 @@ afterEach(() => {
   vi.unstubAllEnvs();
 });
 
-vi.mock("undici", async () => {
-  const actual = await vi.importActual<typeof import("undici")>("undici");
+vi.mock("undici/index.js", async () => {
+  const actual = await vi.importActual<typeof import("undici")>("undici/index.js");
   return {
     ...actual,
     ProxyAgent: proxyMocks.ProxyAgent,

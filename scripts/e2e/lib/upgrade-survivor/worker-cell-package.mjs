@@ -74,6 +74,49 @@ export function resolveWorkerCellExport(source, name) {
   return matches[0];
 }
 
+/** Generated forwarding entries can share the defining owner's filename prefix. */
+export function resolveWorkerCellFunctionBinding(identity, packageRoot, prefix, symbol, ts) {
+  const root = fs.realpathSync(packageRoot);
+  const matches = [];
+  for (const relative of Object.keys(identity.files)) {
+    const name = path.posix.basename(relative);
+    if (
+      path.posix.dirname(relative) !== "dist" ||
+      !name.startsWith(`${prefix}-`) ||
+      !name.endsWith(".mjs")
+    ) {
+      continue;
+    }
+    const file = path.join(root, relative);
+    assert.equal(fs.realpathSync(file), file, `Owner must be a regular package path: ${relative}`);
+    assert(fs.lstatSync(file).isFile());
+    const bytes = fs.readFileSync(file);
+    const expectedHash = identity.files[relative].sha256;
+    assert.equal(hash(bytes), expectedHash, `Package owner changed: ${relative}`);
+    const source = bytes.toString("utf8");
+    const ast = ts.createSourceFile(
+      relative,
+      source,
+      ts.ScriptTarget.Latest,
+      true,
+      ts.ScriptKind.JS,
+    );
+    assert.equal(ast.parseDiagnostics.length, 0, `Cannot parse package owner: ${relative}`);
+    const definitions = ast.statements.filter(
+      (entry) => ts.isFunctionDeclaration(entry) && entry.name?.text === symbol && entry.body,
+    );
+    if (definitions.length === 0) {
+      continue;
+    }
+    assert.equal(definitions.length, 1, `Ambiguous local definition: ${symbol}`);
+    if (resolveWorkerCellExport(source, symbol)) {
+      matches.push([name, symbol, expectedHash]);
+    }
+  }
+  assert.equal(matches.length, 1, `Expected one installed defining ${prefix} owner`);
+  return matches[0];
+}
+
 function inspectTarball(tarball, runtimeRoot) {
   const bytes = fs.readFileSync(tarball);
   const sha256 = hash(bytes);

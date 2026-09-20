@@ -6,6 +6,7 @@ import { resolveThinkingDefaultCore } from "./model-thinking-default-core.js";
 export {
   resolveConfiguredThinkingDefaultCore as resolveConfiguredThinkingDefault,
   resolveThinkingDefaultCore as resolveThinkingDefault,
+  resolveThinkingSelectionCore as resolveThinkingSelection,
 } from "./model-thinking-default-core.js";
 
 /** Resolves thinking default after loading runtime catalog only when needed. */

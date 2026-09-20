@@ -14,16 +14,19 @@ export class PluginInvocationScope {
   private readonly bindings = new Map<PluginInstanceHandle, PluginInvocationBinding>();
   private readonly consumers = new Map<PluginInstanceHandle, PluginInstanceConsumer>();
   private closed = false;
+  private readonly consumerKind: "work" | "custody";
 
   constructor(
     readonly registry: PluginRegistry,
     instances: Iterable<PluginInstanceHandle>,
-    options: { retained?: boolean; parent?: PluginInvocationScope } = {},
+    options: { retained?: boolean; parent?: PluginInvocationScope; kind?: "work" | "custody" } = {},
   ) {
+    this.consumerKind = options.kind ?? "work";
     try {
       for (const instance of new Set(instances)) {
         if (options.retained) {
-          const acquire = () => instance.retainConsumer((run) => this.run(run), registry);
+          const acquire = () =>
+            instance.retainConsumer((run) => this.run(run), registry, this.consumerKind);
           const parent = options.parent?.consumer(instance);
           const consumer = parent ? parent.run(acquire) : acquire();
           this.consumers.set(instance, consumer);
@@ -79,6 +82,7 @@ export class PluginInvocationScope {
     const cleanup = new PluginInvocationScope(this.registry, this.bindings.keys(), {
       retained: this.consumers.size > 0,
       parent: this,
+      kind: this.consumerKind,
     });
     const finished = createDeferredCore();
     // Retirement may already await these exact consumers. Revoke their callbacks
@@ -116,6 +120,12 @@ export function collectRegistryInvocationInstances(
   const instances = new Set<PluginInstanceHandle>();
   for (const record of registry.plugins) {
     const instance = getPluginInstance(record);
+    if (instance) {
+      instances.add(instance);
+    }
+  }
+  for (const { host } of registry.decisionProviders) {
+    const instance = getPluginInstance(host.record);
     if (instance) {
       instances.add(instance);
     }

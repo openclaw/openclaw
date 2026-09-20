@@ -186,7 +186,7 @@ extension OnboardingView {
             }
 
             switch outcome {
-            case let .configured(modelRef, _):
+            case let .configured(modelRef, modelTarget, _):
                 switch pendingState {
                 case .activating, .activationExpired, .completed:
                     // A live setup/verification already owns this marker. A
@@ -195,7 +195,8 @@ extension OnboardingView {
                     guard !self.aiSetup.connected else { return }
                     // Reopening a receipt authorizes observation, never another automatic test.
                     let recoveryIntent = intent == .inspectOnly ? intent : .resumePending
-                    await self.resumePendingSystemAgent(modelRef: modelRef, intent: recoveryIntent).value
+                    await self.resumePendingSystemAgent(
+                        modelRef: modelRef, modelTarget: modelTarget, intent: recoveryIntent).value
                     return
                 case .verified:
                     // Inference was observed, but the dropped activation can

@@ -2,12 +2,153 @@
 
 import { render } from "lit";
 import { describe, expect, it, vi } from "vitest";
+import type { AgentActivityItem } from "../../../../../packages/gateway-protocol/src/schema/logs-chat.js";
+import { projectAgentActivityItem } from "../../../../../src/agents/agent-activity-presentation.js";
+import { projectAgentToolActivity } from "../../../../../src/infra/agent-activity-events.js";
 import type { ToolCard } from "../../../lib/chat/chat-types.ts";
+import { extractToolCardsCached } from "../../../lib/chat/tool-cards.ts";
+import { attachHistoryActivity } from "../chat-history-request.ts";
+import { agentEvent, createHost } from "../tool-stream.test-helpers.ts";
+import { handleAgentEvent } from "../tool-stream.ts";
+import { createMessageEntry, createToolGroup } from "./chat-message.test-support.ts";
+import { renderActivityGroup } from "./chat-message.ts";
 import { renderToolCard } from "./chat-tool-cards.ts";
 
 // Outcome presentation for tool cards: neutral collapsed rows, the expanded
 // outcome line, and the compact progress_card receipt.
 describe("tool-card outcomes", () => {
+  it.each([
+    { status: "failed", label: "failed" },
+    { status: "blocked", label: "Blocked" },
+    { status: undefined, label: "Outcome unknown" },
+    { status: "completed", label: "Completed" },
+  ] as const)(
+    "preserves prepared $status outcomes through live items and history attachment",
+    ({ status, label }) => {
+      const item = projectAgentActivityItem({
+        itemId: "collaboration-call",
+        toolCallId: "collaboration-call",
+        kind: "tool",
+        name: "subagents",
+        title: "Delegate task",
+        phase: "end",
+        ...(status ? { status } : { summary: "Outcome unknown" }),
+      } satisfies AgentActivityItem);
+      const host = createHost({ chatRunId: "run-outcome" });
+      handleAgentEvent(host, agentEvent("run-outcome", 1, "item", item));
+      const live = host.chatToolMessages[0];
+      const saved = {
+        role: "assistant",
+        messageId: "stored-call",
+        content: [
+          {
+            type: "toolCall",
+            id: "collaboration-call",
+            name: "subagents",
+            arguments: { task: "Check the report" },
+          },
+        ],
+      };
+      const history = attachHistoryActivity({
+        messages: [saved],
+        activity: [{ messageId: "stored-call", items: [item] }],
+      });
+      const container = document.createElement("div");
+      for (const [message, runActive] of [
+        [live, true],
+        [history.messages[0], false],
+      ] as const) {
+        const group = createToolGroup("outcome", [createMessageEntry("call", message)]);
+        render(renderActivityGroup([group], { showReasoning: false, runActive }), container);
+        expect(container.querySelectorAll(".chat-tool-failure")).toHaveLength(
+          status === "failed" ? 1 : 0,
+        );
+        render(
+          renderActivityGroup([group], {
+            showReasoning: false,
+            runActive,
+            isToolMessageExpanded: () => true,
+            isToolExpanded: () => true,
+          }),
+          container,
+        );
+        expect(container.querySelector(".chat-tool-card__outcome")?.textContent).toBe(label);
+        expect(container.querySelector(".chat-tool-row--running")).toBeNull();
+        const card = extractToolCardsCached(message)[0]!;
+        expect(card.outputText).toBeUndefined();
+        expect(card.isError).toBeUndefined();
+        expect(card.completed).not.toBe(true);
+      }
+      expect(live).toMatchObject({ __openclawToolStreamResultReceived: false });
+      expect(saved).not.toHaveProperty("activity");
+    },
+  );
+
+  it("keeps a prepared nonzero exit failed without rewriting the raw tool result", () => {
+    const host = createHost({ chatRunId: "command-run" });
+    const args = { command: "check-report" };
+    const result = {
+      content: [{ type: "text", text: "Validation report" }],
+      details: { status: "completed", exitCode: 2 },
+    };
+    handleAgentEvent(
+      host,
+      agentEvent("command-run", 1, "tool", {
+        phase: "start",
+        toolCallId: "check",
+        name: "exec",
+        args,
+      }),
+    );
+    handleAgentEvent(
+      host,
+      agentEvent("command-run", 2, "tool", {
+        phase: "result",
+        toolCallId: "check",
+        name: "exec",
+        isError: false,
+        result,
+      }),
+    );
+    handleAgentEvent(
+      host,
+      agentEvent(
+        "command-run",
+        3,
+        "item",
+        projectAgentToolActivity({
+          phase: "result",
+          toolCallId: "check",
+          name: "exec",
+          isError: false,
+          args,
+          result,
+        }),
+      ),
+    );
+    const card = extractToolCardsCached(host.chatToolMessages[0])[0]!;
+    expect(card).toMatchObject({
+      isError: false,
+      completed: true,
+      outputText: "Validation report",
+      details: result.details,
+    });
+    const container = document.createElement("div");
+    render(
+      renderToolCard(card, {
+        messageKey: "result",
+        expanded: true,
+        runActive: true,
+        onToggleExpanded: vi.fn(),
+      }),
+      container,
+    );
+    expect(container.querySelector(".chat-tool-card__outcome")?.textContent).toBe("Exit code 2");
+    expect(container.querySelector(".chat-tool-row--running")).toBeNull();
+    expect(container.textContent).toContain("Validation report");
+    expect(container.textContent).toContain("check-report");
+  });
+
   it.each([
     { name: "exec", args: { command: "pnpm check" } },
     { name: "write", args: { path: "/workspace/operation.json", content: "{}" } },

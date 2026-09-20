@@ -1,4 +1,3 @@
-// Telegram plugin module implements draft chunking behavior.
 import {
   resolveChannelDraftStreamingChunking,
   type ChannelDraftStreamingChunking,

@@ -8,6 +8,7 @@ import {
 import { createDeferred } from "../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../config/config.js";
 import { GatewayTransportError } from "../gateway/transport-error.js";
+import { collectChannelStatusIssues } from "../infra/channels-status-issues.js";
 import {
   GATEWAY_HEALTH_CREDENTIALS_REQUIRED_MESSAGE,
   GATEWAY_HEALTH_CREDENTIALS_REQUIRED_TITLE,
@@ -308,6 +309,40 @@ describe("checkGatewayHealth", () => {
       "Telemetry exporters",
     );
     expect(JSON.stringify(note.mock.calls)).not.toContain("private log payload");
+  });
+
+  it("reports the recorded plugin trust refusal without retry advice that hides its remedy", async () => {
+    const message =
+      'Plugin "feishu" loaded from "/fixture/plugins-local/feishu/index.js"; installSource="path". Install the official npm package or ClawHub listing.';
+    callGateway.mockResolvedValueOnce({ ok: true }).mockResolvedValueOnce({
+      statusIssues: collectChannelStatusIssues(
+        {
+          channelAccounts: {
+            feishu: [
+              {
+                accountId: "default",
+                running: false,
+                lifecycle: "blocked",
+                terminalDisconnect: true,
+                ingressUnavailable: true,
+                lastError: message,
+              },
+            ],
+          },
+        },
+        [{ id: "feishu" }],
+      ),
+    });
+    const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
+
+    await expect(
+      checkGatewayHealth({ runtime: runtime as never, cfg, timeoutMs: 3000 }),
+    ).resolves.toMatchObject({ authenticated: true, healthOk: true });
+
+    expect(note).toHaveBeenCalledWith(
+      `- feishu default: ${message} (resolve the reported channel error, then restart the channel)`,
+      "Channel warnings",
+    );
   });
 
   it("reports failed channel diagnostics without marking a reachable gateway unhealthy", async () => {

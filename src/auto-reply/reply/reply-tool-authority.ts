@@ -253,27 +253,43 @@ function resolveReplyToolAuthorityContext(
   return { provider, model, capabilityProfile };
 }
 
+function isReplyToolAllowed(
+  input: ReplyToolAuthorityInput,
+  toolName: string,
+  preparedProfile?: ResolvedConversationCapabilityProfile,
+): boolean {
+  if (input.disableTools === true || !isRuntimeToolAllowed(toolName, input.toolsAllow)) {
+    return false;
+  }
+  const policies = resolveConversationToolPolicies({
+    capabilityProfile: preparedProfile ?? resolveReplyToolAuthorityContext(input).capabilityProfile,
+  });
+  return isToolAllowedByPolicies(toolName, [
+    ...Object.values(policies),
+    input.run.senderIsOwner === false ? { deny: [...GATEWAY_OWNER_ONLY_CORE_TOOLS] } : undefined,
+  ]);
+}
+
 /** Browser identity matters to admission only while this turn can control the UI. */
 export function resolveReplyScreenToolTarget(
   input: ReplyToolAuthorityInput,
   preparedProfile?: ResolvedConversationCapabilityProfile,
 ) {
-  if (
-    !input.run.gatewayUiCommandTarget ||
-    input.disableTools === true ||
-    !hasGatewayClientCap(input.run.clientCaps, GATEWAY_CLIENT_CAPS.UI_COMMANDS) ||
-    !isRuntimeToolAllowed("screen", input.toolsAllow)
-  ) {
-    return undefined;
-  }
-  const policies = resolveConversationToolPolicies({
-    capabilityProfile: preparedProfile ?? resolveReplyToolAuthorityContext(input).capabilityProfile,
-  });
-  return isToolAllowedByPolicies("screen", [
-    ...Object.values(policies),
-    input.run.senderIsOwner === false ? { deny: [...GATEWAY_OWNER_ONLY_CORE_TOOLS] } : undefined,
-  ])
+  return input.run.gatewayUiCommandTarget &&
+    hasGatewayClientCap(input.run.clientCaps, GATEWAY_CLIENT_CAPS.UI_COMMANDS) &&
+    isReplyToolAllowed(input, "screen", preparedProfile)
     ? input.run.gatewayUiCommandTarget
+    : undefined;
+}
+
+/** Profile appearance remains requester-scoped even without browser control. */
+export function resolveReplyThemeProfileId(
+  input: ReplyToolAuthorityInput,
+  preparedProfile?: ResolvedConversationCapabilityProfile,
+): string | undefined {
+  return input.run.gatewayUiCommandTarget?.profileId &&
+    isReplyToolAllowed(input, "theme", preparedProfile)
+    ? input.run.gatewayUiCommandTarget.profileId
     : undefined;
 }
 
@@ -283,7 +299,6 @@ function resolveReplyToolAuthorityInputFingerprint(
 ): string {
   const execution = snapshot.run;
   const { provider, model, capabilityProfile } = resolveReplyToolAuthorityContext(snapshot, route);
-  // Runs without screen control retain ordinary cross-browser steering.
   return createHash("sha256")
     .update(
       stableStringify({
@@ -308,6 +323,7 @@ function resolveReplyToolAuthorityInputFingerprint(
         authProfileId: execution.authProfileId,
         clientCaps: [...new Set(execution.clientCaps ?? [])].toSorted(),
         gatewayUiCommandTarget: resolveReplyScreenToolTarget(snapshot, capabilityProfile),
+        themeProfileId: resolveReplyThemeProfileId(snapshot, capabilityProfile),
         toolBindings: execution.toolBindings,
       }),
     )

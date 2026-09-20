@@ -926,23 +926,17 @@ suite.define(() => {
       await expect.poll(() => retainedHost.getAttribute("data-toast-placement")).toBe("shell");
       const retainedToast = retainedHost.locator(".app-toast");
       await expect.poll(() => retainedToast.textContent()).toContain("Codex hidden");
-      if (finalLayout === "compact") {
-        await expect
-          .poll(async () => {
-            const [toastBounds, headerBounds] = await Promise.all([
-              retainedToast.boundingBox(),
-              page.locator(".chat-pane__header:visible").first().boundingBox(),
-            ]);
-            return Boolean(
-              toastBounds && headerBounds && toastBounds.y >= headerBounds.y + headerBounds.height,
-            );
-          })
-          .toBe(true);
-      } else {
-        await expect
-          .poll(async () => Math.round((await retainedToast.boundingBox())?.y ?? -1))
-          .toBe(20);
-      }
+      await expect
+        .poll(async () => {
+          const [toastBounds, headerBounds] = await Promise.all([
+            retainedToast.boundingBox(),
+            page.locator(".chat-pane__header:visible").first().boundingBox(),
+          ]);
+          return Boolean(
+            toastBounds && headerBounds && toastBounds.y >= headerBounds.y + headerBounds.height,
+          );
+        })
+        .toBe(true);
       await expect
         .poll(async () => {
           const [toastBounds, composerBounds] = await Promise.all([

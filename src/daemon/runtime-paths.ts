@@ -1,4 +1,5 @@
 /** Selects stable runtime executable paths for daemon installs across platforms. */
+import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -504,4 +505,54 @@ export async function resolvePreferredBunPath(
     throw probeFailure;
   }
   return undefined;
+}
+
+/** Validate an operator pin without falling back to another executable. */
+export async function resolvePinnedDaemonRuntimePath(
+  input: string | undefined,
+  runtime: "node" | "bun",
+  env: Record<string, string | undefined>,
+): Promise<string | undefined> {
+  if (input === undefined) {
+    return undefined;
+  }
+  const value = input.trim();
+  const paths = getPathModule(process.platform);
+  if (
+    !value ||
+    !paths.isAbsolute(value) ||
+    value.includes("\0") ||
+    value.includes("\r") ||
+    value.includes("\n")
+  ) {
+    throw new Error("--runtime-path must be an absolute executable path.");
+  }
+  const runtimePath = paths.normalize(value);
+  const matchesRuntime =
+    runtime === "node" ? isNodeRuntime(runtimePath) : isBunRuntime(runtimePath);
+  if (!matchesRuntime) {
+    throw new Error(`--runtime-path must name a ${runtime} executable: ${runtimePath}`);
+  }
+  try {
+    if (!(await fs.stat(runtimePath)).isFile()) {
+      throw new Error("not a regular file");
+    }
+    await fs.access(runtimePath, fsConstants.X_OK);
+  } catch (cause) {
+    throw new Error(`Pinned runtime is not executable: ${runtimePath}`, { cause });
+  }
+  const info = await resolveRuntimeInfo(runtimePath, runtime, execFileAsync, env);
+  if (info.status === "probe-failed") {
+    throw info.error;
+  }
+  if (info.status !== "supported") {
+    const detail =
+      info.sqliteSelectionError ??
+      info.capabilityError ??
+      (runtime === "node"
+        ? `Node ${SUPPORTED_NODE_VERSIONS} with WAL-reset-safe SQLite is required.`
+        : "Bun 1.4+ with WAL-reset-safe node:sqlite is required.");
+    throw new Error(`Pinned runtime ${runtimePath} is unsupported: ${detail}`);
+  }
+  return runtimePath;
 }

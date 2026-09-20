@@ -26,11 +26,9 @@ import {
 import {
   canPushToolProgress,
   handleApprovalEvent,
-  handleCommandOutput,
   handleCompactionEnd,
   handleCompactionStart,
   handleItemEvent,
-  handlePatchSummary,
   handlePlanUpdate,
   handleToolStart,
   pushReasoningProgress,
@@ -323,8 +321,6 @@ export async function runTelegramDispatchTurn(turn: Turn) {
               }
               return false;
             },
-            onCommandOutput: (payload) => handleCommandOutput(turn, payload),
-            onPatchSummary: (payload) => handlePatchSummary(turn, payload),
             // Ambient room events are intentionally invisible, including reactions.
             // User requests in group chats are not room_event turns and retain these callbacks.
             onCompactionStart: isRoomEvent

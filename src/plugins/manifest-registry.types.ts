@@ -1,3 +1,4 @@
+import type { ThemeDefinition } from "../../packages/gateway-protocol/src/theme.js";
 import type {
   PluginBundleFormat,
   PluginConfigUiHint,
@@ -17,6 +18,7 @@ import type { PluginTrust } from "./plugin-trust.js";
 import type { PluginDependencySpecMap } from "./status-dependencies-core.js";
 
 export type PluginManifestContractListKey =
+  | "decisionProviders"
   | "speechProviders"
   | "externalAuthProviders"
   | "embeddingProviders"
@@ -51,6 +53,8 @@ type PluginManifestRecordStatic = Omit<
 >;
 
 export type PluginManifestRecord = PluginManifestRecordStatic & {
+  /** Validated palette bytes captured by the immutable metadata generation. */
+  themeDefinitions?: Array<{ id: string; definition: ThemeDefinition }>;
   /** Process-local source selection, never persisted in the installed index. */
   sourcePreferred?: true;
   iconPath?: string;

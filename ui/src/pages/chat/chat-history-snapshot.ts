@@ -2,6 +2,7 @@ import { readSessionMessageSequence } from "@openclaw/gateway-client/browser";
 import type {
   ChatInputReceipts,
   ChatPendingInputsPage,
+  ChatHistoryActivity,
 } from "../../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import type { GatewaySessionRow, GatewaySessionsDefaults } from "../../api/types.ts";
 import type { ChatMetadataResult } from "../../lib/chat/chat-metadata-cache.ts";
@@ -14,6 +15,7 @@ import type { ChatHistorySessions, ChatState } from "./chat-state-contract.ts";
 import { cacheChatSessionSnapshot, readChatSessionSnapshot } from "./session-message-cache.ts";
 
 export type ChatHistoryResult = {
+  activity?: ChatHistoryActivity[];
   pendingInputs?: ChatPendingInputsPage;
   inputReceipts?: ChatInputReceipts;
   deltaCursor?: string;
@@ -48,6 +50,7 @@ export type ChatHistoryResult = {
 };
 
 export type ChatHistoryDeltaResult = {
+  activity?: ChatHistoryActivity[];
   pendingInputs?: ChatPendingInputsPage;
   inputReceipts?: ChatInputReceipts;
   kind: "delta";

@@ -25,6 +25,7 @@ import {
   type RedactionOrigins,
 } from "./redact-json.js";
 import {
+  getIndexedCaptureStart,
   iterateRedactMatches,
   parseRedactPatternSource,
   readRedactMatch,
@@ -632,36 +633,6 @@ function selectSecretCapture(match: string, groups: string[]): SecretCaptureSele
     }
   }
   return selected;
-}
-
-function getIndexedCaptureStart(
-  pattern: ResolvedRedactPattern,
-  input: string,
-  match: string,
-  matchOffset: number,
-  captureIndex: number,
-): number | null {
-  if (!(pattern instanceof RegExp) || matchOffset < 0 || !input) {
-    return null;
-  }
-  try {
-    const flags = pattern.flags.includes("d") ? pattern.flags : `${pattern.flags}d`;
-    const indexedPattern = new RegExp(pattern.source, flags);
-    indexedPattern.lastIndex = matchOffset;
-    const indexedMatch = indexedPattern.exec(input) as
-      | (RegExpExecArray & { indices?: Array<[number, number] | undefined> })
-      | null;
-    const captureIndices = indexedMatch?.indices?.[captureIndex + 1];
-    if (!indexedMatch || indexedMatch.index !== matchOffset || indexedMatch[0] !== match) {
-      return null;
-    }
-    if (!captureIndices) {
-      return null;
-    }
-    return captureIndices[0] - matchOffset;
-  } catch {
-    return null;
-  }
 }
 
 function getSecretCaptureStart(
@@ -1501,15 +1472,18 @@ function prepareFileToJsonReceivers(
   return { record: visit(record, "", [], true, false), decoded };
 }
 
+type LogRecordRedactionOptions = {
+  format?: "file" | "console";
+  deriveMessage?: (record: Record<string, unknown>) => RedactionMessage | undefined;
+  decodedOptions?: ResolvedRedactOptions;
+};
+
 /** Converts native values once and applies configured and structural protection before output. */
-export function redactLogRecordForTransport(
+function redactLogRecord<Result>(
   record: Record<string, unknown>,
-  options: {
-    format?: "file" | "console";
-    deriveMessage?: (record: Record<string, unknown>) => RedactionMessage | undefined;
-    decodedOptions?: ResolvedRedactOptions;
-  } = {},
-): Record<string, unknown> {
+  options: LogRecordRedactionOptions,
+  finish: (redacted: string, canonical: string | undefined) => Result,
+): Result {
   const finishMeasurement = startRedactionMeasurement("log-record");
   let outcome: "ok" | "error" = "error";
   let inputChars: number | undefined;
@@ -1595,7 +1569,7 @@ export function redactLogRecordForTransport(
     }
     const serialized = message ? JSON.stringify(materialized) : json;
     const decodedPatterns = options.decodedOptions?.patterns ?? resolved.patterns;
-    const result: Record<string, unknown> = JSON.parse(
+    const result = finish(
       redactJsonRecord(
         serialized,
         origins,
@@ -1625,12 +1599,31 @@ export function redactLogRecordForTransport(
             !couldMatchDefaultFullContextPatterns(currentValue)),
         message,
       ),
+      // Native conversion can preserve proxy key order; only the materialized tree is canonical.
+      message ? serialized : undefined,
     );
     outcome = "ok";
     return result;
   } finally {
     finishMeasurement?.(outcome, inputChars);
   }
+}
+
+export function redactLogRecordForTransport(
+  record: Record<string, unknown>,
+  options: LogRecordRedactionOptions = {},
+): Record<string, unknown> {
+  return redactLogRecord(record, options, (redacted) => JSON.parse(redacted));
+}
+
+export function serializeRedactedFileLogRecord(
+  record: Record<string, unknown>,
+  options: Omit<LogRecordRedactionOptions, "format"> = {},
+): string {
+  return redactLogRecord(record, options, (redacted, canonical) =>
+    // Key edits can collide or reorder integer keys; edited UTF-16 may need escaping.
+    redacted === canonical ? redacted : JSON.stringify(JSON.parse(redacted)),
+  );
 }
 
 export function redactModelVisibleSecrets<T>(value: T): T {

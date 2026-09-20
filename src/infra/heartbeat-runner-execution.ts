@@ -1,5 +1,8 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import { listActiveEmbeddedRunSessionKeys } from "../agents/embedded-agent-runner/active-run-projections.js";
+import {
+  listActiveEmbeddedRunSessionKeys,
+  resolveActiveEmbeddedRunSessionId,
+} from "../agents/embedded-agent-runner/active-run-projections.js";
 import { resolveEmbeddedSessionLane } from "../agents/embedded-agent-runner/lanes.js";
 import { transitionMainSessionRecovery } from "../agents/main-session-recovery/main-session-recovery-state.js";
 import { isHeartbeatAcknowledgementText } from "../auto-reply/heartbeat.js";
@@ -10,6 +13,7 @@ import {
 import type { ChannelHeartbeatDeps } from "../channels/plugins/types.public.js";
 import { createReplyPrefixContext } from "../channels/reply-prefix.js";
 import { getRuntimeConfig } from "../config/config.js";
+import { isInternalSessionEffectsKey } from "../config/sessions/internal-session-key.js";
 import {
   applySessionEntryLifecycleMutation,
   loadExactSessionEntry,
@@ -33,6 +37,7 @@ import { formatErrorMessage } from "./errors.js";
 import { isWithinActiveHours } from "./heartbeat-active-hours.js";
 import { tryResolveAmbientHeartbeatAgentId } from "./heartbeat-agent-resolution.js";
 import { resolveHeartbeatForWake, type HeartbeatConfig } from "./heartbeat-config.js";
+import { isExecCompletionEvent } from "./heartbeat-events-filter.js";
 import { emitHeartbeatEvent } from "./heartbeat-events.js";
 import { heartbeatLog as log } from "./heartbeat-log.js";
 import { shouldUseHeartbeatResponseToolPrompt } from "./heartbeat-runner-config.js";
@@ -183,8 +188,16 @@ export async function resolveHeartbeatWakeStage(opts: HeartbeatRunOptions) {
     return skippedHeartbeatStage(preflight.skipReason, startedAt);
   }
 
+  // A command result belongs to its waiting session, not the agent's ambient
+  // monitor. Unrelated work must not starve it; target-session fences still apply.
+  const isSessionExecCompletion =
+    normalizeOptionalString(opts.sessionKey) !== undefined &&
+    preflight?.isExecEventWake === true &&
+    !preflight.authoritativeScheduledTick &&
+    scheduledTasks.length === 0 &&
+    preflight.pendingEventEntries.some((event) => isExecCompletionEvent(event.text));
   const getSize = opts.deps?.getQueueSize ?? getQueueSize;
-  if (getSize(CommandLane.Main) > 0) {
+  if (!isSessionExecCompletion && getSize(CommandLane.Main) > 0) {
     return skippedHeartbeatStage(HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT, startedAt);
   }
 
@@ -210,11 +223,12 @@ export async function resolveHeartbeatWakeStage(opts: HeartbeatRunOptions) {
     cronLaneDepth > owningCronLaneTaskIds.size ||
     getSize(CommandLane.CronNested) > 0 ||
     getSize(CommandLane.HookDispatch) > 0;
-  if (cronBusy || cronLaneBusy) {
+  if (!isSessionExecCompletion && (cronBusy || cronLaneBusy)) {
     return skippedHeartbeatStage(HEARTBEAT_SKIP_CRON_IN_PROGRESS, startedAt);
   }
 
-  const shouldHonorActiveReplyRuns = opts.intent !== "immediate" && opts.intent !== "manual";
+  const shouldHonorActiveReplyRuns =
+    !isSessionExecCompletion && opts.intent !== "immediate" && opts.intent !== "manual";
   const listActiveReplyRuns =
     opts.deps?.listActiveReplyRunSessionKeys ?? listActiveReplyRunSessionKeys;
   const listActiveEmbeddedRuns =
@@ -297,7 +311,11 @@ export async function resolveHeartbeatWakeStage(opts: HeartbeatRunOptions) {
   const { sessionKey } = preflight.session;
   const isReplyRunActive =
     opts.deps?.isReplyRunActive ?? ((key: string) => replyRunRegistry.isActive(key));
-  if (isReplyRunActive(sessionKey) || hasActiveRunForSession(sessionKey, listActiveEmbeddedRuns)) {
+  // Keep injected lists authoritative; production checks the current indexed owner at each fence.
+  const isEmbeddedRunActive = opts.deps?.listActiveEmbeddedRunSessionKeys
+    ? (key: string) => hasActiveRunForSession(key, listActiveEmbeddedRuns)
+    : (key: string) => resolveActiveEmbeddedRunSessionId(key) !== undefined;
+  if (isReplyRunActive(sessionKey) || isEmbeddedRunActive(sessionKey)) {
     return skippedHeartbeatStage(HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT, startedAt);
   }
 
@@ -317,7 +335,7 @@ export async function resolveHeartbeatWakeStage(opts: HeartbeatRunOptions) {
     heartbeat,
     scheduledTasks,
     startedAt,
-    listActiveEmbeddedRuns,
+    isEmbeddedRunActive,
     isReplyRunActive,
     preflight,
   } as const;
@@ -329,9 +347,30 @@ export type ReadyHeartbeatWake = StageResult<ReturnType<typeof resolveHeartbeatW
 export async function prepareHeartbeatRunStage(wake: ReadyHeartbeatWake) {
   const { cfg, agentId, heartbeat, preflight } = wake;
   const { scheduledTasks, startedAt } = wake;
-  const { listActiveEmbeddedRuns, isReplyRunActive } = wake;
+  const { isEmbeddedRunActive, isReplyRunActive } = wake;
   const { entry, sessionKey, run, conversationEntry } = preflight.session;
   const previousUpdatedAt = entry?.updatedAt;
+  const projectionSessionKey = run.kind === "isolated" ? run.baseSessionKey : sessionKey;
+  // Capture the client-owned generation before routing can await. The inspected
+  // completion queue owns publication eligibility, not the coalesced wake source.
+  const projectionCandidate =
+    scheduledTasks.length === 0 &&
+    preflight.shouldInspectPendingEvents &&
+    preflight.pendingEventEntries.some((event) => isExecCompletionEvent(event.text)) &&
+    !preflight.session.suppressOriginatingContext &&
+    !isInternalSessionEffectsKey(projectionSessionKey) &&
+    conversationEntry?.delivery?.kind === "internal" &&
+    conversationEntry.createdVia !== "internal" &&
+    (conversationEntry.createdVia === "operator" ||
+      conversationEntry.lastReadAt !== undefined ||
+      (conversationEntry.createdVia === "spawn" &&
+        parseAgentSessionKey(projectionSessionKey)?.rest.startsWith("dashboard:")))
+      ? {
+          sessionKey: projectionSessionKey,
+          sessionId: conversationEntry.sessionId,
+          lifecycleRevision: conversationEntry.lifecycleRevision,
+        }
+      : undefined;
 
   // When isolatedSession is enabled, create a fresh session via the same
   // pattern as cron sessionTarget: "isolated". This gives the heartbeat
@@ -350,6 +389,11 @@ export async function prepareHeartbeatRunStage(wake: ReadyHeartbeatWake) {
       ? preflight.turnSourceDeliveryContext
       : undefined,
   });
+  // Operator-chosen suppression is the resolver's verdict, not a config string:
+  // an explicit target that never resolves to a route also reports `target-none`.
+  // Gate here so neither the relay prompt nor the session publication path can
+  // see a projection target the resolver already declined to deliver to.
+  const internalProjection = delivery.reason === "target-none" ? undefined : projectionCandidate;
   // Routeless ambient polls are pure model burn, but only they may skip:
   // triggered wakes (hook/manual/cron/exec), polls with queued events, and
   // scheduled-task wakes must still run to process their payloads even when
@@ -391,9 +435,9 @@ export async function prepareHeartbeatRunStage(wake: ReadyHeartbeatWake) {
     channel: delivery.channel !== "none" ? delivery.channel : undefined,
     accountId: delivery.accountId,
   });
-  const canRelayToUser = Boolean(
-    delivery.channel !== "none" && delivery.to && visibility.showAlerts,
-  );
+  const canRelayToUser =
+    visibility.showAlerts &&
+    ((delivery.channel !== "none" && Boolean(delivery.to)) || internalProjection !== undefined);
   let useHeartbeatResponseToolPrompt = shouldUseHeartbeatResponseToolPrompt({
     cfg,
     agentId,
@@ -428,10 +472,7 @@ export async function prepareHeartbeatRunStage(wake: ReadyHeartbeatWake) {
             isolatedSessionKey,
             isolatedBaseSessionKey,
           });
-    if (
-      isReplyRunActive(isolatedSessionKey) ||
-      hasActiveRunForSession(isolatedSessionKey, listActiveEmbeddedRuns)
-    ) {
+    if (isReplyRunActive(isolatedSessionKey) || isEmbeddedRunActive(isolatedSessionKey)) {
       return skippedHeartbeatStage(HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT, startedAt);
     }
     const staleIsolatedEntry = staleIsolatedSessionKey
@@ -537,6 +578,7 @@ export async function prepareHeartbeatRunStage(wake: ReadyHeartbeatWake) {
     replyPrefix,
     runSessionKey,
     outboundPolicySessionKey,
+    internalProjection,
     ...heartbeatRunPrompt,
   } as const;
 }

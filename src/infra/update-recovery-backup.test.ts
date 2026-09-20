@@ -300,6 +300,45 @@ describe("update recovery backup", () => {
     },
   );
 
+  it("preserves both restoration and verification cleanup failures", async () => {
+    await withOpenClawTestState({ layout: "state-only", scenario: "minimal" }, async (state) => {
+      const { database, installRoot, runId } = await fixture(state);
+      try {
+        const ref = await createUpdateRecoveryBackup({ ...authority, installRoot, runId });
+        const restoreFailure = new Error("Synthetic native agent drain failure");
+        const cleanupFailure = new Error("Synthetic verification staging cleanup failure");
+        const drain = vi
+          .spyOn(agentDatabaseLifecycle, "closeOpenClawAgentDatabasesAsync")
+          .mockRejectedValueOnce(restoreFailure);
+        const remove = fs.rm;
+        const cleanup = vi.spyOn(fs, "rm").mockImplementation(async (pathname, options) => {
+          if (
+            typeof pathname === "string" &&
+            path.dirname(pathname) === ref.directory &&
+            path.basename(pathname).startsWith(".verify-")
+          ) {
+            throw cleanupFailure;
+          }
+          await remove(pathname, options);
+        });
+        try {
+          await expect(restoreUpdateRecoveryBackup(ref, authority)).rejects.toMatchObject({
+            name: "AggregateError",
+            cause: restoreFailure,
+            errors: [restoreFailure, cleanupFailure],
+          });
+          expect(drain).toHaveBeenCalled();
+        } finally {
+          drain.mockRestore();
+          cleanup.mockRestore();
+        }
+        await expect(verifyUpdateRecoveryBackup(ref)).resolves.toMatchObject({ runId });
+      } finally {
+        database.close();
+      }
+    });
+  });
+
   it("keeps a held plugin lease in capture but permits immediate acquisition after restore", async () => {
     await withOpenClawTestState({ layout: "state-only", scenario: "minimal" }, async (state) => {
       const { database, databasePath, installRoot, runId } = await fixture(state, false);

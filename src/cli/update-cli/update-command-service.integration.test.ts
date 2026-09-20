@@ -15,6 +15,7 @@ import {
 import { readGatewayServiceState, resolveGatewayService } from "../../daemon/service.js";
 import { gatewayHealthResponse } from "../../gateway/health-response.test-support.js";
 import { createUpdateRun } from "../../infra/update-run-ledger.js";
+import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db.js";
 import { captureEnv } from "../../test-utils/env.js";
 import { mockProcessPlatform } from "../../test-utils/vitest-spies.js";
 import * as runtimeUtils from "../../utils.js";
@@ -141,7 +142,12 @@ vi.mock("../../daemon/systemd.js", async (importOriginal) => ({
   startSystemdService: mocks.start,
   installSystemdService: mocks.install,
 }));
-vi.mock("../../daemon/systemd-definition-mutation.js", () => ({
+vi.mock("../../daemon/systemd-user-transport.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../daemon/systemd-user-transport.js")>()),
+  resolveSystemdUserTransport: async () => undefined,
+}));
+vi.mock("../../daemon/systemd-definition-mutation.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../daemon/systemd-definition-mutation.js")>()),
   readSystemdDefinitionMutationCapability: mocks.capability,
 }));
 // These platform-mocked lifecycle fixtures do not own a real updater process.
@@ -152,17 +158,23 @@ vi.mock("./update-command-service-command.js", async (importOriginal) => {
   return {
     ...actual,
     runUpdatedInstallGatewayCommand: (
-      ...[params, action, preserve]: Parameters<typeof actual.runUpdatedInstallGatewayCommand>
+      ...[params, action]: Parameters<typeof actual.runUpdatedInstallGatewayCommand>
     ) =>
       actual.runUpdatedInstallGatewayCommand(
         { ...params, opts: { json: params.opts.json } },
         action,
-        preserve,
       ),
   };
 });
 vi.mock("../../process/exec.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../../process/exec.js")>();
+  const nativeSuccess = {
+    code: 0,
+    stderr: "",
+    signal: null,
+    killed: false,
+    termination: "exit" as const,
+  };
   const versionProbe = [
     "busctl",
     "--user",
@@ -176,22 +188,25 @@ vi.mock("../../process/exec.js", async (importOriginal) => {
   return {
     ...actual,
     runCommandWithTimeout: (...args: Parameters<typeof actual.runCommandWithTimeout>) => {
-      const [argv] = args;
+      const [argv, options] = args;
+      if (argv[0] === "systemctl") {
+        expect(argv).toEqual(["systemctl", "--user", "daemon-reload"]);
+        if (typeof options !== "object") {
+          throw new Error("Native reload requires its captured manager environment.");
+        }
+        expect(options.baseEnv?.HOME).toBe(root);
+        expect(mocks.running).toBe(false);
+        mocks.events.push("native daemon-reload");
+        return Promise.resolve({ ...nativeSuccess, stdout: "" });
+      }
       if (argv.length === versionProbe.length && versionProbe.every((arg, i) => argv[i] === arg)) {
-        return Promise.resolve({
-          code: 0,
-          stdout: 's "252.39"',
-          stderr: "",
-          signal: null,
-          killed: false,
-          termination: "exit" as const,
-        });
+        return Promise.resolve({ ...nativeSuccess, stdout: 's "252.39"' });
       }
       return mocks.child(...args);
     },
     runExec: vi.fn(
-      async (_command: string, _args: string[], options: { input: string | Uint8Array }) =>
-        decodeLaunchAgentPlistFixture(options.input),
+      async (_command: string, args: string[], options: { input: string | Uint8Array }) =>
+        decodeLaunchAgentPlistFixture(options.input, args[1]),
     ),
   };
 });
@@ -301,6 +316,7 @@ beforeEach(async () => {
     .mockRejectedValue(new Error("Unexpected config snapshot during preserved activation"));
 });
 afterEach(async () => {
+  await closeOpenClawStateDatabaseAsync();
   envSnapshot.restore();
   clearConfigCache();
   clearRuntimeConfigSnapshot();

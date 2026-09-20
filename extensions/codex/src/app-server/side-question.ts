@@ -4,13 +4,8 @@ import {
   buildAgentHookContextChannelFields,
   embeddedAgentLog,
   formatErrorMessage,
-  resolveAgentDir,
-  resolveAttemptSpawnWorkspaceDir,
-  resolveModelAuthMode,
   resolveSandboxContext,
   runAgentCleanupStep,
-  supportsModelTools,
-  type AnyAgentTool,
   type AgentHarnessSideQuestionParamsV2,
   type AgentHarnessSideQuestionResult,
   type EmbeddedRunAttemptParamsV2,
@@ -26,21 +21,15 @@ import {
 import { loadExecApprovals } from "openclaw/plugin-sdk/exec-approvals-runtime";
 import { registerNativeHookRelayForBundledRuntime } from "openclaw/plugin-sdk/native-hook-relay-runtime";
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
-import type { ReplyPayload } from "openclaw/plugin-sdk/reply-payload";
 import { readStringField as readString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { resolveCodexAppServerForModelProvider } from "./app-server-policy.js";
 import { handleCodexAppServerApprovalRequest } from "./approval-bridge.js";
-import {
-  interruptCodexTurnAndWaitBestEffort,
-  retireUnsafeCodexTurnClientBestEffort,
-  unsubscribeCodexThreadBestEffort,
-} from "./attempt-client-cleanup.js";
+import { retireUnsafeCodexTurnClientBestEffort } from "./attempt-client-cleanup.js";
 import { resolveCodexAppServerPreparedAuthHandoff } from "./auth-bridge.js";
 import {
   requireCodexSupervisionModelSelection,
   resolveCodexBindingAppServerConnection,
 } from "./binding-connection.js";
-import { ensureCodexAppServerClientRuntime } from "./client-runtime.js";
 import {
   isCodexAppServerApprovalRequest,
   isCodexAppServerIndeterminateRequestCancellationError,
@@ -62,9 +51,9 @@ import {
   type CodexAppServerRuntimeOptions,
 } from "./config.js";
 import {
+  buildDynamicTools,
   resolveCodexExternalSandboxPolicyForOpenClawSandbox,
   resolveCodexMessageToolProvider,
-  resolveCodexNodePlacementToolConstructionPlan,
   resolveCodexSandboxEnvironmentSelection,
   shouldEnableCodexAppServerNativeToolSurface,
   shouldRequireCodexSandboxExecServerEnvironment,
@@ -79,10 +68,7 @@ import {
   resolveCodexToolAbortTerminalReason,
   resolveDynamicToolCallTimeoutMs,
 } from "./dynamic-tool-execution.js";
-import {
-  filterCodexDynamicTools,
-  resolveCodexDynamicToolsLoading,
-} from "./dynamic-tool-profile.js";
+import { resolveCodexDynamicToolsLoading } from "./dynamic-tool-profile.js";
 import { createCodexDynamicToolBridge, type CodexDynamicToolBridge } from "./dynamic-tools.js";
 import { routeCodexAppServerElicitationRequest } from "./elicitation-bridge.js";
 import { createCodexElicitationResponse } from "./elicitation-response.js";
@@ -142,6 +128,7 @@ import {
   type CodexAppServerClientLease,
   type CodexAppServerClientOptions,
 } from "./shared-client.js";
+import { cleanupCodexSideQuestion } from "./side-question-cleanup.js";
 import { SIDE_DEVELOPER_INSTRUCTIONS } from "./side-question-instructions.js";
 import {
   buildCodexRuntimeThreadConfig,
@@ -158,7 +145,6 @@ import {
 import { buildCodexTemporalAdditionalContext } from "./turn-params.js";
 import type { CodexAppServerServerRequest, CodexThreadRouteScope } from "./turn-router.js";
 import { buildCodexUserInput } from "./user-input.js";
-import { filterCodexVisionTools } from "./vision-tools.js";
 import {
   resolveCodexWebSearchPlan,
   type CodexNativeWebSearchSupport,
@@ -461,6 +447,7 @@ export async function runCodexAppServerSideQuestion(
   let sandboxEnvironmentClient: CodexAppServerClient | undefined;
   let nativeHookRelay: ReturnType<typeof registerNativeHookRelayForBundledRuntime> | undefined;
   const activeDynamicToolCalls = new Set<Promise<unknown>>();
+  let primaryFailure: { error: unknown } | undefined;
   const releaseSandboxEnvironment = async () => {
     if (!sandboxEnvironment) {
       return;
@@ -530,31 +517,15 @@ export async function runCodexAppServerSideQuestion(
           })
         : "unsupported";
     const { toolBridge, webSearchPlan } = await createCodexSideToolBridge({
-      params: effectiveParams,
+      params: sideRunParams,
       cwd,
+      resolvedWorkspace: effectiveParams.workspaceDir ?? cwd,
       pluginConfig,
       sessionAgentId,
       nativeToolSurfaceEnabled,
       nativeProviderWebSearchSupport,
       sessionPermissionPolicy,
-      runId,
-      signal: runAbortController.signal,
-    });
-    // Auth refresh is client-owned; keep one shared handler per physical client.
-    ensureCodexAppServerClientRuntime(client, {
-      agentDir: params.agentDir,
-      authProfileId:
-        startupPreparedAuth?.kind === "api-key" ? undefined : connection.requestAuthProfileId,
-      ...(!usesSupervisionConnection
-        ? {
-            authProfileStore: preparedRuntimeAuth.authProfileStore,
-            authMode:
-              startupPreparedAuth?.kind === "api-key"
-                ? ("prepared-api-key" as const)
-                : ("profile" as const),
-          }
-        : {}),
-      config: params.cfg,
+      runAbortController,
     });
     const handleServerRequest = async (
       request: CodexAppServerServerRequest,
@@ -658,15 +629,6 @@ export async function runCodexAppServerSideQuestion(
       } finally {
         activeDynamicToolCalls.delete(toolCall);
       }
-    };
-
-    const selectClient = (nextClient: CodexAppServerClient) => {
-      client = nextClient;
-      ensureCodexAppServerClientRuntime(client, {
-        agentDir: params.agentDir,
-        authProfileId: connection.requestAuthProfileId,
-        config: params.cfg,
-      });
     };
 
     const serviceTier = binding.serviceTier ?? appServer.serviceTier;
@@ -875,7 +837,9 @@ export async function runCodexAppServerSideQuestion(
           }
           return response.thread.id;
         }),
-      onClientChange: selectClient,
+      onClientChange: (nextClient) => {
+        client = nextClient;
+      },
     });
 
     const effort = usesSupervisionConnection
@@ -996,59 +960,50 @@ export async function runCodexAppServerSideQuestion(
       throw new Error("Codex /btw completed without an answer.");
     }
     return { text: result.text, usage: result.usage };
+  } catch (error) {
+    primaryFailure = { error };
+    throw error;
   } finally {
-    try {
-      // Cleanup aborts are ownership teardown, not a terminal run outcome.
-      // Snapshot the real state while late app-server notifications can still drain.
-      nativeToolRunWasAbortedBeforeCleanup = runAbortController.signal.aborted;
-      params.opts?.abortSignal?.removeEventListener("abort", abortFromUpstream);
-      // Stop dispatched side tools before cleanup waits on the app server;
-      // otherwise a stuck tool can outlive the side turn that owns it.
-      if (!runAbortController.signal.aborted) {
-        runAbortController.abort("codex_side_question_finished");
-      }
-      // Request handlers can still be finishing after the terminal turn event.
-      // Drain their abort races before unsubscribe so late diagnostics cannot leak
-      // into the next side run.
-      await Promise.allSettled(activeDynamicToolCalls);
-      try {
-        await cleanupCodexSideThread(childClient ?? client, {
-          threadId: childThreadId,
-          turnId,
-          interrupt: !collector?.completed,
-          timeoutMs: appServer.requestTimeoutMs,
-        });
-      } finally {
-        if (policyWriteUncertain && childClient) {
-          await retireUnsafeCodexTurnClientBestEffort(childClient, "side policy handoff");
-        }
-        collector?.route.release();
-        try {
-          nativeToolLifecycleProjector?.finalizeActive(nativeToolRunWasAbortedBeforeCleanup);
-        } finally {
-          // Keep cleanup-time relay failures with their active projected item.
-          // Direct emission owns only failures that arrive after projector retirement.
-          activateNativePreToolUseFailureFallback();
-        }
-      }
-    } finally {
-      flushPendingNativePreToolUseFailures();
-      try {
-        await releaseSandboxEnvironment();
-      } finally {
-        releaseCodexAppServerClientLease(clientLease);
-        nativeHookRelay?.unregister();
-        await runAgentCleanupStep({
-          runId: sideRunParams.runId,
-          sessionId: sideRunParams.sessionId,
-          step: "codex-side-native-hook-relay-release",
-          log: embeddedAgentLog,
-          cleanup: async () => {
-            await nativeHookRelay?.drain();
-          },
-        });
-      }
+    // Cleanup aborts are ownership teardown, not a terminal run outcome.
+    nativeToolRunWasAbortedBeforeCleanup = runAbortController.signal.aborted;
+    params.opts?.abortSignal?.removeEventListener("abort", abortFromUpstream);
+    if (!runAbortController.signal.aborted) {
+      runAbortController.abort("codex_side_question_finished");
     }
+    // Join dispatched side tools before releasing their native subscription.
+    await Promise.allSettled(activeDynamicToolCalls);
+    await cleanupCodexSideQuestion(childClient ?? client, {
+      threadId: childThreadId,
+      turnId,
+      interrupt: !(collector?.completed || collector?.route.completed),
+      terminateBackgroundTerminals: nativeToolRunWasAbortedBeforeCleanup,
+      timeoutMs: appServer.requestTimeoutMs,
+      failure: primaryFailure,
+      afterThreadCleanup: [
+        async () => {
+          if (policyWriteUncertain && childClient) {
+            await retireUnsafeCodexTurnClientBestEffort(childClient, "side policy handoff");
+          }
+        },
+        () => collector?.route.release(),
+        () => nativeToolLifecycleProjector?.finalizeActive(nativeToolRunWasAbortedBeforeCleanup),
+        activateNativePreToolUseFailureFallback,
+        flushPendingNativePreToolUseFailures,
+        releaseSandboxEnvironment,
+        () => releaseCodexAppServerClientLease(clientLease),
+        () => nativeHookRelay?.unregister(),
+        () =>
+          runAgentCleanupStep({
+            runId: sideRunParams.runId,
+            sessionId: sideRunParams.sessionId,
+            step: "codex-side-native-hook-relay-release",
+            log: embeddedAgentLog,
+            cleanup: async () => {
+              await nativeHookRelay?.drain();
+            },
+          }),
+      ],
+    });
   }
 }
 
@@ -1195,6 +1150,8 @@ function buildSideRunAttemptParams(
     },
     onBlockReply: params.opts?.onBlockReply,
     onPartialReply: params.opts?.onPartialReply,
+    onToolResult: params.opts?.onToolResult,
+    requireExplicitMessageTarget: true,
     hostCapabilities: params.hostCapabilities,
     sandbox: params.sandbox,
   };
@@ -1202,186 +1159,78 @@ function buildSideRunAttemptParams(
 }
 
 async function createCodexSideToolBridge(input: {
-  params: AgentHarnessSideQuestionParamsV2;
+  params: EmbeddedRunAttemptParamsV2;
   cwd: string;
+  resolvedWorkspace: string;
   pluginConfig: ReturnType<typeof readCodexPluginConfig>;
   sessionAgentId: string;
   nativeToolSurfaceEnabled: boolean;
   nativeProviderWebSearchSupport: CodexNativeWebSearchSupport;
   sessionPermissionPolicy?: CodexEffectiveSessionPermissionPolicy;
-  runId: string;
-  signal: AbortSignal;
+  runAbortController: AbortController;
 }): Promise<{ toolBridge: CodexDynamicToolBridge; webSearchPlan: CodexWebSearchPlan }> {
-  const runtimeModel =
-    input.params.runtimeModel ??
-    ({ id: input.params.model, provider: input.params.provider } as never);
-  const messageToolProvider = resolveCodexMessageToolProvider(input.params);
-  let tools: AnyAgentTool[] = [];
-  const webFetchHostnameAllowlistRef: { value?: string[] } = {};
-  if (supportsModelTools(runtimeModel)) {
-    const createOpenClawCodingTools = (await import("openclaw/plugin-sdk/agent-harness"))
-      .createOpenClawCodingTools;
-    const sandboxSessionKey =
-      input.params.sandboxSessionKey?.trim() ||
-      input.params.sessionKey?.trim() ||
-      input.params.sessionId ||
-      input.sessionAgentId;
-    const sandbox =
-      input.params.sandbox !== undefined
-        ? input.params.sandbox
-        : await resolveSandboxContext({
-            config: input.params.cfg,
-            sessionKey: sandboxSessionKey,
-            workspaceDir: input.cwd,
-          });
-    const toolConstructionPlan = resolveCodexNodePlacementToolConstructionPlan(
-      sandbox,
-      input.nativeToolSurfaceEnabled,
-    );
-    // A side thread dispatches these tools through the same direct bridge as a normal
-    // Codex turn, so no tool-start handler reserves a blocking question's prompt here
-    // either. Hand the tools this run's own way to show one.
-    const publishSideToolResult = input.params.opts?.onToolResult;
-    const questionPrompt = publishSideToolResult
-      ? {
-          send: async (payload: ReplyPayload) => {
-            await publishSideToolResult(payload);
-          },
-          ...(input.params.messageChannel ? { messageChannel: input.params.messageChannel } : {}),
-        }
-      : undefined;
-    const allTools = createOpenClawCodingTools({
-      agentId: input.sessionAgentId,
-      requesterThinkingLevel: input.params.resolvedThinkLevel ?? "off",
-      requesterModel: input.params.runtimeModel
-        ? { provider: input.params.runtimeModel.provider, model: input.params.runtimeModel.id }
-        : undefined,
-      sessionKey: sandboxSessionKey,
-      runSessionKey:
-        input.params.sessionKey && input.params.sessionKey !== sandboxSessionKey
-          ? input.params.sessionKey
-          : undefined,
-      sessionId: input.params.sessionId,
-      exec: input.sessionPermissionPolicy && { mode: input.sessionPermissionPolicy.execMode },
-      sessionPermissionPolicy: input.sessionPermissionPolicy,
-      runId: input.runId,
-      agentDir:
-        input.params.agentDir ?? resolveAgentDir(input.params.cfg ?? {}, input.sessionAgentId),
-      workspaceDir: input.cwd,
-      spawnWorkspaceDir: resolveAttemptSpawnWorkspaceDir({
-        sandbox,
-        resolvedWorkspace: input.params.workspaceDir ?? input.cwd,
-      }),
-      config: input.params.cfg,
-      preparedModelRuntime: input.params.preparedModelRuntime,
-      abortSignal: input.signal,
-      modelProvider: runtimeModel.provider,
-      modelId: input.params.model,
-      modelCompat:
-        runtimeModel.compat && typeof runtimeModel.compat === "object"
-          ? (runtimeModel.compat as never)
-          : undefined,
-      modelApi: runtimeModel.api,
-      modelContextWindowTokens: runtimeModel.contextWindow,
-      modelAuthMode: resolveModelAuthMode(runtimeModel.provider, input.params.cfg, undefined, {
-        workspaceDir: input.cwd,
-      }),
-      suppressManagedWebSearch: false,
-      webFetchHostnameAllowlistRef,
-      ...(input.params.messageProvider || input.params.messageChannel
-        ? {
-            messageProvider: messageToolProvider,
-            toolPolicyMessageProvider: input.params.messageProvider ?? input.params.messageChannel,
-          }
-        : {}),
-      ...(input.params.chatType ? { chatType: input.params.chatType } : {}),
-      ...(input.params.agentAccountId ? { agentAccountId: input.params.agentAccountId } : {}),
-      ...(input.params.messageTo ? { messageTo: input.params.messageTo } : {}),
-      ...(input.params.messageThreadId !== undefined
-        ? { messageThreadId: input.params.messageThreadId }
-        : {}),
-      ...(input.params.chatId ? { nativeChannelId: input.params.chatId } : {}),
-      ...(input.params.messageActionTurnCapability
-        ? { messageActionTurnCapability: input.params.messageActionTurnCapability }
-        : {}),
-      ...(input.params.groupId !== undefined ? { groupId: input.params.groupId } : {}),
-      ...(input.params.groupChannel !== undefined
-        ? { groupChannel: input.params.groupChannel }
-        : {}),
-      ...(input.params.groupSpace !== undefined ? { groupSpace: input.params.groupSpace } : {}),
-      ...(input.params.memberRoleIds ? { memberRoleIds: input.params.memberRoleIds } : {}),
-      ...(input.params.spawnedBy !== undefined ? { spawnedBy: input.params.spawnedBy } : {}),
-      ...(input.params.senderId !== undefined ? { senderId: input.params.senderId } : {}),
-      ...(input.params.senderName !== undefined ? { senderName: input.params.senderName } : {}),
-      ...(input.params.senderUsername !== undefined
-        ? { senderUsername: input.params.senderUsername }
-        : {}),
-      ...(input.params.senderE164 !== undefined ? { senderE164: input.params.senderE164 } : {}),
-      ...(input.params.senderIsOwner !== undefined
-        ? { senderIsOwner: input.params.senderIsOwner }
-        : {}),
-      ...(input.params.currentChannelId ? { currentChannelId: input.params.currentChannelId } : {}),
-      hookChannelId: buildAgentHookContextChannelFields({
-        sessionKey: input.params.sessionKey,
-        messageChannel: input.params.messageChannel,
-        messageProvider: input.params.messageProvider,
-        currentChannelId: input.params.currentChannelId,
-      }).channelId,
-      sandbox,
-      ...(toolConstructionPlan ? { toolConstructionPlan } : {}),
-      ...(questionPrompt ? { questionPrompt } : {}),
-      emitBeforeToolCallDiagnostics: false,
-      modelHasVision: runtimeModel.input?.includes("image") ?? false,
-      requireExplicitMessageTarget: true,
-    });
-    const codexFilteredTools = filterCodexDynamicTools(allTools, input.pluginConfig);
-    tools = filterCodexVisionTools(codexFilteredTools, {
-      modelHasVision: runtimeModel.input?.includes("image") ?? false,
-      nativeImageInspectionEnabled: input.nativeToolSurfaceEnabled,
-    });
-  }
-  const requestedWebSearchPlan = resolveCodexWebSearchPlan({
-    config: input.params.cfg,
+  const { params } = input;
+  const sandboxSessionKey =
+    params.sandboxSessionKey?.trim() ||
+    params.sessionKey?.trim() ||
+    params.sessionId ||
+    input.sessionAgentId;
+  const sandbox =
+    params.sandbox !== undefined
+      ? params.sandbox
+      : await resolveSandboxContext({
+          config: params.config,
+          sessionKey: sandboxSessionKey,
+          workspaceDir: input.cwd,
+        });
+  let webSearchAllowed = false;
+  const tools = await buildDynamicTools({
+    params,
+    resolvedWorkspace: input.resolvedWorkspace,
+    effectiveWorkspace: input.cwd,
+    sandboxSessionKey,
+    sandbox,
     nativeToolSurfaceEnabled: input.nativeToolSurfaceEnabled,
     nativeProviderWebSearchSupport: input.nativeProviderWebSearchSupport,
-    webSearchAllowed: tools.some((tool) => tool.name === "web_search"),
+    sessionPermissionPolicy: input.sessionPermissionPolicy,
+    runAbortController: input.runAbortController,
+    sessionAgentId: input.sessionAgentId,
+    policyAgentId: input.sessionAgentId,
+    pluginConfig: input.pluginConfig,
+    onYieldDetected: () => {},
+    onWebSearchPolicyResolved: (allowed) => {
+      webSearchAllowed = allowed;
+    },
   });
-  webFetchHostnameAllowlistRef.value = requestedWebSearchPlan.webFetchHostnameAllowlist;
-  // Codex forks do not accept dynamicTools, so managed web_search cannot be
-  // registered on a side thread. Keep it only as the native-search policy signal.
+  const requestedWebSearchPlan = resolveCodexWebSearchPlan({
+    config: params.config,
+    nativeToolSurfaceEnabled: input.nativeToolSurfaceEnabled,
+    nativeProviderWebSearchSupport: input.nativeProviderWebSearchSupport,
+    webSearchAllowed,
+  });
+  // Forks inherit dynamic declarations; BTW retains its native-only search policy.
   const webSearchPlan =
     requestedWebSearchPlan.kind === "managed"
-      ? resolveCodexWebSearchPlan({
-          config: input.params.cfg,
-          webSearchAllowed: false,
-        })
+      ? resolveCodexWebSearchPlan({ config: params.config, webSearchAllowed: false })
       : requestedWebSearchPlan;
-  // Side threads inherit a large parent context but do not own the main
-  // context-compaction lifecycle needed to expire screenshot coordinates.
-  const exposedTools = input.params.hostCapabilities.bindToolSurface(
-    tools.filter((tool) => tool.name !== "web_search" && tool.name !== "computer"),
-    { cwd: input.cwd },
+  // Side threads do not own the compaction lifecycle that expires screenshot coordinates.
+  const exposedTools = tools.filter(
+    (tool) => tool.name !== "web_search" && tool.name !== "computer",
   );
-  const hookChannelFields = buildAgentHookContextChannelFields({
-    sessionKey: input.params.sessionKey,
-    messageChannel: input.params.messageChannel,
-    messageProvider: input.params.messageProvider,
-    currentChannelId: input.params.currentChannelId,
-  });
   return {
     toolBridge: createCodexDynamicToolBridge({
       tools: exposedTools,
-      signal: input.signal,
+      signal: input.runAbortController.signal,
       loading: resolveCodexDynamicToolsLoading(input.pluginConfig),
       hookContext: {
         agentId: input.sessionAgentId,
-        config: input.params.cfg,
-        contextWindowTokens: runtimeModel.contextWindow,
-        sessionId: input.params.sessionId,
-        sessionKey: input.params.sessionKey,
-        runId: input.runId,
-        currentChannelProvider: messageToolProvider,
-        ...hookChannelFields,
+        config: params.config,
+        contextWindowTokens: params.model.contextWindow,
+        sessionId: params.sessionId,
+        sessionKey: params.sessionKey,
+        runId: params.runId,
+        currentChannelProvider: resolveCodexMessageToolProvider(params),
+        ...buildAgentHookContextChannelFields(params),
       },
     }),
     webSearchPlan,
@@ -1424,40 +1273,6 @@ function isMissingCodexParentThreadError(error: unknown): boolean {
     message.includes("no rollout found for thread id") ||
     message.includes("includeTurns is unavailable before first user message")
   );
-}
-
-async function cleanupCodexSideThread(
-  client: CodexAppServerClient,
-  params: {
-    threadId?: string;
-    turnId?: string;
-    interrupt: boolean;
-    timeoutMs: number;
-  },
-): Promise<void> {
-  if (!params.threadId) {
-    return;
-  }
-  if (params.interrupt && params.turnId !== undefined) {
-    const confirmed = await interruptCodexTurnAndWaitBestEffort(client, {
-      threadId: params.threadId,
-      turnId: params.turnId,
-      timeoutMs: params.timeoutMs,
-    });
-    if (!confirmed) {
-      await retireUnsafeCodexTurnClientBestEffort(client, "side turn interrupt");
-      // An unconfirmed native turn must never lose its only visible subscription.
-      return;
-    }
-  }
-  if (
-    !(await unsubscribeCodexThreadBestEffort(client, {
-      threadId: params.threadId,
-      timeoutMs: params.timeoutMs,
-    }))
-  ) {
-    await retireUnsafeCodexTurnClientBestEffort(client, "side thread unsubscribe");
-  }
 }
 
 function formatCodexErrorMessage(params: JsonObject, rateLimits: JsonValue | undefined): Error {

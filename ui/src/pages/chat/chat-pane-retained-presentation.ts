@@ -27,7 +27,7 @@ import { ChatPaneBoard } from "./chat-pane-board.ts";
 import { consumePaneSessionHandoff, type PaneSessionHandoff } from "./chat-pane-shared.ts";
 import { retirePullRequestRefreshes } from "./chat-pull-request-refresh.ts";
 import { stopChatRealtimeTalk } from "./chat-realtime.ts";
-import { retryReconnectableQueuedChatSends } from "./chat-send-actions.ts";
+import { resumeStoredChatOutboxes } from "./chat-send-actions.ts";
 import { setChatError } from "./chat-send-queue-state.ts";
 import { refreshCurrentChatSessionList } from "./chat-session.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
@@ -38,7 +38,11 @@ import { getChatComposerState } from "./components/chat-composer-state.ts";
 import { dismissConfirmedActionPopovers } from "./components/chat-message.ts";
 import { clearSessionWorkspacePreviews } from "./components/chat-session-workspace-state.ts";
 import { resetTaskDetail } from "./components/chat-task-detail-state.ts";
-import { resetTranscriptSession } from "./components/chat-thread-interactions.ts";
+import {
+  dismissThreadPortals,
+  isThreadPresentationFocused,
+  resetTranscriptSession,
+} from "./components/chat-thread-interactions.ts";
 import { activeQueuedMessageEdit } from "./queued-message-edit.ts";
 
 const COMPOSER_PREFILL_ATTENTION_DURATION_MS = 600;
@@ -46,6 +50,29 @@ const COMPOSER_PREFILL_ATTENTION_CLASS = "agent-chat__input--prefill-attention";
 
 /** Owns foreground resources and composer state that follow one retained presentation. */
 export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
+  private currentSessionArchived: boolean | undefined;
+  private archiveFocusOwned = false;
+
+  protected captureArchivePresentationFocus(): void {
+    this.archiveFocusOwned = Boolean(
+      this.state &&
+      this.isCurrentSessionArchived(this.state) &&
+      this.currentSessionArchived === false &&
+      isThreadPresentationFocused(this.presentationId, this),
+    );
+  }
+
+  protected retireArchivedPresentation(): void {
+    const archived = this.state ? this.isCurrentSessionArchived(this.state) : false;
+    if (archived && this.currentSessionArchived === false) {
+      dismissThreadPortals(this.presentationId, this);
+      if (this.archiveFocusOwned) {
+        this.querySelector<HTMLElement>(".chat-thread")?.focus({ preventScroll: true });
+      }
+    }
+    this.currentSessionArchived = archived;
+  }
+
   private retainedQueuedEdit = false;
 
   get hasQueuedMessageEdit(): boolean {
@@ -113,6 +140,7 @@ export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
     const state = this.state;
     if (
       !state ||
+      state.settings.chatShowTaskProgress === false ||
       !this.presented ||
       this.isCurrentSessionArchived(state) ||
       parseCatalogSessionKey(state.sessionKey)
@@ -167,12 +195,13 @@ export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
       return undefined;
     }
     // Unlike secondary metadata, the progress card determines transcript geometry.
-    return this.resolveChatReadTarget();
+    // Consult preferences only after the pane and its history owner are ready.
+    return state.settings.chatShowTaskProgress === false ? undefined : this.resolveChatReadTarget();
   }
 
   protected get progressCardInitialLoading(): boolean {
     const state = this.state;
-    if (!state) {
+    if (!state || state.settings.chatShowTaskProgress === false) {
       return false;
     }
     if (this.progressPresentationSessionKey !== state.sessionKey) {
@@ -321,7 +350,7 @@ export abstract class ChatPaneRetainedPresentation extends ChatPaneBoard {
     }
     if (active && this.presented && this.state?.chatQueue.length) {
       void refreshCurrentChatSessionList(this.state).catch(() => undefined);
-      void retryReconnectableQueuedChatSends(this.state);
+      void resumeStoredChatOutboxes(this.state);
     }
     this.querySelector(".chat-transcript-announcement")?.setAttribute(
       "aria-live",

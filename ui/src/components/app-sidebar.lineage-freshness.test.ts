@@ -482,8 +482,7 @@ describe("sidebar routed-lineage freshness", () => {
     "refreshes a routed child while preserving filtered membership (listed: $listed, rejected refresh: $rejectRefresh, pending selection: $pendingSelection)",
     async ({ listed, rejectRefresh, pendingSelection }) => {
       const parentKey = "agent:main:parent";
-      const key =
-        pendingSelection === "root" ? "agent:main:dashboard:child" : "agent:main:subagent:child";
+      const key = "agent:main:dashboard:child";
       const otherKey = "agent:main:other-owner";
       const owner = { type: "human" as const, id: "ada", label: "Ada" };
       const otherOwner = { type: "human" as const, id: "bob", label: "Bob" };

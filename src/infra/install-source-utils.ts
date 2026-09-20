@@ -12,6 +12,7 @@ import { runCommandWithTimeout, type SpawnResult } from "../process/exec.js";
 import { resolveUserPath } from "../utils.js";
 import { resolveArchiveKind } from "./archive.js";
 import { pathExists } from "./fs-safe.js";
+import { resolveInstallWorkTimeoutMs } from "./install-mode-options.js";
 import { applyNpmFreshnessBypassEnv, type NpmProjectInstallEnvOptions } from "./npm-install-env.js";
 import { isExactSemverVersion, resolveNpmJsonEntries } from "./npm-registry-spec.js";
 import { withTempWorkspace } from "./private-temp-workspace.js";
@@ -370,6 +371,7 @@ async function findPackedArchiveInDir(cwd: string): Promise<string | undefined> 
 export async function packNpmSpecToArchive(params: {
   spec: string;
   timeoutMs: number;
+  workTimeoutMs?: number | null;
   cwd: string;
   signal?: AbortSignal;
 }): Promise<
@@ -394,7 +396,10 @@ export async function packNpmSpecToArchive(params: {
       `--pack-destination=${params.cwd}`,
     ],
     {
-      timeoutMs: Math.max(params.timeoutMs, 300_000),
+      timeoutMs: resolveInstallWorkTimeoutMs(
+        params.workTimeoutMs,
+        Math.max(params.timeoutMs, 300_000),
+      ),
       signal: params.signal,
       killProcessTree: true,
       cwd: params.cwd,

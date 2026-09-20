@@ -1,9 +1,20 @@
+import fs from "node:fs/promises";
+import path from "node:path";
 import { setImmediate as nextEventLoopTurn } from "node:timers/promises";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import type { RuntimeAuthProfileStore } from "../agents/auth-profiles/types.js";
 import type { PreparedModelRuntimeSnapshot } from "../agents/prepared-model-runtime.js";
 import { createPluginMetadataSnapshot } from "../config/plugin-auto-enable.test-helpers.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import {
+  bumpSkillsSnapshotVersion,
+  getSkillsSnapshotVersion,
+  registerSkillsChangeListener,
+  resetSkillsRefreshStateForTest,
+} from "../skills/runtime/refresh-state.js";
+import { writeSkill } from "../skills/test-support/e2e-test-helpers.js";
 import { createChatMetadataOwner } from "./server-methods/chat-metadata-runtime.test-support.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
 import { createGatewaySidecarStopOwner } from "./server-sidecar-owners.js";
@@ -46,9 +57,13 @@ vi.mock("../skills/runtime/refresh.js", async (importOriginal) => ({
 const { createGatewayChatMetadataLifecycle } = await import("./server-chat-metadata-lifecycle.js");
 const { ChatMetadataSnapshotUnavailableError } =
   await import("./server-methods/chat-metadata-runtime.js");
+const authSnapshots = await vi.importActual<
+  typeof import("../agents/auth-profiles/runtime-snapshots.js")
+>("../agents/auth-profiles/runtime-snapshots.js");
 
 const config = {} as OpenClawConfig;
 const context = {} as GatewayRequestContext;
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 beforeEach(() => {
   for (const mock of Object.values(mocks)) {
@@ -81,7 +96,12 @@ function createLifecycle(minimalTestGateway: boolean, warn = vi.fn()) {
 }
 
 async function createRealMetadataLifecycle(
-  options: { attach?: boolean; ownerAvailable?: boolean } = {},
+  options: {
+    attach?: boolean;
+    ownerAvailable?: boolean;
+    authStore?: RuntimeAuthProfileStore;
+    skillsWorkspaceDir?: string;
+  } = {},
 ) {
   const actual = await vi.importActual<typeof import("./server-methods/chat-metadata-runtime.js")>(
     "./server-methods/chat-metadata-runtime.js",
@@ -90,17 +110,32 @@ async function createRealMetadataLifecycle(
   let ownerAvailable = options.ownerAvailable ?? true;
   let revision = 0;
   let latestRefresh = Promise.resolve();
+  const refresh = vi.fn<() => Promise<void>>();
   const buildCommands = vi.fn(async () => ({ commands: [] }));
   const broadcast = vi.fn();
+  if (options.skillsWorkspaceDir) {
+    owner = { ...owner, workspaceDir: options.skillsWorkspaceDir };
+    mocks.registerSkillsListener.mockImplementation(registerSkillsChangeListener);
+  }
+  if (options.authStore) {
+    authSnapshots.setRuntimeAuthProfileStoreSnapshot(options.authStore, owner.agentDir);
+    mocks.registerAuthListener.mockImplementation(
+      authSnapshots.registerRuntimeAuthProfileStoreMutationListener,
+    );
+  }
   mocks.createRuntime.mockImplementation(
     (params: Parameters<typeof actual.createGatewayChatMetadataRuntime>[0]) => {
       const runtime = actual.createGatewayChatMetadataRuntime({
         ...params,
         deps: {
           getPreparedOwner: () => (ownerAvailable ? owner : undefined),
-          getPreparedAuthStore: () => ({ version: 1, profiles: {} }),
-          getAuthStoreRevision: () => revision,
-          getSkillsVersion: () => 0,
+          ...(options.authStore
+            ? { getPreparedAuthStore: authSnapshots.getPreparedRuntimeAuthProfileStoreSnapshotCore }
+            : {
+                getPreparedAuthStore: () => ({ version: 1, profiles: {} }),
+                getAuthStoreRevision: () => revision,
+              }),
+          getSkillsVersion: options.skillsWorkspaceDir ? getSkillsSnapshotVersion : () => 0,
           getPluginRegistryVersion: () => 0,
           buildCommands,
           buildProjection: async ({ facts }) => ({
@@ -110,13 +145,11 @@ async function createRealMetadataLifecycle(
           }),
         },
       });
-      return {
-        ...runtime,
-        refresh: () => {
-          latestRefresh = runtime.refresh();
-          return latestRefresh;
-        },
-      };
+      refresh.mockImplementation(() => {
+        latestRefresh = runtime.refresh();
+        return latestRefresh;
+      });
+      return { ...runtime, refresh };
     },
   );
   const { lifecycle: pendingLifecycle, sidecarOwner, warn } = createLifecycle(false);
@@ -129,7 +162,7 @@ async function createRealMetadataLifecycle(
   if (options.attach !== false) {
     await attach();
   }
-  const modelEvent = (event: { phase: string; error?: Error }) =>
+  const modelEvent = (event: { phase: string; error?: Error; modelFactsChanged?: boolean }) =>
     mocks.registerModelListener.mock.calls[0]![0](event);
   const authEvent = () => mocks.registerAuthListener.mock.calls[0]![0]();
   return {
@@ -137,6 +170,11 @@ async function createRealMetadataLifecycle(
     attach,
     buildCommands,
     broadcast,
+    refresh,
+    publishAuthStore(store: RuntimeAuthProfileStore) {
+      authSnapshots.updateRuntimeAuthProfileStoreSnapshot(store, owner.agentDir);
+      return latestRefresh;
+    },
     warn,
     modelEvent,
     queueRefresh(stage: "queued" | "building") {
@@ -177,11 +215,164 @@ async function createRealMetadataLifecycle(
         modelEvent({ phase: "catalog-failed", error: new Error("catalog failed") }),
       owner: () => modelEvent({ phase: "invalidated" }),
     },
-    stop: sidecarOwner.stop,
+    async stop() {
+      await sidecarOwner.stop();
+      if (options.authStore) {
+        authSnapshots.clearRuntimeAuthProfileStoreSnapshotCore(owner.agentDir);
+      }
+    },
   };
 }
 
 describe("gateway chat metadata lifecycle", () => {
+  it("does not refresh metadata for identical skills rebuilds but publishes instruction changes", async () => {
+    const { loadWorkspaceSkills } = await import("../skills/loading/workspace-skill-loader.js");
+    resetSkillsRefreshStateForTest();
+    const workspaceDir = tempDirs.make("chat-metadata-skills-");
+    const skillDir = path.join(workspaceDir, "skills", "demo");
+    await writeSkill({ dir: skillDir, name: "demo", description: "Demo", body: "Original body" });
+    const loadOptions = { workspaceOnly: true };
+    const entries = loadWorkspaceSkills(workspaceDir, loadOptions);
+    const version = getSkillsSnapshotVersion(workspaceDir);
+    const harness = await createRealMetadataLifecycle({ skillsWorkspaceDir: workspaceDir });
+    try {
+      const before = await harness.lifecycle.read({ agentId: "main" });
+      harness.refresh.mockClear();
+      harness.broadcast.mockClear();
+      for (let count = 0; count < 3; count += 1) {
+        bumpSkillsSnapshotVersion({ workspaceDir, reason: "watch" });
+        expect(loadWorkspaceSkills(workspaceDir, loadOptions)).toEqual(entries);
+        expect(getSkillsSnapshotVersion(workspaceDir)).toBe(version);
+        expect(await harness.lifecycle.read({ agentId: "main" })).toEqual(before);
+      }
+      expect(harness.refresh).not.toHaveBeenCalled();
+      expect(harness.broadcast).not.toHaveBeenCalled();
+      expect(harness.buildCommands).toHaveBeenCalledOnce();
+
+      await fs.appendFile(path.join(skillDir, "SKILL.md"), "\nChanged instructions\n");
+      bumpSkillsSnapshotVersion({ workspaceDir, reason: "watch" });
+      await harness.lifecycle.read({ agentId: "main" });
+      expect(getSkillsSnapshotVersion(workspaceDir)).toBeGreaterThan(version);
+      expect(harness.refresh).toHaveBeenCalledOnce();
+      expect(harness.buildCommands).toHaveBeenCalledTimes(2);
+      expect(harness.broadcast).toHaveBeenCalledExactlyOnceWith(
+        "chat.metadata.changed",
+        {},
+        { dropIfSlow: true },
+      );
+    } finally {
+      await harness.stop();
+      resetSkillsRefreshStateForTest();
+    }
+  });
+
+  it.each([false, true])(
+    "keeps bookkeeping from refreshing or broadcasting metadata (inherited: %s)",
+    async (inherited) => {
+      const store: RuntimeAuthProfileStore = {
+        version: 1,
+        profiles: { "test:primary": { type: "token", provider: "test", token: "synthetic-token" } },
+      };
+      const harness = await createRealMetadataLifecycle({ authStore: store });
+      try {
+        const before = await harness.lifecycle.read({ agentId: "main" });
+        harness.refresh.mockClear();
+        harness.broadcast.mockClear();
+        for (let count = 1; count <= 3; count += 1) {
+          await harness.publishAuthStore({
+            ...store,
+            ...(inherited ? { runtimeInheritsMainState: true } : {}),
+            lastGood: { test: "test:primary" },
+            usageStats: {
+              "test:primary": {
+                lastUsed: count,
+                errorCount: count,
+                failureCounts: { timeout: count },
+                lastFailureAt: count,
+                lastProbeAt: count,
+              },
+            },
+          });
+          expect(harness.refresh).not.toHaveBeenCalled();
+          harness.events.catalog();
+          expect(await harness.lifecycle.read({ agentId: "main" })).toEqual(before);
+          harness.refresh.mockClear();
+        }
+        expect(harness.buildCommands).toHaveBeenCalledOnce();
+        expect(harness.broadcast).not.toHaveBeenCalled();
+      } finally {
+        await harness.stop();
+      }
+    },
+  );
+
+  it.each<{ name: string; change: Partial<RuntimeAuthProfileStore> }>([
+    {
+      name: "profile added",
+      change: {
+        profiles: {
+          "test:primary": { type: "token", provider: "test", token: "synthetic-token" },
+          "test:second": { type: "api_key", provider: "test", key: "synthetic-key" },
+        },
+      },
+    },
+    { name: "profile removed", change: { profiles: {} } },
+    {
+      name: "token rotated",
+      change: {
+        profiles: { "test:primary": { type: "token", provider: "test", token: "rotated-token" } },
+      },
+    },
+    {
+      name: "expiry changed",
+      change: {
+        profiles: {
+          "test:primary": {
+            type: "token",
+            provider: "test",
+            token: "synthetic-token",
+            expires: 50_000,
+          },
+        },
+      },
+    },
+    {
+      name: "cooldown started",
+      change: { usageStats: { "test:primary": { cooldownUntil: 50_000 } } },
+    },
+    { name: "blocked", change: { usageStats: { "test:primary": { blockedUntil: 50_000 } } } },
+    {
+      name: "inline key disabled",
+      change: {
+        usageStats: { "inline-api-key:test": { disabledUntil: 50_000, disabledReason: "billing" } },
+      },
+    },
+  ])("refreshes and broadcasts metadata when $name", async ({ change }) => {
+    const store: RuntimeAuthProfileStore = {
+      version: 1,
+      profiles: { "test:primary": { type: "token", provider: "test", token: "synthetic-token" } },
+    };
+    const harness = await createRealMetadataLifecycle({ authStore: store });
+    try {
+      await harness.lifecycle.read({ agentId: "main" });
+      harness.refresh.mockClear();
+      harness.broadcast.mockClear();
+      await harness.publishAuthStore({ ...store, ...change });
+      expect(harness.refresh).toHaveBeenCalledOnce();
+      expect(harness.broadcast).toHaveBeenCalledExactlyOnceWith(
+        "chat.metadata.changed",
+        {},
+        { dropIfSlow: true },
+      );
+      await harness.lifecycle.read({ agentId: "main" });
+      expect(harness.buildCommands).toHaveBeenCalledTimes(2);
+      await harness.publishAuthStore(store);
+      expect(harness.broadcast).toHaveBeenCalledTimes(2);
+    } finally {
+      await harness.stop();
+    }
+  });
+
   it("does not rebuild or broadcast unchanged metadata after unrelated skill and catalog events", async () => {
     const harness = await createRealMetadataLifecycle();
     try {
@@ -366,6 +557,7 @@ describe("gateway chat metadata lifecycle", () => {
         routeVariants: [],
       },
       configuredRuntimeModels: [],
+      findConfiguredRuntimeModel: () => undefined,
       inlineProviderModels: [],
       createStores: () => {
         throw new Error("metadata must not create live model stores");
@@ -679,7 +871,11 @@ describe("gateway chat metadata lifecycle", () => {
     const harness = await createRealMetadataLifecycle();
     try {
       const before = await harness.lifecycle.read({ agentId: "main" });
-      harness.modelEvent({ phase: "catalog-failed", error: new Error("catalog attempt failed") });
+      harness.modelEvent({
+        phase: "catalog-failed",
+        error: new Error("catalog attempt failed"),
+        modelFactsChanged: false,
+      });
       const after = await harness.lifecycle.read({ agentId: "main" });
       expect(after).toEqual(before);
       expect(harness.warn).not.toHaveBeenCalled();
@@ -689,21 +885,29 @@ describe("gateway chat metadata lifecycle", () => {
     }
   });
 
-  it("refreshes after the prepared owner publishes a completed full catalog", async () => {
-    const { lifecycle: pendingLifecycle, sidecarOwner } = createLifecycle(false);
-    const lifecycle = await pendingLifecycle;
+  it.each([
+    { modelFactsChanged: true, refreshStatusChanged: false, refreshes: true },
+    { modelFactsChanged: false, refreshStatusChanged: false, refreshes: false },
+    { modelFactsChanged: undefined, refreshStatusChanged: false, refreshes: true },
+    { modelFactsChanged: false, refreshStatusChanged: true, refreshes: true },
+  ])(
+    "refreshes catalog metadata only for a change (%j)",
+    async ({ modelFactsChanged, refreshStatusChanged, refreshes }) => {
+      const { lifecycle: pendingLifecycle, sidecarOwner } = createLifecycle(false);
+      const lifecycle = await pendingLifecycle;
 
-    await lifecycle.attachContext(context, sidecarOwner.publish);
-    const modelListener = mocks.registerModelListener.mock.calls[0]?.[0];
-    modelListener({ phase: "published" });
-    await vi.waitFor(() => expect(mocks.refresh).toHaveBeenCalledTimes(2));
-    mocks.invalidate.mockClear();
+      await lifecycle.attachContext(context, sidecarOwner.publish);
+      const modelListener = mocks.registerModelListener.mock.calls[0]?.[0];
+      modelListener({ phase: "published" });
+      await vi.waitFor(() => expect(mocks.refresh).toHaveBeenCalledTimes(2));
+      mocks.invalidate.mockClear();
 
-    modelListener({ phase: "catalog-published" });
+      modelListener({ phase: "catalog-published", modelFactsChanged, refreshStatusChanged });
 
-    expect(mocks.invalidate).not.toHaveBeenCalled();
-    await vi.waitFor(() => expect(mocks.refresh).toHaveBeenCalledTimes(3));
-  });
+      expect(mocks.invalidate).not.toHaveBeenCalled();
+      expect(mocks.refresh).toHaveBeenCalledTimes(refreshes ? 3 : 2);
+    },
+  );
 
   it("keeps an owner available when a subordinate catalog publishes during attachment", async () => {
     const pendingRefresh = createDeferred();

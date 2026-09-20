@@ -14,7 +14,12 @@ import type { createJiti } from "jiti/static";
 // The virtualModules option then makes them available to extensions.
 import * as bundledTypebox from "typebox";
 import * as bundledTypeboxCompile from "typebox/compile";
+import * as bundledTypeboxError from "typebox/error";
 import * as bundledTypeboxFormat from "typebox/format";
+import * as bundledTypeboxGuard from "typebox/guard";
+import * as bundledTypeboxSchema from "typebox/schema";
+import * as bundledTypeboxSystem from "typebox/system";
+import * as bundledTypeboxType from "typebox/type";
 import * as bundledTypeboxValue from "typebox/value";
 import * as bundledAgentCore from "../../../plugin-sdk/agent-core.js";
 import * as bundledLlm from "../../../plugin-sdk/llm.js";
@@ -46,7 +51,12 @@ import type {
 const VIRTUAL_MODULES: Record<string, unknown> = {
   typebox: bundledTypebox,
   "typebox/compile": bundledTypeboxCompile,
+  "typebox/error": bundledTypeboxError,
   "typebox/format": bundledTypeboxFormat,
+  "typebox/guard": bundledTypeboxGuard,
+  "typebox/schema": bundledTypeboxSchema,
+  "typebox/system": bundledTypeboxSystem,
+  "typebox/type": bundledTypeboxType,
   "typebox/value": bundledTypeboxValue,
   "@sinclair/typebox": bundledTypebox,
   "@sinclair/typebox/compile": bundledTypeboxCompile,

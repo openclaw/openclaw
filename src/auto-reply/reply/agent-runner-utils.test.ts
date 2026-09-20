@@ -31,8 +31,17 @@ vi.mock("../../utils/provider-utils.js", () => ({
   isReasoningTagProvider: (...args: unknown[]) => hoisted.isReasoningTagProviderMock(...args),
 }));
 
-const { buildThreadingToolContext, buildEmbeddedRunExecutionParams, resolveModelFallbackOptions } =
-  await import("./agent-runner-utils.js");
+const {
+  buildThreadingToolContext,
+  buildEmbeddedRunExecutionParams,
+  mintReplyMessageActionTurnCapability,
+  resolveModelFallbackOptions,
+} = await import("./agent-runner-utils.js");
+const {
+  resolveMessageActionTurnAuthorization,
+  resolveMessageActionTurnCapability,
+  revokeMessageActionTurnCapability,
+} = await import("../../gateway/message-action-turn-capability.js");
 const { resolveProviderScopedAuthProfile } = await import("./agent-runner-auth-profile.js");
 const { buildEmbeddedRunBaseParams: buildEmbeddedRunBaseParamsCore } =
   await import("./agent-runner-run-params.js");
@@ -84,6 +93,97 @@ describe("agent-runner-utils", () => {
     hoisted.getChannelPluginMock.mockReset();
     hoisted.isReasoningTagProviderMock.mockReset();
     hoisted.isReasoningTagProviderMock.mockReturnValue(false);
+  });
+
+  describe("message action turn capabilities", () => {
+    const source = {
+      agentId: "agent-1",
+      runId: "dashboard-run",
+      sessionKey: "agent:agent-1:dashboard:reads",
+      sessionId: "session-1",
+    };
+    function makeTurn(): Parameters<typeof mintReplyMessageActionTurnCapability>[0] {
+      return {
+        followupRun: {
+          prompt: "read channel",
+          enqueuedAt: 0,
+          run: makeRun({ sessionKey: source.sessionKey }),
+        },
+        sessionCtx: { Provider: "webchat" },
+        opts: {
+          runId: source.runId,
+          dashboardReadAdmission: { ...source, assertCurrent: vi.fn() },
+        },
+        isHeartbeat: false,
+      };
+    }
+
+    it("mints host-only dashboard authority for the original admitted identity", () => {
+      const turn = makeTurn();
+      const now = Date.now();
+      const token = mintReplyMessageActionTurnCapability(turn, source.runId);
+      const lookup = { ...source, token };
+      const clock = vi
+        .spyOn(Date, "now")
+        .mockReturnValue(now + turn.followupRun.run.timeoutMs + 60_001);
+      try {
+        const authority = resolveMessageActionTurnAuthorization(lookup);
+        expect(authority?.assertDashboardReadCurrent).toBeTypeOf("function");
+        authority?.assertDashboardReadCurrent?.();
+        expect(turn.opts?.dashboardReadAdmission?.assertCurrent).toHaveBeenCalled();
+        expect(resolveMessageActionTurnCapability(lookup)).not.toHaveProperty(
+          "assertDashboardReadCurrent",
+        );
+      } finally {
+        clock.mockRestore();
+        revokeMessageActionTurnCapability(token);
+      }
+    });
+
+    it("rejects inherited dashboard options outside their admitted source", () => {
+      const turn = makeTurn();
+      const queued = { ...turn, opts: { ...turn.opts, runId: "followup-run" } };
+      const mismatches = [
+        { agentId: "another-agent" },
+        { sessionKey: "agent:agent-1:dashboard:another" },
+        { sessionId: "another-session" },
+      ].map((change) => {
+        const mismatch = makeTurn();
+        Object.assign(mismatch.followupRun.run, change);
+        return mismatch;
+      });
+      for (const candidate of [
+        queued,
+        ...mismatches,
+        { ...turn, isHeartbeat: true },
+        { ...turn, opts: { runId: source.runId } },
+      ]) {
+        const token = mintReplyMessageActionTurnCapability(
+          candidate,
+          candidate.opts?.runId ?? source.runId,
+        );
+        revokeMessageActionTurnCapability(token);
+        expect(token).toBeUndefined();
+      }
+      expect(turn.opts?.dashboardReadAdmission?.assertCurrent).not.toHaveBeenCalled();
+    });
+
+    it("keeps native Discord context when dashboard options are present", () => {
+      const turn = makeTurn();
+      turn.sessionCtx = { Provider: "discord", To: "channel:123", AccountId: "work" };
+      const token = mintReplyMessageActionTurnCapability(turn, source.runId);
+      try {
+        const authority = resolveMessageActionTurnAuthorization({ ...source, token });
+        expect(authority).toMatchObject({
+          requesterAccountId: "work",
+          toolContext: { currentChannelProvider: "discord", currentChannelId: "channel:123" },
+        });
+        expect(authority?.assertDashboardReadCurrent).toBeUndefined();
+        expect(turn.opts?.dashboardReadAdmission?.assertCurrent).not.toHaveBeenCalled();
+      } finally {
+        revokeMessageActionTurnCapability(token);
+      }
+    });
   });
 
   it("resolves model fallback options from run context", () => {

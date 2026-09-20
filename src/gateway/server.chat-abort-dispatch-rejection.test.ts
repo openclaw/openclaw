@@ -1,4 +1,4 @@
-// Real WebSocket coverage for abort ownership when an in-flight dispatch rejects.
+// Real WebSocket coverage for abort ownership when an in-flight dispatch settles.
 import { randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
 import fs from "node:fs/promises";
@@ -15,13 +15,14 @@ import type { GetReplyOptions } from "../auto-reply/get-reply-options.types.js";
 import * as staging from "../auto-reply/reply/stage-sandbox-media.js";
 import { clearConfigCache } from "../config/config.js";
 import { loadTranscriptEventsSync } from "../config/sessions/session-accessor.js";
-import { emitAgentEvent } from "../infra/agent-events.js";
+import { emitAgentEventIfCurrent } from "../infra/agent-events.js";
 import {
   getSessionWorkAdmissionRelease,
   interruptSessionWorkAdmissions,
   startSessionWorkAdmissionInterruption,
 } from "../sessions/session-lifecycle-admission.js";
 import type { UserTurnTranscriptRecorder } from "../sessions/user-turn-transcript.js";
+import { observeGatewayConnectionWork } from "./server-held-work.test-support.js";
 import {
   connectOk,
   createGatewaySuiteHarness,
@@ -33,6 +34,7 @@ import {
   testState,
   writeSessionStore,
 } from "./test-helpers.js";
+import { releaseGatewaySessionStoreFixture } from "./test/server-sessions-resources.test-helpers.js";
 
 installGatewayTestHooks({ scope: "suite" });
 
@@ -68,31 +70,12 @@ function trackChatTerminalStates(socket: GatewaySocket, runId: string): string[]
 }
 
 beforeAll(async () => {
-  const kernelModule = await import("./server-kernel.js");
-  const createKernel = kernelModule.createGatewayKernel;
-  const factory = vi
-    .spyOn(kernelModule, "createGatewayKernel")
-    .mockImplementationOnce(async (...args) => {
-      const kernel = await createKernel(...args);
-      const register = kernel.connectionWork.registerConnection.bind(kernel.connectionWork);
-      const registration = vi
-        .spyOn(kernel.connectionWork, "registerConnection")
-        .mockImplementation((close) => {
-          const release = register(close);
-          const released = createDeferred();
-          connectionReleases.push(released.promise);
-          return () => {
-            release();
-            released.resolve();
-          };
-        });
-      restoreConnectionObserver = () => registration.mockRestore();
-      return kernel;
-    });
+  const observer = await observeGatewayConnectionWork(connectionReleases);
+  restoreConnectionObserver = observer.restore;
   try {
     gateway = await createGatewaySuiteHarness();
   } finally {
-    factory.mockRestore();
+    observer.stopCapture();
   }
 });
 
@@ -101,7 +84,10 @@ afterAll(async () => {
   restoreConnectionObserver?.();
 });
 
-afterEach(() => {
+afterEach(async () => {
+  for (const dir of temporaryDirectories.dirs) {
+    await releaseGatewaySessionStoreFixture(dir);
+  }
   dispatchInboundMessageMock.mockReset();
   testState.sessionStorePath = undefined;
   clearConfigCache();
@@ -352,82 +338,6 @@ describe("gateway WebSocket chat abort ownership", () => {
     },
   );
 
-  test("does not replace an acknowledged abort with a later dispatch rejection", async () => {
-    const sessionDirectory = temporaryDirectories.make("openclaw-chat-abort-dispatch-");
-    testState.sessionStorePath = path.join(sessionDirectory, "sessions.json");
-    await writeSessionStore({
-      entries: {
-        main: {
-          sessionId: "sess-main",
-          updatedAt: Date.now(),
-        },
-      },
-    });
-
-    const socket = await gateway.openWs();
-    const dispatchRelease = createDeferred();
-    const runId = "real-websocket-explicit-abort-before-dispatch-rejection";
-    let dispatchRejected = false;
-    const terminalStates = trackChatTerminalStates(socket, runId);
-
-    try {
-      await connectOk(socket);
-      dispatchInboundMessageMock.mockImplementationOnce(async () => {
-        await dispatchRelease.promise;
-        dispatchRejected = true;
-        throw new Error("dispatch rejected after an explicitly aborted run");
-      });
-
-      const sendParameters = {
-        sessionKey: "main",
-        message: "abort this dispatched message",
-        idempotencyKey: runId,
-      };
-      const started = await rpcReq(socket, "chat.send", sendParameters);
-      expect(started.ok).toBe(true);
-      expect(started.payload).toMatchObject({ runId, status: "started" });
-      await vi.waitFor(() => expect(dispatchInboundMessageMock).toHaveBeenCalledOnce(), {
-        interval: 10,
-        timeout: 2_000,
-      });
-
-      const abortedFrame = onceMessage(
-        socket,
-        (frame) =>
-          frame.type === "event" &&
-          frame.event === "chat" &&
-          frame.payload?.runId === runId &&
-          frame.payload?.state === "aborted",
-        2_000,
-      );
-      const aborted = await rpcReq(socket, "chat.abort", {
-        sessionKey: "main",
-        runId,
-      });
-      expect(aborted.ok).toBe(true);
-      expect(aborted.payload).toMatchObject({ ok: true, aborted: true, runIds: [runId] });
-      await expect(abortedFrame).resolves.toMatchObject({
-        payload: { runId, state: "aborted" },
-      });
-
-      dispatchRelease.resolve();
-      await vi.waitFor(() => expect(dispatchRejected).toBe(true), {
-        interval: 10,
-        timeout: 2_000,
-      });
-
-      // The replay response is a real WebSocket ordering barrier: any prior
-      // contradictory terminal frame must arrive before this cached response.
-      const replay = await rpcReq(socket, "chat.send", sendParameters);
-      expect(replay.ok).toBe(true);
-      expect(replay.payload).toMatchObject({ runId, status: "timeout", summary: "aborted" });
-      expect(terminalStates).toEqual(["aborted"]);
-    } finally {
-      dispatchRelease.resolve();
-      socket.close();
-    }
-  });
-
   test("does not let a late abort replace an established dispatch error", async () => {
     const sessionDirectory = temporaryDirectories.make("openclaw-chat-error-late-abort-");
     testState.sessionStorePath = path.join(sessionDirectory, "sessions.json");
@@ -569,20 +479,22 @@ describe("gateway WebSocket chat abort ownership", () => {
           frame.payload?.state === "aborted",
         2_000,
       );
-      emitAgentEvent({
-        runId,
-        stream: "lifecycle",
-        sessionKey: "agent:main:main",
-        sessionId: "sess-main",
-        agentId: "main",
-        data: {
-          phase: "end",
-          startedAt: 900,
-          endedAt: Date.now(),
-          aborted: true,
-          stopReason: "restart",
-        },
-      });
+      expect(
+        emitAgentEventIfCurrent({
+          runId,
+          stream: "lifecycle",
+          sessionKey: "agent:main:main",
+          sessionId: "sess-main",
+          agentId: "main",
+          data: {
+            phase: "end",
+            startedAt: 900,
+            endedAt: Date.now(),
+            aborted: true,
+            stopReason: "restart",
+          },
+        }),
+      ).toBe(true);
       await expect(abortedFrame).resolves.toMatchObject({
         payload: { runId, state: "aborted" },
       });

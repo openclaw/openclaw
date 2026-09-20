@@ -130,10 +130,40 @@ describe("fleet backup runtime", () => {
       stateDir: root,
       containers: containerMock(),
       now: () => 0,
-      checkpoint: () => {},
+      checkpoint: async () => {},
       out,
     };
   }
+
+  it("settles one asynchronous lease probe at a time before returning a regular archive", async () => {
+    let nowMs = 0;
+    let active = 0;
+    let peak = 0;
+    let completed = 0;
+    const result = await backupFleetCell({
+      ...backupParams(path.join(root, "regular.tgz")),
+      now: () => (nowMs += 30_000),
+      checkpoint: async () => {
+        active += 1;
+        peak = Math.max(peak, active);
+        await new Promise<void>((resolve) => {
+          setImmediate(resolve);
+        });
+        active -= 1;
+        completed += 1;
+      },
+    });
+
+    expect(peak).toBe(1);
+    expect(active).toBe(0);
+    expect(completed).toBeGreaterThanOrEqual(2);
+    expect(result.fileCount).toBe(3);
+    const entries: string[] = [];
+    await tar.t({ file: result.archivePath, onentry: (entry) => entries.push(entry.path) });
+    expect(entries).toEqual(
+      expect.arrayContaining(["manifest.json", "data/state.txt", "auth/secret.txt"]),
+    );
+  });
 
   function forceJavaScriptCopyFallback() {
     // These fixtures exercise publication without native or filesystem hard-link support.
@@ -172,7 +202,7 @@ describe("fleet backup runtime", () => {
       stateDir: root,
       containers,
       now: () => 0,
-      checkpoint: () => {},
+      checkpoint: async () => {},
       out: path.join(root, "backup.tgz"),
     });
     expect((await fs.stat(result.archivePath)).mode & 0o777).toBe(0o600);
@@ -302,7 +332,7 @@ describe("fleet backup runtime", () => {
         stateDir: root,
         containers: containerMock(inspection(true)),
         now: () => 0,
-        checkpoint: () => {},
+        checkpoint: async () => {},
       }),
     ).rejects.toThrow(/stop it first/iu);
     await fs.rm(cellAuthSecretDir(root, "acme"), { recursive: true });
@@ -312,7 +342,7 @@ describe("fleet backup runtime", () => {
         stateDir: root,
         containers: containerMock(),
         now: () => 0,
-        checkpoint: () => {},
+        checkpoint: async () => {},
       }),
     ).rejects.toThrow(/no auth-secret directory/iu);
     await fs.rm(record.dataDir, { recursive: true });
@@ -322,7 +352,7 @@ describe("fleet backup runtime", () => {
         stateDir: root,
         containers: containerMock(),
         now: () => 0,
-        checkpoint: () => {},
+        checkpoint: async () => {},
       }),
     ).rejects.toThrow(/no cell data/iu);
   });
@@ -335,7 +365,7 @@ describe("fleet backup runtime", () => {
         stateDir: root,
         containers,
         now: () => 0,
-        checkpoint: () => {},
+        checkpoint: async () => {},
         maxBytes: 1,
         out: path.join(root, "capped.tgz"),
       }),
@@ -348,7 +378,7 @@ describe("fleet backup runtime", () => {
         stateDir: root,
         containers,
         now: () => 0,
-        checkpoint: () => {},
+        checkpoint: async () => {},
         out: existing,
       }),
     ).rejects.toThrow(/overwrite/iu);
@@ -359,7 +389,7 @@ describe("fleet backup runtime", () => {
         stateDir: root,
         containers,
         now: () => 0,
-        checkpoint: () => {},
+        checkpoint: async () => {},
         out: path.join(record.dataDir, "bad.tgz"),
       }),
     ).rejects.toThrow(/inside/iu);
@@ -373,7 +403,7 @@ describe("fleet backup runtime", () => {
         stateDir: root,
         containers: containerMock(),
         now: () => 0,
-        checkpoint: () => {},
+        checkpoint: async () => {},
         out: path.join(root, "unrestorable.tgz"),
       }),
     ).rejects.toThrow(/restore path rules would reject/iu);
@@ -389,7 +419,7 @@ describe("fleet backup runtime", () => {
         stateDir: root,
         containers: containerMock(),
         now: () => 0,
-        checkpoint: () => {},
+        checkpoint: async () => {},
         maxEntries: 2,
         out: path.join(root, "entry-capped.tgz"),
       }),
@@ -409,7 +439,7 @@ describe("fleet backup runtime", () => {
         containers: containerMock(),
         // Each filter probe advances well past the lease-probe interval.
         now: () => (clock += 60_000),
-        checkpoint: () => {
+        checkpoint: async () => {
           throw new Error("Fleet operation lease was lost for acme.");
         },
         out: archivePath,
@@ -428,7 +458,7 @@ describe("fleet restore runtime", () => {
       fetchImpl: vi.fn<typeof fetch>(async () => new Response(null, { status: 200 })),
       now: () => 0,
       sleep: async () => {},
-      checkpoint: () => {},
+      checkpoint: async () => {},
       generateToken: () => "new-token",
       generateAttemptId: () => NEXT_ATTEMPT,
       hostIdentity: undefined,

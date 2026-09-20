@@ -34,6 +34,7 @@ import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtim
 import { createOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { runCopilotAttempt } from "./attempt.js";
+import { projectAgentRunAttemptTerminal } from "./attempt.test-support.js";
 import { createCopilotTestHostCapabilities } from "./host-capability.test-support.js";
 import type { CopilotClientPool } from "./runtime.js";
 import type { createCopilotToolBridge } from "./tool-bridge.js";
@@ -42,20 +43,6 @@ type AgentHarnessAttemptResult = Extract<AgentHarnessAttemptResultContract, { te
 type SettledTurnFinalizationAttemptParams = Parameters<
   NonNullable<AgentHarnessV2["finalizeSettledTurn"]>
 >[0]["attempt"];
-
-function projectAgentRunAttemptTerminal(terminal: AgentHarnessAttemptResult["terminal"]) {
-  return {
-    aborted: terminal.kind === "aborted" && terminal.source !== "yield_cleanup",
-    promptError:
-      terminal.kind === "failed"
-        ? terminal.error
-        : terminal.kind === "ok"
-          ? null
-          : (terminal.failure?.error ?? null),
-    timedOut: terminal.kind === "timeout" && terminal.source !== "observation",
-    timedOutDuringCompaction: terminal.kind === "timeout" && terminal.phase === "compaction",
-  };
-}
 
 const gatewayQuestionMock = vi.hoisted(() => ({
   waiters: new Map<string, (value: unknown) => void>(),
@@ -626,6 +613,7 @@ describe("runCopilotAttempt", () => {
   });
 
   it("reports code-mode engagement through the real tool bridge", async () => {
+    const { createOpenClawCodingTools } = await import("openclaw/plugin-sdk/agent-harness");
     const sdk = makeFakeSdk((session) => {
       session.sendAndWait.mockResolvedValueOnce(makeAssistantMessageEvent("done"));
     });
@@ -637,6 +625,7 @@ describe("runCopilotAttempt", () => {
       makeParams({
         disableTools: false,
         config: { tools: { codeMode: true } },
+        hostCapabilities: createCopilotTestHostCapabilities(createOpenClawCodingTools),
       } as never),
       { pool: makeFakePool(sdk) },
     );
@@ -736,6 +725,7 @@ describe("runCopilotAttempt", () => {
     const createToolBridge = vi.fn(async (input: CopilotToolBridgeInput) => {
       await input.onToolCompleted?.({
         args: { path: "README.md" },
+        isError: false,
         result: { content: [{ text: "read result", type: "text" }] },
         startedAt: Date.now(),
         toolCallId: "tool-call-1",
@@ -1725,6 +1715,8 @@ describe("runCopilotAttempt", () => {
   it("tool bridge wiring: injected tools populate session config", async () => {
     const sdk = makeFakeSdk();
     const pool = makeFakePool(sdk);
+    const abortSignal = new AbortController().signal;
+    const sessionKey = "agent:agent-1:session-1";
     const sdkTools: SdkTool[] = [
       {
         description: "Fake SDK tool",
@@ -1735,18 +1727,16 @@ describe("runCopilotAttempt", () => {
     ];
     const createToolBridge = vi.fn(async () => createStubToolBridge(sdkTools));
 
-    await runCopilotAttempt(makeParams(), { createToolBridge, pool });
+    await runCopilotAttempt(makeParams({ abortSignal, sessionKey }), { createToolBridge, pool });
 
-    expect(createToolBridge).toHaveBeenCalledTimes(1);
-    expect(createToolBridge).toHaveBeenCalledWith(
+    expect(createToolBridge).toHaveBeenCalledExactlyOnceWith(
       expect.objectContaining({
-        abortSignal: undefined,
         agentDir: "C:\\copilot-home",
         agentId: "agent-1",
         modelId: "gpt-4o",
         modelProvider: "github-copilot",
         sessionId: "session-1",
-        sessionKey: "agent:agent-1:session-1",
+        attemptParams: expect.objectContaining({ abortSignal, sessionKey }),
         workspaceDir: "C:\\workspace",
       }),
     );
@@ -1896,40 +1886,30 @@ describe("runCopilotAttempt", () => {
   it("F7: preserves an accepted session spawn when the tool bridge yields the attempt", async () => {
     const sdk = makeFakeSdk();
     const pool = makeFakePool(sdk);
-    const createToolBridge = vi.fn(
-      async (input: {
-        onToolCompleted?: (completion: {
-          args: Record<string, unknown>;
-          result: unknown;
-          startedAt: number;
-          toolCallId: string;
-          toolName: string;
-        }) => void | Promise<void>;
-        onYieldDetected?: (message?: string, acknowledgment?: string) => void;
-      }) => {
-        await input.onToolCompleted?.({
-          args: { task: "review" },
-          result: {
-            details: {
-              status: "accepted",
-              runId: "run-copilot-child",
-              childSessionKey: "agent:main:subagent:copilot-child",
-              expectsCompletionMessage: true,
-            },
+    const createToolBridge = vi.fn(async (input: CopilotToolBridgeInput) => {
+      await input.onToolCompleted?.({
+        args: { task: "review" },
+        isError: false,
+        result: {
+          details: {
+            status: "accepted",
+            runId: "run-copilot-child",
+            childSessionKey: "agent:main:subagent:copilot-child",
+            expectsCompletionMessage: true,
           },
-          startedAt: Date.now(),
-          toolCallId: "spawn-1",
-          toolName: "sessions_spawn",
-        });
-        // Simulate a wrapped tool invoking sessions_yield before the
-        // attempt settles. The bridge is responsible for notifying the
-        // caller via onYieldDetected so the final result can carry the
-        // flag (parent runner uses it to mark liveness paused /
-        // stop_reason end_turn). Mirrors PI/codex parity.
-        input.onYieldDetected?.("private continuation", "Research started; results will follow.");
-        return createStubToolBridge();
-      },
-    );
+        },
+        startedAt: Date.now(),
+        toolCallId: "spawn-1",
+        toolName: "sessions_spawn",
+      });
+      // Simulate a wrapped tool invoking sessions_yield before the
+      // attempt settles. The bridge is responsible for notifying the
+      // caller via onYieldDetected so the final result can carry the
+      // flag (parent runner uses it to mark liveness paused /
+      // stop_reason end_turn). Mirrors PI/codex parity.
+      input.onYieldDetected?.("private continuation", "Research started; results will follow.");
+      return createStubToolBridge();
+    });
 
     const result = await runCopilotAttempt(makeParams(), {
       createToolBridge,

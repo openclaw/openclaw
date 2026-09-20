@@ -287,6 +287,11 @@ describe("worker environment protocol schemas", () => {
 
     expect(validateEnvironmentsListParams({})).toBe(true);
     expect(validateEnvironmentsListParams({ runtimeId: "codex" })).toBe(true);
+    expect(validateEnvironmentsListParams({ projection: "profiles" })).toBe(true);
+    expect(validateEnvironmentsListParams({ runtimeId: "codex", projection: "profiles" })).toBe(
+      true,
+    );
+    expect(validateEnvironmentsListParams({ projection: "unknown" })).toBe(false);
     expect(validateEnvironmentsListParams({ runtimeId: "" })).toBe(false);
     expect(validateEnvironmentsListParams({ runtimeId: "x".repeat(129) })).toBe(false);
     expect(validateEnvironmentsListParams({ runtimeId: "codex", command: "runtime.exec" })).toBe(

@@ -427,8 +427,8 @@ describe("agentCommand ACP runtime routing", () => {
         mockAcpManager({ runTurn });
         if ("abort" in scenario && scenario.abort === "transcript") {
           const actualExecution = await vi.importActual<
-            typeof import("../agents/command/attempt-execution.js")
-          >("../agents/command/attempt-execution.js");
+            typeof import("../agents/command/attempt-execution.runtime.js")
+          >("../agents/command/attempt-execution.runtime.js");
           attemptExecutionMocks.emitAcpLifecycleEnd.mockImplementationOnce(
             actualExecution.emitAcpLifecycleEnd,
           );

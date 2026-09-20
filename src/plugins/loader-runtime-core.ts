@@ -1,10 +1,7 @@
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { normalizeAgentToolResultMiddlewareRuntimeIds } from "./agent-tool-result-middleware.js";
 import { createUnavailableRuntime } from "./api-builder.js";
-import {
-  recordPluginInstallOwnerLookup,
-  resolvePluginCandidateInstallOwner,
-} from "./candidate-install-owner.js";
+import { resolvePluginCandidateInstallOwner } from "./candidate-install-owner.js";
 import { resolveEffectivePluginActivationState } from "./config-state.js";
 import { isPluginEnabledByDefaultForPlatform } from "./default-enablement.js";
 import { isPluginRegistryCacheEnabled } from "./loader-cache.js";
@@ -39,10 +36,8 @@ import {
   isPluginRegistryActivated,
   withPluginRegistryPreparationScope,
 } from "./registry-lifecycle.js";
-import { getPluginRegistryRuntime } from "./registry-runtime-binding.js";
 import { createPluginRegistry, type PluginRegistry } from "./registry.js";
 import { degradedPluginMatchesRoot, findActiveDegradedPlugin } from "./runtime-degraded-state.js";
-import { getActivePluginRegistry } from "./runtime.js";
 import { setPluginRuntimeLoadContext } from "./runtime/load-context.js";
 import type { PluginRuntime } from "./runtime/types.js";
 import { hasKind } from "./slots.js";
@@ -147,18 +142,11 @@ export function loadOpenClawPluginsCore(
       expectedSourceDigests: options.expectedSourceDigests,
       ...overrides?.moduleLoader,
     });
-    const activeRuntime =
-      options.runtimeOptions?.allowGatewaySubagentBinding === true
-        ? getActivePluginRegistry()
-        : undefined;
-    const activeGatewayRuntime = activeRuntime
-      ? getPluginRegistryRuntime(activeRuntime)
+    const borrowedSubagent = context.borrowedGatewayRuntime
+      ? createDeferredGatewaySubagentRuntime(context.borrowedGatewayRuntime)
       : undefined;
-    const borrowedSubagent = activeGatewayRuntime
-      ? createDeferredGatewaySubagentRuntime(activeGatewayRuntime)
-      : undefined;
-    const borrowedNodes = activeGatewayRuntime
-      ? createDeferredGatewayNodesRuntime(activeGatewayRuntime)
+    const borrowedNodes = context.borrowedGatewayRuntime
+      ? createDeferredGatewayNodesRuntime(context.borrowedGatewayRuntime)
       : undefined;
     const runtime =
       options.mode === "cli-metadata"
@@ -427,25 +415,21 @@ export function loadOpenClawPluginsCore(
       });
     }
     if (options.mode !== "cli-metadata") {
-      warnAboutUntrackedLoadedPlugins(
-        recordPluginInstallOwnerLookup(
-          {
-            registry,
-            provenance,
-            allowlist: context.normalized.allow,
-            emitWarning: context.shouldActivate,
-            logger,
-            env: context.env,
-          },
-          new Map(
-            orderedCandidates.flatMap((candidate) => {
-              const pluginId = manifestBySource.get(candidate.source)?.id;
-              const installOwner = resolvePluginCandidateInstallOwner(candidate);
-              return pluginId && installOwner ? [[pluginId, installOwner] as const] : [];
-            }),
-          ),
+      warnAboutUntrackedLoadedPlugins({
+        registry,
+        provenance,
+        allowlist: context.normalized.allow,
+        emitWarning: context.shouldActivate,
+        logger,
+        env: context.env,
+        installOwnerByPluginId: new Map(
+          orderedCandidates.flatMap((candidate) => {
+            const pluginId = manifestBySource.get(candidate.source)?.id;
+            const installOwner = resolvePluginCandidateInstallOwner(candidate);
+            return pluginId && installOwner ? [[pluginId, installOwner] as const] : [];
+          }),
         ),
-      );
+      });
     }
     maybeThrowOnPluginLoadError(registry, options.throwOnLoadError, retained);
     if (context.shouldActivate && options.mode !== "validate") {

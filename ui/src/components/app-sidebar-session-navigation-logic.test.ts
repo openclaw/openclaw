@@ -9,6 +9,7 @@ import {
   createSidebarSessionRowsComparator,
   resolveSidebarMainSessionKey,
 } from "./app-sidebar-session-navigation-logic.ts";
+import { projectSidebarSession } from "./app-sidebar-session-navigation.test-support.ts";
 import { projectSessionTree } from "./app-sidebar-session-tree.ts";
 import type { SidebarRecentSession } from "./app-sidebar-session-types.ts";
 
@@ -44,51 +45,6 @@ it.each([
     ).toBe(expected);
   },
 );
-
-function projectSidebarSession(
-  row: Partial<GatewaySessionRow>,
-  selfUserId?: string,
-): SidebarRecentSession {
-  const context = {
-    basePath: "",
-    agents: { state: { agentsList: { mainKey: "main" } } },
-    agentSelection: { state: { selectedId: "main" } },
-    gateway: {
-      snapshot: {
-        assistantAgentId: "main",
-        hello: null,
-        selfUser: selfUserId ? { id: selfUserId } : undefined,
-      },
-    },
-    sessions: {
-      isPreparedWorkSession: () => false,
-      pullRequestSummary: () => undefined,
-    },
-  } as unknown as Parameters<typeof buildSidebarSessionNavigationState>[0]["context"];
-  const navigation = buildSidebarSessionNavigationState({
-    context,
-    routeSessionKey: "agent:main:main",
-    sessionsResult: null,
-    sessionsAgentId: null,
-    showCron: false,
-    showSystem: false,
-    statusFilter: "active",
-    compareSessions: () => 0,
-    highlightCurrentSession: false,
-    runtimeSampledAtByRow: new WeakMap(),
-    loadingChildSessionKeys: new Set(),
-    outboxAttentionCountForSessionKey: () => 0,
-    hasSessionDraft: () => false,
-    resolveAttention: () => ({ kind: "none" }),
-    resolveAgentStatusNote: () => undefined,
-  });
-  return navigation.toSidebarSession({
-    key: "agent:main:draft",
-    kind: "direct",
-    updatedAt: 1,
-    ...row,
-  });
-}
 
 function projectDraftOwnership(
   row: Pick<GatewaySessionRow, "createdActor" | "sharingRole" | "visibility">,
@@ -206,6 +162,46 @@ describe("sidebar session sort modes", () => {
   });
 });
 
+describe("sidebar workspace identity", () => {
+  it.each([
+    {
+      name: "managed worktree",
+      row: { worktree: { id: "wt-1", branch: "feature/ui", repoRoot: "/repo" } },
+      expected: "worktree",
+    },
+    {
+      name: "managed worktree on a node",
+      row: {
+        worktree: { id: "wt-1", branch: "feature/ui", repoRoot: "/repo" },
+        execNode: "build-node",
+        execCwd: "/remote/task",
+      },
+      expected: "worktree",
+    },
+    {
+      name: "repository checkout",
+      row: { repository: { url: "https://github.com/example/project.git", branch: "feature/ui" } },
+      expected: "checkout",
+    },
+    { name: "plain workspace", row: { spawnedCwd: "/work/project" }, expected: undefined },
+    {
+      name: "node cwd without repository facts",
+      row: { execNode: "build-node", execCwd: "/remote/project" },
+      expected: undefined,
+    },
+    { name: "unresolved workspace", row: {}, expected: undefined },
+  ] satisfies { name: string; row: Partial<GatewaySessionRow>; expected: string | undefined }[])(
+    "labels $name only from recorded repository facts",
+    ({ row, expected }) => {
+      const projected = projectSidebarSession(row);
+      expect(projected.workspaceKind).toBe(expected);
+      if (expected) {
+        expect(projected.workSession).toBe(true);
+      }
+    },
+  );
+});
+
 describe("sidebar session live-run projection", () => {
   it("projects durable message and execution-owner facts", () => {
     expect(
@@ -307,16 +303,16 @@ describe("sidebar navigation lineage ownership", () => {
     key: "agent:main:dashboard:navigation-parent",
     kind: "direct",
     updatedAt: 1,
-    childSessions: ["agent:main:subagent:child"],
+    childSessions: ["agent:main:dashboard:child"],
   };
   const controlParent: GatewaySessionRow = {
     key: "agent:main:main",
     kind: "direct",
     updatedAt: 2,
-    childSessions: ["agent:main:subagent:child"],
+    childSessions: ["agent:main:dashboard:child"],
   };
   const child: GatewaySessionRow = {
-    key: "agent:main:subagent:child",
+    key: "agent:main:dashboard:child",
     kind: "direct",
     updatedAt: 3,
     parentSessionKey: navigationParent.key,

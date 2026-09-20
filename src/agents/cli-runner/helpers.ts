@@ -103,6 +103,9 @@ export function buildCliAgentSystemPrompt(params: {
   workspaceDir: string;
   cwd?: string;
   config?: OpenClawConfig;
+  preparedModelRuntime?: Parameters<
+    typeof buildConfiguredAgentSystemPrompt
+  >[0]["preparedModelRuntime"];
   extraSystemPrompt?: string;
   sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
   requireExplicitMessageTarget?: boolean;
@@ -151,6 +154,7 @@ export function buildCliAgentSystemPrompt(params: {
   });
   return buildConfiguredAgentSystemPrompt({
     config: params.config,
+    preparedModelRuntime: params.preparedModelRuntime,
     agentId: params.agentId,
     workspaceDir: params.workspaceDir,
     runtimeCwd,

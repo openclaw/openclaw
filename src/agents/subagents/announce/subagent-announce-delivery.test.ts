@@ -5130,11 +5130,11 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       expected: missingRequesterFinal,
     })),
     ...["accepted", "in_flight"].map((status) => ({
-      name: `does not record ${status} handoff as a visible final`,
+      name: `retains an ${status} settle handoff until terminal evidence`,
       routes: requesterSettleRoutes,
       response: { status },
       requireVisibleReply: true,
-      expected: deliveredRequesterFinal,
+      expected: { delivered: false, reason: "requester_turn_pending", disposition: "retryable" },
     })),
     {
       name: "does not record a canceled partial answer as a visible final",
@@ -5563,7 +5563,7 @@ describe("deliverSubagentAnnouncement completion delivery", () => {
       requireDirectDelivery: true,
       ...(requireVisibleReply ? { requireVisibleReply: true } : {}),
       directIdempotencyKey: "announce-requester-settle-direct",
-      sourceTool: "subagent_announce",
+      sourceTool: "subagent_settle",
     });
 
     expect(result).toMatchObject(expected);

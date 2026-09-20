@@ -2,12 +2,12 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { withTestDir } from "../test-helpers/temp-dir.js";
+import type { CommandRunner } from "./update-global-command-runner.js";
 import {
   detectGlobalInstallManagerForRoot,
   listActivePnpmIsolatedGlobalPackages,
   resolveGlobalInstallTarget,
   resolvePnpmGlobalDirFromGlobalRoot,
-  type CommandRunner,
 } from "./update-global.js";
 
 async function writeGlobalPackageJson(packageRoot: string, version: string): Promise<void> {

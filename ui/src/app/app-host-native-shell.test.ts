@@ -426,7 +426,7 @@ describe("OpenClaw native shell", () => {
       {
         path: "/chat/main/dashboard/12345678-90ab-cdef-1234-567890abcdef",
         routeId: "chat",
-        search: "?nav=collapsed",
+        search: "?view=chat",
       },
       { path: "/dashboard/main/tasks/review", routeId: "dashboard" },
       { path: "/settings/agents/main/overview", routeId: "agents" },

@@ -32,6 +32,7 @@ import type {
   PreparedModelRuntimeOwner,
   PreparedModelRuntimePluginGeneration,
 } from "./prepared-model-runtime.types.js";
+import { releaseRuntimePluginWork, retainRuntimePluginWork } from "./runtime-plugin-work.js";
 
 const log = createSubsystemLogger("agents/prepared-model-runtime");
 type Lifetime = ReturnType<typeof createLifetime>;
@@ -51,7 +52,7 @@ const { generations, registries, active, retirements, publications } = resolveGl
   }),
 );
 
-function createLifetime(dispose: () => Promise<unknown>) {
+function createLifetime(dispose: () => Promise<unknown>, retainWork?: () => () => void) {
   const references = new Set<object>();
   let closing: Deferred | undefined;
   let disposing = false;
@@ -59,16 +60,20 @@ function createLifetime(dispose: () => Promise<unknown>) {
     get referenced() {
       return references.size > 0;
     },
-    retain() {
+    retain(work = false) {
       if (closing) {
         throw new Error("Prepared plugin generation has retired");
       }
+      const releaseWork = work ? retainWork?.() : undefined;
       const reference = {};
       references.add(reference);
       let releaseCompletion: Promise<void> | undefined;
       return () => {
-        if (references.delete(reference) && references.size === 0) {
-          releaseCompletion = lifetime.close();
+        if (references.delete(reference)) {
+          const completion = references.size === 0 ? lifetime.close() : undefined;
+          releaseCompletion = releaseWork
+            ? releaseRuntimePluginWork(() => completion, releaseWork)
+            : completion;
         }
         return releaseCompletion;
       };
@@ -107,7 +112,11 @@ function createLifetime(dispose: () => Promise<unknown>) {
   return lifetime;
 }
 
-function retainRegistry(registryView: PluginRegistry): (() => void | Promise<void>) | undefined {
+/** Retain physical registry custody for construction or publication, independent of active work. */
+export function retainPreparedPluginRegistry(
+  registryView: PluginRegistry,
+): (() => void | Promise<void>) | undefined {
+  registerPreparedPluginLifetime();
   const prepared = retainPreparedModelRuntimeSnapshotResources({ pluginRegistry: registryView });
   if (prepared) {
     return prepared.release;
@@ -157,23 +166,31 @@ export function ownPreparedPluginGeneration(
     getPluginMetadataSnapshotCache(generation.pluginMetadataSnapshot),
   );
   const releases: Array<() => void | Promise<void>> = [];
+  const selectedRegistries = new Set(
+    [generation.pluginRegistry, generation.inboundPluginRegistry].filter(
+      (registry) => registry !== undefined,
+    ),
+  );
   const acquisitionFailures: unknown[] = [];
-  const lifetime = createLifetime(async () => {
-    const results = await Promise.allSettled(releases.map(async (release) => await release()));
-    releaseMetadata();
-    const failures = results.flatMap((result) =>
-      result.status === "rejected" ? [result.reason] : [],
-    );
-    if (failures.length) {
-      throw new AggregateError(
-        [...acquisitionFailures, ...failures],
-        "Prepared plugin generation cleanup failed",
+  const lifetime = createLifetime(
+    async () => {
+      const results = await Promise.allSettled(releases.map(async (release) => await release()));
+      releaseMetadata();
+      const failures = results.flatMap((result) =>
+        result.status === "rejected" ? [result.reason] : [],
       );
-    }
-  });
+      if (failures.length) {
+        throw new AggregateError(
+          [...acquisitionFailures, ...failures],
+          "Prepared plugin generation cleanup failed",
+        );
+      }
+    },
+    () => retainRuntimePluginWork(selectedRegistries),
+  );
   try {
-    for (const registry of new Set([generation.pluginRegistry, generation.inboundPluginRegistry])) {
-      const release = registry && retainRegistry(registry);
+    for (const registry of selectedRegistries) {
+      const release = retainPreparedPluginRegistry(registry);
       if (release) {
         releases.push(release);
       }
@@ -191,7 +208,7 @@ export function ownPreparedPluginGeneration(
 export function retainPreparedPluginGeneration(
   generation: PreparedModelRuntimePluginGeneration,
 ): () => Promise<void> {
-  const release = ownPreparedPluginGeneration(generation).retain();
+  const release = ownPreparedPluginGeneration(generation).retain(true);
   return async () => {
     await release();
   };
@@ -220,7 +237,7 @@ export function publishPreparedPluginGeneration(
   if (!isCurrent()) {
     throw new Error("Prepared plugin generation retired before publication");
   }
-  const release = retainPreparedPluginGeneration(generation);
+  const release = ownPreparedPluginGeneration(generation).retain();
   const version = owner.generation;
   let signal: AbortSignal | undefined;
   const unsubscribe = () => signal?.removeEventListener("abort", observe);
@@ -260,7 +277,7 @@ export function publishPreparedPluginGeneration(
     generation,
     release: () => {
       unsubscribe();
-      return release();
+      return Promise.resolve(release());
     },
   });
   observe();

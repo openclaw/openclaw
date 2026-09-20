@@ -16,7 +16,10 @@ import {
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
 import * as stateWorker from "../state/openclaw-state-worker-store.js";
-import { seedPluginConversationBindingApprovalForTest } from "./conversation-binding.test-fixtures.js";
+import {
+  createDiscordCodexBindRequest,
+  seedPluginConversationBindingApprovalForTest,
+} from "./conversation-binding.test-fixtures.js";
 import { createEmptyPluginRegistry } from "./registry-empty.js";
 import type { PluginRegistry } from "./registry.js";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
@@ -196,25 +199,6 @@ afterEach(async () => {
   await drainGlobalSingletonLifecycleState();
   vi.useRealTimers();
 });
-
-function createDiscordCodexBindRequest(
-  conversationId: string,
-  summary: string,
-  accountId = "isolated",
-): PluginBindingRequestInput {
-  return {
-    pluginId: "codex",
-    pluginName: "Codex App Server",
-    pluginRoot: "/plugins/codex-a",
-    requestedBySenderId: "user-1",
-    conversation: {
-      channel: "discord",
-      accountId,
-      conversationId,
-    },
-    binding: { summary },
-  };
-}
 
 function createTelegramCodexBindRequest(
   conversationId: string,
@@ -603,6 +587,8 @@ describe("plugin conversation binding approvals", () => {
       status: "expired",
     });
     expect(sessionBindingState.bind).not.toHaveBeenCalled();
+    // Retire storage's independent idle timer before counting approval timers.
+    await closeOpenClawStateDatabaseAsync();
     expect(vi.getTimerCount()).toBe(0);
   });
 
@@ -620,6 +606,8 @@ describe("plugin conversation binding approvals", () => {
       );
     }
 
+    // Pending approvals outlive database actors; count only their owned timers.
+    await closeOpenClawStateDatabaseAsync();
     expect(vi.getTimerCount()).toBe(512);
     const oldest = requests[0];
     const newest = requests[512];

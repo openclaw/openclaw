@@ -101,6 +101,7 @@ async function preparePayload(
         return (
           attachment.mimeType !== expected.mimeType ||
           attachment.fileName !== expected.fileName ||
+          attachment.origin !== expected.origin ||
           attachment.sizeBytes !== expected.sizeBytes
         );
       })
@@ -198,7 +199,12 @@ export async function prepareOutboxPayload(
     host.settings?.gatewayUrl,
     host.client?.recoveryScope,
     purpose,
-    item.attachments?.map(({ mimeType, fileName, sizeBytes }) => [mimeType, fileName, sizeBytes]),
+    item.attachments?.map(({ mimeType, fileName, sizeBytes, origin }) => [
+      mimeType,
+      fileName,
+      sizeBytes,
+      origin,
+    ]),
   ]);
   const isCurrent = captureOutboxPayloadOwner(host);
   let pending = pendingPayloads.get(key);

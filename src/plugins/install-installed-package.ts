@@ -29,7 +29,7 @@ import {
   type PluginInstallPolicyRequest,
 } from "./install-types.js";
 import { validatePackageExtensionEntriesForInstall } from "./package-entry-resolution.js";
-import { linkOpenClawPeerDependencies } from "./plugin-peer-link.js";
+import { linkOpenClawPeerDependencies, resolveOpenClawHostDependency } from "./plugin-peer-link.js";
 
 type ValidatedPackagePlugin = {
   manifest: PackageManifest;
@@ -184,6 +184,7 @@ export async function validatePackagePluginInstallSource(params: {
     return scanResult;
   }
 
+  const hostDependency = resolveOpenClawHostDependency(manifest);
   return {
     ok: true,
     plugin: {
@@ -196,7 +197,7 @@ export async function validatePackagePluginInstallSource(params: {
         ? { setup: ocManifestResult.manifest.setup }
         : {}),
       hasRuntimeDependencies: hasPackageRuntimeDependencies(manifest),
-      peerDependencies: { ...manifest.dependencies, ...manifest.peerDependencies },
+      peerDependencies: hostDependency ? { openclaw: hostDependency.spec } : {},
     },
   };
 }

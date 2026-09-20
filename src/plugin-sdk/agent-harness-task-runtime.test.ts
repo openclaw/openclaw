@@ -11,8 +11,13 @@ import {
   resolveSubagentCompletionOrigin,
 } from "../agents/subagents/announce/subagent-announce-origin.js";
 import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { createAgentHarnessTaskRuntimeScope } from "../tasks/agent-harness-task-runtime-scope.js";
-import { createRunningTaskRun, finalizeTaskRunByRunId } from "../tasks/detached-task-runtime.js";
+import {
+  createRunningTaskRun,
+  finalizeTaskRunByRunId,
+  recordTaskRunProgressByRunId,
+} from "../tasks/detached-task-runtime.js";
 import { listTaskRecords } from "../tasks/runtime-internal.js";
 import { captureTaskExecutionOwner } from "../tasks/task-execution-owner.js";
 import {
@@ -30,6 +35,11 @@ vi.mock("../agents/subagents/announce/subagent-announce-delivery.js", async (imp
     ...actual,
     deliverSubagentAnnouncement: vi.fn(async () => ({ delivered: true, path: "steered" })),
     isInternalAnnounceRequesterSession: vi.fn(() => true),
+    loadRequesterSessionEntry: vi.fn((requesterSessionKey: string) => ({
+      cfg: {},
+      canonicalKey: requesterSessionKey,
+      agentId: "main",
+    })),
   };
 });
 
@@ -99,44 +109,61 @@ describe("agent-harness-task-runtime", () => {
     expect(captureTaskExecutionOwner).not.toHaveBeenCalled();
   });
 
-  it("scopes task lifecycle mutations to the owning requester session", () => {
-    const runtime = createAgentHarnessTaskRuntime({
-      runtime: "subagent",
-      taskKind: "example-harness",
-      scope: createScope(),
-      runIdPrefix: "example:",
-    });
-
-    runtime.createRunningTaskRun({
-      runId: "example:child-1",
-      sourceId: "example:child-1",
-      task: "do work",
-      label: "worker",
-    });
-    runtime.finalizeTaskRunByRunId({
-      runId: "example:child-1",
-      status: "succeeded",
-      endedAt: 1,
-    });
-
-    expect(createRunningTaskRun).toHaveBeenCalledWith(
-      expect.objectContaining({
+  it.each([undefined, "task-child-1"])(
+    "scopes lifecycle mutations and forwards task selector %s",
+    (taskId) => {
+      const runtime = createAgentHarnessTaskRuntime({
         runtime: "subagent",
         taskKind: "example-harness",
-        requesterSessionKey: "agent:main:channel:C123",
-        ownerKey: "agent:main:channel:C123",
-        scopeKind: "session",
+        scope: createScope(),
+        runIdPrefix: "example:",
+      });
+
+      runtime.createRunningTaskRun({
         runId: "example:child-1",
-      }),
-    );
-    expect(finalizeTaskRunByRunId).toHaveBeenCalledWith(
-      expect.objectContaining({
+        sourceId: "example:child-1",
+        task: "do work",
+        label: "worker",
+      });
+      runtime.finalizeTaskRunByRunId({
+        ...(taskId !== undefined ? { taskId } : {}),
+        runId: "example:child-1",
+        status: "succeeded",
+        endedAt: 1,
+      });
+      runtime.recordTaskRunProgressByRunId({
+        ...(taskId !== undefined ? { taskId } : {}),
+        runId: "example:child-1",
+        progressSummary: "working",
+      });
+
+      expect(createRunningTaskRun).toHaveBeenCalledWith(
+        expect.objectContaining({
+          runtime: "subagent",
+          taskKind: "example-harness",
+          requesterSessionKey: "agent:main:channel:C123",
+          ownerKey: "agent:main:channel:C123",
+          scopeKind: "session",
+          runId: "example:child-1",
+        }),
+      );
+      expect(finalizeTaskRunByRunId).toHaveBeenCalledWith(
+        expect.objectContaining({
+          ...(taskId !== undefined ? { taskId } : {}),
+          runtime: "subagent",
+          sessionKey: "agent:main:channel:C123",
+          runId: "example:child-1",
+        }),
+      );
+      expect(recordTaskRunProgressByRunId).toHaveBeenCalledWith({
+        ...(taskId !== undefined ? { taskId } : {}),
         runtime: "subagent",
         sessionKey: "agent:main:channel:C123",
         runId: "example:child-1",
-      }),
-    );
-  });
+        progressSummary: "working",
+      });
+    },
+  );
 
   it("rejects task run ids outside the configured harness scope", () => {
     const runtime = createAgentHarnessTaskRuntime({
@@ -179,7 +206,7 @@ describe("agent-harness-task-runtime", () => {
   });
 
   it("lists only task records owned by the scoped requester session", () => {
-    vi.mocked(listTaskRecords).mockReturnValue([
+    const records = [
       {
         taskId: "task-1",
         runtime: "subagent",
@@ -208,7 +235,10 @@ describe("agent-harness-task-runtime", () => {
         notifyPolicy: "silent",
         createdAt: 1,
       },
-    ]);
+    ] satisfies ReturnType<typeof listTaskRecords>;
+    vi.mocked(listTaskRecords).mockImplementation((filter) =>
+      filter ? records.filter(filter) : records,
+    );
     const runtime = createAgentHarnessTaskRuntime({
       runtime: "subagent",
       taskKind: "example-harness",
@@ -219,42 +249,93 @@ describe("agent-harness-task-runtime", () => {
     expect(runtime.listTaskRecords().map((task) => task.taskId)).toEqual(["task-1"]);
   });
 
-  it("delivers a generic harness completion through subagent announcement delivery", async () => {
-    const gatewayContextResolver = vi.fn();
-    vi.mocked(deliverSubagentAnnouncement).mockImplementationOnce(async () => {
-      expect(getPluginRuntimeGatewayRequestScope()?.resolveGatewayContext).toBe(
-        gatewayContextResolver,
-      );
-      return { delivered: true, path: "steered" };
-    });
-    await deliverAgentHarnessTaskCompletion({
-      scope: createAgentHarnessTaskRuntimeScope({
-        requesterSessionKey: "agent:main:main",
-        gatewayContextResolver,
-      }),
-      childSessionKey: "harness-thread:child",
-      childSessionId: "child",
-      announceId: "harness:parent:child:succeeded",
-      announceType: "Example harness worker",
-      taskLabel: "Example worker",
-      status: "succeeded",
-      statusLabel: "task_complete",
-      result: "child final answer",
-    });
-
-    expect(deliverSubagentAnnouncement).toHaveBeenCalledWith(
-      expect.objectContaining({
-        requesterSessionKey: "agent:main:main",
-        sourceSessionKey: "harness-thread:child",
-        sourceTool: "agent_harness_task",
-        expectsCompletionMessage: true,
-        directIdempotencyKey: "announce:harness:parent:child:succeeded",
-      }),
-    );
-    expect(vi.mocked(deliverSubagentAnnouncement).mock.calls[0]?.[0]).not.toHaveProperty(
-      "resolveGatewayContext",
-    );
-  });
+  it.each(["unguarded", "retired-during-origin"] as const)(
+    "delivers a generic harness completion with source admission %s",
+    async (sourceAdmission) => {
+      const gatewayContextResolver = vi.fn();
+      const requesterOrigin = { channel: "discord", to: "channel:C123" };
+      const originEntered = createDeferredCore();
+      const releaseOrigin = createDeferredCore();
+      let admissionAllowed = true;
+      if (sourceAdmission === "retired-during-origin") {
+        vi.mocked(isInternalAnnounceRequesterSession).mockReturnValueOnce(false);
+        vi.mocked(resolveAnnounceOrigin).mockReturnValueOnce(requesterOrigin);
+        vi.mocked(resolveSubagentCompletionOrigin).mockImplementationOnce(
+          async ({ requesterOrigin: resolvedOrigin }) => {
+            originEntered.resolve();
+            await releaseOrigin.promise;
+            return resolvedOrigin;
+          },
+        );
+      }
+      vi.mocked(deliverSubagentAnnouncement).mockImplementationOnce(async (params) => {
+        expect(getPluginRuntimeGatewayRequestScope()?.resolveGatewayContext).toBe(
+          gatewayContextResolver,
+        );
+        if (sourceAdmission === "retired-during-origin") {
+          expect(params.isSourceSessionAdmissionAllowed?.()).toBe(false);
+          const actual = await vi.importActual<
+            typeof import("../agents/subagents/announce/subagent-announce-delivery.js")
+          >("../agents/subagents/announce/subagent-announce-delivery.js");
+          return actual.deliverSubagentAnnouncement(params);
+        }
+        return { delivered: true, path: "steered" };
+      });
+      const delivery = deliverAgentHarnessTaskCompletion({
+        scope: createAgentHarnessTaskRuntimeScope({
+          requesterSessionKey: "agent:main:main",
+          gatewayContextResolver,
+          ...(sourceAdmission === "retired-during-origin" ? { requesterOrigin } : {}),
+        }),
+        childSessionKey: "harness-thread:child",
+        childSessionId: "child",
+        announceId: "harness:parent:child:succeeded",
+        announceType: "Example harness worker",
+        taskLabel: "Example worker",
+        status: "succeeded",
+        statusLabel: "task_complete",
+        result: "child final answer",
+        ...(sourceAdmission === "retired-during-origin"
+          ? { isSourceSessionAdmissionAllowed: () => admissionAllowed }
+          : {}),
+      });
+      try {
+        if (sourceAdmission === "retired-during-origin") {
+          await Promise.race([
+            originEntered.promise,
+            delivery.then(() => {
+              throw new Error("Completion settled before origin resolution");
+            }),
+          ]);
+          expect(deliverSubagentAnnouncement).not.toHaveBeenCalled();
+          admissionAllowed = false;
+          releaseOrigin.resolve();
+          await expect(delivery).resolves.toMatchObject({
+            delivered: false,
+            reason: "source_owner_changed",
+            terminal: true,
+          });
+        } else {
+          await expect(delivery).resolves.toMatchObject({ delivered: true, path: "steered" });
+        }
+        expect(deliverSubagentAnnouncement).toHaveBeenCalledWith(
+          expect.objectContaining({
+            requesterSessionKey: "agent:main:main",
+            sourceSessionKey: "harness-thread:child",
+            sourceTool: "agent_harness_task",
+            expectsCompletionMessage: true,
+            directIdempotencyKey: "announce:harness:parent:child:succeeded",
+          }),
+        );
+        expect(vi.mocked(deliverSubagentAnnouncement).mock.calls[0]?.[0]).not.toHaveProperty(
+          "resolveGatewayContext",
+        );
+      } finally {
+        releaseOrigin.resolve();
+        await delivery;
+      }
+    },
+  );
 
   it("rechecks the captured task during an asynchronous announcement", async () => {
     const task = {

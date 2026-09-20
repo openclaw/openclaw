@@ -233,6 +233,7 @@ export function collectCodexRuntimeRouteHits(
     agent: defaults,
     path: "agents.defaults",
   });
+  let implicitDefaultRef: { path: string; modelRef: string } | undefined;
   if (
     cfg.agents &&
     !hasAgentPrimaryModelConfig(defaults) &&
@@ -242,10 +243,11 @@ export function collectCodexRuntimeRouteHits(
         resolveImplicitDefaultAgentModelRef(cfg),
     )
   ) {
-    defaultRefs.push({
+    implicitDefaultRef = {
       path: "agents.defaults.model",
       modelRef: resolveImplicitDefaultAgentModelRef(cfg),
-    });
+    };
+    defaultRefs.push(implicitDefaultRef);
   }
 
   const agents = listMutableCodexRouteAgentEntries(cfg);
@@ -281,7 +283,13 @@ export function collectCodexRuntimeRouteHits(
     for (const ref of collectAgentRuntimeModelRefs({
       agent: agentRecord,
       path,
-      fallbackModelRefs: inheritedDefaultModelRefs,
+      fallbackModelRefs: inheritedDefaultModelRefs.map((inheritedRef) =>
+        inheritedRef === implicitDefaultRef
+          ? Object.assign({}, inheritedRef, {
+              modelRef: resolveImplicitDefaultAgentModelRef(cfg, agentId),
+            })
+          : inheritedRef,
+      ),
       inheritedModelRefs,
     })) {
       candidateRefs.push({ ...ref, agentId });

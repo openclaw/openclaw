@@ -8,7 +8,6 @@ import {
   chatSessionListResponse,
   createChatFlowE2eSuite,
   controlUiSessionUrl,
-  controlUiSessionPath,
   captureUiProof,
   installMockGateway,
   waitForRequests,
@@ -43,7 +42,7 @@ suite.define(() => {
     { mode: "worktree", label: "Start in a new worktree", accent: "#ffffff" },
     { mode: "session", label: "Start in this session", accent: "#ffffff" },
     { mode: "worktree", label: "Start in a new worktree", accent: "#00ff00" },
-  ])("starts task ($mode, $accent)", async ({ mode, label, accent }) => {
+  ])("starts task without changing sessions ($mode, $accent)", async ({ mode, label, accent }) => {
     const context = await suite.newBrowserContext({
       ...createControlUiE2eContextOptions(),
       colorScheme: mode === "worktree" ? "dark" : "light",
@@ -142,6 +141,9 @@ suite.define(() => {
         })
         .waitFor({ state: "visible", timeout: 10_000 });
       const sourceUrl = page.url();
+      const composer = page.locator(".agent-chat__composer-combobox textarea");
+      const draft = "Continue the current conversation.";
+      await composer.fill(draft);
       await gateway.deferNext("taskSuggestions.accept");
       if (mode === "local") {
         await startButton.click();
@@ -154,6 +156,16 @@ suite.define(() => {
         true,
       );
       expect(await options.isDisabled()).toBe(true);
+      await gateway.setMethodResponse("taskSuggestions.list", { suggestions: [] });
+      await gateway.emitGatewayEvent("task.suggestion", {
+        action: "resolved",
+        taskId: suggestion.id,
+        resolution: "accepted",
+      });
+      await card.getByText(suggestion.prompt, { exact: true }).waitFor({ state: "visible" });
+      expect(await card.getByRole("button", { name: "Starting…", exact: true }).isDisabled()).toBe(
+        true,
+      );
       await gateway.resolveDeferred("taskSuggestions.accept", {
         taskId: suggestion.id,
         key: mode === "session" ? "main" : "agent:main:dashboard:suggested",
@@ -161,14 +173,18 @@ suite.define(() => {
 
       const acceptRequest = await gateway.waitForRequest("taskSuggestions.accept");
       expect(acceptRequest.params).toEqual({ taskId: "task_123", mode });
-      if (mode === "session") {
-        await card.waitFor({ state: "hidden" });
-        expect(page.url()).toBe(sourceUrl);
-      } else {
-        await expect
-          .poll(() => new URL(page.url()).pathname)
-          .toBe(controlUiSessionPath("agent:main:dashboard:suggested"));
-      }
+      await card.getByRole("status").filter({ hasText: "Task started" }).waitFor();
+      await card.getByRole("link", { name: "Open session", exact: true }).waitFor();
+      expect(await card.getByText(suggestion.prompt, { exact: true }).isVisible()).toBe(true);
+      expect(page.url()).toBe(sourceUrl);
+      expect(await composer.inputValue()).toBe(draft);
+      expect(await gateway.getRequests("taskSuggestions.accept")).toHaveLength(1);
+      await captureUiProof(
+        suite,
+        page,
+        "task-suggestions",
+        `${mode}-${accent.slice(1)}-started.png`,
+      );
     } finally {
       await suite.closeBrowserContext(context);
     }

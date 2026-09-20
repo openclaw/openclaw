@@ -119,6 +119,10 @@ describe("worker node enrollment", () => {
       fs.writeFile(path.join(packageRoot, "node-version.mjs"), "export const supported = true;"),
       fs.writeFile(path.join(packageRoot, "node-sqlite.mjs"), "export const probe = true;"),
       fs.writeFile(
+        path.join(packageRoot, "node-host-launcher.mjs"),
+        "export const launcher = true;",
+      ),
+      fs.writeFile(
         path.join(packageRoot, "node-runtime-update.mjs"),
         "export const update = true;",
       ),

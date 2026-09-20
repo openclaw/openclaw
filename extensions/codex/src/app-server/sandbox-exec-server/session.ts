@@ -23,7 +23,13 @@ import {
   sendError,
   sendResult,
 } from "./json-rpc.js";
-import { readProcess, startProcess, terminateProcess, writeProcess } from "./processes.js";
+import {
+  readProcess,
+  signalProcess,
+  startProcess,
+  terminateProcess,
+  writeProcess,
+} from "./processes.js";
 import type {
   CodexSandboxExecMessageTransport,
   CodexSandboxExecSessionNotifications,
@@ -36,6 +42,7 @@ import type {
 export class CodexSandboxExecSession {
   private readonly processes = new Map<string, ManagedProcess>();
   private readonly fileReads: CodexSandboxFileReadHandles = new Map();
+  private readonly httpRequests = new Set<Promise<void>>();
   private readonly closeController = new AbortController();
   private readonly notifications: CodexSandboxExecSessionNotifications;
   private cleanup?: Promise<void>;
@@ -85,11 +92,19 @@ export class CodexSandboxExecSession {
       // Abort streamed HTTP and file reservations before reaping connection-owned processes.
       this.closeController.abort();
       closeAllFileReads(this.fileReads);
-      this.cleanup = Promise.all(
-        [...this.processes.keys()].map(async (processId) =>
+      this.cleanup = Promise.allSettled([
+        ...this.httpRequests,
+        ...[...this.processes.keys()].map(async (processId) =>
           terminateProcess(this.processes, { processId }),
         ),
-      ).then(() => undefined);
+      ]).then((results) => {
+        const failures = results.flatMap((result) =>
+          result.status === "rejected" ? [result.reason] : [],
+        );
+        if (failures.length > 0) {
+          throw new AggregateError(failures, "Codex sandbox execution cleanup failed");
+        }
+      });
     }
     return this.cleanup;
   }
@@ -114,6 +129,8 @@ export class CodexSandboxExecSession {
         return await readProcess(this.processes, params);
       case "process/write":
         return writeProcess(this.processes, params);
+      case "process/signal":
+        return await signalProcess(this.processes, params);
       case "process/terminate":
         return await terminateProcess(this.processes, params);
       case "fs/open":
@@ -141,7 +158,7 @@ export class CodexSandboxExecSession {
         await copyPath(this.execServer, params);
         return {};
       case "http/request":
-        return await httpRequest(this.execServer, this.notifications, params);
+        return await httpRequest(this.execServer, this.notifications, params, this.httpRequests);
       default:
         throw new JsonRpcProtocolError(
           JSON_RPC_METHOD_NOT_FOUND,

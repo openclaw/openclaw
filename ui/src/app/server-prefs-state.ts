@@ -1,5 +1,5 @@
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
-import { UI_APPEARANCE_THEME_VALUES } from "../../../packages/gateway-protocol/src/schema/ui-appearance-preferences.ts";
+import { isThemeId, normalizeThemeMode } from "../../../packages/gateway-protocol/src/theme-ids.ts";
 import { normalizeSidebarEntries } from "../app-navigation.ts";
 import { isSupportedLocale } from "../i18n/index.ts";
 import {
@@ -14,16 +14,6 @@ import {
 import type { ThemeMode, ThemeName } from "./theme.ts";
 import { normalizeTypefaceOverride, type TypefaceId } from "./typography.ts";
 
-// Derived from the wire contract so a theme the profile store rejects can never
-// be offered here; new Set<ThemeName> makes an unknown protocol name a type error.
-// "custom" is config-syncable (honored only by browsers with an imported
-// palette) but intentionally not profile-storable, so it is appended here
-// rather than added to the wire contract.
-const THEMES: ReadonlySet<ThemeName> = new Set<ThemeName>([
-  ...UI_APPEARANCE_THEME_VALUES,
-  "custom",
-]);
-
 export function isAppearancePref(
   key: string,
 ): key is "theme" | "themeMode" | "accent" | "fontUi" | "fontChat" {
@@ -35,7 +25,6 @@ export function isAppearancePref(
     key === "fontChat"
   );
 }
-const THEME_MODES: ReadonlySet<ThemeMode> = new Set(["light", "dark", "system"]);
 
 type SyncedPrefSpec<T> = {
   configSync?: boolean;
@@ -65,7 +54,7 @@ const fontPrefSpec = (key: "fontUi" | "fontChat") =>
  */
 export const SYNCED_PREFS = {
   theme: prefSpec<ThemeName>({
-    extract: (value) => (THEMES.has(value as ThemeName) ? (value as ThemeName) : undefined),
+    extract: (value) => (value === "custom" || isThemeId(value) ? value : undefined),
     local: (settings) => settings.theme,
     write: (value) => ({ theme: value ?? UI_APPEARANCE_DEFAULTS.theme }),
     clearable: true,
@@ -75,7 +64,7 @@ export const SYNCED_PREFS = {
     canApply: (value, settings) => value !== "custom" || Boolean(settings.customTheme),
   }),
   themeMode: prefSpec<ThemeMode>({
-    extract: (value) => (THEME_MODES.has(value as ThemeMode) ? (value as ThemeMode) : undefined),
+    extract: normalizeThemeMode,
     local: (settings) => settings.themeMode,
     write: (value) => ({ themeMode: value ?? UI_APPEARANCE_DEFAULTS.themeMode }),
     clearable: true,
@@ -247,6 +236,11 @@ export function resolveServerUiPrefStateFromSnapshot<K extends SyncedPrefKey>(
         settings,
       ));
   const applicableServerValue = canApplyServerValue ? serverValue : productDefault;
+  if (canSync === null && profilePrefs != null && isAppearancePref(key)) {
+    // Offline profile snapshots supply a local reset baseline. Cancel queued
+    // edits without creating a new remote write while identity is disconnected.
+    return { ...localState(applicableServerValue), provenance: "device-local" };
+  }
   if (shadowPrefs && key in shadowPrefs) {
     if (canSync === false) {
       return {
@@ -295,6 +289,68 @@ export function resolveServerUiPrefStateFromSnapshot<K extends SyncedPrefKey>(
     };
   }
   return localState(serverValue);
+}
+
+export function serverUiPrefsSnapshotDelta(
+  prefs: ServerUiPrefs,
+  lastSeen: ServerUiPrefs,
+  {
+    appearanceReady,
+    scopeChanged,
+    firstSnapshot,
+    shadowPrefs,
+    retainedLocalKeys,
+  }: {
+    appearanceReady: boolean;
+    scopeChanged: boolean;
+    firstSnapshot: boolean;
+    shadowPrefs: ServerUiPrefs | null;
+    retainedLocalKeys: ReadonlySet<SyncedPrefKey>;
+  },
+): ServerUiPrefs {
+  const changed: ServerUiPrefs = {};
+  // Apply per field: only keys whose server value changed since last seen. Reapplying unchanged
+  // fields would revert unpushable local edits whenever any other server field moves.
+  for (const prefKey of SYNCED_PREF_KEYS) {
+    if (
+      Object.hasOwn(prefs, prefKey) &&
+      (appearanceReady || !isAppearancePref(prefKey)) &&
+      !(shadowPrefs && prefKey in shadowPrefs) &&
+      !retainedLocalKeys.has(prefKey) &&
+      (scopeChanged || firstSnapshot || !prefValuesEqual(prefs[prefKey], lastSeen[prefKey]))
+    ) {
+      Object.assign(changed, { [prefKey]: prefs[prefKey] });
+    }
+  }
+  for (const prefKey of SYNCED_PREF_KEYS) {
+    if (
+      Object.hasOwn(lastSeen, prefKey) &&
+      (appearanceReady || !isAppearancePref(prefKey)) &&
+      !(prefKey in prefs) &&
+      !(shadowPrefs && prefKey in shadowPrefs) &&
+      !retainedLocalKeys.has(prefKey) &&
+      SYNCED_PREFS[prefKey]?.clearable
+    ) {
+      changed[prefKey] = null;
+    }
+  }
+  if (scopeChanged) {
+    // The previous identity may have rendered appearance values this scope has
+    // never seen (absent from both prefs and this scope's last-seen); clear
+    // them back to defaults so the new identity never wears the old one's look.
+    for (const prefKey of SYNCED_PREF_KEYS) {
+      if (
+        isAppearancePref(prefKey) &&
+        !(prefKey in prefs) &&
+        !(shadowPrefs && prefKey in shadowPrefs) &&
+        !retainedLocalKeys.has(prefKey) &&
+        SYNCED_PREFS[prefKey].clearable
+      ) {
+        changed[prefKey] = null;
+      }
+    }
+  }
+  return changed;
 }
 
 /** Local-settings patch that brings the browser mirror in line with the server. */

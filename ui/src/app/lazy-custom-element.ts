@@ -282,6 +282,14 @@ export const DESKTOP_PANEL_ELEMENT = {
   loadModule: () => import("../components/desktop/desktop-panel.ts"),
 } satisfies OptionalCustomElement;
 
+export const LINK_READER_PANEL_ELEMENT = {
+  tagName: "openclaw-link-reader-panel",
+  get label() {
+    return t("linkReader.title");
+  },
+  loadModule: () => import("../components/link-reader-panel.ts"),
+} satisfies OptionalCustomElement;
+
 export const DASHBOARD_DOCUMENT_ELEMENT = {
   tagName: "openclaw-board-document",
   label: "dashboard document",

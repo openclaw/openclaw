@@ -480,7 +480,7 @@ describe("handleAgentEnd", () => {
     const ctx = createContext({
       role: "assistant",
       stopReason: "error",
-      provider: "anthropic\u001b]8;;https://evil.test\u0007",
+      provider: "anthropic\u009b\u001b]8;;https://evil.test\u0007",
       model: "claude\tsonnet\n4",
       errorMessage: "connection refused",
       content: [{ type: "text", text: "" }],
@@ -492,10 +492,9 @@ describe("handleAgentEnd", () => {
     expect(meta.consoleMessage).toBe(
       "embedded run agent end: runId=run-1 isError=true model=claude sonnet 4 provider=anthropic]8;;https://evil.test error=LLM request failed: connection refused by the provider endpoint. rawError=connection refused",
     );
-    expect(meta?.consoleMessage).not.toContain("\n");
-    expect(meta?.consoleMessage).not.toContain("\r");
-    expect(meta?.consoleMessage).not.toContain("\t");
-    expect(meta?.consoleMessage).not.toContain("\u001b");
+    for (const control of ["\n", "\r", "\t", "\u001b", "\u009b"]) {
+      expect(meta?.consoleMessage).not.toContain(control);
+    }
   });
 
   it("redacts logged error text before emitting lifecycle events", async () => {

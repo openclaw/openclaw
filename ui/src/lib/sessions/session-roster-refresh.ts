@@ -18,8 +18,8 @@ import type {
   SessionState,
 } from "./session-capability.ts";
 import { normalizeAgentId } from "./session-key.ts";
-import { observeManagedSessionList } from "./session-list-observation.ts";
 import {
+  canApplySessionListSnapshot,
   coalesceSessionRefresh,
   completeSessionRefreshWaiters,
   isForegroundReplacement,
@@ -39,10 +39,7 @@ import {
   publishManagedList,
   type SessionListRefreshHost,
 } from "./session-managed-list-refresh.ts";
-import {
-  createSessionPrimaryWindows,
-  subscribeManagedSessionList,
-} from "./session-primary-windows.ts";
+import { createSessionPrimaryWindows } from "./session-primary-windows.ts";
 import { normalizeManagedSessionListQuery, requestSessionList } from "./session-requests.ts";
 import { createSessionRosterListReader } from "./session-roster-list-reader.ts";
 import { createSessionMutationRefresh } from "./session-roster-mutation-refresh.ts";
@@ -82,7 +79,16 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
     const observation = {
       revision: ++requestRevision,
       scope: host.connection.capture(),
-      lists: new Set([...managedLists.values()].filter(sessionListEventMatcher(payload))),
+      lists: new Set(
+        [...managedLists.values()]
+          .filter(sessionListEventMatcher(payload))
+          .filter(
+            (entry) =>
+              entry.pending !== null ||
+              entry.snapshot.error !== null ||
+              !canApplySessionListSnapshot(entry.snapshot.result, payload, entry.scope),
+          ),
+      ),
     };
     eventRevisions.set(payload, observation);
     return observation;
@@ -145,11 +151,6 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
   );
   const retireWarmLists = (matches: (entry: ManagedSessionList) => boolean = () => true) =>
     primaryWindows.invalidate(matches, lastListOptions);
-  const subscribeManagedList = (
-    entry: ManagedSessionList,
-    listener: (snapshot: SessionListSnapshot) => void,
-  ) =>
-    subscribeManagedSessionList(entry, listener, managedLists, pageActive, primaryWindows.retire);
 
   const scheduleManagedLists = (
     matches: (entry: ManagedSessionList) => boolean,
@@ -585,17 +586,12 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
       );
     },
     subscribeList(scope: SessionListScope, listener: (snapshot: SessionListSnapshot) => void) {
-      return subscribeManagedList(managedList(scope), listener);
+      return primaryWindows.subscribe(managedList(scope), listener, pageActive);
     },
     observeList: (scope: SessionListScope, listener: (snapshot: SessionListSnapshot) => void) => {
       const entry = managedList(scope);
-      return observeManagedSessionList(
-        entry,
-        listener,
-        () => subscribeManagedList(entry, listener),
-        () => managedLists.get(entry.key) === entry,
-        host.connection,
-        () => refreshManagedList(entry, { append: false, invalidated: true }),
+      return primaryWindows.observe(entry, listener, pageActive, host.connection, () =>
+        refreshManagedList(entry, { append: false, invalidated: true }),
       );
     },
     refreshList(options: SessionRefreshOptions = {}): Promise<void> {
@@ -625,13 +621,10 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
       refreshInternal(options, true, undefined, "automatic"),
     refreshAutomatic: (options: SessionRefreshOptions) =>
       refreshInternal(options, false, undefined, "automatic"),
-    refreshReplacement: (agentId?: string | null) =>
-      refreshInternal(
-        replacementOptions(agentId),
-        false,
-        undefined,
-        agentId?.trim() ? "explicit" : "automatic",
-      ).then((attempt) => (attempt?.matchesRequestedQuery ? attempt.result : null)),
+    refreshReplacement: () =>
+      refreshInternal(replacementOptions(), false, undefined, "automatic").then((attempt) =>
+        attempt?.matchesRequestedQuery ? attempt.result : null,
+      ),
     refreshSelection: (selectedAgent: () => string | null, foreground = false) => {
       if (foreground) {
         // Navigation supersedes the previous request's publication and drain ownership.
@@ -679,22 +672,28 @@ export function createSessionRosterRefresh(host: SessionRosterRefreshHost) {
         ? primaryWindows.presentation(replacementOptions(agentId), connection.epoch)
         : null;
     },
-    // Gateway-owned membership filters require an authoritative list refresh.
-    canApplyPrimarySnapshot: () => isPrimarySessionListQuery(lastListOptions),
+    canApplyPrimarySnapshot: (payload: unknown) =>
+      !inFlight &&
+      host.readState().error === null &&
+      !host.readState().resultCached &&
+      canApplySessionListSnapshot(host.readState().result, payload, lastListOptions),
     invalidateManagedLists,
     scheduleEvent(
       this: void,
       options: { agentId?: string | null; primarySnapshotApplied?: boolean; event?: unknown } = {},
     ) {
       const matchesAgent = sessionListAgentMatcher(options.agentId);
-      // Server events can invalidate a read; accepted row observations are reconciled into it.
-      primaryWindows.invalidate((entry) => matchesAgent(entry.scope.agentId), lastListOptions);
-      if (!options.primarySnapshotApplied && matchesAgent(lastListOptions.agentId)) {
-        eventRefreshCoordinator.schedule();
-      }
       const event = options.event;
       const affected =
         event && typeof event === "object" ? eventRevisions.get(event)?.lists : undefined;
+      // Server events can invalidate a read; accepted row observations are reconciled into it.
+      primaryWindows.invalidate(
+        (entry) => affected?.has(entry) ?? matchesAgent(entry.scope.agentId),
+        lastListOptions,
+      );
+      if (!options.primarySnapshotApplied && matchesAgent(lastListOptions.agentId)) {
+        eventRefreshCoordinator.schedule();
+      }
       if (affected) {
         scheduleManagedLists((entry) => affected.has(entry));
       } else {

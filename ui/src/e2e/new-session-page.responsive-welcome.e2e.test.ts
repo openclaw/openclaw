@@ -92,7 +92,10 @@ suite.define(() => {
       });
       await page.getByRole("option", { name: /Bob/ }).click();
       const preview = page.locator(".new-session-page__composer .chat-reply-preview");
-      await expect.poll(() => preview.textContent()).toContain("Will notify: @Bob");
+      await expect.poll(() => preview.textContent()).toContain("Will notify");
+      await expect
+        .poll(() => preview.locator(".composer-context-strip__person-name").textContent())
+        .toBe("Bob");
       const remove = preview.getByRole("button", { name: "Remove mention" });
 
       for (const viewport of [
@@ -107,7 +110,9 @@ suite.define(() => {
         );
         const layout = await preview.evaluate((element) => {
           const bar = element.getBoundingClientRect();
-          const text = element.querySelector(".chat-reply-preview__text")!.getBoundingClientRect();
+          const text = element
+            .querySelector(".composer-context-strip__people")!
+            .getBoundingClientRect();
           const button = element.querySelector("button")!.getBoundingClientRect();
           return {
             height: bar.height,

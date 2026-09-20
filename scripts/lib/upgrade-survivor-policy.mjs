@@ -152,7 +152,10 @@ export function supportsUpgradeSurvivorScenarioAtBaseline(scenario, baselineSpec
   ) {
     return baselineSpec === "openclaw@2026.9.4";
   }
-  if (scenario === "abandoned-update" || scenario === "missing-configured-plugin-migration") {
+  if (scenario === "abandoned-update") {
+    return baselineSpec === "openclaw@2026.9.4" || baselineSpec === "openclaw@2026.9.3";
+  }
+  if (scenario === "missing-configured-plugin-migration") {
     return baselineSpec === "openclaw@2026.9.2";
   }
   if (scenario === "workshop-doctor-recovery") {

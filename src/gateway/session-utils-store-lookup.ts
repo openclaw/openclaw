@@ -1,4 +1,3 @@
-import { expectDefined } from "@openclaw/normalization-core";
 import { err, ok, type Result } from "@openclaw/normalization-core/result";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { listAgentIds } from "../agents/agent-scope.js";
@@ -12,11 +11,11 @@ import {
   type SessionEntry,
   type SessionStoreTarget,
 } from "../config/sessions.js";
-import {
-  listSessionChildEntriesReadOnly,
-  type SessionEntryListScope,
-  type SessionEntryReadSource,
-} from "../config/sessions/session-accessor.js";
+import { listSessionChildEntriesReadOnly } from "../config/sessions/session-accessor.js";
+import type {
+  SessionEntryListScope,
+  SessionEntryReadSource,
+} from "../config/sessions/session-accessor.types.js";
 import { canonicalSessionKeyMigrationRequiredError } from "../config/sessions/session-canonical-key.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
@@ -30,59 +29,22 @@ import {
   resolveSessionStoreIdentity,
   resolveStoredSessionKeyForAgentStore,
 } from "./session-store-key.js";
-import type {
-  GatewaySessionStoreTarget,
-  GatewaySessionStoreTargetWithStore,
-} from "./session-utils-contracts.js";
 import {
   loadGatewaySessionStoreReads,
   readGatewaySessionStore,
   type GatewaySessionStoreRead,
   type GatewaySessionStoreCache,
 } from "./session-utils-store-read.js";
+import {
+  findCanonicalStoreMatch,
+  resolveGatewaySessionStoreReadResults,
+  type GatewaySessionStoreLookup,
+} from "./session-utils-store-selection.js";
+import type {
+  GatewaySessionStoreTarget,
+  GatewaySessionStoreTargetWithStore,
+} from "./session-utils-store.types.js";
 export type { GatewaySessionStoreCache } from "./session-utils-store-read.js";
-
-function findCanonicalStoreMatch(
-  store: Record<string, SessionEntry>,
-  candidates: readonly string[],
-  onCanonicalError?: (error: Error) => void,
-): { entry: SessionEntry; key: string } | undefined {
-  const matches = new Map<string, { entry: SessionEntry; key: string }>();
-  for (const candidate of candidates) {
-    const trimmed = normalizeOptionalString(candidate) ?? "";
-    if (!trimmed) {
-      continue;
-    }
-    const exact = store[trimmed];
-    if (exact) {
-      matches.set(trimmed, { entry: exact, key: trimmed });
-    }
-  }
-  if (matches.size === 0) {
-    return undefined;
-  }
-  const canonicalKey = candidates[0] ?? "";
-  const selected = matches.get(canonicalKey) ?? matches.values().next().value;
-  if (matches.size > 1) {
-    const error = canonicalSessionKeyMigrationRequiredError(
-      `duplicate rows resolve to canonical session key ${canonicalKey || selected?.key || ""}`,
-    );
-    if (!onCanonicalError) {
-      throw error;
-    }
-    onCanonicalError(error);
-  }
-  if (selected && selected.key !== canonicalKey) {
-    const error = canonicalSessionKeyMigrationRequiredError(
-      `non-canonical persisted row resolves to session key ${canonicalKey || selected.key}`,
-    );
-    if (!onCanonicalError) {
-      throw error;
-    }
-    onCanonicalError(error);
-  }
-  return selected;
-}
 
 function buildGatewaySessionStoreScanTargets(params: {
   cfg: OpenClawConfig;
@@ -117,6 +79,8 @@ function resolveGatewaySessionStoreCandidates(
   agentId: string,
   cache?: GatewaySessionStoreDiscoveryCache,
   excludeConfiguredFallback = false,
+  env: NodeJS.ProcessEnv = process.env,
+  registeredDatabases?: readonly { agentId: string; path: string }[],
 ): GatewaySessionStoreDiscovery {
   const cached = cache?.get(agentId);
   if (cached) {
@@ -125,10 +89,12 @@ function resolveGatewaySessionStoreCandidates(
   const storeConfig = cfg.session?.store;
   const fallback = {
     agentId,
-    storePath: resolveSessionStorePathCore(storeConfig, { agentId }),
+    storePath: resolveSessionStorePathCore(storeConfig, { agentId, env }),
   };
   const discovery = {
     existing: resolveExistingAgentSessionStoreTargetsSync(cfg, agentId, {
+      env,
+      registeredDatabases,
       // Cached discovery also serves existing-only deleted-main lookups.
       excludeStorePath:
         !cache && excludeConfiguredFallback && !isPerAgentSessionStoreConfig(storeConfig)
@@ -146,6 +112,57 @@ function resolveGatewaySessionStoreCandidates(
  * Keep discovery agent-scoped here or each row repeats registry probes and agent-root scans.
  */
 export type GatewaySessionStoreDiscoveryCache = Map<string, GatewaySessionStoreDiscovery>;
+
+export function resolveGatewaySessionStoreLookupCandidates(params: {
+  cfg: OpenClawConfig;
+  agentId: string;
+  targetDiscoveryCache?: GatewaySessionStoreDiscoveryCache;
+  env?: NodeJS.ProcessEnv;
+  registeredDatabases?: readonly { agentId: string; path: string }[];
+}): {
+  configured: boolean;
+  fallback: SessionStoreTarget;
+  candidates: SessionStoreTarget[];
+  readSources?: SessionEntryReadSource[];
+} {
+  const configured = isConfiguredSessionStoreAgentId(params.cfg, params.agentId);
+  if (!configured && params.registeredDatabases) {
+    // Prepared discovery already holds registered owners; don't rescan retired roots per page.
+    const readSources = params.registeredDatabases
+      .filter((source) => normalizeAgentId(source.agentId) === params.agentId)
+      .map((source) => ({ agentId: source.agentId, path: source.path }));
+    return {
+      configured,
+      fallback: {
+        agentId: params.agentId,
+        storePath: resolveSessionStorePathCore(params.cfg.session?.store, {
+          agentId: params.agentId,
+          env: params.env,
+        }),
+      },
+      candidates: readSources.map((source) => ({
+        agentId: source.agentId,
+        storePath: source.path,
+      })),
+      readSources,
+    };
+  }
+  const { existing, fallback } = resolveGatewaySessionStoreCandidates(
+    params.cfg,
+    params.agentId,
+    params.targetDiscoveryCache,
+    configured,
+    params.env,
+    params.registeredDatabases,
+  );
+  return {
+    configured,
+    fallback,
+    candidates: configured
+      ? [fallback, ...existing.filter((target) => target.storePath !== fallback.storePath)]
+      : existing,
+  };
+}
 
 type GatewaySessionStoreLookupParams = {
   cfg: OpenClawConfig;
@@ -168,29 +185,11 @@ type GatewaySessionStorePlan<T> = {
   resolve: () => T;
 };
 
-type GatewaySessionStoreLookup = {
-  storePath: string;
-  store: Record<string, SessionEntry>;
-  readSource?: SessionEntryReadSource;
-  match: { entry: SessionEntry; key: string } | undefined;
-  canonicalValidationError?: Error;
-};
-
 function prepareGatewaySessionStoreLookup(
   params: GatewaySessionStoreLookupParams & { canonicalKey: string; agentId: string },
 ): GatewaySessionStorePlan<GatewaySessionStoreLookup> {
   const scanTargets = buildGatewaySessionStoreScanTargets(params);
-  const configured = isConfiguredSessionStoreAgentId(params.cfg, params.agentId);
-  const discovery = resolveGatewaySessionStoreCandidates(
-    params.cfg,
-    params.agentId,
-    params.targetDiscoveryCache,
-    configured,
-  );
-  const { existing, fallback } = discovery;
-  const candidates = configured
-    ? [fallback, ...existing.filter((target) => target.storePath !== fallback.storePath)]
-    : existing;
+  const { configured, fallback, candidates } = resolveGatewaySessionStoreLookupCandidates(params);
   if (candidates.length === 0) {
     // Retired/manual agents require an existing discovered store; lookup never creates one.
     return {
@@ -209,53 +208,20 @@ function prepareGatewaySessionStoreLookup(
       ...(params.projection ? { projection: params.projection } : {}),
       ...(params.storeCache ? { cache: params.storeCache } : {}),
     },
-    store: index === 0 && target.storePath === fallback.storePath ? params.store : undefined,
+    result:
+      index === 0 && target.storePath === fallback.storePath && params.store !== undefined
+        ? ok(params.store)
+        : undefined,
   }));
   return {
     reads,
-    resolve: () => {
-      const first = expectDefined(reads[0], "first configured or discovered session store");
-      let selectedStorePath = first.storePath;
-      let selectedStore = readGatewaySessionStore(first);
-      let selectedReadSource = first.readSource;
-      let canonicalValidationError: Error | undefined;
-      const recordCanonicalError = params.deferCanonicalValidation
-        ? (error: Error) => {
-            canonicalValidationError ??= error;
-          }
-        : undefined;
-      let selectedMatch = findCanonicalStoreMatch(selectedStore, scanTargets, recordCanonicalError);
-      for (const candidate of reads.slice(1)) {
-        const store = readGatewaySessionStore(candidate);
-        const match = findCanonicalStoreMatch(store, scanTargets, recordCanonicalError);
-        if (!match) {
-          continue;
-        }
-        if (selectedMatch) {
-          const error = canonicalSessionKeyMigrationRequiredError(
-            `duplicate rows resolve to canonical session key ${params.canonicalKey}`,
-          );
-          if (!recordCanonicalError) {
-            throw error;
-          }
-          recordCanonicalError(error);
-          if (match.key !== params.canonicalKey || selectedMatch.key === params.canonicalKey) {
-            continue;
-          }
-        }
-        selectedStorePath = candidate.storePath;
-        selectedStore = store;
-        selectedReadSource = candidate.readSource;
-        selectedMatch = match;
-      }
-      return {
-        storePath: selectedStorePath,
-        store: selectedStore,
-        ...(selectedReadSource ? { readSource: selectedReadSource } : {}),
-        match: selectedMatch,
-        ...(canonicalValidationError ? { canonicalValidationError } : {}),
-      };
-    },
+    resolve: () =>
+      resolveGatewaySessionStoreReadResults({
+        ...params,
+        reads,
+        readStore: readGatewaySessionStore,
+        scanTargets,
+      }),
   };
 }
 
@@ -441,7 +407,6 @@ export function resolveGatewaySessionStoreTargetWithStore(
   return includeDirectChildEntries(
     deletedMain ?? prepareGatewaySessionStoreTarget(normalized).resolve(),
     params.includeStoreChildEntries,
-    params.projection,
     params.cfg,
   );
 }
@@ -491,40 +456,12 @@ export function resolveGatewaySessionStoreTargetsReadOnly(params: {
   targets: readonly { key: string; agentId?: string }[];
   projection?: SessionEntryListScope["projection"];
 }): GatewaySessionStoreTargetWithStore[] {
-  const targetDiscoveryCache: GatewaySessionStoreDiscoveryCache = new Map();
-  const requests = params.targets.map((target) => {
-    const lookup: GatewaySessionStoreLookupParams = {
-      ...target,
-      key: normalizeOptionalString(target.key) ?? "",
-      cfg: params.cfg,
-      clone: false,
-      readOnly: true,
-      exactRead: true,
-      projection: params.projection ?? "list",
-      targetDiscoveryCache,
-    };
-    return { lookup, legacy: prepareExplicitDeletedLegacyMainStoreTarget(lookup) };
+  return readGatewaySessionStoreTargets(params, "eager").map((result) => {
+    if (!result.ok) {
+      throw result.error;
+    }
+    return result.value;
   });
-  loadGatewaySessionStoreReads(requests.flatMap((request) => request.legacy?.reads ?? []));
-  // A successful deleted-main lookup must not open or validate a normal fallback store.
-  const selected = requests.map((request) => {
-    const target = request.legacy?.resolve();
-    return target ? { target } : { plan: prepareGatewaySessionStoreTarget(request.lookup) };
-  });
-  loadGatewaySessionStoreReads(selected.flatMap((selection) => selection.plan?.reads ?? []));
-  return selected.map(
-    (selection) =>
-      selection.target ??
-      expectDefined(selection.plan, "unresolved logical session plan").resolve(),
-  );
-}
-
-function captureSessionStoreTargetResult<T>(resolve: () => T): Result<T, unknown> {
-  try {
-    return ok(resolve());
-  } catch (error) {
-    return err(error);
-  }
 }
 
 /** Read exact groups now, retaining logical errors for the caller's ordered visitor. */
@@ -533,53 +470,58 @@ export function prepareGatewaySessionStoreTargetsReadOnly(params: {
   targets: readonly { key: string; agentId?: string }[];
   projection: SessionEntryListScope["projection"];
 }): Array<Result<GatewaySessionStoreTargetWithStore, unknown>> {
+  return readGatewaySessionStoreTargets(params, "prepared");
+}
+
+function readGatewaySessionStoreTargets(
+  params: Parameters<typeof resolveGatewaySessionStoreTargetsReadOnly>[0],
+  mode: "eager" | "prepared",
+): Array<Result<GatewaySessionStoreTargetWithStore, unknown>> {
+  const resolve = <T, U>(items: Result<T, unknown>[], read: (value: T) => U) =>
+    items.map((item): Result<U, unknown> => {
+      if (!item.ok) {
+        return item;
+      }
+      try {
+        return ok(read(item.value));
+      } catch (error) {
+        if (mode === "eager") {
+          throw error;
+        }
+        return err(error);
+      }
+    });
   const targetDiscoveryCache: GatewaySessionStoreDiscoveryCache = new Map();
-  const requests = params.targets.map((target) =>
-    captureSessionStoreTargetResult(() => {
-      const lookup: GatewaySessionStoreLookupParams = {
-        ...target,
-        key: normalizeOptionalString(target.key) ?? "",
-        cfg: params.cfg,
-        clone: false,
-        readOnly: true,
-        exactRead: true,
-        projection: params.projection,
-        targetDiscoveryCache,
-      };
-      return { lookup, legacy: prepareExplicitDeletedLegacyMainStoreTarget(lookup) };
-    }),
-  );
+  const requests = resolve(params.targets.map(ok), (target) => {
+    const lookup: GatewaySessionStoreLookupParams = {
+      ...target,
+      key: normalizeOptionalString(target.key) ?? "",
+      cfg: params.cfg,
+      clone: false,
+      readOnly: true,
+      exactRead: true,
+      projection: mode === "eager" ? (params.projection ?? "list") : params.projection,
+      targetDiscoveryCache,
+    };
+    return { lookup, legacy: prepareExplicitDeletedLegacyMainStoreTarget(lookup) };
+  });
   loadGatewaySessionStoreReads(
     requests.flatMap((request) => (request.ok ? (request.value.legacy?.reads ?? []) : [])),
   );
-  const selected = requests.map((request) => {
-    if (!request.ok) {
-      return request;
-    }
-    return captureSessionStoreTargetResult(() => {
-      // Only a legacy miss permits fallback; a logical error must stay with its target.
-      const target = request.value.legacy?.resolve();
-      return target ? { target } : { plan: prepareGatewaySessionStoreTarget(request.value.lookup) };
-    });
+  const selected = resolve(requests, ({ lookup, legacy }) => {
+    // Only a legacy miss permits fallback; a logical error must stay with its target.
+    const target = legacy?.resolve();
+    return target ? { reads: [], resolve: () => target } : prepareGatewaySessionStoreTarget(lookup);
   });
   loadGatewaySessionStoreReads(
-    selected.flatMap((selection) => (selection.ok ? (selection.value.plan?.reads ?? []) : [])),
+    selected.flatMap((selection) => (selection.ok ? selection.value.reads : [])),
   );
-  return selected.map((selection) =>
-    selection.ok
-      ? captureSessionStoreTargetResult(
-          () =>
-            selection.value.target ??
-            expectDefined(selection.value.plan, "unresolved logical session plan").resolve(),
-        )
-      : selection,
-  );
+  return resolve(selected, (selection) => selection.resolve());
 }
 
 function includeDirectChildEntries(
   target: GatewaySessionStoreTargetWithStore,
   include: boolean | undefined,
-  projection: SessionEntryListScope["projection"],
   cfg: OpenClawConfig,
 ): GatewaySessionStoreTargetWithStore {
   if (!include) {
@@ -592,11 +534,14 @@ function includeDirectChildEntries(
       for (const { sessionKey, entry } of listSessionChildEntriesReadOnly({
         agentId: target.agentId,
         clone: false,
-        projection,
+        projection: "list",
         sessionKey: parentKey,
         storePath: target.storePath,
       })) {
-        target.store[sessionKey] = entry;
+        // Child discovery must not replace a selected full entry with metadata.
+        if (!parentKeys.has(sessionKey)) {
+          target.store[sessionKey] = entry;
+        }
       }
     }
     for (const { childSessionKey } of listSubagentSessionListRunsForControllers([...parentKeys])) {
@@ -607,10 +552,10 @@ function includeDirectChildEntries(
     for (const child of resolveGatewaySessionStoreTargetsReadOnly({
       cfg,
       targets,
-      projection: projection ?? "full",
+      projection: "list",
     })) {
       const entry = child.store[child.canonicalKey];
-      if (entry) {
+      if (entry && !parentKeys.has(child.canonicalKey)) {
         target.store[child.canonicalKey] = entry;
       }
     }

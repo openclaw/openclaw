@@ -1,6 +1,7 @@
 // Gateway HTTP session history endpoint.
 // Serves JSON and SSE history snapshots backed by session transcripts.
 import type { IncomingMessage, ServerResponse } from "node:http";
+import path from "node:path";
 import { parseStrictPositiveInteger } from "@openclaw/normalization-core/number-coercion";
 import { err, ok, type Result } from "@openclaw/normalization-core/result";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
@@ -43,6 +44,7 @@ import {
   SessionHistorySseState,
 } from "./session-history-state.js";
 import { createSessionListEntryFilter, resolveSessionSharingTarget } from "./session-sharing.js";
+import { resolveSessionStoreKey } from "./session-store-key.js";
 import {
   resolveTranscriptPathForComparison,
   resolveTranscriptUpdatePathForComparison,
@@ -175,7 +177,13 @@ export async function handleSessionHistoryHttpRequest(
   let target: ReturnType<typeof resolveGatewaySessionStoreTargetWithStore>;
   let entry: ReturnType<typeof resolveCanonicalSessionEntryFromStoreKeys>;
   try {
-    target = resolveGatewaySessionStoreTargetWithStore({ cfg, key: sessionKey });
+    target = resolveGatewaySessionStoreTargetWithStore({
+      cfg,
+      key: sessionKey,
+      exactRead: true,
+      // Preserve configured-store initialization; retired and incognito targets stay read-only.
+      readOnly: false,
+    });
     entry = resolveCanonicalSessionEntryFromStoreKeys(target.store, target.storeKeys);
   } catch (error) {
     if ((error as { code?: unknown })?.code !== "SESSION_CANONICAL_KEY_MIGRATION_REQUIRED") {
@@ -326,6 +334,10 @@ export async function handleSessionHistoryHttpRequest(
     return true;
   }
 
+  // Legacy selectors map lexically to SQLite; following a JSON symlink could merge owners.
+  const historyStorePath = path.resolve(target.storePath);
+  const historyLifecycleRevision = normalizeOptionalString(entry.lifecycleRevision);
+  const historyDatabasePath = resolveTranscriptPathForComparison(target.readSource?.path);
   const transcriptCandidates = new Set(
     resolveSessionTranscriptCandidates(
       historyTarget.sessionId,
@@ -492,14 +504,43 @@ export async function handleSessionHistoryHttpRequest(
 
   streamResources.unsubscribe = onInternalSessionTranscriptUpdate((update) => {
     // Filter the global fan-out before retaining messages or scheduling async work.
+    const updateTarget = update.target;
     const updateMatchesIdentity =
-      update.target?.sessionId === historyTarget.sessionId &&
-      normalizeAgentId(update.target.agentId) === normalizeAgentId(target.agentId);
+      updateTarget?.sessionId === historyTarget.sessionId &&
+      normalizeAgentId(updateTarget.agentId) === normalizeAgentId(target.agentId) &&
+      (updateTarget.sessionKey === historyTarget.sessionKey ||
+        resolveSessionStoreKey({
+          cfg: getRuntimeConfig(),
+          sessionKey: updateTarget.sessionKey,
+          storeAgentId: target.agentId,
+        }) === historyTarget.sessionKey);
+    const updateLifecycleRevision = normalizeOptionalString(update.lifecycleRevision);
+    if (updateTarget && !updateMatchesIdentity) {
+      return;
+    }
     const updatePath = resolveTranscriptUpdatePathForComparison(update);
     if (!updateMatchesIdentity && (!updatePath || !transcriptCandidates.has(updatePath))) {
       return;
     }
-    if (update.message === undefined || limit !== undefined || cursor !== undefined) {
+    if (
+      updateLifecycleRevision !== historyLifecycleRevision ||
+      update.message === undefined ||
+      limit !== undefined ||
+      cursor !== undefined
+    ) {
+      queueStreamRefresh();
+      return;
+    }
+    const updateStorePath = updateTarget?.storePath
+      ? path.resolve(updateTarget.storePath)
+      : undefined;
+    const updateMatchesStore = updateStorePath?.endsWith(".sqlite")
+      ? historyDatabasePath !== undefined &&
+        resolveTranscriptUpdatePathForComparison(update, "storePath") === historyDatabasePath
+      : updateStorePath === historyStorePath;
+    if (updateTarget?.sessionKey !== historyTarget.sessionKey || !updateMatchesStore) {
+      // Legacy notifications and unfamiliar aliases can invalidate canonical history,
+      // but their carried payload does not establish physical or lifecycle ownership.
       queueStreamRefresh();
       return;
     }

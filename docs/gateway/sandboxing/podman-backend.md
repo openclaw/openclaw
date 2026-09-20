@@ -43,6 +43,18 @@ Build or pull the sandbox image into the selected Podman store before enabling t
 podman build -t openclaw-sandbox:bookworm-slim -f scripts/docker/sandbox/Dockerfile .
 ```
 
+## Host init prerequisite
+
+OpenClaw creates Podman sandboxes with `--init` so orphaned tool processes are reaped. The Podman engine host needs its init executable, normally `catatonit`. Installing it only inside the sandbox image does not satisfy this requirement. For Podman Machine, the executable belongs inside the machine, not on the client host.
+
+On Debian or Ubuntu, minimal installs using `--no-install-recommends` can omit the helper. Include it explicitly when provisioning the engine host:
+
+```bash
+sudo apt-get install podman catatonit
+```
+
+If sandbox creation reports `lookup init binary` or `container-init binary not found on the host`, install the helper or repair Podman's configured `init_path`/`helper_binaries_dir` in `containers.conf`, then retry. Podman can resolve helpers outside `PATH`; a successful `podman info` does not prove that `--init` works. Keep sandboxing and `--init` enabled rather than bypassing this prerequisite.
+
 Podman notes:
 
 - Browser sandboxing is not supported by Podman; keep `sandbox.browser.enabled` off, or install Docker and select `backend: "docker"`.

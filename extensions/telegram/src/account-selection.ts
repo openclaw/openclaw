@@ -1,4 +1,3 @@
-// Telegram plugin module implements account selection behavior.
 import {
   createAccountListHelpers,
   hasConfiguredAccountValue,

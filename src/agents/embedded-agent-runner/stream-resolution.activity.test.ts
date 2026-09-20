@@ -10,6 +10,7 @@ import {
 } from "openclaw/plugin-sdk/llm";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferredCore } from "../../shared/deferred.js";
 import { streamWithIdleTimeout } from "./run/llm-idle-timeout.js";
 import { resolveEmbeddedAgentStream } from "./stream-resolution.js";
 
@@ -39,6 +40,31 @@ afterEach(() => {
 });
 
 describe("embedded provider stream activity", () => {
+  it("revalidates run authority after deferred credential resolution", async () => {
+    const credentials = createDeferredCore<string>();
+    let current = true;
+    const providerStreamFn = vi.fn(async () => ({}));
+    const streamFn = resolveEmbeddedAgentStream({
+      llmRuntime: defaultLlmRuntime,
+      currentStreamFn: undefined,
+      providerStreamFn: providerStreamFn as never,
+      sessionId: "session-1",
+      model,
+      authStorage: { getApiKey: vi.fn(() => credentials.promise) },
+      assertCurrent: () => {
+        if (!current) {
+          throw new Error("source authority revoked");
+        }
+      },
+    }).streamFn;
+
+    const pending = streamFn(model, {} as never, {});
+    current = false;
+    credentials.resolve("stored-key");
+    await expect(pending).rejects.toThrow("source authority revoked");
+    expect(providerStreamFn).not.toHaveBeenCalled();
+  });
+
   it("keeps provider request activity reaching the caller signal after the run signal merge", async () => {
     const providerStreamFn = vi.fn(async (_model, _context, options) => options);
     const runController = new AbortController();

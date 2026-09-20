@@ -1,5 +1,6 @@
 // Persistent cron session tests cover lifecycle admission and mutation races.
 import path from "node:path";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
@@ -73,6 +74,103 @@ describe("runCronIsolatedAgentTurn session lifecycle", () => {
     resetRunCronIsolatedAgentTurnHarness();
     mockRunCronFallbackPassthrough();
   });
+
+  it.each([
+    { sessionTarget: "isolated", runner: "embedded" },
+    { sessionTarget: "current", runner: "embedded" },
+    { sessionTarget: "isolated", runner: "cli" },
+    { sessionTarget: "current", runner: "cli" },
+  ] as const)(
+    "persists cron prompt provenance for $sessionTarget runs using $runner",
+    async ({ sessionTarget, runner }) => {
+      const accessor = await vi.importActual<
+        typeof import("../../config/sessions/session-accessor.js")
+      >("../../config/sessions/session-accessor.js");
+      const dir = tempDirs.make("openclaw-cron-prompt-provenance-");
+      const sessionId = "cron-provenance-run";
+      const jobId = "daily-monitor";
+      const sourceSessionKey = "agent:main:main";
+      const runSessionKey = `agent:main:cron:${jobId}:run:${sessionId}`;
+      const storePath = path.join(dir, "openclaw-agent.sqlite");
+      const sourceEntry = { sessionId: "source-session", updatedAt: 1 };
+      await accessor.replaceSessionEntry(
+        { agentId: "main", sessionKey: sourceSessionKey, storePath },
+        sourceEntry,
+      );
+      resolveCronSessionMock.mockReturnValue(
+        makeCronSession({
+          storePath,
+          store: { [sourceSessionKey]: sourceEntry },
+          sessionEntry: makeCronSessionEntry({ sessionId }),
+        }),
+      );
+      isCliProviderMock.mockReturnValue(runner === "cli");
+      let modelPrompt: string | undefined;
+      (runner === "cli" ? runCliAgentMock : runEmbeddedAgentMock).mockImplementationOnce(
+        async (runParams: {
+          prompt: string;
+          userTurnTranscriptRecorder: UserTurnTranscriptRecorder;
+        }) => {
+          modelPrompt = runParams.prompt;
+          await runParams.userTurnTranscriptRecorder.persistApproved({ cwd: dir });
+          return { payloads: [{ text: "Monitor complete" }], meta: { agentMeta: {} } };
+        },
+      );
+
+      const result = await runCronIsolatedAgentTurn(
+        makeIsolatedAgentParamsFixture({
+          agentId: "main",
+          sessionKey: `cron:${jobId}`,
+          job: makeIsolatedAgentJobFixture({
+            id: jobId,
+            name: "Daily monitor",
+            sessionTarget,
+            sessionKey: sourceSessionKey,
+            payload: { kind: "agentTurn", message: "Read REFRESH.md.\n    Keep indentation." },
+          }),
+        }),
+      );
+
+      expect(result.status).toBe("ok");
+      expect(result.sessionKey).toBe(runSessionKey);
+      expect(modelPrompt).toContain(
+        `[cron:${jobId} Daily monitor] Read REFRESH.md.\n    Keep indentation.\nCurrent time:`,
+      );
+      const entries = (
+        await accessor.loadTranscriptEvents({
+          agentId: "main",
+          sessionId,
+          sessionKey: runSessionKey,
+          storePath,
+        })
+      ).filter((entry) => asOptionalRecord(entry)?.type === "message");
+      expect(entries).toHaveLength(1);
+      expect(entries[0]).toMatchObject({
+        message: {
+          role: "user",
+          content: modelPrompt,
+          provenance: {
+            kind: "internal_system",
+            sourceTool: "cron",
+            sourcePromptPrefix: `[cron:${jobId} Daily monitor]`,
+            jobId,
+            runId: sessionId,
+            sourceSessionKey: runSessionKey,
+          },
+        },
+      });
+      expect(
+        (
+          await accessor.loadTranscriptEvents({
+            agentId: "main",
+            sessionId: sourceEntry.sessionId,
+            sessionKey: sourceSessionKey,
+            storePath,
+          })
+        ).filter((entry) => asOptionalRecord(entry)?.type === "message"),
+      ).toEqual([]);
+    },
+  );
 
   it.each([
     "completed",

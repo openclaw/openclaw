@@ -32,6 +32,7 @@ import {
   UPDATE_COMPATIBILITY_INVENTORY_FILE,
   writeUpdateCompatibilityChunks,
 } from "./lib/update-compat-chunks.mts";
+import { buildUpdateConfigRuntimeAlias } from "./lib/update-config-runtime-compat.mts";
 import { writeTextFileIfChanged } from "./runtime-postbuild-shared.mjs";
 import { stageBundledPluginRuntime } from "./stage-bundled-plugin-runtime.mts";
 import { writeBuildInfo } from "./write-build-info.ts";
@@ -530,7 +531,13 @@ export function writeStableRootRuntimeAliases(params: RuntimeFsParams = {}) {
       }
       continue;
     }
-    const source = buildRuntimeAliasSource(candidate, distDir, fsImpl);
+    const source =
+      aliasFileName === "io.runtime.js"
+        ? buildUpdateConfigRuntimeAlias(
+            candidate,
+            fsImpl.readFileSync(path.join(distDir, candidate), "utf8"),
+          )
+        : buildRuntimeAliasSource(candidate, distDir, fsImpl);
     const owner = ownership?.chunks[candidate];
     if (ownership && owner) {
       const targetSource = fsImpl.readFileSync(path.join(distDir, candidate));

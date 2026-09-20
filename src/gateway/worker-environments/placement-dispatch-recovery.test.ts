@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import {
+  WORKER_EXECUTION_AUTHORITY_PROTOCOL_FEATURE,
   WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE,
   WORKER_LAUNCH_V2_PROTOCOL_FEATURE,
   type WorkerAdmissionHandshake,
@@ -231,12 +232,11 @@ describe("worker placement restart recovery", () => {
       const environments = support.createService(
         support.createProvider({ inspect: async () => ({ status: "unknown" }), destroy }),
       );
-      const ready = await environments.create(
-        "development",
-        "provider-loss-cleanup",
-        undefined,
-        "remote-exec",
-      );
+      const ready = await environments.createWithRequest({
+        profileId: "development",
+        idempotencyKey: "provider-loss-cleanup",
+        executionMode: "remote-exec",
+      });
       const attached = await environments.attachSession({
         environmentId: ready.environmentId,
         ownerEpoch: ready.ownerEpoch,
@@ -472,10 +472,7 @@ describe("worker placement restart recovery", () => {
         ownerEpoch: 91,
         attachedSessionIds: ["session-unrelated"],
       };
-      vi.mocked(harness.environments.create).mockResolvedValue(unrelatedEnvironment);
-      vi.mocked(harness.environments.createFromProfileSnapshot).mockResolvedValue(
-        unrelatedEnvironment,
-      );
+      vi.mocked(harness.environments.createWithRequest).mockResolvedValue(unrelatedEnvironment);
       vi.mocked(harness.environments.get).mockImplementation((environmentId) => {
         if (environmentId === unrelatedEnvironment.environmentId) {
           return unrelatedEnvironment;
@@ -496,7 +493,7 @@ describe("worker placement restart recovery", () => {
           : REQUEST;
 
       await expect(harness.service.dispatch(request)).rejects.toThrow(
-        "current execution-context contract",
+        "current worker launch contract",
       );
 
       expect(harness.placements.current()).toMatchObject({
@@ -547,7 +544,7 @@ describe("worker placement restart recovery", () => {
       workerBundleHash: harness.ready.bootstrapReceipt?.bundleHash,
     });
     expect(harness.placements.current()!.generation).toBeGreaterThan(provisioning.generation);
-    expect(harness.environments.create).not.toHaveBeenCalled();
+    expect(harness.environments.createWithRequest).not.toHaveBeenCalled();
     expect(harness.environments.attachSession).toHaveBeenCalledOnce();
     expect(harness.environments.destroy).not.toHaveBeenCalled();
     expect(harness.log).toContain("recovery-barrier");
@@ -903,12 +900,36 @@ describe("worker placement restart recovery", () => {
     expect(restartedHarness.environments.startTunnel).not.toHaveBeenCalled();
   });
 
+  it("does not adopt an active worker missing exec-authority launch support", async () => {
+    const placements = createWorkerSessionPlacementStore({
+      database: support.testState.stateDb,
+      now: () => 1_000,
+    });
+    const harness = createHarness(support.testState.stateDb, placements);
+    await harness.environments.attachSession({
+      environmentId: harness.ready.environmentId,
+      ownerEpoch: harness.ready.ownerEpoch,
+      sessionId: "session-1",
+    });
+    harness.placements.seedActive(harness.attached.ownerEpoch);
+    harness.markEnvironmentProtocolFeatures([WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE]);
+
+    await harness.service.reconcile();
+
+    expect(harness.placements.current()).toMatchObject({ state: "reclaimed" });
+    expect(harness.environments.startTunnel).not.toHaveBeenCalled();
+    expect(harness.environments.destroy).toHaveBeenCalledOnce();
+  });
+
   it.each(["bundle", "provider"] as const)(
     "keeps stale pending recovery fenced when %s recovery is unavailable",
     async (failure) => {
       const currentReceipt: WorkerAdmissionHandshake = {
         ...support.BOOTSTRAP_RECEIPT,
-        protocolFeatures: [WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE],
+        protocolFeatures: [
+          WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE,
+          WORKER_EXECUTION_AUTHORITY_PROTOCOL_FEATURE,
+        ],
       };
       let currentBundle: WorkerInstallationArtifact = {
         ...support.BUNDLE_ARTIFACT,

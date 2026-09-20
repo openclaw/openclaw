@@ -1,4 +1,3 @@
-// Qa Lab plugin module implements child output behavior.
 import { StringDecoder } from "node:string_decoder";
 
 export const QA_CHILD_STDOUT_MAX_BYTES = 1024 * 1024;

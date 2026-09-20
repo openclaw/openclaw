@@ -168,29 +168,35 @@ export function renderTeamSessionSlots(
   const attention = summarizeSidebarSessionAttention(
     rows.flatMap((row) => [
       row.ownAttention ?? row.attention,
-      ...(includeChildren ? (row.childAttention ?? []) : []),
+      ...((includeChildren ? row : row.subagentSummary)?.childAttention ?? []),
     ]),
   );
   const active = rows.reduce(
-    (n, row) => n + Number(row.hasActiveRun) + (includeChildren ? row.runningChildCount : 0),
+    (n, row) =>
+      n +
+      Number(row.hasActiveRun) +
+      ((includeChildren ? row : row.subagentSummary)?.runningChildCount ?? 0),
     0,
   );
   const queued = rows.reduce(
     (n, row) =>
       n +
       Number(row.hasActiveRun && row.status === "queued") +
-      (includeChildren ? (row.queuedChildCount ?? 0) : 0),
+      ((includeChildren ? row : row.subagentSummary)?.queuedChildCount ?? 0),
     0,
   );
   const unread = rows.reduce(
-    (n, row) => n + Number(row.unread) + (includeChildren ? (row.unreadChildCount ?? 0) : 0),
+    (n, row) =>
+      n +
+      Number(row.unread) +
+      ((includeChildren ? row : row.subagentSummary)?.unreadChildCount ?? 0),
     0,
   );
   const failed = rows.some(
     (row) =>
       row.status === "failed" ||
       row.status === "timeout" ||
-      (includeChildren && row.failedChildCount > 0),
+      ((includeChildren ? row : row.subagentSummary)?.failedChildCount ?? 0) > 0,
   );
   const state =
     attention && attention.kind !== "none"

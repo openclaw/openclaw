@@ -269,7 +269,7 @@ async function readSystemdDropInOverrides(
   dropInPaths: string[],
   managedUnsetEnvironment: string[],
   env: GatewayServiceEnv,
-): Promise<GatewayServiceManagedOverrides | undefined> {
+): Promise<GatewayServiceManagedOverrides> {
   const inlineEnvironmentKeys = new Set<string>();
   const fileEnvironmentKeys = new Set<string>();
   const unsetEnvironmentKeys = new Set<string>();
@@ -365,7 +365,9 @@ async function readSystemdDropInOverrides(
       };
     }
   }
-  return Object.keys(overrides).length ? overrides : undefined;
+  // A known-empty set preserves the authored definition without mistaking native
+  // defaults (such as a user service's home cwd) for operator-owned overrides.
+  return overrides;
 }
 
 export async function readSystemdServiceExecStart(

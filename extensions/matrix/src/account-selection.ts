@@ -1,4 +1,3 @@
-// Matrix plugin module implements account selection behavior.
 import {
   listCombinedAccountIds,
   listConfiguredAccountIds,

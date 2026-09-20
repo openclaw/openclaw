@@ -35,7 +35,7 @@ import {
 } from "./verified-inference.test-support.js";
 
 export const tempDirs = createTempDirTracker();
-export const modelRef = "openai/gpt-4.1-mini";
+export const modelRef = "openai/gpt-5.4-mini";
 export const credential = {
   type: "api_key",
   provider: "openai",
@@ -57,6 +57,8 @@ export async function fixture(
     codex?: boolean;
     subscription?: boolean;
     homeScope?: "agent" | "user";
+    modelTarget?: "utility";
+    primaryModel?: string;
   } = {},
 ) {
   const root = tempDirs.make("setup-activation-");
@@ -88,12 +90,16 @@ export async function fixture(
         }
       : credential;
   const config: OpenClawConfig = {
+    meta: { migrations: { utilityModelSeparation: true } },
     gateway: { mode: "local" },
     plugins: { slots: { memory: "none" } },
     agents: {
       entries: { main: { default: true } },
       defaults: {
         workspace,
+        ...(options.primaryModel
+          ? { model: { primary: options.primaryModel, fallbacks: ["stable/fallback"] } }
+          : {}),
         skipBootstrap: true,
         models: { [modelRef]: { agentRuntime: { id: "openclaw" } } },
       },
@@ -107,7 +113,7 @@ export async function fixture(
           api: options.subscription ? "openai-chatgpt-responses" : "openai-responses",
           models: [
             {
-              id: "gpt-4.1-mini",
+              id: "gpt-5.4-mini",
               name: "Fixture model",
               reasoning: false,
               input: ["text"],
@@ -148,6 +154,7 @@ export async function fixture(
     methodId: "fixture-login",
     choiceId: "fixture-login",
     choiceLabel: "Fixture sign-in",
+    ...(options.modelTarget ? { modelTarget: options.modelTarget } : {}),
     ...(options.authMethod === "api_key"
       ? { appGuidedSecret: true }
       : { appGuidedAuth: "oauth" as const }),
@@ -235,14 +242,14 @@ export async function fixture(
             ...codexRuntimeArtifactAuth,
           }
         : {}),
-      modelId: "gpt-4.1-mini",
+      modelId: "gpt-5.4-mini",
       modelApi: options.subscription ? "openai-chatgpt-responses" : "openai-responses",
     });
     return {
       payloads: [{ text: "OK" }],
       meta: {
         durationMs: 1,
-        executionTrace: { winnerProvider: "openai", winnerModel: "gpt-4.1-mini" },
+        executionTrace: { winnerProvider: "openai", winnerModel: "gpt-5.4-mini" },
       },
     };
   };
@@ -294,12 +301,13 @@ export async function fixture(
     activationConfirmed?: true,
     overrides: Pick<
       ActivateSetupInferenceParams,
-      "apiKey" | "signal" | "onActivationCompletion"
+      "apiKey" | "signal" | "onActivationCompletion" | "modelTarget" | "modelRef"
     > = {},
   ) =>
     metadata.run(() =>
       activateSetupInference({
         kind,
+        ...(options.modelTarget ? { modelTarget: options.modelTarget } : {}),
         authChoice: choice.choiceId,
         modelRef,
         nativeSessionCatalogsEnabled: false,

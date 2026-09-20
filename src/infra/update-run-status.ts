@@ -9,7 +9,10 @@ import {
   LEGACY_UPDATE_RUN_ADVISORY,
   LEGACY_UPDATE_RUN_EXPIRED_REASON,
 } from "./update-run-legacy-expiry.js";
-import { UNPROTECTED_GATEWAY_UPDATE_ADVISORY } from "./update-run-record.js";
+import {
+  isAcknowledgedAbandonedUpdateRun,
+  UNPROTECTED_GATEWAY_UPDATE_ADVISORY,
+} from "./update-run-record.js";
 /** Status heals the bounded legacy defect while other recovery keeps its existing owner. */
 export function readUpdateRunStatus() {
   let runReconciliationError: string | undefined;
@@ -35,7 +38,8 @@ export function readUpdateRunStatus() {
       ...(abandonment && abandonment !== LEGACY_UPDATE_RUN_EXPIRED_REASON && activeRun
         ? { abandonedRun: { runId: activeRun.runId, rule: abandonment } }
         : {}),
-      ...(expired || currentRun?.origin.unprotectedGatewayUpdate
+      ...((expired && !isAcknowledgedAbandonedUpdateRun(expired)) ||
+      currentRun?.origin.unprotectedGatewayUpdate
         ? {
             advisories: [
               ...(expired

@@ -94,6 +94,13 @@ describe("chat Swarm progress", () => {
           title: "Enxame",
           groupTitle: "Tarefas paralelas",
           progress: "{complete} de {total}",
+          failedOrStopped: "Falhou ou foi interrompida",
+        },
+      },
+      tasksPage: {
+        status: {
+          running: "Em execução",
+          completed: "Concluído",
         },
       },
     });
@@ -102,14 +109,20 @@ describe("chat Swarm progress", () => {
     const container = renderProgress([
       session({ key: "running", status: "running" }),
       session({ key: "done", status: "done" }),
+      session({ key: "stopped", status: "killed" }),
     ]);
 
     expect(
       container.querySelector(".chat-swarm__header")?.textContent?.replace(/\s+/g, " "),
-    ).toContain("1 de 2");
+    ).toContain("2 de 3");
     expect(container.querySelector(".chat-swarm__header strong")?.textContent).toBe(
       "Tarefas paralelas",
     );
+    expect(
+      [...container.querySelectorAll('[role="listitem"]')].map((row) =>
+        row.querySelector('[role="img"]')?.getAttribute("aria-label"),
+      ),
+    ).toEqual(["Em execução", "Concluído", "Falhou ou foi interrompida"]);
   });
 
   it("groups live collector children and maps their task states", () => {
@@ -138,6 +151,11 @@ describe("chat Swarm progress", () => {
       "chat-swarm__task-icon chat-swarm__task-icon--done",
       "chat-swarm__task-icon chat-swarm__task-icon--failed",
     ]);
+    expect(
+      [...container.querySelectorAll('[role="listitem"]')].map((row) =>
+        row.querySelector('[role="img"]')?.getAttribute("aria-label"),
+      ),
+    ).toEqual(["Queued", "Running", "Completed", "Failed or stopped"]);
   });
 
   it.each([

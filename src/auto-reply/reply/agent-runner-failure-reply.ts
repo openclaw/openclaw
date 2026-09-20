@@ -17,7 +17,10 @@ import {
   findCliTimeoutError,
   isFailoverError,
 } from "../../agents/failover-error.js";
-import { renderAssistantRequestFailureCopy } from "../../agents/failover/assistant-request-failure-copy.js";
+import {
+  renderAssistantRequestFailureCopy,
+  renderFormatErrorCopy,
+} from "../../agents/failover/assistant-request-failure-copy.js";
 import { classifyProviderRequestFacets } from "../../agents/failover/request-error-facets.js";
 import {
   GENERIC_EXTERNAL_RUN_FAILURE_TEXT,
@@ -36,8 +39,7 @@ import {
 import { isAgentHarnessPreflightError } from "../../agents/harness/errors.js";
 import { isProviderAuthError } from "../../agents/model-auth-runtime-shared.js";
 import { buildProviderAuthRecoveryHint } from "../../agents/provider-auth-recovery-hint.js";
-import { resolveSilentReplyPolicy } from "../../config/silent-reply.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import type { ReplyCompletion, ReplyExpectation } from "../../agents/reply-completion.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { extractErrorHttpStatus } from "../../shared/assistant-error-format.js";
 import { buildProviderLoginRecovery } from "../provider-login-recovery.js";
@@ -55,10 +57,10 @@ import type { ReplyPayload } from "../types.js";
 
 export function resolveReplyFailoverFacts(error: unknown, message: string) {
   const described = describeFailoverError(error);
-  const status = extractErrorHttpStatus(described.rawError ?? message)?.code ?? described.status;
+  const rawError = described.rawError ?? message;
+  const status = extractErrorHttpStatus(rawError)?.code ?? described.status;
   const reason =
-    described.reason ??
-    classifyFailoverReason(described.rawError ?? message, { provider: described.provider });
+    described.reason ?? classifyFailoverReason(rawError, { provider: described.provider });
   const classification = reason ? ({ kind: "reason", reason } as const) : null;
   return {
     reason: classification?.kind === "reason" ? classification.reason : undefined,
@@ -67,11 +69,12 @@ export function resolveReplyFailoverFacts(error: unknown, message: string) {
     model: described.model,
     status,
     authMode: described.authMode,
+    formatFailureText: reason === "format" ? renderFormatErrorCopy(rawError) : undefined,
     providerRequestError: resolveProviderRequestFailureCopy({
       classification,
       facet: classifyProviderRequestFacets({
         status,
-        message: described.rawError ?? message,
+        message: rawError,
       }),
       status,
       technicalMessage: message,
@@ -144,7 +147,6 @@ function collapseRepeatedFailureDetail(message: string): string {
 }
 
 const EXTERNAL_RUN_FAILURE_DETAIL_MAX_CHARS = 900;
-const AGENT_FAILED_BEFORE_REPLY_TEXT = "Agent failed before reply:";
 const PREFLIGHT_COMPACTION_FAILURE_PREFIX = "Preflight compaction required but failed:";
 
 type ExternalRunFailureReply = Pick<ReplyPayload, "text" | "presentation"> & {
@@ -166,29 +168,6 @@ export function isNonDirectConversationContext(ctx: ExternalFailureConversationC
 
 export function isVerboseFailureDetailEnabled(level: VerboseLevel | undefined): boolean {
   return level === "on" || level === "full";
-}
-
-export function resolveExternalRunFailureTextForConversation(params: {
-  text: string;
-  sessionCtx: ExternalFailureConversationContext;
-  isGenericRunnerFailure: boolean;
-  cfg?: OpenClawConfig;
-  visibleReplyDelivered?: boolean;
-}): string {
-  // Group silence must not strand an already-visible partial without its terminal failure.
-  if (params.visibleReplyDelivered || !isNonDirectConversationContext(params.sessionCtx)) {
-    return params.text;
-  }
-  if (!params.isGenericRunnerFailure && !params.text.includes(AGENT_FAILED_BEFORE_REPLY_TEXT)) {
-    return params.text;
-  }
-  const silentPolicy = resolveSilentReplyPolicy({
-    cfg: params.cfg,
-    sessionKey: params.sessionCtx.SessionKey,
-    surface: params.sessionCtx.Surface ?? params.sessionCtx.Provider,
-    conversationType: "group",
-  });
-  return silentPolicy === "disallow" ? params.text : SILENT_REPLY_TOKEN;
 }
 
 const CODEX_APP_SERVER_CLIENT_CLOSED_BEFORE_REPLY_RE =
@@ -387,7 +366,8 @@ export function buildExternalRunFailureReply(
   if (codexAppServerFailure) {
     return { text: codexAppServerFailure, isGenericRunnerFailure: false };
   }
-  const classifiedFailure = renderAssistantRequestFailureCopy(failoverFacts);
+  const classifiedFailure =
+    failoverFacts.formatFailureText ?? renderAssistantRequestFailureCopy(failoverFacts);
   if (classifiedFailure) {
     return { text: classifiedFailure, isGenericRunnerFailure: false };
   }
@@ -433,55 +413,44 @@ export function renderPostCompactionModelFailurePayload(payload: ReplyPayload): 
     : payload;
 }
 
+/** Optional silence hides generic boilerplate, not guidance or the outcome of visible work. */
+export function resolveAgentRunFailureText(params: {
+  text: string;
+  replyExpectation: ReplyExpectation;
+  isGenericRunnerFailure: boolean;
+  visibleReplyDelivered: boolean;
+}): string {
+  return params.replyExpectation === "optional" &&
+    params.isGenericRunnerFailure &&
+    !params.visibleReplyDelivered
+    ? SILENT_REPLY_TOKEN
+    : params.text;
+}
+
 export function buildTerminalAgentRunFailureReplyPayload(params: {
   isHeartbeat?: boolean;
+  replyExpectation: ReplyExpectation;
   visibleReplyDelivered: boolean;
-  sessionCtx: ExternalFailureConversationContext;
-  cfg?: OpenClawConfig;
 }): ReplyPayload {
-  const text = params.isHeartbeat
-    ? HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT
-    : GENERIC_EXTERNAL_RUN_FAILURE_TEXT;
   return markAgentRunFailureReplyPayload({
-    text: resolveExternalRunFailureTextForConversation({
+    text: resolveAgentRunFailureText({
       ...params,
-      text,
-      isGenericRunnerFailure: true,
+      text: params.isHeartbeat
+        ? HEARTBEAT_EXTERNAL_RUN_FAILURE_TEXT
+        : GENERIC_EXTERNAL_RUN_FAILURE_TEXT,
+      isGenericRunnerFailure: !params.isHeartbeat,
     }),
   });
 }
 
 export function buildEmptyInteractiveReplyPayload(params: {
-  isInteractive: boolean;
-  isHeartbeat?: boolean;
-  silentExpected?: boolean;
-  allowEmptyAssistantReplyAsSilent?: boolean;
-  hasPendingContinuation: boolean;
-  hasExplicitSilentReply: boolean;
-  hasCommittedDelivery: boolean;
-  hasIntentionalTerminalCompletion: boolean;
-  sessionCtx: ExternalFailureConversationContext;
-  cfg?: OpenClawConfig;
+  completion: ReplyCompletion;
 }): ReplyPayload | undefined {
-  if (
-    !params.isInteractive ||
-    params.isHeartbeat === true ||
-    params.silentExpected === true ||
-    params.allowEmptyAssistantReplyAsSilent === true ||
-    params.hasPendingContinuation ||
-    params.hasExplicitSilentReply ||
-    params.hasCommittedDelivery ||
-    params.hasIntentionalTerminalCompletion
-  ) {
+  if (params.completion.outcome !== "missing") {
     return undefined;
   }
   return markAgentRunFailureReplyPayload({
-    text: resolveExternalRunFailureTextForConversation({
-      text: "I finished the turn, but it did not produce a visible reply. Please try again, or start a new session if this keeps happening.",
-      sessionCtx: params.sessionCtx,
-      isGenericRunnerFailure: true,
-      cfg: params.cfg,
-    }),
+    text: "I finished the turn, but it did not produce a visible reply. Please try again, or start a new session if this keeps happening.",
   });
 }
 
@@ -490,7 +459,6 @@ export function buildKnownAgentRunFailureReplyPayload(params: {
   err: unknown;
   sessionCtx: TemplateContext;
   resolvedVerboseLevel: VerboseLevel | undefined;
-  cfg?: OpenClawConfig;
 }): ReplyPayload | undefined {
   // Direct preflight diagnostics are not provider failures; preserve their
   // identity for the caller's generic settlement and disclosure policy.
@@ -525,12 +493,7 @@ export function buildKnownAgentRunFailureReplyPayload(params: {
     return undefined;
   }
   return markAgentRunFailureReplyPayload({
-    text: resolveExternalRunFailureTextForConversation({
-      text: externalRunFailureReply.text,
-      sessionCtx: params.sessionCtx,
-      isGenericRunnerFailure: false,
-      cfg: params.cfg,
-    }),
+    text: externalRunFailureReply.text,
     ...(externalRunFailureReply.presentation
       ? { presentation: externalRunFailureReply.presentation }
       : {}),

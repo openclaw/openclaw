@@ -7,6 +7,10 @@ import path from "node:path";
 import { expect, onTestFinished, test, vi } from "vitest";
 import * as sessionAccessor from "../config/sessions/session-accessor.js";
 import * as sessionHistoryEvents from "../config/sessions/session-accessor.sqlite-history-events.js";
+import {
+  closeOpenClawAgentDatabaseByPath,
+  resolveIncognitoOpenClawAgentSqlitePath,
+} from "../state/openclaw-agent-db.js";
 import type { ControlUiSessionPreview } from "./control-ui-contract.js";
 import type { GatewayClient } from "./server-methods/types.js";
 import { createToolSummaryPreviewTranscriptLines } from "./session-preview.test-helpers.js";
@@ -110,7 +114,7 @@ test("lists and previews the selected aggregate global owner over WebSocket", as
     const preview = await rpcReq<ControlUiSessionPreview>(ws, "controlUi.sessionPreview", {
       sessionKey: "agent:work:main",
     });
-    expect(preview).toMatchObject({
+    expect(preview, JSON.stringify(preview)).toMatchObject({
       ok: true,
       payload: { status: "ok", agentId: "work", derivedTitle: "Work global conversation" },
     });
@@ -416,7 +420,7 @@ test("sessions.resolve filters discovery selectors with sessions.list visibility
   const secondVisibleKey = "agent:main:thread:12345678-0ccc-4000-8000-000000000005";
   const hiddenCollisionKey = "agent:main:thread:12345678-0bbb-4000-8000-000000000002";
   const hiddenOnlyKey = "agent:main:thread:deadbeef-0aaa-4000-8000-000000000003";
-  const incognitoKey = "agent:main:thread:cafebabe-0aaa-4000-8000-000000000004";
+  const incognitoKey = "agent:main:dashboard:incognito-cafebabe-0aaa-4000-8000-000000000004";
   await writeSessionStore({
     entries: {
       [visibleKey]: {
@@ -451,17 +455,24 @@ test("sessions.resolve filters discovery selectors with sessions.list visibility
         visibility: "draft",
         createdActor: { type: "human", source: "profile", id: "owner" },
       },
-      [incognitoKey]: {
-        sessionId: "sess-incognito",
-        label: "incognito-only",
-        displayName: "Incognito only",
-        updatedAt: 10,
-        visibility: "shared",
-        incognito: true,
-        createdActor: { type: "human", source: "profile", id: "viewer" },
-      },
     },
   });
+  const incognitoPath = resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main" });
+  onTestFinished(() => {
+    closeOpenClawAgentDatabaseByPath(incognitoPath);
+  });
+  await sessionAccessor.upsertSessionEntryCore(
+    { agentId: "main", sessionKey: incognitoKey, storePath: incognitoPath },
+    {
+      sessionId: "sess-incognito",
+      label: "incognito-only",
+      displayName: "Incognito only",
+      updatedAt: 10,
+      visibility: "shared",
+      incognito: true,
+      createdActor: { type: "human", source: "profile", id: "viewer" },
+    },
+  );
   const client = identifiedClient("viewer");
 
   for (const params of [
@@ -517,9 +528,16 @@ test("sessions.resolve filters discovery selectors with sessions.list visibility
   );
   expect(ownerDraft).toMatchObject({ ok: true, payload: { ok: true, key: hiddenOnlyKey } });
 
-  const adminIncognito = await directSessionReq<{ ok: true; key: string }>(
+  const adminIncognitoDiscovery = await directSessionReq(
     "sessions.resolve",
     { shortId: "cafebabe" },
+    { client: identifiedClient("admin", ["operator.admin"]) },
+  );
+  expect(adminIncognitoDiscovery.ok).toBe(false);
+  expect(adminIncognitoDiscovery.error?.message).toContain("No session found");
+  const adminIncognito = await directSessionReq<{ ok: true; key: string }>(
+    "sessions.resolve",
+    { key: incognitoKey },
     { client: identifiedClient("admin", ["operator.admin"]) },
   );
   expect(adminIncognito).toMatchObject({ ok: true, payload: { ok: true, key: incognitoKey } });

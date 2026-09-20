@@ -7,9 +7,9 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
 import { gatewayOriginScope } from "../../packages/gateway-client/src/gateway-origin-scope.js";
 import {
-  loadOriginDeviceTokenReadOnly,
-  storeOriginDeviceToken,
-} from "../infra/device-auth-store.js";
+  readOriginDeviceTokenReadOnlyForTest,
+  seedOriginDeviceToken,
+} from "../infra/device-auth-store.test-support.js";
 import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
 import { acquireGatewayLock } from "../infra/gateway-lock.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
@@ -151,7 +151,7 @@ describe("gateway-backed CLI process exit", () => {
       OPENCLAW_STATE_DIR: stateDir,
     };
     const identity = loadOrCreateDeviceIdentity({ env: stateEnv });
-    storeOriginDeviceToken({
+    seedOriginDeviceToken({
       gatewayScope: gatewayOriginScope(gateway.url),
       deviceId: identity.deviceId,
       role: "operator",
@@ -174,7 +174,7 @@ describe("gateway-backed CLI process exit", () => {
     expect(gateway.calls).toEqual(["node.pair.list", "node.pair.approve"]);
     expect(await snapshotDirectoryContents(stateDir)).toEqual(before);
     expect(
-      loadOriginDeviceTokenReadOnly({
+      readOriginDeviceTokenReadOnlyForTest({
         gatewayScope: gatewayOriginScope(gateway.url),
         deviceId: identity.deviceId,
         role: "operator",
@@ -225,7 +225,7 @@ describe("gateway-backed CLI process exit", () => {
       OPENCLAW_STATE_DIR: stateDir,
     };
     const identity = loadOrCreateDeviceIdentity({ env: stateEnv });
-    storeOriginDeviceToken({
+    seedOriginDeviceToken({
       gatewayScope: gatewayOriginScope(gateway.url),
       deviceId: identity.deviceId,
       role: "operator",
@@ -248,7 +248,7 @@ describe("gateway-backed CLI process exit", () => {
     expect(gateway.authInputs).toEqual([{ deviceToken: storedToken }]);
     expect(gateway.calls).toEqual(["diagnostics.stability"]);
     expect(
-      loadOriginDeviceTokenReadOnly({
+      readOriginDeviceTokenReadOnlyForTest({
         gatewayScope: gatewayOriginScope(gateway.url),
         deviceId: identity.deviceId,
         role: "operator",
@@ -279,7 +279,7 @@ describe("gateway-backed CLI process exit", () => {
       };
       if (seeded) {
         const identity = loadOrCreateDeviceIdentity({ env: stateEnv });
-        storeOriginDeviceToken({
+        seedOriginDeviceToken({
           gatewayScope: gatewayOriginScope(gateway.url),
           deviceId: identity.deviceId,
           role: "operator",

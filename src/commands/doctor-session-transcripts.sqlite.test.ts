@@ -180,12 +180,27 @@ describe("doctor session transcript repair", () => {
       env,
       mode: "doctor-fix",
     });
-    expect(repairLegacySessionWorktreeWorkspaces).toHaveBeenCalledWith({ apply: true, cfg, env });
+    expect(repairLegacySessionWorktreeWorkspaces).toHaveBeenCalledWith({
+      apply: true,
+      cfg,
+      env,
+      targets: [],
+    });
     expect(repairCanonicalSessionKeys.mock.invocationCallOrder[0]).toBeLessThan(
       repairLegacySessionWorktreeWorkspaces.mock.invocationCallOrder[0]!,
     );
-    expect(repairReservedIncognitoSessionKeys).toHaveBeenCalledWith({ apply: true, cfg, env });
-    expect(repairCanonicalSessionResolvedSkills).toHaveBeenCalledWith({ apply: true, cfg, env });
+    expect(repairReservedIncognitoSessionKeys).toHaveBeenCalledWith({
+      apply: true,
+      cfg,
+      env,
+      targets: [],
+    });
+    expect(repairCanonicalSessionResolvedSkills).toHaveBeenCalledWith({
+      apply: true,
+      cfg,
+      env,
+      targets: [],
+    });
     expect(
       expectDefined(runDoctorSessionSqlite.mock.invocationCallOrder[0], "SQLite import call order"),
     ).toBeLessThan(
@@ -276,7 +291,12 @@ describe("doctor session transcript repair", () => {
     const env = { ...process.env, OPENCLAW_STATE_DIR: root };
     await noteSessionTranscriptHealth({ cfg, env, shouldRepair: true });
     expect(repairCanonicalSessionKeys).toHaveBeenCalledWith({ apply: true, cfg, env });
-    expect(repairLegacySessionWorktreeWorkspaces).toHaveBeenCalledWith({ apply: false, cfg, env });
+    expect(repairLegacySessionWorktreeWorkspaces).toHaveBeenCalledWith({
+      apply: false,
+      cfg,
+      env,
+      targets: [],
+    });
   });
 
   it("hands a large untouched original to public Doctor SQLite import without a raw repair copy", async () => {
@@ -403,7 +423,12 @@ describe("doctor session transcript repair", () => {
       mode: "dry-run",
     });
     expect(migrateLegacyMainSessionKeys).toHaveBeenCalledWith({ cfg, env, mode: "detect" });
-    expect(repairLegacySessionWorktreeWorkspaces).toHaveBeenCalledWith({ apply: false, cfg, env });
+    expect(repairLegacySessionWorktreeWorkspaces).toHaveBeenCalledWith({
+      apply: false,
+      cfg,
+      env,
+      targets: [],
+    });
     expect(withDoctorSqliteMaintenanceLock).not.toHaveBeenCalled();
     expect(runPostSessionPluginDoctorStateRepairs).toHaveBeenCalledWith({
       config: cfg,

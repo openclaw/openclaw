@@ -1,0 +1,127 @@
+{
+  "id": "typesafe",
+  "name": "TypeSafe AI",
+  "description": "Optional typed evaluations, not a conversational model provider.",
+  "categories": [
+    "developer-tools"
+  ],
+  "enabledByDefault": false,
+  "activation": {
+    "onStartup": true
+  },
+  "contracts": {
+    "tools": [
+      "typesafe_evaluate"
+    ],
+    "decisionProviders": [
+      "typesafe"
+    ]
+  },
+  "toolMetadata": {
+    "typesafe_evaluate": {
+      "optional": true
+    }
+  },
+  "configContracts": {
+    "secretInputs": {
+      "bundledDefaultEnabled": false,
+      "paths": [
+        {
+          "path": "apiKey",
+          "expected": "string",
+          "ownerKind": "capability"
+        }
+      ]
+    }
+  },
+  "uiHints": {
+    "apiKey": {
+      "label": "TypeSafe API credential",
+      "help": "Select a SecretRef. Create protected credentials in Settings \u2192 Secrets. Never paste credentials in chat.",
+      "sensitive": true
+    },
+    "model": {
+      "label": "Evaluation tool default model",
+      "help": "Default only for the optional typesafe_evaluate tool. Native decisions use the agent decisionModel selection."
+    },
+    "timeoutMs": {
+      "label": "Request timeout (ms)",
+      "advanced": true
+    }
+  },
+  "configSchema": {
+    "type": "object",
+    "properties": {
+      "apiKey": {
+        "type": "object",
+        "required": [
+          "source",
+          "provider",
+          "id"
+        ],
+        "properties": {
+          "source": {
+            "anyOf": [
+              {
+                "type": "string",
+                "const": "env"
+              },
+              {
+                "type": "string",
+                "const": "store"
+              },
+              {
+                "type": "string",
+                "const": "file"
+              },
+              {
+                "type": "string",
+                "const": "exec"
+              }
+            ]
+          },
+          "provider": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 128
+          },
+          "id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 1024
+          }
+        },
+        "additionalProperties": false
+      },
+      "model": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 128,
+        "pattern": "^[a-zA-Z0-9._/-]+$",
+        "default": "jev-latest"
+      },
+      "timeoutMs": {
+        "type": "integer",
+        "minimum": 1000,
+        "maximum": 60000,
+        "default": 10000
+      }
+    },
+    "additionalProperties": false
+  },
+  "skills": [
+    "./skills/typesafe-evaluate"
+  ],
+  "decisionModels": [
+    {
+      "provider": "typesafe",
+      "id": "jev-latest",
+      "name": "Jev"
+    },
+    {
+      "provider": "typesafe",
+      "id": "jev-1.13.0",
+      "name": "Jev 1.13.0"
+    }
+  ]
+}

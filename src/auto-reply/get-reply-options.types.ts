@@ -279,6 +279,8 @@ export type GetReplyOptions = {
     approvalId?: string;
     approvalSlug?: string;
     suppressDurableProgress?: true;
+    hideFromChannelProgress?: boolean;
+    suppressChannelProgress?: boolean;
   }) => Promise<ProgressCallbackResult> | ProgressCallbackResult;
   /**
    * Called when the utility-model narration of the in-progress turn changes.

@@ -175,10 +175,19 @@ so an operator stop remains in effect until the goal is resumed.
 
 ## Control UI
 
-Select **Goal** from the command picker, type the objective, and send. The
-composer shows a Goal label so you can see what Send will do. The objective is
-literal text: words such as `clear` and text such as `/stop` do not become
-commands in Goal mode. Cancel leaves the objective as a normal chat draft.
+Select **Goal** from the command picker with Enter, Tab, or a click, then type
+the objective and choose **Start goal**. Typing `/goal start` followed by a
+space, or submitting `/goal start` without an objective, also opens Goal mode.
+Sending bare `/goal`, even after dismissing
+the picker, opens the composer instead of adding a command to the conversation.
+An empty objective cannot be submitted.
+
+The composer shows a Goal label and an objective prompt so you can see what
+Send will do. The objective is literal text: words such as `clear` and text
+such as `/stop` do not become commands in Goal mode. Escape or Cancel leaves
+the objective as a normal chat draft. Complete pasted commands such as
+`/goal start Fix the tests` and explicit management commands such as
+`/goal status` retain their text-command behavior.
 
 Starting a Goal saves the Goal, its user turn, and the run admission together
 before acknowledging Send. A failed admission leaves the draft intact and

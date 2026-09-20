@@ -83,6 +83,8 @@ export class PluginSettingsEditor extends OpenClawLightDomElement {
 
   private renderField(field: PluginSettingsField) {
     const { label, help, path, disabled } = field;
+    // A retired dropdown keeps the callback that owns its rendered plugin selection.
+    const onAskSetting = this.onAskSetting;
     const effective = field.value === undefined ? field.schema.default : field.value;
     const isBoolean =
       !hintForPath(path, field.hints)?.placeholder &&
@@ -130,7 +132,7 @@ export class PluginSettingsEditor extends OpenClawLightDomElement {
               );
             }
             if (event.detail.item.value === "ask") {
-              this.onAskSetting?.(field);
+              onAskSetting?.(field);
             }
           }}
         >
@@ -147,7 +149,7 @@ export class PluginSettingsEditor extends OpenClawLightDomElement {
             ?disabled=${disabled || field.value === undefined || (field.isRequired && field.schema.default === undefined)}
             >${t("pluginsPage.editor.reset")}</wa-dropdown-item
           >
-          ${this.onAskSetting ? html`<wa-dropdown-item value="ask">${t("pluginsPage.editor.ask")}</wa-dropdown-item>` : nothing}
+          ${onAskSetting ? html`<wa-dropdown-item value="ask">${t("pluginsPage.editor.ask")}</wa-dropdown-item>` : nothing}
         </wa-dropdown>
       </div>
       <div class="plugin-editor__copy">

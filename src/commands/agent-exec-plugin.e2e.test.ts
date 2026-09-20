@@ -326,7 +326,11 @@ if (process.argv[2] === "--version") {
     }
     expect(isolatedExitCode).toBe(1);
     expect(isolatedStdout).not.toContain("PLUGIN_HARNESS_OK");
-    await expect(fs.readdir(stateDir)).resolves.toEqual(["extensions", "openclaw.json", "state"]);
+    expect((await fs.readdir(stateDir)).toSorted()).toEqual([
+      "extensions",
+      "openclaw.json",
+      "state",
+    ]);
     const registryFiles = await fs.readdir(path.join(stateDir, "state"));
     expect(registryFiles).toContain("openclaw.sqlite");
     expect(registryFiles.every((file) => file.startsWith("openclaw.sqlite"))).toBe(true);

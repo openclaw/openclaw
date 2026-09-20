@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import type { IncomingMessage } from "node:http";
 import path from "node:path";
 import { Readable } from "node:stream";
+import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
@@ -139,6 +140,71 @@ describe("node workspace transfer service", () => {
     try {
       const plain = await service.prepareSync({ ...request, generation: 1 });
       expect(plain.snapshot.manifest.baseCommit).toBeNull();
+
+      if (process.platform !== "win32") {
+        const nodeRoot = path.join(root, "node-workspaces");
+        const input = {
+          gatewayNamespace: "gateway-umask",
+          environmentId: request.environmentId,
+          sessionId: request.sessionId,
+          generation: 1,
+          argv: ["node", "-e", ""],
+        };
+        const server = await startNodeWorkspaceTransferTestServer(service);
+        try {
+          const created = await runCommandWithTimeout(
+            [
+              "/bin/sh",
+              "-c",
+              'umask 0002; exec "$@"',
+              "workspace-transfer-umask",
+              process.execPath,
+              "--import",
+              fileURLToPath(new URL("../../../scripts/tsx.mjs", import.meta.url)),
+              "--input-type=module",
+              "--eval",
+              `
+                import assert from "node:assert/strict";
+                import fs from "node:fs/promises";
+                import path from "node:path";
+                const { NodeWorkerWorkspaceRuntime } = await import(process.argv[1]);
+                const { root, input } = JSON.parse(process.argv[2]);
+                const runtime = new NodeWorkerWorkspaceRuntime({ root });
+                const initial = await runtime.exec(input);
+                for (let dir = initial.workspaceDir; dir !== path.dirname(root); dir = path.dirname(dir)) {
+                  assert.equal((await fs.stat(dir)).mode & 0o777, 0o700, dir);
+                  await fs.chmod(dir, 0o775);
+                }
+              `,
+              new URL("../../node-host/node-worker-workspace.ts", import.meta.url).href,
+              JSON.stringify({ root: nodeRoot, input }),
+            ],
+            { timeoutMs: 30_000 },
+          );
+          expect(created).toMatchObject({ code: 0, stderr: "" });
+          const reopened = new NodeWorkerWorkspaceRuntime({ root: nodeRoot });
+          const downloaded = await reopened.exec(
+            {
+              ...input,
+              transfer: {
+                direction: "download",
+                token: plain.token,
+                manifestRef: plain.snapshot.manifestRef,
+              },
+            },
+            undefined,
+            { url: server.gatewayUrl },
+          );
+          expect(await fs.readFile(path.join(downloaded.workspaceDir, "input.txt"), "utf8")).toBe(
+            "gateway input\n",
+          );
+          for (let dir = downloaded.workspaceDir; dir !== root; dir = path.dirname(dir)) {
+            expect((await fs.stat(dir)).mode & 0o777, dir).toBe(0o700);
+          }
+        } finally {
+          await server.close();
+        }
+      }
 
       await git("init", "--quiet", "--object-format=sha1");
 

@@ -38,6 +38,7 @@ type PersistRecordResult =
   | undefined
   | {
       anchor?: TranscriptEntryAnchor;
+      lifecycleRevision?: string;
       appended: boolean;
       adoptedMessageId?: string;
       effectiveParentId: string | null;
@@ -639,6 +640,7 @@ export class SessionManagerPersistence extends SessionManagerCore {
         outcome.value.before.rawSeq !== loadedVersion.rawSeq);
     return {
       ...(result.anchor ? { anchor: result.anchor } : {}),
+      lifecycleRevision: outcome.value.lifecycleRevision,
       appended: result.appended,
       effectiveParentId: result.effectiveParentId,
       ...(reloadAfterAppend ? { reloadAfterAppend: true } : {}),

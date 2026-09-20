@@ -951,6 +951,10 @@ describe("chat pane history pagination intent", () => {
     pane.syncHistoryObserver = vi.fn();
     const event = new Event("scroll");
     const thread = document.createElement("div");
+    Object.defineProperties(thread, {
+      scrollHeight: { value: 1000 },
+      clientHeight: { value: 500 },
+    });
     thread.scrollTop = 80;
     Object.defineProperty(event, "target", { value: thread });
 
@@ -971,6 +975,10 @@ describe("chat pane history pagination intent", () => {
     pane.transcriptScrollTop = 100;
     pane.syncHistoryObserver = vi.fn();
     const thread = document.createElement("div");
+    Object.defineProperties(thread, {
+      scrollHeight: { value: 1000 },
+      clientHeight: { value: 500 },
+    });
     const event = new Event("scroll");
     Object.defineProperty(event, "target", { value: thread });
 

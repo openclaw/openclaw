@@ -40,7 +40,12 @@ import {
   retainFulfilledNodeCapabilities,
 } from "./node-command-policy.js";
 import { resolveEffectiveComputerUseDescriptor } from "./node-computer-use-descriptor.js";
-import { serializeNodeEvent } from "./node-invoke-request.js";
+import { isSerializedEventPayload, type SerializedEventPayload } from "./node-event-payload.js";
+import {
+  buildNodeInvokeCancel,
+  buildNodeInvokeInput,
+  serializeNodeEvent,
+} from "./node-invoke-request.js";
 import type { NodeInvokeParams, NodeInvokeResult } from "./node-invoke.types.js";
 import {
   createRegisteredNodePluginToolDescriptorMap,
@@ -72,6 +77,8 @@ import { closeGatewayTransportWithGrace } from "./server/connection-transport-cl
 import type { GatewayWsClient } from "./server/ws-types.js";
 
 export type { NodeInvokeResult } from "./node-invoke.types.js";
+export { serializeEventPayload } from "./node-event-payload.js";
+export type { SerializedEventPayload } from "./node-event-payload.js";
 
 /** Connected node session advertised over Gateway websocket. */
 export type NodeSession = {
@@ -168,17 +175,11 @@ export type NodeConnectivityResult =
   | { ok: true }
   | { ok: false; error: { code: string; message: string } };
 
-const SERIALIZED_EVENT_PAYLOAD = Symbol("openclaw.serializedEventPayload");
 const AUTHORIZED_SYSTEM_RUN_EVENT_GRACE_MS = 5 * 60 * 1000;
 const SLOW_CONSUMER_CLOSE_CODE = 1008;
 const FAILED_EVENT_LOG_INTERVAL_MS = 30_000;
 const log = createSubsystemLogger("gateway/nodes");
 const failedEventLogAtByNode = new WeakMap<NodeSession, number>();
-export type SerializedEventPayload = {
-  readonly json: string;
-  readonly [SERIALIZED_EVENT_PAYLOAD]: true;
-};
-
 /** Event transport for nodes that cannot keep a WebSocket open, such as watchOS. */
 export type NodeEventTransport = {
   send: (event: string, payload: unknown) => boolean;
@@ -234,25 +235,6 @@ export type NodeRegistryOptions = {
   onDesktopAvailabilityChanged?: (nodeId: string) => void;
 };
 
-/** Serialize an event payload once so fanout can reuse the same JSON string. */
-export function serializeEventPayload(payload: unknown): SerializedEventPayload | null {
-  if (payload === undefined) {
-    return null;
-  }
-  const json = JSON.stringify(payload);
-  return typeof json === "string" ? { json, [SERIALIZED_EVENT_PAYLOAD]: true } : null;
-}
-
-/** Narrow values created by serializeEventPayload. */
-function isSerializedEventPayload(value: unknown): value is SerializedEventPayload {
-  return (
-    typeof value === "object" &&
-    value !== null &&
-    (value as { [SERIALIZED_EVENT_PAYLOAD]?: unknown })[SERIALIZED_EVENT_PAYLOAD] === true &&
-    typeof (value as { json?: unknown }).json === "string"
-  );
-}
-
 /** Registry of currently connected Gateway nodes. */
 export class NodeRegistry {
   private nodesById = new Map<string, PairingBoundNodeSession>();
@@ -273,10 +255,11 @@ export class NodeRegistry {
       ) {
         return;
       }
-      this.sendEventToSession(node, "node.invoke.cancel", {
-        invokeId: requestId,
-        nodeId: pending.nodeId,
-      });
+      this.sendEventToSession(
+        node,
+        "node.invoke.cancel",
+        buildNodeInvokeCancel({ invokeId: requestId, nodeId: pending.nodeId }),
+      );
     },
     isConnectionActive: (pending) => {
       const node = this.nodesById.get(pending.nodeId);
@@ -290,12 +273,16 @@ export class NodeRegistry {
     sendInput: (invokeId, pending, seq, payloadJSON) => {
       const node = this.nodesById.get(pending.nodeId);
       return node
-        ? this.sendEventToSession(node, "node.invoke.input", {
-            id: invokeId,
-            nodeId: pending.nodeId,
-            seq,
-            payloadJSON,
-          })
+        ? this.sendEventToSession(
+            node,
+            "node.invoke.input",
+            buildNodeInvokeInput({
+              invokeId,
+              nodeId: pending.nodeId,
+              seq,
+              payloadJSON,
+            }),
+          )
         : false;
     },
     onFailedResult: (pending) => {

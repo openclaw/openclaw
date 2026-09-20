@@ -93,10 +93,6 @@ vi.mock("../plugins/provider-runtime.js", () => ({
   normalizeProviderToolSchemasWithPlugin: mocks.normalizeProviderToolSchemasWithPlugin,
 }));
 
-vi.mock("../plugins/provider-discovery.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../plugins/provider-discovery.js")>()),
-}));
-
 vi.mock("../plugins/providers.runtime.js", () => ({
   resolvePluginProvidersCore: mocks.resolvePluginProvidersCore,
 }));
@@ -195,6 +191,7 @@ describe("doctor runtime tool schema checks", () => {
         runtime: { log() {}, error() {}, exit() {} },
         // 2026.9.3 clears IN_PROGRESS for lint but retains its writable-parent marker.
         env: {
+          ...process.env,
           OPENCLAW_UPDATE_IN_PROGRESS: inProgress,
           OPENCLAW_UPDATE_PARENT_SUPPORTS_DOCTOR_CONFIG_WRITE: "1",
         },

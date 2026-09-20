@@ -89,6 +89,7 @@ export function useNodeBootstrapArtifactFixtures() {
     await write(packageRoot, "node-sqlite.mjs", "export const probe = true;");
     await write(packageRoot, "node-runtime-update.mjs", "export const update = true;");
     await write(packageRoot, "node-runtime-recovery.mjs", "export const recovery = true;");
+    await write(packageRoot, "node-host-launcher.mjs", "export const launcher = true;");
     await write(packageRoot, "scripts/preinstall.mjs", "export {};\n");
     await write(
       packageRoot,

@@ -61,4 +61,52 @@ describe("uploadSlackFile snapshots", () => {
     expect(uploadedMime).toBe(contentType ?? null);
     expect(completeUploadExternal).toHaveBeenCalledOnce();
   });
+
+  it("revalidates authority at the external upload request boundary", async () => {
+    loadMedia.mockResolvedValue({
+      buffer: Buffer.from("attachment"),
+      contentType: "text/plain",
+      kind: "document",
+      fileName: "answer.txt",
+    });
+    const getUploadURLExternal = vi.fn(async () => ({
+      ok: true,
+      upload_url: "https://files.slack.com/upload",
+      file_id: "F123",
+    }));
+    const completeUploadExternal = vi.fn(async () => ({ ok: true }));
+    const client = {
+      files: { getUploadURLExternal, completeUploadExternal },
+    } as unknown as WebClient;
+    const preparation = createDeferred<void>();
+    const rawUpload = vi.fn();
+    guardedFetch.mockImplementation(async (params) => {
+      await preparation.promise;
+      params.beforeRequest?.();
+      rawUpload();
+      return {
+        response: new Response("ok"),
+        finalUrl: params.url,
+        release: async () => {},
+      };
+    });
+    let authorized = true;
+    const upload = uploadSlackFile({
+      client,
+      channelId: "C123",
+      mediaUrl: "/tmp/answer.txt",
+      assertDirectAdapterHandoff: () => {
+        if (!authorized) {
+          throw new Error("direct delivery is no longer active");
+        }
+      },
+    });
+    await vi.waitFor(() => expect(guardedFetch).toHaveBeenCalledOnce());
+    authorized = false;
+    preparation.resolve();
+
+    await expect(upload).rejects.toThrow();
+    expect(rawUpload).not.toHaveBeenCalled();
+    expect(completeUploadExternal).not.toHaveBeenCalled();
+  });
 });

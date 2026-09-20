@@ -96,6 +96,7 @@ export function addGatewayServiceCommands(parent: Command, opts?: { statusDescri
     .addOption(new Option("--defer-activation", "Updater service-load handoff").hideHelp())
     .option("--port <port>", "Gateway port")
     .option("--runtime <runtime>", "Daemon runtime (node|bun). Default: node")
+    .option("--runtime-path <path>", "Pin an absolute Node/Bun executable path")
     .option("--token <token>", "Gateway token (token auth)")
     .option("--wrapper <path>", "Executable wrapper for generated service ProgramArguments")
     .option("--allow-unconfigured", "Allow the service to start without gateway.mode=local")

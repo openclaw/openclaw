@@ -733,24 +733,40 @@ function emitDiscriminatedUnionCompatibility(
   ];
 }
 
+function objectUnionBranches(schema: JsonSchema): JsonSchema[] {
+  if (schema.type === "object") {
+    return [schema];
+  }
+  const branches = (schema.oneOf ?? schema.anyOf)?.map(objectUnionBranches);
+  return branches?.length && branches.every((branch) => branch.length > 0) ? branches.flat() : [];
+}
+
 function emitDiscriminatedUnion(name: string, schema: JsonSchema): string | undefined {
   const branches = schema.oneOf ?? schema.anyOf;
   if (!branches || branches.length < 2) {
     return undefined;
   }
-  const objectBranches = branches.filter((branch) => branch.type === "object");
-  if (objectBranches.length !== branches.length) {
+  const objectBranches = branches.map(objectUnionBranches);
+  if (objectBranches.some((branch) => branch.length === 0)) {
     return undefined;
   }
-  const discriminatorCandidates = Object.keys(objectBranches[0]?.properties ?? {});
+  const discriminatorCandidates = Object.keys(objectBranches[0]?.[0]?.properties ?? {});
   for (const discriminator of discriminatorCandidates) {
-    const cases = objectBranches.map((branch, index) => {
-      const discriminatorSchema = branch.properties?.[discriminator];
-      const literal = discriminatorSchema ? literalSchemaValue(discriminatorSchema) : undefined;
-      if (literal === undefined) {
+    const caseCounts = new Map<string, number>();
+    const cases = branches.map((branch, index) => {
+      const literals = objectBranches[index]!.map((object) => {
+        const property = object.properties?.[discriminator];
+        return property ? literalSchemaValue(property) : undefined;
+      });
+      const literal = literals[0];
+      // A named nested union can share one outer tag while selecting its own variants.
+      if (literal === undefined || literals.some((value) => value !== literal)) {
         return undefined;
       }
-      const caseName = swiftUnionCaseName(literal, `case${index + 1}`);
+      const baseCaseName = swiftUnionCaseName(literal, `case${index + 1}`);
+      const occurrence = (caseCounts.get(baseCaseName) ?? 0) + 1;
+      caseCounts.set(baseCaseName, occurrence);
+      const caseName = occurrence === 1 ? baseCaseName : `${baseCaseName}${occurrence}`;
       // Union cases retain their established structural names; properties use nominal identity.
       const registeredName = namedSchema(branch, true);
       const branchName =
@@ -776,9 +792,30 @@ function emitDiscriminatedUnion(name: string, schema: JsonSchema): string | unde
     const literalType = swiftLiteralTypeName(firstCase.literal);
     if (
       resolvedCases.some((entry) => swiftLiteralTypeName(entry.literal) !== literalType) ||
-      new Set(resolvedCases.map((entry) => String(entry.literal))).size !== resolvedCases.length
+      new Set(resolvedCases.map((entry) => String(entry.literal))).size < 2
     ) {
       continue;
+    }
+    const groups = new Map<string, typeof resolvedCases>();
+    for (const entry of resolvedCases) {
+      const key = swiftLiteralSource(entry.literal);
+      const group = groups.get(key) ?? [];
+      group.push(entry);
+      groups.set(key, group);
+    }
+    const repeatedCases = [...groups.values()].filter((group) => group.length > 1).flat();
+    if (
+      repeatedCases.some(
+        (entry) => entry.branch.type !== "object" || entry.branch.additionalProperties !== false,
+      )
+    ) {
+      continue;
+    }
+    // Shared tags are safe only with strict branch decoders: synthesized Codable
+    // would otherwise accept extra fields and silently choose a different variant.
+    for (const entry of repeatedCases) {
+      entry.registeredName = undefined;
+      entry.branchName = `${name}${entry.caseName.charAt(0).toUpperCase()}${entry.caseName.slice(1)}`;
     }
     const coversAllBoolCases =
       literalType === "Bool" &&
@@ -794,11 +831,40 @@ function emitDiscriminatedUnion(name: string, schema: JsonSchema): string | unde
           `                debugDescription: "Unknown ${name} discriminator value"`,
           "            )",
         ];
+    const decodeCases: string[] = [];
+    for (const [literal, entries] of groups) {
+      if (entries.length === 1) {
+        const entry = entries[0]!;
+        decodeCases.push(
+          `        case ${literal}: self = try .${entry.caseName}(${entry.branchName}(from: decoder))`,
+        );
+        continue;
+      }
+      decodeCases.push(`        case ${literal}:`);
+      for (const entry of entries) {
+        decodeCases.push(
+          `            if let value = try? ${entry.branchName}(from: decoder) {\n                self = .${entry.caseName}(value)\n                return\n            }`,
+        );
+      }
+      decodeCases.push(
+        `            throw DecodingError.dataCorruptedError(\n                forKey: .discriminator,\n                in: container,\n                debugDescription: "No matching ${name} variant"\n            )`,
+      );
+    }
     return [
       // Inline union branches need declarations too; only registered schemas have an external owner.
-      ...resolvedCases.flatMap((entry) =>
-        entry.registeredName ? [] : [emitStruct(entry.branchName, entry.branch, true)],
-      ),
+      ...resolvedCases.flatMap((entry) => {
+        if (entry.registeredName) {
+          return [];
+        }
+        const declaration =
+          entry.branch.type === "object"
+            ? emitStruct(entry.branchName, entry.branch, true)
+            : emitDiscriminatedUnion(entry.branchName, entry.branch);
+        if (!declaration) {
+          throw new Error(`Cannot emit nested Swift union ${entry.branchName}`);
+        }
+        return [declaration];
+      }),
       `public enum ${name}: Codable, Sendable {`,
       ...resolvedCases.map((entry) => `    case ${entry.caseName}(${entry.branchName})`),
       "",
@@ -811,10 +877,7 @@ function emitDiscriminatedUnion(name: string, schema: JsonSchema): string | unde
       "        let container = try decoder.container(keyedBy: CodingKeys.self)",
       `        let discriminator = try container.decode(${literalType}.self, forKey: .discriminator)`,
       "        switch discriminator {",
-      ...resolvedCases.map(
-        (entry) =>
-          `        case ${swiftLiteralSource(entry.literal)}: self = try .${entry.caseName}(${entry.branchName}(from: decoder))`,
-      ),
+      ...decodeCases,
       ...unknownDiscriminatorLines,
       "        }",
       "    }",

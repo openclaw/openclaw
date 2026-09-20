@@ -11,6 +11,7 @@ import {
   recordUpdateRunStep,
 } from "../../infra/update-run-ledger.js";
 import type { UpdateRunResult } from "../../infra/update-runner.js";
+import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
 import { CommandProcessScopeUnsettledError } from "../../process/exec-spawn.js";
 import { UpdateDoctorProcessUnsettledError } from "./update-command-fresh-doctor.js";
 import {
@@ -65,10 +66,13 @@ export async function restoreUpdateRecoveryState(
 
 /** Wrapping failures must not erase the child-lifetime boundary. */
 export function hasUnsettledUpdateProcesses(error: unknown): boolean {
-  return collectNestedErrorCandidates(error).some(
-    (candidate) =>
-      candidate instanceof UpdateDoctorProcessUnsettledError ||
-      candidate instanceof CommandProcessScopeUnsettledError,
+  return (
+    hasCommandProcessCleanupError(error) ||
+    collectNestedErrorCandidates(error).some(
+      (candidate) =>
+        candidate instanceof UpdateDoctorProcessUnsettledError ||
+        candidate instanceof CommandProcessScopeUnsettledError,
+    )
   );
 }
 

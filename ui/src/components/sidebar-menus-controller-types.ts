@@ -2,7 +2,6 @@ import type { ReactiveControllerHost } from "lit";
 import type { ControlUiNavigationItem } from "../../../src/plugin-sdk/control-ui.js";
 import type { AgentIdentityResult } from "../api/types.ts";
 import type { NavigationRouteId, SidebarZoneEntry } from "../app-navigation.ts";
-import type { RouteId } from "../app-route-paths.ts";
 import type { ApplicationContext, ApplicationNavigationOptions } from "../app/context.ts";
 import type { ThemeMode } from "../app/theme.ts";
 import type { CatalogProjectGrouping } from "../lib/sessions/catalog-project-grouping.ts";
@@ -60,13 +59,13 @@ export interface SidebarMenusControllerHost
       | "archiveSessionCatalog"
       | "sessionScopeGeneration"
     >;
-  readonly sessionDataContext: ApplicationContext<RouteId> | undefined;
+  readonly sessionDataContext: ApplicationContext | undefined;
   readonly sessionOrganizer: SessionOrganizerController;
   readonly sessionOwnerFilterActive: boolean;
   readonly sessionOwnerFilterId: string | null;
   readonly sessionInvolvingMeFilterActive: boolean;
   readonly sessionOwnerOptions: readonly SessionOwnerOption[];
-  readonly sessionOwnershipVisible: boolean;
+  readonly sessionOwnershipVisibility: { filters: boolean; avatars: boolean };
   readSessionMutationAccess(request: {
     method: string;
     params?: unknown;

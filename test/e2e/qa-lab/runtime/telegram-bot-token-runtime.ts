@@ -244,7 +244,10 @@ export async function runTelegramBotTokenRuntime(
         OPENCLAW_SKIP_CHANNELS: undefined,
         OPENCLAW_SKIP_PROVIDERS: undefined,
         OPENCLAW_TEST_MINIMAL_GATEWAY: undefined,
-        TELEGRAM_BOT_TOKEN: "qa-invalid-precedence-decoy",
+        // Keep the isolated named account authoritative. A generic token would
+        // also activate the implicit default account and make Gateway readiness
+        // depend on an unrelated getMe probe.
+        TELEGRAM_BOT_TOKEN: undefined,
       },
       startTimeoutMs: options.startupTimeoutMs,
     });

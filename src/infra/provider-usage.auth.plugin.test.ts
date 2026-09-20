@@ -62,12 +62,12 @@ vi.mock("../plugins/manifest-contract-eligibility.js", () => ({
 }));
 
 vi.mock("../secrets/provider-env-vars.js", () => ({
-  listKnownProviderAuthEnvVarNames: () => [
+  listKnownProviderAuthEnvVarNamesCore: () => [
     "ANTHROPIC_API_KEY",
     "MINIMAX_CODE_PLAN_KEY",
     "OPENAI_API_KEY",
   ],
-  resolveProviderAuthEnvVarCandidates: () => ({
+  resolveProviderAuthEnvVarCandidatesCore: () => ({
     anthropic: ["ANTHROPIC_API_KEY"],
     minimax: ["MINIMAX_CODE_PLAN_KEY"],
     openai: ["OPENAI_API_KEY"],

@@ -83,7 +83,15 @@ vi.mock("../agents/prepared-model-catalog.js", () => ({
   })),
 }));
 
-vi.mock("../agents/model-selection.js", () => {
+vi.mock("../agents/model-selection.js", async (importOriginal) => {
+  const {
+    inferUniqueProviderFromConfiguredModels,
+    normalizeStoredOverrideModel,
+    resolvePersistedSelectedModelRef,
+  } = await importOriginal<typeof import("../agents/model-selection.js")>();
+  const { normalizeModelRef } = await import("../agents/model-ref-shared.js");
+  const { parseModelRef: parseModelRefImpl } =
+    await import("../agents/model-selection-normalize.js");
   type ConfigWithModels = {
     meta?: { migrations?: { modelPolicyAllowlist?: boolean } };
     agents?: {
@@ -98,26 +106,8 @@ vi.mock("../agents/model-selection.js", () => {
   type ModelRef = { provider: string; model: string };
   type CatalogEntry = { id?: string; model?: string; name?: string; reasoning?: boolean };
 
-  const parseModelRefImpl = (raw: string, defaultProvider = "openai"): ModelRef | null => {
-    const value = raw.trim();
-    if (!value) {
-      return null;
-    }
-    const slash = value.indexOf("/");
-    if (slash >= 0) {
-      return {
-        provider: value.slice(0, slash).trim(),
-        model: value.slice(slash + 1).trim(),
-      };
-    }
-    return { provider: defaultProvider, model: value };
-  };
   const parseModelRef = vi.fn(parseModelRefImpl);
   const normalizeProviderId = (provider: string) => provider.trim().toLowerCase();
-  const normalizeModelRef = (provider: string, model: string): ModelRef => ({
-    provider: normalizeProviderId(provider),
-    model: model.trim(),
-  });
   const modelKey = (provider: string, model: string) =>
     `${normalizeProviderId(provider)}/${model.trim().toLowerCase()}`;
   const isModelKeyAllowedBySet = (allowedKeys: ReadonlySet<string>, key: string) => {
@@ -143,10 +133,6 @@ vi.mock("../agents/model-selection.js", () => {
   const resolveDefaultRef = (cfg?: ConfigWithModels): ModelRef => {
     const parsed = parseModelRefImpl(resolvePrimary(cfg) ?? "openai/gpt-5.5", "openai");
     return parsed ?? { provider: "openai", model: "gpt-5.5" };
-  };
-  const resolveModelConfig = (cfg: ConfigWithModels | undefined, ref: ModelRef) => {
-    const models = cfg?.agents?.defaults?.models ?? {};
-    return models[`${ref.provider}/${ref.model}`] ?? models[modelKey(ref.provider, ref.model)];
   };
   const resolvePolicyRefs = (cfg?: ConfigWithModels) => {
     const defaults = cfg?.agents?.defaults;
@@ -237,12 +223,15 @@ vi.mock("../agents/model-selection.js", () => {
     buildConfiguredModelCatalog: vi.fn(() => []),
     buildModelAliasIndex: vi.fn(() => new Map()),
     isModelKeyAllowedBySet,
+    inferUniqueProviderFromConfiguredModels,
     isCliProvider: vi.fn(() => false),
     modelKey,
     normalizeModelRef,
+    normalizeStoredOverrideModel,
     normalizeProviderId,
     normalizeProviderIdForAuth: normalizeProviderId,
     parseModelRef,
+    resolvePersistedSelectedModelRef,
     resolveConfiguredModelRef: vi.fn(
       ({ cfg }: { cfg?: ConfigWithModels; defaultProvider?: string; defaultModel?: string }) =>
         resolveDefaultRef(cfg),
@@ -251,37 +240,15 @@ vi.mock("../agents/model-selection.js", () => {
       resolveDefaultRef(cfg),
     ),
     resolveModelRefFromString: vi.fn(
-      ({ raw, defaultProvider }: { raw: string; defaultProvider?: string }) => {
-        const ref = parseModelRef(raw, defaultProvider ?? "openai");
-        return ref ? { ref, source: "parsed" } : null;
-      },
-    ),
-    resolveThinkingDefault: vi.fn(
       ({
-        cfg,
-        provider,
-        model,
-        catalog,
-      }: {
-        cfg?: ConfigWithModels;
-        provider: string;
-        model: string;
-        catalog?: CatalogEntry[];
-      }) => {
-        const ref = normalizeModelRef(provider, model);
-        const modelThinking = resolveModelConfig(cfg, ref)?.params?.thinking;
-        if (modelThinking) {
-          return modelThinking;
-        }
-        const defaultThinking = cfg?.agents?.defaults?.thinkingDefault;
-        if (defaultThinking) {
-          return defaultThinking;
-        }
-        const entry = catalog?.find((item) => item.id === model || item.model === model);
-        if (entry?.reasoning && entry.name?.includes("4.6")) {
-          return "adaptive";
-        }
-        return entry?.reasoning ? "low" : "off";
+        raw,
+        defaultProvider,
+        ...options
+      }: { raw: string; defaultProvider?: string } & NonNullable<
+        Parameters<typeof parseModelRefImpl>[2]
+      >) => {
+        const ref = parseModelRef(raw, defaultProvider ?? "openai", options);
+        return ref ? { ref, source: "parsed" } : null;
       },
     ),
   };

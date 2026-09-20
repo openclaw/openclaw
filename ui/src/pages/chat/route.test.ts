@@ -4,6 +4,7 @@ import type { SessionsResolveResult } from "../../../../packages/gateway-protoco
 import { createDeferredCore } from "../../../../src/shared/deferred.js";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { createApplicationRouter } from "../../app-routes.ts";
+import { createChatSubmissions } from "../../app/chat-submissions.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { sessionsResult } from "../../lib/sessions/session-capability.test-support.ts";
 import { createChatPageSessions } from "./chat-page.test-support.ts";
@@ -34,6 +35,8 @@ function contextFor(resolution: SessionsResolveResult = { ok: false }, mainKey =
   const client = { request };
   const context = {
     basePath: "",
+    chatSubmissions: createChatSubmissions(),
+    placementStartup: { get: vi.fn(() => null) },
     router: { getState: () => ({ matches: [], pendingMatches: [] }), subscribe: () => () => {} },
     gateway: {
       snapshot: { phase: "connected", client, hello: null },

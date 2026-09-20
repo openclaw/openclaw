@@ -1,12 +1,9 @@
+import { createUpdatePreflightFailure } from "../../infra/update-preflight-details.js";
 import { recordUpdateRunPhase } from "../../infra/update-run-ledger.js";
 import type { UpdateRunnerOptions } from "../../infra/update-runner-types.js";
-import { OPENCLAW_DATABASE_SCHEMA_DOCS_URL } from "../../state/openclaw-database-preflight.js";
 import type { OpenClawSchemaVersions } from "../../state/openclaw-schema-versions.js";
 import { UpdatePreMutationError, type UpdateCommandOptions } from "./shared.js";
-import {
-  resolvePreparedGatewayUpdatePolicy,
-  type PreManagedServiceStop,
-} from "./update-command-service.js";
+import type { PreManagedServiceStop } from "./update-command-service.js";
 
 type BeforeGitMutation = NonNullable<UpdateRunnerOptions["beforeGitMutation"]>;
 
@@ -27,29 +24,30 @@ export function recordInspectedGitTarget(
     );
   }
   if (target.metadataUnreadable) {
-    throw new UpdatePreMutationError(
-      "target-metadata-preflight",
-      `Update refused: could not inspect the target's schema support (${target.metadataUnreadable}).`,
-    );
+    const failure = createUpdatePreflightFailure("target-git-metadata", target.metadataUnreadable);
+    throw new UpdatePreMutationError("target-metadata-preflight", failure.message, {
+      failureFacts: failure.failureFacts,
+    });
   }
 }
 
 export function createBeforeGitMutation(params: {
   updateRun?: UpdateCommandOptions["run"];
   roots: readonly string[];
-  shouldRestart: boolean;
   stopManagedService: (roots: readonly string[]) => Promise<void>;
   getPreManagedServiceStop: () => PreManagedServiceStop | undefined;
   checkTargetSchemas: (versions: OpenClawSchemaVersions | undefined) => Promise<void>;
   prepareMutableUpdate: () => Promise<void>;
-  switchToGit: boolean;
 }): BeforeGitMutation {
   return async (target) => {
     if (target?.metadataUnreadable) {
-      throw new UpdatePreMutationError(
-        "target-metadata-preflight",
-        `Update refused: could not inspect the target's schema support (${target.metadataUnreadable}). Retry, or see ${OPENCLAW_DATABASE_SCHEMA_DOCS_URL}.`,
+      const failure = createUpdatePreflightFailure(
+        "target-git-metadata",
+        target.metadataUnreadable,
       );
+      throw new UpdatePreMutationError("target-metadata-preflight", failure.message, {
+        failureFacts: failure.failureFacts,
+      });
     }
     await params.checkTargetSchemas(target.schemaVersions);
     await params.prepareMutableUpdate();
@@ -64,10 +62,7 @@ export function createBeforeGitMutation(params: {
         env: params.updateRun.env,
       });
     }
-    // A candidate checkout cannot own the service until its global exposure
-    // succeeds. Finalization refreshes and activates the verified installation.
-    return params.switchToGit
-      ? { allowGatewayServiceRepair: false, allowGatewayActivation: false }
-      : resolvePreparedGatewayUpdatePolicy(preManagedServiceStop, params.shouldRestart);
+    // Finalization owns the backed-up service rewrite and activation after Doctor.
+    return { allowGatewayServiceRepair: false, allowGatewayActivation: false };
   };
 }

@@ -1,5 +1,6 @@
 import path from "node:path";
 import { expect, it, vi } from "vitest";
+import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { CURRENT_SESSION_VERSION, SessionManager } from "../../agents/sessions/session-manager.js";
 import { makeAgentAssistantMessage } from "../../agents/test-helpers/agent-message-fixtures.js";
 import { clearNodeSqliteKyselyCacheForDatabase } from "../../infra/kysely-sync.js";
@@ -112,6 +113,55 @@ it("reads only the newest bounded active context and accounts for its header", a
     expect(context.serializedBytes).toBeGreaterThan(
       Buffer.byteLength(JSON.stringify(context.events.slice(1)), "utf8"),
     );
+    expect(
+      readSessionTranscriptBoundedActiveContextCore(scope, { maxBytes: 1024, maxEvents: 3 })
+        .truncated,
+    ).toBe(false);
+  });
+});
+
+it.each([false, true])("bounds context sizing with newest oversized=%s", async (oversized) => {
+  await withBoundedContextScope(async (scope) => {
+    await persistSessionTranscriptTurn(scope, {
+      messages: ["old", "large", "new"].map((eventId, index, ids) =>
+        transcriptMessage(eventId, ids[index - 1] ?? null, {
+          role: "user",
+          content:
+            eventId === "large" || (oversized && eventId === "new") ? "🦞".repeat(1024) : eventId,
+        }),
+      ),
+      touchSessionEntry: false,
+    });
+    const options = { maxBytes: 1024, maxEvents: 100 };
+    readSessionTranscriptBoundedActiveContextCore(scope, options);
+    const { db } = openOpenClawAgentDatabase({ agentId: scope.agentId });
+    const counter = trackSqliteStatementExecutions(db, ["sizing"], (sql) =>
+      sql.includes("serialized_bytes") ? "sizing" : null,
+    );
+    try {
+      for (let attempt = 0; attempt < 3; attempt++) {
+        const context = readSessionTranscriptBoundedActiveContextCore(scope, options);
+        expect(context.events.map((event) => (event as { id: string }).id)).toEqual([
+          scope.sessionId,
+          ...(oversized ? [] : ["new"]),
+        ]);
+        expect(context.truncated).toBe(true);
+      }
+      // Each read sizes its header and stops at the first event that cannot fit.
+      expect(counter.rowCounts.sizing).toBeGreaterThan(0);
+      expect(counter.rowCounts.sizing).toBeLessThanOrEqual(oversized ? 6 : 9);
+      await persistSessionTranscriptTurn(scope, {
+        messages: [transcriptMessage("next", "new", { role: "user", content: "next" })],
+        touchSessionEntry: false,
+      });
+      expect(
+        readSessionTranscriptBoundedActiveContextCore(scope, options).events.at(-1),
+      ).toMatchObject({
+        id: "next",
+      });
+    } finally {
+      counter.restore();
+    }
   });
 });
 

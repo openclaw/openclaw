@@ -49,6 +49,7 @@ async function createNpmInstallRoot(base: string): Promise<string> {
   );
   await fs.mkdir(root, { recursive: true });
   await fs.mkdir(binDir, { recursive: true });
+  await fs.writeFile(path.join(root, "package.json"), '{"name":"openclaw"}');
   await fs.writeFile(path.join(root, "openclaw.mjs"), "#!/usr/bin/env node\n");
   if (process.platform === "win32") {
     await fs.writeFile(
@@ -649,7 +650,7 @@ describe("checkUpdateStatus", () => {
     await withTestDir({ prefix: "openclaw-update-check-registry-channel-" }, async (root) => {
       await fs.writeFile(
         path.join(root, "package.json"),
-        JSON.stringify({ packageManager: "npm@10.0.0" }),
+        JSON.stringify({ name: "openclaw", packageManager: "npm@10.0.0" }),
         "utf8",
       );
       await fs.writeFile(path.join(root, "package-lock.json"), "lock", "utf8");

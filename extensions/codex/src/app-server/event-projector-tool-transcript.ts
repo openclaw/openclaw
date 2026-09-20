@@ -599,7 +599,6 @@ export class CodexToolTranscriptProjection {
           sessionTarget: this.params.sessionTarget,
         },
         undefined,
-        "model-context",
         signal,
         this.params.contextTokenBudget,
       )) ?? []

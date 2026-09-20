@@ -68,6 +68,7 @@ const { acpxRuntimeConstructorMock, createAgentRegistryMock, createFileSessionSt
         cancel: vi.fn(async () => {}),
         close: vi.fn(async () => {}),
         doctor: vi.fn(async () => ({ ok: true, message: "ok" })),
+        shutdown: vi.fn(async () => {}),
         ensureSession: vi.fn(async () => ({
           backend: "acpx",
           runtimeSessionName: "agent:codex:acp:test",
@@ -239,6 +240,7 @@ function openProcessLeaseStore(ctx: OpenClawPluginServiceContext) {
 
 function createMockRuntime(overrides: Record<string, unknown> = {}) {
   return {
+    shutdown: vi.fn(async () => {}),
     ensureSession: vi.fn(),
     runTurn: vi.fn(),
     cancel: vi.fn(),
@@ -309,6 +311,7 @@ describe("createAcpxRuntimeService", () => {
     await service.stop?.(ctx);
 
     expect(getAcpRuntimeBackend("acpx")).toBeUndefined();
+    expect(runtime.shutdown).toHaveBeenCalledOnce();
   });
 
   it("publishes before probing and retracts the exact runtime through the injected lifecycle", async () => {

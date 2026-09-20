@@ -5,15 +5,19 @@ import {
   isOpenClawAgentDatabaseOpen,
 } from "../state/openclaw-agent-db.js";
 import { runDoctorAgentDatabaseOperationAsync } from "./doctor-agent-database-operation.js";
-import { listExistingAgentDatabaseTargets } from "./doctor-session-sqlite-readers.js";
+import {
+  listExistingAgentDatabaseTargets,
+  type ExistingAgentDatabaseTarget,
+} from "./doctor-session-sqlite-readers.js";
 
 /** Run after key repairs, whose source claims include workspace metadata. */
 export async function repairLegacySessionWorktreeWorkspaces(params: {
   apply: boolean;
   cfg: OpenClawConfig;
   env: NodeJS.ProcessEnv;
+  targets?: readonly ExistingAgentDatabaseTarget[];
 }) {
-  const targets = listExistingAgentDatabaseTargets(params.cfg, params.env);
+  const targets = params.targets ?? listExistingAgentDatabaseTargets(params.cfg, params.env);
   let found = 0;
   let repaired = 0;
   for (const target of targets) {

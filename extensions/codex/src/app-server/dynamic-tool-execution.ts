@@ -23,7 +23,6 @@ import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import {
   createFailedDynamicToolResponse,
   type CodexDynamicToolRuntimeResponse,
-  withDynamicToolTerminalResolution,
 } from "./dynamic-tool-response-state.js";
 import type { CodexDynamicToolBridge } from "./dynamic-tools.js";
 import {
@@ -183,13 +182,21 @@ export async function handleDynamicToolCallWithTimeout(params: {
         response.executedArguments ?? executionSnapshot?.executedArguments ?? params.call.arguments,
       ...(params.toolMeta ? { meta: params.toolMeta } : {}),
       ...(ownerKey ? { ownerMutation: { ownerKey } } : {}),
+      replaySafe: ownerKey ? false : response.replaySafe,
       ...(observedExecutionStarted !== undefined
         ? { executionStarted: observedExecutionStarted }
         : {}),
       outcome: response.success ? "success" : "failure",
       ...(!response.success ? { failure: { error: readDynamicToolResponseText(response) } } : {}),
     });
-    return withDynamicToolTerminalResolution(response, terminalResolution);
+    if (terminalResolution) {
+      response.terminalResolution = terminalResolution;
+      response.executionStarted = terminalResolution.executionStarted;
+      response.executedArguments =
+        terminalResolution.executedArguments ?? response.executedArguments;
+      response.sideEffectEvidence = terminalResolution.sideEffectEvidence || undefined;
+    }
+    return response;
   };
   // The host observer replaces these conservative facts with exact boundary evidence.
   // Direct/older callers without one must still treat a raced terminal as dispatched.
@@ -405,7 +412,7 @@ export function shouldReleaseTurnAfterTerminalDynamicTool(
 
 /** Returns true when a non-async result should block terminal-release shortcuts. */
 export function shouldBlockTerminalReleaseForNonTerminalDynamicToolResult(
-  response: CodexDynamicToolCallResponse,
+  response: CodexDynamicToolRuntimeResponse,
 ): boolean {
   return response.asyncStarted !== true;
 }

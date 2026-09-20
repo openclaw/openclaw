@@ -5,6 +5,7 @@ import path from "node:path";
 import { format } from "node:util";
 import type { Page } from "playwright";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferredCore } from "../../../src/shared/deferred.ts";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.ts";
 import { captureSidebarUiProof } from "../e2e/sidebar-customization.test-support.ts";
 import { createControlUiE2eArtifactDir } from "./control-ui-e2e-artifacts.ts";
@@ -19,10 +20,91 @@ import {
 describe("shared proof capture", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
   afterEach(() => {
+    vi.useRealTimers();
     vi.unstubAllEnvs();
     vi.restoreAllMocks();
     document.body.replaceChildren();
   });
+
+  it.each([
+    { stage: "evaluation", late: "resolve" },
+    { stage: "evaluation", late: "reject" },
+    { stage: "screenshot", late: "resolve" },
+    { stage: "screenshot", late: "reject" },
+  ])(
+    "preserves the original failure when diagnostic $stage stalls then $late arrives late",
+    async ({ stage, late }) => {
+      vi.useFakeTimers();
+      const parent = tempDirs.make("control-ui-stalled-proof-");
+      vi.stubEnv("OPENCLAW_UI_E2E_DIAGNOSTIC_DIR", parent);
+      vi.spyOn(console, "error").mockImplementation(() => {});
+      const pending = createDeferredCore<Buffer>();
+      const screenshot = vi.fn(() =>
+        stage === "screenshot" ? pending.promise : Promise.resolve(Buffer.from("proof")),
+      );
+      // SAFETY: deferred browser replies model an unavailable renderer at the Page boundary.
+      const page = {
+        evaluate: () =>
+          stage === "evaluation"
+            ? pending.promise
+            : new Promise((resolve) => {
+                // A slow read leaves only the remaining capture budget for the screenshot.
+                setTimeout(() => resolve({ failureSummary: { available: true } }), 4_000);
+              }),
+        screenshot,
+        frames: () => [],
+        isClosed: () => false,
+        url: () => "http://fixture.invalid/chat",
+      } as unknown as Page;
+      const original = new Error("original request failure");
+      original.name = "TimeoutError";
+      let observed: unknown;
+      const failedAction = (async () => {
+        await captureControlUiE2eFailureDiagnostics(page, {
+          error: original,
+          label: "chat.send",
+        });
+        throw original;
+      })().catch((error: unknown) => {
+        observed = error;
+      });
+      try {
+        await vi.advanceTimersByTimeAsync(5_000);
+        expect(observed).toBe(original);
+        expect(vi.getTimerCount()).toBe(0);
+        const directories = readdirSync(parent);
+        expect(directories).toHaveLength(1);
+        const root = path.join(parent, directories[0]!);
+        const before = readdirSync(root).map((name) => [
+          name,
+          readFileSync(path.join(root, name), "utf8"),
+        ]);
+        const report = JSON.parse(readFileSync(path.join(root, "failure.private.json"), "utf8"));
+        expect(report.failure).toMatchObject({
+          name: "TimeoutError",
+          message: original.message,
+        });
+        expect(report.screenshot).toBeNull();
+        expect(report.captureErrors).toEqual([expect.stringContaining("timed out")]);
+        if (stage === "evaluation") {
+          expect(screenshot).not.toHaveBeenCalled();
+        }
+        if (late === "resolve") {
+          pending.resolve(Buffer.from("late proof"));
+        } else {
+          pending.reject(new Error("late renderer failure"));
+        }
+        await vi.runAllTimersAsync();
+        await failedAction;
+        expect(
+          readdirSync(root).map((name) => [name, readFileSync(path.join(root, name), "utf8")]),
+        ).toEqual(before);
+      } finally {
+        pending.resolve(Buffer.from("cleanup"));
+        await failedAction;
+      }
+    },
+  );
 
   it.each([
     { shardIndex: "5", shardCount: "6", failure: "none", sendLabel: "Send message" },
@@ -48,6 +130,7 @@ describe("shared proof capture", () => {
   ])(
     "retains safe failure state despite $failure failure ($sendLabel; $shardIndex/$shardCount)",
     async ({ shardIndex, shardCount, failure, sendLabel }) => {
+      vi.useFakeTimers();
       const parent = tempDirs.make("control-ui-failure-proof-");
       const diagnosticParent = failure === "storage" ? path.join(parent, "blocked") : parent;
       if (failure === "storage") {
@@ -218,17 +301,18 @@ describe("shared proof capture", () => {
         },
         isClosed: () => false,
         url: () => "http://127.0.0.1/chat",
-        screenshot: async (options: { path: string }) => {
+        screenshot: async () => {
           expect(
             logs.mock.calls.some(([message]) => message === "[control-ui-e2e] failure state"),
           ).toBe(true);
-          expect(existsSync(path.join(path.dirname(options.path), "failure.public.json"))).toBe(
-            true,
-          );
+          expect(
+            readdirSync(diagnosticParent).some((name) =>
+              existsSync(path.join(diagnosticParent, name, "failure.public.json")),
+            ),
+          ).toBe(true);
           if (failure === "screenshot") {
             throw new Error("private-screenshot-error");
           }
-          writeFileSync(options.path, "failure-proof");
           return Buffer.from("failure-proof");
         },
       } as unknown as Page;
@@ -298,6 +382,7 @@ describe("shared proof capture", () => {
           }
         };
         await expect(failedAction()).rejects.toBe(original);
+        expect(vi.getTimerCount()).toBe(0);
       }
       const directories = readdirSync(parent, { withFileTypes: true }).filter((entry) =>
         entry.isDirectory(),

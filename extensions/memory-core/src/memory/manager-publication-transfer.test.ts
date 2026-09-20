@@ -1,12 +1,12 @@
 import path from "node:path";
 import { serialize } from "node:v8";
-import * as sqliteCapabilities from "openclaw/plugin-sdk/memory-core-host-engine-knn";
 import { ensureMemoryIndexSchema } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import * as sqliteRuntime from "openclaw/plugin-sdk/sqlite-runtime";
+import * as sqliteWorkerRuntime from "openclaw/plugin-sdk/sqlite-worker-runtime";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { MemoryIndexDatabase } from "./manager-database-context.js";
-import { readMemoryDatabaseRevision } from "./manager-db.js";
+import { readMemoryDatabaseRevision } from "./manager-db-kernel.js";
 import { memoryPublicationBatches } from "./manager-publication-transfer.js";
 import { openExistingSqliteWorkerBackend } from "./manager-publication.worker.js";
 import { readMemoryShadowIdentity } from "./manager-shadow-task.js";
@@ -100,14 +100,16 @@ describe("bounded memory publication transfer", () => {
 
   it("opens keyword publication when SQLite extension loading is unavailable", () => {
     const owner = createOwner();
-    vi.spyOn(sqliteCapabilities, "supportsNodeSqliteExtensionLoading").mockReturnValue(false);
-    const open = sqliteRuntime.openNodeSqliteDatabase;
-    vi.spyOn(sqliteRuntime, "openNodeSqliteDatabase").mockImplementation((location, options) => {
-      if (options?.allowExtension) {
-        throw new Error("SQLite extension loading is unavailable");
-      }
-      return open(location, options);
-    });
+    vi.spyOn(sqliteWorkerRuntime, "supportsNodeSqliteExtensionLoading").mockReturnValue(false);
+    const open = sqliteWorkerRuntime.openNodeSqliteDatabase;
+    vi.spyOn(sqliteWorkerRuntime, "openNodeSqliteDatabase").mockImplementation(
+      (location, options) => {
+        if (options?.allowExtension) {
+          throw new Error("SQLite extension loading is unavailable");
+        }
+        return open(location, options);
+      },
+    );
     const backend = createBackend(owner);
     const { chunks, embeddings: _embeddings, ...header } = replacement();
     backend.execute({

@@ -931,6 +931,7 @@ describe("createGatewayKernel", () => {
         "gateway.request-runtime",
         "gateway.config-revision-key",
         "gateway.request-context",
+        "sessions.projection",
       ]);
     } finally {
       try {

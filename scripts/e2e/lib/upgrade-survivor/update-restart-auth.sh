@@ -76,6 +76,12 @@ if [ "${#filtered[@]}" -gt 2 ] ||
   exit 1
 fi
 
+case "$command" in
+  stop | start | restart | enable | disable)
+    node "$manager_script" record-caller "${log_file}.callers" "$PPID" "$command"
+    ;;
+esac
+
 is_running() {
   [ -s "$pid_file" ] || return 1
   local pid stat_line stat_tail

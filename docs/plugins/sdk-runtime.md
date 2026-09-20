@@ -206,6 +206,28 @@ method, when provided, if the runtime or an embedding adapter retires. This clos
 all of that runtime's managers as best-effort cleanup; it cannot identify dependent
 managers or prevent concurrent manager acquisition.
 
+## Worker provider allocation authority
+
+The Gateway supplies `assertCurrent()` in the options passed to worker providers'
+`provision` and `prepareProvision` methods. This required runtime callback binds
+the operation to the live environment owner and any requesting run. Invoke it
+after awaited preparation and immediately before an allocation, checkpoint fork,
+or adoption. A non-aborted `signal` does not prove that the caller still has
+authority. Providers with project preparation must compose this callback with
+`project.assertCurrent()` so both owners remain current.
+
+The callback belongs to the provision attempt. Carry it into a returned prepared
+allocation closure, but never serialize it or retain it in a durable or reusable
+preparation record. After the attempt closes, the callback rejects retained work.
+Teardown keeps its existing cleanup authority and must still settle an owned
+lease when the requesting run has ended.
+
+The legacy optional parameter shape remains source-compatible until the next
+declared breaking Plugin SDK revision. It is not a capability-free runtime path:
+current hosts supply this assertion, and bundled providers reject missing
+allocation authority before performing work. An older host must be updated to
+use these providers.
+
 ## Other top-level `api` fields
 
 Beyond `api.runtime`, the API object also provides:
@@ -217,7 +239,7 @@ Beyond `api.runtime`, the API object also provides:
   Plugin display name.
 </ParamField>
 <ParamField path="api.config" type="OpenClawConfig">
-  Config snapshot supplied when this instance registers. With the default hybrid
+  Read-only config snapshot supplied when this instance registers. With the default hybrid
   reload mode, changes to this plugin's `plugins.entries.<id>` replace its instance
   by default and rerun registration. A retained instance keeps its snapshot across unrelated
   config changes. In long-lived callbacks, prefer the supplied `cfg`, or use
@@ -278,3 +300,10 @@ Every section heading and namespace anchor from the previous single-page version
 - [Plugin internals](/plugins/architecture) — capability model and registry
 - [SDK entry points](/plugins/sdk-entrypoints) — `definePluginEntry` options
 - [SDK overview](/plugins/sdk-overview) — subpath reference
+
+## Decision model runtime
+
+`api.runtime.decisions` is a closure-bound optional capability for small typed
+Choice, ordered Score, and Boolean-probability batches. Retained handles reject
+after consumer retirement. See [decision models](/plugins/sdk-overview/capabilities#decision-models-contract-version-1)
+for provider selection, lifecycle, failure handling, limits, and diagnostics.

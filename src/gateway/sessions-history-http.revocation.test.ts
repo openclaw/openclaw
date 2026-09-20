@@ -4,10 +4,9 @@
 import { EventEmitter } from "node:events";
 import { createServer, request, type IncomingMessage, type ServerResponse } from "node:http";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { InternalSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 
-let transcriptUpdateHandler:
-  | ((update: { sessionFile?: string; message?: unknown; messageId?: string }) => void)
-  | undefined;
+let transcriptUpdateHandler: ((update: InternalSessionTranscriptUpdate) => void) | undefined;
 let authRevoked = false;
 let gatewayConfig: {
   trustedProxies?: string[];
@@ -365,17 +364,27 @@ function emitErrorOnNextTick(emitter: EventEmitter, error: Error): Promise<void>
 
 function emitTranscriptTextUpdate({
   sessionFile = SESSION_FILE,
+  target = {
+    agentId: "main",
+    sessionId: "session-1",
+    sessionKey: "agent:main",
+    storePath: "/tmp",
+  },
   text,
   messageId,
 }: {
   sessionFile?: string;
+  target?: InternalSessionTranscriptUpdate["target"];
   text: string;
   messageId: string;
 }) {
   transcriptUpdateHandler?.({
     sessionFile,
+    target,
+    lifecycleRevision: "before-reset",
     message: { role: "assistant", content: [{ type: "text", text }] },
     messageId,
+    messageSeq: 1,
   });
 }
 
@@ -672,6 +681,12 @@ describe("session history SSE auth revocation", () => {
 
     emitTranscriptTextUpdate({
       sessionFile: "/tmp/other-session.jsonl",
+      target: {
+        agentId: "main",
+        sessionId: "other-session",
+        sessionKey: "agent:main:other",
+        storePath: "/tmp",
+      },
       text: "other session",
       messageId: "m-3",
     });

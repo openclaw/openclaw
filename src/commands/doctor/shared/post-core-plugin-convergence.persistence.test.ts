@@ -10,11 +10,11 @@ import { cleanupRetainedPluginInstallGenerations } from "../../../gateway/server
 import * as temporaryState from "../../../infra/tmp-openclaw-dir.js";
 import { createUpdateRun } from "../../../infra/update-run-ledger.js";
 import { commitPluginInstallRecordsWithConfig } from "../../../plugins/install-record-commit.js";
+import { readPersistedInstalledPluginIndexRowSync } from "../../../plugins/installed-plugin-index-record-state.js";
 import {
   loadInstalledPluginIndexInstallRecords,
   readPersistedInstalledPluginIndexInstallRecords,
 } from "../../../plugins/installed-plugin-index-records.js";
-import { readPersistedInstalledPluginIndexRowSync } from "../../../plugins/installed-plugin-index-row.js";
 import { readPersistedInstalledPluginIndexSync } from "../../../plugins/installed-plugin-index-store.js";
 import { resolveRetainedManagedNpmInstallMarkerPath } from "../../../plugins/managed-npm-retention.js";
 import { withPluginLifecycleLease } from "../../../plugins/plugin-lifecycle-lease.js";

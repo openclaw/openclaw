@@ -312,9 +312,8 @@ export function verifyBackupManifestEntries(manifest: BackupManifest, entries: S
   const archiveRoot = normalizeArchiveRoot(manifest.archiveRoot);
   const manifestEntryPath = path.posix.join(archiveRoot, "manifest.json");
   const normalizedEntries = [...entries];
-  const normalizedEntrySet = new Set(normalizedEntries);
 
-  if (!normalizedEntrySet.has(manifestEntryPath)) {
+  if (!entries.has(manifestEntryPath)) {
     throw new Error(`Archive is missing manifest entry: ${manifestEntryPath}`);
   }
 
@@ -330,11 +329,10 @@ export function verifyBackupManifestEntries(manifest: BackupManifest, entries: S
     if (!isArchivePathWithin(assetArchivePath, payloadRoot)) {
       throw new Error(`Manifest asset path is outside payload root: ${asset.archivePath}`);
     }
-    const exact = normalizedEntrySet.has(assetArchivePath);
-    const nested = normalizedEntries.some(
-      (entry) => entry !== assetArchivePath && isArchivePathWithin(entry, assetArchivePath),
-    );
-    if (!exact && !nested) {
+    if (
+      !entries.has(assetArchivePath) &&
+      !normalizedEntries.some((entry) => isArchivePathWithin(entry, assetArchivePath))
+    ) {
       throw new Error(`Archive is missing payload for manifest asset: ${assetArchivePath}`);
     }
   }

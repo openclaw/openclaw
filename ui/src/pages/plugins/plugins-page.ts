@@ -35,6 +35,7 @@ import {
 import { InstallWizardController } from "./install-wizard-controller.ts";
 import type { PluginInstallWizardState } from "./install-wizard-model.ts";
 import { PluginDiscoveryController } from "./plugin-discovery-controller.ts";
+import { PluginHelpController } from "./plugin-help-controller.ts";
 import { confirmPluginUninstall } from "./plugin-lifecycle-confirmation.ts";
 import type { PluginRowMessage } from "./plugin-row-message.ts";
 import { PluginSettingsController } from "./plugin-settings-controller.ts";
@@ -73,6 +74,7 @@ class PluginsPage extends OpenClawLightDomElement {
   @state() private catalogDetail: PluginsPageCatalogDetail | null = null;
   @state() private installedDetailTab: InstalledPluginDetailTab = "readme";
   @state() private installWizard: PluginInstallWizardState | null = null;
+  private readonly help = new PluginHelpController(this);
   private configAutoSaveStatus = this.context?.runtimeConfig.state.configAutoSaveStatus ?? "idle";
   private pluginConfigEditPending = false;
   private routeDataConsumed = false;
@@ -623,6 +625,7 @@ class PluginsPage extends OpenClawLightDomElement {
   override render() {
     const blockedReason = this.accessBlockedReason(this.result?.mutationAllowed);
     return renderPluginsPage({
+      help: this.help,
       context: this.context,
       routeData: this.routeData,
       surface: this.surface,

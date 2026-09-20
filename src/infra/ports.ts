@@ -6,7 +6,7 @@ import { defaultRuntime } from "../runtime.js";
 import { isErrno } from "./errors.js";
 import { formatPortDiagnostics } from "./ports-format.js";
 import { tryListenOnPort } from "./ports-probe.js";
-import type { PortUsage } from "./ports-types.js";
+export type { PortUsage } from "./ports-types.js";
 
 class PortInUseError extends Error {
   port: number;
@@ -92,7 +92,6 @@ export async function handlePortError(
 }
 
 export { PortInUseError };
-export type { PortUsage };
 export {
   classifyPortListener,
   formatPortDiagnostics,

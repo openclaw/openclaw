@@ -3,8 +3,11 @@ import { describe, expect, it, vi } from "vitest";
 import { getReplyPayloadMetadata } from "../auto-reply/reply-payload.js";
 import type { AssistantMessage } from "../llm/types.js";
 import { buildEmbeddedRunPayloads } from "./embedded-agent-runner/run/payloads.js";
+import { resolveEmbeddedRunAttemptTerminalState } from "./embedded-agent-runner/run/terminal-outcome.js";
+import { resolveSettledTurnFinalizationRequest } from "./embedded-agent-runner/run/terminal-resolution.js";
 import { createSubscribedSessionHarness } from "./embedded-agent-subscribe.e2e-harness.js";
 import { makeAgentAssistantMessage } from "./test-helpers/agent-message-fixtures.js";
+import { makeEmbeddedRunnerAttempt } from "./test-helpers/embedded-agent-runner-e2e-fixtures.js";
 
 function hasAssistantEvent(calls: Array<unknown[]>): boolean {
   // The gate buffers assistant stream events; tests use this helper to assert
@@ -64,6 +67,136 @@ function buildSubscriptionPayloads(
 }
 
 describe("subscribeEmbeddedAgentSession deferred reply supersession", () => {
+  it.each(["immediate", "pending", "rejected", "deferred", "none"] as const)(
+    "recovers a missing required reply without stealing %s delivery ownership",
+    async (delivery) => {
+      const markdown =
+        "## Result\n\n- **Saved** the note.\n- Keep `note.md` unchanged.\n\n```text\nfirst  second\n```";
+      const delivered: string[] = [];
+      const pending: string[] = [];
+      const onBlockReply = vi.fn(async (payload: { text?: string }) => {
+        if (delivery === "rejected") {
+          throw new Error("synthetic delivery failure");
+        }
+        if (delivery === "pending" && payload.text) {
+          pending.push(payload.text);
+          return;
+        }
+        if (payload.text) {
+          delivered.push(payload.text);
+        }
+      });
+      const { emit, subscription } = createSubscribedSessionHarness({
+        runId: `silent-tail-${delivery}`,
+        onBlockReply: delivery === "none" ? undefined : onBlockReply,
+        onBeforeTerminalDelivery: delivery === "deferred" ? async () => undefined : undefined,
+        blockReplyBreak: "message_end",
+      });
+      const user = { role: "user" as const, content: "Read the saved note.", timestamp: 0 };
+      const toolCall = makeAgentAssistantMessage({
+        content: [{ type: "toolCall", id: "read-note", name: "read", arguments: {} }],
+        stopReason: "toolUse",
+      });
+      const result = { content: [{ type: "text" as const, text: "Note saved." }] };
+      const toolResult = {
+        role: "toolResult" as const,
+        toolCallId: "read-note",
+        toolName: "read",
+        ...result,
+        isError: false,
+        timestamp: 1,
+      };
+      const answer = makeAgentAssistantMessage({
+        content: [
+          {
+            type: "text",
+            text: markdown,
+            textSignature: JSON.stringify({ v: 1, id: "answer", phase: "final_answer" }),
+          },
+        ],
+        stopReason: "toolUse",
+      });
+      const silent = makeAgentAssistantMessage({ content: [{ type: "text", text: "NO_REPLY" }] });
+      const messages = [user, toolCall, toolResult, answer, silent];
+      try {
+        // Settlement precedes the formatted answer. The later canonical NO_REPLY
+        // removes unsent text, but only the transport can prove delivery or custody.
+        emit({ type: "message_end", message: user });
+        emitAssistantMessage(emit, toolCall);
+        emit({ type: "tool_execution_start", toolName: "read", toolCallId: "read-note", args: {} });
+        emit({
+          type: "tool_execution_end",
+          toolName: "read",
+          toolCallId: "read-note",
+          result,
+          isError: false,
+        });
+        emit({ type: "message_end", message: toolResult });
+        emit({ type: "turn_end", message: toolCall, toolResults: [toolResult] });
+        emitAssistantMessage(emit, answer);
+        emit({ type: "turn_end", message: answer, toolResults: [] });
+        emitAssistantMessage(emit, silent);
+        emit({ type: "turn_end", message: silent, toolResults: [] });
+        emit({ type: "agent_end", messages, willRetry: false });
+        await subscription.waitForPendingEvents();
+
+        const assistant = subscription.getCurrentAttemptAssistant();
+        const attempt = makeEmbeddedRunnerAttempt({
+          assistantTexts: subscription.assistantTexts,
+          currentAttemptAssistant: assistant,
+          currentAttemptCompletedAssistant: assistant,
+          lastAssistant: assistant,
+          messagesSnapshot: messages,
+          itemLifecycle: subscription.getItemLifecycle(),
+          toolMetas: [
+            { toolName: "read", toolCallId: "read-note", isError: false, replaySafe: true },
+          ],
+        });
+        const payloads = buildSubscriptionPayloads(subscription);
+        expect(subscription.assistantTexts).toEqual([markdown, "NO_REPLY"]);
+        expect(attempt.itemLifecycle).toMatchObject({
+          startedCount: 1,
+          completedCount: 1,
+          activeCount: 0,
+        });
+        expect(delivered).toEqual(delivery === "immediate" ? [markdown] : []);
+        expect(pending).toEqual(delivery === "pending" ? [markdown] : []);
+        expect(subscription.getVisibleBlockReplyCount()).toBe(
+          delivery === "immediate" || delivery === "pending" ? 1 : 0,
+        );
+        expect(payloads).toEqual([]);
+        const replyDeliveryState =
+          delivered.length > 0 ? "delivered" : pending.length > 0 ? "pending" : "missing";
+        const finalizationRequest = resolveSettledTurnFinalizationRequest({
+          runParams: {
+            runId: "silent-tail",
+            sessionId: "silent-tail",
+            workspaceDir: "/synthetic",
+            prompt: user.content,
+            timeoutMs: 1000,
+            terminalReplyExpectation: "required",
+          },
+          attempt,
+          replyDeliveryState,
+          activeErrorContext: { provider: "openai", model: "mock-1" },
+          modelApi: "openai-responses",
+          executionContract: undefined,
+          payloadsWithToolMedia: payloads,
+          hasTerminalToolPresentation: false,
+          terminalState: resolveEmbeddedRunAttemptTerminalState({ attempt, assistant }),
+          settledTurnFinalizationAvailable: true,
+        });
+        if (replyDeliveryState === "missing") {
+          expect(finalizationRequest).toContain("Tools are unavailable");
+        } else {
+          expect(finalizationRequest).toBeNull();
+        }
+      } finally {
+        subscription.unsubscribe();
+      }
+    },
+  );
+
   it("subscribeEmbeddedAgentSession + buildEmbeddedRunPayloads seals only answered inputs", async () => {
     const { emit, subscription } = createSubscribedSessionHarness({ runId: "answered-inputs" });
     const first = makeAgentAssistantMessage({ content: [{ type: "text", text: "A" }] });

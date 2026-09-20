@@ -127,6 +127,12 @@ describe.skipIf(process.platform === "win32")("native multi-invocation report ow
         expect(index.merge).toMatchObject({ code: 0, signal: null });
       }
       if (mode === "watchdog") {
+        expect(
+          fs.readFileSync(
+            path.join(path.dirname(path.dirname(result.output)), "cold-started"),
+            "utf8",
+          ),
+        ).toBe("started");
         expect(index.entries[0].attempts).toHaveLength(2);
         expect(index.entries[0].attempts[0].outcome.noOutputTimedOut).toBe(true);
       }

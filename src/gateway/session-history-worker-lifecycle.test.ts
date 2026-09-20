@@ -217,6 +217,7 @@ it("closes A through native exit while active and queued B pages survive, then r
     const b = await seed(state, "other", "active-b");
     const c = await seed(state, "other", "queued-b");
     await a.read();
+    await b.read();
     const oldWorker = observed.workers.at(-1)!;
     let closing: Promise<boolean> | undefined;
     observed.dispatch = (message) => {
@@ -241,6 +242,40 @@ it("closes A through native exit while active and queued B pages survive, then r
     fs.renameSync(`${a.path}.replacement`, a.path);
     expect((await a.read()).messages.map(readChatHistoryMessageId)).toEqual(["close-a-message"]);
     expect((await b.read()).messages.map(readChatHistoryMessageId)).toEqual(["active-b-message"]);
+  });
+});
+
+it("evicts the least recently used of 64 retained targets without charging missing databases", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const targets = [];
+    for (let index = 0; index < 65; index++) {
+      targets.push(await seed(state, `retained-${index}`, `history-${index}`));
+    }
+    for (const target of targets.slice(0, 64)) {
+      await target.read();
+    }
+    await targets[0]!.read();
+    const worker = observed.workers.at(-1)!;
+    const threadId = worker.threadId;
+    for (let index = 0; index < 65; index++) {
+      const target = {
+        agentId: `missing-${index}`,
+        sessionKey: `agent:missing-${index}:absent`,
+        storePath: state.statePath(`missing-${index}.sqlite`),
+        env: state.env,
+      };
+      expect(await prepareSessionEntryPresenceRead(target).read()).toBe(false);
+      expect(fs.existsSync(target.storePath)).toBe(false);
+    }
+    await targets[64]!.read();
+    // Only the confirmed eviction releases custody without retiring this worker.
+    await closeOpenClawAgentDatabaseByPathAsync(targets[1]!.path, "retained-1");
+    expect(worker.threadId).toBe(threadId);
+    await closeOpenClawAgentDatabaseByPathAsync(targets[0]!.path, "retained-0");
+    expect(worker.threadId).toBe(-1);
+    expect((await targets[64]!.read()).messages.map(readChatHistoryMessageId)).toEqual([
+      "history-64-message",
+    ]);
   });
 });
 
@@ -393,20 +428,52 @@ it("leaves the unrelated warm worker running when admission rejects a request be
   });
 });
 
-it("joins the history worker and releases database custody when its 30-minute idle timer fires", async () => {
-  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-    const a = await seed(state, "main", "idle-a");
-    await a.read();
-    const worker = observed.workers.at(-1)!;
-    const index = observed.timers.mock.calls.findLastIndex((call) => call[1] === 30 * 60_000);
-    expect(index).toBeGreaterThanOrEqual(0);
-    const [expire] = observed.timers.mock.calls[index]!;
-    const timer = observed.timers.mock.results[index]!.value as NodeJS.Timeout;
-    expect(timer.hasRef()).toBe(false);
-    clearTimeout(timer);
-    expire();
-    await expect.poll(() => worker.threadId).toBe(-1);
-    expect((await a.read()).messages.map(readChatHistoryMessageId)).toEqual(["idle-a-message"]);
-    expect(observed.workers.at(-1)).not.toBe(worker);
-  });
-});
+it.each([false, true])(
+  "joins the history worker when its 30-minute idle timer fires (missing=%s)",
+  async (missing) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const a = missing
+        ? prepareSessionEntryPresenceRead({
+            agentId: "main",
+            sessionKey: "agent:main:idle-missing",
+            storePath: state.statePath("idle-missing.sqlite"),
+            env: state.env,
+          })
+        : await seed(state, "main", "idle-a");
+      const beforeRead = observed.timers.mock.calls.length;
+      await a.read();
+      const worker = observed.workers.at(-1)!;
+      const index = observed.timers.mock.calls.findLastIndex((call) => call[1] === 30 * 60_000);
+      expect(index).toBeGreaterThanOrEqual(beforeRead);
+      const [expire] = observed.timers.mock.calls[index]!;
+      const timer = observed.timers.mock.results[index]!.value as NodeJS.Timeout;
+      expect(timer.hasRef()).toBe(false);
+      clearTimeout(timer);
+      expire();
+      await expect.poll(() => worker.threadId).toBe(-1);
+      const reopened = await a.read();
+      if (typeof reopened === "boolean") {
+        expect(reopened).toBe(false);
+      } else {
+        expect(reopened.messages.map(readChatHistoryMessageId)).toEqual(["idle-a-message"]);
+      }
+      expect(observed.workers.at(-1)).not.toBe(worker);
+      if (missing) {
+        // No database resource exists to close; the reopened empty worker owns only its idle timer.
+        const emptyWorker = observed.workers.at(-1)!;
+        const nextIndex = observed.timers.mock.calls.findLastIndex(
+          (call) => call[1] === 30 * 60_000,
+        );
+        expect(nextIndex).toBeGreaterThan(index);
+        clearTimeout(observed.timers.mock.results[nextIndex]!.value as NodeJS.Timeout);
+        observed.timers.mock.calls[nextIndex]![0]();
+        await expect.poll(() => emptyWorker.threadId).toBe(-1);
+        expect(observed.timers.mock.calls.filter((call) => call[1] === 30 * 60_000)).toHaveLength(
+          observed.timers.mock.calls
+            .slice(0, nextIndex + 1)
+            .filter((call) => call[1] === 30 * 60_000).length,
+        );
+      }
+    });
+  },
+);

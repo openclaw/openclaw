@@ -17,11 +17,19 @@ import {
 } from "../agents/subagents/registry/subagent-registry.js";
 import { withGatewayToolCallerIdentity } from "../agents/tools/gateway-caller-context.js";
 import { createSessionsSendTool } from "../agents/tools/sessions-send-tool.js";
+import { getRuntimeConfig } from "../config/config.js";
 import {
   listSessionPendingInputReceipts,
   listSessionPendingInputs,
 } from "../config/sessions/session-accessor.js";
+import { publishSystemEventStoreConfig } from "../config/sessions/session-store-path.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
+import { isPathInside } from "../infra/path-guards.js";
+import { unregisterOpenClawAgentDatabase } from "../state/openclaw-agent-db-registry.js";
+import {
+  closeOpenClawAgentDatabasesAsync,
+  listOpenClawRegisteredAgentDatabases,
+} from "../state/openclaw-agent-db.js";
 import { findTaskByRunId } from "../tasks/task-registry.js";
 import {
   agentCommandMock,
@@ -34,7 +42,19 @@ import {
 } from "./test-helpers.js";
 
 installGatewayTestHooks({ scope: "suite" });
-const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
+  afterEach(async () => {
+    for (const root of tempDirs.dirs) {
+      await closeOpenClawAgentDatabasesAsync(root);
+    }
+    for (const database of listOpenClawRegisteredAgentDatabases()) {
+      if ([...tempDirs.dirs].some((root) => isPathInside(root, database.path))) {
+        unregisterOpenClawAgentDatabase(database);
+      }
+    }
+    cleanup();
+  }),
+);
 let server: Awaited<ReturnType<typeof startTestGatewayServer>>;
 let kernel: Awaited<ReturnType<(typeof import("./server-kernel.js"))["createGatewayKernel"]>>;
 beforeAll(async () => {
@@ -73,6 +93,7 @@ async function arrangeAuthorityProof(name: string) {
     },
   });
   await prepareGatewayReplyRuntimeForTest();
+  publishSystemEventStoreConfig(getRuntimeConfig());
   registerSubagentRun({
     runId: previousRunId,
     childSessionKey: child,
@@ -111,7 +132,7 @@ async function arrangeAuthorityProof(name: string) {
     });
     return { payloads: [{ text, mediaUrl: null }], meta: { durationMs: 1 } };
   });
-  const send = (caller = parent, approvalSignal?: AbortSignal) => {
+  const send = (caller = parent, approvalSignal?: AbortSignal, mode?: "resume") => {
     const tool = createSessionsSendTool({
       agentSessionKey: caller,
       config: { tools: { sessions: { visibility: "all" } } },
@@ -129,7 +150,7 @@ async function arrangeAuthorityProof(name: string) {
       () =>
         tool.execute(`${name}-proof`, {
           sessionKey: child,
-          mode: "resume",
+          ...(mode ? { mode } : {}),
           message: "The answer is ready; finish the task.",
         }),
     );
@@ -163,7 +184,7 @@ it("rejects an unrelated visible controller without consuming input or producing
     .mockResolvedValue("delivered");
   try {
     const proof = await arrangeAuthorityProof("unrelated-controller");
-    const result = await proof.send(proof.unrelated);
+    const result = await proof.send(proof.unrelated, undefined, "resume");
     expect(result.details).toMatchObject({
       status: "error",
       error: "Task resume is limited to children controlled by the calling session.",
@@ -189,7 +210,7 @@ it("rejects a child without task-owned completion before input or execution", as
     const previous = expectDefined(subagentRuns.get(proof.previousRunId), "paused child");
     previous.expectsCompletionMessage = false;
     persistSubagentRunsToDiskOrThrow(subagentRuns, [proof.previousRunId]);
-    const result = await proof.send();
+    const result = await proof.send(undefined, undefined, "resume");
     expect(result.details).toMatchObject({
       status: "error",
       error: "Task resume requires a child with task-owned completion.",
@@ -366,7 +387,7 @@ it("fences a cancelled successor after adoption before queued input consumption"
   }
 });
 
-it("resumes a visible child through sessions_send and delivers exactly one task-owned result", async () => {
+it("continues a paused child through ordinary sessions_send and delivers exactly one task-owned result", async () => {
   const root = tempDirs.make("openclaw-parent-resume-gateway-");
   const parent = "agent:main:main";
   const child = "agent:main:dashboard:resume-proof";
@@ -390,6 +411,7 @@ it("resumes a visible child through sessions_send and delivers exactly one task-
       },
     });
     await prepareGatewayReplyRuntimeForTest();
+    publishSystemEventStoreConfig(getRuntimeConfig());
     // Seed paused registry/canonical-task state without polling a nonexistent source execution.
     registerSubagentRun({
       runId: previousRunId,
@@ -444,7 +466,8 @@ it("resumes a visible child through sessions_send and delivers exactly one task-
       () =>
         tool.execute("resume-proof", {
           sessionKey: child,
-          mode: "resume",
+          timeoutSeconds: 30,
+          watch: true,
           message: "The answer is ready; finish the task.",
         }),
     );

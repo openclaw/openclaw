@@ -241,7 +241,7 @@ describe("mixed inline directives", () => {
 
     expect(result).toMatchObject({ kind: "continue", provider: "openai", model: "gpt-5.6-luna" });
     expect(lifecycleEvents).toEqual([
-      { sessionKey: "agent:main:dm:1", agentId: "main", reason: "patch" },
+      { sessionKey: "agent:main:dm:1", agentId: "main", reason: "patch", catalogChanged: true },
     ]);
     expect(sessionEntry.authProfileOverrideSource).toBe("user");
     expect(persistStickyModelSelectionBestEffort).not.toHaveBeenCalled();
@@ -283,6 +283,9 @@ describe("mixed inline directives", () => {
       } else {
         expect(persistenceMocks.persist).toHaveBeenCalledOnce();
         expect(enqueueSystemEvent).toHaveBeenCalledOnce();
+        expect(lifecycleEvents).toEqual([
+          { sessionKey: "agent:main:dm:1", agentId: "main", reason: "patch" },
+        ]);
       }
     },
   );

@@ -103,7 +103,6 @@ export function validateSessionTranscriptContextAnchor(
   const result = withOpenClawAgentDatabaseReadOnly(
     (database) => assertContextAnchor(database, resolved, through),
     toDatabaseOptions(resolved),
-    { throwOnMissingTable: true },
   );
   if (!result.found) {
     throw new SessionTranscriptReadFenceError("Completed-turn transcript no longer exists");
@@ -119,7 +118,6 @@ export function validateSessionTranscriptContextVersion(
   const result = withOpenClawAgentDatabaseReadOnly(
     (database) => readTranscriptContextVersionInTransaction(database, resolved.sessionId),
     toDatabaseOptions(resolved),
-    { throwOnMissingTable: true },
   );
   const current = result.found ? result.value : undefined;
   if (
@@ -144,7 +142,6 @@ export function validateSessionTranscriptContextAdmission(
     withOpenClawAgentDatabaseReadOnly(
       (database) => resolveSqliteSessionTranscriptReadFence({ database, ...resolved }),
       toDatabaseOptions(resolved),
-      { throwOnMissingTable: true },
     ),
   );
   if (!result.found || !result.value) {
@@ -157,20 +154,22 @@ export function validateSessionTranscriptContextAdmission(
 /** Select an owned suffix before SQLite payloads can enter JavaScript or cross a worker. */
 function selectBoundedModelRequests(
   requests: ModelContextRequest[],
-  sizes: Map<ContextEntry, number>,
+  readSizes: TranscriptContextSnapshot["readModelEntrySizes"],
   limits: SessionModelContextLimits,
 ): ModelContextRequest[] {
   const boundary = requests.find(
     ({ entry }) => entry.type === "compaction" || entry.type === "reset",
   );
   const candidates = requests.filter((request) => request !== boundary);
+  const sizingCandidates = candidates.slice(-limits.maxEvents);
+  const sizes = readSizes(boundary ? [boundary, ...sizingCandidates] : sizingCandidates);
   let bytes = boundary ? sizes.get(boundary.entry)! : 0;
   let events = boundary ? 1 : 0;
   if (bytes > limits.maxBytes || events > limits.maxEvents) {
     throw new RangeError("Required session context boundary exceeds the model-context limit");
   }
   let cut = candidates.length;
-  for (const request of candidates.toReversed()) {
+  for (const request of sizingCandidates.toReversed()) {
     const size = sizes.get(request.entry)!;
     if (bytes + size > limits.maxBytes || events + 1 > limits.maxEvents) {
       break;
@@ -265,7 +264,7 @@ export function readSessionTranscriptModelContext(
         requests.push({ entry, omitCheckpoint });
       }
       const selected = limits
-        ? selectBoundedModelRequests(requests, readModelEntrySizes(requests), limits)
+        ? selectBoundedModelRequests(requests, readModelEntrySizes, limits)
         : requests;
       const payloads = readModelEntries(selected);
       if (limits) {
@@ -507,7 +506,6 @@ function withTranscriptContextSnapshot<T>(
         { operationLabel: "session context snapshot read" },
       ),
     toDatabaseOptions(resolved),
-    { throwOnMissingTable: true },
   );
   return result;
 }

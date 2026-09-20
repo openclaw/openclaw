@@ -1323,6 +1323,14 @@ describe("createOpenClawCodingTools", () => {
     expect(latestCreateOpenClawToolsOptions().conversationRecall).toEqual(conversationRecall);
   });
 
+  const pluginOnlyConstructionPlan = {
+    includeBaseCodingTools: false,
+    includeShellTools: false,
+    includeChannelTools: false,
+    includeOpenClawTools: false,
+    includePluginTools: true,
+  };
+
   it("keeps plugin-only construction off the OpenClaw core factory", () => {
     const createOpenClawToolsMock = vi.mocked(createOpenClawTools);
     createOpenClawToolsMock.mockClear();
@@ -1331,13 +1339,7 @@ describe("createOpenClawCodingTools", () => {
       config: testConfig,
       includeCoreTools: false,
       runtimeToolAllowlist: ["memory_search"],
-      toolConstructionPlan: {
-        includeBaseCodingTools: false,
-        includeShellTools: false,
-        includeChannelTools: false,
-        includeOpenClawTools: false,
-        includePluginTools: true,
-      },
+      toolConstructionPlan: pluginOnlyConstructionPlan,
     });
 
     expect(createOpenClawToolsMock).not.toHaveBeenCalled();
@@ -1361,13 +1363,7 @@ describe("createOpenClawCodingTools", () => {
         nativeChannelId: "oc_native_chat",
         clientCaps: ["inline-widgets"],
         preparedModelRuntime,
-        toolConstructionPlan: {
-          includeBaseCodingTools: false,
-          includeShellTools: false,
-          includeChannelTools: false,
-          includeOpenClawTools: false,
-          includePluginTools: true,
-        },
+        toolConstructionPlan: pluginOnlyConstructionPlan,
       });
 
       expect(createOpenClawToolsMock).not.toHaveBeenCalled();
@@ -1434,7 +1430,7 @@ describe("createOpenClawCodingTools", () => {
   });
 
   it("wraps plugin-only tools with scheduled creator authority and live routing context", async () => {
-    let observedIdentity: unknown;
+    let observedIdentity: ReturnType<typeof getGatewayToolCallerIdentity>;
     const resolvePluginToolsSpy = vi
       .spyOn(openClawPluginTools, "resolveOpenClawPluginToolsForOptions")
       .mockReturnValue([
@@ -1478,24 +1474,24 @@ describe("createOpenClawCodingTools", () => {
         messageThreadId: "42",
         includeCoreTools: false,
         runtimeToolAllowlist: ["file_fetch"],
-        toolConstructionPlan: {
-          includeBaseCodingTools: false,
-          includeShellTools: false,
-          includeChannelTools: false,
-          includeOpenClawTools: false,
-          includePluginTools: true,
-        },
+        inheritRuntimeToolAllowlist: true,
+        toolConstructionPlan: pluginOnlyConstructionPlan,
       });
 
       await requireTool(tools, "file_fetch").execute?.("tool-call-1", {});
       expect(observedIdentity).toEqual({
         agentId: "main",
+        assertToolAllowed: expect.any(Function),
         sessionKey: "agent:main:telegram:direct:alice",
         turnSourceChannel: "discord",
         turnSourceTo: "channel:123",
         turnSourceAccountId: "creator",
         turnSourceThreadId: "42",
       });
+      expect(() => observedIdentity?.assertToolAllowed?.("file_fetch")).not.toThrow();
+      expect(() => observedIdentity?.assertToolAllowed?.("exec")).toThrow(
+        "exec is not allowed by this conversation's tool policy",
+      );
     } finally {
       resolvePluginToolsSpy.mockRestore();
     }

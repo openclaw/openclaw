@@ -1,4 +1,5 @@
 import { setTimeout as delay } from "node:timers/promises";
+import { extractErrorCode } from "@openclaw/normalization-core/error-coercion";
 import { signalProcessTree } from "../process/kill-tree.js";
 import {
   inspectNodeWorkerProcessIdentity,
@@ -20,16 +21,14 @@ function inspectPosixProcessGroup(pid: number): NodeWorkerTreeState {
 
 export function inspectOwnedNodeWorkerTree(worker: NodeWorkerProcessIdentity): NodeWorkerTreeState {
   const root = inspectNodeWorkerProcessIdentity(worker);
-  if (root === "reused") {
-    return "dead";
+  if (root === "live" || root === "unknown") {
+    return root;
   }
-  if (root === "live") {
-    return "live";
-  }
-  if (root === "unknown") {
+  if (process.platform === "win32") {
+    // Windows descendants need their native Job certificate; root identity is insufficient.
     return "unknown";
   }
-  return process.platform === "win32" ? "dead" : inspectPosixProcessGroup(worker.pid);
+  return root === "reused" ? "dead" : inspectPosixProcessGroup(worker.pid);
 }
 
 export async function signalOwnedNodeWorkerTree(
@@ -67,15 +66,52 @@ export async function signalOwnedNodeWorkerTree(
   });
 }
 
+/** A recognized cleanup observer owns delivery to its child and must not receive group escalation. */
+export function signalOwnedNodeWorkerAnchor(
+  worker: NodeWorkerProcessIdentity,
+  isOwnerCurrent: () => boolean,
+): void {
+  if (!isOwnerCurrent() || inspectNodeWorkerProcessIdentity(worker) !== "live") {
+    return;
+  }
+  try {
+    process.kill(worker.pid, "SIGTERM");
+  } catch (error) {
+    if (extractErrorCode(error) !== "ESRCH") {
+      throw error;
+    }
+  }
+}
+
 export async function waitForOwnedNodeWorkerTreeDeath(
   worker: NodeWorkerProcessIdentity,
-  timeoutMs: number,
+  timeoutMs?: number,
+  isOwnerCurrent?: () => boolean,
 ): Promise<NodeWorkerTreeState> {
-  const deadline = Date.now() + timeoutMs;
+  const deadline = timeoutMs === undefined ? Infinity : Date.now() + timeoutMs;
   let state = inspectOwnedNodeWorkerTree(worker);
   while (state === "live" && Date.now() < deadline) {
+    if (isOwnerCurrent?.() === false) {
+      break;
+    }
     await delay(RECOVERY_POLL_MS);
     state = inspectOwnedNodeWorkerTree(worker);
   }
   return state;
+}
+
+export async function stopOwnedNodeWorkerTree(
+  worker: NodeWorkerProcessIdentity,
+  graceMs: number,
+  forceWaitMs: number,
+): Promise<void> {
+  let treeState = inspectOwnedNodeWorkerTree(worker);
+  if (treeState === "live") {
+    await signalOwnedNodeWorkerTree(worker, "SIGTERM");
+    treeState = await waitForOwnedNodeWorkerTreeDeath(worker, graceMs);
+  }
+  if (treeState === "live") {
+    await signalOwnedNodeWorkerTree(worker, "SIGKILL");
+    await waitForOwnedNodeWorkerTreeDeath(worker, forceWaitMs);
+  }
 }

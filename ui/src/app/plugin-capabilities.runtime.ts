@@ -52,6 +52,7 @@ export async function refreshPluginCapabilities(
     features: { ...snapshot.hello.features, methods: capabilities.methods },
     controlUiTabs: capabilities.controlUiTabs,
     controlUiWidgetKinds: capabilities.controlUiWidgetKinds,
+    controlUiLinkReaders: capabilities.controlUiLinkReaders,
     pluginSurfaceUrls: capabilities.pluginSurfaceUrls,
   });
   publish({ ...snapshot, pluginCapabilities: capabilities, canvasPluginSurfaceUrl });

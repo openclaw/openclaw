@@ -9,7 +9,9 @@ import { discoverConfiguredPluginLoadPaths, discoverOpenClawPlugins } from "./di
 import { resolvePluginDoctorContractArtifact } from "./doctor-contract-artifact.js";
 import { buildInstalledPluginIndexRecords } from "./installed-plugin-index-record-builder.js";
 import { loadPluginManifestRegistryCore } from "./manifest-registry.js";
+import { isPathInside, openPluginRootFileSync } from "./path-safety.js";
 import {
+  checkPluginCacheEntry,
   pluginCacheExistsSync,
   pluginCacheRealpathSync,
   readPluginCacheFile,
@@ -35,6 +37,63 @@ afterEach(() => {
   clearPluginMetadataLifecycleCaches();
 });
 
+function createWindowsRootAliasFixture(
+  prefix: string,
+  relativePath = "plugin.js",
+  contents = "export default {};\n",
+) {
+  const parent = fs.realpathSync(tempDirs.make(prefix));
+  const root = path.join(parent, "canonical-root");
+  const alias = path.join(parent, "root-alias");
+  const source = path.join(root, relativePath);
+  fs.mkdirSync(path.dirname(source), { recursive: true });
+  fs.writeFileSync(source, contents);
+  fs.symlinkSync(root, alias, process.platform === "win32" ? "junction" : "dir");
+  vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+  return { parent, root, alias, source };
+}
+
+function createRetargetedWindowsRootFixture(prefix: string, basename: string) {
+  const parent = fs.realpathSync(tempDirs.make(prefix));
+  const trustedContainer = path.join(parent, "trusted");
+  const replacementContainer = path.join(parent, "replacement");
+  const trustedRoot = path.join(trustedContainer, "plugin");
+  const replacementRoot = path.join(replacementContainer, "plugin");
+  const trustedAlias = path.join(parent, "trusted-alias");
+  const observedParent = path.join(parent, "observed-parent");
+  fs.mkdirSync(trustedRoot, { recursive: true });
+  fs.mkdirSync(replacementRoot, { recursive: true });
+  fs.writeFileSync(path.join(trustedRoot, basename), "trusted\n");
+  fs.writeFileSync(path.join(replacementRoot, basename), "replacement\n");
+  fs.symlinkSync(trustedRoot, trustedAlias, process.platform === "win32" ? "junction" : "dir");
+  fs.symlinkSync(
+    trustedContainer,
+    observedParent,
+    process.platform === "win32" ? "junction" : "dir",
+  );
+  vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+
+  const observedRoot = path.join(observedParent, "plugin");
+  const originalLstat = fs.lstatSync;
+  let rootObservations = 0;
+  vi.spyOn(fs, "lstatSync").mockImplementation(((filePath, options) => {
+    if (filePath === observedRoot && ++rootObservations === 2) {
+      fs.unlinkSync(observedParent);
+      fs.symlinkSync(
+        replacementContainer,
+        observedParent,
+        process.platform === "win32" ? "junction" : "dir",
+      );
+    }
+    return originalLstat(filePath, options as never);
+  }) as typeof fs.lstatSync);
+  return {
+    trustedAlias,
+    observedPath: path.join(observedRoot, basename),
+    openSync: vi.spyOn(fs, "openSync"),
+  };
+}
+
 describe("plugin package facts", () => {
   it("preserves JavaScript realpath identities for canonical paths, aliases, and traversal", () => {
     const root = fs.realpathSync(tempDirs.make("plugin-realpath-"));
@@ -53,11 +112,26 @@ describe("plugin package facts", () => {
       path.relative(process.cwd(), packageDir),
       ...(process.platform === "win32" ? [packageDir.toUpperCase()] : []),
     ];
+    const nativeRealpath = vi.spyOn(fs.realpathSync, "native");
     for (const targetPath of paths) {
       const expected = fs.realpathSync(targetPath);
-      withPluginCache(createPluginCache(), () => {
-        expect(pluginCacheRealpathSync(targetPath)).toBe(expected);
-      });
+      const nativeExpected = fs.realpathSync.native(targetPath);
+      for (const nativeFirst of [false, true]) {
+        nativeRealpath.mockClear();
+        const cache = createPluginCache();
+        withPluginCache(cache, () => {
+          if (nativeFirst) {
+            expect(pluginCacheRealpathSync(targetPath, true)).toBe(nativeExpected);
+          }
+          expect(pluginCacheRealpathSync(targetPath)).toBe(expected);
+          expect(pluginCacheRealpathSync(targetPath, true)).toBe(nativeExpected);
+          expect(nativeRealpath).toHaveBeenCalledTimes(1);
+          invalidatePluginCacheMetadata(cache);
+          expect(pluginCacheRealpathSync(targetPath)).toBe(expected);
+          expect(pluginCacheRealpathSync(targetPath, true)).toBe(nativeExpected);
+          expect(nativeRealpath).toHaveBeenCalledTimes(2);
+        });
+      }
     }
   });
 
@@ -71,6 +145,120 @@ describe("plugin package facts", () => {
       expect(pluginCacheRealpathSync(root, true)).toBeNull();
       expect(pluginCacheRealpathSync(root)).toBe(expected);
       expect(pluginCacheRealpathSync(root, true)).toBeNull();
+    });
+  });
+
+  it("proves aliased root containment by physical directory identity", () => {
+    const { parent, alias, source } = createWindowsRootAliasFixture(
+      "plugin-identity-containment-",
+      path.join("nested", "plugin.js"),
+    );
+    const external = path.join(parent, "external.js");
+    fs.writeFileSync(external, "export default {};\n");
+
+    expect(isPathInside(alias, source)).toBe(true);
+    expect(isPathInside(alias, external)).toBe(false);
+  });
+
+  it("opens a runtime entry when Windows reports the child through another root alias", () => {
+    const { alias, source } = createWindowsRootAliasFixture("plugin-runtime-alias-open-");
+
+    const opened = openPluginRootFileSync({
+      rootPath: alias,
+      filePath: source,
+      rejectHardlinks: false,
+    });
+
+    expect(opened.ok).toBe(true);
+    if (opened.ok) {
+      expect(opened.path).toBe(source);
+      fs.closeSync(opened.fd);
+    }
+  });
+
+  it.each(["entry check", "file read"] as const)(
+    "rejects a retargeted observed root during plugin cache %s",
+    (operation) => {
+      const { trustedAlias, observedPath, openSync } = createRetargetedWindowsRootFixture(
+        "plugin-cache-alias-race-",
+        "package.json",
+      );
+      const relativePath = path.relative(trustedAlias, observedPath);
+
+      const result = withPluginCache(createPluginCache(), () =>
+        operation === "entry check"
+          ? checkPluginCacheEntry({
+              rootDir: trustedAlias,
+              relativePath,
+              rejectHardlinks: true,
+            })
+          : readPluginCacheFile({
+              rootDir: trustedAlias,
+              relativePath,
+              rejectHardlinks: true,
+            }),
+      );
+
+      expect(result.ok).toBe(false);
+      expect(openSync).not.toHaveBeenCalled();
+    },
+  );
+  it("reads an aliased Windows plugin root through the descriptor boundary", () => {
+    const { parent, root, alias, source } = createWindowsRootAliasFixture(
+      "plugin-identity-read-",
+      path.join("nested", "plugin.js"),
+    );
+    const external = path.join(parent, "external.js");
+    fs.writeFileSync(external, "external\n");
+    fs.symlinkSync(external, path.join(root, "external-link.js"));
+
+    withPluginCache(createPluginCache(), () => {
+      const file = readPluginCacheFile({
+        rootDir: alias,
+        // Mirror short-root/long-child records produced by Windows discovery.
+        relativePath: path.relative(alias, source),
+        rejectHardlinks: false,
+      });
+      expect(file.ok && file.contents.toString("utf8")).toBe("export default {};\n");
+      expect(
+        readPluginCacheFile({
+          rootDir: alias,
+          relativePath: "external-link.js",
+          rejectHardlinks: false,
+        }).ok,
+      ).toBe(false);
+    });
+  });
+
+  it("preserves a trusted Windows junction at the plugin root", () => {
+    const { root, alias } = createWindowsRootAliasFixture("plugin-junction-root-");
+
+    withPluginCache(createPluginCache(), () => {
+      expect(
+        checkPluginCacheEntry({
+          rootDir: alias,
+          rootRealPath: root,
+          relativePath: "plugin.js",
+          rejectHardlinks: true,
+        }),
+      ).toMatchObject({ ok: true, exists: true });
+    });
+  });
+
+  it("reopens a long-spelled child beneath an admitted short Windows root", () => {
+    const { root, alias } = createWindowsRootAliasFixture("plugin-short-root-entry-");
+
+    withPluginCache(createPluginCache(), () => {
+      expect(
+        checkPluginCacheEntry({
+          // Mirrors Windows discovery retaining the long child spelling while
+          // native realpath preserves the trusted root's 8.3 alias.
+          rootDir: root,
+          rootRealPath: alias,
+          relativePath: "plugin.js",
+          rejectHardlinks: true,
+        }),
+      ).toMatchObject({ ok: true, exists: true });
     });
   });
 
@@ -89,10 +277,16 @@ describe("plugin package facts", () => {
         }),
       );
       fs.writeFileSync(providerDiscoverySource, "export default {};\n", "utf8");
+      const nativeRealpath = fs.realpathSync.native;
       const nativeRealpathSpy = vi.spyOn(fs.realpathSync, "native");
       if (resolver === "javascript") {
-        nativeRealpathSpy.mockImplementation(() => {
-          throw new Error("native realpath unavailable");
+        nativeRealpathSpy.mockImplementation((filePath, options) => {
+          // Exercise metadata fallback without disabling fs-safe's native
+          // canonicalization when it admits the manifest descriptor.
+          if (filePath === providerDiscoverySource) {
+            throw new Error("native realpath unavailable");
+          }
+          return nativeRealpath(filePath, options);
         });
       }
       const realpathSpy = vi.spyOn(fs, "realpathSync");

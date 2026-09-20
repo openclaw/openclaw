@@ -1,5 +1,7 @@
 /** Native probe facts are diagnostic only; they never grant lifecycle authority. */
 const SERVICE_INSPECTION_MESSAGES = {
+  "service-manager-unavailable":
+    "No supported service manager detected. Restart the Gateway you launched manually after the update.",
   "systemd-user-bus-unavailable":
     "The systemd user session bus is unavailable. Check XDG_RUNTIME_DIR for the service account. Log in once or enable the user manager with sudo loginctl enable-linger <user>, then verify systemctl --user status. On Debian/Ubuntu, install dbus-user-session and run systemctl --user start dbus.socket if the runtime bus is missing. Verify busctl --user list with DBUS_SESSION_BUS_ADDRESS=unix:path=$XDG_RUNTIME_DIR/bus, then retry.",
   "systemd-busctl-unavailable":
@@ -24,7 +26,9 @@ export function isServiceInspectionReason(value: string): value is ServiceInspec
 }
 
 export function formatServiceInspectionReason(reason: ServiceInspectionReason): string {
-  return `${SERVICE_INSPECTION_MESSAGES[reason]} ${EXTERNAL_SERVICE_RECOVERY}`;
+  return reason === "service-manager-unavailable"
+    ? SERVICE_INSPECTION_MESSAGES[reason]
+    : `${SERVICE_INSPECTION_MESSAGES[reason]} ${EXTERNAL_SERVICE_RECOVERY}`;
 }
 
 export class ServiceInspectionError extends Error {

@@ -133,9 +133,7 @@ export async function processCompletionsStream(
   let isFlushingPendingPostToolCallDeltas = false;
   const toolCallBlocksByIndex = new Map<number, ToolCallBlock>();
   const toolCallBlocksById = new Map<string, ToolCallBlock>();
-  const encryptedReasoning = directMode
-    ? createOpenAIEncryptedToolCallReasoningTracker()
-    : undefined;
+  const encryptedReasoning = createOpenAIEncryptedToolCallReasoningTracker();
   // Preview schedules are per active tool call; WeakMap keys die with the block.
   const toolArgumentPreviewSchedules = new WeakMap<ToolCallBlock, ToolArgumentPreviewSchedule>();
   const provisionalCommentaryTags = directMode ? options.provisionalCommentaryTags : new Map();
@@ -592,7 +590,7 @@ export async function processCompletionsStream(
               partialArgs: "",
               ...(initialSig ? { thoughtSignature: initialSig } : {}),
             };
-            encryptedReasoning?.rememberToolCall(block.id, block);
+            encryptedReasoning.rememberToolCall(block.id, block);
             toolArgumentPreviewSchedules.set(block, createToolArgumentPreviewSchedule());
             output.content.push(block);
             toolCallBlockIndices.set(block, output.content.length - 1);
@@ -606,12 +604,13 @@ export async function processCompletionsStream(
             toolCallBlocksByIndex.set(streamIndex, block);
           }
           if (toolCall.id) {
+            const previousId = block.id;
             if (!directMode || !block.id) {
               block.id = toolCall.id;
             }
             toolCallBlocksById.set(toolCall.id, block);
             if (block.id === toolCall.id) {
-              encryptedReasoning?.rememberToolCall(toolCall.id, block);
+              encryptedReasoning.rememberToolCall(toolCall.id, block, previousId);
             }
           }
           currentBlock = block;
@@ -650,7 +649,7 @@ export async function processCompletionsStream(
           }
         }
       }
-      encryptedReasoning?.consumeDetails(deltaFields.reasoning_details);
+      encryptedReasoning.consumeDetails(deltaFields.reasoning_details);
     }
     flushPendingPostToolCallDeltas();
     emitReasoningUsageActivity(hasReasoningUsageActivity);

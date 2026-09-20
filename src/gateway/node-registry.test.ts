@@ -3,6 +3,7 @@
  */
 import { EventEmitter } from "node:events";
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import {
   MAX_DATE_TIMESTAMP_MS,
   MAX_TIMER_TIMEOUT_MS,
@@ -834,11 +835,9 @@ describe("gateway/node-registry", () => {
           },
         }),
       ).toEqual({ changed: true });
-      const [proof] = await nodeWorkerSupervisorTransport.listCurrentNodes();
-      expect(proof?.clientId).toBe(clientId);
-      if (!proof) {
-        throw new Error("expected current supervisor proof");
-      }
+      const [candidate] = await nodeWorkerSupervisorTransport.listCurrentNodes();
+      const proof = expectDefined(candidate, "current supervisor proof");
+      expect(proof.clientId).toBe(clientId);
       expect(
         updateNodeRunnerInventory({
           registry: nodeRegistry,
@@ -911,6 +910,7 @@ describe("gateway/node-registry", () => {
             enabled: true,
             capacity: { total: 2, available: 0 },
             environmentSession: 1,
+            capturedExecPolicy: true,
           },
         },
       });

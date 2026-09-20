@@ -12,6 +12,7 @@ import { pathExists } from "../infra/fs-safe.js";
 import { acquireGitSource } from "../infra/git-source.js";
 import { resolveOsHomeRelativePath } from "../infra/home-dir.js";
 import { readChunkWithIdleTimeout } from "../infra/http-response-body-timeout.js";
+import type { TimedInstallModeOptions } from "../infra/install-mode-options.js";
 import { tryReadJson } from "../infra/json-files.js";
 import { fetchWithSsrFGuard } from "../infra/net/fetch-guard.js";
 import { isPathInside } from "../infra/path-guards.js";
@@ -1212,18 +1213,15 @@ export async function resolveMarketplaceInstallShortcut(
 }
 
 export async function installPluginFromMarketplace(
-  params: InstallSafetyOverrides & {
-    marketplace: string;
-    plugin: string;
-    logger?: MarketplaceLogger;
-    timeoutMs?: number;
-    mode?: "install" | "update";
-    extensionsDir?: string;
-    dryRun?: boolean;
-    expectedPluginId?: string;
-    onBeforePluginArtifactCommit?: PluginInstallArtifactConsentHandler;
-    beforePersistentApply?: () => void;
-  },
+  params: InstallSafetyOverrides &
+    TimedInstallModeOptions<MarketplaceLogger> & {
+      marketplace: string;
+      plugin: string;
+      extensionsDir?: string;
+      expectedPluginId?: string;
+      onBeforePluginArtifactCommit?: PluginInstallArtifactConsentHandler;
+      beforePersistentApply?: () => void;
+    },
 ): Promise<MarketplaceInstallResult> {
   const loaded = await loadMarketplace({
     source: params.marketplace,
@@ -1270,6 +1268,7 @@ export async function installPluginFromMarketplace(
         mode: params.mode,
         extensionsDir: params.extensionsDir,
         timeoutMs: params.timeoutMs,
+        workTimeoutMs: params.workTimeoutMs,
         dryRun: params.dryRun,
         expectedPluginId: params.expectedPluginId,
         onBeforePluginArtifactCommit: params.onBeforePluginArtifactCommit,

@@ -44,16 +44,25 @@ export function renderTaskDetailPanel(params: {
   backgroundTasks: BackgroundTasksProps;
   host: TaskDetailHost;
   task: TaskSummary | undefined;
+  taskId?: string;
   loadFullAssistantMessage?: SidebarFullMessageLoader | null;
 }): TemplateResult {
-  const { backgroundTasks, task } = params;
+  const { backgroundTasks, task, taskId } = params;
   if (!task) {
     resetTaskDetail(params.host);
+    const error = taskId ? backgroundTasks.taskDetailErrors.get(taskId) : undefined;
+    if (
+      !error &&
+      (backgroundTasks.loading || (taskId && backgroundTasks.taskDetailLoadingIds.has(taskId)))
+    ) {
+      return renderPanelLoadingSkeleton("review", t("chat.backgroundTasks.detailLoading"));
+    }
     return html`
       <div class="sidebar-panel chat-task-detail" data-task-detail-panel>
         ${renderTaskHeader(t("chat.backgroundTasks.taskDetailTitle"))}
         <div class="sidebar-content chat-task-detail__state">
-          ${t("chat.backgroundTasks.taskUnavailable")}
+          ${error ?? backgroundTasks.error ?? t("chat.backgroundTasks.taskUnavailable")}
+          ${error && taskId && backgroundTasks.onLoadDetail ? html`<button type="button" @click=${() => backgroundTasks.onLoadDetail?.({ id: taskId })}>${t("chat.backgroundTasks.detailRetry")}</button>` : nothing}
         </div>
       </div>
     `;

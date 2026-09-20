@@ -8,6 +8,10 @@ import {
   getClickClackDiscussionBindingStore,
   type ClickClackDiscussionBinding,
 } from "./discussions/binding-store.js";
+import {
+  asyncDiscussionTestStore,
+  createDiscussionMemoryStore,
+} from "./discussions/service-test-support.js";
 import { handleClickClackInbound } from "./inbound.js";
 import { setClickClackRuntime } from "./runtime.js";
 import type {
@@ -18,45 +22,19 @@ import type {
 } from "./types.js";
 
 function configureDiscussionStore(runtime: PluginRuntime): void {
-  const createStore = <T>(): PluginStateSyncKeyedStore<T> => {
-    const values = new Map<string, { value: T; createdAt: number }>();
-    return {
-      register(key, value) {
-        values.set(key, { value, createdAt: Date.now() });
-      },
-      registerIfAbsent(key, value) {
-        if (values.has(key)) {
-          return false;
-        }
-        values.set(key, { value, createdAt: Date.now() });
-        return true;
-      },
-      lookup: (key) => values.get(key)?.value,
-      consume(key) {
-        const value = values.get(key)?.value;
-        values.delete(key);
-        return value;
-      },
-      delete: (key) => values.delete(key),
-      entries: () =>
-        Array.from(values, ([key, entry]) => ({
-          key,
-          value: entry.value,
-          createdAt: entry.createdAt,
-        })),
-      clear: () => values.clear(),
-    };
-  };
   const stores = new Map<string, PluginStateSyncKeyedStore<unknown>>();
   runtime.state.openSyncKeyedStore = vi.fn((options: { namespace: string }) => {
     const existing = stores.get(options.namespace);
     if (existing) {
       return existing;
     }
-    const created = createStore<unknown>();
+    const created = createDiscussionMemoryStore<unknown>();
     stores.set(options.namespace, created);
     return created;
   }) as unknown as PluginRuntime["state"]["openSyncKeyedStore"];
+  runtime.state.openKeyedStore = <T>(
+    options: Parameters<PluginRuntime["state"]["openKeyedStore"]>[0],
+  ) => asyncDiscussionTestStore<T>(runtime.state.openSyncKeyedStore, options);
 }
 
 function createRuntime(): PluginRuntime {
@@ -197,22 +175,24 @@ describe("ClickClack inbound mention gating", () => {
       throw new Error("SQLITE_FULL");
     });
 
+    const currentConfig = {
+      channels: {
+        clickclack: {
+          enabled: true,
+          baseUrl: "http://127.0.0.1:8080",
+          token: "test-token-placeholder",
+          workspace: "wsp_1",
+          discussions: { enabled: true, workspace: "wsp_1" },
+        },
+      },
+    } satisfies CoreConfig;
+    vi.mocked(runtime.config.current).mockReturnValue(currentConfig);
     await handleClickClackInbound({
       account: createAgentAccount({
         replyMode: "model",
         discussions: { enabled: true, workspace: "wsp_1", section: "Sessions" },
       }),
-      config: {
-        channels: {
-          clickclack: {
-            enabled: true,
-            baseUrl: "http://127.0.0.1:8080",
-            token: "test-token-placeholder",
-            workspace: "wsp_1",
-            discussions: { enabled: true, workspace: "wsp_1" },
-          },
-        },
-      } satisfies CoreConfig,
+      config: currentConfig,
       message: createMessage({ channel_id: "chn_1", body: "Old discussion" }),
     });
 
@@ -564,36 +544,38 @@ describe("ClickClack inbound mention gating", () => {
         label: "Research mentions",
       });
 
+      const currentConfig = {
+        agents: {
+          ownership: "explicit",
+          entries: {
+            research: { groupChat: { mentionPatterns: ["@research"] } },
+            "service-bot": { groupChat: { mentionPatterns: ["@service"] } },
+          },
+        },
+        bindings: [
+          {
+            agentId: "service-bot",
+            match: { channel: "clickclack", accountId: "default" },
+          },
+        ],
+        channels: {
+          clickclack: {
+            enabled: true,
+            baseUrl: "http://127.0.0.1:8080",
+            token: "test-token-placeholder",
+            workspace: "wsp_1",
+            discussions: { enabled: true, workspace: "wsp_1" },
+          },
+        },
+      } satisfies CoreConfig;
+      vi.mocked(runtime.config.current).mockReturnValue(currentConfig);
       await handleClickClackInbound({
         account: createAgentAccount({
           agentId: "service-bot",
           requireMention: true,
           discussions: { enabled: true, workspace: "wsp_1", section: "Sessions" },
         }),
-        config: {
-          agents: {
-            ownership: "explicit",
-            entries: {
-              research: { groupChat: { mentionPatterns: ["@research"] } },
-              "service-bot": { groupChat: { mentionPatterns: ["@service"] } },
-            },
-          },
-          bindings: [
-            {
-              agentId: "service-bot",
-              match: { channel: "clickclack", accountId: "default" },
-            },
-          ],
-          channels: {
-            clickclack: {
-              enabled: true,
-              baseUrl: "http://127.0.0.1:8080",
-              token: "test-token-placeholder",
-              workspace: "wsp_1",
-              discussions: { enabled: true, workspace: "wsp_1" },
-            },
-          },
-        } satisfies CoreConfig,
+        config: currentConfig,
         message: createMessage({ body }),
       });
 

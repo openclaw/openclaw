@@ -1,7 +1,10 @@
 // Non-interactive plugin provider auth tests cover provider choice setup and runtime plugin install requirements.
+import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../../config/config.js";
+import type { ModelProviderConfig } from "../../../config/types.models.js";
 import * as pluginEnable from "../../../plugins/enable.js";
+import { migrateLegacyConfig } from "../../doctor/shared/legacy-config-migrate.js";
 import { applyNonInteractivePluginProviderChoice } from "./auth-choice.plugin-providers.js";
 
 type ModelSelectionRuntimePluginsResult =
@@ -85,6 +88,23 @@ const target = {
   workspaceDir: "/tmp/workspace",
 };
 
+function utilityFixtureProvider(id = "small"): ModelProviderConfig {
+  return {
+    baseUrl: "http://127.0.0.1:9/v1",
+    models: [
+      {
+        id,
+        name: "Local fixture",
+        reasoning: false,
+        input: ["text"],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 8192,
+        maxTokens: 1024,
+      },
+    ],
+  };
+}
+
 type MockCalls = { mock: { calls: Array<Array<unknown>> } };
 
 function mockCall(mock: MockCalls, callIndex = 0): Array<unknown> {
@@ -160,6 +180,109 @@ async function applyProviderModelChoice(params: {
 }
 
 describe("applyNonInteractivePluginProviderChoice", () => {
+  it.each([false, true])(
+    "keeps utility onboarding separate from the previous implicit primary (legacy: %s)",
+    async (legacy) => {
+      const localProvider = utilityFixtureProvider();
+      let baseConfig: OpenClawConfig = legacy
+        ? { models: { providers: { "local-fixture": localProvider } } }
+        : {};
+      const provider = { id: "utility-fixture", label: "Utility fixture" };
+      resolvePluginProvidersCore.mockReturnValue([provider] as never);
+      const runNonInteractive = vi.fn(async ({ config }: { config: OpenClawConfig }) => ({
+        ...config,
+        models: { providers: { "utility-fixture": localProvider, ...config.models?.providers } },
+        agents: {
+          ...config.agents,
+          defaults: {
+            ...config.agents?.defaults,
+            model: { primary: "utility-fixture/small" },
+            utilityModel: "utility-fixture/small",
+          },
+        },
+      }));
+      resolveProviderPluginChoice.mockReturnValue({
+        provider,
+        wizard: { modelTarget: "utility" },
+        method: { runNonInteractive },
+      });
+      const runtime = createRuntime();
+      const apply = () =>
+        applyNonInteractivePluginProviderChoice({
+          nextConfig: baseConfig,
+          baseConfig,
+          authChoice: "provider-plugin:utility-fixture:custom",
+          opts: {},
+          runtime,
+          target,
+          resolveApiKey: vi.fn(),
+          toApiKeyCredential: vi.fn(),
+        });
+      if (legacy) {
+        const original = structuredClone(baseConfig);
+        expect(await apply()).toBeNull();
+        expectRuntimeErrorIncludes(runtime, "openclaw doctor --fix");
+        expect(runNonInteractive).not.toHaveBeenCalled();
+        expect(ensureModelSelectionRuntimePlugins).not.toHaveBeenCalled();
+        expect(baseConfig).toEqual(original);
+        baseConfig = expectDefined(
+          migrateLegacyConfig(baseConfig, { sourceConfigBeforeMigrations: baseConfig }).config,
+          "migrated config",
+        );
+      }
+      const before = structuredClone(baseConfig);
+      const result = await apply();
+      expect(result?.agents?.defaults?.utilityModel).toBe("utility-fixture/small");
+      expect(result?.agents?.defaults?.model).toEqual(
+        legacy ? { primary: "local-fixture/small" } : undefined,
+      );
+      expect(result?.meta?.migrations?.utilityModelSeparation).toBe(true);
+      expect(baseConfig).toEqual(before);
+      expect(runNonInteractive).toHaveBeenCalledOnce();
+    },
+  );
+
+  it.each(["${LOCAL_MODEL}", "small@experimental"])(
+    "rejects utility preparation before an unsafe legacy catalog %s can be reordered",
+    async (id) => {
+      const baseConfig: OpenClawConfig = {
+        models: { providers: { "local-fixture": utilityFixtureProvider(id) } },
+      };
+      const original = structuredClone(baseConfig);
+      const provider = { id: "utility-fixture", label: "Utility fixture" };
+      const runNonInteractive = vi.fn(async ({ config }: { config: OpenClawConfig }) => ({
+        ...config,
+        models: {
+          providers: { "utility-fixture": utilityFixtureProvider(), ...config.models?.providers },
+        },
+      }));
+      resolvePluginProvidersCore.mockReturnValue([provider] as never);
+      resolveProviderPluginChoice.mockReturnValue({
+        provider,
+        method: { runNonInteractive },
+        wizard: { modelTarget: "utility" },
+      });
+      const runtime = createRuntime();
+      expect(
+        await applyNonInteractivePluginProviderChoice({
+          nextConfig: baseConfig,
+          baseConfig,
+          authChoice: "provider-plugin:utility-fixture:custom",
+          opts: {},
+          runtime,
+          target,
+          resolveApiKey: vi.fn(),
+          toApiKeyCredential: vi.fn(),
+        }),
+      ).toBeNull();
+      expectRuntimeErrorIncludes(runtime, "explicit primary model");
+      expect(runNonInteractive).not.toHaveBeenCalled();
+      expect(ensureOnboardingPluginInstalled).not.toHaveBeenCalled();
+      expect(ensureModelSelectionRuntimePlugins).not.toHaveBeenCalled();
+      expect(baseConfig).toEqual(original);
+    },
+  );
+
   it("requires capability consent before loading a disabled provider in noninteractive setup", async () => {
     const config: OpenClawConfig = { plugins: { entries: { example: { enabled: false } } } };
     resolveManifestProviderAuthChoice.mockReturnValue({ pluginId: "example" } as never);

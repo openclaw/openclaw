@@ -9,12 +9,12 @@ import {
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
 import { normalizeSqliteNumber } from "../infra/sqlite-number.js";
-import { withExistingOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-readonly.js";
 import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
+  type OpenClawStateDatabase,
   type OpenClawStateDatabaseOptions,
 } from "../state/openclaw-state-db.js";
 import { createOpenClawStateSchemaEnsurer } from "../state/openclaw-state-feature-schema.js";
@@ -199,9 +199,9 @@ function pruneDecisionFactsAfterInsert(
 }
 
 /** Record one immutable fact only when its action owner has no native durable record. */
-export function recordExecutionDecisionFact(
+export function recordExecutionDecisionFactInDatabase(
   receipt: unknown,
-  options: ExecutionDecisionFactOptions = {},
+  options: ExecutionDecisionFactOptions & { database: OpenClawStateDatabase },
 ): "inserted" | "existing" {
   if (!validateDecisionReceiptV1(receipt)) {
     throw new Error("execution decision fact must match DecisionReceiptV1");
@@ -402,137 +402,132 @@ function projectDecisionMetadata(
 }
 
 /** Summarize at most 128 owner rows; the 129th makes coverage explicitly unknown. */
-export function summarizeExecutionDecisionFactsForContext(params: {
-  context: ExecutionDecisionContext;
-  now?: number;
-  database?: OpenClawStateDatabaseOptions;
-}): {
+export function summarizeExecutionDecisionFactsForContextInDatabase(
+  db: DatabaseSync,
+  params: {
+    context: ExecutionDecisionContext;
+    now?: number;
+  },
+): {
   count: number;
   coverageState?: "enforced" | "unknown" | "unsupported";
   missingEvidence: string[];
 } {
-  return (
-    withExistingOpenClawStateDatabaseReadOnly(({ db }) => {
-      if (!tableExists(db, "execution_decision_facts")) {
-        return { count: 0, missingEvidence: [] };
-      }
-      const metadataRows = retainedDecisionFactMetadata({
-        db,
-        contextId: params.context.contextId,
-        now: params.now ?? Date.now(),
-        limit: EXECUTION_DECISION_FACT_SUMMARY_MAX_ROWS + 1,
-      });
-      const count = metadataRows.length;
-      if (count === 0) {
-        return { count: 0, missingEvidence: [] };
-      }
-      // Whole-set coverage stays conservative without parsing an unbounded
-      // collection of retained JSON receipts on the Gateway event loop.
-      if (count > EXECUTION_DECISION_FACT_SUMMARY_MAX_ROWS) {
-        return {
-          count,
-          coverageState: "unknown" as const,
-          missingEvidence: ["decision.fact.summary_bounded"],
-        };
-      }
-      const receipts = metadataRows.map((metadata) =>
-        projectDecisionMetadata(metadata, params.context),
-      );
-      const coverage = new Set(receipts.map((receipt) => receipt.enforcement.coverageState));
-      return {
-        count,
-        ...(coverage.has("unsupported")
-          ? { coverageState: "unsupported" as const }
-          : coverage.has("unknown")
-            ? { coverageState: "unknown" as const }
-            : coverage.has("enforced")
-              ? { coverageState: "enforced" as const }
-              : {}),
-        missingEvidence: [
-          ...new Set(receipts.flatMap((receipt) => receipt.missingEvidence)),
-        ].toSorted(),
-      };
-    }, params.database) ?? { count: 0, missingEvidence: [] }
+  if (!tableExists(db, "execution_decision_facts")) {
+    return { count: 0, missingEvidence: [] };
+  }
+  const metadataRows = retainedDecisionFactMetadata({
+    db,
+    contextId: params.context.contextId,
+    now: params.now ?? Date.now(),
+    limit: EXECUTION_DECISION_FACT_SUMMARY_MAX_ROWS + 1,
+  });
+  const count = metadataRows.length;
+  if (count === 0) {
+    return { count: 0, missingEvidence: [] };
+  }
+  // Whole-set coverage stays conservative without parsing an unbounded
+  // collection of retained JSON receipts on the Gateway event loop.
+  if (count > EXECUTION_DECISION_FACT_SUMMARY_MAX_ROWS) {
+    return {
+      count,
+      coverageState: "unknown" as const,
+      missingEvidence: ["decision.fact.summary_bounded"],
+    };
+  }
+  const receipts = metadataRows.map((metadata) =>
+    projectDecisionMetadata(metadata, params.context),
   );
-}
-
-export function hasExecutionDecisionFactsForRun(params: {
-  runId: string;
-  now?: number;
-  database?: OpenClawStateDatabaseOptions;
-}): boolean {
-  return (
-    withExistingOpenClawStateDatabaseReadOnly(({ db }) => {
-      if (!tableExists(db, "execution_decision_facts")) {
-        return false;
-      }
-      return Boolean(
-        executeSqliteQueryTakeFirstSync(
-          db,
-          decisionDb(db)
-            .selectFrom("execution_decision_facts")
-            .select("receipt_id")
-            .where("run_id", "=", params.runId)
-            .where(
-              "occurred_at",
-              ">=",
-              (params.now ?? Date.now()) - EXECUTION_DECISION_FACT_RETENTION_MS,
-            )
-            .limit(1),
-        ),
-      );
-    }, params.database) ?? false
-  );
-}
-
-export function pageExecutionDecisionFactsForContext(params: {
-  context: ExecutionDecisionContext;
-  after?: ExecutionDecisionFactCursor;
-  offset?: number;
-  limit: number;
-  now?: number;
-  database?: OpenClawStateDatabaseOptions;
-}): ExecutionDecisionFactPage {
-  return (
-    withExistingOpenClawStateDatabaseReadOnly(({ db }) => {
-      if (!tableExists(db, "execution_decision_facts")) {
-        return { entries: [], receipts: [] };
-      }
-      const metadataRows = retainedDecisionFactMetadata({
-        db,
-        contextId: params.context.contextId,
-        now: params.now ?? Date.now(),
-        after: params.after,
-        offset: params.offset,
-        limit: params.limit + 1,
-      });
-      const pageMetadata = metadataRows.slice(0, params.limit);
-      const entries = pageMetadata.map((metadata) => ({
-        receipt: projectDecisionMetadata(metadata, params.context),
-        selectorId: executionDecisionSelectorId(metadata),
-      }));
-      const last = pageMetadata.at(-1);
-      return {
-        entries,
-        receipts: entries.map((entry) => entry.receipt),
-        ...(metadataRows.length > params.limit && last
-          ? {
-              nextCursor: {
-                occurredAt: normalizeSqliteNumber(last.occurred_at) ?? 0,
-                rowId: last.receipt_rowid,
-              },
-            }
+  const coverage = new Set(receipts.map((receipt) => receipt.enforcement.coverageState));
+  return {
+    count,
+    ...(coverage.has("unsupported")
+      ? { coverageState: "unsupported" as const }
+      : coverage.has("unknown")
+        ? { coverageState: "unknown" as const }
+        : coverage.has("enforced")
+          ? { coverageState: "enforced" as const }
           : {}),
-      };
-    }, params.database) ?? { entries: [], receipts: [] }
+    missingEvidence: [
+      ...new Set(receipts.flatMap((receipt) => receipt.missingEvidence)),
+    ].toSorted(),
+  };
+}
+
+export function hasExecutionDecisionFactsForRunInDatabase(
+  db: DatabaseSync,
+  params: {
+    runId: string;
+    now?: number;
+  },
+): boolean {
+  if (!tableExists(db, "execution_decision_facts")) {
+    return false;
+  }
+  return Boolean(
+    executeSqliteQueryTakeFirstSync(
+      db,
+      decisionDb(db)
+        .selectFrom("execution_decision_facts")
+        .select("receipt_id")
+        .where("run_id", "=", params.runId)
+        .where(
+          "occurred_at",
+          ">=",
+          (params.now ?? Date.now()) - EXECUTION_DECISION_FACT_RETENTION_MS,
+        )
+        .limit(1),
+    ),
   );
+}
+
+export function pageExecutionDecisionFactsForContextInDatabase(
+  db: DatabaseSync,
+  params: {
+    context: ExecutionDecisionContext;
+    after?: ExecutionDecisionFactCursor;
+    offset?: number;
+    limit: number;
+    now?: number;
+  },
+): ExecutionDecisionFactPage {
+  if (!tableExists(db, "execution_decision_facts")) {
+    return { entries: [], receipts: [] };
+  }
+  const metadataRows = retainedDecisionFactMetadata({
+    db,
+    contextId: params.context.contextId,
+    now: params.now ?? Date.now(),
+    after: params.after,
+    offset: params.offset,
+    limit: params.limit + 1,
+  });
+  const pageMetadata = metadataRows.slice(0, params.limit);
+  const entries = pageMetadata.map((metadata) => ({
+    receipt: projectDecisionMetadata(metadata, params.context),
+    selectorId: executionDecisionSelectorId(metadata),
+  }));
+  const last = pageMetadata.at(-1);
+  return {
+    entries,
+    receipts: entries.map((entry) => entry.receipt),
+    ...(metadataRows.length > params.limit && last
+      ? {
+          nextCursor: {
+            occurredAt: normalizeSqliteNumber(last.occurred_at) ?? 0,
+            rowId: last.receipt_rowid,
+          },
+        }
+      : {}),
+  };
 }
 
 /** Delete one bounded batch without creating the optional table. */
-export function pruneExpiredExecutionDecisionFacts(
-  params: { now?: number; database?: OpenClawStateDatabaseOptions } = {},
-): number {
-  const databaseOptions = params.database ?? {};
+export function pruneExpiredExecutionDecisionFactsInDatabase(params: {
+  now?: number;
+  database: OpenClawStateDatabaseOptions & { database: OpenClawStateDatabase };
+}): number {
+  const databaseOptions = params.database;
   const database = openOpenClawStateDatabase(databaseOptions);
   if (!tableExists(database.db, "execution_decision_facts")) {
     return 0;

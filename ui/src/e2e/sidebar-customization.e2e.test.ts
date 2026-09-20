@@ -118,7 +118,10 @@ suite.define(() => {
     try {
       await page.goto(`${suite.server.baseUrl}settings/appearance`);
       await waitForControlUiSettingsTakeover(page);
-      await gateway.waitForRequest("sessions.catalog.list");
+      const labelsRequest = await gateway.waitForRequest("sessions.catalog.list", {
+        match: { metadataOnly: true },
+      });
+      expect(labelsRequest.params).not.toHaveProperty("limitPerHost");
       const sidebarSettings = page.locator("#settings-appearance-sidebar");
       await sidebarSettings.getByRole("heading", { name: "Hidden session sections" }).waitFor();
       const recovery = sidebarSettings.locator(".settings-group", { hasText: "offline-catalog" });

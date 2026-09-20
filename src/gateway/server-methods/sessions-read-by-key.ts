@@ -1,33 +1,17 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { validateSessionsDescribeParams } from "../../../packages/gateway-protocol/src/index.js";
-import { prepareSubagentSessionListReadIndex } from "../../agents/subagents/registry/subagent-registry-read.js";
-import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import { hasOperatorBoundary } from "../operator-role-policy.js";
-import { withSessionProjectionWorkBudget } from "../session-projection-work.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
-import { createSessionListEntryFilter, prepareSessionSharing } from "../session-sharing.js";
-import { readRecentSessionMessagesWithStatsAsync } from "../session-transcript-readers.js";
-import { buildSessionListRowMetadataContext } from "../session-utils-projection.js";
+import { prepareProjectedSessionPresentation } from "../session-row-presentation.js";
+import { getSessionRowProjection } from "../session-row-projection-access.js";
 import {
-  readSessionRowInputs,
-  materializeSessionRow,
-  presentSessionRow,
-} from "../session-utils-row.js";
-import { createGatewaySessionEntryReader } from "../session-utils-store-lookup.js";
-import { readPreparedServerMethodModelCatalog } from "./optional-model-catalog.js";
-import { readSessionPlacementFields } from "./session-placement-read-projection.js";
+  authorizeIncognitoSessionTarget,
+  createSessionListEntryFilter,
+} from "../session-sharing.js";
+import { readRecentSessionMessagesWithStatsAsync } from "../session-transcript-readers.js";
 import { loadSessionEntriesForTarget, requireSessionKey } from "./sessions-shared.js";
 import type { GatewayRequestHandlers } from "./types.js";
 import { assertValidParams } from "./validation.js";
-
-function createRoleVisibilityFilter(
-  client: Parameters<typeof hasOperatorBoundary>[0],
-  cfg: Parameters<typeof hasOperatorBoundary>[1],
-) {
-  return hasOperatorBoundary(client, cfg)
-    ? createSessionListEntryFilter({ client, cfg })
-    : undefined;
-}
 
 export const sessionByKeyReadHandlers: GatewayRequestHandlers = {
   "sessions.describe": async ({ params, respond, context, client }) => {
@@ -38,118 +22,57 @@ export const sessionByKeyReadHandlers: GatewayRequestHandlers = {
     if (!key) {
       return;
     }
-    const catalogAgent = resolveRequestedSessionAgentId(
-      context.getRuntimeConfig(),
-      key,
-      params.agentId,
-    );
-    if (!catalogAgent.ok) {
-      respond(false, undefined, catalogAgent.error);
-      return;
+    const projection = getSessionRowProjection(context);
+    if (!projection) {
+      throw new Error("Session projection is unavailable before Gateway startup completes");
     }
-    const modelCatalog = await readPreparedServerMethodModelCatalog(context, {
-      agentId: catalogAgent.agentId,
-    });
-    const readVisibleSession = (includeStoreChildEntries: boolean) => {
-      const cfg = context.getRuntimeConfig();
-      const requestedAgent = resolveRequestedSessionAgentId(cfg, key, params.agentId);
-      if (!requestedAgent.ok) {
-        respond(false, undefined, requestedAgent.error);
-        return null;
-      }
-      const { target, storePath, store, entry } = loadSessionEntriesForTarget({
-        key,
-        cfg,
-        includeStoreChildEntries,
-        ...(requestedAgent.agentId ? { agentId: requestedAgent.agentId } : {}),
-      });
-      const sharing = prepareSessionSharing({ client, cfg });
-      const boundaryFilter = hasOperatorBoundary(client, cfg) ? sharing.entryFilter : undefined;
-      if (!entry || boundaryFilter?.(target.canonicalKey, entry) === false) {
-        respond(true, { session: null }, undefined);
-        return null;
-      }
-      return { cfg, target, storePath, store, entry, sharing };
-    };
-    if (!readVisibleSession(false)) {
-      return;
-    }
-    const stateContext = captureOpenClawStateWorkerContext();
-    const assertCurrent = () => {
-      stateContext.maintenanceScope?.assertAdmission();
-      stateContext.admission.assertCurrent();
-    };
-    return withSessionProjectionWorkBudget(async (budget) => {
-      const indexNow = Date.now();
-      const work = await prepareSubagentSessionListReadIndex(
-        indexNow,
-        stateContext,
-        budget.shouldYield,
-        budget.yieldIfNeeded,
+    while (true) {
+      const prepared = await projection.withPreparedExactRows(
+        (cfg) => {
+          const agent = resolveRequestedSessionAgentId(cfg, key, params.agentId);
+          const denied = authorizeIncognitoSessionTarget({
+            client: client ?? null,
+            sessionKey: key,
+            target: null,
+          });
+          return agent.ok && !denied ? [{ key, agentId: agent.agentId }] : [];
+        },
+        (read) => {
+          const requestedAgent = resolveRequestedSessionAgentId(
+            read.state.cfg,
+            key,
+            params.agentId,
+          );
+          if (!requestedAgent.ok) {
+            respond(false, undefined, requestedAgent.error);
+            return;
+          }
+          const query = { key, agentId: requestedAgent.agentId };
+          const presentation = prepareProjectedSessionPresentation(read, client);
+          const denied = presentation.authorizeDescription(query);
+          if (denied) {
+            respond(false, undefined, denied);
+            return;
+          }
+          const record = read.describe(query);
+          if (
+            !record ||
+            (presentation.sharing.sessionCap !== undefined &&
+              presentation.sharing.entryFilter?.(record.key, record.entry) === false)
+          ) {
+            respond(true, { session: null });
+            return;
+          }
+          respond(true, { session: presentation.present(record, params) });
+        },
       );
-      budget.resumeAfterAwait();
-      let step: ReturnType<typeof work.next>;
-      do {
-        const pause = budget.yieldIfNeeded();
-        if (pause) {
-          await pause;
-        }
-        assertCurrent();
-        step = work.next();
-      } while (!step.done);
-      const pause = budget.yieldIfNeeded();
-      if (pause) {
-        await pause;
-      }
-      assertCurrent();
-      // Target, sharing, lineage and placement facts belong to this final synchronous read.
-      const current = readVisibleSession(true);
-      if (!current) {
+      if (prepared.kind === "complete") {
         return;
       }
-      const { cfg, target, storePath, store, entry, sharing } = current;
-      const now = Date.now();
-      const { inputs, presentation } = readSessionRowInputs({
-        cfg,
-        storePath,
-        store,
-        modelSource: {
-          entry,
-          readSourceEntry: createGatewaySessionEntryReader({
-            cfg,
-            agentId: target.agentId,
-            store,
-            readSource: target.readSource,
-          }),
-        },
-        key: target.canonicalKey,
-        entry,
-        agentId: target.agentId,
-        now,
-        modelCatalog: new Map([[catalogAgent.agentId, modelCatalog]]),
-        includeDerivedTitles: params.includeDerivedTitles,
-        includeLastMessage: params.includeLastMessage,
-        transcriptUsageMaxBytes: 64 * 1024,
-        rowContext: buildSessionListRowMetadataContext({
-          now,
-          subagentRuns: step.value.atTime(now),
-        }),
-        includeSwarmChildren: true,
-      });
-      const row = presentSessionRow(materializeSessionRow(inputs), presentation);
-      Object.assign(row, {
-        sharingRole: sharing.roleForTarget({
-          agentId: target.agentId,
-          canonicalKey: target.canonicalKey,
-          entry,
-          storeKey: target.canonicalKey,
-          storeKeys: target.storeKeys,
-          storePath,
-        }),
-        ...readSessionPlacementFields(context, row.sessionId),
-      });
-      respond(true, { session: row });
-    });
+      const { certifySessionCanonicalValidationPending } =
+        await import("../../config/sessions/session-canonical-validation-readiness.js");
+      await certifySessionCanonicalValidationPending(prepared.database);
+    }
   },
   "sessions.get": async ({ params, respond, context, client }) => {
     // SAFETY: Gateway dispatch supplies object params; each optional field is narrowed before use.
@@ -183,7 +106,9 @@ export const sessionByKeyReadHandlers: GatewayRequestHandlers = {
       cfg,
       agentId: requestedAgent.agentId,
     });
-    const boundaryFilter = createRoleVisibilityFilter(client, cfg);
+    const boundaryFilter = hasOperatorBoundary(client, cfg)
+      ? createSessionListEntryFilter({ client, cfg })
+      : undefined;
     if (!entry?.sessionId || boundaryFilter?.(target.canonicalKey, entry) === false) {
       respond(true, { messages: [] }, undefined);
       return;
@@ -216,7 +141,9 @@ export const sessionByKeyReadHandlers: GatewayRequestHandlers = {
           agentId: currentRequestedAgent.agentId,
         })
       : null;
-    const currentBoundaryFilter = createRoleVisibilityFilter(client, currentCfg);
+    const currentBoundaryFilter = hasOperatorBoundary(client, currentCfg)
+      ? createSessionListEntryFilter({ client, cfg: currentCfg })
+      : undefined;
     if (
       !current ||
       current.target.agentId !== target.agentId ||

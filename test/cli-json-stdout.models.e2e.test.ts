@@ -51,17 +51,22 @@ describe("cli json stdout contract", () => {
               : []),
           ].join("\n"),
         ).toString("base64");
-        const result = runBuiltCli(tempHome, testCase.args, {
-          NODE_OPTIONS: `--import=data:text/javascript;base64,${preload}`,
-          OPENCLAW_CONFIG_PATH: path.join(tempHome, "missing-openclaw.json"),
-          OPENCLAW_STATE_DIR: path.join(tempHome, "isolated-state"),
-          ...("commander" in testCase ? { OPENCLAW_DISABLE_ROUTE_FIRST: "1" } : {}),
-          ...("tty" in testCase ? { FORCE_COLOR: "1" } : {}),
-        });
+        const result = runBuiltCli(
+          tempHome,
+          testCase.args,
+          {
+            OPENCLAW_CONFIG_PATH: path.join(tempHome, "missing-openclaw.json"),
+            OPENCLAW_STATE_DIR: path.join(tempHome, "isolated-state"),
+            ...("commander" in testCase ? { OPENCLAW_DISABLE_ROUTE_FIRST: "1" } : {}),
+            ...("tty" in testCase ? { FORCE_COLOR: "1" } : {}),
+          },
+          { execArgv: [`--import=data:text/javascript;base64,${preload}`] },
+        );
         const message = "Remote catalog refresh failed: Error: offline fixture";
 
         expect(result.status, result.stderr).toBe(1);
-        expect(result.stdout, result.stderr).not.toMatch(/[\u001B\u0007]/u);
+        expect(result.stdout, result.stderr).not.toContain("\u001B");
+        expect(result.stdout, result.stderr).not.toContain("\u0007");
         if ("human" in testCase) {
           expect(result.stdout).toBe("");
         } else {
@@ -213,7 +218,7 @@ describe("cli json stdout contract", () => {
               ? 'throw new Error("offline fixture");'
               : response === "unchanged"
                 ? "return new Response(null, { status: 304 });"
-                : `return new Response(JSON.stringify(${JSON.stringify(fixture)}), { headers: { etag: '\"fixture\"' } });`;
+                : `return new Response(JSON.stringify(${JSON.stringify(fixture)}), { headers: { etag: '"fixture"' } });`;
           return Buffer.from(
             [
               'import net from "node:net";',
@@ -231,11 +236,15 @@ describe("cli json stdout contract", () => {
           args: string[],
           response: "initial" | "updated" | "unchanged" | "failure",
         ) =>
-          runBuiltCli(tempHome, ["models", ...args], {
-            NODE_OPTIONS: `--import=data:text/javascript;base64,${preloadFor(response)}`,
-            OPENCLAW_CONFIG_PATH: configPath,
-            OPENCLAW_STATE_DIR: stateDir,
-          });
+          runBuiltCli(
+            tempHome,
+            ["models", ...args],
+            {
+              OPENCLAW_CONFIG_PATH: configPath,
+              OPENCLAW_STATE_DIR: stateDir,
+            },
+            { execArgv: [`--import=data:text/javascript;base64,${preloadFor(response)}`] },
+          );
         const readCatalogRow = () =>
           readConfigMachineState<{ generated_at: number; bundle_json: string }>(
             "modelCatalog.remote",

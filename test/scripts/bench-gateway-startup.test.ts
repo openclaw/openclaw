@@ -212,6 +212,21 @@ server.listen(port, "127.0.0.1", () => {
 
   it("rejects ambiguous benchmark CLI values before spawning Node", () => {
     expect(() => testing.parseOptions(["--wat"])).toThrow("Unknown argument: --wat");
+    expect(() => testing.parseOptions(["--installed-cpu-diagnostic"])).toThrow(
+      "--installed-cpu-diagnostic requires --installed-cohort",
+    );
+    for (const flag of ["--cpu-prof-dir", "--heap-prof-dir"]) {
+      expect(() =>
+        testing.parseOptions([
+          "--installed-cohort",
+          "input.json",
+          "--output",
+          "result.json",
+          flag,
+          "profiles",
+        ]),
+      ).toThrow(`${flag} is not supported with --installed-cohort`);
+    }
     expect(
       testing.parseOptions([
         "--case",

@@ -1,7 +1,10 @@
 import { gatewayCredentialScope } from "@openclaw/gateway-client/browser";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { GatewayUpdateAvailableEventPayload } from "../../../src/gateway/events.js";
-import type { UpdateRunRecord } from "../../../src/infra/update-run-record.js";
+import {
+  isAcknowledgedAbandonedUpdateRun,
+  type UpdateRunRecord,
+} from "../../../src/infra/update-run-record.js";
 import { isReportableUpdateRun } from "../../../src/shared/update-outcome.js";
 import { GatewayRequestError } from "../api/gateway.ts";
 import type { UpdateHoldResult } from "../api/types.ts";
@@ -190,7 +193,8 @@ export function createApplicationUpdateOverlays(
         snapshot.updateRunning || snapshot.updateReconciliationPending
           ? null
           : snapshot.updateRun
-            ? isReportableUpdateRun(snapshot.updateRun)
+            ? !isAcknowledgedAbandonedUpdateRun(snapshot.updateRun) &&
+              isReportableUpdateRun(snapshot.updateRun)
               ? snapshot.updateRun.runId
               : null
             : currentFailure?.outcome === "failed" && currentFailure.attempt
@@ -230,7 +234,9 @@ export function createApplicationUpdateOverlays(
     snapshot = {
       ...snapshot,
       updateRun: run,
-      updateRunAcknowledged: receipts.acknowledged(updateGatewayScope, profileId, run.runId),
+      updateRunAcknowledged:
+        isAcknowledgedAbandonedUpdateRun(run) ||
+        receipts.acknowledged(updateGatewayScope, profileId, run.runId),
       recordedUpdateAttempt: failure?.attempt ?? null,
       updateStatusBanner: failure?.banner ?? null,
     };

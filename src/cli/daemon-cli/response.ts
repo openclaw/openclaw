@@ -1,5 +1,7 @@
 // JSON/text response helpers for Gateway service lifecycle commands.
 import { Writable } from "node:stream";
+import { currentGatewayServiceRebindReceipt } from "../../daemon/service-rebind.js";
+import type { GatewayServiceDefinitionBackupReceipt } from "../../daemon/service-stage.js";
 import type { GatewayService } from "../../daemon/service.js";
 import {
   isSystemdUnavailableDetail,
@@ -38,6 +40,7 @@ type DaemonActionResponse = {
   hints?: string[];
   hintItems?: DaemonHintItem[];
   warnings?: string[];
+  definitionBackup?: GatewayServiceDefinitionBackupReceipt;
   service?: {
     label: string;
     loaded: boolean;
@@ -47,7 +50,8 @@ type DaemonActionResponse = {
 };
 
 function emitDaemonActionJson(payload: DaemonActionResponse) {
-  defaultRuntime.writeJson(payload);
+  const rebind = currentGatewayServiceRebindReceipt();
+  defaultRuntime.writeJson({ ...payload, ...(rebind ? { rebind } : {}) });
 }
 
 function classifyDaemonHintText(text: string): DaemonHintKind {
@@ -171,11 +175,19 @@ export function createNullWriter(): Writable {
 }
 
 /** Create stdout/warning/emit/fail helpers for one daemon lifecycle action. */
-export function createDaemonActionContext(params: { action: DaemonAction; json: boolean }): {
+export function createDaemonActionContext(params: {
+  action: DaemonAction;
+  json: boolean;
+  definitionBackup?: () => GatewayServiceDefinitionBackupReceipt | undefined;
+}): {
   stdout: Writable;
   warnings: string[];
   emit: (payload: Omit<DaemonActionResponse, "action">) => void;
-  fail: (message: string, hints?: string[], result?: "restart-health-failed") => void;
+  fail: (
+    message: string,
+    hints?: string[],
+    result?: "restart-health-failed" | "still-starting",
+  ) => void;
 } {
   const warnings: string[] = [];
   const stdout = params.json ? createNullWriter() : process.stdout;
@@ -183,14 +195,20 @@ export function createDaemonActionContext(params: { action: DaemonAction; json: 
     if (!params.json) {
       return;
     }
+    const definitionBackup = params.definitionBackup?.();
     emitDaemonActionJson({
       action: params.action,
+      ...(definitionBackup ? { definitionBackup } : {}),
       ...payload,
       hintItems: payload.hintItems ?? buildDaemonHintItems(payload.hints),
       warnings: payload.warnings ?? (warnings.length ? warnings : undefined),
     });
   };
-  const fail = (message: string, hints?: string[], result?: "restart-health-failed") => {
+  const fail = (
+    message: string,
+    hints?: string[],
+    result?: "restart-health-failed" | "still-starting",
+  ) => {
     if (params.json) {
       emit({
         ok: false,
@@ -206,7 +224,7 @@ export function createDaemonActionContext(params: { action: DaemonAction; json: 
         }
       }
     }
-    defaultRuntime.exit(1);
+    defaultRuntime.exit(result === "still-starting" ? 2 : 1);
   };
 
   return { stdout, warnings, emit, fail };

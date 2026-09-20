@@ -1,4 +1,5 @@
 import { addAbortListener } from "node:events";
+import { withTimeout } from "../infra/fs-safe.js";
 import { registerSecretValueForRedaction } from "../logging/secret-redaction-registry.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import type { WorkerLaunchDescriptor } from "../worker/launch-descriptor.js";
@@ -17,6 +18,21 @@ import {
   type NodeWorkerStopState,
 } from "./node-worker-supervisor-ownership.js";
 import type { NodeWorkerTurnStore } from "./node-worker-turn-store.js";
+
+export async function cancelNodeWorkerTurn(
+  active: NodeWorkerRunningChild,
+  turn: NonNullable<NodeWorkerRunningChild["turn"]>,
+  timeoutMs: number,
+): Promise<void> {
+  // A worker that stopped reading can block the write as well as the reply.
+  await withTimeout(
+    sendNodeWorkerInput(active.adapter, { type: "cancel", turnId: turn.claim.launchId }).then(
+      () => turn.done,
+    ),
+    timeoutMs,
+    { message: "node worker turn cancellation did not settle" },
+  );
+}
 
 /** Shutdown must be able to abort admission before it stops the retiring physical owner. */
 export async function waitForNodeWorkerRetirement(

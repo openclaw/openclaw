@@ -9,6 +9,46 @@ import { loadTranscriptEvents, replaceSessionEntry } from "./session-accessor.js
 import { persistSessionTranscriptTurn } from "./session-accessor.transcript-turn.js";
 
 describe("transcript turn logical ownership", () => {
+  it("completes committed custody before a queued cancellation can interrupt the receipt", async () => {
+    await withTempHome(async (home) => {
+      const scope = {
+        agentId: "main",
+        sessionId: "commit-callback-session",
+        sessionKey: "agent:main:main",
+        storePath: path.join(home, "sessions.json"),
+      };
+      await replaceSessionEntry(scope, { sessionId: scope.sessionId, updatedAt: 1 });
+      const controller = new AbortController();
+      const completed: string[] = [];
+      const turn = persistSessionTranscriptTurn(scope, {
+        config: { session: { store: scope.storePath } },
+        expectedSessionId: scope.sessionId,
+        messages: [
+          {
+            eventId: "committed-before-cancellation",
+            message: { role: "assistant", content: "Committed notification" },
+            shouldAppendInTransaction: () => {
+              // Cancellation runs at the first async boundary after SQLite commit.
+              queueMicrotask(() => controller.abort(new Error("cancelled after commit")));
+              return true;
+            },
+          },
+        ],
+        onMessageCommitted: ({ messageId }) => {
+          controller.signal.throwIfAborted();
+          completed.push(messageId);
+        },
+        updateMode: "none",
+      });
+      await expect(turn).resolves.toMatchObject({ appendedCount: 1 });
+      expect(controller.signal.aborted).toBe(true);
+      expect(completed).toEqual(["committed-before-cancellation"]);
+      expect(await loadTranscriptEvents(scope)).toContainEqual(
+        expect.objectContaining({ id: "committed-before-cancellation" }),
+      );
+    });
+  });
+
   it.each([undefined, "ops"])(
     "rejects a bare-key write without a designation (provenance: %s)",
     async (retainedOwner) => {

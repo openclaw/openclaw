@@ -9,6 +9,7 @@ import {
   asNullableRecord,
   normalizeStringEntries,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { hasBrowserControlWork } from "../browser-control-state.js";
 import { BROWSER_PROXY_COMMAND, BROWSER_PROXY_UPLOAD_COMMAND } from "../browser-node-commands.js";
 import {
   assertBrowserProxyFileCountWithinLimit,
@@ -25,6 +26,7 @@ import {
 import {
   discardStagedBrowserProxyUpload,
   ensureBrowserProxyUploadCleanup,
+  hasBrowserProxyUploadWork,
   stageBrowserProxyUploadRequest,
 } from "../browser-proxy-upload.js";
 import { resolveCdpControlPolicy } from "../browser/cdp-reachability-policy.js";
@@ -133,6 +135,10 @@ function resolveBrowserProxyConfig() {
 
 let browserControlReady: Promise<void> | null = null;
 let admittedBrowserControlState: ReturnType<typeof getBrowserControlState> = null;
+
+export function hasBrowserNodeHostWork(): boolean {
+  return hasBrowserControlWork() || hasBrowserProxyUploadWork();
+}
 
 async function ensureBrowserControlService(): Promise<void> {
   const current = getBrowserControlState();

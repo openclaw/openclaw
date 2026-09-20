@@ -206,32 +206,35 @@ describe("node environment command authority", () => {
     expect(statusPayload?.invocableCommands ?? []).toEqual(expected);
   });
 
-  it("requires write scope only for runtime-specific command state", async () => {
-    const context = {
-      logGateway: { warn: vi.fn() },
-      getRuntimeConfig: () => ({}),
-      nodeRegistry: { listConnectedForPairingStates: () => [] },
-    };
-    const readOnlyRespond = vi.fn();
-    await environmentsHandlers["environments.list"]?.({
-      params: { runtimeId: "codex" },
-      respond: readOnlyRespond,
-      client: { connect: { scopes: ["operator.read"] } },
-      context,
-    } as never);
-    expect(readOnlyRespond).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({ code: "FORBIDDEN", message: "missing scope: operator.write" }),
-    );
+  it.each([{}, { projection: "profiles" }])(
+    "preserves runtime write scope for %j",
+    async (params) => {
+      const context = {
+        logGateway: { warn: vi.fn() },
+        getRuntimeConfig: () => ({}),
+        nodeRegistry: { listConnectedForPairingStates: () => [] },
+      };
+      const readOnlyRespond = vi.fn();
+      await environmentsHandlers["environments.list"]?.({
+        params: { ...params, runtimeId: "codex" },
+        respond: readOnlyRespond,
+        client: { connect: { scopes: ["operator.read"] } },
+        context,
+      } as never);
+      expect(readOnlyRespond).toHaveBeenCalledWith(
+        false,
+        undefined,
+        expect.objectContaining({ code: "FORBIDDEN", message: "missing scope: operator.write" }),
+      );
 
-    const inventoryRespond = vi.fn();
-    await environmentsHandlers["environments.list"]?.({
-      params: {},
-      respond: inventoryRespond,
-      client: { connect: { scopes: ["operator.read"] } },
-      context,
-    } as never);
-    expect(inventoryRespond.mock.calls.at(0)?.[0]).toBe(true);
-  });
+      const inventoryRespond = vi.fn();
+      await environmentsHandlers["environments.list"]?.({
+        params,
+        respond: inventoryRespond,
+        client: { connect: { scopes: ["operator.read"] } },
+        context,
+      } as never);
+      expect(inventoryRespond.mock.calls.at(0)?.[0]).toBe(true);
+    },
+  );
 });

@@ -38,7 +38,7 @@ export function clearSubmittedComposerState(
   submittedDraft: string,
   submittedAttachments: ChatAttachment[],
   submittedMentions: readonly HumanMention[] | undefined,
-  preserveAnnotations = false,
+  retainAttachments: "none" | "annotations" | "all" = "none",
 ) {
   if (
     chatAttachmentDraftSignature(
@@ -53,11 +53,14 @@ export function clearSubmittedComposerState(
   }
   host.chatMessage = "";
   host.chatMentions = [];
-  host.chatAttachments = preserveAnnotations
-    ? host.chatAttachments.filter(
-        (attachment) => attachment.browserAnnotation || attachment.selectionAnnotation,
-      )
-    : [];
+  if (retainAttachments !== "all") {
+    host.chatAttachments =
+      retainAttachments === "annotations"
+        ? host.chatAttachments.filter(
+            (attachment) => attachment.browserAnnotation || attachment.selectionAnnotation,
+          )
+        : [];
+  }
   resetChatInputHistoryNavigation(host);
   return {
     previousAttachments: submittedAttachments,
@@ -130,7 +133,7 @@ export function captureChatCommandComposerRecovery(
   };
 }
 
-export function submittedCommandConnectionIsCurrent(
+function submittedCommandConnectionIsCurrent(
   host: ChatHost,
   recovery: ChatCommandComposerRecovery,
 ): boolean {
@@ -151,7 +154,7 @@ export function submittedCommandScopeIsVisible(
   );
 }
 
-export function clearOwnedCommandComposerFallback(
+function clearOwnedCommandComposerFallback(
   host: ChatHost,
   recovery: ChatCommandComposerRecovery,
 ): boolean {
@@ -168,7 +171,7 @@ export function clearOwnedCommandComposerFallback(
   return fallbackHost ? clearChatComposerMemoryFallback(fallbackHost, ownership) : false;
 }
 
-export function commandComposerFallbackRetainsAttachments(
+function commandComposerFallbackRetainsAttachments(
   host: ChatHost,
   recovery: ChatCommandComposerRecovery,
 ): boolean {
@@ -180,7 +183,7 @@ export function commandComposerFallbackRetainsAttachments(
   );
 }
 
-export function releaseCommandComposerAttachments(
+function releaseCommandComposerAttachments(
   host: ChatHost,
   recovery: ChatCommandComposerRecovery,
   attachments: readonly ChatAttachment[] | undefined,
@@ -221,7 +224,7 @@ function composerRetainsSubmittedAnnotations(
   );
 }
 
-export function restoreFailedCommandComposer(
+function restoreFailedCommandComposer(
   host: ChatHost,
   recovery: ChatCommandComposerRecovery,
 ): boolean {
@@ -286,6 +289,26 @@ export function restoreFailedCommandComposer(
     owner.requestUpdate?.();
   }
   return retained;
+}
+
+export function settleChatCommandComposer(
+  host: ChatHost,
+  recovery: ChatCommandComposerRecovery,
+  completed: boolean,
+  attachments: readonly ChatAttachment[] | undefined,
+): void {
+  if (!completed) {
+    if (!restoreFailedCommandComposer(host, recovery)) {
+      releaseCommandComposerAttachments(host, recovery, attachments);
+    }
+    return;
+  }
+  if (submittedCommandConnectionIsCurrent(host, recovery)) {
+    clearOwnedCommandComposerFallback(host, recovery);
+  }
+  if (!commandComposerFallbackRetainsAttachments(host, recovery)) {
+    releaseCommandComposerAttachments(host, recovery, attachments);
+  }
 }
 
 type PendingComposerSnapshot = {

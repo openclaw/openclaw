@@ -15,7 +15,26 @@ function createManagedNativeUpdaterScript(params: {
   return `void (async () => {
     ${params.sourceRuntimeImport}
     const { prepareRetainedNativeTestPeer } = await import(${JSON.stringify(new URL("./update-managed-service-native-peer.test-support.ts", import.meta.url).href)});
-    const admission = await prepareRetainedNativeTestPeer({ assertCurrent: () => {}, timeoutMs: ${params.timeoutStop ? 1_000 : 30_000} });
+    const nativeFs = require("node:fs");
+    const statePath = ${JSON.stringify(params.statePath)};
+    const scheduleTimeout = (command, onTimeout, timeoutMs) => {
+      if (!${params.timeoutStop === true} || command !== "stop\\n") {
+        const timer = setTimeout(onTimeout, timeoutMs);
+        return () => clearTimeout(timer);
+      }
+      // Expire only after bootout is held, so host load cannot time out suppression.
+      const timer = setInterval(() => {
+        let state;
+        try { state = JSON.parse(nativeFs.readFileSync(statePath, "utf8")); }
+        catch { return; }
+        if (!state.parked) return;
+        clearInterval(timer);
+        onTimeout();
+        nativeFs.writeFileSync(statePath + ".native-timeout", "expired");
+      }, 5);
+      return () => clearInterval(timer);
+    };
+    const admission = await prepareRetainedNativeTestPeer({ assertCurrent: () => {}, timeoutMs: 30_000, scheduleTimeout });
     if (${params.failPreparation === true}) throw new Error("startup failed before persistence");
     const { createRetainedUpdateRecovery } = await import(${JSON.stringify(new URL("./update-retained-recovery.test-support.ts", import.meta.url).href)});
     const runtime = { root: ${JSON.stringify(params.installRoot)}, nodePath: process.execPath, version: "1.0.0", buildId: null };
@@ -24,8 +43,6 @@ function createManagedNativeUpdaterScript(params: {
     const { loadUpdateRecovery } = await import(${JSON.stringify(new URL("./update-run-recovery.ts", import.meta.url).href)});
     await admission.commit(() => { if (JSON.stringify(loadUpdateRecovery(persisted.runId)) !== JSON.stringify(persisted)) throw new Error("retained fixture changed"); });
     if (${params.failCommitAck === true}) throw new Error("startup commit acknowledgement lost");
-    const nativeFs = require("node:fs");
-    const statePath = ${JSON.stringify(params.statePath)};
     const nativeEffect = async (action, effect) => {
       const record = (phase) => {
         const state = nativeFs.existsSync(statePath) ? JSON.parse(nativeFs.readFileSync(statePath, "utf8")) : {};

@@ -1,6 +1,8 @@
 import { createHash } from "node:crypto";
 import path from "node:path";
+import { DatabaseSync } from "node:sqlite";
 import { expect, it, vi } from "vitest";
+import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { makeUserMessage } from "../../../test/helpers/user-message.js";
 import {
   appendTranscriptEvent,
@@ -111,6 +113,50 @@ it.each(["sync", "async"])("bounds the prepared message tail by event count (%s)
   });
 });
 
+it.each([false, true])(
+  "bounds payload sizing by the event budget with retained compaction=%s",
+  async (compacted) => {
+    await withHistory(
+      `context-sizing-limit-${compacted}`,
+      async ({ scope, source, verifyRead }) => {
+        const first = source.appendMessage(makeUserMessage("first retained request", 0));
+        for (let index = 1; index < 40; index++) {
+          source.appendMessage(makeUserMessage(`retained request ${index}`, index));
+        }
+        const boundary = compacted
+          ? source.appendCompaction("required summary", first, 100)
+          : undefined;
+        source.appendMessage(makeUserMessage("current request", 40));
+        const full = source.buildSessionContext().messages;
+        await verifyRead(() => {
+          const database = openOpenClawAgentDatabase({ agentId: "main", path: scope.storePath });
+          const reads = trackSqliteStatementExecutions(database.db, ["sizes"], (query) =>
+            query.includes("octet_length(") && query.includes('as "bytes"') ? "sizes" : null,
+          );
+          try {
+            const selected = SessionManager.openModelContext(scope, {
+              limits: { maxBytes: 16_384, maxEvents: 3 },
+            });
+            expect(selected.buildSessionContext().messages).toEqual(
+              compacted ? [full[0], ...full.slice(-2)] : full.slice(-3),
+            );
+            if (boundary) {
+              expect(selected.getBranch().find((entry) => entry.id === boundary)).toMatchObject({
+                type: "compaction",
+                summary: "required summary",
+              });
+            }
+            expect(reads.rowCounts.sizes).toBeGreaterThan(0);
+            expect(reads.rowCounts.sizes).toBeLessThanOrEqual(compacted ? 4 : 3);
+          } finally {
+            reads.restore();
+          }
+        });
+      },
+    );
+  },
+);
+
 it("applies the aggregate byte budget before hydrating omitted message bodies", async () => {
   await withHistory("context-byte-limit", async ({ scope, source, verifyRead }) => {
     for (let index = 0; index < 8; index++) {
@@ -148,6 +194,49 @@ it("applies the aggregate byte budget before hydrating omitted message bodies", 
       );
     });
   });
+});
+
+it("avoids text copies of omitted message objects when SQLite supports binary JSON", async () => {
+  const nativeJson = new DatabaseSync(":memory:");
+  const extract = nativeJson.prepare("SELECT json_extract(?, ?) AS value");
+  let supportsBinaryJson = false;
+  try {
+    nativeJson.prepare("SELECT jsonb_extract('{}', '$')").get();
+    supportsBinaryJson = true;
+  } catch {
+    // The supported SQLite 3.44 line exercises the text fallback below.
+  }
+  try {
+    await withHistory("context-navigation-copies", async ({ scope, source, verifyRead }) => {
+      const marker = "omitted-message-object:";
+      source.appendMessage(makeUserMessage(marker + "x".repeat(32_768), 1));
+      source.appendMessage(makeUserMessage("latest request", 2));
+      const expected = source.buildSessionContext().messages.slice(-1);
+      const database = openOpenClawAgentDatabase({ agentId: "main", path: scope.storePath });
+      let messageObjectCopies = 0;
+      // Preserve SQLite extraction while observing whole-message text intermediates.
+      database.db.function("json_extract", { deterministic: true }, (json, jsonPath) => {
+        const value = extract.get(json, jsonPath)?.value ?? null;
+        if (typeof value === "string" && value.startsWith("{") && value.includes(marker)) {
+          messageObjectCopies++;
+        }
+        return value;
+      });
+      await verifyRead(() => {
+        const context = SessionManager.openModelContext(scope, {
+          limits: { maxBytes: 4096, maxEvents: 1 },
+        }).buildSessionContext();
+        expect(context.messages).toEqual(expected);
+        if (supportsBinaryJson) {
+          expect(messageObjectCopies).toBe(0);
+        } else {
+          expect(messageObjectCopies).toBeGreaterThan(0);
+        }
+      });
+    });
+  } finally {
+    nativeJson.close();
+  }
 });
 
 it("budgets projected context without hydrating large private evidence", async () => {

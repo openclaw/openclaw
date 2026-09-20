@@ -41,6 +41,7 @@ vi.mock("./cron-stream-watchers.js", async (importOriginal) => ({
   }),
 }));
 
+import { sessionChanges } from "../sessions/session-row-changes.js";
 import { buildGatewayCronService } from "./server-cron.js";
 import { sessionHasAutomation } from "./session-automation-index.js";
 
@@ -50,11 +51,11 @@ type StartedGatewayCron = {
   stateDir: string;
 };
 
-async function startGatewayCron(label: string): Promise<StartedGatewayCron> {
+async function startGatewayCron(label: string, enabled = true): Promise<StartedGatewayCron> {
   const stateDir = await mkdtemp(path.join(os.tmpdir(), `openclaw-cron-drain-${label}-`));
   const cfg: OpenClawConfig = {
     session: { mainKey: "main" },
-    cron: { triggers: { enabled: true } },
+    cron: { enabled, triggers: { enabled: true } },
   };
   getRuntimeConfigMock.mockReturnValue(cfg);
   const state = buildGatewayCronService({
@@ -90,6 +91,47 @@ describe("gateway cron stop-and-drain automation ownership", () => {
     getRuntimeConfigMock.mockReset();
     stopAllMock.mockReset();
   });
+
+  it.each([false, true])(
+    "publishes a one-shot binding removal after completion (delete=%s)",
+    async (deleteAfterRun) => {
+      stopAllMock.mockResolvedValue(undefined);
+      const original = await startGatewayCron(`one-shot-${deleteAfterRun}`, false);
+      const changed = vi.fn();
+      let stop = () => {};
+      try {
+        const job = await original.state.cron.add({
+          name: "one-shot binding",
+          enabled: true,
+          schedule: { kind: "at", at: new Date(Date.now() - 1_000).toISOString() },
+          payload: { kind: "command", argv: [process.execPath, "-e", "process.exit(0)"] },
+          sessionTarget: "isolated",
+          wakeMode: "next-heartbeat",
+          delivery: { mode: "none" },
+          deleteAfterRun,
+        });
+        const key = `agent:main:cron:${job.id}`;
+        expect(sessionHasAutomation(key, original.cfg)).toBe(true);
+        stop = sessionChanges.subscribe(changed);
+        expect(await original.state.cron.run(job.id, "force")).toMatchObject({
+          ok: true,
+          ran: true,
+        });
+        expect(original.state.cron.getJob(job.id)?.state.lastError).toBeUndefined();
+        expect(sessionHasAutomation(key, original.cfg)).toBe(false);
+        const automation = changed.mock.calls
+          .map(([change]) => change)
+          .filter((change) => change.scope === "automation");
+        expect(automation).toEqual([{ sessionKey: key, scope: "automation" }]);
+        expect(original.state.cron.getJob(job.id)?.enabled).toBe(
+          deleteAfterRun ? undefined : false,
+        );
+      } finally {
+        stop();
+        await cleanGatewayCron(original);
+      }
+    },
+  );
 
   it("waits for cancelled exit watchers to settle before completing the drain", async () => {
     const exitWatcherDrain = createDeferred();

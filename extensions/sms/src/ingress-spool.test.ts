@@ -150,6 +150,8 @@ describe("createSmsIngressSpool", () => {
         saveRemoteMedia: async (options: Parameters<typeof saveRemoteMedia>[0]) =>
           await saveRemoteMedia({
             ...options,
+            // The guard resolves Twilio before the loopback fetch override runs.
+            lookupFn: async () => [{ address: "93.184.216.34", family: 4 }],
             fetchImpl: async (_url, init) =>
               await fetch(`${mediaOrigin}/twilio-media`, {
                 headers: init?.headers,

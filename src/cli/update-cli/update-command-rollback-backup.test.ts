@@ -21,6 +21,8 @@ const mocks = vi.hoisted(() => ({
   restore: vi.fn(),
   stop: vi.fn(),
   restart: vi.fn(),
+  inspect: vi.fn(),
+  revalidate: vi.fn(),
   record: vi.fn(),
   capture: vi.fn(),
   configCurrent: vi.fn(),
@@ -56,6 +58,14 @@ vi.mock("./update-command-service.js", () => ({
 vi.mock("../daemon-cli/restart-health-probe.js", () => ({
   confirmGatewayReachable: async () => ({ reachable: true }),
 }));
+vi.mock("../../daemon/service.js", async (original) => ({
+  ...(await original<typeof import("../../daemon/service.js")>()),
+  readGatewayServiceState: mocks.inspect,
+}));
+vi.mock("./update-command-service-maintenance.js", async (original) => ({
+  ...(await original<typeof import("./update-command-service-maintenance.js")>()),
+  revalidateManagedGatewayServiceAfterUpdate: mocks.revalidate,
+}));
 const dirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(closeOpenClawStateDatabaseForTest);
 afterEach(() => vi.restoreAllMocks());
@@ -63,6 +73,8 @@ beforeEach(() => {
   vi.resetAllMocks();
   mocks.stop.mockResolvedValue({ stopped: true });
   mocks.restart.mockResolvedValue("ok");
+  mocks.inspect.mockResolvedValue({ loaded: true });
+  mocks.revalidate.mockResolvedValue({ kind: "owned", refreshDefinition: false });
   mocks.outcome.mockImplementation(async (_ref, _outcome, authority) => authority.assertOwned());
 });
 
@@ -203,6 +215,7 @@ it.each(cases)(
       );
     }
     const result = await rollbackFailedUpdate({
+      definitionRecovery: {},
       result: {
         status: "error",
         mode: "npm",
@@ -274,6 +287,9 @@ it.each(cases)(
         mocks.restore.mock.invocationCallOrder[0]!,
       );
       expect(mocks.restore.mock.invocationCallOrder[0]).toBeLessThan(
+        mocks.inspect.mock.invocationCallOrder[0]!,
+      );
+      expect(mocks.revalidate.mock.invocationCallOrder[0]).toBeLessThan(
         mocks.restart.mock.invocationCallOrder[0]!,
       );
       expect(mocks.record).toHaveBeenCalledWith(

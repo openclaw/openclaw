@@ -117,6 +117,12 @@
   stroke-linejoin: round;
 }
 
+.session-progress-card--composer .session-progress-card__step-marker {
+  height: 1lh;
+  font-size: inherit;
+  line-height: inherit;
+}
+
 .session-progress-card__current-marker {
   color: var(--session-progress-neutral);
 }

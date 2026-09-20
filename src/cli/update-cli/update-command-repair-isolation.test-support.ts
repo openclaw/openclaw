@@ -141,6 +141,7 @@ export async function writeRepairCandidate(candidate: string, configChange: bool
   await fs.symlink(path.join(process.cwd(), "dist"), path.join(candidate, "dist"), "dir");
   for (const file of [
     "openclaw.mjs",
+    "node-host-launcher.mjs",
     "node-version.mjs",
     "node-sqlite.mjs",
     "node-runtime-update.mjs",

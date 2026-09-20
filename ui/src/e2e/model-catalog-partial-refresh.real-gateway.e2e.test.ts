@@ -1,6 +1,5 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import type { WebSocket } from "playwright";
 import { expect, it } from "vitest";
 import config from "../../../test/fixtures/config-corpus/provider-partially-unavailable.json" with { type: "json" };
@@ -8,6 +7,7 @@ import {
   createOpenClawTestInstance,
   type OpenClawTestInstance,
 } from "../../../test/helpers/openclaw-test-instance.ts";
+import { createRequireRecord } from "../../../test/helpers/record.js";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.ts";
 import type { ModelCatalogResult } from "../api/types.ts";
 import type { ApplicationContext } from "../app/context.ts";
@@ -135,7 +135,7 @@ suite.define(() => {
                 return;
               }
               const params = requireRecord(frame.params);
-              if (params.agentId === "main" && params.limitPerHost === 1 && !params.catalogId) {
+              if (params.agentId === "main" && params.metadataOnly === true && !params.catalogId) {
                 latestDiscovery = { socket, id: frame.id, complete: false };
               }
             });

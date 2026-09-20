@@ -27,6 +27,11 @@ export const stateDirGatewayFixtureEntrypoint = {
 
 // Direct-stop children use the invocation's prepared graph before readiness starts.
 export const gatewayDirectStopEntrypoints = {
+  modelAcquisitionFixture: {
+    currentModuleUrl: import.meta.url,
+    sourceWorkerName: "gateway-cli/run-loop.model-acquisition.test-support",
+    distWorkerPath: "cli/gateway-cli/run-loop.model-acquisition.test-support.js",
+  },
   fileLogTransport: {
     currentModuleUrl: import.meta.url,
     sourceWorkerName: "../logging/logger-file-transport",
@@ -66,5 +71,19 @@ export const gatewayDirectStopEntrypoints = {
     currentModuleUrl: import.meta.url,
     sourceWorkerName: "../process/gateway-work-admission",
     distWorkerPath: "process/gateway-work-admission.js",
+  },
+} as const;
+
+// Extra update roots share the native fixture generation.
+export const updateExecutorEntrypoints = {
+  lease: {
+    currentModuleUrl: import.meta.url,
+    sourceWorkerName: "../infra/update-managed-service-handoff-lease",
+    distWorkerPath: "infra/update-managed-service-handoff-lease.js",
+  },
+  activation: {
+    currentModuleUrl: import.meta.url,
+    sourceWorkerName: "../infra/package-update-activation",
+    distWorkerPath: "infra/package-update-activation.js",
   },
 } as const;

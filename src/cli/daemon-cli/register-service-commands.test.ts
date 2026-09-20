@@ -97,6 +97,28 @@ describe("addGatewayServiceCommands", () => {
     vi.restoreAllMocks();
   });
 
+  it.each(["/opt/Runtime Tools/node", "C:\\\\Runtime Tools\\\\node.exe"])(
+    "forwards an exact runtime pin through gateway and daemon install: %s",
+    async (pin) => {
+      for (const parent of ["gateway", "daemon"]) {
+        runDaemonInstall.mockClear();
+        const program = new Command();
+        if (parent === "gateway") {
+          createGatewayParentLikeCommand(program);
+        } else {
+          registerDaemonCli(program);
+        }
+        await program.parseAsync([parent, "install", "--runtime-path", pin, "--force"], {
+          from: "user",
+        });
+        expect(expectSingleDaemonCall(runDaemonInstall)).toMatchObject({
+          runtimePath: pin,
+          force: true,
+        });
+      }
+    },
+  );
+
   it.each(
     ["gateway", "daemon"].flatMap((parent) =>
       ["install", "restart", "stop"].map((action) => ({ parent, action })),
@@ -126,7 +148,14 @@ describe("addGatewayServiceCommands", () => {
         startupEnv.restore();
       }
       expect(output.mock.calls.map(([chunk]) => String(chunk)).join("")).toBe(
-        JSON.stringify({ updateExecutor: "root-spawner-v1", targetRootBinding: true }),
+        JSON.stringify({
+          updateExecutor: "root-spawner-v1",
+          targetRootBinding: true,
+          definitionBackup: true,
+          retainedOwnerBinding: true,
+          originalDefinitionBinding: true,
+          originalRuntimePinBinding: true,
+        }),
       );
       expect(ensureConfigReady).not.toHaveBeenCalled();
       expect(runDaemonInstall).not.toHaveBeenCalled();

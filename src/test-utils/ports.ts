@@ -78,7 +78,11 @@ async function isPortBlockFree(start: number, offsets: number[]): Promise<boolea
   }
   const probes = await Promise.all(offsets.map((offset) => probePort(start + offset)));
   for (const probe of probes) {
-    if (probe.error?.code === "EPERM" || probe.error?.code === "EACCES") {
+    // Windows can deny individual candidates; port-zero allocation still surfaces global failures.
+    if (
+      probe.error?.code === "EPERM" ||
+      (probe.error?.code === "EACCES" && platform() !== "win32")
+    ) {
       throw probe.error;
     }
   }

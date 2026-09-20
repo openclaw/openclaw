@@ -1,5 +1,6 @@
 // Verifies runtime config snapshots preserve normalized public settings.
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { freezeJsonSnapshot } from "../shared/immutable-data.js";
 import {
   cloneConfigWithResolutionFacts,
   createConfigResolutionFacts,
@@ -30,6 +31,7 @@ import {
   setRuntimeConfigSnapshotRefreshHandler,
 } from "./runtime-snapshot.js";
 import { createProviderConfigFixture } from "./runtime-snapshot.test-fixtures.js";
+import { captureRuntimeConfig } from "./runtime-source-projection.js";
 import type { OpenClawConfig } from "./types.js";
 
 function resetRuntimeConfigState(): void {
@@ -139,6 +141,37 @@ describe("runtime snapshot state", () => {
 
     expect(first).not.toBe(second);
     expect(hashRuntimeConfigValue({ logging: { level: "info" } })).toBe(first);
+  });
+
+  it.each([false, true])("hashes one immutable fleet only once (captured: %s)", (captured) => {
+    const source = {
+      agents: {
+        entries: Object.fromEntries(
+          Array.from({ length: 200 }, (_, index) => [`agent-${index}`, { name: `${index}` }]),
+        ),
+      },
+    };
+    const keys = vi.spyOn(Object, "keys");
+    try {
+      const config = captured ? captureRuntimeConfig(source) : freezeJsonSnapshot(source);
+      const first = hashRuntimeConfigValue(config);
+      for (let index = 0; index < 200; index += 1) {
+        expect(hashRuntimeConfigValue(config)).toBe(first);
+      }
+      expect(keys.mock.calls.filter(([value]) => value === config.agents?.entries)).toHaveLength(1);
+    } finally {
+      keys.mockRestore();
+    }
+  });
+
+  it("rehashes mutable descendants of a shallow-frozen config", () => {
+    const config = Object.freeze({ gateway: { port: 18789 } });
+    const before = hashRuntimeConfigValue(config);
+    config.gateway.port = 19001;
+    expect(hashRuntimeConfigValue(config)).not.toBe(before);
+    expect(hashRuntimeConfigValue(config)).toBe(
+      hashRuntimeConfigValue({ gateway: { port: 19001 } }),
+    );
   });
 
   it.each([false, true])(

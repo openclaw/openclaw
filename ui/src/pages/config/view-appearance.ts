@@ -1,5 +1,6 @@
 import { html, nothing, type TemplateResult } from "lit";
 import { styleMap } from "lit/directives/style-map.js";
+import { BUILTIN_THEMES } from "../../../../packages/gateway-protocol/src/theme.ts";
 import { controlUiAccentInk } from "../../app/accent-contrast.ts";
 import {
   TEXT_SCALE_STOPS,
@@ -11,7 +12,7 @@ import type { ThemeName } from "../../app/theme.ts";
 import {
   loadTypefaceSpecimens,
   normalizeTypefaceOverride,
-  THEME_TYPEFACES,
+  resolveTypefaces,
   TYPEFACES,
 } from "../../app/typography.ts";
 import { icons } from "../../components/icons.ts";
@@ -44,70 +45,6 @@ const TEXT_SCALE_LABELS: Record<TextScaleStop, string> = {
   140: "configView.textSizes.xxl",
 };
 
-type ThemeOption = {
-  id: ThemeName;
-  labelKey: string;
-  descriptionKey: string;
-};
-
-const BUILTIN_THEME_OPTIONS: ThemeOption[] = [
-  {
-    id: "claw",
-    labelKey: "configView.themes.claw.label",
-    descriptionKey: "configView.themes.claw.description",
-  },
-  {
-    id: "knot",
-    labelKey: "configView.themes.knot.label",
-    descriptionKey: "configView.themes.knot.description",
-  },
-  {
-    id: "dash",
-    labelKey: "configView.themes.dash.label",
-    descriptionKey: "configView.themes.dash.description",
-  },
-  {
-    id: "absolutely",
-    labelKey: "configView.themes.absolutely.label",
-    descriptionKey: "configView.themes.absolutely.description",
-  },
-  {
-    id: "tide",
-    labelKey: "configView.themes.tide.label",
-    descriptionKey: "configView.themes.tide.description",
-  },
-  {
-    id: "beacon",
-    labelKey: "configView.themes.beacon.label",
-    descriptionKey: "configView.themes.beacon.description",
-  },
-  {
-    id: "phosphor",
-    labelKey: "configView.themes.phosphor.label",
-    descriptionKey: "configView.themes.phosphor.description",
-  },
-  {
-    id: "crt",
-    labelKey: "configView.themes.crt.label",
-    descriptionKey: "configView.themes.crt.description",
-  },
-  {
-    id: "manuscript",
-    labelKey: "configView.themes.manuscript.label",
-    descriptionKey: "configView.themes.manuscript.description",
-  },
-  {
-    id: "rose",
-    labelKey: "configView.themes.rose.label",
-    descriptionKey: "configView.themes.rose.description",
-  },
-  {
-    id: "miami",
-    labelKey: "configView.themes.miami.label",
-    descriptionKey: "configView.themes.miami.description",
-  },
-];
-
 const ACCENT_PRESETS = [
   { id: "default", hex: undefined, labelKey: "configView.appearance.accents.default" },
   { id: "claw", hex: "#ff5c5c", labelKey: "configView.appearance.accents.claw" },
@@ -126,7 +63,7 @@ const ACCENT_PRESETS = [
    colors while active — its chips read the live CSS variables — so it falls
    back to the spark icon otherwise. */
 function renderThemeCardVisual(id: ThemeName, activeTheme: ThemeName) {
-  if (id === "custom" && activeTheme !== "custom") {
+  if ((id === "custom" || id.includes("/")) && activeTheme !== id) {
     return html`<span class="settings-theme-card__icon" aria-hidden="true"
       >${icons.download}</span
     >`;
@@ -166,7 +103,7 @@ function focusCustomThemeImportInput() {
   });
 }
 
-function renderTypography(props: ConfigProps, themeLabel: string) {
+function renderTypography(props: ConfigProps, theme: { id: ThemeName; label: string }) {
   const options = Object.entries(TYPEFACES).map(([face, metadata]) => ({
     value: face,
     label: face === "system" ? t("configView.appearance.fonts.system") : metadata.label,
@@ -182,7 +119,7 @@ function renderTypography(props: ConfigProps, themeLabel: string) {
         ${(["ui", "chat"] as const).map((slot) => {
           const isUi = slot === "ui";
           const title = t(`configView.appearance.fonts.${slot}`);
-          const face = THEME_TYPEFACES[props.theme][slot];
+          const face = resolveTypefaces(theme.id)[slot];
           return renderSettingsRow({
             title,
             description: serverUiPrefProvenanceHint(
@@ -201,7 +138,7 @@ function renderTypography(props: ConfigProps, themeLabel: string) {
                   // face, so "match interface" would misname the actual fallback.
                   label: t("configView.appearance.fonts.themeDefault"),
                   description: t("configView.appearance.fonts.themeFace", {
-                    theme: themeLabel,
+                    theme: theme.label,
                     face: TYPEFACES[face].label,
                   }),
                   labelStyle: `font-family: ${TYPEFACES[face].stack}`,
@@ -248,11 +185,16 @@ export function renderAppearanceSection(
   }
   const importedName = importedThemeName(props);
   const themeOptions: Array<{ id: ThemeName; label: string; description: string }> = [
-    ...BUILTIN_THEME_OPTIONS.map((option) => ({
-      id: option.id,
-      label: t(option.labelKey),
-      description: t(option.descriptionKey),
-    })),
+    ...(props.themeCatalog?.themes.length ? props.themeCatalog.themes : BUILTIN_THEMES).map(
+      (theme) => ({
+        id: theme.id,
+        label: theme.source === "builtin" ? t(`configView.themes.${theme.id}.label`) : theme.name,
+        description:
+          theme.source === "builtin"
+            ? t(`configView.themes.${theme.id}.description`)
+            : theme.description,
+      }),
+    ),
     {
       id: "custom",
       label: props.hasCustomTheme ? importedName : t("configView.appearance.import"),
@@ -261,6 +203,14 @@ export function renderAppearanceSection(
         : t("configView.appearance.importHint"),
     },
   ];
+  const selectedTheme = themeOptions.find((option) => option.id === props.theme);
+  const themeUnavailable =
+    props.themeCatalog?.unavailableId === props.theme ||
+    (props.theme.includes("/") && Boolean(props.themeCatalog?.themes.length) && !selectedTheme);
+  const presentedTheme = selectedTheme ?? {
+    id: UI_APPEARANCE_DEFAULTS.theme,
+    label: t("configView.themes.claw.label"),
+  };
   const themeDefault =
     themeOptions.find((option) => option.id === props.themeResetValue)?.label ??
     t("configView.themes.claw.label");
@@ -292,7 +242,7 @@ export function renderAppearanceSection(
     (preset) => preset.hex !== undefined && preset.hex === props.accent,
   );
   const accentSelectionStatus = defaultAccentSelected
-    ? t("configView.appearance.usingInheritedAccent")
+    ? null
     : t("configView.appearance.usingAccent", {
         value: selectedAccentPreset
           ? t(selectedAccentPreset.labelKey)
@@ -310,21 +260,39 @@ export function renderAppearanceSection(
           ${renderSettingsDefaultDescription(themeDefault, props.themeOverridden)}
           ${themeProvenance}
         </p>
+        ${
+          themeUnavailable
+            ? html`<p class="settings-section__desc" role="status">
+                ${t("configView.appearance.themeUnavailable", { id: props.theme })}
+              </p>`
+            : nothing
+        }
+        ${
+          props.themeCatalog?.error
+            ? html`<p class="settings-status settings-status--error" role="alert">
+                ${props.themeCatalog.error}
+                <button type="button" class="btn btn--sm" @click=${props.onRetryThemeCatalog}>
+                  ${t("common.retry")}
+                </button>
+              </p>`
+            : nothing
+        }
         <div class="settings-group">
           <div class="settings-row settings-row--stacked">
             <div class="settings-theme-grid">
               ${themeOptions.map(
                 (opt) => html`
                   <button
-                    class="settings-theme-card settings-theme-card--${opt.id} ${
-                      opt.id === props.theme ? "settings-theme-card--active" : ""
+                    class="settings-theme-card settings-theme-card--${opt.id.includes("/") ? "custom" : opt.id} ${
+                      opt.id === presentedTheme.id ? "settings-theme-card--active" : ""
                     }"
                     aria-pressed=${
                       opt.id === "custom" && !props.hasCustomTheme
                         ? nothing
-                        : String(opt.id === props.theme)
+                        : String(opt.id === presentedTheme.id)
                     }
                     title=${opt.description}
+                    data-theme-id=${opt.id}
                     @click=${(e: Event) => {
                       if (opt.id === "custom" && !props.hasCustomTheme) {
                         props.onOpenCustomThemeImport?.();
@@ -341,7 +309,7 @@ export function renderAppearanceSection(
                       }
                     }}
                   >
-                    ${renderThemeCardVisual(opt.id, props.theme)}
+                    ${renderThemeCardVisual(opt.id, presentedTheme.id)}
                     <span class="settings-theme-card__label">${opt.label}</span>
                   </button>
                 `,
@@ -479,7 +447,9 @@ export function renderAppearanceSection(
                   ? defaultAccentSelected
                   : !defaultAccentSelected && preset.hex === props.accent;
                 const label = t(preset.labelKey);
-                const themeChipScope = isDefault ? ` settings-accent-theme--${props.theme}` : "";
+                const themeChipScope = isDefault
+                  ? ` settings-accent-theme--${presentedTheme.id.includes("/") ? "custom" : presentedTheme.id}`
+                  : "";
                 return html`
                   <button
                     type="button"
@@ -539,12 +509,18 @@ export function renderAppearanceSection(
           </div>
         </div>
         <p id="settings-accent-status" class="settings-section__desc settings-accent-status">
-          <span class="settings-accent-status__selection">${accentSelectionStatus}</span>
+          ${
+            accentSelectionStatus
+              ? html`<span class="settings-accent-status__selection"
+                  >${accentSelectionStatus}</span
+                >`
+              : nothing
+          }
           <span class="settings-accent-status__scope">${accentProvenance}</span>
         </p>
       </section>
 
-      ${renderTypography(props, themeOptions.find((option) => option.id === props.theme)!.label)}
+      ${renderTypography(props, presentedTheme)}
 
       <section id=${APPEARANCE_SETTINGS_TARGET_IDS.textSize} class="settings-section">
         <div class="settings-section__header">

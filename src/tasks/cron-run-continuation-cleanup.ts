@@ -1,4 +1,5 @@
 /** Removes an idle exact-run continuation through the session lifecycle owner. */
+import { hasDescendantRunAwaitingSettle } from "../agents/subagents/registry/subagent-registry-read.js";
 import { getRuntimeConfig } from "../config/config.js";
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import {
@@ -47,6 +48,7 @@ export async function removeCronRunContinuationSessionIfIdle(
     queueContext ?? captureOpenClawStateWorkerContext(),
   );
   if (
+    hasDescendantRunAwaitingSettle(sessionKey) ||
     pendingSessionDeliveries.some(
       (entry) =>
         entry.sessionKey === sessionKey &&
@@ -73,6 +75,11 @@ export async function removeCronRunContinuationSessionIfIdle(
   }
   await deleteSessionEntryLifecycle({
     agentId,
+    commitGuard: () => {
+      if (hasDescendantRunAwaitingSettle(sessionKey)) {
+        throw new Error("cron run continuation still has unsettled subagents");
+      }
+    },
     // Exact rows alias the stable cron transcript; the stable row owns archival.
     archiveTranscript: false,
     expectedEntry: entry,

@@ -207,8 +207,7 @@ describe.skipIf(process.platform === "win32")("terminal command process ownershi
       });
       if (identity === "reused-after-exit") {
         await expect(running).rejects.toMatchObject({
-          name: "CommandProcessScopeUnsettledError",
-          cause: failure,
+          code: "ERR_COMMAND_PROCESS_CLEANUP_UNCERTAIN",
         });
       } else if (completion === "reject") {
         await expect(running).rejects.toBe(failure);

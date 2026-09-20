@@ -134,6 +134,7 @@ describe("CodexAppServerEventProjector replay safety and progress projection", (
           id: "stale-dynamic-tool",
           turnId: "turn-old",
           tool: "web_fetch",
+          arguments: {},
           status: "completed",
         },
       ]),
@@ -177,6 +178,7 @@ describe("CodexAppServerEventProjector replay safety and progress projection", (
           id: "dynamic-after-image-view",
           turnId: TURN_ID,
           tool: "web_fetch",
+          arguments: {},
           status: "completed",
         },
         {
@@ -616,8 +618,15 @@ describe("CodexAppServerEventProjector replay safety and progress projection", (
         stream: "item",
         phase: "end",
         itemId: "cmd-future-status",
+      }).data,
+    ).toMatchObject({ phase: "end", summary: "Outcome unknown" });
+    expect(
+      findAgentEvent(onAgentEvent, {
+        stream: "item",
+        phase: "end",
+        itemId: "cmd-future-status",
       }).data.status,
-    ).toBe("completed");
+    ).toBeUndefined();
     const toolResult = findAgentEvent(onAgentEvent, {
       stream: "tool",
       phase: "result",

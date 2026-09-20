@@ -34,6 +34,11 @@ import { getMSTeamsRuntime } from "./runtime.js";
 import { sendMSTeamsActivityWithReference } from "./sdk-proactive.js";
 import type { MSTeamsActivityLike } from "./sdk-types.js";
 import type { MSTeamsApp } from "./sdk.js";
+import {
+  assertMSTeamsSendHandoff,
+  withMSTeamsConnectorHandoff,
+  type MSTeamsSendHandoff,
+} from "./send-handoff.js";
 
 /**
  * MSTeams-specific media size limit (100MB).
@@ -277,7 +282,7 @@ async function buildActivity(
   tokenProvider?: MSTeamsAccessTokenProvider,
   sharePointSiteId?: string,
   mediaMaxBytes?: number,
-  options?: { feedbackLoopEnabled?: boolean },
+  options?: { feedbackLoopEnabled?: boolean } & MSTeamsSendHandoff,
 ): Promise<Record<string, unknown>> {
   const activity: Record<string, unknown> = buildMSTeamsMessageActivity(msg.text);
 
@@ -315,6 +320,7 @@ async function buildActivity(
       ) {
         // Large file or non-image in personal chat: use FileConsentCard flow
         const conversationId = conversationRef.conversation?.id ?? "unknown";
+        assertMSTeamsSendHandoff(options);
         const { activity: consentActivity, uploadId } = prepareFileConsentActivity({
           media: { buffer: media.buffer, filename: fileName, contentType },
           conversationId,
@@ -338,6 +344,7 @@ async function buildActivity(
         const chatId = conversationRef.conversation?.id;
 
         const uploaded = await uploadAndShareSharePoint({
+          assertDirectAdapterHandoff: options?.assertDirectAdapterHandoff,
           buffer: media.buffer,
           filename: fileName,
           contentType,
@@ -348,6 +355,7 @@ async function buildActivity(
         });
 
         const driveItem = await getDriveItemProperties({
+          assertDirectAdapterHandoff: options?.assertDirectAdapterHandoff,
           siteId,
           itemId: uploaded.itemId,
           tokenProvider,
@@ -377,25 +385,28 @@ async function buildActivity(
   return activity;
 }
 
-export async function sendMSTeamsMessages(params: {
-  replyStyle: MSTeamsReplyStyle;
-  app: MSTeamsApp;
-  appId: string;
-  conversationRef: StoredConversationReference;
-  context?: { sendActivity: (activity: MSTeamsActivityLike) => Promise<unknown> };
-  messages: MSTeamsRenderedMessage[];
-  retry?: false | MSTeamsSendRetryOptions;
-  onRetry?: (event: MSTeamsSendRetryEvent) => void;
-  /** Token provider for SharePoint uploads in group chats/channels */
-  tokenProvider?: MSTeamsAccessTokenProvider;
-  /** SharePoint site ID for file uploads in group chats/channels */
-  sharePointSiteId?: string;
-  /** Max media size in bytes. Default: 100MB. */
-  mediaMaxBytes?: number;
-  /** Enable the Teams feedback loop (thumbs up/down) on sent messages. */
-  feedbackLoopEnabled?: boolean;
-  serviceUrlBoundary?: MSTeamsSdkCloudOptions;
-}): Promise<string[]> {
+export async function sendMSTeamsMessages(
+  params: {
+    replyStyle: MSTeamsReplyStyle;
+    app: MSTeamsApp;
+    appId: string;
+    conversationRef: StoredConversationReference;
+    context?: { sendActivity: (activity: MSTeamsActivityLike) => Promise<unknown> };
+    messages: MSTeamsRenderedMessage[];
+    retry?: false | MSTeamsSendRetryOptions;
+    onRetry?: (event: MSTeamsSendRetryEvent) => void;
+    onMessageSent?: (messageId: string, messageIndex: number) => Promise<void> | void;
+    /** Token provider for SharePoint uploads in group chats/channels */
+    tokenProvider?: MSTeamsAccessTokenProvider;
+    /** SharePoint site ID for file uploads in group chats/channels */
+    sharePointSiteId?: string;
+    /** Max media size in bytes. Default: 100MB. */
+    mediaMaxBytes?: number;
+    /** Enable the Teams feedback loop (thumbs up/down) on sent messages. */
+    feedbackLoopEnabled?: boolean;
+    serviceUrlBoundary?: MSTeamsSdkCloudOptions;
+  } & MSTeamsSendHandoff,
+): Promise<string[]> {
   const messages = params.messages.filter(
     (m) => (m.text && m.text.trim().length > 0) || m.mediaUrl,
   );
@@ -446,6 +457,7 @@ export async function sendMSTeamsMessages(params: {
     try {
       response = await sendWithRetry(
         async () => {
+          assertMSTeamsSendHandoff(params);
           // Retry failed preparation, but keep its successful I/O and SharePoint work
           // out of subsequent provider retries.
           activity ??= await buildActivity(
@@ -454,7 +466,10 @@ export async function sendMSTeamsMessages(params: {
             params.tokenProvider,
             params.sharePointSiteId,
             params.mediaMaxBytes,
-            { feedbackLoopEnabled: params.feedbackLoopEnabled },
+            {
+              feedbackLoopEnabled: params.feedbackLoopEnabled,
+              assertDirectAdapterHandoff: params.assertDirectAdapterHandoff,
+            },
           );
 
           pendingUploadId ??=
@@ -463,6 +478,7 @@ export async function sendMSTeamsMessages(params: {
               : undefined;
           delete activity["_pendingUploadId"];
 
+          assertMSTeamsSendHandoff(params);
           providerDispatchStarted = true;
           return await sendFn(activity);
         },
@@ -472,7 +488,7 @@ export async function sendMSTeamsMessages(params: {
         },
       );
     } catch (error) {
-      if (!providerDispatchStarted) {
+      if (!providerDispatchStarted && !(error instanceof PlatformMessageNotDispatchedError)) {
         throw new PlatformMessageNotDispatchedError(
           error instanceof Error ? error.message : "Teams activity preparation failed",
           { cause: error },
@@ -481,6 +497,7 @@ export async function sendMSTeamsMessages(params: {
       throw error;
     }
     const messageId = extractMessageId(response) ?? "unknown";
+    await params.onMessageSent?.(messageId, messageIndex);
 
     // Store the activity ID so the accept handler can replace the consent card in-place
     if (pendingUploadId && messageId !== "unknown") {
@@ -522,6 +539,8 @@ export async function sendMSTeamsMessages(params: {
     const isChannel = params.conversationRef.conversation?.conversationType === "channel";
     const sendFn = (activity: MSTeamsActivityLike) =>
       sendMSTeamsActivityWithReference(params.app, baseRef, activity, {
+        assertDirectAdapterHandoff: params.assertDirectAdapterHandoff,
+        onPlatformSendDispatch: params.onPlatformSendDispatch,
         threadActivityId: isChannel ? threadActivityId : undefined,
         serviceUrlBoundary: params.serviceUrlBoundary,
       });
@@ -538,7 +557,8 @@ export async function sendMSTeamsMessages(params: {
     if (!ctx) {
       return await sendProactively(messages, 0, resolvedThreadId);
     }
-    const sendFn = ctx.sendActivity;
+    const sendFn = (activity: MSTeamsActivityLike) =>
+      withMSTeamsConnectorHandoff(params, () => ctx.sendActivity(activity));
     const messageIds: string[] = [];
     for (const [idx, message] of messages.entries()) {
       const result = await withRevokedProxyFallback({

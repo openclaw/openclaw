@@ -1,4 +1,3 @@
-// Feishu plugin module implements targets behavior.
 import { normalizeLowercaseStringOrEmpty } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { FeishuIdType } from "./types.js";
 

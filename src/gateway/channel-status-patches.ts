@@ -1,6 +1,9 @@
 // Channel status patch factories centralize timestamp fields that multiple
 // runtime paths send into the gateway status store.
+import { isChannelIngressUnavailableError } from "../channels/message/ingress-unavailable.js";
 import type { ChannelAccountSnapshot } from "../channels/plugins/types.core.js";
+import { extractErrorCode, formatErrorMessage } from "../infra/errors.js";
+import { isPluginTrustRefusalError } from "../plugins/plugin-trust.js";
 
 /** Patch emitted when a channel connection is established. */
 type ConnectedChannelStatusPatch = {
@@ -106,6 +109,24 @@ export function channelBlockedPatch(
     },
     extras,
   );
+}
+
+/** Classifies startup failures before transport cleanup or retry policy can hide their cause. */
+export function channelStartFailurePatch(error: unknown): Omit<
+  ChannelAccountSnapshot,
+  "accountId"
+> & {
+  lastError: string;
+} {
+  const lastError = formatErrorMessage(error);
+  const trustRefused = isPluginTrustRefusalError(error);
+  return {
+    lastError,
+    ...(extractErrorCode(error) === "AGENT_SELECTION_REQUIRED" || trustRefused
+      ? channelBlockedPatch(lastError, trustRefused ? { healthState: "plugin-trust-refused" } : {})
+      : {}),
+    ...(isChannelIngressUnavailableError(error) ? { ingressUnavailable: true } : {}),
+  };
 }
 
 /** Creates the shared patch emitted after a channel account has stopped. */

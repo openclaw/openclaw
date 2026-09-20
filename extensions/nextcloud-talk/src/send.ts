@@ -141,7 +141,10 @@ function createNextcloudTalkSendReceipt(params: {
 export async function sendMessageNextcloudTalk(
   to: string,
   text: string,
-  opts: NextcloudTalkSendOpts,
+  opts: NextcloudTalkSendOpts & {
+    onPlatformSendDispatch?: () => Promise<void>;
+    assertDirectAdapterHandoff?: () => void;
+  },
 ): Promise<NextcloudTalkSendResult> {
   const { cfg, account, baseUrl, secret } = resolveNextcloudTalkSendContext(opts);
   const roomToken = normalizeRoomToken(to);
@@ -176,8 +179,10 @@ export async function sendMessageNextcloudTalk(
 
   const url = `${baseUrl}/ocs/v2.php/apps/spreed/api/v1/bot/${roomToken}/message`;
 
+  await opts.onPlatformSendDispatch?.();
   const { response, release } = await fetchWithSsrFGuard({
     url,
+    beforeRequest: opts.assertDirectAdapterHandoff,
     init: {
       method: "POST",
       headers: {

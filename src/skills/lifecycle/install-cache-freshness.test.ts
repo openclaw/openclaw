@@ -4,12 +4,16 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { loadWorkspaceSkills } from "../loading/workspace-skill-loader.js";
 import type { SkillEntry, SkillInstallSpec } from "../types.js";
 import { installSkill } from "./install.js";
-import { skillsInstallTesting } from "./install.test-support.js";
 
 const { runCommandWithTimeoutMock } = vi.hoisted(() => ({
   runCommandWithTimeoutMock: vi.fn<typeof import("../../process/exec.js").runCommandWithTimeout>(),
+}));
+
+vi.mock("../loading/workspace-skill-loader.js", () => ({
+  loadWorkspaceSkills: vi.fn(),
 }));
 
 vi.mock("../../process/exec.js", () => ({
@@ -21,7 +25,7 @@ vi.mock("../../plugins/install-security-scan.js", () => ({
 }));
 
 afterEach(() => {
-  skillsInstallTesting.setDepsForTest();
+  vi.mocked(loadWorkspaceSkills).mockReset();
   runCommandWithTimeoutMock.mockReset();
   vi.restoreAllMocks();
 });
@@ -60,7 +64,7 @@ describe.each(["uv", "go"] as const)("%s bootstrap cache freshness", (kind) => {
           metadata: { install: [{ id: "deps", ...spec }] },
         };
       });
-      skillsInstallTesting.setDepsForTest({ loadWorkspaceSkills: () => entries });
+      vi.mocked(loadWorkspaceSkills).mockReturnValue(entries);
 
       let bootstraps = 0;
       let recipes = 0;

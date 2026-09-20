@@ -1,4 +1,8 @@
 import { expect, it, vi } from "vitest";
+import {
+  codexCatalogResidentHomeKey,
+  subscribeCodexCatalogEvents,
+} from "../session-catalog-events.js";
 import { CodexAppServerClient } from "./client.js";
 import type { CodexAppServerStartOptions } from "./config.js";
 import {
@@ -17,6 +21,40 @@ import { CodexAdoptedThreadActiveError } from "./thread-lifecycle-errors.js";
 
 /** Register under the shared-client suite so its auth mocks and cleanup remain authoritative. */
 export function registerSharedClientLifetimeTests(redirectNextStartToWebSocket: () => void) {
+  it("connects catalog events at physical startup without retaining a client lease", async () => {
+    const harness = createClientHarness();
+    vi.spyOn(CodexAppServerClient, "start").mockResolvedValue(harness.client);
+    const startOptions: CodexAppServerStartOptions = {
+      transport: "websocket",
+      command: "codex",
+      args: ["app-server"],
+      url: "wss://catalog-events.example.test/codex",
+      authToken: "synthetic-catalog-token",
+      headers: {},
+    };
+    const homeKey = await codexCatalogResidentHomeKey({ startOptions });
+    const receive = vi.fn();
+    const stop = subscribeCodexCatalogEvents(homeKey, receive);
+    try {
+      const acquiring = getLeasedSharedCodexAppServerClient({ startOptions, timeoutMs: 1_000 });
+      await sendInitializeResult(harness, "openclaw/0.151.0 (Linux; test)");
+      const client = await acquiring;
+      const event = { method: "thread/archived", params: { threadId: "thread-1" } };
+      harness.send(event);
+      expect(receive).toHaveBeenCalledExactlyOnceWith(
+        event,
+        expect.any(Function),
+        expect.objectContaining({ closed: false }),
+      );
+      retireSharedCodexAppServerClientIfCurrent(client);
+      expect(releaseLeasedSharedCodexAppServerClient(client)).toBe(true);
+      expect(client.getCloseError()).toBeDefined();
+    } finally {
+      stop();
+      harness.client.close();
+    }
+  });
+
   it.each([
     { name: "isolated stdio", transport: "stdio", allowed: true },
     { name: "isolated websocket", transport: "websocket", allowed: false },

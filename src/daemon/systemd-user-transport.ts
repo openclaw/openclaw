@@ -12,6 +12,7 @@ import type { GatewayServiceEnv } from "./service-types.js";
 import { assertGatewayServiceUpdateCurrent } from "./service-update-authority.js";
 import { decodeLegacyBusctlOutput } from "./systemd-busctl-legacy.js";
 import { openSystemdUserManager } from "./systemd-peer-native.js";
+import { resolveUnavailableSystemdInspectionReason } from "./systemd-unavailable.js";
 
 // Reachability is a process-local routing fact, never a connection or mutation grant.
 type Selection = { transport: SystemdUserTransport; timedOut: boolean };
@@ -186,6 +187,10 @@ export async function resolveSystemdUserTransport(
       }
     }
     check();
+    if (!timedOut && reason !== "service-manager-access-denied") {
+      reason = await resolveUnavailableSystemdInspectionReason(reason, source, deadline);
+      check();
+    }
     throw timedOut ? SYSTEMD_TRANSPORT_DEADLINE : new ServiceInspectionError(reason);
   }
 }

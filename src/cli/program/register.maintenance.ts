@@ -9,6 +9,7 @@ import { hasExplicitOptions } from "../command-options.js";
 import { isDoctorMachineOutput } from "../doctor-output-mode.js";
 import { formatCliJsonFailure } from "../failure-output.js";
 import { exitCliAfterOutput } from "../one-shot-exit.js";
+import type { ProgramContext } from "./context.js";
 import { setCommandJsonMode } from "./json-mode.js";
 // Maintenance command registration: doctor, triage, dashboard, reset, and uninstall.
 
@@ -45,7 +46,10 @@ function exitDoctorError(error: unknown, json: boolean): never {
 }
 
 /** Register maintenance commands that inspect or mutate local OpenClaw state. */
-export function registerMaintenanceCommands(program: Command) {
+export function registerMaintenanceCommands(
+  program: Command,
+  ctx?: Pick<ProgramContext, "doctorDatabasePreflight">,
+) {
   const doctor = program
     .command("doctor")
     .description("Health checks + quick fixes for the gateway and channels")
@@ -211,35 +215,39 @@ export function registerMaintenanceCommands(program: Command) {
           doctorUpdateRecoveryRuntime(defaultRuntime),
           async () => {
             const { doctorCommand } = await import("../../commands/doctor.js");
-            await doctorCommand(defaultRuntime, {
-              ...(opts.updateRecoveryOwner === "driver" ||
-              opts.updateRecoveryOwner === "unprotected"
-                ? { updateRecoveryOwner: opts.updateRecoveryOwner }
-                : {}),
-              ...(typeof opts.updateRecoveryBackup === "string"
-                ? { updateRecoveryBackup: opts.updateRecoveryBackup }
-                : {}),
-              workspaceSuggestions: opts.workspaceSuggestions,
-              yes: Boolean(opts.yes),
-              repair: Boolean(opts.repair) || Boolean(opts.fix),
-              force: Boolean(opts.force),
-              nonInteractive: Boolean(opts.nonInteractive),
-              generateGatewayToken: Boolean(opts.generateGatewayToken),
-              allowExec: Boolean(opts.allowExec),
-              deep: Boolean(opts.deep),
-              postUpgrade: Boolean(opts.postUpgrade),
-              ...(stateSqlite ? { stateSqlite } : {}),
-              ...(sessionSqlite ? { sessionSqlite } : {}),
-              ...(typeof opts.sessionSqliteStore === "string"
-                ? { sessionSqliteStore: opts.sessionSqliteStore }
-                : {}),
-              ...(typeof opts.sessionSqliteAgent === "string"
-                ? { sessionSqliteAgent: opts.sessionSqliteAgent }
-                : {}),
-              sessionSqliteAllAgents: Boolean(opts.sessionSqliteAllAgents),
-              sessionSqliteGithubIssue: Boolean(opts.githubIssue),
-              json: Boolean(opts.json),
-            });
+            await doctorCommand(
+              defaultRuntime,
+              {
+                ...(opts.updateRecoveryOwner === "driver" ||
+                opts.updateRecoveryOwner === "unprotected"
+                  ? { updateRecoveryOwner: opts.updateRecoveryOwner }
+                  : {}),
+                ...(typeof opts.updateRecoveryBackup === "string"
+                  ? { updateRecoveryBackup: opts.updateRecoveryBackup }
+                  : {}),
+                workspaceSuggestions: opts.workspaceSuggestions,
+                yes: Boolean(opts.yes),
+                repair: Boolean(opts.repair) || Boolean(opts.fix),
+                force: Boolean(opts.force),
+                nonInteractive: Boolean(opts.nonInteractive),
+                generateGatewayToken: Boolean(opts.generateGatewayToken),
+                allowExec: Boolean(opts.allowExec),
+                deep: Boolean(opts.deep),
+                postUpgrade: Boolean(opts.postUpgrade),
+                ...(stateSqlite ? { stateSqlite } : {}),
+                ...(sessionSqlite ? { sessionSqlite } : {}),
+                ...(typeof opts.sessionSqliteStore === "string"
+                  ? { sessionSqliteStore: opts.sessionSqliteStore }
+                  : {}),
+                ...(typeof opts.sessionSqliteAgent === "string"
+                  ? { sessionSqliteAgent: opts.sessionSqliteAgent }
+                  : {}),
+                sessionSqliteAllAgents: Boolean(opts.sessionSqliteAllAgents),
+                sessionSqliteGithubIssue: Boolean(opts.githubIssue),
+                json: Boolean(opts.json),
+              },
+              ctx?.doctorDatabasePreflight,
+            );
             exitCliAfterOutput(defaultRuntime, 0);
           },
         );

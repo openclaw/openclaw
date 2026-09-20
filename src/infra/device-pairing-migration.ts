@@ -2,7 +2,7 @@
 // Older gateways kept paired devices, pending requests, and bootstrap tokens
 // in <state>/devices/{paired,pending,bootstrap}.json; the store now lives in
 // the shared state DB (device_pairing_* / device_bootstrap_tokens tables).
-// Runs at gateway startup before the node-surface fold, which writes onto the
+// Doctor runs this before the node-surface fold, which writes onto the
 // imported device records. Pending requests (5 min TTL) and bootstrap tokens
 // (10 min TTL) are transients and are not imported; devices re-request and
 // setup codes are reissued.
@@ -78,14 +78,6 @@ async function fileExists(filePath: string): Promise<boolean> {
     () => true,
     () => false,
   );
-}
-
-/** List legacy devices/*.json files the startup import has not archived yet. */
-export async function listLegacyDevicePairingStoreFiles(baseDir?: string): Promise<string[]> {
-  const { dir, pendingPath, pairedPath } = resolvePairingPaths(baseDir, "devices");
-  const candidates = [pairedPath, pendingPath, path.join(dir, "bootstrap.json")];
-  const present = await Promise.all(candidates.map(fileExists));
-  return candidates.filter((_, index) => present[index]);
 }
 
 /**

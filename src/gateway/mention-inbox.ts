@@ -12,6 +12,7 @@ import {
   type MentionInboxItem,
   type MentionsListResult,
 } from "../../packages/gateway-protocol/src/index.js";
+import { updateSessionProfileInvolvement } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { isIncognitoSessionKey } from "../routing/session-key.js";
@@ -427,13 +428,9 @@ export function createMentionInbox(params: {
   });
   const stopSessions = onSessionIdentityMutation(() => invalidate());
 
-  function readOperation<T>(operation: () => Result<T, ErrorShape>): Result<T, ErrorShape> {
-    if (active) {
-      try {
-        return operation();
-      } catch {
-        log.warn("The mention Inbox could not read or save its current state. Reconnect to retry.");
-      }
+  function unavailable(warn = false): Result<never, ErrorShape> {
+    if (warn) {
+      log.warn("The mention Inbox could not read or save its current state. Reconnect to retry.");
     }
     return err(
       errorShape(ErrorCodes.UNAVAILABLE, "The mention Inbox is unavailable. Reconnect to retry.", {
@@ -442,11 +439,33 @@ export function createMentionInbox(params: {
     );
   }
 
+  function readOperation<T>(operation: () => Result<T, ErrorShape>): Result<T, ErrorShape> {
+    if (active) {
+      try {
+        return operation();
+      } catch {
+        return unavailable(true);
+      }
+    }
+    return unavailable();
+  }
+
   refresh();
 
   return {
-    mentionable: (...args: Parameters<typeof policy.mentionable>) =>
-      readOperation(() => policy.mentionable(...args)),
+    async mentionable(client, input, publish) {
+      let preparationFailure: Result<never, ErrorShape> | undefined;
+      try {
+        // A committed profile change can invalidate preparation before this continuation runs.
+        while (policy.needsDirectoryPreparation()) {
+          await policy.prepareDirectory();
+        }
+      } catch {
+        preparationFailure = unavailable(true);
+      }
+      // Current policy selection and response publication must not cross another await.
+      publish(preparationFailure ?? readOperation(() => policy.mentionable(client, input)));
+    },
     validateRecipients: (...args: Parameters<typeof policy.validateRecipients>) =>
       readOperation(() => policy.validateRecipients(...args)),
     list(client: GatewayClient | null): Result<MentionsListResult, ErrorShape> {
@@ -518,6 +537,33 @@ export function createMentionInbox(params: {
             log.debug("Skipped mention delivery because its committed session changed.");
             return [];
           }
+          const senderProfile = policy.readProfile(input.senderProfileId);
+          const mentionedProfiles = input.recipientProfileIds.flatMap((id) => {
+            const recipient = policy.recipientProfile(
+              id,
+              {
+                agentId: resolved.agentId,
+                sessionKey: resolved.canonicalKey,
+                entry: resolved.entry,
+              },
+              cfg,
+            );
+            return senderProfile && recipient && senderProfile.profileId !== recipient.profileId
+              ? [recipient.profileId]
+              : [];
+          });
+          updateSessionProfileInvolvement(
+            {
+              agentId: resolved.agentId,
+              sessionKey: resolved.storeKey,
+              storePath: resolved.storePath,
+            },
+            {
+              expectedSessionId: input.sessionId,
+              profileIds: mentionedProfiles,
+              change: { kind: "mention", source: input.committedSource },
+            },
+          );
           const sourceKey = createHash("sha256")
             .update(
               JSON.stringify([

@@ -90,6 +90,8 @@ type RepairMissingPluginInstallsResult = {
 export async function repairMissingConfiguredPluginInstalls(params: {
   cfg: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
+  timeoutMs?: number;
+  workTimeoutMs?: number | null;
   onCapabilityConsent?: PluginCapabilityConsentHandler;
   onWarning?: (warning: PluginInstallRepairWarning) => void;
   beforePersistentEffect?: () => void | Promise<void>;
@@ -104,6 +106,8 @@ export async function repairMissingConfiguredPluginInstalls(params: {
 }): Promise<RepairMissingPluginInstallsResult> {
   return repairMissingPluginInstalls({
     cfg: params.cfg,
+    timeoutMs: params.timeoutMs,
+    workTimeoutMs: params.workTimeoutMs,
     env: params.env,
     pluginIds: collectConfiguredPluginIds(params.cfg, params.env),
     channelIds: collectConfiguredChannelIds(params.cfg, params.env),
@@ -122,6 +126,8 @@ export async function repairMissingPluginInstallsForIds(params: {
   channelIds?: Iterable<string>;
   blockedPluginIds?: Iterable<string>;
   env?: NodeJS.ProcessEnv;
+  timeoutMs?: number;
+  workTimeoutMs?: number | null;
   baselineRecords?: Record<string, PluginInstallRecord>;
   onCapabilityConsent?: PluginCapabilityConsentHandler;
   onWarning?: (warning: PluginInstallRepairWarning) => void;
@@ -129,6 +135,8 @@ export async function repairMissingPluginInstallsForIds(params: {
 }): Promise<RepairMissingPluginInstallsResult> {
   return repairMissingPluginInstalls({
     cfg: params.cfg,
+    timeoutMs: params.timeoutMs,
+    workTimeoutMs: params.workTimeoutMs,
     env: params.env,
     pluginIds: new Set(
       [...params.pluginIds].map((pluginId) => pluginId.trim()).filter((pluginId) => pluginId),
@@ -156,6 +164,8 @@ async function repairMissingPluginInstalls(params: {
   channelIds: ReadonlySet<string>;
   blockedPluginIds?: ReadonlySet<string>;
   env?: NodeJS.ProcessEnv;
+  timeoutMs?: number;
+  workTimeoutMs?: number | null;
   baselineRecords?: Record<string, PluginInstallRecord>;
   onCapabilityConsent?: PluginCapabilityConsentHandler;
   onWarning?: (warning: PluginInstallRepairWarning) => void;
@@ -181,6 +191,7 @@ async function repairMissingPluginInstallsWithLease(
     configuredChannelOwnerPluginIds,
     bundledPluginsById,
     configuredPluginIdsWithStaleDescriptors,
+    operatorManagedPluginIds,
     stalePathInstallPluginIds,
     records,
     persistedRecords,
@@ -246,7 +257,11 @@ async function repairMissingPluginInstallsWithLease(
 
   for (const [pluginId, record] of Object.entries(records)) {
     const bundled = bundledPluginsById.get(pluginId);
-    if (!bundled || !recordMatchesBundledPackage(record, bundled)) {
+    if (
+      operatorManagedPluginIds.has(pluginId) ||
+      !bundled ||
+      !recordMatchesBundledPackage(record, bundled)
+    ) {
       continue;
     }
     if (bundled.preserveExternalInstallRecord) {
@@ -283,6 +298,9 @@ async function repairMissingPluginInstallsWithLease(
       blockedPluginIds: params.blockedPluginIds,
     });
     for (const pluginId of updateDeferredPluginIds) {
+      if (operatorManagedPluginIds.has(pluginId)) {
+        continue;
+      }
       deferredPluginIds.add(pluginId);
       const record = nextRecords[pluginId];
       if (!record || !isPayloadMissing(env, record.installPath)) {
@@ -296,6 +314,7 @@ async function repairMissingPluginInstallsWithLease(
 
   const missingRecordedPlugins = Object.entries(records).filter(
     ([pluginId]) =>
+      !operatorManagedPluginIds.has(pluginId) &&
       !deferredPluginIds.has(pluginId) &&
       !officialReplacementPluginIds.has(pluginId) &&
       Object.hasOwn(nextRecords, pluginId) &&
@@ -330,6 +349,8 @@ async function repairMissingPluginInstallsWithLease(
           },
         },
         pluginIds: missingRecordedPluginIds,
+        timeoutMs: params.timeoutMs,
+        workTimeoutMs: params.workTimeoutMs,
         skipDisabledPlugins: true,
         updateChannel,
         coreVersion: resolveCompatibilityHostVersion(env),
@@ -381,7 +402,7 @@ async function repairMissingPluginInstallsWithLease(
 
   const missingPluginIds = new Set(
     [...params.pluginIds].filter((pluginId) => {
-      if (deferredPluginIds.has(pluginId)) {
+      if (operatorManagedPluginIds.has(pluginId) || deferredPluginIds.has(pluginId)) {
         return false;
       }
       const hasRecord = Object.hasOwn(nextRecords, pluginId);
@@ -401,10 +422,11 @@ async function repairMissingPluginInstallsWithLease(
     configuredPluginIds: params.pluginIds,
     configuredChannelIds: params.channelIds,
     configuredChannelOwnerPluginIds,
-    blockedPluginIds:
-      deferredPluginIds.size > 0
-        ? new Set([...(params.blockedPluginIds ?? []), ...deferredPluginIds])
-        : params.blockedPluginIds,
+    blockedPluginIds: new Set([
+      ...(params.blockedPluginIds ?? []),
+      ...deferredPluginIds,
+      ...operatorManagedPluginIds,
+    ]),
   })) {
     const repair = resolveConfiguredPluginCandidateRepair({
       candidate,
@@ -437,6 +459,8 @@ async function repairMissingPluginInstallsWithLease(
       copyPluginInstallTransactionRequest(params, {
         candidate,
         config: params.cfg,
+        timeoutMs: params.timeoutMs,
+        workTimeoutMs: params.workTimeoutMs,
         records: nextRecords,
         env,
         updateChannel,

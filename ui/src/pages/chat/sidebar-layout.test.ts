@@ -5,6 +5,7 @@ import {
   closeSlot,
   ensureSidebarConversation,
   fitSidebarLayout,
+  initializeBrowserSidebarWidth,
   isSidebarSlotVisible,
   normalizeSidebarLayout,
   openSlot,
@@ -130,6 +131,7 @@ describe("sidebar layout", () => {
     expect(closed).toEqual({
       columns: [
         {
+          browserWidthPending: true,
           id: "side-panel-column",
           side: "right",
           panels: [],
@@ -272,6 +274,35 @@ describe("sidebar layout", () => {
       fitSidebarLayout(resizeSidebarPanel(layout, columnId, 1_000), 1_200)?.columns[0]?.width,
     ).toBe(720);
     expect(fitSidebarLayout(layout, 560)).toBeNull();
+  });
+
+  it.each([
+    [1_800, 804, 990],
+    [1_400, 804, 694],
+    [1_000, 964, 494],
+    [800, 600, 480],
+    [2_800, 804, 1_200],
+  ])("sizes a new browser in a %ipx pane around the chat column", (paneWidth, chatWidth, width) => {
+    const layout = openSlot({ columns: [] }, "browser");
+    const opened = initializeBrowserSidebarWidth(layout, paneWidth, chatWidth);
+    expect(opened.columns[0]?.width).toBe(width);
+    expect(initializeBrowserSidebarWidth(opened, 2_000, 600)).toEqual(opened);
+  });
+
+  it("defers browser sizing in narrow and bottom layouts and preserves manual or legacy widths", () => {
+    const layout = normalizeSidebarLayout(openSlot({ columns: [] }, "browser"));
+    expect(initializeBrowserSidebarWidth(layout, 500, 464)).toEqual(layout);
+    const bottom = setSidebarDock(layout, "bottom");
+    expect(initializeBrowserSidebarWidth(bottom, 1_800, 804)).toEqual(bottom);
+    const resized = normalizeSidebarLayout(resizeSidebarPanel(layout, layout.columns[0]!.id, 480));
+    expect(initializeBrowserSidebarWidth(resized, 1_800, 804)).toEqual(resized);
+    const legacy = normalizeSidebarLayout({
+      columns: [
+        { id: "side", side: "right", panels: [{ id: "browser", slot: "browser" }], width: 480 },
+      ],
+    });
+    expect(initializeBrowserSidebarWidth(legacy, 1_800, 804)).toEqual(legacy);
+    expect(initializeBrowserSidebarWidth(layout, 1_800, 804).columns[0]?.width).toBe(990);
   });
 
   it("persists and resizes the same panel at the bottom", () => {

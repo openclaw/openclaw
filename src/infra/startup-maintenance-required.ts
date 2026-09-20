@@ -8,6 +8,7 @@ const maintenanceReasons = {
   "agent-databases-composite-primary-key": "state database schema migration",
   "audit-events-v2": "state database schema migration",
   "legacy-workshop-review-index": "state database schema migration",
+  "legacy-cron-run-logs": "cron run history migration",
   "legacy-workspace": "workspace setup state migration",
   "legacy-session-store": "session store migration",
 } as const;

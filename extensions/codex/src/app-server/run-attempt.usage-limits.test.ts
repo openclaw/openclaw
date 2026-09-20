@@ -3,6 +3,7 @@ import path from "node:path";
 import { saveAuthProfileStore } from "openclaw/plugin-sdk/agent-runtime";
 import { describe, expect, it } from "vitest";
 import { readAttemptTerminal } from "./attempt-terminal.test-helper.js";
+import { turnCompleted } from "./protocol.test-helpers.js";
 import { readCodexRateLimitsRevision, rememberCodexRateLimitsRead } from "./rate-limit-cache.js";
 import {
   createParams,
@@ -272,21 +273,16 @@ describe("runCodexAppServerAttempt usage limits", () => {
     saveAuthProfileStore(params.authProfileStore, params.agentDir);
     const run = runCodexAppServerAttempt(params);
     await harness.waitForMethod("turn/start");
-    await harness.notify({
-      method: "turn/completed",
-      params: {
-        threadId: "thread-1",
-        turnId: "turn-1",
-        turn: {
-          id: "turn-1",
-          status: "failed",
-          error: {
-            message: "You've reached your usage limit.",
-            codexErrorInfo: "usageLimitExceeded",
-          },
+    await harness.notify(
+      turnCompleted({
+        id: "turn-1",
+        status: "failed",
+        error: {
+          message: "You've reached your usage limit.",
+          codexErrorInfo: "usageLimitExceeded",
         },
-      },
-    });
+      }),
+    );
 
     const result = await run;
 
@@ -340,18 +336,7 @@ describe("runCodexAppServerAttempt usage limits", () => {
       const run = runCodexAppServerAttempt(params);
       await harness.waitForMethod("turn/start");
       await harness.notify(rateLimitsUpdated(resetsAt));
-      await harness.notify({
-        method: "turn/completed",
-        params: {
-          threadId: "thread-1",
-          turnId: "turn-1",
-          turn: {
-            id: "turn-1",
-            status: "failed",
-            error,
-          },
-        },
-      });
+      await harness.notify(turnCompleted({ id: "turn-1", status: "failed", error }));
 
       const result = await run;
 
@@ -392,21 +377,16 @@ describe("runCodexAppServerAttempt usage limits", () => {
 
     const run = runCodexAppServerAttempt(params);
     await harness.waitForMethod("turn/start");
-    await harness.notify({
-      method: "turn/completed",
-      params: {
-        threadId: "thread-1",
-        turnId: "turn-1",
-        turn: {
-          id: "turn-1",
-          status: "failed",
-          error: {
-            message: "You've reached your usage limit.",
-            codexErrorInfo: "usageLimitExceeded",
-          },
+    await harness.notify(
+      turnCompleted({
+        id: "turn-1",
+        status: "failed",
+        error: {
+          message: "You've reached your usage limit.",
+          codexErrorInfo: "usageLimitExceeded",
         },
-      },
-    });
+      }),
+    );
 
     const result = await run;
 

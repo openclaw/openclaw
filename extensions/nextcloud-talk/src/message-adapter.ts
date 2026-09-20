@@ -13,17 +13,25 @@ export const nextcloudTalkMessageAdapter = defineChannelMessageAdapter({
     },
   },
   send: {
-    text: async ({ cfg, to, text, accountId, replyToId }) =>
-      await sendMessageNextcloudTalk(to, text, {
-        accountId: accountId ?? undefined,
-        replyTo: replyToId ?? undefined,
-        cfg: cfg as CoreConfig,
+    text: async (ctx) =>
+      await sendMessageNextcloudTalk(ctx.to, ctx.text, {
+        accountId: ctx.accountId ?? undefined,
+        replyTo: ctx.replyToId ?? undefined,
+        cfg: ctx.cfg as CoreConfig,
+        onPlatformSendDispatch: ctx.onPlatformSendDispatch,
+        assertDirectAdapterHandoff: ctx.assertDirectAdapterHandoff,
       }),
-    media: async ({ cfg, to, text, mediaUrl, accountId, replyToId }) =>
-      await sendMessageNextcloudTalk(to, mediaUrl ? `${text}\n\nAttachment: ${mediaUrl}` : text, {
-        accountId: accountId ?? undefined,
-        replyTo: replyToId ?? undefined,
-        cfg: cfg as CoreConfig,
-      }),
+    media: async (ctx) =>
+      await sendMessageNextcloudTalk(
+        ctx.to,
+        ctx.mediaUrl ? `${ctx.text}\n\nAttachment: ${ctx.mediaUrl}` : ctx.text,
+        {
+          accountId: ctx.accountId ?? undefined,
+          replyTo: ctx.replyToId ?? undefined,
+          cfg: ctx.cfg as CoreConfig,
+          onPlatformSendDispatch: ctx.onPlatformSendDispatch,
+          assertDirectAdapterHandoff: ctx.assertDirectAdapterHandoff,
+        },
+      ),
   },
 });

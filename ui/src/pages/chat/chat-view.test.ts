@@ -1,8 +1,8 @@
 /* @vitest-environment jsdom */
 
 import { expectDefined } from "@openclaw/normalization-core";
-import { html, render, type LitElement } from "lit";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { html, render } from "lit";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type {
@@ -12,7 +12,6 @@ import type {
   SessionsListResult,
 } from "../../api/types.ts";
 import { createChatAttachmentHandoff } from "../../app/chat-attachment-handoff.ts";
-import type { ExecApprovalRequest } from "../../app/exec-approval.ts";
 import type { UiSettings } from "../../app/settings.ts";
 import { i18n, t } from "../../i18n/index.ts";
 import type { ChatAttachment, ChatQueueItem, MessageGroup } from "../../lib/chat/chat-types.ts";
@@ -37,6 +36,14 @@ import {
   registerChatAttachmentPayload as registerStoredChatAttachmentPayload,
   releaseChatAttachmentPayloads,
 } from "./attachment-payload-store.ts";
+import {
+  createAttachmentSidebarHarness,
+  getAttachmentMenuOption,
+  renderAttachmentHarness,
+  requireAttachmentInput,
+  selectAttachmentMenuOption,
+  selectFile,
+} from "./chat-attachment-picker.test-support.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
 import { createChatModelSetupBanner } from "./chat-model-setup.ts";
 import { applyChatPendingInputs, getChatPendingInputs } from "./chat-pending-inputs.ts";
@@ -50,14 +57,16 @@ import {
   createChatProps,
   createPasteEvent,
   createTestTranscript,
+  renderChatInto,
+  renderChatView,
   stubAnimationFrames,
 } from "./chat-view.test-helpers.ts";
 import { renderChat } from "./chat-view.ts";
-import { ChatAttachmentReadLifecycle } from "./components/chat-attachments.ts";
 import { resetChatComposerState } from "./components/chat-composer.ts";
 import * as chatMessage from "./components/chat-message.ts";
 import { renderChatModelAccountControl } from "./components/chat-model-account-control.ts";
 import { renderChatModelControls } from "./components/chat-model-controls.ts";
+import { installChatComposerPickerDismissal } from "./components/chat-picker-overlay.ts";
 import {
   resetThreadPresentation,
   resetTranscriptSession,
@@ -327,6 +336,7 @@ function renderWorkGroupSummaryMock(
 }
 
 beforeEach(() => {
+  onTestFinished(installChatComposerPickerDismissal(document));
   installTranscriptDomMocks();
   vi.spyOn(chatThread, "buildCachedChatItems").mockImplementation(buildChatItemsMock);
   vi.spyOn(chatThread, "getExpandedToolCards").mockReturnValue(new Map<string, boolean>());
@@ -694,16 +704,6 @@ function itemAt<T>(items: ArrayLike<T>, index: number, label: string): T {
   return expectDefined(items[index], `${label} ${index}`);
 }
 
-function renderChatView(overrides: Partial<ChatProps> = {}) {
-  const container = document.createElement("div");
-  render(renderChat(createChatProps(overrides)), container);
-  return container;
-}
-
-function renderChatInto(container: HTMLElement, overrides: Partial<ChatProps> = {}) {
-  render(renderChat(createChatProps(overrides)), container);
-}
-
 describe("chat typing status", () => {
   it.each([
     {
@@ -759,7 +759,7 @@ describe("chat typing status", () => {
     const shell = requireElement(container, ".agent-chat__composer-shell", "composer shell");
     const queue = requireElement(container, ".chat-queue", "composer queue");
     expect(error.textContent).toContain("Gateway unavailable");
-    expect(error.closest(".agent-chat__composer-overlay")).not.toBeNull();
+    expect(error.closest(".agent-chat__composer-notices")).not.toBeNull();
     expect(typingRow.compareDocumentPosition(shell)).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
     expect(queue.closest(".agent-chat__composer-shell")).toBe(shell);
     expect(
@@ -810,131 +810,6 @@ function createBackgroundTasks(
     ...overrides,
   };
 }
-
-describe("chat Swarm progress", () => {
-  it.each(["agent:main:parent", "parent"])(
-    "stays visible for %s between the transcript and composer",
-    (routeKey) => {
-      const parentSessionKey = "agent:main:parent";
-      const container = renderChatView({
-        sessionKey: routeKey,
-        canAbort: true,
-        showNewMessages: true,
-        swarm: {
-          sessionKey: parentSessionKey,
-          sessions: [
-            {
-              key: "agent:main:parent",
-              kind: "direct",
-              swarm: {
-                groups: [
-                  {
-                    groupId: "swarm:agent:main:parent:turn-42",
-                    createdAt: 1,
-                    children: [{ sessionKey: "agent:main:subagent:worker", status: "running" }],
-                    queued: 0,
-                    running: 1,
-                    done: 0,
-                    failed: 0,
-                  },
-                ],
-                otherActiveGroups: 0,
-              },
-            },
-            {
-              key: "agent:main:subagent:worker",
-              kind: "direct",
-              updatedAt: 1,
-              parentSessionKey,
-              swarmGroupId: "swarm:agent:main:parent:turn-42",
-              label: "Worker A",
-              status: "running",
-            },
-          ],
-        },
-      });
-
-      const widget = requireElement(container, "[data-test-id=chat-swarm]", "Swarm progress");
-      const shell = requireElement(container, ".agent-chat__composer-shell", "composer shell");
-      const scrollAnchor = widget.previousElementSibling;
-      expect(scrollAnchor?.classList.contains("chat-scroll-to-bottom-wrap")).toBe(true);
-      expect(scrollAnchor?.previousElementSibling?.classList.contains("chat-thread")).toBe(true);
-      expect(widget.parentElement).toBe(shell.parentElement);
-      expect(widget.compareDocumentPosition(shell)).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
-      expect(container.querySelector(".chat-swarm__task-name")?.textContent).toBe("Worker A");
-    },
-  );
-});
-
-describe("inline approval card", () => {
-  it("renders between the transcript and composer and enforces its grant projection", async () => {
-    const onApprovalDecision = vi.fn();
-    const inlineApproval = {
-      id: "approval-inline",
-      kind: "exec",
-      request: {
-        command: "rm -rf build",
-        agentId: "main",
-        sessionKey: "agent:main:current",
-        commandSpans: [{ startIndex: 0, endIndex: 5 }],
-      },
-      createdAtMs: 1,
-      expiresAtMs: 61_000,
-    } satisfies ExecApprovalRequest;
-
-    const container = renderChatView({
-      inlineApproval,
-      approvalCanGrant: false,
-      approvalErrors: new Map([["approval-inline", "Approval failed: gateway unavailable"]]),
-      onApprovalDecision,
-    });
-
-    const card = container.querySelector(".chat-inline-approval .exec-approval-card");
-    const inlineSurface = requireElement(container, ".chat-inline-approval", "inline approval");
-    const shell = requireElement(container, ".agent-chat__composer-shell", "composer shell");
-    expect(card?.getAttribute("data-approval-id")).toBe("approval-inline");
-    const scrollAnchor = inlineSurface.previousElementSibling;
-    expect(scrollAnchor?.classList.contains("chat-scroll-to-bottom-wrap")).toBe(true);
-    expect(scrollAnchor?.previousElementSibling?.classList.contains("chat-thread")).toBe(true);
-    expect(inlineSurface.parentElement).toBe(shell.parentElement);
-    expect(inlineSurface.compareDocumentPosition(shell)).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
-    const countdown = expectDefined(
-      container.querySelector<LitElement>(".exec-approval-countdown"),
-      "inline approval countdown",
-    );
-    const nowSpy = vi.spyOn(Date, "now").mockReturnValue(1_000);
-    document.body.append(container);
-    try {
-      await countdown.updateComplete;
-      expect(countdown.textContent?.trim()).toBe("expires in 01:00");
-    } finally {
-      container.remove();
-      nowSpy.mockRestore();
-    }
-    expect(container.querySelector(".exec-approval-command-span")?.textContent).toBe("rm -r");
-    expect(container.querySelector(".exec-approval-error")?.textContent).toBe(
-      "Approval failed: gateway unavailable",
-    );
-    expect(container.querySelector(".exec-approval-warning")?.textContent?.trim()).toBe(
-      "Review only. Sign in with approval access to record a decision.",
-    );
-    expect(
-      Array.from(
-        container.querySelectorAll<HTMLButtonElement>(".exec-approval-actions button"),
-      ).every((button) => button.disabled),
-    ).toBe(true);
-    container.querySelector<HTMLButtonElement>(".exec-approval-actions button")?.click();
-    expect(onApprovalDecision).not.toHaveBeenCalled();
-
-    const authorizedContainer = renderChatView({
-      inlineApproval,
-      approvalCanGrant: true,
-      onApprovalDecision,
-    });
-    authorizedContainer.querySelector<HTMLButtonElement>(".exec-approval-actions button")?.click();
-    expect(onApprovalDecision).toHaveBeenCalledWith("approval-inline", "allow-once");
-  });
-});
 
 describe("chat run error", () => {
   it.each(["run", "request"])(
@@ -1102,7 +977,7 @@ describe("chat run error", () => {
       source === "request",
     );
     expect(
-      alert.closest(source === "run" ? ".agent-chat__composer-overlay" : ".chat-topbar-notices"),
+      alert.closest(source === "run" ? ".agent-chat__composer-notices" : ".chat-topbar-notices"),
     ).not.toBeNull();
   });
 
@@ -1154,7 +1029,7 @@ describe("chat run error", () => {
         source === "request",
       );
       expect(
-        alert.closest(source === "run" ? ".agent-chat__composer-overlay" : ".chat-topbar-notices"),
+        alert.closest(source === "run" ? ".agent-chat__composer-notices" : ".chat-topbar-notices"),
       ).not.toBeNull();
       alert.querySelector<HTMLButtonElement>('[aria-label="Dismiss error"]')?.click();
       expect(onDismissError).toHaveBeenCalledTimes(source === "request" ? 1 : 0);
@@ -1189,7 +1064,7 @@ describe("chat run error", () => {
     });
     const alert = requireElement(container, ".chat-error", "startup error");
     expect(requireElement(alert, "pre", "startup diagnostic").textContent).toBe(
-      "The session was created, but runner startup failed:  Provisioning failed\n  Final diagnostic line  ",
+      "The session was created, but startup needs attention:  Provisioning failed\n  Final diagnostic line  ",
     );
     expect(alert.textContent).not.toContain("⚠");
     const details = requireElement(alert, "details", "startup disclosure");
@@ -1202,7 +1077,7 @@ describe("chat run error", () => {
     copy?.click();
     await waitForFast(() =>
       expect(writeText).toHaveBeenCalledWith(
-        "The session was created, but runner startup failed: ⚠️ Provisioning failed\n  Final diagnostic line  ",
+        "The session was created, but startup needs attention: ⚠️ Provisioning failed\n  Final diagnostic line  ",
       ),
     );
     expect(details.hasAttribute("open")).toBe(false);
@@ -1274,7 +1149,7 @@ describe("cloud workspace conflict notice", () => {
       ".chat-workspace-conflict-notice",
       "workspace conflict notice",
     );
-    expect(notice.closest(".agent-chat__composer-overlay")).not.toBeNull();
+    expect(notice.closest(".agent-chat__composer-notices")).not.toBeNull();
     expect(notice.textContent).toContain("9 cloud workspace conflicts");
     expect(notice.querySelectorAll(".chat-workspace-conflict-paths li")).toHaveLength(5);
     expect(notice.textContent).toContain("+4 more paths");
@@ -2355,145 +2230,6 @@ describe("chat transcript rendering", () => {
   });
 });
 
-describe("chat goal status", () => {
-  function goalSession(
-    goal: Partial<NonNullable<GatewaySessionRow["goal"]>> = {},
-  ): GatewaySessionRow {
-    return {
-      key: "main",
-      kind: "direct",
-      updatedAt: 2,
-      goal: {
-        schemaVersion: 1,
-        id: "goal-1",
-        objective: "Land the web goal UI",
-        status: "active",
-        createdAt: Date.now() - 15_000,
-        updatedAt: 2,
-        tokenStart: 100,
-        tokensUsed: 12_400,
-        tokenBudget: 50_000,
-        continuationTurns: 0,
-        ...goal,
-      },
-    };
-  }
-
-  it("renders the goal pill with status, objective, and elapsed time", () => {
-    const container = renderChatView({ selectedSession: goalSession() });
-
-    const goal = container.querySelector(".agent-chat__goal");
-    expect(goal?.querySelector(".agent-chat__goal-label")?.textContent).toBe("Pursuing goal");
-    expect(goal?.querySelector(".agent-chat__goal-objective")?.textContent).toBe(
-      "Land the web goal UI",
-    );
-    expect(goal?.querySelector(".agent-chat__goal-elapsed")?.textContent).toBe("15s");
-    expect(goal?.getAttribute("aria-label")).toBe("Pursuing goal (12k/50k): Land the web goal UI");
-    expect(goal?.closest(".agent-chat__goal-float")).not.toBeNull();
-    expect(goal?.closest(".agent-chat__composer-status-stack")).toBeNull();
-  });
-
-  it("dispatches typed goal actions from the pill controls", () => {
-    const onGoalAction = vi.fn();
-    const container = renderChatView({ selectedSession: goalSession(), onGoalAction });
-
-    container.querySelector<HTMLButtonElement>('button[aria-label="Pause goal"]')?.click();
-    container.querySelector<HTMLButtonElement>('button[aria-label="Clear goal"]')?.click();
-
-    expect(onGoalAction).toHaveBeenNthCalledWith(1, "goal-1", "pause");
-    expect(onGoalAction).toHaveBeenNthCalledWith(2, "goal-1", "clear");
-    expect(container.querySelector('button[aria-label="Resume goal"]')).toBeNull();
-  });
-
-  it("offers resume instead of pause for paused goals", () => {
-    const onGoalAction = vi.fn();
-    const container = renderChatView({
-      selectedSession: goalSession({ status: "paused", pausedAt: Date.now() }),
-      onGoalAction,
-    });
-
-    expect(container.querySelector('button[aria-label="Pause goal"]')).toBeNull();
-    container.querySelector<HTMLButtonElement>('button[aria-label="Resume goal"]')?.click();
-    expect(onGoalAction).toHaveBeenCalledWith("goal-1", "resume");
-  });
-
-  it("edits the plain objective and restores the conversation draft on cancellation", () => {
-    let draft = "Keep my conversation draft";
-    const container = document.createElement("div");
-    const onDraftChange = vi.fn((next: string) => {
-      draft = next;
-    });
-    const draw = () =>
-      renderChatInto(container, {
-        selectedSession: goalSession(),
-        draft,
-        getDraft: () => draft,
-        onGoalAction: vi.fn(),
-        onGoalSubmit: vi.fn(async () => true),
-        onDraftChange,
-        onRequestUpdate: draw,
-      });
-    draw();
-
-    container.querySelector<HTMLButtonElement>('button[aria-label="Edit goal"]')?.click();
-
-    expect(onDraftChange).toHaveBeenCalledWith("Land the web goal UI", undefined);
-    expect(container.querySelector(".agent-chat__goal-mode")?.textContent).toContain("Edit goal");
-    container.querySelector<HTMLButtonElement>('button[aria-label="Cancel goal entry"]')?.click();
-    expect(draft).toBe("Keep my conversation draft");
-    expect(container.querySelector(".agent-chat__goal-mode")).toBeNull();
-  });
-
-  it("expands goal details on demand", () => {
-    const props = createChatProps({
-      selectedSession: goalSession({ lastStatusNote: "Waiting for CI" }),
-      onGoalAction: vi.fn(),
-    });
-    const container = document.createElement("div");
-    render(renderChat(props), container);
-
-    expect(container.querySelector(".agent-chat__goal-detail")?.getAttribute("aria-hidden")).toBe(
-      "true",
-    );
-    const toggle = container.querySelector<HTMLButtonElement>(
-      'button[aria-label="Show goal details"]',
-    );
-    expect(toggle?.getAttribute("aria-expanded")).toBe("false");
-    toggle?.click();
-    render(renderChat(props), container);
-
-    const detail = container.querySelector(".agent-chat__goal-detail");
-    expect(detail?.getAttribute("aria-hidden")).toBe("false");
-    expect(detail?.querySelector(".agent-chat__goal-detail-objective")?.textContent).toBe(
-      "Land the web goal UI",
-    );
-    expect(detail?.querySelector(".agent-chat__goal-detail-note")?.textContent).toBe(
-      "Waiting for CI",
-    );
-    expect(
-      Array.from(detail?.querySelectorAll(".agent-chat__goal-detail-meta > span") ?? []).map(
-        (element) => element.textContent?.trim(),
-      ),
-    ).toEqual(["12k/50k", "·", "15s"]);
-    expect(
-      container
-        .querySelector('button[aria-label="Hide goal details"]')
-        ?.getAttribute("aria-expanded"),
-    ).toBe("true");
-  });
-
-  it("hides goal action buttons when the composer cannot send", () => {
-    const container = renderChatView({
-      selectedSession: goalSession(),
-      onGoalAction: vi.fn(),
-      connected: false,
-    });
-
-    expect(container.querySelector('button[aria-label="Pause goal"]')).toBeNull();
-    expect(container.querySelector('button[aria-label="Show goal details"]')).not.toBeNull();
-  });
-});
-
 describe("chat scroll-to-bottom affordance", () => {
   it("anchors immediately after the transcript and above every rendered footer surface", () => {
     const onScrollToBottom = vi.fn();
@@ -2520,7 +2256,7 @@ describe("chat scroll-to-bottom affordance", () => {
     const wrapper = button?.closest(".chat-scroll-to-bottom-wrap");
     expect(button?.getAttribute("aria-label")).toBe("Scroll to latest");
     expect(wrapper?.previousElementSibling?.classList.contains("chat-thread")).toBe(true);
-    expect(wrapper?.nextElementSibling?.classList.contains("chat-inline-approval")).toBe(true);
+    expect(wrapper?.nextElementSibling?.classList.contains("chat-footer")).toBe(true);
     for (const surface of container.querySelectorAll(
       ".chat-inline-approval, .chat-queue, .agent-chat__composer-shell",
     )) {
@@ -2547,9 +2283,12 @@ describe("chat scroll-to-bottom affordance", () => {
     const shell = requireElement(container, ".agent-chat__composer-shell", "composer shell");
     const queue = requireElement(container, ".chat-queue", "composer queue");
     const composer = requireElement(shell, ".agent-chat__input", "composer");
-    expect(wrapper.parentElement).toBe(shell.parentElement);
+    const footer = requireElement(container, ".chat-footer", "footer");
+    expect(wrapper.nextElementSibling).toBe(footer);
+    expect(shell.closest(".chat-footer")).toBe(footer);
     expect(wrapper.compareDocumentPosition(shell)).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
-    expect(queue.closest(".agent-chat__composer-shell")).toBe(shell);
+    expect(queue.closest(".chat-footer__context")).not.toBeNull();
+    expect(composer.closest(".chat-footer__context")).toBeNull();
     expect(queue.compareDocumentPosition(composer)).toBe(Node.DOCUMENT_POSITION_FOLLOWING);
   });
 
@@ -2791,7 +2530,7 @@ describe("per-pane chat presentation state", () => {
       renderChatInto(container, { onRequestUpdate });
       const composer = getComposerTextarea(container);
       const transientTarget = document.createElement("button");
-      const chat = container.querySelector<HTMLElement>(".card.chat");
+      const chat = container.querySelector<HTMLElement>(".chat");
       if (!chat) {
         throw new Error("expected chat section");
       }
@@ -3819,7 +3558,7 @@ describe("chat loading skeleton", () => {
     }
   });
 
-  it("floats interrupted chrome above the composer", () => {
+  it("keeps interrupted status with composer notices outside the transcript", () => {
     const nowSpy = vi.spyOn(Date, "now").mockReturnValue(1_000);
     try {
       const container = renderChatView({
@@ -3835,11 +3574,14 @@ describe("chat loading skeleton", () => {
         },
       });
 
-      expect(
-        container
-          .querySelector(".agent-chat__composer-run-status")
-          ?.closest(".agent-chat__composer-overlay"),
-      ).not.toBeNull();
+      const status = requireElement(
+        container,
+        ".agent-chat__composer-run-status",
+        "interrupted status",
+      );
+      expect(status.closest(".agent-chat__composer-notices")).not.toBeNull();
+      expect(status.closest(".chat-footer")).not.toBeNull();
+      expect(status.closest(".chat-thread")).toBeNull();
       expect(
         container.querySelector(".agent-chat__run-status-announcement")?.textContent?.trim(),
       ).toBe("Interrupted");
@@ -4598,20 +4340,56 @@ describe("chat slash menu accessibility", () => {
     expect(onSlashIntent).toHaveBeenCalledTimes(1);
   });
 
-  it.each(["keyboard", "pointer"])(
-    "collects a literal Goal objective after %s selection and retains a rejected draft",
+  it.each([
+    "keyboard",
+    "pointer",
+    "tab",
+    "start",
+    "set",
+    "create",
+    "send",
+    "dismissed-enter",
+    "argument-keyboard",
+    "argument-pointer",
+  ])(
+    "collects a literal Goal objective after %s entry and retains a rejected draft",
     async (selection) => {
       const onGoalSubmit = vi.fn(async () => false);
       const onSend = vi.fn();
-      const { container } = createReactiveDraftHarness({ onGoalSubmit, onSend });
+      const { container } = createReactiveDraftHarness({
+        onGoalSubmit,
+        onSend,
+        onSlashCommand: vi.fn(),
+      });
       inputDraftAtEnd(container, "/goal");
-      if (selection === "keyboard") {
-        keydownComposer(container, "Enter");
-      } else {
+      if (selection === "keyboard" || selection === "tab") {
+        keydownComposer(container, selection === "tab" ? "Tab" : "Enter");
+      } else if (selection === "pointer") {
         container.querySelector<HTMLElement>('.slash-menu-item[role="option"]')?.click();
+      } else if (selection === "send" || selection === "dismissed-enter") {
+        keydownComposer(container, "Escape");
+        if (selection === "send") {
+          container.querySelector<HTMLButtonElement>('button[aria-label="Send message"]')?.click();
+        } else {
+          keydownComposer(container, "Enter");
+        }
+      } else if (selection.startsWith("argument-")) {
+        inputDraftAtEnd(container, "/goal st");
+        keydownComposer(container, "ArrowDown");
+        if (selection === "argument-keyboard") {
+          keydownComposer(container, "Enter");
+        } else {
+          container.querySelector<HTMLElement>('.slash-menu-item[aria-selected="true"]')?.click();
+        }
+      } else {
+        inputDraftAtEnd(container, `/goal ${selection} `);
       }
       expect(container.querySelector(".agent-chat__goal-mode")).not.toBeNull();
       expect(container.querySelector(".slash-menu")).toBeNull();
+      expect(onGoalSubmit).not.toHaveBeenCalled();
+      expect(onSend).not.toHaveBeenCalled();
+      expect(getComposerTextarea(container).value).toBe("");
+      keydownComposer(container, "Enter");
       expect(onGoalSubmit).not.toHaveBeenCalled();
       expect(onSend).not.toHaveBeenCalled();
       const objective = "  /stop the flaky tests\nthen preserve   every space  ";
@@ -4634,18 +4412,43 @@ describe("chat slash menu accessibility", () => {
     },
   );
 
-  it("keeps Tab completion textual and preserves explicit goal command submission", () => {
-    const onGoalSubmit = vi.fn(async () => true);
-    const onSend = vi.fn();
-    const { container } = createReactiveDraftHarness({ onGoalSubmit, onSend });
-    inputDraftAtEnd(container, "/goal");
-    keydownComposer(container, "Tab");
-    expect(container.querySelector(".agent-chat__goal-mode")).toBeNull();
-    inputDraftAtEnd(container, "/goal start Fix the tests");
-    keydownComposer(container, "Enter");
-    expect(onSend).toHaveBeenCalledOnce();
-    expect(onGoalSubmit).not.toHaveBeenCalled();
+  it.each(["/goal start Fix the tests", "/goal status", "/goal pause waiting on CI"])(
+    "preserves explicit goal command submission: %s",
+    (command) => {
+      const onGoalSubmit = vi.fn(async () => true);
+      const onSend = vi.fn();
+      const { container } = createReactiveDraftHarness({ onGoalSubmit, onSend });
+      inputDraftAtEnd(container, command);
+      expect(container.querySelector(".agent-chat__goal-mode")).toBeNull();
+      keydownComposer(container, "Escape");
+      keydownComposer(container, "Enter");
+      expect(onSend).toHaveBeenCalledOnce();
+      expect(onGoalSubmit).not.toHaveBeenCalled();
+    },
+  );
+
+  it("does not consume a creation-action prefix while an objective is still being typed", () => {
+    const { container } = createReactiveDraftHarness({ onGoalSubmit: vi.fn(async () => true) });
+    for (const draft of ["/goal start", "/goal starting", "/goal starting the rollout"]) {
+      inputDraftAtEnd(container, draft);
+      expect(container.querySelector(".agent-chat__goal-mode")).toBeNull();
+      expect(getComposerTextarea(container).value).toBe(draft);
+    }
   });
+
+  it.each(["/goal start ", "Discuss /goal start "])(
+    "preserves %s when it is not a supported standalone Goal entry",
+    (draft) => {
+      const onSend = vi.fn();
+      const { container } = createReactiveDraftHarness({
+        onSend,
+        ...(draft.startsWith("Discuss") ? { onGoalSubmit: vi.fn(async () => true) } : {}),
+      });
+      inputDraftAtEnd(container, draft);
+      expect(container.querySelector(".agent-chat__goal-mode")).toBeNull();
+      expect(getComposerTextarea(container).value).toBe(draft);
+    },
+  );
 
   it("keeps a new session draft intact when an earlier Goal edit finishes", async () => {
     const pending = createDeferred<boolean>();
@@ -5672,18 +5475,6 @@ describe("chat slash menu accessibility", () => {
     expect(onSend).not.toHaveBeenCalled();
   });
 
-  it("commits local draft input on blur", () => {
-    const onDraftChange = vi.fn();
-    const container = renderChatView({ onDraftChange });
-
-    inputDraft(container, "persist before leaving composer");
-    container
-      .querySelector<HTMLTextAreaElement>("textarea")!
-      .dispatchEvent(new FocusEvent("blur", { bubbles: false }));
-
-    expect(onDraftChange).toHaveBeenCalledWith("persist before leaving composer", undefined);
-  });
-
   it("commits plain draft input while a send is active", () => {
     const onDraftChange = vi.fn();
     const container = renderChatView({ onDraftChange, sending: true });
@@ -6066,187 +5857,11 @@ describe("chat slash menu accessibility", () => {
 });
 
 describe("chat attachment picker", () => {
-  function renderAttachmentHarness(
-    getAttachments: () => ChatAttachment[],
-    onAttachmentsChange: (attachments: ChatAttachment[]) => void,
-  ) {
-    return renderChatView({
-      attachments: getAttachments(),
-      getAttachments,
-      onAttachmentsChange,
-    });
-  }
-
-  function selectFile(input: HTMLInputElement, file: File) {
-    Object.defineProperty(input, "files", { configurable: true, value: [file] });
-    input.dispatchEvent(new Event("change", { bubbles: true }));
-  }
-
-  function getAttachmentMenuOption(container: Element, label: string) {
-    return Array.from(
-      container.querySelectorAll<HTMLButtonElement>(".agent-chat__attach-menu-option"),
-    ).find((button) => button.textContent?.trim() === label);
-  }
-
-  function requireAttachmentInput(container: Element, selector: string, label: string) {
-    return requireElement(container, selector, label) as HTMLInputElement;
-  }
-
-  function selectAttachmentMenuOption(button: HTMLButtonElement | undefined) {
-    button
-      ?.closest("wa-dropdown")
-      ?.dispatchEvent(new CustomEvent("wa-select", { detail: { item: button }, bubbles: true }));
-  }
-
-  it.each(["clipboard", "file picker", "drop"] as const)(
-    "waits for an in-flight %s attachment before accepting an immediate send",
-    async (entry) => {
-      const readers: FileReader[] = [];
-      vi.spyOn(FileReader.prototype, "readAsDataURL").mockImplementation(
-        function (this: FileReader) {
-          readers.push(this);
-        },
-      );
-      const container = document.createElement("div");
-      const file = new File(["attachment proof"], "proof.png", { type: "image/png" });
-      const draft = "Send the attachment with this message";
-      let attachments: ChatAttachment[] = [];
-      const onSend = vi.fn(() => {
-        expect(attachments.map((attachment) => attachment.fileName)).toEqual(["proof.png"]);
-      });
-      const redraw = () => {
-        const readSignal = reads.readSignal;
-        render(
-          renderChat(
-            createChatProps({
-              attachments,
-              draft,
-              getAttachments: () => attachments,
-              getDraft: () => draft,
-              getPendingAttachmentReads: () => reads.pendingReads,
-              onAttachmentsChange: (next) => {
-                attachments = next;
-              },
-              onPendingReadsChange: (delta) => reads.updatePending(readSignal, delta),
-              onSend,
-              pendingAttachmentReads: reads.pendingReads,
-              readSignal,
-            }),
-          ),
-          container,
-        );
-      };
-      const reads = new ChatAttachmentReadLifecycle(redraw);
-      redraw();
-
-      if (entry === "clipboard") {
-        const paste = new Event("paste", { bubbles: true, cancelable: true });
-        Object.defineProperty(paste, "clipboardData", {
-          value: {
-            items: [{ type: file.type, getAsFile: () => file }],
-            getData: () => "",
-          },
-        });
-        getComposerTextarea(container).dispatchEvent(paste);
-      } else if (entry === "file picker") {
-        const input = requireAttachmentInput(
-          container,
-          ".agent-chat__file-input",
-          "attachment file input",
-        );
-        selectFile(input, file);
-      } else {
-        const drop = new Event("drop", { bubbles: true, cancelable: true });
-        Object.defineProperty(drop, "dataTransfer", {
-          value: { files: [file], types: ["Files"] },
-        });
-        requireElement(container, "section.card.chat", "chat drop target").dispatchEvent(drop);
-      }
-
-      expect(readers).toHaveLength(1);
-      expect(reads.pendingReads).toBe(1);
-      const status = container.querySelector(".chat-attachments-status");
-      expect(status?.textContent).toContain("Preparing attachments");
-      expect(status?.getAttribute("role")).toBe("status");
-      expect(status?.classList.contains("sr-only")).toBe(false);
-      expect(getComposerTextarea(container).disabled).toBe(false);
-      const send = requireElement(
-        container,
-        'button[aria-label="Send message"]',
-        "send button",
-      ) as HTMLButtonElement;
-      expect(send.disabled).toBe(true);
-      expect(send.getAttribute("aria-busy")).toBe("true");
-      expect(send.closest("openclaw-tooltip")?.content).toBe("Preparing attachments…");
-      getComposerTextarea(container).dispatchEvent(
-        new KeyboardEvent("keydown", { bubbles: true, cancelable: true, key: "Enter" }),
-      );
-      expect(onSend).not.toHaveBeenCalled();
-
-      const reader = expectDefined(readers[0], "deferred attachment reader");
-      Object.defineProperty(reader, "result", {
-        configurable: true,
-        value: `data:image/png;base64,${btoa("attachment proof")}`,
-      });
-      reader.dispatchEvent(new ProgressEvent("load"));
-
-      await waitForFast(() => {
-        expect(reads.pendingReads).toBe(0);
-        expect(attachments.map((attachment) => attachment.fileName)).toEqual(["proof.png"]);
-      });
-      const readySend = requireElement(
-        container,
-        'button[aria-label="Send message"]',
-        "ready send button",
-      ) as HTMLButtonElement;
-      expect(readySend.disabled).toBe(false);
-      expect(readySend.getAttribute("aria-busy")).toBe("false");
-      expect(container.querySelector(".chat-attachments-status")?.textContent?.trim()).toBe("");
-      readySend.click();
-      expect(onSend).toHaveBeenCalledOnce();
-    },
-  );
-
-  it("does not attach an aborted file read to a newly selected session", async () => {
-    const readers: FileReader[] = [];
-    vi.spyOn(FileReader.prototype, "readAsDataURL").mockImplementation(function (this: FileReader) {
-      readers.push(this);
-    });
-    const reads = new ChatAttachmentReadLifecycle(() => undefined);
-    const oldSignal = reads.readSignal;
-    const onAttachmentsChange = vi.fn();
-    const file = new File(["private session A"], "private.png", { type: "image/png" });
-    const container = renderChatView({
-      getPendingAttachmentReads: () => reads.pendingReads,
-      onAttachmentsChange,
-      onPendingReadsChange: (delta) => reads.updatePending(oldSignal, delta),
-      pendingAttachmentReads: reads.pendingReads,
-      readSignal: oldSignal,
-      sessionKey: "agent:main:session-a",
-    });
-    const drop = new Event("drop", { bubbles: true, cancelable: true });
-    Object.defineProperty(drop, "dataTransfer", {
-      value: { files: [file], types: ["Files"] },
-    });
-    requireElement(container, "section.card.chat", "session A drop target").dispatchEvent(drop);
-
-    expect(readers).toHaveLength(1);
-    expect(reads.pendingReads).toBe(1);
-    reads.abortReads();
-    await Promise.resolve();
-    await Promise.resolve();
-
-    expect(oldSignal.aborted).toBe(true);
-    expect(reads.pendingReads).toBe(0);
-    expect(reads.readSignal).not.toBe(oldSignal);
-    expect(onAttachmentsChange).not.toHaveBeenCalled();
-  });
-
   it("highlights only the chat pane receiving a file drag", () => {
     const first = renderChatView();
     const second = renderChatView();
-    const firstChat = requireElement(first, "section.card.chat", "first chat drop target");
-    const secondChat = requireElement(second, "section.card.chat", "second chat drop target");
+    const firstChat = requireElement(first, "section.chat", "first chat drop target");
+    const secondChat = requireElement(second, "section.chat", "second chat drop target");
 
     secondChat.dispatchEvent(createDragEvent("dragenter"));
 
@@ -6260,7 +5875,7 @@ describe("chat attachment picker", () => {
 
   it("keeps the file drop overlay stable across nested drag targets", () => {
     const container = renderChatView();
-    const chat = requireElement(container, "section.card.chat", "chat drop target");
+    const chat = requireElement(container, "section.chat", "chat drop target");
 
     chat.dispatchEvent(createDragEvent("dragenter"));
     chat.dispatchEvent(createDragEvent("dragenter"));
@@ -6276,7 +5891,7 @@ describe("chat attachment picker", () => {
 
   it("cancels non-file drops outside the composer textarea but keeps them native inside it", () => {
     const container = renderChatView();
-    const chat = requireElement(container, "section.card.chat", "chat drop target");
+    const chat = requireElement(container, "section.chat", "chat drop target");
     const textarea = getComposerTextarea(container);
 
     const outsideDrop = createDragEvent("drop", ["text/uri-list"]);
@@ -6391,7 +6006,7 @@ describe("chat attachment picker", () => {
     });
     const container = renderAttachmentHarness(() => attachments, onAttachmentsChange);
     const textarea = getComposerTextarea(container);
-    const chat = requireElement(container, "section.card.chat", "chat drop target");
+    const chat = requireElement(container, "section.chat", "chat drop target");
     const pastedText = `large paste ${"x".repeat(1100)}`;
     const droppedFile = new File(["%PDF-1.4\n"], "brief.pdf", { type: "application/pdf" });
     const dropEvent = new Event("drop", { bubbles: true, cancelable: true });
@@ -6439,6 +6054,7 @@ describe("chat attachment picker", () => {
         id: "ordinary-text-file",
         fileName: "pasted-text-1.txt",
         mimeType: "text/plain",
+        origin: "file",
         sizeBytes: 4,
       },
       dataUrl: `data:text/plain;base64,${btoa("file")}`,
@@ -6468,28 +6084,7 @@ describe("chat attachment picker", () => {
     );
   });
 
-  it("shows a cached short preview for pasted text", () => {
-    let attachments: ChatAttachment[] = [];
-    let container = renderAttachmentHarness(
-      () => attachments,
-      (next) => {
-        attachments = next;
-      },
-    );
-    const textarea = getComposerTextarea(container);
-    const text = `First words from a long pasted note ${"x".repeat(1100)}`;
-    textarea.dispatchEvent(createPasteEvent(text));
-    container = renderChatView({ attachments });
-
-    expect(container.querySelector(".chat-attachment-file__name")?.textContent).toContain(
-      "First words from a l...",
-    );
-    expect(container.querySelector(".chat-attachment-text-action")?.textContent?.trim()).toBe(
-      "Show in text field",
-    );
-  });
-
-  it("preserves pasted-text presentation and restore behavior across handoff", () => {
+  it("preserves pasted-text presentation and restore behavior across handoff", async () => {
     let attachments: ChatAttachment[] = [];
     const producer = renderAttachmentHarness(
       () => attachments,
@@ -6522,7 +6117,9 @@ describe("chat attachment picker", () => {
 
     const onAttachmentsChange = vi.fn();
     const onDraftChange = vi.fn();
+    const sidebar = createAttachmentSidebarHarness();
     const remounted = renderChatView({
+      onOpenSidebar: sidebar.open,
       attachments,
       getAttachments: () => attachments,
       draft: "intro",
@@ -6530,36 +6127,27 @@ describe("chat attachment picker", () => {
       onAttachmentsChange,
       onDraftChange,
     });
-    expect(remounted.querySelector(".chat-attachment-file__name")?.textContent).toContain(
-      "First words from a r...",
-    );
+    document.body.append(remounted);
+    await waitForFast(() => {
+      expect(remounted.querySelector(".chat-selection-annotations__chip")?.textContent).toContain(
+        "First words from a remounted p…",
+      );
+    });
+    expect(attachments[0]?.origin).toBe("paste");
     requireElement(
       remounted,
-      '[aria-label="Show in text field"]',
+      ".chat-selection-annotations__chip",
+      "pasted text chip",
+    ).dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    requireElement(
+      sidebar.container,
+      ".chat-attachment-text-action",
       "show pasted text button",
     ).dispatchEvent(new MouseEvent("click", { bubbles: true }));
 
     expect(onAttachmentsChange).toHaveBeenCalledWith([]);
     expect(onDraftChange).toHaveBeenCalledWith(`intro\n\n${pastedText}`);
     expect(getChatAttachmentDataUrl(original)).toBeNull();
-  });
-
-  it("keeps large paste previews UTF-16 well-formed at the display boundary", () => {
-    let attachments: ChatAttachment[] = [];
-    let container = renderAttachmentHarness(
-      () => attachments,
-      (next) => {
-        attachments = next;
-      },
-    );
-    const textarea = getComposerTextarea(container);
-    const text = `${"a".repeat(19)}🦞${"x".repeat(1100)}`;
-    textarea.dispatchEvent(createPasteEvent(text));
-    container = renderChatView({ attachments });
-
-    expect(container.querySelector(".chat-attachment-file__name")?.textContent).toBe(
-      `${"a".repeat(19)}...`,
-    );
   });
 
   it("keeps normal short plain-text paste in the textarea", () => {
@@ -6588,8 +6176,10 @@ describe("chat attachment picker", () => {
     );
     const onDraftChange = vi.fn();
     const onShowAttachmentsChange = vi.fn();
+    const sidebar = createAttachmentSidebarHarness();
     const preview = expectDefined(
       renderChatView({
+        onOpenSidebar: sidebar.open,
         attachments: [attachment],
         draft: "intro",
         getDraft: () => "intro",
@@ -6598,9 +6188,16 @@ describe("chat attachment picker", () => {
       }),
       'renderChatView({ attachments: [attachment], draft: "intro", getDraft:... test invariant',
     );
+    document.body.append(preview);
+    await waitForFast(() => {
+      expect(preview.querySelector(".chat-selection-annotations__chip")).not.toBeNull();
+    });
+    requireElement(preview, ".chat-selection-annotations__chip", "pasted text chip").dispatchEvent(
+      new MouseEvent("click", { bubbles: true }),
+    );
     const showInTextFieldButton = requireElement(
-      preview,
-      '[aria-label="Show in text field"]',
+      sidebar.container,
+      ".chat-attachment-text-action",
       "show pasted text in text field button",
     ) as HTMLButtonElement;
 
@@ -7907,21 +7504,6 @@ describe("chat model controls", () => {
     },
   );
 
-  it("applies a model selection immediately", () => {
-    const { state } = createOpenAiHeaderState();
-    const onModelSelect = vi.fn(async () => true);
-    const container = renderModelControls(state, { onModelSelect });
-    const modelOption = Array.from(
-      container.querySelectorAll<HTMLButtonElement>(
-        '[data-chat-model-option]:not([data-chat-model-default="true"])',
-      ),
-    ).find((button) => button.getAttribute("aria-selected") === "false");
-    expect(modelOption).toBeInstanceOf(HTMLButtonElement);
-    modelOption?.click();
-
-    expect(onModelSelect).toHaveBeenCalledWith(modelOption?.dataset.chatModelOption, "main", null);
-  });
-
   it.each([
     ["session", "Selecting a model changes only this session."],
     ["agent", "Selecting a model updates this agent's default."],
@@ -7955,7 +7537,7 @@ describe("chat model controls", () => {
       expect(onModelSelect).toHaveBeenCalledWith(
         modelOption?.dataset.chatModelOption,
         "main",
-        null,
+        undefined,
       );
     },
   );
@@ -8146,7 +7728,11 @@ describe("chat model controls", () => {
     getThinkingSlider(container)?.dispatchEvent(new Event("change", { bubbles: true }));
 
     expect(onFastModeSelect).not.toHaveBeenCalled();
-    expect(onModelSelect).toHaveBeenCalledWith(modelOption?.dataset.chatModelOption, "main", null);
+    expect(onModelSelect).toHaveBeenCalledWith(
+      modelOption?.dataset.chatModelOption,
+      "main",
+      undefined,
+    );
     expect(onThinkingSelect).not.toHaveBeenCalled();
   });
 
@@ -8618,7 +8204,7 @@ describe("chat model controls", () => {
       expect(search?.getAttribute("aria-activedescendant")).toBe(highlighted?.id);
 
       search!.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
-      expect(onModelSelect).toHaveBeenCalledWith("anthropic/claude-sonnet-4-6", "main", null);
+      expect(onModelSelect).toHaveBeenCalledWith("anthropic/claude-sonnet-4-6", "main", undefined);
       expect(details?.open).toBe(false);
 
       onModelSelect.mockClear();
@@ -8627,7 +8213,7 @@ describe("chat model controls", () => {
       expect(onModelSelect).toHaveBeenCalledExactlyOnceWith(
         "anthropic/claude-sonnet-4-6",
         "main",
-        null,
+        undefined,
       );
       expect(details?.open).toBe(false);
       container.remove();
@@ -8695,7 +8281,7 @@ describe("chat model controls", () => {
     expect(onModelSelect).not.toHaveBeenCalled();
 
     details!.dispatchEvent(new KeyboardEvent("keydown", { key: "1", bubbles: true }));
-    expect(onModelSelect).toHaveBeenCalledWith("anthropic/claude-sonnet-4-6", "main", null);
+    expect(onModelSelect).toHaveBeenCalledWith("anthropic/claude-sonnet-4-6", "main", undefined);
     container.remove();
   });
 
@@ -9426,7 +9012,11 @@ describe("chat model controls", () => {
     );
     expect(modelOption).toBeInstanceOf(HTMLButtonElement);
     modelOption?.click();
-    expect(onModelSelect).toHaveBeenCalledWith(modelOption?.dataset.chatModelOption, "main", null);
+    expect(onModelSelect).toHaveBeenCalledWith(
+      modelOption?.dataset.chatModelOption,
+      "main",
+      undefined,
+    );
 
     const slider = getThinkingSlider(container);
     expect(slider).toBeInstanceOf(HTMLInputElement);
@@ -9776,7 +9366,7 @@ describe("chat model controls", () => {
       ?.click();
 
     await waitForFast(() => {
-      expect(onModelSelect).toHaveBeenCalledWith("openai/gpt-5.4", "main", null);
+      expect(onModelSelect).toHaveBeenCalledWith("openai/gpt-5.4", "main", undefined);
     });
     render(renderChatModelControls(props), container);
     expect(
@@ -10204,7 +9794,7 @@ describe("right-click Reply", () => {
   it("dismisses an inline confirmation before opening the reply context menu", () => {
     const container = renderChatView({ onSetReply: vi.fn() });
     document.body.appendChild(container);
-    const section = container.querySelector<HTMLElement>(".card.chat")!;
+    const section = container.querySelector<HTMLElement>(".chat")!;
     const confirmationOwner = document.createElement("span");
     confirmationOwner.className = "chat-confirm-wrap";
     const confirmationTrigger = document.createElement("button");
@@ -10467,7 +10057,7 @@ describe("right-click Reply", () => {
     const onClearReply = vi.fn();
     const container = renderReply({ onClearReply });
 
-    const section = container.querySelector<HTMLElement>(".card.chat");
+    const section = container.querySelector<HTMLElement>(".chat");
     const evt = new KeyboardEvent("keydown", {
       key: "Escape",
       shiftKey,
@@ -10631,22 +10221,6 @@ describe("right-click Reply", () => {
     }
   });
 
-  it("does not clear reply target when Escape is already defaultPrevented", () => {
-    const onClearReply = vi.fn();
-    const container = renderReply({ onClearReply });
-
-    const section = container.querySelector<HTMLElement>(".card.chat");
-    const evt = new KeyboardEvent("keydown", {
-      key: "Escape",
-      bubbles: true,
-      cancelable: true,
-    });
-    Object.defineProperty(evt, "defaultPrevented", { value: true });
-    section!.dispatchEvent(evt);
-
-    expect(onClearReply).not.toHaveBeenCalled();
-  });
-
   it("does not open Reply menu when onSetReply is absent", () => {
     const { bubble } = renderChatBubble({
       messages: [{ role: "user", content: "hello", timestamp: 1 }],
@@ -10661,7 +10235,7 @@ describe("right-click Reply", () => {
     const writeText = vi.fn().mockResolvedValue(undefined);
     vi.stubGlobal("navigator", { clipboard: { writeText } });
     const container = renderChatView({ onSetReply: vi.fn() });
-    const section = container.querySelector<HTMLElement>(".card.chat");
+    const section = container.querySelector<HTMLElement>(".chat");
     expect(section).not.toBeNull();
 
     const { bubble, group } = appendChatBubble(container, {

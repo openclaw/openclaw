@@ -6,16 +6,14 @@ import {
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
 import { normalizeSqliteNumber } from "../infra/sqlite-number.js";
-import { withExistingOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-readonly.js";
 import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
-import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
 import { AUDIT_EVENT_RETENTION_MS, rowToAuditEvent } from "./audit-event-store.js";
 import type { OutboundMessageAuditEventRecord } from "./audit-event-types.js";
 import {
-  countOutboundMessageProgressForRun,
-  hasOutboundMessageProgressCursor,
-  readOutboundMessageProgressForRun,
+  countOutboundMessageProgressForRunInDatabase,
+  hasOutboundMessageProgressCursorInDatabase,
+  readOutboundMessageProgressForRunInDatabase,
 } from "./message-delivery-progress-store.js";
 import { selectMessageExecutionBinding } from "./message-execution-binding.js";
 
@@ -83,52 +81,50 @@ function compositeMessageRowId(event: OutboundMessageAuditEventRecord): number {
   return rowId;
 }
 
-function readTerminalEventsForRun(params: {
-  runId: string;
-  contextId?: string;
-  executionId?: string;
-  after?: { occurredAt: number; sequence: number };
-  limit: number;
-  now?: number;
-  database?: OpenClawStateDatabaseOptions;
-}): OutboundMessageAuditEventRecord[] {
-  return (
-    withExistingOpenClawStateDatabaseReadOnly(({ db }) => {
-      const exact = selectMessageExecutionBinding(params);
-      if (exact && !tableExists(db, "outbound_message_execution_bindings")) {
-        return [];
-      }
-      let query = deliveryAuditDb(db)
-        .selectFrom("audit_events")
-        .selectAll()
-        .where("kind", "=", "message")
-        .where("direction", "=", "outbound")
-        .where("action", "=", "message.outbound.finished")
-        .where("run_id", "=", params.runId)
-        .where("occurred_at", ">=", (params.now ?? Date.now()) - AUDIT_EVENT_RETENTION_MS);
-      if (exact) {
-        query = query.where("event_id", "in", terminalBindingEventIds(db, params.runId, exact));
-      }
-      const after = params.after;
-      if (after) {
-        query = query.where((expression) =>
-          expression.or([
-            expression("occurred_at", ">", after.occurredAt),
-            expression.and([
-              expression("occurred_at", "=", after.occurredAt),
-              expression("sequence", ">", after.sequence),
-            ]),
-          ]),
-        );
-      }
-      return executeSqliteQuerySync(
-        db,
-        query.orderBy("occurred_at", "asc").orderBy("sequence", "asc").limit(params.limit),
-      ).rows.map(
-        // SAFETY: the query fixes the row to the validated outbound terminal-message variant.
-        (row) => rowToAuditEvent(row) as OutboundMessageAuditEventRecord,
-      );
-    }, params.database) ?? []
+function readTerminalEventsForRun(
+  db: DatabaseSync,
+  params: {
+    runId: string;
+    contextId?: string;
+    executionId?: string;
+    after?: { occurredAt: number; sequence: number };
+    limit: number;
+    now?: number;
+  },
+): OutboundMessageAuditEventRecord[] {
+  const exact = selectMessageExecutionBinding(params);
+  if (exact && !tableExists(db, "outbound_message_execution_bindings")) {
+    return [];
+  }
+  let query = deliveryAuditDb(db)
+    .selectFrom("audit_events")
+    .selectAll()
+    .where("kind", "=", "message")
+    .where("direction", "=", "outbound")
+    .where("action", "=", "message.outbound.finished")
+    .where("run_id", "=", params.runId)
+    .where("occurred_at", ">=", (params.now ?? Date.now()) - AUDIT_EVENT_RETENTION_MS);
+  if (exact) {
+    query = query.where("event_id", "in", terminalBindingEventIds(db, params.runId, exact));
+  }
+  const after = params.after;
+  if (after) {
+    query = query.where((expression) =>
+      expression.or([
+        expression("occurred_at", ">", after.occurredAt),
+        expression.and([
+          expression("occurred_at", "=", after.occurredAt),
+          expression("sequence", ">", after.sequence),
+        ]),
+      ]),
+    );
+  }
+  return executeSqliteQuerySync(
+    db,
+    query.orderBy("occurred_at", "asc").orderBy("sequence", "asc").limit(params.limit),
+  ).rows.map(
+    // SAFETY: the query fixes the row to the validated outbound terminal-message variant.
+    (row) => rowToAuditEvent(row) as OutboundMessageAuditEventRecord,
   );
 }
 
@@ -156,9 +152,9 @@ function streamAfterCursor(
 
 function fillMessageStream(
   stream: MessageStream,
+  db: DatabaseSync,
   params: MessageExecutionSelector & {
     now: number;
-    database?: OpenClawStateDatabaseOptions;
   },
 ): void {
   if (stream.buffered.length > 0 || stream.exhausted) {
@@ -169,14 +165,13 @@ function fillMessageStream(
     ...(params.contextId ? { contextId: params.contextId } : {}),
     ...(params.executionId ? { executionId: params.executionId } : {}),
     now: params.now,
-    database: params.database,
     after: stream.after,
     limit: MESSAGE_STREAM_CHUNK_SIZE,
   };
   const events =
     stream.stage === 2
-      ? readTerminalEventsForRun(query)
-      : readOutboundMessageProgressForRun({
+      ? readTerminalEventsForRun(db, query)
+      : readOutboundMessageProgressForRunInDatabase(db, {
           ...query,
           action:
             stream.stage === 0 ? "message.outbound.queued" : "message.outbound.platform-started",
@@ -191,13 +186,13 @@ function fillMessageStream(
 
 function takeNextMessageEvent(
   streams: MessageStream[],
+  db: DatabaseSync,
   params: MessageExecutionSelector & {
     now: number;
-    database?: OpenClawStateDatabaseOptions;
   },
 ): OwnedMessageEvent | undefined {
   for (const stream of streams) {
-    fillMessageStream(stream, params);
+    fillMessageStream(stream, db, params);
   }
   let selected: MessageStream | undefined;
   for (const stream of streams) {
@@ -210,101 +205,100 @@ function takeNextMessageEvent(
   return selected?.buffered.shift();
 }
 
-function hasTerminalCursor(params: {
-  runId: string;
-  contextId?: string;
-  executionId?: string;
-  occurredAt: number;
-  sequence: number;
-  database?: OpenClawStateDatabaseOptions;
-}): boolean {
-  return (
-    withExistingOpenClawStateDatabaseReadOnly(({ db }) => {
-      const exact = selectMessageExecutionBinding(params);
-      if (exact && !tableExists(db, "outbound_message_execution_bindings")) {
-        return false;
-      }
-      let query = deliveryAuditDb(db)
-        .selectFrom("audit_events")
-        .select("sequence")
-        .where("sequence", "=", params.sequence)
-        .where("run_id", "=", params.runId)
-        .where("occurred_at", "=", params.occurredAt)
-        .where("kind", "=", "message")
-        .where("direction", "=", "outbound")
-        .where("action", "=", "message.outbound.finished");
-      if (exact) {
-        query = query.where("event_id", "in", terminalBindingEventIds(db, params.runId, exact));
-      }
-      return Boolean(executeSqliteQueryTakeFirstSync(db, query));
-    }, params.database) ?? false
-  );
+function hasTerminalCursor(
+  db: DatabaseSync,
+  params: {
+    runId: string;
+    contextId?: string;
+    executionId?: string;
+    occurredAt: number;
+    sequence: number;
+  },
+): boolean {
+  const exact = selectMessageExecutionBinding(params);
+  if (exact && !tableExists(db, "outbound_message_execution_bindings")) {
+    return false;
+  }
+  let query = deliveryAuditDb(db)
+    .selectFrom("audit_events")
+    .select("sequence")
+    .where("sequence", "=", params.sequence)
+    .where("run_id", "=", params.runId)
+    .where("occurred_at", "=", params.occurredAt)
+    .where("kind", "=", "message")
+    .where("direction", "=", "outbound")
+    .where("action", "=", "message.outbound.finished");
+  if (exact) {
+    query = query.where("event_id", "in", terminalBindingEventIds(db, params.runId, exact));
+  }
+  return Boolean(executeSqliteQueryTakeFirstSync(db, query));
 }
 
 /** Count retained owner-native outbound lifecycle records for one run. */
-export function countOutboundMessageAuditEventsForRun(params: {
-  runId: string;
-  contextId?: string;
-  executionId?: string;
-  now?: number;
-  database?: OpenClawStateDatabaseOptions;
-}): number {
-  return (
-    (withExistingOpenClawStateDatabaseReadOnly(({ db }) => {
-      const exact = selectMessageExecutionBinding(params);
-      if (exact && !tableExists(db, "outbound_message_execution_bindings")) {
-        return 0;
-      }
-      let query = deliveryAuditDb(db)
-        .selectFrom("audit_events")
-        .select((expression) => expression.fn.countAll<number>().as("count"))
-        .where("kind", "=", "message")
-        .where("direction", "=", "outbound")
-        .where("action", "=", "message.outbound.finished")
-        .where("run_id", "=", params.runId)
-        .where("occurred_at", ">=", (params.now ?? Date.now()) - AUDIT_EVENT_RETENTION_MS);
-      if (exact) {
-        query = query.where("event_id", "in", terminalBindingEventIds(db, params.runId, exact));
-      }
-      const row = executeSqliteQueryTakeFirstSync(db, query);
-      return normalizeSqliteNumber(row?.count ?? null) ?? 0;
-    }, params.database) ?? 0) + countOutboundMessageProgressForRun(params)
-  );
+export function countOutboundMessageAuditEventsForRunInDatabase(
+  db: DatabaseSync,
+  params: {
+    runId: string;
+    contextId?: string;
+    executionId?: string;
+    now?: number;
+  },
+): number {
+  const terminalCount = (() => {
+    const exact = selectMessageExecutionBinding(params);
+    if (exact && !tableExists(db, "outbound_message_execution_bindings")) {
+      return 0;
+    }
+    let query = deliveryAuditDb(db)
+      .selectFrom("audit_events")
+      .select((expression) => expression.fn.countAll<number>().as("count"))
+      .where("kind", "=", "message")
+      .where("direction", "=", "outbound")
+      .where("action", "=", "message.outbound.finished")
+      .where("run_id", "=", params.runId)
+      .where("occurred_at", ">=", (params.now ?? Date.now()) - AUDIT_EVENT_RETENTION_MS);
+    if (exact) {
+      query = query.where("event_id", "in", terminalBindingEventIds(db, params.runId, exact));
+    }
+    const row = executeSqliteQueryTakeFirstSync(db, query);
+    return normalizeSqliteNumber(row?.count ?? null) ?? 0;
+  })();
+  return terminalCount + countOutboundMessageProgressForRunInDatabase(db, params);
 }
 
 /** Page retained owner-native outbound lifecycle records in decision order. */
-export function pageOutboundMessageAuditEventsForRun(params: {
-  runId: string;
-  contextId?: string;
-  executionId?: string;
-  after?: OutboundMessageAuditEventCursor;
-  offset?: number;
-  limit: number;
-  now?: number;
-  database?: OpenClawStateDatabaseOptions;
-}): { entries: OwnedMessageEvent[]; nextCursor?: OutboundMessageAuditEventCursor } {
+export function pageOutboundMessageAuditEventsForRunInDatabase(
+  db: DatabaseSync,
+  params: {
+    runId: string;
+    contextId?: string;
+    executionId?: string;
+    after?: OutboundMessageAuditEventCursor;
+    offset?: number;
+    limit: number;
+    now?: number;
+  },
+): { entries: OwnedMessageEvent[]; nextCursor?: OutboundMessageAuditEventCursor } {
   if (params.after) {
     const stage = Math.floor(params.after.rowId / MESSAGE_CURSOR_STAGE_SPAN);
     const sequence = params.after.rowId % MESSAGE_CURSOR_STAGE_SPAN;
     const retained =
       Number.isSafeInteger(sequence) && sequence >= 1 && stage >= 0 && stage <= 2
         ? stage === 2
-          ? hasTerminalCursor({
+          ? hasTerminalCursor(db, {
               runId: params.runId,
               ...(params.contextId ? { contextId: params.contextId } : {}),
               ...(params.executionId ? { executionId: params.executionId } : {}),
               occurredAt: params.after.occurredAt,
               sequence,
-              database: params.database,
             })
-          : hasOutboundMessageProgressCursor({
+          : hasOutboundMessageProgressCursorInDatabase(db, {
               runId: params.runId,
               ...(params.contextId ? { contextId: params.contextId } : {}),
               ...(params.executionId ? { executionId: params.executionId } : {}),
               occurredAt: params.after.occurredAt,
               sequence,
               action: stage === 0 ? "message.outbound.queued" : "message.outbound.platform-started",
-              database: params.database,
             })
         : false;
     if (!retained) {
@@ -322,15 +316,14 @@ export function pageOutboundMessageAuditEventsForRun(params: {
     ...(params.contextId ? { contextId: params.contextId } : {}),
     ...(params.executionId ? { executionId: params.executionId } : {}),
     now: params.now ?? Date.now(),
-    database: params.database,
   };
   let remainingOffset = params.offset ?? 0;
-  while (remainingOffset > 0 && takeNextMessageEvent(streams, streamParams)) {
+  while (remainingOffset > 0 && takeNextMessageEvent(streams, db, streamParams)) {
     remainingOffset -= 1;
   }
   const rows: OwnedMessageEvent[] = [];
   while (rows.length <= params.limit) {
-    const next = takeNextMessageEvent(streams, streamParams);
+    const next = takeNextMessageEvent(streams, db, streamParams);
     if (!next) {
       break;
     }

@@ -5,6 +5,12 @@ import type { renderAgents } from "./view.ts";
 type AgentsViewProps = Parameters<typeof renderAgents>[0];
 type AgentFilesProps = Parameters<typeof renderAgentFiles>[0];
 
+export function primaryModelPicker(container: ParentNode) {
+  return container.querySelector(
+    'openclaw-select-picker:has([role="listbox"][aria-label^="Primary model"])',
+  );
+}
+
 export const inertAgentFileControls = {
   agentFileConflict: null,
   onLoadFiles: () => undefined,
@@ -112,6 +118,7 @@ export function createAgentViewTestProps(
     runtimeSessionKey: "main",
     runtimeSessionMatchesSelectedAgent: false,
     modelCatalog: [],
+    decisionModels: [],
     modelCatalogStatus: { error: null, hasLoaded: false, stale: false, awaitingGateway: false },
     pinnedAgentIds: [],
     onRefresh: () => undefined,
@@ -129,6 +136,7 @@ export function createAgentViewTestProps(
     onConfigReload: () => undefined,
     onConfigSave: () => undefined,
     onModelChange: () => undefined,
+    onDecisionModelChange: () => undefined,
     onModelFallbacksChange: () => undefined,
     onModelCatalogOpen: () => undefined,
     onChannelsRefresh: () => undefined,

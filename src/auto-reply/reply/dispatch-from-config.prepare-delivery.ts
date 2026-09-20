@@ -125,7 +125,7 @@ export async function prepareDispatchDelivery(state: GatherDispatchRequestReadyS
     return normalizeReplyMediaPaths;
   };
   const normalizeReplyMediaPayload = async (payload: ReplyPayload): Promise<ReplyPayload> => {
-    if (!resolveSendableOutboundReplyParts(payload).hasMedia) {
+    if (isInternalWebchatTurn || !resolveSendableOutboundReplyParts(payload).hasMedia) {
       return payload;
     }
     const normalizeReplyMediaPayloadPaths = await getNormalizeReplyMediaPaths();
@@ -198,7 +198,7 @@ export async function prepareDispatchDelivery(state: GatherDispatchRequestReadyS
     });
     // Routed sends settle here: the transport result is the settlement. This is
     // the single routed choke point, so every routed lane feeds the turn ledger.
-    turnLedger.recordRoutedDelivery(payload, result);
+    turnLedger.recordRoutedDelivery(options?.kind ?? "final", payload, result);
     return result;
   };
 

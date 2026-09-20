@@ -1,31 +1,24 @@
 import { estimateBase64DecodedBytes, isValidBase64 } from "@openclaw/media-core/base64";
 import type { ChatAttachment } from "../../lib/chat/chat-types.ts";
+import {
+  payloads,
+  releaseChatAttachmentPayload,
+  releaseChatAttachmentPayloads,
+  releaseVideoPoster,
+  revokeObjectUrl,
+  type AttachmentPayload,
+} from "./attachment-payload-lifecycle.ts";
 
-type AttachmentPayload = {
-  blob?: Blob;
-  dataUrl?: string;
-  previewUrl?: string;
-  videoPoster?: {
-    controller: AbortController;
-    promise: Promise<string | null>;
-    url?: string;
-  };
-};
-
-const payloads = new Map<string, AttachmentPayload>();
+export {
+  releaseChatAttachmentPayload,
+  releaseChatAttachmentPayloads,
+} from "./attachment-payload-lifecycle.ts";
 
 function createObjectUrl(blob: Blob): string | undefined {
   if (typeof URL === "undefined" || typeof URL.createObjectURL !== "function") {
     return undefined;
   }
   return URL.createObjectURL(blob);
-}
-
-function revokeObjectUrl(url: string | undefined): void {
-  if (!url || typeof URL === "undefined" || typeof URL.revokeObjectURL !== "function") {
-    return;
-  }
-  URL.revokeObjectURL(url);
 }
 
 export function registerChatAttachmentPayload(params: {
@@ -89,11 +82,6 @@ export function getChatAttachmentVideoPosterUrl(
   return poster.promise;
 }
 
-function releaseVideoPoster(payload: AttachmentPayload): void {
-  payload.videoPoster?.controller.abort();
-  revokeObjectUrl(payload.videoPoster?.url);
-}
-
 function blobFromDataUrl(dataUrl: string): Blob | null {
   const match = /^data:([^,]*),(.*)$/s.exec(dataUrl);
   if (!match) {
@@ -155,22 +143,6 @@ export function cloneChatAttachmentsForIndependentOwner(
     const dataUrl = getChatAttachmentDataUrl(attachment);
     return { ...metadata, id: generateAttachmentId(), ...(dataUrl ? { dataUrl } : {}) };
   });
-}
-
-export function releaseChatAttachmentPayload(id: string): void {
-  const payload = payloads.get(id);
-  if (!payload) {
-    return;
-  }
-  releaseVideoPoster(payload);
-  revokeObjectUrl(payload.previewUrl);
-  payloads.delete(id);
-}
-
-export function releaseChatAttachmentPayloads(attachments: readonly ChatAttachment[] = []): void {
-  for (const attachment of attachments) {
-    releaseChatAttachmentPayload(attachment.id);
-  }
 }
 
 /**

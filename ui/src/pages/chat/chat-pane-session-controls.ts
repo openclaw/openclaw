@@ -8,7 +8,10 @@ import {
   readSessionMethodAccess,
   type SessionMethodAccess,
 } from "../../lib/session-method-access.ts";
-import { scopedAgentParamsForSession } from "../../lib/sessions/index.ts";
+import {
+  scopedAgentListParamsForSession,
+  scopedAgentParamsForSession,
+} from "../../lib/sessions/index.ts";
 import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
 import { readChatSessionActionAccess } from "./chat-session-action-access.ts";
 import {
@@ -39,7 +42,7 @@ type PendingPermissionChange = {
   nextMode: ChatPermissionPickerProps["mode"];
   ownsSelection: () => boolean;
   pending: boolean;
-  retainUntilRevision?: number;
+  retainWhileCurrent?: () => boolean;
 };
 
 const pendingPermissionChanges = new WeakMap<ChatPageHost, Map<string, PendingPermissionChange>>();
@@ -49,11 +52,12 @@ export function createChatPaneQueuedEditProps(
   state: ChatPageHost,
   sessionParticipationBlocked: boolean,
 ): NonNullable<ChatProps["queuedEdit"]> {
+  const edit = activeQueuedMessageEdit(state);
   return {
-    editingId: activeQueuedMessageEdit(state)?.id ?? null,
-    editingText: activeQueuedMessageEdit(state)?.draftText,
-    editingMentions: activeQueuedMessageEdit(state)?.mentions,
-    source: activeQueuedMessageEdit(state)?.source,
+    editingId: edit?.id ?? null,
+    editingText: edit?.draftText,
+    editingMentions: edit?.mentions,
+    source: edit?.source,
     onEdit: sessionParticipationBlocked ? undefined : state.editQueuedChatMessage,
     onEditChange: sessionParticipationBlocked ? undefined : state.updateQueuedChatMessageEdit,
     onEditSubmit: sessionParticipationBlocked ? undefined : state.submitQueuedChatMessageEdit,
@@ -123,6 +127,7 @@ export function renderChatPaneComposerControls(params: {
   const accountSelection = state.chatAccountSelection;
   const connectionEpoch = state.connectionEpoch;
   const agentScope = scopedAgentParamsForSession(state, sessionKey);
+  const affectedAgentId = scopedAgentListParamsForSession(state, sessionKey).agentId;
   const expectedSessionId = selectedSession?.sessionId?.trim();
   const permissionScopeKey = JSON.stringify([sessionKey, agentScope.agentId]);
   const permissionChanges =
@@ -145,10 +150,7 @@ export function renderChatPaneComposerControls(params: {
     permissionChanges.delete(permissionScopeKey);
     pendingChange = undefined;
   }
-  if (
-    pendingChange?.retainUntilRevision !== undefined &&
-    state.sessions.canonicalListRevision > pendingChange.retainUntilRevision
-  ) {
+  if (pendingChange?.retainWhileCurrent && !pendingChange.retainWhileCurrent()) {
     permissionChanges.delete(permissionScopeKey);
     pendingChange = undefined;
   }
@@ -318,14 +320,17 @@ export function renderChatPaneComposerControls(params: {
           if (!ownsRoute() || !ownsOutcome()) {
             return;
           }
-          const revision = state.sessions.canonicalListRevision;
-          await state.sessions.refreshReplacement(agentScope.agentId);
+          const retainWhileCurrent = state.sessions.capturePermissionObservation(
+            sessionKey,
+            affectedAgentId,
+          );
+          const outcome = await state.sessions.reconcileMutation(affectedAgentId);
           if (!ownsRoute() || !ownsOutcome()) {
             return;
           }
-          if (ownsSelection() && state.sessions.canonicalListRevision === revision) {
+          if (ownsSelection() && outcome.status !== "refreshed") {
             change.pending = false;
-            change.retainUntilRevision = revision;
+            change.retainWhileCurrent = retainWhileCurrent;
           }
           state.chatError = state.lastError = t("chat.permissionControls.updateFailed", {
             error: String(error),
@@ -336,7 +341,7 @@ export function renderChatPaneComposerControls(params: {
           }
           if (
             permissionChanges.get(permissionScopeKey) === change &&
-            change.retainUntilRevision === undefined
+            change.retainWhileCurrent === undefined
           ) {
             permissionChanges.delete(permissionScopeKey);
           }

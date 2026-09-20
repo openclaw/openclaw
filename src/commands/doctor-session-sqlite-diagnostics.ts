@@ -11,6 +11,7 @@ import {
   canonicalMigrationFilePath,
 } from "./doctor-session-sqlite-migration-run.js";
 import {
+  countTranscriptEventsForPath,
   readOnlySqliteDbStats,
   resolveTargetSqlitePath,
   scanReadOnlySqliteActiveTranscriptFiles,
@@ -22,6 +23,44 @@ import {
   type DoctorSessionSqliteReport,
   type DoctorSessionSqliteTargetReport,
 } from "./doctor-session-sqlite-types.js";
+
+export function countLegacyTranscript(
+  record: { transcriptPath?: string; sessionKey: string },
+  report: DoctorSessionSqliteTargetReport,
+): void {
+  const result = countTranscriptEventsForPath(record.transcriptPath);
+  if (result.status === "missing") {
+    report.issues.push({
+      code: "transcript_missing",
+      message: `Transcript file is missing: ${record.transcriptPath}`,
+      sessionKey: record.sessionKey,
+    });
+    return;
+  }
+  if (result.status === "malformed") {
+    report.issues.push({
+      code: "transcript_malformed",
+      message: result.message,
+      sessionKey: record.sessionKey,
+    });
+    return;
+  }
+  report.validatedEntries += 1;
+  report.validatedTranscriptEvents += result.events;
+}
+
+export function appendRetainedPluginSessionSourceIssue(
+  report: DoctorSessionSqliteTargetReport,
+  pluginIds: readonly string[],
+): void {
+  const pending = pluginIds.length
+    ? `remain pending for plugin(s): ${pluginIds.join(", ")}. Install the plugin and run openclaw doctor --fix to finish.`
+    : "await archival. Run openclaw doctor --fix to finish.";
+  report.issues.push({
+    code: "plugin_migration_source_retained",
+    message: `Canonical session import is verified. Original session migration inputs, including unindexed history, ${pending}`,
+  });
+}
 
 export function appendActiveSqliteTranscriptFileIssues(
   target: SessionStoreTarget,

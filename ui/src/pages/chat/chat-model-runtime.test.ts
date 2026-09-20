@@ -47,7 +47,7 @@ function renderRuntimeModel(entry: ModelCatalogEntry, selectedRuntime?: string) 
 
 describe("chat model runtime choices", () => {
   it.each([false, true])(
-    "follows configured routing with runtime ownership locked: %s",
+    "preserves runtime selection when changing only the model (locked: %s)",
     async (runtimeLocked) => {
       const defaultModel: ModelCatalogEntry = {
         id: "gpt-5.6-luna",
@@ -155,12 +155,7 @@ describe("chat model runtime choices", () => {
           .click();
         await selection;
         const patches = host.request.mock.calls.filter(([method]) => method === "sessions.patch");
-        expect(patches).toHaveLength(patchesBeforeReset + 1);
-        expect(patches.at(-1)?.[1]).toEqual({
-          key: "main",
-          model: "openai/gpt-5.6-sol",
-          agentRuntime: null,
-        });
+        expect(patches).toHaveLength(patchesBeforeReset);
       } finally {
         host.sessions.dispose();
       }

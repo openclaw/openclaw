@@ -3,6 +3,7 @@ import { PassThrough } from "node:stream";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { onTestFinished, vi } from "vitest";
 import { createUpdateProgress } from "../cli/update-cli/progress.js";
+import type { SpawnResult } from "../process/exec.js";
 import { defaultRuntime } from "../runtime.js";
 import type { UpdateStepResult } from "./update-runner-types.js";
 
@@ -16,22 +17,23 @@ export class FakeChild extends EventEmitter {
   }
 }
 
-export function createCanarySnapshotResult(input: string, databasePath?: string) {
+export function createCanarySnapshotResult(input: string, databasePath?: string): SpawnResult {
   const request: unknown = JSON.parse(input);
   return {
     code: 0,
-    stdout: Buffer.from(
-      JSON.stringify(
-        isRecord(request) && request.mode === "inventory"
-          ? {
-              databases: databasePath ? [[databasePath, { spellings: [databasePath] }]] : [],
-              pluginBytes: 0,
-              pluginPlan: "plugin-copy-plan.json",
-            }
-          : { versions: [], pluginPaths: {} },
-      ),
+    stdout: JSON.stringify(
+      isRecord(request) && request.mode === "inventory"
+        ? {
+            databases: databasePath ? [[databasePath, { spellings: [databasePath] }]] : [],
+            pluginBytes: 0,
+            pluginPlan: "plugin-copy-plan.json",
+          }
+        : { versions: [], pluginPaths: {} },
     ),
-    stderr: Buffer.alloc(0),
+    stderr: "",
+    signal: null,
+    killed: false,
+    cleanup: "normal",
     termination: "exit",
   };
 }

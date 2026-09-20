@@ -2,6 +2,7 @@
 import type { Static } from "typebox";
 import { Type } from "typebox";
 import { closedObject } from "./closed-object.js";
+import { ChatHistoryActivitySchema } from "./logs-chat.js";
 import { NonEmptyString } from "./primitives.js";
 import { withSince } from "./since.js";
 
@@ -154,6 +155,7 @@ export const TasksHistoryParamsSchema = closedObject({
 export const TasksHistoryResultSchema = closedObject({
   /** Stable messageId or __openclaw.id anchors refreshes; entry IDs can have sibling rows. */
   messages: Type.Array(Type.Unknown()),
+  activity: Type.Optional(Type.Array(ChatHistoryActivitySchema)),
   nextCursor: Type.Optional(Type.String({ maxLength: 8192 })),
 });
 

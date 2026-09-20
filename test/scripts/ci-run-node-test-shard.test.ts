@@ -105,6 +105,7 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
         configs: ["one.config.ts"],
         includePatterns: ["src/one.test.ts", "src/two.test.ts"],
         shard_name: "one",
+        fallbackMaxWorkers: 2,
         timing_key: "one#include-2-abcd",
       },
       { configs: ["two.config.ts"], env: { OPENCLAW_VITEST_MAX_WORKERS: "2" }, shard_name: "two" },
@@ -243,28 +244,69 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
     },
   );
 
-  it.each([
-    ["local explicit concurrency", 2, 16, undefined, undefined, 3, 3],
-    ["CI capacity boundary", 8, 24, "true", undefined, 2, 2],
-    ["CPU-constrained CI", 4, 32, "true", undefined, 2, 1],
-    ["memory-constrained CI", 8, 16, "true", undefined, 2, 1],
-    ["unknown CI CPUs", Number.NaN, 32, "true", undefined, 2, 1],
-    ["unknown CI memory", 8, Number.NaN, "true", undefined, 2, 1],
-    ["CI two-plan ceiling", 16, 64, "true", undefined, 3, 2],
-    ["GitHub Actions capacity", 4, 32, undefined, "true", 2, 1],
+  it.each<
+    readonly [
+      name: string,
+      cpus: number,
+      gib: number,
+      ci: string | undefined,
+      actions: string | undefined,
+      requested: number,
+      expected: number,
+      config: string | undefined,
+    ]
+  >([
+    ["local explicit concurrency", 2, 16, undefined, undefined, 3, 3, undefined],
+    ["CI capacity boundary", 8, 24, "true", undefined, 2, 2, undefined],
+    ["CPU-constrained CI", 4, 32, "true", undefined, 2, 1, undefined],
+    ["memory-constrained CI", 8, 16, "true", undefined, 2, 1, undefined],
+    ["unknown CI CPUs", Number.NaN, 32, "true", undefined, 2, 1, undefined],
+    ["unknown CI memory", 8, Number.NaN, "true", undefined, 2, 1, undefined],
+    ["CI two-plan ceiling", 16, 64, "true", undefined, 3, 2, undefined],
+    ["GitHub Actions capacity", 4, 32, undefined, "true", 2, 1, undefined],
+    ...[
+      "gateway-core",
+      "gateway-database-workers",
+      "gateway-methods",
+      "gateway-methods-isolated",
+      "gateway-server",
+      "gateway-server-isolated",
+    ].map(
+      (name) =>
+        [name, 8, 24, "true", undefined, 2, 1, `test/vitest/vitest.${name}.config.ts`] as const,
+    ),
+    [
+      "Gateway client remains parallel",
+      8,
+      24,
+      "true",
+      undefined,
+      2,
+      2,
+      "test/vitest/vitest.gateway-client.config.ts",
+    ],
   ])(
     "runs plans with bounded concurrency and cache isolation for %s",
-    async (_name, cpus, gib, ci, actions, requested, expected) => {
+    async (_name, cpus, gib, ci, actions, requested, expected, config) => {
       vi.spyOn(os, "availableParallelism").mockReturnValue(cpus);
       vi.spyOn(os, "totalmem").mockReturnValue(gib * 1024 ** 3);
       const scratchDir = makeScratchDir();
-      const seen: Array<{ args: string[]; cache: string | undefined; label: string }> = [];
+      const seen: Array<{
+        args: string[];
+        cache: string | undefined;
+        label: string;
+        workers: string | undefined;
+      }> = [];
       let active = 0;
       let peakActive = 0;
       const exitCode = await runShardPlans(
         resolveShardPlans({
           OPENCLAW_NODE_TEST_GROUPS_JSON: JSON.stringify([
-            { configs: ["a.config.ts"], shard_name: "a" },
+            {
+              configs: [config ?? "a.config.ts"],
+              shard_name: "a",
+              env: { OPENCLAW_VITEST_MAX_WORKERS: "6" },
+            },
             { configs: ["b.config.ts"], shard_name: "b" },
             { configs: ["c.config.ts"], shard_name: "c" },
           ]),
@@ -275,6 +317,8 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
             CI: ci,
             GITHUB_ACTIONS: actions,
             OPENCLAW_NODE_TEST_PLAN_CONCURRENCY: String(requested),
+            OPENCLAW_VITEST_MAX_WORKERS: "4",
+            OPENCLAW_NODE_TEST_ENV_JSON: JSON.stringify({ OPENCLAW_VITEST_MAX_WORKERS: "2" }),
           },
           runChild: async (
             args: string[],
@@ -284,7 +328,12 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
             active += 1;
             peakActive = Math.max(peakActive, active);
             await Promise.resolve();
-            seen.push({ args, cache: childEnv.OPENCLAW_VITEST_FS_MODULE_CACHE_PATH, label });
+            seen.push({
+              args,
+              cache: childEnv.OPENCLAW_VITEST_FS_MODULE_CACHE_PATH,
+              label,
+              workers: childEnv.OPENCLAW_VITEST_MAX_WORKERS,
+            });
             active -= 1;
             return 0;
           },
@@ -293,8 +342,75 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
       );
       expect(exitCode).toBe(0);
       expect(peakActive).toBe(expected);
+      expect(seen.map((run) => run.workers)).toEqual(["2", "2", "2"]);
       expect(seen.map((run) => run.label).toSorted()).toEqual(["a", "b", "c"]);
       expect(new Set(seen.map((run) => run.cache)).size).toBe(expected === 1 ? 1 : 3);
+    },
+  );
+
+  it.each([
+    { name: "measured host", cpus: 8, gib: 31, runner: "self-hosted", expected: "8" },
+    { name: "constrained CPUs", cpus: 4, gib: 31, runner: "self-hosted", expected: "2" },
+    { name: "constrained memory", cpus: 8, gib: 16, runner: "self-hosted", expected: "2" },
+    { name: "hosted fallback", cpus: 8, gib: 31, runner: "github-hosted", expected: "2" },
+    { name: "unknown runner", cpus: 8, gib: 31, runner: undefined, expected: "2" },
+    {
+      name: "frozen target",
+      cpus: 8,
+      gib: 31,
+      runner: "self-hosted",
+      frozen: "true",
+      expected: "2",
+    },
+    {
+      name: "explicit lower cap",
+      cpus: 4,
+      gib: 31,
+      runner: "self-hosted",
+      cap: "1",
+      expected: "1",
+    },
+    {
+      name: "overlapping plans",
+      cpus: 8,
+      gib: 31,
+      runner: "self-hosted",
+      parallel: true,
+      expected: "2",
+    },
+  ])(
+    "retains the measured group's fallback ceiling on $name",
+    async ({ cpus, gib, runner, frozen, cap, parallel, expected }) => {
+      vi.spyOn(os, "availableParallelism").mockReturnValue(cpus);
+      vi.spyOn(os, "totalmem").mockReturnValue(gib * 1024 ** 3);
+      const runChild = vi.fn(async (_args: string[], _env: NodeJS.ProcessEnv) => 0);
+      const plans = resolveShardPlans({
+        OPENCLAW_NODE_TEST_GROUPS_GZIP_BASE64: encodeNodeTestGroups([
+          {
+            configs: ["measured.config.ts"],
+            fallbackMaxWorkers: 2,
+            env: { OPENCLAW_VITEST_MAX_WORKERS: cap },
+          },
+          { configs: ["ordinary.config.ts"] },
+        ]),
+      });
+      await expect(
+        runShardPlans(plans, {
+          env: {
+            CI: "true",
+            RUNNER_ENVIRONMENT: runner,
+            FROZEN_TARGET: frozen,
+            OPENCLAW_VITEST_MAX_WORKERS: "8",
+            OPENCLAW_NODE_TEST_PLAN_CONCURRENCY: parallel ? "2" : "1",
+          },
+          scratchDir: makeScratchDir(),
+          runChild,
+        }),
+      ).resolves.toBe(0);
+      expect(runChild.mock.calls.map(([, env]) => env.OPENCLAW_VITEST_MAX_WORKERS)).toEqual([
+        expected,
+        "8",
+      ]);
     },
   );
 
@@ -460,43 +576,58 @@ describe("scripts/ci-run-node-test-shard.mts", () => {
     );
   });
 
-  it("forwards job and group Vitest arguments without leaking them to sibling plans", async () => {
-    const scratchDir = makeScratchDir();
-    const seen: string[][] = [];
-    const exitCode = await runShardPlans(
-      resolveShardPlans({
-        OPENCLAW_NODE_TEST_GROUPS_JSON: JSON.stringify([
-          {
-            configs: ["test/vitest/vitest.extensions.config.ts"],
-            env: { OPENCLAW_NODE_TEST_VITEST_ARGS_JSON: JSON.stringify(["--shard=1/6"]) },
+  it.each([undefined, "--shard=3/6"])(
+    "resolves job and group Vitest arguments once (job partition %s)",
+    async (jobPartition) => {
+      const scratchDir = makeScratchDir();
+      const seen: string[][] = [];
+      const exitCode = await runShardPlans(
+        resolveShardPlans({
+          OPENCLAW_NODE_TEST_GROUPS_JSON: JSON.stringify([
+            {
+              configs: ["test/vitest/vitest.extensions.config.ts"],
+              env: { OPENCLAW_NODE_TEST_VITEST_ARGS_JSON: JSON.stringify(["--shard=1/6"]) },
+            },
+            {
+              configs: ["test/vitest/vitest.extensions.config.ts"],
+              env: { OPENCLAW_NODE_TEST_VITEST_ARGS_JSON: JSON.stringify(["--shard=2/6"]) },
+            },
+            { configs: ["test/vitest/vitest.unit.config.ts"] },
+          ]),
+        }),
+        {
+          concurrency: 1,
+          env: {
+            OPENCLAW_NODE_TEST_VITEST_ARGS_JSON: JSON.stringify(["--hookTimeout=300000"]),
+            OPENCLAW_NODE_TEST_ENV_JSON: JSON.stringify(
+              jobPartition
+                ? {
+                    OPENCLAW_NODE_TEST_VITEST_ARGS_JSON: JSON.stringify([jobPartition]),
+                  }
+                : {},
+            ),
           },
-          {
-            configs: ["test/vitest/vitest.extensions.config.ts"],
-            env: { OPENCLAW_NODE_TEST_VITEST_ARGS_JSON: JSON.stringify(["--shard=2/6"]) },
+          runChild: async (args: string[]) => {
+            seen.push(args);
+            return 0;
           },
-          { configs: ["test/vitest/vitest.unit.config.ts"] },
-        ]),
-      }),
-      {
-        concurrency: 1,
-        env: {
-          OPENCLAW_NODE_TEST_VITEST_ARGS_JSON: JSON.stringify(["--hookTimeout=300000"]),
+          scratchDir,
         },
-        runChild: async (args: string[]) => {
-          seen.push(args);
-          return 0;
-        },
-        scratchDir,
-      },
-    );
+      );
 
-    expect(exitCode).toBe(0);
-    expect(seen).toEqual([
-      ["test/vitest/vitest.extensions.config.ts", "--", "--hookTimeout=300000", "--shard=1/6"],
-      ["test/vitest/vitest.extensions.config.ts", "--", "--hookTimeout=300000", "--shard=2/6"],
-      ["test/vitest/vitest.unit.config.ts", "--", "--hookTimeout=300000"],
-    ]);
-  });
+      expect(exitCode).toBe(0);
+      expect(seen).toEqual([
+        ["test/vitest/vitest.extensions.config.ts", "--", "--hookTimeout=300000", "--shard=1/6"],
+        ["test/vitest/vitest.extensions.config.ts", "--", "--hookTimeout=300000", "--shard=2/6"],
+        [
+          "test/vitest/vitest.unit.config.ts",
+          "--",
+          "--hookTimeout=300000",
+          ...(jobPartition ? [jobPartition] : []),
+        ],
+      ]);
+    },
+  );
 
   it("reuses isolated persistent cache slots across serial work", async () => {
     const scratchDir = makeScratchDir();

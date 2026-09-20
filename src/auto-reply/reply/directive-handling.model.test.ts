@@ -2028,25 +2028,29 @@ describe("/model chat UX", () => {
     expect(sessionEntry.agentRuntimeOverride).toBeUndefined();
   });
 
-  it("clears a provider-incompatible runtime pin during a model switch", async () => {
-    const sessionEntry = createSessionEntry({
-      providerOverride: "openai",
-      modelOverride: "gpt-4o",
-      modelOverrideSource: "user",
-      agentRuntimeOverride: "codex",
-    });
-    const { persisted } = await persistModelDirectiveForTest({
-      command: "/model anthropic/claude-opus-4-6 hello",
-      allowedModelKeys: ["anthropic/claude-opus-4-6", "openai/gpt-4o"],
-      sessionEntry,
-      provider: "openai",
-      model: "gpt-4o",
-      initialModelLabel: "openai/gpt-4o",
-    });
+  it.each(["", " --runtime codex"])(
+    "rejects an incompatible runtime without changing the session (%s)",
+    async (runtime) => {
+      const sessionEntry = createSessionEntry({
+        providerOverride: "openai",
+        modelOverride: "gpt-4o",
+        modelOverrideSource: "user",
+        agentRuntimeOverride: "codex",
+      });
+      const { persisted } = await persistModelDirectiveForTest({
+        command: `/model anthropic/claude-opus-4-6${runtime} hello`,
+        allowedModelKeys: ["anthropic/claude-opus-4-6", "openai/gpt-4o"],
+        sessionEntry,
+        provider: "openai",
+        model: "gpt-4o",
+        initialModelLabel: "openai/gpt-4o",
+      });
 
-    expect(sessionEntry.agentRuntimeOverride).toBeUndefined();
-    expect(persisted.directiveAck?.text).toContain("Runtime reset to configured policy.");
-  });
+      expect(persisted.errorText).toContain('Runtime "codex" is not supported');
+      expect(sessionEntry.agentRuntimeOverride).toBe("codex");
+      expect(sessionEntry.modelOverride).toBe("gpt-4o");
+    },
+  );
 
   it("rejects model/runtime transactions that target an unsupported runtime", async () => {
     vi.mocked(enqueueSystemEvent).mockClear();
@@ -2070,16 +2074,6 @@ describe("/model chat UX", () => {
       agentRuntimeOverride: "openclaw",
     });
     expect(enqueueSystemEvent).not.toHaveBeenCalled();
-  });
-
-  it("rejects the Codex runtime for providers the harness does not support", async () => {
-    const { persisted, sessionEntry } = await persistModelDirectiveForTest({
-      command: "/model anthropic/claude-opus-4-6 --runtime codex hello",
-      allowedModelKeys: ["anthropic/claude-opus-4-6"],
-    });
-
-    expect(persisted.errorText).toBe('Runtime "codex" is not supported for anthropic.');
-    expect(sessionEntry.agentRuntimeOverride).toBeUndefined();
   });
 
   it("rejects unsupported mixed thinking before mutating the model/runtime transaction", async () => {
@@ -2235,7 +2229,7 @@ describe("handleDirectiveOnly model persist behavior (fixes #1435)", () => {
 
   function createHandleParams(overrides: Partial<HandleParams>): HandleParams {
     return createDirectiveHandlingParams({
-      sessionKey,
+      sessionKey: `agent:${overrides.agentId ?? "main"}:dm:1`,
       elevatedEnabled: false,
       elevatedAllowed: false,
       allowedModelKeys,

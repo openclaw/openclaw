@@ -16,8 +16,7 @@ import {
   parseThreadSessionSuffix,
 } from "../../sessions/session-key-utils.js";
 import { finalizeTaskRunByRunId } from "../../tasks/detached-task-runtime.js";
-import { findTaskByRunId } from "../../tasks/runtime-internal.js";
-import type { TaskStatus } from "../../tasks/task-registry.types.js";
+import type { TaskRecord, TaskStatus } from "../../tasks/task-registry.types.js";
 import { formatForLog } from "../ws-log.js";
 import type {
   GatewayContextResolver,
@@ -101,7 +100,7 @@ export function resolveGatewayAgentTaskTrackingMode(params: {
   sessionEntry?: Pick<SessionEntry, "spawnedBy" | "label" | "displayName" | "acp">;
   confirmedAcpManualSpawn?: boolean;
   modelRun?: boolean;
-  runId?: string;
+  existingTask?: Pick<TaskRecord, "runtime" | "childSessionKey">;
 }): GatewayAgentTaskTrackingMode {
   // Model probes are stateless one-shot work. A terminal CLI task row would
   // outlive the probe even when its session/transcript effects are internal.
@@ -111,7 +110,7 @@ export function resolveGatewayAgentTaskTrackingMode(params: {
   if (!params.sessionKey?.trim()) {
     return "none";
   }
-  const existingTask = params.runId ? findTaskByRunId(params.runId) : undefined;
+  const existingTask = params.existingTask;
   if (params.inputProvenance?.kind === "inter_session") {
     const requesterSessionKey = normalizeOptionalString(params.inputProvenance.sourceSessionKey);
     if (
@@ -270,6 +269,7 @@ export async function registerPluginSubagentRunFromGateway(params: {
 }
 
 export function tryFinalizeTrackedAgentTask(params: {
+  finalizeRun?: typeof finalizeTaskRunByRunId;
   runId: string;
   sessionKey?: string;
   status: GatewayAgentTaskTerminalStatus;
@@ -278,7 +278,7 @@ export function tryFinalizeTrackedAgentTask(params: {
   log: Pick<GatewayRequestContext["logGateway"], "warn">;
 }): void {
   try {
-    finalizeTaskRunByRunId({
+    (params.finalizeRun ?? finalizeTaskRunByRunId)({
       runId: params.runId,
       runtime: "cli",
       sessionKey: params.sessionKey,

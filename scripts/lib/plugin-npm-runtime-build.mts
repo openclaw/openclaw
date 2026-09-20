@@ -482,7 +482,7 @@ async function preparePluginNativeImport(params: PluginNpmRuntimeBuildParams) {
   const dependency = resolveOpenClawHostDependency(manifest.value);
   if (!dependency) {
     throw new Error(
-      `${params.packageDir} does not declare openclaw in peerDependencies or dependencies; no host link to prepare.`,
+      `${params.packageDir} does not declare openclaw in peerDependencies, optionalDependencies, or dependencies; no host link to prepare.`,
     );
   }
   if (

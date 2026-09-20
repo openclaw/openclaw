@@ -1,8 +1,10 @@
 import { existsSync, mkdirSync } from "node:fs";
 import path from "node:path";
+import { err } from "@openclaw/normalization-core/result";
 import { describe, expect, it, vi } from "vitest";
 import { resetConfigRuntimeState, setRuntimeConfigSnapshot } from "../config/config.js";
 import { loadSessionEntry, replaceSessionEntry } from "../config/sessions/session-accessor.js";
+import * as sessionAccessor from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   closeOpenClawAgentDatabasesForTest,
@@ -33,6 +35,7 @@ import type {
   GatewayRequestHandler,
   RespondFn,
 } from "./server-methods/types.js";
+import { getSessionRowProjection } from "./session-row-projection-access.js";
 import {
   createGatewaySessionEntryReader,
   prepareGatewaySessionStoreTargetsReadOnly,
@@ -42,11 +45,7 @@ import {
   type GatewaySessionStoreCache,
 } from "./session-utils-store-lookup.js";
 import { loadGatewaySessionEntryReadOnly } from "./session-utils-store.js";
-import {
-  loadCombinedSessionStoreForGatewayCore,
-  loadGatewaySessionLifecycleSnapshot,
-  loadGatewaySessionRow,
-} from "./session-utils.js";
+import { loadCombinedSessionStoreForGatewayCore } from "./session-utils.js";
 
 vi.mock("./github-publication-availability.js", () => ({
   prepareCurrentGitHubPublicationOptionsIdentity: vi.fn(async (agentId: string) => ({
@@ -211,21 +210,55 @@ describe("global session lookup ownership", () => {
           skillsSnapshot: { prompt: "selected synthetic prompt", skills: [] },
         },
       );
-      const results = prepareGatewaySessionStoreTargetsReadOnly({
-        cfg,
-        projection: "full",
-        targets: [{ key: "agent:research:main" }, { key: "agent:main:main", agentId: "research" }],
-      });
-      expect(results).toMatchObject([
-        {
-          ok: true,
-          value: {
-            agentId: "research",
-            store: { global: { skillsSnapshot: { prompt: "selected synthetic prompt" } } },
+      const failure = new Error("metadata unavailable", { cause: new Error("SQLITE_IOERR") });
+      const readMetadata = sessionAccessor.loadExactSessionEntryCandidatesReadOnlyBatch;
+      const failingRead = vi
+        .spyOn(sessionAccessor, "loadExactSessionEntryCandidatesReadOnlyBatch")
+        .mockImplementation((scopes) =>
+          readMetadata(scopes).map((result, index) =>
+            scopes[index]?.agentId === "main" ? err(failure) : result,
+          ),
+        );
+      try {
+        const results = prepareGatewaySessionStoreTargetsReadOnly({
+          cfg,
+          projection: "full",
+          targets: [
+            { key: "agent:main:main" },
+            { key: "agent:research:main" },
+            { key: "agent:main:main", agentId: "research" },
+          ],
+        });
+        expect(results[0]).toEqual(err(failure));
+        expect(results.slice(1)).toMatchObject([
+          {
+            ok: true,
+            value: {
+              agentId: "research",
+              store: { global: { skillsSnapshot: { prompt: "selected synthetic prompt" } } },
+            },
           },
-        },
-        { ok: false, error: { message: expect.stringContaining('belongs to "main"') } },
-      ]);
+          { ok: false, error: { message: expect.stringContaining('belongs to "main"') } },
+        ]);
+        const failingSingleRead = vi
+          .spyOn(sessionAccessor, "loadExactSessionEntryCandidates")
+          .mockImplementation(() => {
+            throw failure;
+          });
+        try {
+          expect(() =>
+            resolveGatewaySessionStoreTargetWithStore({
+              cfg,
+              key: "agent:main:main",
+              exactRead: true,
+            }),
+          ).toThrow(failure);
+        } finally {
+          failingSingleRead.mockRestore();
+        }
+      } finally {
+        failingRead.mockRestore();
+      }
     });
   });
 
@@ -482,8 +515,9 @@ describe("exact session model projections", () => {
           request: { agentId: "main", limit: 10 },
         });
         expect(listed.sessions.find((row) => row.key === childKey)).toMatchObject(expected);
-        expect.soft(loadGatewaySessionRow(childKey)).toMatchObject(expected);
-        expect.soft(loadGatewaySessionLifecycleSnapshot(childKey).row).toMatchObject(expected);
+        expect
+          .soft(getSessionRowProjection(context)?.snapshot({ key: childKey, agentId: "main" }).row)
+          .toMatchObject(expected);
 
         const described = vi.fn();
         await sessionByKeyReadHandlers["sessions.describe"]!({
@@ -502,7 +536,9 @@ describe("exact session model projections", () => {
           params: { sessionKey: childKey },
           req: { type: "req", id: "model-history", method: "chat.history" },
           client: null,
-          context: createDirectChatContext(),
+          context: createDirectChatContext({
+            sessionRowProjectionOwner: context.sessionRowProjectionOwner,
+          }),
           isWebchatConnect: () => false,
           respond: history,
         });
@@ -521,10 +557,11 @@ describe("exact session model projections", () => {
             agentId: "main",
             reason: "patch",
           });
+          await flushPendingSessionsChangedEvents(eventContext);
           expect(broadcast.mock.calls[0]?.[0]).toBe("sessions.changed");
-          expect.soft(broadcast.mock.calls[0]?.[1]).toMatchObject(expected);
+          expect.soft(broadcast.mock.calls[0]?.[1]).toMatchObject({ session: expected });
         } finally {
-          flushPendingSessionsChangedEvents(eventContext);
+          await flushPendingSessionsChangedEvents(eventContext);
         }
       });
     },
@@ -679,9 +716,9 @@ it.each([
         });
         expect.soft(searched.sessions.some((row) => row.key === created.key)).toBe(true);
       }
-      await expect
-        .soft(Promise.resolve().then(() => loadGatewaySessionRow(created.key)))
-        .resolves.toMatchObject(expected);
+      expect
+        .soft(getSessionRowProjection(context)?.snapshot({ key: created.key, agentId: "work" }).row)
+        .toMatchObject(expected);
       await expect
         .soft(
           request(sessionByKeyReadHandlers["sessions.describe"]!, "sessions.describe", {

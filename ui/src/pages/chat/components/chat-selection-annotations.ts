@@ -11,7 +11,11 @@ registerChatMessageMetadataEnglish();
 /** The persistent comment owner handles edits from either preview or source marker. */
 export function renderChatSelectionAnnotations(props: ChatAttachmentControlsProps) {
   const comments = props.attachments?.filter((attachment) => attachment.selectionAnnotation) ?? [];
-  const request = (event: Event, id: string, action: "edit" | "delete") => {
+  const request = (
+    event: Event,
+    id: string | undefined,
+    action: "edit" | "delete" | "delete-all",
+  ) => {
     event.currentTarget?.dispatchEvent(
       new CustomEvent("openclaw-comment-action", {
         bubbles: true,
@@ -38,6 +42,7 @@ export function renderChatSelectionAnnotations(props: ChatAttachmentControlsProp
                 </button>
                 <button
                   type="button"
+                  data-comment-delete=${attachment.id}
                   aria-label=${t("chat.messages.deleteAnnotation")}
                   ?disabled=${props.disabled || props.readSignal?.aborted}
                   @click=${(event: Event) => request(event, attachment.id, "delete")}
@@ -48,6 +53,12 @@ export function renderChatSelectionAnnotations(props: ChatAttachmentControlsProp
             ),
           )}
         </ol>`,
+        undefined,
+        true,
+        {
+          onRemove: (event) => request(event, undefined, "delete-all"),
+          disabled: Boolean(props.disabled || props.readSignal?.aborted),
+        },
       )
     : nothing;
 }

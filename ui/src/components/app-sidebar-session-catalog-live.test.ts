@@ -98,7 +98,7 @@ describe("SessionCatalogLiveState", () => {
         error: { code: "unavailable", message: "Catalog temporarily unavailable" },
       }),
     },
-  ])("applies $metadata without marking a material change", ({ update }) => {
+  ])("applies $metadata from a progressive host event", ({ update }) => {
     const live = new SessionCatalogLiveState();
     const { progressId } = live.beginRequest(1);
     const current = catalog("changed", 1);
@@ -115,23 +115,5 @@ describe("SessionCatalogLiveState", () => {
     });
 
     expect(result?.catalogs[0]).toEqual(update(current));
-    expect(result?.materialChange).toBe(false);
-    expect(live.sawChange).toBe(false);
-  });
-
-  it.each([
-    ["mode-less client", { deviceId: "legacy-client" }, false],
-    ["browser with a node role", { deviceId: "browser", mode: "webchat", roles: ["node"] }, false],
-    [
-      "operator with a node role",
-      { deviceId: "operator", mode: "operator", roles: ["node"] },
-      false,
-    ],
-    ["node with an operator role", { deviceId: "node", mode: "node", roles: ["operator"] }, true],
-    ["legacy node role", { deviceId: "legacy-node", roles: ["node"] }, true],
-  ] as const)("classifies %s presence for catalog refreshes", (_name, entry, expected) => {
-    const live = new SessionCatalogLiveState();
-
-    expect(live.observePresence({ presence: [entry] })).toBe(expected);
   });
 });

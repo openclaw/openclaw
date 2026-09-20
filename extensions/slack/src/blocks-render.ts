@@ -1,4 +1,3 @@
-// Slack plugin module implements blocks render behavior.
 import type { Block, KnownBlock } from "@slack/web-api";
 import { parseExecApprovalCommandText } from "openclaw/plugin-sdk/approval-reply-runtime";
 import {

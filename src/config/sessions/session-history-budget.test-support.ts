@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import { executeSqliteQuerySync } from "../../infra/kysely-sync.js";
+import type { runQueuedStoreWrite } from "../../shared/store-writer-queue.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import {
   appendTranscriptMessage,
@@ -8,6 +9,42 @@ import {
 } from "./session-accessor.js";
 import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
+
+export type SessionHistoryBudgetQueueObservation = {
+  mock: {
+    calls: Array<Parameters<typeof runQueuedStoreWrite>>;
+    results: Array<{ type: string; value: unknown }>;
+  };
+};
+
+export async function joinSessionHistoryBudgetSweeps(
+  spy: SessionHistoryBudgetQueueObservation,
+  work: Promise<unknown>[] = [],
+): Promise<void> {
+  let joined = 0;
+  for (;;) {
+    const pending = spy.mock.calls.flatMap(([params], index) => {
+      const outcome = spy.mock.results[index];
+      return params.label === "enforceSqliteSessionHistoryDiskBudget" &&
+        outcome?.type === "return" &&
+        outcome.value instanceof Promise
+        ? [outcome.value as Promise<unknown>]
+        : [];
+    });
+    if (joined === pending.length) {
+      return;
+    }
+    const next = pending.slice(joined);
+    joined = pending.length;
+    work.push(...next);
+    await Promise.all(next);
+    // A settled sweep may enqueue its existing pending-force continuation.
+    // A single queue barrier can return before that follow-up pass completes.
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+  }
+}
 
 export function createSessionHistoryBudgetFixture(
   readScope: () => { storePath: string; tempDir: string },

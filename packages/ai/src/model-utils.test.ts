@@ -89,6 +89,30 @@ describe("clampThinkingLevel", () => {
     },
   );
 
+  it.each(
+    ["openai-responses", "openclaw-openai-completions-transport"].flatMap((api) =>
+      [{ supportsReasoningEffort: false }, { supportedReasoningEfforts: [] }].map((compat) => ({
+        api,
+        compat,
+      })),
+    ),
+  )(
+    "does not expose mapped extended levels when scalar effort is disabled: $api $compat",
+    ({ api, compat }) => {
+      const model = makeModel({ xhigh: "xhigh", max: "max" }, { api, compat });
+
+      expect(getSupportedThinkingLevels(model)).toEqual([
+        "off",
+        "minimal",
+        "low",
+        "medium",
+        "high",
+      ]);
+      expect(clampThinkingLevel(model, "xhigh")).toBe("high");
+      expect(clampThinkingLevel(model, "max")).toBe("high");
+    },
+  );
+
   it("downgrades explicit extended-level opt-outs", () => {
     expect(clampThinkingLevel(makeModel({ xhigh: null, max: "max" }), "xhigh")).toBe("high");
   });

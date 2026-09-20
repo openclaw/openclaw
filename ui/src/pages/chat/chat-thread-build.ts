@@ -309,6 +309,7 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
   );
   const currentRunQueuedSends = threadQueuedSends.filter(
     (queued) =>
+      queued.sendState === "submitting" ||
       queued.sendState === "sending" ||
       queued.sendState === "waiting-model" ||
       (queued.sendState === "waiting-reconnect" &&
@@ -633,7 +634,9 @@ export function buildChatItems(props: BuildChatItemsProps): Array<ChatItem | Mes
     ((props.runWorking === true && !initialHistoryLoad) ||
       hasEmptyLiveStream ||
       queuedSends.some(
-        (item) => item.sendState === "sending" && shouldRenderQueuedSendInThread(item),
+        (item) =>
+          (item.sendState === "submitting" || item.sendState === "sending") &&
+          shouldRenderQueuedSendInThread(item),
       ));
   if (props.runWorking !== true && props.stream === null && !showWorkingIndicator) {
     clearWorkingProgress(props.sessionKey);

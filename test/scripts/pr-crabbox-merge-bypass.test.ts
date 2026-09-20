@@ -356,6 +356,9 @@ const value = JSON.parse(fs.readFileSync("input.json", "utf8"));
 const save = () => fs.writeFileSync("input.json", JSON.stringify(value));
 const fail = (message, code = 19) => { console.error(message); process.exit(code); };
 const out = (data) => console.log(typeof data === "string" ? data : JSON.stringify(data));
+const apiOut = (data) => out(args.includes("--jq")
+  ? cp.execFileSync("jq", ["-r", args[args.indexOf("--jq") + 1]], {input:JSON.stringify(data),encoding:"utf8"}).trim()
+  : data);
 const repo = {id:123,nameWithOwner:"openclaw/openclaw",url:"https://github.com/openclaw/openclaw"};
 const repoNodeId = "fixture-repo";
 const reviewComments = ${JSON.stringify(reviewComments)};
@@ -365,14 +368,22 @@ const pr = {id:"fixture-pr",number:131091,url:repo.url+"/pull/131091",state:"OPE
   isCrossRepository:false,mergeable:"MERGEABLE",mergeStateStatus:"BLOCKED",mergeCommit:null,
   autoMergeRequest:null,isInMergeQueue:false,isMergeQueueEnabled:false};
 if (args.some(arg => /\\{(?:owner|repo)\\}/u.test(arg))) fail("unresolved repository placeholder");
+const repositoryLocatorRequest = JSON.stringify(args) === JSON.stringify(["api", "--hostname", "github.com", "repos/openclaw/openclaw"]);
+if (repositoryLocatorRequest) {
+  if (process.env.FAKE_DENIED === "repos/openclaw/openclaw") fail("protected refusal");
+  // Locator metadata cannot satisfy the separate authoritative ID binding.
+  apiOut({full_name:repo.nameWithOwner,html_url:repo.url});
+  process.exit(0);
+}
 const endpoint = args.find(arg => /^(?:repos\\/|orgs\\/|user$|graphql$)/u.test(arg));
+if (args[0] === "api" && args.includes("repos/openclaw/openclaw") &&
+    JSON.stringify(args) !== JSON.stringify(["api", "--hostname", "github.com", "repos/openclaw/openclaw", "-H", "Cache-Control: max-age=0"])) fail("unexpected repository authority request");
 if (endpoint && endpoint === process.env.FAKE_DENIED) fail("protected refusal");
-if (args[0] === "repo" && args[1] === "view") out(args.includes("--jq") ? repo.nameWithOwner : repo);
+if (args[0] === "browse" && args[1] === "--no-browser") out(repo.url);
 else if (args[0] === "pr" && args[1] === "checks" && args.includes("--required")) {
   // gh v2.98.0 checks.go exports JSON before applying its human-output exit codes.
   out(value.requiredChecks);
-} else if (args[0] === "pr" && args[1] === "view") out(args.includes("--jq") ? pr.headRefOid : pr);
-else if (args[0] === "pr" && args[1] === "merge") out("synthetic merge request accepted");
+} else if (args[0] === "pr" && args[1] === "merge") out("synthetic merge request accepted");
 else if (args[0] === "workflow" && args[1] === "run") { value.dispatched = true; save(); }
 else if (endpoint === "graphql" && args.some(arg => arg.includes("viewerMergeBodyText"))) {
   out({data:{repository:{pullRequest:{...pr,viewerMergeBodyText:value.mergePreview}}}});
@@ -386,15 +397,25 @@ else if (endpoint === "graphql" && args.includes("query=query { viewer { login }
   else out(cp.execFileSync("jq", ["-r", args[args.indexOf("--jq") + 1]], {input:json,encoding:"utf8"}).trim());
 } else {
   if (!endpoint) fail("unexpected command");
+  // PR metadata reads replace the old gh view requests. Authorization
+  // reads below retain their explicit freshness-header and pagination checks.
+  const cacheableMetadata = [
+    ["api", "--hostname", "github.com", "repos/openclaw/openclaw/pulls/131091"],
+    ["api", "repos/openclaw/openclaw/pulls/131091", "--jq", ".head.sha"],
+  ].some((request) => JSON.stringify(args) === JSON.stringify(request));
   const mutable = endpoint.startsWith("orgs/") ||
-    (!process.env.FAKE_DISPATCH && !/\\/compare\\/|\\/commits\\/[a-f0-9]{40}$/u.test(endpoint));
+    (!process.env.FAKE_DISPATCH && !cacheableMetadata && !/\\/compare\\/|\\/commits\\/[a-f0-9]{40}$/u.test(endpoint));
   if (mutable && !args.some((arg,i) => ["-H", "--header"].includes(arg) && args[i+1] === "Cache-Control: max-age=0")) fail("missing live header", 18);
   if (endpoint.includes("/check-runs?") || endpoint.includes("/jobs?") || endpoint.includes("/issues/131091/comments?")) {
     if (!args.includes("--paginate") || !args.includes("--slurp")) fail("missing pagination");
   }
   const prefix = "repos/openclaw/openclaw/";
-  if (endpoint === "repos/openclaw/openclaw") out({id:repo.id,node_id:repoNodeId,full_name:repo.nameWithOwner,html_url:repo.url});
-  else if (endpoint === prefix + "pulls/131091") out(value.pullRequest);
+  if (endpoint === "repos/openclaw/openclaw") {
+    apiOut({id:repo.id,node_id:repoNodeId,full_name:repo.nameWithOwner,html_url:repo.url});
+  }
+  else if (endpoint === prefix + "pulls/131091") apiOut({...value.pullRequest,html_url:pr.url,
+    base:{...value.pullRequest.base,repo:{id:repo.id,...value.pullRequest.base.repo}},
+    head:{...value.pullRequest.head,ref:pr.headRefName,repo:{id:repo.id,name:"openclaw",html_url:repo.url,owner:{login:"openclaw"},...value.pullRequest.head.repo}}});
   else if (endpoint === prefix + "commits/" + value.headSha && args.includes("--jq")) out({name:"Fixture Contributor",email:"fixture@example.com",user:{login:"fixture-contributor",type:"User"}});
   else if (endpoint === prefix + "issues/131091/comments?per_page=100") out(reviewComments);
   else if (endpoint === prefix + "commits/" + value.headSha + "/check-runs?filter=latest&per_page=100") out(value.checkRuns.check_runs.map(check => ({check_runs:[check]})));
@@ -427,6 +448,7 @@ else if (endpoint === "graphql" && args.includes("query=query { viewer { login }
     case "$1" in --git-dir=*) shift;; esac
     case "$1" in
       fetch|cat-file|merge-base) exit 0;;
+      config) [ "$*" = 'config --bool remote.origin.promisor' ] && exit 1; exit 19;;
       remote) [ "$2 $3" = 'get-url origin' ] || exit 19; echo 'https://github.com/openclaw/openclaw.git';;
       merge-tree) echo candidate-tree;;
       rev-parse) case "$2" in
@@ -560,13 +582,14 @@ const mergeAuthorizationCommand = `
 enter_worktree() { PR_MAIN_SHA=${mainSha}; }
 refresh_main_snapshot() { PR_MAIN_SHA=${mainSha}; }
 verify_prep_branch_matches_prepared_head() { :; }
+review_artifact_preflight() { :; }
 validate_review_artifact_data() { :; }
 require_ready_review_recommendation() { :; }
 mark_pr_operation_side_effects_started() { :; }
 is_canonical_pr_number() { [[ "$1" =~ ^[1-9][0-9]*$ ]]; }
 merge_outcome_load_local() { MERGE_OUTCOME_OID=""; MERGE_OUTCOME_RECORD=""; }
 merge_outcome_write() { MERGE_OUTCOME_RECORD="$1"; printf '%s\\n' "$1" > .local/intent.json; }
-for artifact in review.md review.json pr-meta.env pr-meta.json prep.md; do
+for artifact in review.json pr-meta.env pr-meta.json prep.md; do
   echo fixture > ".local/$artifact"
 done
 printf '%s\\n' PREP_HEAD_SHA=${headSha} PREP_REPLACED_HOSTED_ANCESTRY=false PREP_AUTHOR_ACCESS=maintainer > .local/prep.env

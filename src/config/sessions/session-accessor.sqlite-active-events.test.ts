@@ -1,5 +1,6 @@
 // Active transcript projection tests cover branch rebuilds and bounded large-history reads.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { requireNodeSqlite } from "../../infra/node-sqlite.js";
 import {
@@ -30,6 +31,10 @@ import {
 import { runExclusiveSqliteSessionWrite } from "./session-accessor.sqlite-scope.js";
 import { appendTranscriptEventsInTransaction } from "./session-accessor.sqlite-transcript-store.js";
 import { runWithSessionTranscriptReadFence } from "./session-transcript-read-fence.js";
+import {
+  closeSessionTranscriptReconcileWorkerPool,
+  getSessionTranscriptReconcileWorkerPoolSnapshot,
+} from "./session-transcript-reconcile-pool.js";
 import {
   reconcileSessionTranscriptIndexes,
   startSessionTranscriptIndexReconcile,
@@ -762,39 +767,29 @@ describe("SQLite active transcript event projection", () => {
       messages: [{ eventId: "seed", message: { role: "user", content: "seed" } }],
       touchSessionEntry: false,
     });
+    await closeSessionTranscriptReconcileWorkerPool();
+    const poolBefore = getSessionTranscriptReconcileWorkerPoolSnapshot();
+    expect(poolBefore.workersCreated).toBe(0);
     queuedSessionWrite.mockClear();
-    let resolveCompletionQueued!: () => void;
-    const completionQueued = new Promise<void>((resolve) => {
-      resolveCompletionQueued = resolve;
-    });
+    const completionQueued = createDeferred();
     queuedSessionWrite.mockImplementation(() => {
       if (queuedSessionWrite.mock.calls.length === 2) {
-        resolveCompletionQueued();
+        completionQueued.resolve();
       }
     });
-    let releaseWriter!: () => void;
-    let writerEntered!: () => void;
-    const entered = new Promise<void>((resolve) => {
-      writerEntered = resolve;
-    });
-    const release = new Promise<void>((resolve) => {
-      releaseWriter = resolve;
-    });
+    const entered = createDeferred();
+    const release = createDeferred();
     const heldWriter = runExclusiveSqliteSessionWrite(
       { agentId: scope.agentId, env: scope.env },
       async () => {
-        writerEntered();
-        await release;
+        entered.resolve();
+        await release.promise;
       },
       "session.transcript.batch",
     );
-    await entered;
-    const createWorker = vi.fn(() => {
-      throw new Error("clean projection must not spawn a worker");
-    });
+    await entered.promise;
     const outcome = reconcileSessionTranscriptIndexes({
       agentId: scope.agentId,
-      createWorker,
       env: scope.env,
     }).then(
       (value) => ({ value }),
@@ -802,13 +797,16 @@ describe("SQLite active transcript event projection", () => {
     );
 
     // The second queued write is the preflight transaction waiting behind the held writer.
-    await completionQueued;
-    expect(queuedSessionWrite).toHaveBeenCalledTimes(2);
-    releaseWriter();
-    await heldWriter;
+    try {
+      await completionQueued.promise;
+      expect(queuedSessionWrite).toHaveBeenCalledTimes(2);
+    } finally {
+      release.resolve();
+      await heldWriter;
+    }
 
     expect(await outcome).toEqual({ value: { reconciledSessions: 0 } });
-    expect(createWorker).not.toHaveBeenCalled();
+    expect(getSessionTranscriptReconcileWorkerPoolSnapshot()).toEqual(poolBefore);
   }, 10_000);
 
   it("keeps dirty batch appends off the synchronous writer stack", async () => {

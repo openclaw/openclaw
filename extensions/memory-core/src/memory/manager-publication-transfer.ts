@@ -22,7 +22,12 @@ function* jsonParts(value: unknown): Generator<string> {
       if (index) {
         yield ",";
       }
-      yield* jsonParts(value[index] ?? null);
+      const item: unknown = value[index] ?? null;
+      if (typeof item === "number") {
+        yield JSON.stringify(item);
+      } else {
+        yield* jsonParts(item);
+      }
     }
     yield "]";
   } else if (value && typeof value === "object") {

@@ -51,6 +51,24 @@ import {
 
 const NATIVE_HOOK_RELAY_EXEC_PREFIX = process.platform === "win32" ? "" : "exec ";
 
+function createPermissionRequestFixture(
+  relayId: string,
+  toolUseId: string,
+): Parameters<typeof invokeNativeHookRelay>[0] {
+  return {
+    provider: "codex",
+    relayId,
+    event: "permission_request",
+    rawPayload: {
+      hook_event_name: "PermissionRequest",
+      cwd: "/repo",
+      tool_name: "Bash",
+      tool_use_id: toolUseId,
+      tool_input: { command: "git status" },
+    },
+  };
+}
+
 function readTestNativeAgentId(rawPayload: unknown): string | undefined {
   if (!isRecord(rawPayload) || typeof rawPayload.agent_id !== "string") {
     return undefined;
@@ -1014,18 +1032,9 @@ describe("native hook relay registry", () => {
     const approvalRequester = vi.fn(() => pendingDecision);
     testing.setNativeHookRelayPermissionApprovalRequesterForTests(approvalRequester);
 
-    const first = invokeNativeHookRelay({
-      provider: "codex",
-      relayId: relay.relayId,
-      event: "permission_request",
-      rawPayload: {
-        hook_event_name: "PermissionRequest",
-        cwd: "/repo",
-        tool_name: "Bash",
-        tool_use_id: "native-call-1",
-        tool_input: { command: "git status" },
-      },
-    });
+    const first = invokeNativeHookRelay(
+      createPermissionRequestFixture(relay.relayId, "native-call-1"),
+    );
     const state = getNativeHookRelaySharedStateForTests();
     await vi.waitFor(() => expect(state.pendingPermissionApprovals.size).toBe(1));
     expect(state.permissionApprovalWindows.get(relay.relayId)).toHaveLength(1);
@@ -1136,18 +1145,9 @@ describe("native hook relay registry", () => {
     duplicateModule.testing.setNativeHookRelayPermissionApprovalRequesterForTests(
       duplicateApprovalRequester,
     );
-    const duplicateApproval = await duplicateModule.invokeNativeHookRelay({
-      provider: "codex",
-      relayId: relay.relayId,
-      event: "permission_request",
-      rawPayload: {
-        hook_event_name: "PermissionRequest",
-        cwd: "/repo",
-        tool_name: "Bash",
-        tool_use_id: "native-call-1",
-        tool_input: { command: "git status" },
-      },
-    });
+    const duplicateApproval = await duplicateModule.invokeNativeHookRelay(
+      createPermissionRequestFixture(relay.relayId, "native-call-1"),
+    );
     expect(JSON.parse(duplicateApproval.stdout)).toEqual({
       hookSpecificOutput: {
         hookEventName: "PermissionRequest",
@@ -1157,18 +1157,9 @@ describe("native hook relay registry", () => {
 
     const primaryApprovalRequester = vi.fn(async () => "deny" as const);
     testing.setNativeHookRelayPermissionApprovalRequesterForTests(primaryApprovalRequester);
-    const primaryApproval = await invokeNativeHookRelay({
-      provider: "codex",
-      relayId: relay.relayId,
-      event: "permission_request",
-      rawPayload: {
-        hook_event_name: "PermissionRequest",
-        cwd: "/repo",
-        tool_name: "Bash",
-        tool_use_id: "native-call-2",
-        tool_input: { command: "git status" },
-      },
-    });
+    const primaryApproval = await invokeNativeHookRelay(
+      createPermissionRequestFixture(relay.relayId, "native-call-2"),
+    );
     expect(JSON.parse(primaryApproval.stdout)).toEqual({
       hookSpecificOutput: {
         hookEventName: "PermissionRequest",
@@ -4117,30 +4108,12 @@ describe("native hook relay registry", () => {
     const approvalRequester = vi.fn(async () => "allow-always" as const);
     testing.setNativeHookRelayPermissionApprovalRequesterForTests(approvalRequester);
 
-    const first = await invokeNativeHookRelay({
-      provider: "codex",
-      relayId: relay.relayId,
-      event: "permission_request",
-      rawPayload: {
-        hook_event_name: "PermissionRequest",
-        cwd: "/repo",
-        tool_name: "Bash",
-        tool_use_id: "native-call-1",
-        tool_input: { command: "git status" },
-      },
-    });
-    const second = await invokeNativeHookRelay({
-      provider: "codex",
-      relayId: relay.relayId,
-      event: "permission_request",
-      rawPayload: {
-        hook_event_name: "PermissionRequest",
-        cwd: "/repo",
-        tool_name: "Bash",
-        tool_use_id: "native-call-2",
-        tool_input: { command: "git status" },
-      },
-    });
+    const first = await invokeNativeHookRelay(
+      createPermissionRequestFixture(relay.relayId, "native-call-1"),
+    );
+    const second = await invokeNativeHookRelay(
+      createPermissionRequestFixture(relay.relayId, "native-call-2"),
+    );
 
     expect(approvalRequester).toHaveBeenCalledTimes(1);
     expect([first, second].map((response) => JSON.parse(response.stdout))).toEqual([
@@ -4172,18 +4145,7 @@ describe("native hook relay registry", () => {
     const approvalRequester = vi.fn(async () => "allow-always" as const);
     testing.setNativeHookRelayPermissionApprovalRequesterForTests(approvalRequester);
 
-    await invokeNativeHookRelay({
-      provider: "codex",
-      relayId: first.relayId,
-      event: "permission_request",
-      rawPayload: {
-        hook_event_name: "PermissionRequest",
-        cwd: "/repo",
-        tool_name: "Bash",
-        tool_use_id: "native-call-1",
-        tool_input: { command: "git status" },
-      },
-    });
+    await invokeNativeHookRelay(createPermissionRequestFixture(first.relayId, "native-call-1"));
     first.unregister();
     const second = registerNativeHookRelay({
       provider: "codex",
@@ -4193,18 +4155,7 @@ describe("native hook relay registry", () => {
       sessionKey: "agent:main:session-2",
       runId: "run-2",
     });
-    await invokeNativeHookRelay({
-      provider: "codex",
-      relayId: second.relayId,
-      event: "permission_request",
-      rawPayload: {
-        hook_event_name: "PermissionRequest",
-        cwd: "/repo",
-        tool_name: "Bash",
-        tool_use_id: "native-call-2",
-        tool_input: { command: "git status" },
-      },
-    });
+    await invokeNativeHookRelay(createPermissionRequestFixture(second.relayId, "native-call-2"));
 
     expect(approvalRequester).toHaveBeenCalledTimes(2);
     const request = getMockCallArg(approvalRequester, 1, 0, "second approval request");

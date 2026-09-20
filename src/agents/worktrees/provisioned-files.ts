@@ -3,7 +3,7 @@ import fs, { type FileHandle } from "node:fs/promises";
 import path from "node:path";
 import { root as fsRoot, FsSafeError, type Root } from "../../infra/fs-safe.js";
 import { runGitWorkerOperation } from "../../infra/git-worker.js";
-import { splitNullBuffer } from "./git-path-inventory.js";
+import { gitPathspecBatches, splitNullBuffer } from "./git-path-inventory.js";
 import { requireGitBuffer } from "./git.js";
 import {
   hasSafeParentDirectories,
@@ -173,18 +173,7 @@ async function readProvisionedMembership(
   const ignoredUntracked = new Set<string>();
   const currentTracked = new Set<string>();
   const trackedAtHead = new Set<string>();
-  let offset = 0;
-  while (offset < paths.length) {
-    const batch: string[] = [];
-    let bytes = 0;
-    while (
-      offset < paths.length &&
-      (batch.length === 0 || (batch.length < 128 && bytes < 16_384))
-    ) {
-      const entry = paths[offset++]!;
-      batch.push(entry);
-      bytes += Buffer.byteLength(entry) + 1;
-    }
+  for (const batch of gitPathspecBatches(paths)) {
     for (const [target, args] of [
       [ignoredUntracked, ["ls-files", "--others", "--ignored", "--exclude-standard", "-z"]],
       [currentTracked, ["ls-files", "--cached", "-z"]],

@@ -5,25 +5,26 @@ sees through the dedicated QA user account.
 
 ## Baseline preconditions
 
-- Complete Prepare, Doctor, and proof-directory creation in [`SKILL.md`](../SKILL.md).
+- Complete Prepare and proof-directory creation in [`SKILL.md`](../SKILL.md). The runner performs strict readiness on the same lease used for the scenario.
 
 ## Driving conventions
 
 - Use `run-mock-sut-user-e2e.mjs` for every recipe. It owns a fresh SUT gateway.
-- Prefer `--dm` for isolated turns. Use the group only for mention and reaction behavior.
+- Prefer `--dm` for isolated turns. Use the group only when group policy, mentions, commands, topics, or reactions are part of the claim.
 - Give every feature its own proof subdirectory and explicit `--record` plus `--output` paths.
-- After a failed drive, rerun doctor before another Telegram action.
+- After a failed drive, preserve the evidence and repair the setup or harness before another attempt. The changed scenario must pass readiness on its own lease; use a standalone doctor only to isolate a credential problem.
 
 ## Proof gate
 
 - Apply the evidence and cleanup gates from `SKILL.md` to every recipe.
-- Record an unreachable path with the exact command and missing account, chat,
-  entitlement, OS, or external-service prerequisite.
+- For an unreachable path, record the exact command, attempted in-scope setup
+  and remaining access, platform or external-service boundary. A missing test
+  chat alone is a fixture to create, not an unreachable path.
 
 ## Features
 
 - [Basic turns](./basic-turns.md): real-user group, DM, and native-command entry points.
-- [Delivery lifecycle](./delivery-lifecycle.md): messages, edits, typing, and receipt finalization.
+- [Delivery lifecycle](./delivery-lifecycle.md): messages, edits, typing, and finalization.
 - [Reaction lifecycle](./reaction-lifecycle.md): acknowledgement and status reactions on the user's message.
 - Photo and album turns: pass `--photo PATH` to the canonical runner; repeat it for one Telegram media album and inspect `messagePhoto` events plus provider evidence.
 
@@ -33,7 +34,7 @@ sees through the dedicated QA user account.
 
 ## Reaching non-default config
 
-The whole point of an audit lane is exercising config the default path never uses:
+The audit lane exercises config the default path never uses:
 
 | Knob                        | Reaches                                                                                                                         |
 | --------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
@@ -54,10 +55,10 @@ it needs. Invoke a shell explicitly when the test needs shell syntax.
 
 Read `sutBotToken` from
 `$TELEGRAM_E2E_STATE_DIR/credentials.local.json` inside the command process.
-Use that value with `TELEGRAM_E2E_TEST_API_ROOT` to call any Test Bot API method.
-Gateway resolves the same private JSON file through a file SecretRef. The
-runner passes file locations to children and keeps leased tokens out of their
-environments. The local proxy forwards requests to Telegram's Test Server.
+Use it with `TELEGRAM_E2E_TEST_API_ROOT` to call any Test Bot API method.
+Gateway reads a private run-owned `tokenFile`; the runner passes file locations
+to children and keeps leased tokens out of their environments. The local proxy
+forwards requests to Telegram's Test Server.
 
 Command actions stay in the runner-owned process group by default. A command
 that deliberately creates a new process session owns that session and stops it

@@ -40,6 +40,7 @@ jobs:
       full_release_validation_run_id: ${{ steps.inputs.outputs.full_release_validation_run_id }}
       full_release_validation_run_attempt: ${{ steps.inputs.outputs.full_release_validation_run_attempt }}
       release_publish_run_id: ${{ steps.inputs.outputs.release_publish_run_id }}
+      stable_soak_waiver: ${{ steps.inputs.outputs.stable_soak_waiver }}
       rollback_drill_date: ${{ steps.inputs.outputs.rollback_drill_date }}
       rollback_drill_id: ${{ steps.inputs.outputs.rollback_drill_id }}
       evidence_tag: ${{ steps.inputs.outputs.evidence_tag }}
@@ -314,10 +315,12 @@ jobs:
             echo "Stable closeout requires repository variables RELEASE_ROLLBACK_DRILL_ID and RELEASE_ROLLBACK_DRILL_DATE, or explicit manual overrides." >&2
             exit 1
           fi
+          stable_soak_waiver="$(jq -c '.stableSoakWaiver // "" | if type == "string" then . else error("Invalid stable soak waiver") end' "$evidence_path")"
           {
             echo "full_release_validation_run_id=$full_release_validation_run_id"
             echo "full_release_validation_run_attempt=$full_release_validation_run_attempt"
             echo "release_publish_run_id=$release_publish_run_id"
+            echo "stable_soak_waiver=$stable_soak_waiver"
             echo "rollback_drill_date=$ROLLBACK_DRILL_DATE"
             echo "rollback_drill_id=$ROLLBACK_DRILL_ID"
             echo "evidence_tag=$evidence_source_tag"
@@ -410,6 +413,7 @@ jobs:
 
       - name: Verify release workflow evidence
         env:
+          STABLE_SOAK_WAIVER: ${{ fromJSON(needs.resolve.outputs.stable_soak_waiver) }}
           RELEASE_TAG: ${{ needs.resolve.outputs.tag }}
           GH_TOKEN: ${{ github.token }}
           EVIDENCE_TAG: ${{ needs.resolve.outputs.evidence_tag }}
@@ -462,15 +466,13 @@ jobs:
             .workflowName == "Full Release Validation" and
             .runId == $run_id and
             .runAttempt == $run_attempt and
-            .targetSha == $tag_sha and
-            .rerunGroup == "all" and
-            .runReleaseSoak == "true" and
-            .controls.performanceBlocking == true and
-            .childRuns.productPerformance.conclusion == "success"
+            .targetSha == $tag_sha
           ' "$manifest_dir/$manifest_asset" >/dev/null || {
             echo "Full Release Validation manifest does not contain the required stable release controls." >&2
             exit 1
           }
+          node .closeout-tooling/scripts/lib/release-publish-gates.mts \
+            --consumer stable-closeout --manifest "$manifest_dir/$manifest_asset"
 
           recovery_evidence="$manifest_dir/openclaw-${evidence_version}-postpublish-evidence.json"
           if [[ "$ALLOW_FAILED_PUBLISH_RECOVERY" == "true" ]]; then

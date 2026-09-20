@@ -45,8 +45,14 @@ export async function prepareMemoryFlushSession(params: {
     },
     sessionManager,
     sessionPersistence: "detached",
+    cleanupBundleMcpOnRunEnd: true,
   } satisfies Pick<
     RunEmbeddedAgentParams,
-    "sessionId" | "sessionKey" | "sessionTarget" | "sessionManager" | "sessionPersistence"
+    | "cleanupBundleMcpOnRunEnd"
+    | "sessionId"
+    | "sessionKey"
+    | "sessionTarget"
+    | "sessionManager"
+    | "sessionPersistence"
   > & { sessionFile: string };
 }

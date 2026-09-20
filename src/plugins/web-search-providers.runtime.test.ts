@@ -28,12 +28,12 @@ const BUNDLED_WEB_SEARCH_PROVIDERS = [
 ] as const;
 
 let createEmptyPluginRegistry: RegistryModule["createEmptyPluginRegistry"];
-let loadPluginManifestRegistryMock: ReturnType<
-  typeof vi.fn<LoadPluginManifestRegistryForPluginRegistry>
->;
-let loadInstalledPluginManifestRegistryMock: ReturnType<
-  typeof vi.fn<LoadPluginManifestRegistryForInstalledIndex>
->;
+const { loadPluginManifestRegistryMock, loadInstalledPluginManifestRegistryMock } = vi.hoisted(
+  () => ({
+    loadPluginManifestRegistryMock: vi.fn<LoadPluginManifestRegistryForPluginRegistry>(),
+    loadInstalledPluginManifestRegistryMock: vi.fn<LoadPluginManifestRegistryForInstalledIndex>(),
+  }),
+);
 let setActivePluginRegistry: RuntimeModule["setActivePluginRegistry"];
 let resolvePluginWebSearchProviders: WebSearchProvidersRuntimeModule["resolvePluginWebSearchProviders"];
 let resolveRuntimeWebSearchProviders: WebSearchProvidersRuntimeModule["resolveRuntimeWebSearchProviders"];
@@ -270,55 +270,51 @@ function expectSnapshotLoaderCalls(params: {
   expectLoaderCallCount(params.expectedLoaderCalls);
 }
 
+vi.mock("./manifest-registry.js", async () => {
+  const actual =
+    await vi.importActual<typeof import("./manifest-registry.js")>("./manifest-registry.js");
+  return {
+    ...actual,
+    loadPluginManifestRegistryCore: (
+      ...args: Parameters<LoadPluginManifestRegistryForPluginRegistry>
+    ) => loadPluginManifestRegistryMock(...args),
+  };
+});
+vi.mock("./plugin-registry-snapshot.js", async () => {
+  const actual = await vi.importActual<typeof import("./plugin-registry-snapshot.js")>(
+    "./plugin-registry-snapshot.js",
+  );
+  return {
+    ...actual,
+    loadPluginRegistrySnapshotWithMetadata: () => ({
+      source: "derived",
+      snapshot: {
+        plugins: [
+          {
+            pluginId: "__test_manifest_registry_fixture__",
+            origin: "bundled",
+            enabled: true,
+          },
+        ],
+      },
+      diagnostics: [],
+    }),
+  };
+});
+vi.mock("./manifest-registry-installed.js", async () => {
+  const actual = await vi.importActual<typeof import("./manifest-registry-installed.js")>(
+    "./manifest-registry-installed.js",
+  );
+  return {
+    ...actual,
+    loadPluginManifestRegistryForInstalledIndex: (
+      ...args: Parameters<LoadPluginManifestRegistryForInstalledIndex>
+    ) => loadInstalledPluginManifestRegistryMock(...args),
+  };
+});
+
 describe("resolvePluginWebSearchProviders", () => {
   beforeAll(async () => {
-    loadPluginManifestRegistryMock = vi.fn<LoadPluginManifestRegistryForPluginRegistry>();
-    loadInstalledPluginManifestRegistryMock = vi.fn<LoadPluginManifestRegistryForInstalledIndex>();
-    vi.doMock("./manifest-registry.js", async () => {
-      const actual =
-        await vi.importActual<typeof import("./manifest-registry.js")>("./manifest-registry.js");
-      return {
-        ...actual,
-        loadPluginManifestRegistryCore: (
-          ...args: Parameters<LoadPluginManifestRegistryForPluginRegistry>
-        ) => loadPluginManifestRegistryMock(...args),
-      };
-    });
-    vi.doMock("./plugin-registry.js", async () => {
-      const actual =
-        await vi.importActual<typeof import("./plugin-registry.js")>("./plugin-registry.js");
-      return {
-        ...actual,
-        loadPluginRegistrySnapshotWithMetadata: () => ({
-          source: "derived",
-          snapshot: {
-            plugins: [
-              {
-                pluginId: "__test_manifest_registry_fixture__",
-                origin: "bundled",
-                enabled: true,
-              },
-            ],
-          },
-          diagnostics: [],
-        }),
-        loadPluginManifestRegistryForPluginRegistry: (
-          ...args: Parameters<LoadPluginManifestRegistryForPluginRegistry>
-        ) => loadPluginManifestRegistryMock(...args),
-      };
-    });
-    vi.doMock("./manifest-registry-installed.js", async () => {
-      const actual = await vi.importActual<typeof import("./manifest-registry-installed.js")>(
-        "./manifest-registry-installed.js",
-      );
-      return {
-        ...actual,
-        loadPluginManifestRegistryForInstalledIndex: (
-          ...args: Parameters<LoadPluginManifestRegistryForInstalledIndex>
-        ) => loadInstalledPluginManifestRegistryMock(...args),
-      };
-    });
-
     ({ createEmptyPluginRegistry } = await import("./registry-empty.js"));
     loaderModule = await import("./loader.js");
     pluginAutoEnableModule = await import("../config/plugin-auto-enable.js");

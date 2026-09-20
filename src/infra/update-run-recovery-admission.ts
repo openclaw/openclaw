@@ -26,25 +26,7 @@ async function inspectUpdateRecoveryDatabasePath(
   const databasePath = path.resolve(
     options.path ?? resolveOpenClawStateSqlitePath(options.env ?? process.env),
   );
-  const parent = path.dirname(databasePath);
-  try {
-    await fs.lstat(parent);
-  } catch (error) {
-    if (!hasNodeErrorCode(error, "ENOENT")) {
-      throw error;
-    }
-    return undefined;
-  }
-  // A family may hold the only original DB even when another canonical file
-  // exists. Locators confer no authority to inspect, repair, or retire it.
-  // Do not swallow discovery races or recreate an absent canonical database.
-  const families = await fs.readdir(parent);
-  if (families.some((name) => name.startsWith(".openclaw-restore-"))) {
-    throw new Error(
-      "Interrupted shared-database publication is read-only while full-state recovery is deferred",
-    );
-  }
-  return databasePath;
+  return (await assertUpdateRecoveryDirectoryAdmission(databasePath)) ? databasePath : undefined;
 }
 
 /** Read-only admission; neither a missing nor a replaced DB retires old recovery. */
@@ -164,4 +146,29 @@ export function bindUnprotectedGatewayUpdateFinalizer(
   };
   assertCurrent();
   return { runId: parent.runId, assertCurrent };
+}
+
+/** Check publication before an admitted row reader; false means the parent is absent. */
+export async function assertUpdateRecoveryDirectoryAdmission(
+  databasePath: string,
+): Promise<boolean> {
+  const parent = path.dirname(databasePath);
+  try {
+    await fs.lstat(parent);
+  } catch (error) {
+    if (!hasNodeErrorCode(error, "ENOENT")) {
+      throw error;
+    }
+    return false;
+  }
+  // A family may hold the only original DB even when another canonical file
+  // exists. Locators confer no authority to inspect, repair, or retire it.
+  // Do not swallow discovery races or recreate an absent canonical database.
+  const families = await fs.readdir(parent);
+  if (families.some((name) => name.startsWith(".openclaw-restore-"))) {
+    throw new Error(
+      "Interrupted shared-database publication is read-only while full-state recovery is deferred",
+    );
+  }
+  return true;
 }

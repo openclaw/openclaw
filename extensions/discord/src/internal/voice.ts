@@ -1,4 +1,3 @@
-// Discord plugin module implements voice behavior.
 import type {
   DiscordGatewayAdapterCreator,
   DiscordGatewayAdapterLibraryMethods,

@@ -119,6 +119,42 @@ async function consume(kind: "agent" | "summary" | "branch" | "model-summary", s
 }
 
 describe("plugin stream consumer admission", () => {
+  it("fences new retained admission while replacing an idle donor and releases only its own reservation", async () => {
+    const instance = new PluginInstance("idle-donor");
+    const custody = instance.retainConsumer(undefined, undefined, "custody");
+    const release = instance.reserveReplacement();
+    try {
+      expect(() => instance.retainConsumer()).toThrow("retiring");
+      expect(() => custody.run(() => instance.retainConsumer())).toThrow("retiring");
+      expect(() => instance.retainWork()).toThrow("replacement is in progress");
+      expect(() => instance.reserveReplacement()).toThrow("replacement is in progress");
+      release();
+      const releaseNext = instance.reserveReplacement();
+      release();
+      expect(() => instance.retainWork()).toThrow("replacement is in progress");
+      releaseNext();
+      const work = instance.retainConsumer();
+      expect(work.run(() => "still callable")).toBe("still callable");
+      work.release();
+    } finally {
+      release();
+      custody.release();
+      await instance.dispose();
+    }
+  });
+
+  it("keeps finite host work visible to replacement without making disposal wait on itself", async () => {
+    const instance = new PluginInstance("host-work");
+    const release = instance.retainWork();
+    expect(() => instance.reserveReplacement()).toThrow("active retained work");
+    await expect(instance.dispose()).resolves.toEqual({ errors: [] });
+    expect(() => instance.reserveReplacement()).toThrow("active retained work");
+    release();
+    release();
+    instance.reserveReplacement()();
+    expect(() => instance.run(() => "unavailable")).toThrow("reloaded or disabled");
+  });
+
   it.each(["direct", "thinking"] as const)(
     "admits an async stream factory through %s before retirement can finish its handoff",
     async (wrapper) => {

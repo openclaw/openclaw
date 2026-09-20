@@ -20,11 +20,14 @@ type InProcessGatewayDispatchOptions = {
   isWebchatConnect?: GatewayRequestOptions["isWebchatConnect"];
   methodRegistry?: GatewayMethodRegistry;
   onAccepted?: (payload: unknown) => void;
+  /** Observes handler settlement separately from the non-cancelling response deadline. */
+  onExecution?: (execution: Promise<void>) => void;
   onSignalAbort?: () => Promise<void> | void;
   requestIdPrefix?: string;
   sessionMutationCommitGuard?: () => void;
   timeoutMs?: number;
   signal?: AbortSignal;
+  hasCurrentClientAuthority?: GatewayRequestOptions["hasCurrentClientAuthority"];
 };
 
 export function unwrapGatewayMethodDispatchResponse(
@@ -189,7 +192,7 @@ export async function dispatchGatewayRequestInProcessRaw(
   try {
     const { handleGatewayRequest } = await import("./server-methods.js");
     entry?.assertOpen();
-    void options.context
+    const execution = options.context
       .trackExecution(() =>
         handleGatewayRequest({
           req,
@@ -211,6 +214,9 @@ export async function dispatchGatewayRequestInProcessRaw(
           context: options.context,
           methodRegistry: options.methodRegistry,
           sessionMutationCommitGuard: options.sessionMutationCommitGuard,
+          ...(options.hasCurrentClientAuthority
+            ? { hasCurrentClientAuthority: options.hasCurrentClientAuthority }
+            : {}),
           ...(options.signal ? { signal: options.signal } : {}),
         })
           .then(() => {
@@ -231,6 +237,7 @@ export async function dispatchGatewayRequestInProcessRaw(
         postFirstResponseError = error;
         rejectFinalResponse?.(error);
       });
+    options.onExecution?.(execution);
   } catch (error) {
     entry?.release();
     throw error;

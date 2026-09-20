@@ -57,6 +57,7 @@ type ChatMetadataBinding = {
   scope: { agentId?: string; sessionKey: string };
   version: number;
   sessionFactsInvalidated: boolean;
+  sessionRefreshPending?: boolean;
   sessionFactsRetryPending?: boolean;
   sessionFactsRequest?: { version: number; promise: Promise<void> };
   refreshPending?: { refresh: ChatMetadataRefresh; promise: Promise<void> };
@@ -177,6 +178,8 @@ function bindChatMetadata(host: ChatPageHost): ChatMetadataBinding | undefined {
           return;
         }
         if (update.type === "invalidated" || update.type === "loading") {
+          binding.sessionRefreshPending =
+            update.type === "invalidated" && update.scope === "session";
           binding.version += 1;
           if (binding.sessionFactsRequest) {
             binding.sessionFactsInvalidated = true;
@@ -184,9 +187,11 @@ function bindChatMetadata(host: ChatPageHost): ChatMetadataBinding | undefined {
           }
         }
         if (update.type === "invalidated") {
-          binding.catalogRequest?.controller.abort();
-          binding.catalogRequest = undefined;
-          host.chatModelsLoading = false;
+          if (update.scope === "full") {
+            binding.catalogRequest?.controller.abort();
+            binding.catalogRequest = undefined;
+            host.chatModelsLoading = false;
+          }
           binding.sessionFactsInvalidated ||= update.refreshSessionFacts;
           void refreshChatMetadata(host, { automatic: true });
           return;
@@ -198,6 +203,10 @@ function bindChatMetadata(host: ChatPageHost): ChatMetadataBinding | undefined {
               agentId: scope.agentId,
               result: update.result,
             });
+            if (update.catalogChanged) {
+              binding.sessionFactsInvalidated = true;
+              void refreshChatMetadata(host, { automatic: true });
+            }
           }
           if (binding.sessionFactsRetryPending) {
             binding.sessionFactsRetryPending = false;
@@ -493,6 +502,7 @@ export function applyChatModelCatalogSnapshot(host: ChatPageHost): boolean {
   if (
     binding &&
     fresh &&
+    !binding.sessionRefreshPending &&
     binding.sessionFactsInvalidated &&
     host.chatMetadataIsPresented?.() !== false
   ) {

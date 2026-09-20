@@ -4,6 +4,7 @@ import {
   getPluginRuntimeGatewayRequestScope,
   withPluginRuntimeGatewayRequestScope,
 } from "../../plugins/runtime/gateway-request-scope.js";
+import { getReplyPayloadMetadata, setReplyPayloadMetadata } from "../reply-payload.js";
 import type { ReplyPayload } from "../types.js";
 import type { AdmittedFollowupTurn } from "./followup-turn-admission.js";
 import type { FollowupExecutionResult } from "./followup-turn-execution.js";
@@ -619,6 +620,82 @@ describe("createFollowupRunner", () => {
     );
     expect(state.clearRunContext).toHaveBeenCalledWith("run-1");
   });
+
+  it.each(["delivered", "filtered", "delivery-failed", "completion-failed"])(
+    "closes queued continuation adoption after its delivery owner settles (%s)",
+    async (outcome) => {
+      const turn = createTurn();
+      let continuationOpen = true;
+      let openAtCleanup: boolean | undefined;
+      const adoptionResults: Array<boolean | undefined> = [];
+      const adopt = vi.fn(async () => continuationOpen);
+      const statusPayload = setReplyPayloadMetadata(
+        { text: "The worker is continuing." },
+        {
+          continuationStatus: true,
+          progressContinuation: {
+            adopt,
+            close: () => {
+              continuationOpen = false;
+            },
+          },
+        },
+      );
+      const decision = { kind: "deliver", payloads: [statusPayload] };
+      const receipt = {
+        channel: "discord",
+        to: "user:1",
+        messageId: "existing-card",
+        text: "The worker is continuing.",
+        snapshot: { lines: ["The worker is continuing."] },
+      };
+      turn.queued.queuedFollowupReplyDisposition = {
+        kind: "deliver",
+        deliver: async (batch) => {
+          for (const payload of batch.payloads) {
+            adoptionResults.push(
+              await getReplyPayloadMetadata(payload)?.progressContinuation?.adopt(receipt),
+            );
+          }
+          if (outcome === "completion-failed") {
+            throw new Error("completion failed after adoption");
+          }
+        },
+      };
+      state.admit.mockResolvedValue({ kind: "admitted", turn });
+      state.execute.mockResolvedValue(createSettledExecution());
+      state.account.mockResolvedValue({});
+      state.resolveDecision.mockResolvedValue(decision);
+      state.deliver.mockImplementation(async () => {
+        if (outcome === "delivery-failed") {
+          throw new Error("delivery failed before adoption");
+        }
+        return {
+          kind: "completed",
+          payloads: outcome === "filtered" ? [] : decision.payloads,
+        };
+      });
+
+      await createFollowupRunner({
+        typing: createTypingController(),
+        typingMode: "never",
+        defaultModel: "claude",
+        opts: {
+          onQueuedFollowupSettled: async () => {
+            openAtCleanup = continuationOpen;
+          },
+        },
+      })(turn.queued);
+
+      await expect(adopt()).resolves.toBe(false);
+      expect(openAtCleanup).toBe(true);
+      expect(adoptionResults).toEqual(
+        outcome === "delivered" || outcome === "completion-failed" ? [true] : [],
+      );
+      expect(state.execute).toHaveBeenCalledOnce();
+      expect(state.completeLifecycle).toHaveBeenCalledWith(turn.queued);
+    },
+  );
 
   it.each([true, false])(
     "projects queued commentary with the refreshed durable owner when enabled is %s",

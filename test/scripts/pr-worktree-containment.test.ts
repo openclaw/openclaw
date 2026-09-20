@@ -32,7 +32,7 @@ const bash = process.platform === "darwin" ? "/bin/bash" : "bash";
 // Keep real worktree/index behavior at the provisioning boundary; the complete
 // locked adapter path is covered by pr-worktree-provision.test.ts.
 const provisionWorktreeFixture =
-  'provision_pr_worktree() { git -C "$1" worktree add -- "$1/.worktrees/pr-$2" "temp/pr-$2"; }';
+  'provision_pr_worktree() { pr_git -C "$1" worktree add -- "$1/.worktrees/pr-$2" "temp/pr-$2"; }';
 
 type Fixture = {
   root: string;
@@ -154,11 +154,11 @@ function runShell(fixture: Fixture, commands: string[], env?: NodeJS.ProcessEnv)
         'source "$3"',
         'fixture_root="$4"',
         'script_parent_dir="$fixture_root"',
-        `gh_plain() { printf 'HTTP/2.0 200 OK\\n\\n{"data":{"viewer":{"login":"fixture-user"}}}\\n'; }`,
+        `pr_gh_plain() { printf 'HTTP/2.0 200 OK\\n\\n{"data":{"viewer":{"login":"fixture-user"}}}\\n'; }`,
         "mark_pr_operation_side_effects_started() { :; }",
         provisionWorktreeFixture,
         'pr_meta_json() { local head; head=$(git rev-parse refs/pull/42/head); jq -cn --arg head "$head" \'{number:42,title:"fixture",url:"https://example.invalid/42",state:"OPEN",isDraft:false,author:{login:"fixture"},baseRefName:"main",headRefName:"review/pr",headRefOid:$head,headRepository:{nameWithOwner:"fixture/repo",url:""},headRepositoryOwner:{login:"fixture"},additions:1,deletions:0,changedFiles:3}\'; }',
-        'gh() { if [ "$#" = 5 ] && [ "$1 $2 $3 $4" = "pr view 42 --json" ]; then pr_meta_json 42 | jq --arg fields "$5" \'with_entries(select(.key as $key | $fields | split(",") | index($key)))\'; else echo "Unexpected fixture GitHub request" >&2; return 99; fi; }',
+        'pr_gh() { if [ "$#" = 5 ] && [ "$1 $2 $3 $4" = "pr view 42 --json" ]; then pr_meta_json 42 | jq --arg fields "$5" \'with_entries(select(.key as $key | $fields | split(",") | index($key)))\'; else echo "Unexpected fixture GitHub request" >&2; return 99; fi; }',
         ...commands,
       ].join("\n"),
       "pr-worktree-containment",
@@ -187,9 +187,10 @@ function traceEntryCommands(failure: string, code = 73) {
     "  fi",
     "}",
     ...["git", "cd", "pwd", "mkdir", "rm", "mv", "trash"].map(
-      (name) => `${name}() { trace_command ${name} "$@" || return $?; command ${name} "$@"; }`,
+      (name) =>
+        `${name === "git" ? "pr_git" : name}() { trace_command ${name} "$@" || return $?; command ${name} "$@"; }`,
     ),
-    `gh_plain() { trace_command gh_plain "$@" || return $?; printf 'HTTP/2.0 200 OK\\n\\n{"data":{"viewer":{"login":"fixture-user"}}}\\n'; }`,
+    `pr_gh_plain() { trace_command gh_plain "$@" || return $?; printf 'HTTP/2.0 200 OK\\n\\n{"data":{"viewer":{"login":"fixture-user"}}}\\n'; }`,
   ];
 }
 
@@ -260,7 +261,7 @@ describePosix("scripts/pr worktree containment", () => {
                 bash,
                 [
                   "-c",
-                  `set -euo pipefail\nsource "$1"\nsource "$2"\nsource "$3"\nscript_parent_dir="$4"\ngh_plain() { printf 'HTTP/2.0 200 OK\\n\\n{"data":{"viewer":{"login":"fixture-user"}}}\\n'; }\nmark_pr_operation_side_effects_started() { :; }\n${provisionWorktreeFixture}\nreview_checkout_main "$5"`,
+                  `set -euo pipefail\nsource "$1"\nsource "$2"\nsource "$3"\nscript_parent_dir="$4"\npr_gh_plain() { printf 'HTTP/2.0 200 OK\\n\\n{"data":{"viewer":{"login":"fixture-user"}}}\\n'; }\nmark_pr_operation_side_effects_started() { :; }\n${provisionWorktreeFixture}\nreview_checkout_main "$5"`,
                   "pr-concurrency",
                   commonScript,
                   worktreeScript,
@@ -717,9 +718,10 @@ describePosix("scripts/pr worktree containment", () => {
       {
         name: "interrupted recovery checkout",
         setup: [
-          'git() { if [ "${1:-}" = checkout ]; then return 73; fi; command git "$@"; }',
+          "original_pr_git=$(declare -f pr_git)",
+          'pr_git() { if [ "${1:-}" = checkout ]; then return 73; fi; command git "$@"; }',
           "if recover_review_transition 42; then exit 1; fi",
-          "unset -f git",
+          'eval "$original_pr_git"',
           'git diff --cached --quiet "$target_sha"',
         ],
       },

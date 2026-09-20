@@ -127,6 +127,34 @@ describe("Discord Crabline real-plugin roundtrip", () => {
         ),
       ).toBe(true);
 
+      const summary = JSON.parse(
+        await fs.readFile(path.join(suite.result.outputDir, "qa-suite-summary.json"), "utf8"),
+      ) as { run?: { channelDriverSmokePath?: string } };
+      const readinessPath = summary.run?.channelDriverSmokePath;
+      if (!readinessPath) {
+        throw new Error("Discord Crabline readiness artifact path missing from QA summary");
+      }
+      const readiness = JSON.parse(
+        await fs.readFile(path.resolve(suite.result.outputDir, readinessPath), "utf8"),
+      ) as { providerReadiness?: { result?: { recorderPath?: string } } };
+      const snapshotRecorderPath = readiness.providerReadiness?.result?.recorderPath;
+      if (!snapshotRecorderPath) {
+        throw new Error("Discord Crabline readiness snapshot recorder path missing");
+      }
+      const snapshotEvents = await readRecorderEvents(
+        path.resolve(suite.result.outputDir, snapshotRecorderPath),
+      );
+      expect(
+        snapshotEvents.some(
+          (event) =>
+            event.type === "api" &&
+            event.method === "POST" &&
+            event.path === `/api/v10/channels/${inboundChannelId}/messages` &&
+            (readStringValue(readObject(event.body)?.content) ?? "").includes(EXPECTED_MARKER) &&
+            event.accepted === true,
+        ),
+      ).toBe(true);
+
       // The suite returns only after Gateway, WebSocket, HTTP, recorder, and temporary runtime
       // owners have all completed their ordered cleanup.
       await expect(fs.readFile(recorderPath, "utf8")).resolves.toContain(EXPECTED_MARKER);

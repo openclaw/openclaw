@@ -21,7 +21,7 @@ For unmatched HTTP paths, the app-shell fallback respects the request's `Accept`
 
 It speaks **directly to the Gateway WebSocket** on the same port.
 
-If the Gateway's request queue is full, the Control UI shows "The server is busy. Please try again in a moment." Wait briefly, then retry the action.
+If the Gateway's request queue is full, automatic sidebar session discovery keeps the current rows and retries up to three times, respecting the server's retry delay. A persistent failure shows "The server is busy. Please try again in a moment." Other actions can show this message immediately; wait briefly, then retry the action.
 
 While the initial connection or a route loads, shimmer placeholders reserve the chat layout. Home and System busyness open directly in their destination panels, with working headers and Close controls while the content loads. Brief loads do not flash placeholders; slower loads show placeholders inside the panel, and load errors offer Retry in the same place. The rest of the page stays usable. Loading indicators respect your theme and reduced-motion preference; Gateway startup progress remains visible when available.
 
@@ -29,9 +29,13 @@ The selected chat loads before automatic sidebar task lists refresh. Live events
 
 Closed Terminal, Browser, and Desktop panels initialize when you open them rather than during initial navigation. Home/Ask OpenClaw and System busyness keep lightweight frames ready and defer their conversation or diagnostic contents until opened. Home preserves its saved dock position and size throughout loading. Panels saved as open still restore after a reload. Settings does not automatically reopen Ask OpenClaw; its control and diagnostic actions can still open it explicitly.
 
-Hidden retained chats defer command and model metadata refreshes until you return to them. Repeated background changes share the current metadata read and refresh once more after it finishes, instead of issuing overlapping requests.
+Hidden retained chats defer command and model metadata refreshes until you return to them. Returning to a recently opened chat reuses its completed metadata on the same connection until a Gateway change invalidates it. Concurrent readers share the same request. Ordinary session patches and command changes wait for a 2.5-second quiet period before refreshing commands and session facts. They reuse the model catalog unless the returned metadata indicates a changed model or account projection. Explicit model, account, and runtime selections refresh promptly. Configuration, catalog, and session lifecycle changes still invalidate the full metadata bundle. Repeated changes during a request share one trailing refresh instead of issuing overlapping requests.
 
-Subagent activity rows lead with the child task's display title, using its configured
+Provider authentication status is shared across views and refreshes after account changes and near credential warning or expiry deadlines. Credentials without an expiry do not need periodic refreshes. Hidden tabs defer deadline refreshes until visible again.
+
+Subagent runs appear in inline transcript activity rows, the chat **Tasks** tab,
+and the [Tasks page](/automation/tasks#control-ui), outside sidebar navigation.
+Their activity rows lead with the child task's display title, using its configured
 `label` when present, followed by the latest activity. The leading claw moves only
 while running; queued and cancelled tasks stay still, and completion briefly turns
 the claw green. Failed tasks have a warning badge and timed-out tasks a clock badge.
@@ -39,9 +43,16 @@ Hover the row or focus it with the keyboard for a tooltip explaining the exact
 status. Reduced motion keeps the claw still. Tasks without a display title keep
 the generic **Subagent** label. Select a row to open its details.
 
+Dragging a session between sidebar groups updates its placement immediately. A successful
+save keeps that placement even if the subsequent list refresh fails; the UI reports
+the refresh error separately. If a connection failure leaves the save unconfirmed,
+refresh and check the session's group before retrying. Other clients' newer group
+changes still reconcile through session events.
+
 The sidebar keeps unread child failures visible on their ancestors. These warnings
 name the child session that failed, even when its parent has finished or continues
-working. Open the child session to inspect and acknowledge its failure.
+working. Select the warning to open the child session and acknowledge its failure;
+a subagent chat opens without adding a sidebar row.
 
 Choose **New agent** in the sidebar or Agents home to open the custodian chat.
 It recommends a chief of staff, researcher, writer, reviewer, or a small team

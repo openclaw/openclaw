@@ -26,6 +26,8 @@ Available action groups in current Slack tooling:
 
 Current Slack message actions include `send`, `conversation-open`, `upload-file`, `download-file`, `read`, `edit`, `delete`, `pin`, `unpin`, `list-pins`, `member-info`, and `emoji-list`. `download-file` accepts Slack file IDs shown in inbound file placeholders and returns image previews for images or local file metadata for other file types.
 
+Interactive message actions retain their caller authority through target and permission lookups and recheck it before each Slack request. If that authority closes, remaining requests stop while an already accepted mutation keeps its result.
+
 In a Slack conversation, delegated `member-info` reads only the current requester
 on the same account; omitting `userId` selects that requester. `emoji-list` uses
 the trusted current workspace. Both metadata actions work without a channel target

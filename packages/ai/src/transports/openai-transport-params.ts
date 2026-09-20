@@ -368,12 +368,8 @@ export function buildOpenAIClientHeaders(
   );
 }
 
-function resolveOpenAISdkTimeoutMs(model: Model, timeoutMs?: number): number | undefined {
-  return resolveModelRequestTimeoutMs(model, timeoutMs);
-}
-
 export function buildOpenAISdkClientOptions(model: Model): { timeout?: number; maxRetries: 0 } {
-  const timeout = resolveOpenAISdkTimeoutMs(model);
+  const timeout = resolveModelRequestTimeoutMs(model);
   return { ...(timeout === undefined ? {} : { timeout }), maxRetries: 0 };
 }
 
@@ -391,7 +387,7 @@ export function buildOpenAISdkRequestOptions(
       headers?: Record<string, string>;
     }
   | undefined {
-  const timeout = resolveOpenAISdkTimeoutMs(model, options?.timeoutMs);
+  const timeout = resolveModelRequestTimeoutMs(model, options?.timeoutMs);
   const headers =
     options?.stream === true && usesNativeOpenAICodexResponsesBackend(model)
       ? { Accept: "text/event-stream" }

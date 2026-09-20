@@ -427,10 +427,9 @@ describe("web monitor inbox delivery and dedupe", () => {
     const closePromise = listener.close().then(() => {
       closed = true;
     });
-    await waitForMessageCalls(onMessage, 3);
+    await waitForMessageCalls(onMessage, 2);
     expect(closed).toBe(false);
-    expect(inboundMessage(onMessage, 1).payload.body).toBe("second");
-    expect(inboundMessage(onMessage, 2).payload.body).toBe("third");
+    expect(inboundMessage(onMessage, 1).payload.body).toBe("second\nthird");
 
     releaseFirst?.();
     await closePromise;
@@ -747,7 +746,7 @@ describe("web monitor inbox delivery and dedupe", () => {
     await listener.close();
   });
 
-  it("delivery coordinator keeps same-lane follow-up pending until turn adoption", async () => {
+  it("delivery coordinator admits same-lane follow-up without settling the first deferred claim", async () => {
     let adoptFirst: (() => void | Promise<void>) | undefined;
     const onMessage = vi.fn(async (message: WebInboundMessage) => {
       if (!adoptFirst) {
@@ -760,7 +759,10 @@ describe("web monitor inbox delivery and dedupe", () => {
       }
     });
 
-    const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage);
+    const queue = createWhatsAppDurableInboundQueue(DEFAULT_ACCOUNT_ID);
+    const { listener, sock } = await startInboxMonitor(onMessage as InboxOnMessage, {
+      durableInboundQueue: queue,
+    });
     sock.ev.emit("messages.upsert", {
       type: "notify",
       messages: [
@@ -785,15 +787,17 @@ describe("web monitor inbox delivery and dedupe", () => {
     });
     await settleInboundWork();
 
-    expect(onMessage).toHaveBeenCalledTimes(1);
-    expect(inboundMessage(onMessage).payload.body).toBe("ping");
+    await waitForMessageCalls(onMessage, 2);
+    expect(onMessage.mock.calls.map(([message]) => message.payload.body)).toEqual(["ping", "pong"]);
+    expect(await queue.listClaims()).toHaveLength(1);
+    expect(await queue.listPending({ limit: "all" })).toEqual([]);
 
     if (!adoptFirst) {
       throw new Error("expected first adoption callback");
     }
     await adoptFirst();
-    await waitForMessageCalls(onMessage, 2);
-    expect(inboundMessage(onMessage, 1).payload.body).toBe("pong");
+    expect(await queue.listClaims()).toEqual([]);
+    expect(onMessage).toHaveBeenCalledTimes(2);
     await listener.close();
   });
 });

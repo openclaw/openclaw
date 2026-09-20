@@ -1,5 +1,3 @@
-import type { SynchronousWork } from "../../../shared/synchronous-work.js";
-import type { OpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.types.js";
 /**
  * Read-only subagent registry accessors.
  *
@@ -11,7 +9,6 @@ import { getSubagentRunsForChildSession, subagentRuns } from "./subagent-registr
 import {
   buildLatestSubagentRunReadIndexFromRuns,
   buildSubagentRunReadIndexFromRuns,
-  buildSubagentRunReadIndexWork,
   countActiveDescendantRunsFromRuns,
   countPendingDescendantRunsFromRuns,
   getLatestSubagentRunByChildSessionKeyFromRuns,
@@ -28,7 +25,6 @@ import {
 import type { SubagentRunReadRecord } from "./subagent-registry-read.types.js";
 import {
   getSubagentSessionListRunsSnapshotForRead,
-  withSubagentSessionListRunsSnapshotForRead,
   getSubagentSessionListRunsSnapshotForSessions,
   getSubagentRunsSnapshotForChildSession,
   getSubagentRunsSnapshotForController,
@@ -69,24 +65,6 @@ export function buildSubagentSessionListReadIndex(
   });
 }
 
-export function prepareSubagentSessionListReadIndex(
-  now: number,
-  context: OpenClawStateWorkerContext,
-  shouldYield: () => boolean,
-  yieldIfNeeded: () => Promise<void> | undefined,
-): Promise<SynchronousWork<SubagentRunReadIndex<SubagentRunReadRecord>>> {
-  return withSubagentSessionListRunsSnapshotForRead(
-    subagentRuns,
-    context,
-    (runs) =>
-      buildSubagentRunReadIndexWork(
-        { runs, inMemoryRuns: subagentRuns.values(), now },
-        shouldYield,
-      ),
-    yieldIfNeeded,
-  );
-}
-
 /** Direct-child discovery needs only its controllers, without building global topology. */
 export function listSubagentSessionListRunsForControllers(
   controllerSessionKeys: readonly string[],
@@ -124,11 +102,13 @@ export function listSubagentRunsForController(
 export function countActiveDescendantRuns(
   rootSessionKey: string,
   requesterAgentId?: string,
+  requesterStorePath?: string | null,
 ): number {
   return countActiveDescendantRunsFromRuns(
     getSubagentRunsSnapshotForSessions(subagentRuns, [rootSessionKey]),
     rootSessionKey,
     requesterAgentId,
+    requesterStorePath,
   );
 }
 
@@ -153,12 +133,16 @@ export function hasDescendantRunAwaitingSettle(
   rootSessionKey: string,
   excludeRunId?: string,
   requesterAgentId?: string,
+  requesterStorePath?: string | null,
+  settledBefore?: number,
 ): boolean {
   return hasDescendantRunAwaitingSettleFromRuns(
     getSubagentRunsSnapshotForSessions(subagentRuns, [rootSessionKey]),
     rootSessionKey,
     excludeRunId,
     requesterAgentId,
+    requesterStorePath,
+    settledBefore,
   );
 }
 
@@ -201,7 +185,11 @@ export function isSubagentSessionRunActive(childSessionKey: string): boolean {
 /** Lists process-local runs requested by one session key. */
 export function listSubagentRunsForRequester(
   requesterSessionKey: string,
-  options?: { requesterRunId?: string; requesterAgentId?: string },
+  options?: {
+    requesterRunId?: string;
+    requesterAgentId?: string;
+    requesterStorePath?: string | null;
+  },
 ): SubagentRunRecord[] {
   // Request-run lifetime scoping must observe the raw live map, including rows not persisted yet.
   return listRunsForRequesterFromRuns(subagentRuns, requesterSessionKey, options);

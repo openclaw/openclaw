@@ -115,6 +115,72 @@ describe("desktop readiness evidence", () => {
     expect(failure.errors[1]).toBe(cleanup);
   });
 
+  it("keeps the probe deadline within the startup budget as the clock advances", async () => {
+    const diagnostics: GatewayReadinessDiagnostic[] = [];
+    const fetchImpl = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(new Response('{"ready":true,"failing":[]}', { status: 200 }));
+    let now = 1_000;
+    const clock = vi.spyOn(Date, "now").mockImplementation(() => now++);
+    try {
+      await testing.waitForGatewayReady(
+        processState(),
+        [],
+        [],
+        12345,
+        25,
+        fetchImpl,
+        undefined,
+        (entry) => diagnostics.push(entry),
+      );
+    } finally {
+      clock.mockRestore();
+    }
+    const artifact = await publicArtifact(diagnostics);
+    const entries = artifact.files[0]!.assertions[0]!.gatewayReadiness!;
+    expect(entries).toHaveLength(1);
+    const entry = entries[0]!;
+    expect(entry).toMatchObject({ outcome: "ready", attempts: 1 });
+    expect(entry.deadlineMs - entry.startedAtMs).toBe(25);
+    expect(entry.probes[0]!.deadlineMs).toBe(entry.deadlineMs);
+  });
+
+  it("does not start a probe when the startup budget expires before admission", async () => {
+    const diagnostics: GatewayReadinessDiagnostic[] = [];
+    const fetchImpl = vi
+      .fn<typeof fetch>()
+      .mockResolvedValue(new Response('{"ready":true,"failing":[]}', { status: 200 }));
+    const clock = vi
+      .spyOn(Date, "now")
+      .mockReturnValueOnce(1_000)
+      .mockReturnValueOnce(1_024)
+      .mockReturnValue(1_026);
+    let failure: unknown;
+    try {
+      failure = await testing
+        .waitForGatewayReady(processState(), [], [], 12345, 25, fetchImpl, undefined, (entry) =>
+          diagnostics.push(entry),
+        )
+        .catch((error: unknown) => error);
+    } finally {
+      clock.mockRestore();
+    }
+    expect(fetchImpl).not.toHaveBeenCalled();
+    expect(failure).toBeInstanceOf(Error);
+    expect(String(failure)).toContain("timeout waiting for gateway readiness");
+    const artifact = await publicArtifact(diagnostics, failure);
+    const entries = artifact.files[0]!.assertions[0]!.gatewayReadiness!;
+    expect(entries).toHaveLength(1);
+    expect(entries[0]).toMatchObject({
+      outcome: "timeout",
+      startedAtMs: 1_000,
+      deadlineMs: 1_025,
+      attempts: 0,
+      probes: [],
+      omittedProbes: 0,
+    });
+  });
+
   it("records every completed probe and one success timing line", async () => {
     const diagnostics: GatewayReadinessDiagnostic[] = [];
     const fetchImpl = vi

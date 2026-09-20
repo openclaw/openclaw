@@ -54,8 +54,9 @@ const connection = new AgentSideConnection(
       await save(sessionId);
       return { sessionId, ...describe(state) };
     },
-    async loadSession({ sessionId }) {
+    async loadSession({ sessionId, mcpServers }) {
       const state = JSON.parse(await fs.readFile(file(sessionId), "utf8"));
+      state.loadedMcpServers = mcpServers;
       sessions.set(sessionId, state);
       return describe(state);
     },

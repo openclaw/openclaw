@@ -1,4 +1,5 @@
 import fs from "node:fs";
+import { registerHooks } from "node:module";
 import path from "node:path";
 import readline from "node:readline";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -254,44 +255,56 @@ async function installProviderRedirect() {
   const repoRoot = fileURLToPath(new URL("../../../..", import.meta.url));
   const distDir = path.join(repoRoot, "dist");
   if (proofMode === "heartbeat-upgraded-restart") {
-    const compactChunks = fs.readdirSync(distDir).filter((name) => {
-      if (!name.startsWith("compact-") || !/\.m?js$/u.test(name)) {
+    const marker = "async function persistSessionCompactionCheckpoint(params) {";
+    const checkpointChunks = fs.readdirSync(distDir).filter((name) => {
+      if (!/\.m?js$/u.test(name)) {
         return false;
       }
       const source = fs.readFileSync(path.join(distDir, name), "utf8");
-      return (
-        source.includes("failed to persist compaction checkpoint") &&
-        source.includes("compactionCheckpointStore")
-      );
+      return source.includes(marker);
     });
-    if (compactChunks.length !== 1) {
-      throw new Error(`expected one compaction checkpoint chunk, found ${compactChunks.length}`);
+    if (checkpointChunks.length !== 1) {
+      throw new Error(`expected one compaction checkpoint chunk, found ${checkpointChunks.length}`);
     }
-    const compactModule = await import(pathToFileURL(path.join(distDir, compactChunks[0])).href);
-    const checkpointStore = Object.values(compactModule).find(
-      (value) =>
-        value &&
-        typeof value === "object" &&
-        typeof value.persistCheckpoint === "function" &&
-        typeof value.captureSnapshot === "function" &&
-        typeof value.cleanupSnapshot === "function",
-    );
-    if (!checkpointStore) {
-      throw new Error("compaction checkpoint store export was not found");
-    }
-    const persistCheckpoint = checkpointStore.persistCheckpoint.bind(checkpointStore);
-    checkpointStore.persistCheckpoint = async (params) => {
+    const checkpointUrl = pathToFileURL(path.join(distDir, checkpointChunks[0])).href;
+    const holdKey = "openclaw.qa.codex-heartbeat-host-compaction-commit";
+    globalThis[Symbol.for(holdKey)] = async ({ sessionTarget }) => {
       const response = await originalFetch(`${providerBaseUrl}/qa/host-compaction-commit`, {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ sessionId: params.sessionId, sessionKey: params.sessionKey }),
+        body: JSON.stringify({
+          sessionId: sessionTarget.sessionId,
+          sessionKey: sessionTarget.sessionKey,
+        }),
       });
       await response.text();
       if (!response.ok) {
         throw new Error(`host compaction commit checkpoint failed: ${response.status}`);
       }
-      return await persistCheckpoint(params);
     };
+    // The host event, count, and latch have committed; checkpoint metadata must remain untouched.
+    registerHooks({
+      load(url, context, nextLoad) {
+        const loaded = nextLoad(url, context);
+        if (url !== checkpointUrl) {
+          return loaded;
+        }
+        const source =
+          typeof loaded.source === "string"
+            ? loaded.source
+            : Buffer.from(loaded.source).toString("utf8");
+        if (source.split(marker).length !== 2) {
+          throw new Error("compaction checkpoint persistence injection target changed");
+        }
+        return {
+          ...loaded,
+          source: source.replace(
+            marker,
+            `${marker}\n  await globalThis[Symbol.for(${JSON.stringify(holdKey)})](params);`,
+          ),
+        };
+      },
+    });
   }
   const hostChunks = fs
     .readdirSync(distDir)

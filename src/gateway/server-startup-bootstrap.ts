@@ -21,6 +21,7 @@ import {
 } from "../config/resolution-facts.js";
 import { captureConfigOverrideApplier } from "../config/runtime-overrides.js";
 import { resolveSystemMainSessionTarget } from "../config/sessions.js";
+import { publishSystemEventStoreConfig } from "../config/sessions/session-store-path.js";
 import type { GatewayAuthConfig } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isSecretRef } from "../config/types.secrets.js";
@@ -150,6 +151,9 @@ export async function prepareGatewayServerBootstrap(input: {
       preflightOpenClawDatabaseSchemas({
         signal,
         env: process.env,
+        reuseStartupSchemaPreparation: true,
+        onAgentInspection: (stats) =>
+          startupTrace.detail("state.schema-preflight", Object.entries(stats)),
       });
     const databaseSchemas = await startupTrace.measure("state.schema-preflight", () =>
       opts.startupOperation
@@ -481,6 +485,7 @@ export async function prepareGatewayServerBootstrap(input: {
       log,
     }),
   );
+  publishSystemEventStoreConfig(cfgAtStart);
   const pluginBootstrap = await startupTrace.measure("plugins.bootstrap", () =>
     prepareGatewayPluginBootstrap({
       cfgAtStart,

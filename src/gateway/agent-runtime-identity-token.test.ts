@@ -492,7 +492,7 @@ describe("agent runtime identity token", () => {
     },
   );
 
-  it("round-trips a signed private cron creator grant only with final provenance", async () => {
+  it("round-trips captured-surface grants and rejects unqualified creator grants", async () => {
     useTempHome();
     const runtimeToken = await importRuntimeTokenModule();
     const run = operationalRun();
@@ -516,7 +516,7 @@ describe("agent runtime identity token", () => {
         operationalRunInstance: run.operationalRunInstance,
         cronCreatorAuthorityGrant,
       }),
-    ).rejects.toThrow("require final tool-surface provenance");
+    ).rejects.toThrow("require tool-surface or authenticated-requester provenance");
     const managementToken = await runtimeToken.mintAgentRuntimeIdentityToken({
       agentId: "main",
       sessionKey: "agent:main:main",
@@ -529,6 +529,61 @@ describe("agent runtime identity token", () => {
       cronManagementGrant: cronCreatorAuthorityGrant,
     });
   });
+
+  it.each(["signed", "direct"] as const)(
+    "carries a %s live native requester grant without claiming complete tool capture",
+    async (mode) => {
+      useTempHome();
+      const runtimeToken = await importRuntimeTokenModule();
+      const grants = await import("./cron-creator-authority-grant.js");
+      const run = operationalRun("run-native-requester");
+      const requester = {
+        version: 1 as const,
+        channel: "discord",
+        accountId: "work",
+        senderId: "native-current-sender",
+      };
+      const scope = grants.createCronCreatorAuthorityRunScope(
+        run.operationalRunInstance.runId,
+        { kind: "external", channel: "discord" },
+        undefined,
+        undefined,
+        requester,
+      );
+      try {
+        const grant = grants.mintCronCreatorAuthorityGrant(
+          scope,
+          undefined,
+          undefined,
+          undefined,
+          "requester",
+        );
+        const params = {
+          agentId: "main",
+          sessionKey: "agent:main:shared-discord",
+          operationalRunInstance: run.operationalRunInstance,
+          turnSourceChannel: "discord",
+          turnSourceAccountId: "work",
+          cronCreatorAuthorityGrant: grant,
+        };
+        const identity = await createIdentity(runtimeToken, mode, params);
+        expect(identity).toMatchObject({ cronCreatorAuthorityGrant: grant });
+        expect(identity).not.toHaveProperty("cronToolsAllowCapture");
+        expect(JSON.stringify(identity)).not.toContain(requester.senderId);
+        expect(JSON.stringify(scope)).not.toContain(requester.senderId);
+        expect(grants.resolveCronCreatorAuthorityGrantProvenance(grant, scope.runId)).toEqual({
+          capturesRuntimeAuthority: false,
+          channelRequester: requester,
+        });
+        grants.revokeCronCreatorAuthorityRunScope(scope);
+        await expect(createIdentity(runtimeToken, mode, params)).rejects.toThrow(
+          "require tool-surface or authenticated-requester provenance",
+        );
+      } finally {
+        grants.revokeCronCreatorAuthorityRunScope(scope);
+      }
+    },
+  );
 
   it("does not mint local credentials while rejecting invalid presented tokens", async () => {
     useTempHome();

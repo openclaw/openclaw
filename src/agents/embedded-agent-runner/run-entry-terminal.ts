@@ -8,8 +8,10 @@ import {
   buildAgentRunTerminalReplySnapshot,
   normalizeAgentRunTerminalReplySnapshot,
 } from "../agent-run-terminal-reply.js";
+import type { ModelFallbackResultClassification } from "../model-fallback-attempt.js";
 import type { FallbackAttempt } from "../model-fallback.types.js";
 import { isProviderModelRerouted } from "../provider-model-route.js";
+import { resolveSourceReplyDelivery } from "./delivery-evidence.js";
 import type { EmbeddedAgentRunResult, TraceAttempt } from "./types.js";
 
 export type RunEntryTerminalBehavior =
@@ -172,7 +174,9 @@ export function buildRunEntryTerminal(params: {
     normalizeAgentRunTerminalReceipt(agentMeta?.terminalReceipt) ??
     // CLI backends report delivery without an embedded model-turn receipt.
     // The entry owner supplies run identity; the tool supplied the send fact.
-    (params.result.sourceReplyDelivered && agentMeta?.provider && agentMeta.model
+    (resolveSourceReplyDelivery(params.result) === "delivered" &&
+    agentMeta?.provider &&
+    agentMeta.model
       ? {
           runId: params.runId,
           sessionId: params.sessionId,
@@ -245,4 +249,30 @@ export function buildRunEntryTerminal(params: {
     }
   }
   return { outcome, metadata };
+}
+
+const PRESERVED_FOLLOWUP_RESULT_CODES = new Set([
+  "empty_result",
+  "reasoning_only_result",
+  "planning_only_result",
+]);
+
+export function preserveFollowupResultForDelivery(
+  classification: ModelFallbackResultClassification,
+): ModelFallbackResultClassification {
+  if (
+    !classification ||
+    !("code" in classification) ||
+    !classification.code ||
+    !PRESERVED_FOLLOWUP_RESULT_CODES.has(classification.code)
+  ) {
+    return classification;
+  }
+  // Follow-up delivery owns its terminal fallback, so retain the classified
+  // result for that layer instead of replacing it with a summary error.
+  return {
+    ...classification,
+    preserveResultOnExhaustion: true,
+    preserveResultPriority: -1,
+  };
 }

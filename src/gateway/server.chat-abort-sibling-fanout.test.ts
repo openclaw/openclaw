@@ -1,4 +1,5 @@
 import path from "node:path";
+import { expectDefined } from "@openclaw/normalization-core";
 import { expect, test, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { runQaGatewayFixture } from "../../test/helpers/qa-gateway-cleanup.js";
@@ -22,6 +23,12 @@ import {
 } from "../agents/subagents/swarm/swarm-scheduler.js";
 import { testing as schedulerTesting } from "../agents/subagents/swarm/swarm-scheduler.test-support.js";
 import {
+  appendTranscriptMessageSync,
+  loadExactSessionEntryReadOnly,
+  loadTranscriptEvents,
+  replaceSessionEntrySync,
+} from "../config/sessions/session-accessor.js";
+import {
   beginSessionWorkAdmission,
   getActiveSessionLifecycleMutationCount,
   getActiveSessionWorkAdmissionCount,
@@ -33,6 +40,7 @@ import {
   agentCommandMock,
   connectOk,
   createGatewaySuiteHarness,
+  embeddedRunMock,
   installGatewayTestHooks,
   onceMessage,
   rpcReq,
@@ -60,23 +68,46 @@ installGatewayTestHooks({
 
 await import("./server.js");
 
-test.each([false, true])(
-  "chat.abort interrupts all siblings before cleanup and preserves failure accounting (fault=%s)",
-  async (fault) => {
-    const suffix = fault ? "fault" : "success";
+for (const { name, fault, replaceParent } of [
+  ...[false, true].map((faultCase) => ({
+    name: `chat.abort interrupts all siblings before cleanup and preserves failure accounting (fault=${faultCase})`,
+    fault: faultCase,
+    replaceParent: false,
+  })),
+  {
+    name: "typed Stop rejects a replaced parent while child cancellation drains",
+    fault: false,
+    replaceParent: true,
+  },
+]) {
+  test(name, async () => {
+    const suffix = replaceParent ? "replacement" : fault ? "fault" : "success";
     const parentRunId = `parent-${suffix}`;
     const parentKey = `agent:main:sibling-abort-${suffix}`;
     const groupId = `sibling-abort-${suffix}`;
-    const running = Array.from({ length: 8 }, (_, index) => `running-${suffix}-${index}`);
-    const queued = [`queued-${suffix}-0`, `queued-${suffix}-1`];
+    const running = Array.from(
+      { length: replaceParent ? 1 : 8 },
+      (_, index) => `running-${suffix}-${index}`,
+    );
+    const firstRunId = expectDefined(running[0], "first running child");
+    const queued = replaceParent ? [] : [`queued-${suffix}-0`, `queued-${suffix}-1`];
     const selected = [...running, ...queued];
     const failedRunId = fault ? running[3] : undefined;
     const sessionKey = (runId: string) => `agent:main:subagent:${runId}`;
     const stateDir = process.env.OPENCLAW_STATE_DIR!;
     const storePath = path.join(stateDir, "agents", "main", "sessions", "sessions.json");
+    const parentSessionId = `parent-session-${suffix}`;
+    const replacementScope = {
+      storePath,
+      agentId: "main",
+      sessionKey: parentKey,
+      sessionId: `replacement-session-${suffix}`,
+    };
+    const replacementCanary = "The replacement conversation must survive the earlier Stop.";
+    let replacementBefore: Awaited<ReturnType<typeof loadTranscriptEvents>> | undefined;
     testState.sessionStorePath = storePath;
     await writeSessionStore({
-      entries: { [parentKey]: { sessionId: `parent-session-${suffix}`, updatedAt: Date.now() } },
+      entries: { [parentKey]: { sessionId: parentSessionId, updatedAt: Date.now() } },
     });
 
     const socket = await gateway.openWs();
@@ -144,7 +175,7 @@ test.each([false, true])(
             requesterDisplayKey: parentKey,
             task: runId,
             cleanup: "keep",
-            collect: true,
+            collect: !replaceParent,
             groupId,
             queued: queued.includes(runId),
             expectsCompletionMessage: false,
@@ -153,6 +184,16 @@ test.each([false, true])(
           if (queued.includes(runId)) {
             activateSwarmRun({ groupId, runId, start, onStartFailure: () => true });
           }
+        }
+        if (replaceParent) {
+          expect(
+            reserveSwarmRun({
+              groupId,
+              runId: firstRunId,
+              maxConcurrent: 1,
+              activeRunIds: running,
+            }),
+          ).toBe(false);
         }
         for (const runId of running) {
           expect(isSwarmRunActive(runId)).toBe(true);
@@ -179,11 +220,30 @@ test.each([false, true])(
         expect(activeAdmissionCount).toBeGreaterThanOrEqual(running.length);
         expect(start).not.toHaveBeenCalled();
 
-        abortResponse = rpcReq(socket, "chat.abort", {
-          sessionKey: parentKey,
-          agentId: "main",
-          runId: parentRunId,
-        });
+        if (replaceParent) {
+          const history = await rpcReq<{
+            sessionId: string;
+            sessionInfo: { activeLeafEntryId: string | null };
+          }>(socket, "chat.history", { sessionKey: parentKey });
+          expect(history.ok).toBe(true);
+          const payload = expectDefined(history.payload, "parent history");
+          expect(payload.sessionId).toBe(parentSessionId);
+          expect(payload.sessionInfo).toHaveProperty("activeLeafEntryId");
+          embeddedRunMock.activeIds.add(`${firstRunId}-session`);
+          abortResponse = rpcReq(socket, "chat.send", {
+            sessionKey: parentKey,
+            message: "/stop",
+            sessionId: parentSessionId,
+            expectedLeafEntryId: payload.sessionInfo.activeLeafEntryId,
+            idempotencyKey: "stop-parent-replaced-during-drain",
+          });
+        } else {
+          abortResponse = rpcReq(socket, "chat.abort", {
+            sessionKey: parentKey,
+            agentId: "main",
+            runId: parentRunId,
+          });
+        }
         abortOutcome = abortResponse.then(
           (response) => {
             responseSettled = true;
@@ -208,6 +268,27 @@ test.each([false, true])(
         expect(getActiveSessionWorkAdmissionCount()).toBe(activeAdmissionCount);
         expect(responseSettled).toBe(false);
         expect(start).not.toHaveBeenCalled();
+        if (replaceParent) {
+          expect(subagentRuns.get(firstRunId)?.killIntent).toBeDefined();
+          replaceSessionEntrySync(replacementScope, {
+            sessionId: replacementScope.sessionId,
+            lifecycleRevision: "replacement",
+            updatedAt: Date.now(),
+          });
+          expect(
+            appendTranscriptMessageSync(replacementScope, {
+              eventId: "replacement-canary",
+              message: { role: "user", content: replacementCanary },
+              parentId: null,
+            }).ok,
+          ).toBe(true);
+          replacementBefore = await loadTranscriptEvents(replacementScope);
+          expect(replacementBefore).toContainEqual(
+            expect.objectContaining({
+              message: expect.objectContaining({ content: replacementCanary }),
+            }),
+          );
+        }
         for (const lease of leases.toReversed()) {
           lease.release();
         }
@@ -215,7 +296,25 @@ test.each([false, true])(
         if (!outcome.ok) {
           throw outcome.error;
         }
-        if (fault) {
+        if (replaceParent) {
+          expect(outcome.response).toMatchObject({
+            ok: false,
+            error: {
+              code: "INVALID_REQUEST",
+              details: {
+                code: "SESSION_MUTATION_AUTHORIZATION_CHANGED",
+                method: "chat.send",
+                sessionKey: parentKey,
+              },
+            },
+          });
+          expect(embeddedRunMock.abortCalls).not.toContain(`${firstRunId}-session`);
+          expect(embeddedRunMock.activeIds.has(`${firstRunId}-session`)).toBe(true);
+          expect(loadExactSessionEntryReadOnly(replacementScope)?.entry.sessionId).toBe(
+            replacementScope.sessionId,
+          );
+          expect(await loadTranscriptEvents(replacementScope)).toEqual(replacementBefore);
+        } else if (fault) {
           expect(outcome.response).toMatchObject({ ok: false, error: { code: "UNAVAILABLE" } });
           expect(outcome.response.error?.message).toContain(
             "synthetic sibling interruption failure",
@@ -241,7 +340,7 @@ test.each([false, true])(
         for (const runId of selected) {
           const task = tasks.find((candidate) => candidate.runId === runId)!;
           const run = persistedRuns.get(runId)!;
-          if (runId === failedRunId) {
+          if (replaceParent || runId === failedRunId) {
             expect(task.status).toBe("running");
             expect(run.execution.status).toBe("running");
             expect(run.execution.endedAt).toBeUndefined();
@@ -251,6 +350,14 @@ test.each([false, true])(
               endedReason: "subagent-killed",
               execution: { status: "terminal" },
             });
+          }
+          if (replaceParent) {
+            expect(task.error).toBeUndefined();
+            expect(run.killIntent).toBeUndefined();
+            expect(
+              loadExactSessionEntryReadOnly({ storePath, sessionKey: sessionKey(runId) })?.entry
+                .abortedLastRun,
+            ).not.toBe(true);
           }
           if (queued.includes(runId)) {
             expect(run.execution.startedAt).toBeUndefined();
@@ -284,6 +391,9 @@ test.each([false, true])(
       },
       () => {
         for (const runId of selected) {
+          if (replaceParent) {
+            embeddedRunMock.activeIds.delete(`${runId}-session`);
+          }
           removeQueuedSwarmRun(runId);
           releaseSwarmRun(runId);
         }
@@ -292,5 +402,5 @@ test.each([false, true])(
         expect(getActiveSessionWorkAdmissionCount()).toBe(0);
       },
     );
-  },
-);
+  });
+}

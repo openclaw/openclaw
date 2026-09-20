@@ -186,7 +186,7 @@ export class ComposedGatewayHarness {
   private readonly requestMethods = new Map<string, string>();
   private readonly faults: FaultRule[] = [];
   private readonly liveEventGates: LiveEventGate[] = [];
-  private serviceValue!: workerEnv.WorkerEnvironmentService;
+  serviceValue!: workerEnv.WorkerEnvironmentService;
   private liveEventsValue!: liveEvents.WorkerLiveEventReceiver;
   private readonly placementLifecycle: WorkerFaultPlacementLifecycle;
   private placementGateValue: WorkerSessionPlacementGate | undefined;

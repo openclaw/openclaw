@@ -10,9 +10,12 @@ import { startUpdateRunWatcher } from "../update-run-watcher.js";
 import type { GatewayRequestContext, RespondFn } from "./types.js";
 import { updateStatusHandlers } from "./update-status.js";
 
-vi.mock("../../infra/update-startup.js", () => ({
+vi.mock("../../infra/update-status-state.js", () => ({
   getUpdateAvailable: () => null,
   getUpdateSchedule: () => null,
+}));
+
+vi.mock("../../infra/update-startup.js", () => ({
   getUpdateEffectiveChannel: async () => "stable",
   refreshGatewayUpdateStatus: async () => {},
 }));

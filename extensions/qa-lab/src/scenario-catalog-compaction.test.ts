@@ -1,8 +1,73 @@
+import { runInNewContext } from "node:vm";
 import { describe, expect, it } from "vitest";
 import { readQaScenarioById } from "./scenario-catalog.js";
 import { readFlowAssertExpression, requireFlowScenario } from "./scenario-catalog.test-utils.js";
 
 describe("qa compaction scenario catalog", () => {
+  it.each([
+    { retained: [12, 13, 14, 15], pass: true },
+    { retained: [10, 11, 12, 13, 14, 15], pass: false },
+    { retained: [12, 14, 15], pass: false },
+    { retained: [], pass: false },
+  ])(
+    "distinguishes complete retained blocks $retained from summary excerpts",
+    ({ retained, pass }) => {
+      const scenario = requireFlowScenario(readQaScenarioById("compaction-retry-mutating-tool"));
+      const actions = scenario.execution.flow?.steps[0]?.actions ?? [];
+      const seed = actions.find(
+        (action) => (action as { call?: string }).call === "seedQaSessionTranscript",
+      ) as { args: [unknown, { messages: { expr: string } }] };
+      const messages = runInNewContext(seed.args[1].messages.expr, {
+        config: scenario.execution.config,
+        now: 0,
+      }) as { text: string }[];
+      const block = (index: number) =>
+        messages.find((message) =>
+          message.text.includes(
+            `post-marker historical user block ${String(index).padStart(2, "0")}`,
+          ),
+        )!.text;
+      const overflowRequest = {
+        cursor: 1,
+        allInputText: messages.map((message) => message.text).join("\n"),
+      };
+      const writeRequest = {
+        cursor: 2,
+        allInputText: [
+          "Recent turns preserved verbatim:",
+          ...[9, 10, 11].map((index) => block(index).slice(0, 600)),
+          ...retained.map(block),
+        ].join("\n"),
+      };
+      const evidence = actions.find(
+        (action) => (action as { set?: string }).set === "requestEvidence",
+      ) as { value: { expr: string } };
+      const requestEvidence = runInNewContext(evidence.value.expr, {
+        config: scenario.execution.config,
+        scenarioRequests: [overflowRequest, writeRequest],
+      }) as unknown[];
+      const pruningAssertions = actions
+        .map(readFlowAssertExpression)
+        .filter(
+          (expression) =>
+            expression.includes("tailBlocks") ||
+            expression.includes("includes(config.bulkyMarker)"),
+        );
+      expect(pruningAssertions).toHaveLength(2);
+      expect(
+        pruningAssertions.every((expression) =>
+          runInNewContext(expression, {
+            config: scenario.execution.config,
+            overflowRequest,
+            writeRequest,
+            overflowEvidence: requestEvidence[0],
+            writeEvidence: requestEvidence[1],
+          }),
+        ),
+      ).toBe(pass);
+    },
+  );
+
   it.each([
     {
       id: "compaction-empty-response-recovery",
@@ -122,7 +187,7 @@ describe("qa compaction scenario catalog", () => {
       "OpenClaw performs exactly one successful write, then one terminal continuation after zero-or-more causally linked waits, and returns the exact file content and final marker.",
     );
     expect(scenario.successCriteria).toContain(
-      "OpenClaw proves session-memory.pruning by retaining a nonempty contiguous suffix ending at block 15 while pruning marker block 10.",
+      "OpenClaw proves session-memory.pruning by retaining a nonempty contiguous suffix of complete tail blocks ending at block 15 while pruning the body of marker block 10; bounded summary excerpts are allowed.",
     );
     expect(scenario.successCriteria).toContain(
       "The Codex runtime-pair cell reports a known harness gap before gateway, session, or provider work and makes no compaction coverage claim.",
@@ -344,7 +409,7 @@ describe("qa compaction scenario catalog", () => {
     expect(flow).toContain(
       "String(overflowRequest.allInputText ?? '').includes(config.bulkyMarker)",
     );
-    expect(flow).toContain("!String(writeRequest.allInputText ?? '').includes(config.bulkyMarker)");
+    expect(flow).toContain("config.tailTokenCount - 1");
     expect(flow).toContain("JSON.stringify(overflowEvidence.tailBlocks)");
     expect(flow).toContain("writeEvidence.tailBlocks.length > 0");
     expect(flow).toContain("!writeEvidence.tailBlocks.includes('10')");

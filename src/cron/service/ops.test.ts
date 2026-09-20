@@ -2,6 +2,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { createCronRegressionState } from "../../../test/helpers/cron/service-regression-fixtures.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { AgentDeletionCommitUncertainError } from "../../agents/agent-lifecycle-registry.js";
 import {
@@ -37,13 +38,17 @@ import { list, writeScratch } from "./ops-read.js";
 import { inspectManualRunDisposition } from "./ops-run-preparation.js";
 import { run } from "./ops-run.js";
 import { proposeCronRunRecovery, recoverCronRunProposal } from "./run-recovery.js";
-import { createCronServiceState, type CronAddResult, type CronEvent } from "./state.js";
+import type { CronAddResult, CronEvent } from "./state.js";
 import * as taskRuns from "./task-runs.js";
 import { runMissedJobs } from "./timer.js";
 
 const { logger, makeStorePath } = setupCronServiceSuite({
   prefix: "cron-service-ops-seam",
 });
+
+function createCronServiceState(params: Parameters<typeof createCronRegressionState>[0]) {
+  return createCronRegressionState({ log: logger, ...params });
+}
 
 function requireDeclarativeAddResult(result: CronAddResult) {
   if (!("job" in result)) {
@@ -508,11 +513,7 @@ async function withStateDirForStorePath<T>(
 function createTimedOutIsolatedCronState(params: { storePath: string; now: number }) {
   return createCronServiceState({
     storePath: params.storePath,
-    cronEnabled: true,
-    log: logger,
     nowMs: () => params.now,
-    enqueueSystemEvent: vi.fn(),
-    requestHeartbeat: vi.fn(),
     runIsolatedAgentJob: vi.fn(async () => {
       throw new Error("cron: job execution timed out");
     }),
@@ -528,11 +529,7 @@ function createOkIsolatedCronState(params: {
 }) {
   return createCronServiceState({
     storePath: params.storePath,
-    cronEnabled: true,
-    log: logger,
     nowMs: () => params.now,
-    enqueueSystemEvent: vi.fn(),
-    requestHeartbeat: vi.fn(),
     ...(params.triggersEnabled ? { cronConfig: { triggers: { enabled: true } } } : {}),
     runIsolatedAgentJob: vi.fn(async () => ({
       status: "ok" as const,
@@ -854,12 +851,8 @@ describe("cron service ops seam coverage", () => {
     insertCronJobRow(storePath, legacyJob);
     const state = createCronServiceState({
       storePath,
-      cronEnabled: true,
       cronConfig: { webhook: "https://example.invalid/cron" } as never,
-      log: logger,
       nowMs: () => now,
-      enqueueSystemEvent: vi.fn(),
-      requestHeartbeat: vi.fn(),
       runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
     });
 
@@ -900,8 +893,6 @@ describe("cron service ops seam coverage", () => {
 
     const state = createCronServiceState({
       storePath,
-      cronEnabled: true,
-      log: logger,
       nowMs: () => now,
       enqueueSystemEvent,
       requestHeartbeat,
@@ -969,8 +960,6 @@ describe("cron service ops seam coverage", () => {
     });
     const state = createCronServiceState({
       storePath,
-      cronEnabled: true,
-      log: logger,
       nowMs: () => now,
       enqueueSystemEvent,
       requestHeartbeat,
@@ -1017,11 +1006,7 @@ describe("cron service ops seam coverage", () => {
     completedJob.state.nextRunAtMs = now + 60_000;
     const state = createCronServiceState({
       storePath,
-      cronEnabled: true,
-      log: logger,
       nowMs: () => now,
-      enqueueSystemEvent: vi.fn(),
-      requestHeartbeat: vi.fn(),
       runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
     });
     const proposal = proposeCronRunRecovery(state, job.id, undefined, startedAt);
@@ -1113,11 +1098,7 @@ describe("cron service ops seam coverage", () => {
         const events: CronEvent[] = [];
         const state = createCronServiceState({
           storePath,
-          cronEnabled: true,
-          log: logger,
           nowMs: () => now,
-          enqueueSystemEvent: vi.fn(),
-          requestHeartbeat: vi.fn(),
           runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
           onEvent: (event) => events.push(structuredClone(event)),
         });
@@ -1270,11 +1251,7 @@ describe("cron service ops seam coverage", () => {
       runReceiptStore.releaseLocalCronRunReceiptOwnership(receipt);
       const state = createCronServiceState({
         storePath,
-        cronEnabled: true,
-        log: logger,
         nowMs: () => now,
-        enqueueSystemEvent: vi.fn(),
-        requestHeartbeat: vi.fn(),
         runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
       });
       const taskRunId = taskRuns.tryCreateCronTaskRunHandle({
@@ -1345,11 +1322,7 @@ describe("cron service ops seam coverage", () => {
       const events: CronEvent[] = [];
       const state = createCronServiceState({
         storePath,
-        cronEnabled: true,
-        log: logger,
         nowMs: () => now,
-        enqueueSystemEvent: vi.fn(),
-        requestHeartbeat: vi.fn(),
         runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
         onEvent: (event) => events.push(structuredClone(event)),
       });
@@ -1415,11 +1388,7 @@ describe("cron service ops seam coverage", () => {
       await writeCronStoreSnapshot({ storePath, jobs: [job] });
       const state = createCronServiceState({
         storePath,
-        cronEnabled: true,
-        log: logger,
         nowMs: () => now,
-        enqueueSystemEvent: vi.fn(),
-        requestHeartbeat: vi.fn(),
         runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
       });
       const taskRunId = taskRuns.tryCreateCronTaskRunHandle({ state, job, startedAt })?.runId;
@@ -1489,11 +1458,7 @@ describe("cron service ops seam coverage", () => {
         const runIsolatedAgentJob = vi.fn(async () => ({ status: "ok" as const }));
         const state = createCronServiceState({
           storePath,
-          cronEnabled: true,
-          log: logger,
           nowMs: () => now,
-          enqueueSystemEvent: vi.fn(),
-          requestHeartbeat: vi.fn(),
           runIsolatedAgentJob,
         });
         const taskRunId = taskRuns.tryCreateCronTaskRunHandle({
@@ -1557,12 +1522,8 @@ describe("cron service ops seam coverage", () => {
       const sendCronFailureAlert = vi.fn(async () => undefined);
       const state = createCronServiceState({
         storePath,
-        cronEnabled: true,
         cronConfig: { failureAlert: { enabled: true, after: 1, cooldownMs: 60_000 } },
-        log: logger,
         nowMs: () => now,
-        enqueueSystemEvent: vi.fn(),
-        requestHeartbeat: vi.fn(),
         sendCronFailureAlert,
         runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
       });
@@ -1620,11 +1581,7 @@ describe("cron service ops seam coverage", () => {
     });
     const state = createCronServiceState({
       storePath,
-      cronEnabled: true,
-      log: logger,
       nowMs: () => now,
-      enqueueSystemEvent: vi.fn(),
-      requestHeartbeat: vi.fn(),
       runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
     });
 
@@ -1694,12 +1651,8 @@ describe("cron service ops seam coverage", () => {
     await writeCronStoreSnapshot({ storePath, jobs: [job] });
     const state = createCronServiceState({
       storePath,
-      cronEnabled: true,
       cronConfig: { triggers: { enabled: true } },
-      log: logger,
       nowMs: () => now,
-      enqueueSystemEvent: vi.fn(),
-      requestHeartbeat: vi.fn(),
       runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
       runScriptJob: vi.fn(async () => ({
         status: "ok" as const,
@@ -1751,11 +1704,7 @@ describe("cron service ops seam coverage", () => {
       await writeDueIsolatedJobSnapshot(storePath, now);
       const state = createCronServiceState({
         storePath,
-        cronEnabled: true,
-        log: logger,
         nowMs: () => now,
-        enqueueSystemEvent: vi.fn(),
-        requestHeartbeat: vi.fn(),
         runIsolatedAgentJob: vi.fn(async () => ({
           status: "error" as const,
           error: "provider failed",
@@ -1794,11 +1743,7 @@ describe("cron service ops seam coverage", () => {
       await writeCronStoreSnapshot({ storePath, jobs: [job] });
       const state = createCronServiceState({
         storePath,
-        cronEnabled: true,
-        log: logger,
         nowMs: () => now,
-        enqueueSystemEvent: vi.fn(),
-        requestHeartbeat: vi.fn(),
         runIsolatedAgentJob: vi.fn(async () => ({
           status: "error" as const,
           error: 'Session "agent:main:cron:job-1" changed while starting work. Retry.',
@@ -1981,11 +1926,7 @@ describe("cron service ops seam coverage", () => {
       let resolveRun: ((value: { status: "ok"; summary: string }) => void) | undefined;
       const state = createCronServiceState({
         storePath,
-        cronEnabled: true,
-        log: logger,
         nowMs: () => now,
-        enqueueSystemEvent: vi.fn(),
-        requestHeartbeat: vi.fn(),
         runIsolatedAgentJob: vi.fn(
           () =>
             new Promise<{ status: "ok"; summary: string }>((resolve) => {

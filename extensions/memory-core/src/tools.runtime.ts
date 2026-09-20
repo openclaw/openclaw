@@ -1,4 +1,3 @@
-// Memory Core plugin module implements tools behavior.
 export {
   readAgentMemoryFile,
   resolveMemoryBackendConfig,

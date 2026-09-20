@@ -94,6 +94,13 @@ Pass the same owner to shared capture helpers so screenshots, reports, and video
 stay together. Distinguish stage names within an attempt. Close the browser context
 before finalizing video.
 
+With `OPENCLAW_CAPTURE_UI_PROOF=1`, the chat-loading performance real-Gateway
+suite retains `history-pagination.cpuprofile` beside its screenshots and
+`loading-evidence.json`. Pagination evidence distinguishes loaded messages from
+the pane's completed update plus two animation frames, so deferred layout work
+stays inside the rendered timing. Compare repeated runs of the same fixture and
+build mode; CPU profiling adds overhead, and individual timings can vary.
+
 Successful and failed evidence is retained. Cleanup is manual: remove only exact
 directories that you own and have finished reviewing. Never recursively delete
 the shared parent before a replay. Disposable build/media fixtures and temporary
@@ -107,6 +114,12 @@ local, alongside an allowlisted `failure.public.json` summary. Automatic CI uplo
 match only `failure-*/failure.public.json`; raw reports and screenshots remain
 private. Older frozen targets without the public summary produce no matching
 upload and never fall back to raw captures.
+
+The shared failure collector gives renderer evaluation and screenshot capture one
+five-second budget. If the renderer stalls, it records incomplete diagnostics and
+returns so the caller can rethrow the original failure. A late browser response
+cannot publish a screenshot after that budget expires; test action deadlines and
+caller-owned browser cleanup remain unchanged.
 
 The private JSON report's `ci.shardIndex` and `ci.vitestShardCount` fields record
 `VITEST_SHARD_INDEX` and `VITEST_SHARD_COUNT`, respectively, as supplied by normal CI.

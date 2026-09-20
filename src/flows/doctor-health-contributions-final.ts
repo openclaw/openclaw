@@ -79,6 +79,7 @@ export function resolveFinalDoctorHealthContributions(params: {
     createDoctorHealthContribution({
       id: "doctor:default-account-routing",
       label: "Default account routing",
+      updateWork: { kind: "inspection", scope: "run" },
       healthChecks: {
         description: "Multi-account channels have explicit default routing or complete bindings.",
         defaultEnabled: false,
@@ -157,18 +158,20 @@ export function resolveFinalDoctorHealthContributions(params: {
     createDoctorHealthContribution({
       id: "doctor:security",
       label: "Security",
+      updateWork: { kind: "inspection", scope: "agent" },
       healthCheckIds: ["core/doctor/security"],
       run: runSecurityHealth,
     }),
     createDoctorHealthContribution({
       id: "doctor:web-fetch-proxy",
       label: "Web fetch proxy",
+      updateWork: { kind: "inspection", scope: "run" },
       run: runWebFetchProxyHealth,
     }),
     createDoctorHealthContribution({
       id: "doctor:github-projects",
       label: "GitHub projects",
-      updatePolicy: "standalone",
+      updateWork: { kind: "standalone" },
       run: runGitHubProjectHealth,
     }),
     createDoctorHealthContribution({
@@ -180,42 +183,49 @@ export function resolveFinalDoctorHealthContributions(params: {
     createDoctorHealthContribution({
       id: "doctor:oauth-tls",
       label: "OAuth TLS",
+      updateWork: { kind: "inspection", scope: "run" },
       healthCheckIds: ["core/doctor/oauth-tls"],
       run: runOpenAIOAuthTlsHealth,
     }),
     createDoctorHealthContribution({
       id: "doctor:hooks-model",
       label: "Hooks model",
+      updateWork: { kind: "inspection", scope: "run" },
       healthCheckIds: ["core/doctor/hooks-model"],
       run: runHooksModelHealth,
     }),
     createDoctorHealthContribution({
       id: "doctor:model-references",
       label: "Model references",
+      updateWork: { kind: "inspection", scope: "agent" },
       healthCheckIds: ["core/doctor/model-references"],
       run: (ctx) => runCoreHealthFindingNote(ctx, "core/doctor/model-references"),
     }),
     createDoctorHealthContribution({
       id: "doctor:provider-catalog-projection",
       label: "Provider catalog projection",
+      updateWork: { kind: "inspection", scope: "run" },
       healthCheckIds: ["core/doctor/provider-catalog-projection"],
       run: (ctx) => runCoreHealthFindingNote(ctx, "core/doctor/provider-catalog-projection"),
     }),
     createDoctorHealthContribution({
       id: "doctor:local-audio-acceleration",
       label: "Local audio acceleration",
+      updateWork: { kind: "inspection", scope: "run" },
       healthCheckIds: ["core/doctor/local-audio-acceleration"],
       run: (ctx) => runCoreHealthFindingNote(ctx, "core/doctor/local-audio-acceleration"),
     }),
     createDoctorHealthContribution({
       id: "doctor:runtime-tool-schemas",
       label: "Runtime tool schemas",
+      updateWork: { kind: "inspection", scope: "agent" },
       healthCheckIds: ["core/doctor/runtime-tool-schemas"],
       run: (ctx) => runCoreHealthFindingNote(ctx, "core/doctor/runtime-tool-schemas"),
     }),
     createDoctorHealthContribution({
       id: "doctor:skill-workshop-tool-policy",
       label: "Skill Workshop tool policy",
+      updateWork: { kind: "inspection", scope: "agent" },
       healthCheckIds: ["core/doctor/skill-workshop-tool-policy"],
       run: (ctx) => runCoreHealthFindingNote(ctx, "core/doctor/skill-workshop-tool-policy"),
     }),
@@ -238,6 +248,7 @@ export function resolveFinalDoctorHealthContributions(params: {
     createDoctorHealthContribution({
       id: "doctor:workspace-status",
       label: "Workspace status",
+      updateWork: { kind: "inspection", scope: "agent" },
       healthChecks: {
         description: "Workspace plugin/status diagnostics are exposed as findings.",
         defaultEnabled: false,
@@ -286,13 +297,14 @@ export function resolveFinalDoctorHealthContributions(params: {
     createDoctorHealthContribution({
       id: "doctor:skills",
       label: "Skills",
+      updateWork: { kind: "inspection", scope: "agent" },
       healthCheckIds: ["core/doctor/skills-readiness"],
       run: runSkillsHealth,
     }),
     createDoctorHealthContribution({
       id: "doctor:bootstrap-size",
       label: "Bootstrap size",
-      updatePolicy: "standalone",
+      updateWork: { kind: "standalone" },
       healthCheckIds: ["core/doctor/bootstrap-size"],
       run: runBootstrapSizeHealth,
     }),
@@ -367,6 +379,7 @@ export function resolveFinalDoctorHealthContributions(params: {
     createDoctorHealthContribution({
       id: "doctor:whatsapp-responsiveness",
       label: "WhatsApp responsiveness",
+      updateWork: { kind: "inspection", scope: "run" },
       healthChecks: {
         description: "Gateway pressure and local TUI observations when WhatsApp is enabled.",
         defaultEnabled: false,
@@ -402,6 +415,7 @@ export function resolveFinalDoctorHealthContributions(params: {
     createDoctorHealthContribution({
       id: "doctor:memory-search",
       label: "Memory search",
+      updateWork: { kind: "inspection", scope: "agent" },
       healthChecks: {
         description: "Memory search provider and backend readiness are captured as findings.",
         defaultEnabled: false,
@@ -436,6 +450,7 @@ export function resolveFinalDoctorHealthContributions(params: {
     createDoctorHealthContribution({
       id: "doctor:write-config",
       label: "Write config",
+      updateWork: { kind: "finalize" },
       healthChecks: {
         description: "Config write blockers are findings before doctor repair writes.",
         defaultEnabled: false,
@@ -446,13 +461,14 @@ export function resolveFinalDoctorHealthContributions(params: {
     createDoctorHealthContribution({
       id: "doctor:workspace-suggestions",
       label: "Workspace suggestions",
-      updatePolicy: "standalone",
+      updateWork: { kind: "standalone" },
       healthCheckIds: ["core/doctor/workspace-suggestions"],
       run: runWorkspaceSuggestionsHealth,
     }),
     createDoctorHealthContribution({
       id: "doctor:final-config-validation",
       label: "Final config validation",
+      updateWork: { kind: "finalize" },
       healthCheckIds: ["core/doctor/final-config-validation"],
       run: runFinalConfigValidationHealth,
     }),

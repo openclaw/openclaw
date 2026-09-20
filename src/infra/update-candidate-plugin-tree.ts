@@ -467,7 +467,7 @@ export async function copyUpdateCandidatePluginTrees(
   const privateRoot = resolvePathViaExistingAncestorSync(path.resolve(params.targetStateDir));
   const candidateRoot = resolvePathViaExistingAncestorSync(path.resolve(params.candidateRoot));
   if (candidateRoot !== plan.candidateRoot) {
-    throw new Error("Plugin candidate root changed after snapshot inventory");
+    throw new Error("Plugin files changed during update preparation; rerun the update");
   }
   const rebase = (file: string) =>
     relocateRuntimePath(file, [{ sourceRoot: plan.privateRoot, destinationRoot: privateRoot }]);

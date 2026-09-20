@@ -1,4 +1,3 @@
-// Matrix plugin module implements url validation behavior.
 import {
   assertHttpUrlTargetsPrivateNetwork,
   type LookupFn,

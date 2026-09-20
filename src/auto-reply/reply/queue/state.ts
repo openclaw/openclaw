@@ -3,10 +3,10 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import type { QueueMode } from "../../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import type { ModelCatalogEntry } from "../../../agents/model-catalog.types.js";
 import type { ModelFallbackRouteResolution } from "../../../agents/model-fallback.types.js";
-import { resolveThinkingDefault } from "../../../agents/model-thinking-default.js";
+import { resolveThinkingSelection } from "../../../agents/model-thinking-default.js";
 import { resolveGlobalMap } from "../../../shared/global-singleton.js";
 import { applyQueueRuntimeSettings } from "../../../utils/queue-helpers.js";
-import { normalizeThinkLevel, resolveSupportedThinkingLevel } from "../../thinking.js";
+import { normalizeThinkLevel } from "../../thinking.js";
 import { completeFollowupRunLifecycle } from "./lifecycle.js";
 import type { FollowupRun, QueueDropPolicy, QueueSettings } from "./types.js";
 
@@ -274,22 +274,19 @@ export function refreshQueuedFollowupSession(params: {
       }
       if (params.nextThinking) {
         run.thinkingCatalog = params.nextThinking.catalog;
-        const thinkingPolicy = {
-          provider: run.provider,
-          model: run.model,
-          catalog: params.nextThinking.catalog,
-          agentRuntime: params.nextThinking.agentRuntime,
-        };
         const explicitLevel =
           run.thinkLevelOverride === "default"
             ? undefined
             : (run.thinkLevelOverride ?? normalizeThinkLevel(params.nextThinking.level));
-        run.thinkLevel = resolveSupportedThinkingLevel({
-          ...thinkingPolicy,
-          level:
-            explicitLevel ??
-            resolveThinkingDefault({ cfg: run.config, agentId: run.agentId, ...thinkingPolicy }),
-        });
+        run.thinkLevel = resolveThinkingSelection({
+          cfg: run.config,
+          agentId: run.agentId,
+          provider: run.provider,
+          model: run.model,
+          catalog: params.nextThinking.catalog,
+          agentRuntime: params.nextThinking.agentRuntime,
+          level: explicitLevel,
+        }).level;
       }
     }
   };

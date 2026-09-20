@@ -51,13 +51,14 @@ function createCrabboxNodeSetup(params: {
   const workerBundle = params.workerBundle
     ? (({ token: _token, ...artifact }) => artifact)(params.workerBundle)
     : undefined;
-  const desktopEnvironment = params.desktop
-    ? [
-        "set -eu",
-        ...createCrabboxXfceSessionEnvironment(),
-        `exec "$1" -e 'process.stdout.write(JSON.stringify({DISPLAY:process.env.DISPLAY,DBUS_SESSION_BUS_ADDRESS:process.env.DBUS_SESSION_BUS_ADDRESS,XDG_RUNTIME_DIR:process.env.XDG_RUNTIME_DIR}))'`,
-      ].join("\n")
-    : null;
+  const desktopEnvironment =
+    params.desktop && (params.target ?? "linux") === "linux"
+      ? [
+          "set -eu",
+          ...createCrabboxXfceSessionEnvironment(),
+          `exec "$1" -e 'process.stdout.write(JSON.stringify({DISPLAY:process.env.DISPLAY,DBUS_SESSION_BUS_ADDRESS:process.env.DBUS_SESSION_BUS_ADDRESS,XDG_RUNTIME_DIR:process.env.XDG_RUNTIME_DIR}))'`,
+        ].join("\n")
+      : null;
   // The script receives credentials only through the private forwarded environment.
   // Its children inherit neither download authority nor the enrollment credential.
   const script = `const fs = require("node:fs");

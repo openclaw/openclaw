@@ -116,6 +116,18 @@ describe("registerMaintenanceCommands doctor action", () => {
     vi.clearAllMocks();
   });
 
+  it("rejects legacy capture cleanup before entering Doctor maintenance", async () => {
+    const program = new Command().exitOverride().configureOutput({ writeErr: () => {} });
+    registerMaintenanceCommands(program);
+
+    await expect(
+      program.parseAsync(["doctor", "--cleanup-legacy-plugin-captures"], { from: "user" }),
+    ).rejects.toMatchObject({ code: "commander.unknownOption" });
+
+    expect(doctorCommand).not.toHaveBeenCalled();
+    expect(runDoctorLintCli).not.toHaveBeenCalled();
+  });
+
   it.each(["22.23.2", "26.0.0"])("keeps plain doctor read-only on Node %s", async (node) => {
     vi.stubGlobal("process", { ...process, versions: { ...process.versions, node } });
     const capabilities = await nodeSqlite.detectCurrentSqliteCapabilities();
@@ -452,6 +464,7 @@ describe("registerMaintenanceCommands doctor action", () => {
     expect(doctorCommand).toHaveBeenCalledWith(
       runtime,
       expect.objectContaining({ postUpgrade: true, json: true }),
+      undefined,
     );
     expect(runDoctorLintCli).not.toHaveBeenCalled();
     expect(runtime.exit).toHaveBeenCalledWith(0);

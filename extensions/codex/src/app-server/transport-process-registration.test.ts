@@ -8,6 +8,7 @@ import { terminateCodexAppServerOrphan } from "./transport-process-containment.j
 import {
   createCodexAppServerProcessReaperService,
   prepareCodexAppServerProcessRegistration,
+  waitForCodexAppServerProcessRegistrationCleanup,
 } from "./transport-process-registration.js";
 import { RegistrationTestChildProcess } from "./transport-process-registration.test-support.js";
 import {
@@ -101,7 +102,7 @@ describe("Codex process registration", () => {
     expect(readCodexAppServerProcessCommand).toHaveBeenCalledTimes(mode === "legacy" ? 0 : 1);
   });
 
-  it.for(["gone", "replaced"])(
+  it.for(["gone", "zombie", "replaced"])(
     "lets containment settle a %s child after command inspection fails",
     async (mode) => {
       store.register("orphan", { parent, child: { ...child, commandFingerprint } });
@@ -112,7 +113,14 @@ describe("Codex process registration", () => {
         .mockResolvedValueOnce([observer, liveChild])
         .mockResolvedValue([
           observer,
-          ...(mode === "gone" ? [] : [{ ...liveChild, startedAt: "a later start" }]),
+          ...(mode === "gone"
+            ? []
+            : [
+                {
+                  ...liveChild,
+                  ...(mode === "zombie" ? { state: "Z" } : { startedAt: "a later start" }),
+                },
+              ]),
         ]);
 
       await expect(prepareCodexAppServerProcessRegistration()).resolves.toBeTypeOf("function");
@@ -238,6 +246,7 @@ describe("Codex process registration", () => {
         expect(JSON.stringify(store.entries())).not.toContain(command);
         expect(kill).not.toHaveBeenCalled();
         spawned.emit("exit", 0, null);
+        await waitForCodexAppServerProcessRegistrationCleanup(spawned);
         expect(store.entries()).toEqual([]);
       } else {
         await expect(registered).rejects.toThrow(

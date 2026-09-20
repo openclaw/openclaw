@@ -364,6 +364,7 @@ export function startHeartbeatRunner(opts: {
     const agentOutcomes = await Promise.all(enrolledAgents.map((agent) => runOneAgent(agent)));
     let ran = false;
     let firstResult: HeartbeatRunResult | undefined;
+    let firstFailure: Extract<HeartbeatRunResult, { status: "failed" }> | undefined;
     let firstGuardSkip: Extract<HeartbeatRunResult, { status: "skipped" }> | undefined;
     for (const outcome of agentOutcomes) {
       if (outcome.retryableSkip) {
@@ -374,6 +375,9 @@ export function startHeartbeatRunner(opts: {
       ran ||= outcome.ran;
       firstResult ??= outcome.result;
       const result = outcome.result;
+      if (result?.status === "failed") {
+        firstFailure ??= result;
+      }
       if (
         !ran &&
         result?.status === "skipped" &&
@@ -386,10 +390,11 @@ export function startHeartbeatRunner(opts: {
       }
     }
     if (ran) {
-      return { status: "ran", durationMs: Date.now() - startedAt };
+      return firstFailure ?? { status: "ran", durationMs: Date.now() - startedAt };
     }
     return (
       firstGuardSkip ??
+      firstFailure ??
       firstResult ?? {
         status: "skipped",
         reason: isInterval ? "not-due" : "disabled",

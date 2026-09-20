@@ -220,7 +220,7 @@ describe("native sessions.abort requester authorization over WebSocket", () => {
         clearQueued: true,
       });
       // Drain the real publisher, then cross a same-socket response barrier.
-      flushPendingSessionsChangedEvents();
+      await flushPendingSessionsChangedEvents();
       expect(await rpcReq(owner.ws, "sessions.subscribe", {})).toMatchObject({
         ok: true,
         payload: { subscribed: true },

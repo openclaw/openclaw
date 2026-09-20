@@ -60,6 +60,7 @@ function fixture() {
         ...first,
         supervisor,
         worker: supervisor,
+        cleanupMode: container ? null : "process-group",
         container,
         nowMs: NOW_MS,
       });

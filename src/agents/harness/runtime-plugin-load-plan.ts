@@ -267,11 +267,18 @@ function withRuntimePluginIdsAllowed(
   if (pluginIds.length === 0 || (!materializeAllowlist && existingAllowlist.length === 0)) {
     return config;
   }
+  const allow = dedupePluginIds([...existingAllowlist, ...pluginIds]);
+  if (
+    allow.length === existingAllowlist.length &&
+    allow.every((pluginId, index) => pluginId === existingAllowlist[index])
+  ) {
+    return config;
+  }
   return {
     ...config,
     plugins: {
       ...config?.plugins,
-      allow: dedupePluginIds([...existingAllowlist, ...pluginIds]),
+      allow,
     },
   };
 }

@@ -1,6 +1,7 @@
 import path from "node:path";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { assert, expect, it } from "vitest";
+import { prepareChatHistoryFixture } from "../test-helpers/chat-activity-fixtures.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
@@ -79,28 +80,32 @@ suite.define(() => {
 
       const historyPage = await context.newPage();
       await installMockGateway(historyPage, {
-        historyMessages: [
-          { role: "user", content: "Prepare the release", timestamp: timestamp - 1_000 },
-          {
-            role: "assistant",
-            content: [{ type: "toolCall", id: skipped.toolCallId, name: "write", arguments: args }],
-            timestamp,
-          },
-          skipped,
-          {
-            role: "toolResult",
-            toolCallId: "failed-check",
-            toolName: "exec",
-            content: "Permission denied",
-            isError: true,
-            timestamp: timestamp + 1_000,
-          },
-          {
-            role: "assistant",
-            content: "Received the subagent update. The validation command needs attention.",
-            timestamp: timestamp + 2_000,
-          },
-        ],
+        methodResponses: {
+          "chat.history": prepareChatHistoryFixture([
+            { role: "user", content: "Prepare the release", timestamp: timestamp - 1_000 },
+            {
+              role: "assistant",
+              content: [
+                { type: "toolCall", id: skipped.toolCallId, name: "write", arguments: args },
+              ],
+              timestamp,
+            },
+            skipped,
+            {
+              role: "toolResult",
+              toolCallId: "failed-check",
+              toolName: "exec",
+              content: "Permission denied",
+              isError: true,
+              timestamp: timestamp + 1_000,
+            },
+            {
+              role: "assistant",
+              content: "Received the subagent update. The validation command needs attention.",
+              timestamp: timestamp + 2_000,
+            },
+          ]),
+        },
       });
       await historyPage.goto(`${suite.server.baseUrl}chat`);
       await historyPage
@@ -109,6 +114,9 @@ suite.define(() => {
       const group = historyPage.locator(".chat-activity-group__summary").first();
       expect(await group.textContent()).toContain("1 failed");
       expect(await group.textContent()).toContain("1 skipped");
+      expect(await group.locator(".chat-activity-group__label").textContent()).not.toContain(
+        "Write (failed)",
+      );
       await group.click();
       const historyRow = historyPage
         .locator(".chat-tool-msg-summary")

@@ -135,16 +135,16 @@ describe("first-run activation receipt", () => {
     expect(localStorage.getItem(receiptKey)).toBeNull();
   });
 
-  it("rejects a tampered model without trusting or replaying its owner receipt", () => {
+  it.each([
+    { name: "model", patch: { modelRef: "anthropic/different" } },
+    { name: "role", patch: { modelTarget: "utility" } },
+  ])("rejects a tampered $name without trusting or replaying its owner receipt", ({ patch }) => {
     const context = createContext();
     const receipt = persistFirstRunActivationReceipt(context, {
       kind: "openai-api-key",
       modelRef: "openai/expected",
     });
-    localStorage.setItem(
-      receiptKey,
-      JSON.stringify({ ...receipt, modelRef: "anthropic/different" }),
-    );
+    localStorage.setItem(receiptKey, JSON.stringify({ ...receipt, ...patch }));
 
     expect(readFirstRunActivationReceipt(context)).toBeNull();
     expect(localStorage.getItem(receiptKey)).toBeNull();
