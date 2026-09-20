@@ -324,6 +324,43 @@ describe("prepareWorkerGitHubEnvironment", () => {
     );
   });
 
+  it.each([
+    { scenario: "assume-unchanged", flags: ["--assume-unchanged"] },
+    { scenario: "skip-worktree", flags: ["--skip-worktree"] },
+    { scenario: "both index", flags: ["--assume-unchanged", "--skip-worktree"] },
+  ])("preserves a tracked file that a $scenario flag hides from Git status", async ({ flags }) => {
+    const collision = "collision";
+    const localContent = "local edit hidden from status\n";
+    await fs.writeFile(path.join(cwd, collision), "base file\n");
+    initialHead = await commit(cwd, "Track collision file");
+    await git(cwd, "push", "--quiet", "origin", "HEAD:refs/heads/main");
+
+    const seed = path.join(root, "earlier-worker");
+    await git(root, "clone", "--quiet", "--branch", "main", origin, seed);
+    await fs.rm(path.join(seed, collision));
+    await fs.mkdir(path.join(seed, collision));
+    await fs.writeFile(path.join(seed, collision, "remote.txt"), "remote file\n");
+    const remoteHead = await commit(seed, "Earlier turn");
+    await git(seed, "push", "--quiet", "origin", `HEAD:refs/heads/${binding.branch}`);
+
+    await fs.writeFile(path.join(cwd, collision), localContent);
+    for (const flag of flags) {
+      await git(cwd, "update-index", flag, collision);
+    }
+    // The flag hides the edit, so a clean report must not authorize removing these bytes.
+    expect(await git(cwd, "status", "--porcelain", "--ignored", "-z")).toBe("");
+
+    await prepare();
+
+    await expect(fs.readFile(path.join(cwd, collision), "utf8")).resolves.toBe(localContent);
+    await expect(fs.access(path.join(cwd, collision, "remote.txt"))).rejects.toThrow();
+    expect((await git(cwd, "rev-parse", "HEAD")).trim()).toBe(initialHead);
+    expect(remoteHead).not.toBe(initialHead);
+    expect(warn).toHaveBeenCalledExactlyOnceWith(
+      expect.stringContaining("GitHub checkout fast-forward skipped"),
+    );
+  });
+
   it("preserves a tracked dirty directory that blocks an incoming file", async () => {
     const collision = "collision";
     const localFile = path.join(collision, "local.txt");

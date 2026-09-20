@@ -180,9 +180,13 @@ async function bindWorkerGitHubCheckout(
         "--",
         gitPath,
       ]);
+      // `-v` tags assume-unchanged (`h`) and skip-worktree (`S`, or `s` when both are set)
+      // entries, whose worktree edits status deliberately hides; only a plain cached entry
+      // proves the local bytes are reproducible from the index.
       const tracked = await listPaths([
         "--literal-pathspecs",
         "ls-files",
+        "-v",
         "--stage",
         "-z",
         "--",
@@ -191,7 +195,7 @@ async function bindWorkerGitHubCheckout(
       const isCleanTracked =
         status.length === 0 &&
         tracked.length > 0 &&
-        tracked.every((entry) => !entry.startsWith("160000 "));
+        tracked.every((entry) => entry.startsWith("H ") && !entry.startsWith("H 160000 "));
       if (!isCleanTracked) {
         hasPathPrefixCollision = true;
         break;
