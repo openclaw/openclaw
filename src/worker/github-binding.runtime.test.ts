@@ -402,6 +402,57 @@ describe("prepareWorkerGitHubEnvironment", () => {
     );
   });
 
+  it("completes the move when the turn is fenced after the removals", async () => {
+    const collision = "collision";
+    await fs.writeFile(path.join(cwd, collision), "base file\n");
+    initialHead = await commit(cwd, "Track collision file");
+    await git(cwd, "push", "--quiet", "origin", "HEAD:refs/heads/main");
+
+    const seed = path.join(root, "earlier-worker");
+    await git(root, "clone", "--quiet", "--branch", "main", origin, seed);
+    await fs.rm(path.join(seed, collision));
+    await fs.mkdir(path.join(seed, collision));
+    await fs.writeFile(path.join(seed, collision, "remote.txt"), "remote file\n");
+    const remoteHead = await commit(seed, "Earlier turn");
+    await git(seed, "push", "--quiet", "origin", `HEAD:refs/heads/${binding.branch}`);
+
+    const controller = new AbortController();
+    const runCommand = exec.runCommandWithTimeout;
+    vi.spyOn(exec, "runCommandWithTimeout").mockImplementation(async (argv, options) => {
+      if (argv.includes("checkout")) {
+        // The removals are already done and HEAD has advanced; the replacement files must still
+        // be materialized, otherwise the checkout stays half applied with no later recovery.
+        controller.abort(new Error("worker fenced: owner-epoch-mismatch"));
+      }
+      return await runCommand(argv, options);
+    });
+    const prepareFenced = () =>
+      prepareWorkerGitHubEnvironment({
+        binding,
+        stateDir: path.join(root, "state"),
+        runId: "turn",
+        cwd,
+        signal: controller.signal,
+      });
+
+    await prepareFenced();
+
+    expect((await git(cwd, "rev-parse", "HEAD")).trim()).toBe(remoteHead);
+    await expect(fs.readFile(path.join(cwd, collision, "remote.txt"), "utf8")).resolves.toBe(
+      "remote file\n",
+    );
+    expect(await git(cwd, "status", "--porcelain", "-z")).toBe("");
+
+    // The next turn sees a local head that already matches the remote one, so it returns early.
+    await prepareFenced();
+
+    expect((await git(cwd, "rev-parse", "HEAD")).trim()).toBe(remoteHead);
+    await expect(fs.readFile(path.join(cwd, collision, "remote.txt"), "utf8")).resolves.toBe(
+      "remote file\n",
+    );
+    expect(await git(cwd, "status", "--porcelain", "-z")).toBe("");
+  });
+
   it("preserves a tracked dirty directory that blocks an incoming file", async () => {
     const collision = "collision";
     const localFile = path.join(collision, "local.txt");

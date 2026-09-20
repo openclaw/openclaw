@@ -32,20 +32,27 @@ async function bindWorkerGitHubCheckout(
   baseEnv: NodeJS.ProcessEnv,
   signal?: AbortSignal,
 ) {
-  const git = (args: string[], timeoutMs = 5_000) =>
+  const runGit = (args: string[], timeoutMs: number, honorSignal: boolean) =>
     executeGitCommand(cwd, args, {
       baseEnv,
       timeoutMs,
       maxOutputBytes: { stdout: 1_048_576, stderr: 2_048 },
-      ...(signal ? { signal } : {}),
+      ...(honorSignal && signal ? { signal } : {}),
     });
-  const requireGit = async (args: string[]) => {
-    const result = await git(args);
+  const git = (args: string[], timeoutMs = 5_000) => runGit(args, timeoutMs, true);
+  const requireGitWith = async (args: string[], honorSignal: boolean) => {
+    const result = await runGit(args, 5_000, honorSignal);
     if (result.code !== 0 || result.stdoutTruncatedBytes) {
       throw new Error(`git ${args[0]} failed or output was truncated (exit ${result.code})`);
     }
     return result.stdout;
   };
+  const requireGit = (args: string[]) => requireGitWith(args, true);
+  // The move below advances HEAD before it materializes the replacements, so a turn fenced
+  // partway through would leave the workspace half applied and the next turn returns early
+  // because the local head already equals the remote head. Once the move starts, this bounded
+  // local work completes instead of honoring the abort.
+  const requireMoveGit = (args: string[]) => requireGitWith(args, false);
   try {
     if ((await git(["rev-parse", "--git-dir"])).code !== 0) {
       return;
@@ -94,8 +101,9 @@ async function bindWorkerGitHubCheckout(
     if (signal?.aborted) {
       return;
     }
-    const listPaths = async (args: string[]) =>
-      (await requireGit(args)).split("\0").filter(Boolean);
+    const splitPaths = (stdout: string) => stdout.split("\0").filter(Boolean);
+    const listPaths = async (args: string[]) => splitPaths(await requireGit(args));
+    const listMovePaths = async (args: string[]) => splitPaths(await requireMoveGit(args));
     const added = await listPaths([
       "diff",
       "--name-only",
@@ -235,15 +243,16 @@ async function bindWorkerGitHubCheckout(
     }
     // Paths already missing before the move are the session's own deletions and stay
     // deleted; only files the incoming commits introduce are materialized.
-    const listDeleted = () => listPaths(["ls-files", "--deleted", "-z"]);
-    const deletedBefore = new Set(await listDeleted());
-    await requireGit(["reset", "--mixed", "FETCH_HEAD"]);
+    const deletedBefore = new Set(await listPaths(["ls-files", "--deleted", "-z"]));
+    await requireMoveGit(["reset", "--mixed", "FETCH_HEAD"]);
     for (const collisionPath of removableTrackedCollisions) {
       await fs.rm(path.join(cwd, collisionPath), { recursive: true });
     }
-    const missing = (await listDeleted()).filter((file) => !deletedBefore.has(file));
+    const missing = (await listMovePaths(["ls-files", "--deleted", "-z"])).filter(
+      (file) => !deletedBefore.has(file),
+    );
     if (missing.length > 0) {
-      await requireGit(["--literal-pathspecs", "checkout", "--", ...missing]);
+      await requireMoveGit(["--literal-pathspecs", "checkout", "--", ...missing]);
     }
   } catch (error) {
     // Checkout metadata helps direct publication; a failure must not discard the coding turn.
