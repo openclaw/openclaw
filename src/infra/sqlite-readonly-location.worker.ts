@@ -264,22 +264,20 @@ function runSession(): void {
       !Number.isSafeInteger(message.id) ||
       !("args" in message) ||
       !Array.isArray(message.args) ||
-      (message.args[0] !== "sync" && !isSqliteSnapshotStagingMode(message.args[0])) ||
+      !isSqliteSnapshotStagingMode(message.args[0]) ||
       !message.args.every((arg): arg is string => typeof arg === "string")
     ) {
       process.exit(1);
     }
     busy = true;
     const id = message.id;
-    const staging = isSqliteSnapshotStagingMode(message.args[0]);
     void inspect(message.args).then((inspected) => {
       const result: SqliteReadOnlyWorkerResult =
         Buffer.byteLength(JSON.stringify(inspected)) > SQLITE_READONLY_WORKER_MAX_BUFFER
           ? { ok: false, message: "exceeded its output buffer" }
           : inspected;
       process.send?.({ id, result }, (error) => {
-        if (error || (!result.ok && !staging)) {
-          // A failed inspection may still own a native handle and admission.
+        if (error) {
           process.exit(1);
           return;
         }

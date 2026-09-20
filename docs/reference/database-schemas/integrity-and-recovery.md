@@ -115,7 +115,9 @@ retention, or update migrations.
 Live shared-state inspection, including synchronous plugin and configuration reads,
 uses the same SQLite online-backup owner in an isolated child. One read transaction
 pins committed pages while writers continue; inspection does not require database
-or WAL bytes to stop changing. Native SQLite may update existing SHM read marks,
+or WAL bytes to stop changing. Backup-capable inspections use one-shot children,
+including inside startup scopes, to avoid Node 26 completion stalls with persistent IPC.
+Native SQLite may update existing SHM read marks,
 but leaves database and WAL contents unchanged. Incomplete WAL families, rollback
 crash residue, and owner-excluded sources retain private copying and recovery so
 inspection does not create missing source sidecars. Source-change retries apply

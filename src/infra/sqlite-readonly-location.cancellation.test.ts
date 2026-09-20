@@ -8,7 +8,11 @@ import { waitForSignalExitBarriers } from "../cli/signal-exit-barrier.js";
 import { requireNodeSqlite } from "./node-sqlite.js";
 import { SQLITE_READONLY_CHILD_ARG } from "./runtime-process-entrypoints.js";
 import * as workerUrls from "./runtime-worker-url.js";
-import { withSqliteReadOnlyWorkerScope } from "./sqlite-readonly-worker.js";
+import {
+  captureSqliteReadOnlyWorkerLaunch,
+  createScopedSqliteReadOnlyWorker,
+  withSqliteReadOnlyWorkerScope,
+} from "./sqlite-readonly-worker.js";
 import {
   prepareSqliteReadOnlyLocation,
   prepareSqliteReadOnlyLocationSync,
@@ -82,7 +86,7 @@ function isWorkerMode(args: readonly string[] | null | undefined, mode: string):
   return marker >= 0 && args?.[marker + 1] === mode;
 }
 
-function inspectionChild(mode: "session" | "async") {
+function inspectionChild(mode: "session" | "sync" | "async") {
   const mock = mode === "session" ? vi.mocked(spawn) : processMocks.execFile;
   const index = mock.mock.calls.findIndex(([, args]) => isWorkerMode(args, mode));
   return mock.mock.results[index]?.value;
@@ -107,7 +111,7 @@ describe("SQLite read-only worker cancellation", () => {
       ${reclaimFixture}
       process.on("message", (message) => {
         if (typeof message === "object") {
-          const location = path.join(message.args[2], "snapshot.sqlite");
+          const location = path.join(message.args[1], "snapshot.sqlite");
           fs.writeFileSync(location, "");
           process.send({ id: message.id, result: { ok: true, location } });
         }
@@ -125,16 +129,15 @@ describe("SQLite read-only worker cancellation", () => {
       }
       return schedule(callback, inspectionFinished && delay === 300_000 ? 1 : delay, ...args);
     });
-    await withSqliteReadOnlyWorkerScope(async () => {
-      const prepared = await prepareSqliteReadOnlyLocation(path.join(fixture, "unused.sqlite"), {
-        preserveSourceArtifacts: true,
-      });
-      expect(await prepared.cleanupAsync()).toBe(true);
+    const session = createScopedSqliteReadOnlyWorker(captureSqliteReadOnlyWorkerLaunch());
+    try {
+      await session.run(fixture, { mode: "staging-reconcile" });
       inspectionFinished = true;
-    });
+    } finally {
+      await session.close();
+    }
     expect(shutdownTimeouts).toEqual([300_000]);
     expect(inspectionChild("session")?.signalCode).toBe("SIGKILL");
-    expect(fs.readdirSync(path.join(cacheRoot, "openclaw"))).toEqual([]);
   });
 
   it.each(
@@ -145,7 +148,7 @@ describe("SQLite read-only worker cancellation", () => {
       })),
     ),
   )(
-    "joins a scoped child and removes its unpublished snapshot on $stop (session=$preserveSourceArtifacts)",
+    "joins a scoped child and removes its unpublished snapshot on $stop (preserve=$preserveSourceArtifacts)",
     async ({ stop, preserveSourceArtifacts }) => {
       const fixture = tempDirs.make("openclaw-readonly-scoped-held-");
       const worker = path.join(fixture, "worker.mjs");
@@ -157,26 +160,18 @@ describe("SQLite read-only worker cancellation", () => {
         import path from "node:path";
         ${reclaimFixture}
         process.on("SIGTERM", () => {});
-        const block = (stagingRoot, id) => {
+        const block = (stagingRoot) => {
           fs.writeFileSync(path.join(stagingRoot, "partial.sqlite"), "private partial snapshot");
           fs.writeFileSync(${JSON.stringify(ready)}, stagingRoot);
           ${
             stop === "invalid-response"
               ? `
-            if (id === undefined) {
-              process.stdout.write(JSON.stringify({ ok: true, unexpected: "invalid" }));
-              process.exit(0);
-            } else {
-              process.send({ id, result: { ok: true, unexpected: "invalid" } });
-            }`
+            process.stdout.write(JSON.stringify({ ok: true, unexpected: "invalid" }));
+            process.exit(0);`
               : ""
           }
         };
-        if (process.argv[3] === "session") {
-          process.on("message", ({ id, args }) => block(args[2], id));
-        } else {
-          block(process.argv[5]);
-        }
+        block(process.argv[5]);
         setTimeout(() => process.exit(2), 5000);
       `,
       );
@@ -202,8 +197,8 @@ describe("SQLite read-only worker cancellation", () => {
             await expect(operation).rejects.toThrow("returned an invalid result");
           }
         });
-        const child = inspectionChild(preserveSourceArtifacts ? "session" : "async");
-        if (!preserveSourceArtifacts && stop === "invalid-response") {
+        const child = inspectionChild(preserveSourceArtifacts ? "sync" : "async");
+        if (stop === "invalid-response") {
           expect(child.exitCode).toBe(0);
         } else {
           expect(child.signalCode).toBe("SIGKILL");
@@ -322,11 +317,7 @@ describe("read-only snapshot deadline", () => {
         fs.writeFileSync(path.join(stagingRoot, 'partial.sqlite'), 'partial');
         fs.writeFileSync(${JSON.stringify(ready)}, 'ready');
       };
-      if (process.argv[3] === 'session') {
-        process.on('message', ({ args }) => block(args[2]));
-      } else {
-        block(process.argv[5]);
-      }
+      block(process.argv[5]);
       setTimeout(() => process.exit(0), 35000);`,
       );
       vi.spyOn(workerUrls, "resolveRuntimeWorkerUrl").mockReturnValue(pathToFileURL(worker));
@@ -338,16 +329,7 @@ describe("read-only snapshot deadline", () => {
       let childClosed: Promise<void> | undefined;
       let closeSignal: NodeJS.Signals | null | undefined;
       // Exercise native termination and cleanup without waiting out the production budget.
-      if (mode === "scoped") {
-        const schedule = globalThis.setTimeout;
-        vi.spyOn(globalThis, "setTimeout").mockImplementation((callback, delay, ...args) =>
-          schedule(
-            callback,
-            delay === 301_000 && inspectionChild("session") ? 2_000 : delay,
-            ...args,
-          ),
-        );
-      } else if (mode === "sync") {
+      if (mode === "sync") {
         vi.mocked(spawnSync).mockImplementationOnce((command, args, options) => {
           expect(options).toMatchObject({ timeout: 301_000, killSignal: "SIGKILL" });
           const result = actual.spawnSync(command, args, { ...options, timeout: 2_000 });
@@ -357,7 +339,7 @@ describe("read-only snapshot deadline", () => {
         });
       } else {
         processMocks.execFile.mockImplementation((file, args, options, callback) => {
-          if (!isWorkerMode(args, mode)) {
+          if (!isWorkerMode(args, mode === "scoped" ? "sync" : mode)) {
             return executeFile(file, args, options, callback);
           }
           expect(options).toMatchObject({ timeout: 301_000, killSignal: "SIGKILL" });
@@ -384,9 +366,7 @@ describe("read-only snapshot deadline", () => {
         await expect(
           run().finally(() => {
             // Check at settlement, before the finally block joins for failed-test cleanup.
-            expect(mode === "scoped" ? inspectionChild("session")?.signalCode : closeSignal).toBe(
-              "SIGKILL",
-            );
+            expect(closeSignal).toBe("SIGKILL");
           }),
         ).rejects.toThrow(
           /timed out after 301 seconds \(budget for 26 B\).*Stop the Gateway service/,

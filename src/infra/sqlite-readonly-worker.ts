@@ -120,11 +120,9 @@ export function sqliteInspectionTimeoutError(
 
 type SqliteReadOnlyWorkerScope = {
   active: boolean;
-  busy: boolean;
   controller: AbortController;
   pending: Set<Promise<SqliteReadOnlyWorkerValue>>;
   deadlineOwnedByCaller: boolean;
-  worker?: ReturnType<typeof createScopedSqliteReadOnlyWorker>;
   authWorker?: {
     source: SqliteAuthProfileReadOptions["source"];
     launch: SqliteReadOnlyWorkerLaunch;
@@ -141,7 +139,6 @@ export function createSqliteReadOnlyWorkerScope(options?: {
 }) {
   const scope: SqliteReadOnlyWorkerScope = {
     active: true,
-    busy: false,
     controller: new AbortController(),
     pending: new Set(),
     deadlineOwnedByCaller: options?.deadlineOwnedByCaller ?? false,
@@ -163,10 +160,7 @@ export function createSqliteReadOnlyWorkerScope(options?: {
         scope.active = false;
         scope.controller.abort(new Error("SQLite read-only worker scope closed"));
         await Promise.allSettled(scope.pending);
-        const closed = await Promise.allSettled([
-          scope.worker?.close(),
-          scope.authWorker?.session.close(),
-        ]);
+        const closed = await Promise.allSettled([scope.authWorker?.session.close()]);
         const failures = closed.flatMap((result) =>
           result.status === "rejected" ? [result.reason] : [],
         );
@@ -297,12 +291,6 @@ export function runSqliteReadOnlyWorker(
       ? AbortSignal.any([options.signal, scope.controller.signal])
       : scope.controller.signal,
   };
-  // Synchronous scopes reuse a serial child. Concurrent source readers need
-  // separate processes so one native close cannot release another reader's locks.
-  const useScopedWorker = options.mode === "sync" && !scope.busy;
-  if (useScopedWorker) {
-    scope.busy = true;
-  }
   const authRequest =
     scopedOptions.mode === "auth-profile-rows"
       ? {
@@ -310,26 +298,13 @@ export function runSqliteReadOnlyWorker(
           launch: captureSqliteReadOnlyWorkerLaunch(scopedOptions.env, scopedOptions.source),
         }
       : undefined;
+  // Native backup promises can stall with persistent IPC on Node 26. Snapshot
+  // modes (including sync) stay one-shot; only auth reads reuse this scope's child.
   const operation = authRequest
     ? scope.authTail.then(() =>
         runSqliteAuthProfileWorker(pathname, authRequest.options, authRequest.launch, scope),
       )
-    : (async () => {
-        if (!useScopedWorker) {
-          return runSqliteReadOnlyWorkerOnce(pathname, scopedOptions);
-        }
-        try {
-          const launch = captureSqliteReadOnlyWorkerLaunch();
-          if (!scope.worker?.compatible(launch)) {
-            await scope.worker?.close();
-            scopedOptions.signal.throwIfAborted();
-            scope.worker = createScopedSqliteReadOnlyWorker(launch);
-          }
-          return await scope.worker.run(pathname, scopedOptions);
-        } finally {
-          scope.busy = false;
-        }
-      })();
+    : runSqliteReadOnlyWorkerOnce(pathname, scopedOptions);
   if (scopedOptions.mode === "auth-profile-rows") {
     // Source locks are process-owned. Keep auth requests serial even for different databases.
     scope.authTail = operation.then(
