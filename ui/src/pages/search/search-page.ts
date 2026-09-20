@@ -165,8 +165,8 @@ class SearchPage extends OpenClawLightDomElement {
   }
 
   private get busy() {
-    const state = this.context.runtimeConfig.state;
-    return state.configLoading || state.configSaving || state.configApplying;
+    const configState = this.context.runtimeConfig.state;
+    return configState.configLoading || configState.configSaving || configState.configApplying;
   }
 
   private async load() {
@@ -459,11 +459,11 @@ class SearchPage extends OpenClawLightDomElement {
               showLabel: false,
               rawAvailable: false,
               maskSensitive: true,
-              onPatch: (path, value) => {
-                void this.patch(scope, path, value);
+              onPatch: (changedPath, nextValue) => {
+                void this.patch(scope, changedPath, nextValue);
               },
-              onRemove: (path) => {
-                void this.patch(scope, path, undefined);
+              onRemove: (changedPath) => {
+                void this.patch(scope, changedPath, undefined);
               },
             }),
           });
@@ -519,8 +519,8 @@ class SearchPage extends OpenClawLightDomElement {
     const result = this.result;
     const scope = this.gateway.capture();
     const statusGeneration = this.generation;
-    const state = this.context.runtimeConfig.state;
-    const config = currentConfigObject(state);
+    const configState = this.context.runtimeConfig.state;
+    const config = currentConfigObject(configState);
     const search = asNullableRecord(asNullableRecord(asNullableRecord(config?.tools)?.web)?.search);
     const providers = (result?.providers ?? []).toSorted((a, b) => a.label.localeCompare(b.label));
     const configuredProvider = config
@@ -532,12 +532,12 @@ class SearchPage extends OpenClawLightDomElement {
     const agents = (this.context.agents.state.agentsList?.agents ?? []).filter(
       (agent) => agent.kind !== "system",
     );
-    const disabled = !this.canEdit || this.busy || !state.configSnapshot;
+    const disabled = !this.canEdit || this.busy || !configState.configSnapshot;
     const body = renderSettingsWorkspace(
       renderSettingsPage(html`
         ${!this.gateway.connected ? renderSettingsEmpty(t("searchPage.offline")) : nothing}
         ${this.error ? html`<div role="alert" class="callout danger">${this.error}<button class="btn btn--sm" @click=${() => this.load()}>${t("common.retry")}</button></div>` : nothing}
-        ${state.lastError ? html`<div role="alert" class="callout danger">${state.lastError}<button class="btn btn--sm" @click=${() => this.retryConfig(scope)}>${t("common.retry")}</button></div>` : nothing}
+        ${configState.lastError ? html`<div role="alert" class="callout danger">${configState.lastError}<button class="btn btn--sm" @click=${() => this.retryConfig(scope)}>${t("common.retry")}</button></div>` : nothing}
         ${!result && this.loading ? renderSettingsLoadingSkeleton({ rows: 4 }) : nothing}
         ${
           result

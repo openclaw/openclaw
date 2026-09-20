@@ -177,14 +177,14 @@ async function mount(
 }
 
 function button(element: Element, text: string) {
-  const button = [...element.querySelectorAll("button")].find(
+  const control = [...element.querySelectorAll("button")].find(
     (candidate) =>
       (
         candidate.querySelector(".settings-row__title")?.textContent ?? candidate.textContent
       )?.trim() === text,
   );
-  expect(button, text).toBeDefined();
-  return button!;
+  expect(control, text).toBeDefined();
+  return control!;
 }
 function select(element: Element, label: string, value: string) {
   const field = element.querySelector<HTMLSelectElement>(`select[aria-label="${label}"]`)!;

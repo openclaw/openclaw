@@ -29,7 +29,14 @@ export type NewSessionTarget =
   | { model: string; catalogId?: never; group?: never };
 
 function requestedModel(value: string | null): string | undefined {
-  if (!value || value.length > 2048 || /[\u0000-\u001f\u007f]/u.test(value)) {
+  if (
+    !value ||
+    value.length > 2048 ||
+    Array.from(value).some((character) => {
+      const code = character.charCodeAt(0);
+      return code < 32 || code === 127;
+    })
+  ) {
     return undefined;
   }
   const parsed = parseModelCatalogRef(value);

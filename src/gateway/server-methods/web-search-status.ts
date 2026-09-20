@@ -119,10 +119,10 @@ export async function prepareWebSearchStatus(
                 "config",
                 ...(entry.configPath ?? ["webSearch"]),
               ],
-        ...(entry.credentialPath ? { credentialPath: entry.credentialPath } : {}),
-        ...(credential ? { credential } : {}),
-        ...(entry.docsUrl ? { docsUrl: entry.docsUrl } : {}),
-        ...(entry.signupUrl ? { signupUrl: entry.signupUrl } : {}),
+        credentialPath: entry.credentialPath || undefined,
+        credential,
+        docsUrl: entry.docsUrl || undefined,
+        signupUrl: entry.signupUrl || undefined,
       };
     });
   const enabled = config.tools?.web?.search?.enabled !== false;

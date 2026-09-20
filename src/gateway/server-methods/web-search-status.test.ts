@@ -240,11 +240,11 @@ describe("Search settings status projection", () => {
     { provider: "fixture-search", transport: "fixture-responses" },
   ])(
     "reports the $provider native owner without a vendor-specific label",
-    async ({ provider, transport }) => {
+    async ({ provider: nativeProvider, transport }) => {
       withModelCatalog();
       mocks.native.mockReturnValue({
         kind: "native",
-        provider,
+        provider: nativeProvider,
         transport,
       });
       const result = await prepareWebSearchStatus(context(), {
@@ -253,7 +253,12 @@ describe("Search settings status projection", () => {
       });
       expect(result.status).toMatchObject({
         model: { provider: "custom", id: "model", runtime: "openclaw" },
-        route: { kind: "native", provider, label: "Native web search", testable: false },
+        route: {
+          kind: "native",
+          provider: nativeProvider,
+          label: "Native web search",
+          testable: false,
+        },
       });
     },
   );
