@@ -133,6 +133,14 @@ async function dispatchDiscordMessageAction(
       : {}),
     ...readPolicyOptions,
   } as const;
+  const notifyVisibleDelivery = (to: string, fallbackSessionKey?: string) => {
+    discordInboundEventDelivery.notify({
+      sessionKey: ctx.sessionKey ?? fallbackSessionKey ?? undefined,
+      to,
+      accountId,
+      inboundEventKind: ctx.inboundEventKind,
+    });
+  };
   const notifyVisibleOutbound = (
     result: AgentToolResult<unknown>,
     to: string,
@@ -147,12 +155,7 @@ async function dispatchDiscordMessageAction(
     if (details?.ok !== true) {
       return;
     }
-    discordInboundEventDelivery.notify({
-      sessionKey: ctx.sessionKey ?? fallbackSessionKey ?? undefined,
-      to,
-      accountId,
-      inboundEventKind: ctx.inboundEventKind,
-    });
+    notifyVisibleDelivery(to, fallbackSessionKey);
   };
   const withAdoptedThreadReplyRoute = (
     result: AgentToolResult<unknown>,
@@ -505,7 +508,13 @@ async function dispatchDiscordMessageAction(
         ...(readBooleanParam(params, "silent") === true ? { silent: true } : {}),
       },
       cfg,
-      actionOptions,
+      {
+        ...actionOptions,
+        onDeliveryResult: async (deliveryResult: DiscordSendResult) => {
+          notifyVisibleDelivery(to);
+          await ctx.onDeliveryResult?.(toDiscordOutboundDeliveryResult(deliveryResult));
+        },
+      },
     );
     notifyVisibleOutbound(result, to);
     return result;

@@ -4,6 +4,7 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { discordMessageActions } from "../channel-actions.js";
+import { discordInboundEventDelivery } from "../inbound-event-delivery.js";
 import { RequestClient } from "../internal/rest.js";
 import { sendDiscordComponentMessage } from "../send.components.js";
 import * as runtime from "../send.js";
@@ -757,34 +758,65 @@ describe.each(["sticker", "poll"] as const)("Discord structured %s content", (ki
   });
 });
 
-it("reports sticker delivery through the channel action before a caption tail fails", async () => {
-  const onDeliveryResult = vi.fn();
-  rejectStructuredCaptionTails = true;
-
-  await expect(
-    handleDiscordMessageAction({
-      action: "sticker",
-      params: {
-        to: `channel:${channelId}`,
-        stickerId: ["523456789012345678"],
-        message: `${"x".repeat(1990)}\n\n| A | B |\n| - | - |\n| x | y |`,
+it.each(["present", "omitted", "rejects"] as const)(
+  "retires room history at first sticker delivery before later work fails (host callback: %s)",
+  async (hostCallbackMode) => {
+    const onDeliveryResult =
+      hostCallbackMode === "rejects"
+        ? vi.fn().mockRejectedValue(new Error("Synthetic delivery callback failure"))
+        : vi.fn();
+    const markInboundEventDelivered = vi.fn();
+    const sessionKey = `agent:main:discord:channel:${channelId}`;
+    const endDelivery = discordInboundEventDelivery.begin(
+      sessionKey,
+      {
+        outboundTo: `channel:${channelId}`,
+        outboundAccountId: "default",
+        markInboundEventDelivered,
       },
-      cfg: {
-        channels: {
-          discord: { token, groupPolicy: "open", markdown: { tables: "code" } },
+      { inboundEventKind: "room_event" },
+    );
+    rejectStructuredCaptionTails = true;
+
+    try {
+      const action = handleDiscordMessageAction({
+        action: "sticker",
+        params: {
+          to: `channel:${channelId}`,
+          stickerId: ["523456789012345678"],
+          message: `${"x".repeat(1990)}\n\n| A | B |\n| - | - |\n| x | y |`,
         },
-      },
-      onDeliveryResult,
-    }),
-  ).rejects.toThrow("Synthetic caption tail failure");
+        cfg: {
+          channels: {
+            discord: { token, groupPolicy: "open", markdown: { tables: "code" } },
+          },
+        },
+        accountId: "default",
+        sessionKey,
+        inboundEventKind: "room_event",
+        ...(hostCallbackMode === "omitted" ? {} : { onDeliveryResult }),
+      });
+      await expect(action).rejects.toThrow(
+        hostCallbackMode === "rejects"
+          ? "Synthetic delivery callback failure"
+          : "Synthetic caption tail failure",
+      );
 
-  expect(onDeliveryResult).toHaveBeenCalledOnce();
-  expect(onDeliveryResult).toHaveBeenCalledWith(
-    expect.objectContaining({
-      messageId,
-      target: { kind: "channel", id: channelId },
-      receipt: expect.objectContaining({ primaryPlatformMessageId: messageId }),
-    }),
-  );
-  expect(onDeliveryResult.mock.calls[0]?.[0]).not.toHaveProperty("channel");
-});
+      expect(markInboundEventDelivered).toHaveBeenCalledOnce();
+      expect(onDeliveryResult).toHaveBeenCalledTimes(hostCallbackMode === "omitted" ? 0 : 1);
+      expect(writes()).toHaveLength(hostCallbackMode === "rejects" ? 1 : 2);
+      if (hostCallbackMode !== "omitted") {
+        expect(onDeliveryResult).toHaveBeenCalledWith(
+          expect.objectContaining({
+            messageId,
+            target: { kind: "channel", id: channelId },
+            receipt: expect.objectContaining({ primaryPlatformMessageId: messageId }),
+          }),
+        );
+        expect(onDeliveryResult.mock.calls[0]?.[0]).not.toHaveProperty("channel");
+      }
+    } finally {
+      endDelivery();
+    }
+  },
+);
