@@ -13,7 +13,7 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { refreshAwsSharedConfigCacheForBedrock } from "./aws-credential-refresh.js";
+import { bedrockCredentialDefaultProvider } from "./aws-credential-refresh.js";
 
 // ---------------------------------------------------------------------------
 // Types & constants
@@ -312,8 +312,8 @@ export async function createBedrockEmbeddingProvider(
   });
 
   const invoke = async (body: string, signal?: AbortSignal): Promise<Uint8Array | undefined> => {
-    await refreshAwsSharedConfigCacheForBedrock();
     const sdk = new BedrockRuntimeClient({
+      credentialDefaultProvider: bedrockCredentialDefaultProvider,
       region: client.region,
       endpoint: client.endpoint,
       useFipsEndpoint: client.useFipsEndpoint,
@@ -494,6 +494,7 @@ export async function hasAwsCredentials(
   }
   try {
     const credentials = await defaultProvider({
+      ignoreCache: true,
       timeout: 1000,
       maxRetries: 0,
     })();

@@ -19,7 +19,6 @@ type InferenceProfileResult =
 const inferenceProfileGetResults: InferenceProfileResult[] = [];
 const bedrockClientConfigs: Array<Record<string, unknown>> = [];
 const destroyBedrockClient = vi.fn();
-const refreshSharedConfigCache = vi.fn(async () => {});
 const sendBedrockCommand = vi.fn(
   async (command: unknown, options?: { abortSignal?: AbortSignal }) => {
     const commandName = command?.constructor?.name;
@@ -93,10 +92,6 @@ vi.mock("@aws-sdk/client-bedrock", () => {
     ListInferenceProfilesCommand,
   };
 });
-
-vi.mock("@smithy/shared-ini-file-loader", () => ({
-  loadSharedConfigFiles: refreshSharedConfigCache,
-}));
 
 type RegisteredProviderPlugin = Awaited<ReturnType<typeof registerSingleProviderPlugin>>;
 
@@ -249,7 +244,6 @@ describe("amazon-bedrock provider plugin", () => {
     inferenceProfileGetResults.length = 0;
     bedrockClientConfigs.length = 0;
     destroyBedrockClient.mockClear();
-    refreshSharedConfigCache.mockClear();
     sendBedrockCommand.mockClear();
   });
 
@@ -462,41 +456,6 @@ describe("amazon-bedrock provider plugin", () => {
       const result = await callWrappedStream(provider, NON_ANTHROPIC_MODEL, MODEL_DESCRIPTOR);
       expectWrappedResultFields(result, { cacheRetention: "none" });
     });
-  });
-
-  it("refreshes AWS shared config cache before Bedrock sends", async () => {
-    await withEnvAsync(
-      {
-        AWS_ACCESS_KEY_ID: undefined,
-        AWS_SECRET_ACCESS_KEY: undefined,
-        AWS_BEARER_TOKEN_BEDROCK: undefined,
-        AWS_BEDROCK_SKIP_AUTH: undefined,
-      },
-      async () => {
-        const order: string[] = [];
-        refreshSharedConfigCache.mockImplementationOnce(async () => {
-          order.push("refresh");
-        });
-        const provider = await registerSingleProviderPlugin(amazonBedrockPlugin);
-        const wrapped = provider.wrapStreamFn?.({
-          provider: "amazon-bedrock",
-          modelId: ANTHROPIC_MODEL,
-          streamFn: spyStreamFn,
-        } as never);
-        const result = wrapped?.(ANTHROPIC_MODEL_DESCRIPTOR, { messages: [] } as never, {
-          onPayload: () => {
-            order.push("original");
-          },
-        }) as Record<string, unknown> | undefined;
-
-        await (
-          result?.onPayload as ((p: Record<string, unknown>, model: unknown) => unknown) | undefined
-        )?.({}, ANTHROPIC_MODEL_DESCRIPTOR);
-
-        expect(refreshSharedConfigCache).toHaveBeenCalledWith({ ignoreCache: true });
-        expect(order).toEqual(["refresh", "original"]);
-      },
-    );
   });
 
   it.each([
@@ -1116,8 +1075,9 @@ describe("amazon-bedrock provider plugin", () => {
       const system = payload.system as Array<Record<string, unknown>>;
       expect(system[1]).toEqual({ cachePoint: { type: "default" } });
       expect(sendBedrockCommand).toHaveBeenCalledTimes(1);
-      expect(bedrockClientConfigs).toEqual([{ region: "us-east-1" }]);
-      expect(refreshSharedConfigCache).toHaveBeenCalledTimes(1);
+      expect(bedrockClientConfigs).toEqual([
+        { region: "us-east-1", credentialDefaultProvider: expect.any(Function) },
+      ]);
       expect(destroyBedrockClient).toHaveBeenCalledTimes(1);
     });
 
@@ -1146,8 +1106,11 @@ describe("amazon-bedrock provider plugin", () => {
 
       expect(payload.inferenceConfig).toEqual({ maxTokens: 10 });
       expect(sendBedrockCommand).toHaveBeenCalledTimes(1);
-      expect(bedrockClientConfigs).toEqual([{ region: "us-west-2" }]);
+      expect(bedrockClientConfigs).toEqual([
+        { region: "us-west-2", credentialDefaultProvider: expect.any(Function) },
+      ]);
     });
+
 
     it.each(["anthropic.claude-3-opus-20240229-v1:0", "amazon.nova-pro-v1:0"])(
       "keeps opaque profile caching disabled for resolved target %s",
@@ -1231,7 +1194,6 @@ describe("amazon-bedrock provider plugin", () => {
           { cachePoint: { type: "default" } },
         ]);
         expect(sendBedrockCommand).toHaveBeenCalledTimes(2);
-        expect(refreshSharedConfigCache).toHaveBeenCalledTimes(2);
         expect(destroyBedrockClient).toHaveBeenCalledTimes(2);
       } finally {
         vi.useRealTimers();
@@ -1268,11 +1230,10 @@ describe("amazon-bedrock provider plugin", () => {
       }
 
       expect(sendBedrockCommand).toHaveBeenCalledTimes(2);
-      expect(refreshSharedConfigCache).toHaveBeenCalledTimes(2);
       expect(destroyBedrockClient).toHaveBeenCalledTimes(2);
     });
 
-    it("checks caller cancellation before refreshing AWS credentials", async () => {
+    it("checks caller cancellation before profile lookup", async () => {
       const modelId =
         "arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/pre-aborted";
       const controller = new AbortController();
@@ -1290,7 +1251,6 @@ describe("amazon-bedrock provider plugin", () => {
         ),
       ).rejects.toBe(reason);
 
-      expect(refreshSharedConfigCache).not.toHaveBeenCalled();
       expect(sendBedrockCommand).not.toHaveBeenCalled();
       expect(destroyBedrockClient).not.toHaveBeenCalled();
     });

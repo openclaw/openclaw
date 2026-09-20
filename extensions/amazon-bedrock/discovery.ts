@@ -31,7 +31,6 @@ import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { refreshAwsSharedConfigCacheForBedrock } from "./aws-credential-refresh.js";
 import {
   loadBedrockControlPlaneSdk,
   runBedrockControlPlaneRequest,
@@ -520,9 +519,6 @@ export async function discoverBedrockModels(params: {
 
   const sdk = await loadBedrockControlPlaneSdk();
   const clientFactory = params.clientFactory ?? ((region: string) => sdk.createClient(region));
-  if (!params.clientFactory) {
-    await refreshAwsSharedConfigCacheForBedrock();
-  }
   const client = clientFactory(params.region);
 
   const discoveryPromise = (async () => {
