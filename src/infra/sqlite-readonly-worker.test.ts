@@ -6,6 +6,7 @@ import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coerci
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { runNodeScript } from "../../test/helpers/run-node-script.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { withEnvAsync } from "../test-utils/env.js";
 import { requireNodeSqlite } from "./node-sqlite.js";
 import { SQLITE_READONLY_CHILD_ARG } from "./runtime-process-entrypoints.js";
 import {
@@ -252,7 +253,7 @@ describe("scoped SQLite read-only children", () => {
     },
   );
 
-  it("keeps scoped snapshots out of persistent IPC children and joins each backup", async () => {
+  it("reuses fresh raw snapshots while joining backup-capable children before returning", async () => {
     const source = createDatabase(1024 * 1024);
     const sqlite = requireNodeSqlite();
     const writer = new sqlite.DatabaseSync(source);
@@ -280,14 +281,14 @@ describe("scoped SQLite read-only children", () => {
             } finally {
               expect(await prepared.cleanupAsync()).toBe(true);
             }
+            const child = vi.mocked(execFile).mock.results.at(-1)?.value;
+            expect(child?.exitCode).toBe(0);
+            expect(child?.connected).toBe(false);
           }
-          expect(spawn).not.toHaveBeenCalled();
-          const child = vi.mocked(execFile).mock.results.at(-1)?.value;
-          expect(child?.exitCode).toBe(0);
-          expect(child?.connected).toBe(false);
+          expect(vi.mocked(spawn).mock.results[0]?.value.exitCode).toBeNull();
         }
       });
-      expect(spawn).not.toHaveBeenCalled();
+      expect(spawn).toHaveBeenCalledTimes(1);
       const children = vi.mocked(execFile).mock.calls.flatMap(([, args], index) => {
         const marker = args?.indexOf(SQLITE_READONLY_CHILD_ARG) ?? -1;
         return marker < 0
@@ -295,14 +296,13 @@ describe("scoped SQLite read-only children", () => {
           : [{ mode: args?.[marker + 1], child: vi.mocked(execFile).mock.results[index]?.value }];
       });
       expect(children.filter(({ mode }) => mode !== "reclaim").map(({ mode }) => mode)).toEqual([
-        "sync",
         "async",
-        "sync",
       ]);
       for (const { child } of children) {
         expect(child?.exitCode).toBe(0);
         expect(child?.connected).toBe(false);
       }
+      expect(vi.mocked(spawn).mock.results[0]?.value.exitCode).toBe(0);
     } finally {
       writer.close();
     }
@@ -315,11 +315,26 @@ describe("scoped SQLite read-only children", () => {
         [0, 0],
       );
     });
-    expect(spawn).not.toHaveBeenCalled();
-    expect(execFile).toHaveBeenCalledTimes(2);
-    expect(vi.mocked(execFile).mock.results[0]?.value.pid).not.toBe(
-      vi.mocked(execFile).mock.results[1]?.value.pid,
+    expect(spawn).toHaveBeenCalledTimes(1);
+    expect(execFile).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(spawn).mock.results[0]?.value.pid).not.toBe(
+      vi.mocked(execFile).mock.results[0]?.value.pid,
     );
+  });
+
+  it("replaces the child when its launch environment changes", async () => {
+    const source = createDatabase(0);
+    await withSqliteReadOnlyWorkerScope(async () => {
+      await readSnapshotVersion(source);
+      await withEnvAsync(
+        { XDG_CACHE_HOME: tempDirs.make("openclaw-scoped-environment-") },
+        async () => {
+          expect(await readSnapshotVersion(source)).toBe(0);
+          expect(vi.mocked(spawn).mock.results[0]?.value.exitCode).toBe(0);
+        },
+      );
+    });
+    expect(spawn).toHaveBeenCalledTimes(2);
   });
 
   it("releases admission between requests and reacquires it against the current exclusion", async () => {
@@ -337,7 +352,7 @@ describe("scoped SQLite read-only children", () => {
       }
       expect(await readSnapshotVersion(source)).toBe(0);
     });
-    expect(spawn).not.toHaveBeenCalled();
+    expect(spawn).toHaveBeenCalledTimes(2);
   });
 
   it("refuses a descendant inspection after its scope closes", async () => {
@@ -431,7 +446,7 @@ it("includes WAL, SHM, and rollback-journal sidecars in inspection size", () => 
   expect(vi.mocked(spawnSync).mock.calls[0]?.[1]).toContain("sync");
 });
 
-it("uses online backup instead of raw WAL copying for synchronous inspection", () => {
+it("uses online backup instead of raw WAL copying for live inspection", async () => {
   const source = createDatabase(0);
   const writer = new (requireNodeSqlite().DatabaseSync)(source);
   const stagingRoot = tempDirs.make("openclaw-snapshot-fallback-live-");
@@ -439,7 +454,7 @@ it("uses online backup instead of raw WAL copying for synchronous inspection", (
     writer.exec(
       "PRAGMA journal_mode=WAL; PRAGMA wal_autocheckpoint=0; CREATE TABLE live(value TEXT); INSERT INTO live VALUES ('committed');",
     );
-    const location = runSqliteReadOnlyWorkerSync(source, stagingRoot);
+    const location = await runSqliteReadOnlyWorker(source, { mode: "async", stagingRoot });
     const snapshot = new (requireNodeSqlite().DatabaseSync)(location, { readOnly: true });
     try {
       expect(snapshot.prepare("SELECT value FROM live").get()).toEqual({ value: "committed" });

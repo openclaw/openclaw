@@ -12,6 +12,7 @@ import { releaseSnapshotTempDirectory } from "./sqlite-readonly-location-cleanup
 import {
   createOnlineReadOnlyBackup,
   prepareSqliteReadOnlyLocationInProcess,
+  prepareSqliteReadOnlyLocationSyncInProcess,
   SqliteSourceChangedError,
 } from "./sqlite-readonly-location.js";
 import {
@@ -34,8 +35,8 @@ import {
 
 const stagingTokens = new Map<string, (retiring?: boolean) => void>();
 
-// Synchronous callers block on this child, not on a different snapshot strategy.
-// SQLite's read transaction captures committed WAL pages while writers continue.
+// Artifact-preserving sync requests must not open SQLite on the source. Live
+// async backups pin committed pages with a read transaction and may update SHM.
 async function inspect(args: string[]): Promise<SqliteReadOnlyWorkerResult> {
   const mode = args[0];
   const pathname = args[1];
@@ -119,7 +120,10 @@ async function inspect(args: string[]): Promise<SqliteReadOnlyWorkerResult> {
       releaseSnapshotTempDirectory(prepared.cleanupRoot ?? path.dirname(prepared.location));
       return { ok: true, location: prepared.location };
     }
-    const prepared = await prepareSqliteReadOnlyLocationInProcess(pathname, stagingRoot);
+    const prepared =
+      mode === "sync"
+        ? prepareSqliteReadOnlyLocationSyncInProcess(pathname, stagingRoot)
+        : await prepareSqliteReadOnlyLocationInProcess(pathname, stagingRoot);
     releaseSnapshotTempDirectory(prepared.cleanupRoot ?? path.dirname(prepared.location));
     return { ok: true, location: prepared.location };
   } catch (error) {
@@ -264,20 +268,22 @@ function runSession(): void {
       !Number.isSafeInteger(message.id) ||
       !("args" in message) ||
       !Array.isArray(message.args) ||
-      !isSqliteSnapshotStagingMode(message.args[0]) ||
+      (message.args[0] !== "sync" && !isSqliteSnapshotStagingMode(message.args[0])) ||
       !message.args.every((arg): arg is string => typeof arg === "string")
     ) {
       process.exit(1);
     }
     busy = true;
     const id = message.id;
+    const staging = isSqliteSnapshotStagingMode(message.args[0]);
     void inspect(message.args).then((inspected) => {
       const result: SqliteReadOnlyWorkerResult =
         Buffer.byteLength(JSON.stringify(inspected)) > SQLITE_READONLY_WORKER_MAX_BUFFER
           ? { ok: false, message: "exceeded its output buffer" }
           : inspected;
       process.send?.({ id, result }, (error) => {
-        if (error) {
+        if (error || (!result.ok && !staging)) {
+          // Failed private recovery can retain a native handle until process exit.
           process.exit(1);
           return;
         }

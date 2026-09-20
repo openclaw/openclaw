@@ -1,4 +1,5 @@
 import { formatErrorMessage } from "../../infra/errors.js";
+import { createUpdateErrorFact } from "../../infra/update-failure-facts.js";
 import { assertUpdateRecoveryAdmission } from "../../infra/update-run-recovery-admission.js";
 import { UpdateRecoveryRequiredError } from "../../infra/update-run-recovery.js";
 import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
@@ -36,7 +37,10 @@ export async function withUpdateCommandRecoveryUnwind(
             mode: "unknown",
             root: recoveryState.triageTarget.root,
             durationMs: 0,
-            failure: { cause: error, detail: formatErrorMessage(error) },
+            failure: {
+              cause: error,
+              detail: createUpdateErrorFact("update", error, run.env).message,
+            },
           }),
           runId: run.runId,
         });

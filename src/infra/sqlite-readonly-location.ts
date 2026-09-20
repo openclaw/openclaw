@@ -35,6 +35,7 @@ import {
   createSqliteSnapshotStagingDirectorySync,
   sqliteSnapshotStagingError,
 } from "./sqlite-snapshot-staging.js";
+import { copySqliteWalPrefixSync } from "./sqlite-snapshot-wal-prefix.js";
 import {
   withSqliteSourceHandle,
   withSqliteSourceHandleAsync,
@@ -254,6 +255,8 @@ function recoverPrivateJournalCopy(snapshotPath: string): void {
   const snapshot = openNodeSqliteDatabase(snapshotPath);
   try {
     snapshot.exec("PRAGMA busy_timeout = 30000; PRAGMA trusted_schema = OFF;");
+    // Read the header cookie without parsing sqlite_schema; the consumer owns
+    // diagnostics and authorized repair of malformed catalogs.
     snapshot.prepare("PRAGMA schema_version;").get();
   } finally {
     snapshot.close();
@@ -298,11 +301,35 @@ function createStableReadOnlyCopyInTempDirectory(
       throw new SqliteSourceChangedError(`SQLite journal mode changed before copying: ${pathname}`);
     }
     const sidecars = readSourceSidecars(pathname);
+    let copiedWalPrefix = false;
+    if (journalMode === "wal" && sidecars.wal && !sidecars.journal) {
+      const walPath = `${pathname}-wal`;
+      const wal = openPinnedFile(walPath);
+      try {
+        const copied = copySqliteWalPrefixSync(
+          wal.descriptor,
+          `${snapshotPath}-wal`,
+          () => copySourceFile(pathname, snapshotPath),
+          () => sourceMatchesCopy(pathname, snapshotPath),
+        );
+        assertPinnedIdentityUnchanged(wal);
+        if (copied === false) {
+          throw new SqliteSourceChangedError(
+            `SQLite WAL generation changed while copying: ${pathname}`,
+          );
+        }
+        copiedWalPrefix = copied === true;
+      } finally {
+        fs.closeSync(wal.descriptor);
+      }
+    }
     const sidecarSuffixes = [
       ...(sidecars.journal ? ["-journal"] : []),
       ...(sidecars.wal ? ["-wal"] : []),
     ];
-    if (sidecarSuffixes.length > 0) {
+    if (copiedWalPrefix) {
+      assertExpectedSidecars(pathname, sidecars);
+    } else if (sidecarSuffixes.length > 0) {
       for (const suffix of sidecarSuffixes) {
         copySourceFile(`${pathname}${suffix}`, `${snapshotPath}${suffix}`);
       }

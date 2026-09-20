@@ -102,7 +102,7 @@ describe("prepareSqliteReadOnlyLocation", () => {
     await expectPublicSnapshot(prepareSqliteReadOnlyLocationSync);
   });
 
-  it("preserves database and WAL contents across scoped writer inspections", async () => {
+  it("keeps each scoped artifact-preserving inspection byte-neutral across writer commits", async () => {
     const sqlite = requireNodeSqlite();
     const databasePath = createTempDatabasePath();
     const writer = new sqlite.DatabaseSync(databasePath);
@@ -113,12 +113,12 @@ describe("prepareSqliteReadOnlyLocation", () => {
       await withSqliteReadOnlyWorkerScope(async () => {
         for (const value of ["first", "second"]) {
           writer.prepare("INSERT INTO probe VALUES (?)").run(value);
-          const familyBefore = readLogicalFamily(databasePath);
+          const familyBefore = readFamily(databasePath);
           const prepared = await prepareSqliteReadOnlyLocation(databasePath, {
             preserveSourceArtifacts: true,
           });
           try {
-            expect(readLogicalFamily(databasePath)).toEqual(familyBefore);
+            expect(readFamily(databasePath)).toEqual(familyBefore);
             const snapshot = new sqlite.DatabaseSync(prepared.location, { readOnly: true });
             try {
               expect(
@@ -697,11 +697,16 @@ describe("prepareSqliteReadOnlyLocation", () => {
     },
   );
 
-  it("retries a same-size WAL reset instead of accepting an impossible pair", async () => {
-    const sqlite = requireNodeSqlite();
-    const livePath = createTempDatabasePath();
-    const writer = new sqlite.DatabaseSync(livePath);
-    writer.exec(`
+  it.each([
+    { mode: "async", prepare: prepareSqliteReadOnlyLocationInProcess },
+    { mode: "sync", prepare: prepareSqliteReadOnlyLocationSyncInProcess },
+  ])(
+    "retries a same-size WAL reset instead of accepting an impossible pair ($mode)",
+    async ({ prepare }) => {
+      const sqlite = requireNodeSqlite();
+      const livePath = createTempDatabasePath();
+      const writer = new sqlite.DatabaseSync(livePath);
+      writer.exec(`
       PRAGMA journal_mode = WAL;
       PRAGMA wal_autocheckpoint = 0;
       CREATE TABLE before_reset (value TEXT PRIMARY KEY);
@@ -709,41 +714,42 @@ describe("prepareSqliteReadOnlyLocation", () => {
       PRAGMA wal_checkpoint(TRUNCATE);
       INSERT INTO before_reset VALUES ('A');
     `);
-    const databasePath = createTempDatabasePath();
-    fs.copyFileSync(livePath, databasePath);
-    fs.copyFileSync(`${livePath}-wal`, `${databasePath}-wal`);
-    writer.close();
-    expect(fs.existsSync(`${databasePath}-shm`)).toBe(false);
-    const walSizeBeforeReset = fs.statSync(`${databasePath}-wal`).size;
-    const fsyncSync = fs.fsyncSync.bind(fs);
-    let injected = false;
-    let raceWriter: DatabaseSync | undefined;
-    let sourceAfterReset: Map<string, Buffer> | undefined;
-    vi.spyOn(fs, "fsyncSync").mockImplementation((descriptor) => {
-      fsyncSync(descriptor);
-      if (!injected) {
-        injected = true;
-        raceWriter = new sqlite.DatabaseSync(databasePath);
-        raceWriter.exec(`
+      const databasePath = createTempDatabasePath();
+      fs.copyFileSync(livePath, databasePath);
+      fs.copyFileSync(`${livePath}-wal`, `${databasePath}-wal`);
+      writer.close();
+      expect(fs.existsSync(`${databasePath}-shm`)).toBe(false);
+      const walSizeBeforeReset = fs.statSync(`${databasePath}-wal`).size;
+      const fsyncSync = fs.fsyncSync.bind(fs);
+      let injected = false;
+      let raceWriter: DatabaseSync | undefined;
+      let sourceAfterReset: Map<string, Buffer> | undefined;
+      vi.spyOn(fs, "fsyncSync").mockImplementation((descriptor) => {
+        fsyncSync(descriptor);
+        if (!injected) {
+          injected = true;
+          raceWriter = new sqlite.DatabaseSync(databasePath);
+          raceWriter.exec(`
           PRAGMA wal_checkpoint(TRUNCATE);
           INSERT INTO after_reset VALUES ('B');
         `);
-        sourceAfterReset = readLogicalFamily(databasePath);
-      }
-    });
+          sourceAfterReset = readLogicalFamily(databasePath);
+        }
+      });
 
-    const prepared = await prepareSqliteReadOnlyLocationInProcess(databasePath);
-    expect(injected).toBe(true);
-    expect(fs.statSync(`${databasePath}-wal`).size).toBe(walSizeBeforeReset);
-    const snapshot = new sqlite.DatabaseSync(prepared.location, { readOnly: true });
-    expect(snapshot.prepare("SELECT value FROM before_reset").all()).toEqual([{ value: "A" }]);
-    expect(snapshot.prepare("SELECT value FROM after_reset").all()).toEqual([{ value: "B" }]);
-    expect(snapshot.prepare("PRAGMA integrity_check").get()).toEqual({ integrity_check: "ok" });
-    snapshot.close();
-    expect(readLogicalFamily(databasePath)).toEqual(sourceAfterReset);
-    expect(prepared.cleanup()).toBe(true);
-    raceWriter?.close();
-  });
+      const prepared = await prepare(databasePath);
+      expect(injected).toBe(true);
+      expect(fs.statSync(`${databasePath}-wal`).size).toBe(walSizeBeforeReset);
+      const snapshot = new sqlite.DatabaseSync(prepared.location, { readOnly: true });
+      expect(snapshot.prepare("SELECT value FROM before_reset").all()).toEqual([{ value: "A" }]);
+      expect(snapshot.prepare("SELECT value FROM after_reset").all()).toEqual([{ value: "B" }]);
+      expect(snapshot.prepare("PRAGMA integrity_check").get()).toEqual({ integrity_check: "ok" });
+      snapshot.close();
+      expect(readLogicalFamily(databasePath)).toEqual(sourceAfterReset);
+      expect(prepared.cleanup()).toBe(true);
+      raceWriter?.close();
+    },
+  );
 
   it("retries when backup fallback inspection sees a replaced source", async () => {
     const sqlite = requireNodeSqlite();

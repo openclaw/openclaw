@@ -112,18 +112,19 @@ unchanged. Explicit provenance inspection and inherited artifact-preserving scop
 still use private snapshots. Neither optimization changes schemas, stored records,
 retention, or update migrations.
 
-Live shared-state inspection, including synchronous plugin and configuration reads,
-uses the same SQLite online-backup owner in an isolated child. One read transaction
-pins committed pages while writers continue; inspection does not require database
-or WAL bytes to stop changing. Backup-capable inspections use one-shot children,
-including inside startup scopes, to avoid Node 26 completion stalls with persistent IPC.
-Native SQLite may update existing SHM read marks,
-but leaves database and WAL contents unchanged. Incomplete WAL families, rollback
-crash residue, and owner-excluded sources retain private copying and recovery so
-inspection does not create missing source sidecars. Source-change retries apply
-only to those copies. Existing WAL and rollback-journal files can coexist without
-write activity; inspection copies and verifies both before SQLite recovers the
-private family. It does not discard committed WAL pages or repair the source.
+Live snapshots use SQLite's online-backup owner and a read transaction to pin
+committed pages while writers continue. Native readers may update existing SHM
+read marks, so artifact-preserving planning and Doctor scopes use raw copies
+instead. A WAL copy captures main first, then a bounded WAL prefix, and verifies
+both within the same pinned WAL generation. Appended frames are allowed; resets,
+replacements, and changes to captured bytes require another attempt. SQLite
+interprets committed frames in the private copy. Source SHM stays untouched.
+Only raw copies reuse a scoped IPC child; native backups remain one-shot to avoid
+Node 26 completion stalls with persistent IPC. Incomplete WAL families, rollback
+crash residue, and owner-excluded sources also retain private copying and recovery.
+Existing WAL and rollback-journal files can coexist without write activity;
+inspection copies and verifies both before SQLite recovers the private family.
+It does not discard committed WAL pages, repair the source, or change plan identity.
 Snapshot debug telemetry reports operation and owner,
 main and WAL sizes, copied bytes, attempt, duration, and outcome.
 
@@ -237,7 +238,7 @@ A 2 GiB database gets 2,860 seconds, and workers finish as soon as their work co
 
 Update schema inspection and candidate snapshots use this same allowance as an inactivity watchdog. Larger caller budgets remain available, and observed private-copy progress renews the deadline. See [How updates run](/cli/update/how-updates-run).
 
-Synchronous and asynchronous callers share the online-backup worker for live databases. Byte-neutral raw copying is reserved for owner-excluded sources or journal state requiring private recovery.
+Live snapshots use the online-backup worker. Artifact-preserving scopes and synchronous snapshot copies keep source bytes unchanged, including WAL coordination state.
 
 Full startup readiness checks agent ownership, integrity, foreign keys, and schema
 in one fresh read-only transaction in a disposable child. Complete WAL families

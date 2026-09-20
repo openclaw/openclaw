@@ -308,8 +308,7 @@ function withFreshOpenClawStateDatabaseReadOnly<T>(
   const env = options.env ?? process.env;
   openClawStateDatabaseCache.assertOpenClawStateDatabaseFreshOpenAllowedAtPath(pathname, env);
   // Even read-only SQLite opens can create a missing WAL. The existing worker
-  // snapshots committed WAL pages without creating missing sidecars or closing caller-held locks.
-  // Native readers may update existing SHM read marks while writers continue.
+  // snapshots committed WAL pages without touching source sidecars or caller-held locks.
   // One consistent snapshot per synchronous scope avoids mixed reads and duplicate copies.
   // Concurrent commits become visible in the next scope; this reader closes at scope end.
   const readers = synchronousReadSnapshots.current;
@@ -659,7 +658,7 @@ function executeRetainedOpenClawStateRead(
   );
 }
 
-/** Read existing shared state without creating missing SQLite sidecars or changing stored data. */
+/** Read existing shared state without creating or updating its SQLite sidecars. */
 export function withExistingOpenClawStateDatabaseArtifactPreservingReadOnly<T>(
   operation: (database: OpenClawStateReadOnlyDatabase) => T,
   options: OpenClawStateDatabaseOptions = {},

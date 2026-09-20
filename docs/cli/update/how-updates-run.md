@@ -228,10 +228,12 @@ TMPDIR=/var/tmp openclaw update --yes
 
 Subsequent updates use the new updater's measured destination selection.
 
-Schema checks use SQLite read transactions and private backups while live writers
-continue. Database and WAL contents remain unchanged; SQLite may update existing
-SHM read marks. Incomplete WAL families and crash journals are copied for private
-recovery without creating missing source sidecars. Inspection budgets include database
+Live snapshots use SQLite read transactions and private backups while writers
+continue. Artifact-preserving planning and Doctor checks retain byte-neutral
+copies that leave source SHM unchanged. WAL copies capture a bounded prefix
+within one verified WAL generation, so appended commits do not require a quiet database.
+Incomplete WAL families and crash journals are recovered privately without
+creating missing source sidecars. Inspection budgets include database
 and journal sizes, cold startup, and repeated IO passes for every discovered
 store. Metadata checks remain cancellable. Copy progress renews the watchdog,
 and larger caller allowances are preserved. Workers stop before their private
