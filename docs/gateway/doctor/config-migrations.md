@@ -26,6 +26,21 @@ the account's bindings unchanged. An unresolved account stays blocked
 with that reason while the Gateway and other accounts continue running; it does
 not enter a restart loop. Add the reported binding and restart the Gateway.
 
+## ACP agents' model precedence
+
+`agents.entries.*.model.primary` on an agent with `runtime.type: "acp"` selects that
+agent's ACP harness model. Harness model ids are the harness's own vocabulary, not
+OpenClaw model references, so OpenClaw-side model calls for such an agent resolve
+`agents.defaults.model` rather than the agent's primary.
+
+Doctor reports this split per ACP agent (`core/doctor/acp-agent-model`). A harness-only
+id is informational. A primary that is a normal `provider/model` reference is reported as
+a warning, because OpenClaw-side calls for that agent previously used it and now use the
+global default: if that default names a different provider or one without credentials,
+previously working local commands change route or fail. The finding names the resolved
+model so the transition is visible before it surprises a turn. ACP turns keep using the
+configured primary in both cases; no config is rewritten.
+
 ## Missing plugins during migration
 
 A configured plugin that is missing or cannot finish installation does not block

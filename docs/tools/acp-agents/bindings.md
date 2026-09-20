@@ -130,7 +130,17 @@ policy. For an agent with `runtime.type: "acp"`, `agents.entries.*.model.primary
 is that harness's own model id and is used only for the ACP session; harness ids
 are not OpenClaw model refs, so OpenClaw-side model calls for that agent (internal
 tool and skill dispatch, `/btw`, compaction) resolve `agents.defaults.model`
-instead. Thinking uses the agent's `thinkingDefault`, then per-model
+instead.
+
+If an existing ACP agent's `model.primary` is a normal `provider/model` reference,
+those OpenClaw-side calls previously used it and now use `agents.defaults.model`.
+ACP turns are unaffected. Set `agents.defaults.model` to the model those calls
+should use, or accept the default; `openclaw doctor` reports each ACP agent whose
+primary is affected, and names the model its OpenClaw-side calls resolve. An ACP
+agent has no per-agent override for that route today, so agents needing different
+OpenClaw-side models cannot both rely on the global default.
+
+Thinking uses the agent's `thinkingDefault`, then per-model
 `agents.defaults.models["provider/model"].params.thinking`, then
 `agents.defaults.thinkingDefault`. Without configured policy, the external
 harness keeps its own defaults.
