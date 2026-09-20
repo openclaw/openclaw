@@ -45,7 +45,7 @@ export async function load(
       groupWorktree,
       groupCatalogGeneration,
       groupDefaultsStatus,
-      model: "",
+      model: requestedLocation.requestedModel ?? "",
       catalogLabel: "",
       startTerminal: false,
     };

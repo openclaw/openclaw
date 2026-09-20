@@ -37,6 +37,19 @@ export type SettingsSearchTarget = {
 // Keep destinations and translation keys together without importing page
 // renderers: settings search runs before the destination page is loaded.
 export const SETTINGS_SEARCH_TARGETS = {
+  webSearch: {
+    routeId: "search",
+    labelKey: "tabs.search",
+    hash: "",
+    searchKeys: [
+      "searchPage.enabled",
+      "searchPage.provider",
+      "searchPage.test",
+      "searchPage.setup",
+    ],
+    aliases:
+      "web internet native hosted automatic provider brave parallel google gemini searxng codex openai api key endpoint",
+  },
   sessionStorage: {
     routeId: "ai-agents",
     labelKey: "configView.sessionStorage.title",

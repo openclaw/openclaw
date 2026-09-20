@@ -16,8 +16,13 @@ import { newSessionLocationFromSearch, type NewSessionRouteData } from "./locati
 
 registerNewSessionSetupEnglish();
 
-function draftRouteKey(requestedAgentId: string, catalogId: string, group: string): string {
-  return JSON.stringify([requestedAgentId, catalogId, group]);
+function draftRouteKey(
+  requestedAgentId: string,
+  catalogId: string,
+  group: string,
+  model?: string,
+): string {
+  return JSON.stringify([requestedAgentId, catalogId, group, ...(model ? [model] : [])]);
 }
 
 /**
@@ -27,12 +32,32 @@ function draftRouteKey(requestedAgentId: string, catalogId: string, group: strin
  * would make that fill-in look like a navigation and discard the draft.
  */
 export function routeKey(data?: NewSessionRouteData): string {
-  return draftRouteKey(data?.requestedAgentId ?? "", data?.catalogId ?? "", data?.group ?? "");
+  return draftRouteKey(
+    data?.requestedAgentId ?? "",
+    data?.catalogId ?? "",
+    data?.group ?? "",
+    data?.requestedModel,
+  );
 }
 
 export function routeKeyFromSearch(search: string): string {
   const location = newSessionLocationFromSearch(search);
-  return draftRouteKey(location.agentId, location.catalogId, location.group ?? "");
+  return draftRouteKey(
+    location.agentId,
+    location.catalogId,
+    location.group ?? "",
+    location.requestedModel,
+  );
+}
+
+export function requestedModelForAgent(
+  data: NewSessionRouteData | undefined,
+  agentId: string,
+): string | undefined {
+  return !data?.requestedAgentId ||
+    normalizeAgentId(data.requestedAgentId) === normalizeAgentId(agentId)
+    ? data?.requestedModel
+    : undefined;
 }
 
 export function isTarget(data?: NewSessionRouteData): boolean {

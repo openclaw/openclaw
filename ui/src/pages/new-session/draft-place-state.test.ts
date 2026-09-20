@@ -1,7 +1,9 @@
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import type { WorktreesBranchesResult } from "../../../../packages/gateway-protocol/src/index.js";
 import { createDeferred } from "../../../../test/helpers/promise.ts";
+import type { ModelCatalogEntry } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
+import { settleModelCatalogRequests } from "../../lib/model-catalog-store.ts";
 import type { DraftCloudProfile } from "./discovery.ts";
 import { DraftCloudMachineState } from "./draft-cloud-machine-state.ts";
 import { buildSelectedSessionCreateParams } from "./draft-create-params.ts";
@@ -9,6 +11,7 @@ import type { DraftGatewayState } from "./draft-gateway-state.ts";
 import { DraftPlaceBrowser } from "./draft-place-browser.ts";
 import { DraftPlaceState } from "./draft-place-state.ts";
 import type { NewSessionRouteData } from "./location.ts";
+import { renderControl } from "./model-control.test-support.ts";
 import type { NewSessionPreference } from "./preferences.ts";
 import { TestReactiveControllerHost } from "./reactive-controller-host.test-support.ts";
 
@@ -22,6 +25,7 @@ function createRepositoryFixture(
     workspaceGit?: boolean;
     unavailable?: boolean;
     data?: NewSessionRouteData;
+    models?: ModelCatalogEntry[];
   } = {},
 ) {
   const requestUpdate = vi.fn();
@@ -41,7 +45,7 @@ function createRepositoryFixture(
         phase: "connected",
         client: {
           request: async (method: string) =>
-            method === "models.list" ? { models: [] } : request(method),
+            method === "models.list" ? { models: options.models ?? [] } : request(method),
         },
         hello: { auth: { role: "operator", scopes: ["operator.admin"] } },
       },
@@ -93,7 +97,7 @@ function createRepositoryFixture(
     () => ({ context, data: options.data, submitting: false, pendingPlacementSessionKey: "" }),
     { requestUpdate, onError: vi.fn(), onClearError: vi.fn() },
   );
-  return { state, browser, persistPreference, readPreference, request, requestUpdate };
+  return { state, browser, context, persistPreference, readPreference, request, requestUpdate };
 }
 
 describe("DraftPlaceState repository selection", () => {
@@ -123,6 +127,80 @@ describe("DraftPlaceState repository selection", () => {
     expect(create()).toHaveProperty("worktreeBaseRef", "main");
     state.setBaseRef("");
     expect(create()).not.toHaveProperty("worktreeBaseRef");
+  });
+
+  it("keeps a route-selected model in the unsent composer instead of restoring a remembered model", async () => {
+    const { state, context, readPreference, persistPreference, request } = createRepositoryFixture({
+      data: {
+        agentId: "main",
+        requestedAgentId: "main",
+        requestedModel: "example/first",
+        model: "example/first",
+        catalogId: "",
+        catalogLabel: "",
+        startTerminal: false,
+      },
+      models: ["first", "second", "remembered"].map((id) => ({
+        id,
+        provider: "example",
+        name: id,
+        available: true,
+      })),
+    });
+    onTestFinished(() => state.modelControl.reset());
+    readPreference.mockReturnValue({ model: "example/remembered" });
+    state.adoptAgentDefaults();
+    await settleModelCatalogRequests(context.gateway.snapshot.client!, { agentId: "main" });
+    const view = renderControl(state.modelControl, context, "main", state.selectedAgent());
+    expect(state.modelControl.modelForSubmission()).toBe("example/first");
+    expect(
+      buildSelectedSessionCreateParams(state, { message: "", visibility: "normal" }).model,
+    ).toBe("example/first");
+    expect(persistPreference).not.toHaveBeenCalled();
+
+    const choice = view.querySelector<HTMLButtonElement>(
+      '[data-chat-model-option="example/second"]',
+    );
+    expect(choice).not.toBeNull();
+    choice!.click();
+    expect(state.modelControl.modelForSubmission()).toBe("example/second");
+    state.modelControl.load(context, "main", true, { agent: state.selectedAgent() });
+    state.adoptAgentDefaults();
+    expect(state.modelControl.modelForSubmission()).toBe("example/second");
+    state.modelControl.invalidate();
+    state.adoptAgentDefaults();
+    await settleModelCatalogRequests(context.gateway.snapshot.client!, { agentId: "main" });
+    expect(state.modelControl.modelForSubmission()).toBe("example/second");
+    Object.assign(context.gateway.snapshot, { hello: { ...context.gateway.snapshot.hello } });
+    state.invalidateGatewayDiscovery(false);
+    state.adoptAgentDefaults();
+    await settleModelCatalogRequests(context.gateway.snapshot.client!, { agentId: "main" });
+    expect(state.modelControl.modelForSubmission()).toBe("example/second");
+    expect(persistPreference).toHaveBeenCalledExactlyOnceWith(
+      "main",
+      "/workspace",
+      expect.objectContaining({ model: "example/second" }),
+    );
+    context.agents.state.agentsList!.agents.push({ id: "scout", workspace: "/workspace" });
+    readPreference.mockImplementation(() => ({
+      model: state.agentId === "main" ? "example/second" : "example/remembered",
+    }));
+    const selectAgent = async (agentId: string, model: string) => {
+      state.selectAgentId(agentId);
+      await settleModelCatalogRequests(context.gateway.snapshot.client!, { agentId });
+      expect(state.modelControl.modelForSubmission()).toBe(model);
+    };
+    await selectAgent("scout", "example/remembered");
+    await selectAgent("main", "example/second");
+    expect(state.modelControl.modelForSubmission()).toBe("example/second");
+    state.resetDraft();
+    state.adoptAgentDefaults();
+    await settleModelCatalogRequests(context.gateway.snapshot.client!, { agentId: "main" });
+    expect(state.modelControl.modelForSubmission()).toBe("example/first");
+
+    expect(
+      request.mock.calls.some(([method]) => method === "sessions.create" || method === "chat.send"),
+    ).toBe(false);
   });
 
   it("captures pending placement preferences instead of transient discovery defaults", () => {

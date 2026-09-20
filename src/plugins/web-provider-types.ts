@@ -95,6 +95,8 @@ export type WebSearchProviderPlugin = {
   id: WebSearchProviderId;
   label: string;
   hint: string;
+  /** Settings subtree relative to this plugin's config; null hides inline settings. Defaults to ["webSearch"]. */
+  configPath?: readonly string[] | null;
   onboardingScopes?: readonly "text-inference"[];
   requiresCredential?: boolean;
   credentialLabel?: string;

@@ -77,6 +77,7 @@ const CORE_GATEWAY_HANDLER_MODULES = {
     import("./models-auth-order.js").then((module) => module.modelsAuthOrderHandlers),
   models: () => import("./models.js").then((module) => module.modelsHandlers),
   "models-probe": () => import("./models-probe.js").then((module) => module.modelsProbeHandlers),
+  "web-search": () => import("./web-search.js").then((module) => module.webSearchHandlers),
   "native-hook-relay": () =>
     import("./native-hook-relay.js").then((module) => module.nativeHookRelayHandlers),
   "nodes-pending": () =>

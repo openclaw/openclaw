@@ -116,7 +116,7 @@ const WEB_SEARCH_CITATION_MAX_SCAN = 1_000;
 
 type WebSearchOutputBudget = { remaining: number; truncated: boolean };
 
-function unwrapEnvelopes(value: string): string {
+export function unwrapWebSearchOutputText(value: string): string {
   return value.replace(ENVELOPE_OPEN_RE, "").replace(ENVELOPE_END_RE, "").trim();
 }
 
@@ -140,7 +140,7 @@ function toHttpUrl(value: string): string | undefined {
 const PUBLISHED_RE = /^\d{4}-\d{2}-\d{2}(?:[T ][\d:.+Z-]{0,20})?$/u;
 
 function wrapProse(value: string, budget?: WebSearchOutputBudget): string {
-  let inner = unwrapEnvelopes(value);
+  let inner = unwrapWebSearchOutputText(value);
   if (budget) {
     const bounded = truncateSanitizedExternalContent(inner, budget.remaining);
     budget.truncated ||= bounded.truncated;

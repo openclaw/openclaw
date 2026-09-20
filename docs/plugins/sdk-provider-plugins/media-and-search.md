@@ -205,6 +205,13 @@ plugins](/plugins/sdk-provider-plugins) guide.
     `getCredentialValue`, `setCredentialValue`, and `createTool` are all
     required.
 
+    Search providers can declare `configPath` as a path relative to their own
+    plugin configuration for the Search settings page. It defaults to
+    `["webSearch"]`; use `null` when the provider has no inline settings.
+    Providers sharing a plugin can expose different settings without showing
+    fields that only apply to a sibling provider. Credentials remain described
+    by `credentialPath` and use the existing masked credential editor.
+
     Search providers using `openclaw/plugin-sdk/provider-web-search` should
     resolve `resolveSearchCacheTtlMs(searchConfig)` once per execution and
     pass that value to both `readCachedSearchPayload(cacheKey, ttlMs)` and

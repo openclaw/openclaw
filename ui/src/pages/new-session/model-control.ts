@@ -59,10 +59,12 @@ type NewSessionMetadataState = ChatModelCatalogState & {
 type NewSessionMetadataLoadOptions = {
   agent?: GatewayAgentRow;
   preference?: NewSessionPreference | null;
+  initialModel?: string;
 };
 
 export class NewSessionModelControl {
   private selectionGeneration = 0;
+  private initialModel: string | undefined;
   private agentId = "";
   private metadataState: NewSessionMetadataState = {
     catalog: [],
@@ -294,6 +296,14 @@ export class NewSessionModelControl {
     this.catalogTargets.retry(client, this.agentId);
   }
 
+  private resetSelection(model = "") {
+    this.selected = model;
+    this.agentRuntime = undefined;
+    this.contextWindow = "";
+    this.thinkingLevel = "";
+    this.fastMode = undefined;
+  }
+
   invalidate(resetSelection = false) {
     if (!resetSelection && this.metadataClient) {
       invalidateModelCatalogCache(this.metadataClient, this.metadataScope);
@@ -305,11 +315,8 @@ export class NewSessionModelControl {
     if (resetSelection) {
       this.agentId = "";
       this.metadataClient = undefined;
-      this.selected = "";
-      this.agentRuntime = undefined;
-      this.contextWindow = "";
-      this.thinkingLevel = "";
-      this.fastMode = undefined;
+      this.resetSelection();
+      this.initialModel = undefined;
       this.updateMetadataState({
         catalog: [],
         hasSnapshot: false,
@@ -349,11 +356,8 @@ export class NewSessionModelControl {
       this.draftAccount = undefined;
       this.clearMetadataSubscription();
       if (this.agentId !== normalizedAgentId) {
-        this.selected = "";
-        this.agentRuntime = undefined;
-        this.contextWindow = "";
-        this.thinkingLevel = "";
-        this.fastMode = undefined;
+        this.resetSelection();
+        this.initialModel = undefined;
       }
       this.agentId = normalizedAgentId;
       this.metadataClient = undefined;
@@ -365,7 +369,6 @@ export class NewSessionModelControl {
     }
     this.metadataIdentityId = snapshot?.selfUser?.id;
     this.metadataHello = snapshot?.hello;
-    const selectionGeneration = this.selectionGeneration;
     if (!context || snapshot?.phase !== "connected" || !client || !normalizedAgentId || !enabled) {
       this.clearDraftAccount();
       this.clearMetadataSubscription();
@@ -381,6 +384,13 @@ export class NewSessionModelControl {
       this.notify();
       return;
     }
+    const initialModel = options.initialModel;
+    if (initialModel && initialModel !== this.initialModel) {
+      this.resetSelection(initialModel);
+      this.selectionGeneration += 1;
+      this.initialModel = initialModel;
+    }
+    const selectionGeneration = this.selectionGeneration;
     const scope = {
       agentId: normalizedAgentId,
       ...(this.draftAccount ? { authProfileId: this.draftAccount.authProfileId } : {}),
@@ -388,11 +398,13 @@ export class NewSessionModelControl {
     const previousScope = this.metadataScope;
     const boundScope = this.bindMetadataSubscription(client, scope);
     const rebound = boundScope !== previousScope;
-    this.pendingPreference = options.preference;
+    // URL intent seeds this draft once; saved preferences and catalog refreshes cannot replace it.
+    this.pendingPreference = this.initialModel ? undefined : options.preference;
     this.pendingAgent = options.agent;
     this.pendingSelectionGeneration = selectionGeneration;
     this.restoringPreference = Boolean(
-      !this.draftAccount && (options.preference?.model || options.preference?.thinkingLevel),
+      !this.draftAccount &&
+      (this.pendingPreference?.model || this.pendingPreference?.thinkingLevel),
     );
     if (this.metadataRequest) {
       this.notify();

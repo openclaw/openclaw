@@ -211,6 +211,7 @@ const SETTINGS_NAVIGATION_GROUPS = [
     routes: [
       "agents",
       "model-providers",
+      "search",
       "plugin-settings",
       "skill-settings",
       "mcp",
@@ -238,6 +239,7 @@ const NON_ADMIN_SETTINGS_ROUTES: ReadonlySet<NavigationRouteId> = new Set([
   "devices",
   "agents",
   "model-providers",
+  "search",
   "plugin-settings",
   "skill-settings",
   "memory",
@@ -372,6 +374,7 @@ const NAVIGATION_PRESENTATION: Record<NavigationRouteId, NavigationPresentation>
   automation: navigationPresentation("terminal", "automation"),
   mcp: navigationPresentation("wrench", "mcp"),
   memory: navigationPresentation("book", "memory"),
+  search: navigationPresentation("search", "search"),
   talk: navigationPresentation("mic", "talk"),
   infrastructure: navigationPresentation("globe", "infrastructure"),
   labs: navigationPresentation("flaskConical", "labs"),

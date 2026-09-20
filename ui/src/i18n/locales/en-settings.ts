@@ -3,6 +3,75 @@ import { en } from "./en.ts";
 
 // Settings copy loads with its lazy page or search, not the startup shell.
 const enSettings = {
+  searchPage: {
+    enabled: "Web search",
+    advanced: "Advanced search settings",
+    enabledHint: "Allow agents to find up-to-date information on the web.",
+    provider: "Search provider",
+    automatic: "Automatic",
+    automaticHint:
+      "Prefer native search when supported; otherwise use a configured search provider.",
+    scopeHint:
+      "Search settings apply to all agents. Choose an agent and model to see their effective route.",
+    agent: "Agent",
+    model: "Model",
+    agentDefault: "Agent default",
+    route: "Search for this model",
+    routeKinds: {
+      native: "Native search",
+      external: "Check in chat",
+      managed: "Provider search",
+      disabled: "Off",
+      unavailable: "Unavailable",
+    },
+    loading: "Checking search configuration…",
+    offline: "Connect to the Gateway to configure search.",
+    readOnly: "An administrator can change search settings and credentials.",
+    setup: "Provider setup",
+    setupProvider: "Configure provider",
+    setupHint:
+      "Configure a provider for OpenClaw web search. External harnesses may also supply their own search tools.",
+    configured: "Configured",
+    pluginUnavailable: "Enable plugin to use",
+    pluginMissing: "Install plugin to use",
+    testInChat: "Test in chat",
+    testInChatHint:
+      "Open a new chat with this agent and model selected. Nothing is sent automatically.",
+    needsSetup: "Needs setup",
+    configuration: "Configuration",
+    credentialSources: {
+      config: "Saved credential",
+      secretRef: "Secret reference",
+      env: "Gateway environment",
+      "auth-profile": "Connected account",
+      none: "No separate API key required",
+      missing: "Credential missing",
+    },
+    health: "Search health",
+    untested: "Not tested",
+    untestedHint:
+      "Configuration alone does not verify access. Run a search to check the current route.",
+    test: "Test search",
+    testProvider: "Test {provider}",
+    testing: "Searching…",
+    query: "Search query",
+    queryPlaceholder: "What would you like to find?",
+    queryDefault: "OpenClaw documentation",
+    success: "Search succeeded",
+    failure: "Search failed",
+    duration: "{ms} ms",
+    cached: "Cached result",
+    result: "Answer",
+    sources: "Sources",
+    noResults: "The provider returned no results for this query.",
+    pluginSettings: "All provider settings",
+    pluginSettingsHint: "Open the plugin’s complete configuration and access controls.",
+    moreProviders: "Add search providers",
+    moreProvidersHint:
+      "Install a search plugin, or configure a custom endpoint with a compatible provider.",
+    docs: "Provider documentation",
+    refresh: "Refresh search status",
+  },
   connection: {
     browser: {
       title: "Browser",
@@ -1400,6 +1469,7 @@ export const registerSettingsEnglish = Object.assign(
   () => {
     en.memoryPage = enSettings.memoryPage;
     en.modelProviders = enSettings.modelProviders;
+    en.searchPage = enSettings.searchPage;
     // Extend the shared objects: eager save/update copy and existing readers survive.
     en.cloudWorkersPage = enSettings.cloudWorkersPage;
     Object.assign(en.connection, enSettings.connection);
