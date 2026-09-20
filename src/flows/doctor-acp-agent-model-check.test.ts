@@ -10,14 +10,14 @@ const ACP_RUNTIME = {
   acp: { agent: "cursor", backend: "acpx" },
 } satisfies AgentEntry["runtime"];
 const NATIVE_MODEL = "anthropic/claude-sonnet-4-6";
-const HARNESS_MODEL = "gpt-5.6-sol[context=272k,reasoning=medium,fast=false]";
+const HARNESS_MODEL = "harness-only[context=272k,reasoning=medium,fast=false]";
 
 async function detect(cfg: OpenClawConfig) {
   const check = CORE_HEALTH_CHECKS.find((entry) => entry.id === "core/doctor/acp-agent-model");
   if (!check) {
     throw new Error("missing registered ACP agent model check");
   }
-  expect(check.repair).toBeUndefined();
+  expect(typeof check.repair).toBe("undefined");
   const before = structuredClone(cfg);
   const findings = await check.detect({ mode: "lint", runtime: createTestRuntime(), cfg });
   expect(cfg).toEqual(before);
