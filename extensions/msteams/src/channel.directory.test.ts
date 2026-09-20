@@ -3,7 +3,7 @@ import {
   expectDirectorySurface,
 } from "openclaw/plugin-sdk/channel-test-helpers";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { OpenClawConfig, RuntimeEnv } from "../runtime-api.js";
+import type { MSTeamsConfig, OpenClawConfig, RuntimeEnv } from "../runtime-api.js";
 import { msteamsPlugin } from "./channel.js";
 import { resolveMSTeamsOutboundSessionRoute } from "./session-route.js";
 
@@ -183,7 +183,11 @@ describe("msteams session route", () => {
     },
   );
 
-  it.each([
+  it.each<{
+    title: string;
+    teams: NonNullable<MSTeamsConfig["teams"]>;
+    expectedPolicy: "thread" | "channel";
+  }>([
     {
       title: "team-only policy with no channel entries",
       teams: { "team-1": { threadSessionPolicy: "channel" as const } },
