@@ -187,7 +187,7 @@ describe("Bedrock stream client lifecycle", () => {
 
   it("destroys the client after an aborted request", async () => {
     const controller = new AbortController();
-    const send = vi.spyOn(BedrockRuntimeClient.prototype, "send").mockImplementation(async () => {
+    const send = vi.spyOn(BedrockRuntimeClient.prototype, "send").mockImplementation(() => {
       controller.abort();
       throw new Error("synthetic abort");
     });

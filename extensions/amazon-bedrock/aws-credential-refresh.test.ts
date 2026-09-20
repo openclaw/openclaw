@@ -60,13 +60,14 @@ describe("Bedrock shared credential rotation", () => {
       // Prime the actual SDK's file cache, independently of OpenClaw's refresh helper.
       expect((await defaultProvider()()).accessKeyId).toBe("TEST_A");
       const resolved: string[] = [];
+      const pendingCredentials: Promise<void>[] = [];
       const capture = async (client: BedrockClient | BedrockRuntimeClient) => {
         const credentials = await client.config.credentials();
         resolved.push(`${credentials.accessKeyId}/${credentials.sessionToken}`);
       };
       vi.spyOn(BedrockRuntimeClient.prototype, "send").mockImplementation(
-        async function (this: BedrockRuntimeClient) {
-          await capture(this);
+        function (this: BedrockRuntimeClient) {
+          pendingCredentials.push(capture(this));
           return {
             $metadata: {},
             body: new TextEncoder().encode('{"embedding":[1,0]}'),
@@ -76,12 +77,10 @@ describe("Bedrock shared credential rotation", () => {
           };
         },
       );
-      vi.spyOn(BedrockClient.prototype, "send").mockImplementation(
-        async function (this: BedrockClient) {
-          await capture(this);
-          return { $metadata: {}, modelSummaries: [] };
-        },
-      );
+      vi.spyOn(BedrockClient.prototype, "send").mockImplementation(function (this: BedrockClient) {
+        pendingCredentials.push(capture(this));
+        return { $metadata: {}, modelSummaries: [] };
+      });
       const invoke = async () => {
         if (route === "stream") {
           const result = await streamSimpleBedrock(model, {
@@ -102,8 +101,10 @@ describe("Bedrock shared credential rotation", () => {
         }
       };
       await invoke();
+      await Promise.all(pendingCredentials);
       await rotate("B");
       await invoke();
+      await Promise.all(pendingCredentials);
       expect(resolved).toEqual(["TEST_A/synthetic-token-A", "TEST_B/synthetic-token-B"]);
     },
   );
