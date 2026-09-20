@@ -634,13 +634,15 @@ export async function sendPoll(params: MessagePollParams): Promise<MessagePollRe
       isAnonymous: params.isAnonymous,
       sessionKey: params.sessionKey,
       inboundEventKind: params.inboundEventKind,
-      onDeliveryResult: params.onDeliveryResult
-        ? async (deliveryResult) => {
-            await params.onDeliveryResult?.(
-              normalizeChannelMessageSendResult(channel, deliveryResult),
-            );
+      ...(params.onDeliveryResult
+        ? {
+            onDeliveryResult: async (deliveryResult) => {
+              await params.onDeliveryResult?.(
+                normalizeChannelMessageSendResult(channel, deliveryResult),
+              );
+            },
           }
-        : undefined,
+        : {}),
       onPlatformSendDispatch: params.onPlatformSendDispatch,
       assertDirectAdapterHandoff: params.assertDirectAdapterHandoff,
     });

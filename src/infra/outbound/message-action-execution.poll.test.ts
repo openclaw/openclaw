@@ -157,6 +157,7 @@ describe("executeMessagePoll", () => {
     expect(call.threadId).toBe("42");
     expect(call.content).toBe("Choose carefully");
     expect(call.silent).toBe(true);
+    expect(call).not.toHaveProperty("onDeliveryResult");
     expect(pollerSendPoll).toHaveBeenCalledOnce();
     expect(result.pollResult?.result).toMatchObject({
       messageId: "poll-test",
