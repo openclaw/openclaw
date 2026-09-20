@@ -50,7 +50,8 @@ openclaw dashboard --json
 The response includes the backward-compatible shared-auth `url`, plus `browserUrl`,
 `browserBootstrapExpiresAtMs`, `httpUrl`, `wsUrl`, `port`, and `tokenIncluded`. Browser integrations
 should open `browserUrl`; native RPC clients that need the shared Gateway credential can continue to
-use `url`. If the Gateway is not ready or a browser handoff cannot be issued, the command returns
+use `url`. When `gateway.publicOrigin` is configured the response also includes `publicBrowserUrl`.
+If the Gateway is not ready or a browser handoff cannot be issued, the command returns
 `{"ok":false,"reason":"..."}` and exits non-zero. SecretRef-managed shared tokens are never included
 in `url`.
 
@@ -63,6 +64,11 @@ Notes:
 - `browserUrl` carries a single-use, ten-minute bootstrap in the URL fragment. The Control UI strips
   it immediately, binds it to the browser's signed device identity, and stores only the resulting
   administrator per-device credential. Another browser profile cannot inherit or replay that grant.
+- `browserUrl` always names the destination that launched the command, so a same-host consumer (the
+  desktop app, Quick Chat, a local script) keeps working even when a configured `gateway.publicOrigin`
+  is unreachable from the Gateway host. `publicBrowserUrl` carries the same single-use grant
+  re-addressed to that public origin; use it only when the link is transported to a browser that
+  cannot reach the local endpoint, and keep using `browserUrl` otherwise.
 - The pairing link includes its Gateway destination. If another Gateway is selected in the browser,
   confirm the destination before pairing; canceling keeps the existing selection. This also applies
   when a Gateway update reloads the dashboard before pairing completes.
