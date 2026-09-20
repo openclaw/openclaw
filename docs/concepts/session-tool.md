@@ -55,7 +55,7 @@ Use the filters together to narrow the inventory before paging:
 - `ownerId` and `creatorId`: exact canonical actor IDs. Relationship filters narrow visibility; they never grant access.
 - `projectId` and `workspaceDir`: exact persisted project and working-directory associations. Listing does not inspect the filesystem or run Git.
 - `group` and `pinned`: exact sidebar group and pin state. An empty group selects ungrouped sessions.
-- `activeOnly`: current direct queued/running work on Gateway-backed inventories; it is unavailable in embedded mode without a live Gateway projection. `activeMinutes` is recency, not liveness. `excludeSubagents` omits subagent sessions.
+- `activeOnly`: current direct queued/running work on Gateway-backed inventories; it is unavailable in embedded mode without a live Gateway projection. `activeMinutes` is recency, not liveness. `excludeSubagents` omits subagent runs and ungrouped spawned sessions. Visible spawned conversations assigned to a custom group remain eligible under the normal visibility and archive filters.
 - `kinds`, `label`, `agentId`, and `search`: the existing classification, exact label/agent, and metadata-text filters. Kinds are `main`, `group`, `cron`, `hook`, `node`, and `other`.
 - `archived`: false or omitted selects unarchived sessions; true selects archived sessions; `"all"` includes both.
 
@@ -168,15 +168,21 @@ During healthy worker provisioning or workspace preparation, accepted input stay
 
 - **Fire-and-forget:** set `timeoutSeconds: 0` to enqueue and return immediately.
 - **Wait for reply:** set a timeout and get the response inline.
-- **Resume a paused child task:** use `mode: "resume"` with the continuation message. The calling session must control the native child task, and that task must be paused by `sessions_yield`. This preserves its task identity and original completion recipient. Ordinary `followup` messages do not resume tasks.
+- **Continue a paused child task:** send the continuation without `mode`. When the caller controls a native child paused by `sessions_yield` with task-owned completion, the runtime resumes that task automatically, preserving its identity and original completion recipient. Use `mode: "resume"` to require this behavior explicitly. An explicit `mode: "followup"` starts a separate turn and leaves the paused task intact.
 
 Task resume returns `status: "accepted"`, `mode: "resume"`, the successor `runId`,
 the original `taskRunId`, and `completion: "task"`. The existing task owner delivers
 the eventual result once; the tool does not wait for the answer or start a separate
-reply-back loop. Omit `watch` and `timeoutSeconds`, or set `timeoutSeconds: 0`;
-`watch: true` and positive waits are rejected. Resume requires trusted in-process
+reply-back loop. Automatic resume accepts ordinary `watch` and `timeoutSeconds`
+arguments but leaves all result delivery with the existing task instead of adding
+an inline wait or a second watcher. Explicit `mode: "resume"` rejects `watch: true`
+and positive waits. Resume requires trusted in-process
 Gateway admission. Unrelated callers, completed tasks, and changed child sessions
 are rejected rather than falling back to ordinary messaging.
+Controller ownership remains bound to the originally recorded session store.
+Retained tasks created without store provenance keep ordinary default messaging
+and their existing explicit resume and cancellation controls. Newly registered
+tasks record their store and can use automatic continuation.
 
 `timeoutSeconds` limits the sending tool's wait, not the receiver's execution
 budget. For nonblocking coordination, use `sessions_send` with `timeoutSeconds: 0`.

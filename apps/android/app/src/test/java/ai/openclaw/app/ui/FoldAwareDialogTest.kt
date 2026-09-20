@@ -89,7 +89,7 @@ import androidx.window.layout.WindowLayoutInfo
 import androidx.window.layout.WindowMetrics
 import androidx.window.layout.WindowMetricsCalculator
 import androidx.window.layout.WindowMetricsCalculatorDecorator
-import com.google.mlkit.common.internal.MlKitInitProvider
+import com.google.mlkit.common.sdkinternal.MlKitContext
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.MutableStateFlow
 import org.junit.After
@@ -437,7 +437,7 @@ class FoldAwareDialogTest {
   fun scanErrorKeepsIllustrationMessageAndChoicesReachableWithoutLeavingThePane() {
     fontScale = 2f
     withModel { model, _ ->
-      Robolectric.buildContentProvider(MlKitInitProvider::class.java).create()
+      MlKitContext.initializeIfNeeded(RuntimeEnvironment.getApplication())
       setContent { OnboardingFlow(model) }
       composeRule.onNodeWithText("Continue").performClick()
       composeRule.onNodeWithText("Scan QR or setup code").performClick()

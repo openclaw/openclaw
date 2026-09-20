@@ -4,7 +4,7 @@ read_when:
   - Debugging missing or stuck macOS permission prompts
   - Screen Recording still appears missing after granting access
   - Deciding whether to grant Accessibility to node or a CLI runtime
-  - Understanding locked desktops or unattended desktop hosting
+  - Understanding locked desktops or keeping the computer awake
   - Packaging or signing the macOS app
   - Changing bundle IDs or app install paths
 title: "macOS permissions"
@@ -19,7 +19,7 @@ when you return to the app after changing a grant in System Settings, focus the
 Dashboard, or complete a permission request. Open Dashboard windows do not start
 background permission polling.
 
-Enabling camera access, Computer Control, unattended desktop hosting, the Peekaboo bridge, browser cookie
+Enabling camera access, Computer Control, Keep computer awake, the Peekaboo bridge, browser cookie
 sync, or continuous Voice Wake listening requires a native confirmation with
 **Cancel** selected by default. Increasing location access (from Off to While
 Using or Always, or from While Using to Always) and enabling precise location
@@ -89,18 +89,18 @@ window and browser actions. Completion, cancellation, disconnect, provider
 replacement, or local Stop releases the execution's keep-awake request. The web
 Desktop viewer does not create an OpenClaw keep-awake execution.
 
-To keep a dedicated Mac awake between jobs, enable **Unattended desktop hosting**
+To keep a dedicated Mac awake between jobs, enable **Keep computer awake**
 on the same settings page and accept the native confirmation. It is off by
 default and takes effect only while this Mac is connected and actually hosting.
 It does not change macOS power or lock settings.
 
 Screen Sharing may request an immediate lock when its last viewer disconnects.
-OpenClaw honors that lock even when unattended desktop hosting is enabled.
+OpenClaw honors that lock even when **Keep computer awake** is enabled.
 
 Manual lock, logout, or an unknown desktop state releases keep-awake assertions
 and retires active Computer executions. OpenClaw does not unlock the Mac or
 resume those executions after sign-in. Use the normal macOS login screen through
-Screen Sharing or locally, then start a new Computer execution. The unattended
+Screen Sharing or locally, then start a new Computer execution. The keep-awake
 option can become active again after a verified unlock while its hosting and
 connection requirements still hold.
 

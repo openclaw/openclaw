@@ -12,11 +12,16 @@ it("scopes configured search hits before limiting and returns only matched snaps
     { key: "agent:retired:outside" },
     { key: "global" },
     { key: "unknown" },
-    { key: "agent:main:subagent:child" },
-    { key: "agent:main:controlled", spawnedBy: "agent:main:parent" },
+    { key: "agent:main:subagent:child", category: "Research" },
+    { key: "agent:main:controlled", spawnedBy: "agent:main:parent", category: " " },
     { key: "agent:main:cron:job" },
     { key: "agent:main:probe", createdActor: { type: "system" } },
-    { key: "agent:main:visible", label: "Visible match" },
+    {
+      key: "agent:main:visible",
+      label: "Visible match",
+      spawnedBy: "agent:main:parent",
+      category: "Research",
+    },
     { key: "agent:main:later", label: "Later match" },
   ];
   const hits = rows.map((row, index) => ({

@@ -278,6 +278,12 @@ starting a sibling. The requester is announced once such a follow-up finishes
 normally; a follow-up that yields again leaves the run paused and the requester
 waiting.
 
+The controlling parent resumes a paused native child with an ordinary
+`sessions_send` continuation. The runtime preserves the original task and its
+completion recipient without requiring `mode: "resume"`. An explicit
+`mode: "followup"` deliberately starts a separate turn instead. Return completed
+work normally after resuming; yielding again keeps the task waiting.
+
 An operator can also resume the existing child with the `sessions.send` Gateway
 method and its paused session key. This preserves the original task, requester,
 and parent completion batch, so the parent continues when the child finishes.
@@ -359,9 +365,9 @@ means the runtime has no child completion to await; it does not prove that a
 remote job or timer was scheduled. Child dependency lists are bounded to 32
 entries and `pendingCount` retains the total. A finished child with pending
 delivery has produced a result that has not yet reached its requester.
-For an external wait, `resume` names the supported Gateway method and exact
-child session key. An authorized operator or integration must send that
-continuation; merely yielding does not schedule one.
+For an external wait, the controlling parent can send a continuation to the
+listed child session key with `sessions_send`; merely yielding does not schedule
+one. The task owner delivers completion when the resumed child finishes.
 
 Use `action: "cancel"` with a `taskId` returned by `action: "list"` to stop
 a task. Native subagent cancellation requires current controller authority;

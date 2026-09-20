@@ -11,8 +11,7 @@ import {
 import {
   NODE_WORKER_BUNDLE_RETENTION_VERSION,
   NODE_WORKER_BUNDLE_STATUS_VERSION,
-  NODE_WORKER_ENVIRONMENT_SESSION_VERSION,
-  NODE_WORKER_PREPARED_WORKSPACE_VERSION,
+  resolveNodeWorkerExecutionIssue,
   type NodeRunnerInventoryIssue,
   type NodeRunnerInventoryDeclaration,
   type NodeWorkerCapacitySnapshot,
@@ -31,6 +30,7 @@ import {
 import {
   createNodeRunnerStatePublisher,
   isNodeWorkerHostClientId,
+  isNodeWorkerSupervisorProofCurrent,
   resolveNodeRunnerInventoryIssue,
   resolveNodeWorkerSupervisorProof,
   sameBundleStatusObservation,
@@ -73,6 +73,7 @@ export type NodeWorkerSupervisorTransport = {
     node: NodeWorkerSupervisorNodeProof,
     requireLaunchEligibility?: boolean,
     requiredCommands?: readonly string[],
+    requireCapturedExecPolicy?: boolean,
   ): boolean;
   invoke(params: {
     node: NodeWorkerSupervisorNodeProof;
@@ -135,34 +136,6 @@ type NodeRegistryPrivateState = {
 };
 
 const NODE_REGISTRY_PRIVATE_STATES = new WeakMap<object, NodeRegistryPrivateState>();
-
-function isWorkerSupervisorProofCurrent(
-  state: NodeRegistryPrivateState,
-  proof: NodeWorkerSupervisorNodeProof,
-  requireLaunchEligibility: boolean,
-  requiredCommands: readonly string[] = [],
-  requireEnvironmentSession = false,
-  requirePreparedWorkspace = false,
-): boolean {
-  const node = state.context.getNode(proof.nodeId);
-  if (!node || node.client.invalidated === true || node.connId !== proof.connId) {
-    return false;
-  }
-  const current = resolveNodeWorkerSupervisorProof(node, state.runnerInventoryByConn);
-  return (
-    current?.pairingIdentity === proof.pairingIdentity &&
-    current.pairingGeneration === proof.pairingGeneration &&
-    current.clientId === proof.clientId &&
-    current.clientMode === proof.clientMode &&
-    current.protocolFeature === proof.protocolFeature &&
-    (!requireLaunchEligibility || current.workerHost.capacity.available > 0) &&
-    (!requireEnvironmentSession ||
-      current.workerHost.environmentSession === NODE_WORKER_ENVIRONMENT_SESSION_VERSION) &&
-    (!requirePreparedWorkspace ||
-      current.workerHost.preparedWorkspace === NODE_WORKER_PREPARED_WORKSPACE_VERSION) &&
-    requiredCommands.every((command) => current.commands.includes(command))
-  );
-}
 
 function updateWorkerRunnerInventory(
   state: NodeRegistryPrivateState,
@@ -487,7 +460,13 @@ export function registerNodeRegistryPrivateRuntime(
       return observation ? structuredClone(observation) : undefined;
     },
     acceptBundleStatus: (node, observation) => {
-      if (!isWorkerSupervisorProofCurrent(state, node, false)) {
+      if (
+        !isNodeWorkerSupervisorProofCurrent(
+          context.getNode(node.nodeId),
+          state.runnerInventoryByConn,
+          node,
+        )
+      ) {
         return false;
       }
       const currentNode = state.context.getNode(node.nodeId);
@@ -511,8 +490,22 @@ export function registerNodeRegistryPrivateRuntime(
       }
       return true;
     },
-    isCurrent: (node, requireLaunchEligibility = false, requiredCommands = []) =>
-      isWorkerSupervisorProofCurrent(state, node, requireLaunchEligibility, requiredCommands),
+    isCurrent: (
+      node,
+      requireLaunchEligibility = false,
+      requiredCommands = [],
+      requireCapturedExecPolicy = false,
+    ) =>
+      isNodeWorkerSupervisorProofCurrent(
+        context.getNode(node.nodeId),
+        state.runnerInventoryByConn,
+        node,
+        {
+          launchEligibility: requireLaunchEligibility,
+          commands: requiredCommands,
+          capturedExecPolicy: requireCapturedExecPolicy,
+        },
+      ),
     invoke: async (params) => {
       if (!NODE_WORKER_PRIVATE_COMMANDS.includes(params.command)) {
         return {
@@ -522,14 +515,17 @@ export function registerNodeRegistryPrivateRuntime(
       }
       const isProofCurrent = () =>
         params.isDispatchAuthorized() &&
-        isWorkerSupervisorProofCurrent(
-          state,
+        isNodeWorkerSupervisorProofCurrent(
+          context.getNode(params.node.nodeId),
+          state.runnerInventoryByConn,
           params.node,
-          false,
-          [],
-          params.command === NODE_WORKER_SUPERVISOR_LAUNCH_COMMAND ||
-            params.command === NODE_WORKER_ENVIRONMENT_STOP_COMMAND,
-          params.command === NODE_WORKER_WORKSPACE_PREPARE_COMMAND,
+          {
+            environmentSession:
+              params.command === NODE_WORKER_SUPERVISOR_LAUNCH_COMMAND ||
+              params.command === NODE_WORKER_ENVIRONMENT_STOP_COMMAND,
+            preparedWorkspace: params.command === NODE_WORKER_WORKSPACE_PREPARE_COMMAND,
+            capturedExecPolicy: params.command === NODE_WORKER_SUPERVISOR_LAUNCH_COMMAND,
+          },
         );
       if (!isProofCurrent()) {
         return {
@@ -650,6 +646,7 @@ export function collectNodeCatalogRuntimeState(
   connectedNodes: ReadonlyArray<
     Pick<NodeRunnerRegistrySession, "nodeId" | "connId" | "pairingGeneration">
   >,
+  requireWorkerExecution = false,
 ) {
   const sessionHostNodeIds = new Set<string>();
   const issuesByNodeId = new Map<string, NodeRunnerInventoryIssue[]>();
@@ -667,7 +664,11 @@ export function collectNodeCatalogRuntimeState(
     if (proof && proof.pairingGeneration === node.pairingGeneration) {
       sessionHostNodeIds.add(node.nodeId);
     }
-    const issue = resolveNodeRunnerInventoryIssue(current, state.runnerInventoryByConn);
+    const issue =
+      resolveNodeRunnerInventoryIssue(current, state.runnerInventoryByConn) ??
+      (requireWorkerExecution && proof
+        ? resolveNodeWorkerExecutionIssue(proof.workerHost)
+        : undefined);
     if (issue) {
       issuesByNodeId.set(node.nodeId, [issue]);
     }

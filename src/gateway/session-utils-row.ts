@@ -282,6 +282,8 @@ export function readSessionRowInputs(params: {
     presentation: {
       now,
       subagentRuns: rowContext.subagentRuns,
+      projectedAgentRuns: rowContext.projectedAgentRuns,
+      projectedSubagentActivity: rowContext.projectedSubagentActivity,
       activeModel,
       excludedChildKeys: params.excludedChildKeys,
     },
@@ -612,7 +614,11 @@ export function presentSessionRow(
     key: row.key,
     entry,
     now,
-    rowContext: { subagentRuns },
+    rowContext: {
+      subagentRuns,
+      projectedAgentRuns: options.projectedAgentRuns,
+      projectedSubagentActivity: options.projectedSubagentActivity,
+    },
   });
   Object.assign(row, fields);
   const usage = source.usageByFallbackModel?.get(subagentRun?.model);
@@ -631,12 +637,36 @@ export function presentSessionRow(
   row.estimatedCostUsd =
     source.estimatedCostUsd ??
     asNonNegativeFiniteNumber(source.lightweight ? undefined : usage?.estimatedCostUsd);
-  const children = source.childLinks?.flatMap(({ key, entry: childEntry }) =>
-    !options.excludedChildKeys?.has(key) &&
-    resolveSessionChildOwners({ key, entry: childEntry, now, subagentRuns }).includes(row.key)
-      ? [key]
-      : [],
-  );
+  const children = source.childLinks?.flatMap(({ key, entry: childEntry }) => {
+    if (options.excludedChildKeys?.has(key)) {
+      return [];
+    }
+    const childActive = projectGatewaySessionRunState({
+      key,
+      entry: childEntry,
+      now,
+      rowContext: {
+        subagentRuns,
+        projectedAgentRuns: options.projectedAgentRuns,
+        projectedSubagentActivity: options.projectedSubagentActivity,
+      },
+    }).fields.hasActiveSubagentRun;
+    if (
+      !resolveSessionChildOwners({
+        key,
+        entry: childEntry,
+        now,
+        subagentRuns,
+        hasActiveRun: childActive,
+      }).includes(row.key)
+    ) {
+      return [];
+    }
+    if (childActive) {
+      row.hasActiveSubagentRun = true;
+    }
+    return [key];
+  });
   row.childSessions = children?.length ? children : undefined;
   row.activeModelProvider = options.activeModel?.provider;
   row.activeModel = options.activeModel?.model;

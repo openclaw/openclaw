@@ -5,6 +5,8 @@
   },
   "include": [
     "../../src/cli/update-cli/**/*.test.ts",
-    "../../src/cli/update-cli/**/*.test.tsx"
+    "../../src/cli/update-cli/**/*.test.tsx",
+    "../../src/cli/update*.test.ts",
+    "../../src/cli/update*.test.tsx"
   ]
 }

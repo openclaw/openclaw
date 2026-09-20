@@ -128,6 +128,11 @@ host.
     result includes provider/model/agent attribution plus normalized token,
     cache, and estimated cost usage when available.
 
+    `usage.costUsd` is omitted when no recorded cost or configured/eligible catalog
+    pricing is available. Default-filled zero rates do not establish free usage.
+    Explicit operator zero pricing and provider-billed zero totals remain `0`;
+    recorded request costs retain their original pricing tiers.
+
     Direct completions can set `responseFormat` for provider-native constrained
     output. When the provider exposes them, the result also includes the concrete
     `responseModel` and terminal `stopReason`. Security-sensitive callers can set

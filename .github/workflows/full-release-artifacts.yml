@@ -92,10 +92,6 @@ jobs:
       preflight_phase: ${{ inputs.preflight_phase }}
       npm_dist_tag: ${{ inputs.npm_dist_tag }}
       release_candidate_branch: ${{ inputs.release_candidate_branch }}
-      # Blacksmith 32vcpu runners have been dropping this producer's source
-      # check ~20 minutes into `pnpm check` (three release parents in a row on
-      # 2026-09-18); hosted runners finish it reliably.
-      use_github_hosted_runners: true
 
   candidate:
     name: Prepare validation candidate

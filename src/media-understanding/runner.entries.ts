@@ -70,6 +70,7 @@ import { resolveCliModelEntry, resolveEntryRunOptions } from "./resolve.js";
 import { isTranscriptArtifactText } from "./transcription-text.js";
 import type {
   AudioTranscriptionResult,
+  AudioTranscriptionRequest,
   MediaAttachment,
   MediaUnderstandingCapability,
   MediaUnderstandingDecision,
@@ -404,19 +405,10 @@ export function buildModelDecision(params: {
   };
 }
 
-function resolveMediaRequestOverrides(config: MediaUnderstandingConfig | undefined): {
+export type MediaRequestOverrides = {
   prompt?: string;
   language?: string;
-} {
-  const overrides = (config ?? {}) as MediaUnderstandingConfig & {
-    _requestPromptOverride?: string;
-    _requestLanguageOverride?: string;
-  };
-  return {
-    prompt: overrides["_requestPromptOverride"],
-    language: overrides["_requestLanguageOverride"],
-  };
-}
+};
 
 type ProviderExecutionAuth =
   | {
@@ -428,6 +420,28 @@ type ProviderExecutionAuth =
       kind: "none";
       source: string;
     };
+
+function executeProviderRequest<T>(
+  provider: string,
+  auth: ProviderExecutionAuth,
+  execute: (auth: Pick<AudioTranscriptionRequest, "apiKey" | "auth">) => Promise<T>,
+): Promise<T> {
+  return auth.kind === "api-key"
+    ? executeWithApiKeyRotation({
+        provider,
+        apiKeys: auth.apiKeys,
+        transientRetry: providerOperationRetryConfig("read"),
+        execute: (apiKey) =>
+          execute({
+            apiKey,
+            auth: { kind: "api-key", apiKey, source: auth.source },
+          }),
+      })
+    : execute({
+        apiKey: CUSTOM_LOCAL_AUTH_MARKER,
+        auth: { kind: "none", source: auth.source ?? `provider:${provider}` },
+      });
+}
 
 async function resolveProviderExecutionAuth(params: {
   capability: MediaUnderstandingCapability;
@@ -637,35 +651,12 @@ function assertMinAudioSize(params: { size: number; attachmentIndex: number }): 
   );
 }
 
-/**
- * Build an actionable hint suffix for "provider not available" errors.
- *
- * Restricts the hint to ids that are owned by the official external
- * provider catalog — NOT the combined channel/plugin catalog — so a media
- * provider id like `feishu` (an official channel, not a media provider)
- * never emits a misleading install hint from a media-provider error.
- *
- * Tier 1: provider id is owned by an official external provider entry that
- *   declares a `contracts.mediaUnderstandingProviders` block listing the
- *   id — emit the catalog-backed install + registry refresh + doctor fix
- *   commands.
- * Tier 2: empty string — keeps the legacy message verbatim for ids that
- *   are not in the provider catalog (channel ids, plugin ids, unknown
- *   ids, internal ids, etc.). Newly externalized media providers must
- *   register with the official external provider catalog to receive the
- *   actionable hint.
- */
 function formatMissingProviderHint(providerId: string): string {
   const trimmed = providerId.trim();
   if (!trimmed) {
     return "";
   }
-  // Look up the id only in catalog entries that declare
-  // `contracts.mediaUnderstandingProviders`. This ensures the install hint
-  // only fires for provider packages that actually own the missing
-  // media-understanding capability. Providers that have a generic `providers[]`
-  // catalog entry but no media-understanding contract (e.g. Amazon Bedrock)
-  // will not emit misleading hints.
+  // Channel-only and non-media providers must not receive media-plugin install hints.
   const providerEntry = listOfficialExternalProviderCatalogEntries().find((entry) => {
     const manifest = getOfficialExternalPluginCatalogManifest(entry);
     const mediaProviders = manifest?.contracts?.mediaUnderstandingProviders ?? [];
@@ -674,9 +665,6 @@ function formatMissingProviderHint(providerId: string): string {
   if (!providerEntry) {
     return "";
   }
-  // `resolveOfficialExternalPluginRepairHint` is contract-agnostic but we
-  // already validated ownership via the provider-only catalog, so the
-  // returned hint is for the correct provider entry.
   const catalogHint = resolveOfficialExternalPluginRepairHint(trimmed);
   if (!catalogHint) {
     return "";
@@ -698,6 +686,7 @@ export async function runProviderEntry(params: {
   providerRegistry: ProviderRegistry;
   config?: MediaUnderstandingConfig;
   secretOwnerId?: string;
+  request?: MediaRequestOverrides;
 }): Promise<Result<MediaUnderstandingOutput | null, unknown>> {
   const { entry, capability, cfg } = params;
   const providerIdRaw = entry.provider?.trim();
@@ -757,7 +746,6 @@ export async function runProviderEntry(params: {
       }
       throw error;
     }
-    const requestOverrides = resolveMediaRequestOverrides(params.config);
     const provider = getMediaUnderstandingProvider(requestProviderId, params.providerRegistry);
     const imageInput = {
       buffer: optimizedMedia.buffer,
@@ -765,7 +753,7 @@ export async function runProviderEntry(params: {
       mime: optimizedMedia.mime,
       model: modelId,
       provider: requestProviderId,
-      prompt: requestOverrides.prompt ?? prompt,
+      prompt: params.request?.prompt ?? prompt,
       timeoutMs,
       profile: entry.profile,
       preferredProfile: entry.preferredProfile,
@@ -800,16 +788,15 @@ export async function runProviderEntry(params: {
     if (!provider.transcribeAudio && !provider.transcribeAudioWithContext) {
       throw new Error(`Audio transcription provider "${providerId}" not available.`);
     }
-    const requestOverrides = resolveMediaRequestOverrides(params.config);
     const media = await params.cache.getBuffer({
       attachmentIndex: params.attachmentIndex,
       maxBytes,
       timeoutMs,
     });
     assertMinAudioSize({ size: media.size, attachmentIndex: params.attachmentIndex });
-    const audioLanguage = requestOverrides.language ?? entry.language ?? params.config?.language;
+    const audioLanguage = params.request?.language ?? entry.language ?? params.config?.language;
     // STT prompts are spelling/context hints; injected instructions can be echoed on silence.
-    const audioPrompt = requestOverrides.prompt ?? (hasConfiguredPrompt ? prompt : undefined);
+    const audioPrompt = params.request?.prompt ?? (hasConfiguredPrompt ? prompt : undefined);
     const transport = resolveProviderRequestContext({
       providerId,
       cfg,
@@ -870,25 +857,9 @@ export async function runProviderEntry(params: {
         agentDir: params.agentDir,
         workspaceDir: params.workspaceDir,
       });
-      const buildRequest = (
-        requestAuth: { kind: "api-key"; apiKey: string } | { kind: "none" },
-      ) => ({
-        ...input,
-        apiKey: requestAuth.kind === "api-key" ? requestAuth.apiKey : CUSTOM_LOCAL_AUTH_MARKER,
-        auth:
-          requestAuth.kind === "api-key"
-            ? { kind: "api-key" as const, apiKey: requestAuth.apiKey, source: auth.source }
-            : { kind: "none" as const, source: auth.source ?? `provider:${providerId}` },
-      });
-      result =
-        auth.kind === "api-key"
-          ? await executeWithApiKeyRotation({
-              provider: providerId,
-              apiKeys: auth.apiKeys,
-              transientRetry: providerOperationRetryConfig("read"),
-              execute: async (apiKey) => transcribeAudio(buildRequest({ kind: "api-key", apiKey })),
-            })
-          : await transcribeAudio(buildRequest({ kind: "none" }));
+      result = await executeProviderRequest(providerId, auth, (requestAuth) =>
+        transcribeAudio({ ...input, ...requestAuth }),
+      );
     }
     if (isTranscriptArtifactText(result.text)) {
       return ok(null);
@@ -934,7 +905,6 @@ export async function runProviderEntry(params: {
     entry,
     config: params.config,
   });
-  const authSource = auth.source ?? `provider:${providerId}`;
   const model =
     entry.model?.trim() ||
     (await import("./defaults.js")).resolveDefaultMediaModel({
@@ -945,32 +915,21 @@ export async function runProviderEntry(params: {
       providerRegistry: params.providerRegistry,
     }) ||
     entry.model;
-  const buildRequest = (requestAuth: { kind: "api-key"; apiKey: string } | { kind: "none" }) => ({
-    buffer: media.buffer,
-    fileName: media.fileName,
-    mime: media.mime,
-    apiKey: requestAuth.kind === "api-key" ? requestAuth.apiKey : CUSTOM_LOCAL_AUTH_MARKER,
-    auth:
-      requestAuth.kind === "api-key"
-        ? { kind: "api-key" as const, apiKey: requestAuth.apiKey, source: auth.source }
-        : { kind: "none" as const, source: authSource },
-    baseUrl,
-    headers,
-    request,
-    model,
-    prompt,
-    timeoutMs,
-    fetchFn,
-  });
-  const result =
-    auth.kind === "api-key"
-      ? await executeWithApiKeyRotation({
-          provider: providerId,
-          apiKeys: auth.apiKeys,
-          transientRetry: providerOperationRetryConfig("read"),
-          execute: (apiKey) => describeVideo(buildRequest({ kind: "api-key", apiKey })),
-        })
-      : await describeVideo(buildRequest({ kind: "none" }));
+  const result = await executeProviderRequest(providerId, auth, (requestAuth) =>
+    describeVideo({
+      buffer: media.buffer,
+      fileName: media.fileName,
+      mime: media.mime,
+      ...requestAuth,
+      baseUrl,
+      headers,
+      request,
+      model,
+      prompt,
+      timeoutMs,
+      fetchFn,
+    }),
+  );
   return ok({
     kind: "video.description",
     attachmentIndex: params.attachmentIndex,
@@ -989,6 +948,7 @@ export async function runCliEntry(params: {
   attachment: MediaAttachment;
   cache: MediaAttachmentCache;
   config?: MediaUnderstandingConfig;
+  request?: MediaRequestOverrides;
 }): Promise<MediaUnderstandingOutput | null> {
   const { entry, capability, cfg, ctx } = params;
   const attachmentIndex = params.attachment.index;
@@ -997,8 +957,7 @@ export async function runCliEntry(params: {
     throw cli.error;
   }
   const { command, args } = cli.value;
-  const requestOverrides = resolveMediaRequestOverrides(params.config);
-  const language = requestOverrides.language ?? entry.language ?? params.config?.language;
+  const language = params.request?.language ?? entry.language ?? params.config?.language;
   const { maxBytes, maxChars, timeoutMs, prompt } = resolveEntryRunOptions({
     capability,
     entry,
@@ -1039,7 +998,7 @@ export async function runCliEntry(params: {
       MediaDir: path.dirname(mediaPath),
       OutputDir: outputDir,
       OutputBase: outputBase,
-      Prompt: requestOverrides.prompt ?? prompt,
+      Prompt: params.request?.prompt ?? prompt,
       ...(capability === "audio" && language ? { Language: language } : {}),
       MaxChars: maxChars,
     };

@@ -11,9 +11,8 @@ import { openSessionWorkspaceFile, revealSessionWorkspaceFile } from "./chat-ses
 import type { SidebarContent, SidebarSelection } from "./chat-sidebar.ts";
 import { renderTaskDetailPanel } from "./chat-task-detail.ts";
 
-// Region close collapses the detail slot but leaves sidebarContent set, so
-// "task content exists" is not "panel visible"; consumers (panel render, rail
-// open-row highlight) must gate on the layout, not the content.
+// Panel rendering and the Tasks highlight share the persisted detail selection.
+// A selection only applies while its detail slot exists.
 function detailSlotOpen(layout: SidebarLayout): boolean {
   return layout.columns.some((column) => column.panels.some((panel) => panel.slot === "detail"));
 }
@@ -22,7 +21,14 @@ export function openTaskDetailId(
   content: SidebarSelection | null | undefined,
   layout: SidebarLayout,
 ): string | undefined {
-  return content?.kind === "task" && detailSlotOpen(layout) ? content.taskId : undefined;
+  if (!detailSlotOpen(layout)) {
+    return undefined;
+  }
+  if (content) {
+    return content.kind === "task" ? content.taskId : undefined;
+  }
+  return layout.columns.flatMap((column) => column.panels).find((panel) => panel.slot === "detail")
+    ?.taskId;
 }
 
 export function renderChatDetailSlot(params: {
@@ -42,7 +48,10 @@ export function renderChatDetailSlot(params: {
             backgroundTasks: params.backgroundTasks,
             host,
             loadFullAssistantMessage: params.chat.loadFullAssistantMessage,
-            task: params.backgroundTasks.tasks?.find((task) => task.id === taskId) ?? undefined,
+            task:
+              params.backgroundTasks.tasks?.find((task) => task.id === taskId) ??
+              params.backgroundTasks.taskDetails.get(taskId),
+            taskId,
           }),
   };
   return (
@@ -68,7 +77,7 @@ export function renderChatDetailSlot(params: {
       .canvasPluginSurfaceUrl=${host.canvasPluginSurfaceUrl}
       .embedSandboxMode=${host.embedSandboxMode}
       .allowExternalEmbedUrls=${host.allowExternalEmbedUrls}
-      .githubRepo=${params.chat.githubRepo}
+      .githubContext=${{ githubRepo: params.chat.githubRepo, githubRepositories: params.chat.githubRepositories }}
       .onOpenWorkspaceFile=${(target: { path: string; line?: number | null }) =>
         openSessionWorkspaceFile(host, target)}
       .onOpenSessionLink=${params.chat.onOpenSessionLink}

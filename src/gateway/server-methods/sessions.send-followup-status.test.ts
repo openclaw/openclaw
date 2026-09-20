@@ -44,12 +44,6 @@ vi.mock("../../agents/subagents/spawn/subagent-spawn-cleanup.js", () => ({
   terminateAcceptedCollectorRun: (...args: unknown[]) => terminateAcceptedCollectorRunMock(...args),
 }));
 
-vi.mock("./chat.js", () => ({
-  chatHandlers: {
-    "chat.send": (...args: unknown[]) => chatSendMock(...args),
-  },
-}));
-
 vi.mock("./chat-send-external-entry.js", () => ({
   handleDirectExternalChatSend: (...args: unknown[]) => chatSendWithAdmissionOwnedMock(...args),
 }));
@@ -306,9 +300,7 @@ describe("sessions.send completed subagent follow-up status", () => {
         });
         expect(respond).toHaveBeenCalledWith(true, payload, undefined, undefined);
       }
-      expect(chatSendWithAdmissionOwnedMock).toHaveBeenCalledTimes(
-        method === "sessions.steer" ? 2 : 0,
-      );
+      expect(chatSendWithAdmissionOwnedMock).toHaveBeenCalledTimes(2);
     },
   );
 

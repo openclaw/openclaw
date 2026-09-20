@@ -1875,7 +1875,10 @@ describe("CI changed Node test plan", () => {
     expect(workerShards).toEqual([
       expect.objectContaining({
         configs: ["test/vitest/vitest.extension-database-workers.config.ts"],
-        includePatterns: ["extensions/qa-lab/src/execution-identity-storage-inspection.test.ts"],
+        includePatterns: [
+          "extensions/qa-lab/src/execution-identity-storage-inspection.test.ts",
+          "extensions/qa-lab/src/live-transports/matrix/scenarios/scenario-runtime-state-files.test.ts",
+        ],
         requiresDist: false,
       }),
     ]);
@@ -1897,7 +1900,10 @@ describe("CI changed Node test plan", () => {
     expect(shards?.filter((shard) => !qaShards.includes(shard))).toEqual([
       expect.objectContaining({
         configs: ["test/vitest/vitest.extension-database-workers.config.ts"],
-        includePatterns: ["extensions/qa-lab/src/execution-identity-storage-inspection.test.ts"],
+        includePatterns: [
+          "extensions/qa-lab/src/execution-identity-storage-inspection.test.ts",
+          "extensions/qa-lab/src/live-transports/matrix/scenarios/scenario-runtime-state-files.test.ts",
+        ],
         requiresDist: false,
       }),
       expect.objectContaining({ configs: ["test/vitest/vitest.boundary.config.ts"] }),

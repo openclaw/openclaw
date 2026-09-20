@@ -106,7 +106,7 @@ type FinalizeSpawnResult = { code: number | null; stdout?: string; stderr?: stri
 type PostCoreFinalizeSpawner = (params: {
   argv: string[];
   cwd: string;
-  timeoutMs: number;
+  timeoutMs?: number;
   env: NodeJS.ProcessEnv;
 }) => Promise<FinalizeSpawnResult>;
 
@@ -196,12 +196,16 @@ export async function runPostCoreFinalizeAfterGatewayUpdate(params: {
   // Pin the finalizer's host-compat resolution to the just-installed core
   // version so plugins reconcile against the new core, not the running process.
   const compatHostVersion = result.after?.version ?? undefined;
-  // Outer whole-process backstop, decoupled from the per-step `--timeout` above.
-  const processTimeoutMs = await resolveUpdateFinalizationTimeoutMs(perStepTimeoutMs, {
-    env: params.env,
-    pluginCount: Object.keys(params.preUpdateConfig?.sourceConfig.plugins?.entries ?? {}).length,
-    nodeRunner: nodePath,
-  });
+  // An omitted operator deadline must not become an outer work deadline.
+  const processTimeoutMs =
+    perStepTimeoutMs === undefined
+      ? undefined
+      : await resolveUpdateFinalizationTimeoutMs(perStepTimeoutMs, {
+          env: params.env,
+          pluginCount: Object.keys(params.preUpdateConfig?.sourceConfig.plugins?.entries ?? {})
+            .length,
+          nodeRunner: nodePath,
+        });
 
   let sourceConfigDir: string | undefined;
   try {

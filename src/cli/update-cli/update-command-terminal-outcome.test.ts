@@ -14,10 +14,16 @@ import {
   createRetainedPackageSwap,
 } from "../../infra/package-update-swap.test-support.js";
 import { readRestartSentinel } from "../../infra/restart-sentinel.js";
+import * as snapshot from "../../infra/sqlite-snapshot-source.js";
 import * as temporaryRoot from "../../infra/tmp-openclaw-dir.js";
 import { createManagedHandoffLeaseStore } from "../../infra/update-managed-service-handoff-lease.js";
 import { prepareNativePackageStage } from "../../infra/update-native-package-stage.js";
-import { createUpdateRun, finishUpdateRun, getUpdateRun } from "../../infra/update-run-ledger.js";
+import {
+  createUpdateRun,
+  finishUpdateRun,
+  getUpdateRun,
+  recordUpdateRunVerification,
+} from "../../infra/update-run-ledger.js";
 import { renderUpdateRunReport } from "../../infra/update-run-report.js";
 import type { UpdateRunResult, UpdateStepResult } from "../../infra/update-runner.js";
 import { defaultRuntime } from "../../runtime.js";
@@ -154,6 +160,7 @@ async function scenario(
   repeat = false,
   deferred = true,
   preparedRecovery = false,
+  completedByGateway = false,
 ) {
   let swap;
   let nativeManifest: string | undefined;
@@ -335,9 +342,30 @@ async function scenario(
   const observedResults: UpdateRunResult[] = [];
   const observationLeases: string[] = [];
   let failure: unknown;
+  let reportSnapshotFailure: { mockRestore: () => void } | undefined;
   const execute = () =>
     withUpdateCommandExecutor(run.runId, async (executor) => {
       run.executorFence = await executor.enter(swap.packageRoot);
+      if (completedByGateway) {
+        recordUpdateRunVerification(
+          run.runId,
+          {
+            serviceRunning: true,
+            versionMatch: true,
+            channelsReady: true,
+            readyz: true,
+            settled: true,
+            runningVersion: "2.0.0",
+            pluginErrors: [],
+          },
+          { env: run.env },
+        );
+        finishUpdateRun(
+          run.runId,
+          { status: "succeeded", after: { version: "2.0.0" } },
+          { env: run.env },
+        );
+      }
       if (nativeManifest) {
         await fs.writeFile(
           nativeManifest,
@@ -408,6 +436,15 @@ async function scenario(
           "CREATE TRIGGER deny_terminal_release BEFORE DELETE ON managed_update_handoffs BEGIN SELECT RAISE(FAIL, 'fixture final lease delete denied'); END",
         );
       }
+    }).then(() => {
+      if (completedByGateway) {
+        closeOpenClawStateDatabaseForTest();
+        reportSnapshotFailure = vi
+          .spyOn(snapshot, "prepareSqliteReadOnlyLocationSync")
+          .mockImplementation(() => {
+            throw new Error("live database changed during terminal publication");
+          });
+      }
     });
   try {
     if (deferred) {
@@ -428,6 +465,8 @@ async function scenario(
     }
   } catch (error) {
     failure = error;
+  } finally {
+    reportSnapshotFailure?.mockRestore();
   }
   if (kind === "foreign-revoked" && failure instanceof UpdateCommandPendingRecoveryFailure) {
     vi.spyOn(defaultRuntime, "exit").mockImplementation(() => {
@@ -499,6 +538,19 @@ async function scenario(
 }
 
 describe("composed cleanup and terminal outcome", () => {
+  it.each([true, false])(
+    "publishes the Gateway's completed row after real executor release (json=%s)",
+    async (json) => {
+      const value = await scenario("healthy", json, false, true, false, true);
+      expect(value.exitCode).toBe(0);
+      expect(value.history?.status).toBe("succeeded");
+      expect(value.lease).toBe("absent");
+      expect(value.retainedExists).toBe(false);
+      expect(value.observedResults).toEqual([expect.objectContaining({ status: "ok" })]);
+      expect(value.observationLeases).toEqual(["absent"]);
+      expect(value.afterRepeat).toEqual(value.beforeRepeat);
+    },
+  );
   it.each(["release-failure", "revoked", "link-retained"] as const)(
     "qualifies pending recovery claims after %s settlement",
     async (kind) => {

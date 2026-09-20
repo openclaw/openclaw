@@ -1476,8 +1476,8 @@ class NodeRuntime private constructor(
   private val _gatewayAgents = MutableStateFlow<List<GatewayAgentSummary>>(emptyList())
   val gatewayAgents: StateFlow<List<GatewayAgentSummary>> = _gatewayAgents.asStateFlow()
 
-  // Preserve an explicit user choice across metadata refreshes. Gateway reconnects
-  // clear it so the newly connected gateway's canonical main agent wins again.
+  // The focused Gateway owns this choice for the runtime's lifetime; replacing a
+  // socket must not rebind Chat or Talk to the default agent.
   @Volatile private var selectedChatAgentId: String? = null
   private val chatSelectionSeq = AtomicLong(0)
   private val _cronStatus = MutableStateFlow(GatewayCronStatus(enabled = false, jobs = 0, nextWakeAtMs = null))
@@ -1691,17 +1691,21 @@ class NodeRuntime private constructor(
           selectGatewayDevicePairingCapabilities(hello.methods.orEmpty(), operatorScopes)
         _gatewayAccentArgb.value = null
         _gatewaySourcePreviewConfig.value = null
-        val mainSessionKey =
-          prepareMainSessionKey(resolveAgentIdFromMainSessionKey(hello.mainSessionKey))
-        // Create/adopt before history refresh; this keeps the first connected read on the
-        // device-owned session without changing the shipped key or its existing transcript.
-        chat.onGatewayConnected(mainSessionBinding(mainSessionKey))
+        synchronized(gatewayDataScopeLock) {
+          val mainSessionKey =
+            prepareMainSessionKey(selectedChatAgentId ?: resolveAgentIdFromMainSessionKey(hello.mainSessionKey))
+          // Create/adopt before history refresh; this keeps the first connected read on the
+          // device-owned session without changing the shipped key or its existing transcript.
+          chat.onGatewayConnected(mainSessionBinding(mainSessionKey))
+        }
         refreshGatewayControlPage()
         updateStatus {
           operatorConnectionProblem = null
           operatorConnected = true
           operatorStatusText = "Connected"
         }
+        // Revalidate removals even when no screen refreshes metadata after reconnect.
+        if (selectedChatAgentId != null) refreshAgents()
         // Bootstrap can connect the node before operator access is ready.
         refreshNodesDevices()
         // Method and scope snapshots are synchronous above; refresh only after both so
@@ -2036,7 +2040,6 @@ class NodeRuntime private constructor(
     }
     skillsSummary.reset()
     synchronized(gatewayDataScopeLock) {
-      selectedChatAgentId = null
       chatSelectionSeq.incrementAndGet()
       sessionCatalogRefreshSeq.incrementAndGet()
       sessionCatalogContinueSeq.incrementAndGet()
@@ -2477,6 +2480,9 @@ class NodeRuntime private constructor(
 
   val talkModeStatusText: StateFlow<String>
     get() = talkMode.statusText
+
+  val talkFailureText: StateFlow<String?>
+    get() = talkMode.failureText
 
   private val wearRealtimeLifecycleMutex = Mutex()
 
@@ -5631,6 +5637,7 @@ class NodeRuntime private constructor(
     val disconnectAttemptId = retireConnectAttempt()
     synchronized(gatewayDataScopeLock) {
       gatewayDataGeneration += 1
+      if (retireRunState) selectedChatAgentId = null
       clearOperatorGatewayState(retirePendingCronRuns = true)
     }
     if (retireRunState) updateGatewayDefaultAgentId(null)
@@ -7149,14 +7156,17 @@ class NodeRuntime private constructor(
   private suspend fun refreshAgentsFromGateway() {
     val gatewayScope = captureGatewayDataScope() ?: return
     if (!operatorConnected) return
+    val selectionSequence = chatSelectionSeq.get()
     try {
       val res = requestGatewayData(gatewayScope, "agents.list", "{}")
       val root = json.parseToJsonElement(res).asObjectOrNull() ?: return
       val defaultAgentId = root["defaultId"].asStringOrNull()?.trim().orEmpty()
       val mainKey = normalizeMainKey(root["mainKey"].asStringOrNull())
       val agents = parseGatewayAgentSummaries(root)
+      if (agents.isEmpty()) return
 
       publishGatewayData(gatewayScope) {
+        if (chatSelectionSeq.get() != selectionSequence) return@publishGatewayData
         updateGatewayDefaultAgentId(defaultAgentId)
         _gatewayAgents.value = agents
         val selectedAgentId = selectedChatAgentId?.takeIf { id -> agents.any { it.id == id } }

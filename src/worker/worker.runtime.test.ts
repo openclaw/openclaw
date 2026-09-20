@@ -83,6 +83,7 @@ import {
   WorkerLiveEventClient,
   WorkerTranscriptCommitClient,
 } from "./worker-rpc-clients.js";
+import { registerWorkerBackgroundExecLifecycleTests } from "./worker-runtime-background-exec.suite.js";
 import { createWorkerRuntimeEnvironment, runWorkerDescriptor } from "./worker.runtime.js";
 
 const browserRuntimeMocks = vi.hoisted(() => ({
@@ -943,6 +944,14 @@ afterEach(async () => {
 });
 
 describe("worker runtime", () => {
+  registerWorkerBackgroundExecLifecycleTests({
+    setup,
+    waitForFast,
+    bundleHash: BUNDLE_HASH,
+    sessionId: SESSION_ID,
+    inferenceStartTimeoutMs: WORKER_INFERENCE_START_TIMEOUT_MS,
+  });
+
   it("sends current image and scanned PDF page content through remote inference exactly once", async () => {
     const { gateway, launch } = await setup();
     const images = [
@@ -1887,46 +1896,6 @@ describe("worker runtime", () => {
       );
     },
   );
-
-  it("joins retained background processes before closing the managed owner on EOF", async () => {
-    const { launch } = await setup({ inferencePlans: ["background-tool", "text"] });
-    const input = new PassThrough();
-    const output = new PassThrough();
-    const result = createDeferred<WorkerProcessResult>();
-    output.on("data", (chunk: Buffer) => {
-      const parsed = parseWorkerProcessResult(JSON.parse(chunk.toString("utf8")));
-      if (parsed) {
-        result.resolve(parsed);
-      }
-    });
-    const command = runWorkerCommand({ managed: true, input, output });
-    const scopeKey = `worker:${SESSION_ID}`;
-    const supervisor = getProcessSupervisor();
-    try {
-      input.write(
-        `${JSON.stringify({ type: "turn", turnId: launch.assignment.turnId, descriptor: launch })}\n`,
-      );
-      await expect(result.promise).resolves.toMatchObject({ retainWorker: true });
-      const running = listRunningSessions().filter((session) => session.scopeKey === scopeKey);
-      expect(running).toHaveLength(1);
-      const pid = running[0]!.pid!;
-      expect(pid).toBeGreaterThan(0);
-      input.end();
-      await command;
-      expect(() => process.kill(pid, 0)).toThrow();
-      expect(listRunningSessions().filter((session) => session.scopeKey === scopeKey)).toHaveLength(
-        0,
-      );
-    } finally {
-      input.end();
-      try {
-        await command;
-      } finally {
-        supervisor.cancelScope(scopeKey, "manual-cancel");
-        await waitForExecScope(scopeKey);
-      }
-    }
-  });
 
   it.each(["foreground", "hidden-background"] as const)(
     "keeps environment state until %s exec finalization settles",

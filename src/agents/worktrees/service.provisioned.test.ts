@@ -287,15 +287,25 @@ describe("ManagedWorktreeService provisioned state", () => {
     },
   );
 
-  it("propagates manifest inventory failures without provisioning unrelated files", async () => {
-    await fs.mkdir(path.join(repo, ".worktreeinclude"));
-    await expect(
-      runGitWorkerOperation({
-        type: "worktree.provisioning-inspection",
-        input: { sourceRoot: repo },
-      }),
-    ).rejects.toThrow();
-  });
+  it.each(["directory", "directory-symlink"] as const)(
+    "propagates manifest inventory failures without provisioning unrelated files (%s)",
+    async (kind) => {
+      const manifest = path.join(repo, ".worktreeinclude");
+      if (kind === "directory") {
+        await fs.mkdir(manifest);
+      } else {
+        const target = path.join(repo, "manifest-directory");
+        await fs.mkdir(target);
+        await fs.symlink(target, manifest, "junction");
+      }
+      await expect(
+        runGitWorkerOperation({
+          type: "worktree.provisioning-inspection",
+          input: { sourceRoot: repo },
+        }),
+      ).rejects.toThrow();
+    },
+  );
 
   it("reuses snapshot inventories while round-tripping Git and provisioned contents", async () => {
     await fs.writeFile(path.join(repo, ".gitignore"), "settings.local\nignored/\n");

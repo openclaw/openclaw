@@ -32,7 +32,12 @@ export function normalizeControlPlaneUpdateResult(result: UpdateRunResult): Upda
       (result.status === "skipped" && result.reason === "already-current")) &&
     isUpdateGatewayReadinessPending(result)
   ) {
-    return { ...result, status: "skipped", reason: "gateway-readiness-unverified" };
+    return {
+      ...result,
+      status: "skipped",
+      reason:
+        result.reason === "still-starting" ? "still-starting" : "gateway-readiness-unverified",
+    };
   }
   const beforeSha = result.before?.sha?.trim();
   const afterSha = result.after?.sha?.trim();

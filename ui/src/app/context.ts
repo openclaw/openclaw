@@ -28,6 +28,7 @@ import type { ApplicationOverlays } from "./overlays-types.ts";
 import type { ApplicationPlacementStartup } from "./session-placement-startup.ts";
 import type { UiPreferences } from "./settings.ts";
 import type { SidebarAttentionStore } from "./sidebar-attention-store.ts";
+import type { ThemeCatalogSnapshot } from "./theme-catalog.ts";
 import type { ThemeMode, ThemeName } from "./theme.ts";
 import type { WebPushCapability } from "./web-push.ts";
 
@@ -45,6 +46,8 @@ export type ApplicationThemeServerSelection = {
 };
 
 export type ApplicationTheme = {
+  readonly catalog?: ThemeCatalogSnapshot;
+  retryCatalog?: () => void;
   readonly settings: UiPreferences;
   readonly mode: ThemeMode;
   readonly resolvedMode: "dark" | "light";
@@ -105,12 +108,12 @@ export type ApplicationChatAttachmentHandoff = {
   dispose(): void;
 };
 
-export type ApplicationContext<TRouteId extends string = string> = {
+export type ApplicationContext<TRouteId extends string = RouteId> = {
   readonly basePath: string;
   readonly resourceBasePath: string;
   readonly lifecycleAbortSignal?: AbortSignal;
   readonly router: Pick<
-    Router<RouteId, ApplicationContext<RouteId>, unknown, unknown>,
+    Router<RouteId, ApplicationContext, unknown, unknown>,
     "getState" | "subscribe" | "navigate"
   >;
   readonly gateway: ApplicationGateway;
@@ -151,5 +154,4 @@ export type ApplicationContext<TRouteId extends string = string> = {
   readonly preload: (routeId: TRouteId) => Promise<void>;
 };
 
-export const applicationContext =
-  createContext<ApplicationContext<RouteId>>("openclaw.application");
+export const applicationContext = createContext<ApplicationContext>("openclaw.application");

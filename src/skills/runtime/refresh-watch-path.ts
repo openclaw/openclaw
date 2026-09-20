@@ -188,6 +188,7 @@ export function resolveSkillsWatcherUsePolling(): boolean {
 export function makeSkillsWatchTarget(
   raw: string,
   depth: number,
+  previousWatchRoot?: string,
 ): { path: string; watchRoot: string; depth: number } {
   const watchPath = toWatchRoot(resolveSkillsWatchPath(raw));
   let watchRoot = watchPath;
@@ -197,6 +198,32 @@ export function makeSkillsWatchTarget(
       break;
     }
     watchRoot = parent;
+  }
+  if (
+    previousWatchRoot &&
+    previousWatchRoot !== watchRoot &&
+    isPathInside(previousWatchRoot, watchRoot)
+  ) {
+    // Explicit descendant watches bypass Chokidar's followSymlinks:false for
+    // intermediate components. Promotion must stop where recursive observation
+    // would stop; trusted realpath targets are registered by target preparation.
+    let cursor = previousWatchRoot;
+    const parts = path.relative(previousWatchRoot, watchRoot).split(path.sep).filter(Boolean);
+    for (const part of ["", ...parts]) {
+      cursor = path.join(cursor, part);
+      try {
+        if (!fs.lstatSync(cursor).isSymbolicLink()) {
+          continue;
+        }
+      } catch {
+        // An ancestor disappeared between discovery and promotion.
+      }
+      watchRoot = path.dirname(cursor);
+      while (!fs.existsSync(watchRoot) && path.dirname(watchRoot) !== watchRoot) {
+        watchRoot = path.dirname(watchRoot);
+      }
+      break;
+    }
   }
   return { path: watchPath, watchRoot: toWatchRoot(watchRoot), depth };
 }

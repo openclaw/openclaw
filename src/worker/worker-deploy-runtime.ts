@@ -15,4 +15,8 @@ registerSealedRuntimeProcessEntrypoint(
   "imageProcessor",
   new URL(`./${WORKER_BUNDLE_IMAGE_PROCESSOR_PATH}`, import.meta.url),
 );
+registerSealedRuntimeProcessEntrypoint(
+  "serviceChildRelay",
+  new URL("./service-child-relay.mjs", import.meta.url),
+);
 setWorkerDeployHighlightJsLoader(loadHighlightJsRuntime);

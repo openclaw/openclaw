@@ -4,6 +4,7 @@ import { MessagePort, Worker } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferredCore } from "../shared/deferred.js";
+import { createOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
 import {
   closeOpenClawStateDatabaseAsync,
   runOpenClawStateWriteTransaction,
@@ -13,7 +14,9 @@ import { runOpenClawStateWorkerOperation } from "../state/openclaw-state-worker-
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import * as tokens from "./device-auth-store.js";
 import { storeDeviceAuthTokenInDatabase } from "./device-auth-store.kernel.js";
+import { SQLITE_WORKER_MAX_RESULT_BYTES } from "./sqlite-worker-contract.js";
 import { sqliteWorkerPreloadEnv } from "./sqlite-worker-preload.test-support.js";
+import * as sqliteWorkers from "./sqlite-worker-store.js";
 import {
   captureStateDatabaseCoordinatorRuntime,
   resolveStateDatabaseCoordinatorPath,
@@ -36,6 +39,13 @@ it.each([
   { length: 32, ownerCurrent: false, queuedFollower: true, nested: false, preparation: false },
   { length: 32, ownerCurrent: true, queuedFollower: false, nested: false, preparation: false },
   { length: 32, ownerCurrent: true, queuedFollower: false, nested: true, preparation: false },
+  {
+    length: 32,
+    ownerCurrent: true,
+    queuedFollower: false,
+    nested: "cross-scope" as const,
+    preparation: false,
+  },
   { length: 32, ownerCurrent: false, queuedFollower: false, nested: false, preparation: true },
 ])(
   "preserves a settled $length-byte token outcome through cleanup failure (owner current: $ownerCurrent, queued follower: $queuedFollower, nested: $nested, preparation: $preparation)",
@@ -114,16 +124,19 @@ if (!isMainThread) {
       let nativeWrites = 0;
       let current = true;
       const refused = new Error("Synthetic token authority revoked");
+      // Begin the framed-result cleanup probe after the large mutation has settled.
       const dispatch = vi
         .spyOn(MessagePort.prototype, "postMessage")
         .mockImplementation(function (this: MessagePort, message, transferList) {
           const result = nativePost.call(this, message, transferList);
           if (
             !isRecord(message) ||
-            message.type !== "accepted" ||
-            (preparation
-              ? message.admission !== undefined
-              : !(message.admission instanceof MessagePort))
+            (length > SQLITE_WORKER_MAX_RESULT_BYTES
+              ? message.type !== "result-next"
+              : message.type !== "accepted" ||
+                (preparation
+                  ? message.admission !== undefined
+                  : !(message.admission instanceof MessagePort)))
           ) {
             return result;
           }
@@ -164,20 +177,55 @@ if (!isMainThread) {
         });
       const escape = createDeferredCore<never>();
       void escape.promise.catch(() => {});
+      const nestedScopes =
+        nested === "cross-scope"
+          ? {
+              parent: createOpenClawDatabaseMaintenanceScope(),
+              child: createOpenClawDatabaseMaintenanceScope(),
+            }
+          : undefined;
+      const operations = vi.spyOn(sqliteWorkers, "runSqliteWorkerStoreOperation");
+      let parentStore: object | undefined;
+      let parentActor: object | undefined;
+      let nestedWork: ReturnType<typeof mutate> | undefined;
       const mutation = nested
         ? runOpenClawStateWorkerOperation(
-            captureOpenClawStateWorkerContext({ env: state.env }),
-            () =>
-              Promise.race([
-                (async () => {
-                  const result = await mutate();
-                  await expect(tokens.loadDeviceAuthToken(lookup)).rejects.toMatchObject({
-                    code: "unavailable",
-                  });
-                  return result;
-                })(),
-                escape.promise,
-              ]),
+            nestedScopes
+              ? nestedScopes.parent.run(() => captureOpenClawStateWorkerContext({ env: state.env }))
+              : captureOpenClawStateWorkerContext({ env: state.env }),
+            () => {
+              if (nestedScopes) {
+                parentStore = operations.mock.calls.at(-1)?.[0];
+                if (!parentStore) {
+                  throw new Error("Expected the enclosing callback's current client");
+                }
+                parentActor = sqliteWorkers.getSqliteWorkerActorIdentity(parentStore);
+              }
+              nestedWork = (async () => {
+                if (nestedScopes) {
+                  await nestedScopes.child.run(() =>
+                    runOpenClawStateWorkerOperation(
+                      captureOpenClawStateWorkerContext({ env: state.env }),
+                      async () => {
+                        const store = operations.mock.calls.at(-1)?.[0];
+                        if (!store) {
+                          throw new Error("Expected the nested callback's current client");
+                        }
+                        expect(store).not.toBe(parentStore);
+                        expect(sqliteWorkers.getSqliteWorkerActorIdentity(store)).toBe(parentActor);
+                      },
+                    ),
+                  );
+                }
+                const result = await (nestedScopes ? nestedScopes.child.run(mutate) : mutate());
+                await expect(tokens.loadDeviceAuthToken(lookup)).rejects.toMatchObject({
+                  code: "unavailable",
+                });
+                return result;
+              })();
+              void nestedWork.catch(() => {});
+              return Promise.race([nestedWork, escape.promise]);
+            },
           )
         : mutate();
       let completed = false;
@@ -243,7 +291,8 @@ if (!isMainThread) {
       } finally {
         escape.reject(new Error("Release nested fixture after observation"));
         dispatch.mockRestore();
-        await Promise.allSettled([mutation, follower]);
+        await Promise.allSettled([mutation, follower, nestedWork]);
+        await Promise.allSettled([nestedScopes?.child.close(), nestedScopes?.parent.close()]);
         await closeOpenClawStateDatabaseAsync();
         warnings.mockRestore();
         vi.unstubAllEnvs();

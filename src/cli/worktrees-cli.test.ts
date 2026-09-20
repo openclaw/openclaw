@@ -120,7 +120,7 @@ describe("worktrees cli", () => {
       const cleanup = { outcome: removed ? "removed-lossless" : "retained-dirty", at: 1 } as const;
       const remove = vi.spyOn(managedWorktrees, "remove");
       vi.spyOn(managedWorktrees, "removeIfLossless").mockResolvedValue(removed);
-      vi.spyOn(managedWorktrees, "listRegistryRecords").mockReturnValue([
+      vi.spyOn(managedWorktrees, "listRegistryRecords").mockResolvedValue([
         {
           id: "worktree-id",
           name: "task",

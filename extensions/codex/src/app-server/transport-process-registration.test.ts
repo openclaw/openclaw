@@ -8,6 +8,7 @@ import { terminateCodexAppServerOrphan } from "./transport-process-containment.j
 import {
   createCodexAppServerProcessReaperService,
   prepareCodexAppServerProcessRegistration,
+  waitForCodexAppServerProcessRegistrationCleanup,
 } from "./transport-process-registration.js";
 import { RegistrationTestChildProcess } from "./transport-process-registration.test-support.js";
 import {
@@ -245,6 +246,7 @@ describe("Codex process registration", () => {
         expect(JSON.stringify(store.entries())).not.toContain(command);
         expect(kill).not.toHaveBeenCalled();
         spawned.emit("exit", 0, null);
+        await waitForCodexAppServerProcessRegistrationCleanup(spawned);
         expect(store.entries()).toEqual([]);
       } else {
         await expect(registered).rejects.toThrow(

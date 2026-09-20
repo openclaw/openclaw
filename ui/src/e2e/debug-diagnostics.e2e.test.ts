@@ -32,6 +32,7 @@ suite.define(() => {
     await suite.withPage(
       {
         locale: "en-US",
+        colorScheme: "dark",
         serviceWorkers: "block",
         hasTouch: true,
         viewport: { height: 1000, width: 1280 },
@@ -348,13 +349,12 @@ suite.define(() => {
         for (const reading of [
           "Main thread",
           "42%",
-          "Tracked workers",
+          "Worker threads",
           "28%",
           "Other threads",
-          "5%",
+          "≈5%",
           "Host · 8 logical CPUs",
           "34%",
-          "100% = one logical CPU",
         ]) {
           expect(cpuText).toContain(reading);
         }
@@ -461,6 +461,24 @@ suite.define(() => {
               animations: "disabled",
               path: path.join(proofDir, `cpu-${scenario.name}.png`),
             });
+          }
+          if (captureUiProof && scenario.name === "workers-hot") {
+            for (const viewport of [
+              { name: "desktop", width: 1280, height: 1000 },
+              { name: "mobile", width: 390, height: 844 },
+            ]) {
+              await page.setViewportSize({ width: viewport.width, height: viewport.height });
+              const popup = cpuTooltip.locator('[part="body"]');
+              await writeFile(
+                path.join(proofDir, `cpu-workers-hot-${viewport.name}-tooltip.png`),
+                await takeControlUiElementScreenshot(page, popup, [cpuDetail]),
+              );
+              await page.screenshot({
+                animations: "disabled",
+                path: path.join(proofDir, `cpu-workers-hot-${viewport.name}.png`),
+              });
+            }
+            await page.setViewportSize({ width: 1280, height: 1000 });
           }
           await transitionCpuDetail("wa-after-hide", () => page.keyboard.press("Escape"));
         }

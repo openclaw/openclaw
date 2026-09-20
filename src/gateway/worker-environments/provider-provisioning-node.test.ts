@@ -72,12 +72,11 @@ describe("node worker provider provisioning", () => {
         },
       );
       try {
-        const environment = await workerService.create(
-          "development",
-          "runtime-mode",
-          undefined,
+        const environment = await workerService.createWithRequest({
+          profileId: "development",
+          idempotencyKey: "runtime-mode",
           executionMode,
-        );
+        });
         expect(environment).toMatchObject({
           state: "ready",
           bootstrapReceipt: support.BOOTSTRAP_RECEIPT,
@@ -155,7 +154,10 @@ describe("node worker provider provisioning", () => {
       );
       let creationSettled = false;
       const creation = workerService
-        .create("development", `bundle-overlap-${outcome}`)
+        .createWithRequest({
+          profileId: "development",
+          idempotencyKey: `bundle-overlap-${outcome}`,
+        })
         .then(
           (value) => ({ value }),
           (error: unknown) => ({ error }),
@@ -291,7 +293,10 @@ describe("node worker provider provisioning", () => {
       },
     );
 
-    const environment = await workerService.create("development", "request-cloud-node");
+    const environment = await workerService.createWithRequest({
+      profileId: "development",
+      idempotencyKey: "request-cloud-node",
+    });
     expect(environment).toMatchObject({
       state: "ready",
       nodeSetupId: expect.any(String),
@@ -350,7 +355,10 @@ describe("node worker provider provisioning", () => {
           ensureNodeWorkerBundle: async () => structuredClone(support.BOOTSTRAP_RECEIPT),
         },
       );
-      const creation = workerService.create("development", `request-node-preparation-${outcome}`);
+      const creation = workerService.createWithRequest({
+        profileId: "development",
+        idempotencyKey: `request-node-preparation-${outcome}`,
+      });
       const completed = creation.then(
         (value) => ({ value }),
         (error: unknown) => ({ error }),
@@ -459,7 +467,10 @@ describe("node worker provider provisioning", () => {
           providerCallTimeoutMs: 20,
         },
       );
-      const creation = workerService.create("development", `request-node-closed-${outcome}`);
+      const creation = workerService.createWithRequest({
+        profileId: "development",
+        idempotencyKey: `request-node-closed-${outcome}`,
+      });
       const rejected = expect(creation).rejects.toMatchObject({ code: "provider_failure" });
       try {
         await providerEntered.promise;
@@ -575,7 +586,10 @@ describe("node worker provider provisioning", () => {
     );
 
     await expect(
-      workerService.create("development", "request-node-destroy-replay"),
+      workerService.createWithRequest({
+        profileId: "development",
+        idempotencyKey: "request-node-destroy-replay",
+      }),
     ).rejects.toMatchObject({ code: "provider_failure" });
     const provisioning = support.testState.store.list()[0]!;
     expect(provisioning).toMatchObject({
@@ -662,7 +676,10 @@ describe("node worker provider provisioning", () => {
       },
     );
 
-    const environment = await workerService.create("development", "request-paired-device");
+    const environment = await workerService.createWithRequest({
+      profileId: "development",
+      idempotencyKey: "request-paired-device",
+    });
     expect(environment).toMatchObject({
       state: "ready",
       nodeSetupId: null,
@@ -695,7 +712,10 @@ describe("node worker provider provisioning", () => {
       { ensureNodeWorkerBundle: async () => workerBuild, placementStore: placementGate },
     );
 
-    const result = await workerService.create("development", "request-device");
+    const result = await workerService.createWithRequest({
+      profileId: "development",
+      idempotencyKey: "request-device",
+    });
 
     expect(result).toMatchObject({
       state: "ready",

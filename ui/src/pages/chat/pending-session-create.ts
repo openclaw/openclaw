@@ -4,12 +4,15 @@ import type { ApplicationContext } from "../../app/context.ts";
 import { readDeletedSessionStartup } from "../../app/deleted-session-startup.ts";
 import type { ImageLightboxItem } from "../../components/image-lightbox.types.ts";
 import { t } from "../../i18n/index.ts";
+import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-session-setup.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../../lit/subscriptions-controller.ts";
 import { renderNewSessionBody } from "../new-session/draft-body.ts";
 import { chatStartupStatusLabel } from "./chat-run-startup.ts";
 import { renderChatImageLightbox } from "./components/chat-image-lightbox.ts";
 import { buildLocalUserMessage } from "./user-message-content.ts";
+
+registerNewSessionSetupEnglish();
 
 /** Admission preview owns display only; real pane controllers mount after acceptance. */
 class PendingSessionCreate extends OpenClawLightDomElement {

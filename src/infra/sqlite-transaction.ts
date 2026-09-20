@@ -349,7 +349,7 @@ function commitImmediateTransaction(
 
 function discardUnsafeConnection(db: TransactionDatabase, error: unknown): void {
   db[abortedTransactionSymbol] ??= { error };
-  discardSqliteTransactionState(db);
+  discardSqliteTransactionState(db, error);
   clearNodeSqliteKyselyCacheForDatabase(db);
   try {
     db.close();

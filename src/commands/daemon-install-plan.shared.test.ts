@@ -139,6 +139,12 @@ describe("resolveDaemonServicePathDirs openclaw discovery", () => {
         fs.mkdirSync(path.dirname(otherEntrypoint), { recursive: true });
         fs.writeFileSync(activeEntrypoint, "");
         fs.writeFileSync(otherEntrypoint, "");
+        for (const entrypoint of [activeEntrypoint, otherEntrypoint]) {
+          fs.writeFileSync(
+            path.join(path.dirname(entrypoint), "package.json"),
+            '{"name":"openclaw"}',
+          );
+        }
         fs.symlinkSync(otherEntrypoint, path.join(binDir, "openclaw"));
 
         expect(

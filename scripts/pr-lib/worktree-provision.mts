@@ -429,7 +429,7 @@ if (isDirectRunUrl(process.argv[1], import.meta.url)) {
     }
     await provisionPrWorktree({ root, pr, seed, lockRef, ownerOid, signal: controller.signal });
   } catch (error) {
-    console.error(error);
+    console.error(error instanceof Error ? error.message : String(error));
     process.exitCode = 1;
     console.error("[pr-worktree-provision] FAILED (exit 1)");
   } finally {

@@ -51,6 +51,11 @@ describe("skills watcher churn", () => {
       vi.useFakeTimers();
       const workspaceDir = fixtureWorkspaceDir;
       const executionWorkspaceDir = await createFixtureDirectory("busy-worktree");
+      for (const root of [workspaceDir, executionWorkspaceDir]) {
+        for (const directory of ["skills", ".agents/skills"]) {
+          await fs.mkdir(path.join(root, directory), { recursive: true });
+        }
+      }
       refreshModule.ensureSkillsWatcher({ workspaceDir, executionWorkspaceDir });
       const version = getSkillsSnapshotVersion(workspaceDir);
       const seen: SkillsChangeEvent[] = [];

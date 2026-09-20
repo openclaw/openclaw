@@ -4,7 +4,10 @@ import type {
   DocumentExtractorPlugin,
   PluginDocumentExtractorEntry,
 } from "./document-extractor-types.js";
-import { loadBundledPublicArtifactEntries } from "./public-artifact-factories.js";
+import {
+  loadBundledPublicArtifactEntries,
+  type BundledPublicArtifactParams,
+} from "./public-artifact-factories.js";
 
 function isDocumentExtractorPlugin(value: unknown): value is DocumentExtractorPlugin {
   return (
@@ -19,10 +22,9 @@ function isDocumentExtractorPlugin(value: unknown): value is DocumentExtractorPl
 }
 
 /** Loads document extractor entries from a bundled plugin public artifact module. */
-export function loadBundledDocumentExtractorEntriesFromDir(params: {
-  dirName: string;
-  pluginId: string;
-}): PluginDocumentExtractorEntry[] | null {
+export function loadBundledDocumentExtractorEntriesFromDir(
+  params: BundledPublicArtifactParams,
+): PluginDocumentExtractorEntry[] | null {
   return loadBundledPublicArtifactEntries({
     ...params,
     artifactCandidates: ["document-extractor.js", "document-extractor-api.js"],

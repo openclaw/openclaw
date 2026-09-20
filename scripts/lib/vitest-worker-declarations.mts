@@ -16,6 +16,9 @@ export const runtimeProcessDeclarationEntries = {
 };
 export const vitestWorkerDeclarationEntries = {
   ...runtimeProcessDeclarationEntries,
+  // Codex is package-owned and excluded from the root runtime bundle.
+  "extensions/codex/catalog-page-worker-entrypoint":
+    "extensions/codex/catalog-page-worker-entrypoint.ts",
   "extensions/memory-core/manager-publication-fault-entrypoint.test-support":
     "extensions/memory-core/src/memory/manager-publication-fault-entrypoint.test-support.ts",
   "state/openclaw-agent-worker-store.runtime.test-support":

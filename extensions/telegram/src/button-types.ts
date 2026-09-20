@@ -265,3 +265,40 @@ export function resolveTelegramInlineButtons(
     buildTelegramPresentationButtons(normalizeMessagePresentation(params.presentation), options)
   );
 }
+export function resolveTelegramButtonsFromParams(
+  params: Record<string, unknown>,
+  presentation = normalizeMessagePresentation(params.presentation),
+  options?: TelegramButtonBuildOptions,
+) {
+  return resolveTelegramInlineButtons(
+    {
+      presentation,
+      interactive: params.interactive,
+    },
+    options,
+  );
+}
+export function buildTelegramControlDegradation(
+  controls: readonly TelegramDroppedControl[],
+  fallbackDelivered: boolean,
+) {
+  if (controls.length === 0) {
+    return undefined;
+  }
+  const reasons = [...new Set(controls.map((control) => control.reason))];
+  const hasOverflow = reasons.includes("callback_data_too_long");
+  return {
+    warning: fallbackDelivered
+      ? `Telegram delivered ${controls.length} unencodable control${controls.length === 1 ? "" : "s"} as readable text.`
+      : `Telegram could not deliver ${controls.length} control${controls.length === 1 ? "" : "s"}.`,
+    degradedDelivery: {
+      droppedControls: controls.length,
+      fallback: fallbackDelivered ? "text" : "not_delivered",
+      reasons,
+      ...(hasOverflow ? { callbackDataLimitBytes: TELEGRAM_CALLBACK_DATA_MAX_BYTES } : {}),
+      guidance: hasOverflow
+        ? `Shorten callback data to at most ${TELEGRAM_CALLBACK_DATA_MAX_BYTES} UTF-8 bytes and retry if clickable controls are required.`
+        : "Retry with a supported control action if clickable controls are required.",
+    },
+  };
+}

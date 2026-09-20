@@ -5,6 +5,7 @@ import {
 } from "@openclaw/normalization-core/error-coercion";
 import { captureRuntimeConfigAsyncReader } from "../../config/io.runtime.js";
 import type { SqliteWorkerStore } from "../../infra/sqlite-worker-contract.js";
+import type { SqliteWorkerNativeSettlementOwner } from "../../infra/sqlite-worker-operation-settlement.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerOperations } from "../../state/openclaw-state-worker-contract.js";
 import {
@@ -24,6 +25,7 @@ import {
   runTaskFlowRegistryWorkerMutation,
 } from "../../tasks/task-flow-runtime-internal.js";
 import { canOwnerAccessTaskAsync } from "../../tasks/task-owner-access.js";
+import { readTaskCreationEventTarget } from "../../tasks/task-registry-agent-event-target.js";
 import {
   runTaskRegistryWorkerMutation,
   ensureTaskRegistryReadyAsync,
@@ -234,6 +236,9 @@ function bindManagedFlows(params: Binding): BoundAsyncManagedTaskFlowsRuntime {
     async runTask(input) {
       const taskInput = structuredClone(input);
       const { store, context } = await readStore(true, true);
+      const { runTaskRegistryWorkerOperation } =
+        await import("../../tasks/task-registry-worker-operation.js");
+      context.admission.assertCurrent();
       const scope = {
         taskId: crypto.randomUUID(),
         flowId: taskInput.flowId.trim(),
@@ -241,26 +246,40 @@ function bindManagedFlows(params: Binding): BoundAsyncManagedTaskFlowsRuntime {
         childSessionKey: taskInput.childSessionKey?.trim(),
       };
       let publicationTask: TaskRecord | undefined;
+      let creationOwner: SqliteWorkerNativeSettlementOwner | undefined;
       const result = await store.runOpenClawStateWorkerOperation(context, (worker) =>
         runTaskRegistryWorkerMutation(
           {
             scope,
             admission: context.admission,
+            readEventTarget: () =>
+              readTaskCreationEventTarget(
+                creationOwner?.committed?.facts,
+                "flows.runTask",
+                scope.taskId,
+              ),
             publicationRecords: () =>
               new Map<string, TaskRecord>(
                 publicationTask ? [[publicationTask.taskId, publicationTask]] : [],
               ),
           },
           async () => {
-            const receipt = await worker.execute({
-              type: "flows.runTask",
-              input: {
-                callerOwnerKey: binding.sessionKey,
-                params: taskInput,
-                taskId: scope.taskId,
-                now: Date.now(),
+            const receipt = await runTaskRegistryWorkerOperation(
+              context,
+              {
+                type: "flows.runTask",
+                input: {
+                  callerOwnerKey: binding.sessionKey,
+                  params: taskInput,
+                  taskId: scope.taskId,
+                  now: Date.now(),
+                },
               },
-            });
+              () => context.admission.assertCurrent(),
+              (owner) => {
+                creationOwner = owner;
+              },
+            );
             if (receipt.taskMutation === "created" || receipt.taskMutation === "updated") {
               publicationTask = receipt.task;
             }

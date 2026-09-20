@@ -17,7 +17,10 @@ import {
 
 export type { TaskCreateInput, TaskCreateResult } from "./task-registry-create.operation.js";
 
-type TaskCreateOptions = Pick<TaskCreateOperations, "onCommitted" | "assertCurrent">;
+type TaskCreateOptions = Pick<
+  TaskCreateOperations,
+  "onCommitted" | "assertCurrent" | "retainTaskCommit"
+>;
 
 /** Shared writer custody spans the operation; write owns each separate transaction. */
 export function createTaskRecordInDatabase(
@@ -63,5 +66,6 @@ export function createTaskRecordInDatabase(
     },
     onCommitted: options.onCommitted,
     assertCurrent: options.assertCurrent,
+    retainTaskCommit: options.retainTaskCommit,
   });
 }

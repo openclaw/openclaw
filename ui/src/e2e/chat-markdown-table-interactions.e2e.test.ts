@@ -112,7 +112,10 @@ describeControlUiE2e("Control UI Markdown table interactions", () => {
         await page.goto(`${server.baseUrl}chat`);
         if (surface === "assistant panel") {
           await page.locator(".sidebar-brand__search").click();
-          await page.getByPlaceholder("Search chats and commands…").fill("Ask OpenClaw");
+          await page
+            .locator("openclaw-command-palette")
+            .getByPlaceholder("Search or start a task…")
+            .fill("Ask OpenClaw");
           await page.getByRole("option", { name: "Ask OpenClaw", exact: true }).click();
         }
         const bubble = page.locator(

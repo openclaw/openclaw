@@ -607,6 +607,7 @@ vi.mock("../../media/store.js", async () => {
 });
 
 const { chatHandlers } = await import("./chat.js");
+const { handleDirectExternalChatSend } = await import("./chat-send-external-entry.js");
 
 // Multi-media transcript mirroring can exceed 1s on loaded CI before the async broadcast lands.
 async function waitForAssertion(assertion: () => void, timeoutMs = 5_000, stepMs = 2) {
@@ -1316,10 +1317,7 @@ async function runNonStreamingChatSend(params: {
   if (typeof params.deliver === "boolean") {
     sendParams.deliver = params.deliver;
   }
-  const handler =
-    params.directExternal === false
-      ? handleChatSend
-      : expectDefined(chatHandlers["chat.send"], 'chatHandlers["chat.send"] test invariant');
+  const handler = params.directExternal === false ? handleChatSend : handleDirectExternalChatSend;
   const handlerOptions = {
     params: {
       ...sendParams,
@@ -5455,10 +5453,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     await createTranscriptFixture("openclaw-chat-send-session-key-too-long-");
     const { context, respond } = createChatRequestFixture();
 
-    await expectDefined(
-      chatHandlers["chat.send"],
-      'chatHandlers["chat.send"] test invariant',
-    )({
+    await handleDirectExternalChatSend({
       params: {
         sessionKey: `agent:main:${"x".repeat(CHAT_SEND_SESSION_KEY_MAX_LENGTH)}`,
         message: "hello",
@@ -5483,10 +5478,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     mockState.sessionMissing = true;
     const { context, respond } = createChatRequestFixture();
 
-    await expectDefined(
-      chatHandlers["chat.send"],
-      'chatHandlers["chat.send"] test invariant',
-    )({
+    await handleDirectExternalChatSend({
       params: {
         sessionKey: "agent:main:harness:codex:supervision:native-thread",
         message: "claim reserved session",

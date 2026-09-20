@@ -1,4 +1,7 @@
-import { WEBSOCKET_NON_RETRYABLE_CLOSE_ERROR_CODE } from "@openclaw/ai/diagnostics";
+import {
+  resolveResponsesOutputIdentityRetry,
+  WEBSOCKET_NON_RETRYABLE_CLOSE_ERROR_CODE,
+} from "@openclaw/ai/diagnostics";
 import { isProviderRefusalAssistantError } from "@openclaw/llm-core/diagnostics";
 import { classifyFailoverSignal } from "../../agents/failover/classify.js";
 import {
@@ -22,10 +25,15 @@ const TERMINAL_ASSISTANT_ERROR_CODES = new Set([
  * Replay must not duplicate output or override refusals and permanent transport failures.
  */
 export function isTerminalAssistantError(
-  message: Pick<AssistantMessage, "diagnostics" | "errorCode"> | null | undefined,
+  message:
+    | (Pick<AssistantMessage, "diagnostics" | "errorCode"> &
+        Partial<Pick<AssistantMessage, "stopReason" | "errorBody" | "content">>)
+    | null
+    | undefined,
 ): boolean {
   return (
     Boolean(message?.errorCode && TERMINAL_ASSISTANT_ERROR_CODES.has(message.errorCode)) ||
+    (message != null && resolveResponsesOutputIdentityRetry(message) === "stop") ||
     isProviderRefusalAssistantError(message)
   );
 }
@@ -38,6 +46,9 @@ export function isRetryableAssistantError(message: AssistantMessage): boolean {
     isTerminalAssistantError(message)
   ) {
     return false;
+  }
+  if (resolveResponsesOutputIdentityRetry(message) === "retry") {
+    return true;
   }
   const errorMessage = message.errorMessage.trim();
   const status = extractFailoverHttpStatus(errorMessage);

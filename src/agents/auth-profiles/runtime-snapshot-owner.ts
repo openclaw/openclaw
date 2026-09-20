@@ -249,16 +249,22 @@ export function runtimeAuthProfileSnapshotSharesOwner(
   snapshot: RuntimeAuthSharedOwner,
   owner: Pick<AuthProfileStoreOwner, "location" | "sharedDatabasePath">,
 ): boolean {
+  return resolveRuntimeAuthSharedOwnerPath(snapshot, owner.location) === owner.sharedDatabasePath;
+}
+
+/** Resolve a captured owner's path without opening a cold scope or consulting ambient state. */
+export function resolveRuntimeAuthSharedOwnerPath(
+  snapshot: RuntimeAuthSharedOwner,
+  location: AuthProfileStoreOwner["location"],
+): string {
   if (snapshot.kind === "resolved") {
-    return snapshot.sharedDatabasePath === owner.sharedDatabasePath;
+    return snapshot.sharedDatabasePath;
   }
   // Resolve forward from captured cold facts and the known producer's storage
   // location; never open the cold scope or infer ownership from directory ancestry.
-  const candidate =
-    owner.location === "state-db"
-      ? resolveOpenClawStateSqlitePath({ OPENCLAW_STATE_DIR: snapshot.scope.stateDir })
-      : path.join(snapshot.scope.sharedMainDir, "openclaw-agent.sqlite");
-  return candidate === owner.sharedDatabasePath;
+  return location === "state-db"
+    ? resolveOpenClawStateSqlitePath({ OPENCLAW_STATE_DIR: snapshot.scope.stateDir })
+    : path.join(snapshot.scope.sharedMainDir, "openclaw-agent.sqlite");
 }
 
 export function runtimeAuthSharedOwnerRebound(

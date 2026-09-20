@@ -147,16 +147,18 @@ export async function runDoctorHealthFlow(_runtime, options, authority) {
   ],
   [
     sourceUrl("./update-cli/update-command-config-snapshot.ts"),
-    scenario === "phase-hang"
-      ? `import { spawnCommand } from ${JSON.stringify(sourceUrl("../process/exec-spawn.ts"))};
+    // Replace snapshot creation only; keep real readers available to Doctor imports.
+    `export * from ${JSON.stringify(`${sourceUrl("./update-cli/update-command-config-snapshot.ts")}?fixture-original`)};\n` +
+      (scenario === "phase-hang"
+        ? `import { spawnCommand } from ${JSON.stringify(sourceUrl("../process/exec-spawn.ts"))};
 export const createUpdateConfigSnapshot = async () => {
   const child = spawnCommand([process.execPath, '-e', ${JSON.stringify(blockedChildSource)}, '--', 'fixture-private-argument'], {stdin:'pipe', stdout:'ignore', stderr:'ignore'});
   console.error('fixture configSnapshot entered');
   await child;
 };`
-      : scenario === "borrowed-phase"
-        ? "export const createUpdateConfigSnapshot = async () => { await new Promise(resolve => setTimeout(resolve, 1_200)); };"
-        : "export const createUpdateConfigSnapshot = async () => {};",
+        : scenario === "borrowed-phase"
+          ? "export const createUpdateConfigSnapshot = async () => { await new Promise(resolve => setTimeout(resolve, 1_200)); };"
+          : "export const createUpdateConfigSnapshot = async () => {};"),
   ],
   [
     sourceUrl("./update-cli/update-command-config.ts"),
@@ -303,6 +305,11 @@ await import(${JSON.stringify(preparedDoctor.href)});
 if (scenario === "commonjs-state") {
   require("../plugin-state/plugin-state-store.ts");
 }
+if (repairDeadline) {
+  const { withPluginLifecycleLease } = await import("../plugins/plugin-lifecycle-lease.js");
+  await withPluginLifecycleLease({}, async () => {});
+}
+
 if (repairDeadline) {
   const { withPluginLifecycleLease } = await import("../plugins/plugin-lifecycle-lease.js");
   await withPluginLifecycleLease({}, async () => {});

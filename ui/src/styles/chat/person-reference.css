@@ -2,7 +2,7 @@
 .markdown-person-reference {
   display: inline;
   margin: 0;
-  border: 1px solid color-mix(in srgb, var(--accent) 24%, transparent);
+  border: 0;
   border-radius: var(--radius-sm);
   padding: 0 0.2em;
   background: color-mix(in srgb, var(--accent) 10%, transparent);
@@ -27,16 +27,21 @@
   outline-offset: 2px;
 }
 
+/* Keep the original @ in native selections and copied tables, but not beside the avatar. */
+.markdown-person-reference__prefix {
+  font-size: 0;
+}
+
 .markdown-person-reference__avatar {
   display: inline-grid;
   place-items: center;
-  width: 1em;
-  height: 1em;
+  width: calc(1em + 2px);
+  height: calc(1em + 2px);
   margin-inline-end: 0.25em;
   overflow: hidden;
   border-radius: var(--radius-full);
   background: var(--secondary);
-  vertical-align: -0.125em;
+  vertical-align: calc(-0.125em - 1px);
   pointer-events: none;
   user-select: none;
   -webkit-user-select: none;

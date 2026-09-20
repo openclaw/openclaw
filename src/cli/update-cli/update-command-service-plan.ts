@@ -16,7 +16,10 @@ import {
   formatServiceInspectionReason,
   type ServiceInspectionReason,
 } from "../../daemon/service-inspection-error.js";
-import { summarizeGatewayServiceLayout } from "../../daemon/service-layout.js";
+import {
+  gatewayServiceCommandMatchesRoot,
+  summarizeGatewayServiceLayout,
+} from "../../daemon/service-layout.js";
 import type {
   GatewayServiceCommandConfig,
   GatewayServiceState,
@@ -52,6 +55,7 @@ import { CLI_NAME } from "../cli-name.js";
 import { formatCliCommand } from "../command-format.js";
 import { quoteCliArg, quotePowerShellArg } from "../quote-cli-arg.js";
 import { resolveNodeRunner } from "./shared.js";
+import type { PackageRuntimeRecovery } from "./update-command-node-runtime-resolution.js";
 import type {
   ManagedGatewayUpdateVerdict,
   PreManagedServiceStop,
@@ -295,7 +299,7 @@ export async function readManagedGatewayServiceForUpdate(env: NodeJS.ProcessEnv)
   });
 }
 
-type PackageRuntimePreflight = {
+export type PackageRuntimePreflight = {
   nodeRunner?: string;
   replacedNodeRunner?: string;
   targetVersion?: string;
@@ -315,6 +319,8 @@ export async function resolvePackageRuntimePreflight(params: {
   invocationCwd?: string;
   /** An already-current source checkout retains its launcher across a global-prefix switch. */
   sourceRoot?: string;
+  fallbackNodeRunner?: string;
+  runtimeRecovery?: PackageRuntimeRecovery;
 }): Promise<
   Result<PackageRuntimePreflight, string> & {
     failureFacts?: UpdateFailureFact[];
@@ -366,13 +372,14 @@ export async function resolvePackageRuntimePreflight(params: {
       params.service.serviceUpdateVerdict?.kind === "owned" &&
       params.service.serviceUpdateVerdict.refreshDefinition;
     const fallbackNodeRunner =
-      params.shouldRestart &&
+      params.fallbackNodeRunner ??
+      (params.shouldRestart &&
       nodeRunner &&
       (params.alreadyCurrent
         ? canRefreshCurrentService
         : await gatewayServiceCommandUsesRoot({ root: params.root }))
         ? resolveNodeRunner()
-        : undefined;
+        : undefined);
     if (nodeRunner && fallbackNodeRunner && fallbackNodeRunner !== nodeRunner) {
       const fallbackRuntime = await resolvePackageRuntimeForPreflight({
         nodeRunner: fallbackNodeRunner,
@@ -391,6 +398,22 @@ export async function resolvePackageRuntimePreflight(params: {
     }
     if (satisfies !== false) {
       return ok(unchangedRuntime);
+    }
+    if (params.runtimeRecovery && target.nodeEngine) {
+      const { resolveTargetNodeRuntime } =
+        await import("./update-command-node-runtime-resolution.js");
+      const recovered = await resolveTargetNodeRuntime({
+        engine: target.nodeEngine,
+        recovery: params.runtimeRecovery,
+        timeoutMs: params.timeoutMs,
+      });
+      if (recovered) {
+        return ok({
+          nodeRunner: recovered,
+          replacedNodeRunner: nodeRunner ?? resolveNodeRunner(),
+          targetVersion,
+        });
+      }
     }
     const runtimeLabel = runtime.nodeRunner
       ? `Node ${runtime.version ?? "unknown"} at ${runtime.nodeRunner}`
@@ -543,8 +566,10 @@ export function resolveManagedServiceNodeRunner(
 export async function resolveManagedServicePackageUpdatePlan(params: {
   root: string;
   pkgOwnership?: FreeBsdPkgOwnershipInspection;
+  rebind?: boolean;
 }): Promise<{
   rootRedirect: ManagedServiceRootRedirect | null;
+  serviceRoot?: string;
   nodeRunner?: string;
   serviceUnitTarget?: string;
 }> {
@@ -559,7 +584,8 @@ export async function resolveManagedServicePackageUpdatePlan(params: {
   }
   // Root and runtime planning share one effective command; mutation and restart
   // revalidate independently so this snapshot cannot grant later service authority.
-  const command = (await readManagedGatewayServiceForUpdate(process.env))?.command ?? null;
+  const inspected = await readManagedGatewayServiceForUpdate(process.env);
+  const command = inspected?.command ?? null;
   const layout = await summarizeGatewayServiceLayout(command);
   const serviceUnitTarget = layout?.entrypoint ?? "no service entrypoint found";
   if (!layout?.packageRootReal) {
@@ -574,9 +600,19 @@ export async function resolveManagedServicePackageUpdatePlan(params: {
     layout.entrypointSourceCheckout !== true &&
     (await tryRealpathOrResolve(params.root)) !== layout.packageRootReal
   ) {
+    // Only an owned, writable definition can move from serving A to invoking B.
+    // Windows/overridden definitions retain the existing service-root update path.
+    const canRebind =
+      params.rebind !== false &&
+      process.platform !== "win32" &&
+      !command?.managedOverrides &&
+      !command?.managedDefinition &&
+      inspected?.verdict.refreshDefinition === true;
     return {
       serviceUnitTarget,
-      rootRedirect: { root: serviceRoot, previousRoot: params.root },
+      ...(canRebind
+        ? { rootRedirect: null, serviceRoot }
+        : { rootRedirect: { root: serviceRoot, previousRoot: params.root } }),
       ...(serviceNode ? { nodeRunner: serviceNode } : {}),
     };
   }
@@ -609,66 +645,7 @@ export async function gatewayServiceCommandUsesRoot(params: {
         ? ((await readManagedGatewayServiceForUpdate(params.env ?? process.env))?.command ?? null)
         : null
       : params.command;
-  const layout = await summarizeGatewayServiceLayout(command);
-  const serviceRoot = layout?.packageRoot;
-  const serviceEntrypoint = layout?.entrypoint;
-  if (
-    !serviceRoot ||
-    !serviceEntrypoint ||
-    (!path.isAbsolute(serviceEntrypoint) && !path.win32.isAbsolute(serviceEntrypoint))
-  ) {
-    return null;
-  }
-  const [expectedRootReal, serviceRootReal] = await Promise.all([
-    tryRealpathOrResolve(expectedRoot),
-    tryRealpathOrResolve(serviceRoot),
-  ]);
-  if (expectedRootReal === serviceRootReal) {
-    return true;
-  }
-  // Paired read-only release mounts have different paths but the same directory
-  // identity. Copies of another release must remain foreign.
-  const [expected, actual] = await Promise.all(
-    [expectedRootReal, serviceRootReal].map((root) => fs.stat(root).catch(() => null)),
-  );
-  if (expected && actual && expected.dev === actual.dev && expected.ino === actual.ino) {
-    return true;
-  }
-  const managed = command?.managedDefinition;
-  if (
-    !managed ||
-    (await gatewayServiceCommandUsesRoot({ root: expectedRoot, command: managed })) !== true
-  ) {
-    return false;
-  }
-  const namespace = path.dirname(expectedRootReal);
-  const managedLayout = await summarizeGatewayServiceLayout(managed);
-  const stableEntry = path.join(
-    namespace,
-    "current",
-    "dist",
-    path.basename(managedLayout?.entrypoint ?? ""),
-  );
-  if (serviceEntrypoint !== stableEntry) {
-    return false;
-  }
-  // Deployment-owned current points into this installation's releases, either
-  // by symlink or by a paired bind mount. Unrelated namespaces remain foreign.
-  const releases = path.join(namespace, "releases");
-  if (serviceRootReal.startsWith(`${releases}${path.sep}`)) {
-    return true;
-  }
-  try {
-    for await (const entry of await fs.opendir(releases)) {
-      const candidate = await fs.lstat(path.join(releases, entry.name));
-      if (actual && candidate.dev === actual.dev && candidate.ino === actual.ino) {
-        return true;
-      }
-    }
-  } catch {
-    // Without directory identity proof, the override cannot authorize lifecycle actions.
-  }
-  return false;
+  return await gatewayServiceCommandMatchesRoot(expectedRoot, command);
 }
 
 export async function resolveUpdatedGatewayRestartPort(params: {
@@ -701,6 +678,7 @@ export async function resolveUpdatedGatewayRestartPort(params: {
 /** Describe the selected plan without changing roots, runtime, or service authority. */
 export function formatManagedServicePackageUpdatePlan(params: {
   rootRedirect: ManagedServiceRootRedirect | null;
+  serviceRoot?: string;
   nodeRunner?: string;
 }): Array<{ level: "muted" | "warn"; message: string }> {
   const { rootRedirect, nodeRunner } = params;
@@ -721,6 +699,14 @@ export function formatManagedServicePackageUpdatePlan(params: {
       ...(nodeRunner
         ? [{ level: "muted" as const, message: `Managed gateway service Node: ${nodeRunner}` }]
         : []),
+    ];
+  }
+  if (params.serviceRoot) {
+    return [
+      {
+        level: "muted",
+        message: `Updating this installation and rebinding the managed Gateway from ${params.serviceRoot} after ownership and runtime verification.`,
+      },
     ];
   }
   return nodeRunner

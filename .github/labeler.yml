@@ -34,6 +34,12 @@
       - any-glob-to-any-file:
           - "extensions/pixverse/**"
           - "docs/providers/pixverse.md"
+"plugin: typesafe":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/typesafe/**"
+          - "docs/plugins/typesafe.md"
+          - "docs/plugins/reference/typesafe.md"
 "channel: a2a":
   - changed-files:
       - any-glob-to-any-file:

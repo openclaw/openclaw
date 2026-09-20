@@ -1,6 +1,6 @@
 import "./tooltip.ts";
 import { anchorFromNavigationEvent } from "../lib/navigation-click.ts";
-import { previewTargetForAnchor } from "./link-reader-hovercard-registration.ts";
+import { ownsHoverPreview } from "./link-reader-hovercard-registration.ts";
 import { collectTooltipNameText, isTooltipTriggerElement } from "./tooltip-content.ts";
 
 function titleNamesElement(element: Element) {
@@ -62,7 +62,7 @@ export function installTitleTooltips(ownerDocument: Document) {
   // Preview eligibility owns the hint before its lazy runtime or request settles.
   // Title suppression and accessible naming still use the normal restoration lifecycle.
   const ownsPreview = (link: HTMLAnchorElement | null | undefined) =>
-    Boolean(link && previewTargetForAnchor(link));
+    Boolean(link && ownsHoverPreview(link));
   const content = () => {
     if (ownsPreview(active?.link)) {
       return "";

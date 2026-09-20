@@ -160,7 +160,8 @@
       },
       "persistedAuthState": {
         "specifier": "./auth-presence",
-        "exportName": "hasAnyMatrixAuth"
+        "exportName": "hasAnyMatrixAuth",
+        "backingStore": "plugin-state"
       }
     },
     "install": {

@@ -229,6 +229,7 @@ export async function prepareEmbeddedRunAuthPlan(params: {
       generationRouteModelMemo: params.preparedModelRuntime?.routeModelResolutionMemo,
       resolveModel: ({ config, authProfileId, authProfileMode }) =>
         resolveModelAsync(params.provider, params.modelId, params.agentDir, config, {
+          abortSignal: runParams.abortSignal,
           assertCurrent: params.assertCurrent,
           modelIdSource: "selected",
           authStorage: params.authStorage,

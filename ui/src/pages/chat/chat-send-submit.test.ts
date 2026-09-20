@@ -296,27 +296,101 @@ describe("Home work context admission", () => {
 });
 
 describe("handleSendChat immediate local commands", () => {
+  it.each(["draft", "session"])("keeps a newer %s intact when export finishes", async (change) => {
+    const exported = createDeferred<"downloaded">();
+    const attachment = createStagedAttachment("pending-export-att");
+    const exportCurrentChat = vi.fn(() => exported.promise);
+    const host = makeChatHost({
+      chatMessage: "/export",
+      chatAttachments: [attachment],
+      exportCurrentChat,
+      requestHandlers: {},
+    });
+    const sending = handleSendChat(host);
+    await vi.waitFor(() => expect(exportCurrentChat).toHaveBeenCalledOnce());
+    const nextDraft = change === "draft" ? "Keep this new draft" : "/export";
+    if (change === "session") {
+      host.sessionKey = "agent:main:other";
+    }
+    host.chatMessage = nextDraft;
+    exported.resolve("downloaded");
+    await sending;
+
+    expect(host.chatMessage).toBe(nextDraft);
+    expect(host.chatAttachments).toEqual([attachment]);
+    expect(getChatAttachmentDataUrl(attachment)).toBe(attachmentDataUrl);
+    expect(host.request).not.toHaveBeenCalled();
+  });
+
   it.each(["/export-session", "/export"])(
-    "shows an empty export outcome and preserves staged attachments for %s",
+    "preserves a rejected %s path draft and clears the error after correction",
     async (command) => {
+      const draft = `${command} reports/conversation.html`;
+      const attachment = createStagedAttachment("export-path-att");
+      const exportCurrentChat = vi.fn(() => "downloaded" as const);
+      const host = makeChatHost({
+        chatMessage: draft,
+        chatAttachments: [attachment],
+        exportCurrentChat,
+        requestHandlers: {},
+      });
+
+      await handleSendChat(host);
+
+      expect(exportCurrentChat).not.toHaveBeenCalled();
+      expect(host.request).not.toHaveBeenCalled();
+      expect(host.chatError).toBe(
+        "Control UI exports Markdown through your browser. Run /export without a file path.",
+      );
+      expect(host.chatMessage).toBe(draft);
+      expect(host.chatAttachments).toEqual([attachment]);
+      expect(getChatAttachmentDataUrl(attachment)).toBe(attachmentDataUrl);
+      expect(host.chatQueue).toEqual([]);
+
+      host.chatMessage = command;
+      await handleSendChat(host);
+
+      expect(exportCurrentChat).toHaveBeenCalledOnce();
+      expect(host.chatError).toBeNull();
+      expect(host.lastError).toBeNull();
+      expect(host.chatMessage).toBe("");
+      expect(host.chatAttachments).toEqual([attachment]);
+    },
+  );
+
+  it.each(
+    ["/export-session", "/export"].flatMap((command) =>
+      (["empty", "downloaded"] as const).map((result) => ({ command, result })),
+    ),
+  )(
+    "handles a $result export and preserves staged attachments for $command",
+    async ({ command, result }) => {
       const attachment = createStagedAttachment("export-att");
-      const exportCurrentChat = vi.fn(() => "empty" as const);
+      const exportCurrentChat = vi.fn(() => result);
       const afterCommit = vi.fn(() => () => undefined);
-      const host = createImmediateCommandHost(command, attachment, {
+      const host = makeChatHost({
+        chatMessage: command,
+        chatAttachments: [attachment],
         exportCurrentChat,
         renderLifecycle: { invalidate: vi.fn(), afterCommit },
+        requestHandlers: {},
       });
 
       await handleSendChat(host);
 
       expect(exportCurrentChat).toHaveBeenCalledOnce();
-      expect(host.chatMessages).toEqual([
-        expect.objectContaining({
-          role: "system",
-          content: "There are no messages to export yet.",
-        }),
-      ]);
-      expect(afterCommit).toHaveBeenCalledOnce();
+      expect(host.request).not.toHaveBeenCalled();
+      expect(host.chatMessages).toEqual(
+        result === "empty"
+          ? [
+              expect.objectContaining({
+                role: "system",
+                content: "There are no messages to export yet.",
+              }),
+            ]
+          : [],
+      );
+      expect(afterCommit).toHaveBeenCalledTimes(result === "empty" ? 1 : 0);
       expect(host.chatMessage).toBe("");
       expect(host.chatAttachments).toEqual([attachment]);
       expect(getChatAttachmentDataUrl(attachment)).toBe(attachmentDataUrl);

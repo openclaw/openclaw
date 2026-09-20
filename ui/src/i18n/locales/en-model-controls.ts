@@ -7,6 +7,15 @@ const enModelControls = {
       subscription: "Subscription",
       api: "API",
       default: "Default",
+      decisionLabel: "Decision Model",
+      decisionDisabled: "Disabled",
+      decisionInherit: "Use global default · {model}",
+      decisionUnavailable:
+        "This decision model is unavailable. Enable its plugin or choose another model.",
+      decisionHelp:
+        "Makes typed choices, scores, and yes/no judgments. Disabled until you select a decision model; chat models are not used as a fallback.",
+      decisionAgentHelp:
+        "Use the global decision model, choose an override, or disable decisions for this agent.",
       effort: "Effort",
       faster: "Faster",
       smarter: "Smarter",

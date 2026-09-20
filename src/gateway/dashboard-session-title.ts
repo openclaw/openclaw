@@ -7,7 +7,6 @@ import { resolveSessionModelRef } from "../agents/session-model-ref.js";
 import { resolveSessionRuntimeOverrideForProvider } from "../agents/session-runtime-compat.js";
 import { resolveUtilityModelRefForAgent } from "../agents/utility-model.js";
 import type { WorktreeSourceStage } from "../agents/worktrees/types.js";
-import { generateConversationLabelWithFallback } from "../auto-reply/reply/conversation-label-generator.js";
 import { stripInboundMetadata } from "../auto-reply/reply/strip-inbound-meta.js";
 import { loadSessionEntry, patchSessionEntryCore } from "../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../config/sessions/types.js";
@@ -193,6 +192,10 @@ async function generateDashboardSessionTitle(params: {
   });
   const boundedSource = truncateUtf16Safe(sourceText, DASHBOARD_SESSION_TITLE_SOURCE_MAX_CHARS);
   try {
+    const { generateConversationLabelWithFallback } =
+      await import("../auto-reply/reply/conversation-label-generator.js");
+    params.assertCurrent?.();
+    params.abortSignal?.throwIfAborted();
     const generated = await generateConversationLabelWithFallback({
       userMessage: boundedSource,
       prompt: DASHBOARD_SESSION_TITLE_PROMPT,

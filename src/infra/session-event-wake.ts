@@ -7,6 +7,12 @@ import { parseAgentSessionKey } from "../routing/session-key.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { normalizeHeartbeatWakeReason } from "./heartbeat-reason.js";
 import type { HeartbeatRunResult, HeartbeatWakeRequest } from "./heartbeat-wake-contracts.js";
+import {
+  getSystemEventStorePath,
+  isSystemEventStoreCurrent,
+  registerSystemEventStoreOwner,
+  recordSystemEventStoreReplaced,
+} from "./system-event-ownership.js";
 
 type SessionEventWakeResult = HeartbeatRunResult;
 type SessionEventWakeRequest = HeartbeatWakeRequest;
@@ -40,6 +46,7 @@ type PendingWake = SessionEventWakeRequest & {
   readyAt: number;
   notBefore: number;
   settlements: Settlement[];
+  retired?: true;
 };
 type WakeGroup = {
   task?: PendingWake;
@@ -47,7 +54,7 @@ type WakeGroup = {
   event?: PendingWake;
   blockedUntil: number;
 };
-type ActiveWake = { generation: number; controller: AbortController };
+type ActiveWake = { generation: number; controller: AbortController; wakes: PendingWake[] };
 type RequestOptions = Omit<SessionEventWakeRequest, "retainedWork"> & { coalesceMs?: number };
 
 const SLOTS = ["task", "scheduled", "event"] as const;
@@ -159,8 +166,46 @@ function createSessionEventWakeRuntime() {
   let timerDefersReadyWork = false;
   let enabled = true;
 
+  const isCurrent = (wake: PendingWake) =>
+    !wake.retired &&
+    isSystemEventStoreCurrent(wake.sessionKey, wake.sessionStorePath, wake.agentId);
+  function retire(wake: PendingWake) {
+    if (wake.retired) {
+      return;
+    }
+    wake.retired = true;
+    settle(wake, { status: "skipped", reason: "store-replaced" });
+    recordSystemEventStoreReplaced();
+  }
+  registerSystemEventStoreOwner(Symbol.for("openclaw.sessionEventWake"), () => {
+    for (const [key, group] of pending) {
+      for (const slot of SLOTS) {
+        const wake = group[slot];
+        if (wake && !isCurrent(wake)) {
+          delete group[slot];
+          retire(wake);
+        }
+      }
+      if (!SLOTS.some((slot) => group[slot])) {
+        pending.delete(key);
+      }
+    }
+    for (const owner of active.values()) {
+      for (const wake of owner.wakes) {
+        if (!isCurrent(wake)) {
+          retire(wake);
+          owner.controller.abort();
+        }
+      }
+    }
+  });
+
   function enqueue(wake: PendingWake, blockedUntil = 0): string {
     const key = targetKey(wake);
+    if (!isCurrent(wake)) {
+      retire(wake);
+      return key;
+    }
     const group = pending.get(key) ?? { blockedUntil: 0 };
     const slot =
       wake.intent === "task" ? "task" : wake.intent === "scheduled" ? "scheduled" : "event";
@@ -322,6 +367,9 @@ function createSessionEventWakeRuntime() {
     const signal = owner.controller.signal;
     try {
       for (const [index, wake] of wakes.entries()) {
+        if (wake.retired) {
+          continue;
+        }
         // Busy backoff also owns wakes selected before the current attempt began.
         const blockedUntil = pending.get(key)?.blockedUntil ?? 0;
         if (owner.generation !== generation || blockedUntil > performance.now()) {
@@ -354,6 +402,9 @@ function createSessionEventWakeRuntime() {
               reason: wake.reason,
               ...(wake.agentId ? { agentId: wake.agentId } : {}),
               ...(wake.sessionKey ? { sessionKey: wake.sessionKey } : {}),
+              ...(wake.sessionStorePath === undefined
+                ? {}
+                : { sessionStorePath: wake.sessionStorePath }),
               ...(wake.heartbeat ? { heartbeat: wake.heartbeat } : {}),
               ...(wake.scheduledEveryMs !== undefined
                 ? { scheduledEveryMs: wake.scheduledEveryMs }
@@ -366,6 +417,9 @@ function createSessionEventWakeRuntime() {
             return Promise.race([running, aborted]);
           }, "heartbeat:wake");
         } catch {
+          if (wake.retired) {
+            continue;
+          }
           if (owner.generation === generation) {
             retry(wake);
           } else {
@@ -376,6 +430,9 @@ function createSessionEventWakeRuntime() {
           if (onAbort) {
             signal.removeEventListener("abort", onAbort);
           }
+        }
+        if (wake.retired) {
+          continue;
         }
         if (result.status === "skipped" && shouldRetain(wake, result)) {
           if (owner.generation === generation) {
@@ -412,7 +469,7 @@ function createSessionEventWakeRuntime() {
         }
         // Register the whole batch first so replacement retires unstarted work too.
         const ready = takeReady().map(({ key, wakes }) => {
-          const owner = { generation, controller: new AbortController() };
+          const owner = { generation, controller: new AbortController(), wakes };
           active.set(key, owner);
           return { key, wakes, owner };
         });
@@ -513,6 +570,10 @@ function createSessionEventWakeRuntime() {
     runWithoutOwnedSessionTranscriptWrites(() => {
       const pendingWake: PendingWake = {
         ...normalized,
+        sessionStorePath:
+          options.sessionStorePath === undefined && normalized.sessionKey
+            ? getSystemEventStorePath(normalized.sessionKey, normalized.agentId)
+            : options.sessionStorePath,
         sequence: nextSequence,
         barrierSequence:
           targetKey(normalized) === GLOBAL_TARGET && wake.intent === "immediate"

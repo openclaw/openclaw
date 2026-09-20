@@ -6,6 +6,7 @@ import { supportsCurrentWorkerLaunch, verifyWorkerAdmissionHandshake } from "./a
 import {
   DevicePlacementUnavailableError,
   resolveDevicePlacementEligibility,
+  type WorkerNodePlacementAuthority,
 } from "./device-placement-eligibility.js";
 import { DEVICE_WORKER_PROVIDER_ID } from "./device-provider-identity.js";
 import type {
@@ -17,6 +18,10 @@ import type {
   WorkerDispatchPlacementStore,
   WorkerProvisioningDispatchPlacement,
 } from "./placement-dispatch-failure.js";
+import {
+  isPendingProvisioningEnvironment,
+  requireProvisionedEnvironment,
+} from "./placement-dispatch-provisioning.js";
 import {
   readWorkerProjectPreparation,
   type WorkerProviderPreparedIntent,
@@ -49,62 +54,10 @@ export type WorkerDevicePlacementRequirementResolver = (
   >,
 ) => Promise<DevicePlacementRequirement>;
 
-export type WorkerNodePlacementAuthority = (
-  node: NodeWorkerSupervisorNodeProof,
-  requirement: DevicePlacementRequirement,
-) => boolean;
-
 type WorkerNodePlacementAdmission = {
   node: NodeWorkerSupervisorNodeProof;
   requirement: DevicePlacementRequirement;
 };
-
-function isPendingProvisioningEnvironment(
-  environment: ReturnType<WorkerEnvironmentService["get"]>,
-  environmentId: string | null,
-): boolean {
-  return (
-    environment?.environmentId === environmentId &&
-    environment.destroyRequestedAtMs === null &&
-    (environment.state === "requested" ||
-      environment.state === "provisioning" ||
-      environment.state === "bootstrapping")
-  );
-}
-
-function requireProvisionedEnvironment(
-  environment: Awaited<ReturnType<WorkerEnvironmentService["create"]>>,
-  expectedEnvironmentId: string,
-  executionMode: WorkerPlacementDispatchRequest["executionMode"],
-  environments: Pick<WorkerDispatchEnvironmentService, "supportsProviderExecutionMode">,
-): { environmentId: string; ownerEpoch: number; bundleHash: string } {
-  if (
-    (environment.state !== "ready" && environment.state !== "idle") ||
-    environment.environmentId !== expectedEnvironmentId ||
-    environment.destroyRequestedAtMs !== null ||
-    !environment.bootstrapReceipt ||
-    !supportsCurrentWorkerLaunch(environment.bootstrapReceipt)
-  ) {
-    throw new Error(
-      `Worker environment is not dispatchable with the current worker launch contract: ${environment.state}`,
-    );
-  }
-  if (
-    (environment.profileSnapshot.executionMode !== undefined &&
-      environment.profileSnapshot.executionMode !== executionMode) ||
-    (executionMode === "worker-turn" &&
-      environment.profileSnapshot.executionMode !== undefined &&
-      !environment.nodeDeviceId) ||
-    !environments.supportsProviderExecutionMode(environment.providerId, executionMode)
-  ) {
-    throw new Error("Worker environment does not support the placement's exact execution mode");
-  }
-  return {
-    environmentId: environment.environmentId,
-    ownerEpoch: environment.ownerEpoch,
-    bundleHash: environment.bootstrapReceipt.bundleHash,
-  };
-}
 
 export function createWorkerPlacementDispatchStartup(options: {
   placements: WorkerDispatchPlacementStore;
@@ -161,6 +114,7 @@ export function createWorkerPlacementDispatchStartup(options: {
       environmentService: environments,
       deviceId: request.deviceId,
       requirement: request.devicePlacement,
+      executionMode: request.executionMode,
       config: getRuntimeConfig(),
     });
     if (!eligibility.ok) {
@@ -169,7 +123,7 @@ export function createWorkerPlacementDispatchStartup(options: {
   };
   const requireNodePlacementEligibility = async (
     request: WorkerPlacementDispatchRequest,
-    environment: Awaited<ReturnType<WorkerEnvironmentService["create"]>>,
+    environment: Awaited<ReturnType<WorkerEnvironmentService["createWithRequest"]>>,
     admittedNode?: NodeWorkerSupervisorNodeProof,
   ): Promise<WorkerNodePlacementAdmission | undefined> => {
     const deviceId = environment.nodeDeviceId;
@@ -193,6 +147,7 @@ export function createWorkerPlacementDispatchStartup(options: {
       environmentService: environments,
       deviceId,
       requirement: admittedNode ? { ...requirement, consumesWorkerSlot: false } : requirement,
+      executionMode: request.executionMode,
       config: getRuntimeConfig(),
       ...(admittedNode ? { currentNode: admittedNode } : {}),
     });
@@ -258,7 +213,11 @@ export function createWorkerPlacementDispatchStartup(options: {
           );
       if (
         !admittedNode ||
-        !options.isCurrentNodePlacement?.(admittedNode.node, admittedNode.requirement) ||
+        !options.isCurrentNodePlacement?.(
+          admittedNode.node,
+          admittedNode.requirement,
+          params.request.executionMode,
+        ) ||
         !remainsSelectable()
       ) {
         continue;
@@ -284,7 +243,7 @@ export function createWorkerPlacementDispatchStartup(options: {
           if (!remainsSelectable()) {
             throw new Error("Prepared worker is no longer available under the current pool policy");
           }
-          if (!options.isCurrentNodePlacement?.(node, requirement)) {
+          if (!options.isCurrentNodePlacement?.(node, requirement, params.request.executionMode)) {
             throw new Error("Prepared worker lost its current node authority before binding");
           }
         },
@@ -299,7 +258,7 @@ export function createWorkerPlacementDispatchStartup(options: {
   const continueProvisionedDispatch = async (params: {
     request: WorkerPlacementDispatchRequest;
     placement: WorkerDispatchPlacement;
-    environment: Awaited<ReturnType<WorkerEnvironmentService["create"]>>;
+    environment: Awaited<ReturnType<WorkerEnvironmentService["createWithRequest"]>>;
     expectedEnvironmentId: string;
     workspace: WorkerSessionWorkspace;
     onTransition?: (placement: WorkerDispatchPlacement) => void;
@@ -354,7 +313,11 @@ export function createWorkerPlacementDispatchStartup(options: {
       }
       if (
         admittedNode &&
-        !options.isCurrentNodePlacement?.(admittedNode.node, admittedNode.requirement)
+        !options.isCurrentNodePlacement?.(
+          admittedNode.node,
+          admittedNode.requirement,
+          request.executionMode,
+        )
       ) {
         throw new Error("Worker dispatch lost its current node authority before attachment");
       }
@@ -500,7 +463,11 @@ export function createWorkerPlacementDispatchStartup(options: {
         requireAttachedEnvironment();
         if (
           admittedNode &&
-          !options.isCurrentNodePlacement?.(admittedNode.node, admittedNode.requirement)
+          !options.isCurrentNodePlacement?.(
+            admittedNode.node,
+            admittedNode.requirement,
+            request.executionMode,
+          )
         ) {
           throw new Error(
             "Worker dispatch lost its current node connection, pairing generation, or command authorization before activation",

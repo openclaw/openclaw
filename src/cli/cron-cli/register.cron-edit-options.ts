@@ -36,7 +36,7 @@ export async function resolveCronEditPayloadDeliveryPatch(
   const patch: Record<string, unknown> = {};
   const hasSystemEventPatch = typeof opts.systemEvent === "string";
   const scriptPath = readNonBlankString(opts.script);
-  const commandShell = normalizeOptionalString(opts.command);
+  const commandShell = readNonBlankString(opts.command);
   const commandArgv = parseCronCommandArgv(opts.commandArgv);
   if (commandShell && commandArgv) {
     throw new CronCliError(

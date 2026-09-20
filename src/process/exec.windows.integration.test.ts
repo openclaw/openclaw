@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import { once } from "node:events";
 import process from "node:process";
 import { describe, expect, it, vi } from "vitest";
+import { runClaudeCliNativeSpawnProof } from "../../test/helpers/claude-cli-native-spawn-proof.js";
 import {
   inspectNodeWorkerProcessIdentity,
   requireNodeWorkerProcessIdentity,
@@ -155,3 +156,41 @@ describe("runUtf8CommandWithTimeout Windows integration", () => {
     15_000,
   );
 });
+
+describe.runIf(process.platform === "win32" || process.env.OPENCLAW_CLAUDE_CLI_SPAWN_PROOF === "1")(
+  "ordinary Claude CLI executable launch",
+  () => {
+    it.each(
+      process.platform === "win32"
+        ? (["native", "node-leading", "npm-shim"] as const)
+        : (["npm-shim"] as const),
+    )(
+      "completes an ordinary agent turn through %s",
+      async (kind) => {
+        const proof = await runClaudeCliNativeSpawnProof(kind);
+        console.log("[claude-cli-native-proof]", JSON.stringify(proof));
+        expect(proof.code, proof.stderr).toBe(0);
+        expect(JSON.parse(proof.stdout)).toMatchObject({
+          payloads: expect.arrayContaining([expect.objectContaining({ text: "PONG" })]),
+        });
+        expect(proof.launches).toEqual(
+          expect.arrayContaining([
+            expect.objectContaining({
+              phase: "run",
+              platform: process.platform,
+              entrypoint: proof.entrypoint,
+            }),
+          ]),
+        );
+        if (kind === "native") {
+          expect(proof.launches).toEqual(
+            expect.arrayContaining([
+              expect.objectContaining({ phase: "native-launch", platform: "win32" }),
+            ]),
+          );
+        }
+      },
+      360_000,
+    );
+  },
+);

@@ -133,7 +133,7 @@ async function runCliShimInner(moduleUrl, options, nodeArgs) {
         cwd: process.cwd(),
         detached,
         env: process.env,
-        stdio: "inherit",
+        stdio: options.stdio ?? "inherit",
       },
     );
     const result = await new Promise((resolve, reject) => {

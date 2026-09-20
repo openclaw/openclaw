@@ -38,6 +38,7 @@ function createBrowser(
   };
   const context = {
     gateway: {
+      subscribe: () => () => undefined,
       connection: { gatewayUrl: "ws://gateway.example" },
       snapshot: {
         phase: "connected",
@@ -112,6 +113,16 @@ function createBrowser(
     client,
     context,
     hello,
+    detachHost() {
+      for (const controller of controllers) {
+        controller.hostDisconnected?.();
+      }
+    },
+    queuedUpdate() {
+      for (const controller of controllers) {
+        controller.hostUpdate?.();
+      }
+    },
     update() {
       gateway.synchronize(context.gateway);
       for (const controller of controllers) {
@@ -122,6 +133,29 @@ function createBrowser(
 }
 
 describe("DraftPlaceBrowser", () => {
+  it("retains catalog context for a detached draft until its lifetime owner disposes it", async () => {
+    const project = { id: "project", displayName: "Project", repoRoot: "/project" };
+    const fixture = createBrowser(async () => ({ projects: [project] }));
+    await fixture.browser.refreshProjects();
+    fixture.browser.selectProject({ kind: "local", id: project.id });
+    fixture.detachHost();
+    expect(fixture.browser.selectedProject()).toEqual(project);
+  });
+
+  it("does not reattach a disposed draft catalog from a queued Lit update", async () => {
+    const request = vi.fn(async () => ({ projects: [] }));
+    const fixture = createBrowser(request);
+    await fixture.browser.refreshProjects();
+    const reads = request.mock.calls.length;
+    fixture.gateway.disconnect();
+    fixture.browser.disconnect();
+    fixture.queuedUpdate();
+    await Promise.resolve();
+    expect(request).toHaveBeenCalledTimes(reads);
+    fixture.update();
+    await fixture.browser.refreshProjects();
+    expect(request).toHaveBeenCalledTimes(reads + 1);
+  });
   it("keeps environment search transient and separate from project search", () => {
     const { browser } = createBrowser(async () => ({}));
     const writeStorage = vi.spyOn(Storage.prototype, "setItem");
@@ -447,6 +481,8 @@ describe("DraftGatewayState", () => {
       if (change === "gateway") {
         fixture.context.gateway.connection.gatewayUrl = "ws://gateway-b.example";
       }
+      const current = createDeferred<Awaited<typeof pending.promise>>();
+      request.mockReturnValue(current.promise);
       // Retirement must happen in synchronize, before Lit schedules hostUpdate.
       fixture.gateway.synchronize(fixture.context.gateway);
       pending.resolve({
@@ -460,6 +496,7 @@ describe("DraftGatewayState", () => {
       });
       expect(fixture.browser.projects).toEqual([]);
       expect(fixture.gateway.environments).toBeNull();
+      current.resolve({ projects: [], environments: [], profiles: [] });
     },
   );
 
@@ -512,7 +549,9 @@ describe("DraftGatewayState", () => {
   });
 
   it("retains a discovered name when the same connection's recovery scope arrives", async () => {
-    const fixture = createBrowser(async () => ({ machineName: "Gateway A" }));
+    const fixture = createBrowser(async (method) =>
+      method === "projects.list" ? { projects: [] } : { machineName: "Gateway A" },
+    );
     fixture.hello.features.methods.push("system.info");
     fixture.client.recoveryScopeReady = false;
     fixture.update();
@@ -526,7 +565,9 @@ describe("DraftGatewayState", () => {
 
   it("hides a disconnected name until the same client's new discovery completes", async () => {
     const pending = createDeferred<{ machineName: string }>();
-    const request = vi.fn(async () => ({ machineName: "Gateway A" }));
+    const request = vi.fn(async (method: string) =>
+      method === "projects.list" ? { projects: [] } : { machineName: "Gateway A" },
+    );
     const fixture = createBrowser(request);
     fixture.hello.features.methods.push("system.info");
     fixture.update();
@@ -535,7 +576,9 @@ describe("DraftGatewayState", () => {
     fixture.context.gateway.snapshot.phase = "reconnecting";
     fixture.update();
     expect(fixture.gateway.gatewayName).toBe("");
-    request.mockImplementation(() => pending.promise);
+    request.mockImplementation((method) =>
+      method === "projects.list" ? Promise.resolve({ projects: [] }) : pending.promise,
+    );
     fixture.context.gateway.snapshot.phase = "connected";
     fixture.update();
     expect(fixture.gateway.gatewayName).toBe("");
@@ -546,10 +589,14 @@ describe("DraftGatewayState", () => {
   it("ignores a late name from the replaced client", async () => {
     const oldName = createDeferred<{ machineName: string }>();
     const newName = createDeferred<{ machineName: string }>();
-    const fixture = createBrowser(() => oldName.promise);
+    const fixture = createBrowser((method) =>
+      method === "projects.list" ? Promise.resolve({ projects: [] }) : oldName.promise,
+    );
     fixture.hello.features.methods.push("system.info");
     fixture.update();
-    fixture.context.gateway.snapshot.client = createTestGatewayClient(() => newName.promise);
+    fixture.context.gateway.snapshot.client = createTestGatewayClient((method) =>
+      method === "projects.list" ? Promise.resolve({ projects: [] }) : newName.promise,
+    );
     fixture.update();
     oldName.resolve({ machineName: "Retired Gateway" });
     // Flush the retired request's promise continuations before checking the active owner.
@@ -569,7 +616,10 @@ describe("DraftGatewayState", () => {
     "settles name discovery with advertisement $advertised and response $response",
     async ({ advertised, response, name }) => {
       let current: typeof response | { machineName: string } = { machineName: "Current Gateway" };
-      const request = vi.fn(async (_method: string) => {
+      const request = vi.fn(async (method: string) => {
+        if (method === "projects.list") {
+          return { projects: [] };
+        }
         if (!current) {
           throw new Error("System info unavailable");
         }

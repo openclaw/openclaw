@@ -26,6 +26,7 @@ import { applyImportanceMultiplier } from "./importance.js";
 import { runMemoryVectorFallback } from "./manager-cpu-worker-runtime.js";
 import { acquireMemoryIndexReadGeneration } from "./manager-index-generation-lease.js";
 import { MemoryKeywordRetrieval, type KeywordSearchHit } from "./manager-keyword-retrieval.js";
+import type { MemoryIndexIdentityState } from "./manager-reindex-state.js";
 import { runVectorKnnInSubprocess } from "./manager-search-knn-subprocess.js";
 import { resolveMemorySearchPreflight } from "./manager-search-preflight.js";
 import { prepareExactPathMatcher, searchVector } from "./manager-search.js";
@@ -244,8 +245,25 @@ export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
           providerKeyKnown: this.providerInitialized,
         });
       }
+      // A pending OpenClaw chunking upgrade keeps the stored keyword rows
+      // readable: the resolver only marks chunkingVersionOnly when every
+      // corpus constraint still matches, so source or scope changes
+      // still fail closed here.
+      const chunkingUpgradePendingKeywordOnly = (state: MemoryIndexIdentityState): boolean =>
+        state.status === "mismatched" &&
+        state.owner === "openclaw" &&
+        state.code === "chunking_version" &&
+        state.versionOrder === "older" &&
+        state.chunkingVersionOnly === true &&
+        this.fts.enabled &&
+        this.fts.available;
       if (repairedIndexIdentity.status !== "valid") {
-        return [];
+        if (!chunkingUpgradePendingKeywordOnly(repairedIndexIdentity)) {
+          return [];
+        }
+        log.warn(
+          "memory search: chunking upgrade rebuild is pending; serving the existing keyword index",
+        );
       }
       // No watcher can observe later edits after kernel capacity exhaustion.
       // Record a fresh generation at the search boundary so detached maintenance
@@ -255,7 +273,12 @@ export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
       }
       const capacitySyncInFlight =
         this.memoryWatchCapacityDegraded && this.activeBackgroundSearchSyncs.size > 0;
-      if (searchSyncEnabled && !capacitySyncInFlight && (this.dirty || this.sessionsDirty)) {
+      if (
+        searchSyncEnabled &&
+        !capacitySyncInFlight &&
+        !chunkingUpgradePendingKeywordOnly(repairedIndexIdentity) &&
+        (this.dirty || this.sessionsDirty)
+      ) {
         const trackedSearchSync = this.syncPublishedIndexInBackground({ reason: "search" })
           .catch((err: unknown) => {
             log.warn(`memory sync failed (search): ${String(err)}`);
@@ -267,24 +290,29 @@ export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
       }
       // Bootstrap and identity repair may publish a new generation. Acquire the
       // read lease only after those writers finish so first search cannot wait on itself.
+      let effectiveIdentity: MemoryIndexIdentityState = repairedIndexIdentity;
       for (let identityAttempt = 0; identityAttempt < 2; identityAttempt += 1) {
         releaseGeneration = await acquireMemoryIndexReadGeneration(
           this.settings.store.databasePath,
           opts?.signal,
         );
-        if (embeddingBootstrapKeywordOnly) {
-          break;
-        }
-        const leasedIdentity = this.refreshIndexIdentityDirty({
-          providerKeyKnown: this.providerInitialized,
-        });
-        if (leasedIdentity.status === "valid") {
+        // Recompute under the lease: a publisher that queued ahead of this read
+        // may have replaced the generation the earlier eligibility was based on.
+        const leasedIdentity = embeddingBootstrapKeywordOnly
+          ? this.refreshKeywordFallbackIndexIdentity()
+          : this.refreshIndexIdentityDirty({ providerKeyKnown: this.providerInitialized });
+        effectiveIdentity = leasedIdentity;
+        if (
+          leasedIdentity.status === "valid" ||
+          chunkingUpgradePendingKeywordOnly(leasedIdentity)
+        ) {
           break;
         }
         const release = releaseGeneration;
         releaseGeneration = undefined;
         await release();
         if (
+          embeddingBootstrapKeywordOnly ||
           identityAttempt > 0 ||
           leasedIdentity.status !== "mismatched" ||
           !(await this.adoptPublishedFallbackProviderIfMatched())
@@ -323,7 +351,14 @@ export abstract class MemorySearchOrchestration extends MemoryKeywordRetrieval {
           activeProjectKeys: opts?.activeProjectKeys,
         });
 
-      const keywordOnly = embeddingBootstrapKeywordOnly || !this.provider || opts?.lexicalOnly;
+      const keywordOnly =
+        embeddingBootstrapKeywordOnly ||
+        chunkingUpgradePendingKeywordOnly(effectiveIdentity) ||
+        !this.provider ||
+        opts?.lexicalOnly;
+      if (chunkingUpgradePendingKeywordOnly(effectiveIdentity)) {
+        opts?.onDebug?.({ backend: "builtin", effectiveMode: "keyword-only" });
+      }
       const loadKeywordResults = async () => {
         const results =
           (keywordOnly || hybrid.enabled) && this.fts.enabled && this.fts.available

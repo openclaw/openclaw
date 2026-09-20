@@ -7,7 +7,8 @@ import {
 import type { TelegramBotDeps } from "./bot-deps.js";
 import {
   enqueueDraftEvent,
-  resetLaneState,
+  prepareAnswerLaneForToolProgress,
+  retireAnswerLane,
   rotateAnswerLaneAfterToolProgress,
   rotateAnswerLaneForNewMessage,
 } from "./bot-message-dispatch-draft.js";
@@ -76,7 +77,7 @@ function buildTelegramCompactionProgressLine(
 export function createProgressState(
   config: TurnConfig,
   draftState: TelegramProgressDraftState,
-  prepareAnswerLaneForToolProgress: () => Promise<void>,
+  getTurn: () => Turn,
 ): TelegramProgressStateSlice {
   const progressState = {
     finalAnswerDeliveryStarted: false,
@@ -96,7 +97,7 @@ export function createProgressState(
     updateOnLineChange: true,
     shouldStartNow: (line) => typeof line !== "string" && Boolean(line?.toolName),
     update: async (streamText, options) => {
-      await prepareAnswerLaneForToolProgress();
+      await prepareAnswerLaneForToolProgress(getTurn());
       draftState.answerLane.lastPartialText = streamText;
       draftState.answerLane.hasStreamedMessage = true;
       draftState.answerLane.finalized = false;
@@ -112,15 +113,7 @@ export function createProgressState(
         await draftState.answerLane.stream?.flush();
       }
     },
-    deleteCurrent: async () => {
-      // clear waits for in-flight sends and stops the stream. Reopen only after
-      // that stop so a cleared card cannot consume the next progress update.
-      await draftState.answerLane.stream?.clear();
-      draftState.answerLane.stream?.forceNewMessage();
-      draftState.answerLane.lastPartialText = "";
-      draftState.answerLane.hasStreamedMessage = false;
-      draftState.answerLane.finalized = false;
-    },
+    deleteCurrent: async () => await retireAnswerLane(getTurn(), "clear"),
   });
   return Object.assign(progressState, {
     progressCompositor,
@@ -209,8 +202,7 @@ export async function teardownProgressWindow(turn: Turn): Promise<void> {
     await rotateAnswerLaneAfterToolProgress(turn);
     return;
   }
-  await turn.answerLane.stream?.clear();
-  resetLaneState(turn, turn.answerLane);
+  await retireAnswerLane(turn, "clear");
 }
 
 export async function handleToolStart(

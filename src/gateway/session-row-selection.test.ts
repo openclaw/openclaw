@@ -69,6 +69,27 @@ it("reuses resident key predicates across list requests and refreshes entry clas
       expect(hidden.sessions.map((row) => row.key).toSorted()).toEqual(
         expected.filter((key) => key !== sessionKey),
       );
+      for (const category of ["Research", " "]) {
+        replaceSessionEntrySync(
+          { agentId: "main", sessionKey },
+          {
+            sessionId: sessionKey,
+            updatedAt: 2,
+            spawnedBy: "agent:main:parent",
+            archivedAt: 2,
+            category,
+          },
+        );
+        const grouped = await listProjectedSessions({ projection, opts });
+        expect(grouped.sessions.map((row) => row.key).toSorted()).toEqual(
+          category.trim() ? expected : expected.filter((key) => key !== sessionKey),
+        );
+        expect(
+          (
+            await listProjectedSessions({ projection, opts: { ...opts, archived: false } })
+          ).sessions.some((row) => row.key === sessionKey),
+        ).toBe(false);
+      }
       replaceSessionEntrySync(
         { agentId: "main", sessionKey },
         { sessionId: sessionKey, updatedAt: 3, archivedAt: 2 },

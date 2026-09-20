@@ -9,6 +9,8 @@ import { isActiveTaskStatus } from "./task-registry-common.js";
 import type { TaskRegistryControlRuntime } from "./task-registry-control.types.js";
 import { ensureLinkedTaskFlowRegistryReady } from "./task-registry-flow-link.js";
 import { clearTaskFlowSyncRetries } from "./task-registry-flow-sync.js";
+import { resetTaskRegistryListenerState } from "./task-registry-listener-state.js";
+import { prepareTaskRegistryRead } from "./task-registry-read.js";
 import {
   cloneTaskRecord,
   listTasksFromIndex,
@@ -17,6 +19,7 @@ import {
   compareTasksNewestFirst,
   pickPreferredRunIdTask,
   snapshotTaskRecords,
+  selectTaskRecordsForOwnerTree,
 } from "./task-registry-records.js";
 import {
   TASK_REGISTRY_CONTROL_RUNTIME_OVERRIDE_KEY,
@@ -35,7 +38,6 @@ import {
   getTasksByRunId,
   taskRegistryLog,
   readTaskRegistryRevision,
-  resetTaskRegistryListenerState,
   resetTaskRegistryRestoreState,
   taskDeliveryStates,
   taskIdsByOwnerKey,
@@ -67,28 +69,9 @@ export function listTaskRecordsUnsorted(): TaskRecord[] {
 /** Coarse tree candidates; callers still enforce agent identity and current control authority. */
 export function listTaskRecordsForOwnerTree(rootOwnerKeys: ReadonlySet<string>): TaskRecord[] {
   ensureTaskRegistryReady();
-  const owners = new Set(rootOwnerKeys);
-  const selected = new Set<string>();
-  for (const owner of owners) {
-    const key = normalizeOptionalString(owner);
-    if (!key) {
-      continue;
-    }
-    for (const taskId of taskIdsByOwnerKey.get(key) ?? []) {
-      const task = tasks.get(taskId);
-      if (!task || task.scopeKind !== "session") {
-        continue;
-      }
-      selected.add(taskId);
-      if (task.childSessionKey) {
-        owners.add(task.childSessionKey);
-      }
-    }
-  }
-  // Preserve registry insertion order, including descendants inserted before their parents.
-  return [...tasks.values()]
-    .filter((task) => selected.has(task.taskId))
-    .map((task) => cloneTaskRecord(task));
+  return selectTaskRecordsForOwnerTree(tasks, taskIdsByOwnerKey, rootOwnerKeys).map((task) =>
+    cloneTaskRecord(task),
+  );
 }
 
 function taskMatchesRelatedSession(
@@ -211,11 +194,14 @@ export async function listTaskRecordPage(params: {
   sortBy?: "updatedAt" | "endedAt";
 }): Promise<
   Result<
-    { tasks: TaskRecord[]; hasMore: boolean; revision: number },
+    { tasks: TaskRecord[]; hasMore: boolean; revision: number; isCurrent: () => boolean },
     "cursor_stale" | "registry_changed"
   >
 > {
-  ensureTaskRegistryReady();
+  let read = await prepareTaskRegistryRead();
+  if (!read) {
+    return err("registry_changed");
+  }
   const statuses = params.statuses ? new Set(params.statuses) : null;
   const agentId = normalizeOptionalString(params.agentId);
   const sessionKey = normalizeOptionalString(params.sessionKey);
@@ -226,6 +212,12 @@ export async function listTaskRecordPage(params: {
   const windowSize = params.offset + params.limit;
   let workStartedAt = performance.now();
   for (let attempt = 0; attempt < TASK_PAGE_MAX_ATTEMPTS; attempt += 1) {
+    if (attempt > 0) {
+      read = await prepareTaskRegistryRead();
+      if (!read) {
+        return err("registry_changed");
+      }
+    }
     const revision = readTaskRegistryRevision();
     if (params.expectedRevision !== undefined && params.expectedRevision !== revision) {
       return err("cursor_stale");
@@ -250,6 +242,9 @@ export async function listTaskRecordPage(params: {
         if (params.expectedRevision !== undefined && revision !== readTaskRegistryRevision()) {
           return err("cursor_stale");
         }
+        if (revision === readTaskRegistryRevision()) {
+          read.assertCurrent();
+        }
       }
       const batch: TaskRecord[] = [];
       // A registry reload can leave this iterator with IDs whose records no longer exist.
@@ -261,6 +256,13 @@ export async function listTaskRecordPage(params: {
         }
         scannedCount += 1;
         current = iterator.next();
+      }
+      if (revision === readTaskRegistryRevision()) {
+        for (const task of batch) {
+          if (!read.isTaskCurrent(task.taskId)) {
+            return err("registry_changed");
+          }
+        }
       }
       const candidates = batch.filter(
         (task) =>
@@ -299,14 +301,33 @@ export async function listTaskRecordPage(params: {
       }
       continue;
     }
-    if (params.offset >= matchingCount) {
-      return ok({ tasks: [], hasMore: false, revision });
+    read.assertCurrent();
+    const selected =
+      params.offset >= matchingCount ? [] : window.toSorted(compare).slice(params.offset);
+    for (const task of selected) {
+      if (!read.isTaskCurrent(task.taskId)) {
+        return err("registry_changed");
+      }
     }
-    const selected = window.toSorted(compare).slice(params.offset);
+    const prepared = read;
     return ok({
       tasks: selected.map((task) => cloneTaskRecord(task)),
       hasMore: params.offset + selected.length < matchingCount,
       revision,
+      isCurrent: () => {
+        if (revision !== readTaskRegistryRevision()) {
+          return false;
+        }
+        // A held page can lose its owner after selection but before the response frame.
+        try {
+          prepared.assertCurrent();
+          return selected.every(
+            (task) => tasks.get(task.taskId) === task && prepared.isTaskCurrent(task.taskId),
+          );
+        } catch {
+          return false;
+        }
+      },
     });
   }
   return err("registry_changed");
@@ -399,16 +420,21 @@ export function listTasksForOwnerKey(ownerKey: string): TaskRecord[] {
 }
 
 export async function listFreshTasksForOwnerKey(ownerKey: string): Promise<TaskRecord[]> {
-  ensureTaskRegistryReady();
   const key = normalizeOptionalString(ownerKey);
   if (!key) {
     return [];
+  }
+  const read = await prepareTaskRegistryRead();
+  if (!read) {
+    throw new Error("Task activity did not stabilize. Retry the owner lookup.");
   }
   const store = getTaskRegistryStore();
   if (store.listTasksForOwnerKey) {
     try {
       const merged = new Map<string, TaskRecord>();
-      for (const task of await store.listTasksForOwnerKey(key)) {
+      const records = await store.listTasksForOwnerKey(key);
+      read.assertCurrent();
+      for (const task of records) {
         merged.set(task.taskId, cloneTaskRecord(normalizeTaskTimestamps(task)));
       }
       return [...merged.values()]
@@ -416,13 +442,14 @@ export async function listFreshTasksForOwnerKey(ownerKey: string): Promise<TaskR
         .toSorted(compareTasksNewestFirst)
         .map(({ insertionIndex: _insertionIndex, ...task }) => task);
     } catch (error) {
+      read.assertCurrent();
       taskRegistryLog.warn("Failed to read fresh owner task registry records", {
         ownerKey: key,
         error,
       });
     }
   }
-
+  read.assertCurrent();
   return listTasksFromIndex(tasks, taskIdsByOwnerKey, key);
 }
 

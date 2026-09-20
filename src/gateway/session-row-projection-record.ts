@@ -159,6 +159,8 @@ export function present(
   const row = rowProjection.presentSessionRow(record.materialized, {
     now,
     subagentRuns: context.subagentRuns.atTime(now),
+    projectedAgentRuns: context.projectedAgentRuns,
+    projectedSubagentActivity: context.projectedSubagentActivity,
     activeModel: active ? (live ?? undefined) : record.fallbackModel,
     excludedChildKeys: options.excludedChildKeys,
   });

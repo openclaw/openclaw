@@ -89,6 +89,15 @@ session reservation or temporary output, await `withCommandProcessScope` from th
 same subpath around execution before releasing those resources. The scope joins
 late startup and process cleanup; uncertain cleanup remains an error.
 
+Interactive process adapters can use `spawnTerminalPty` from the same subpath.
+It owns platform-specific terminal creation, including the Node helper on Bun.
+Pass the caller's construction signal and current-authority check through its
+second argument. The caller owns output subscriptions, termination, and waiting
+for the terminal's exit before releasing its backend resources.
+
+Sandbox command adapters retain the sandbox owner's per-stream output bound,
+`SANDBOX_COMMAND_MAX_BUFFER_BYTES`, from `openclaw/plugin-sdk/sandbox`.
+
 `WorkerTaskPool` from `openclaw/plugin-sdk/process-runtime` retains workers and
 unconsumed inputs when termination fails. Retry `close()` on that same pool;
 dispose dependent files only after closure is acknowledged. The optional

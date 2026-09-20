@@ -272,6 +272,12 @@ public enum TaskSuggestionResolution: String, Codable, Sendable {
     case expired = "expired"
 }
 
+public enum ThemeMode: String, Codable, Sendable {
+    case system = "system"
+    case light = "light"
+    case dark = "dark"
+}
+
 public enum WorkerDesktopAppId: String, Codable, Sendable {
     case browser = "browser"
     case terminal = "terminal"
@@ -4903,17 +4909,20 @@ public struct ControlUiLinkReaderMetadata: Codable, Sendable {
     public let pathpattern: String
     public let detailmethod: String
     public let previewmethod: String?
+    public let imagemethod: String?
 
     public init(
         hosts: [String],
         pathpattern: String,
         detailmethod: String,
-        previewmethod: String? = nil)
+        previewmethod: String? = nil,
+        imagemethod: String? = nil)
     {
         self.hosts = hosts
         self.pathpattern = pathpattern
         self.detailmethod = detailmethod
         self.previewmethod = previewmethod
+        self.imagemethod = imagemethod
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -4921,6 +4930,7 @@ public struct ControlUiLinkReaderMetadata: Codable, Sendable {
         case pathpattern = "pathPattern"
         case detailmethod = "detailMethod"
         case previewmethod = "previewMethod"
+        case imagemethod = "imageMethod"
     }
 }
 
@@ -9164,6 +9174,7 @@ public struct ModelsListParams: Codable, Sendable {
 
 public struct ModelsListResult: Codable, Sendable {
     public let models: [ModelChoice]
+    public let decisionmodels: [[String: AnyCodable]]?
     public let defaultmodels: [String: AnyCodable]?
     public let refreshfailed: Bool?
     public let pendingproviders: [String]?
@@ -9172,6 +9183,7 @@ public struct ModelsListResult: Codable, Sendable {
 
     public init(
         models: [ModelChoice],
+        decisionmodels: [[String: AnyCodable]]? = nil,
         defaultmodels: [String: AnyCodable]? = nil,
         refreshfailed: Bool? = nil,
         pendingproviders: [String]? = nil,
@@ -9179,6 +9191,7 @@ public struct ModelsListResult: Codable, Sendable {
         provideroutcomes: [[String: AnyCodable]]? = nil)
     {
         self.models = models
+        self.decisionmodels = decisionmodels
         self.defaultmodels = defaultmodels
         self.refreshfailed = refreshfailed
         self.pendingproviders = pendingproviders
@@ -9188,6 +9201,7 @@ public struct ModelsListResult: Codable, Sendable {
 
     private enum CodingKeys: String, CodingKey {
         case models
+        case decisionmodels = "decisionModels"
         case defaultmodels = "defaultModels"
         case refreshfailed = "refreshFailed"
         case pendingproviders = "pendingProviders"
@@ -10387,6 +10401,64 @@ public struct PluginControlUiModule: Codable, Sendable {
     }
 }
 
+public struct PluginDecisionProviderStatus: Codable, Sendable {
+    public let providerid: String
+    public let pluginid: String
+    public let configured: Bool
+    public let credentialready: Bool
+    public let callable: Bool
+    public let runtimegeneration: String
+    public let recentsuccessat: Int?
+    public let activerequests: Int
+    public let successcount: Int
+    public let totallatencyms: Double
+    public let usage: [String: AnyCodable]
+    public let reasons: [String: AnyCodable]
+
+    public init(
+        providerid: String,
+        pluginid: String,
+        configured: Bool,
+        credentialready: Bool,
+        callable: Bool,
+        runtimegeneration: String,
+        recentsuccessat: Int? = nil,
+        activerequests: Int,
+        successcount: Int,
+        totallatencyms: Double,
+        usage: [String: AnyCodable],
+        reasons: [String: AnyCodable])
+    {
+        self.providerid = providerid
+        self.pluginid = pluginid
+        self.configured = configured
+        self.credentialready = credentialready
+        self.callable = callable
+        self.runtimegeneration = runtimegeneration
+        self.recentsuccessat = recentsuccessat
+        self.activerequests = activerequests
+        self.successcount = successcount
+        self.totallatencyms = totallatencyms
+        self.usage = usage
+        self.reasons = reasons
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case providerid = "providerId"
+        case pluginid = "pluginId"
+        case configured
+        case credentialready = "credentialReady"
+        case callable
+        case runtimegeneration = "runtimeGeneration"
+        case recentsuccessat = "recentSuccessAt"
+        case activerequests = "activeRequests"
+        case successcount = "successCount"
+        case totallatencyms = "totalLatencyMs"
+        case usage
+        case reasons
+    }
+}
+
 public struct PluginDeclaredSurface: Codable, Sendable {
     public let channels: [String]
     public let providers: [String]
@@ -11080,6 +11152,7 @@ public struct PluginsInspectResult: Codable, Sendable {
     public let ok: Bool
     public let overview: [String: AnyCodable]?
     public let credentials: [[String: AnyCodable]]?
+    public let decisions: [PluginDecisionProviderStatus]?
     public let plugin: [String: AnyCodable]
     public let source: PluginInspectSource?
     public let declared: PluginDeclaredSurface
@@ -11093,6 +11166,7 @@ public struct PluginsInspectResult: Codable, Sendable {
         ok: Bool,
         overview: [String: AnyCodable]? = nil,
         credentials: [[String: AnyCodable]]? = nil,
+        decisions: [PluginDecisionProviderStatus]? = nil,
         plugin: [String: AnyCodable],
         source: PluginInspectSource? = nil,
         declared: PluginDeclaredSurface,
@@ -11105,6 +11179,7 @@ public struct PluginsInspectResult: Codable, Sendable {
         self.ok = ok
         self.overview = overview
         self.credentials = credentials
+        self.decisions = decisions
         self.plugin = plugin
         self.source = source
         self.declared = declared
@@ -11119,6 +11194,7 @@ public struct PluginsInspectResult: Codable, Sendable {
         case ok
         case overview
         case credentials
+        case decisions
         case plugin
         case source
         case declared
@@ -18248,6 +18324,7 @@ public struct SessionsUsageParams: Codable, Sendable {
     public let key: String?
     public let agentid: String?
     public let agentscope: String?
+    public let creatorkey: String?
     public let startdate: String?
     public let enddate: String?
     public let mode: AnyCodable?
@@ -18263,6 +18340,7 @@ public struct SessionsUsageParams: Codable, Sendable {
         key: String? = nil,
         agentid: String? = nil,
         agentscope: String? = nil,
+        creatorkey: String? = nil,
         startdate: String? = nil,
         enddate: String? = nil,
         mode: AnyCodable? = nil,
@@ -18277,6 +18355,7 @@ public struct SessionsUsageParams: Codable, Sendable {
         self.key = key
         self.agentid = agentid
         self.agentscope = agentscope
+        self.creatorkey = creatorkey
         self.startdate = startdate
         self.enddate = enddate
         self.mode = mode
@@ -18293,6 +18372,7 @@ public struct SessionsUsageParams: Codable, Sendable {
         case key
         case agentid = "agentId"
         case agentscope = "agentScope"
+        case creatorkey = "creatorKey"
         case startdate = "startDate"
         case enddate = "endDate"
         case mode
@@ -22353,6 +22433,166 @@ public struct TerminalUploadResult: Codable, Sendable {
         case path
         case size
         case uploadpathstyle = "uploadPathStyle"
+    }
+}
+
+public struct ThemeDefinition: Codable, Sendable {
+    public let name: String
+    public let description: String
+    public let light: ThemePalette?
+    public let dark: ThemePalette?
+
+    public init(
+        name: String,
+        description: String,
+        light: ThemePalette? = nil,
+        dark: ThemePalette? = nil)
+    {
+        self.name = name
+        self.description = description
+        self.light = light
+        self.dark = dark
+    }
+}
+
+public struct ThemePalette: Codable, Sendable {
+    public let background: String
+    public let foreground: String
+    public let card: String
+    public let cardForeground: String
+    public let popover: String
+    public let popoverForeground: String
+    public let primary: String
+    public let primaryForeground: String
+    public let secondary: String
+    public let secondaryForeground: String
+    public let muted: String
+    public let mutedForeground: String
+    public let accent: String
+    public let accentForeground: String
+    public let destructive: String
+    public let destructiveForeground: String
+    public let border: String
+    public let input: String
+    public let ring: String
+    public let fontSans: String?
+    public let fontMono: String?
+
+    public init(
+        background: String,
+        foreground: String,
+        card: String,
+        cardForeground: String,
+        popover: String,
+        popoverForeground: String,
+        primary: String,
+        primaryForeground: String,
+        secondary: String,
+        secondaryForeground: String,
+        muted: String,
+        mutedForeground: String,
+        accent: String,
+        accentForeground: String,
+        destructive: String,
+        destructiveForeground: String,
+        border: String,
+        input: String,
+        ring: String,
+        fontSans: String? = nil,
+        fontMono: String? = nil)
+    {
+        self.background = background
+        self.foreground = foreground
+        self.card = card
+        self.cardForeground = cardForeground
+        self.popover = popover
+        self.popoverForeground = popoverForeground
+        self.primary = primary
+        self.primaryForeground = primaryForeground
+        self.secondary = secondary
+        self.secondaryForeground = secondaryForeground
+        self.muted = muted
+        self.mutedForeground = mutedForeground
+        self.accent = accent
+        self.accentForeground = accentForeground
+        self.destructive = destructive
+        self.destructiveForeground = destructiveForeground
+        self.border = border
+        self.input = input
+        self.ring = ring
+        self.fontSans = fontSans
+        self.fontMono = fontMono
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case background
+        case foreground
+        case card
+        case cardForeground = "card-foreground"
+        case popover
+        case popoverForeground = "popover-foreground"
+        case primary
+        case primaryForeground = "primary-foreground"
+        case secondary
+        case secondaryForeground = "secondary-foreground"
+        case muted
+        case mutedForeground = "muted-foreground"
+        case accent
+        case accentForeground = "accent-foreground"
+        case destructive
+        case destructiveForeground = "destructive-foreground"
+        case border
+        case input
+        case ring
+        case fontSans = "font-sans"
+        case fontMono = "font-mono"
+    }
+}
+
+public struct ThemesGetParams: Codable, Sendable {
+    public let id: String?
+
+    public init(
+        id: String? = nil)
+    {
+        self.id = id
+    }
+}
+
+public struct ThemesImportParams: Codable, Sendable {
+    public let id: String
+    public let definition: ThemeDefinition
+    public let apply: Bool?
+    public let mode: ThemeMode?
+
+    public init(
+        id: String,
+        definition: ThemeDefinition,
+        apply: Bool? = nil,
+        mode: ThemeMode? = nil)
+    {
+        self.id = id
+        self.definition = definition
+        self.apply = apply
+        self.mode = mode
+    }
+}
+
+public struct ThemesListParams: Codable, Sendable {}
+
+public struct ThemesSetParams: Codable, Sendable {
+    public let id: AnyCodable?
+    public let mode: AnyCodable?
+    public let appearance: [String: AnyCodable]?
+
+    public init(
+        id: AnyCodable? = nil,
+        mode: AnyCodable? = nil,
+        appearance: [String: AnyCodable]? = nil)
+    {
+        self.id = id
+        self.mode = mode
+        self.appearance = appearance
     }
 }
 

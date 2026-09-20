@@ -11,7 +11,7 @@ if [ -n "${OPENCLAW_PR_GITHUB_SNAPSHOT_ROOT:-}" ]; then
         return 1
       fi
     done
-    for pr_gh_snapshot_path in pr-lib/github.sh pr-lib/github.mjs lib/plain-gh.mjs lib/direct-run.mjs; do
+    for pr_gh_snapshot_path in pr-lib/github.sh pr-lib/github.mjs pr-lib/gh-api-preflight.mjs lib/plain-gh.mjs lib/direct-run.mjs; do
       if [ ! -f "$pr_gh_snapshot_root/scripts/$pr_gh_snapshot_path" ] ||
         [ -L "$pr_gh_snapshot_root/scripts/$pr_gh_snapshot_path" ] ||
         ! cmp -s "$pr_gh_source_scripts/$pr_gh_snapshot_path" "$pr_gh_snapshot_root/scripts/$pr_gh_snapshot_path"; then

@@ -36,6 +36,7 @@ import {
   warnLegacyAuthProfileSourcesIgnored,
 } from "./legacy-source-diagnostic.js";
 import { resolveLegacyAuthProfileSourceCandidates } from "./legacy-source-files.js";
+import { captureOAuthRefreshClaimPublication } from "./oauth-refresh-marker.js";
 import {
   shouldPersistRuntimeExternalOAuthProfile,
   type RuntimeExternalOAuthProfile,
@@ -1081,6 +1082,10 @@ export function restoreAuthProfileStorePersistenceSnapshot(
                 stateChanged: stateRestored,
                 selectionChanged: stateRestored,
                 profileIds: credentialsRestored ? changedProfileIds : [],
+                oauthRefreshClaimIds: captureOAuthRefreshClaimPublication(
+                  restoredProfiles,
+                  credentialsRestored ? changedProfileIds : [],
+                ),
               },
               owner,
             );
@@ -1857,15 +1862,7 @@ export function createAuthProfileStoreRuntime(
       persistedStores,
     });
     const existingRaw = readPersistedAuthProfileStoreRaw(persistenceAgentDir, database);
-    const {
-      payload,
-      changedProfileIds,
-      profileSetChanged,
-      credentialsChanged,
-      statePayload,
-      stateChanged,
-      selectionChanged,
-    } = prepareAuthProfileStoreMutation({
+    const { payload, statePayload, publication } = prepareAuthProfileStoreMutation({
       existingRaw,
       existingState: readPersistedAuthProfileStateRaw(persistenceAgentDir, database),
       store: localStore,
@@ -1875,6 +1872,7 @@ export function createAuthProfileStoreRuntime(
         ...localStore.profiles,
       },
     });
+    const { credentialsChanged, stateChanged } = publication;
     const suppliedRuntimeStore = publishFromSuppliedStore
       ? markRuntimePersistedProfiles(
           buildLocalAuthProfileStoreForSave({
@@ -1906,17 +1904,7 @@ export function createAuthProfileStoreRuntime(
         ? listRuntimeAuthProfileStoreSnapshotsForSharedOwner(owner)
         : [];
       if (credentialsChanged || stateChanged) {
-        noteRuntimeAuthProfileStorePersistedMutation(
-          persistenceAgentDir,
-          {
-            credentialsChanged,
-            profileSetChanged,
-            stateChanged,
-            selectionChanged,
-            profileIds: changedProfileIds,
-          },
-          owner,
-        );
+        noteRuntimeAuthProfileStorePersistedMutation(persistenceAgentDir, publication, owner);
       }
       try {
         assertAuthProfileMigrationStateAtDatabasePath(savedAuthPath);

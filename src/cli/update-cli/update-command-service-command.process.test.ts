@@ -107,23 +107,23 @@ it.each([
               scenario === "install slow" ? 'const timer = setInterval(() => { if (fs.existsSync(' + JSON.stringify(release) + ')) clearInterval(timer); }, 5);' : '',
             ].join("\n"));
             if (scenario === "missing executor") {
-              await assert.rejects(runUpdatedInstallGatewayCommand(params, action, true), {
+              await assert.rejects(runUpdatedInstallGatewayCommand(params, action), {
                 message: "Native command requires its original update executor.",
               });
               assert.equal(existsSync(receipt), false);
             } else if (scenario === "unregistered executor") {
-              await assert.rejects(runUpdatedInstallGatewayCommand(params, action, true), {
-                message: "Child continuation requires its live executor.",
+              await assert.rejects(runUpdatedInstallGatewayCommand(params, action), {
+                message: "Package recovery requires its admitted executor.",
               });
               assert.equal(existsSync(receipt), false);
             } else if (scenario.endsWith("revoked")) {
-              await assert.rejects(runUpdatedInstallGatewayCommand(params, action, true), {
+              await assert.rejects(runUpdatedInstallGatewayCommand(params, action), {
                 message: "Update authority revoked during native command",
               });
             } else if (scenario === "install slow") {
               mock.timers.enable({ apis: ["setTimeout"] });
               let settled = false;
-              const completed = runUpdatedInstallGatewayCommand(params, action, true).then(
+              const completed = runUpdatedInstallGatewayCommand(params, action).then(
                 (value) => { settled = true; return value; },
                 (error) => { settled = true; return error; },
               );
@@ -137,7 +137,7 @@ it.each([
               mock.timers.reset();
               assert.equal(await completed, "unverified");
             } else {
-              assert.equal(await runUpdatedInstallGatewayCommand(params, action, true), "unverified");
+              assert.equal(await runUpdatedInstallGatewayCommand(params, action), "unverified");
             }
             if (scenario !== "unregistered executor" && scenario !== "missing executor") {
               const observed = JSON.parse(await fs.readFile(receipt, "utf8"));

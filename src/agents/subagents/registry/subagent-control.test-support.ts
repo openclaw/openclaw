@@ -44,6 +44,7 @@ export function useSubagentControlFixture() {
     gateway.mockReset();
     persist.mockReset().mockImplementation(persistSubagentRunsToDiskOrThrow);
     testing.setDepsForTest({
+      cleanupBrowserSessionsForLifecycleEnd: async () => {},
       loadAgentRuntimePluginRegistryHandle: () => undefined,
       resolveContextEngine: async () => new LegacyContextEngine(),
       callGateway: gateway,

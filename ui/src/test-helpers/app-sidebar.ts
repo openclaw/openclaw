@@ -539,7 +539,7 @@ export function createContext(
     invalidate: () => undefined,
     subscribe: () => () => undefined,
   },
-): ApplicationContext<RouteId> {
+): ApplicationContext {
   const selectedAgentId = sessions.state.agentId ?? "main";
   const agents = {
     state: {
@@ -573,7 +573,7 @@ export function createContext(
       snapshot: { approvalQueue },
       subscribe: () => () => undefined,
     } as unknown as ApplicationOverlays,
-  } as unknown as ApplicationContext<RouteId>;
+  } as unknown as ApplicationContext;
 }
 
 export async function mountSidebar(
@@ -589,7 +589,7 @@ export async function mountSidebar(
 }
 
 export async function mountSidebarContext(
-  context: ApplicationContext<RouteId>,
+  context: ApplicationContext,
   variant: SidebarLifecycleState["variant"] = "panel",
   activeRouteId?: RouteId,
 ) {

@@ -191,7 +191,7 @@ async function main() {
         context: "openclaw/ci-gate",
         runUrl: `https://github.com/${owner}/${repo}/actions/runs/${GITHUB_RUN_ID}`,
       },
-      "failure",
+      "pending",
       "Review scheduled; CI and security review have not completed",
     );
   }

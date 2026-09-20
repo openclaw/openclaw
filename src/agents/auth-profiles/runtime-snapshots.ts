@@ -10,6 +10,7 @@ import {
   recordRuntimeAuthProfileStorePersistedMutation,
   resolveRuntimeStoreKey,
 } from "./mutation-lineage.js";
+import { publishOAuthRefreshClaimIdentities } from "./oauth-refresh-observation.js";
 import { captureAuthProfileOwnerScope } from "./path-resolve.js";
 import { buildPersistedAuthProfileSecretsStore, mergeAuthProfileStores } from "./persisted.js";
 import { removePersonalAuthProfileReferences } from "./runtime-external-profile-references.js";
@@ -25,6 +26,7 @@ import {
   cloneRuntimeAuthSharedOwner,
   runtimeAuthProfileSnapshotSharesOwner,
   runtimeAuthSharedOwnerRebound,
+  resolveRuntimeAuthSharedOwnerPath,
   runtimeAuthCredentialState as credentialState,
   runtimeAuthMetadataState,
   type RuntimeAuthSharedOwner,
@@ -64,10 +66,23 @@ let runtimeAuthStoreMetadataRevision = 0;
 const runtimeAuthStoreMetadataRevisions = new Map<string, number>();
 let runtimeAuthStoreMetadataRevisionFloor = 0;
 
-export const runtimeAuthProfileRowsCache = createRuntimeAuthProfileRowsCache((databasePath) => ({
-  rows: `${getRuntimeAuthProfileStoreSnapshotRevisionAtDatabasePath(databasePath)}:${getRuntimeAuthProfileStoreMutationRevisionAtDatabasePath(databasePath)}`,
-  selection: `${runtimeAuthStoreMetadataRevisions.get(databasePath) ?? runtimeAuthStoreMetadataRevisionFloor}:${getRuntimeAuthProfileStoreMutationRevisionAtDatabasePath(databasePath, "credentials")}`,
-}));
+export const runtimeAuthProfileRowsCache = createRuntimeAuthProfileRowsCache((databasePath) => {
+  const owner = runtimeAuthStoreSnapshots.get(databasePath)?.owner;
+  return {
+    rows: `${getRuntimeAuthProfileStoreSnapshotRevisionAtDatabasePath(databasePath)}:${getRuntimeAuthProfileStoreMutationRevisionAtDatabasePath(databasePath)}`,
+    selection: `${runtimeAuthStoreMetadataRevisions.get(databasePath) ?? runtimeAuthStoreMetadataRevisionFloor}:${getRuntimeAuthProfileStoreMutationRevisionAtDatabasePath(databasePath, "credentials")}`,
+    // Shared publication can remove the derived snapshot while its reader is in flight.
+    ownerLineage:
+      owner?.kind === "resolved"
+        ? [owner.sharedDatabasePath]
+        : owner
+          ? [
+              resolveRuntimeAuthSharedOwnerPath(owner, "state-db"),
+              resolveRuntimeAuthSharedOwnerPath(owner, "legacy-main"),
+            ]
+          : [],
+  };
+});
 
 registerFreshSharedAuthStoreHandoff(({ previousSharedDatabasePath, sharedDatabasePath, env }) => {
   let rebound = false;
@@ -241,6 +256,24 @@ export function getRuntimeAuthProfileStoreSnapshotAtDatabasePath(
 ): RuntimeAuthProfileStore | undefined {
   const store = runtimeAuthStoreSnapshots.get(databasePath)?.store;
   return store ? cloneAuthProfileStore(store) : undefined;
+}
+
+/** Capture an authoritative local pin without copying or reopening credential material. */
+export function captureRuntimeAuthProfileLocalPin(
+  databasePath: string,
+  profileId: string,
+):
+  | {
+      databasePath: string;
+      matchesCredential: (credential: AuthProfileStore["profiles"][string] | undefined) => boolean;
+    }
+  | undefined {
+  const store = runtimeAuthStoreSnapshots.get(databasePath)?.store;
+  const credential = store?.profiles[profileId];
+  if (!credential || !store?.runtimeLocalProfileIds?.includes(profileId)) {
+    return undefined;
+  }
+  return { databasePath, matchesCredential: (current) => isDeepStrictEqual(credential, current) };
 }
 
 export function getOwnedRuntimeAuthProfileStoreSnapshotAtDatabasePath(
@@ -669,6 +702,7 @@ export function noteRuntimeAuthProfileStorePersistedMutation(
     stateChanged: boolean;
     selectionChanged?: boolean;
     profileIds: Iterable<string>;
+    oauthRefreshClaimIds?: ReadonlyMap<string, string | undefined>;
   },
   owner?: AuthProfileStoreOwner,
 ): void {
@@ -679,6 +713,9 @@ export function noteRuntimeAuthProfileStorePersistedMutation(
     runtimeAuthStoreCredentialsRevision += 1;
   }
   const ownerKey = owner?.databasePath ?? resolveRuntimeStoreKey(agentDir);
+  if (mutation.credentialsChanged && mutation.oauthRefreshClaimIds?.size) {
+    publishOAuthRefreshClaimIdentities(ownerKey, mutation.oauthRefreshClaimIds);
+  }
   runtimeAuthProfileRowsCache.clear(ownerKey);
   if (mutation.selectionChanged) {
     advanceRuntimeAuthStoreMetadataRevision(ownerKey);

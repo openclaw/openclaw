@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { delimiter, join, resolve } from "node:path";
 import { isDirectRunUrl } from "../lib/direct-run.mjs";
 import { execGhRead, execPlainGh } from "../lib/plain-gh.mjs";
+import { parseGithubResponse, rateLimitRetryGuidance } from "./gh-api-preflight.mjs";
 
 function githubAccessFailure(error) {
   const limited = (text) =>
@@ -84,6 +85,7 @@ function quotaSummary(resource, quota) {
 // Keep the failing call's route and host: a pooled reader and the mutation CLI
 // may use different credentials. Never print raw API error bodies in quota diagnostics.
 export function execPrGh(args, options = {}, route = "read") {
+  const deadline = options.timeout > 0 ? Date.now() + options.timeout : undefined;
   const run = route === "plain" ? execPlainGh : execGhRead;
   const inherited = options.env ?? process.env;
   const selectedGit = inherited.OPENCLAW_PR_GIT || inherited.GIT_EXEC;
@@ -112,22 +114,40 @@ export function execPrGh(args, options = {}, route = "read") {
     if (!reason) {
       throw error;
     }
-    const hostname = quotaHostname(args, inherited);
-    const host = hostname ? ["--hostname", hostname] : [];
-    let resources;
-    try {
-      resources = JSON.parse(
-        run(["api", ...host, "rate_limit"], {
-          ...captured,
-          encoding: "utf8",
-          stdio: ["ignore", "pipe", "pipe", ...notifier],
-        }),
-      ).resources;
-    } catch {
-      // A failed diagnostics probe must not conceal the original resource or retry it.
+    const response = parseGithubResponse(String(error?.stdout ?? ""));
+    let diagnostic;
+    if (response.status) {
+      const { status, resource, remaining, limit, resetUtc, retryAfter } = response;
+      diagnostic = `original response: HTTP ${status}; resource=${resource}; remaining=${remaining ?? "unknown"}; limit=${limit ?? "unknown"}; reset=${resetUtc}${retryAfter === undefined ? "" : `; retry-after=${retryAfter}s`}.`;
+      diagnostic +=
+        reason === "quota"
+          ? ` ${rateLimitRetryGuidance(response)}`
+          : " Check access policy before retrying.";
+    } else {
+      const hostname = quotaHostname(args, inherited);
+      const host = hostname ? ["--hostname", hostname] : [];
+      let resources;
+      try {
+        // Diagnostics share the failed read's budget; they must not extend a watcher deadline.
+        const remaining = deadline === undefined ? undefined : deadline - Date.now();
+        if (remaining !== undefined && remaining <= 0) {
+          throw error;
+        }
+        resources = JSON.parse(
+          run(["api", ...host, "rate_limit"], {
+            ...captured,
+            ...(remaining === undefined ? {} : { timeout: remaining }),
+            encoding: "utf8",
+            stdio: ["ignore", "pipe", "pipe", ...notifier],
+          }),
+        ).resources;
+      } catch {
+        // A failed diagnostics probe must not conceal the original resource or retry it.
+      }
+      diagnostic = `Supplemental quota probe (remaining/limit; not the failing response): ${quotaSummary("graphql", resources?.graphql)} ${quotaSummary("core", resources?.core)}. Check access or throttling before retrying; the original response's quota and reset are unknown.`;
     }
     const failure = new Error(
-      `GitHub API request failed (resource=${resourceFor(args)}); ${quotaSummary("graphql", resources?.graphql)} ${quotaSummary("core", resources?.core)}. Check access or wait for the exhausted resource's reset before retrying.`,
+      `GitHub API request failed (resource=${resourceFor(args)}); ${diagnostic}`,
     );
     failure.code = "OPENCLAW_GH_ACCESS";
     failure.status = reason === "quota" ? 75 : 77;
@@ -147,16 +167,16 @@ export function execPrGhJson(args, options = {}, route = "read") {
   return JSON.parse(execPrGh(args, { ...options, encoding: "utf8" }, route));
 }
 
-function repositoryLocator(explicit, route) {
+function repositoryLocator(explicit, route, readOptions = () => ({})) {
   // gh browse shares PR commands' SmartBaseRepoFunc and preserves the configured
   // default and host. --no-browser only verifies it with REST HEAD and prints its URL.
   const value = execPrGh(
     ["browse", "--no-browser", ...(explicit ? ["--repo", explicit] : [])],
-    { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
+    { ...readOptions(), encoding: "utf8", stdio: ["ignore", "pipe", "pipe"] },
     route,
   ).trim();
   const match =
-    /^(?:(?:https?:\/\/|ssh:\/\/git@|git@)?([^/:]+)[:/])?([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+?)(?:\.git)?\/?$/.exec(
+    /^(?:(?:https?:\/\/|ssh:\/\/git@|git@)?([^/:]+(?::[0-9]+)?)[:/])?([A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+?)(?:\.git)?\/?$/.exec(
       value,
     );
   if (!match?.[1]) {
@@ -174,7 +194,7 @@ function option(args, name) {
   return index < 0 ? undefined : args[index + 1];
 }
 
-function api(repo, endpoint, route, paginate = false) {
+function api(repo, endpoint, route, paginate = false, options = {}) {
   return execPrGhJson(
     [
       "api",
@@ -182,9 +202,9 @@ function api(repo, endpoint, route, paginate = false) {
       repo.host,
       endpoint,
       ...(paginate ? ["--paginate", "--slurp"] : []),
-      ...(route === "plain" ? ["-H", "Cache-Control: max-age=0"] : []),
+      ...(route === "plain" || options.revalidate ? ["-H", "Cache-Control: max-age=0"] : []),
     ],
-    { stdio: ["ignore", "pipe", "pipe"] },
+    { ...options.readOptions?.(), stdio: ["ignore", "pipe", "pipe"] },
     route,
   );
 }
@@ -222,11 +242,11 @@ function selectFields(record, fields, kind) {
   );
 }
 
-function readPr(repo, pr, fields, route) {
+function readPr(repo, pr, fields, route, options = {}) {
   if (!/^[1-9][0-9]*$/.test(pr)) {
     throw new Error("Expected a positive PR number.");
   }
-  const record = api(repo, `repos/${repo.name}/pulls/${pr}`, route);
+  const record = api(repo, `repos/${repo.name}/pulls/${pr}`, route, false, options);
   if (!record || typeof record !== "object" || Array.isArray(record)) {
     throw new Error("GitHub did not return one PR JSON object.");
   }
@@ -282,7 +302,7 @@ function readPr(repo, pr, fields, route) {
   };
   if (fields.includes("files")) {
     result.files = pageItems(
-      api(repo, `repos/${repo.name}/pulls/${pr}/files?per_page=100`, "plain", true),
+      api(repo, `repos/${repo.name}/pulls/${pr}/files?per_page=100`, "plain", true, options),
     ).map((file) => ({
       path: file.filename,
       additions: file.additions,
@@ -293,10 +313,13 @@ function readPr(repo, pr, fields, route) {
   if (fields.includes("statusCheckRollup")) {
     const commit = `repos/${repo.name}/commits/${record.head.sha}`;
     const checks = pageItems(
-      api(repo, `${commit}/check-runs?filter=latest&per_page=100`, route, true),
+      api(repo, `${commit}/check-runs?filter=latest&per_page=100`, route, true, options),
       "check_runs",
     );
-    const statuses = pageItems(api(repo, `${commit}/status?per_page=100`, route, true), "statuses");
+    const statuses = pageItems(
+      api(repo, `${commit}/status?per_page=100`, route, true, options),
+      "statuses",
+    );
     result.statusCheckRollup = [
       ...checks.map((check) => ({
         __typename: "CheckRun",
@@ -318,6 +341,11 @@ function readPr(repo, pr, fields, route) {
     ];
   }
   return selectFields(result, fields, "PR");
+}
+
+export function readPrMetadata(pr, repository, fields, readOptions = () => ({})) {
+  const repo = repositoryLocator(repository, "read", readOptions);
+  return readPr(repo, String(pr), fields, "read", { readOptions, revalidate: true });
 }
 
 function main([route, ...args]) {

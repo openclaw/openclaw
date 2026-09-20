@@ -30,7 +30,7 @@ describe("UsagePage detail requests", () => {
   ])(
     "routes every selected $key detail through its listed agent",
     async ({ key, agentId, needsOwnerHint }) => {
-      const snapshot = cacheSnapshot("sessions", "fresh");
+      const snapshot = cacheSnapshot("fresh");
       const session = {
         key,
         agentId,
@@ -50,7 +50,7 @@ describe("UsagePage detail requests", () => {
         if (method === "sessions.usage.logs") {
           return { logs: [{ timestamp: 1, role: "user", content: `${agentId} turn` }] };
         }
-        return method === "usage.cost" ? snapshot.costSummary : { providers: [], points: [] };
+        return { providers: [], points: [] };
       });
       const page = await createPage({ request } as unknown as GatewayBrowserClient, true);
       await preloadUsage(page);
@@ -76,7 +76,7 @@ describe("UsagePage detail requests", () => {
       blockChars = 10;
     }
     let report: WeakRef<ExportReport> | undefined;
-    const snapshot = cacheSnapshot("sessions", "fresh");
+    const snapshot = cacheSnapshot("fresh");
     const session = {
       key: "agent:main:export-lifetime",
       label: "Export lifetime",
@@ -100,7 +100,7 @@ describe("UsagePage detail requests", () => {
           sessions: [{ ...session, ...(weight ? { contextWeight: weight } : {}) }],
         };
       }
-      return method === "usage.cost" ? snapshot.costSummary : { providers: [] };
+      return { providers: [] };
     };
     const download = vi.spyOn(downloads, "downloadTextFile").mockImplementation(() => {});
     const page = await createPage({ request } as unknown as GatewayBrowserClient, true);
@@ -157,14 +157,14 @@ describe("UsagePage detail requests", () => {
       usage = null;
     }
     let payload: WeakRef<OverviewPayload> | undefined;
-    const snapshot = cacheSnapshot("sessions", "fresh");
+    const snapshot = cacheSnapshot("fresh");
     const request = async (method: string) => {
       if (method === "sessions.usage") {
         const report = new OverviewPayload();
         payload = new WeakRef(report);
         return { ...snapshot.result, sessions: [report] };
       }
-      return method === "usage.cost" ? snapshot.costSummary : { providers: [] };
+      return { providers: [] };
     };
     const page = await createPage({ request } as unknown as GatewayBrowserClient);
     await page.loadUsage();
@@ -182,7 +182,7 @@ describe("UsagePage detail requests", () => {
   });
 
   it("keeps unavailable timeline and conversation details pending and refreshes them when admission reopens", async () => {
-    const snapshot = cacheSnapshot("sessions", "fresh");
+    const snapshot = cacheSnapshot("fresh");
     const session = {
       key: "agent:main:detail",
       label: "Detail session",
@@ -192,9 +192,6 @@ describe("UsagePage detail requests", () => {
     const request = vi.fn(async (method: string) => {
       if (method === "sessions.usage") {
         return { ...snapshot.result, sessions: [session] };
-      }
-      if (method === "usage.cost") {
-        return snapshot.costSummary;
       }
       if (method === "usage.status") {
         return { providers: [] };
@@ -342,7 +339,7 @@ describe("UsagePage detail requests", () => {
   });
 
   it("loads context only for the selected session and fences superseded replies through automatic recovery", async () => {
-    const snapshot = cacheSnapshot("sessions", "fresh");
+    const snapshot = cacheSnapshot("fresh");
     const keys = ["agent:main:first", "agent:main:second", "global"];
     const result = {
       ...snapshot.result,
@@ -371,9 +368,7 @@ describe("UsagePage detail requests", () => {
           }
           return result;
         }
-        return method === "usage.cost"
-          ? snapshot.costSummary
-          : { providers: [], logs: [], points: [] };
+        return { providers: [], logs: [], points: [] };
       },
     );
     const client = { request } as unknown as GatewayBrowserClient;
@@ -460,7 +455,7 @@ describe("UsagePage detail requests", () => {
   });
 
   it("refreshes selected details and clears context when its report disappears", async () => {
-    const snapshot = cacheSnapshot("sessions", "fresh");
+    const snapshot = cacheSnapshot("fresh");
     const timestamp = new Date().setHours(12, 0, 0, 0);
     let turns = 2;
     let available = true;
@@ -507,7 +502,7 @@ describe("UsagePage detail requests", () => {
           logs: [{ timestamp, role: "assistant", content: `${turns} completed turns` }],
         };
       }
-      return method === "usage.cost" ? { ...snapshot.costSummary, totals } : { providers: [] };
+      return { providers: [] };
     });
     const page = await createPage({ request } as unknown as GatewayBrowserClient, true);
     await preloadUsage(page);
@@ -544,7 +539,7 @@ describe("UsagePage detail requests", () => {
   });
 
   it("preserves agent-owned context in filtered JSON exports and cancels exports when scope changes", async () => {
-    const snapshot = cacheSnapshot("sessions", "fresh");
+    const snapshot = cacheSnapshot("fresh");
     const result = {
       ...snapshot.result,
       sessions: ["First", "Second"].map((label, index) => ({
@@ -566,7 +561,7 @@ describe("UsagePage detail requests", () => {
         if (method === "sessions.usage") {
           return params?.includeContextWeight ? pending.promise : result;
         }
-        return method === "usage.cost" ? snapshot.costSummary : { providers: [] };
+        return { providers: [] };
       },
     );
     const download = vi.spyOn(downloads, "downloadTextFile").mockImplementation(() => {});
@@ -697,9 +692,7 @@ describe("UsagePage detail requests", () => {
           ? providerUsageRefreshing
             ? { updatedAt: 1, providers: [], refreshing: true }
             : { updatedAt: 2, providers: [] }
-          : method === "usage.cost"
-            ? { daily: [] }
-            : { sessions: [], totals: null },
+          : cacheSnapshot("fresh").result,
       ),
     } as unknown as GatewayBrowserClient;
     const page = await createPage(client);
@@ -728,7 +721,7 @@ describe("UsagePage detail requests", () => {
     };
     await page.updateComplete;
     for (let attempt = 0; attempt < 3; attempt += 1) {
-      await vi.advanceTimersByTimeAsync(5_000);
+      await vi.advanceTimersByTimeAsync(5_000 * 2 ** attempt);
     }
     expect(page.providerUsageStalled).toBe(true);
 
@@ -748,7 +741,7 @@ describe("UsagePage detail requests", () => {
         }
         return { updatedAt: 2, providers: [] };
       }
-      return {};
+      return cacheSnapshot("fresh").result;
     });
     const page = await createPage({ request } as unknown as GatewayBrowserClient);
     const gateway = page.context.gateway;
@@ -777,7 +770,7 @@ describe("UsagePage detail requests", () => {
     await page.updateComplete;
 
     for (let attempt = 0; attempt < 3; attempt += 1) {
-      await vi.advanceTimersByTimeAsync(5_000);
+      await vi.advanceTimersByTimeAsync(5_000 * 2 ** attempt);
     }
 
     expect(request.mock.calls.filter(([method]) => method === "usage.status")).toHaveLength(3);

@@ -31,7 +31,7 @@ import {
   withSessionHistoryWorkerDatabase,
   type SessionHistoryWorkerDatabase,
 } from "./session-transcript-worker-runtime.js";
-import type { SessionTranscriptHistoryWorkerInput } from "./session-transcript.worker.js";
+import type { SessionTranscriptHistoryWorkerInput } from "./session-transcript-worker.types.js";
 
 type QueuedHistoryRead = {
   promise: Promise<SessionHistoryWorkerResult>;

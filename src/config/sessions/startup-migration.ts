@@ -35,7 +35,6 @@ import { isCanonicalSqliteSessionMainKeyCurrent } from "./session-canonical-key-
 import { setCanonicalSqliteSessionMainKey } from "./session-canonical-key.js";
 import { resolveSqliteTargetFromSessionStorePath } from "./session-sqlite-target.js";
 import { resolveAllAgentSessionStoreTargetsSync, resolveSessionStoreTargets } from "./targets.js";
-import type { migrateManagedWorktreeCanonicalWorkspaces } from "./worktree-workspace-migration.js";
 
 export type SessionStartupMigrationLogger = Record<"info" | "warn", (message: string) => void>;
 
@@ -173,7 +172,6 @@ export async function runSessionStartupMigration(params: {
   handoffDatabase?: (database: OpenClawAgentDatabaseOptions) => Promise<void>;
   deps?: {
     migrateLegacyMainSessionKeys?: typeof migrateLegacyMainSessionKeys;
-    migrateManagedWorktreeCanonicalWorkspaces?: typeof migrateManagedWorktreeCanonicalWorkspaces;
     resolveAllAgentSessionStoreTargetsSync?: typeof resolveAllAgentSessionStoreTargetsSync;
   };
 }): Promise<void> {
@@ -202,11 +200,9 @@ export async function runSessionStartupMigration(params: {
   }
 
   const databases = new Set<string>();
-  let migrateWorktreeSessions = params.deps?.migrateManagedWorktreeCanonicalWorkspaces;
   const registeredDatabases = new Set(
     listOpenClawRegisteredAgentDatabases({ env }).map((entry) => `${entry.agentId}\0${entry.path}`),
   );
-  let pendingWorktreeSessions = 0;
   const tasks = targets.map((target) => async () => {
     params.assertCurrent?.();
     const options = toDatabaseOptions(resolveSqliteReadScope({ ...target, env }));
@@ -245,8 +241,8 @@ export async function runSessionStartupMigration(params: {
           `session: SQLite startup maintenance failed for ${target.agentId}; continuing: ${String(error)}`,
         );
       }
-      // Canonical refusal is readiness failure. Drain before worktree and runtime
-      // visitors can otherwise parse a whole migrated store on the main thread.
+      // Canonical refusal is readiness failure. Drain before runtime visitors can
+      // otherwise parse a whole migrated store on the main thread.
       const { certifySessionCanonicalValidationPending } =
         await import("./session-canonical-validation-readiness.js");
       const { withSqliteCanonicalValidationWorker } =
@@ -256,23 +252,6 @@ export async function runSessionStartupMigration(params: {
         certifySessionCanonicalValidationPending(options, withWorker, params.assertCurrent),
       );
       params.assertCurrent?.();
-      try {
-        migrateWorktreeSessions ??= (await import("./worktree-workspace-migration.js"))
-          .migrateManagedWorktreeCanonicalWorkspaces;
-        params.assertCurrent?.();
-        const worktreeReport = await migrateWorktreeSessions({
-          ...target,
-          cfg: params.cfg,
-          env,
-          mode: "detect",
-        });
-        pendingWorktreeSessions += worktreeReport.found;
-      } catch (error) {
-        params.assertCurrent?.();
-        params.log.warn(
-          `session: SQLite startup maintenance failed for ${target.agentId}; continuing: ${String(error)}`,
-        );
-      }
       if (params.handoffDatabase) {
         // Runtime readiness failures must propagate; only successful handoff
         // transfers the cold connection beyond this maintenance operation.
@@ -302,9 +281,4 @@ export async function runSessionStartupMigration(params: {
     }
   });
   params.assertCurrent?.();
-  if (pendingWorktreeSessions > 0) {
-    params.log.warn(
-      `session: ${pendingWorktreeSessions} managed-worktree session(s) need canonical workspace repair; run openclaw doctor --fix`,
-    );
-  }
 }

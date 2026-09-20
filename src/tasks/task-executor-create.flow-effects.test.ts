@@ -76,7 +76,7 @@ async function fixture(syncMode: TaskFlowRecord["syncMode"] = "task_mirrored") {
     vi.fn<
       (input: TaskInitialWorkerOperations["flows.finalizeTaskCancellation"]["input"]) => void
     >();
-  store.runInitialMutationAsync = async function (context, command, assertCurrent) {
+  store.runInitialMutationAsync = async function (context, command, assertCurrent, onGranted) {
     commands.push(command.type);
     context.admission.assertCurrent();
     assertCurrent();
@@ -91,7 +91,7 @@ async function fixture(syncMode: TaskFlowRecord["syncMode"] = "task_mirrored") {
         | Promise<TaskInitialWorkerOperations[Key]["output"]>;
     } = {
       "tasks.createRecord": (input) =>
-        originalCreate(context, { type: "tasks.createRecord", input }, assertCurrent),
+        originalCreate(context, { type: "tasks.createRecord", input }, assertCurrent, onGranted),
       "tasks.settleUnstarted": (input) =>
         runTaskRecordTransitionOperation(
           {

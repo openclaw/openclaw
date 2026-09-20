@@ -63,6 +63,33 @@ export function listTasksFromIndex(
     .map(({ insertionIndex: _insertionIndex, ...task }) => task);
 }
 
+export function selectTaskRecordsForOwnerTree(
+  tasks: ReadonlyMap<string, TaskRecord>,
+  taskIdsByOwnerKey: ReadonlyMap<string, ReadonlySet<string>>,
+  rootOwnerKeys: ReadonlySet<string>,
+): TaskRecord[] {
+  const owners = new Set(rootOwnerKeys);
+  const selected = new Set<string>();
+  for (const owner of owners) {
+    const key = normalizeOptionalString(owner);
+    if (!key) {
+      continue;
+    }
+    for (const taskId of taskIdsByOwnerKey.get(key) ?? []) {
+      const task = tasks.get(taskId);
+      if (!task || task.scopeKind !== "session") {
+        continue;
+      }
+      selected.add(taskId);
+      if (task.childSessionKey) {
+        owners.add(task.childSessionKey);
+      }
+    }
+  }
+  // Preserve registry insertion order, including descendants inserted before their parents.
+  return [...tasks.values()].filter((task) => selected.has(task.taskId));
+}
+
 /** Build the derived flow index in snapshot order to retain the latest-task tie break. */
 export function findLatestTaskForFlowInSnapshot(
   tasks: ReadonlyMap<string, TaskRecord>,
@@ -93,10 +120,10 @@ function taskRunScopeKey(
   ].join("\u0000");
 }
 
-export function filterTasksByRunScope(
-  records: TaskRecord[],
+export function filterTasksByRunScope<T extends TaskRunScope>(
+  records: T[],
   params: { runtime?: TaskRuntime; sessionKey?: string },
-): TaskRecord[] {
+): T[] {
   const matches = records.filter((task) => !params.runtime || task.runtime === params.runtime);
   const sessionKey = normalizeOptionalString(params.sessionKey);
   if (sessionKey) {
@@ -131,7 +158,9 @@ export function sameTaskRunScope(left: TaskRunScope, right: TaskRunScope): boole
   );
 }
 
-export function captureTaskPersistenceReceipt(task: TaskRecord): TaskPersistenceReceipt {
+export function captureTaskPersistenceReceipt(
+  task: Pick<TaskRecord, keyof TaskPersistenceReceipt>,
+): TaskPersistenceReceipt {
   if (!task.runId) {
     throw new Error("Task persistence selection requires a run identity");
   }
@@ -148,7 +177,7 @@ export function captureTaskPersistenceReceipt(task: TaskRecord): TaskPersistence
 }
 
 export function matchesTaskPersistenceReceipt(
-  task: TaskRecord,
+  task: Pick<TaskRecord, keyof TaskPersistenceReceipt>,
   receipt: TaskPersistenceReceipt,
 ): boolean {
   return (

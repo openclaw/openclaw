@@ -7,15 +7,19 @@ export function teardownSkillsPathWatcher(state: {
   watcher: FSWatcher;
   timer?: ReturnType<typeof setTimeout>;
 }): Promise<void> {
+  const watcher = state.watcher;
+  // Chokidar can recover removed paths after close, including from pending reads.
+  // Only replacement watchers may admit roots once this instance is retired.
+  watcher.add = () => watcher;
   clearTimeout(state.timer);
   const closing = (async () => {
     try {
-      const wasClosed = state.watcher.closed;
-      const closed = state.watcher.close();
+      const wasClosed = watcher.closed;
+      const closed = watcher.close();
       if (!wasClosed) {
         // Chokidar removes listeners before pending scans settle. Their late errors
         // belong to the retired watcher and must not become unhandled events.
-        state.watcher.on("error", () => {});
+        watcher.on("error", () => {});
       }
       await closed;
     } catch {

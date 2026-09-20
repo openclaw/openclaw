@@ -23,6 +23,8 @@ const JSON_FIELDS = [
 export type UpdateRunLedgerOptions = OpenClawStateDatabaseOptions & {
   busyTimeoutMs?: number;
   redactPaths?: readonly string[];
+  /** Revalidate caller-owned publication authority inside the write transaction. */
+  assertCurrent?: () => void;
 };
 
 function mapJsonText(value: unknown, transform: (text: string) => string): unknown {

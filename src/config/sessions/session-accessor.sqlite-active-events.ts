@@ -15,13 +15,16 @@ import type {
 } from "./session-accessor.sqlite-contract.js";
 import {
   getActiveTranscriptKysely,
+  getMessageRangeReaders,
   parseActiveTranscriptMessageRow,
+  selectMessageMetadata,
+  selectMessagePayload,
+  selectMessageRows,
   type SessionTranscriptMessageEvent,
 } from "./session-accessor.sqlite-projection-read.js";
 import {
   iterateVisibleMessageRange,
   iterateVisibleMessageMetadata,
-  readVisibleMessageMetadata,
   readVisibleMessageRange,
   readVisibleTranscriptStats,
   resolveVisibleMessagePositions,
@@ -99,26 +102,11 @@ export function readLatestSessionTranscriptMessageEvent(
       database: projection.database,
       ...projection.resolved,
     });
-    const row = executeSqliteQueryTakeFirstSync(
-      projection.database.db,
-      getActiveTranscriptKysely(projection.database)
-        .selectFrom("session_transcript_active_events as active")
-        .innerJoin("transcript_events as event", (join) =>
-          join
-            .onRef("event.session_id", "=", "active.session_id")
-            .onRef("event.seq", "=", "active.event_seq"),
-        )
-        .select(["active.event_seq", "active.message_position", "event.event_json"])
-        .where("active.session_id", "=", projection.resolved.sessionId)
-        .where("active.message_position", "is not", null)
-        .where(
-          "active.message_position",
-          "<",
-          fence?.beforeActiveMessagePosition ?? projection.state.activeMessageCount,
-        )
-        .orderBy("active.message_position", "desc")
-        .limit(1),
-    );
+    const row = getMessageRangeReaders(projection.database).latest({
+      sessionId: projection.resolved.sessionId,
+      start: 0,
+      endExclusive: fence?.beforeActiveMessagePosition ?? projection.state.activeMessageCount,
+    });
     return row ? parseActiveTranscriptMessageRow(row) : undefined;
   });
 }
@@ -162,13 +150,10 @@ export function everySessionTranscriptUserInputFrom(
     if (anchor.message_position < postStart) {
       return false;
     }
-    const query = db
-      .selectFrom("session_transcript_active_events as active")
-      .innerJoin("transcript_events as event", (join) =>
-        join
-          .onRef("event.session_id", "=", "active.session_id")
-          .onRef("event.seq", "=", "active.event_seq"),
-      )
+    const query = selectMessageRows(projection.database, projection.resolved.sessionId, {
+      start: anchor.message_position,
+      endExclusive: end,
+    })
       .select(
         /* kysely-allow-raw: Stream only admission control facts, never message bodies, across the exact active input range. */
         sql<string>`json_object('role', json_extract(event.event_json, '$.message.role'),
@@ -176,16 +161,12 @@ export function everySessionTranscriptUserInputFrom(
           '__openclaw', json_object('runId', json_extract(event.event_json, '$.message.__openclaw.runId')),
           'provenance', json_extract(event.event_json, '$.message.provenance'))`.as("message_json"),
       )
-      .where("active.session_id", "=", projection.resolved.sessionId)
-      .where("active.message_position", ">=", anchor.message_position)
-      .where("active.message_position", "<", end)
       .where(
         /* kysely-allow-raw: User-role filtering excludes assistant/tool payloads without materializing them. */
         sql<string>`json_extract(event.event_json, '$.message.role')`,
         "=",
         "user",
-      )
-      .orderBy("active.message_position", "asc");
+      );
     let seen = false;
     for (const row of iterateSqliteQuerySync(projection.database.db, query)) {
       seen = true;
@@ -397,26 +378,14 @@ export function readSessionTranscriptVisibleMessageDeltaCore(
 
     const metadata = executeSqliteQuerySync(
       projection.database.db,
-      db
-        .selectFrom("session_transcript_active_events as active")
-        .innerJoin("transcript_events as event", (join) =>
-          join
-            .onRef("event.session_id", "=", "active.session_id")
-            .onRef("event.seq", "=", "active.event_seq"),
-        )
-        .select([
-          "active.event_seq",
-          "active.message_position",
-          /* kysely-allow-raw: SQLite byte length avoids fetching or parsing excluded JSON. */
-          sql<number>`OCTET_LENGTH(event.event_json) + 1`.as("serialized_bytes"),
-        ])
-        .where("active.session_id", "=", projection.resolved.sessionId)
-        .where("active.message_position", "is not", null)
-        .where("active.message_position", ">=", startPosition)
-        .$if(transcriptFence !== undefined, (query) =>
-          query.where("active.message_position", "<", transcriptFence!.beforeActiveMessagePosition),
-        )
-        .orderBy("active.message_position", "asc")
+      selectMessageMetadata(
+        selectMessageRows(projection.database, projection.resolved.sessionId, {
+          start: startPosition,
+          endExclusive:
+            transcriptFence?.beforeActiveMessagePosition ?? projection.state.activeMessageCount,
+        }),
+      )
+        .select("active.event_seq")
         .limit(maxMessages + 1),
     ).rows;
 
@@ -429,21 +398,20 @@ export function readSessionTranscriptVisibleMessageDeltaCore(
       serializedBytes += row.serialized_bytes;
       selectedCount += 1;
     }
-    const selected = metadata.slice(0, selectedCount);
-    const lastEventSeq = selected.at(-1)?.event_seq ?? cursor.lastEventSeq;
-    const lastMessagePosition = selected.at(-1)?.message_position ?? cursor.lastMessagePosition;
+    const lastSelected = metadata[selectedCount - 1];
+    const lastEventSeq = lastSelected?.event_seq ?? cursor.lastEventSeq;
+    const lastMessagePosition = lastSelected?.message_position ?? cursor.lastMessagePosition;
     const rows =
       selectedCount === 0
         ? []
         : executeSqliteQuerySync(
             projection.database.db,
-            db
-              .selectFrom("session_transcript_active_events as active")
-              .innerJoin("transcript_events as event", (join) =>
-                join
-                  .onRef("event.session_id", "=", "active.session_id")
-                  .onRef("event.seq", "=", "active.event_seq"),
-              )
+            selectMessagePayload(
+              selectMessageRows(projection.database, projection.resolved.sessionId, {
+                start: startPosition,
+                endExclusive: lastMessagePosition + 1,
+              }),
+            )
               .leftJoin("session_transcript_active_events as parent_active", (join) =>
                 join
                   .onRef("parent_active.session_id", "=", "active.session_id")
@@ -456,16 +424,7 @@ export function readSessionTranscriptVisibleMessageDeltaCore(
                   .onRef("parent_identity.session_id", "=", "parent_active.session_id")
                   .onRef("parent_identity.seq", "=", "parent_active.event_seq"),
               )
-              .select([
-                "active.event_seq",
-                "active.message_position",
-                "event.event_json",
-                "parent_identity.event_id as parent_id",
-              ])
-              .where("active.session_id", "=", projection.resolved.sessionId)
-              .where("active.message_position", ">=", startPosition)
-              .where("active.message_position", "<=", lastMessagePosition)
-              .orderBy("active.message_position", "asc"),
+              .select("parent_identity.event_id as parent_id"),
           ).rows.map((row) => {
             const { event, eventSeq, seq } = parseActiveTranscriptMessageRow(row);
             return {
@@ -609,15 +568,15 @@ export function readSessionTranscriptBoundedMessageTailPage(
           totalMessages,
         };
       }
-      const db = getActiveTranscriptKysely(projection.database);
-      const metadata = readVisibleMessageMetadata(projection, start, endExclusive).toReversed();
+      const metadata = Array.from(iterateVisibleMessageMetadata(projection, start, endExclusive));
       if (metadata.length !== scannedMessages) {
         throw new Error("Active transcript bounded message page is incomplete");
       }
       const selectedPositions: number[] = [];
       let newestContiguousEventCount: number | undefined;
       let serializedBytes = 0;
-      for (const row of metadata) {
+      for (let index = metadata.length - 1; index >= 0; index -= 1) {
+        const row = metadata[index]!;
         if (serializedBytes + row.serialized_bytes > maxBytes) {
           newestContiguousEventCount ??= selectedPositions.length;
           continue;
@@ -630,17 +589,11 @@ export function readSessionTranscriptBoundedMessageTailPage(
           ? []
           : executeSqliteQuerySync(
               projection.database.db,
-              db
-                .selectFrom("session_transcript_active_events as active")
-                .innerJoin("transcript_events as event", (join) =>
-                  join
-                    .onRef("event.session_id", "=", "active.session_id")
-                    .onRef("event.seq", "=", "active.event_seq"),
-                )
-                .select(["active.event_seq", "active.message_position", "event.event_json"])
-                .where("active.session_id", "=", projection.resolved.sessionId)
-                .where("active.message_position", "in", selectedPositions)
-                .orderBy("active.message_position", "asc"),
+              selectMessagePayload(
+                selectMessageRows(projection.database, projection.resolved.sessionId, {
+                  positions: selectedPositions,
+                }),
+              ),
             ).rows.map(parseActiveTranscriptMessageRow);
       return {
         activeLeafEntryId: projection.state.leafEventId,

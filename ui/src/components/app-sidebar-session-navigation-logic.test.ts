@@ -9,6 +9,7 @@ import {
   createSidebarSessionRowsComparator,
   resolveSidebarMainSessionKey,
 } from "./app-sidebar-session-navigation-logic.ts";
+import { projectSidebarSession } from "./app-sidebar-session-navigation.test-support.ts";
 import { projectSessionTree } from "./app-sidebar-session-tree.ts";
 import type { SidebarRecentSession } from "./app-sidebar-session-types.ts";
 
@@ -44,51 +45,6 @@ it.each([
     ).toBe(expected);
   },
 );
-
-function projectSidebarSession(
-  row: Partial<GatewaySessionRow>,
-  selfUserId?: string,
-): SidebarRecentSession {
-  const context = {
-    basePath: "",
-    agents: { state: { agentsList: { mainKey: "main" } } },
-    agentSelection: { state: { selectedId: "main" } },
-    gateway: {
-      snapshot: {
-        assistantAgentId: "main",
-        hello: null,
-        selfUser: selfUserId ? { id: selfUserId } : undefined,
-      },
-    },
-    sessions: {
-      isPreparedWorkSession: () => false,
-      pullRequestSummary: () => undefined,
-    },
-  } as unknown as Parameters<typeof buildSidebarSessionNavigationState>[0]["context"];
-  const navigation = buildSidebarSessionNavigationState({
-    context,
-    routeSessionKey: "agent:main:main",
-    sessionsResult: null,
-    sessionsAgentId: null,
-    showCron: false,
-    showSystem: false,
-    statusFilter: "active",
-    compareSessions: () => 0,
-    highlightCurrentSession: false,
-    runtimeSampledAtByRow: new WeakMap(),
-    loadingChildSessionKeys: new Set(),
-    outboxAttentionCountForSessionKey: () => 0,
-    hasSessionDraft: () => false,
-    resolveAttention: () => ({ kind: "none" }),
-    resolveAgentStatusNote: () => undefined,
-  });
-  return navigation.toSidebarSession({
-    key: "agent:main:draft",
-    kind: "direct",
-    updatedAt: 1,
-    ...row,
-  });
-}
 
 function projectDraftOwnership(
   row: Pick<GatewaySessionRow, "createdActor" | "sharingRole" | "visibility">,

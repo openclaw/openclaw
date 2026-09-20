@@ -296,6 +296,12 @@ async function fetchDetail(target: GitHubTarget, fetchImpl: typeof fetch): Promi
   }
   return {
     ...githubPreviewView(preview),
+    metadata: githubChangeMetadata(
+      preview.additions,
+      preview.deletions,
+      preview.changedFiles,
+      preview.comments,
+    ),
     url,
     ...content,
     comments,

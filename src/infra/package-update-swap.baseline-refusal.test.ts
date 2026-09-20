@@ -43,7 +43,7 @@ it("refuses a borrowed dependency before activation without inventing a failed r
       step: { exitCode: 1 },
     });
     expect(result.step.stderrTail).toContain("symlink leaves the retained tree");
-    expect(result.step.stderrTail).toContain("no package activation was attempted");
+    expect(result.step.stderrTail).not.toContain("Package rollback verification failed");
     expect(result.step.stderrTail).not.toMatch(/(?:retained|restored) package .*changed/u);
     expect(beforeActivate).not.toHaveBeenCalled();
     expect(onLiveMutation).not.toHaveBeenCalled();

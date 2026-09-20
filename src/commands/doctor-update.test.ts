@@ -127,6 +127,7 @@ describe("Doctor source update delegation", () => {
     { status: "ok", reason: undefined, handled: true },
     { status: "skipped", reason: "already-current", handled: false },
     { status: "skipped", reason: "gateway-readiness-unverified", handled: true },
+    { status: "skipped", reason: "still-starting", handled: true },
   ] as const)(
     "uses the settled $status/$reason update outcome to decide whether Doctor continues",
     async ({ status, reason, handled }) => {
@@ -137,14 +138,16 @@ describe("Doctor source update delegation", () => {
       await expect(offer()).resolves.toEqual({
         updated: true,
         handled,
-        ...(reason === "gateway-readiness-unverified" ? { reason } : {}),
+        ...(reason === "gateway-readiness-unverified" || reason === "still-starting"
+          ? { reason }
+          : {}),
       });
       expect(mocks.updateCommand).toHaveBeenCalledExactlyOnceWith({
         sourceUpdate: { root: "/repo/source" },
         timeout: "1200",
         onResult: expect.any(Function),
       });
-      if (reason === "gateway-readiness-unverified") {
+      if (reason === "gateway-readiness-unverified" || reason === "still-starting") {
         expect(mocks.outro).toHaveBeenCalledWith(
           expect.stringContaining("Gateway readiness remains unverified. Keep recovery backups"),
         );

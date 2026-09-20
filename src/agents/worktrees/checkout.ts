@@ -4,6 +4,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { normalizeGitPathForFilesystem, type GitCommandOptions } from "../../infra/git-exec.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { withWorktreeGitConfig } from "./checkout-git-config.js";
 import type { WorktreeSourceProfile } from "./checkout-profiles.js";
 import { detectWorktreeFilesystemBackend } from "./filesystem-backend.js";
 import type { WorktreeFilesystemOptions } from "./filesystem-backend.types.js";
@@ -44,6 +45,8 @@ type CheckoutOptions = WorktreeFilesystemOptions & {
   rollbackGuard?: () => void;
   /** Restore reuses a warm template, or materializes its snapshot after registration. */
   deferGitCheckout?: boolean;
+  /** This source is consumed by a sandboxed session, never host filter programs. */
+  sourceOnly?: boolean;
   checkoutBudget?: Pick<GitCommandOptions, "timeoutMs" | "killGraceMs">;
   requireSpace: (cloneBytes?: number) => void;
 };
@@ -347,6 +350,9 @@ export async function addManagedWorktree(input: CheckoutOptions): Promise<Checko
   };
   await assertExistingSeed();
   const profile = input.sourceProfile;
+  if (input.sourceOnly && profile) {
+    throw new Error("Source-only session checkouts do not support repository source profiles");
+  }
   if (profile) {
     if (input.deferGitCheckout || (await worktreePathExists(input.destination))) {
       throw new Error(
@@ -431,9 +437,8 @@ export async function addManagedWorktree(input: CheckoutOptions): Promise<Checko
   const checkout = async (): Promise<CheckoutResult> => {
     await assertRegistration();
     materializationStarted = true;
-    const result = await runGit(
-      options.destination,
-      ["read-tree", "--reset", "--no-recurse-submodules", "-u", commit],
+    const result = await materializeManagedWorktree(
+      { destination: options.destination, commit, sourceOnly: options.sourceOnly },
       {
         ...gitOptions(options),
         beforeRun: () => {
@@ -459,7 +464,7 @@ export async function addManagedWorktree(input: CheckoutOptions): Promise<Checko
     await options.prepareCommit?.(commit);
     let template: Awaited<ReturnType<typeof prepareTemplate>>;
     let cloneBytes: number | undefined;
-    if (options.enabled && !profile) {
+    if (options.enabled && !profile && !options.sourceOnly) {
       try {
         template = await prepareTemplate(options);
         cloneBytes = template ? await estimateTemplateCloneBytes(template) : undefined;
@@ -608,6 +613,47 @@ export async function addManagedWorktree(input: CheckoutOptions): Promise<Checko
       await removeFailedCheckout({ ...options, signal: undefined, commitGuard: rollbackGuard });
     }
   }
+}
+
+/** Materialization and restore share one filter-safe operation boundary. */
+export async function materializeManagedWorktree(
+  params: {
+    destination: string;
+    commit: string;
+    sourceOnly?: boolean;
+    resetIndexTo?: string;
+    removeExisting?: boolean;
+  },
+  options: GitCommandOptions,
+  indexOptions: GitCommandOptions = options,
+): Promise<GitResult> {
+  return await withWorktreeGitConfig(
+    params.destination,
+    params.sourceOnly === true,
+    indexOptions,
+    async (git) => {
+      if (params.removeExisting) {
+        await git.require(
+          params.destination,
+          ["rm", "-r", "--force", "--ignore-unmatch", "--", "."],
+          options,
+        );
+      }
+      const result = await git.run(
+        params.destination,
+        ["read-tree", "--reset", "--no-recurse-submodules", "-u", params.commit],
+        options,
+      );
+      if (result.code === 0 && params.resetIndexTo) {
+        await git.require(
+          params.destination,
+          params.sourceOnly ? ["read-tree", "--reset", params.resetIndexTo] : ["reset"],
+          indexOptions,
+        );
+      }
+      return result;
+    },
+  );
 }
 
 async function removeFailedCheckout(options: CheckoutOptions): Promise<void> {

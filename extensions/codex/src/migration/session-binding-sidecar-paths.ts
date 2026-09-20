@@ -1,5 +1,5 @@
 import fs from "node:fs/promises";
-import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 export async function readDirectoryEntries(directory: string) {
   try {
     return await fs.readdir(directory, { withFileTypes: true });

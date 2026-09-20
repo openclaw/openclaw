@@ -1,6 +1,7 @@
 import { setTimeout as delay } from "node:timers/promises";
 import type { File as TelegramFile } from "grammy/types";
 import type { TelegramBotInfo } from "./bot-info.js";
+import type { TelegramTestContext as TelegramMiddlewareTestContext } from "./bot.test-helpers.js";
 
 export const telegramBotInfoForTest = {
   id: 9_876_543_210,
@@ -180,5 +181,65 @@ export function createTelegramPrivateMediaContext(params: {
         file_unique_id: `unique-${params.fileId}`,
         file_path: `documents/${params.fileId}`,
       })),
+  };
+}
+
+export function makePrivateTextContext(params: {
+  text: string;
+  messageId?: number;
+  updateId?: number;
+  date?: number;
+  chatId?: number;
+  from?: Record<string, unknown>;
+  message?: Record<string, unknown>;
+  downloadable?: boolean;
+}): TelegramMiddlewareTestContext {
+  const from = params.from ?? { id: 42, first_name: "Ada" };
+  return {
+    ...(params.updateId === undefined ? {} : { update: { update_id: params.updateId } }),
+    message: {
+      chat: { id: params.chatId ?? 7, type: "private" },
+      text: params.text,
+      date: params.date ?? 1736380800,
+      ...(params.messageId === undefined ? {} : { message_id: params.messageId }),
+      from,
+      ...params.message,
+    },
+    me: { username: "openclaw_bot" },
+    getFile: params.downloadable
+      ? async () => ({ download: async () => new Uint8Array() })
+      : async () => ({}),
+  };
+}
+
+export function makeCallbackRetryContext(params: {
+  updateId?: number;
+  id: string;
+  data: string;
+  messageId: number;
+  text?: string;
+  message?: Record<string, unknown>;
+  from?: Record<string, unknown>;
+  downloadable?: boolean;
+}): TelegramMiddlewareTestContext {
+  return {
+    ...(params.updateId === undefined ? {} : { update: { update_id: params.updateId } }),
+    callbackQuery: {
+      id: params.id,
+      data: params.data,
+      from: params.from ?? { id: 9, first_name: "Ada", username: "ada_bot" },
+      message: {
+        chat: { id: 1234, type: "private" },
+        date: 1736380800,
+        message_id: params.messageId,
+        ...(params.text === undefined ? {} : { text: params.text }),
+        ...params.message,
+      },
+    },
+    me: { username: "openclaw_bot" },
+    getFile:
+      params.downloadable === false
+        ? async () => ({})
+        : async () => ({ download: async () => new Uint8Array() }),
   };
 }

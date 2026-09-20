@@ -12,6 +12,11 @@ import {
 } from "./node-workspace-upload-reader.js";
 import * as manifestWorker from "./workspace-manifest-worker.js";
 import { serializeWorkerWorkspaceManifest } from "./workspace-manifest.js";
+import {
+  applyStagedWorkerWorkspaceResult,
+  workerWorkspaceResultRef,
+  workerWorkspaceResultStaging,
+} from "./workspace-result-staging.js";
 
 const temporary = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => vi.restoreAllMocks());
@@ -61,6 +66,83 @@ function fixture(controller = new AbortController()) {
 }
 
 describe("workspace upload byte stream", () => {
+  it("uploads and applies a result larger than the former total byte limit", async () => {
+    const temporaryRoot = temporary.make("workspace-large-upload-");
+    const local = temporary.make("workspace-large-upload-local-");
+    const chunk = Buffer.alloc(1024 * 1024, 0x61);
+    const fileBytes = 60 * chunk.length;
+    const hash = createHash("sha256");
+    for (let index = 0; index < 60; index += 1) {
+      hash.update(chunk);
+    }
+    const sha256 = hash.digest("hex");
+    const baseRaw = serializeWorkerWorkspaceManifest({ version: 1, baseCommit: null, entries: [] });
+    const entries = Array.from({ length: 9 }, (_, index) => ({
+      path: `result-${index}.bin`,
+      type: "file" as const,
+      mode: 0o644,
+      size: fileBytes,
+      sha256,
+    }));
+    const currentRaw = serializeWorkerWorkspaceManifest({ version: 1, baseCommit: null, entries });
+    function* body() {
+      for (const raw of [baseRaw, currentRaw]) {
+        const bytes = Buffer.from(raw);
+        const length = Buffer.alloc(4);
+        length.writeUInt32BE(bytes.length);
+        yield length;
+        yield bytes;
+      }
+      for (const entry of entries) {
+        const length = Buffer.alloc(8);
+        length.writeBigUInt64BE(BigInt(entry.size));
+        yield length;
+        for (let index = 0; index < 60; index += 1) {
+          yield chunk;
+        }
+      }
+    }
+    const request = Readable.from(body()) as unknown as IncomingMessage;
+    request.headers = {
+      "content-length": String(
+        8 +
+          Buffer.byteLength(baseRaw) +
+          Buffer.byteLength(currentRaw) +
+          entries.length * (8 + fileBytes),
+      ),
+    };
+    const upload = await readNodeWorkspaceUpload({
+      request,
+      temporaryRoot,
+      baseManifestRef: `sha256:${createHash("sha256").update(baseRaw).digest("hex")}`,
+      signal: new AbortController().signal,
+      assertCurrent: () => {},
+      isAuthorized: () => true,
+    });
+    const stagedResultRef = workerWorkspaceResultRef("large-upload");
+    await workerWorkspaceResultStaging.stageWorkerWorkspaceResult({
+      root: local,
+      stagingRoot: upload.stagingRoot,
+      stagedResultRef,
+      baseManifestRef: upload.baseManifestRef,
+      currentManifestRef: upload.currentManifestRef,
+      baseManifestRaw: upload.baseRaw,
+      currentManifestRaw: upload.currentRaw,
+    });
+    const commit = vi.fn();
+    const result = await applyStagedWorkerWorkspaceResult({
+      root: local,
+      stagedResultRef,
+      expectedBaseManifestRef: upload.baseManifestRef,
+      journal: { load: () => undefined, begin: () => {}, commit, abort: () => {} },
+    });
+    expect(result.manifestRef).toBe(upload.currentManifestRef);
+    expect(commit).toHaveBeenCalledWith(upload.currentManifestRef);
+    for (const entry of entries) {
+      expect((await fs.stat(path.join(local, entry.path))).size).toBe(entry.size);
+    }
+  }, 60_000);
+
   it.each(["cancellation", "independent failure"] as const)(
     "preserves manifest computation %s when the owner closes",
     async (outcome) => {

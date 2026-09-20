@@ -28,6 +28,7 @@ import type { OpenClawPluginDefinition } from "./types.js";
 // Scoped runtime proxies also ask for descriptors after their get trap returns.
 const LAZY_RUNTIME_PROPERTIES = {
   version: true,
+  decisions: true,
   gateway: true,
   config: true,
   agent: true,

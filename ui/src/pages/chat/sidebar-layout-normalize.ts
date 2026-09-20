@@ -102,6 +102,9 @@ export function normalizeSidebarLayout(value: unknown): SidebarLayout {
       panels.push({
         id: panelId,
         slot,
+        ...(slot === "detail" && normalizeOptionalString(rawPanel.taskId)
+          ? { taskId: normalizeOptionalString(rawPanel.taskId) }
+          : {}),
         ...((slot === "desktop" ||
           (slot === "portal" && !normalizeOptionalString(rawPanel.portalId))) &&
         normalizeOptionalString(rawPanel.environmentId)

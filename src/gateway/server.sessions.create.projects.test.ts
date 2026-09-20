@@ -835,7 +835,7 @@ test("sessions.create with an empty message preserves its owned checkout above t
         now: Date.now(),
       });
     }
-    const kept = managedWorktrees.listRegistryRecords();
+    const kept = await managedWorktrees.listRegistryRecords();
     const key = "agent:main:worktree-above-cleanup-target";
     const scope = { agentId: "main", sessionKey: key, storePath };
     const originalCreate = managedWorktrees.createWithOutcome.bind(managedWorktrees);
@@ -893,7 +893,7 @@ test("sessions.create with an empty message preserves its owned checkout above t
       expect(await requireGit(worktree.path, ["rev-parse", "HEAD"])).toBe(baseCommit);
       expect(await requireGit(worktree.path, ["branch", "--show-current"])).toBe(worktree.branch);
       expect(await fs.readFile(path.join(worktree.path, "README.md"), "utf8")).toBe("project\n");
-      expect(managedWorktrees.listRegistryRecords()).toHaveLength(101);
+      expect(await managedWorktrees.listRegistryRecords()).toHaveLength(101);
       for (const record of kept) {
         expect(managedWorktrees.findLiveById(record.id)).toEqual(record);
         expect(await fs.readFile(path.join(record.path, "README.md"), "utf8")).toBe("workspace\n");
@@ -1013,26 +1013,3 @@ test.each(["missing", "non-directory"] as const)(
     );
   },
 );
-
-test("sessions.create rejects an outside project for a sandboxed agent", async () => {
-  const root = tempDirs.make("openclaw-session-sandbox-project-");
-  const workspace = await initializeRepository(root, "workspace");
-  const outside = await initializeRepository(root, "outside");
-  testState.agentConfig = { workspace, sandbox: { mode: "all" } };
-  await createSessionStoreDir();
-  const project = await registerProjectRegistry({ path: outside });
-
-  for (const worktree of [false, true]) {
-    const created = await directSessionReq("sessions.create", {
-      projectId: project.id,
-      ...(worktree ? { worktree: true } : {}),
-    });
-    expect(created).toMatchObject({
-      ok: false,
-      error: {
-        code: "INVALID_REQUEST",
-        message: "sessions.create project is outside the sandboxed agent workspace",
-      },
-    });
-  }
-});

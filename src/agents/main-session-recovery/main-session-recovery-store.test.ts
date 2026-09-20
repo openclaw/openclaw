@@ -289,6 +289,47 @@ describe("main session recovery store", () => {
   });
 
   it.each([
+    ["claim", false],
+    ["inspect", false],
+    ["claim", true],
+    ["inspect", true],
+  ] as const)("%s follows a moved session with lifecycle rotation=%s", async (kind, rotate) => {
+    const movedKey = "agent:main:moved";
+    const replacement = { sessionId: "replacement", updatedAt: 200 };
+    await seedExact({ [movedKey]: interruptedEntry(), [sessionKey]: replacement });
+    if (rotate) {
+      const replace = sessionAccessor.applySessionEntryReplacements;
+      vi.spyOn(sessionAccessor, "applySessionEntryReplacements").mockImplementationOnce(
+        async (params) => {
+          const result = await replace(params);
+          rotateAgentEventLifecycleGeneration();
+          return result;
+        },
+      );
+    }
+
+    const result =
+      kind === "claim"
+        ? await claimRecovery()
+        : await inspectMainSessionRecoveryRequired({
+            expectedSessionId: "session-1",
+            lifecycleGeneration,
+            target: { sessionKey, storePath },
+          });
+
+    expect(result).toMatchObject(
+      rotate
+        ? { kind: "invalidated", reason: "stale_generation" }
+        : kind === "claim"
+          ? { kind: "claimed", sessionKey: movedKey }
+          : { kind: "required" },
+    );
+    expect(read()).toMatchObject(replacement);
+    const moved = sessionAccessor.loadSessionEntry({ sessionKey: movedKey, storePath });
+    expect(Boolean(moved?.mainRestartRecovery?.foregroundClaims)).toBe(kind === "claim" && !rotate);
+  });
+
+  it.each([
     "validate_foreground",
     "release_foreground",
     "cancel_reservation",

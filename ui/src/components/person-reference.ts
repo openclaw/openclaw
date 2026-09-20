@@ -217,6 +217,10 @@ class PersonReference extends OpenClawLightDomContentsElement {
         ariaHidden: true,
       })}</span
     >`;
+    const displayLabel = this.label.startsWith("@")
+      ? html`<span class="markdown-person-reference__prefix" aria-hidden="true">@</span
+          >${this.label.slice(1)}`
+      : this.label;
     return html`<button
       type="button"
       class="markdown-person-reference"
@@ -260,7 +264,7 @@ class PersonReference extends OpenClawLightDomContentsElement {
         this.open();
       }}
     >
-      ${face}${this.label}
+      ${face}${displayLabel}
     </button>`;
   }
 }

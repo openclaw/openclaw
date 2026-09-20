@@ -282,6 +282,16 @@ The new version can be running while verification fails. Recovery guidance uses 
 latest observed service state and names the running version when known; an
 earlier activation stop does not mean the service remains stopped.
 
+Respawn and update verification use the same progress-aware readiness wait as
+Gateway restart. Startup that continues making progress can use the existing
+five-minute startup lease. If that lease ends while the same Gateway is still
+progressing, verification finishes with a warning and reason `still-starting`.
+The process stays running, recovery backups remain available, and the updater
+does not restart it again, roll it back, or instruct you to keep it stopped.
+The run is `skipped` because readiness is unverified. A version that has not yet
+been observed is unknown; a version mismatch requires an observed serving
+version that disagrees with the installed target.
+
 When the readiness allowance expires for the same running PID or boot generation
 while the restart owner reports waiting for a listener, startup migration, or
 healthy settling, the updater records the elapsed wait and startup phase as a warning. It leaves the process starting, keeps readiness
@@ -302,6 +312,12 @@ This warning handling belongs to the updater already running. The published
 2026.9.3 and 2026.9.4 parents cannot distinguish pending readiness from verified
 success when completing a migrated update, so candidate-only updates cannot
 change their backup-retirement and Windows autostart decisions.
+The published 2026.9.4 runtime also retains its own ten-second respawn health
+wait when it verifies a child it started. Installing a new version cannot change
+that already-running wait. The shared respawn readiness wait applies when the
+new runtime owns the respawn, including subsequent upgrades driven by it;
+candidate-side restart verification uses the new owner when the old updater
+hands that work to the installed runtime.
 
 Plugin packages download and sync against the installed target before the managed
 Gateway restarts. The service remains stopped through channel/config writes,
@@ -395,8 +411,8 @@ requires that retained package, its pre-update verification, unchanged
 config content since the activation Doctor pass, and unchanged applied schema
 versions in pre-existing shared and affected per-agent SQLite databases,
 including deferred content versions. A database first created during activation or
-verification is schema-neutral only at the candidate's supported version for its
-database kind; a missing pre-existing database or a new database at a foreign
+verification is schema-neutral only at the schema version supported by the new installation
+for that database kind; a missing pre-existing database or a new database at a foreign
 version blocks rollback. Newly created databases must also be readable by the
 previous package; unknown or incompatible support refuses rollback with
 `rollback-state-unverified`. The updater restores the previous generation and verifies
@@ -644,7 +660,7 @@ the sentinel.
     Runs Doctor health checks, config and plugin planning, and the isolated migration and test Gateway checks described above. Validation failure leaves the old Gateway serving.
   </Step>
   <Step title="Activate and verify">
-    Stops the managed service, captures and verifies the update-recovery set, checks out the exact candidate SHA, publishes the prepared runtime, and runs required Doctor migrations. Core dependencies and the checkout build were prepared before downtime; plugin convergence follows while the service remains stopped.
+    Stops the managed service, captures and verifies the update-recovery set, checks out the exact staged commit SHA, publishes the prepared runtime, and runs required Doctor migrations. Core dependencies and the checkout build were prepared before downtime; plugin convergence follows while the service remains stopped.
 
     If restoring the previous Git runtime fails, the Gateway stays stopped and the failed rollback step records the filesystem error. Pending originals remain in sibling `<runtime>.openclaw-update-<id>.tmp/previous` directories. Preserve those backups and repair the installation before restarting; cleanup does not delete an unrestored original.
 

@@ -2,11 +2,7 @@ import fs, { type BigIntStats, type Stats } from "node:fs";
 import path from "node:path";
 import type { DatabaseSync as HandoffDatabase } from "node:sqlite";
 import { sql } from "kysely";
-import {
-  requireDirectorySync,
-  syncDirectorySync,
-  type DirectoryReceipt,
-} from "./directory-durability.js";
+import { requireDirectorySync, syncDirectorySync } from "./directory-durability.js";
 import { acquireFileLockSyncWithRetry } from "./file-lock-sync.js";
 import { sameFileIdentity } from "./fs-safe-advanced.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "./kysely-sync.js";
@@ -114,7 +110,16 @@ function assertSamePath(
   }
 }
 
-function createMissingDatabaseFile(databasePath: string, parentReceipt: DirectoryReceipt): void {
+type HandoffDirectoryReceipt = {
+  path: string;
+  realPath: string;
+  identity: BigIntStats;
+};
+
+function createMissingDatabaseFile(
+  databasePath: string,
+  parentReceipt: HandoffDirectoryReceipt,
+): void {
   let descriptor: number | undefined;
   try {
     descriptor =
@@ -149,8 +154,15 @@ function createMissingDatabaseFile(databasePath: string, parentReceipt: Director
         ? fs.lstatSync(databasePath)
         : fs.lstatSync(databasePath, { bigint: true });
     assertSamePath(currentIdentity, identity, "file");
-    assertSamePath(fs.lstatSync(parentReceipt.path), parentReceipt.identity, "directory");
-    requireDirectorySync(syncDirectorySync(parentReceipt), "Managed handoff lease directory");
+    assertSamePath(
+      fs.lstatSync(parentReceipt.path, { bigint: true }),
+      parentReceipt.identity,
+      "directory",
+    );
+    // fs-safe 0.16 guards bigint receipt identities but declares only numeric Stats.
+    // @ts-expect-error Remove after adopting the declaration fix in openclaw/fs-safe#495.
+    const directorySync = syncDirectorySync(parentReceipt);
+    requireDirectorySync(directorySync, "Managed handoff lease directory");
   } finally {
     if (descriptor !== undefined) {
       fs.closeSync(descriptor);
@@ -247,7 +259,7 @@ export function createManagedHandoffLeaseDatabase(
    * databases and defeating the lock this store exists to provide. The decision
    * is therefore retaken under the lock, where the replacement is visible.
    */
-  function recoverUnadoptableStore(target: string, parent: DirectoryReceipt): void {
+  function recoverUnadoptableStore(target: string, parent: HandoffDirectoryReceipt): void {
     if (!observeUnadoptable(target)) {
       return;
     }
@@ -312,7 +324,7 @@ export function createManagedHandoffLeaseDatabase(
       fs.chmodSync(dir, 0o700);
     }
     recoverDirectoryMode(dir);
-    const directoryIdentity = fs.lstatSync(dir);
+    const directoryIdentity = fs.lstatSync(dir, { bigint: true });
     assertPath(directoryIdentity, "directory");
     // syncDirectorySync verifies ordinary realpath spelling. Windows native
     // realpath can expand an 8.3 alias differently without changing the directory.
@@ -335,7 +347,7 @@ export function createManagedHandoffLeaseDatabase(
       { readOnly: !write },
     );
     try {
-      assertSamePath(fs.lstatSync(dir), directoryIdentity, "directory");
+      assertSamePath(fs.lstatSync(dir, { bigint: true }), directoryIdentity, "directory");
       assertSamePath(fs.lstatSync(databasePath), databaseIdentity, "file");
       setSqliteBusyTimeout(db, 5000);
       if (write) {

@@ -621,15 +621,19 @@ export function getSubagentRunsSnapshotForController(
 export function getSubagentRunsSnapshotForSession(
   inMemoryRuns: Map<string, SubagentRunRecord>,
   sessionKey: string,
+  storePath?: string,
 ): Map<string, SubagentRunRecord> {
   const key = sessionKey.trim();
   if (!key) {
     return new Map();
   }
+  const ownsStore = (ownerPath: string | undefined) =>
+    storePath === undefined || ownerPath === storePath;
   return getSubagentRunsSnapshot(inMemoryRuns, persistedSubagentRunsReadCache, {
     load: () => loadSubagentRunsForSessionFromSqlite(key),
     matches: (entry) =>
-      entry.controllerSessionKey?.trim() === key || entry.requesterSessionKey.trim() === key,
+      (entry.controllerSessionKey?.trim() === key && ownsStore(entry.controllerStorePath)) ||
+      (entry.requesterSessionKey.trim() === key && ownsStore(entry.requesterStorePath)),
   });
 }
 

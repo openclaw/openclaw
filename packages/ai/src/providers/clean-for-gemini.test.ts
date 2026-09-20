@@ -1,9 +1,54 @@
 // Gemini schema cleaner tests cover OpenAPI-compatible tool schema cleanup for
 // Gemini-backed providers before schemas are sent upstream.
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
 import { describe, expect, it } from "vitest";
 import { cleanSchemaForGemini } from "./clean-for-gemini.js";
 
+const execFileAsync = promisify(execFile);
+
 describe("cleanSchemaForGemini", () => {
+  it("normalizes deep nullable schemas in a cold process", async () => {
+    const source = String.raw`
+      import assert from "node:assert/strict";
+      import { cleanSchemaForGemini } from ${JSON.stringify(new URL("./clean-for-gemini.ts", import.meta.url).href)};
+      import { stripUnsupportedSchemaKeywords } from ${JSON.stringify(new URL("./schema-keyword-strip.ts", import.meta.url).href)};
+      let value = { type: "string", format: "date-time" };
+      for (let index = 0; index < 2048; index += 1) {
+        value = { anyOf: [value, { type: "null" }] };
+      }
+      const schema = JSON.parse(JSON.stringify({
+        type: "object", properties: { value }, required: ["value"],
+      }));
+      const normalized = cleanSchemaForGemini(schema);
+      const stripped = stripUnsupportedSchemaKeywords(schema, new Set(["format"]));
+      let leaf = stripped.properties.value;
+      for (let index = 0; index < 2048; index += 1) {
+        assert.equal(leaf.anyOf.length, 2);
+        assert.deepEqual(leaf.anyOf[1], { type: "null" });
+        leaf = leaf.anyOf[0];
+      }
+      const circular = { type: "object", properties: {} };
+      circular.properties.self = circular;
+      assert.throws(() => cleanSchemaForGemini(circular), TypeError);
+      assert.throws(() => stripUnsupportedSchemaKeywords(circular, new Set()), TypeError);
+      process.stdout.write(JSON.stringify({ normalized, leaf }));
+    `;
+    const { stdout } = await execFileAsync(
+      process.execPath,
+      ["--max-old-space-size=192", "--import", "tsx", "--input-type=module", "-e", source],
+      { cwd: process.cwd(), encoding: "utf8", maxBuffer: 1024 * 1024, timeout: 20_000 },
+    );
+    expect(JSON.parse(stdout)).toEqual({
+      normalized: {
+        type: "object",
+        properties: { value: { type: "string" } },
+        required: ["value"],
+      },
+      leaf: { type: "string" },
+    });
+  }, 30_000);
+
   it("strips serialized optional markers without changing required fields or the input", () => {
     const schema = {
       type: "object",
@@ -353,5 +398,29 @@ describe("cleanSchemaForGemini", () => {
     }) as { enum?: unknown };
 
     expect(cleaned.enum).toBeUndefined();
+  });
+
+  it("preserves shared definitions across inline and reference traversal", () => {
+    const node = {
+      type: "object",
+      properties: { next: { $ref: "#/$defs/Node" } },
+    };
+    expect(
+      cleanSchemaForGemini({
+        type: "object",
+        $defs: { Node: node },
+        properties: { head: node },
+        required: ["head"],
+      }),
+    ).toStrictEqual({
+      type: "object",
+      properties: {
+        head: {
+          type: "object",
+          properties: { next: { type: "object", properties: { next: {} } } },
+        },
+      },
+      required: ["head"],
+    });
   });
 });

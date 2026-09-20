@@ -93,6 +93,7 @@ data class ChatMessageUsage(
   val input: Long? = null,
   val output: Long? = null,
   val cacheRead: Long? = null,
+  val cacheWrite: Long? = null,
 )
 
 @Serializable

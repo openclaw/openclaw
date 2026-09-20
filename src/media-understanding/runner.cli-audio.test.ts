@@ -316,21 +316,18 @@ describe("media-understanding CLI audio entry", () => {
                 audio: {
                   prompt: "configured prompt",
                   language: "fr",
-                  _requestPromptOverride: "Focus on names",
-                  _requestLanguageOverride: "en",
                 },
               },
             },
-          } as OpenClawConfig,
+          },
           ctx,
           attachment: requireFirstAttachment(media),
           cache,
           config: {
             prompt: "configured prompt",
             language: "fr",
-            _requestPromptOverride: "Focus on names",
-            _requestLanguageOverride: "en",
-          } as never,
+          },
+          request: { prompt: "Focus on names", language: "en" },
         });
       },
     );

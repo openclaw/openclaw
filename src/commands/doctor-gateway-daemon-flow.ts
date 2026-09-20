@@ -51,8 +51,8 @@ import { buildGatewayRuntimeHints, formatGatewayRuntimeSummary } from "./doctor-
 import type { DoctorOptions, DoctorPrompter } from "./doctor-prompter.js";
 import {
   confirmDoctorServiceRepair,
-  EXTERNAL_SERVICE_REPAIR_NOTE,
-  isServiceRepairExternallyManaged,
+  formatServiceRepairDeferredNote,
+  isServiceRepairDeferred,
   resolveServiceRepairPolicy,
   SERVICE_REPAIR_POLICY_ENV,
   shouldManageGatewayService,
@@ -141,7 +141,7 @@ async function maybeRepairLaunchAgentBootstrap(params: {
   title: string;
   runtime: RuntimeEnv;
   prompter: DoctorPrompter;
-  serviceRepairExternal: boolean;
+  serviceRepairDeferred: boolean;
 }): Promise<LaunchAgentBootstrapDoctorOutcome> {
   if (
     process.platform !== "darwin" ||
@@ -152,8 +152,8 @@ async function maybeRepairLaunchAgentBootstrap(params: {
   }
 
   note("LaunchAgent is installed but not loaded in launchd.", `${params.title} LaunchAgent`);
-  if (params.serviceRepairExternal) {
-    note(EXTERNAL_SERVICE_REPAIR_NOTE, `${params.title} LaunchAgent`);
+  if (params.serviceRepairDeferred) {
+    note(formatServiceRepairDeferredNote(), `${params.title} LaunchAgent`);
     return { status: "not-loaded" };
   }
 
@@ -297,12 +297,12 @@ export async function maybeRepairGatewayDaemon(params: {
 
   if (!(await shouldManageGatewayService())) {
     await noteGatewayPortDiagnostics(params.cfg, params.options.deep ?? false);
-    note(EXTERNAL_SERVICE_REPAIR_NOTE, "Gateway");
+    note(formatServiceRepairDeferredNote(), "Gateway");
     return;
   }
 
   const serviceRepairPolicy = resolveServiceRepairPolicy();
-  const serviceRepairExternal = isServiceRepairExternallyManaged(serviceRepairPolicy);
+  const serviceRepairDeferred = isServiceRepairDeferred(serviceRepairPolicy);
   const service = resolveGatewayService();
   const restartGatewayService = async () => {
     try {
@@ -337,7 +337,7 @@ export async function maybeRepairGatewayDaemon(params: {
           title: "Gateway",
           runtime: params.runtime,
           prompter: params.prompter,
-          serviceRepairExternal,
+          serviceRepairDeferred,
         });
     await maybeRepairLaunchAgentBootstrap({
       env: {
@@ -347,7 +347,7 @@ export async function maybeRepairGatewayDaemon(params: {
       title: "Node",
       runtime: params.runtime,
       prompter: params.prompter,
-      serviceRepairExternal,
+      serviceRepairDeferred,
     });
     if (gatewayRepair.status === "not-loaded") {
       return;
@@ -405,8 +405,8 @@ export async function maybeRepairGatewayDaemon(params: {
         return;
       }
     }
-    if (serviceRepairExternal) {
-      note(EXTERNAL_SERVICE_REPAIR_NOTE, "Gateway");
+    if (serviceRepairDeferred) {
+      note(formatServiceRepairDeferredNote(), "Gateway");
       return;
     }
     const install = await confirmDoctorServiceRepair(
@@ -487,8 +487,8 @@ export async function maybeRepairGatewayDaemon(params: {
     if (params.healthSkipped && serviceRuntime?.status !== "stopped") {
       return;
     }
-    if (serviceRepairExternal) {
-      note(EXTERNAL_SERVICE_REPAIR_NOTE, "Gateway");
+    if (serviceRepairDeferred) {
+      note(formatServiceRepairDeferredNote(), "Gateway");
       return;
     }
     const start = await confirmDoctorServiceRepair(
@@ -525,8 +525,8 @@ export async function maybeRepairGatewayDaemon(params: {
     if (params.healthSkipped) {
       return;
     }
-    if (serviceRepairExternal) {
-      note(EXTERNAL_SERVICE_REPAIR_NOTE, "Gateway");
+    if (serviceRepairDeferred) {
+      note(formatServiceRepairDeferredNote(), "Gateway");
       return;
     }
 

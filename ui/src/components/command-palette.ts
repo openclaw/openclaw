@@ -1,9 +1,9 @@
-// Control UI component renders the command palette.
+// The palette owns search/navigation; its draft reuses the canonical session owners.
 import { consume } from "@lit/context";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { property, state } from "lit/decorators.js";
-import type { RouteId } from "../app-route-paths.ts";
 import { applicationContext, type ApplicationContext } from "../app/context.ts";
+import { gatewayPresentationScope } from "../app/gateway-presentation-scope.ts";
 import { hasOperatorAdminAccess } from "../app/operator-access.ts";
 import { isGatewayMethodAdvertised } from "../lib/gateway-methods.ts";
 import { resolveUiSelectedGlobalAgentId } from "../lib/sessions/session-key.ts";
@@ -11,23 +11,31 @@ import { searchVisibleSessionTranscripts } from "../lib/sessions/transcript-sear
 import { GatewayPageController } from "../lit/gateway-page-controller.ts";
 import { OpenClawLightDomContentsElement } from "../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../lit/subscriptions-controller.ts";
+import { PaletteSessionDraft } from "../pages/new-session/palette-session-draft.ts";
 import {
   getStaticCommandPaletteCatalogItems,
   loadCommandPaletteCatalogItems,
   toCommandPaletteItems,
   type CommandPaletteItem,
 } from "./command-palette-catalog-search.ts";
-import { isCommandPaletteShortcut } from "./command-palette-contract.ts";
+import {
+  isCommandPaletteShortcut,
+  type CommandPaletteOpenInput,
+  type CommandPaletteInputHandoff,
+} from "./command-palette-contract.ts";
 import {
   buildCommandPaletteSessionItems,
   SESSION_SEARCH_LIMIT,
 } from "./command-palette-session-search.ts";
-import { focusInput, renderCommandPalette, type PaletteFilter } from "./command-palette-view.ts";
+import { renderCommandPalette, type PaletteFilter } from "./command-palette-view.ts";
+import type { OpenClawModalDialog } from "./modal-dialog.ts";
 
 type PaletteItem = CommandPaletteItem;
 
 const SESSION_SEARCH_DEBOUNCE_MS = 50;
 const SESSION_SEARCH_MIN_CHARS = 2;
+const PROMPT_ENTER_CHARS = 60;
+const PROMPT_EXIT_CHARS = 50;
 const SESSION_SEARCH_SCOPE = {
   includeGlobal: false,
   includeUnknown: false,
@@ -39,17 +47,47 @@ const SESSION_SEARCH_SCOPE = {
 const CATALOG_CACHE_TTL_MS = 30_000;
 
 export class CommandPalette extends OpenClawLightDomContentsElement {
-  @property({ attribute: false }) onNavigate?: ApplicationContext<RouteId>["navigate"];
+  @property({ attribute: false }) onNavigate?: ApplicationContext["navigate"];
   @property({ attribute: false }) onSelectSession?: (sessionKey: string) => void;
   @property({ attribute: false }) onSlashCommand?: (command: string) => void;
   @property({ attribute: false }) desktopAvailable = false;
   @property({ attribute: false }) custodianAvailable = false;
   @consume({ context: applicationContext, subscribe: true })
-  private context?: ApplicationContext<RouteId>;
+  private context?: ApplicationContext;
   @state() private open = false;
-  @state() private query = "";
-  @state() private activeId: string | null = null;
+  private initialInput: CommandPaletteOpenInput | undefined;
+  private takeInitialInput: CommandPaletteInputHandoff | undefined;
+  private inputElement: HTMLTextAreaElement | undefined;
+  private presentationScope: ReturnType<typeof gatewayPresentationScope> | undefined;
   @state() private filter: PaletteFilter = "all";
+  private readonly draft = new PaletteSessionDraft(
+    this,
+    () => ({ context: this.context, open: this.open }),
+    {
+      onClose: () => this.closePalette(),
+      onMessageChange: (query) => {
+        const text = query.trim();
+        const length = Array.from(text).length;
+        // Separate entry/exit thresholds keep edits near the boundary from
+        // repeatedly collapsing and reopening search. Draft resets pass here too.
+        this.promptMode =
+          text.includes("\n") ||
+          (this.promptMode ? length > PROMPT_EXIT_CHARS : length >= PROMPT_ENTER_CHARS);
+        if (!text) {
+          this.filter = "all";
+        }
+        this.activeId = null;
+        this.scheduleSessionSearch(query);
+      },
+    },
+  );
+
+  private get query(): string {
+    return this.draft.message;
+  }
+
+  @state() private promptMode = false;
+  @state() private activeId: string | null = null;
   @state() private sessionItems: readonly PaletteItem[] = [];
   @state() private catalogItems: readonly PaletteItem[] = [];
   @state() private modelSearchError: string | null = null;
@@ -63,7 +101,7 @@ export class CommandPalette extends OpenClawLightDomContentsElement {
   @state() private sessionSearchTimer: ReturnType<typeof globalThis.setTimeout> | null = null;
   private sessionSearchId = 0;
   @state() private catalogLoad?: {
-    client: NonNullable<ApplicationContext<RouteId>["gateway"]["snapshot"]["client"]>;
+    client: NonNullable<ApplicationContext["gateway"]["snapshot"]["client"]>;
     agentId: string;
     promise: Promise<void>;
     loadedAt?: number;
@@ -74,19 +112,12 @@ export class CommandPalette extends OpenClawLightDomContentsElement {
       this.clearSessionSearch();
       this.clearCatalogSearch();
     },
+    onSnapshot: () => this.synchronizePresentationScope(),
     ensureInitialData: () => this.scheduleSessionSearch(this.query),
   });
 
   constructor() {
     super();
-    this.subscriptions.watch(
-      () => this.context?.agents,
-      (agents, notify) => agents.subscribe(notify),
-    );
-    this.subscriptions.watch(
-      () => this.context?.agentIdentity,
-      (identity, notify) => identity.subscribe(notify),
-    );
     this.subscriptions.effect(
       () => this.context?.gateway,
       (gateway) =>
@@ -120,20 +151,52 @@ export class CommandPalette extends OpenClawLightDomContentsElement {
 
   override disconnectedCallback() {
     document.removeEventListener("keydown", this.handleGlobalKeydown);
+    this.initialInput = undefined;
+    this.takeInitialInput = undefined;
+    this.inputElement?.removeEventListener("focus", this.adoptInitialInput);
+    this.inputElement = undefined;
     this.open = false;
-    this.query = "";
     this.activeId = null;
     this.clearSessionSearch();
     this.clearCatalogSearch();
     super.disconnectedCallback();
   }
 
-  openPalette() {
+  openPalette(input?: CommandPaletteOpenInput | CommandPaletteInputHandoff) {
+    const returnFocus =
+      document.activeElement instanceof HTMLElement ? document.activeElement : null;
     this.open = true;
-    this.filter = "all";
-    this.query = "";
+    this.draft.open();
+    this.takeInitialInput = typeof input === "function" ? input : undefined;
+    this.initialInput =
+      typeof input === "function"
+        ? undefined
+        : (input ?? {
+            value: this.query,
+            selectionStart: this.query.length,
+            selectionEnd: this.query.length,
+            selectionDirection: "none",
+            returnFocus,
+          });
+    if (this.initialInput) {
+      this.draft.setMessage(this.initialInput.value);
+    }
     this.activeId = null;
-    this.clearSessionSearch();
+    this.filter = "all";
+    this.scheduleSessionSearch(this.query);
+  }
+
+  private synchronizePresentationScope() {
+    const gateway = this.context?.gateway;
+    const scope = gateway ? gatewayPresentationScope(gateway) : undefined;
+    if (this.presentationScope && this.presentationScope !== scope) {
+      // Account/connection replacement retires the visible launcher; ordinary
+      // transport reconnects keep the canonical presentation scope and query.
+      this.closePalette();
+      this.activeId = null;
+      this.clearCatalogSearch();
+    }
+    this.presentationScope = scope;
   }
 
   get isOpen(): boolean {
@@ -142,18 +205,68 @@ export class CommandPalette extends OpenClawLightDomContentsElement {
 
   readonly togglePalette = () => {
     if (this.open) {
-      this.open = false;
-      this.clearSessionSearch();
+      if (!this.draft.submitting) {
+        this.closePalette();
+      }
       return;
     }
     this.openPalette();
   };
 
+  private closePalette() {
+    this.initialInput = undefined;
+    this.takeInitialInput = undefined;
+    this.open = false;
+    this.draft.close();
+    this.clearSessionSearch();
+  }
+
   private readonly handleInputRef = (element: Element | undefined) => {
-    if (this.open) {
-      focusInput(element);
+    this.inputElement?.removeEventListener("focus", this.adoptInitialInput);
+    this.inputElement = element instanceof HTMLTextAreaElement ? element : undefined;
+    this.inputElement?.addEventListener("focus", this.adoptInitialInput);
+  };
+
+  private readonly adoptInitialInput = () => {
+    const element = this.inputElement;
+    if (!this.open || !element?.isConnected || document.activeElement !== element) {
+      return;
+    }
+    if (this.takeInitialInput) {
+      const take = this.takeInitialInput;
+      this.takeInitialInput = undefined;
+      const input = take();
+      if (!input) {
+        this.closePalette();
+        return;
+      }
+      this.initialInput = input;
+      this.draft.setMessage(input.value);
+      // The dialog has accepted focus. Publish the captured value synchronously
+      // before the next key, then let the normal binding retain that same value.
+      element.value = input.value;
+    }
+    const input = this.initialInput;
+    if (!input) {
+      return;
+    }
+    this.initialInput = undefined;
+    if (input.returnFocus !== undefined) {
+      element
+        .closest<OpenClawModalDialog>("openclaw-modal-dialog")
+        ?.setReturnFocusTarget(input.returnFocus);
+    }
+    element.setSelectionRange(input.selectionStart, input.selectionEnd, input.selectionDirection);
+    if (input.submitRequested) {
+      void this.draft.submit();
     }
   };
+
+  protected override updated() {
+    // ModalDialog owns autofocus. Focusing its not-yet-open slotted field here
+    // can retire the loader before the browser has admitted the new modal.
+    this.adoptInitialInput();
+  }
 
   private clearSessionSearch() {
     if (this.sessionSearchTimer !== null) {
@@ -179,7 +292,14 @@ export class CommandPalette extends OpenClawLightDomContentsElement {
     const context = this.context;
     const gateway = context?.gateway;
     const client = gateway?.snapshot.client;
-    if (!context || !this.gateway.connected || !gateway || !client) {
+    if (
+      !this.open ||
+      this.promptMode ||
+      !context ||
+      !this.gateway.connected ||
+      !gateway ||
+      !client
+    ) {
       return Promise.resolve();
     }
     const agentId =
@@ -194,6 +314,7 @@ export class CommandPalette extends OpenClawLightDomContentsElement {
       return current.promise;
     }
     const snapshot = gateway.snapshot;
+    const scope = gatewayPresentationScope(gateway);
     const previousModels =
       current?.client === client && current.agentId === agentId
         ? this.catalogItems.filter((item) => item.category === "models")
@@ -206,6 +327,7 @@ export class CommandPalette extends OpenClawLightDomContentsElement {
     }).then(({ items, modelRequestFailed, modelSearchError }) => {
       if (
         this.catalogLoad?.promise === promise &&
+        gatewayPresentationScope(gateway) === scope &&
         this.context?.gateway === gateway &&
         this.context?.agentSelection === context.agentSelection &&
         gateway.snapshot.client === client
@@ -226,6 +348,12 @@ export class CommandPalette extends OpenClawLightDomContentsElement {
     // Invalidate the previous query immediately so late responses cannot
     // repopulate selectable stale rows during the debounce window.
     this.clearSessionSearch();
+    if (this.promptMode) {
+      // Retire catalog generations too: late results and refresh events must not
+      // revive search while the same field is being used as a session draft.
+      this.clearCatalogSearch();
+      return;
+    }
     const search = normalizeOptionalString(query);
     if (!this.open || !search || search.length < SESSION_SEARCH_MIN_CHARS) {
       return;
@@ -254,8 +382,10 @@ export class CommandPalette extends OpenClawLightDomContentsElement {
       return;
     }
     const requestId = ++this.sessionSearchId;
+    const scope = gatewayPresentationScope(gateway);
     const isCurrent = () =>
       requestId === this.sessionSearchId &&
+      gatewayPresentationScope(gateway) === scope &&
       this.open &&
       this.context?.sessions === sessions &&
       this.context?.gateway === gateway &&
@@ -311,12 +441,7 @@ export class CommandPalette extends OpenClawLightDomContentsElement {
   }
 
   private readonly handleGlobalKeydown = (event: KeyboardEvent) => {
-    if (event.isComposing || event.keyCode === 229) {
-      return;
-    }
-    if (!event.defaultPrevented && event.key === "Escape" && this.open) {
-      event.preventDefault();
-      this.togglePalette();
+    if (event.defaultPrevented || event.isComposing || event.keyCode === 229) {
       return;
     }
     if (isCommandPaletteShortcut(event)) {
@@ -330,6 +455,7 @@ export class CommandPalette extends OpenClawLightDomContentsElement {
       basePath: this.context?.basePath ?? "",
       open: this.open,
       query: this.query,
+      promptMode: this.promptMode,
       activeId: this.activeId,
       filter: this.filter,
       onFilterChange: (filter) => {
@@ -355,6 +481,7 @@ export class CommandPalette extends OpenClawLightDomContentsElement {
       sessionSearchPending: this.sessionSearchPending,
       catalogSearchPending: Boolean(
         normalizeOptionalString(this.query) &&
+        !this.promptMode &&
         ((this.sessionSearchTimer !== null && this.gateway.connected) ||
           (this.catalogLoad && this.catalogLoad.loadedAt === undefined)),
       ),
@@ -366,12 +493,7 @@ export class CommandPalette extends OpenClawLightDomContentsElement {
       custodianAvailable: this.custodianAvailable,
       onToggle: this.togglePalette,
       onQueryChange: (query) => {
-        this.query = query;
-        if (!query.trim()) {
-          this.filter = "all";
-        }
-        this.activeId = null;
-        this.scheduleSessionSearch(query);
+        this.draft.setMessage(query);
       },
       onActiveIdChange: (id) => {
         this.activeId = id;
@@ -380,6 +502,7 @@ export class CommandPalette extends OpenClawLightDomContentsElement {
       onSelectSession: this.onSelectSession,
       onSlashCommand: this.onSlashCommand,
       onInputRef: this.handleInputRef,
+      draft: this.draft,
     });
   }
 }

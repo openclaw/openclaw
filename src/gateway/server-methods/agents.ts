@@ -5,16 +5,10 @@ import os from "node:os";
 import path from "node:path";
 import { normalizeOptionalString as resolveOptionalStringParam } from "@openclaw/normalization-core/string-coerce";
 import {
-  GATEWAY_CLIENT_CAPS,
-  GATEWAY_CLIENT_IDS,
-  hasGatewayClientCap,
-} from "../../../packages/gateway-protocol/src/client-info.js";
-import {
   ErrorCodes,
   errorShape,
   validateAgentsCreateParams,
   validateAgentsDeleteParams,
-  validateAgentsListParams,
   validateAgentsUpdateParams,
 } from "../../../packages/gateway-protocol/src/index.js";
 import type { AgentsDeleteResult } from "../../../packages/gateway-protocol/src/schema/agents-models-skills.js";
@@ -100,7 +94,6 @@ import {
 } from "../../state/agent-deletion-journal.js";
 import { unregisterOpenClawAgentDatabase } from "../../state/openclaw-agent-db-registry.js";
 import { resolveUserPath } from "../../utils.js";
-import { listAgentsForGateway } from "../session-utils.js";
 import {
   AgentConfigPreconditionError,
   deleteAgentConfigEntry,
@@ -108,7 +101,7 @@ import {
   updateAgentConfigEntry,
 } from "./agents-config-mutations.js";
 import { createAgentFileHandlers } from "./agents-files.js";
-import { readPreparedServerMethodModelCatalog } from "./optional-model-catalog.js";
+import { agentListHandler } from "./agents-list.js";
 import type { GatewayRequestHandlers, RespondFn } from "./types.js";
 import { assertValidParams } from "./validation.js";
 
@@ -628,33 +621,7 @@ async function buildIdentityMarkdownOrRespondUnsafe(params: {
 }
 
 export const agentsHandlers: GatewayRequestHandlers = {
-  "agents.list": async ({ params, respond, context, client }) => {
-    if (!assertValidParams(params, validateAgentsListParams, "agents.list", respond)) {
-      return;
-    }
-
-    const cfg = context.getRuntimeConfig();
-    const modelCatalogByAgentId = new Map(
-      await Promise.all(
-        listAgentIds(cfg).map(
-          async (agentId) =>
-            [agentId, await readPreparedServerMethodModelCatalog(context, { agentId })] as const,
-        ),
-      ),
-    );
-    respond(
-      true,
-      await listAgentsForGateway(cfg, undefined, {
-        modelCatalogByAgentId,
-        includeSystem: hasGatewayClientCap(client?.connect.caps, GATEWAY_CLIENT_CAPS.AGENT_KIND),
-        httpAvatarBasePath:
-          client?.connect.client.id === GATEWAY_CLIENT_IDS.CONTROL_UI
-            ? (cfg.gateway?.controlUi?.basePath ?? "")
-            : undefined,
-      }),
-      undefined,
-    );
-  },
+  "agents.list": agentListHandler,
   "agents.create": async ({ params, respond }) => {
     if (!assertValidParams(params, validateAgentsCreateParams, "agents.create", respond)) {
       return;

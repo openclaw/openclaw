@@ -309,3 +309,39 @@ jobs:
         # Swift runtime rpath, say) shows up at all. `--all-targets` keeps the
         # compile coverage `check --all-targets` used to give.
         run: cargo +stable test --locked --all-targets
+
+      - name: Verify native macOS power lifecycle
+        working-directory: apps/linux/src-tauri
+        run: cargo +stable test --locked --test native_keep_awake native_power_lifecycle -- --nocapture
+
+  test-windows-power:
+    name: Test Windows power lifecycle
+    # Match the optional Windows desktop-test bundle runner.
+    runs-on: windows-2022
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 1
+          fetch-tags: false
+          persist-credentials: false
+          submodules: false
+
+      - name: Install Rust
+        run: rustup toolchain install stable --profile minimal
+
+      - name: Cache Cargo
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            apps/linux/src-tauri/target
+          key: windows-app-${{ runner.os }}-${{ hashFiles('apps/linux/src-tauri/Cargo.lock') }}
+          restore-keys: |
+            windows-app-${{ runner.os }}-
+
+      - name: Verify native Windows power lifecycle
+        working-directory: apps/linux/src-tauri
+        run: cargo +stable test --locked --test native_keep_awake native_power_lifecycle -- --nocapture

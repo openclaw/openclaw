@@ -199,6 +199,11 @@ Use `api.runtime.state.openKeyedStore` with the same namespace and options, then
 await its operations. The opener itself still returns a store synchronously.
 Both interfaces use the same plugin-scoped data, so no data migration is needed.
 
+Deferred runtime code without a bound plugin API can import
+`createPluginStateKeyedStore` from `openclaw/plugin-sdk/plugin-state-store-runtime`.
+Pass the plugin ID and the same namespace options, then await each operation.
+Keep this import lazy because the factory loads the state database runtime.
+
 ```typescript
 const store = api.runtime.state.openKeyedStore<MyRecord>({
   namespace: "my-feature",

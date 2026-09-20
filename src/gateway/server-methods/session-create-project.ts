@@ -281,9 +281,9 @@ export async function prepareSessionWorkspace(params: {
     }
     const root = prepareSessionCreateFilesystemRoot({
       cfg,
-      // The saved child now carries the locked parent's inherited sandbox requirement.
-      // Registered projects must take the same pre-worktree containment path as clones.
-      enforceSandboxContainment: Boolean(project || saved.projectId),
+      // Direct bindings still require containment. Pending managed checkouts use
+      // the saved child requirement and source custody in the preparation owner.
+      enforceSandboxContainment: !pending && Boolean(project || saved.projectId),
       requestedProjectId: project?.id ?? saved.projectId,
       sessionCwd: directory,
       sessionKey,
@@ -362,7 +362,13 @@ export async function prepareSessionWorkspace(params: {
       // Retries inherit workspace intent, not a previous caller's setup authority.
       const result = await prepareSessionWorktree({
         cfg,
-        target: { ...target, key: sessionKey, entry: saved },
+        target: {
+          ...target,
+          key: sessionKey,
+          entry: saved,
+          projectId: project?.id ?? saved.projectId,
+          sandboxRequired: saved.sandbox === "required",
+        },
         workspace: directory,
         name: pending.name,
         baseRef: pending.baseRef,
@@ -372,6 +378,7 @@ export async function prepareSessionWorkspace(params: {
         signal,
         commitGuard: assertRunOwnership,
         onProgress: (stage) => status(stage === "setup" ? "running_setup" : "creating_worktree"),
+        acceptedSource: pending.source,
       });
       if (!result.ok) {
         throw new Error(result.error.message);
@@ -380,25 +387,31 @@ export async function prepareSessionWorkspace(params: {
     }
     let bound;
     try {
-      bound = await patchSessionEntryCore(
-        target,
-        (current) => {
-          assertSavedWorkspaceIntent(current);
-          return {
-            ...(project ? { projectId: project.id } : {}),
-            sessionRoot: prepared.sessionRoot,
-            spawnedCwd: prepared.spawnedCwd,
-            ...(prepared.worktree ? { worktree: prepared.worktree } : {}),
-            pendingProjectGitUrl: undefined,
-            pendingWorktree: undefined,
-          };
-        },
-        {
-          assertCommitAllowed: assertRunOwnership,
-          requireWriteSuccess: true,
-          skipMaintenance: true,
-        },
-      );
+      const bind = async (assertSourceCurrent: () => void) =>
+        await patchSessionEntryCore(
+          target,
+          (current) => {
+            assertSourceCurrent();
+            assertSavedWorkspaceIntent(current);
+            return {
+              ...(project ? { projectId: project.id } : {}),
+              sessionRoot: prepared.sessionRoot,
+              spawnedCwd: prepared.spawnedCwd,
+              ...(prepared.worktree ? { worktree: prepared.worktree } : {}),
+              pendingProjectGitUrl: undefined,
+              pendingWorktree: undefined,
+            };
+          },
+          {
+            assertCommitAllowed: () => {
+              assertRunOwnership();
+              assertSourceCurrent();
+            },
+            requireWriteSuccess: true,
+            skipMaintenance: true,
+          },
+        );
+      bound = prepared.withCommit ? await prepared.withCommit(bind) : await bind(() => {});
       if (!bound) {
         throw new Error("Session disappeared while preparing its workspace; start a new session.");
       }

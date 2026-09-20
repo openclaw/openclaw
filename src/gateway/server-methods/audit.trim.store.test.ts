@@ -3,16 +3,17 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { cleanupTempDirs, makeTempDir } from "../../../test/helpers/temp-dir.js";
-import { listAuditEvents, recordAuditEvent } from "../../audit/audit-event-store.js";
+import { listAuditEvents, recordAuditEventInDatabase } from "../../audit/audit-event-store.js";
 import {
   configureExecutionIdentityAdmissionSink,
   enqueueExecutionIdentityContextAtAdmission,
 } from "../../audit/execution-identity-admission.js";
-import { processExecutionIdentityAdmissionWork } from "../../audit/execution-identity-context.js";
+import { processExecutionIdentityAdmissionWorkInDatabase } from "../../audit/execution-identity-context.js";
 import { requireNodeSqlite } from "../../infra/node-sqlite.js";
 import {
   closeOpenClawStateDatabaseForTest,
   closeOpenClawStateDatabaseAsync,
+  openOpenClawStateDatabase,
   type OpenClawStateDatabaseOptions,
 } from "../../state/openclaw-state-db.js";
 import { auditHandlers } from "./audit.js";
@@ -41,7 +42,10 @@ describe("audit methods against a real audit store", () => {
       const database = createDatabaseOptions();
       process.env.OPENCLAW_STATE_DIR = database.env!.OPENCLAW_STATE_DIR;
       const clear = configureExecutionIdentityAdmissionSink((work) => {
-        processExecutionIdentityAdmissionWork(work, database);
+        processExecutionIdentityAdmissionWorkInDatabase(work, {
+          ...database,
+          database: openOpenClawStateDatabase(database),
+        });
         return true;
       });
       try {
@@ -137,11 +141,11 @@ describe("audit methods against a real audit store", () => {
         sessionKey: "agent:main:main",
         runId: "run-trim-1",
       };
-      recordAuditEvent(
+      recordAuditEventInDatabase(
         { ...input, sourceSequence: 1, action: "agent.run.started", status: "started" },
-        database,
+        { ...database, database: openOpenClawStateDatabase(database) },
       );
-      const finished = recordAuditEvent(
+      const finished = recordAuditEventInDatabase(
         {
           ...input,
           sourceId: "audit-trim-finished",
@@ -149,7 +153,7 @@ describe("audit methods against a real audit store", () => {
           action: "agent.run.finished",
           status: "succeeded",
         },
-        database,
+        { ...database, database: openOpenClawStateDatabase(database) },
       );
 
       // Negative control: untrimmed filter values miss the planted row at the store.

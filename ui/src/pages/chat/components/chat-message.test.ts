@@ -2667,7 +2667,7 @@ describe("grouped chat rendering", () => {
 
     const activity = expectElement(container, ".chat-activity-group__summary", HTMLButtonElement);
     // The Gateway prepares compact labels; raw tool names stay in the disclosure.
-    expect(activity.textContent).toContain("Read File, Run Command");
+    expect(activity.textContent).toContain("1 command · 1 read");
     expect(activity.querySelector(".chat-activity-group__preview")).toBeNull();
     expect(activity.textContent).not.toContain("read_file");
     expect(activity.textContent).not.toContain("run_command");
@@ -2739,7 +2739,7 @@ describe("grouped chat rendering", () => {
       container,
     );
     expect(container.querySelector(".chat-activity-group__label")?.textContent?.trim()).toBe(
-      "Exec, Wait",
+      "1 command · 1 other operation",
     );
     expect(container.querySelectorAll(".chat-tool-row")).toHaveLength(2);
   });
@@ -2784,7 +2784,7 @@ describe("grouped chat rendering", () => {
     });
     expect(unknown.activity[0]?.items[0]).not.toHaveProperty("status");
     expect(container.querySelector(".chat-activity-group__label")?.textContent).toBe(
-      "Exec — outcome unknown",
+      "1 command · 1 unknown",
     );
     expect(container.querySelector(".chat-tool-row--running")).toBeNull();
     expect(container.textContent).toContain("check-workspace");
@@ -2797,7 +2797,7 @@ describe("grouped chat rendering", () => {
       }),
     ]);
     expect(completed.activity[0]?.items[0]).toMatchObject({ phase: "end", status: "completed" });
-    expect(container.querySelector(".chat-activity-group__label")?.textContent).toBe("Exec");
+    expect(container.querySelector(".chat-activity-group__label")?.textContent).toBe("1 command");
     expect(container.textContent).not.toContain("outcome unknown");
     expect(container.textContent).toContain("Workspace checked.");
     expect(container.querySelectorAll(".chat-tool-row")).toHaveLength(1);
@@ -2912,7 +2912,7 @@ describe("grouped chat rendering", () => {
     expect(container.querySelectorAll(".chat-activity-group")).toHaveLength(1);
     expect(container.querySelectorAll(".chat-activity-group__summary")).toHaveLength(1);
     expect(container.querySelector(".chat-activity-group__label")?.textContent).toContain(
-      "Run Command, Read File, Write File",
+      "1 command · 1 read · 1 write",
     );
     expect(container.querySelectorAll(".chat-activity-group__body > .chat-bubble")).toHaveLength(3);
     expect(
@@ -3030,8 +3030,8 @@ describe("grouped chat rendering", () => {
     );
 
     render(renderActivityGroup(groups, { ...opts, runActive: false }), container);
-    expect(container.querySelector(".chat-activity-group__label")?.textContent).toBe(
-      "Read (failed), Edit in /repo/src/a.ts",
+    expect(activitySummary.textContent?.replace(/\s+/gu, " ").trim()).toBe(
+      "1 read · 1 edit 1 failed",
     );
   });
 

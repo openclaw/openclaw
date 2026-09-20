@@ -7,7 +7,11 @@ import { runCommandWithTimeout } from "../process/exec.js";
 import { hasErrnoCode } from "./errno.js";
 import type { UpdateDoctorConfigChange } from "./update-doctor-config.js";
 import { UpdateRequesterRevokedError } from "./update-requester-authority.js";
-import { resolveCandidateNodeRuntimeForTest } from "./update-runner-git-candidate.test-support.js";
+import {
+  expectRuntime,
+  resolveCandidateNodeRuntimeForTest,
+  writeRuntime,
+} from "./update-runner-git-candidate.test-support.js";
 import { prepareGitRuntimePromotion } from "./update-runner-git-runtime.js";
 import { updateGitCheckout } from "./update-runner-git.js";
 import type { CommandRunner, UpdateRunnerOptions } from "./update-runner-types.js";
@@ -20,18 +24,6 @@ async function git(root: string, ...args: string[]) {
   return result.stdout.trim();
 }
 
-const runtimeImports = [
-  "../dist-runtime/identity.cjs",
-  "../packages/runtime/dist-runtime/identity.cjs",
-  "../node_modules/identity.cjs",
-  "workspace-runtime",
-  "relative-workspace-runtime",
-  "external-runtime",
-  "absolute-external-runtime",
-  "../packages/runtime/node_modules/external-runtime",
-  "virtual-runtime",
-];
-
 type VirtualStoreLayout =
   | "node_modules/.pnpm"
   | ".pnpm"
@@ -39,88 +31,6 @@ type VirtualStoreLayout =
   | "../store"
   | "external"
   | "symlink";
-
-async function writeRuntime(directory: string, sha: string, store: string, layout: string) {
-  const root = await fs.realpath(directory);
-  const dist = path.join(root, "dist");
-  const external = path.join(store, sha);
-  await fs.mkdir(path.join(dist, "control-ui"), { recursive: true });
-  const virtualStore =
-    layout === "external"
-      ? path.join(store, "virtual-store")
-      : path.resolve(root, layout === "symlink" ? ".pnpm" : layout);
-  if (layout === "symlink") {
-    const linkedStore = path.join(store, "linked-store", sha);
-    await fs.mkdir(linkedStore, { recursive: true });
-    await fs.rm(virtualStore, { force: true });
-    await fs.symlink(linkedStore, virtualStore, "junction");
-  }
-  const virtualPackage = path.join(virtualStore, sha, "node_modules", "virtual-runtime");
-  for (const file of [
-    path.join(external, "index.js"),
-    path.join(virtualPackage, "index.js"),
-    path.join(root, "node_modules", "identity.cjs"),
-    path.join(root, "packages", "runtime", "node_modules", "nested.cjs"),
-    path.join(root, "dist-runtime", "identity.cjs"),
-    path.join(root, "packages", "runtime", "dist-runtime", "identity.cjs"),
-  ]) {
-    await fs.mkdir(path.dirname(file), { recursive: true });
-    await fs.writeFile(file, `module.exports = ${JSON.stringify(sha)};`);
-  }
-  await fs.rm(path.join(root, "node_modules", "workspace-runtime"), { force: true });
-  await fs.symlink(
-    path.join(root, "packages", "runtime"),
-    path.join(root, "node_modules", "workspace-runtime"),
-    "junction",
-  );
-  for (const [relative, target, absolute] of [
-    ["node_modules/relative-workspace-runtime", path.join(root, "packages", "runtime"), false],
-    ["node_modules/external-runtime", external, false],
-    ["node_modules/absolute-external-runtime", external, true],
-    ["packages/runtime/node_modules/external-runtime", external, false],
-    ["node_modules/virtual-runtime", virtualPackage, false],
-  ] as const) {
-    const file = path.join(root, relative);
-    await fs.rm(file, { force: true });
-    await fs.symlink(
-      absolute || process.platform === "win32" ? target : path.relative(path.dirname(file), target),
-      file,
-      process.platform === "win32" ? "junction" : "dir",
-    );
-  }
-  await Promise.all([
-    fs.writeFile(
-      path.join(root, "node_modules", ".modules.yaml"),
-      JSON.stringify({
-        virtualStoreDir:
-          process.platform === "win32"
-            ? virtualStore
-            : path.relative(path.join(root, "node_modules"), virtualStore),
-      }),
-    ),
-    fs.writeFile(
-      path.join(dist, "entry.js"),
-      runtimeImports
-        .map((specifier) => `console.log(require(${JSON.stringify(specifier)}));`)
-        .join("\n"),
-    ),
-    fs.writeFile(path.join(dist, "build-info.json"), JSON.stringify({ commit: sha, buildId: sha })),
-    fs.writeFile(path.join(dist, ".buildstamp"), JSON.stringify({ head: sha })),
-    fs.writeFile(path.join(dist, ".runtime-postbuildstamp"), JSON.stringify({ head: sha })),
-    fs.writeFile(path.join(dist, "control-ui", "index.html"), "ready"),
-  ]);
-}
-
-async function expectRuntime(root: string, sha: string) {
-  const child = await runCommandWithTimeout(
-    [process.execPath, path.join(root, "dist", "entry.js")],
-    {
-      timeoutMs: 5000,
-    },
-  );
-  expect(child.code, child.stderr).toBe(0);
-  expect(child.stdout.trim().split("\n")).toEqual(runtimeImports.map(() => sha));
-}
 
 describe("Git candidate activation", () => {
   let directory: string;
@@ -240,6 +150,32 @@ describe("Git candidate activation", () => {
       ),
     ).toEqual([]);
   }
+
+  it.each([undefined, 5_000])(
+    "separates work deadlines from observation budgets: %s",
+    async (timeoutMs) => {
+      await advanceRemote();
+      const commands: Array<{ argv: string[]; timeoutMs: number | undefined }> = [];
+      const execute = runCommand;
+      runCommand = (argv, options) => {
+        commands.push({ argv, timeoutMs: options.timeoutMs });
+        return execute(argv, options);
+      };
+      expect((await update({ timeoutMs })).status).toBe("ok");
+      for (const work of ["install", "build", "doctor", "fetch", "checkout"]) {
+        const command = commands.find(({ argv }) => argv.includes(work));
+        expect(command, work).toBeDefined();
+        expect(command?.timeoutMs, work).toBe(timeoutMs);
+      }
+      for (const probe of ["--version", "rev-parse", "status"]) {
+        const command = commands.find(({ argv }) => argv.includes(probe));
+        expect(command, probe).toBeDefined();
+        expect(command?.timeoutMs, probe).toBe(5_000);
+      }
+      expect(commands.find(({ argv }) => argv.includes("remove"))?.timeoutMs).toBe(5_000);
+      await expectNoRuntimeStagingPaths();
+    },
+  );
 
   it.each([
     ["success", undefined],
@@ -770,12 +706,24 @@ describe("Git candidate activation", () => {
       // A deliberately non-signing executable rejects Git's signing request without a key.
       await git(root, "config", "gpg.program", process.execPath);
       await git(root, "config", "commit.gpgSign", "true");
+      const abortTimeouts: Array<number | undefined> = [];
+      const execute = runCommand;
+      runCommand = (argv, options) => {
+        if (argv.includes("rebase") && argv.includes("--abort")) {
+          abortTimeouts.push(options.timeoutMs);
+        }
+        return execute(argv, options);
+      };
       const result = await update(inspection ? { inspectGitTarget: async () => undefined } : {});
       // The existing fallback can retain the old candidate without creating a commit.
       expect(result.status, JSON.stringify(result)).toBe("ok");
       expect(
         result.steps.some((step) => /preflight rebase \(/u.test(step.name) && step.exitCode !== 0),
       ).toBe(true);
+      expect(abortTimeouts.length).toBeGreaterThan(0);
+      for (const timeoutMs of abortTimeouts) {
+        expect(timeoutMs).toBe(5_000);
+      }
       expect(await git(root, "rev-parse", "HEAD")).toBe(beforeSha);
       await expectRuntime(root, beforeSha);
     },
@@ -882,21 +830,41 @@ describe("Git candidate activation", () => {
   );
 
   it.each([
-    { layout: "node_modules/.pnpm", restoreSource: true, restoreRuntime: true },
-    { layout: "node_modules/.pnpm", restoreSource: false, restoreRuntime: true },
-    { layout: "../store", restoreSource: true, restoreRuntime: true },
-    { layout: "node_modules/.pnpm", restoreSource: true, restoreRuntime: false },
+    {
+      layout: "node_modules/.pnpm",
+      restoreSource: true,
+      restoreRuntime: true,
+      timeoutMs: undefined,
+    },
+    { layout: "node_modules/.pnpm", restoreSource: false, restoreRuntime: true, timeoutMs: 5_000 },
+    {
+      layout: "node_modules/.pnpm",
+      restoreSource: "throw",
+      restoreRuntime: true,
+      timeoutMs: undefined,
+    },
+    { layout: "../store", restoreSource: true, restoreRuntime: true, timeoutMs: undefined },
+    {
+      layout: "node_modules/.pnpm",
+      restoreSource: true,
+      restoreRuntime: false,
+      timeoutMs: undefined,
+    },
   ] as const)(
     "verifies $layout runtime recovery after activation failure (source restored: $restoreSource, runtime restored: $restoreRuntime)",
-    async ({ layout, restoreSource, restoreRuntime }) => {
+    async ({ layout, restoreSource, restoreRuntime, timeoutMs }) => {
       virtualStoreLayout = layout;
       await writeRuntime(root, beforeSha, path.join(directory, "shared-store"), layout);
       const candidateSha = await advanceRemote();
       const command = runCommand;
       let resetFaultInjected = false;
+      const recoveryTimeouts: Array<number | undefined> = [];
       runCommand = async (argv, options) => {
+        if (faultInjected && argv[0] === "git" && argv[2] === root) {
+          recoveryTimeouts.push(options.timeoutMs);
+        }
         if (
-          !restoreSource &&
+          restoreSource !== true &&
           argv[0] === "git" &&
           argv[2] === root &&
           argv[3] === "reset" &&
@@ -904,6 +872,9 @@ describe("Git candidate activation", () => {
           argv[5] === beforeSha
         ) {
           resetFaultInjected = true;
+          if (restoreSource === "throw") {
+            throw new Error("rollback command unavailable");
+          }
           return { code: 1, stdout: "", stderr: "source restoration failed" };
         }
         return command(argv, options);
@@ -931,7 +902,29 @@ describe("Git candidate activation", () => {
         }
         return rename(source, destination);
       });
-      const result = await update();
+      const onRollbackOutcome = vi.fn(() => {
+        if (!restoreRuntime) {
+          throw new Error("diagnostic storage unavailable");
+        }
+      });
+      const execution = update({ timeoutMs, progress: { onRollbackOutcome } });
+      if (restoreSource === "throw") {
+        await expect(execution).rejects.toThrow("rollback command unavailable");
+        expect(resetFaultInjected).toBe(true);
+        expect(onRollbackOutcome).toHaveBeenLastCalledWith({
+          status: "failed",
+          reason: "Rollback threw before restoration could be verified",
+        });
+        return;
+      }
+      const result = await execution;
+      expect(recoveryTimeouts.length).toBeGreaterThan(0);
+      expect(recoveryTimeouts.every((deadline) => deadline === 5_000)).toBe(true);
+      expect(onRollbackOutcome).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          status: restoreSource && restoreRuntime ? "succeeded" : "failed",
+        }),
+      );
       expect(faultInjected).toBe(true);
       expect(resetFaultInjected).toBe(!restoreSource);
       expect(restoreFaultInjected).toBe(!restoreRuntime);

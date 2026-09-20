@@ -5,9 +5,19 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import "./test-helpers/service-audit-mocks.js";
 import { buildLaunchAgentPlist } from "./launchd-plist.js";
 import { decodeLaunchAgentPlistFixture } from "./launchd-plist.test-support.js";
-import { resolveLaunchAgentPlistPath } from "./launchd-service-files.js";
+import {
+  buildLaunchAgentEnvironmentWrapper,
+  resolveLaunchAgentPlistPath,
+  resolveLaunchAgentEnvWrapperPath,
+} from "./launchd-service-files.js";
 import { resolveGatewaySupervisorLogPaths } from "./restart-logs.js";
-import { buildScheduledTaskXml, resolveTaskScriptPath } from "./schtasks-layout.js";
+import {
+  buildScheduledTaskXml,
+  buildTaskScript,
+  buildHiddenLauncherScript,
+  resolveTaskScriptPath,
+  resolveTaskLauncherScriptPath,
+} from "./schtasks-layout.js";
 import { auditGatewayServiceConfig } from "./service-audit.js";
 import { buildSystemdUnit } from "./systemd-unit.js";
 import {
@@ -267,4 +277,287 @@ it("reports failed native task inspection independently from legacy issues", asy
   expect(result.issues).toEqual([]);
   expect(result.definitionDriftError).toContain("inspection could not be completed");
   expect(JSON.stringify(result)).not.toContain("operator-secret");
+});
+
+const discardedSettings: Array<{
+  key: string;
+  native: string[];
+  gateway: string[];
+  cwd?: string;
+  environment: Record<string, string>;
+}> = [
+  { key: "ProgramArguments", native: ["--inspect=operator-private"], gateway: [], environment: {} },
+  { key: "ProgramArguments", native: [], gateway: ["--verbose"], environment: {} },
+  { key: "WorkingDirectory", native: [], gateway: [], cwd: "/operator-private", environment: {} },
+  {
+    key: "Environment.OPENCLAW_CUSTOM",
+    native: [],
+    gateway: [],
+    environment: { OPENCLAW_CUSTOM: "operator-private" },
+  },
+  {
+    key: "Environment.PATH",
+    native: [],
+    gateway: [],
+    environment: { PATH: "/usr/bin:/operator-private" },
+  },
+  {
+    key: "Environment.NODE_OPTIONS",
+    native: [],
+    gateway: [],
+    environment: { NODE_OPTIONS: "--max-old-space-size=4096 --require=/operator-private" },
+  },
+];
+
+it.each(discardedSettings)(
+  "blocks a rewrite plan that discards $key without exposing values",
+  async ({ key, native: nativeArguments, gateway, cwd, environment }) => {
+    const fixture = await systemdFixture((unit) => unit);
+    const command = {
+      ...fixture.command,
+      programArguments: [
+        "/usr/bin/node",
+        ...nativeArguments,
+        "/old/index.js",
+        "gateway",
+        ...gateway,
+      ],
+      workingDirectory: cwd,
+      environment: { ...fixture.command.environment, ...environment },
+    };
+    const before = await auditGatewayServiceConfig({ ...fixture, command, platform: "linux" });
+    expect(before.definitionDrift).toBeUndefined();
+    const result = await auditGatewayServiceConfig({
+      ...fixture,
+      command,
+      platform: "linux",
+      expectedCommand: fixture.command,
+    });
+    expect(result.definitionDrift).toContainEqual(
+      expect.objectContaining({ kind: "unknown-edit", key }),
+    );
+    expect(JSON.stringify(result.definitionDrift)).not.toContain("operator-private");
+    expect(await fs.readFile(fixture.sourcePath, "utf8")).toBe(fixture.content);
+  },
+);
+
+it("accepts retained heap aliases, custom environment and owned environment regeneration", async () => {
+  const fixture = await systemdFixture((unit) => unit);
+  const command = {
+    ...fixture.command,
+    programArguments: [
+      "/old/node",
+      "--max_old_space_size",
+      "2048",
+      "--max-old-space-size=4096",
+      "/old/index.js",
+      "gateway",
+      "--port=1234",
+      "--allow-unconfigured",
+    ],
+    environment: {
+      ...fixture.command.environment,
+      OPENCLAW_SERVICE_MANAGED_ENV_KEYS: "MANAGED_SETTING",
+      MANAGED_SETTING: "old",
+      OPENCLAW_GATEWAY_PORT: "1234",
+    },
+  };
+  const result = await auditGatewayServiceConfig({
+    ...fixture,
+    command,
+    platform: "linux",
+    expectedCommand: {
+      programArguments: [
+        "/new/node",
+        "--max-old-space-size=4096",
+        "/new/index.js",
+        "gateway",
+        "--port",
+        "4321",
+      ],
+      environment: { ...fixture.command.environment, OPENCLAW_GATEWAY_PORT: "4321" },
+    },
+  });
+  expect(result.definitionDrift).toBeUndefined();
+});
+
+it.each(["OpenClaw Gateway (v2026.9.4)", "operator-private"])(
+  "classifies systemd description before a rewrite: %s",
+  async (description) => {
+    const fixture = await systemdFixture((unit) =>
+      unit.replace("Description=OpenClaw Gateway", `Description=${description}`),
+    );
+    const result = await auditGatewayServiceConfig({
+      ...fixture,
+      platform: "linux",
+      expectedCommand: fixture.command,
+    });
+    if (description === "operator-private") {
+      expect(result.definitionDrift).toContainEqual(
+        expect.objectContaining({ kind: "unknown-edit", key: "Unit.Description" }),
+      );
+      expect(JSON.stringify(result.definitionDrift)).not.toContain(description);
+    } else {
+      expect(result.definitionDrift).toBeUndefined();
+    }
+  },
+);
+
+it.each(["canonical-wrapper", "wrapper", "metadata"])(
+  "audits launchd %s before the installer can replace it",
+  async (kind) => {
+    const home = dirs.make("rewrite-launchd-preservation-");
+    const env = { HOME: home, OPENCLAW_STATE_DIR: path.join(home, "state") };
+    const sourcePath = resolveLaunchAgentPlistPath(env);
+    const command = {
+      programArguments: ["/usr/bin/node", "/opt/openclaw/index.js", "gateway"],
+      environment: { PATH: "/usr/bin:/bin" },
+    };
+    const { stdoutPath } = resolveGatewaySupervisorLogPaths(env, { platform: "darwin" });
+    await fs.mkdir(path.dirname(sourcePath), { recursive: true });
+    await fs.writeFile(
+      sourcePath,
+      buildLaunchAgentPlist({
+        ...command,
+        label: "ai.openclaw.gateway",
+        comment: kind === "metadata" ? "operator-private" : "OpenClaw Gateway",
+        stdoutPath,
+        stderrPath: stdoutPath,
+      }),
+    );
+    if (kind !== "metadata") {
+      const wrapperPath = resolveLaunchAgentEnvWrapperPath(env, "ai.openclaw.gateway");
+      await fs.mkdir(path.dirname(wrapperPath), { recursive: true });
+      await fs.writeFile(
+        wrapperPath,
+        kind === "canonical-wrapper"
+          ? buildLaunchAgentEnvironmentWrapper()
+          : '#!/bin/sh\necho operator-private\nexec "$@"\n',
+      );
+    }
+    const result = await auditGatewayServiceConfig({
+      env,
+      command,
+      platform: "darwin",
+      expectedCommand: command,
+    });
+    if (kind === "canonical-wrapper") {
+      expect(result.definitionDrift ?? []).toEqual([]);
+      return;
+    }
+    expect(result.definitionDrift).toContainEqual(
+      expect.objectContaining({
+        kind: "unknown-edit",
+        key: kind === "wrapper" ? "EnvironmentWrapper" : "Comment",
+      }),
+    );
+    expect(JSON.stringify(result.definitionDrift)).not.toContain("operator-private");
+  },
+);
+
+it.each([
+  "canonical",
+  "script",
+  "launcher",
+  "metadata",
+  "planned-launcher",
+  "missing-launcher",
+  "path",
+  "custom-script",
+  "native-defaults",
+])("checks generated Scheduled Task %s before a rewrite", async (kind) => {
+  const home = dirs.make("rewrite-task-preservation-");
+  const env = {
+    USERPROFILE: home,
+    OPENCLAW_STATE_DIR: home,
+    USERNAME: "fixture",
+    ...(kind === "custom-script" ? { OPENCLAW_TASK_SCRIPT_NAME: "gateway.bat" } : {}),
+  };
+  const environment: Record<string, string> = { OPENCLAW_SERVICE_KIND: "gateway" };
+  if (kind === "path") {
+    environment.PATH = "C:\\operator-private";
+  }
+  const command = {
+    programArguments: ["node", "C:\\openclaw\\index.js", "gateway"],
+    environment,
+  };
+  const scriptPath = resolveTaskScriptPath(env);
+  const hiddenPath = resolveTaskLauncherScriptPath(
+    { OPENCLAW_WINDOWS_TASK_HIDDEN_LAUNCHER: "1" },
+    scriptPath,
+  );
+  const script =
+    (kind === "path" ? 'set "PATH=C:\\operator-private"\r\n' : "") +
+    buildTaskScript(command) +
+    (kind === "script" ? "echo operator-private\r\n" : "");
+  const launcher =
+    buildHiddenLauncherScript({ scriptPath, taskSupervisor: true }) +
+    (kind === "launcher" || kind === "planned-launcher"
+      ? 'WScript.Echo "operator-private"\r\n'
+      : "");
+  await fs.writeFile(scriptPath, script);
+  if (kind !== "missing-launcher") {
+    await fs.writeFile(hiddenPath, launcher);
+  }
+  native.task.mockResolvedValue({
+    code: 0,
+    stderr: "",
+    stdout: buildScheduledTaskXml({
+      taskDescription: kind === "metadata" ? "operator-private" : "OpenClaw Gateway",
+      taskUser: "fixture",
+      launchPath:
+        kind === "planned-launcher" || kind === "missing-launcher" ? scriptPath : hiddenPath,
+    })
+      .replace(
+        "<RunLevel>LeastPrivilege</RunLevel>",
+        kind === "native-defaults" ? "" : "<RunLevel>LeastPrivilege</RunLevel>",
+      )
+      .replace(
+        "<Count>3</Count>",
+        kind === "native-defaults" ? "<Count>0</Count>" : "<Count>3</Count>",
+      ),
+  });
+  const result = await auditGatewayServiceConfig({
+    env,
+    command,
+    platform: "win32",
+    expectedCommand: {
+      ...command,
+      environment: { ...environment, OPENCLAW_WINDOWS_TASK_HIDDEN_LAUNCHER: "1" },
+    },
+  });
+  if (kind === "canonical" || kind === "missing-launcher" || kind === "custom-script") {
+    expect(result.definitionDrift).toBeUndefined();
+  } else if (kind === "native-defaults") {
+    expect(result.definitionDrift).toEqual([
+      expect.objectContaining({
+        kind: "outdated",
+        key: "Settings.RestartOnFailure.Count",
+        current: "0",
+        expected: "3",
+      }),
+    ]);
+  } else {
+    expect(result.definitionDrift).toContainEqual(
+      expect.objectContaining({
+        kind: "unknown-edit",
+        key:
+          kind === "script"
+            ? "TaskScript"
+            : kind === "launcher" || kind === "planned-launcher"
+              ? "TaskLauncher"
+              : kind === "path"
+                ? "Environment.PATH"
+                : "RegistrationInfo.Description",
+      }),
+    );
+    expect(JSON.stringify(result.definitionDrift)).not.toContain("operator-private");
+  }
+  expect(result.definitionDriftError).toBeUndefined();
+  expect(await fs.readFile(scriptPath, "utf8")).toBe(script);
+  if (kind === "missing-launcher") {
+    await expect(fs.stat(hiddenPath)).rejects.toMatchObject({ code: "ENOENT" });
+  } else {
+    expect(await fs.readFile(hiddenPath, "utf8")).toBe(launcher);
+  }
 });

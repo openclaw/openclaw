@@ -183,9 +183,9 @@ describe("built-in session tool role authority", () => {
           identities: [REQUESTER, sessionId],
           assertAllowed: () => {},
         });
-        const { chatHandlers } = await import("./server-methods/chat.js");
+        const chatSendOwner = await import("./server-methods/chat-send-external-entry.js");
         const startChild = vi
-          .spyOn(chatHandlers, "chat.send")
+          .spyOn(chatSendOwner, "handleDirectExternalChatSend")
           .mockImplementation(async ({ respond }) => {
             respond(true, { status: "started", runId: "fork-child-run" });
           });

@@ -71,9 +71,7 @@ it("native plist publication rechecks after asynchronous preparation, without st
   const originalWrite = fs.writeFile;
   vi.spyOn(fs, "writeFile").mockImplementation(async (...args) => {
     await originalWrite(...args);
-    if (typeof args[0] === "string" && args[0].endsWith(".tmp")) {
-      current = false;
-    }
+    current = false;
   });
   await expect(
     withGatewayServiceUpdateAuthority(

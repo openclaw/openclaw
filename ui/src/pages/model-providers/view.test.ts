@@ -9,6 +9,45 @@ import { renderModelProviders } from "./view.ts";
 
 type SegmentedGroup = HTMLElement & { disabled: boolean; value: string };
 
+it("offers only decision models, even without a chat provider, and retains an unavailable selection", async () => {
+  const onDecisionChange = vi.fn();
+  const container = document.createElement("div");
+  const viewProps = props({
+    configuredModels: [],
+    decisionModels: [{ provider: "typesafe", id: "jev-latest", name: "Jev", pluginId: "typesafe" }],
+    defaultModels: {
+      primary: "",
+      fallbacks: [],
+      utilityModel: null,
+      decisionModel: "typesafe/retired",
+    },
+    onDecisionChange,
+  });
+  render(renderModelProviders(viewProps), container);
+  await updatePickers(container);
+  const picker = container.querySelector<HTMLButtonElement>("#model-providers-decision-model")!;
+  expect(picker.disabled).toBe(false);
+  expect(picker.textContent).toContain("typesafe/retired");
+  expect(
+    container.querySelectorAll('[role="option"][data-value="typesafe/jev-latest"]'),
+  ).toHaveLength(1);
+  await choosePickerValue(picker, "typesafe/retired");
+  expect(onDecisionChange).not.toHaveBeenCalled();
+  await choosePickerValue(picker, "typesafe/jev-latest");
+  expect(onDecisionChange).toHaveBeenLastCalledWith("typesafe/jev-latest");
+  await choosePickerValue(picker, "");
+  expect(onDecisionChange).toHaveBeenLastCalledWith(null);
+
+  render(
+    renderModelProviders({ ...viewProps, defaultsMutationBlockedReason: "Read only" }),
+    container,
+  );
+  await updatePickers(container);
+  expect(
+    container.querySelector<HTMLButtonElement>("#model-providers-decision-model")!.disabled,
+  ).toBe(true);
+});
+
 it("retains a saved unavailable model without offering it for another default setting", async () => {
   const onUtilityChange = vi.fn();
   const container = document.createElement("div");
@@ -158,7 +197,14 @@ describe("renderModelProviders", () => {
             entry.querySelector(".settings-row__title"),
         ),
       ),
-    ).toEqual(["Model", "Utility Model", "Fallback Model", "Thinking", "Fast Mode"]);
+    ).toEqual([
+      "Model",
+      "Utility Model",
+      "Decision Model",
+      "Fallback Model",
+      "Thinking",
+      "Fast Mode",
+    ]);
     const thinking = settingsRow(behavior!, "Thinking").querySelector<SegmentedGroup>(
       "wa-radio-group",
     );
@@ -366,7 +412,7 @@ describe("renderModelProviders", () => {
     const defaults = container.querySelector(".model-providers__defaults");
     await updatePickers(container);
     const defaultSelects = [...(defaults?.querySelectorAll("openclaw-select-picker") ?? [])];
-    expect(defaultSelects).toHaveLength(3);
+    expect(defaultSelects).toHaveLength(4);
     expect(
       defaultSelects.every((select) => select.querySelector<HTMLButtonElement>("button")?.disabled),
     ).toBe(true);

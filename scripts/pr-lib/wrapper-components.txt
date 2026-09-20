@@ -9,14 +9,19 @@ packages/agent-core/src/harness/env/kill-tree.ts
 packages/gateway-client/package.json
 packages/gateway-client/src/timeouts.ts
 packages/gateway-protocol/package.json
+packages/gateway-protocol/src/capability-consent-error-details.ts
 packages/gateway-protocol/src/client-info.ts
 packages/gateway-protocol/src/failover-reasons.ts
+packages/gateway-protocol/src/protocol-value-normalization.ts
 packages/gateway-protocol/src/schema/closed-object.ts
 packages/gateway-protocol/src/schema/failover-reason.ts
+packages/gateway-protocol/src/schema/plugin-declared-surface-groups.ts
 packages/gateway-protocol/src/schema/since.ts
 packages/gateway-protocol/src/schema/worker-admission.ts
 packages/gateway-protocol/src/schema/worker-computer.ts
 packages/gateway-protocol/src/schema/worker-protocol-primitives.ts
+packages/gateway-protocol/src/theme-ids.ts
+packages/gateway-protocol/src/theme.ts
 packages/gateway-protocol/src/update-run-vocabulary.ts
 packages/llm-core/package.json
 packages/llm-core/src/model-data.ts
@@ -202,6 +207,7 @@ src/agents/worktrees/branches.runtime.ts
 src/agents/worktrees/capacity.runtime.ts
 src/agents/worktrees/capacity.ts
 src/agents/worktrees/checkout-apfs.ts
+src/agents/worktrees/checkout-git-config.ts
 src/agents/worktrees/checkout.ts
 src/agents/worktrees/errors.ts
 src/agents/worktrees/filesystem-apfs.native.ts
@@ -246,6 +252,7 @@ src/channels/plugins/package-state-probes.ts
 src/channels/plugins/persisted-auth-state.ts
 src/channels/plugins/setup-contract.ts
 src/cli/command-format.ts
+src/cli/daemon-cli/restart-health.types.ts
 src/cli/parse-bytes.ts
 src/cli/parse-duration.ts
 src/cli/profile-utils.ts
@@ -387,6 +394,7 @@ src/config/model-policy-ref.ts
 src/config/model-provider-config.ts
 src/config/model-provider-overlay-ids.ts
 src/config/model-provider-rows.ts
+src/config/mutate.include-io.ts
 src/config/mutate-guards.ts
 src/config/mutate.ts
 src/config/mutation-conflict.ts
@@ -442,6 +450,7 @@ src/config/validation-plugin-rules.ts
 src/config/validation-prepared.ts
 src/config/validation.ts
 src/config/validation.types.ts
+src/config/value-tree.ts
 src/config/version.ts
 src/config/web-search-legacy-provider-keys.ts
 src/config/write-capture.ts
@@ -486,6 +495,7 @@ src/cron/task-run-detail.ts
 src/daemon/arg-split.ts
 src/daemon/constants.ts
 src/daemon/runtime-binary.ts
+src/daemon/service-inspection-error.ts
 src/daemon/service-process-env.ts
 src/gateway/control-ui-bootstrap-contract.ts
 src/gateway/control-ui-session-prs-git.runtime.ts
@@ -696,6 +706,7 @@ src/infra/sqlite-wal-split-brain.ts
 src/infra/sqlite-wal-write-admission.ts
 src/infra/sqlite-wal.ts
 src/infra/sqlite-worker-broker-admission.ts
+src/infra/sqlite-worker-broker-lifecycle.ts
 src/infra/sqlite-worker-broker-reply.ts
 src/infra/sqlite-worker-broker.ts
 src/infra/sqlite-worker-client.ts
@@ -725,6 +736,7 @@ src/infra/update-channels.ts
 src/infra/update-doctor-config-schema.ts
 src/infra/update-doctor-result.ts
 src/infra/update-failure-facts.ts
+src/infra/update-failure-public-identifiers.ts
 src/infra/update-managed-service-handoff-boot.ts
 src/infra/update-managed-service-handoff-cleanup.ts
 src/infra/update-managed-service-handoff-database.ts
@@ -734,6 +746,8 @@ src/infra/update-managed-service-handoff-retained-custody.ts
 src/infra/update-managed-service-handoff-schema.ts
 src/infra/update-managed-service-handoff-source-inspection.ts
 src/infra/update-managed-service-handoff-store-repair.ts
+src/infra/update-preflight-details.ts
+src/infra/update-recovery.ts
 src/infra/update-recovery-backup-contract.ts
 src/infra/update-run-limits.ts
 src/infra/update-run-schema.ts
@@ -884,6 +898,7 @@ src/plugins/manifest-record.ts
 src/plugins/manifest-registry-installed.ts
 src/plugins/manifest-registry.ts
 src/plugins/manifest-setup-normalizers.ts
+src/plugins/manifest-themes.ts
 src/plugins/manifest.ts
 src/plugins/min-host-version.ts
 src/plugins/module-export.ts
@@ -1078,8 +1093,11 @@ src/shared/model-key.ts
 src/shared/path-array-index.ts
 src/shared/pid-alive.ts
 src/shared/regexp.ts
+src/shared/sandbox-workspace-paths.ts
+src/shared/update-outcome.ts
 src/skills/discovery/agent-filter.ts
 src/skills/discovery/filter.ts
+src/skills/lifecycle/upload-store-error.ts
 src/state/config-machine-state-write.ts
 src/state/config-machine-state.ts
 src/state/openclaw-agent-db-contract.ts

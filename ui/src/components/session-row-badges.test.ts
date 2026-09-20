@@ -87,21 +87,6 @@ describe("sidebar initial connection", () => {
   });
 });
 
-describe("session workspace badge", () => {
-  it("shows one text label and removes it when the workspace identity is unknown", () => {
-    for (const [workspaceKind, label] of [
-      ["worktree", "Worktree"],
-      ["checkout", "Checkout"],
-    ] as const) {
-      render(renderSessionRowBadges({ workspaceKind }), container);
-      expect(container.querySelectorAll(".session-row-workspace")).toHaveLength(1);
-      expect(container.textContent?.trim()).toBe(label);
-    }
-    render(renderSessionRowBadges({}), container);
-    expect(container.querySelector(".session-row-workspace")).toBeNull();
-  });
-});
-
 describe("session row placement badges", () => {
   it("names the service, profile, and machine without losing conflict or disk attention", () => {
     render(

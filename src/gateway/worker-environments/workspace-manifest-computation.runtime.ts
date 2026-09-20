@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { ownedWorkerBytes } from "../../infra/worker-transfer-bytes.js";
+import { runTasksWithConcurrency } from "../../utils/run-with-concurrency.js";
 import {
   readActualWorkspaceManifestImpl,
   readWorkspaceFileSnapshotWithLimit,
@@ -11,7 +12,10 @@ import {
   withoutWorkspaceHashContext,
   type WorkspaceHashMetrics,
 } from "./workspace-hash-memo.js";
-import { parseChangedWorkspaceResult } from "./workspace-manifest-comparison.js";
+import {
+  parseChangedWorkspaceResult,
+  type WorkspaceNode,
+} from "./workspace-manifest-comparison.js";
 import type {
   WorkspaceComputationHashes,
   WorkspaceComputationHashResult,
@@ -25,6 +29,7 @@ import {
   parseWorkerWorkspaceManifest,
   serializeWorkerWorkspaceManifest,
 } from "./workspace-manifest.js";
+import { localWorkspaceNode } from "./workspace-reconcile-fs.js";
 import { preflightWorkspaceApplyImpl } from "./workspace-reconcile-preflight.js";
 import {
   loadStagedWorkerWorkspace,
@@ -86,6 +91,23 @@ export async function executeWorkspaceManifestComputation(
   command: WorkspaceManifestComputationCommand,
 ): Promise<WorkspaceManifestComputationResult> {
   switch (command.type) {
+    case "workspace.manifest.nodes": {
+      const input = decodeManifestValue(command);
+      return await withHashes(input.hashes, async () => {
+        const result = await runTasksWithConcurrency({
+          tasks: input.paths.map((entryPath) => async (): Promise<[string, WorkspaceNode]> => [
+            entryPath,
+            await localWorkspaceNode(input.root, entryPath),
+          ]),
+          limit: 4,
+          errorMode: "stop",
+        });
+        if (result.hasError) {
+          throw result.firstError;
+        }
+        return result.results;
+      });
+    }
     case "workspace.manifest.staged":
       return await loadStagedWorkerWorkspace(command.input.root, command.input.ref);
     case "workspace.manifest.stage-input":

@@ -23,6 +23,10 @@ import { OPENCLAW_STATE_SCHEMA_VERSION } from "../state/openclaw-state-db-contra
 import { closeOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { getUserPreferences } from "../state/user-preferences.js";
+import {
+  listConfigCorpusFixtureNames,
+  readConfigCorpusFixture,
+} from "./config-corpus.test-support.js";
 import { createConfigIO } from "./io.js";
 import {
   readRecentUserAssistantTextForSession,
@@ -60,17 +64,11 @@ type StateFixture = {
 };
 
 const corpusDir = fileURLToPath(new URL("../../test/fixtures/state-corpus/", import.meta.url));
-const configCorpusDir = fileURLToPath(
-  new URL("../../test/fixtures/config-corpus/", import.meta.url),
-);
 const releases = fs
   .readdirSync(corpusDir)
   .filter((name) => fs.statSync(path.join(corpusDir, name)).isDirectory())
   .toSorted();
-const configNames = fs
-  .readdirSync(configCorpusDir)
-  .filter((name) => name.endsWith(".json"))
-  .toSorted();
+const configNames = listConfigCorpusFixtureNames();
 const allCases = releases.flatMap((release) =>
   configNames.map((configName) => [release, configName] as const),
 );
@@ -125,12 +123,10 @@ function prepareState(release: string, configName: string) {
     path.join(pluginDir, "index.ts"),
     'export default { id: "fixture-extension", register() {} };\n',
   );
-  const config: unknown = JSON.parse(
-    fs.readFileSync(path.join(configCorpusDir, configName), "utf8"),
-    (_key, value: unknown) =>
-      typeof value === "string" && value.startsWith("/home/fixture/")
-        ? path.join(home, value.slice("/home/fixture/".length))
-        : value,
+  const config: unknown = JSON.parse(readConfigCorpusFixture(configName), (_key, value: unknown) =>
+    typeof value === "string" && value.startsWith("/home/fixture/")
+      ? path.join(home, value.slice("/home/fixture/".length))
+      : value,
   );
   fs.writeFileSync(configPath, JSON.stringify(config));
   return { home, stateDir, configPath, fixture };

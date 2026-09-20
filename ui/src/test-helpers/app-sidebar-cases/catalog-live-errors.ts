@@ -300,7 +300,7 @@ describe("AppSidebar session catalog request errors", () => {
           new GatewayRequestError({
             code,
             message,
-            retryable: true,
+            retryable: Boolean(reason),
             details: reason ? { reason, phase: "draining" } : undefined,
           }),
         );

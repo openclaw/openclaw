@@ -7,10 +7,10 @@ import {
   type SkillArchiveInstallFailureKind,
 } from "./archive-install.js";
 import { validateRequestedSkillSlug } from "./install-paths.js";
+import { SkillUploadRequestError } from "./upload-store-error.js";
 import {
   defaultSkillUploadStore,
   normalizeSkillUploadSha256,
-  SkillUploadRequestError,
   type SkillUploadStore,
 } from "./upload-store.js";
 

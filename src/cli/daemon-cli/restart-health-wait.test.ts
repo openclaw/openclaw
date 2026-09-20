@@ -8,6 +8,7 @@ import {
   makeGatewayService,
   monotonicClock,
   callGateway,
+  gatewayResponseError,
   readGatewayOwnerLease,
   resetRestartHealthMocks,
   restoreRestartHealthMocks,
@@ -733,34 +734,41 @@ describe("restart health", () => {
     expect(sleep).toHaveBeenCalledTimes(1);
   });
 
-  it("keeps waiting when the gateway probe cannot report build identity yet", async () => {
-    const service = makeGatewayService({ status: "running", pid: 8000 });
-    inspectPortUsage.mockResolvedValue({
-      port: 18789,
-      status: "busy",
-      listeners: [{ pid: 8000, commandLine: "openclaw-gateway" }],
-      hints: [],
-    });
-    callGateway.mockRejectedValueOnce(new Error("connect ECONNREFUSED")).mockImplementationOnce(
-      gatewayHealthResponse({
-        server: { version: "2026.4.26", buildId: "new-build", connId: "new" },
-      }),
-    );
+  it.each(["connect ECONNREFUSED", "auth required"])(
+    "keeps waiting for hello identity after %s",
+    async (error) => {
+      const service = makeGatewayService({ status: "running", pid: 8000 });
+      inspectPortUsage.mockResolvedValue({
+        port: 18789,
+        status: "busy",
+        listeners: [{ pid: 8000, commandLine: "openclaw-gateway" }],
+        hints: [],
+      });
+      callGateway
+        .mockRejectedValueOnce(
+          error === "auth required" ? gatewayResponseError(error) : new Error(error),
+        )
+        .mockImplementationOnce(
+          gatewayHealthResponse({
+            server: { version: "2026.4.26", buildId: "new-build", connId: "new" },
+          }),
+        );
 
-    const snapshot = await waitForGatewayHealthyRestart({
-      service,
-      port: 18789,
-      expectedBuildId: "new-build",
-      attempts: 4,
-      delayMs: 1_000,
-    });
+      const snapshot = await waitForGatewayHealthyRestart({
+        service,
+        port: 18789,
+        expectedBuildId: "new-build",
+        attempts: 4,
+        delayMs: 1_000,
+      });
 
-    expect(snapshot.healthy).toBe(true);
-    expect(snapshot.gatewayBuildId).toBe("new-build");
-    expect(snapshot.waitOutcome).toBe("healthy");
-    expect(snapshot.buildIdMismatch).toBeUndefined();
-    expect(sleep).toHaveBeenCalledTimes(1);
-  });
+      expect(snapshot.healthy).toBe(true);
+      expect(snapshot.gatewayBuildId).toBe("new-build");
+      expect(snapshot.waitOutcome).toBe("healthy");
+      expect(snapshot.buildIdMismatch).toBeUndefined();
+      expect(sleep).toHaveBeenCalledTimes(1);
+    },
+  );
 
   it("fails closed when build identity remains unavailable through the wait deadline", async () => {
     const service = makeGatewayService({ status: "running", pid: 8000 });

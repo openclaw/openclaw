@@ -384,7 +384,10 @@ export function resolveRecoveryPath(
 }
 
 // Do not pass preload hooks, native-library overrides, or application secrets to probes.
-export function isUsableNode(nodePath, { allowCwd = false, trustedRoot, env = process.env } = {}) {
+export function isUsableNode(
+  nodePath,
+  { allowCwd = false, trustedRoot, env = process.env, acceptVersion } = {},
+) {
   const resolved = resolveRecoveryPath(nodePath, undefined, { allowCwd, trustedRoot });
   if (!resolved || !/^node(?:\.exe)?$/i.test(path.basename(resolved))) {
     return false;
@@ -413,7 +416,11 @@ export function isUsableNode(nodePath, { allowCwd = false, trustedRoot, env = pr
       },
     );
     const details = JSON.parse(result.stdout);
-    return result.status === 0 && !nodeRuntimeFailure(details.version, details.probe);
+    return (
+      result.status === 0 &&
+      !nodeRuntimeFailure(details.version, details.probe) &&
+      (!acceptVersion || acceptVersion(details.version))
+    );
   } catch {
     return false;
   }
@@ -647,22 +654,15 @@ function* availableNodeCandidates(homeDir, env) {
   }
 }
 
-/** Recover only at CLI startup, before reading config or state. */
-export async function recoverNodeRuntime({
+/** Select a verified runtime without respawning; callers own target admission and activation. */
+export async function findUsableNodeRuntime({
   homeDir,
   allowInstall = false,
   env = process.env,
+  acceptVersion,
+  nodeVersion,
+  installCommand,
 } = {}) {
-  if (
-    process.versions.bun ||
-    env.OPENCLAW_NODE_UPDATE_RESPAWNED === "1" ||
-    !process.argv[1] ||
-    isForegroundGmailRunInvocation(process.argv) ||
-    (process.platform !== "win32" && isNativeHookRelayInvocation(process.argv)) ||
-    !nodeRuntimeFailure(process.versions.node, await detectCurrentSqliteCapabilities())
-  ) {
-    return false;
-  }
   // userInfo reads the account home without consulting the mutable process environment.
   const inheritedHome = env.HOME?.trim() || env.USERPROFILE?.trim();
   let accountHome;
@@ -691,7 +691,12 @@ export async function recoverNodeRuntime({
     });
   const { resolveUpdatedNodeRuntime } = await import("./node-runtime-update.mjs");
   let nodePath = recoveryRoot
-    ? await resolveUpdatedNodeRuntime(recoveryRoot, { allowInstall: false, env })
+    ? await resolveUpdatedNodeRuntime(recoveryRoot, {
+        allowInstall: false,
+        env,
+        acceptVersion,
+        installCommand,
+      })
     : null;
   let reason = "cached OpenClaw runtime";
   const currentNode = realNodePath(process.execPath);
@@ -708,7 +713,7 @@ export async function recoverNodeRuntime({
         continue;
       }
       seen.add(realPath);
-      if (isUsableNode(realPath, { allowCwd, env })) {
+      if (isUsableNode(realPath, { allowCwd, env, acceptVersion })) {
         nodePath = realPath;
         reason = source;
         break;
@@ -716,9 +721,36 @@ export async function recoverNodeRuntime({
     }
   }
   if (!nodePath && allowInstall && recoveryRoot) {
-    nodePath = await resolveUpdatedNodeRuntime(recoveryRoot, { env });
+    nodePath = await resolveUpdatedNodeRuntime(recoveryRoot, {
+      env,
+      acceptVersion,
+      nodeVersion,
+      installCommand,
+    });
     reason = "private OpenClaw runtime";
   }
+  return nodePath ? { nodePath, reason } : null;
+}
+
+/** Recover only at CLI startup, before reading config or state. */
+export async function recoverNodeRuntime({
+  homeDir,
+  allowInstall = false,
+  env = process.env,
+} = {}) {
+  if (
+    process.versions.bun ||
+    env.OPENCLAW_NODE_UPDATE_RESPAWNED === "1" ||
+    !process.argv[1] ||
+    isForegroundGmailRunInvocation(process.argv) ||
+    (process.platform !== "win32" && isNativeHookRelayInvocation(process.argv)) ||
+    !nodeRuntimeFailure(process.versions.node, await detectCurrentSqliteCapabilities())
+  ) {
+    return false;
+  }
+  const selected = await findUsableNodeRuntime({ homeDir, allowInstall, env });
+  const nodePath = selected?.nodePath;
+  const reason = selected?.reason;
   if (!nodePath) {
     return false;
   }

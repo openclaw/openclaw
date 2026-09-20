@@ -179,6 +179,13 @@ describe("Gateway catalog worker pool", () => {
           .map((capture) => capture.filename),
       );
       expect(initialCaptures.size).toBeGreaterThan(0);
+      const capturedRuntimeSources = () =>
+        new Set(
+          fs
+            .readFileSync(path.join(fixture.root, "runtime-artifact-paths.txt"), "utf8")
+            .split("\n")
+            .filter(Boolean),
+        );
       writeFixturePlugin({ root: fixture.root, spinMs: 0, pluginVersion: "v2" });
       const catalogs = await Promise.all(
         snapshots.map((snapshot) => loadCompletedFullCatalog(snapshot)),
@@ -209,6 +216,11 @@ describe("Gateway catalog worker pool", () => {
           .map((capture) => capture.filename),
       );
       expect(captures).toEqual(initialCaptures);
+      expect(capturedRuntimeSources().size).toBe(1);
+      await Promise.all(
+        snapshots.map((snapshot) => loadCompletedFullCatalog(snapshot, { refresh: true })),
+      );
+      expect(capturedRuntimeSources().size).toBe(1);
     } finally {
       workerChannel.unsubscribe(recordWorker);
     }

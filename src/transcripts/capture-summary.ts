@@ -2,16 +2,13 @@ import { resolveDefaultAgentId } from "../agents/agent-scope-config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { isTranscriptArtifactText } from "../media-understanding/transcription-text.js";
 import { runWithGatewayDetachedWorkAdmission } from "../process/gateway-work-admission.js";
-import {
-  AsyncWorkScope,
-  getAsyncWorkSignal,
-  runInDetachedAsyncContext,
-} from "../shared/async-work-scope.js";
+import { getAsyncWorkSignal, runInDetachedAsyncContext } from "../shared/async-work-scope.js";
 import type { resolveTranscriptsConfig } from "./config.js";
 import type { TranscriptSessionDescriptor } from "./provider-types.js";
 import { TranscriptsSummaryChangedError } from "./store-errors.js";
 import type { TranscriptSummarySnapshot, TranscriptsStore } from "./store.js";
 import { summarizeTranscriptsWithModel } from "./summary-model.js";
+import { runSummaryWork } from "./summary-work.js";
 import { summarizeTranscripts } from "./summary.js";
 
 type SummaryParams = {
@@ -87,26 +84,7 @@ function enqueueSummary<T>(
   };
   lane.pending++;
   const parentSignal = getAsyncWorkSignal();
-  const result = lane.tail.then(async () => {
-    const work = new AsyncWorkScope();
-    const close = () => work.beginClose(parentSignal?.reason);
-    parentSignal?.addEventListener("abort", close, { once: true });
-    if (parentSignal?.aborted) {
-      close();
-    }
-    try {
-      return await work.track(() => run(lane, owned));
-    } finally {
-      try {
-        await AsyncWorkScope.runWhenAllIdle(
-          () => [work],
-          () => work.drain(),
-        );
-      } finally {
-        parentSignal?.removeEventListener("abort", close);
-      }
-    }
-  });
+  const result = lane.tail.then(() => runSummaryWork(parentSignal, () => run(lane, owned)));
   lane.tail = result
     .then(
       () => undefined,

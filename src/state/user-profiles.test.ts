@@ -3,10 +3,12 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { GIT_COAUTHOR_PREFERENCE_KEY } from "../../packages/gateway-protocol/src/index.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "./openclaw-state-db-contract.js";
 import { tableExists, tableHasColumn } from "./openclaw-state-db-schema-helpers.js";
 import {
   closeOpenClawStateDatabaseForTest,
+  closeOpenClawStateDatabaseAsync,
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "./openclaw-state-db.js";
@@ -31,8 +33,9 @@ import {
 } from "./user-profiles.js";
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
-  afterEach(() => {
+  afterEach(async () => {
     vi.restoreAllMocks();
+    await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
     cleanup();
   });
@@ -882,13 +885,12 @@ describe("user profiles", () => {
 
   it("preserves a user avatar written while provider avatar bytes are in flight", async () => {
     const options = stateOptions();
-    let resolveFetch: ((response: Response) => void) | undefined;
-    const fetchImpl = vi.fn(
-      async () =>
-        await new Promise<Response>((resolve) => {
-          resolveFetch = resolve;
-        }),
-    );
+    const entered = createDeferredCore();
+    const response = createDeferredCore<Response>();
+    const fetchImpl = vi.fn(async () => {
+      entered.resolve();
+      return response.promise;
+    });
     const pending = ensureTailscaleProfileWithAvatar(
       {
         login: "avatar-race@github",
@@ -898,21 +900,29 @@ describe("user profiles", () => {
       options,
       { fetchImpl },
     );
-    await vi.waitFor(() => expect(resolveFetch).toBeTypeOf("function"));
-    const profileId = listUserProfilesSync(options)[0]?.id;
-    expect(profileId).toBeTruthy();
-    expect(setAvatar(profileId!, new Uint8Array([9, 8, 7]), "image/png", options).ok).toBe(true);
-    const version = readUserProfileVersion();
-
-    resolveFetch?.(
-      new Response(Uint8Array.from(fixtureImage("ui/public/favicon-32.png")).buffer, {
-        headers: { "content-type": "image/png" },
-      }),
-    );
-    await pending;
-
-    expect(readUserProfileVersion()).toBe(version);
-    expect(getProfileAvatar(profileId!, options)?.bytes).toEqual(new Uint8Array([9, 8, 7]));
+    try {
+      await Promise.race([
+        entered.promise,
+        pending.then(() => {
+          throw new Error("Avatar adoption did not enter its fetch");
+        }),
+      ]);
+      const profileId = listUserProfilesSync(options)[0]?.id;
+      expect(profileId).toBeTruthy();
+      expect(setAvatar(profileId!, new Uint8Array([9, 8, 7]), "image/png", options).ok).toBe(true);
+      const version = readUserProfileVersion();
+      response.resolve(
+        new Response(Uint8Array.from(fixtureImage("ui/public/favicon-32.png")).buffer, {
+          headers: { "content-type": "image/png" },
+        }),
+      );
+      await pending;
+      expect(readUserProfileVersion()).toBe(version);
+      expect(getProfileAvatar(profileId!, options)?.bytes).toEqual(new Uint8Array([9, 8, 7]));
+    } finally {
+      response.resolve(new Response("unavailable", { status: 503 }));
+      await Promise.allSettled([pending]);
+    }
   });
 
   it("migrates legacy provider logins while preserving profiles and real emails", () => {

@@ -9,7 +9,7 @@ import { buildGatewayInstallPlan } from "./daemon-install-helpers.js";
 import { createPrompter, setPlatform } from "./doctor-gateway-daemon-flow.test-support.js";
 import { createDoctorPrompter } from "./doctor-prompter.js";
 import {
-  EXTERNAL_SERVICE_REPAIR_NOTE,
+  formatServiceRepairDeferredNote,
   SERVICE_REPAIR_POLICY_ENV,
 } from "./doctor-service-repair-policy.js";
 import { resolveGatewayInstallToken } from "./gateway-install-token.js";
@@ -347,7 +347,7 @@ describe("maybeRepairGatewayDaemon", () => {
 
       expect(inspectPortUsage).toHaveBeenCalledOnce();
       expect(note).toHaveBeenCalledWith("Port 18789 is already in use.", "Gateway port");
-      expect(note).toHaveBeenCalledWith(EXTERNAL_SERVICE_REPAIR_NOTE, "Gateway");
+      expect(note).toHaveBeenCalledWith(formatServiceRepairDeferredNote("external"), "Gateway");
       expect(findInstalledSystemdGatewayScope).toHaveBeenCalledTimes(scenario.detected ? 1 : 0);
       expect(service.isLoaded).not.toHaveBeenCalled();
       expect(service.readRuntime).not.toHaveBeenCalled();
@@ -385,7 +385,7 @@ describe("maybeRepairGatewayDaemon", () => {
       expect.objectContaining({ message: "Start gateway service now?" }),
     );
     expect(service.restart).toHaveBeenCalledOnce();
-    expect(note).not.toHaveBeenCalledWith(EXTERNAL_SERVICE_REPAIR_NOTE, "Gateway");
+    expect(note).not.toHaveBeenCalledWith(formatServiceRepairDeferredNote("external"), "Gateway");
   });
 
   it("reports recent restart handoffs during deep doctor", async () => {
@@ -852,7 +852,7 @@ describe("maybeRepairGatewayDaemon", () => {
 
     expect(service.install).not.toHaveBeenCalled();
     expect(service.restart).not.toHaveBeenCalled();
-    expect(note).toHaveBeenCalledWith(EXTERNAL_SERVICE_REPAIR_NOTE, "Gateway");
+    expect(note).toHaveBeenCalledWith(formatServiceRepairDeferredNote("external"), "Gateway");
   });
 
   it("skips gateway service install when a system OpenClaw gateway service exists", async () => {
@@ -899,7 +899,10 @@ describe("maybeRepairGatewayDaemon", () => {
 
     expect(launchd.repairLaunchAgentBootstrap).not.toHaveBeenCalled();
     expect(service.install).not.toHaveBeenCalled();
-    expect(note).toHaveBeenCalledWith(EXTERNAL_SERVICE_REPAIR_NOTE, "Gateway LaunchAgent");
+    expect(note).toHaveBeenCalledWith(
+      formatServiceRepairDeferredNote("external"),
+      "Gateway LaunchAgent",
+    );
     expect(note).not.toHaveBeenCalledWith("Gateway service not installed.", "Gateway");
     expect(buildGatewayRuntimeHints).not.toHaveBeenCalled();
   });

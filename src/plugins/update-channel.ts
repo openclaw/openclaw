@@ -76,6 +76,8 @@ export async function syncPluginsForUpdateChannel(params: {
   config: OpenClawConfig;
   channel: UpdateChannel;
   coreVersion?: string;
+  timeoutMs?: number;
+  workTimeoutMs?: number | null;
   skipIds?: ReadonlySet<string>;
   workspaceDir?: string;
   env?: NodeJS.ProcessEnv;
@@ -225,6 +227,7 @@ async function syncPluginsForUpdateChannelWithLease(
           npmSpec && trustedSourceLinkedOfficialInstall
             ? await resolveNpmInstallSpecsForUpdateChannel({
                 spec: npmSpec,
+                timeoutMs: params.timeoutMs,
                 updateChannel: params.channel,
                 officialPackageName: resolveNpmSpecPackageName(npmSpec),
                 coreVersion: params.coreVersion,
@@ -284,6 +287,8 @@ async function syncPluginsForUpdateChannelWithLease(
           spec,
           config: next,
           mode: "update" as const,
+          timeoutMs: params.timeoutMs,
+          workTimeoutMs: params.workTimeoutMs,
           expectedPluginId: targetPluginId,
           logger,
           onBeforePluginArtifactCommit: capabilityConsent.onBeforePluginArtifactCommit,

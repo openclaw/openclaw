@@ -228,15 +228,18 @@ export function resolveSessionChildOwners(params: {
   entry: SessionEntry;
   now: number;
   subagentRuns: SessionListRowContext["subagentRuns"];
+  hasActiveRun?: boolean;
 }): string[] {
   const { key, entry, now, subagentRuns } = params;
   const latest = subagentRuns.getDisplaySubagentRun(key);
-  const keep = latest
-    ? shouldKeepSubagentRunChildLink(latest, {
-        activeDescendants: subagentRuns.countActiveDescendantRuns(key),
-        now,
-      })
-    : shouldKeepStoreOnlyChildLink(entry, now);
+  const keep =
+    params.hasActiveRun ||
+    (latest
+      ? shouldKeepSubagentRunChildLink(latest, {
+          activeDescendants: subagentRuns.countActiveDescendantRuns(key),
+          now,
+        })
+      : shouldKeepStoreOnlyChildLink(entry, now));
   if (!keep) {
     return [];
   }

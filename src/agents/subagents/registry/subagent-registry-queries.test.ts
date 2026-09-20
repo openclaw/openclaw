@@ -731,6 +731,43 @@ describe("subagent registry query regressions", () => {
 describe("hasDescendantRunAwaitingSettleFromRuns", () => {
   const requester = "agent:main:main";
 
+  it.each([
+    { name: "ended before the batch", endOffset: -1, pending: false },
+    { name: "ended at the batch boundary", endOffset: 0, pending: true },
+    { name: "ended during the batch", endOffset: 1, pending: true },
+    { name: "still executing", endOffset: undefined, pending: true },
+  ])("scopes $name without pruning descendants of an old parent", ({ endOffset, pending }) => {
+    const batchCreatedAt = Date.now() - 1_000;
+    const parent = makeRun({
+      runId: "old-parent",
+      requesterSessionKey: requester,
+      createdAt: batchCreatedAt - 3_000,
+      endedAt: batchCreatedAt - 2_000,
+    });
+    const descendant = makeRun({
+      runId: "descendant",
+      requesterSessionKey: parent.childSessionKey,
+      createdAt: batchCreatedAt - 2_500,
+      startedAt: batchCreatedAt - 2_500,
+      ...(endOffset !== undefined ? { endedAt: batchCreatedAt + endOffset } : {}),
+      expectsCompletionMessage: true,
+      delivery: { status: "pending" },
+    });
+    const runs = toRunMap([parent, descendant]);
+
+    expect(
+      hasDescendantRunAwaitingSettleFromRuns(
+        runs,
+        requester,
+        undefined,
+        undefined,
+        undefined,
+        batchCreatedAt,
+      ),
+    ).toBe(pending);
+    expect(countPendingDescendantRunsFromRuns(runs, requester)).toBe(2);
+  });
+
   it("reports live runs and ended runs whose cleanup has not completed, but not cleaned runs", () => {
     const now = Date.now();
     const runs = toRunMap([

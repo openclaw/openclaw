@@ -109,20 +109,6 @@ type SessionObserverModelsResult = {
   agentId: string;
   models: ModelCatalogEntry[];
 };
-// Keys settable through this page's setSetting helper. Whether a key syncs
-// across devices is owned by app/server-prefs.ts, not by this type.
-type ConfigPageSetting =
-  | "textScale"
-  | "sidebarLiveActivity"
-  | "chatMessageMaxWidth"
-  | "chatCollapseTaskProgress"
-  | "showAdvancedSettings"
-  | "chatSendShortcut"
-  | "chatFollowUpMode"
-  | "catalogOpenTarget"
-  | "composerHoldToRecord"
-  | "openLinksInControlUiBrowser";
-
 const SESSION_OBSERVER_STATUS_POLL_INTERVAL_MS = 10_000;
 const EMPTY_SESSION_CATALOG_LABELS: ReadonlyMap<string, string> = new Map();
 
@@ -880,21 +866,11 @@ export class ConfigPage extends OpenClawLightDomElement {
     context?: Parameters<typeof startThemeTransition>[0]["context"],
   ) {
     const preference = this.currentSyncedPref("themeMode");
-    const reset = preference.overridden && mode === preference.resetValue;
-    const currentTheme = resolveTheme(this.settings.theme, this.settings.themeMode);
-    startThemeTransition({
-      currentTheme,
-      nextTheme: resolveTheme(this.settings.theme, mode),
-      context,
-      applyTheme: () =>
-        reset
-          ? this.resetSyncedAppearancePref("themeMode")
-          : this.applySettings({ themeMode: mode }),
-    });
-  }
-
-  private setSetting<K extends ConfigPageSetting>(key: K, value: UiSettings[K]) {
-    this.applySettings({ [key]: value });
+    if (preference.overridden && mode === preference.resetValue) {
+      this.resetSyncedAppearancePref("themeMode");
+    } else {
+      this.context.theme.setMode(mode, context?.element);
+    }
   }
 
   private selectMicrophone(deviceId: string) {
@@ -1126,6 +1102,8 @@ export class ConfigPage extends OpenClawLightDomElement {
         ? localePref.resetValue
         : undefined,
       onLocaleChange: (locale) => this.setLocale(locale),
+      themeCatalog: this.pageId === "appearance" ? this.context.theme.catalog : undefined,
+      onRetryThemeCatalog: () => this.context.theme.retryCatalog?.(),
       setTheme: (theme, transitionContext) => this.setTheme(theme, transitionContext),
       setThemeMode: (mode, transitionContext) => this.setThemeMode(mode, transitionContext),
       setAccent: (accent) =>
@@ -1147,13 +1125,13 @@ export class ConfigPage extends OpenClawLightDomElement {
       textScale: this.settings.textScale ?? UI_APPEARANCE_DEFAULTS.textScale,
       textScaleOverridden: this.settings.textScale !== undefined,
       setTextScale: (value) =>
-        this.setSetting(
-          "textScale",
-          value === UI_APPEARANCE_DEFAULTS.textScale ? undefined : normalizeTextScale(value),
-        ),
+        this.applySettings({
+          textScale:
+            value === UI_APPEARANCE_DEFAULTS.textScale ? undefined : normalizeTextScale(value),
+        }),
       sidebarLiveActivity:
         this.settings.sidebarLiveActivity ?? UI_APPEARANCE_DEFAULTS.sidebarLiveActivity,
-      setSidebarLiveActivity: (enabled) => this.setSetting("sidebarLiveActivity", enabled),
+      setSidebarLiveActivity: (enabled) => this.applySettings({ sidebarLiveActivity: enabled }),
       hiddenSessionCatalogIds: this.hiddenSessionCatalogIds,
       hiddenSessionCatalogLabels:
         this.hiddenSessionCatalogLabelsTask.status === TaskStatus.COMPLETE
@@ -1161,12 +1139,15 @@ export class ConfigPage extends OpenClawLightDomElement {
           : EMPTY_SESSION_CATALOG_LABELS,
       setSessionCatalogHidden: setStoredSessionCatalogHidden,
       chatMessageMaxWidth: this.settings.chatMessageMaxWidth,
-      setChatMessageMaxWidth: (value) => this.setSetting("chatMessageMaxWidth", value),
+      setChatMessageMaxWidth: (value) => this.applySettings({ chatMessageMaxWidth: value }),
+      chatShowTaskProgress:
+        this.settings.chatShowTaskProgress ?? UI_APPEARANCE_DEFAULTS.chatShowTaskProgress,
+      setChatShowTaskProgress: (enabled) => this.applySettings({ chatShowTaskProgress: enabled }),
       chatCollapseTaskProgress: this.settings.chatCollapseTaskProgress === true,
       setChatCollapseTaskProgress: (enabled) =>
-        this.setSetting("chatCollapseTaskProgress", enabled),
+        this.applySettings({ chatCollapseTaskProgress: enabled }),
       showAdvancedSettings: this.settings.showAdvancedSettings === true,
-      setShowAdvancedSettings: (enabled) => this.setSetting("showAdvancedSettings", enabled),
+      setShowAdvancedSettings: (enabled) => this.applySettings({ showAdvancedSettings: enabled }),
       forceShowAdvanced: this.pageId === "advanced",
       forceAdvancedSection: this.routeData?.advanced ? this.routeData.section : null,
       sessionObserverEnabled: controlUiConfig?.sessionObserver !== false,
@@ -1208,7 +1189,7 @@ export class ConfigPage extends OpenClawLightDomElement {
       chatSendShortcutProvenance: chatSendShortcutPref.provenance,
       chatSendShortcutResetValue:
         chatSendShortcutPref.resetValue ?? UI_APPEARANCE_DEFAULTS.chatSendShortcut,
-      setChatSendShortcut: (value) => this.setSetting("chatSendShortcut", value),
+      setChatSendShortcut: (value) => this.applySettings({ chatSendShortcut: value }),
       chatFollowUpMode: this.settings.chatFollowUpMode,
       chatFollowUpModeOverridden: chatFollowUpModePref.overridden,
       chatFollowUpModeProvenance: chatFollowUpModePref.provenance,
@@ -1217,7 +1198,7 @@ export class ConfigPage extends OpenClawLightDomElement {
             configNeedsApply: configState.configNeedsApply,
           })
         : undefined,
-      setChatFollowUpMode: (value) => this.setSetting("chatFollowUpMode", value),
+      setChatFollowUpMode: (value) => this.applySettings({ chatFollowUpMode: value }),
       resetChatFollowUpMode: () => this.resetSyncedAppearancePref("chatFollowUpMode"),
       catalogOpenTarget: normalizeCatalogOpenTarget(this.settings.catalogOpenTarget),
       pluginsHref: pathForRoute("plugin-settings", this.context.basePath),
@@ -1226,7 +1207,7 @@ export class ConfigPage extends OpenClawLightDomElement {
           ? this.sessionSourcePluginsTask.value
           : null,
       sessionSourcePluginsLoading: this.sessionSourcePluginsTask.status === TaskStatus.PENDING,
-      setCatalogOpenTarget: (value) => this.setSetting("catalogOpenTarget", value),
+      setCatalogOpenTarget: (value) => this.applySettings({ catalogOpenTarget: value }),
       microphone: {
         devices: this.microphoneDevices,
         permissionRequired: this.microphonePermissionRequired,
@@ -1235,7 +1216,7 @@ export class ConfigPage extends OpenClawLightDomElement {
         error: this.microphoneError,
       },
       composerHoldToRecord: this.settings.composerHoldToRecord !== false,
-      setComposerHoldToRecord: (enabled) => this.setSetting("composerHoldToRecord", enabled),
+      setComposerHoldToRecord: (enabled) => this.applySettings({ composerHoldToRecord: enabled }),
       onMicrophoneRefresh: () => void this.refreshMicrophones(true),
       onMicrophoneSelect: (deviceId) => this.selectMicrophone(deviceId),
       camera: {
@@ -1276,7 +1257,7 @@ export class ConfigPage extends OpenClawLightDomElement {
         activeSection === "browser" && browserPanelAvailable && !hasNativeBrowserBridge()
           ? renderBrowserLinkPreferencesRow({
               enabled: this.settings.openLinksInControlUiBrowser === true,
-              onChange: (enabled) => this.setSetting("openLinksInControlUiBrowser", enabled),
+              onChange: (enabled) => this.applySettings({ openLinksInControlUiBrowser: enabled }),
             })
           : undefined,
       showRootTab: !includeSections?.length,

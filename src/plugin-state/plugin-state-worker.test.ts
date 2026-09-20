@@ -35,67 +35,6 @@ afterEach(async () => {
 
 describe("worker plugin state", () => {
   it.each(["observe", "compareDelete"] as const)(
-    "delegates lifecycle custody acquired before admission during %s",
-    async (operation) => {
-      await withOpenClawTestState({ label: "plugin-state-lock-custody" }, async (state) => {
-        const store = createPluginStateKeyedStore<string>("memory-core", {
-          namespace: "lock-custody",
-          maxEntries: 10,
-          env: state.env,
-        });
-        const messages = vi.spyOn(Worker.prototype, "postMessage");
-        await store.register("workspace", "owner");
-        const worker = messages.mock.contexts[0];
-        messages.mockRestore();
-        if (!(worker instanceof Worker)) {
-          throw new Error("Expected the shared-state worker");
-        }
-        const observation = await store.observe("workspace");
-        // Acquire before admission so the broker can delegate this live custody.
-        // Taking a new host lock only at dispatch would block worker-side acquisition.
-        const held = acquireStateDatabaseCoordinator({
-          databasePath: resolveOpenClawStateSqlitePath(state.env),
-          busyTimeoutMs: 0,
-        });
-        let dispatched = false;
-        const nativePost = worker.postMessage.bind(worker);
-        const dispatch = vi
-          .spyOn(worker, "postMessage")
-          .mockImplementation((message, transferList) => {
-            const request = asOptionalRecord(message);
-            if (
-              request?.type === "execute" &&
-              request.input instanceof Uint8Array &&
-              asOptionalRecord(deserialize(request.input))?.type === "pluginState." + operation
-            ) {
-              dispatched = true;
-              expect(request.stateLifecycle).toBeDefined();
-              expect(request.workerStateLifecycle).toBeUndefined();
-            }
-            return nativePost(message, transferList);
-          });
-        try {
-          if (operation === "observe") {
-            await expect(store.observe("workspace")).resolves.toMatchObject({ value: "owner" });
-          } else {
-            await expect(
-              store.compareAndApply("workspace", observation.comparison, {
-                operation: "delete",
-                action: "delete",
-              }),
-            ).resolves.toEqual({ status: "applied" });
-          }
-          expect(dispatched).toBe(true);
-        } finally {
-          dispatch.mockRestore();
-          held.release();
-        }
-        expect(await store.lookup("workspace")).toBe(operation === "observe" ? "owner" : undefined);
-      });
-    },
-  );
-
-  it.each(["observe", "compareDelete"] as const)(
     "waits for an overlapping host owner before worker lifecycle acquisition during %s",
     async (operation) => {
       await withOpenClawTestState({ label: "plugin-state-lock-custody" }, async (state) => {

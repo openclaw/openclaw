@@ -43,11 +43,16 @@ responsive layout; on a phone it can sit below chat or expand with the panel.
 
 The reader includes descriptions, discussion comments, published inline PR
 review comments with file and diff context, commit comments, and expandable
-file diffs. Markdown images and standalone HTML image attachments can display
-inline. The Gateway image policy permits GitHub user-attachment URLs and its
-`user-images.githubusercontent.com` and `private-user-images.githubusercontent.com`
-attachment hosts. They must support anonymous CORS; requests send no credentials
-or referrer. Other or unavailable images retain a full-size external link.
+file diffs. HTML comments in descriptions and replies stay hidden, matching
+GitHub; literal comment examples inside code remain visible.
+Markdown images and standalone HTML image attachments can display inline. The
+GitHub plugin fetches public user attachments anonymously through the Gateway,
+including GitHub's attachment redirects, so they do not need browser CORS headers.
+Requests send no GitHub credentials, cookies, or referrer. PNG, JPEG, GIF, and WebP
+attachments up to 2 MiB are supported by the resolver. If resolution fails, the
+reader preserves the original anonymous-CORS image path; images that still
+cannot load retain a full-size external link. Each loaded document bounds concurrent requests and
+cached image data; closing its tab or replacing the document retires that cache.
 Script and connection policies are unchanged; remote content cannot run scripts
 or app widgets.
 
@@ -82,7 +87,10 @@ hovercard, and GitHub links open externally.
 - Long text and patches are bounded. Incomplete content is labeled rather than
   presented as a complete conversation or diff.
 - **Refresh** requests the current item again. Rate limits, deleted items, and
-  unavailable services show a retry action and the external source link.
+  unavailable services show their specific explanation in the reader and hovercards,
+  including GitHub's retry delay when available. Cached preview details stay visible
+  with the failure notice. Use the reader's **Retry** action or **Open on GitHub**;
+  the server's API quota is separate from your signed-in browser session.
 
 ## Plugin author integration
 

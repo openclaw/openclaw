@@ -3,8 +3,9 @@ import type { AddressInfo, Socket } from "node:net";
 import { Bot } from "grammy";
 import { projectAgentToolActivity } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import { setReplyPayloadMetadata } from "openclaw/plugin-sdk/reply-payload-testing";
 import { dispatchInboundMessage } from "openclaw/plugin-sdk/reply-runtime";
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { TelegramMessageContext } from "./bot-message-context.js";
 import { dispatchTelegramMessage } from "./bot-message-dispatch.js";
 import { setTelegramPluginStateRuntimeForTests } from "./runtime-state.test-support.js";
@@ -81,6 +82,10 @@ describe("Telegram progress command detail through the shared dispatcher and Tel
     resetPluginStateStoreForTests({ closeDatabase: false });
     resetTelegramReplyFenceForTest();
     setTelegramPluginStateRuntimeForTests();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
   });
 
   async function waitForBotApiCall(predicate: (call: RecordedBotApiCall) => boolean) {
@@ -176,7 +181,7 @@ describe("Telegram progress command detail through the shared dispatcher and Tel
   async function dispatchProgressTurn(
     emitEvents: (options: ReplyResolverOptions) => Promise<void>,
     scenario?: {
-      mode: "partial";
+      mode: "partial" | "progress";
       toolProgress: boolean;
       finalReply: { text: string; isError?: boolean };
     },
@@ -245,6 +250,132 @@ describe("Telegram progress command detail through the shared dispatcher and Tel
       .filter((call) => call.method === "sendMessage" || call.method === "editMessageText")
       .map((call) => [call.method, call.fields.message_id ?? null, call.fields.text] as const);
   }
+
+  it("flushes a pending parent progress surface before adopting a fast yield", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    const commentary = "The delegated check is still running.";
+    let receipt: unknown;
+    const waitingPayload = setReplyPayloadMetadata(
+      { text: "Waiting for delegated work." },
+      {
+        progressContinuation: {
+          adopt: async (candidate) => {
+            receipt = candidate;
+            return true;
+          },
+          close: () => undefined,
+        },
+      },
+    );
+    await dispatchProgressTurn(
+      async (options) => {
+        await options?.onItemEvent?.({
+          kind: "preamble",
+          itemId: "parent-commentary",
+          phase: "end",
+          progressText: commentary,
+        });
+        expect(calls.filter((call) => call.method === "sendMessage")).toEqual([]);
+      },
+      { mode: "progress", toolProgress: true, finalReply: waitingPayload },
+    );
+
+    expect(receipt).toMatchObject({
+      messageId: String([...visibleMessages.keys()][0]),
+      text: expect.stringContaining(commentary),
+      snapshot: { statusHeadline: commentary },
+    });
+    expect([...visibleMessages.values()]).toEqual([expect.stringContaining(commentary)]);
+    expect(calls.filter((call) => call.method === "sendMessage")).toHaveLength(1);
+    expect(calls.some((call) => call.fields.text === waitingPayload.text)).toBe(false);
+  });
+
+  it.each([true, false])(
+    "retains the existing progress card only when continuation custody is accepted (%s)",
+    async (accept) => {
+      vi.useFakeTimers({ shouldAdvanceTime: true });
+      const waitingText = "Waiting for delegated work.";
+      const commentary = "Parent commentary remains visible.";
+      const plan = [
+        { step: "Inspect the request", status: "completed" as const },
+        { step: "Finish delegated work", status: "in_progress" as const },
+      ];
+      let receipt: unknown;
+      let progressMessageId: number | undefined;
+      let parentCallbacks: ReplyResolverOptions | undefined;
+      const waitingPayload = setReplyPayloadMetadata(
+        { text: waitingText },
+        {
+          progressContinuation: {
+            adopt: async (candidate) => {
+              receipt = candidate;
+              return accept;
+            },
+            close: () => undefined,
+          },
+        },
+      );
+      await dispatchProgressTurn(
+        async (options) => {
+          parentCallbacks = options;
+          await options?.onPlanUpdate?.({
+            phase: "update",
+            explanation: "Delegating the remaining work",
+            steps: plan,
+          });
+          await options?.onItemEvent?.({
+            kind: "preamble",
+            itemId: "parent-commentary",
+            phase: "end",
+            progressText: commentary,
+          });
+          await emitToolStart(options, { name: "exec", phase: "start", toolCallId: "delegate" });
+          await waitForBotApiCall((call) => call.method === "sendMessage");
+          progressMessageId = [...visibleMessages.keys()][0];
+        },
+        { mode: "progress", toolProgress: true, finalReply: waitingPayload },
+      );
+
+      expect(receipt).toMatchObject({
+        channel: "telegram",
+        accountId: "default",
+        to: String(CHAT_ID),
+        messageId: String(progressMessageId),
+        text: expect.stringContaining(commentary),
+        snapshot: { statusHeadline: commentary, plan },
+      });
+      if (accept) {
+        await parentCallbacks?.onItemEvent?.({
+          kind: "preamble",
+          itemId: "parent-commentary",
+          phase: "end",
+          progressText: "A retired parent must not replace the retained card.",
+        });
+        await parentCallbacks?.onPlanUpdate?.({ phase: "update", steps: [] });
+        await parentCallbacks?.onQueuedFollowupSettled?.();
+      }
+      // Advance detached preview cleanup beyond its four-second dwell.
+      await vi.advanceTimersByTimeAsync(4_100);
+      if (!accept) {
+        await expect
+          .poll(() => [...visibleMessages.values()], { timeout: 5_000 })
+          .toEqual([waitingText]);
+        expect(
+          calls
+            .filter((call) => call.method === "deleteMessage")
+            .map((call) => Number(call.fields.message_id)),
+        ).toEqual([progressMessageId]);
+        return;
+      }
+      expect([...visibleMessages.entries()]).toEqual([
+        [progressMessageId, expect.stringContaining(commentary)],
+      ]);
+      expect([...visibleMessages.values()][0]).toContain("Finish delegated work");
+      expect(calls.filter((call) => call.method === "deleteMessage")).toEqual([]);
+      expect(calls.filter((call) => call.method === "sendMessage")).toHaveLength(1);
+      expect(calls.some((call) => call.fields.text === waitingText)).toBe(false);
+    },
+  );
 
   it.each([false, true])(
     "keeps tool progress until the final answer replaces it (assistant boundary: %s)",

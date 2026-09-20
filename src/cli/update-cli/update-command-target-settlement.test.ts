@@ -1,5 +1,6 @@
-import { afterEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { collectNestedErrorCandidates } from "../../infra/error-graph-internal.js";
+import { createUpdateRun } from "../../infra/update-run-ledger.js";
 import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
 import {
   resolveCommandProcessSignal,
@@ -7,6 +8,10 @@ import {
   withCommandProcessScope,
 } from "../../process/exec-spawn.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import {
+  createOpenClawTestState,
+  type OpenClawTestState,
+} from "../../test-utils/openclaw-test-state.js";
 import { UnreportedUpdateAdmissionOutcome } from "./update-command-result.js";
 import { resolveUpdateCommandTarget } from "./update-command-target.js";
 
@@ -21,11 +26,19 @@ vi.mock("../../infra/update-freebsd-pkg-ownership.js", async (importOriginal) =>
 vi.mock("./update-command-terminal.js", () => ({
   reportPreMutationUpdateResult: boundary.report,
 }));
-afterEach(() => vi.resetAllMocks());
+let state: OpenClawTestState;
+beforeEach(async () => {
+  state = await createOpenClawTestState({ layout: "state-only" });
+});
+afterEach(async () => {
+  await state.cleanup();
+  vi.resetAllMocks();
+});
 
 it.each(["forced", "uncertain"] as const)(
   "settles target inspection before reporting preflight refusal (%s)",
   async (cleanupResult) => {
+    const run = createUpdateRun({ trigger: "cli" }, { env: state.env });
     const cleanup = createDeferredCore<"forced" | "uncertain">();
     const joining = createDeferredCore();
     const reported = new Error("terminal refusal was reported");
@@ -53,8 +66,8 @@ it.each(["forced", "uncertain"] as const)(
     } satisfies Parameters<typeof resolveUpdateCommandTarget>[3];
     const work = withCommandProcessScope(() =>
       resolveUpdateCommandTarget(
-        { json: true, run: { runId: "synthetic", env: {} } },
-        { triageTarget: { root: prepared.discoveredRoot, env: {} } },
+        { json: true, run: { runId: run.runId, env: state.env } },
+        { triageTarget: { root: prepared.discoveredRoot, env: state.env } },
         undefined,
         prepared,
         { enter },

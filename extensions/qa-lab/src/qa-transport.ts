@@ -509,6 +509,9 @@ export function createQaStateBackedTransportAdapter(
     ...(params.createRuntimeEnvPatch
       ? { createRuntimeEnvPatch: params.createRuntimeEnvPatch }
       : {}),
+    ...(params.createRuntimePreloads
+      ? { createRuntimePreloads: params.createRuntimePreloads }
+      : {}),
     ...(params.prepareFlow ? { prepareFlow: params.prepareFlow } : {}),
     ...(params.captureArtifacts ? { captureArtifacts: params.captureArtifacts } : {}),
     ...(params.cleanup ? { cleanup: params.cleanup } : {}),

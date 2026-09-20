@@ -72,6 +72,7 @@ it("uses the installed checkout runner for partial-clone classification", async 
     beforeSha: null,
     installedRoot: "/installed",
     installedRunCommand,
+    probeTimeoutMs: 1_000,
     step: {
       runCommand: inspectionRunCommand,
       cwd: "/inspection",
@@ -221,6 +222,7 @@ it
     beforeSha,
     installedRoot: install,
     installedRunCommand: runCommand,
+    probeTimeoutMs: 15_000,
     step: step(source),
   });
   expect(historyInventoryAllowsMissingObjects).toBe(true);
@@ -260,6 +262,7 @@ it
       beforeSha,
       installedRoot: install,
       installedRunCommand: runCommand,
+      probeTimeoutMs: 15_000,
       step: step(inspection),
     });
     expect(transfer).toBeDefined();

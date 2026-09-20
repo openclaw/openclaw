@@ -16,6 +16,7 @@ import { createCliJsonlStreamingParser } from "../cli-output-stream.js";
 import { parseCliOutput } from "../cli-output.js";
 import type { FailoverError } from "../failover-error.js";
 import { applyPluginTextReplacements } from "../plugin-text-transforms.js";
+import { resolveReplyExpectation } from "../reply-completion.js";
 import type { CliExecuteDeps } from "./execute-deps.js";
 import type { CliEventHandlers } from "./execute-events.js";
 import { createCliAbortError, executeNodeClaudeRun } from "./execute-node-claude.js";
@@ -208,6 +209,7 @@ export async function executeCliProcess(params: {
       result = await executePluginOwnedProcess({
         context,
         execute: context.executionTarget.execute,
+        watchdogClock: params.deps.watchdogClock,
         executionCommand: params.executionCommand,
         executionArgv0: params.executionArgv0,
         executionArgs: [...params.executionLeadingArgv, ...params.resolveExecutionArgs()],
@@ -318,6 +320,7 @@ export async function executeCliProcess(params: {
               kind: "cli" as const,
               runId: runParams.runId,
               toolAuthorityFingerprint: runParams.toolAuthorityFingerprint,
+              terminalReplyExpectation: resolveReplyExpectation(runParams),
               cancel: () => {
                 processCancelled = true;
                 managedRun.cancel("manual-cancel");

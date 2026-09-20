@@ -3,6 +3,7 @@ import { SqliteCoordinatorError } from "../infra/sqlite-coordinator.js";
 import { SqliteSchemaVersionError } from "../infra/sqlite-user-version.js";
 import { StartupMaintenanceRequiredError } from "../infra/startup-maintenance-required.js";
 import { StateDatabaseCoordinatorContentionError } from "../infra/state-database-coordinator.js";
+import { SkillUploadRequestError } from "../skills/lifecycle/upload-store-error.js";
 import { OpenClawAgentDatabaseMediaMigrationRequiredError } from "./openclaw-agent-db-migration-required.js";
 import { OpenClawStateDatabaseSchemaMigrationRequiredError } from "./openclaw-state-db-schema-migration-required.js";
 import {
@@ -28,7 +29,16 @@ type ErrorValue =
   | { undefined: true };
 
 type ErrorIdentity =
-  | { type: "error" | "aggregate" | "ownership" | "newer-schema" | "coordinator" | "range-error" }
+  | {
+      type:
+        | "error"
+        | "aggregate"
+        | "ownership"
+        | "newer-schema"
+        | "coordinator"
+        | "range-error"
+        | "skill-upload-request";
+    }
   | { type: "coordinator-contention"; family: CoordinatorFamily }
   | { type: "ownership-metadata"; databasePath: string }
   | { type: "external-ownership"; databasePath: string; managerId: string }
@@ -56,6 +66,9 @@ export type OpenClawStateWorkerErrorPayload = {
 type ErrorGraphOptions = { includeOrdinary?: boolean };
 
 function identifyError(error: Error): ErrorIdentity {
+  if (error instanceof SkillUploadRequestError) {
+    return { type: "skill-upload-request" };
+  }
   if (error instanceof StateDatabaseCoordinatorContentionError) {
     return { type: "coordinator-contention", family: error.family };
   }
@@ -186,6 +199,7 @@ function parseIdentity(node: Record<string, unknown>): ErrorIdentity | undefined
     case "newer-schema":
     case "coordinator":
     case "range-error":
+    case "skill-upload-request":
       return { type: node.type };
     case "coordinator-contention":
       return node.family === "gateway-lifecycle" ||
@@ -304,6 +318,8 @@ function createError(node: ErrorNode): Error {
       return new Error(node.message);
     case "range-error":
       return new RangeError(node.message);
+    case "skill-upload-request":
+      return new SkillUploadRequestError(node.message);
     case "aggregate":
       return new AggregateError([], node.message);
     case "coordinator":

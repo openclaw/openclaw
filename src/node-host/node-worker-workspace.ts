@@ -5,6 +5,7 @@ import path from "node:path";
 import { resolveStateDir } from "../config/paths.js";
 import { takeWorkspaceHashMemo } from "../gateway/worker-environments/workspace-hash-memo.js";
 import { isPathInside } from "../infra/path-guards.js";
+import { tightenPrivateDirRootSync } from "../infra/private-dir-mode.js";
 import { KeyedAsyncQueue } from "../plugin-sdk/keyed-async-queue.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import type {
@@ -111,8 +112,9 @@ export class NodeWorkerWorkspaceRuntime {
     const configuredRoot = path.resolve(
       options.root ?? path.join(resolveStateDir(env), "node-host"),
     );
-    fs.mkdirSync(configuredRoot, { recursive: true });
+    fs.mkdirSync(configuredRoot, { recursive: true, mode: 0o700 });
     this.root = fs.realpathSync.native(configuredRoot);
+    tightenPrivateDirRootSync(this.root, 0o700);
     // Git artifacts are machine caches, outside the per-lease state scrub boundary.
     const home = env.HOME ?? env.USERPROFILE ?? os.homedir();
     this.seedsRoot = path.resolve(home, ".openclaw-worker", "git-seeds");

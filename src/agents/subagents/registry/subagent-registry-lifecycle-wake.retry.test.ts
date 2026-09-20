@@ -83,7 +83,12 @@ describe("requester settle retry lifetime", () => {
         createdAt: 1_000,
         execution: { status: "terminal", endedAt: 4_000 },
         expectsCompletionMessage: false,
-        requesterSettleWake: { status: "pending", attemptCount: 0, rearmGeneration: 1 },
+        requesterSettleWake: {
+          status: "pending",
+          attemptCount: 0,
+          rearmGeneration: 1,
+          progressOperationId: "retained-progress-receipt",
+        },
       };
       const runs = new Map([[entry.runId, entry]]);
       const persistedWakes: Array<SubagentRunRecord["requesterSettleWake"]> = [];
@@ -140,7 +145,13 @@ describe("requester settle retry lifetime", () => {
           expect(getActiveGatewayRootWorkCount()).toBe(0);
         });
         expect(persistedWakes).toEqual([
-          { status: "pending", attemptCount: 1, nextAttemptAt: 11_000, rearmGeneration: 1 },
+          {
+            status: "pending",
+            attemptCount: 1,
+            nextAttemptAt: 11_000,
+            rearmGeneration: 1,
+            progressOperationId: "retained-progress-receipt",
+          },
         ]);
         await origin.drain();
         expect(origin.signal.aborted).toBe(true);

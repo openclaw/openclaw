@@ -25,6 +25,16 @@ import { resolveSafeChildProcessInvocation } from "./windows-command.js";
 
 export const COMMAND_PROCESS_TREE_KILL_GRACE_MS = 300;
 
+export class CommandProcessScopeUnsettledError extends Error {
+  constructor(cause?: unknown) {
+    super(
+      "Command process scope could not prove that every child stopped; recovery must retain its capture",
+      { cause },
+    );
+    this.name = "CommandProcessScopeUnsettledError";
+  }
+}
+
 /** Retire only settled operation ownership before an intentional process handoff. */
 export async function retireCommandProcessJobForHandoff(): Promise<void> {
   if (process.platform !== "win32") {
@@ -103,14 +113,6 @@ export async function withCommandProcessScope<T>(
   signal?: AbortSignal,
 ): Promise<T> {
   const parent = commandProcessScope.getStore();
-  if (parent?.signal.aborted) {
-    throw new Error("Command process scope is closed");
-  }
-  if (process.platform === "win32") {
-    const { rearmRetainedWindowsProcessJob } =
-      await import("./supervisor/service-child-windows-job-native.js");
-    rearmRetainedWindowsProcessJob();
-  }
   const controller = new AbortController();
   const inherited = resolveCommandProcessSignal(signal);
   const scope: CommandProcessScope = {
@@ -268,9 +270,7 @@ function retainCommandProcess(
       // Windows executable finalizers retain a Job until process exit. POSIX
       // pipe closure is not extinction: observe this exact group after its stop.
       if (process.platform === "win32") {
-        const { areRetainedWindowsProcessJobChildrenSettled } =
-          await import("./supervisor/service-child-windows-job-native.js");
-        if (!observedExit || !areRetainedWindowsProcessJobChildrenSettled()) {
+        if (!observedExit) {
           throw new CommandProcessCleanupError();
         }
         return;

@@ -10,10 +10,10 @@ export function githubChangeMetadata(
 ): NonNullable<ControlUiLinkReaderPreview["metadata"]> {
   const metadata: NonNullable<ControlUiLinkReaderPreview["metadata"]> = [];
   if (additions !== undefined) {
-    metadata.push({ label: "Additions", value: "+" + additions });
+    metadata.push({ label: "Additions", value: "+" + additions, tone: "positive" });
   }
   if (deletions !== undefined) {
-    metadata.push({ label: "Deletions", value: "−" + deletions });
+    metadata.push({ label: "Deletions", value: "−" + deletions, tone: "negative" });
   }
   if (files !== undefined) {
     metadata.push({ label: "Files", value: String(files) });
@@ -40,28 +40,24 @@ export function githubPreviewView(preview: ControlUiGitHubPreview): ControlUiLin
     subtitle: preview.owner + "/" + preview.repo + " #" + preview.number,
     badge,
     author: preview.login,
+    authorUrl: "https://github.com/" + encodeURIComponent(preview.login),
+    coAuthors: preview.coAuthors?.map(({ login, avatarDataUrl }) => ({
+      name: login,
+      imageUrl: avatarDataUrl,
+    })),
+    coAuthorCount: preview.coAuthorCount,
     createdAt: preview.createdAt,
     updatedAt: preview.updatedAt,
     imageUrl: preview.avatarDataUrl,
-    metadata: [
-      ...githubChangeMetadata(
-        preview.additions,
-        preview.deletions,
-        preview.changedFiles,
-        preview.comments,
-      ),
-      ...(preview.coAuthors?.length
-        ? [
-            {
-              label: "Co-authors",
-              value:
-                preview.coAuthors.map((author) => author.login).join(", ") +
-                ((preview.coAuthorCount ?? 0) > preview.coAuthors.length
-                  ? " +" + ((preview.coAuthorCount ?? 0) - preview.coAuthors.length)
-                  : ""),
-            },
-          ]
-        : []),
-    ],
+    metadata:
+      preview.kind === "pull"
+        ? githubChangeMetadata(preview.additions, preview.deletions).map(({ value, tone }) => ({
+            label: "",
+            value,
+            tone,
+          }))
+        : preview.comments === undefined
+          ? []
+          : [{ label: "Comments", value: String(preview.comments) }],
   };
 }

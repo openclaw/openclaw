@@ -1,3 +1,11 @@
+/** Follow rendered ownership through slots and open shadow roots, never documents. */
+export function composedParent(element: Element): Element | null {
+  const root = element.getRootNode();
+  return (
+    element.assignedSlot ?? element.parentElement ?? (root instanceof ShadowRoot ? root.host : null)
+  );
+}
+
 /** Ordinary primary click without modifiers; anything else keeps native link behavior. */
 export function shouldHandleNavigationClick(event: MouseEvent): boolean {
   return (

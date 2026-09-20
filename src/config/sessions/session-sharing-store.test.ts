@@ -135,7 +135,16 @@ describe("session sharing store", () => {
       const database = openOpenClawAgentDatabase({ agentId: "main", env });
       database.db.exec("DROP TABLE session_members;");
 
-      expect(() => listSessionMembers(scope)).toThrow(/no such table: session_members/);
+      expect(() => listSessionMembers(scope)).toThrow(
+        expect.objectContaining({
+          name: "SessionMetadataUnavailableError",
+          reason: "table-missing",
+          missingTables: ["session_members"],
+          cause: expect.objectContaining({
+            message: expect.stringMatching(/no such table: session_members/),
+          }),
+        }),
+      );
       expect(
         database.db
           .prepare("SELECT 1 FROM sqlite_schema WHERE type = 'table' AND name = 'session_members'")

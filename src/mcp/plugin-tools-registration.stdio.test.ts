@@ -12,7 +12,7 @@ const runner = fileURLToPath(
 );
 let sdkHost: string | undefined;
 beforeAll(() => {
-  sdkHost = createCompiledSdkHost(mcpProviderCatalogEntrypoint, lifetime.createTempDir);
+  sdkHost = createCompiledSdkHost([mcpProviderCatalogEntrypoint], lifetime.createTempDir);
 });
 afterAll(() => lifetime.cleanup());
 

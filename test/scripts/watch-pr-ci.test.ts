@@ -16,7 +16,7 @@ import {
   selectRunAfter,
 } from "../../scripts/watch-pr-ci.mts";
 import { withTempDir } from "../../src/test-utils/temp-dir.js";
-import placeholderFixture from "../fixtures/watch-pr-ci-queued-placeholder.json" with { type: "json" };
+import placeholderFixture from "../fixtures/watch-pr-ci-queued-placeholder.js";
 
 const sha = "a".repeat(40);
 
@@ -24,8 +24,9 @@ function runWatcher(
   ghScript: string,
   headSha = sha,
   options: string[] = [],
-  clock: "poll" | "wall" = "poll",
+  clock: "poll" | "wall" | { readClock: string } = "poll",
   envOverrides: NodeJS.ProcessEnv = {},
+  notifierPath?: string,
 ) {
   return withTempDir("openclaw-watch-pr-ci-", async (binDir) => {
     const ghPath = join(binDir, "gh");
@@ -37,10 +38,11 @@ function runWatcher(
     // NODE_OPTIONS reaches the implementation through its unmodified CLI wrapper.
     writeFileSync(
       clockPath,
-      `import { syncBuiltinESMExports } from "node:module";
+      `import { readFileSync } from "node:fs";
+import { syncBuiltinESMExports } from "node:module";
 import timers from "node:timers/promises";
 if (process.argv[1] === ${JSON.stringify(fileURLToPath(new URL("../../scripts/watch-pr-ci.mts", import.meta.url)))}) {
-  const now = ${clock === "wall" ? "Date.now" : "() => 0"};
+  const now = ${typeof clock === "object" ? `() => Number(readFileSync(${JSON.stringify(clock.readClock)}, "utf8"))` : clock === "wall" ? "Date.now" : "() => 0"};
   const realSleep = timers.setTimeout;
   let waitedMs = 0;
   Date.now = () => now() + waitedMs;
@@ -56,8 +58,17 @@ if (process.argv[1] === ${JSON.stringify(fileURLToPath(new URL("../../scripts/wa
     return await new Promise<{ status: number; stdout: string; stderr: string }>(
       (resolve, reject) => {
         execFile(
-          process.execPath,
+          notifierPath ? "/bin/bash" : process.execPath,
           [
+            ...(notifierPath
+              ? [
+                  "-c",
+                  'exec 3>"$1"; shift; exec "$@"',
+                  "watcher-notifier",
+                  notifierPath,
+                  process.execPath,
+                ]
+              : []),
             "scripts/watch-pr-ci.mjs",
             "42",
             headSha,
@@ -126,7 +137,19 @@ const runPath = "repos/openclaw/openclaw/actions/runs/33155056361";
 const scanned = calls.some((call) => call[1]?.startsWith("repos/openclaw/openclaw/actions/jobs/"));
 const currentGraphql = scanned && fixture.afterAliasScan !== undefined ? fixture.afterAliasScan : fixture.graphql;
 let value;
-if (args[0] === "pr" && args[1] === "view") value = currentGraphql.data.repository.pullRequest;
+if (args[0] === "browse" && args[1] === "--no-browser") {
+  console.log("https://github.com/openclaw/openclaw");
+  process.exit(0);
+}
+else if (args.includes("repos/openclaw/openclaw/pulls/42")) {
+  const pr = currentGraphql.data.repository.pullRequest;
+  value = {
+    state: pr.state === "MERGED" ? "closed" : pr.state.toLowerCase(),
+    merged_at: pr.state === "MERGED" ? "2026-09-19T00:00:00Z" : null,
+    mergeable: pr.mergeable === "MERGEABLE" ? true : pr.mergeable === "CONFLICTING" ? false : null,
+    head: { sha: pr.headRefOid },
+  };
+}
 else if (args[0] === "run" && args[1] === "view") {
   const reads = calls.filter((call) => call[0] === "run" && call[1] === "view").length;
   value = fixture.runViewSnapshots?.[Math.min(reads, fixture.runViewSnapshots.length - 1)] ?? fixture.run;
@@ -261,7 +284,11 @@ describe("watch-pr-ci", () => {
       const result = await runWatcher(
         `#!/usr/bin/env bash
 case "$1 $2" in
-  "pr view") printf '{"state":"OPEN","mergeable":true,"headRefOid":"${sha}"}\\n' ;;
+  "browse --no-browser") printf 'https://github.com/openclaw/openclaw\\n' ;;
+  "api --hostname")
+    if [ "$4" != "repos/openclaw/openclaw/pulls/42" ]; then exit 2; fi
+    printf '{"state":"open","mergeable":true,"head":{"sha":"${sha}"}}\\n'
+    ;;
   "api --method")
     case " $* " in
       *" per_page=1 "*) printf '{"workflow_runs":[{"id":202,"conclusion":"skipped"}]}\\n' ;;
@@ -315,8 +342,11 @@ const fs = require("node:fs");
 const args = process.argv.slice(2);
 fs.appendFileSync(${JSON.stringify(callsPath)}, JSON.stringify(args) + "\\n");
 let value;
-if (args[0] === "pr" && args[1] === "view") {
-  value = { state: "OPEN", mergeable: true, headRefOid: ${JSON.stringify(sha)} };
+if (args[0] === "browse" && args[1] === "--no-browser") {
+  console.log("https://github.com/openclaw/openclaw");
+  process.exit(0);
+} else if (args.includes("repos/openclaw/openclaw/pulls/42")) {
+  value = { state: "open", mergeable: true, head: { sha: ${JSON.stringify(sha)} } };
 } else if (args.includes("repos/openclaw/openclaw/actions/workflows/ci.yml/runs")) {
   value = { workflow_runs: [{ id: 201 }] };
 } else if (args[0] === "run" && args[1] === "view") {
@@ -341,6 +371,11 @@ console.log(JSON.stringify(value));
         .trim()
         .split("\n")
         .map((line) => JSON.parse(line) as string[]);
+      expect(
+        calls.filter((args) => args.includes("repos/openclaw/openclaw/pulls/42")),
+      ).toHaveLength(2);
+      expect(calls.some((args) => args[0] === "pr" || args.includes("graphql"))).toBe(false);
+      expect(calls.some((args) => args.some((arg) => arg.includes("/commits/")))).toBe(false);
       const runReads = calls.filter((args) => args[0] === "run" && args[1] === "view");
       expect(runReads.map((args) => args[args.indexOf("--json") + 1])).toEqual([
         "status,conclusion",
@@ -349,6 +384,190 @@ console.log(JSON.stringify(value));
     });
   });
 
+  it.skipIf(process.platform === "win32").each<{
+    label: string;
+    phase: "attach" | "watch";
+    patch: Record<string, unknown>;
+    exitCode: number;
+    output: string;
+    slowBrowse?: boolean;
+    slowQuota?: boolean;
+    notifier?: boolean;
+    host?: string;
+  }>([
+    ...(["attach", "watch"] as const).flatMap((phase) => [
+      {
+        label: "closed",
+        phase,
+        patch: { state: "closed" },
+        exitCode: 10,
+        output: "PR-CLOSED state=CLOSED",
+      },
+      {
+        label: "merged",
+        phase,
+        patch: { state: "closed", merged_at: "2026-09-19T00:00:00Z" },
+        exitCode: 10,
+        output: "PR-CLOSED state=MERGED",
+      },
+      {
+        label: "moved head",
+        phase,
+        patch: { head: { sha: "b".repeat(40) } },
+        exitCode: 11,
+        output: "HEAD-MOVED",
+      },
+      {
+        label: "conflict",
+        phase,
+        patch: { mergeable: false },
+        exitCode: phase === "attach" ? 12 : 14,
+        output: phase === "attach" ? "CONFLICTING mergeable=" : "CONFLICTING-MID-WAIT",
+      },
+    ]),
+    {
+      label: "unknown mergeability",
+      phase: "attach",
+      patch: { mergeable: null },
+      exitCode: 0,
+      output: "GREEN",
+    },
+    {
+      label: "slow repository resolution",
+      phase: "watch",
+      patch: {},
+      slowBrowse: true,
+      exitCode: 16,
+      output: "TIMEOUT completion=ci-run",
+    },
+    {
+      label: "slow quota diagnostics",
+      phase: "watch",
+      patch: {},
+      slowQuota: true,
+      exitCode: 16,
+      output: "TIMEOUT completion=ci-run",
+    },
+    {
+      label: "native notifier",
+      phase: "attach",
+      patch: {},
+      notifier: true,
+      exitCode: 0,
+      output: "GREEN",
+    },
+    {
+      label: "enterprise port",
+      phase: "attach",
+      patch: {},
+      host: "github.enterprise.invalid:8443",
+      exitCode: 0,
+      output: "GREEN",
+    },
+  ])(
+    "uses REST for ci-run $phase: $label",
+    async ({
+      phase,
+      patch,
+      exitCode,
+      output,
+      slowBrowse = false,
+      slowQuota = false,
+      notifier = false,
+      host = "github.com",
+    }) => {
+      await withTempDir("openclaw-watch-pr-ci-rest-", async (root) => {
+        const callsPath = join(root, "calls.jsonl");
+        const repo = "fixture-owner/fixture-repo";
+        const pullPath = `repos/${repo}/pulls/42`;
+        const notifierPath = notifier ? join(root, "notifier") : undefined;
+        const readClockPath = join(root, "read-clock");
+        if (slowQuota) {
+          // Charge request time independently of process startup so the diagnostic
+          // gets to exercise its real child timeout, even on a busy host.
+          writeFileSync(readClockPath, "0");
+        }
+        writeFileSync(callsPath, "");
+        const result = await runWatcher(
+          `#!/usr/bin/env node
+const fs = require("node:fs");
+const args = process.argv.slice(2);
+const calls = fs.readFileSync(${JSON.stringify(callsPath)}, "utf8").trim().split("\\n").filter(Boolean).map(JSON.parse);
+fs.appendFileSync(${JSON.stringify(callsPath)}, JSON.stringify(args) + "\\n");
+const pullPath = ${JSON.stringify(pullPath)};
+const reads = calls.filter((call) => call.includes(pullPath)).length;
+if (${notifier} && (args[0] === "browse" || args.includes(pullPath))) fs.writeSync(3, args[0] + "\\n");
+let value;
+if (args[0] === "browse" && args[1] === "--no-browser") {
+  if (args[args.indexOf("--repo") + 1] !== ${JSON.stringify(repo)}) throw new Error("wrong repository selection");
+  if (${slowBrowse} && reads > 0) {
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 2_000);
+    fs.appendFileSync(${JSON.stringify(callsPath)}, JSON.stringify(["slow-browse-completed"]) + "\\n");
+  }
+  console.log("https://" + ${JSON.stringify(host)} + "/" + ${JSON.stringify(repo)});
+  process.exit(0);
+} else if (args[0] === "api" && args.includes(pullPath)) {
+  if (args[args.indexOf("--hostname") + 1] !== ${JSON.stringify(host)}) throw new Error("wrong API host");
+  if (args[args.indexOf("-H") + 1] !== "Cache-Control: max-age=0") throw new Error("metadata read must revalidate mutable PR state");
+  if (${slowQuota} && reads > 0) {
+    fs.writeFileSync(${JSON.stringify(readClockPath)}, "500");
+    console.error("HTTP 429 Too Many Requests");
+    process.exit(1);
+  }
+  value = { state: "open", merged_at: null, mergeable: true, head: { sha: "${sha}" },
+    ...(${phase === "attach"} || reads > 0 ? ${JSON.stringify(patch)} : {}) };
+} else if (${slowQuota} && args.includes("rate_limit")) {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 650);
+  fs.appendFileSync(${JSON.stringify(callsPath)}, JSON.stringify(["slow-quota-completed"]) + "\\n");
+  value = { resources: {} };
+} else if (args.includes("repos/" + ${JSON.stringify(repo)} + "/actions/workflows/ci.yml/runs")) {
+  value = { workflow_runs: [{ id: 201 }] };
+} else if (args[0] === "run" && args[1] === "view") {
+  value = { status: "completed", conclusion: "success" };
+} else {
+  throw new Error("unexpected gh invocation: " + JSON.stringify(args));
+}
+console.log(JSON.stringify(value));
+`,
+          sha,
+          ["--repo", repo, "--completion", "ci-run"],
+          slowQuota ? { readClock: readClockPath } : slowBrowse ? "wall" : "poll",
+          { OPENCLAW_PR_LOCK_NOTIFY_FD: notifier ? "3" : undefined },
+          notifierPath,
+        );
+        expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(exitCode);
+        expect(result.stdout).toContain(output);
+        const calls = readFileSync(callsPath, "utf8")
+          .trim()
+          .split("\n")
+          .map((line) => JSON.parse(line) as string[]);
+        expect(calls.some((args) => args[0] === "pr" || args.includes("graphql"))).toBe(false);
+        expect(calls.some((args) => args.some((arg) => arg.includes("/commits/")))).toBe(false);
+        if (phase === "attach" && exitCode !== 0) {
+          expect(
+            calls.some(
+              (args) => args[0] === "run" || args.some((arg) => arg.includes("/actions/")),
+            ),
+          ).toBe(false);
+        } else {
+          expect(result.stdout).toContain("ATTACHED run=201");
+        }
+        expect(calls.filter((args) => args.includes(pullPath))).toHaveLength(
+          slowBrowse || (phase === "attach" && exitCode !== 0) ? 1 : 2,
+        );
+        if (exitCode !== 0) {
+          expect(result.stdout).not.toContain("\nGREEN");
+        }
+        expect(calls.some((args) => args[0] === "slow-browse-completed")).toBe(false);
+        expect(calls.some((args) => args[0] === "slow-quota-completed")).toBe(false);
+        expect(calls.filter((args) => args.includes("rate_limit"))).toHaveLength(slowQuota ? 1 : 0);
+        if (notifierPath) {
+          expect(readFileSync(notifierPath, "utf8")).toBe("browse\napi\nbrowse\napi\n");
+        }
+      });
+    },
+  );
+
   describe.skipIf(process.platform === "win32")("proxy failures", () => {
     it.each([
       ...[
@@ -356,11 +575,13 @@ console.log(JSON.stringify(value));
         'Post "https://api.github.com/graphql": Proxy Authentication Required',
       ].flatMap((error) => [
         { phase: "attach", completion: "rollup", status: 407, exitCode: 2, error },
+        { phase: "attach", completion: "ci-run", status: 407, exitCode: 2, error },
         { phase: "watch", completion: "rollup", status: 407, exitCode: 2, error },
         { phase: "watch", completion: "ci-run", status: 407, exitCode: 2, error },
       ]),
       ...[
         { phase: "attach", completion: "rollup", exitCode: 13 },
+        { phase: "attach", completion: "ci-run", exitCode: 13 },
         { phase: "watch", completion: "rollup", exitCode: 16 },
         { phase: "watch", completion: "ci-run", exitCode: 16 },
       ].map((scenario) => Object.assign(scenario, { status: 502, error: "502 Bad Gateway" })),
@@ -379,7 +600,11 @@ if (phase === ${JSON.stringify(phase)}) {
 }
 const args = process.argv.slice(2);
 let value;
-if (args[0] === "pr" && args[1] === "view") value = { state: "OPEN", mergeable: true, headRefOid: "${sha}" };
+if (args[0] === "browse" && args[1] === "--no-browser") {
+  console.log("https://github.com/openclaw/openclaw");
+  process.exit(0);
+}
+else if (args.includes("repos/openclaw/openclaw/pulls/42")) value = { state: "open", mergeable: true, head: { sha: "${sha}" } };
 else if (args.includes("repos/openclaw/openclaw/actions/workflows/ci.yml/runs")) value = { workflow_runs: [{ id: 201 }] };
 else if (args[0] === "run" && args[1] === "view") {
   fs.writeFileSync(marker, "");
@@ -915,15 +1140,19 @@ if (metadataRead && ${Boolean(afterMetadataState)}) pr.statusCheckRollup.state =
 const runs = ${JSON.stringify(listedRuns)};
 const previousRuns = ${JSON.stringify(previousRuns)};
 let value;
-if (args[0] === "pr" && args[1] === "view") {
-  if (${slowWatchPr} && calls.some((call) => call[0] === "pr" && call[1] === "view")) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 2_000);
-  value = pr;
+if (args[0] === "browse" && args[1] === "--no-browser") {
+  console.log("https://github.com/openclaw/openclaw");
+  process.exit(0);
+}
+else if (args.includes("repos/openclaw/openclaw/pulls/42")) {
+  if (${slowWatchPr} && calls.some((call) => call.includes("repos/openclaw/openclaw/pulls/42"))) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 2_000);
+  value = { state: pr.state.toLowerCase(), mergeable: pr.mergeable, head: { sha: pr.headRefOid } };
 }
 else if (args[0] === "run" && args[1] === "view") {
   if (${slowFinalRun} && calls.some((call) => call[0] === "run" && call[1] === "view")) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 2_000);
   value = runs.find((run) => String(run.id) === args[2]);
 }
-else if (args[0] === "api" && args[1] === "graphql") value = { data: { repository: { pullRequest: pr } } };
+else if (${completion !== "ci-run"} && args[0] === "api" && args[1] === "graphql") value = { data: { repository: { pullRequest: pr } } };
 else if (args.includes("repos/openclaw/openclaw/actions/workflows/ci.yml/runs")) value = { total_count: ${olderRunOutsidePage ? 21 : 2}, workflow_runs: runs };
 else if (args[1]?.startsWith("repos/openclaw/openclaw/actions/runs/")) {
   if (${slowMetadata}) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 2_000);
@@ -948,6 +1177,8 @@ console.log(JSON.stringify(value));
         expect(result.status, `${result.stdout}\n${result.stderr}`).toBe(exitCode);
         expect(result.stdout).toContain(`ATTACHED run=${expectedRun}`);
         expect(result.stdout).toContain(output);
+        expect(result.calls.some((call) => call[0] === "pr")).toBe(false);
+        expect(result.calls.some((call) => call.includes("graphql"))).toBe(completion !== "ci-run");
         expect(
           result.calls.filter((call) => call[1] === "repos/openclaw/openclaw/actions/runs/100"),
         ).toHaveLength(olderRunOutsidePage && expectedMetadataReads > 0 ? 1 : 0);

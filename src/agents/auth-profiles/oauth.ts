@@ -264,13 +264,6 @@ const oauthManager = createOAuthManager({
     }),
 });
 
-export async function waitForActiveOAuthRefreshes(
-  provider: string,
-  profileId?: string,
-): Promise<void> {
-  await oauthManager.waitForActiveOAuthRefreshes(provider, profileId);
-}
-
 /** Clear in-process OAuth refresh queues between isolated tests. */
 function resetOAuthRefreshQueuesForTest(): void {
   oauthManager.resetRefreshQueuesForTest();

@@ -634,9 +634,7 @@ describe("runCapability image skip", () => {
               },
             ],
           ]),
-          config: {
-            _requestPromptOverride: "Use this request prompt",
-          },
+          request: { prompt: "Use this request prompt" },
           activeModel: { provider: "openai", model: "gpt-4.1" },
         });
 

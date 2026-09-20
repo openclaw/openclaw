@@ -375,7 +375,7 @@ suite.define(() => {
     await page.goto(`${suite.server.baseUrl}chat`);
     const activity = page.locator(".chat-group--activity .chat-activity-group__summary");
     await activity.waitFor();
-    expect(await activity.textContent()).toContain("Read source, Apply patch");
+    expect(await activity.textContent()).toContain("2 other operations");
     const activityGeometry = await activity.evaluate((node) => {
       const container = node.closest<HTMLElement>(".chat-activity-group");
       const label = node.querySelector<HTMLElement>(".chat-activity-group__label");
@@ -567,7 +567,7 @@ suite.define(() => {
       .poll(() => page.evaluate(() => document.documentElement.dataset.themeMode))
       .toBe("dark");
     await captureFactrowProof(page, activity, "dark");
-    expect(await summary.textContent()).toContain("Apply Patch, Exec");
+    expect(await summary.textContent()).toContain("2 other operations");
     expect(await patchRow.locator(".chat-tool-row__verb").textContent()).toBe("Changed");
     await context.close();
   });

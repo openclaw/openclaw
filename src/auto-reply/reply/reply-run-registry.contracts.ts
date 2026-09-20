@@ -1,3 +1,4 @@
+import type { ReplyExpectation } from "../../agents/reply-completion.js";
 import type { ScheduledToolPolicyContext } from "../../agents/scheduled-tool-policy.js";
 import type { TrustedSubagentCompletionHandoff } from "../../agents/subagents/announce/subagent-announce-handoff.js";
 import type { ChatType } from "../../channels/chat-type.js";
@@ -30,6 +31,7 @@ export type ReplyBackendQueueMessageOptions = {
   steeringMode?: "all";
   /** True when this queue item came from the channel's current user turn. */
   isInboundUserMessage?: boolean;
+  terminalReplyExpectation?: ReplyExpectation;
   /** Exact tool authority resolved for an inbound user turn before steering. */
   toolAuthorityFingerprint?: string;
   /** Internal proof that a mismatched route recomputes to the active run's full authority. */
@@ -146,6 +148,7 @@ export type ReplyBackendHandle = {
   /** Exact authority of this concrete backend attempt, after fallback selection. */
   readonly toolAuthorityFingerprint?: string;
   readonly sourceReplyDeliveryMode?: SourceReplyDeliveryMode;
+  readonly terminalReplyExpectation?: ReplyExpectation;
   readonly taskSuggestionDeliveryMode?: TaskSuggestionDeliveryMode;
   /** True only when queueMessage preserves images supplied in its options. */
   readonly supportsQueueMessageImages?: boolean;
@@ -216,6 +219,7 @@ type ReplyBackendQueueMessageMismatch =
   | "tool_authority_mismatch"
   | "image_input_unsupported"
   | "source_reply_delivery_mode_mismatch"
+  | "reply_expectation_mismatch"
   | "task_suggestion_delivery_mode_mismatch";
 
 /** Prevents steering a turn into a run that cannot preserve its model-facing input. */

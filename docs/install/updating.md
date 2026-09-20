@@ -47,6 +47,21 @@ first, stop the Gateway through its actual supervisor or foreground process owne
 replace the package, run Doctor, and restart through that same owner.
 `--no-restart` cannot repair the old admission check.
 
+<Note>
+On macOS, the 2026.9.4 Gateway's `update.run` action or `/update` can hand off
+successfully, then fail at activation with `managed-service-preflight` and
+"This command is running inside the gateway process tree." The installed
+updater refuses its own managed helper before swapping packages, so a newer
+candidate cannot repair that first update.
+
+For this ancestry refusal, the owner should run `openclaw update` once from an
+independent Terminal outside the Gateway process tree, using the same owning
+account, installation, and state/configuration. After installing a release
+containing the managed-helper authority fix, subsequent updates started through
+`update.run` or `/update` use the corrected updater. The fix applies to updates
+**from** the fixed version; it does not repair the 2026.9.4 macOS handoff in place.
+</Note>
+
 Registry updates inspect the exact candidate's Node requirement before staging.
 An incompatible runtime produces `node-runtime-preflight`, with the target
 version, required engine range, selected Node version, and an upgrade command.

@@ -309,6 +309,10 @@ declarations, oversized trees, and unknown scripts. Declare this only when that
 tree contains the complete inference implementation; optional tool integrations
 do not make an external implementation graph safe.
 
+On Windows, supported JavaScript entrypoints run through the verified Node
+executable selected from `PATH`. Explicit script paths do not require their
+suffix in `PATHEXT`; bare command lookup still follows `PATH` and `PATHEXT`.
+
 If the same backend also ships a self-contained native executable, list its
 canonical basenames in `nativeExecutableNames`. Other native commands remain
 unverified.

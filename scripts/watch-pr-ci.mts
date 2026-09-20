@@ -4,6 +4,7 @@ import { parseArgs as parseNodeArgs } from "node:util";
 import { z } from "zod";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
 import { execGhJson, workflowRunsApiArgs } from "./lib/plain-gh.mjs";
+import { readPrMetadata } from "./pr-lib/github.mjs";
 
 const USAGE =
   "Usage: node scripts/watch-pr-ci.mjs <pr-number> <head-sha> [--repo owner/repo] [--after run-id] [--attach-timeout 900] [--timeout 3600] [--interval 120] [--completion rollup|ci-run]";
@@ -404,13 +405,15 @@ function ghReadOptions(deadline?: number) {
   return { ...GH_READ_OPTIONS, timeout: Math.min(GH_READ_OPTIONS.timeout, remaining) };
 }
 
-const readPr = (pr: number, repo: string, deadline?: number) =>
-  RollupPageSchema.parse(
-    execGhJson(
-      `pr view ${pr} --repo ${repo} --json state,mergeable,headRefOid`.split(" "),
-      ghReadOptions(deadline),
+function readPr(pr: number, repo: string, deadline?: number) {
+  // Repository resolution and metadata share one read budget, including diagnostics.
+  const readDeadline = Date.now() + ghReadOptions(deadline).timeout;
+  return RollupPageSchema.parse(
+    readPrMetadata(pr, repo, ["state", "mergeable", "headRefOid"], () =>
+      ghReadOptions(readDeadline),
     ),
   );
+}
 export const buildFindRunArgs = (repo: string, sha: string) =>
   workflowRunsApiArgs(repo, sha, "pull_request", 20);
 export const selectRunAfter = (runs: RunListItem[], after?: number) =>

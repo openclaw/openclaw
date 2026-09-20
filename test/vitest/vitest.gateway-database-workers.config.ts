@@ -5,7 +5,7 @@ export function createGatewayDatabaseWorkersVitestConfig(env?: Record<string, st
   return createScopedVitestConfig(gatewayDatabaseWorkerTestFiles, {
     dir: "src/gateway",
     env,
-    fileParallelism: false,
+    fileParallelism: true,
     intersectIncludeFile: true,
     isolate: false,
     name: "gateway-database-workers",

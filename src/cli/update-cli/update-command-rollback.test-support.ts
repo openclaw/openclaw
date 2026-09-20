@@ -117,6 +117,7 @@ export async function expectActiveRollbackIdentity(params: {
     });
   }
   const outcome = await rollbackFailedUpdate({
+    definitionRecovery: {},
     result,
     previousRoot,
     configSnapshot,
@@ -148,6 +149,7 @@ export async function expectActiveRollbackIdentity(params: {
     root: activePackageRoot ?? undefined,
     after: activePackageRoot === null ? undefined : restoredPackage ? result.before : result.after,
     reason: rollbackSucceeded ? result.reason : "source-rollback-failed",
+    rollbackOutcome: { status: rollbackSucceeded ? "succeeded" : "failed" },
     steps: [
       expect.objectContaining({
         name: "rollback",

@@ -358,26 +358,40 @@ it("keeps display history separate from the current-turn context cutoff", async 
     if (!anchor) {
       throw new Error("expected requested message anchor");
     }
-    const reader = createReadonlySessionHistoryReader(target);
-    const admission = { ...anchor, logicalTurnId: "read-fence", role: "user" as const };
-    const page = await runWithSessionTranscriptReadFence(admission, () => {
-      // Context excludes the admitted turn; display history retains it and validates its identity.
-      expect(
-        readLatestSessionTranscriptMessageEvent({
-          ...target.transcript,
-          storePath: target.database.path,
-        }),
-      ).toBeUndefined();
-      return reader.readRecentSessionMessagesWithStatsAsync(target.transcript, { maxMessages: 10 });
-    });
-    expect(page.messages.map(readChatHistoryMessageId)).toEqual(["requested-message"]);
-    expect(page.totalMessages).toBe(1);
-    await expect(
-      runWithSessionTranscriptReadFence(
-        { ...admission, storePath: `${target.database.path}.other` },
-        () =>
-          reader.readRecentSessionMessagesWithStatsAsync(target.transcript, { maxMessages: 10 }),
-      ),
-    ).rejects.toThrow("different transcript store");
+    const retained = new OpenClawAgentDatabaseReadOnlyScope();
+    try {
+      await retained.run(target.database, async () => {
+        const reader = createReadonlySessionHistoryReader(target);
+        await reader.readRecentSessionMessagesWithStatsAsync(target.transcript, {
+          maxMessages: 10,
+        });
+        const admission = { ...anchor, logicalTurnId: "read-fence", role: "user" as const };
+        const page = await runWithSessionTranscriptReadFence(admission, () => {
+          // Context excludes the admitted turn; display history retains it and validates its identity.
+          expect(
+            readLatestSessionTranscriptMessageEvent({
+              ...target.transcript,
+              storePath: target.database.path,
+            }),
+          ).toBeUndefined();
+          return reader.readRecentSessionMessagesWithStatsAsync(target.transcript, {
+            maxMessages: 10,
+          });
+        });
+        expect(page.messages.map(readChatHistoryMessageId)).toEqual(["requested-message"]);
+        expect(page.totalMessages).toBe(1);
+        await expect(
+          runWithSessionTranscriptReadFence(
+            { ...admission, storePath: `${target.database.path}.other` },
+            () =>
+              reader.readRecentSessionMessagesWithStatsAsync(target.transcript, {
+                maxMessages: 10,
+              }),
+          ),
+        ).rejects.toThrow("different transcript store");
+      });
+    } finally {
+      retained.close();
+    }
   });
 });

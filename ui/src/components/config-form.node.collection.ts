@@ -359,7 +359,7 @@ function renderArrayContent(
             showHeaderMeta && help ? html`<span class="settings-row__desc">${help}</span>` : nothing
           }
           ${
-            showHeaderMeta && schema.default !== undefined
+            showHeaderMeta && defaultDescription !== nothing
               ? html`<span class="settings-row__desc">${defaultDescription}</span>`
               : nothing
           }

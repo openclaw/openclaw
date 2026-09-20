@@ -16,6 +16,35 @@ describe("restart startup progress", () => {
   beforeEach(resetRestartHealthMocks);
   afterEach(restoreRestartHealthMocks);
 
+  it.each([null, 1])("observes delayed child readiness with exitCode=%s", async (exitCode) => {
+    const child = { pid: process.pid, exitCode, signalCode: null };
+    inspectPortUsage.mockImplementation(async (port) => ({
+      port,
+      status: monotonicClock.nowMs < 12_500 ? "free" : "busy",
+      listeners: monotonicClock.nowMs < 12_500 ? [] : [{ pid: child.pid }],
+      hints: [],
+    }));
+    callGateway.mockImplementation(async (opts) => {
+      if (monotonicClock.nowMs < 20_000) {
+        throw new Error("Gateway is still starting");
+      }
+      return gatewayHealthResponse({ server: { version: "2026.9.4", bootId: "child-boot" } })(opts);
+    });
+    const health = await waitForGatewayHealthyRestart({
+      child,
+      port: 18789,
+      requireRunningService: true,
+      requirePluginHealth: false,
+      expectedVersion: "2026.9.4",
+    });
+    if (exitCode === null) {
+      expect(health).toMatchObject({ healthy: true, waitOutcome: "healthy", elapsedMs: 20_000 });
+    } else {
+      expect(health.runtime.status).toBe("stopped");
+      expect(health.waitOutcome).not.toBe("healthy");
+    }
+  });
+
   it("waits through advancing service, listener, and hello phases until health at 180s", async () => {
     const service = makeGatewayService({ status: "running", pid: 8000 });
     vi.mocked(service.readRuntime).mockImplementation(async () =>
@@ -111,6 +140,28 @@ describe("restart startup progress", () => {
       phase: "waiting for Gateway listener",
     },
     { name: "renewing migration", renew: true, expected: "still-starting", elapsedMs: 300_000 },
+    {
+      name: "renewing migration during update verification",
+      renew: true,
+      timeoutMs: 300_000,
+      expected: "still-starting",
+      elapsedMs: 300_000,
+    },
+    {
+      name: "renewing migration under a published updater",
+      renew: true,
+      updateInProgress: true,
+      expected: "still-starting",
+      elapsedMs: 300_000,
+    },
+    {
+      name: "migration that stops making progress during update verification",
+      renew: true,
+      renewUntilMs: 30_000,
+      timeoutMs: 300_000,
+      expected: "timeout",
+      elapsedMs: 300_000,
+    },
     { name: "stalled migration", renew: false, expected: "timeout", elapsedMs: 70_000 },
     {
       name: "replaced process",
@@ -149,6 +200,8 @@ describe("restart startup progress", () => {
       pollJitterMs,
       expected,
       elapsedMs,
+      timeoutMs,
+      updateInProgress,
     }) => {
       const service = makeGatewayService({ status: "running", pid: 8000 });
       if (readyAtMs !== undefined) {
@@ -225,6 +278,8 @@ describe("restart startup progress", () => {
         port: 18789,
         isStartupMigrationActive,
         requirePluginHealth: false,
+        timeoutMs,
+        env: updateInProgress ? { OPENCLAW_UPDATE_IN_PROGRESS: "1" } : {},
       });
       expect(health).toMatchObject({
         healthy: expected === "healthy",

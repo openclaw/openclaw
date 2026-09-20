@@ -3,7 +3,6 @@ import type { ReactiveController, ReactiveControllerHost } from "lit";
 import type { SessionAgentStatus } from "../../../packages/gateway-protocol/src/session-agent-status.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { GatewaySessionRow } from "../api/types.ts";
-import type { RouteId } from "../app-route-paths.ts";
 import { compactApprovalCommand } from "../app/approval-presentation.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import {
@@ -28,14 +27,14 @@ import {
 
 interface SessionAttentionControllerHost extends ReactiveControllerHost {
   readonly isConnected: boolean;
-  readonly sessionAttentionContext: ApplicationContext<RouteId> | undefined;
+  readonly sessionAttentionContext: ApplicationContext | undefined;
 }
 
 /** Session-scoped question, approval, and failed-run attention ownership. */
 export class SessionAttentionController implements ReactiveController {
   private readonly attentionSubscriptions: SubscriptionsController;
   private readonly questionPromptState: ReturnType<typeof createQuestionPromptState>;
-  private attentionGateway: ApplicationContext<RouteId>["gateway"] | null = null;
+  private attentionGateway: ApplicationContext["gateway"] | null = null;
   private attentionGatewayClient: GatewayBrowserClient | null = null;
   private attentionGatewayConnected = false;
   private agentStatusExpiryTimer: ReturnType<typeof globalThis.setTimeout> | null = null;
@@ -76,7 +75,7 @@ export class SessionAttentionController implements ReactiveController {
     disposeQuestionPromptState(this.questionPromptState);
   }
 
-  private synchronizeAttentionGateway(gateway: ApplicationContext<RouteId>["gateway"]) {
+  private synchronizeAttentionGateway(gateway: ApplicationContext["gateway"]) {
     const connected = gateway.snapshot.phase === "connected";
     const client =
       connected &&

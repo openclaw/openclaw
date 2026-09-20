@@ -15,6 +15,11 @@ const CHANNEL_LABELS: Record<string, string> = {
   slack: "Slack",
   whatsapp: "WhatsApp",
   matrix: "Matrix",
+  msteams: "Microsoft Teams",
+  bluebubbles: "BlueBubbles",
+  googlechat: "Google Chat",
+  mattermost: "Mattermost",
+  irc: "IRC",
   email: "Email",
   sms: "SMS",
 };
@@ -211,8 +216,8 @@ type SessionDisplayOptions = {
   includeSubagentPrefix?: boolean;
 };
 
-function capitalize(s: string): string {
-  return s.charAt(0).toUpperCase() + s.slice(1);
+export function formatSessionChannelLabel(channel: string): string {
+  return CHANNEL_LABELS[channel] ?? channel.charAt(0).toUpperCase() + channel.slice(1);
 }
 
 /**
@@ -251,7 +256,7 @@ function parseSessionKey(key: string): SessionKeyInfo {
     if (!channel || !identifier) {
       return { prefix: "", fallbackName: key, accountId };
     }
-    const channelLabel = CHANNEL_LABELS[channel] ?? capitalize(channel);
+    const channelLabel = formatSessionChannelLabel(channel);
     return {
       prefix: "",
       fallbackName: `${channelLabel} · ${shortenPeerId(identifier)}`,
@@ -268,7 +273,7 @@ function parseSessionKey(key: string): SessionKeyInfo {
     if (!channel) {
       return { prefix: "", fallbackName: key };
     }
-    const channelLabel = CHANNEL_LABELS[channel] ?? capitalize(channel);
+    const channelLabel = formatSessionChannelLabel(channel);
     return { prefix: "", fallbackName: `${channelLabel} Group` };
   }
 
@@ -276,7 +281,7 @@ function parseSessionKey(key: string): SessionKeyInfo {
   // pre-agent-scoped builds still surface in session lists; label, don't leak keys.
   for (const ch of KNOWN_CHANNEL_KEYS) {
     if (key === ch || key.startsWith(`${ch}:`)) {
-      return { prefix: "", fallbackName: `${CHANNEL_LABELS[ch]} Session` };
+      return { prefix: "", fallbackName: `${formatSessionChannelLabel(ch)} Session` };
     }
   }
 

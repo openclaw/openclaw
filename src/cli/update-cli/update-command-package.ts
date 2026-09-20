@@ -40,7 +40,7 @@ import {
   type UpdateRunResult,
   type UpdateStepResult,
 } from "../../infra/update-runner.js";
-import { runCommandWithTimeout, runUtf8CommandWithTimeout } from "../../process/exec.js";
+import { runCommandWithTimeout } from "../../process/exec.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { CLI_NAME } from "../cli-name.js";
 import { createUpdateProgress } from "./progress.js";
@@ -58,12 +58,8 @@ import {
   readUpdateConfigSnapshot,
   type UpdateConfigSnapshot,
 } from "./update-command-config-snapshot.js";
-import {
-  withUpdateCommandExecutorChild,
-  type UpdateCommandChildGrant,
-} from "./update-command-executor.js";
+import { withUpdateDoctorChild } from "./update-command-doctor-child.js";
 import type { FinishUpdateParams } from "./update-command-finish-types.js";
-import type { UpdateDoctorInput } from "./update-command-migrated-types.js";
 import { resolveUpdateTargetEnv } from "./update-command-service-env.js";
 export async function readPackageUpdateIdentity(root: string) {
   const [version, buildId] = await Promise.all([
@@ -89,7 +85,8 @@ type PackageDoctorOptions = {
         requester?: Readonly<UpdateRequester>;
         inputHash: string;
         changes: UpdateDoctorConfigChange[];
-        assertRequesterCurrent: () => void;
+        assertCurrent: () => void;
+        assertBoundChildCurrent: () => void;
       }
     | undefined;
 };
@@ -102,7 +99,7 @@ export function preparePackageDoctorContext(params: {
   inputHash?: string | null;
   changes: UpdateDoctorConfigChange[];
   assertCurrent: () => void;
-  assertRequesterCurrent: () => void;
+  assertBoundChildCurrent: () => void;
 }) {
   params.assertCurrent();
   if (!params.capable) {
@@ -117,15 +114,14 @@ export function preparePackageDoctorContext(params: {
     requester: params.requester,
     inputHash: params.inputHash ?? hashConfigRaw(null),
     changes: params.changes,
-    // Delegation suspends the parent's mutation fence. Requester checks must
-    // remain usable until the child owner hands input to its bound process.
-    assertRequesterCurrent: params.assertRequesterCurrent,
+    assertCurrent: params.assertCurrent,
+    assertBoundChildCurrent: params.assertBoundChildCurrent,
   };
 }
 
 export async function runPackageUpdateDoctor(params: PackageDoctorOptions) {
   const context = params.getDoctorContext?.();
-  context?.assertRequesterCurrent();
+  context?.assertCurrent();
   const entryPath = await resolveGatewayInstallEntrypoint(params.root);
   if (!entryPath) {
     return null;
@@ -173,24 +169,8 @@ export async function runPackageUpdateDoctor(params: PackageDoctorOptions) {
   const configSnapshot = params.onConfigSnapshot
     ? await readUpdateConfigSnapshot(resolveConfigPath(doctorEnv))
     : undefined;
-  const runDoctor = (
-    executor?: UpdateCommandChildGrant,
-    beforeInput?: (pid: number, argv?: readonly string[]) => void,
-  ) => {
-    context?.assertRequesterCurrent();
-    const input: UpdateDoctorInput | undefined =
-      context && executor
-        ? {
-            executor,
-            runId: context.runId,
-            root: params.root,
-            configInputHash: context.inputHash,
-            requester: context.requester,
-            repair: doctorPolicy.fix,
-            updateRecoveryBackup: params.updateRecoveryBackup,
-          }
-        : undefined;
-    return runUpdateStep({
+  const runDoctor = (runCommand?: Parameters<typeof runUpdateStep>[0]["runCommand"]) =>
+    runUpdateStep({
       name: `${CLI_NAME} doctor`,
       argv: doctorArgv,
       cwd: params.root,
@@ -206,33 +186,23 @@ export async function runPackageUpdateDoctor(params: PackageDoctorOptions) {
         [UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV]: doctorResultPath,
       },
       timeoutMs: params.timeoutMs,
-      ...(input
-        ? {
-            runCommand: async (argv, options) => {
-              const result = await runUtf8CommandWithTimeout(argv, {
-                ...options,
-                input: JSON.stringify(input),
-                beforeInput,
-                killProcessTree: true,
-                requireProcessTreeExtinction: true,
-              });
-              if (result.cleanup !== "normal") {
-                throw new Error("Doctor executor did not settle its child processes.");
-              }
-              return result;
-            },
-          }
-        : {}),
+      ...(runCommand ? { runCommand } : {}),
     });
-  };
   const doctorStep = context
-    ? await withUpdateCommandExecutorChild(context.executorFence, params.root, (grant, bindChild) =>
-        runDoctor(grant, (pid, argv) => {
-          context.assertRequesterCurrent();
-          bindChild(pid, argv);
-        }),
+    ? await withUpdateDoctorChild(
+        {
+          root: params.root,
+          context: { ...context, assertRequesterCurrent: context.assertBoundChildCurrent },
+          input: {
+            configInputHash: context.inputHash,
+            repair: doctorPolicy.fix,
+            updateRecoveryBackup: params.updateRecoveryBackup,
+          },
+        },
+        runDoctor,
       )
     : await runDoctor();
+  context?.assertCurrent();
   const doctorResult = await consumeUpdatePostInstallDoctorResult(doctorResultPath);
   if (configSnapshot) {
     // Only the child writer can attribute bytes to Doctor; a later read may contain an operator save.
@@ -502,7 +472,7 @@ export async function runPackageInstallUpdate(
     packageRoot: pkgRoot,
     // Artifact equality cannot skip a method switch or retained-runtime staging.
     requirePackageReplacement:
-      params.installKind === "git" || params.requirePackageReplacement === true,
+      params.requirePackageReplacement === true || params.installKind === "git",
     runCommand: runCommandWithTimeout,
     timeoutMs: params.timeoutMs,
     ...(installEnv === undefined ? {} : { env: installEnv }),

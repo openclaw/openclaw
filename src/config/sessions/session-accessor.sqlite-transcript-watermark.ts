@@ -32,7 +32,6 @@ export function readSessionTranscriptWatermark(
         { databaseLabel: database.path, operationLabel: "session transcript watermark read" },
       ),
     toDatabaseOptions(resolved),
-    { throwOnMissingTable: true },
   );
   return result.found ? result.value : { generation: null, maxSeq: null };
 }

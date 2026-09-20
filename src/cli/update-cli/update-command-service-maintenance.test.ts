@@ -1,27 +1,21 @@
+// Install the native service fixtures before loading the maintenance owner.
+import "./update-command-service-maintenance.test-support.js";
 import { spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
-import fs from "node:fs/promises";
 import path from "node:path";
 import { stableStringify } from "@openclaw/normalization-core/stable-stringify";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { expect, it, vi } from "vitest";
 import { beginDoctorMaintenance } from "../../commands/doctor-maintenance.js";
 import * as doctorServicePolicy from "../../commands/doctor-service-repair-policy.js";
 import * as schtasksExec from "../../daemon/schtasks-exec.js";
 import { readScheduledTaskRuntime } from "../../daemon/schtasks-runtime.js";
 import { ServiceInspectionError } from "../../daemon/service-inspection-error.js";
 import { readGatewayServiceState, type GatewayService } from "../../daemon/service.js";
-import {
-  createMockGatewayService,
-  mockSystemAccountHome,
-} from "../../daemon/service.test-helpers.js";
+import { createMockGatewayService } from "../../daemon/service.test-helpers.js";
 import { sha256Hex } from "../../infra/crypto-digest.js";
-import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
 import * as openClawTmp from "../../infra/tmp-openclaw-dir.js";
-import { CONTROL_PLANE_UPDATE_SENTINEL_META_ENV } from "../../infra/update-control-plane-sentinel.js";
 import { createManagedHandoffLeaseStore } from "../../infra/update-managed-service-handoff-lease.js";
 import { createUpdateRun } from "../../infra/update-run-ledger.js";
-import { makeTempWorkspace } from "../../test-helpers/workspace.js";
-import { withEnvAsync } from "../../test-utils/env.js";
 import { mockProcessPlatform } from "../../test-utils/vitest-spies.js";
 import { withUpdateCommandExecutor } from "./update-command-executor.js";
 import {
@@ -30,73 +24,8 @@ import {
   type PreManagedServiceStop,
 } from "./update-command-service-maintenance.js";
 
-const mocks = vi.hoisted(() => ({
-  service: vi.fn<() => GatewayService>(),
-  taskState: 3 as number | string,
-  prepareCutover: vi.fn(),
-  cutoverAssert: vi.fn(),
-  cutoverRefresh: vi.fn(),
-  cutoverRelease: vi.fn(),
-}));
-
-vi.mock("../daemon-cli/update-cutover.js", () => ({
-  prepareGatewayUpdateCutover: mocks.prepareCutover,
-}));
-
-vi.mock("../../daemon/service.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../daemon/service.js")>()),
-  resolveGatewayService: mocks.service,
-}));
-
-vi.mock("node:child_process", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("node:child_process")>()),
-  spawnSync: vi.fn(() => ({
-    pid: 0,
-    output: [null, JSON.stringify({ state: mocks.taskState, lastRunResult: 0 }), ""],
-    stdout: JSON.stringify({ state: mocks.taskState, lastRunResult: 0 }),
-    stderr: "",
-    status: 0,
-    signal: null,
-  })),
-}));
-
-beforeEach(() => {
-  mockSystemAccountHome();
-  mocks.cutoverAssert.mockReset();
-  mocks.cutoverRefresh.mockReset().mockResolvedValue(undefined);
-  mocks.cutoverRelease.mockReset().mockResolvedValue(undefined);
-  mocks.prepareCutover.mockReset().mockResolvedValue({
-    assertCurrent: mocks.cutoverAssert,
-    refresh: mocks.cutoverRefresh,
-    release: mocks.cutoverRelease,
-  });
-});
-afterEach(() => vi.restoreAllMocks());
-
-async function withServiceHome(run: (home: string) => Promise<void>): Promise<void> {
-  const home = await makeTempWorkspace("openclaw-update-service-");
-  vi.spyOn(openClawTmp, "resolvePreferredOpenClawTmpDir").mockReturnValue(home);
-  try {
-    await withEnvAsync(
-      {
-        HOME: home,
-        USERPROFILE: home,
-        APPDATA: path.join(home, "AppData"),
-        OPENCLAW_GATEWAY_PORT: undefined,
-        OPENCLAW_HOME: undefined,
-        OPENCLAW_STATE_DIR: undefined,
-        OPENCLAW_CONFIG_PATH: undefined,
-        OPENCLAW_PROFILE: undefined,
-        OPENCLAW_SUPERVISOR_MODE: undefined,
-        OPENCLAW_SERVICE_MARKER: undefined,
-        OPENCLAW_SERVICE_KIND: undefined,
-      },
-      () => run(home),
-    );
-  } finally {
-    await fs.rm(home, { recursive: true, force: true });
-  }
-}
+const { mocks, withServiceHome } =
+  await import("./update-command-service-maintenance.test-support.js");
 
 it.each(["systemd-user-bus-unavailable", "service-manager-access-denied"] as const)(
   "retains the native inspection reason without service authority: %s",
@@ -436,189 +365,6 @@ it("preserves a silent Scheduled Task probe failure through update and Doctor wa
     expect(service.install).not.toHaveBeenCalled();
     expect(service.restart).not.toHaveBeenCalled();
   }));
-
-const servingAncestorMaintenanceCases = [
-  { platform: "linux", identity: "current updater", phase: "inspect", authorized: true },
-  { platform: "linux", identity: "current updater", phase: "prepare", authorized: true },
-  { platform: "darwin", identity: "current updater", phase: "inspect", authorized: true },
-  { platform: "darwin", identity: "current updater", phase: "prepare", authorized: false },
-  { platform: "linux", identity: "missing marker", phase: "prepare", authorized: false },
-  { platform: "linux", identity: "missing metadata", phase: "prepare", authorized: false },
-  { platform: "linux", identity: "missing lease", phase: "prepare", authorized: false },
-  { platform: "linux", identity: "replaced owner", phase: "prepare", authorized: false },
-  { platform: "linux", identity: "different root", phase: "prepare", authorized: false },
-  { platform: "linux", identity: "different run", phase: "prepare", authorized: false },
-  { platform: "linux", identity: "stale start identity", phase: "prepare", authorized: false },
-  { platform: "linux", identity: "parent lease", phase: "prepare", authorized: false },
-] as const;
-
-it.runIf(process.platform === "linux" || process.platform === "darwin").each(
-  servingAncestorMaintenanceCases.filter(
-    // Binding a foreign PID reads native process identity, so only exercise that
-    // fixture where the simulated Linux policy matches the actual host.
-    ({ identity }) => identity !== "parent lease" || process.platform === "linux",
-  ),
-)(
-  "keeps $platform serving-ancestor maintenance bound to the current updater: $identity $phase",
-  ({ platform, identity, phase, authorized }) =>
-    withServiceHome(async (home) => {
-      mockProcessPlatform(platform);
-      const root = await fs.realpath(process.cwd());
-      const metaPath = path.join(home, "handoff-meta.json");
-      const runId = randomUUID();
-      vi.spyOn(openClawTmp, "resolvePreferredOpenClawTmpDir").mockReturnValue(home);
-      createUpdateRun({ runId, trigger: "cli" }, { env: process.env });
-      await fs.writeFile(
-        metaPath,
-        JSON.stringify({
-          version: 1,
-          meta: {
-            root: identity === "different root" ? home : root,
-            runId: identity === "different run" ? randomUUID() : runId,
-            handoffId: "owned-handoff",
-          },
-        }),
-      );
-      const store = createManagedHandoffLeaseStore();
-      if (identity !== "missing lease") {
-        const claim = store.acquire(
-          root,
-          identity === "replaced owner" ? "replacement-handoff" : "owned-handoff",
-          { kind: "update" },
-        );
-        if (claim.kind !== "acquired") {
-          throw new Error("fixture could not acquire its installation lease");
-        }
-        if (identity === "parent lease") {
-          expect(store.bind(claim.lease, process.ppid)).not.toBeNull();
-        } else if (identity === "stale start identity") {
-          const db = openNodeSqliteDatabase(path.join(home, "managed-update-handoffs.sqlite"));
-          try {
-            db.prepare(
-              "UPDATE managed_update_handoffs SET payload_json = json_set(payload_json, '$.executor.startIdentity', 'stale') WHERE install_root = ?",
-            ).run(root);
-          } finally {
-            db.close();
-          }
-        }
-      }
-      await withEnvAsync(
-        {
-          OPENCLAW_UPDATE_RUN_HANDOFF: identity === "missing marker" ? undefined : "1",
-          [CONTROL_PLANE_UPDATE_SENTINEL_META_ENV]:
-            identity === "missing metadata" ? undefined : metaPath,
-        },
-        async () => {
-          const service = createMockGatewayService({
-            readCommand: async () => ({
-              programArguments: [process.execPath, path.join(root, "openclaw.mjs"), "gateway"],
-              environment: { HOME: home },
-            }),
-            readRuntime: async () => ({
-              status: "running",
-              pid: process.ppid,
-              systemd: { managerUid: 2001 },
-            }),
-            isLoaded: async () => true,
-          });
-          mocks.service.mockReturnValue(service);
-          const inspected = await maybeStopManagedServiceBeforeMutableUpdate({
-            root,
-            updateInstallKind: "package",
-            shouldRestart: true,
-            jsonMode: true,
-            phase,
-            updateRun: { runId, env: process.env },
-            handoffFromGateway: async () => false,
-          });
-          expect(inspected.serviceUpdateVerdict?.kind).toBe("owned");
-          if (authorized) {
-            expect(inspected.blockMessage).toBeUndefined();
-          } else {
-            expect(inspected.blockMessage).toContain("inside the gateway process tree");
-          }
-          expect(service.stop).toHaveBeenCalledTimes(authorized && phase === "prepare" ? 1 : 0);
-          expect(service.start).not.toHaveBeenCalled();
-          expect(service.restart).not.toHaveBeenCalled();
-          expect(service.stage).not.toHaveBeenCalled();
-          expect(service.install).not.toHaveBeenCalled();
-        },
-      );
-    }),
-);
-
-it.runIf(process.platform === "linux")(
-  "rechecks the managed handoff identity immediately before stopping the Gateway",
-  () =>
-    withServiceHome(async (home) => {
-      const root = await fs.realpath(process.cwd());
-      const metaPath = path.join(home, "handoff-meta.json");
-      const runId = randomUUID();
-      createUpdateRun({ runId, trigger: "cli" }, { env: process.env });
-      await fs.writeFile(
-        metaPath,
-        JSON.stringify({
-          version: 1,
-          meta: { root, runId, handoffId: "owned-handoff" },
-        }),
-      );
-      const store = createManagedHandoffLeaseStore();
-      const claim = store.acquire(root, "owned-handoff", { kind: "update" });
-      if (claim.kind !== "acquired") {
-        throw new Error("fixture could not acquire its installation lease");
-      }
-      let runtimeReads = 0;
-      const stop = vi.fn(async () => undefined);
-      mocks.service.mockReturnValue(
-        createMockGatewayService({
-          readCommand: async () => ({
-            programArguments: [process.execPath, path.join(root, "openclaw.mjs"), "gateway"],
-            environment: { HOME: home },
-          }),
-          readRuntime: async () => {
-            runtimeReads += 1;
-            if (runtimeReads === 2) {
-              const db = openNodeSqliteDatabase(path.join(home, "managed-update-handoffs.sqlite"));
-              try {
-                db.prepare(
-                  "UPDATE managed_update_handoffs SET payload_json = json_set(payload_json, '$.executor.startIdentity', 'replaced') WHERE install_root = ?",
-                ).run(root);
-              } finally {
-                db.close();
-              }
-            }
-            return {
-              status: "running",
-              pid: process.ppid,
-              systemd: { managerUid: 2001 },
-            };
-          },
-          isLoaded: async () => true,
-          stop,
-        }),
-      );
-      await withEnvAsync(
-        {
-          OPENCLAW_UPDATE_RUN_HANDOFF: "1",
-          [CONTROL_PLANE_UPDATE_SENTINEL_META_ENV]: metaPath,
-        },
-        async () => {
-          await expect(
-            maybeStopManagedServiceBeforeMutableUpdate({
-              root,
-              updateInstallKind: "package",
-              shouldRestart: true,
-              jsonMode: true,
-              phase: "prepare",
-              updateRun: { runId, env: process.env },
-            }),
-          ).rejects.toThrow(/inside the gateway process tree/);
-        },
-      );
-      expect(runtimeReads).toBe(2);
-      expect(stop).not.toHaveBeenCalled();
-    }),
-);
 
 it.each([
   { label: "changed account", uid: 3002 },

@@ -423,15 +423,3 @@ export function releaseSqliteWorkerActorCoordinators(actor: Actor): void {
     }
   }
 }
-
-export function forgetSqliteWorkerActor(actors: Map<string, Actor>, actor: Actor): void {
-  if (actor.gatewaySchemaFence || actor.pendingStateLifecycles.size) {
-    actor.cleanupState = "pending";
-    return;
-  }
-  if (actors.get(actor.key) === actor) {
-    actors.delete(actor.key);
-  }
-  actor.slot.actors.delete(actor);
-  actor.cleanupState = "complete";
-}

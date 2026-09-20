@@ -15,6 +15,7 @@ const groupId = `swarm:${sessionKey}:11111111-2222-4333-8444-666666666666`;
 suite.define(() => {
   it.each([
     { name: "desktop", width: 1440, height: 900, count: 1 },
+    { name: "desktop-many", width: 1440, height: 900, count: 30 },
     { name: "mobile", width: 390, height: 844, count: 1 },
     { name: "mobile-many", width: 390, height: 844, count: 30 },
   ])("collapses successful child runs without hiding their details on $name", async (viewport) => {
@@ -125,6 +126,32 @@ suite.define(() => {
               .isVisible(),
           )
           .toBe(true);
+        const outcomeClearance = await summary.evaluate((element) => {
+          const outcome = element.parentElement?.querySelector(".chat-swarm__outcome");
+          if (!outcome) {
+            throw new Error("Expanded Swarm outcome is missing");
+          }
+          const range = document.createRange();
+          range.selectNodeContents(outcome);
+          const firstLine = range.getClientRects()[0];
+          if (!firstLine) {
+            throw new Error("Expanded Swarm outcome has no rendered text");
+          }
+          const style = getComputedStyle(element);
+          const outlineWidth = Number.parseFloat(style.outlineWidth);
+          const outlineBottom =
+            element.getBoundingClientRect().bottom +
+            Number.parseFloat(style.outlineOffset) +
+            outlineWidth;
+          return {
+            focused: element.matches(":focus-visible"),
+            outlineWidth,
+            clearance: firstLine.top - outlineBottom,
+          };
+        });
+        expect(outcomeClearance.focused).toBe(true);
+        expect(outcomeClearance.outlineWidth).toBeGreaterThan(0);
+        expect(outcomeClearance.clearance).toBeGreaterThanOrEqual(0);
         await page.screenshot({
           path: path.join(proofDir, "completed-details.png"),
           animations: "disabled",

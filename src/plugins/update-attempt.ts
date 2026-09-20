@@ -422,6 +422,7 @@ export async function runPluginUpdateAttempt(params: {
   effectiveSpec?: string;
   extensionsDir?: string;
   timeoutMs?: number;
+  workTimeoutMs?: number | null;
   onInstallPolicyWarning?: InstallSafetyOverrides["onInstallPolicyWarning"];
   onBeforePluginArtifactCommit?: PluginInstallArtifactConsentHandler;
   expectedIntegrity?: string;
@@ -448,6 +449,7 @@ export async function runPluginUpdateAttempt(params: {
               mode: "update",
               extensionsDir: params.extensionsDir,
               timeoutMs: params.timeoutMs,
+              workTimeoutMs: params.workTimeoutMs,
               ...dryRunOption,
               onInstallPolicyWarning: params.onInstallPolicyWarning,
               onBeforePluginArtifactCommit: params.onBeforePluginArtifactCommit,
@@ -473,6 +475,7 @@ export async function runPluginUpdateAttempt(params: {
                 mode: "update",
                 extensionsDir: params.extensionsDir,
                 timeoutMs: params.timeoutMs,
+                workTimeoutMs: params.workTimeoutMs,
                 ...dryRunOption,
                 onInstallPolicyWarning: params.onInstallPolicyWarning,
                 onBeforePluginArtifactCommit: params.onBeforePluginArtifactCommit,
@@ -488,6 +491,7 @@ export async function runPluginUpdateAttempt(params: {
                   mode: "update",
                   extensionsDir: params.extensionsDir,
                   timeoutMs: params.timeoutMs,
+                  workTimeoutMs: params.workTimeoutMs,
                   ...dryRunOption,
                   onInstallPolicyWarning: params.onInstallPolicyWarning,
                   onBeforePluginArtifactCommit: params.onBeforePluginArtifactCommit,
@@ -503,6 +507,7 @@ export async function runPluginUpdateAttempt(params: {
                   mode: "update",
                   extensionsDir: params.extensionsDir,
                   timeoutMs: params.timeoutMs,
+                  workTimeoutMs: params.workTimeoutMs,
                   ...dryRunOption,
                   onInstallPolicyWarning: params.onInstallPolicyWarning,
                   onBeforePluginArtifactCommit: params.onBeforePluginArtifactCommit,
@@ -544,6 +549,7 @@ export async function runPluginUpdateAttempt(params: {
         mode: "update",
         extensionsDir: params.extensionsDir,
         timeoutMs: params.timeoutMs,
+        workTimeoutMs: params.workTimeoutMs,
         ...dryRunOption,
         onInstallPolicyWarning: params.onInstallPolicyWarning,
         onBeforePluginArtifactCommit: params.onBeforePluginArtifactCommit,

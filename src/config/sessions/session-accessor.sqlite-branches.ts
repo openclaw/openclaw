@@ -31,7 +31,7 @@ import type {
 import { readRestoredSessionTranscript } from "./session-cold-storage-read.js";
 import { assertSessionTranscriptHot } from "./session-cold-storage-state.js";
 
-const SESSION_BRANCH_CACHE_MAX_ENTRIES = 32;
+const SESSION_BRANCH_CACHE_MAX_ENTRIES = 64;
 
 type SessionBranchCacheEntry = SessionTranscriptWatermark & {
   branches: SessionBranchSummary[];
@@ -211,7 +211,7 @@ export async function listSessionBranches(
             snapshot = readSessionBranchSnapshot(database, expected);
           } else {
             const { runSessionBranchSummaryWorkerRequest } =
-              await import("./session-transcript-worker-runtime.js");
+              await import("./session-transcript-read-worker-runtime.js");
             assertCurrent();
             snapshot = await runSessionBranchSummaryWorkerRequest(
               {

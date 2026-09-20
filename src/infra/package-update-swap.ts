@@ -10,6 +10,7 @@ import {
   activateStagedNpmPackageRoot,
   capturePackageLaunchers,
   type PackageLauncherBackup,
+  discardPackageLauncherBackup,
   discardPackageUpdateBackup,
   copyPackagePathEntry as copyPathEntry,
   PACKAGE_MANAGER_SWAP_SOURCE_HARDLINKS,
@@ -135,7 +136,6 @@ export async function swapStagedPackageInstall(
     `.openclaw.package-backup-${process.pid}-${Date.now()}`,
   );
   let hadPackage = false;
-  let baselineCompleted = false;
   let replayLocalOverrides: (() => Promise<void>) | undefined;
   let previousVersion: string | null = null;
   let previousDistFiles: string[] | undefined;
@@ -150,6 +150,7 @@ export async function swapStagedPackageInstall(
   const rollback: Array<(assertCurrent: () => void) => Promise<void>> = [];
   let packageRollbackVerified = false;
   let retained = false;
+  let liveMutationStarted = false;
   let projectActivated = false;
   let activationCompleted = false;
   const assertReplacementUnowned = async () => {
@@ -358,7 +359,6 @@ export async function swapStagedPackageInstall(
   };
   try {
     await (native ? readBaseline() : baseline.observe("baseline", readBaseline));
-    baselineCompleted = true;
     // The optional tree scan must not consume the launcher backup's deadline.
     const launcherReader = createPackageIntegrityReader(params.timeoutMs);
     await launcherReader.observe("baseline", () =>
@@ -518,16 +518,13 @@ export async function swapStagedPackageInstall(
                 messages.push(message);
               }
             }
-            if (launchers.backupDir) {
-              const message = await discardPackageUpdateBackup(
-                launchers.backupDir,
-                "shim backup",
-                targetLayout.globalRoot,
-                assertRetirementCurrent,
-              );
-              if (message) {
-                messages.push(message);
-              }
+            const launcherCleanup = await discardPackageLauncherBackup(
+              launchers,
+              targetLayout.globalRoot,
+              assertRetirementCurrent,
+            );
+            if (launcherCleanup) {
+              messages.push(launcherCleanup);
             }
             // Capture authority loss during the final filesystem await in the
             // retirement outcome, not only in the caller's later publication check.
@@ -559,6 +556,7 @@ export async function swapStagedPackageInstall(
     // Mark mutation only now: a copy-fallback move can fail after partial publication,
     // and only a completed backup permits restoration.
     params.onLiveMutation?.();
+    liveMutationStarted = true;
     packageRollbackVerified = false;
     if (native || !hadPackage) {
       activePackageRoot = null;
@@ -681,13 +679,7 @@ export async function swapStagedPackageInstall(
           ? await rootLink.retire()
           : await discardPackageUpdateBackup(backupRoot, "old package", targetLayout.globalRoot)
         : null,
-      launchers.backupDir && !retained
-        ? await discardPackageUpdateBackup(
-            launchers.backupDir,
-            "shim backup",
-            targetLayout.globalRoot,
-          )
-        : null,
+      !retained ? await discardPackageLauncherBackup(launchers, targetLayout.globalRoot) : null,
     ];
     return {
       status: "committed",
@@ -709,27 +701,23 @@ export async function swapStagedPackageInstall(
       error instanceof PackageUpdateActivationError ||
       error instanceof FreeBsdPkgOwnershipError
     ) {
-      if (launchers.backupDir) {
-        await discardPackageUpdateBackup(
-          launchers.backupDir,
-          "shim backup",
-          targetLayout.globalRoot,
-        );
-      }
+      await discardPackageLauncherBackup(launchers, targetLayout.globalRoot);
       throw error instanceof PackageUpdateActivationError
         ? error
         : new PackageUpdateActivationError(error);
     }
-    // No retained baseline means no package mutation was admitted. Do not run
-    // compensation or report a changed backup that was never captured.
-    const errors = [
-      formatErrorMessage(error),
-      ...(baselineCompleted
-        ? retained
-          ? []
-          : await restoreSwap()
-        : ["Package baseline is unavailable; no package activation was attempted."]),
-    ];
+    const errors = [formatErrorMessage(error)];
+    if (!retained && !liveMutationStarted) {
+      // Preparation can fail before a baseline exists. There is nothing to
+      // restore; the caller independently verifies the untouched runtime.
+      packageRollbackVerified = false;
+      const cleanup = await discardPackageLauncherBackup(launchers, targetLayout.globalRoot);
+      if (cleanup) {
+        errors.push(cleanup);
+      }
+    } else if (!retained) {
+      errors.push(...(await restoreSwap()));
+    }
     return {
       status: "failed",
       activePackageRoot,

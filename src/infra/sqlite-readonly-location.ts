@@ -2,6 +2,7 @@
 import fs, { type BigIntStats } from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
+import { copyFileDescriptorSync } from "@openclaw/fs-safe/advanced";
 import { sameFileIdentity } from "./fs-safe-advanced.js";
 import { openNodeSqliteDatabase } from "./node-sqlite.js";
 import { backupNodeSqliteDatabase } from "./sqlite-backup.js";
@@ -152,29 +153,7 @@ function copyPinnedFile(source: PinnedFile, targetPath: string): void {
   let target: number | undefined;
   try {
     target = fs.openSync(targetPath, "wx", 0o600);
-    const buffer = Buffer.allocUnsafe(COPY_BUFFER_BYTES);
-    let offset = 0;
-    while (true) {
-      const bytesRead = fs.readSync(source.descriptor, buffer, 0, buffer.length, offset);
-      if (bytesRead === 0) {
-        break;
-      }
-      let bytesWritten = 0;
-      while (bytesWritten < bytesRead) {
-        const count = fs.writeSync(
-          target,
-          buffer,
-          bytesWritten,
-          bytesRead - bytesWritten,
-          offset + bytesWritten,
-        );
-        if (count === 0) {
-          throw new Error(`SQLite read-only snapshot copy made no progress: ${targetPath}`);
-        }
-        bytesWritten += count;
-      }
-      offset += bytesRead;
-    }
+    copyFileDescriptorSync(source.descriptor, target);
     fs.fsyncSync(target);
     assertPinnedIdentityUnchanged(source);
   } finally {

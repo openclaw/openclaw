@@ -15,6 +15,15 @@ export type SqliteWorkerBackend<Operations extends SqliteWorkerOperations> = {
   close(): void | Promise<void>;
 };
 
+// Source fixtures and compiled backends can load separate copies in the same Worker.
+export const SQLITE_WORKER_PREPARE_COMMAND = Symbol.for("openclaw.sqliteWorkerPrepareCommand");
+
+/** Internal code-loading hook; the public SDK backend remains synchronous. */
+export type SqliteWorkerPreparedBackend<Operations extends SqliteWorkerOperations> =
+  SqliteWorkerBackend<Operations> & {
+    [SQLITE_WORKER_PREPARE_COMMAND]?(commandType: keyof Operations): void | Promise<void>;
+  };
+
 export type SqliteWorkerStore<Operations extends SqliteWorkerOperations> = {
   execute<Key extends keyof Operations>(
     command: { type: Key; input: Operations[Key]["input"] },

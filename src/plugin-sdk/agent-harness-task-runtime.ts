@@ -176,13 +176,13 @@ export function createAgentHarnessTaskRuntime(
       });
     },
     listTaskRecords() {
-      return listTaskRecords().filter(
+      return listTaskRecords(
         (task) =>
           task.runtime === runtime &&
           (!taskKind || task.taskKind === taskKind) &&
           task.scopeKind === "session" &&
           task.ownerKey === requesterSessionKey &&
-          (!runIdPrefix || task.runId?.startsWith(runIdPrefix)),
+          (!runIdPrefix || task.runId?.startsWith(runIdPrefix) === true),
       );
     },
   };
@@ -216,10 +216,10 @@ export async function deliverAgentHarnessTaskCompletion(params: {
   const eventStatus = mapHarnessCompletionStatus(params.status);
   // Capture completion ownership before origin resolution can yield to a new task.
   const readOwnedTasks = () =>
-    listTaskRecords().filter(
+    listTaskRecords(
       (task) =>
         task.runtime === "subagent" &&
-        task.taskKind &&
+        Boolean(task.taskKind) &&
         task.requesterSessionKey === requesterSessionKey &&
         task.runId === childSessionKey,
     );

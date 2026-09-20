@@ -75,6 +75,14 @@ Hot reload and secrets reload preserve that distinction: catalog compatibility
 metadata does not become a custom request override that switches a native runtime
 back to OpenClaw.
 
+Changing `session.store` does not migrate conversations. Queued notifications
+bound to the previous physical store end with a recorded `store-replaced` outcome.
+Pending child-result delivery is suspended while the result and completed task
+remain available for explicit recovery; selecting the old store again does not
+automatically re-arm that delivery.
+Replacement and in-process restart that keep the same store preserve queued
+notification handoff.
+
 | Category                  | Fields                                                                                                                                                                                                                                                             | Gateway restart needed?                |
 | ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------- |
 | Channels                  | `channels.*`, `web` (WhatsApp)                                                                                                                                                                                                                                     | Depends on setting and loaded plugin   |

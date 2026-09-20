@@ -413,7 +413,9 @@ export function createPageState(
     }
     // Every close route commits here; tab switches retain the pending selection.
     if (
-      (state.sidebarContent?.kind === "loading" || state.sidebarContent?.kind === "unavailable") &&
+      (state.sidebarContent?.kind === "loading" ||
+        state.sidebarContent?.kind === "unavailable" ||
+        state.sidebarContent?.kind === "task") &&
       !normalized.columns.some((column) => column.panels.some((panel) => panel.slot === "detail"))
     ) {
       state.sidebarContent = null;
@@ -474,6 +476,13 @@ export function createPageState(
       .flatMap((column) => column.panels)
       .find((panel) => panel.slot === targetSlot);
     if (targetPanel) {
+      if (targetSlot === "detail") {
+        if (content?.kind === "task") {
+          targetPanel.taskId = content.taskId;
+        } else {
+          delete targetPanel.taskId;
+        }
+      }
       opened = activatePanel(opened, targetPanel.id);
     }
     const availableWidth = page.getBoundingClientRect?.().width ?? 0;

@@ -58,11 +58,12 @@ openclaw-pending-session-create {
 }
 
 @media (max-width: 560px) {
-  .chat-error:has(> .chat-error__discard) {
+  .chat-error:has(> :is(.chat-error__discard, .chat-error__refresh)) {
     grid-template-columns: 18px minmax(0, 1fr);
   }
 
-  .chat-error__discard {
+  .chat-error__discard,
+  .chat-error__refresh {
     grid-column: 2;
     justify-self: start;
     white-space: normal;
@@ -89,14 +90,22 @@ openclaw-pending-session-create {
 .chat-error__summary strong {
   flex: 1;
   min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  white-space: normal;
 }
 
 .chat-error__summary > span {
   flex: 0 0 auto;
   color: var(--muted);
+}
+
+@media (max-width: 560px) {
+  .chat-error__summary {
+    flex-wrap: wrap;
+  }
+
+  .chat-error__summary strong {
+    flex-basis: 100%;
+  }
 }
 
 .chat-error__chevron {
@@ -112,7 +121,7 @@ openclaw-pending-session-create {
   transform: rotate(180deg);
 }
 
-/* Preserve the received diagnostic as text; only its collapsed preview clips. */
+/* Preserve the received diagnostic as text beyond the bounded summary. */
 .chat-error__diagnostic {
   max-height: min(16rem, 35dvh);
   margin: 10px 0;
@@ -637,6 +646,13 @@ openclaw-pending-session-create {
   display: flow-root;
   width: 100%;
   content-visibility: auto;
+}
+
+/* Auto content visibility implies paint containment, which clips outlines at
+   row edges. Let the focused row paint its full keyboard focus indicator
+   without disabling offscreen layout skipping for the rest of the transcript. */
+.chat-virtual-row:focus-within {
+  content-visibility: visible;
 }
 
 /* Message jumps need real mounted-row sizes before their target settles.
@@ -1970,6 +1986,10 @@ openclaw-chat-video-player {
   min-height: 44px;
   margin: -10px -12px;
   padding: 10px 12px;
+}
+
+.chat-swarm__group--completed[open] .chat-swarm__summary {
+  margin-bottom: 0;
 }
 
 .chat-swarm__group--completed .chat-swarm__counts {

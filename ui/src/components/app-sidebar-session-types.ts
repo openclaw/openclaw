@@ -14,9 +14,9 @@ import type {
 import type { SessionAgentAttentionIconId } from "../../../packages/gateway-protocol/src/session-agent-status.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { SessionRunStatus } from "../api/types.ts";
-import type { RouteId } from "../app-route-paths.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import type { BoardFace } from "../lib/board/settings.ts";
+import type { SessionChannelPresentation } from "../lib/session-channel.ts";
 import type { SessionWorkContext } from "../lib/session-display.ts";
 import {
   normalizeCatalogProjectGrouping,
@@ -138,6 +138,7 @@ export type SidebarRecentSession = {
   boardFace?: BoardFace;
   channel?: string;
   channelSession?: boolean;
+  channelPresentation?: SessionChannelPresentation;
   workSession?: boolean;
   /** ACP-backed harness session; lands in the Coding zone with work sessions. */
   acpSession?: boolean;
@@ -207,6 +208,7 @@ export type SidebarSessionHovercardRow = Pick<
   | "createdActor"
   | "createdAt"
   | "channelAvatarUrl"
+  | "channelPresentation"
   | "color"
   | "endedAt"
   | "hasAutomation"
@@ -293,8 +295,8 @@ export type SidebarSectionDropTarget = {
 
 export type SidebarSessionMutationScope = {
   epoch: number;
-  context: ApplicationContext<RouteId>;
-  gateway: ApplicationContext<RouteId>["gateway"];
+  context: ApplicationContext;
+  gateway: ApplicationContext["gateway"];
   sessions: SessionCapability;
   client: GatewayBrowserClient;
   selectedAgentId: string;

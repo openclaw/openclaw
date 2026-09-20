@@ -21,6 +21,12 @@ export { WorkerTaskError, WorkerTaskPool, serveWorkerTasks } from "../infra/work
 export type { WorkerTaskControl } from "../infra/worker-task-pool.js";
 export { killProcessTree, signalProcessTree } from "../process/kill-tree.js";
 export {
+  spawnTerminalPty,
+  type TerminalPtyHandle,
+  type TerminalPtySpawnParams,
+  type TerminalPtySubscription,
+} from "../process/terminal-pty.js";
+export {
   getFileLockProcessStartTime,
   isPidAlive,
   isPidDefinitelyDead,

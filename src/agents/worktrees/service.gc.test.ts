@@ -10,7 +10,10 @@ import { runNodeScript } from "../../../test/helpers/run-node-script.js";
 import * as backoff from "../../infra/backoff.js";
 import { createWarnLogCapture } from "../../logging/test-helpers/warn-log-capture.js";
 import * as pidAlive from "../../shared/pid-alive.js";
-import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  closeOpenClawStateDatabaseForTest,
+} from "../../state/openclaw-state-db.js";
 import * as worktreeGit from "./git.js";
 import { requireGit } from "./git.js";
 import { findLiveRegistryWorktreeByPath, getRegistryWorktree } from "./registry.js";
@@ -91,6 +94,7 @@ describe("ManagedWorktreeService garbage collection", () => {
   });
 
   afterEach(async () => {
+    await closeOpenClawStateDatabaseAsync();
     closeOpenClawStateDatabaseForTest();
     await fs.rm(root, { recursive: true, force: true });
   });
@@ -764,7 +768,7 @@ describe("ManagedWorktreeService garbage collection", () => {
     const newest = await materializeRunOwnedFixture("default-newest", "session");
     expect((await service.gc()).removed).toEqual([oldest.id]);
     expect(
-      service.listRegistryRecords().filter((record) => record.removedAt === undefined),
+      (await service.listRegistryRecords()).filter((record) => record.removedAt === undefined),
     ).toHaveLength(100);
     expect(getRegistryWorktree(env, newest.id)?.removedAt).toBeUndefined();
   });

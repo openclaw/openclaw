@@ -45,6 +45,7 @@ import type { AgentPatchedSessionModelFallback } from "./session-model-fallback.
 import type { SessionSkillSnapshot } from "./session-prompt-types.js";
 import type { SessionSystemPromptReport } from "./session-system-prompt-report.js";
 import type { SessionToolOverrides } from "./session-tool-overrides.js";
+import type { PendingSessionWorktree } from "./session-worktree-intent.js";
 
 export type { SessionToolOverrides } from "./session-tool-overrides.js";
 export type { SessionSystemPromptReport } from "./session-system-prompt-report.js";
@@ -653,14 +654,7 @@ export type InternalSessionEntryCore = SessionEntryCore & {
   /** Canonical remote repository awaiting preparation by this exact session generation. */
   pendingProjectGitUrl?: string;
   /** Authorized worktree intent awaiting preparation by an admitted turn. */
-  pendingWorktree?: {
-    workspace?: string;
-    name?: string;
-    baseRef?: string;
-    /** Verified commit used for checkout while baseRef remains user-facing metadata. */
-    baseCommit?: string;
-    titleSource: string;
-  };
+  pendingWorktree?: PendingSessionWorktree;
   /** Suppresses repeated byte-triggered compaction after an oversized successor was observed. */
   transcriptByteCompactionLatch?: {
     activeBytes: number;

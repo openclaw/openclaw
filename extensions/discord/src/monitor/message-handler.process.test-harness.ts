@@ -41,12 +41,15 @@ const sendMocks = vi.hoisted(() => ({
 }));
 export function createMockDraftStream() {
   let messageId: string | undefined = "preview-1";
+  let text = "";
   return {
-    update: vi.fn<(text: string) => void>(() => {
+    update: vi.fn<(next: string) => void>((next) => {
+      text = next;
       messageId ??= "preview-next";
     }),
     flush: vi.fn(async () => {}),
     messageId: vi.fn(() => messageId),
+    lastDeliveredText: vi.fn(() => text),
     clear: vi.fn(async () => {
       messageId = undefined;
     }),
@@ -60,6 +63,7 @@ export function createMockDraftStream() {
     cleanupPendingMessages: vi.fn(async () => {}),
     forceNewMessage: vi.fn(() => {
       messageId = undefined;
+      text = "";
     }),
   };
 }

@@ -5,7 +5,10 @@ import { resolveManagedServiceUpdateFailureExitCode } from "../../infra/update-c
 import { normalizeUpdateFailureFacts } from "../../infra/update-failure-facts.js";
 import { verifyPackageUpdateRecovery } from "../../infra/update-global.js";
 import { getUpdateRun, recordUpdateRunPhase } from "../../infra/update-run-ledger.js";
-import { assertUpdateRecoveryAdmission } from "../../infra/update-run-recovery-admission.js";
+import {
+  assertUpdateRecoveryAdmission,
+  assertUpdateRecoveryPublicationAdmission,
+} from "../../infra/update-run-recovery-admission.js";
 import { isUpdateGatewayReadinessPending } from "../../infra/update-run-step.js";
 import { readCurrentGitUpdateRecovery } from "../../infra/update-runner-git-recovery.js";
 import type { UpdateRunResult, UpdateStepResult } from "../../infra/update-runner.js";
@@ -27,8 +30,17 @@ import {
   writeControlPlaneUpdateRestartSentinelBestEffort,
 } from "./update-command-result.js";
 import { completeUpdateCommandRun } from "./update-command-run.js";
+import {
+  readUpdateCommandTerminalRecord,
+  type UpdateCommandTerminalRecord,
+} from "./update-command-terminal-record.js";
+
 type Run = NonNullable<UpdateCommandOptions["run"]>;
-type Publisher = (failure?: unknown) => Promise<UpdateRunResult>;
+type PublishedRecord = (record: UpdateCommandTerminalRecord["record"]) => void;
+type Publisher = (
+  failure?: unknown,
+  onTerminalRecord?: PublishedRecord,
+) => Promise<UpdateRunResult>;
 type TerminalOwner = {
   publish?: Publisher;
   observation?: { root: string; result: UpdateRunResult };
@@ -86,7 +98,10 @@ export function hasDeferredUpdateCommandTerminalResult(run: Run): boolean {
 /** Enclose the real executor so its final checks and release precede terminal output. */
 export async function withUpdateCommandTerminalResult<T>(
   operation: (registerRun: (run: Run) => void) => Promise<T>,
-  opts: Pick<UpdateCommandOptions, "json" | "onResult"> = {},
+  opts: Pick<UpdateCommandOptions, "json" | "onResult"> & {
+    /** Internal candidate-worker output, never a serialized continuation grant. */
+    onTerminalRecord?: PublishedRecord;
+  } = {},
 ): Promise<T> {
   const owner: TerminalOwner = { settled: false };
   let run: Run | undefined;
@@ -134,7 +149,10 @@ export async function withUpdateCommandTerminalResult<T>(
       };
     }
     if (owner.publish) {
-      const result = await owner.publish("error" in outcome ? outcome.error : undefined);
+      const result = await owner.publish(
+        "error" in outcome ? outcome.error : undefined,
+        opts.onTerminalRecord,
+      );
       opts.onResult?.(result);
       if ("error" in outcome) {
         const failure = outcome.error;
@@ -235,7 +253,12 @@ export async function resolveSettledUpdateCommandResult(
   params: Pick<FinishUpdateParams, "opts" | "ownedManagedUpdateEnv" | "root">,
   pendingResult: UpdateRunResult,
   failure?: unknown,
-): Promise<{ result: UpdateRunResult; settlementFailed: boolean }> {
+  captured?: UpdateCommandTerminalRecord,
+): Promise<{
+  result: UpdateRunResult;
+  settlementFailed: boolean;
+  captured?: UpdateCommandTerminalRecord;
+}> {
   const { result, settlementFailed } = resolveUpdateCommandSettlementResult(
     params.root,
     pendingResult,
@@ -244,10 +267,16 @@ export async function resolveSettledUpdateCommandResult(
   // The mutation owner is now closed. This is diagnostic publication only,
   // never authority to reopen displaced state or replace another terminal row.
   try {
+    if (failure === undefined && captured) {
+      readUpdateCommandTerminalRecord(params, result, captured);
+      return { result, settlementFailed, captured };
+    }
     const env = params.ownedManagedUpdateEnv ?? params.opts.run?.env;
     // Keep the first target stable if selectors change during admission.
     const targetPath = resolveOpenClawStateSqlitePath(env);
+    assertUpdateRecoveryPublicationAdmission({ env, path: targetPath });
     await assertUpdateRecoveryAdmission({ env, path: targetPath });
+    assertUpdateRecoveryPublicationAdmission({ env, path: targetPath });
     if (params.opts.run) {
       if (resolveOpenClawStateSqlitePath(params.opts.run.env) !== targetPath) {
         await assertUpdateRecoveryAdmission({ env: params.opts.run.env });
@@ -471,15 +500,38 @@ async function publishPreMutationUpdateOutcome(
 export async function publishUpdateCommandTerminalResult(
   params: Pick<FinishUpdateParams, "opts" | "coreAlreadyCurrent" | "ownedManagedUpdateEnv">,
   input: UpdateRunResult,
-  outcome: { rolledBack: boolean; downtimeMs?: number },
+  outcome: {
+    rolledBack: boolean;
+    downtimeMs?: number;
+    captured?: UpdateCommandTerminalRecord;
+  },
+  onTerminalRecord?: PublishedRecord,
 ): Promise<UpdateRunResult> {
-  const nextAction = recordUpdateResultNextAction(params, input);
-  const run = params.opts.run;
-  const result = completeUpdateCommandRun(input, run, outcome);
-  const owner = run && terminalOwners.get(run);
+  let record: UpdateCommandTerminalRecord["record"] | undefined;
+  if (outcome.captured) {
+    try {
+      // Sentinel delivery may have yielded since settlement checked this identity.
+      record = readUpdateCommandTerminalRecord(params, input, outcome.captured);
+    } catch (cause) {
+      throw new UpdateCommandPendingRecoveryFailure(input, formatErrorMessage(cause), { cause });
+    }
+  }
+  if (!record) {
+    assertUpdateRecoveryPublicationAdmission({
+      env: params.ownedManagedUpdateEnv ?? params.opts.run?.env,
+    });
+  }
+  const nextAction = recordUpdateResultNextAction(params, input, record);
+  const result = record
+    ? { ...input, runId: record.runId }
+    : completeUpdateCommandRun(input, params.opts.run, outcome);
+  const owner = params.opts.run && terminalOwners.get(params.opts.run);
   if (owner?.settled) {
     await owner.retireCapture?.(result);
   }
-  printResult(result, params.opts, { nextAction });
+  printResult(result, params.opts, { nextAction, record });
+  if (record) {
+    onTerminalRecord?.(record);
+  }
   return result;
 }

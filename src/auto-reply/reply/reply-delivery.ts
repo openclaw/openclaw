@@ -23,6 +23,21 @@ export type DirectBlockDelivery = Awaited<ReturnType<typeof deliverBlockReply>> 
   terminalDeliveryConfirmed?: true;
 };
 
+/** Visible progress needs a failure outcome, but retained or suppressed sends are not visibility. */
+export async function resolveReplyFailureVisibility(
+  resolveVisibleReplyDelivery: (() => Promise<boolean>) | undefined,
+  directBlockDeliveries: readonly DirectBlockDelivery[],
+): Promise<boolean> {
+  return (
+    (await resolveVisibleReplyDelivery?.()) === true ||
+    directBlockDeliveries.some(
+      (delivery) =>
+        delivery.outcome === "delivered" &&
+        hasOutboundReplyContent(delivery.payload, { trimText: true }),
+    )
+  );
+}
+
 /** Parses inline reply directives into payload fields and silent-reply state. */
 export function normalizeReplyPayloadDirectives(params: {
   payload: ReplyPayload;

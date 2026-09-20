@@ -7,6 +7,7 @@ import { hasErrnoCode } from "../infra/errno.js";
 import { formatErrorMessage, toErrorObject } from "../infra/errors.js";
 import { UPDATE_RUN_ID_ENV } from "../infra/update-control-plane-sentinel.js";
 import {
+  collectUpdateDoctorFailureFacts,
   consumeUpdatePostInstallDoctorResult,
   UPDATE_POST_INSTALL_DOCTOR_ADVISORY_EXIT_CODE,
   UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV,
@@ -487,11 +488,32 @@ export async function prepareDoctorUpdateRecovery(options: DoctorOptions = {}): 
   if (!root) {
     throw new Error("Doctor cannot identify its installation for update recovery.");
   }
-  scope.maintenance = await beginDoctorMaintenance({
-    options: { ...options, repair: true },
-    root: pending ? null : root,
-    runtime: scope.runtime,
-  });
+  try {
+    scope.maintenance = await beginDoctorMaintenance({
+      options: { ...options, repair: true },
+      root: pending ? null : root,
+      runtime: scope.runtime,
+    });
+  } catch (error) {
+    // Recovery admission precedes the health flow and its Doctor result writer.
+    // Preserve typed refusals on the shipped IPC path without claiming a config write.
+    const resultPath = process.env[UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV]?.trim();
+    const failureFacts = collectUpdateDoctorFailureFacts(error);
+    if (resultPath && failureFacts.length) {
+      try {
+        await writeUpdatePostInstallDoctorResult({
+          resultPath,
+          result: { status: "error", configHash: "unchanged", failureFacts },
+        });
+      } catch {
+        // Exclusive creation retains any existing receipt; diagnostics cannot replace the refusal.
+        scope.runtime.error(
+          "Doctor could not record its preparation refusal; the original failure is retained.",
+        );
+      }
+    }
+    throw error;
+  }
   const maintenance = scope.maintenance;
   if (!maintenance) {
     throw new Error("Doctor could not acquire update recovery maintenance ownership.");

@@ -194,31 +194,32 @@ describe("ShellGatewayOwner profile appearance integration", () => {
     expect(loadSettings().accent).toBe("#336699");
   });
 
-  it("refreshes only matching profile-change events and republishes the resolved appearance", async () => {
-    const { completeProfileAppearance, owner, refreshTheme, request, snapshot } =
-      createProfileAppearanceGateway("profile-owner");
-    owner.synchronizeGateway(snapshot);
-    await completeProfileAppearance();
-    expect(loadSettings().accent).toBe("#336699");
-    request.mockClear();
-    refreshTheme.mockClear();
+  it.each(["profile-owner", "canonical-owner"])(
+    "refreshes current profile appearance for its routed %s invalidation",
+    async (eventProfileId) => {
+      const { completeProfileAppearance, owner, refreshTheme, request, snapshot } =
+        createProfileAppearanceGateway("profile-owner");
+      owner.synchronizeGateway(snapshot);
+      await completeProfileAppearance();
+      expect(loadSettings().accent).toBe("#336699");
+      request.mockClear();
+      refreshTheme.mockClear();
 
-    owner.handleGatewayEvent({
-      type: "event",
-      event: "users.prefs.changed",
-      payload: { profileId: "other-profile", keys: ["ui.accent"] },
-    });
-    expect(request).not.toHaveBeenCalled();
+      owner.handleGatewayEvent({
+        type: "event",
+        event: "users.prefs.changed",
+        payload: {
+          profileId: eventProfileId,
+          keys: ["ui.accent"],
+          entries: { "ui.accent": "#ffffff" },
+        },
+      });
 
-    owner.handleGatewayEvent({
-      type: "event",
-      event: "users.prefs.changed",
-      payload: { profileId: "profile-owner", keys: ["ui.accent"] },
-    });
-
-    await completeProfileAppearance("#224466");
-    expect(loadSettings().accent).toBe("#224466");
-    expect(request).toHaveBeenCalledOnce();
-    expect(refreshTheme).toHaveBeenCalledOnce();
-  });
+      expect(loadSettings().accent).toBe("#336699");
+      await completeProfileAppearance("#224466");
+      expect(loadSettings().accent).toBe("#224466");
+      expect(request).toHaveBeenCalledOnce();
+      expect(refreshTheme).toHaveBeenCalledOnce();
+    },
+  );
 });

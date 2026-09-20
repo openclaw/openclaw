@@ -4,6 +4,7 @@ import { isValidAgentId, normalizeAgentId } from "../../../routing/session-key.j
 import { listAgentIds } from "../../agent-scope-config.js";
 import { resolveSessionAgentId } from "../../agent-scope.js";
 import { reserveChildAdmissionSlot } from "../../child-admission.js";
+import { summarizeSpawnError } from "../../spawn-pipeline.js";
 import { resolveSpawnAdmission, resolveSpawnMode } from "../../spawn-plan.js";
 import { listSwarmRunsForGroup } from "../registry/subagent-registry.js";
 import { resolveSwarmConfig } from "../swarm/swarm-config.js";
@@ -125,25 +126,31 @@ export function resolveSubagentSpawnRequest(
     completionOwnerKey: ctx.completionOwnerKey,
   });
 
-  // Bind private results to the admitted parent incarnation; a reset must not
-  // transfer a retained child result to a replacement session at the same key.
+  // Capture the requester window before launch; a reset must not move child
+  // progress receipts or private results to a replacement session at the same key.
   let completionRequesterSessionId: string | undefined;
-  if (params.completionTarget === "parent") {
+  try {
     const target = resolveGatewaySessionStoreTarget({
       cfg,
       key: ownership.completionRequesterSessionKey,
+      agentId: ctx.requesterAgentIdOverride,
     });
     completionRequesterSessionId = loadSessionEntry({
       storePath: target.storePath,
       sessionKey: target.canonicalKey,
       clone: false,
     })?.sessionId;
-    if (!completionRequesterSessionId) {
-      return rejectSubagentSpawnRequest(
-        "error",
-        "Private completion requires an existing requester session. Retry from an active session.",
-      );
-    }
+  } catch (error) {
+    return rejectSubagentSpawnRequest(
+      "error",
+      `sessions_spawn could not read the requester session: ${summarizeSpawnError(error)}`,
+    );
+  }
+  if (params.completionTarget === "parent" && !completionRequesterSessionId) {
+    return rejectSubagentSpawnRequest(
+      "error",
+      "Private completion requires an existing requester session. Retry from an active session.",
+    );
   }
 
   const requesterAgentId = resolveSessionAgentId({

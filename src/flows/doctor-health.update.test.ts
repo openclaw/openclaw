@@ -150,6 +150,17 @@ describe("runDoctorHealthFlow update outcomes", () => {
           );
         }
         const deferred = receipt("deferred cleanup", refused ? "refused" : "warning");
+        const refusalFact = {
+          check: "plugin-doctor-post-session-state",
+          code: "blocked-by-session-repair-failure",
+          message:
+            "Post-session plugin repair was blocked because prerequisite session repair failed.",
+        };
+        if (refused) {
+          deferred.id = refusalFact.check;
+          deferred.refusal = refusalFact;
+        }
+        const refusalWarning = `Failing check ${refusalFact.check} (${refusalFact.code}): ${refusalFact.message}`;
         const refusal = new DoctorStateMigrationRefusalError([deferred]);
         const inspectionWarning =
           "core/doctor/auth-profiles [update-inspection-deferred]: Run openclaw doctor after activation.";
@@ -196,9 +207,16 @@ describe("runDoctorHealthFlow update outcomes", () => {
           }
           const result = await consumeUpdatePostInstallDoctorResult(resultPath);
           expect(result?.status).toBe(refused ? "error" : "ok");
-          expect(result?.warnings).toHaveLength(refused ? 1 : noisy ? 32 : 4);
+          expect(result?.warnings).toHaveLength(refused ? 2 : noisy ? 32 : 4);
           expect(result?.warnings).toContain(inspectionWarning);
-          if (!refused) {
+          if (refused) {
+            expect(refusal.message).toContain(refusalWarning);
+            expect(result?.failureFacts).toEqual([refusalFact]);
+            expect(result?.warnings).toContain(refusalWarning);
+            expect(mocks.runContributions.mock.calls[0]?.[0].updateWarnings).toContain(
+              refusalWarning,
+            );
+          } else {
             expect(result?.warnings).toContain("preflight cleanup: run openclaw doctor --fix");
             if (!noisy) {
               expect(result?.warnings).toEqual(

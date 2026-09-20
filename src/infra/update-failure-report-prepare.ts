@@ -8,6 +8,7 @@ import { resolveStateDir } from "../config/paths.js";
 import {
   redactPublicSupportDiagnosticLine,
   redactPublicSupportVersion,
+  redactSupportDiagnosticLine,
   redactSupportString,
 } from "../logging/diagnostic-support-redaction.js";
 import { classifyUpdateOutcome } from "../shared/update-outcome.js";
@@ -45,8 +46,9 @@ export type UpdateFailureReportInput = {
   attemptId: string;
   error?: string;
   result: UpdateRunResult;
+  action?: "cli";
   recordedRun?: Pick<UpdateRunRecord, "runId" | "steps"> &
-    Partial<Pick<UpdateRunRecord, "reason" | "target" | "after" | "verification">>;
+    Partial<Pick<UpdateRunRecord, "trigger" | "reason" | "target" | "after" | "verification">>;
   target?: string;
 };
 
@@ -162,26 +164,16 @@ function resolveFailedSteps(input: UpdateFailureReportInput): ReportedFailedStep
   ];
 }
 
-function resolveFailedPhase(
-  result: UpdateRunResult,
-  steps: ReportedFailedStep[],
-  context: UpdateFailureReportContext,
-): string {
-  const failed = steps.at(-1);
-  const phase = sanitizeFactIdentifier(failed?.name ?? result.reason ?? "unknown", context);
-  // Some updater labels are executable text (for example, the Doctor step).
-  // Keep the structured failure code visible without publishing that command.
-  return phase === "[redacted-command]" || phase === "[redacted-path]"
-    ? sanitizeReportField(result.reason ?? "unknown", context)
-    : phase;
-}
-
 function resolveUpdateTarget(
   input: UpdateFailureReportInput,
   context: UpdateFailureReportContext,
 ): string {
   const explicit =
-    input.target?.trim() || input.recordedRun?.target?.sha || input.recordedRun?.target?.version;
+    input.target?.trim() ||
+    input.recordedRun?.target?.sha ||
+    input.recordedRun?.target?.version ||
+    input.recordedRun?.target?.tag ||
+    input.recordedRun?.target?.channel;
   if (explicit) {
     // update.run records these two display forms from validated campaign facts.
     // Revalidate their scalar payloads before adding the fixed display words.
@@ -213,7 +205,10 @@ function resolveRecoveryOutcome(
   input: UpdateFailureReportInput,
   context: UpdateFailureReportContext,
 ): string {
-  const { result } = input;
+  const result = {
+    ...input.result,
+    recovery: input.result.recovery ?? input.recordedRun?.verification?.recovery,
+  };
   if (result.recovery?.serviceRestartSafe === true) {
     const version = redactPublicSupportVersion(result.recovery.version);
     const restored = result.recovery.packageRollbackVerified === true;
@@ -302,12 +297,15 @@ async function renderBoundedDiagnostics(
         normalizeUpdateFailureFacts(step.failureFacts ?? [], context.env).map(async (fact) =>
           formatUpdateFailureFact({
             ...(await projectPublicUpdateFailureIdentifiers(fact)),
+            ...(fact.location ? { location: fact.location } : {}),
             ...(fact.affectedKey ? { affectedKey: sanitizeFactConfigKey(fact.affectedKey) } : {}),
             ...(fact.message
               ? {
                   message:
                     updatePreflightDetailMessage(fact.code) ??
-                    redactPublicSupportDiagnosticLine(fact.message, context),
+                    (fact.errorName
+                      ? redactSupportDiagnosticLine(fact.message, context)
+                      : redactPublicSupportDiagnosticLine(fact.message, context)),
                 }
               : {}),
           }),
@@ -316,21 +314,6 @@ async function renderBoundedDiagnostics(
     );
   }
   return diagnostics;
-}
-
-function resolveReportPaths(
-  attemptId: string,
-  stateDir: string,
-): {
-  reportDir: string;
-  reportPath: string;
-} {
-  const key = createHash("sha256").update(attemptId).digest("hex");
-  const reportDir = path.join(stateDir, "update-reports");
-  return {
-    reportDir,
-    reportPath: path.join(reportDir, `${key}.md`),
-  };
 }
 
 /** Builds the exact sanitized body the user must review before submission. */
@@ -362,8 +345,11 @@ export async function prepareUpdateFailureReport(
   const platform = sanitizeReportField(`${process.platform}/${process.arch}`, context);
   const target = resolveUpdateTarget(input, context);
   const steps = resolveFailedSteps(input);
-  const phase = resolveFailedPhase(input.result, steps, context);
+  const phase = sanitizeFactIdentifier(steps.at(-1)?.name ?? "not-recorded", context);
   const recovery = resolveRecoveryOutcome(input, context);
+  const rollback = input.result.rollbackOutcome ?? recordedRun?.verification?.rollbackOutcome;
+  const action = recordedRun?.trigger ?? input.action;
+  const installation = recordedRun?.target?.installationMethod;
   const verification = recordedRun?.verification;
   const identity = verification
     ? formatUpdateRunIdentity(verification, recordedRun?.after ?? input.result.after ?? {})
@@ -379,9 +365,20 @@ export async function prepareUpdateFailureReport(
     `- OpenClaw version: ${version}`,
     `- Platform: ${platform}`,
     `- Node version: ${sanitizeReportField(process.versions.node ?? "unknown", context)}`,
+    ...(action
+      ? [
+          `- Update action: ${action === "cli" ? "CLI command: openclaw update" : action === "campaign" ? "automatic update campaign" : `Gateway RPC: update.run (${action})`}`,
+        ]
+      : []),
+    ...(installation ? [`- Installation method: ${installation}`] : []),
     `- Update target: ${target}`,
     `- Failed phase: ${phase}`,
-    `- Recovery outcome: ${recovery}`,
+    ...(rollback
+      ? [
+          `- Rollback outcome: ${{ "not-needed": "not needed", "not-attempted": "not attempted", succeeded: "attempted; succeeded", failed: "attempted; failed" }[rollback.status]} — ${redactSupportDiagnosticLine(rollback.reason, context)}`,
+        ]
+      : []),
+    ...(recovery !== "not recorded" || !rollback ? [`- Recovery outcome: ${recovery}`] : []),
     ...(identity ? [`- Recorded verification: ${identity}`] : []),
     ...(currentHealth
       ? [
@@ -417,12 +414,15 @@ export async function prepareUpdateFailureReport(
     " ",
   );
   const issue = prepareGithubIssue({ title, body });
-  const { reportPath } = resolveReportPaths(input.attemptId, stateDir);
   return {
     ...issue,
     attemptId: input.attemptId,
     previewDigest: createHash("sha256").update(issue.body).digest("hex"),
-    savedReportPath: reportPath,
+    savedReportPath: path.join(
+      stateDir,
+      "update-reports",
+      `${createHash("sha256").update(input.attemptId).digest("hex")}.md`,
+    ),
     ...(issue.browserFallback.status === "available" ? { url: issue.browserFallback.url } : {}),
   };
 }

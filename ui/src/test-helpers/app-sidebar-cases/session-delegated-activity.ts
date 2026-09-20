@@ -3,10 +3,61 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { reconcileSessionChanged } from "../../lib/sessions/reconcile.ts";
 import { createGatewayHarness, createSessionsHarness, mountSidebar } from "../app-sidebar.ts";
+import { createTestGatewayClient } from "../gateway-client.ts";
 import { waitForFast } from "../wait-for.ts";
 import { mountRoster, roster, session } from "./roster.test-support.ts";
 
 describe("AppSidebar delegated activity", () => {
+  it("loads hidden subagent activity for the selected parent without adding navigation rows", async () => {
+    const parentKey = "agent:main:review-parent";
+    const childKey = "agent:main:subagent:review-child";
+    const sessions = createSessionsHarness("main", [parentKey]);
+    const result = sessions.sessions.state.result!;
+    const parentRow = result.sessions[0]!;
+    Object.assign(parentRow, {
+      label: "Review release",
+      status: "done",
+      hasActiveRun: false,
+      childSessions: [childKey],
+    });
+    const child: GatewaySessionRow = {
+      key: childKey,
+      kind: "direct",
+      spawnedBy: parentKey,
+      updatedAt: 2,
+      status: "running",
+      hasActiveRun: true,
+    };
+    sessions.list.mockResolvedValue({ ...result, sessions: [child] });
+    const gateway = createGatewayHarness(
+      createTestGatewayClient(async () => ({ session: parentRow })),
+    );
+    const { sidebar } = await mountSidebar(gateway.gateway, sessions.sessions);
+    sidebar.activeRouteId = "chat";
+    sidebar.sessionKey = parentKey;
+    const parent = () => sidebar.querySelector(`[data-session-key="${parentKey}"]`)!;
+    await waitForFast(() =>
+      expect(
+        parent().querySelector('.session-glyph__ring[aria-label="Subagents working"]'),
+      ).not.toBeNull(),
+    );
+    expect(sidebar.querySelector(`[data-session-key="${childKey}"]`)).toBeNull();
+    expect(sidebar.querySelector("[data-child-session-toggle]")).toBeNull();
+
+    const finished: GatewaySessionRow = {
+      ...child,
+      status: "done",
+      hasActiveRun: false,
+      updatedAt: 3,
+    };
+    sessions.list.mockResolvedValue({ ...result, ts: 3, sessions: [finished] });
+    gateway.publishEvent("sessions.changed", {
+      sessionKey: childKey,
+      session: finished,
+    });
+    await waitForFast(() => expect(parent().querySelector(".session-glyph__ring")).toBeNull());
+  });
+
   it("keeps subagent runs out of the session tree while preserving parent activity and failure attention", async () => {
     const parentKey = "agent:main:dashboard:release";
     const childKey = "agent:main:subagent:review";

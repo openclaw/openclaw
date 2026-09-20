@@ -1,10 +1,16 @@
 import { resolveLaunchAgentLabel } from "./launchd-label.js";
 import { LAUNCH_AGENT_POLICY, decodeLaunchdPlistMetadata } from "./launchd-plist.js";
 import {
+  buildLaunchAgentEnvironmentWrapper,
   readExistingLaunchAgentPlist,
+  resolveLaunchAgentEnvWrapperPath,
   resolveLaunchAgentPlistPath,
 } from "./launchd-service-files.js";
 import { resolveGatewayLogPaths, resolveGatewaySupervisorLogPaths } from "./restart-logs.js";
+import {
+  isInstallerServiceDescription,
+  serviceDefinitionUnknown,
+} from "./service-audit-preservation.js";
 import type { ServiceConfigIssue, ServiceDefinitionDrift } from "./service-audit-types.js";
 import type { GatewayServiceEnv } from "./service-types.js";
 
@@ -14,6 +20,7 @@ export async function auditLaunchdDefinition(
   issues: ServiceConfigIssue[],
   findings: ServiceDefinitionDrift[],
   timeoutMs?: number,
+  inspectRewrite = false,
 ): Promise<void> {
   const sourcePath = resolveLaunchAgentPlistPath(env);
   const content = (await readExistingLaunchAgentPlist(sourcePath))?.contents ?? null;
@@ -38,6 +45,28 @@ export async function auditLaunchdDefinition(
   const installed = await decodeLaunchdPlistMetadata(content, timeoutMs);
   if (!installed) {
     throw new Error("LaunchAgent definition could not be decoded.");
+  }
+  if (inspectRewrite) {
+    if (!isInstallerServiceDescription(installed.Comment, env)) {
+      findings.push(
+        serviceDefinitionUnknown(
+          "Comment",
+          "The installer would replace custom service metadata.",
+          sourcePath,
+        ),
+      );
+    }
+    const wrapperPath = resolveLaunchAgentEnvWrapperPath(env, resolveLaunchAgentLabel(env));
+    const wrapper = (await readExistingLaunchAgentPlist(wrapperPath))?.contents ?? null;
+    if (wrapper !== null && wrapper.toString("utf8") !== buildLaunchAgentEnvironmentWrapper()) {
+      findings.push(
+        serviceDefinitionUnknown(
+          "EnvironmentWrapper",
+          "The generated wrapper contains unrecognized behavior.",
+          wrapperPath,
+        ),
+      );
+    }
   }
   const { stdoutPath } = resolveGatewaySupervisorLogPaths(env, { platform: "darwin" });
   const expected: Record<string, string | number | boolean> = {

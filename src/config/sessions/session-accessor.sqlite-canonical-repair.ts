@@ -2,8 +2,10 @@ import { uniqueStrings } from "@openclaw/normalization-core/string-normalization
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
+  getNodeSqliteKysely,
 } from "../../infra/kysely-sync.js";
 import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
+import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
 import {
   openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
@@ -33,6 +35,8 @@ import { canonicalSessionKeyMigrationRequiredError } from "./session-canonical-k
 import { assertSessionTranscriptHot } from "./session-cold-storage-state.js";
 import { normalizeStoreSessionKey } from "./store-entry.js";
 import type { SessionEntry } from "./types.js";
+
+type AgentCacheDatabase = Pick<OpenClawAgentKyselyDatabase, "cache_entries">;
 
 // Doctor-only cross-store transfer. Runtime readers never reconcile aliases.
 
@@ -350,6 +354,8 @@ function copySqliteSessionOwnedStateForRepair(params: {
           .onConflict((conflict) => conflict.column("conversation_id").doUpdateSet(replacement)),
       );
     }
+    const sourceCache = getNodeSqliteKysely<AgentCacheDatabase>(params.source.db);
+    const destinationCache = getNodeSqliteKysely<AgentCacheDatabase>(params.destination.db);
     for (const delivery of deliveries) {
       const canonicalDelivery = {
         ...delivery,
@@ -367,6 +373,32 @@ function copySqliteSessionOwnedStateForRepair(params: {
           .values(canonicalDelivery)
           .onConflict((conflict) => conflict.column("operation_id").doUpdateSet(replacement)),
       );
+      const snapshot = executeSqliteQueryTakeFirstSync(
+        params.source.db,
+        sourceCache
+          .selectFrom("cache_entries")
+          .selectAll()
+          .where("scope", "=", "conversation-progress")
+          .where("key", "=", delivery.operation_id),
+      );
+      if (snapshot) {
+        executeSqliteQuerySync(
+          params.destination.db,
+          destinationCache
+            .insertInto("cache_entries")
+            .values(snapshot)
+            .onConflict((conflict) => conflict.columns(["scope", "key"]).doUpdateSet(snapshot)),
+        );
+      } else {
+        // Replacing a receipt cannot retain another receipt's presentation at the same key.
+        executeSqliteQuerySync(
+          params.destination.db,
+          destinationCache
+            .deleteFrom("cache_entries")
+            .where("scope", "=", "conversation-progress")
+            .where("key", "=", delivery.operation_id),
+        );
+      }
     }
   }
   const preferredWindowProjection = params.preferredEntry

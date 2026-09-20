@@ -58,7 +58,6 @@ import {
   hashConfigRaw,
   hasConfigMeta,
   parseConfigJson5,
-  rejectConfigNonFiniteNumbers,
   resolveGatewayMode,
   restoreAuthoredTildePathsForWrite,
 } from "./io.read-helpers.js";
@@ -102,6 +101,7 @@ import { resolveIncludeRoots } from "./paths.js";
 import { preflightRuntimeSnapshotWrite } from "./runtime-snapshot.js";
 import type { OpenClawConfig } from "./types.js";
 import { validateConfigObjectRawWithPlugins } from "./validation.js";
+import { rejectConfigNonFiniteNumbers } from "./value-tree.js";
 import { captureCommittedConfigFileWrite } from "./write-capture.js";
 import { captureConfigWriteLockGuard } from "./write-lock.js";
 export async function writeConfigFileFromContext(
@@ -506,6 +506,7 @@ export async function writeConfigFileFromContext(
   const publication: { phase: "unpublished" | "removed" | "published" | "accepted" } = {
     phase: "unpublished",
   };
+  let restoreFile: ((assertCurrent: () => void) => Promise<boolean>) | undefined;
   let rollbackStatus: ConfigWriteRollbackStatus = "not-restored";
   try {
     options.assertConfigPathForWrite?.();
@@ -531,14 +532,26 @@ export async function writeConfigFileFromContext(
         onRootRemoved: () => {
           publication.phase = "removed";
         },
+        onRootPublished: () => {
+          publication.phase = "published";
+        },
       },
     );
+    // The writer owns compensation identity; callers supply the still-live enclosing owner.
+    restoreFile = (assertCurrent) =>
+      rollbackConfigFileWriteIfUnchanged({
+        configPath,
+        previousSnapshot: snapshot,
+        committedHash: publication.phase === "removed" ? hashConfigRaw(null) : nextHash,
+        fsModule: deps.fs,
+        ...guardedFs.captureRollbackProof(assertCurrent),
+      });
     await using preparedFile = await prepareConfigFileWrite({
       configPath,
       content: json,
       previousRaw: snapshot.raw,
-      fsModule: guardedFs,
-      assertCurrent: options.assertConfigPathForWrite,
+      fsModule: guardedFs.fileSystem,
+      assertCurrent: guardedFs.assertCurrent,
     });
     await options.beforeCommit?.();
     const result = withDeferredPluginMigrationsCurrent(
@@ -630,38 +643,33 @@ export async function writeConfigFileFromContext(
         hash: committedRevision,
         sourceConfig: sourceConfigForPreflight,
       },
-      [configWritePostCommitRollback]: (assertCurrent) => {
-        assertCurrent();
-        restoreConfigSnapshotAuditRecord({
-          env: deps.env,
-          homedir: deps.homedir,
-          snapshot: priorSnapshotAuditRecord,
-          expectedSnapshot: writtenSnapshotAuditRecord,
-        });
-        if (previousWarningFingerprint === undefined) {
-          loggedConfigWarningFingerprints.delete(configPath);
-        } else {
-          setBoundedConfigIoWarningEntry(
-            loggedConfigWarningFingerprints,
-            configPath,
-            previousWarningFingerprint,
-          );
-        }
+      [configWritePostCommitRollback]: {
+        restoreFile,
+        restoreEffects: (assertCurrent) => {
+          assertCurrent();
+          restoreConfigSnapshotAuditRecord({
+            env: deps.env,
+            homedir: deps.homedir,
+            snapshot: priorSnapshotAuditRecord,
+            expectedSnapshot: writtenSnapshotAuditRecord,
+          });
+          if (previousWarningFingerprint === undefined) {
+            loggedConfigWarningFingerprints.delete(configPath);
+          } else {
+            setBoundedConfigIoWarningEntry(
+              loggedConfigWarningFingerprints,
+              configPath,
+              previousWarningFingerprint,
+            );
+          }
+        },
       },
     };
   } catch (error) {
     let failure = error;
-    if (publication.phase === "removed" || publication.phase === "published") {
+    if (restoreFile && (publication.phase === "removed" || publication.phase === "published")) {
       try {
-        rollbackStatus = (await rollbackConfigFileWriteIfUnchanged({
-          configPath,
-          previousSnapshot: snapshot,
-          committedHash: publication.phase === "published" ? nextHash : hashConfigRaw(null),
-          fsModule: deps.fs,
-          assertCurrent: sourceGuard,
-        }))
-          ? "restored"
-          : "not-restored";
+        rollbackStatus = (await restoreFile(() => sourceGuard?.())) ? "restored" : "not-restored";
       } catch (rollbackError) {
         rollbackStatus = "unknown";
         failure = new AggregateError(

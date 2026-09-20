@@ -669,7 +669,7 @@ describe("DebugOverlay", () => {
       expect(overlay.querySelectorAll(".gateway-vital")).toHaveLength(5);
       expect(normalizedText(overlay.querySelector(".gateway-vital--cpu"))).toContain("Host —");
       expect(normalizedText(overlay.querySelector(".gateway-cpu-detail"))).toContain(
-        "Loop utilization 42%",
+        "Event loop busy 42%",
       );
       expect(overlay.querySelector(".sparkline-tile__chart")).toBeNull();
       expect(normalizedText(overlay.querySelector(".debug-overlay__vitals-footer"))).toBe(

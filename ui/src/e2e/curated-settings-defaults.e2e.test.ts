@@ -67,8 +67,9 @@ function settingsRow(page: Page, title: string): Locator {
   });
 }
 
-async function expectInherited(row: Locator, value: string) {
-  await expect.poll(() => row.textContent()).toContain(`Using default: ${value}`);
+async function expectQuietDefault(row: Locator) {
+  await row.waitFor();
+  await expect.poll(() => row.textContent()).not.toContain("Using default:");
 }
 
 async function expectDefaultInfo(row: Locator, explanation: string) {
@@ -158,7 +159,7 @@ suite.define(() => {
         await expect
           .poll(async () => (await gateway.getRequests("config.get")).length)
           .toBe(configGetsBeforeLabsReset + 1);
-        await expectInherited(codeModeRow, "Disabled");
+        await expectQuietDefault(codeModeRow);
         expect(await codeModeSwitch.getAttribute("aria-checked")).toBe("false");
 
         if (captureUiProofEnabled) {
@@ -193,7 +194,7 @@ suite.define(() => {
         const securitySavesBefore = (await gateway.getRequests("config.set")).length;
         await browserRow.locator(".settings-row__title").click();
         await profileRow.getByRole("radio", { name: "Full", exact: true }).click();
-        await expectInherited(browserRow, "Enabled");
+        await expectQuietDefault(browserRow);
         await expect
           .poll(() =>
             profileRow
@@ -231,7 +232,7 @@ suite.define(() => {
         }
 
         expect((await page.reload())?.status()).toBe(200);
-        await expectInherited(settingsRow(page, "Browser enabled"), "Enabled");
+        await expectQuietDefault(settingsRow(page, "Browser enabled"));
         const reloadedProfileRow = settingsRow(page, "Available tools");
         await expect
           .poll(() =>
@@ -351,7 +352,7 @@ suite.define(() => {
 
         expect((await page.goto(`${suite.server.baseUrl}settings/labs`))?.status()).toBe(200);
         const reloadedCodeModeRow = settingsRow(page, "Code Mode");
-        await expectInherited(reloadedCodeModeRow, "Disabled");
+        await expectQuietDefault(reloadedCodeModeRow);
         expect(
           await reloadedCodeModeRow
             .getByRole("switch", { name: "Code Mode", exact: true })

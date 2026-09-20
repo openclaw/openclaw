@@ -46,6 +46,8 @@ export async function completeInitialSessionTurn(
     clearDraft: (releasePayloads: boolean, keepPending?: boolean) => Promise<void>;
     completeInBackground: (key: string, runId?: string) => boolean;
     finishNavigation: () => void;
+    onAccepted?: () => void;
+    onRejectedPrompt?: (error: string) => void;
   },
 ) {
   const { context, client, agentId, result, instant } = options;
@@ -62,7 +64,15 @@ export async function completeInitialSessionTurn(
     return;
   }
   const handedOffAttachments = retainInitialSessionTurn(options);
-  await options.clearDraft(!handedOffAttachments);
+  if (
+    initialRun.status === "rejected" &&
+    options.turn.attachments.length === 0 &&
+    options.onRejectedPrompt
+  ) {
+    options.onRejectedPrompt(initialRun.error);
+  } else {
+    await options.clearDraft(!handedOffAttachments);
+  }
   if (!options.isCurrent() || (instant && !instant.isCurrent())) {
     return;
   }
@@ -72,6 +82,7 @@ export async function completeInitialSessionTurn(
       initialRun.status === "started" ? initialRun.runId : undefined,
     )
   ) {
+    options.onAccepted?.();
     return;
   }
   instant?.admitted(key, agentId);

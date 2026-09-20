@@ -48,7 +48,6 @@ import {
 } from "../../infra/update-post-core-finalize.js";
 import {
   buildUpdateRestartSentinelPayload,
-  createControlPlaneUpdateRefusal,
   normalizeControlPlaneUpdateResult,
   type UpdateRestartSentinelMeta,
 } from "../../infra/update-restart-sentinel-payload.js";
@@ -59,12 +58,12 @@ import {
   finishUpdateRun,
   getUpdateRun,
   recordUpdateRunPhase,
+  recordUpdateRunDiagnostics,
   recordUpdateRunStep,
   recordUpdateRunVerification,
 } from "../../infra/update-run-ledger.js";
 import { withUnprotectedGatewayUpdateAdvisory } from "../../infra/update-run-record.js";
 import { renderUpdateRunNotice } from "../../infra/update-run-report.js";
-import { updateRunStepsFromResultStep } from "../../infra/update-run-step.js";
 import { runGatewayUpdate, runGatewayUpdatePreflight } from "../../infra/update-runner.js";
 import { getUpdateAvailable } from "../../infra/update-status-state.js";
 import { mergeDeliveryContext } from "../../utils/delivery-context.shared.js";
@@ -86,6 +85,7 @@ import { updateReportHandler } from "./update-report.js";
 import {
   createUnexpectedUpdateFailureResult,
   createUpdateRunRecording,
+  recordUpdateRunResult,
 } from "./update-run-recording.js";
 import { updateStatusHandlers } from "./update-status.js";
 import { assertValidParams } from "./validation.js";
@@ -228,11 +228,23 @@ export const updateHandlers: GatewayRequestHandlers = {
     };
     try {
       const configChannel = normalizeUpdateChannel(config.update?.channel);
-      const { status, installSurface } = await resolveGatewayUpdateAdmission(timeoutMs);
+      const { status, installSurface } = await resolveGatewayUpdateAdmission(runId, timeoutMs);
       const installRoot = installSurface.root;
       result.mode = installSurface.mode;
       result.root = installRoot;
-      const refusedUpdate = createControlPlaneUpdateRefusal(installSurface);
+      const refusedUpdate = (
+        outcome: "error" | "skipped",
+        reason: string,
+        beforeVersion?: string | null,
+      ): Awaited<ReturnType<typeof runGatewayUpdate>> => ({
+        status: outcome,
+        mode: installSurface.mode,
+        ...(installRoot ? { root: installRoot } : {}),
+        ...(beforeVersion ? { before: { version: beforeVersion } } : {}),
+        reason,
+        steps: [],
+        durationMs: 0,
+      });
       const effectiveChannel = resolveEffectiveUpdateChannel({
         configChannel,
         currentVersion: VERSION,
@@ -320,6 +332,11 @@ export const updateHandlers: GatewayRequestHandlers = {
       const supervisor = detectRespawnSupervisor(process.env, process.platform, {
         includeLinuxOpenClawGatewayServiceMarker: true,
       });
+      if (supervisor) {
+        recordUpdateRunPhase(runId, "requested", {
+          target: { installationMethod: "managed-service" },
+        });
+      }
       const requiresManagedServiceHandoff =
         installSurface.kind === "global" || (installSurface.kind === "git" && supervisor !== null);
       const managedGitPreflightFailure =
@@ -513,11 +530,11 @@ export const updateHandlers: GatewayRequestHandlers = {
         recordUpdateRunPhase(runId, "staging");
         result = await runGatewayUpdate({
           runId,
+          ...createUpdateRunRecording(runId, driver, sentinelMeta),
           updateRecoveryOwner: unprotectedGatewayUpdate ? "unprotected" : undefined,
           getDoctorEnv: unprotectedGatewayUpdate
             ? () => ({ [UPDATE_RUN_ID_ENV]: runId })
             : undefined,
-          ...createUpdateRunRecording(runId, driver, sentinelMeta),
           timeoutMs,
           cwd: installSurface.root,
           channel:
@@ -555,51 +572,27 @@ export const updateHandlers: GatewayRequestHandlers = {
         outcomeMessage = error.message;
       }
       context?.logGateway?.warn(`update.run failed error=${formatErrorMessage(error)}`);
-      result = createUnexpectedUpdateFailureResult(run, result, error);
+      let recorded = run;
+      try {
+        recorded = getUpdateRun(runId) ?? run;
+      } catch {
+        context?.logGateway?.warn(
+          "Update history could not be read; preserving the original update failure with captured admission facts.",
+        );
+      }
+      result = createUnexpectedUpdateFailureResult(recorded, result, error);
     }
 
     if (unprotectedGatewayUpdate) {
       result = withUnprotectedGatewayUpdateAdvisory(result);
     }
     result = normalizeControlPlaneUpdateResult(result);
-    if (result.status === "ok") {
-      const activating = recordUpdateRunPhase(runId, "activating", {
-        before: result.before,
-        after: result.after,
-      });
-      await notify(activating, "activating");
-    }
-    let outcomeRun = recordUpdateRunPhase(
-      runId,
-      result.status === "ok" ? "restarting" : "requested",
-      {
-        before: result.before,
-        after: result.after,
-        ...(outcomeMessage
-          ? { origin: { nextAction: outcomeMessage } }
-          : handoff && "message" in handoff
-            ? { origin: { nextAction: handoff.message } }
-            : {}),
-      },
-    );
-    for (const step of result.steps) {
-      for (const entry of updateRunStepsFromResultStep(step)) {
-        if (entry.step === step.name && step.exitCode === null && result.status !== "error") {
-          entry.status = "completed";
-          delete entry.detail;
-        }
-        recordUpdateRunStep(runId, entry);
-      }
-    }
-    // A managed orchestrator or the replacement Gateway owns terminal success;
-    // refusals and synchronous failures have no later process to finish the run.
-    if (result.status !== "ok" && handoff?.status !== "started") {
-      outcomeRun = finishUpdateRun(runId, {
-        status: result.status === "skipped" ? "skipped" : "failed",
-        reason: result.reason,
-        after: result.after,
-      });
-    }
+    let outcomeRun = await recordUpdateRunResult(runId, result, {
+      nextAction: outcomeMessage || (handoff && "message" in handoff ? handoff.message : undefined),
+      handoffStarted: handoff?.status === "started",
+      notifyActivating: (activating) => notify(activating, "activating"),
+      warn: (message) => context?.logGateway?.warn(message),
+    });
 
     const payload: RestartSentinelPayload = buildUpdateRestartSentinelPayload({
       result,
@@ -618,6 +611,16 @@ export const updateHandlers: GatewayRequestHandlers = {
         recordLatestUpdateRestartSentinel(payload);
       } catch (error) {
         if (result.status === "ok" && handoff?.status !== "started") {
+          recordUpdateRunDiagnostics(
+            runId,
+            {
+              rollbackOutcome: {
+                status: "not-attempted",
+                reason: "Restart notice failure does not undo an installed update",
+              },
+            },
+            (message) => context?.logGateway?.warn(message),
+          );
           outcomeMessage =
             "The update was installed, but its restart notice could not be saved. Run openclaw update status after the gateway restarts.";
           recordUpdateRunPhase(runId, "restarting", {

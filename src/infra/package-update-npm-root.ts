@@ -6,6 +6,8 @@ import {
   createPackageIntegrityReader,
   type PackageDirectoryIdentity,
   type PackageRootIntegrityFingerprint,
+  type PackageLauncherFingerprint,
+  packageLauncherDifferences,
 } from "./package-update-integrity.js";
 import { readCurrentGitUpdateRecovery } from "./update-runner-git-recovery.js";
 
@@ -112,7 +114,11 @@ export async function verifyNpmRootRecovery(
     previousRoot: PackageRootIntegrityFingerprint | undefined;
     previousIdentity?: PackageDirectoryIdentity;
     targetSwapRoot: string;
-    shims: readonly { destination: string; backup: string | null; fingerprint?: string }[];
+    shims: readonly {
+      destination: string;
+      backup: string | null;
+      fingerprint?: PackageLauncherFingerprint;
+    }[];
   },
   timeoutMs?: number,
   verifyGitRuntime?: () => Promise<void>,
@@ -139,7 +145,9 @@ export async function verifyNpmRootRecovery(
       const target = fromBackup ? shim.backup : shim.destination;
       if (
         shim.backup
-          ? !target || (await reader.launcher(target)) !== shim.fingerprint
+          ? !target ||
+            !shim.fingerprint ||
+            packageLauncherDifferences(shim.fingerprint, await reader.launcher(target)).length > 0
           : !fromBackup && (await reader.exists(shim.destination))
       ) {
         throw new Error(

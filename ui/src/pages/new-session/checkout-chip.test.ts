@@ -102,9 +102,15 @@ describe("Checkout chip state", () => {
     { worktree: true, remotePlacement: false, repository: false },
     { worktree: true, remotePlacement: true, repository: false },
     { worktree: false, remotePlacement: true, repository: true },
+    {
+      worktree: true,
+      remotePlacement: false,
+      repository: false,
+      idPrefix: "palette-session-1",
+    },
   ])(
     "offers explicit checkout choices (worktree=$worktree, remote=$remotePlacement)",
-    ({ worktree, remotePlacement, repository }) => {
+    ({ worktree, remotePlacement, repository, idPrefix }) => {
       const container = document.createElement("div");
       const onSelectWorktree = vi.fn();
       const onBaseRefInput = vi.fn();
@@ -112,6 +118,7 @@ describe("Checkout chip state", () => {
       const onConfirm = vi.fn();
       render(
         renderCheckoutChip({
+          idPrefix,
           state: { label: worktree ? "New worktree from main" : "feature" },
           remotePlacement,
           repository,
@@ -205,9 +212,16 @@ describe("Checkout chip state", () => {
         baseRef.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown" }));
         baseRef.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown" }));
         expect(baseRef.getAttribute("aria-activedescendant")).toBe(
-          "new-session-worktree-branch-suggestion-1",
+          `${idPrefix ?? "new-session"}-worktree-branch-suggestion-1`,
         );
         expect(suggestions[1]!.getAttribute("aria-selected")).toBe("true");
+        for (const key of ["ArrowDown", "ArrowUp"]) {
+          const event = new KeyboardEvent("keydown", { key, bubbles: true, cancelable: true });
+          name.dispatchEvent(event);
+          expect(event.defaultPrevented).toBe(false);
+          expect(name.hasAttribute("aria-activedescendant")).toBe(false);
+          expect(suggestions[1]!.getAttribute("aria-selected")).toBe("true");
+        }
         baseRef.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter" }));
         expect(onBaseRefInput).toHaveBeenLastCalledWith("release/next");
         expect(onConfirm).not.toHaveBeenCalled();
@@ -216,6 +230,12 @@ describe("Checkout chip state", () => {
         name.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter" }));
         container.querySelector("wa-popover")!.dispatchEvent(new CustomEvent("wa-after-hide"));
         expect(onConfirm).toHaveBeenCalledOnce();
+        baseRef.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown" }));
+        const branchWrites = onBaseRefInput.mock.calls.length;
+        name.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", cancelable: true }));
+        container.querySelector("wa-popover")!.dispatchEvent(new CustomEvent("wa-after-hide"));
+        expect(onBaseRefInput).toHaveBeenCalledTimes(branchWrites);
+        expect(onConfirm).toHaveBeenCalledTimes(2);
         expect(container.textContent).toContain(
           "Creates a branch from the session title in a separate checkout.",
         );

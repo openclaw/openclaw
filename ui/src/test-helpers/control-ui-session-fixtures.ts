@@ -252,6 +252,11 @@ export function createControlUiSessionFixtures(
         ? [...new Set([...activeRunIds, runId])]
         : activeRunIds.filter((id) => id !== runId);
     const fields = {
+      // Like the Gateway projection, a newly started sole run has no execution
+      // model until it publishes one; the previous fallback is not evidence.
+      ...(outcome === "running" && activeRunIds.length === 0
+        ? { activeModel: undefined, activeModelProvider: undefined }
+        : {}),
       activeRunIds: remaining,
       hasActiveRun: remaining.length > 0,
       status: remaining.length > 0 ? "running" : outcome,

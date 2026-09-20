@@ -81,9 +81,11 @@ describe("security review workflow trust boundaries", () => {
       const checkouts = job.steps.filter((step) => step.uses?.startsWith("actions/checkout@"));
       expect(checkouts).toHaveLength(1);
       expect(checkouts[0]?.with).toMatchObject({
-        ref: "${{ github.workflow_sha }}",
         "persist-credentials": false,
       });
+      for (const input of ["ref", "repository", "allow-unsafe-pr-checkout"]) {
+        expect(checkouts[0]?.with).not.toHaveProperty(input);
+      }
       const runtime = job.steps.filter((step) => step.uses === `./${runtimeActionPath}`);
       expect(runtime).toHaveLength(name === "review" ? 1 : 0);
       for (const step of job.steps) {

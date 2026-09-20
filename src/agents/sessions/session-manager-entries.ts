@@ -1,3 +1,4 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { buildSessionContext as buildCoreSessionContext } from "../../../packages/agent-core/src/harness/session/session.js";
 import {
   readActiveTranscriptEntryAnchor,
@@ -51,6 +52,21 @@ function isSqliteTranscriptMutationConflict(error: unknown): boolean {
     current = current.cause;
   }
   return false;
+}
+
+function isTalkRealtimeVoiceEntry(entry: SessionEntry): boolean {
+  if (
+    entry.type !== "message" ||
+    (entry.message.role !== "user" && entry.message.role !== "assistant")
+  ) {
+    return false;
+  }
+  const provenance: unknown = Reflect.get(entry.message, "provenance");
+  return (
+    isRecord(provenance) &&
+    provenance.kind === "realtime_voice" &&
+    provenance.sourceChannel === "talk"
+  );
 }
 
 export class SessionManagerEntries extends SessionManagerPersistence {
@@ -172,7 +188,11 @@ export class SessionManagerEntries extends SessionManagerPersistence {
       this.reloadPersistedTranscript();
       // Context-excluded users have no payload in byId. The exact SQLite replay
       // anchors their identity; physical ancestry still closes older turns.
-      if (this.resolveCurrentTurnEntryId() !== persistenceResult.adoptedMessageId) {
+      // Final Talk speech records history without consuming the consult's keyed input.
+      if (
+        this.resolveCurrentTurnEntryId(isTalkRealtimeVoiceEntry) !==
+        persistenceResult.adoptedMessageId
+      ) {
         throw new Error(
           `Session transcript keyed user is outside the current turn: ${persistenceResult.adoptedMessageId}`,
         );

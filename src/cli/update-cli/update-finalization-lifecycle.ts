@@ -271,13 +271,13 @@ export class UpdateFinalizationLifecycle {
         }
         doctorOutput = output.snapshot();
         stopPhaseChildren();
-        const recovery = this.updateRecoveryBackup
-          ? {
-              manifestPath: this.updateRecoveryBackup.manifestPath,
-              command: "npx openclaw@latest doctor --fix",
-            }
-          : undefined;
         this.reportTimeout = () => {
+          const recovery = this.updateRecoveryBackup
+            ? {
+                manifestPath: this.updateRecoveryBackup.manifestPath,
+                command: "npx openclaw@latest doctor --fix",
+              }
+            : undefined;
           if (recovery) {
             writeSync(
               2,
@@ -304,8 +304,8 @@ export class UpdateFinalizationLifecycle {
               error: failure.message,
               phaseTimings: this.phaseTimings,
               ...diagnostics,
-              ...(doctorOutput ? { doctorOutput } : {}),
               ...(recovery ? { recovery } : {}),
+              ...(doctorOutput ? { doctorOutput } : {}),
             });
           }
         };

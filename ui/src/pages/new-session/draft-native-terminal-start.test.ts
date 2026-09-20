@@ -135,6 +135,44 @@ describe("DraftSubmissionFlow native terminal", () => {
     },
   );
 
+  it("keeps an empty native start busy until acceptance and refuses a duplicate", async () => {
+    let finishStart!: (result: ReturnType<typeof terminalOpenResult>) => void;
+    const starting = new Promise<ReturnType<typeof terminalOpenResult>>((resolve) => {
+      finishStart = resolve;
+    });
+    const { context, flow, request } = createDraftFixture({
+      scopes: ["operator.admin"],
+      methods: ["sessions.catalog.startTerminal", "terminal.open"],
+      data: {
+        agentId: "main",
+        requestedAgentId: "main",
+        catalogId: "synthetic-cli",
+        catalogLabel: "Synthetic CLI",
+        model: "",
+        startTerminal: true,
+        terminalHosts: [{ hostId: "gateway:local", label: "Local" }],
+      },
+      request: async (method) => (method === "sessions.catalog.startTerminal" ? starting : {}),
+    });
+    mountNativeTerminal(context);
+    const first = flow.submit();
+    await vi.waitFor(() =>
+      expect(
+        request.mock.calls.filter(([method]) => method === "sessions.catalog.startTerminal"),
+      ).toHaveLength(1),
+    );
+    expect(flow.submitting).toBe(true);
+    const duplicate = flow.submit();
+    finishStart(terminalOpenResult("empty-native"));
+    await Promise.all([first, duplicate]);
+    expect(
+      request.mock.calls.filter(([method]) => method === "sessions.catalog.startTerminal"),
+    ).toHaveLength(1);
+    expect(context.replace).toHaveBeenCalledOnce();
+    expect(context.sessions.createResult).not.toHaveBeenCalled();
+    expect(flow.submitting).toBe(false);
+  });
+
   it("keeps the native prompt until terminal startup succeeds", async () => {
     let rejectStart!: (error: Error) => void;
     const started = new Promise<never>((_, reject) => {

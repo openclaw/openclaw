@@ -49,20 +49,14 @@ suite.define(() => {
         byAgent: [],
         byChannel: [],
         daily: [],
+        costDaily: [{ date, ...totals }],
       },
-    });
-    const cost = (date: string) => ({
-      updatedAt: Date.now(),
-      days: 1,
-      totals,
-      daily: [{ date, ...totals }],
     });
     try {
       await page.clock.setFixedTime(new Date("2026-08-07T12:00:00Z"));
       const gateway = await installMockGateway(page, {
         methodResponses: {
           "sessions.usage": sessions("2026-08-07"),
-          "usage.cost": cost("2026-08-07"),
           "usage.status": {
             updatedAt: Date.now(),
             providers: [{ provider: "openai", displayName: "QA Provider Plan", windows: [] }],
@@ -70,8 +64,11 @@ suite.define(() => {
         },
       });
       await page.goto(`${suite.server.baseUrl}usage`);
-      const range = page.locator(".cost-window-range-label");
-      const value = page.locator(".cost-window-card--range .cost-window-card__value");
+      const range = page.locator(".daily-chart-range");
+      const value = page
+        .locator(".usage-metric-badge")
+        .filter({ hasText: "Cost" })
+        .locator("strong");
       const refresh = page
         .locator("openclaw-usage-page")
         .getByRole("button", { name: "Refresh", exact: true });
@@ -80,10 +77,10 @@ suite.define(() => {
       const originalValue = (await value.textContent())!.trim();
       await page.screenshot({ path: path.join(artifacts, "initial.png"), fullPage: true });
 
-      await gateway.deferNext("usage.cost");
+      await gateway.deferNext("sessions.usage");
       await refresh.click();
-      await expect.poll(async () => (await gateway.getRequests("usage.cost")).length).toBe(2);
-      await gateway.rejectDeferred("usage.cost", {
+      await expect.poll(async () => (await gateway.getRequests("sessions.usage")).length).toBe(2);
+      await gateway.rejectDeferred("sessions.usage", {
         code: "UNAVAILABLE",
         message: "QA cost temporarily unavailable",
       });
@@ -92,13 +89,13 @@ suite.define(() => {
       expect((await value.textContent())!.trim()).toBe(originalValue);
       await page.getByText("QA Provider Plan", { exact: true }).waitFor();
 
-      await gateway.deferNext("usage.cost");
+      await gateway.deferNext("sessions.usage");
       const dates = page.locator("input.usage-date-input");
       await dates.nth(0).fill("2026-07-01");
       await dates.nth(1).fill("2026-07-01");
       await dates.nth(1).press("Tab");
-      await expect.poll(async () => (await gateway.getRequests("usage.cost")).length).toBe(3);
-      await gateway.rejectDeferred("usage.cost", {
+      await expect.poll(async () => (await gateway.getRequests("sessions.usage")).length).toBe(3);
+      await gateway.rejectDeferred("sessions.usage", {
         code: "UNAVAILABLE",
         message: "QA cost temporarily unavailable",
       });
@@ -108,9 +105,7 @@ suite.define(() => {
       const failedRange = (await range.count()) ? await range.textContent() : null;
       const failedValue = (await value.count()) ? await value.textContent() : null;
       await page.screenshot({ path: path.join(artifacts, "failed-date.png"), fullPage: true });
-      if (await page.locator(".cost-window-analysis").count()) {
-        await page.locator(".cost-window-analysis").scrollIntoViewIfNeeded();
-      }
+      await page.locator(".usage-header").scrollIntoViewIfNeeded();
       await page.screenshot({ path: path.join(artifacts, "failed-summary.png") });
       await writeFile(
         path.join(artifacts, "observed.json"),
@@ -120,26 +115,23 @@ suite.define(() => {
             originalValue,
             failedRange,
             failedValue,
-            requests: await gateway.getRequests("usage.cost"),
+            requests: await gateway.getRequests("sessions.usage"),
           },
           null,
           2,
         ),
       );
-      if (failedValue && /\d/.test(failedValue)) {
-        expect.soft(failedRange?.trim()).toBe(originalRange);
-        expect.soft(failedValue.trim()).toBe(originalValue);
-      }
+      expect(failedRange).toBeNull();
+      expect(failedValue).toBeNull();
       expect(await page.locator(".usage-empty-state").count()).toBe(0);
 
       await gateway.setMethodResponse("sessions.usage", sessions("2026-07-01"));
-      await gateway.setMethodResponse("usage.cost", cost("2026-07-01"));
       await refresh.click();
       await expect.poll(() => value.textContent()).toMatch(/\$1\.00/);
       expect((await range.textContent())!.trim()).not.toBe(originalRange);
       expect(await page.locator(".usage-callout.danger").count()).toBe(0);
       await page.screenshot({ path: path.join(artifacts, "recovered.png"), fullPage: true });
-      await page.locator(".cost-window-analysis").scrollIntoViewIfNeeded();
+      await page.locator(".usage-header").scrollIntoViewIfNeeded();
       await page.screenshot({ path: path.join(artifacts, "recovered-summary.png") });
     } finally {
       await context.close();

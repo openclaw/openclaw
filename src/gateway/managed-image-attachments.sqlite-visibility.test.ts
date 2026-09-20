@@ -26,6 +26,7 @@ import {
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
+  OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
 } from "../state/openclaw-state-db.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import {
@@ -335,7 +336,9 @@ describe("managed attachment SQLite visibility", () => {
       seq: number;
       event_json: string;
     };
-    const writer = new DatabaseSync(database.path);
+    // Match runtime connection admission instead of failing immediately on an
+    // unrelated transient lock. The write still commits inside the read snapshot.
+    const writer = new DatabaseSync(database.path, { timeout: OPENCLAW_SQLITE_BUSY_TIMEOUT_MS });
     const parse = JSON.parse;
     let rewrote = false;
     const spy = vi.spyOn(JSON, "parse").mockImplementation((value, reviver) => {

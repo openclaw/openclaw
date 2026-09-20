@@ -548,6 +548,79 @@ describeBrowserLayout("app chrome interaction styles", () => {
     });
   });
 
+  it.each([
+    { label: "merged chat chrome", nativeClass: "", merged: true, search: "visible" },
+    { label: "topbar still shown", nativeClass: "", merged: false, search: "hidden" },
+    {
+      label: "native macOS",
+      nativeClass: "openclaw-native-macos",
+      merged: false,
+      search: "hidden",
+    },
+    { label: "native nav", nativeClass: "openclaw-native-nav", merged: false, search: "hidden" },
+    {
+      label: "native web chrome",
+      nativeClass: "openclaw-native-web-chrome",
+      merged: false,
+      search: "hidden",
+    },
+  ])(
+    "shows the mobile drawer command palette button only where nothing else carries it ($label)",
+    async ({ nativeClass, merged, search }) => {
+      await withBrowserPage(mobileContext.newPage(), async (page) => {
+        await page.setContent(`
+        <!doctype html>
+        <html class="${nativeClass}">
+          <head>
+            <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+            <style>${readUiCss()}</style>
+          </head>
+          <body>
+            <div class="shell shell--mobile-nav ${merged ? "shell--merged-chat-chrome" : ""}">
+              <div class="sidebar-brand">
+                <div class="sidebar-brand__actions">
+                  <button
+                    class="sidebar-brand__icon sidebar-brand__header-control sidebar-brand__desktop-control sidebar-brand__collapse"
+                  ></button>
+                  <button
+                    class="sidebar-brand__icon sidebar-brand__header-control sidebar-brand__desktop-control sidebar-brand__search"
+                  ></button>
+                </div>
+              </div>
+            </div>
+          </body>
+        </html>
+      `);
+
+        const display = await page.evaluate(() => {
+          const read = (selector: string) => {
+            const node = document.querySelector(selector);
+            if (!(node instanceof HTMLElement)) {
+              throw new Error(`Missing mobile drawer fixture ${selector}`);
+            }
+            return getComputedStyle(node).display;
+          };
+          return {
+            collapse: read(".sidebar-brand__collapse"),
+            search: read(".sidebar-brand__search"),
+          };
+        });
+
+        // The drawer has no collapsed state, so the collapse toggle always goes.
+        expect(display.collapse).toBe("none");
+        // Merged chat chrome hides the topbar, leaving the drawer as the only
+        // surface that can carry search. Everywhere else - including every native
+        // host, which never merges - the topbar keeps its own, so a drawer copy
+        // would put two on screen at once.
+        if (search === "visible") {
+          expect(display.search).not.toBe("none");
+        } else {
+          expect(display.search).toBe("none");
+        }
+      });
+    },
+  );
+
   it("scales mobile sidebar variants while preserving the coarse-pointer input floor", async () => {
     await withBrowserPage(mobileContext.newPage(), async (page) => {
       await page.setContent(`

@@ -307,7 +307,8 @@ export function listControlUiLinkReaders(
         !metadata ||
         !loaded.has(entry.pluginId) ||
         !readable(metadata.detailMethod, entry.pluginId) ||
-        (metadata.previewMethod && !readable(metadata.previewMethod, entry.pluginId))
+        (metadata.previewMethod && !readable(metadata.previewMethod, entry.pluginId)) ||
+        (metadata.imageMethod && !readable(metadata.imageMethod, entry.pluginId))
       ) {
         return [];
       }

@@ -79,6 +79,7 @@ export async function runInteractiveUpdateFailureAction(params: {
       const prepared = await prepareUpdateFailureReport(
         {
           attemptId: params.attemptId,
+          action: "cli",
           ...(params.error ? { error: params.error } : {}),
           result,
           recordedRun,

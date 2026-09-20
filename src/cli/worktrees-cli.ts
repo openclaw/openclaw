@@ -105,9 +105,9 @@ export function registerWorktreesCli(program: Command): void {
     .action(async (id: string, opts: JsonOption & { force?: boolean; ifLossless?: boolean }) => {
       if (opts.ifLossless) {
         const removed = await managedWorktrees.removeIfLossless(id);
-        const cleanup = managedWorktrees
-          .listRegistryRecords()
-          .find((record) => record.id === id)?.runEndCleanup;
+        const cleanup = (await managedWorktrees.listRegistryRecords()).find(
+          (record) => record.id === id,
+        )?.runEndCleanup;
         if (opts.json) {
           printJson({ removed, cleanup });
         } else {

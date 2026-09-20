@@ -67,6 +67,14 @@ suite.define(() => {
           await reference.waitFor();
           expect(await reference.count()).toBe(1);
           expect(await reference.textContent()).toBe(label);
+          expect(await reference.evaluate((node) => getComputedStyle(node).borderWidth)).toBe(
+            "0px",
+          );
+          expect(
+            await reference
+              .locator(".markdown-person-reference__prefix")
+              .evaluate((node) => node.getBoundingClientRect().width),
+          ).toBe(0);
           const avatar = reference.locator(".markdown-person-reference__avatar");
           await expect
             .poll(() =>
@@ -92,6 +100,11 @@ suite.define(() => {
           const avatarSize = await avatar.boundingBox();
           expect(avatarSize?.width).toBeGreaterThan(0);
           expect(avatarSize?.width).toBe(avatarSize?.height);
+          expect(avatarSize!.width).toBe(
+            await reference.evaluate(
+              (node) => Number.parseFloat(getComputedStyle(node).fontSize) + 2,
+            ),
+          );
           expect(avatarSize!.height).toBeLessThanOrEqual(
             await reference.evaluate((node) =>
               Number.parseFloat(getComputedStyle(node).lineHeight),

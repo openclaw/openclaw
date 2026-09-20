@@ -3,7 +3,7 @@ import { createServer, type ServerResponse } from "node:http";
 import { setTimeout as delay } from "node:timers/promises";
 import { expect, it } from "vitest";
 import type { ModelsListResult } from "../../../packages/gateway-protocol/src/schema/agents-models-skills.js";
-import { withTestTimeout } from "../../../test/helpers/promise.js";
+import { createDeferred, withTestTimeout } from "../../../test/helpers/promise.js";
 import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { disconnectGatewayClient, startGatewayWithClient } from "../test-helpers.e2e.js";
 import { waitForCatalogPublication } from "./models-auth-catalog.test-support.js";
@@ -33,7 +33,10 @@ it.for([
     const sibling = "z-failing-fixture";
     const providers = withSibling ? [provider, sibling] : [provider];
     let requests = 0;
-    let hold = false;
+    // The 1 ms inventory can expire during setup reads, so gate renewal before startup.
+    let hold = !initiallyEmpty;
+    const renewal = createDeferred();
+    let initialRequests = 0;
     let fail = false;
     let failSibling = false;
     const original = initiallyEmpty ? [] : ["original"];
@@ -50,9 +53,12 @@ it.for([
         return;
       }
       requests++;
-      endpoint.emit("primary-provider-request");
-      if (hold) {
+      if (requests === 1) {
+        initialRequests = requests;
+        reply(response);
+      } else if (hold) {
         held.push(response);
+        renewal.resolve();
       } else {
         reply(response);
       }
@@ -151,23 +157,24 @@ it.for([
         };
         const initial = await waitForCatalogPublication({
           signal,
-          start: () => list(true),
+          // Startup discovers nonempty inventory; forcing refresh would bypass TTL renewal.
+          start: initiallyEmpty ? () => list(true) : list,
           read: list,
           ready: (result) =>
-            initiallyEmpty
-              ? result.siblingModels.includes("sibling")
-              : result.models.some((row) => row.id === "original"),
+            (initiallyEmpty
+              ? !result.pendingProviders?.includes(provider)
+              : result.models.some((row) => row.id === "original")) &&
+            (!withSibling || result.siblingModels.includes("sibling")),
         });
         expect(initial.models.map((row) => row.id)).toEqual(original);
-        const initialRequests = requests;
         advertised = [...original, "newly-published"];
         if (initiallyEmpty) {
+          initialRequests = requests;
           expect((await list()).models).toEqual([]);
           expect(requests).toBe(initialRequests);
           await delay(1_100);
         }
         hold = true;
-        const renewal = once(endpoint, "primary-provider-request");
         const saved = await withTestTimeout(
           list(),
           1_000,
@@ -175,7 +182,11 @@ it.for([
         );
         expect(saved.models.map((row) => row.id)).toEqual(original);
         expect(saved.siblingModels).toEqual(withSibling ? ["sibling"] : []);
-        await withTestTimeout(renewal, 3_000, "models.list did not refresh the expired provider");
+        await withTestTimeout(
+          renewal.promise,
+          3_000,
+          "models.list did not refresh the expired provider",
+        );
         const concurrent = await withTestTimeout(
           Promise.all([list(), list()]),
           1_000,

@@ -1,7 +1,14 @@
 import fs from "node:fs";
 import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { captureClawInstallSchemaVersionFacts } from "../claws/provenance-runtime-read.js";
+import "../claws/tool-policy-runtime.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import * as sqliteSnapshots from "../infra/sqlite-snapshot-source.js";
+import {
+  closeOpenClawStateDatabaseByPathAsync,
+  openOpenClawStateDatabase,
+} from "../state/openclaw-state-db.js";
 import {
   registerResolvedAgentDir,
   resolveRegisteredAgentIdForDir,
@@ -32,6 +39,54 @@ const { makeTempDir, retireAfterTest } = usePreparedCatalogWorkerFixtures();
 describe("catalog request existing directory ownership", () => {
   beforeEach(() => {
     vi.stubEnv("CODEX_HOME", makeTempDir("openclaw-directory-request-empty-codex-"));
+  });
+
+  it("serves repeated catalog requests from prepared provenance without copying shared state", async () => {
+    const fixture = createCatalogFixture(makeTempDir, 0);
+    for (const name of [
+      "OPENCLAW_DISABLE_BUNDLED_PLUGINS",
+      "OPENCLAW_STATE_DIR",
+      "OPENCLAW_WORKER_CATALOG_MARKER",
+      EXTERNAL_AUTH_PATH_ENV,
+      REF_ONLY_API_ENV,
+      REF_ONLY_TOKEN_ENV,
+    ] as const) {
+      vi.stubEnv(name, fixture.env[name]);
+    }
+    const prepared = await prepareWorkspaceBuildGroup(
+      [{ agentId: "main", agentDir: fixture.agentDir, config: fixture.config, env: fixture.env }],
+      "static",
+    );
+    retireAfterTest(retainPreparedPluginGeneration(prepared.pluginGeneration));
+    const value = createPreparedModelCatalogWorkerInput({
+      agentFacts: prepared.agentFacts[0]!,
+      pluginMetadataSnapshot: prepared.pluginGeneration.pluginMetadataSnapshot,
+    });
+    const database = openOpenClawStateDatabase({ env: fixture.env });
+    const clawInstallSchemaVersions = captureClawInstallSchemaVersionFacts({ env: fixture.env });
+    await closeOpenClawStateDatabaseByPathAsync(database.path);
+    const copy = vi.spyOn(sqliteSnapshots, "prepareSqliteReadOnlyLocationSync");
+    try {
+      for (let tick = 0; tick < 3; tick++) {
+        const result = await runPreparedModelCatalogWorkerRequest(
+          structuredClone(value),
+          structuredClone({ kind: "catalog", syntheticAuth: [], clawInstallSchemaVersions }),
+        );
+        expect(result).toMatchObject({
+          status: "ok",
+          kind: "catalog",
+          snapshot: {
+            entries: expect.arrayContaining([
+              expect.objectContaining({ provider: PROVIDER_ID, id: "plugin-generation-v1" }),
+            ]),
+          },
+        });
+      }
+      expect(copy).not.toHaveBeenCalled();
+    } finally {
+      copy.mockRestore();
+      await closeOpenClawStateDatabaseByPathAsync(database.path);
+    }
   });
 
   it.each([
@@ -93,6 +148,7 @@ describe("catalog request existing directory ownership", () => {
     const result = await runPreparedModelCatalogWorkerRequest(value, {
       kind: "catalog",
       syntheticAuth: [],
+      clawInstallSchemaVersions: captureClawInstallSchemaVersionFacts({ env: fixture.env }),
     });
     if (conflict) {
       expect(result).toEqual({

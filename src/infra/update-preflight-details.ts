@@ -1,5 +1,3 @@
-import type { UpdateFailureFact } from "./update-failure-facts.js";
-
 // Public descriptions are fixed text: registry responses and local paths stay local.
 export const UPDATE_PREFLIGHT_DETAILS = {
   "installation-unclassified":
@@ -25,7 +23,7 @@ export function updatePreflightDetailMessage(code: string): string | undefined {
 export function createUpdatePreflightFailure(
   code: keyof typeof UPDATE_PREFLIGHT_DETAILS,
   detail?: string,
-): { message: string; failureFacts: UpdateFailureFact[] } {
+) {
   const message = UPDATE_PREFLIGHT_DETAILS[code];
   return {
     message: detail ? `${message}\n${detail}` : message,

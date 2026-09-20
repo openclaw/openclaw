@@ -171,7 +171,7 @@ suite.define(() => {
     const operationLabel = currentPage.locator(".chat-work-group .chat-activity-group__label");
     const elapsedLabel = currentPage.locator(".chat-work-group .chat-activity-group__duration");
     await elapsedLabel.waitFor();
-    await expect.poll(() => operationLabel.textContent()).toBe("Bash");
+    await expect.poll(() => operationLabel.textContent()).toBe("1 command");
     expect.soft(await elapsedLabel.textContent()).toBe("13s");
     expect(await currentPage.getByRole("button", { name: "Stop generating" }).count()).toBe(0);
 
@@ -179,7 +179,7 @@ suite.define(() => {
     await gateway.waitForRequest("chat.startup");
     await replyBody.waitFor();
     await elapsedLabel.waitFor();
-    expect(await operationLabel.textContent()).toBe("Bash");
+    expect(await operationLabel.textContent()).toBe("1 command");
     expect(await elapsedLabel.textContent()).toBe("13s");
     expect(await currentPage.locator(".chat-group.user").count()).toBe(2);
   });

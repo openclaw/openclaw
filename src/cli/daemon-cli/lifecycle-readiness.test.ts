@@ -159,9 +159,14 @@ describe("Gateway service readiness", () => {
     },
   );
 
-  it.each([true, false])(
-    "reports a progressing Gateway at the cap without declaring failure (json=%s)",
-    async (json) => {
+  it.each([
+    { json: true, updateMarker: undefined, code: 2, result: "still-starting" },
+    { json: false, updateMarker: undefined, code: 2, result: "still-starting" },
+    { json: true, updateMarker: "1", code: 1, result: "restart-health-failed" },
+  ])(
+    "reports progressing startup with the caller's response contract (json=$json, update=$updateMarker)",
+    async ({ json, updateMarker, code: expectedExitCode, result }) => {
+      vi.stubEnv("OPENCLAW_UPDATE_IN_PROGRESS", updateMarker);
       const { defaultRuntime } = await import("../../runtime.js");
       const { createDaemonActionContext } = await import("./response.js");
       const writeJson = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
@@ -188,15 +193,15 @@ describe("Gateway service readiness", () => {
         startupPhase: "startup migration",
       });
 
-      await expect(runDaemonRestart({ json })).rejects.toThrow("exit 2");
+      await expect(runDaemonRestart({ json })).rejects.toThrow(`exit ${expectedExitCode}`);
 
-      expect(exit).toHaveBeenCalledExactlyOnceWith(2);
+      expect(exit).toHaveBeenCalledExactlyOnceWith(expectedExitCode);
       if (json) {
         expect(writeJson).toHaveBeenCalledExactlyOnceWith(
           expect.objectContaining({
             ok: false,
             action: "restart",
-            result: "still-starting",
+            result,
             error: expect.stringMatching(
               /still starting after 300s.*startup migration.*openclaw gateway status --deep/,
             ),

@@ -69,7 +69,7 @@ describe("worker allocation cleanup", () => {
         });
       let service = createService();
       const creation = service
-        .create("development", "confirmed-node-cleanup")
+        .createWithRequest({ profileId: "development", idempotencyKey: "confirmed-node-cleanup" })
         .catch((error: unknown) => error);
       try {
         await Promise.race([
@@ -130,7 +130,12 @@ describe("worker allocation cleanup", () => {
       const destroy = vi.fn(async () => {});
       const provider = support.createProvider({ provision, destroy });
       let service = support.createService(provider);
-      await expect(service.create("development", "confirmed-cleanup")).rejects.toMatchObject({
+      await expect(
+        service.createWithRequest({
+          profileId: "development",
+          idempotencyKey: "confirmed-cleanup",
+        }),
+      ).rejects.toMatchObject({
         code: "provider_failure",
         message: expect.stringContaining(
           replay ? "allocation response lost" : primaryError.message,
@@ -198,7 +203,9 @@ describe("worker allocation cleanup", () => {
       destroy,
     });
     const service = support.createService(provider);
-    await expect(service.create("development", "invalid-allocation")).rejects.toMatchObject({
+    await expect(
+      service.createWithRequest({ profileId: "development", idempotencyKey: "invalid-allocation" }),
+    ).rejects.toMatchObject({
       code: "provider_failure",
     });
     const pending = expectDefined(support.testState.store.list()[0], "invalid allocation intent");
@@ -244,7 +251,12 @@ describe("worker allocation cleanup", () => {
         resolveAllocation,
       };
       let service = support.createService(provider);
-      await expect(service.create("development", "preflight-cleanup")).rejects.toMatchObject({
+      await expect(
+        service.createWithRequest({
+          profileId: "development",
+          idempotencyKey: "preflight-cleanup",
+        }),
+      ).rejects.toMatchObject({
         code: "provider_failure",
       });
       const pending = expectDefined(support.testState.store.list()[0], "failed preflight intent");
@@ -320,7 +332,9 @@ describe("worker allocation cleanup", () => {
         );
       const provider = support.createProvider({ provision, resolveAllocation, destroy });
       const first = support.createService(provider);
-      await expect(first.create("development", "lost-allocation")).rejects.toMatchObject({
+      await expect(
+        first.createWithRequest({ profileId: "development", idempotencyKey: "lost-allocation" }),
+      ).rejects.toMatchObject({
         code: "provider_failure",
       });
       const pending = expectDefined(support.testState.store.list()[0], "unreported allocation");
@@ -388,7 +402,9 @@ describe("worker allocation cleanup", () => {
           resolveProvisionTimeoutMs: () => 20,
         }),
       );
-      await expect(service.create("development", "owner-race")).rejects.toMatchObject({
+      await expect(
+        service.createWithRequest({ profileId: "development", idempotencyKey: "owner-race" }),
+      ).rejects.toMatchObject({
         code: "provider_failure",
       });
       const pending = expectDefined(support.testState.store.list()[0], "pending owner");
@@ -444,7 +460,9 @@ describe("worker allocation cleanup", () => {
         providerCallTimeoutMs: 20,
       },
     );
-    await expect(service.create("development", "resolution-timeout")).rejects.toMatchObject({
+    await expect(
+      service.createWithRequest({ profileId: "development", idempotencyKey: "resolution-timeout" }),
+    ).rejects.toMatchObject({
       code: "provider_failure",
     });
     const pending = expectDefined(support.testState.store.list()[0], "pending resolution");

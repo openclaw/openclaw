@@ -808,9 +808,9 @@ fs.readFileSync = function(file, ...args) {
     expect(events.some((event) => event.kind === "continuation-membership")).toBe(true);
     expect(events.filter((event) => event.kind === "fixer")).toHaveLength(admitted ? 1 : 0);
     if (!admitted) {
-      expect(await boundary.log()).toContain(
-        "automatic triage executor is outside its native scope",
-      );
+      // Native cleanup can terminate the rejected process before its error is flushed.
+      expect(events.some((event) => event.kind === "scope-stopped")).toBe(true);
+      expect(events.filter((event) => event.kind === "branch")).toEqual([]);
     }
   },
 );

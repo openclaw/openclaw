@@ -254,6 +254,16 @@ The heartbeat proves ownership, not migration progress. A live but stuck mainten
 
 `SQLite read-only worker` failures append `code` and numeric SQLite `errcode` diagnostics when the underlying error supplies valid values, including through a bounded cause chain. Report the full code suffix when investigating a failure. Snapshot and integrity-child timeout errors include the applied budget and source file size; snapshot timeouts report an unknown size if the source stat failed. Integrity-child timeouts also retain `lastObservedPhase`. A generic `disk I/O error` or `SQLITE_IOERR` alone does not prove the disk is full.
 
+### Database paths cannot be compared
+
+`Cannot determine whether database paths alias` means OpenClaw could not safely
+compare paths that do not yet exist. Check permission to create and remove entries
+under the nearest existing parent directory, then retry. Comparisons use bounded
+filesystem probes: each missing suffix permits up to 8,192 UTF-16 code units, with
+at most 32,768 forward filesystem observations. Simplify unusually long paths if
+those limits are exceeded. Incomplete probe cleanup never becomes a cached
+path-identity result.
+
 ### A legacy Workshop index prevents shared-state reads
 
 The `legacy-workshop-review-index` error requires `openclaw doctor --fix`.

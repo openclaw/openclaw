@@ -7,8 +7,13 @@ import type { Generated } from "kysely";
 import { clearNodeSqliteKyselyCacheForDatabase } from "./kysely-sync-cache-state.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "./kysely-sync.js";
 import { openNodeSqliteDatabase, resolveExistingSqliteFileUri } from "./node-sqlite.js";
+import { captureSqliteReaderOwner, type SqliteReaderOwner } from "./sqlite-reader-lifecycle.js";
 import { runSqliteImmediateTransactionSync } from "./sqlite-transaction.js";
-import type { SqliteWorkerBackend } from "./sqlite-worker-contract.js";
+import {
+  SQLITE_WORKER_PREPARE_COMMAND,
+  type SqliteWorkerPreparedBackend,
+} from "./sqlite-worker-contract.js";
+import { requestSqliteWorkerOperationAdmission } from "./sqlite-worker-operation-admission.js";
 
 let pendingCloses = 0;
 type ReplyOwnership = { kind: string; before: number; after: number };
@@ -39,9 +44,18 @@ if (parentPort) {
 export type FixtureOpenInput =
   | { type: "link"; existingPath: string }
   | { type: "observe"; markerPath: string }
+  | { type: "prepare"; markerPath: string; gatePath: string; reject?: boolean; guarded?: boolean }
   | { type: "replace"; backupPath: string; replacementPath?: string };
 
-type Receipt = { actor: string; writes: number; threadId: number };
+type Receipt = {
+  actor: string;
+  writes: number;
+  threadId: number;
+  readerOwnership?: {
+    preparation: (SqliteReaderOwner | undefined)[];
+    execution: SqliteReaderOwner | undefined;
+  };
+};
 export type FixtureOperations = {
   append: { input: { value: string }; output: Receipt };
   read: { input: undefined; output: string[] };
@@ -75,14 +89,14 @@ function waitForFile(file: string): Promise<void> {
 export function createSqliteWorkerBackend(
   input: FixtureOpenInput | undefined,
   context: { databasePath: string },
-): SqliteWorkerBackend<FixtureOperations> {
+): SqliteWorkerPreparedBackend<FixtureOperations> {
   return createFixtureBackend(input, context.databasePath, false);
 }
 
 export function openExistingSqliteWorkerBackend(
   input: FixtureOpenInput | undefined,
   context: { databasePath: string },
-): SqliteWorkerBackend<FixtureOperations> {
+): SqliteWorkerPreparedBackend<FixtureOperations> {
   return createFixtureBackend(input, context.databasePath, true);
 }
 
@@ -90,7 +104,7 @@ function createFixtureBackend(
   input: FixtureOpenInput | undefined,
   databasePath: string,
   existingOnly: boolean,
-): SqliteWorkerBackend<FixtureOperations> {
+): SqliteWorkerPreparedBackend<FixtureOperations> {
   if (input?.type === "link") {
     linkSync(input.existingPath, databasePath);
   } else if (input?.type === "observe") {
@@ -110,14 +124,34 @@ function createFixtureBackend(
   const query = getNodeSqliteKysely<{ entries: { id: Generated<number>; value: string } }>(db);
   const actor = randomUUID();
   let writes = 0;
+  let prepared = false;
+  const preparationOwners: (SqliteReaderOwner | undefined)[] = [];
   let failClose = false;
   let delayedClose: { markerPath: string; reject: boolean } | undefined;
   function append(value: string): Receipt {
     runSqliteImmediateTransactionSync(db, () => {
+      if (input?.type === "prepare" && input.guarded) {
+        requestSqliteWorkerOperationAdmission({ stage: "transaction", facts: undefined });
+      }
       executeSqliteQuerySync(db, query.insertInto("entries").values({ value }));
+      if (input?.type === "prepare" && input.guarded) {
+        requestSqliteWorkerOperationAdmission({ stage: "commit", facts: undefined });
+      }
     });
     writes += 1;
-    return { actor, writes, threadId };
+    return {
+      actor,
+      writes,
+      threadId,
+      ...(input?.type === "prepare"
+        ? {
+            readerOwnership: {
+              preparation: [...preparationOwners],
+              execution: captureSqliteReaderOwner(),
+            },
+          }
+        : {}),
+    };
   }
   function closeNative(): void {
     clearNodeSqliteKyselyCacheForDatabase(db);
@@ -127,6 +161,21 @@ function createFixtureBackend(
     }
   }
   return {
+    [SQLITE_WORKER_PREPARE_COMMAND](commandType) {
+      if (input?.type !== "prepare" || commandType !== "append" || prepared) {
+        return undefined;
+      }
+      preparationOwners.push(captureSqliteReaderOwner());
+      const waiting = waitForFile(input.gatePath);
+      writeFileSync(input.markerPath, "preparing");
+      return waiting.then(() => {
+        preparationOwners.push(captureSqliteReaderOwner());
+        if (input.reject) {
+          throw new Error("Fixture code preparation failed");
+        }
+        prepared = true;
+      });
+    },
     execute(command) {
       if (command.type === "takeReplyOwnership") {
         return replyOwnership.splice(0);

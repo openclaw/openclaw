@@ -61,6 +61,7 @@ function createOpenAiAudioCfg(extra?: Partial<OpenClawConfig>): OpenClawConfig {
 async function runAutoAudioCase(params: {
   transcribeAudio: (req: AudioTranscriptionRequest) => Promise<{ text: string; model: string }>;
   cfgExtra?: Partial<OpenClawConfig>;
+  request?: Parameters<typeof runCapability>[0]["request"];
 }) {
   let runResult: Awaited<ReturnType<typeof runCapability>> | undefined;
   await withAudioFixture("openclaw-auto-audio", async ({ ctx, media, cache }) => {
@@ -73,6 +74,7 @@ async function runAutoAudioCase(params: {
       attachments: cache,
       media,
       providerRegistry,
+      request: params.request,
     });
   });
   if (!runResult) {
@@ -673,6 +675,7 @@ describe("runCapability auto audio entries", () => {
         seenPrompt = req.prompt;
         return { text: "ok", model: req.model ?? "unknown" };
       },
+      request: { prompt: "Focus on names", language: "en" },
       cfgExtra: {
         tools: {
           media: {
@@ -689,12 +692,10 @@ describe("runCapability auto audio entries", () => {
               enabled: true,
               prompt: "configured prompt",
               language: "fr",
-              _requestPromptOverride: "Focus on names",
-              _requestLanguageOverride: "en",
             },
           },
         },
-      } as Partial<OpenClawConfig>,
+      },
     });
 
     expect(expectDefined(result.outputs[0], "media output 0").text).toBe("ok");

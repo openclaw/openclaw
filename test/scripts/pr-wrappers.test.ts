@@ -812,7 +812,7 @@ describe("scripts/pr wrappers", () => {
     const fixture = makeMismatchedWrapperRepo({ toolingOnly: true });
     const tooling = join(fixture.root, "tooling");
     const origin = fixture.git(fixture.canonical, ["remote", "get-url", "origin"]).stdout.trim();
-    fixture.git(fixture.root, ["clone", "--quiet", origin, tooling]);
+    fixture.git(fixture.root, ["clone", "--no-local", "--quiet", origin, tooling]);
     writeFileSync(join(tooling, ".git/info/exclude"), "node_modules/\n");
     linkPrWrapperDependencies(tooling);
     const stale = join(fixture.root, "stale-tsx");
@@ -2112,7 +2112,7 @@ const args = process.argv.slice(2);
 fs.appendFileSync(${JSON.stringify(calls)}, JSON.stringify(args) + "\\n");
 if (args[0] === "api" && args[1] === "rate_limit") {
   console.log(JSON.stringify({ resources: {
-    graphql: { remaining: 0, limit: 5000, reset: 1893456000 },
+    graphql: { remaining: 5000, limit: 5000, reset: 1893459600 },
     core: { remaining: 4999, limit: 5000, reset: 1893459600 },
   } }));
   process.exit(0);
@@ -2158,8 +2158,14 @@ process.exit(${scenario.code});
     expect(result.stdout + result.stderr).not.toMatch(/synthetic-private-detail|UNEXPECTED_ROUTE/);
     if (quotaIntercepted) {
       expect(result.stderr).toContain("GitHub API request failed (resource=graphql)");
-      expect(result.stderr).toContain("graphql 0/5000 reset=2030-01-01T00:00:00Z");
-      expect(result.stderr).toContain("core 4999/5000 reset=2030-01-01T01:00:00Z");
+      expect(result.stderr).toContain(`original response: HTTP ${scenario.status}`);
+      expect(result.stderr).not.toContain("Supplemental quota probe");
+      for (const detail of scenario.details ?? []) {
+        expect(result.stderr).toContain(detail);
+      }
+      for (const detail of scenario.absent ?? []) {
+        expect(result.stderr).not.toContain(detail);
+      }
     } else if (scenario.diagnostic) {
       expect(result.stderr).toContain(`GitHub API preflight ${scenario.diagnostic}`);
       for (const detail of scenario.details ?? []) {
@@ -2187,10 +2193,7 @@ process.exit(${scenario.code});
         .trim()
         .split("\n")
         .map((line) => JSON.parse(line)),
-    ).toEqual([
-      ["api", "graphql", "-f", "query=query { viewer { login } }", "--include"],
-      ...(quotaIntercepted ? [["api", "rate_limit"]] : []),
-    ]);
+    ).toEqual([["api", "graphql", "-f", "query=query { viewer { login } }", "--include"]]);
   });
 
   it.each(["default", "override"])(

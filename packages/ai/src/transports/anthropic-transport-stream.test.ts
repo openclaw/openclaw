@@ -324,6 +324,18 @@ function makeAnthropicTransportModel(
   );
 }
 
+function makeAnthropicToolUseMessage(content: AssistantMessage["content"]) {
+  return {
+    role: "assistant",
+    provider: "anthropic",
+    api: "anthropic-messages",
+    model: "claude-sonnet-4-6",
+    stopReason: "toolUse",
+    timestamp: 0,
+    content,
+  };
+}
+
 function makeSonnet5PrefillContext(): AnthropicStreamContext {
   return {
     messages: [
@@ -3492,15 +3504,9 @@ describe("anthropic transport stream", () => {
       makeAnthropicTransportModel(),
       {
         messages: [
-          {
-            role: "assistant",
-            provider: "anthropic",
-            api: "anthropic-messages",
-            model: "claude-sonnet-4-6",
-            stopReason: "toolUse",
-            timestamp: 0,
-            content: [{ type: "toolCall", id: "tool_1", name: "quiet", arguments: {} }],
-          },
+          makeAnthropicToolUseMessage([
+            { type: "toolCall", id: "tool_1", name: "quiet", arguments: {} },
+          ]),
           {
             role: "toolResult",
             toolCallId: "tool_1",
@@ -3528,15 +3534,9 @@ describe("anthropic transport stream", () => {
       makeAnthropicTransportModel({ input: ["text", "image"] }),
       {
         messages: [
-          {
-            role: "assistant",
-            provider: "anthropic",
-            api: "anthropic-messages",
-            model: "claude-sonnet-4-6",
-            stopReason: "toolUse",
-            timestamp: 0,
-            content: [{ type: "toolCall", id: "tool_husk", name: "screenshot", arguments: {} }],
-          },
+          makeAnthropicToolUseMessage([
+            { type: "toolCall", id: "tool_husk", name: "screenshot", arguments: {} },
+          ]),
           {
             role: "toolResult",
             toolCallId: "tool_husk",
@@ -3566,15 +3566,9 @@ describe("anthropic transport stream", () => {
       makeAnthropicTransportModel({ id: "claude-sonnet-4-6", input: ["text", "image"] }),
       {
         messages: [
-          {
-            role: "assistant",
-            provider: "anthropic",
-            api: "anthropic-messages",
-            model: "claude-sonnet-4-6",
-            stopReason: "toolUse",
-            timestamp: 0,
-            content: [{ type: "toolCall", id: "tool_1", name: "screenshot", arguments: {} }],
-          },
+          makeAnthropicToolUseMessage([
+            { type: "toolCall", id: "tool_1", name: "screenshot", arguments: {} },
+          ]),
           {
             role: "toolResult",
             toolCallId: "tool_1",
@@ -3711,15 +3705,9 @@ describe("anthropic transport stream", () => {
       makeAnthropicTransportModel({ id: "claude-sonnet-4-6" }),
       {
         messages: [
-          {
-            role: "assistant",
-            provider: "anthropic",
-            api: "anthropic-messages",
-            model: "claude-sonnet-4-6",
-            stopReason: "toolUse",
-            timestamp: 0,
-            content: [{ type: "toolCall", id: "tool_1", name: "fetch", arguments: {} }],
-          },
+          makeAnthropicToolUseMessage([
+            { type: "toolCall", id: "tool_1", name: "fetch", arguments: {} },
+          ]),
           {
             role: "toolResult",
             toolCallId: "tool_1",
@@ -3761,15 +3749,9 @@ describe("anthropic transport stream", () => {
       makeAnthropicTransportModel({ id: "claude-sonnet-4-6", input: ["text", "image"] }),
       {
         messages: [
-          {
-            role: "assistant",
-            provider: "anthropic",
-            api: "anthropic-messages",
-            model: "claude-sonnet-4-6",
-            stopReason: "toolUse",
-            timestamp: 0,
-            content: [{ type: "toolCall", id: "tool_1", name: "screenshot", arguments: {} }],
-          },
+          makeAnthropicToolUseMessage([
+            { type: "toolCall", id: "tool_1", name: "screenshot", arguments: {} },
+          ]),
           {
             role: "toolResult",
             toolCallId: "tool_1",
@@ -3823,15 +3805,9 @@ describe("anthropic transport stream", () => {
       model,
       {
         messages: [
-          {
-            role: "assistant",
-            provider: "anthropic",
-            api: "anthropic-messages",
-            model: "claude-sonnet-4-6",
-            stopReason: "toolUse",
-            timestamp: 0,
-            content: [{ type: "toolCall", id: "tool_1", name: "screenshot", arguments: {} }],
-          },
+          makeAnthropicToolUseMessage([
+            { type: "toolCall", id: "tool_1", name: "screenshot", arguments: {} },
+          ]),
           {
             role: "toolResult",
             toolCallId: "tool_1",

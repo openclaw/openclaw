@@ -14,7 +14,6 @@ import {
   resolveProfileAppearanceProfileId,
   resolveProfileAppearancePrefs,
   resolveProfilePreferenceScope,
-  writeProfileAppearancePrefs,
 } from "./server-prefs-profile.ts";
 import {
   extractServerUiPrefs,
@@ -43,6 +42,7 @@ import {
 } from "./server-prefs-storage.ts";
 import { loadSettings, patchSettings, type UiSettings } from "./settings.ts";
 import type { ThemeName } from "./theme.ts";
+import { invalidateUserPreferences } from "./user-prefs-cache.ts";
 
 type ServerUiPrefsWriter = Pick<RuntimeConfigCapability, "canPatch" | "runExternalMutation"> & {
   readonly state: {
@@ -511,7 +511,10 @@ async function drainPendingPrefs(writer: ServerUiPrefsWriter, epoch: number): Pr
     const localOnlyKeys = SYNCED_PREF_KEYS.filter(
       (key) =>
         pendingPrefs?.[key] !== undefined &&
-        SYNCED_PREFS[key].configSync === false &&
+        (SYNCED_PREFS[key].configSync === false ||
+          (key === "theme" &&
+            typeof pendingPrefs.theme === "string" &&
+            pendingPrefs.theme.includes("/"))) &&
         !(pushProfileId && pushCanWrite),
     );
     if (localOnlyKeys.length) {
@@ -547,11 +550,21 @@ async function drainPendingPrefs(writer: ServerUiPrefsWriter, epoch: number): Pr
       if (pushWriter !== writer || pushEpoch !== epoch) {
         return;
       }
+      if (useProfile && writer.state.client) {
+        invalidateUserPreferences(writer.state.client);
+      }
       const result = useProfile
-        ? await writeProfileAppearancePrefs(
-            writer.state.client,
-            batch,
-            writer.state.connected && pushCanWrite && batchIsCurrent(batch),
+        ? await import("./server-prefs-profile-runtime.ts").then(
+            ({ writeProfileAppearancePrefs }) =>
+              writeProfileAppearancePrefs(
+                writer.state.client,
+                batch,
+                pushWriter === writer &&
+                  pushEpoch === epoch &&
+                  writer.state.connected &&
+                  pushCanWrite &&
+                  batchIsCurrent(batch),
+              ),
           )
         : await writer.runExternalMutation(
             (client) =>

@@ -32,7 +32,6 @@ import {
   claimOpenClawAgentDatabaseLease,
   releaseOpenClawAgentDatabaseLease,
 } from "./openclaw-agent-db-lease.js";
-import { withFreshOpenClawAgentDatabaseReadOnly } from "./openclaw-agent-db-readonly-open.js";
 import { withOpenClawAgentDatabaseReadOnly } from "./openclaw-agent-db-readonly.js";
 import {
   createOpenClawAgentDatabasePathMatcher,
@@ -1241,41 +1240,6 @@ describe("openclaw agent database", () => {
       expect(admitted).toBe(false);
     },
   );
-
-  it.each([false, true])("preserves missing-table adaptation (fresh-only: %s)", (freshOnly) => {
-    const stateDir = createTempStateDir();
-    const options = {
-      agentId: "worker-1",
-      env: { OPENCLAW_STATE_DIR: stateDir },
-    };
-    const databasePath = materializeCurrentWorkerAgentDatabase(stateDir);
-    const owner = openOpenClawAgentDatabase(options);
-    owner.db.exec("DROP TABLE session_nodes;");
-    let readDb: DatabaseSync | undefined;
-    const readOnly = freshOnly
-      ? withFreshOpenClawAgentDatabaseReadOnly
-      : withOpenClawAgentDatabaseReadOnly;
-    const read = (throwOnMissingTable = false) =>
-      readOnly(
-        ({ db }) => {
-          readDb = db;
-          return db.prepare("SELECT * FROM session_nodes").all();
-        },
-        options,
-        { throwOnMissingTable },
-      );
-
-    expect(read()).toEqual({ found: false, reason: "table-missing" });
-    expect(() => read(true)).toThrow(/no such table: session_nodes/);
-    expect(readDb === owner.db).toBe(!freshOnly);
-    expect(readDb?.isOpen).toBe(!freshOnly);
-    expect(owner.db.isOpen).toBe(true);
-    expect(closeOpenClawAgentDatabaseByPath(databasePath)).toBe(true);
-    expect(read()).toEqual({ found: false, reason: "table-missing" });
-    expect(readDb?.isOpen).toBe(false);
-    expect(() => read(true)).toThrow(/no such table: session_nodes/);
-    expect(readDb?.isOpen).toBe(false);
-  });
 
   it("reads committed rows without joining or closing the owner's transaction", () => {
     const stateDir = createTempStateDir();

@@ -3,6 +3,7 @@ import { afterAll, expect, test, vi } from "vitest";
 import type { TasksListResult } from "../../../../packages/gateway-protocol/src/index.js";
 import { loadSessionEntry } from "../../../config/sessions/session-accessor.js";
 import * as sessionAccessor from "../../../config/sessions/session-accessor.js";
+import * as agentDatabaseReadOnly from "../../../state/openclaw-agent-db-readonly.js";
 import { listTaskRecordsUnsorted } from "../../../tasks/task-registry.js";
 import { configureTaskRegistryRuntime } from "../../../tasks/task-registry.store.js";
 import type { TaskRecord } from "../../../tasks/task-registry.types.js";
@@ -219,5 +220,39 @@ test("preserves task pagination during metadata patches but invalidates new requ
     } finally {
       failingRead.mockRestore();
     }
+
+    for (const reason of ["database-missing", "schema-missing"] as const) {
+      const unavailableStore = vi
+        .spyOn(agentDatabaseReadOnly, "withOpenClawAgentDatabaseReadOnly")
+        .mockReturnValue({ found: false, reason });
+      try {
+        const unavailable = await sendRpc<TasksListResult>(
+          viewer,
+          `tasks-${reason}`,
+          "tasks.list",
+          pageParams,
+        );
+        if (reason === "database-missing") {
+          expect(unavailable).toMatchObject({ ok: true, payload: { tasks: [] } });
+        } else {
+          expect(unavailable.payload).toBeUndefined();
+          expect(unavailable).toMatchObject({
+            ok: false,
+            error: { code: "UNAVAILABLE", message: expect.stringContaining(reason) },
+          });
+        }
+        expect(unavailableStore).toHaveBeenCalled();
+      } finally {
+        unavailableStore.mockRestore();
+      }
+    }
+    const recovered = await sendRpc<TasksListResult>(
+      viewer,
+      "tasks-store-recovered",
+      "tasks.list",
+      pageParams,
+    );
+    expect(recovered.ok, JSON.stringify(recovered.error)).toBe(true);
+    expect(recovered.payload?.tasks).toHaveLength(25);
   });
 }, 60_000);

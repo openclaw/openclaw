@@ -6,7 +6,6 @@ import type {
   SessionsCatalogListResult,
 } from "../../../packages/gateway-protocol/src/index.ts";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
-import type { RouteId } from "../app-route-paths.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import { isGatewayMethodAdvertised } from "../lib/gateway-methods.ts";
 import {
@@ -43,7 +42,7 @@ export interface SessionDataControllerHost extends ReactiveControllerHost {
   readonly connected: boolean;
   readonly activeRouteId?: string;
   getRouteSessionKey(): string;
-  readonly sessionDataContext: ApplicationContext<RouteId> | undefined;
+  readonly sessionDataContext: ApplicationContext | undefined;
   dismissTransientMenus(): boolean;
   expandedAgentId(): string;
   promoteCreatedSession(sessionKey: string): void;
@@ -55,7 +54,7 @@ export interface SessionDataControllerHost extends ReactiveControllerHost {
 }
 
 export interface SessionCatalogDataOwner {
-  readonly context: ApplicationContext<RouteId> | undefined;
+  readonly context: ApplicationContext | undefined;
   readonly isSessionDataHostConnected: boolean;
   readonly sessionDataHostConnected: boolean;
   sessionCatalogs: SessionCatalog[];

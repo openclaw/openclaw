@@ -329,6 +329,8 @@ export const SETTINGS_SEARCH_TARGETS = {
     searchKeys: [
       "configView.chatPrefs.messageWidth",
       "configView.chatPrefs.messageWidthHint",
+      "configView.chatPrefs.showTaskProgress",
+      "configView.chatPrefs.showTaskProgressHint",
       "configView.chatPrefs.collapseTaskProgress",
       "configView.chatPrefs.collapseTaskProgressHint",
       "chat.sendShortcut",
@@ -339,7 +341,6 @@ export const SETTINGS_SEARCH_TARGETS = {
       "chat.followUpModeQueue",
       "chat.followUpModeServer",
       "chat.followUpModeLoading",
-      "chat.followUpModeUsingServer",
       "chat.followUpModeOverriding",
       "chat.followUpModeReset",
       "chat.catalogOpenTarget",

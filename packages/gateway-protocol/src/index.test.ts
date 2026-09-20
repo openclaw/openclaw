@@ -24,7 +24,6 @@ import {
   validateSessionsPatchManyParams,
   validateSessionsPatchParams,
   validateSessionsSendParams,
-  validateSessionsUsageParams,
   validateTalkConfigResult,
   validateTalkClientCreateParams,
   validateTalkClientCreateResult,
@@ -415,17 +414,6 @@ describe("lazy protocol validators", () => {
       { agentId: "work", view: "configured" },
       { sessionKey: "" },
       { sessionKey: "agent:work:main", authProfileId: "test:locked" },
-    ]);
-  });
-
-  it("accepts an IANA time zone for session usage while retaining UTC offsets", () => {
-    expectAccepted(validateSessionsUsageParams, [
-      { mode: "specific", timeZone: "Europe/Vienna" },
-      { mode: "specific", utcOffset: "UTC+2" },
-    ]);
-    expectRejected(validateSessionsUsageParams, [
-      { mode: "specific", timeZone: "" },
-      { mode: "specific", timeZone: 2 },
     ]);
   });
 

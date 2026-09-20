@@ -42,6 +42,7 @@ const FS_MODULE_CACHE_GENERATION_FILE = ".openclaw-transform-generation";
 export type ShardTargetPlan = { kind: "target"; name: string; target: string };
 type ShardGroupConfig = {
   configs: string[];
+  fallbackMaxWorkers?: number;
   env?: Record<string, unknown> | null;
   includePatterns?: string[] | null;
   shard_name?: string;
@@ -476,6 +477,30 @@ export async function runShardPlans(plans: ShardPlan[], options: RunShardOptions
       `[shard:resources] logicalCpuCount=${hostResources.logicalCpuCount} totalMemoryBytes=${hostResources.totalMemoryBytes} requested plans=${requestedConcurrency} admitted plans=${concurrency}`,
     );
   }
+  const hasMeasuredHeadroom =
+    hostResources !== null &&
+    !isConstrainedCiCheckHost(hostResources) &&
+    concurrency === 1 &&
+    baseEnv.RUNNER_ENVIRONMENT === "self-hosted" &&
+    baseEnv.FROZEN_TARGET !== "true";
+  const admittedPlans = plans.map((entry): ShardPlan => {
+    if (entry.kind !== "group" || entry.plan.fallbackMaxWorkers === undefined) {
+      return entry;
+    }
+    const fallback = parsePositiveInt(entry.plan.fallbackMaxWorkers, "Fallback worker limit");
+    if (hasMeasuredHeadroom) {
+      return entry;
+    }
+    return {
+      ...entry,
+      plan: {
+        ...entry.plan,
+        env: mergePlanEnv(mergePlanEnv({}, entry.plan.env), {
+          OPENCLAW_VITEST_MAX_WORKERS: String(fallback),
+        }),
+      },
+    };
+  });
   const scratchDir = options.scratchDir ?? mkdtempSync(join(tmpdir(), "openclaw-node-shard-"));
   const persistentCacheRoot = baseEnv[FS_MODULE_CACHE_PATH_ENV_KEY]?.trim();
   const nodeCompileCacheRoot = baseEnv[NODE_COMPILE_CACHE_PATH_ENV_KEY]?.trim();
@@ -486,7 +511,7 @@ export async function runShardPlans(plans: ShardPlan[], options: RunShardOptions
     );
   }
 
-  const context = await createWorkerContext(baseEnv, plans);
+  const context = await createWorkerContext(baseEnv, admittedPlans);
   let interrupted: NodeJS.Signals | undefined;
   const onSignal = (signal: NodeJS.Signals) => {
     interrupted ??= signal;
@@ -503,13 +528,13 @@ export async function runShardPlans(plans: ShardPlan[], options: RunShardOptions
     let exitCode = 0;
     const workers = Array.from({ length: concurrency }, async (_, cacheSlot) => {
       try {
-        while (nextIndex < plans.length && (exitCode === 0 || options.continueOnFailure)) {
+        while (nextIndex < admittedPlans.length && (exitCode === 0 || options.continueOnFailure)) {
           if (interrupted) {
             return;
           }
           const index = nextIndex;
           nextIndex += 1;
-          const entry = plans[index];
+          const entry = admittedPlans[index];
           if (!entry) {
             return;
           }
@@ -552,7 +577,7 @@ export async function runShardPlans(plans: ShardPlan[], options: RunShardOptions
       } catch (error) {
         // Setup failures stop admission immediately; live children still own
         // their cache slots until every admitted worker has joined.
-        nextIndex = plans.length;
+        nextIndex = admittedPlans.length;
         throw error;
       }
     });

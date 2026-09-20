@@ -7,7 +7,10 @@ import type { UpdateRecoveryBackupRef } from "../../infra/update-recovery-backup
 import type { loadInstalledPluginIndexInstallRecords } from "../../plugins/installed-plugin-index-records.js";
 import type { OpenClawSchemaVersions } from "../../state/openclaw-schema-versions.js";
 import type { UpdateCommandOptions } from "./shared.js";
-import type { UpdateRestartParams } from "./update-command-service-context-types.js";
+import type {
+  OriginalManagedServiceRuntime,
+  UpdateRestartParams,
+} from "./update-command-service-context-types.js";
 import type { UpdateServiceLoadBoundary } from "./update-command-service-load.js";
 export type FinishUpdateParams = UpdateRestartParams & {
   coreAlreadyCurrent?: boolean;
@@ -40,6 +43,7 @@ export type FinishUpdateParams = UpdateRestartParams & {
   candidateSchemaVersions?: OpenClawSchemaVersions;
   previousSchemaVersions?: OpenClawSchemaVersions;
   previousVerified?: boolean;
+  originalManagedServiceRuntime?: OriginalManagedServiceRuntime;
   activationConfig?: import("./update-command-config-snapshot.js").UpdateConfigSnapshot;
   rollbackBlockedReason?: "state-migrated-no-rollback" | "rollback-state-unverified";
 };

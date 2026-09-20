@@ -1,7 +1,6 @@
 import { vi } from "vitest";
 import type { UserProfile } from "../../../../packages/gateway-protocol/src/index.ts";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import type { RouteId } from "../../app-route-paths.ts";
 import { createAgentSelectionCapability } from "../../app/agent-selection.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
 import type { AuthenticatedUser } from "../../app/user-profile.ts";
@@ -77,8 +76,8 @@ export function createConnectedContext(
     },
     basePath: "",
     navigate: vi.fn(),
-  } as unknown as Omit<ApplicationContext<RouteId>, "settingsAgentSelection">;
-  const context: ApplicationContext<RouteId> = {
+  } as unknown as Omit<ApplicationContext, "settingsAgentSelection">;
+  const context: ApplicationContext = {
     ...baseContext,
     settingsAgentSelection: createAgentSelectionCapability(
       baseContext.gateway,
@@ -120,7 +119,7 @@ export type ProfilePageElement = HTMLElement & {
   updateComplete: Promise<boolean>;
 };
 
-export function mountProfilePage(context: ApplicationContext<RouteId>) {
+export function mountProfilePage(context: ApplicationContext) {
   const provider = createApplicationContextProvider(context);
   const page = document.createElement(PROFILE_PAGE_TEST_TAG) as ProfilePageElement;
   provider.append(page);

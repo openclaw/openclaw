@@ -23,7 +23,6 @@ import {
   getUserProfileListItem,
   linkEmail,
   listProfiles,
-  resolveUserProfileId,
   setAvatar,
   setDisplayName,
   setUserProfileRole,
@@ -36,6 +35,7 @@ import {
   isGatewayClientProfilePending,
 } from "./gateway-client-identity.js";
 import type { GatewayRequestHandlerOptions, GatewayRequestHandlers } from "./types.js";
+import { publishUserPreferencesChanged } from "./user-preference-events.js";
 import { usersAuthConnectHandlers } from "./users-auth-connect.js";
 import { usersGitHubHandlers } from "./users-github.js";
 import {
@@ -194,29 +194,7 @@ export const usersHandlers: GatewayRequestHandlers = {
         return;
       }
       respond(true, { status: "ok" }, undefined);
-      const keys = Object.keys(params.entries);
-      if (keys.length === 0 || !context.getClientConnIds) {
-        return;
-      }
-      const canonicalProfileId = resolveUserProfileId(result.value.profileId);
-      if (!canonicalProfileId) {
-        return;
-      }
-      const connIds = context.getClientConnIds((connectedClient) => {
-        const connectedProfileId = connectedClient.authenticatedUserProfile?.profileId;
-        return Boolean(
-          connectedProfileId &&
-          (connectedProfileId === canonicalProfileId ||
-            resolveUserProfileId(connectedProfileId) === canonicalProfileId),
-        );
-      });
-      if (connIds?.size) {
-        context.broadcastToConnIds(
-          "users.prefs.changed",
-          { profileId: canonicalProfileId, keys },
-          connIds,
-        );
-      }
+      publishUserPreferencesChanged(context, result.value.profileId, Object.keys(params.entries));
     } catch (error) {
       respond(false, undefined, profileError(error));
     }

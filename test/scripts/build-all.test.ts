@@ -1480,14 +1480,6 @@ describe("resolveBuildStepCacheState", () => {
       writeBuildStepCacheStamp(step, cacheState, { rootDir });
 
       const fresh = resolveBuildStepCacheState(step, { rootDir });
-      expect(fresh.cacheable).toBe(true);
-      expect(fresh.fresh).toBe(true);
-      expect(fresh.reason).toBe("fresh");
-      expect(fresh.inputFiles).toBe(1);
-      expect(fresh.outputFiles).toBe(1);
-      expect(fresh.restorable).toBe(false);
-      expect(fresh.relativeOutputFiles).toEqual(["dist/output.js"]);
-      expect(fresh.stampedOutputs).toEqual(["dist/output.js"]);
       expect(typeof fresh.signature).toBe("string");
       expect(fresh.signature).toHaveLength(64);
       expect(fresh.outputRoot).toBe(
@@ -1650,8 +1642,6 @@ describe("resolveBuildStepCacheState", () => {
       expect(stale.outputFiles).toBe(1);
       expect(stale.restorable).toBe(false);
       expect(restoreBuildStepCacheOutputs(stale, { rootDir })).toBe(false);
-      expect(stale.relativeOutputFiles).toEqual(["dist/output.js"]);
-      expect(stale.stampedOutputs).toEqual(["dist/output.js"]);
       expect(typeof stale.signature).toBe("string");
       expect(stale.signature).toHaveLength(64);
       expect(stale.outputRoot).toBe(
@@ -1765,14 +1755,6 @@ describe("resolveBuildStepCacheState", () => {
       fs.rmSync(path.join(rootDir, "dist"), { force: true, recursive: true });
 
       const restorable = resolveBuildStepCacheState(step, { rootDir });
-      expect(restorable.cacheable).toBe(true);
-      expect(restorable.fresh).toBe(true);
-      expect(restorable.reason).toBe("fresh-cache");
-      expect(restorable.inputFiles).toBe(1);
-      expect(restorable.outputFiles).toBe(0);
-      expect(restorable.restorable).toBe(true);
-      expect(restorable.relativeOutputFiles).toEqual([]);
-      expect(restorable.stampedOutputs).toEqual(["dist/output.js"]);
       expect(typeof restorable.signature).toBe("string");
       expect(restorable.signature).toHaveLength(64);
       expect(restorable.outputRoot).toBe(

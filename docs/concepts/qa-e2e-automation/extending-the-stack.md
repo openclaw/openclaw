@@ -130,6 +130,7 @@ Runner plugins own the transport contract:
 - how outbound messages are observed
 - how transcripts and normalized transport state are exposed
 - how transport-backed actions are executed
+- which trusted module preloads the Gateway runtime needs
 - how transport-specific reset or cleanup is handled
 
 The minimum adoption bar for a new channel:

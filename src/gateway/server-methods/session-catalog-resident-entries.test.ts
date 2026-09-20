@@ -248,7 +248,7 @@ it("bounds roster projections while delivering adopted sessions without an impli
           createdActor: original.createdActor,
         })),
       );
-      expect(rosterEntryProjections).toBeLessThanOrEqual(sessionCount * (agentCount + 8));
+      expect(rosterEntryProjections).toBeLessThanOrEqual(sessionCount * 8);
     },
     { agents: { ownership: "explicit", entries: agents } },
   );

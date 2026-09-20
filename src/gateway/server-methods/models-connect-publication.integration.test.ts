@@ -14,11 +14,11 @@ import {
   getActiveGatewayRootWorkHolders,
 } from "../../process/gateway-work-admission.js";
 import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { acquireTestPortBlock } from "../../test-utils/port-claims.js";
 import * as modelCatalogAuth from "../server-model-catalog-auth.js";
 import {
   connectGatewayClient,
   disconnectGatewayClient,
-  getGatewayE2ePortBlock,
   startGatewayWithClient,
 } from "../test-helpers.e2e.js";
 
@@ -60,7 +60,6 @@ it("connect negotiates snapshots and preserves draft and saved-session catalog s
       OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
     },
   });
-  const port = await getGatewayE2ePortBlock();
   const token = "synthetic-catalog-gateway-token";
   const publications: ModelsSnapshotEvent[] = [];
   try {
@@ -83,8 +82,10 @@ it("connect negotiates snapshots and preserves draft and saved-session catalog s
       },
       "alpha",
     );
+    const portClaim = await acquireTestPortBlock({ offsets: [0, 1, 2, 3, 4] });
+    const { port } = portClaim;
     const { client, server } = await startGatewayWithClient({
-      port,
+      portClaim,
       configPath: state.configPath,
       token,
       clientName: GATEWAY_CLIENT_IDS.CONTROL_UI,

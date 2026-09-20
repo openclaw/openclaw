@@ -149,7 +149,9 @@ export function createControlUiMockResponses(
           (scope.configuredAgentsOnly === true &&
             key.startsWith("agent:") &&
             !agentIds.has(agentId)) ||
-          (scope.excludeSubagents === true && (key.includes(":subagent:") || row.spawnedBy)) ||
+          (scope.excludeSubagents === true &&
+            (key.includes(":subagent:") ||
+              (row.spawnedBy && !(typeof row.category === "string" && row.category.trim())))) ||
           (cron && (scope.excludeCron === true || key.includes(":run:"))) ||
           (scope.excludeSystem === true && system) ||
           (scope.boardFace && row.boardFace !== scope.boardFace) ||

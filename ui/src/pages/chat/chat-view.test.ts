@@ -5475,18 +5475,6 @@ describe("chat slash menu accessibility", () => {
     expect(onSend).not.toHaveBeenCalled();
   });
 
-  it("commits local draft input on blur", () => {
-    const onDraftChange = vi.fn();
-    const container = renderChatView({ onDraftChange });
-
-    inputDraft(container, "persist before leaving composer");
-    container
-      .querySelector<HTMLTextAreaElement>("textarea")!
-      .dispatchEvent(new FocusEvent("blur", { bubbles: false }));
-
-    expect(onDraftChange).toHaveBeenCalledWith("persist before leaving composer", undefined);
-  });
-
   it("commits plain draft input while a send is active", () => {
     const onDraftChange = vi.fn();
     const container = renderChatView({ onDraftChange, sending: true });
@@ -6094,41 +6082,6 @@ describe("chat attachment picker", () => {
     expect(withImage.querySelector("textarea")?.getAttribute("placeholder")).toBe(
       t("chat.composer.placeholderWithAttachments"),
     );
-  });
-
-  it("opens a pasted text excerpt in the side panel with the text-field action", async () => {
-    let attachments: ChatAttachment[] = [];
-    let container = renderAttachmentHarness(
-      () => attachments,
-      (next) => {
-        attachments = next;
-      },
-    );
-    const textarea = getComposerTextarea(container);
-    const text = `First words from a long pasted note ${"x".repeat(1100)}`;
-    textarea.dispatchEvent(createPasteEvent(text));
-    const sidebar = createAttachmentSidebarHarness();
-    container = renderChatView({ attachments, onOpenSidebar: sidebar.open });
-    document.body.append(container);
-
-    await waitForFast(() => {
-      expect(container.querySelector(".chat-selection-annotations__chip")?.textContent).toContain(
-        "First words from a long pasted…",
-      );
-    });
-    expect(attachments[0]?.origin).toBe("paste");
-    expect(container.querySelector("openclaw-chat-pasted-text openclaw-tooltip")).toBeNull();
-    requireElement(
-      container,
-      ".chat-selection-annotations__chip",
-      "pasted text chip",
-    ).dispatchEvent(new MouseEvent("click", { bubbles: true }));
-    expect(sidebar.open).toHaveBeenCalledWith(
-      expect.objectContaining({ kind: "attachment", plainText: true, mimeType: "text/plain" }),
-    );
-    expect(
-      sidebar.container.querySelector(".chat-attachment-text-action")?.textContent?.trim(),
-    ).toBe("Show in text field");
   });
 
   it("preserves pasted-text presentation and restore behavior across handoff", async () => {
@@ -10266,22 +10219,6 @@ describe("right-click Reply", () => {
       paneA.dispose();
       paneB.dispose();
     }
-  });
-
-  it("does not clear reply target when Escape is already defaultPrevented", () => {
-    const onClearReply = vi.fn();
-    const container = renderReply({ onClearReply });
-
-    const section = container.querySelector<HTMLElement>(".chat");
-    const evt = new KeyboardEvent("keydown", {
-      key: "Escape",
-      bubbles: true,
-      cancelable: true,
-    });
-    Object.defineProperty(evt, "defaultPrevented", { value: true });
-    section!.dispatchEvent(evt);
-
-    expect(onClearReply).not.toHaveBeenCalled();
   });
 
   it("does not open Reply menu when onSetReply is absent", () => {

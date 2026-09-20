@@ -47,8 +47,10 @@ context, and wrapper selection stays unchanged.
 10-second deadline before choosing wrapper code; Darwin process-identity Python
 calls use the same deadline. Ordinary PR metadata and check rollups use REST.
 GraphQL remains where the writer identity, required-check app binding, or merge
-queue contract has no equivalent REST read. API throttling reports both GraphQL
-and core quota reset times without adding automatic retries.
+queue contract has no equivalent REST read. API failures preserve safe quota and retry metadata from the original response.
+When that response has no usable HTTP framing, a separate GraphQL/core quota
+probe is labeled supplemental and does not establish the failed request's reset.
+Diagnostics never add automatic retries.
 
 ## Generated Outputs
 

@@ -57,6 +57,7 @@ type CommonModelResolutionOptions = {
 };
 
 type AsyncModelResolutionOptions = CommonModelResolutionOptions & {
+  abortSignal?: AbortSignal;
   /** Selected executable IDs must not pass through input aliases again. */
   modelIdSource?: "input" | "selected";
   allowBundledStaticCatalogFallback?: boolean;
@@ -221,6 +222,7 @@ export async function resolveModelAsync(
       const suppressedRuntimeModel =
         explicitModel.kind === "suppressed"
           ? await resolveRuntimePreferredSuppressedModel({
+              abortSignal: options?.abortSignal,
               assertCurrent: options?.assertCurrent,
               provider: normalizedRef.provider,
               modelId: normalizedRef.model,
@@ -308,6 +310,7 @@ export async function resolveModelAsync(
     };
     const resolveDynamicAttempt = async () => {
       const authProfile = await resolveDynamicModelAuthProfile({
+        abortSignal: options?.abortSignal,
         provider: normalizedRef.provider,
         modelId: normalizedRef.model,
         cfg,
@@ -337,6 +340,7 @@ export async function resolveModelAsync(
           });
       options?.assertCurrent?.();
       return resolveModelWithPreparedRegistry({
+        abortSignal: options?.abortSignal,
         assertCurrent: options?.assertCurrent,
         provider: normalizedRef.provider,
         modelId: normalizedRef.model,

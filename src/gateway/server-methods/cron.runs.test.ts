@@ -224,6 +224,33 @@ describe("cron.runs session visibility", () => {
     });
   });
 
+  it.each([
+    { filter: { query: "absent text" }, total: 0, offset: 0 },
+    { filter: { runId: "absent-run" }, total: 0, offset: 0 },
+    { filter: { runId: "history-run-1", offset: 99 }, total: 1, offset: 1 },
+  ])(
+    "keeps deleted-job empty pages distinct from missing history: $filter",
+    async ({ filter, total, offset }) => {
+      await withCronHistory(async ({ jobId, cron, query, viewer }) => {
+        await cron.remove(jobId);
+        expect(await query({ id: jobId, ...filter, limit: 1 }, viewer)).toHaveBeenCalledWith(
+          true,
+          { entries: [], total, offset, limit: 1, hasMore: false, nextOffset: null },
+          undefined,
+        );
+        expect(
+          await query({ id: "missing-job", ...filter, limit: 1 }, viewer),
+        ).toHaveBeenCalledWith(
+          false,
+          undefined,
+          expect.objectContaining({
+            details: { code: "CRON_JOB_NOT_FOUND", jobId: "missing-job" },
+          }),
+        );
+      });
+    },
+  );
+
   it("keeps foreign jobs hidden and retained deleted-job history available to viewers", async () => {
     await withCronHistory(async ({ jobId, foreignJobId, cron, query, viewer }) => {
       expect(await query({ id: foreignJobId })).toHaveBeenCalledWith(

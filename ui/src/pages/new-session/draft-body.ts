@@ -1,14 +1,15 @@
+import { html, nothing, type TemplateResult } from "lit";
 import "../../styles/chat/startup-layout.css";
 import "../../styles/chat/message-layout.css";
 import "../../styles/chat/text.css";
 import "../../styles/chat/grouped.css";
 import "../../styles/chat/working-indicator.css";
-import { html, nothing, type TemplateResult } from "lit";
 import { beginNativeWindowDragFromTopInset } from "../../app/native-window-drag.ts";
 import { icons } from "../../components/icons.ts";
 import { resolveIdentityAvatarView } from "../../components/identity-avatar-view.ts";
 import type { ImageLightboxItem } from "../../components/image-lightbox.types.ts";
 import { t } from "../../i18n/index.ts";
+import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-session-setup.ts";
 import { resolveMessageDisplayMarkdown } from "../../lib/chat/message-display.ts";
 import { normalizeMessage } from "../../lib/chat/message-normalizer.ts";
 import { formatSenderLabel } from "../../lib/chat/sender-label.ts";
@@ -29,6 +30,8 @@ import {
 } from "../chat/components/chat-message-text.ts";
 import { renderChatWorkingIndicator } from "../chat/components/chat-working-indicator.ts";
 import type { buildLocalUserMessage } from "../chat/user-message-content.ts";
+
+registerNewSessionSetupEnglish();
 
 export function renderDraftError(
   message: string,

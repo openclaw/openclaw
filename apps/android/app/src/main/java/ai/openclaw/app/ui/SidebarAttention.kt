@@ -43,7 +43,6 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.window.Popup
 import androidx.compose.ui.window.PopupProperties
 
 internal enum class SidebarAttentionKind { Question, Approval }
@@ -175,7 +174,7 @@ internal fun SidebarAttentionIndicator(
       }
     }
     if (!dismissed && (opened || hovered || focused)) {
-      Popup(alignment = Alignment.TopEnd, offset = IntOffset(0, popupOffset), onDismissRequest = {
+      AppPopup(alignment = Alignment.TopEnd, offset = IntOffset(0, popupOffset), onDismissRequest = {
         opened = false
         dismissed = true
       }, properties = PopupProperties(focusable = opened)) {

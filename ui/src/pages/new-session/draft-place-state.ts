@@ -21,6 +21,7 @@ import {
   resolveNewSessionFolderPreference,
   resolveNewSessionWhere,
   type NewSessionWhere,
+  type NewSessionPreference,
 } from "./preferences.ts";
 import type { DraftRemoteProject } from "./project-chip.ts";
 
@@ -83,7 +84,6 @@ export class DraftPlaceState {
   private autoDeviceValue = false;
   private cloudProfileIdValue = "";
   readonly cloudMachines = new DraftCloudMachineState();
-  private gatewayApprovedWorkspaceRoots: string[] = [];
   private agentsHydratedValue = false;
   private agentSelectedByUser = false;
   private folderSelectedByUser = false;
@@ -110,7 +110,7 @@ export class DraftPlaceState {
         isAdmin: this.isAdmin(),
       }),
       {
-        onApprovedListing: (listing) => this.recordGatewayApprovedListing(listing),
+        onApprovedRootsChange: callbacks.requestUpdate,
         onVerified: () => {
           this.callbacks.onClearError(t("newSession.browserLoadFailed"));
           this.repositoryState.load();
@@ -204,6 +204,24 @@ export class DraftPlaceState {
     return this.agentsHydratedValue;
   }
 
+  preferenceSelection(): NewSessionPreference {
+    // Remember selection intent, not a temporary projection while discovery is pending.
+    const where = this.preferredWhereRestore ?? resolveNewSessionWhere(this);
+    return {
+      workspace: this.workspacePath(),
+      folder: this.folderValue,
+      projectId: this.preferredProjectRestore || this.browser.projectId,
+      where,
+      worktree:
+        ((where.kind !== "local" && this.freshWorkspaceValue) ||
+          this.repositoryState.preferenceWorktree) &&
+        !this.remoteRepository,
+      freshWorkspace: this.freshWorkspaceValue,
+      baseRef: this.repositoryState.baseRef,
+      worktreeName: this.repositoryState.worktreeName,
+    };
+  }
+
   get placementPreferenceReady(): boolean {
     return (
       (this.freshWorkspace || this.repositoryState.preferenceReady) &&
@@ -285,25 +303,11 @@ export class DraftPlaceState {
   }
 
   knownWorkspaceRoots(): string[] {
-    const configuredWorkspace = this.workspacePath();
-    return configuredWorkspace
-      ? [configuredWorkspace, ...this.gatewayApprovedWorkspaceRoots]
-      : this.gatewayApprovedWorkspaceRoots;
+    return this.folderValidation.knownWorkspaceRoots(this.workspacePath());
   }
 
   recordGatewayApprovedListing(listing: FsListDirResult) {
-    if (this.isAdmin()) {
-      return;
-    }
-    const roots = new Set(this.gatewayApprovedWorkspaceRoots);
-    roots.add(listing.path);
-    if (listing.parent) {
-      roots.add(listing.parent);
-    }
-    if (roots.size !== this.gatewayApprovedWorkspaceRoots.length) {
-      this.gatewayApprovedWorkspaceRoots = [...roots];
-      this.callbacks.requestUpdate();
-    }
+    this.folderValidation.recordApprovedListing(listing);
   }
 
   folderSubmissionBlocked(): boolean {
@@ -394,7 +398,7 @@ export class DraftPlaceState {
   private resetPlaceSelection() {
     this.freshWorkspaceValue = true;
     this.folderSelectedByUser = false;
-    this.gatewayApprovedWorkspaceRoots = [];
+    this.folderValidation.reset();
     this.preferredWhereRestore = null;
     this.preferredProjectRestore = "";
     this.whereSelectedByUser = false;
@@ -413,7 +417,6 @@ export class DraftPlaceState {
     this.browser.clearProjectSelection();
     this.resetPlaceSelection();
     this.browser.resetProjectSearch();
-    this.folderValidation.cancel();
     this.modelControl.reset();
     this.cloudMachines.clear();
     this.callbacks.requestUpdate();
@@ -424,8 +427,7 @@ export class DraftPlaceState {
     this.agentsHydratedValue = false;
     this.modelControl.invalidate(resetHostSelection);
     this.browser.close();
-    this.folderValidation.cancel();
-    this.gatewayApprovedWorkspaceRoots = [];
+    this.folderValidation.reset();
     this.browser.resetProjectSearch();
     this.browser.resetProjects(resetHostSelection);
     if (!resetHostSelection) {
@@ -491,7 +493,6 @@ export class DraftPlaceState {
       return;
     }
     this.agentIdValue = normalizeAgentId(agentId);
-    this.folderValidation.cancel();
     this.modelControl.reset();
     this.callbacks.onError(null);
     this.agentSelectedByUser = true;

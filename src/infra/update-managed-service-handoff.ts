@@ -2466,7 +2466,7 @@ export function claimManagedServiceUpdateHandoff(
   return true;
 }
 
-/** A transferred updater may inspect its serving ancestor only under its current lease. */
+/** A transferred updater may manage its serving ancestor only under its current lease. */
 export async function isCurrentManagedServiceUpdateHandoffProcess(params: {
   root: string;
   runId: string | undefined;

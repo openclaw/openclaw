@@ -91,6 +91,7 @@ import {
   type GatewayReloadPlan,
   startGatewayConfigReloader,
 } from "./config-reload.js";
+import { createWatcherMock } from "./config-reload.watcher.test-support.js";
 import { commitGatewayConfigWrite } from "./server-methods/config-write-flow.js";
 import { GatewayConfigReloadSupersededError } from "./server-reload-contracts.js";
 import { createTerminalLaunchPolicy } from "./terminal/launch.js";
@@ -1724,33 +1725,6 @@ describe("buildGatewayReloadPlan", () => {
     expect(resolveGatewayReloadSettings({})).toMatchObject({ mode: "hybrid", debounceMs: 300 });
   });
 });
-
-type WatcherHandler = (value?: unknown) => void;
-type WatcherEvent = "add" | "change" | "unlink" | "error" | "ready";
-const WATCHER_PATH_EVENTS = new Set<WatcherEvent>(["add", "change", "unlink"]);
-
-function createWatcherMock(effectiveUsePolling?: boolean) {
-  const handlers = new Map<WatcherEvent, WatcherHandler[]>();
-  const watcher = {
-    effectiveUsePolling,
-    options: { usePolling: false },
-    on(event: WatcherEvent, handler: WatcherHandler) {
-      const existing = handlers.get(event) ?? [];
-      existing.push(handler);
-      handlers.set(event, existing);
-      return this;
-    },
-    emit(event: WatcherEvent, value?: unknown) {
-      const eventValue =
-        value ?? (WATCHER_PATH_EVENTS.has(event) ? "/tmp/openclaw.json" : undefined);
-      for (const handler of handlers.get(event) ?? []) {
-        handler(eventValue);
-      }
-    },
-    close: vi.fn(async () => {}),
-  };
-  return watcher;
-}
 
 function makeGatewayPortConfig(port: number): OpenClawConfig {
   return { gateway: { reload: {}, port } };
@@ -3601,7 +3575,14 @@ describe("startGatewayConfigReloader", () => {
     "settles an RPC write inside its originating gateway root (%s)",
     async (scenario) => {
       const root = tempDirs.make("openclaw-config-receipt-");
+      const bundledPluginsDir = tempDirs.make("openclaw-config-receipt-bundled-");
       const configPath = nodePath.join(root, "openclaw.json");
+      // Reloads discover plugins per operation; this admission fixture declares none.
+      const configEnv = {
+        OPENCLAW_CONFIG_PATH: configPath,
+        OPENCLAW_BUNDLED_PLUGINS_DIR: bundledPluginsDir,
+        OPENCLAW_DISABLE_BUNDLED_PLUGINS: undefined,
+      };
       const initialConfig = {
         gateway: { reload: {} },
         hooks: { enabled: false },
@@ -3659,7 +3640,7 @@ describe("startGatewayConfigReloader", () => {
       const log = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
 
       try {
-        await withEnvAsync({ OPENCLAW_CONFIG_PATH: configPath }, async () => {
+        await withEnvAsync(configEnv, async () => {
           const configIo = createConfigIO({ configPath, pluginValidation: "skip" });
           const reloader = startGatewayConfigReloader({
             testDebounceMs: 0,

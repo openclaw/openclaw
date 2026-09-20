@@ -36,6 +36,7 @@ export function createDraftFixture(options: FixtureOptions = {}) {
   const phase = options.phase ?? "connected";
   const context = {
     gateway: options.gateway ?? {
+      subscribe: () => () => undefined,
       subscribeEvents: () => () => undefined,
       connection: { gatewayUrl: "ws://gateway.example" },
       snapshot: {

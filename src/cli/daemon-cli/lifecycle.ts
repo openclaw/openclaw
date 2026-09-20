@@ -646,7 +646,10 @@ export async function runDaemonRestart(opts: DaemonLifecycleOptions = {}): Promi
         failure.failMessage,
         [formatCliCommand("openclaw gateway status --deep"), formatCliCommand("openclaw doctor")],
         health.waitOutcome === "still-starting"
-          ? "still-starting"
+          ? // Published updater parents recognize this envelope and continue readiness verification.
+            managedRestartContext.env.OPENCLAW_UPDATE_IN_PROGRESS === "1"
+            ? "restart-health-failed"
+            : "still-starting"
           : activationAccepted
             ? "restart-health-failed"
             : undefined,

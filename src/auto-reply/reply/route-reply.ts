@@ -332,9 +332,10 @@ export async function routeReply(params: RouteReplyParams): Promise<RouteReplyRe
     replyTransport && Object.hasOwn(replyTransport, "threadId")
       ? (replyTransport.threadId ?? null)
       : (threadId ?? null);
+  const inferredReplyTarget = replyTransport?.replyToIdSource === "implicit";
   const deliveryPayload = copyReplyPayloadMetadata(normalized, {
     ...externalPayload,
-    replyToId: resolvedReplyToId,
+    replyToId: inferredReplyTarget ? undefined : resolvedReplyToId,
   });
 
   try {
@@ -376,6 +377,7 @@ export async function routeReply(params: RouteReplyParams): Promise<RouteReplyRe
         },
       },
       replyToId: resolvedReplyToId ?? null,
+      ...(inferredReplyTarget ? { replyToMode: replyDelivery?.replyToMode ?? "all" } : {}),
       threadId: resolvedThreadId,
       session: outboundSession,
       signal: abortSignal,

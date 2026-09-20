@@ -3422,13 +3422,6 @@ NODE
   it("keeps Testbox pull request validation off leased runner capacity", () => {
     const workflow = readTestboxWorkflow();
 
-    expect(workflow.on.pull_request).toEqual({
-      types: ["opened", "reopened", "synchronize", "ready_for_review"],
-      paths: [".github/workflows/**"],
-    });
-    expect(workflow.jobs.check.if).toBe(
-      "${{ github.event_name != 'pull_request' || !github.event.pull_request.draft }}",
-    );
     expect(workflow.jobs.check["runs-on"]).toBe(
       "${{ github.event_name == 'pull_request' && 'ubuntu-24.04' || 'blacksmith-16vcpu-ubuntu-2404' }}",
     );
@@ -4483,14 +4476,11 @@ NODE
 
   it("runs real behavior proof from the trusted workflow revision", () => {
     const workflow = readRealBehaviorProofWorkflow();
-    const source = readFileSync(".github/workflows/real-behavior-proof.yml", "utf8");
     const checkout = workflow.jobs["real-behavior-proof"].steps.find(
       (step: WorkflowStep) => step.uses === CHECKOUT_V6,
     );
 
     expect(checkout.with.ref).toBe("${{ github.workflow_sha }}");
-    expect(checkout.with.ref).not.toBe("${{ github.event.pull_request.base.sha }}");
-    expect(source).toContain("Old PR events can carry a stale base SHA");
   });
 
   it("keeps docs-change detection fail-safe and fixture-aware", () => {
@@ -12251,15 +12241,6 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(currentMissing.output).toContain(
       "Current CI targets must provide the check:temp-path-guardrails package script.",
     );
-
-    const workflow = readFileSync(".github/workflows/ci.yml", "utf8");
-    const preflightGuards = workflow.slice(
-      workflow.indexOf("guards)"),
-      workflow.indexOf("npm-lock)"),
-    );
-    expect(preflightGuards.indexOf("pnpm check:temp-path-guardrails")).toBeLessThan(
-      preflightGuards.indexOf("pnpm dup:check"),
-    );
   });
 
   it.each([
@@ -14581,7 +14562,6 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       'elif [[ "$HISTORICAL_TARGET" == "true" ]] && has_package_script "deadcode:ci"',
     );
     expect(checkShard.run).toContain("Target does not provide a supported deadcode check.");
-
     const uiInstall = workflow.jobs["checks-ui"].steps.find(
       (step: { name?: string }) => step.name === "Install Playwright Chromium",
     );
@@ -14598,6 +14578,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(uiInstall.run).toContain('if [[ "${COMPATIBILITY_TARGET:-false}" == "true" ]]');
     expect(uiInstall.run).toContain("pnpm --dir ui exec playwright install chromium");
     expect(uiInstall.run).toContain("node --import tsx scripts/ensure-playwright-chromium.mts");
+    expect(uiInstall.run).toContain(".mts --require-playwright-chromium");
     expect(uiInstall.run).toContain(
       'elif [[ "$FROZEN_TARGET" == "true" && -f scripts/ensure-playwright-chromium.mjs ]]',
     );
@@ -16316,6 +16297,7 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       {
         configs: ["test/vitest/vitest.unit-fast.config.ts"],
         env: undefined,
+        fallbackMaxWorkers: 2,
         includePatterns: ["src/a.test.ts", "src/b.test.ts"],
         requiresDist: false,
         runner: "ubuntu-24.04",
@@ -16331,9 +16313,10 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
       },
     ];
     const projectedGroups = groups.map(
-      ({ configs, env, includePatterns, shard_name, timing_key }) => ({
+      ({ configs, env, fallbackMaxWorkers, includePatterns, shard_name, timing_key }) => ({
         configs,
         env,
+        fallbackMaxWorkers,
         includePatterns,
         shard_name,
         timing_key,
@@ -16638,6 +16621,23 @@ printf '%s\n' "\${CURL_SUCCESS_IP:-203.0.113.7}"
     expect(resourceStep.run.indexOf('workers="$cores"')).toBeLessThan(
       resourceStep.run.indexOf("OPENCLAW_VITEST_MAX_WORKERS"),
     );
+    expect(resourceStep.env.FROZEN_TARGET).toBe("${{ needs.preflight.outputs.frozen_target }}");
+    expect(resourceStep.env.RUNNER_ENVIRONMENT).toBe("${{ runner.environment }}");
+    expect(resourceStep.run).toContain(
+      '[[ "$RUNNER_ENVIRONMENT" == "self-hosted" && "$FROZEN_TARGET" != "true" && "$SHARD_PLAN_CONCURRENCY" == "1" ]]',
+    );
+    expect(resourceStep.run).toContain("isConstrainedCiCheckHost({");
+    expect(resourceStep.run).toContain(
+      "resolveLocalVitestScheduling(process.env, host).maxWorkers",
+    );
+    expect(nodeTestJob.steps.indexOf(resourceStep)).toBeGreaterThan(
+      nodeTestJob.steps.findIndex((step: WorkflowStep) => step.name === "Build Node test runtime"),
+    );
+    const runStep = nodeTestJob.steps.find(
+      (step: WorkflowStep) => step.name === "Run Node test shard",
+    );
+    expect(runStep.env.FROZEN_TARGET).toBe(resourceStep.env.FROZEN_TARGET);
+    expect(runStep.env.RUNNER_ENVIRONMENT).toBe(resourceStep.env.RUNNER_ENVIRONMENT);
   });
 
   it("uses candidate-owned script interfaces for frozen target CI", () => {

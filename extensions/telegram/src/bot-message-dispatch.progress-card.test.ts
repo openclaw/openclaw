@@ -9,6 +9,8 @@ import {
   createTelegramDraftStream,
   deliverReplies,
   describeTelegramDispatch,
+  emitToolStart,
+  expectDeliveredReply,
   dispatchReplyWithBufferedBlockDispatcher,
   dispatchWithContext,
   editMessageTelegram,
@@ -17,6 +19,94 @@ import { asTelegramClientFetch } from "./client-fetch.js";
 import type { TelegramDraftStream } from "./draft-stream.js";
 
 describeTelegramDispatch("dispatchTelegramMessage progress cards", () => {
+  it.each(["confirmed", "staged", "unconfirmed", "absent"] as const)(
+    "requires a confirmed visible receipt for continuation custody (%s)",
+    async (receipt) => {
+      const draft = createSequencedDraftStream(2001);
+      createTelegramDraftStream.mockReturnValue(draft);
+      const adopt = vi.fn(async () => true);
+      const waitingText = "Waiting for delegated work.";
+      const payload = { text: waitingText };
+      dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+        async ({ dispatcherOptions, replyOptions }) => {
+          if (receipt !== "absent") {
+            await emitToolStart(replyOptions, {
+              name: "exec",
+              phase: "start",
+              toolCallId: "delegate",
+            });
+          }
+          if (receipt === "staged") {
+            draft.lastDeliveredText.mockReturnValue("");
+          } else if (receipt === "unconfirmed") {
+            draft.messageId.mockReturnValue(undefined);
+            draft.sendMayHaveLanded.mockReturnValue(true);
+          }
+          // Earlier skipped output must not cause a fallback after a retained card.
+          dispatcherOptions.onSkip?.({}, { kind: "block", reason: "empty" });
+          await dispatcherOptions.deliver(payload, {
+            kind: "final",
+            adoptProgressContinuation: adopt,
+          });
+          return { queuedFinal: true };
+        },
+      );
+      await dispatchWithContext({
+        context: createContext(),
+        streamMode: "progress",
+        telegramCfg: { streaming: { mode: "progress", progress: { toolProgress: true } } },
+      });
+
+      if (receipt === "confirmed") {
+        expect(adopt).toHaveBeenCalledOnce();
+        expect(deliverReplies).not.toHaveBeenCalled();
+        expect(draft.clear).not.toHaveBeenCalled();
+      } else {
+        expect(adopt).not.toHaveBeenCalled();
+        expectDeliveredReply(0, { text: waitingText });
+      }
+    },
+  );
+
+  it.each([
+    { kind: "media", content: { mediaUrl: "https://example.com/report.pdf" } },
+    {
+      kind: "buttons",
+      content: {
+        channelData: { telegram: { buttons: [[{ text: "Continue", callback_data: "go" }]] } },
+      },
+    },
+  ])(
+    "delivers $kind alongside a waiting payload instead of adopting only its card",
+    async ({ content }) => {
+      createTelegramDraftStream.mockReturnValue(createSequencedDraftStream(2001));
+      const adopt = vi.fn(async () => true);
+      const payload = { text: "Waiting for delegated work.", ...content };
+      dispatchReplyWithBufferedBlockDispatcher.mockImplementation(
+        async ({ dispatcherOptions, replyOptions }) => {
+          await emitToolStart(replyOptions, {
+            name: "exec",
+            phase: "start",
+            toolCallId: "delegate",
+          });
+          await dispatcherOptions.deliver(payload, {
+            kind: "final",
+            adoptProgressContinuation: adopt,
+          });
+          return { queuedFinal: true };
+        },
+      );
+      await dispatchWithContext({
+        context: createContext(),
+        streamMode: "progress",
+        telegramCfg: { streaming: { mode: "progress", progress: { toolProgress: true } } },
+      });
+
+      expect(adopt).not.toHaveBeenCalled();
+      expectDeliveredReply(0, { text: payload.text, ...content });
+    },
+  );
+
   it.each([
     { commentary: false, richMessages: false },
     { commentary: false, richMessages: true },

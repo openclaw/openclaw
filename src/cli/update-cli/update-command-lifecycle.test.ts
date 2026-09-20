@@ -250,6 +250,29 @@ vi.mock("./update-command-plugins.js", () => ({
   }),
 }));
 
+// This ordering suite isolates capture payload IO; backup/rollback suites qualify real files.
+vi.mock("./update-command-backup-lifecycle.js", async (original) => ({
+  ...(await original<typeof import("./update-command-backup-lifecycle.js")>()),
+  createUpdateCommandBackup: vi.fn(async () => ({
+    directory: "/fixture/capture",
+    manifestPath: "/fixture/capture/manifest.json",
+    manifestSha256: "a".repeat(64),
+  })),
+}));
+vi.mock("../../infra/update-recovery-config-writes.js", async (original) => ({
+  ...(await original<typeof import("../../infra/update-recovery-config-writes.js")>()),
+  persistUpdateRecoveryConfigWrites: vi.fn(async () => {}),
+  withUpdateRecoveryConfigWrites: async (
+    _backup: unknown,
+    _authority: unknown,
+    run: () => Promise<unknown>,
+  ) => await run(),
+}));
+vi.mock("./update-command-rollback-state.js", async (original) => ({
+  ...(await original<typeof import("./update-command-rollback-state.js")>()),
+  restoreUpdateRecoveryState: vi.fn(async () => ({ warnings: [] })),
+}));
+
 // Process fixtures cover runtime generation with real lifecycle ownership.
 vi.mock("./update-command-runtime.js", () => ({
   completeSourceUpdateRuntime: vi.fn(async () => {
@@ -355,24 +378,19 @@ describe("update plugin lifecycle lease boundaries", () => {
     mocks.doctorWarnings = [];
     mocks.interactive = false;
     mocks.triage.mockReset().mockResolvedValue({ status: "completed", hint: "fixture" });
-    mocks.maintenance.mockReset().mockResolvedValue(undefined);
+    mocks.maintenance.mockReset().mockImplementation(async () => ({
+      assertCurrent: () => {},
+      closeStores: async () => {},
+      run: <T>(operation: () => T): T => operation(),
+      releaseState: async () => {},
+      release: async () => {},
+      finish: async () => {},
+    }));
     vi.mocked(runUpdateFinalizationDoctorInFreshProcess)
       .mockReset()
       .mockImplementation(async (params) => {
         record("fresh-doctor");
         params.onWarnings?.(mocks.doctorWarnings);
-      });
-    vi.mocked(completePostCorePluginUpdate)
-      .mockReset()
-      .mockImplementation(async () => {
-        record("complete");
-        return { pluginUpdate: successfulPluginUpdate, configSnapshot: validConfigSnapshot };
-      });
-    vi.mocked(updatePluginsAfterCoreUpdate)
-      .mockReset()
-      .mockImplementation(async () => {
-        record("plugin-update");
-        return successfulPluginUpdate;
       });
     vi.mocked(writePostCorePluginUpdateResultFile).mockReset().mockResolvedValue(undefined);
     vi.mocked(writePostCoreUpdateFailureFile).mockReset().mockResolvedValue(undefined);
@@ -717,7 +735,7 @@ describe("update plugin lifecycle lease boundaries", () => {
       mocks.maintenance.mockImplementationOnce(async () => {
         record("park-service");
         return {
-          assertCurrent() {},
+          assertCurrent: () => {},
           closeStores: async () => {},
           run: <T>(operation: () => T): T => operation(),
           releaseState: async () => {
@@ -918,7 +936,7 @@ describe("update plugin lifecycle lease boundaries", () => {
       const release = vi.fn<Maintenance["release"]>().mockResolvedValue(undefined);
       const releaseState = vi.fn<Maintenance["releaseState"]>().mockResolvedValue(undefined);
       mocks.maintenance.mockResolvedValue({
-        assertCurrent() {},
+        assertCurrent: () => {},
         closeStores: async () => {},
         run: <T>(operation: () => T): T => operation(),
         finish,

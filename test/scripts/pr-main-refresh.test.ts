@@ -1174,16 +1174,20 @@ fi`,
     const result = f.run("merge-run");
     expect(result.status, result.stdout + result.stderr).toBe(1);
     expect(result.stderr).toContain("GitHub API request failed (resource=graphql)");
-    expect(result.stderr).toContain("graphql 0/5000 reset=2030-01-01T00:00:00Z");
-    expect(result.stderr).toContain("core 4999/5000 reset=2030-01-01T01:00:00Z");
+    expect(result.stderr).toContain("original response: HTTP 200");
+    expect(result.stderr).toContain("resource=graphql; remaining=0; limit=unknown; reset=unknown");
+    expect(result.stderr).not.toContain("Supplemental quota probe");
     expect(f.events().some((e) => e.kind === "main-fetch")).toBe(false);
     const ghCalls = f.events().filter((e) => e.kind === "gh");
     const apiCalls = ghCalls.filter((e) => e.args?.[0] === "api").map((e) => e.args);
-    expect(apiCalls.slice(-2)).toEqual([
-      ["api", "graphql", "-f", "query=query { viewer { login } }", "--include"],
-      ["api", "rate_limit"],
+    expect(apiCalls.at(-1)).toEqual([
+      "api",
+      "graphql",
+      "-f",
+      "query=query { viewer { login } }",
+      "--include",
     ]);
-    expect(apiCalls.filter((args) => args?.includes("rate_limit"))).toHaveLength(1);
+    expect(apiCalls.filter((args) => args?.includes("rate_limit"))).toHaveLength(0);
     expect(
       apiCalls.filter((args) => args?.includes("query=query { viewer { login } }")),
     ).toHaveLength(1);

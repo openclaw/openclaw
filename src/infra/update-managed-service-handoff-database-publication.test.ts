@@ -5,6 +5,7 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { pathToFileURL } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { mockLargeDirectoryId } from "../../test/helpers/fs-large-directory-id.js";
 import { stopChildProcess } from "../../test/helpers/stop-child-process.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createManagedHandoffLeaseDatabase } from "./update-managed-service-handoff-database.js";
@@ -144,6 +145,17 @@ describe("managed handoff database publication", () => {
     );
 
     expect(readOwners()).toEqual(["alias-owner"]);
+    expect(fs.statSync(databasePath).nlink).toBe(1);
+  });
+
+  it("publishes when the parent file ID exceeds Number's exact range", () => {
+    mockLargeDirectoryId(root);
+
+    createManagedHandoffLeaseDatabase(databasePath)(true, (db) =>
+      insertRow(db, root, "exact-owner"),
+    );
+
+    expect(readOwners()).toEqual(["exact-owner"]);
     expect(fs.statSync(databasePath).nlink).toBe(1);
   });
 

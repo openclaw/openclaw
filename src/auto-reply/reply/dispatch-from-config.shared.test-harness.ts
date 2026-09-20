@@ -1,5 +1,5 @@
 // Shared harness for dispatch-from-config tests and mocked runtimes.
-import { vi } from "vitest";
+import { afterEach, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { TtsAutoMode } from "../../config/types.tts.js";
 import type { WorkerSessionPlacementRecord } from "../../gateway/worker-environments/placement-record.js";
@@ -20,14 +20,9 @@ import {
   createChannelTestPluginBase,
   createTestRegistry,
 } from "../../test-utils/channel-plugins.js";
-import { copyReplyPayloadMetadata } from "../reply-payload.js";
 import type { ReplyPayload } from "../types.js";
-import type { ReplyDispatchBeforeDeliver } from "./reply-dispatcher.js";
-import type {
-  ReplyDispatchKind,
-  ReplyDispatchSettledCounts,
-  ReplyDispatcher,
-} from "./reply-dispatcher.types.js";
+import { createReplyDispatcher } from "./reply-dispatcher.js";
+import type { ReplyDispatcher } from "./reply-dispatcher.types.js";
 import type { StageSandboxMediaResult } from "./stage-sandbox-media.js";
 import { buildTestCtx } from "./test-ctx.js";
 
@@ -776,82 +771,31 @@ vi.mock("../../tts/tts-config.js", () => ({
 export const noAbortResult = { handled: false, aborted: false } as const;
 export const emptyConfig = {} as OpenClawConfig;
 
+const fixtureDispatchers = new Set<ReplyDispatcher>();
+afterEach(() => {
+  for (const dispatcher of fixtureDispatchers) {
+    dispatcher.markComplete();
+  }
+  fixtureDispatchers.clear();
+});
+
 export function createDispatcher(): ReplyDispatcher {
-  let beforeDeliver: ReplyDispatchBeforeDeliver | undefined;
-  const beforeDeliverTasks: Promise<unknown>[] = [];
-  const settled = {
-    tool: { cancelled: 0, failedBeforeSend: 0 },
-    block: { cancelled: 0, failedBeforeSend: 0 },
-    final: { cancelled: 0, failedBeforeSend: 0 },
-  };
-  const runBeforeDeliver = (kind: ReplyDispatchKind, payload: ReplyPayload): void => {
-    if (!beforeDeliver) {
-      return;
-    }
-    beforeDeliverTasks.push(
-      Promise.resolve(beforeDeliver(payload, { kind })).then(
-        (result) => {
-          if (!result) {
-            settled[kind].cancelled += 1;
-          }
-        },
-        () => {
-          settled[kind].failedBeforeSend += 1;
-        },
-      ),
-    );
-  };
-  const sendToolResult = vi.fn((payload: ReplyPayload) => {
-    runBeforeDeliver("tool", payload);
-    return true;
-  });
-  const sendBlockReply = vi.fn((payload: ReplyPayload) => {
-    runBeforeDeliver("block", payload);
-    return true;
-  });
-  const sendFinalReply = vi.fn((payload: ReplyPayload) => {
-    runBeforeDeliver("final", payload);
-    return true;
-  });
-  const counts = (kind: ReplyDispatchKind, delivered: number): ReplyDispatchSettledCounts => ({
-    delivered: Math.max(0, delivered - settled[kind].cancelled - settled[kind].failedBeforeSend),
-    deliveredNotVisible: 0,
-    cancelled: settled[kind].cancelled,
-    failedBeforeSend: settled[kind].failedBeforeSend,
-    failedAfterSend: 0,
-  });
-  return {
-    sendToolResult,
-    sendBlockReply,
-    sendFinalReply,
-    appendBeforeDeliver: vi.fn((hook) => {
-      const previousBeforeDeliver = beforeDeliver;
-      beforeDeliver = previousBeforeDeliver
-        ? async (payload, info) => {
-            const previousPayload = await previousBeforeDeliver(payload, info);
-            return previousPayload
-              ? hook(copyReplyPayloadMetadata(payload, previousPayload), info)
-              : null;
-          }
-        : hook;
-    }),
-    supportsSettledReceipt: true,
-    waitForIdle: vi.fn(async () => {
-      await Promise.all(beforeDeliverTasks);
-      const receipt = {
-        tool: counts("tool", sendToolResult.mock.calls.length),
-        block: counts("block", sendBlockReply.mock.calls.length),
-        final: counts("final", sendFinalReply.mock.calls.length),
-      };
-      return {
-        counts: receipt,
-        anyVisibleDelivered: Object.values(receipt).some((entry) => entry.delivered > 0),
-      };
-    }),
-    getQueuedCounts: vi.fn(() => ({ tool: 0, block: 0, final: 0 })),
-    getFailedCounts: vi.fn(() => ({ tool: 0, block: 0, final: 0 })),
-    markComplete: vi.fn(),
-  };
+  const dispatcher = createReplyDispatcher({ deliver: async () => undefined });
+  fixtureDispatchers.add(dispatcher);
+  vi.spyOn(dispatcher, "sendToolResult");
+  vi.spyOn(dispatcher, "sendBlockReply");
+  vi.spyOn(dispatcher, "sendFinalReply");
+  vi.spyOn(dispatcher, "appendBeforeDeliver");
+  vi.spyOn(dispatcher, "waitForIdle");
+  // Admission counts are explicit inputs in these fixtures; delivery receipts stay core-owned.
+  vi.spyOn(dispatcher, "getQueuedCounts").mockImplementation(() => ({
+    tool: 0,
+    block: 0,
+    final: 0,
+  }));
+  vi.spyOn(dispatcher, "getFailedCounts");
+  vi.spyOn(dispatcher, "markComplete");
+  return dispatcher;
 }
 
 export function resetPluginTtsAndThreadMocks() {

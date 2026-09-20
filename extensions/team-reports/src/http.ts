@@ -219,7 +219,7 @@ export function createTeamReportsHttpHandler(options: TeamReportsHttpOptions) {
     if (route.segments.length === 0) {
       const periods = await index();
       const latest = periods.day[0];
-      const stored = latest ? await store.getPeriod("day", latest.key) : undefined;
+      const stored = latest ? await store.getPeriodDocument("day", latest.key) : undefined;
       return html(
         renderIndexPage(ctx, periods, {
           orgs: stored?.report.orgs ?? options.orgs(),
@@ -264,15 +264,16 @@ export function createTeamReportsHttpHandler(options: TeamReportsHttpOptions) {
       } catch {
         return notFound();
       }
-      const stored = await store.getPeriod(first, key);
+      if (format === "report.md") {
+        const stored = await store.getPeriod(first, key);
+        return stored ? send(200, "text/markdown", stored.markdown) : notFound();
+      }
+      const stored = await store.getPeriodDocument(first, key);
       if (!stored) {
         return notFound();
       }
       if (format === "data.json") {
         return json(stored.report);
-      }
-      if (format === "report.md") {
-        return send(200, "text/markdown", stored.markdown);
       }
       return html(
         renderReportPage(

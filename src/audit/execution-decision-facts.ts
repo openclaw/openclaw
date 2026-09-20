@@ -14,6 +14,7 @@ import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-
 import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
+  type OpenClawStateDatabase,
   type OpenClawStateDatabaseOptions,
 } from "../state/openclaw-state-db.js";
 import { createOpenClawStateSchemaEnsurer } from "../state/openclaw-state-feature-schema.js";
@@ -198,9 +199,9 @@ function pruneDecisionFactsAfterInsert(
 }
 
 /** Record one immutable fact only when its action owner has no native durable record. */
-export function recordExecutionDecisionFact(
+export function recordExecutionDecisionFactInDatabase(
   receipt: unknown,
-  options: ExecutionDecisionFactOptions = {},
+  options: ExecutionDecisionFactOptions & { database: OpenClawStateDatabase },
 ): "inserted" | "existing" {
   if (!validateDecisionReceiptV1(receipt)) {
     throw new Error("execution decision fact must match DecisionReceiptV1");
@@ -522,10 +523,11 @@ export function pageExecutionDecisionFactsForContextInDatabase(
 }
 
 /** Delete one bounded batch without creating the optional table. */
-export function pruneExpiredExecutionDecisionFacts(
-  params: { now?: number; database?: OpenClawStateDatabaseOptions } = {},
-): number {
-  const databaseOptions = params.database ?? {};
+export function pruneExpiredExecutionDecisionFactsInDatabase(params: {
+  now?: number;
+  database: OpenClawStateDatabaseOptions & { database: OpenClawStateDatabase };
+}): number {
+  const databaseOptions = params.database;
   const database = openOpenClawStateDatabase(databaseOptions);
   if (!tableExists(database.db, "execution_decision_facts")) {
     return 0;

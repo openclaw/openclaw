@@ -1,7 +1,7 @@
 import { html, nothing } from "lit";
 import { repeat } from "lit/directives/repeat.js";
 import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
-import { pathForRoute } from "../../app-route-paths.ts";
+import { pathForRoute, type RouteId } from "../../app-route-paths.ts";
 import type { ApplicationContext, ApplicationNavigationOptions } from "../../app/context.ts";
 import { renderAgentIdentityAvatar } from "../../components/identity-avatar-view.ts";
 import { renderSettingsPageHeader } from "../../components/settings-ui.ts";
@@ -38,7 +38,7 @@ type AgentsHomeProps = {
 
 export function renderAgentsHome(props: AgentsHomeProps) {
   const { context } = props;
-  const navigate = (event: MouseEvent, route: string, options?: ApplicationNavigationOptions) => {
+  const navigate = (event: MouseEvent, route: RouteId, options?: ApplicationNavigationOptions) => {
     if (shouldHandleNavigationClick(event)) {
       event.preventDefault();
       context.navigate(route, options);

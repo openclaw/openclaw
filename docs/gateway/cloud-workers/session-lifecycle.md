@@ -133,6 +133,8 @@ Recovery requested for one worker inspects that environment and resumes only its
 
 If a turn reports `Cloud worker finished, but its workspace result could not be reconciled`, inspect the cause after the colon. A failed node manifest capture includes its bounded, redacted stderr, or its termination status when stderr is empty. Node cleanup preserves manifests needed between upload and verification, including when other workers finish simultaneously; increasing transfer timeouts does not repair a missing manifest.
 
+Reconciliation compares files with the last synchronized workspace, not the worker's current Git `HEAD`. A rebase can therefore return many upstream changes even when `git status` is clean. Results support up to 500,000 before/after records across the two 250,000-entry inventories, 64 MiB per changed file, and 768 MiB of changed content or generated patch. The compressed SQLite rollback snapshot remains limited to 256 MiB. Git import preparation uses temporary files so it does not buffer the entire result twice. These result limits are separate from the 4 GiB dispatch inventory and the attachment limits.
+
 ## What survives a dead machine
 
 The Gateway owns the canonical session transcript in both modes. Worker-turn commits each complete user, assistant, and tool-result message before the worker's session write settles; remote-exec uses the normal local harness transcript path because the Codex app-server stays on the Gateway. If the machine disappears mid-message, durable history ends at the last committed message. Partial text or tool progress already shown by the live stream may disappear; the failed turn remains visible, and the failed placement records a bounded terminal reason above the composer.

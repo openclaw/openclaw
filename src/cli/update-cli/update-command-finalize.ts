@@ -49,6 +49,7 @@ import { exitCliAfterOutput } from "../one-shot-exit.js";
 import { retainCliProcessJobUntilExit } from "../runtime-cleanup-scope.js";
 import {
   parseTimeoutMsOrExit,
+  parseUpdateTimeoutMs,
   readPackageVersion,
   resolveUpdateRoot,
   tryResolveInvocationCwd,
@@ -168,7 +169,6 @@ export async function updateFinalizeCommand(
           ),
         recoveryRunIds === undefined ? "finalize" : "unknown",
       );
-      const run = { runId, env: { ...process.env } };
       lifecycle.root = root;
       const target = {
         root,
@@ -177,6 +177,7 @@ export async function updateFinalizeCommand(
           [UPDATE_RUN_ID_ENV]: runId,
         },
       };
+      const run = { runId, env: target.env };
       await withUpdateFailureTriage({ ...opts, invocationCwd, run }, target, () =>
         withUpdateInProgressEnv(invocationCwd, async () => {
           let finalResult: Awaited<ReturnType<typeof updateFinalizeCommandInternal>> | undefined;
@@ -426,6 +427,9 @@ async function withFinalizationRecovery<T>(
         } catch (cause) {
           reverseFailure = { error: cause };
         }
+        if (reverseFailure && hasUnsettledUpdateProcesses(reverseFailure.error)) {
+          throw reverseFailure.error;
+        }
         try {
           await recoveryMaintenance.release();
           authority.assertOwned();
@@ -534,6 +538,7 @@ async function prepareUpdateFinalization(
         configSnapshot: snapshot,
         requestedChannel,
         assertCurrent: phase.assertCurrent,
+        beforePersistentEffect: phase.assertCurrent,
       });
     });
   }
@@ -574,12 +579,18 @@ async function updateFinalizeCommandInternal(
   }
   const initialPluginUpdate = await withPrePluginUpdateDoctorEnv(async () => {
     await lifecycle.run("configSnapshot", () => createUpdateConfigSnapshot());
-    await lifecycle.run("doctor", async () => {
+    await lifecycle.run("doctor", async (phase) => {
+      phase.assertCurrent();
       await recovery.beforeDoctor();
+      phase.assertCurrent();
       await runUpdateFinalizationDoctorInFreshProcess({
         updateRecoveryBackup: recovery.backup,
         updateRecoveryOwner: recovery.updateRecoveryOwner,
         executorFence: recovery.executorFence,
+        assertCurrent: () => {
+          phase.assertCurrent();
+          recovery.assertCurrent();
+        },
         phase: "pre-plugin",
         root,
         runId: invokingRunId,
@@ -601,6 +612,7 @@ async function updateFinalizeCommandInternal(
           const preparedConfig = await preparePostCorePluginConfig({
             requestedChannel,
             preUpdateConfig: preFinalizeConfig,
+            beforePersistentEffect: assertCurrent,
             assertCurrent,
           });
           configSnapshot = preparedConfig.configSnapshot;
@@ -621,6 +633,7 @@ async function updateFinalizeCommandInternal(
             json: opts.json,
             acceptCapabilities: opts.acceptCapabilities,
             timeoutMs: lifecycle.budget("plugins"),
+            workTimeoutMs: parseUpdateTimeoutMs(opts.timeout) ?? null,
             pluginInstallRecords,
             assertCurrent,
             runtime: createNonExitingRuntime(),
@@ -650,6 +663,7 @@ async function updateFinalizeCommandInternal(
         json: opts.json === true,
         timeoutMs: lifecycle.budget("targetConfigConvergence"),
         onWarnings: onDoctorWarnings,
+        assertCurrent,
       });
       await persistValidatedDowngradeConfig(result.configSnapshot, assertCurrent);
       return result;

@@ -9,7 +9,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import { Minimatch } from "minimatch";
+import type { Minimatch } from "minimatch";
 import { extractFrontmatterBlock } from "../../packages/markdown-core/src/frontmatter.js";
 import type { ChatType } from "../channels/chat-type.js";
 import { isRootFileMissingFailure } from "../infra/boundary-file-read.js";
@@ -20,10 +20,7 @@ import { FsSafeError, pathExists, root as fsSafeRoot } from "../infra/fs-safe.js
 import { isPathInside } from "../infra/path-guards.js";
 import { retryAsync } from "../infra/retry.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import {
-  CANONICAL_ROOT_MEMORY_FILENAME,
-  exactWorkspaceEntryExists,
-} from "../memory/root-memory-files.js";
+import { exactWorkspaceEntryExists } from "../memory/root-memory-files.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { isCronSessionKey, isSubagentSessionKey } from "../routing/session-key.js";
 import { deriveSessionChatTypeFromKey } from "../sessions/session-chat-type-shared.js";
@@ -31,6 +28,20 @@ import { createLazyPromise, getOrCreatePromise } from "../shared/lazy-promise.js
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db.js";
 import { resolveUserPath } from "../utils.js";
 import { getAgentWorkspaceAccess } from "./workspace-access.js";
+import {
+  DEFAULT_AGENTS_FILENAME,
+  DEFAULT_BOOTSTRAP_FILENAME,
+  DEFAULT_IDENTITY_FILENAME,
+  DEFAULT_MEMORY_FILENAME,
+  DEFAULT_SOUL_FILENAME,
+  DEFAULT_USER_FILENAME,
+  GENERATED_WORKSPACE_BOOTSTRAP_FILENAMES,
+  WORKSPACE_BOOTSTRAP_FILENAMES,
+  createBootstrapPatternMatcher,
+  hasGlobPattern,
+  normalizeWorkspacePatternPath,
+  resolveGlobWalkRoot,
+} from "./workspace-bootstrap-policy.js";
 import { MAX_WORKSPACE_BOOTSTRAP_FILE_BYTES } from "./workspace-bootstrap-read.js";
 import { DEFAULT_AGENT_WORKSPACE_DIR } from "./workspace-default.js";
 import {
@@ -56,6 +67,17 @@ import {
 } from "./workspace-state-store.js";
 import { resolveWorkspaceTemplateSearchDirs } from "./workspace-templates.js";
 export {
+  DEFAULT_AGENTS_FILENAME,
+  DEFAULT_BOOTSTRAP_FILENAME,
+  DEFAULT_IDENTITY_FILENAME,
+  DEFAULT_MEMORY_FILENAME,
+  DEFAULT_SOUL_FILENAME,
+  DEFAULT_TOOLS_FILENAME,
+  DEFAULT_USER_FILENAME,
+  GENERATED_WORKSPACE_BOOTSTRAP_FILENAMES,
+  WORKSPACE_BOOTSTRAP_FILENAMES,
+} from "./workspace-bootstrap-policy.js";
+export {
   getWorkspaceFileSourceRelativePath,
   workspaceFileSourceIdentitiesMatch,
   workspaceFilesShareSourceIdentity,
@@ -65,19 +87,6 @@ export {
   DEFAULT_AGENT_WORKSPACE_DIR,
   resolveDefaultAgentWorkspaceDir,
 } from "./workspace-default.js";
-export const DEFAULT_AGENTS_FILENAME = "AGENTS.md";
-export const DEFAULT_SOUL_FILENAME = "SOUL.md";
-export const DEFAULT_TOOLS_FILENAME = "TOOLS.md";
-export const DEFAULT_IDENTITY_FILENAME = "IDENTITY.md";
-export const DEFAULT_USER_FILENAME = "USER.md";
-export const DEFAULT_BOOTSTRAP_FILENAME = "BOOTSTRAP.md";
-export const DEFAULT_MEMORY_FILENAME = CANONICAL_ROOT_MEMORY_FILENAME;
-export const GENERATED_WORKSPACE_BOOTSTRAP_FILENAMES = [
-  DEFAULT_AGENTS_FILENAME,
-  DEFAULT_SOUL_FILENAME,
-  DEFAULT_IDENTITY_FILENAME,
-  DEFAULT_USER_FILENAME,
-] as const;
 const GENERATED_WORKSPACE_BOOTSTRAP_FILENAME_SET: ReadonlySet<string> = new Set(
   GENERATED_WORKSPACE_BOOTSTRAP_FILENAMES,
 );
@@ -129,20 +138,6 @@ async function loadTemplate(name: string): Promise<string> {
     throw error;
   }
 }
-
-/**
- * Canonical bootstrap filenames in prompt order. Single source for the runtime
- * validation set, the name union, and the Control UI core-files list; a private
- * copy anywhere else silently drifts when a file is retired.
- */
-export const WORKSPACE_BOOTSTRAP_FILENAMES = [
-  DEFAULT_AGENTS_FILENAME,
-  DEFAULT_SOUL_FILENAME,
-  DEFAULT_IDENTITY_FILENAME,
-  DEFAULT_USER_FILENAME,
-  DEFAULT_BOOTSTRAP_FILENAME,
-  DEFAULT_MEMORY_FILENAME,
-] as const;
 
 export type WorkspaceBootstrapFileName = (typeof WORKSPACE_BOOTSTRAP_FILENAMES)[number];
 
@@ -1293,28 +1288,6 @@ export function filterBootstrapFilesForSession(
   return privacyFilteredFiles;
 }
 
-function hasGlobPattern(pattern: string): boolean {
-  // Keep square brackets literal here; workspace paths commonly contain them.
-  return /[?*{}]/u.test(pattern);
-}
-
-function normalizeWorkspacePatternPath(value: string): string {
-  return value
-    .replaceAll(path.sep, "/")
-    .replaceAll("\\", "/")
-    .replace(/^\.\/+/u, "");
-}
-
-function resolveGlobWalkRoot(pattern: string): string {
-  const normalized = normalizeWorkspacePatternPath(pattern);
-  const globIndex = normalized.search(/[?*{}]/u);
-  if (globIndex === -1) {
-    return normalized;
-  }
-  const slashIndex = normalized.lastIndexOf("/", globIndex);
-  return slashIndex === -1 ? "." : normalized.slice(0, slashIndex) || ".";
-}
-
 async function* walkWorkspaceFiles(
   workspaceDir: string,
   initialRelativeDir: string,
@@ -1399,11 +1372,7 @@ async function resolveExtraBootstrapPatternPaths(
   }
 
   const normalizedPattern = normalizeWorkspacePatternPath(pattern);
-  const matcher = new Minimatch(normalizedPattern, {
-    nocomment: true,
-    nonegate: true,
-    windowsPathsNoEscape: true,
-  });
+  const matcher = createBootstrapPatternMatcher(normalizedPattern);
   const matches: string[] = [];
   for await (const candidate of walkWorkspaceFiles(
     workspaceDir,

@@ -19,6 +19,7 @@ import {
 } from "../../infra/update-run-ledger.js";
 import type { UpdateRunRecord } from "../../infra/update-run-record.js";
 import { loadInstalledPluginIndexInstallRecords } from "../../plugins/installed-plugin-index-records.js";
+import { readPersistedInstalledPluginIndex } from "../../plugins/installed-plugin-index-store.js";
 import { seedInstalledPluginIndex } from "../../plugins/test-helpers/installed-plugin-index.js";
 import { runExec } from "../../process/exec.js";
 import { defaultRuntime } from "../../runtime.js";
@@ -98,7 +99,7 @@ const sealedRegistryUrl = resolveRuntimeWorkerUrl(updateExecutorNativeEntrypoint
 const failureOutputUrl = resolveRuntimeWorkerUrl(updateExecutorNativeEntrypoints.failureOutput);
 const sourceFixture = leaseFixtureUrl.pathname.endsWith(".ts");
 
-type Lane = LeaseScenario["lane"];
+type Lane = LeaseScenario["lane"] | "candidate-runtime";
 let state: OpenClawTestState;
 let entrypoint: string;
 
@@ -192,8 +193,9 @@ async function writeScenario(
   await state.writeJson("scenario.json", {
     pluginUpdate: pluginResult,
     ...scenario,
-    lane,
     installRoot: await fs.realpath(state.root),
+    // Both inline paths retain fresh Doctor, but must never invoke the fixture's post-core role.
+    lane: lane === "candidate-runtime" ? "current-process" : lane,
   });
   if (lane === "resume") {
     vi.stubEnv("OPENCLAW_UPDATE_POST_CORE_RESULT_PATH", state.path("post-core-result.json"));
@@ -201,7 +203,11 @@ async function writeScenario(
   }
 }
 
-async function invoke(lane: Lane, recoveryRunIds: readonly string[] = []): Promise<void> {
+async function invoke(
+  lane: Lane,
+  recoveryRunIds: readonly string[] = [],
+  startedAt = Date.now(),
+): Promise<void> {
   if (lane === "resume") {
     return resumePostCoreUpdate({
       root: state.root,
@@ -222,32 +228,37 @@ async function invoke(lane: Lane, recoveryRunIds: readonly string[] = []): Promi
       recoveryRunIds,
     );
   }
-  await finishUpdate({
-    mutationStarted: true,
-    result: {
-      status: "ok",
-      mode: "npm",
+  await finishUpdate(
+    {
+      mutationStarted: true,
+      result: {
+        status: "ok",
+        mode: "npm",
+        root: state.root,
+        before: {
+          version: lane === "fresh-process" || lane === "candidate-runtime" ? "0.9.0" : "2.0.0",
+        },
+        after: { version: lane === "fresh-process" ? VERSION : "1.0.0" },
+        steps: [],
+        durationMs: 1,
+      },
       root: state.root,
-      before: { version: lane === "fresh-process" ? "0.9.0" : "2.0.0" },
-      after: { version: lane === "fresh-process" ? VERSION : "1.0.0" },
-      steps: [],
-      durationMs: 1,
+      installKindChanged: false,
+      configSnapshot: await readConfigFileSnapshot({ skipPluginValidation: true }),
+      requestedChannel: null,
+      storedChannel: "stable",
+      channel: "stable",
+      downgradeRisk: lane !== "fresh-process" && lane !== "candidate-runtime",
+      shouldRestart: false,
+      opts: { json: true, yes: true },
+      ownedManagedUpdateEnv: { ...process.env },
+      controlPlaneUpdateSentinelMeta: null,
+      preUpdatePluginInstallRecords: { stale: { source: "path", sourcePath: state.path("stale") } },
+      startedAt,
+      updateStepTimeoutMs: 15_000,
     },
-    root: state.root,
-    installKindChanged: false,
-    configSnapshot: await readConfigFileSnapshot({ skipPluginValidation: true }),
-    requestedChannel: null,
-    storedChannel: "stable",
-    channel: "stable",
-    downgradeRisk: lane !== "fresh-process",
-    shouldRestart: false,
-    opts: { json: true, yes: true },
-    ownedManagedUpdateEnv: { ...process.env },
-    controlPlaneUpdateSentinelMeta: null,
-    preUpdatePluginInstallRecords: { stale: { source: "path", sourcePath: state.path("stale") } },
-    startedAt: Date.now(),
-    updateStepTimeoutMs: 15_000,
-  });
+    { candidateRuntime: lane === "candidate-runtime" },
+  );
 }
 
 async function invokeReportedFailure(
@@ -572,7 +583,7 @@ describe("update orchestration lifecycle ownership", () => {
     }
   });
 
-  it.each(["fresh-process", "current-process", "repair"] as const)(
+  it.each(["fresh-process", "current-process", "candidate-runtime", "repair"] as const)(
     "%s releases plugin ownership for fresh doctor without delegating Gateway activation",
     async (lane) => {
       const recovery = lane === "repair" ? seedInterruptedPostCoreRun() : undefined;
@@ -747,23 +758,29 @@ describe("update orchestration lifecycle ownership", () => {
     },
   );
 
-  it.each([false, true])(
-    "resume reads the parent migration owner's committed generation (empty=%s)",
-    async (empty) => {
+  it.each(
+    (["resume", "candidate-runtime"] as const).flatMap((lane) =>
+      [false, true].map((empty) => ({ lane, empty })),
+    ),
+  )(
+    "$lane reads the parent migration owner's committed generation (empty=$empty)",
+    async ({ lane, empty }) => {
       const old = { old: { source: "path" as const } };
       await seedInstalledPluginIndex(old);
       expect(await loadInstalledPluginIndexInstallRecords()).toEqual(old);
       const recordsPath = await state.writeJson("forwarded.json", old);
       vi.stubEnv("OPENCLAW_UPDATE_POST_CORE_INSTALL_RECORDS_PATH", recordsPath);
-      vi.stubEnv("OPENCLAW_UPDATE_POST_CORE_STARTED_AT_MS", String(Date.now()));
+      const startedAt = Date.now();
+      vi.stubEnv("OPENCLAW_UPDATE_POST_CORE_STARTED_AT_MS", String(startedAt));
       const current: Record<string, PluginInstallRecord> = empty
         ? {}
         : { current: { source: "path" } };
       await state.writeConfig({ plugins: { enabled: false }, gateway: { port: 19003 } });
-      await seedInstalledPluginIndex(current);
-      await writeScenario("resume");
-      await invoke("resume");
-      expectSuccess("resume", false);
+      await seedInstalledPluginIndex(current, { now: () => new Date(startedAt) });
+      expect((await readPersistedInstalledPluginIndex())?.generatedAtMs).toBe(startedAt);
+      await writeScenario(lane);
+      await invoke(lane, [], startedAt);
+      expectSuccess(lane, lane !== "resume");
       expect(mocks.plugins).toHaveBeenCalledWith(
         expect.objectContaining({
           configSnapshot: expect.objectContaining({
@@ -772,11 +789,26 @@ describe("update orchestration lifecycle ownership", () => {
           pluginInstallRecords: current,
         }),
       );
-      expect(await events()).toEqual([]);
+      expect(await events()).toEqual(
+        lane === "resume" ? [] : ["post-attempt", "post-acquired", "validate", "readiness"],
+      );
     },
   );
 
-  it.each(["fresh-process", "current-process", "repair"] as const)(
+  it("uses forwarded records when candidate convergence has no persisted index", async () => {
+    expect(await readPersistedInstalledPluginIndex()).toBeNull();
+    await writeScenario("candidate-runtime", { hostVersion: "1.0.0" });
+    await invoke("candidate-runtime");
+    expectSuccess("candidate-runtime");
+    expect(mocks.plugins).toHaveBeenCalledWith(
+      expect.objectContaining({
+        pluginInstallRecords: { stale: { source: "path", sourcePath: state.path("stale") } },
+      }),
+    );
+    expect(await events()).toEqual(["post-attempt", "post-acquired", "validate", "readiness"]);
+  });
+
+  it.each(["fresh-process", "current-process", "candidate-runtime", "repair"] as const)(
     "%s does not run a final doctor when no plugins changed",
     async (lane) => {
       await writeScenario(lane, { pluginUpdate: { ...pluginResult, changed: false } });
@@ -792,7 +824,7 @@ describe("update orchestration lifecycle ownership", () => {
     },
   );
 
-  it.each(["fresh-process", "current-process", "repair"] as const)(
+  it.each(["fresh-process", "current-process", "candidate-runtime", "repair"] as const)(
     "%s retains strict fresh validation after releasing the lease",
     async (lane) => {
       const recovery = lane === "repair" ? seedInterruptedPostCoreRun() : undefined;
@@ -963,93 +995,87 @@ describe("update orchestration lifecycle ownership", () => {
     ]);
   });
 
-  it.each([
-    { lane: "resume", valid: true },
-    { lane: "fresh-process", valid: true },
-    { lane: "repair", valid: true },
-    { lane: "resume", valid: false },
-    { lane: "fresh-process", valid: false },
-    { lane: "repair", valid: false },
-  ] as const)(
-    "$lane stamps only strictly valid downgrade config (valid=$valid)",
-    async ({ lane, valid }) => {
-      const futureVersion = "2099.1.1";
-      await state.writeConfig({
-        meta: { lastTouchedVersion: futureVersion },
-        plugins: { enabled: false },
-        update: { channel: "stable" },
-        gateway: { port: valid ? 19004 : -1 },
-      });
-      const originalConfig = await fs.readFile(state.configPath, "utf8");
-      await writeScenario(lane, { failDoctor: "post", invalidConfig: !valid });
+  it.each(
+    (["resume", "fresh-process", "candidate-runtime", "repair"] as const).flatMap((lane) =>
+      [true, false].map((valid) => ({ lane, valid })),
+    ),
+  )("$lane stamps only strictly valid downgrade config (valid=$valid)", async ({ lane, valid }) => {
+    const futureVersion = "2099.1.1";
+    await state.writeConfig({
+      meta: { lastTouchedVersion: futureVersion },
+      plugins: { enabled: false },
+      update: { channel: "stable" },
+      gateway: { port: valid ? 19004 : -1 },
+    });
+    const originalConfig = await fs.readFile(state.configPath, "utf8");
+    await writeScenario(lane, { failDoctor: "post", invalidConfig: !valid });
 
-      if (lane === "resume") {
-        await invoke(lane);
-        expectSuccess(lane, false);
-      } else {
-        await invokeReportedFailure(lane);
-        expect(reportedResult(lane)).toMatchObject({
-          status: "error",
-          postUpdate: {
-            plugins: {
-              reason: valid
-                ? "post-plugin-doctor-execution-failed"
-                : "post-plugin-doctor-invalid-config",
-            },
+    if (lane === "resume") {
+      await invoke(lane);
+      expectSuccess(lane, false);
+    } else {
+      await invokeReportedFailure(lane);
+      expect(reportedResult(lane)).toMatchObject({
+        status: "error",
+        postUpdate: {
+          plugins: {
+            reason: valid
+              ? "post-plugin-doctor-execution-failed"
+              : "post-plugin-doctor-invalid-config",
           },
-        });
-      }
-      const persistedRaw = await fs.readFile(state.configPath, "utf8");
-      const persisted = JSON.parse(persistedRaw) as OpenClawConfig;
-      expect(persisted.update?.channel).toBe("stable");
-      const startupBlock = resolveFutureConfigActionBlock({
-        action: "start gateway service",
-        config: persisted,
-        env: {},
+        },
       });
-      if (lane === "repair") {
-        // Uncertified reverse publication is refused. Preserve newer Doctor output
-        // and the exact prior config in B, without reporting a restored outcome.
-        expect(persisted.meta?.lastTouchedVersion).toBe(valid ? VERSION : futureVersion);
-        expect(startupBlock === null).toBe(valid);
-        expect(mocks.restart).not.toHaveBeenCalled();
-        const { inspectUpdateRecoveryBackups, verifyUpdateRecoveryBackup } =
-          await import("../../infra/update-recovery-backup.js");
-        const captures = await inspectUpdateRecoveryBackups({ installRoot: state.root });
-        expect(captures).toHaveLength(1);
-        const [capture] = captures;
-        if (!capture) {
-          throw new Error("Expected failed repair retained capture");
-        }
-        expect(capture.terminalOutcome).not.toBe("restored");
-        const manifest = await verifyUpdateRecoveryBackup(capture.ref);
-        const original = manifest.entries.find((entry) => entry.sourcePath === state.configPath);
-        if (original?.kind !== "file") {
-          throw new Error("Expected baseline config payload");
-        }
-        expect(
-          await fs.readFile(path.join(capture.ref.directory, original.archivePath), "utf8"),
-        ).toBe(originalConfig);
-        const failedRun = getUpdateRun(manifest.runId);
-        expect(failedRun?.status).toBe("failed");
-        expect(failedRun?.origin.updateRecoveryCapture?.restored).not.toBe(true);
-        expect(failedRun?.origin.updateRecoveryCapture?.forwardResolution).toBeUndefined();
-      } else {
-        expect(persisted.meta?.lastTouchedVersion).toBe(valid ? VERSION : futureVersion);
-        expect(startupBlock === null).toBe(valid);
+    }
+    const persistedRaw = await fs.readFile(state.configPath, "utf8");
+    const persisted = JSON.parse(persistedRaw) as OpenClawConfig;
+    expect(persisted.update?.channel).toBe("stable");
+    const startupBlock = resolveFutureConfigActionBlock({
+      action: "start gateway service",
+      config: persisted,
+      env: {},
+    });
+    if (lane === "repair") {
+      // Uncertified reverse publication is refused. Preserve newer Doctor output
+      // and the exact prior config in B, without reporting a restored outcome.
+      expect(persisted.meta?.lastTouchedVersion).toBe(valid ? VERSION : futureVersion);
+      expect(startupBlock === null).toBe(valid);
+      expect(mocks.restart).not.toHaveBeenCalled();
+      const { inspectUpdateRecoveryBackups, verifyUpdateRecoveryBackup } =
+        await import("../../infra/update-recovery-backup.js");
+      const captures = await inspectUpdateRecoveryBackups({ installRoot: state.root });
+      expect(captures).toHaveLength(1);
+      const [capture] = captures;
+      if (!capture) {
+        throw new Error("Expected failed repair retained capture");
       }
-      expect(await events(), JSON.stringify(vi.mocked(defaultRuntime.error).mock.calls)).toEqual(
-        lane === "resume"
-          ? []
-          : [
-              ...(lane === "repair" ? ["pre-attempt", "pre-acquired"] : []),
-              ...(lane === "fresh-process" ? ["packages-acquired", "packages-released"] : []),
-              "post-attempt",
-              "post-acquired",
-              "validate",
-              ...(valid ? ["readiness"] : []),
-            ],
-      );
-    },
-  );
+      expect(capture.terminalOutcome).not.toBe("restored");
+      const manifest = await verifyUpdateRecoveryBackup(capture.ref);
+      const original = manifest.entries.find((entry) => entry.sourcePath === state.configPath);
+      if (original?.kind !== "file") {
+        throw new Error("Expected baseline config payload");
+      }
+      expect(
+        await fs.readFile(path.join(capture.ref.directory, original.archivePath), "utf8"),
+      ).toBe(originalConfig);
+      const failedRun = getUpdateRun(manifest.runId);
+      expect(failedRun?.status).toBe("failed");
+      expect(failedRun?.origin.updateRecoveryCapture?.restored).not.toBe(true);
+      expect(failedRun?.origin.updateRecoveryCapture?.forwardResolution).toBeUndefined();
+    } else {
+      expect(persisted.meta?.lastTouchedVersion).toBe(valid ? VERSION : futureVersion);
+      expect(startupBlock === null).toBe(valid);
+    }
+    expect(await events(), JSON.stringify(vi.mocked(defaultRuntime.error).mock.calls)).toEqual(
+      lane === "resume"
+        ? []
+        : [
+            ...(lane === "repair" ? ["pre-attempt", "pre-acquired"] : []),
+            ...(lane === "fresh-process" ? ["packages-acquired", "packages-released"] : []),
+            "post-attempt",
+            "post-acquired",
+            "validate",
+            ...(valid ? ["readiness"] : []),
+          ],
+    );
+  });
 });

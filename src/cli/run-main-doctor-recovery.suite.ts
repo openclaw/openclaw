@@ -63,6 +63,9 @@ export function registerDoctorBootstrapRecoveryTests(
   it.each([
     ["explicit lint", ["--lint", "--json"]],
     ["bare JSON", ["--json"]],
+    ["rejected JSON fix", ["--fix", "--json"]],
+    ["rejected JSON repair", ["--repair", "--json"]],
+    ["rejected JSON yes", ["--yes", "--json"]],
     ["post-upgrade probes", ["--post-upgrade", "--json"]],
     ["session inspection", ["--session-sqlite", "inspect", "--json"]],
     ["session validation", ["--session-sqlite", "validate", "--json"]],

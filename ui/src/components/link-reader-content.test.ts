@@ -43,6 +43,38 @@ function mount(value: ControlUiLinkReaderDocument, link = target) {
 afterEach(() => document.body.replaceChildren());
 
 describe("link reader document content", () => {
+  it("hides HTML comment metadata while preserving visible prose and literal code examples", () => {
+    const body = [
+      "<!-- hidden-block\nmetadata --> <!-- hidden-adjacent -->",
+      "  <!-- hidden-indented -->",
+      "Visible description with <!-- hidden-inline --> text.",
+      "`<!-- inline example -->`",
+      "```html\n<!-- fenced example -->\n```",
+      "    <!-- indented example -->",
+      "&lt;!-- escaped example --&gt;",
+      "<!-- hidden-prefix -->Trailing text<!-- hidden-suffix -->More text",
+      "<!-- hidden-unclosed",
+    ].join("\n\n");
+    const container = mount(
+      detail(body, [
+        {
+          id: "issuecomment-1",
+          url: url + "#issuecomment-1",
+          author: "review-bot",
+          body: "<!-- hidden-ack --> <!-- hidden-status -->\n\nReview requested.",
+        },
+      ]),
+    );
+    expect(container.textContent).not.toContain("hidden-");
+    expect(container.textContent).toContain("Visible description with  text.");
+    expect(container.textContent).toContain("Trailing textMore text");
+    expect(container.querySelector("#issuecomment-1")?.textContent).toContain("Review requested.");
+    expect([...container.querySelectorAll("code")].map((code) => code.textContent?.trim())).toEqual(
+      ["<!-- inline example -->", "<!-- fenced example -->", "<!-- indented example -->"],
+    );
+    expect(container.textContent).toContain("<!-- escaped example -->");
+  });
+
   it("renders Markdown and HTML attachments with anonymous requests, source-relative URLs, and full-size links", () => {
     const container = mount(
       detail(
@@ -224,7 +256,10 @@ describe("link reader document content", () => {
         subtitle: "Team changes",
         badge: { label: "Needs review", tone: "attention" },
         author: "Alex",
-        metadata: [{ label: "Build", value: "Passed" }],
+        authorUrl: "https://forge.example/users/alex",
+        coAuthors: [{ name: "Sam" }, { name: "Noor" }],
+        coAuthorCount: 3,
+        metadata: [{ label: "Build", value: "Passed", tone: "positive" }],
         body: "[Next change](C43)",
         partial: true,
         bodyTruncated: true,
@@ -258,6 +293,13 @@ describe("link reader document content", () => {
     );
     expect(container.querySelector("h1")?.textContent).toBe("Change C42");
     expect(container.textContent).toContain("Build: Passed");
+    expect(container.querySelector(".lr-item-meta a")?.getAttribute("href")).toBe(
+      "https://forge.example/users/alex",
+    );
+    expect(container.querySelector(".lr-coauthors")?.textContent).toBe("Co-authors: Sam, Noor +1");
+    expect(container.querySelector(".lr-item-meta [data-tone=positive]")?.textContent).toBe(
+      "Passed",
+    );
     expect(container.querySelector(".lr-state--attention")?.textContent).toBe("Needs review");
     expect(container.querySelector('a[href="https://forge.example/changes/C43"]')).not.toBeNull();
     expect(

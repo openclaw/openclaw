@@ -5,7 +5,7 @@ import type {
   ControlUiLinkReaderDescriptor,
   ControlUiLinkReaderPreview,
 } from "../../../src/shared/control-ui-link-reader.js";
-import type { GatewayBrowserClient } from "../api/gateway.ts";
+import { GatewayRequestError, type GatewayBrowserClient } from "../api/gateway.ts";
 import { i18n } from "../i18n/index.ts";
 import { LinkReaderHovercardProvider } from "./link-reader-hovercard.ts";
 
@@ -126,6 +126,58 @@ describe("openclaw-link-reader-hovercard-provider", () => {
     expect(request).toHaveBeenCalledTimes(1);
   });
 
+  it("preserves co-author faces, missing-face counts, and accessible credit", async () => {
+    const { anchor, provider } = createLink();
+    const imageUrl = preview().imageUrl;
+    connect(
+      provider,
+      vi.fn().mockResolvedValue({
+        ...preview(),
+        authorUrl: "https://github.com/reviewer",
+        coAuthors: [
+          { name: "ada", imageUrl },
+          { name: "mira", imageUrl: "https://127.0.0.1/private.png" },
+          { name: "lin", imageUrl },
+          { name: "noor", imageUrl },
+          { name: "rune", imageUrl },
+        ],
+        coAuthorCount: 7,
+      }),
+    );
+    await hover(anchor);
+    const group = card()?.querySelector(".link-reader-hovercard__coauthors");
+    expect(group?.getAttribute("aria-label")).toContain("ada, mira, lin, noor, rune +2");
+    expect(group?.querySelectorAll(".link-reader-hovercard__coauthor")).toHaveLength(3);
+    expect(group?.querySelector(".link-reader-hovercard__coauthors-more")?.textContent).toBe("+4");
+    const image = group?.querySelector("img");
+    expect(image?.crossOrigin).toBe("anonymous");
+    expect(image?.getAttribute("referrerpolicy")).toBe("no-referrer");
+    image?.dispatchEvent(new Event("error"));
+    expect(image && (!image.isConnected || image.hidden)).toBe(true);
+    expect(image?.parentElement?.textContent).toContain("A");
+    await i18n.setLocale("de");
+    const retainedFace = card()?.querySelector(".link-reader-hovercard__coauthor img");
+    expect(!retainedFace || retainedFace.hasAttribute("hidden")).toBe(true);
+    expect(group?.querySelector(".link-reader-hovercard__coauthors-more")?.textContent).toBe("+4");
+    image?.dispatchEvent(new Event("load"));
+    expect(image?.hidden).toBe(false);
+  });
+
+  it.each([
+    ["https://github.com/reviewer", "https://github.com/reviewer"],
+    ["/reviewer", "https://github.com/reviewer"],
+    ["javascript:alert(1)", null],
+    ["https://other.example/reviewer", null],
+    ["https://name:password@github.com/reviewer", null],
+  ])("only links author profiles on the source origin: %s", async (authorUrl, expected) => {
+    const { anchor, provider } = createLink();
+    connect(provider, vi.fn().mockResolvedValue({ ...preview(), authorUrl }));
+    await hover(anchor);
+    expect(card()?.querySelector(".link-reader-hovercard__author")?.getAttribute("href")).toBe(
+      expected,
+    );
+  });
+
   it("uses a second reader's method and passive DTO with keyboard focus and Escape", async () => {
     const url = "https://forge.example/changes/C42";
     const { anchor, provider } = createLink(url, [github, forge]);
@@ -176,13 +228,27 @@ describe("openclaw-link-reader-hovercard-provider", () => {
     expect(card()?.textContent).toContain("Keep previews compact");
   });
 
-  it("keeps failed previews invisible and briefly caches failures", async () => {
+  it.each([
+    "GitHub API rate limit reached. Retry after 40 minutes.",
+    "GitHub item not found (HTTP 404). Check the URL and access permissions.",
+    "GitHub authentication failed (HTTP 401). Check the configured credentials.",
+  ])("shows the provider failure and caches it without refetching: %s", async (message) => {
     const { anchor, provider } = createLink();
-    const request = connect(provider, vi.fn().mockRejectedValue(new Error("Not Found")));
+    const request = connect(
+      provider,
+      vi.fn().mockRejectedValue(new GatewayRequestError({ code: "UNAVAILABLE", message })),
+    );
     await hover(anchor);
-    expect(card()).toBeNull();
+    expect(card()?.textContent).toContain("Could not load preview");
+    expect(card()?.textContent).toContain(message);
+    const externalLink = card()?.querySelector<HTMLAnchorElement>("a");
+    expect(externalLink?.textContent).toBe("Open on GitHub");
+    expect(externalLink?.href).toBe(href);
     leave(anchor);
+    await vi.advanceTimersByTimeAsync(120);
+    expect(card()).toBeNull();
     await hover(anchor);
+    expect(card()?.textContent).toContain(message);
     expect(request).toHaveBeenCalledTimes(1);
     leave(anchor);
     await vi.advanceTimersByTimeAsync(30_000);
@@ -195,11 +261,12 @@ describe("openclaw-link-reader-hovercard-provider", () => {
     { title: "Wrong reader", url: "https://other.example/item/1" },
     { title: "Wrong item", url: href.replace("99816", "99817") },
     { title: "Wrong query", url: href + "?resource=other" },
-  ])("rejects invalid preview data without mounting an empty popup: %j", async (value) => {
+  ])("reports invalid preview data without rendering mismatched details: %j", async (value) => {
     const { anchor, provider } = createLink();
     connect(provider, vi.fn().mockResolvedValue(value));
     await hover(anchor);
-    expect(card()).toBeNull();
+    expect(card()?.textContent).toContain("Could not load preview");
+    expect(card()?.textContent).not.toContain("Wrong");
   });
 
   it("preserves existing descriptions when leaving before opening and on route removal", async () => {

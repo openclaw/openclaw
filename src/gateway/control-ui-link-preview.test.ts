@@ -93,6 +93,38 @@ describe("public link previews", () => {
     );
   });
 
+  it.each([
+    {
+      name: "open-graph",
+      tags: '<meta name="description" content="Fallback"><meta name="twitter:description" content="Twitter"><meta property="og:description" content=" A &amp; B   guide ">',
+      expected: "A & B guide",
+    },
+    {
+      name: "twitter",
+      tags: '<meta name="description" content="Fallback"><meta name="twitter:description" content="Twitter">',
+      expected: "Twitter",
+    },
+    {
+      name: "standard",
+      tags: '<meta name="description" content="' + "x".repeat(399) + '😀tail">',
+      expected: "x".repeat(399),
+    },
+  ])(
+    "extracts bounded $name description without another fetch",
+    async ({ name, tags, expected }) => {
+      const fetch = vi
+        .fn<typeof globalThis.fetch>()
+        .mockImplementation(async (input) =>
+          requestUrl(input).endsWith("/favicon.ico")
+            ? new Response(null, { status: 404 })
+            : html("<html><head>" + tags + "</head></html>"),
+        );
+      vi.stubGlobal("fetch", fetch);
+      expect(await load("/description-" + name)).toEqual({ description: expected });
+      expect(fetch).toHaveBeenCalledTimes(2);
+    },
+  );
+
   it("uses Twitter metadata and validated ICO fallback without decoding it", async () => {
     const fetch = vi
       .fn<typeof globalThis.fetch>()

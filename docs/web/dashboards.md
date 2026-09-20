@@ -138,6 +138,7 @@ never needs the agent.
   Visited tabs stay loaded while the dashboard is retained, preserving local
   filters and widget interactions when you switch back. Unvisited tabs load on
   demand; changed content still refreshes, and removed tabs release their widgets.
+  Moving a loaded widget to another tab also preserves its unsaved input and interactions.
 - **Dashboard view.** The board can occupy the main area or a resizable side
   panel. With Dashboard active in the side panel, choose **Swap** in the task
   toolbar, then **Focus** for a dashboard-only view. **Restore split** brings

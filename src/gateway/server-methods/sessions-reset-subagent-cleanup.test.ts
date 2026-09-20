@@ -47,6 +47,8 @@ import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
+import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
+import { captureTaskRegistryReadFence } from "../../tasks/task-registry-listener-state.js";
 import { resetTaskRegistryForTests } from "../../tasks/task-registry.test-support.js";
 import { findTaskByRunIdForStatus } from "../../tasks/task-status-access.js";
 import { captureEnv, setTestEnvValue } from "../../test-utils/env.js";
@@ -145,6 +147,9 @@ function registerCollector(id: string, childSessionKey = key, agentId = "main") 
 }
 
 afterEach(async () => {
+  // Join this fixture's accepted native writes before restoring event dependencies.
+  // The residual-root assertion below still detects unowned or unsettled tails.
+  await captureTaskRegistryReadFence(captureOpenClawStateWorkerContext().admission);
   vi.restoreAllMocks();
   restoreRegisteredAgentHarnesses(harnesses);
   await cleanupSubagentRegistryPersistenceTest({

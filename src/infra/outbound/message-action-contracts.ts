@@ -12,6 +12,7 @@ import type {
   ChannelPlugin,
   ChannelThreadingToolContext,
 } from "../../channels/plugins/types.public.js";
+import type { ChannelProgressDraftCompositorSnapshot } from "../../channels/progress-draft-compositor.types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { MessageActionAuthorization } from "../../gateway/message-action-turn-capability.js";
 import type { OutboundMediaAccess } from "../../media/load-options.js";
@@ -47,6 +48,8 @@ export type MessageActionInput = {
   cfg: OpenClawConfig;
   action: ChannelMessageActionName;
   params: Record<string, unknown>;
+  /** @internal Host-prepared display state for an existing progress message edit. */
+  progressSnapshot?: ChannelProgressDraftCompositorSnapshot;
   /** @internal Identifies model-authored calls for lossy input normalization. */
   actionOrigin?: "message-tool";
   defaultAccountId?: string;

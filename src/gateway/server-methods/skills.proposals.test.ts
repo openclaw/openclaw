@@ -84,12 +84,6 @@ vi.mock("../../skills/workshop/service.js", async (importOriginal) => {
   };
 });
 
-vi.mock("./chat.js", () => ({
-  chatHandlers: {
-    "chat.send": mocks.chatSend,
-  },
-}));
-
 vi.mock("./chat-send-handler.js", () => ({
   handleChatSend: mocks.chatSend,
   handleChatSendWithSkillWorkshopProposalRevision: mocks.chatSend,

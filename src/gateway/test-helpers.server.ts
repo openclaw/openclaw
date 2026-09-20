@@ -69,7 +69,6 @@ import {
   resetTaskRegistryForTests,
 } from "../tasks/task-runtime.test-helpers.js";
 import { captureEnv } from "../test-utils/env.js";
-import { getDeterministicFreePortBlock } from "../test-utils/ports.js";
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { buildDeviceAuthPayloadV3 } from "./device-auth.js";
@@ -78,6 +77,7 @@ import type { GatewayServerOptions } from "./server.js";
 import { invalidateSessionSharingSnapshot } from "./session-sharing.js";
 import { loadGatewayTestConfig } from "./test-helpers.config-runtime.js";
 import { GATEWAY_STARTUP_MUTATED_ENV_KEYS } from "./test-helpers.env.js";
+import { getGatewayTestPort, canRetryPort, startClaimedGateway } from "./test-helpers.listener.js";
 import { resetTestPluginRegistry } from "./test-helpers.plugin-registry.js";
 import {
   agentCommandMock,
@@ -671,9 +671,7 @@ export function installGatewayTestHooks(
   });
 }
 
-export async function getGatewayTestPort(): Promise<number> {
-  return await getDeterministicFreePortBlock({ offsets: [0, 1, 2, 3, 4] });
-}
+export { getGatewayTestPort } from "./test-helpers.listener.js";
 
 type GatewayTestMessage = {
   type?: string;
@@ -778,7 +776,7 @@ export async function startTestGatewayServer(port: number, opts?: GatewayServerO
     };
   }
   return await gatewayFixtureLifetime.ownServer(
-    () => mod.startGatewayServer(port, resolvedOpts),
+    () => startClaimedGateway(port, () => mod.startGatewayServer(port, resolvedOpts)),
     tempHome,
   );
 }
@@ -795,8 +793,7 @@ export async function startGatewayServerWithRetries(params: {
         server: await startTestGatewayServer(port, params.opts),
       };
     } catch (err) {
-      const code = (err as { cause?: { code?: string } }).cause?.code;
-      if (code !== "EADDRINUSE") {
+      if (!canRetryPort(err)) {
         throw err;
       }
       port = await getGatewayTestPort();

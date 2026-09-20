@@ -5,6 +5,7 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
+import { extractSqliteTableSchema } from "../infra/sqlite-schema-sql.js";
 import type { DB as OpenClawStateDatabase } from "../state/openclaw-state-db.generated.js";
 import {
   runOpenClawStateWriteTransaction,
@@ -12,6 +13,7 @@ import {
 } from "../state/openclaw-state-db.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "../state/openclaw-state-schema.js";
 import type { NodeWorkerSupervisorIdentity } from "../worker/node-supervisor-protocol.js";
+import { isNodeWorkerTerminalState } from "./node-worker-launch-receipt.js";
 import {
   readNodeWorkerLaunchReceipt,
   settleNodeWorkerActiveTurns,
@@ -35,13 +37,13 @@ function query(database: DatabaseSync) {
 }
 
 function ensureTurnSchema(database: DatabaseSync): void {
-  const start = OPENCLAW_STATE_SCHEMA_SQL.indexOf("CREATE TABLE IF NOT EXISTS node_worker_turns (");
-  const endMarker = "\n  WHERE state = 'running';";
-  const end = OPENCLAW_STATE_SCHEMA_SQL.indexOf(endMarker, start);
-  if (start < 0 || end < start) {
-    throw new Error("OpenClaw node worker turn schema marker is missing.");
-  }
-  database.exec(OPENCLAW_STATE_SCHEMA_SQL.slice(start, end + endMarker.length)); // sqlite-allow-raw -- Canonical feature-local additive DDL only.
+  // sqlite-allow-raw -- Canonical feature-local additive DDL only.
+  database.exec(
+    extractSqliteTableSchema(OPENCLAW_STATE_SCHEMA_SQL, "node_worker_turns", {
+      endMarker: "\n  WHERE state = 'running';",
+      errorMessage: "OpenClaw node worker turn schema marker is missing.",
+    }),
+  );
 }
 
 function readRow(database: DatabaseSync, turnId: string): TurnRow | undefined {
@@ -66,14 +68,7 @@ function readReceipt(database: DatabaseSync, turnId: string): NodeWorkerTurnRece
     turn = readRow(database, turnId)!;
   }
   const state = turn.state === "running" && owner.state === "pending" ? "pending" : turn.state;
-  if (
-    state !== "pending" &&
-    state !== "running" &&
-    state !== "completed" &&
-    state !== "failed" &&
-    state !== "interrupted" &&
-    state !== "cancelled"
-  ) {
+  if (state !== "pending" && state !== "running" && !isNodeWorkerTerminalState(state)) {
     throw new Error(`invalid node worker turn state ${state}`);
   }
   return {

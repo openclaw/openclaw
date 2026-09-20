@@ -3,7 +3,6 @@ import { existsSync, statSync } from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
 import type { AdmittedRunContext } from "../agents/admitted-run-context.js";
 import { createExecutionIdentityAdmissionToken } from "../audit/execution-identity-admission.js";
 import { bindExecutionOwnerLifecycleMetadata } from "../audit/execution-owner-lifecycle-binding-store.js";
@@ -22,6 +21,7 @@ import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
   closeOpenClawStateDatabase,
+  closeOpenClawStateDatabaseAsync,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
@@ -401,49 +401,6 @@ describe("task-registry store runtime", () => {
     expect(getTaskById("task-restored")).toBeUndefined();
     expect(failedLoad).toHaveBeenCalledTimes(1);
     expect(cleanLoad).toHaveBeenCalledTimes(1);
-  });
-
-  it("uses scoped owner lookups for fresh owner task reads", async () => {
-    const storedTask = createStoredTask();
-    const loadSnapshot = vi.fn(() => ({
-      tasks: new Map(),
-      deliveryStates: new Map(),
-    }));
-    const lookup = createDeferred<TaskRecord[]>();
-    const listTasksForOwnerKey = vi.fn(() => lookup.promise);
-    configureTaskRegistryRuntime({
-      store: {
-        ...createInMemoryTaskRegistryStore(),
-        loadSnapshot,
-        listTasksForOwnerKey,
-      },
-    });
-
-    const pending = listFreshTasksForOwnerKey("agent:main:main");
-    lookup.resolve([storedTask]);
-    const tasks = await pending;
-
-    expect(tasks.map((task) => task.taskId)).toEqual(["task-restored"]);
-    expect(listTasksForOwnerKey).toHaveBeenCalledWith("agent:main:main");
-    expect(loadSnapshot).toHaveBeenCalledTimes(1);
-  });
-
-  it("uses the current memory snapshot when a delayed owner lookup fails", async () => {
-    const storedTask = createStoredTask();
-    const lookup = createDeferred<TaskRecord[]>();
-    configureTaskRegistryRuntime({
-      store: {
-        ...createInMemoryTaskRegistryStore({
-          tasks: new Map([[storedTask.taskId, storedTask]]),
-          deliveryStates: new Map(),
-        }),
-        listTasksForOwnerKey: () => lookup.promise,
-      },
-    });
-    const pending = listFreshTasksForOwnerKey(storedTask.ownerKey);
-    updateTaskNotifyPolicyById({ taskId: storedTask.taskId, notifyPolicy: "silent" });
-    lookup.reject(new Error("owner lookup unavailable"));
-    expect(await pending).toMatchObject([{ taskId: storedTask.taskId, notifyPolicy: "silent" }]);
   });
 
   it("does not clone non-blocker details when inspecting restart blockers", () => {
@@ -1254,6 +1211,8 @@ describe("task-registry store runtime", () => {
           data: { phase: "start", name: "read", toolCallId: "call-1" },
         });
 
+        await listFreshTasksForOwnerKey(created.ownerKey);
+        await closeOpenClawStateDatabaseAsync();
         resetTaskRegistryForTests({ persist: false });
         expect(findTaskByRunId("run-tool-activity-sqlite")).toMatchObject({
           taskId: created.taskId,

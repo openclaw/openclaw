@@ -92,6 +92,23 @@ export function createSubagentSpawnTestConfig(
   };
 }
 
+export function createConfigOverride(overrides?: Record<string, unknown>) {
+  return createSubagentSpawnTestConfig(os.tmpdir(), {
+    agents: {
+      defaults: {
+        workspace: os.tmpdir(),
+      },
+      list: [
+        {
+          id: "main",
+          workspace: "/tmp/workspace-main",
+        },
+      ],
+    },
+    ...overrides,
+  });
+}
+
 /** Mock gateway calls for the common accepted-spawn flow. */
 export function setupAcceptedSubagentGatewayMock(callGatewayMock: MockImplementationTarget) {
   callGatewayMock.mockImplementation(async (opts: { method?: string }) => {

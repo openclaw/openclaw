@@ -47,6 +47,12 @@ searches the full authorized indexed history in that scope. The browser does not
 a session roster to choose which transcripts to search, and a roster page size does not
 exclude older matching sessions.
 
+The command palette also finds agent-created conversations assigned to a custom
+sidebar group, by title or transcript, after you switch to another conversation.
+Ungrouped spawned sessions and subagent runs remain excluded from the palette.
+Groups do not grant access to private conversations or include incognito or
+archived sessions in active search.
+
 Search returns a bounded set of the best matches. More matches than the result limit is
 normal, not an incomplete-index warning; refine the query to narrow the results. Genuine
 indexing work and cold archived transcripts excluded from search have separate status

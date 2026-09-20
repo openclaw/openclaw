@@ -41,16 +41,21 @@ beforeEach(() => {
     gatewayBuildId: params.expectedBuildId ?? null,
     gatewayBootId: "synthetic-current-boot",
   }));
-  mocks.waitForGatewayHealthyRestart.mockReset().mockImplementation(async (params) => ({
-    runtime: await params.service.readRuntime(params.env ?? process.env),
-    portUsage: { port: params.port, status: "busy", listeners: [], hints: [] },
-    healthy: mocks.restartedHealthy,
-    staleGatewayPids: [],
-    gatewayVersion: params.expectedVersion ?? null,
-    gatewayBuildId: params.expectedBuildId ?? null,
-    gatewayBootId: "synthetic-restarted-boot",
-    waitOutcome: mocks.restartedHealthy ? "healthy" : "timeout",
-  }));
+  mocks.waitForGatewayHealthyRestart.mockReset().mockImplementation(async (params) => {
+    if (!params.service) {
+      throw new Error("Doctor readiness must use its managed Gateway service");
+    }
+    return {
+      runtime: await params.service.readRuntime(params.env ?? process.env),
+      portUsage: { port: params.port, status: "busy", listeners: [], hints: [] },
+      healthy: mocks.restartedHealthy,
+      staleGatewayPids: [],
+      gatewayVersion: params.expectedVersion ?? null,
+      gatewayBuildId: params.expectedBuildId ?? null,
+      gatewayBootId: "synthetic-restarted-boot",
+      waitOutcome: mocks.restartedHealthy ? "healthy" : "timeout",
+    };
+  });
 });
 
 // The synthetic manager's leases and locks belong to its private fixture root.

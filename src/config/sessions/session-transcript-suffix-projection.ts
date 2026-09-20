@@ -15,7 +15,7 @@ import {
   hasTranscriptMessage,
   shouldProjectActiveEvent,
   transcriptEventContextEligibility,
-} from "./session-transcript-projection-rebuild.js";
+} from "./session-transcript-projection-append.js";
 import {
   scanSessionTranscriptTree,
   selectSessionTranscriptTreePathNodes,

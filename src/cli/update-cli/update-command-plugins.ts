@@ -36,6 +36,7 @@ import { defaultRuntime, type RuntimeEnv } from "../../runtime.js";
 import { formatCliCommand } from "../command-format.js";
 import { resolvePluginCapabilityConsentCliOptions } from "../plugin-capability-consent.js";
 import { readPackageVersion } from "./shared.js";
+import { withUpdateConfigWriteAuthority } from "./update-command-config.js";
 import {
   assessPluginUpdate,
   buildInvalidConfigPostCoreUpdateResult,
@@ -96,6 +97,7 @@ export async function updatePluginsAfterCoreUpdate(params: {
   configChanged?: boolean;
   restoredAuthoredChannels?: unknown;
   timeoutMs: number;
+  workTimeoutMs?: number | null;
   pluginInstallRecords?: Record<string, PluginInstallRecord>;
   json?: boolean;
   acceptCapabilities?: boolean;
@@ -232,6 +234,7 @@ export async function updatePluginsAfterCoreUpdate(params: {
     coreVersion: coreVersion ?? undefined,
     versionBoundPluginIds: VERSION_BOUND_RUNTIME_PLUGIN_IDS,
     timeoutMs: params.timeoutMs,
+    workTimeoutMs: params.workTimeoutMs,
     workspaceDir: params.root,
     externalizedBundledPluginBridges,
     beforePersistentEffect: params.assertCurrent,
@@ -275,6 +278,8 @@ export async function updatePluginsAfterCoreUpdate(params: {
   );
   const convergence = await runPostCorePluginConvergence({
     cfg: pluginConfig,
+    timeoutMs: params.timeoutMs,
+    workTimeoutMs: params.workTimeoutMs,
     env: process.env,
     compatibilityHostVersion: coreVersion ?? undefined,
     baselineInstallRecords: convergenceBaselineRecords,
@@ -408,11 +413,14 @@ export async function updatePluginsAfterCoreUpdate(params: {
       nextInstallRecords,
       nextConfig,
       baseHash: params.configSnapshot.hash,
-      writeOptions: {
-        ...params.configWriteOptions,
-        inputBase: "source",
-        skipPluginValidation: true,
-      },
+      writeOptions: withUpdateConfigWriteAuthority(
+        {
+          ...params.configWriteOptions,
+          inputBase: "source",
+          skipPluginValidation: true,
+        },
+        params.assertCurrent,
+      ),
     });
     params.assertCurrent?.();
     await withPluginLifecycleLease({ assertCurrent: params.assertCurrent }, async (lease) =>

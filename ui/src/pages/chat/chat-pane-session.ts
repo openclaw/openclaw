@@ -6,10 +6,10 @@ import type {
 import type { ControlUiSessionPullRequest } from "../../../../src/gateway/control-ui-contract.js";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import { t } from "../../i18n/index.ts";
-import { nativeHistoryMessageIdentity } from "../../lib/chat/history-message-identity.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { clampText } from "../../lib/format.ts";
 import { isGatewayMethodAdvertised } from "../../lib/gateway-methods.ts";
+import { projectsForGateway } from "../../lib/projects.ts";
 import { readSessionMethodAccess } from "../../lib/session-method-access.ts";
 import {
   summarizeSessionPullRequests,
@@ -61,6 +61,19 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
             this.transcriptReady ||
             getAcceptedChatHistorySession(state)))),
     );
+  }
+
+  protected subscribeSessionRepositoryContext(): void {
+    this.chatState.addCleanup(
+      projectsForGateway(this.context.gateway).subscribe(() => this.requestUpdate()),
+    );
+    const sessionPullRequests = sessionPullRequestsForGateway(this.context.gateway);
+    this.chatState.addCleanup(
+      sessionPullRequests.subscribe(() => {
+        void this.refreshSessionPullRequests();
+      }),
+    );
+    this.chatState.addCleanup(() => sessionPullRequests.unwatch(this));
   }
 
   protected get visibleSessionPullRequests(): ControlUiSessionPullRequest[] {
@@ -461,29 +474,6 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
       return false;
     });
     return [...uniqueMessages, ...this.catalogMessages];
-  }
-
-  protected prependUniqueNativeMessages(messages: unknown[], current: unknown[]): unknown[] {
-    const duplicateCounts = new Map<string, number>();
-    for (const message of current) {
-      const identity = nativeHistoryMessageIdentity(message);
-      if (identity) {
-        duplicateCounts.set(identity, (duplicateCounts.get(identity) ?? 0) + 1);
-      }
-    }
-    const uniqueMessages = messages.filter((message) => {
-      const identity = nativeHistoryMessageIdentity(message);
-      if (!identity) {
-        return true;
-      }
-      const duplicatesRemaining = duplicateCounts.get(identity) ?? 0;
-      if (duplicatesRemaining === 0) {
-        return true;
-      }
-      duplicateCounts.set(identity, duplicatesRemaining - 1);
-      return false;
-    });
-    return [...uniqueMessages, ...current];
   }
 
   protected async loadCatalogSession(key: CatalogSessionKey, older: boolean): Promise<boolean> {

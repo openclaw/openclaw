@@ -7,7 +7,10 @@ import * as records from "./session-row-projection-record.js";
 import { buildSessionSwarmSummary } from "./session-swarm-summary.js";
 import type { SessionListRowContext } from "./session-utils-contracts.js";
 import type { SessionChildLink } from "./session-utils-core.js";
-import { buildSessionListRowMetadataContext } from "./session-utils-projection.js";
+import {
+  buildProjectedSubagentActivity,
+  buildSessionListRowMetadataContext,
+} from "./session-utils-projection.js";
 import { refreshSessionRowProfiles } from "./session-utils-row.js";
 
 /** Registry and display facts have their own lifecycle, independent of stored row acquisition. */
@@ -35,11 +38,13 @@ export function createSessionRowProjectionContext() {
       registryRevision === revision
         ? current.subagentRuns.atTime(now)
         : buildSubagentSessionListReadIndex(now);
+    const projectedAgentRuns = buildProjectedAgentRunIndex();
     current = modelFactsDirty
       ? {
           ...buildSessionListRowMetadataContext({
             now,
             subagentRuns,
+            projectedAgentRuns,
             userProfileIdentityById: current.userProfileIdentityById,
           }),
           identityProjection,
@@ -47,10 +52,14 @@ export function createSessionRowProjectionContext() {
       : {
           ...current,
           subagentRuns,
+          projectedAgentRuns,
+          projectedSubagentActivity: buildProjectedSubagentActivity(
+            subagentRuns,
+            projectedAgentRuns,
+          ),
           subagentRunsByChildSessionKey: subagentRuns.runsByChildSessionKey,
         };
     modelFactsDirty = false;
-    current.projectedAgentRuns = buildProjectedAgentRunIndex();
     Object.assign(subagentInputs, current.subagentRuns.inputs);
     registryRevision = revision;
     preparedEpoch = epoch;

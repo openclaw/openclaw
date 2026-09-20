@@ -555,6 +555,23 @@ the live Codex app-server catalog for the harness and account. If `/status` is
 surprising, see
 [Troubleshooting](/plugins/codex-harness/troubleshooting).
 
+## Luna Reserve and credit usage
+
+Ordinary `gpt-5.6-luna` and Luna Reserve (`gpt-reserve`) are separate routes.
+Selecting ordinary Luna does not consume Reserve merely because its quota has
+capacity. Turning Fast off changes the requested service tier, not the model route.
+
+OpenClaw currently reports the Reserve bucket when Codex returns it, but does not
+implement the backend-authorized Reserve transition and recovery flow. Do not
+force the hidden Reserve model or treat an unused counter as authorization.
+Account and client eligibility remain backend decisions.
+
+After included usage is exhausted, ordinary requests may consume credits under
+your account settings. Check the provider’s usage and spending controls before
+continuing high-volume automation. Account balances and quota percentages are
+not per-request billing receipts; `/status` and `/codex binding` do not establish
+the service tier or charge actually applied to a completed request.
+
 ## Where each section moved
 
 Every section of the single-page version now lives on this page or on one of the

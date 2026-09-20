@@ -45,6 +45,7 @@ const maliciousTitle = '<script>alert("report")</script>';
 const hostileLogin = 'bad"><img src=x onerror=alert(1)>';
 const hostileDisplay = '"Quoted <Name>';
 const counts = githubCounts(1);
+const markdownSuffix = "\nStored Markdown only 雪 🦞\n".repeat(4096);
 const avatarPeople: Person[] = [
   { github: ["invalid.login", "invalid-alias"], display: "Fallback Name" },
   { github: [hostileLogin, "hostile-alias"], display: hostileDisplay },
@@ -184,7 +185,7 @@ beforeAll(async () => {
     await store.upsertPeriod({
       report: document,
       summary,
-      markdown: renderMarkdown(document, summary),
+      markdown: renderMarkdown(document, summary) + markdownSuffix,
     });
   }
   const handler = createTeamReportsHttpHandler({
@@ -472,18 +473,39 @@ describe("Team Reports HTTP responses", () => {
     ["day", "2026-08-20"],
     ["week", "2026-W34"],
     ["month", "2026-08"],
-  ])("serves %s Markdown and canonical JSON", async (period, key) => {
+  ] as const)("serves %s Markdown and canonical JSON", async (period, key) => {
     const markdown = await fetchPath(`/reports/${period}/${key}/report.md`);
     expect(markdown.status).toBe(200);
     expect(markdown.headers["content-type"]).toBe("text/markdown; charset=utf-8");
     expect(markdown.body).toContain(key);
     expect(markdown.body).not.toContain(maliciousTitle);
     expect(markdown.body).toContain("> Model summary unavailable: completion failed\n");
+    expect(markdown.body).toBe(renderMarkdown(report(period, key), summary) + markdownSuffix);
     const json = await fetchPath(`/reports/${period}/${key}/data.json`);
     expect(json.status).toBe(200);
     expect(json.headers["content-type"]).toBe("application/json; charset=utf-8");
     expect(JSON.parse(json.body)).toMatchObject({ version: 1, period: { period, key } });
   });
+
+  it.each(["/reports/", "/reports/day/2026-08-20/", "/reports/day/2026-08-20/data.json"])(
+    "serves %s without transferring unused Markdown from storage",
+    async (url) => {
+      workerReads.calls = 0;
+      workerReads.bytes = 0;
+      workerReads.enabled = true;
+      try {
+        const response = await fetchPath(url);
+        expect(response.status).toBe(200);
+        expect(response.body).toContain("example");
+        expect(response.body).not.toContain("Stored Markdown only");
+      } finally {
+        workerReads.enabled = false;
+      }
+      expect(workerReads.calls).toBeGreaterThan(0);
+      expect(workerReads.bytes).toBeGreaterThan(0);
+      expect(workerReads.bytes).toBeLessThan(Buffer.byteLength(markdownSuffix));
+    },
+  );
 
   it("renders stored trends, history, archived people, index, and status", async () => {
     const index = await fetchPath("/reports/");

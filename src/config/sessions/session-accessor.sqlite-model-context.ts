@@ -103,7 +103,6 @@ export function validateSessionTranscriptContextAnchor(
   const result = withOpenClawAgentDatabaseReadOnly(
     (database) => assertContextAnchor(database, resolved, through),
     toDatabaseOptions(resolved),
-    { throwOnMissingTable: true },
   );
   if (!result.found) {
     throw new SessionTranscriptReadFenceError("Completed-turn transcript no longer exists");
@@ -119,7 +118,6 @@ export function validateSessionTranscriptContextVersion(
   const result = withOpenClawAgentDatabaseReadOnly(
     (database) => readTranscriptContextVersionInTransaction(database, resolved.sessionId),
     toDatabaseOptions(resolved),
-    { throwOnMissingTable: true },
   );
   const current = result.found ? result.value : undefined;
   if (
@@ -144,7 +142,6 @@ export function validateSessionTranscriptContextAdmission(
     withOpenClawAgentDatabaseReadOnly(
       (database) => resolveSqliteSessionTranscriptReadFence({ database, ...resolved }),
       toDatabaseOptions(resolved),
-      { throwOnMissingTable: true },
     ),
   );
   if (!result.found || !result.value) {
@@ -509,7 +506,6 @@ function withTranscriptContextSnapshot<T>(
         { operationLabel: "session context snapshot read" },
       ),
     toDatabaseOptions(resolved),
-    { throwOnMissingTable: true },
   );
   return result;
 }

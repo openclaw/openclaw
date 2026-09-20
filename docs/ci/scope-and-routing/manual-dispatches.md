@@ -119,8 +119,14 @@ binding. This separate mode runs one unprofiled fresh prime, then one native CPU
 profile of an established launch using the same synthetic state. Both launches
 still require readiness, first status/health requests, acknowledged shutdown,
 and descendant settlement. It produces no timing summary or paired comparison.
-The artifact retains raw `.cpuprofile` files, the main process/thread identity
-and clock calibration, startup trace metrics, config hashes, and backup-existence
-facts. Profiling and trace observation add overhead; main-isolate samples do not
+The artifact retains raw `.cpuprofile` files, the main process/thread identity,
+preload clock observations, startup trace metrics, config hashes, and backup-existence
+facts. The preload's monotonic and performance-clock observations remain available
+for calibration within the Gateway process. Controller, Gateway, and native-profile
+timestamps have separately identified clock domains; their alignment is not
+established. Do not compare absolute values across those domains or assume that a
+profile's last sampled timestamp includes the preload's exit observation.
+Console and stream trace output share the diagnostic observer, including under Bun.
+Profiling and trace observation add overhead; main-isolate samples do not
 account for unprofiled child or Worker CPU. Ordinary timing cohorts remain
 uninstrumented.

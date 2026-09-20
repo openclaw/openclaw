@@ -86,6 +86,9 @@ export type Actor = {
   backendClosed: boolean;
   cleanupState?: "pending" | "complete";
   closing?: Promise<void>;
+  retirementRequested?: boolean;
+  retirement?: Promise<void>;
+  onReferencesDrained?: () => void;
   stateContext?: SqliteWorkerStateContext;
   gatewaySchemaFence?: NonNullable<ReturnType<typeof tryCreateGatewaySchemaFenceDelegate>>;
   pendingStateLifecycles: Set<StateLifecycleDelegate>;
@@ -107,6 +110,8 @@ export type EnqueueOptions = {
   assertCurrent?: () => void;
 };
 export type StoreClient = {
+  actor: Actor;
+  close(): Promise<void>;
   sealed: boolean;
   isAvailable(): boolean;
   scopes: Set<Promise<void>>;

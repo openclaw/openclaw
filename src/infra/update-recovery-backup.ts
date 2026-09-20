@@ -172,6 +172,7 @@ export async function preserveUpdateRecoveryCandidate(
 ): Promise<UpdateRecoveryBackupRef> {
   return await withConfigMutationLock({}, async () => {
     const baseline = await prepareVerifiedBackup(ref);
+    let preservationFailure: { error: unknown } | undefined;
     try {
       if (
         baseline.manifest.schemaVersion !== 2 ||
@@ -231,8 +232,20 @@ export async function preserveUpdateRecoveryCandidate(
         );
       }
       return candidate;
+    } catch (error) {
+      preservationFailure = { error };
+      throw error;
     } finally {
-      await baseline.close();
+      await baseline.close().catch((cleanupError: unknown) => {
+        if (preservationFailure) {
+          throw new AggregateError(
+            [preservationFailure.error, cleanupError],
+            `Candidate preservation failed and verification staging cleanup also failed. Baseline and candidate evidence remain retained at ${ref.manifestPath}.`,
+            { cause: preservationFailure.error },
+          );
+        }
+        throw cleanupError;
+      });
     }
   });
 }
@@ -245,6 +258,7 @@ export async function restoreUpdateRecoveryBackup(
   const candidate = await preserveUpdateRecoveryCandidate(ref, authority);
   const prepared = await prepareVerifiedBackup(ref);
   let restored = false;
+  let restorationFailure: { error: unknown } | undefined;
   try {
     await withUpdateRecoveryConfigWrites(ref, authority, () =>
       withUpdateRecoveryConfigValidation(
@@ -329,6 +343,7 @@ export async function restoreUpdateRecoveryBackup(
     );
   } catch (error) {
     if (!restored) {
+      restorationFailure = { error };
       throw error;
     }
     authority.assertOwned();
@@ -338,6 +353,13 @@ export async function restoreUpdateRecoveryBackup(
   } finally {
     await prepared.close().catch((error: unknown) => {
       if (!restored) {
+        if (restorationFailure) {
+          throw new AggregateError(
+            [restorationFailure.error, error],
+            `State restoration failed and temporary verification files could not be removed. Capture retained at ${ref.manifestPath}.`,
+            { cause: restorationFailure.error },
+          );
+        }
         throw error;
       }
       authority.assertOwned();

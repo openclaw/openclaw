@@ -24,8 +24,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveMcpLoopbackScopedTools } from "../../gateway/mcp-http.runtime.js";
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
-import { createPluginMetadataSnapshotFixture } from "../../plugins/plugin-metadata.test-support.js";
-import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
+import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import { withPluginRuntimeGenerationScope } from "../../plugins/runtime/generation-scope.js";
 import { isSubagentSessionKey } from "../../routing/session-key.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
@@ -70,6 +69,7 @@ import {
   SUBAGENT_ANNOUNCE_EMBEDDED_DELIVERY_CASES,
   type SubagentAnnounceDeliveryCase,
 } from "./attempt-execution.announce.test-support.js";
+import { createCliImageCapabilityPlugins } from "./attempt-execution.cli.test-support.js";
 import { runAgentAttempt as runAgentAttemptImpl } from "./attempt-execution.js";
 import { resolveClaudeCliProjectDirForWorkspace } from "./claude-cli-project-dir.js";
 import { resolveEmbeddedModelSelection } from "./model-selection.js";
@@ -1049,22 +1049,8 @@ describe("CLI attempt execution", () => {
         ? { channels: { modelByChannel: { discord: { "vision-fixture": "custom/child" } } } }
         : {}),
     };
-    const metadataSnapshot = createPluginMetadataSnapshotFixture({
-      plugins: [
-        {
-          id: "anthropic",
-          providers: ["anthropic"],
-          cliBackends: ["claude-cli"],
-          modelCatalog: {
-            providers: {
-              anthropic: {
-                models: [{ id: model, name: model, reasoning: true, input: ["text", "image"] }],
-              },
-            },
-          },
-        },
-      ],
-    });
+    const { metadataSnapshot, pluginRegistry } = createCliImageCapabilityPlugins(model);
+    setActivePluginRegistry(pluginRegistry);
     const opts: RunAgentAttemptParams["opts"] = {
       message: "Inspect the image after switching models",
       thinking: "off",
@@ -1129,7 +1115,7 @@ describe("CLI attempt execution", () => {
     await withPluginRuntimeGenerationScope(
       {
         metadataSnapshot,
-        pluginRegistry: createEmptyPluginRegistry(),
+        pluginRegistry,
       },
       async () => {
         await runOuterCliFallback({

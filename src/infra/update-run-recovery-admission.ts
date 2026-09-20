@@ -1,6 +1,8 @@
+import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import type { OpenClawStateDatabaseOptions } from "../state/openclaw-state-db-contract.js";
+import { withExistingOpenClawStateDatabaseCurrentReadOnly } from "../state/openclaw-state-db-readonly.js";
 import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { clearNodeSqliteKyselyCacheForDatabase } from "./kysely-sync-cache-state.js";
@@ -27,25 +29,7 @@ async function inspectUpdateRecoveryDatabasePath(
   const databasePath = path.resolve(
     options.path ?? resolveOpenClawStateSqlitePath(options.env ?? process.env),
   );
-  const parent = path.dirname(databasePath);
-  try {
-    await fs.lstat(parent);
-  } catch (error) {
-    if (!hasNodeErrorCode(error, "ENOENT")) {
-      throw error;
-    }
-    return undefined;
-  }
-  // A family may hold the only original DB even when another canonical file
-  // exists. Locators confer no authority to inspect, repair, or retire it.
-  // Do not swallow discovery races or recreate an absent canonical database.
-  const families = await fs.readdir(parent);
-  if (families.some((name) => name.startsWith(".openclaw-restore-"))) {
-    throw new Error(
-      "Interrupted shared-database publication is read-only while full-state recovery is deferred",
-    );
-  }
-  return databasePath;
+  return (await assertUpdateRecoveryDirectoryAdmission(databasePath)) ? databasePath : undefined;
 }
 
 /** Read-only admission; neither a missing nor a replaced DB retires old recovery. */
@@ -56,6 +40,33 @@ export async function assertUpdateRecoveryAdmission(
   if (databasePath) {
     assertNoPendingUpdateRecovery({ ...options, path: databasePath });
   }
+}
+
+/** Recheck the existing admission at a synchronous publication transaction boundary. */
+export function assertUpdateRecoveryPublicationAdmission(
+  options: OpenClawStateDatabaseOptions = {},
+): void {
+  const databasePath = path.resolve(options.path ?? resolveOpenClawStateSqlitePath(options.env));
+  let families: string[];
+  try {
+    families = fsSync.readdirSync(path.dirname(databasePath));
+  } catch (error) {
+    if (hasNodeErrorCode(error, "ENOENT")) {
+      return;
+    }
+    throw error;
+  }
+  assertRecoveryDirectoryNamesAdmission(families);
+  // Publication cannot inherit a discovery snapshot from before a new recovery.
+  withExistingOpenClawStateDatabaseCurrentReadOnly(
+    ({ db }) => {
+      const pending = readRecoveries(db).find(isUpdateRecoveryPending);
+      if (pending) {
+        throw new UpdateRecoveryRequiredError(pending);
+      }
+    },
+    { ...options, path: databasePath },
+  );
 }
 
 /** Inspect only the stable recovery namespace before restoring a verified state set. */
@@ -165,6 +176,35 @@ export function bindUnprotectedGatewayUpdateFinalizer(
   };
   assertCurrent();
   return { runId: parent.runId, assertCurrent };
+}
+
+/** Check publication before an admitted row reader; false means the parent is absent. */
+export async function assertUpdateRecoveryDirectoryAdmission(
+  databasePath: string,
+): Promise<boolean> {
+  const parent = path.dirname(databasePath);
+  try {
+    await fs.lstat(parent);
+  } catch (error) {
+    if (!hasNodeErrorCode(error, "ENOENT")) {
+      throw error;
+    }
+    return false;
+  }
+  // A family may hold the only original DB even when another canonical file
+  // exists. Locators confer no authority to inspect, repair, or retire it.
+  // Do not swallow discovery races or recreate an absent canonical database.
+  const families = await fs.readdir(parent);
+  assertRecoveryDirectoryNamesAdmission(families);
+  return true;
+}
+
+function assertRecoveryDirectoryNamesAdmission(families: string[]): void {
+  if (families.some((name) => name.startsWith(".openclaw-restore-"))) {
+    throw new Error(
+      "Interrupted shared-database publication is read-only while full-state recovery is deferred",
+    );
+  }
 }
 
 type UpdateRecoveryInvocationAuthority = {

@@ -190,6 +190,7 @@ export type TelegramDispatchTurn = TelegramDispatchTurnConfig &
     noVisibleReplyFallbackEligible: boolean;
     suppressSilentReplyFallback: boolean;
     hadErrorReplyFailureOrSkip: boolean;
+    progressContinuationAdopted?: boolean;
     finalReplyOutcome?: "failed" | "suppressed";
     dispatchError?: unknown;
   };

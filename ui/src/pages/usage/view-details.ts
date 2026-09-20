@@ -2,10 +2,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { html, svg, nothing } from "lit";
-import {
-  renderPanelRefreshStatus,
-  type PanelRefreshStatus,
-} from "../../components/panel-refresh-status.ts";
+import type { PanelRefreshStatus } from "../../components/panel-refresh-status.ts";
 import { renderSettingsSegmented } from "../../components/settings-ui.ts";
 import { t } from "../../i18n/index.ts";
 import "../../components/tooltip.ts";
@@ -13,6 +10,7 @@ import { formatDurationCompact } from "../../lib/format-duration.ts";
 import { createMsFormatter, formatMs, formatTimeMs } from "../../lib/format.ts";
 import { parseToolSummary } from "./helpers.ts";
 import { charsToTokens, formatIsoDate, formatUsageCost, formatUsageTokens } from "./metrics.ts";
+import { renderUsageRefreshStatus } from "./page-shell.ts";
 import type {
   SessionLogEntry,
   SessionLogRole,
@@ -20,7 +18,8 @@ import type {
   UsageContextDetail,
   UsageSessionEntry,
 } from "./types.ts";
-import { renderInsightList, USAGE_TOKEN_CATEGORIES } from "./view-overview.ts";
+import { USAGE_TOKEN_CATEGORIES } from "./view-chart.ts";
+import { renderInsightList } from "./view-overview.ts";
 
 const CHART_BAR_WIDTH_RATIO = 0.75; // Fraction of slot used for bar (rest is gap)
 const CHART_MAX_BAR_WIDTH = 8; // Max bar width in SVG viewBox units
@@ -53,23 +52,6 @@ function isLogInRange(log: SessionLogEntry, rangeStart: number, rangeEnd: number
   }
   const ts = normalizeLogTimestamp(log.timestamp);
   return ts >= Math.min(rangeStart, rangeEnd) && ts <= Math.max(rangeStart, rangeEnd);
-}
-
-function renderUsageRefreshStatus(
-  status: PanelRefreshStatus,
-  detailKey: string,
-  kind: "timeline" | "conversation" | "context",
-) {
-  return renderPanelRefreshStatus({
-    status,
-    errorMessage: status.error
-      ? t("usage.details.loadFailed", {
-          detail: normalizeLowercaseStringOrEmpty(t(detailKey)),
-          error: status.error,
-        })
-      : undefined,
-    className: `usage-callout usage-detail-error--${kind}`,
-  });
 }
 
 function renderSessionSummary(

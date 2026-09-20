@@ -81,7 +81,7 @@ async function readSessionMessagesPageWithStatsAsync(
   sessionId: string,
   storePath: string | undefined,
   sessionFile: string | undefined,
-  opts: { offset: number; maxMessages: number; allowResetArchiveFallback?: boolean },
+  opts: { offset: number; maxMessages: number },
   agentId?: string,
 ) {
   return await filesystemReader(sessionId, storePath, sessionFile, agentId).readPage(opts);
@@ -144,6 +144,10 @@ function writeResetArchive(
   const archivePath = path.join(tmpDir, `${sessionId}.jsonl.reset.${timestamp}`);
   fs.writeFileSync(archivePath, lines.map((line) => JSON.stringify(line)).join("\n"), "utf-8");
   return archivePath;
+}
+
+function writeArchivedTranscript(tmpDir: string, sessionId: string, lines: unknown[]): string {
+  return writeResetArchive(tmpDir, sessionId, "2026-08-28T00-00-00.000Z", lines);
 }
 
 function installAsyncPositionalShortReadProxy(maxPerCall = 16) {
@@ -256,7 +260,7 @@ describe("readSessionMessages", () => {
 
   test("includes synthetic compaction markers for compaction entries", async () => {
     const sessionId = "test-session-compaction";
-    const transcriptPath = path.join(tmpDir, `${sessionId}.jsonl`);
+    const transcriptPath = path.join(tmpDir, `${sessionId}.jsonl.reset.2026-08-28T00-00-00.000Z`);
     const lines = [
       JSON.stringify({ type: "session", version: 1, id: sessionId }),
       JSON.stringify({ message: { role: "user", content: "Hello" } }),
@@ -292,7 +296,7 @@ describe("readSessionMessages", () => {
 
   test("preserves real sequence metadata for async bounded recent-message reads", async () => {
     const sessionId = "test-session-recent-seq-async";
-    writeTranscript(tmpDir, sessionId, [
+    writeArchivedTranscript(tmpDir, sessionId, [
       { type: "session", version: 1, id: sessionId },
       { message: { role: "user", content: "old" } },
       { message: { role: "assistant", content: "middle" } },
@@ -324,7 +328,7 @@ describe("readSessionMessages", () => {
 
   test("returns no recent messages for a zero-sized page while preserving the total", async () => {
     const sessionId = "test-session-recent-zero";
-    writeTranscript(tmpDir, sessionId, [
+    writeArchivedTranscript(tmpDir, sessionId, [
       { type: "session", version: 1, id: sessionId },
       { message: { role: "user", content: "old" } },
       { message: { role: "assistant", content: "latest" } },
@@ -341,7 +345,7 @@ describe("readSessionMessages", () => {
     const sessionId = "test-session-record-timestamp";
     const t1 = "2026-05-16T16:00:31.000Z";
     const t2 = "2026-05-23T04:02:33.000Z";
-    writeTranscript(tmpDir, sessionId, [
+    writeArchivedTranscript(tmpDir, sessionId, [
       { type: "session", version: 1, id: sessionId },
       { timestamp: t1, message: { role: "user", content: "old turn" } },
       { timestamp: t2, message: { role: "assistant", content: "fresh turn" } },
@@ -363,7 +367,7 @@ describe("readSessionMessages", () => {
 
   test("surfaces persisted user idempotency keys in __openclaw metadata (#79844)", async () => {
     const sessionId = "test-session-idempotency-key";
-    writeTranscript(tmpDir, sessionId, [
+    writeArchivedTranscript(tmpDir, sessionId, [
       { type: "session", version: 1, id: sessionId },
       {
         id: "entry-user-1",
@@ -389,7 +393,7 @@ describe("readSessionMessages", () => {
 
   test("honors byte caps for async recent-message reads", async () => {
     const sessionId = "test-session-recent-async-byte-cap";
-    const transcriptPath = path.join(tmpDir, `${sessionId}.jsonl`);
+    const transcriptPath = path.join(tmpDir, `${sessionId}.jsonl.reset.2026-08-28T00-00-00.000Z`);
     const hugeContent = "huge ".repeat(4096);
     const lines = [
       JSON.stringify({ type: "session", version: 1, id: sessionId }),
@@ -417,7 +421,7 @@ describe("readSessionMessages", () => {
 
   test("reads active tree branch asynchronously without SessionManager.open", async () => {
     const sessionId = "test-session-tree-async";
-    writeTranscript(tmpDir, sessionId, [
+    writeArchivedTranscript(tmpDir, sessionId, [
       { type: "session", version: 3, id: sessionId },
       createTranscriptMessage("user-1", null, "user", "root"),
       createTranscriptMessage("assistant-1", "user-1", "assistant", "active branch"),
@@ -539,7 +543,7 @@ describe("readSessionMessages", () => {
       expected: ["reset", "new turn", "compaction", "new answer"],
     },
   ])("$name", async ({ sessionId, entries, expected }) => {
-    writeTranscript(tmpDir, sessionId, entries(sessionId));
+    writeArchivedTranscript(tmpDir, sessionId, entries(sessionId));
 
     const project = (messages: unknown[]) =>
       messages.map((message) => {
@@ -561,7 +565,7 @@ describe("readSessionMessages", () => {
 
   test("keeps reset markers reachable through pagination", async () => {
     const sessionId = "paginated-branch-with-reset";
-    const sessionFile = writeTranscript(tmpDir, sessionId, [
+    const sessionFile = writeArchivedTranscript(tmpDir, sessionId, [
       { type: "session", version: 3, id: sessionId },
       createTranscriptMessage("old-user", null, "user", "old prompt"),
       {
@@ -596,7 +600,7 @@ describe("readSessionMessages", () => {
 
   test("keeps parentless linear history after a leaf control", async () => {
     const sessionId = "test-linear-with-opaque-link";
-    writeTranscript(tmpDir, sessionId, [
+    writeArchivedTranscript(tmpDir, sessionId, [
       { type: "session", version: 3, id: sessionId },
       createTranscriptMessage("linear-user", undefined, "user", "linear root"),
       createTranscriptMessage("linear-assistant", undefined, "assistant", "linear answer"),
@@ -623,8 +627,12 @@ describe("readSessionMessages", () => {
     );
   });
 
-  test("falls back to the latest reset archive when the active transcript is missing", async () => {
+  test("reads the latest reset archive independently of active artifacts", async () => {
     const sessionId = "test-session-reset-archive-fallback";
+    writeTranscript(tmpDir, sessionId, [
+      { type: "session", version: 1, id: sessionId },
+      { message: { role: "assistant", content: "active artifact" } },
+    ]);
     writeResetArchive(tmpDir, sessionId, "2026-02-16T22-26-33.000Z", [
       { type: "session", version: 1, id: sessionId },
       { message: { role: "assistant", content: "older archive" } },
@@ -638,7 +646,6 @@ describe("readSessionMessages", () => {
     const fullMessages = await readSessionMessagesAsync(sessionId, storePath, undefined, {
       mode: "full",
       reason: "test reset archive fallback",
-      allowResetArchiveFallback: true,
     });
     expect(fullMessages.map((message) => (message as { content?: unknown }).content)).toEqual([
       "restored prompt",
@@ -647,7 +654,6 @@ describe("readSessionMessages", () => {
     const recent = await readRecentSessionMessagesWithStatsAsync(sessionId, storePath, undefined, {
       maxMessages: 1,
       maxBytes: 2048,
-      allowResetArchiveFallback: true,
     });
     expect(recent.transcriptSource).toBe("reset-archive");
     expect(recent.totalMessages).toBe(2);
@@ -659,48 +665,7 @@ describe("readSessionMessages", () => {
     });
   });
 
-  test("uses the active transcript if it appears during reset archive discovery", async () => {
-    const sessionId = "test-session-reset-archive-active-race";
-    writeResetArchive(tmpDir, sessionId, "2026-02-16T22-26-34.000Z", [
-      { type: "session", version: 1, id: sessionId },
-      { message: { role: "assistant", content: "stale archive" } },
-    ]);
-
-    const originalReaddir = fs.promises.readdir.bind(fs.promises);
-    let wroteActiveTranscript = false;
-    const readdirSpy = vi.spyOn(fs.promises, "readdir").mockImplementation((async (
-      ...args: unknown[]
-    ) => {
-      const result = await (originalReaddir as (...readdirArgs: unknown[]) => Promise<unknown>)(
-        ...args,
-      );
-      if (!wroteActiveTranscript) {
-        wroteActiveTranscript = true;
-        writeTranscript(tmpDir, sessionId, [
-          { type: "session", version: 1, id: sessionId },
-          { message: { role: "assistant", content: "active transcript" } },
-        ]);
-      }
-      return result;
-    }) as typeof fs.promises.readdir);
-
-    try {
-      const fullMessages = await readSessionMessagesAsync(sessionId, storePath, undefined, {
-        mode: "full",
-        reason: "test active transcript race",
-        allowResetArchiveFallback: true,
-      });
-
-      expect(readdirSpy).toHaveBeenCalled();
-      expect(fullMessages.map((message) => (message as { content?: unknown }).content)).toEqual([
-        "active transcript",
-      ]);
-    } finally {
-      readdirSpy.mockRestore();
-    }
-  });
-
-  test("caches reset archive discovery for repeated missing-active reads", async () => {
+  test("caches reset archive discovery for repeated reads", async () => {
     const sessionId = "test-session-reset-archive-cache";
     writeResetArchive(tmpDir, sessionId, "2026-02-16T22-26-34.000Z", [
       { type: "session", version: 1, id: sessionId },
@@ -712,14 +677,12 @@ describe("readSessionMessages", () => {
       const firstMessages = await readSessionMessagesAsync(sessionId, storePath, undefined, {
         mode: "full",
         reason: "test first cached archive read",
-        allowResetArchiveFallback: true,
       });
       const readdirCallsAfterFirstRead = readdirSpy.mock.calls.length;
 
       const secondMessages = await readSessionMessagesAsync(sessionId, storePath, undefined, {
         mode: "full",
         reason: "test second cached archive read",
-        allowResetArchiveFallback: true,
       });
 
       expect(readdirCallsAfterFirstRead).toBeGreaterThan(0);
@@ -751,7 +714,6 @@ describe("readSessionMessages", () => {
       const fullMessages = await readSessionMessagesAsync(sessionId, storePath, undefined, {
         mode: "full",
         reason: "test cross-root reset archive fallback",
-        allowResetArchiveFallback: true,
       });
 
       expect(fullMessages.map((message) => (message as { content?: unknown }).content)).toEqual([
@@ -776,7 +738,6 @@ describe("readSessionMessages", () => {
     const fullMessages = await readSessionMessagesAsync(sessionId, storePath, staleSessionFile, {
       mode: "full",
       reason: "test stale archive fallback rejection",
-      allowResetArchiveFallback: true,
     });
 
     expect(fullMessages.map((message) => (message as { content?: unknown }).content)).toEqual([
@@ -796,7 +757,6 @@ describe("readSessionMessages", () => {
     const fullMessages = await readSessionMessagesAsync(sessionId, storePath, staleSessionFile, {
       mode: "full",
       reason: "test stale generated archive header recovery",
-      allowResetArchiveFallback: true,
     });
 
     expect(fullMessages.map((message) => (message as { content?: unknown }).content)).toEqual([
@@ -819,7 +779,6 @@ describe("readSessionMessages", () => {
     const fullMessages = await readSessionMessagesAsync(sessionId, storePath, topicSessionFile, {
       mode: "full",
       reason: "test explicit archive variant priority",
-      allowResetArchiveFallback: true,
     });
 
     expect(fullMessages.map((message) => (message as { content?: unknown }).content)).toEqual([
@@ -839,7 +798,6 @@ describe("readSessionMessages", () => {
     const fullMessages = await readSessionMessagesAsync(sessionId, storePath, sessionFile, {
       mode: "full",
       reason: "test previous custom archive rejection",
-      allowResetArchiveFallback: true,
     });
     expect(fullMessages).toEqual([]);
 
@@ -850,7 +808,6 @@ describe("readSessionMessages", () => {
       {
         maxMessages: 1,
         maxBytes: 2048,
-        allowResetArchiveFallback: true,
       },
     );
     expect(recent).toEqual({ messages: [], totalMessages: 0 });
@@ -873,7 +830,6 @@ describe("readSessionMessages", () => {
       readSessionMessagesAsync(sessionId, storePath, sessionFile, {
         mode: "full",
         reason: "same-path archive replacement test",
-        allowResetArchiveFallback: true,
       });
 
     await expect(read()).resolves.toHaveLength(1);
@@ -907,7 +863,6 @@ describe("readSessionMessages", () => {
       const fullMessages = await readSessionMessagesAsync(sessionId, storePath, sessionFile, {
         mode: "full",
         reason: "test newest valid custom archive",
-        allowResetArchiveFallback: true,
       });
 
       expect(fullMessages.map((message) => (message as { content?: unknown }).content)).toEqual([
@@ -921,7 +876,7 @@ describe("readSessionMessages", () => {
 
   test("keeps async rows when imported parent links are incomplete without leaf control", async () => {
     const sessionId = "test-session-tree-async-incomplete-parent";
-    writeTranscript(tmpDir, sessionId, [
+    writeArchivedTranscript(tmpDir, sessionId, [
       { type: "session", version: 3, id: sessionId },
       createTranscriptMessage("legacy-user", undefined, "user", "legacy prompt"),
       createTranscriptMessage("tree-assistant", "legacy-user", "assistant", "tree reply"),
@@ -946,7 +901,7 @@ describe("readSessionMessages", () => {
 
   test("keeps legacy async parents when tree transcripts reference pre-v3 rows", async () => {
     const sessionId = "test-session-tree-async-legacy-parent";
-    writeTranscript(tmpDir, sessionId, [
+    writeArchivedTranscript(tmpDir, sessionId, [
       { type: "session", version: 1, id: sessionId },
       createTranscriptMessage("legacy-user", undefined, "user", "legacy hello"),
       createTranscriptMessage("tree-assistant", "legacy-user", "assistant", "tree hello"),
@@ -964,7 +919,7 @@ describe("readSessionMessages", () => {
 
   test("caches async transcript indexes by file stats", async () => {
     const sessionId = "test-session-index-cache";
-    writeTranscript(tmpDir, sessionId, [
+    writeArchivedTranscript(tmpDir, sessionId, [
       { type: "session", version: 1, id: sessionId },
       { message: { role: "user", content: "hello" } },
       { message: { role: "assistant", content: "hi" } },
@@ -984,7 +939,7 @@ describe("readSessionMessages", () => {
 
   test("shares concurrent async transcript index builds", async () => {
     const sessionId = "test-session-index-cache-concurrent";
-    writeTranscript(tmpDir, sessionId, [
+    writeArchivedTranscript(tmpDir, sessionId, [
       { type: "session", version: 1, id: sessionId },
       { message: { role: "user", content: "hello" } },
       { message: { role: "assistant", content: "hi" } },
@@ -1015,7 +970,7 @@ describe("readSessionMessages", () => {
       record: { timestamp: `2026-04-27T00:00:0${second}.000Z` },
       message: { timestamp: second },
     });
-    const sessionFile = writeTranscript(tmpDir, sessionId, [
+    const sessionFile = writeArchivedTranscript(tmpDir, sessionId, [
       {
         type: "session",
         version: 3,
@@ -1102,13 +1057,13 @@ describe("readSessionMessages", () => {
       message: { role: "assistant", content: "from-custom-ops" },
     },
   ] as const)(
-    "reads cross-agent absolute sessionFile across store-root layouts for $sessionId",
+    "reads cross-agent absolute sessionFile archives across store-root layouts for $sessionId",
     async ({ sessionId, sessionFileParts, wrongStorePathParts, message }) => {
       const sessionFile = path.join(tmpDir, ...sessionFileParts);
       const wrongStorePath = path.join(tmpDir, ...wrongStorePathParts);
       fs.mkdirSync(path.dirname(sessionFile), { recursive: true });
       fs.writeFileSync(
-        sessionFile,
+        `${sessionFile}.reset.2026-08-28T00-00-00.000Z`,
         [
           JSON.stringify({ type: "session", version: 1, id: sessionId }),
           JSON.stringify({ message }),
@@ -1127,8 +1082,8 @@ describe("readSessionMessages", () => {
   );
 
   test("reads only the active SessionManager branch after a transcript rewrite", async () => {
-    const sessionId = "branched-session";
     const sessionManager = createFileBackedSessionManagerForTest(tmpDir, tmpDir);
+    const sessionId = sessionManager.getSessionId();
     const decoratedPrompt = 'Sender:\n```json\n{"label":"ui"}\n```\n\nhello';
     const visiblePrompt = "hello";
     sessionManager.appendMessage({
@@ -1158,6 +1113,7 @@ describe("readSessionMessages", () => {
     if (!sessionFile) {
       throw new Error("expected SessionManager to expose a session file");
     }
+    fs.renameSync(sessionFile, `${sessionFile}.reset.2026-08-28T00-00-00.000Z`);
 
     const out = await readSessionMessagesAsync(sessionId, storePath, sessionFile, {
       mode: "full",
@@ -1177,7 +1133,7 @@ describe("readSessionMessages", () => {
 
   test("keeps compaction markers when reading only the active SessionManager branch", async () => {
     const sessionId = "branched-session-with-compaction";
-    const sessionFile = writeTranscript(tmpDir, sessionId, [
+    const sessionFile = writeArchivedTranscript(tmpDir, sessionId, [
       { type: "session", version: 1, id: sessionId },
       createTranscriptMessage("user-old", null, "user", "old prompt", {
         message: { timestamp: 1 },
@@ -1219,7 +1175,7 @@ describe("readSessionMessages", () => {
 
   test("keeps active-branch compaction markers reachable through pagination", async () => {
     const sessionId = "paginated-branch-with-compaction";
-    const sessionFile = writeTranscript(tmpDir, sessionId, [
+    const sessionFile = writeArchivedTranscript(tmpDir, sessionId, [
       { type: "session", version: 3, id: sessionId },
       createTranscriptMessage("old-user", null, "user", "old prompt"),
       createTranscriptMessage("old-assistant", "old-user", "assistant", "old answer"),
@@ -1300,6 +1256,7 @@ describe("readSessionMessages", () => {
 
     expect(messageId).toBeTypeOf("string");
     expect(messageId.length).toBeGreaterThan(0);
+    fs.renameSync(sessionFile, `${sessionFile}.reset.2026-08-28T00-00-00.000Z`);
     const out = await readSessionMessagesAsync(sessionId, storePath, sessionFile, {
       mode: "full",
       reason: "test",
@@ -1348,6 +1305,7 @@ describe("readSessionMessages", () => {
       redactedText: "Blocked again by HITL test hook.",
       pluginId: "hitl-test-hooks",
     });
+    fs.renameSync(sessionFile, `${sessionFile}.reset.2026-08-28T00-00-00.000Z`);
 
     const out = await readSessionMessagesAsync(sessionId, storePath, sessionFile, {
       mode: "full",
@@ -1721,7 +1679,7 @@ describe("oversized transcript line guards", () => {
   test("readRecentSessionMessagesAsync replaces oversized JSONL lines with placeholders", async () => {
     const sessionId = "test-oversized-recent";
     const oversizedContent = "x".repeat(300 * 1024);
-    writeTranscript(tmpDir, sessionId, [
+    writeArchivedTranscript(tmpDir, sessionId, [
       { type: "session", version: 1, id: sessionId },
       { message: { role: "user", content: "start" } },
       { message: { role: "assistant", content: oversizedContent } },
@@ -1793,8 +1751,6 @@ describe("oversized transcript line guards", () => {
     const messages = projectChatDisplayMessages(
       await readRecentSessionMessagesAsync(sessionId, storePath, undefined, {
         maxMessages: 10,
-        allowResetArchiveFallback: true,
-        resetArchiveOnly: true,
       }),
     );
 
@@ -1814,10 +1770,7 @@ describe("oversized transcript line guards", () => {
       expect(JSON.stringify(messages)).toContain('"cache_control":{"type":"ephemeral"}');
     }
 
-    const singleMessage = await filesystemReader(sessionId, storePath).readById("archived-image", {
-      allowResetArchiveFallback: true,
-      resetArchiveOnly: true,
-    });
+    const singleMessage = await filesystemReader(sessionId, storePath).readById("archived-image");
     expect(singleMessage).toMatchObject({
       found: true,
       oversized: false,
@@ -1856,13 +1809,8 @@ describe("oversized transcript line guards", () => {
     const messages = await reader.read({
       mode: "recent",
       maxMessages: 10,
-      allowResetArchiveFallback: true,
-      resetArchiveOnly: true,
     });
-    const singleMessage = await reader.readById("distant-image", {
-      allowResetArchiveFallback: true,
-      resetArchiveOnly: true,
-    });
+    const singleMessage = await reader.readById("distant-image");
 
     for (const message of [messages.messages[0], singleMessage.message]) {
       expect(message).toMatchObject({
@@ -1895,8 +1843,6 @@ describe("oversized transcript line guards", () => {
 
     const messages = await readRecentSessionMessagesAsync(sessionId, storePath, undefined, {
       maxMessages: 10,
-      allowResetArchiveFallback: true,
-      resetArchiveOnly: true,
     });
 
     expect(messages).toMatchObject([
@@ -1944,8 +1890,6 @@ describe("oversized transcript line guards", () => {
     const messages = projectChatDisplayMessages(
       await readRecentSessionMessagesAsync(sessionId, storePath, undefined, {
         maxMessages: 10,
-        allowResetArchiveFallback: true,
-        resetArchiveOnly: true,
       }),
     );
 
@@ -1989,8 +1933,6 @@ describe("oversized transcript line guards", () => {
 
     const messages = await readRecentSessionMessagesAsync(sessionId, storePath, undefined, {
       maxMessages: 10,
-      allowResetArchiveFallback: true,
-      resetArchiveOnly: true,
     });
 
     expect(messages).toMatchObject([
@@ -1999,12 +1941,10 @@ describe("oversized transcript line guards", () => {
         __openclaw: { id: "expanded-json", truncated: true, reason: "oversized" },
       },
     ]);
-    expect(
-      await filesystemReader(sessionId, storePath).readById("expanded-json", {
-        allowResetArchiveFallback: true,
-        resetArchiveOnly: true,
-      }),
-    ).toMatchObject({ found: true, oversized: true });
+    expect(await filesystemReader(sessionId, storePath).readById("expanded-json")).toMatchObject({
+      found: true,
+      oversized: true,
+    });
   });
 
   test("rejects JSON-escaped transcript recovery marker collisions", async () => {
@@ -2026,8 +1966,6 @@ describe("oversized transcript line guards", () => {
 
     const messages = await readRecentSessionMessagesAsync(sessionId, storePath, undefined, {
       maxMessages: 10,
-      allowResetArchiveFallback: true,
-      resetArchiveOnly: true,
     });
 
     expect(messages).toMatchObject([
@@ -2036,12 +1974,10 @@ describe("oversized transcript line guards", () => {
         __openclaw: { id: "escaped-marker", truncated: true, reason: "oversized" },
       },
     ]);
-    expect(
-      await filesystemReader(sessionId, storePath).readById("escaped-marker", {
-        allowResetArchiveFallback: true,
-        resetArchiveOnly: true,
-      }),
-    ).toMatchObject({ found: true, oversized: true });
+    expect(await filesystemReader(sessionId, storePath).readById("escaped-marker")).toMatchObject({
+      found: true,
+      oversized: true,
+    });
   });
 
   test.each([
@@ -2094,8 +2030,6 @@ describe("oversized transcript line guards", () => {
 
     const messages = await readRecentSessionMessagesAsync(sessionId, storePath, undefined, {
       maxMessages: 10,
-      allowResetArchiveFallback: true,
-      resetArchiveOnly: true,
     });
 
     expect(messages).toMatchObject([
@@ -2107,17 +2041,14 @@ describe("oversized transcript line guards", () => {
     ]);
     expect(JSON.stringify(messages)).not.toContain(encoded);
     expect(
-      await filesystemReader(sessionId, storePath).readById("adversarial-image", {
-        allowResetArchiveFallback: true,
-        resetArchiveOnly: true,
-      }),
+      await filesystemReader(sessionId, storePath).readById("adversarial-image"),
     ).toMatchObject({ found: true, oversized: true });
   });
 
   test("readRecentSessionMessagesAsync keeps oversized active-tree leaves", async () => {
     const sessionId = "test-oversized-tree-tail";
     const oversizedContent = "z".repeat(300 * 1024);
-    writeTranscript(tmpDir, sessionId, [
+    writeArchivedTranscript(tmpDir, sessionId, [
       { type: "session", version: 3, id: sessionId },
       createTranscriptMessage("root", null, "user", "root"),
       createTranscriptMessage("oversized-leaf", "root", "assistant", oversizedContent),
@@ -2161,7 +2092,7 @@ describe("oversized transcript line guards", () => {
       ],
     },
   ])("$name", async ({ sessionId, sideRecords }) => {
-    writeTranscript(tmpDir, sessionId, [
+    writeArchivedTranscript(tmpDir, sessionId, [
       { type: "session", version: 3, id: sessionId },
       createTranscriptMessage("active-root", null, "user", "active root"),
       ...sideRecords,
@@ -2186,7 +2117,7 @@ describe("oversized transcript line guards", () => {
     const sessionId = "test-oversized-metadata-extract";
     const timestamp = "2026-05-16T16:00:33.000Z";
     const oversizedContent = "w".repeat(300 * 1024);
-    writeTranscript(tmpDir, sessionId, [
+    writeArchivedTranscript(tmpDir, sessionId, [
       { type: "session", version: 3, id: sessionId },
       createTranscriptMessage("root-msg", null, "user", "root"),
       createTranscriptMessage("oversized-child", "root-msg", "assistant", oversizedContent, {
@@ -2221,15 +2152,11 @@ describe("oversized transcript line guards", () => {
 
   test("readSessionMessagesAsync keeps id-less oversized message placeholders", async () => {
     const sessionId = "test-oversized-idless-async";
-    const transcriptPath = path.join(tmpDir, `${sessionId}.jsonl`);
     const oversizedContent = "w".repeat(300 * 1024);
-    fs.writeFileSync(
-      transcriptPath,
-      `${JSON.stringify({
-        message: { role: "assistant", content: oversizedContent },
-      })}\n`,
-      "utf-8",
-    );
+    writeArchivedTranscript(tmpDir, sessionId, [
+      { type: "session", version: 1, id: sessionId },
+      { message: { role: "assistant", content: oversizedContent } },
+    ]);
 
     const out = await readSessionMessagesAsync(sessionId, storePath, undefined, {
       mode: "full",
@@ -2263,7 +2190,7 @@ describe("short read resilience", () => {
         },
       })),
     ];
-    writeTranscript(tmpDir, sessionId, lines);
+    writeArchivedTranscript(tmpDir, sessionId, lines);
 
     const expected = await readRecentSessionMessagesAsync(sessionId, storePath, undefined, {
       maxMessages: 20,
@@ -2293,7 +2220,7 @@ describe("short read resilience", () => {
         },
       })),
     ];
-    writeTranscript(tmpDir, sessionId, lines);
+    writeArchivedTranscript(tmpDir, sessionId, lines);
 
     const normal = await readRecentSessionMessagesAsync(sessionId, storePath, undefined, {
       maxMessages: 20,

@@ -16,6 +16,7 @@ export const CONTROL_UI_SESSION_PULL_REQUESTS_MAX_KEYS = 200;
 /** Anonymous public-page presentation; remote URLs never cross into the renderer. */
 export type ControlUiLinkPreview = {
   title?: string;
+  description?: string;
   imageDataUrl?: string;
   faviconDataUrl?: string;
 };

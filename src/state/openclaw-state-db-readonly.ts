@@ -1,7 +1,8 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import { statSync } from "node:fs";
+import { lstatSync } from "node:fs";
 import path from "node:path";
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
+import { hasErrnoCode } from "../infra/errno.js";
 import { SqliteCoordinatorError, throwSqliteLifecycleErrors } from "../infra/sqlite-coordinator.js";
 import {
   retainSnapshotTempDirectory,
@@ -45,7 +46,10 @@ import {
   withOpenClawStateReadOnlyLocation,
 } from "./openclaw-state-db-read-connection.js";
 import { isExistingOpenClawStateSchema } from "./openclaw-state-db-schema-policy.js";
-import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
+import {
+  existingPathOrUndefined,
+  resolveOpenClawStateSqlitePath,
+} from "./openclaw-state-db.paths.js";
 import {
   assertRetainedReadScopeAdmission,
   bindRetainedReadScope,
@@ -250,18 +254,6 @@ function resolveReadOnlyPath(options: OpenClawStateDatabaseOptions): string {
   return pathname;
 }
 
-function existingPathOrUndefined(pathname: string): string | undefined {
-  try {
-    statSync(pathname);
-    return pathname;
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      return undefined;
-    }
-    throw error;
-  }
-}
-
 function withOpenClawStateDatabaseReadOnlyIfOpen<T>(
   operation: (database: OpenClawStateReadOnlyDatabase) => T,
   pathname: string,
@@ -378,6 +370,32 @@ export function withOpenClawStateDatabaseReadOnly<T>(
     return reused.value;
   }
   return withFreshOpenClawStateDatabaseReadOnly(operation, options, pathname);
+}
+
+/** A missing pathname is not absence while this read owner can serve retained state. */
+export function isOpenClawStateDatabaseDefinitelyAbsent(
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
+  try {
+    const pathname = resolveReadOnlyPath({ env });
+    const snapshot = stateSnapshotReads.getStore();
+    if (
+      synchronousReadSnapshots.current?.has(pathname) ||
+      (snapshot?.active && snapshot.path === pathname) ||
+      openClawStateDatabaseCache.getCachedOpenClawStateDatabase(pathname)?.db.isOpen
+    ) {
+      return false;
+    }
+    try {
+      lstatSync(pathname);
+      return false;
+    } catch (error) {
+      return hasErrnoCode(error, "ENOENT");
+    }
+  } catch {
+    // Unknown availability retains the normal reader's admission and error behavior.
+    return false;
+  }
 }
 
 /** Read existing shared state while preserving non-missing filesystem failures. */

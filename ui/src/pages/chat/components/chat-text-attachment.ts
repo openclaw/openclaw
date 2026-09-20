@@ -71,14 +71,27 @@ class ChatTextAttachment extends OpenClawLightDomContentsElement {
     super.disconnectedCallback();
   }
 
+  private get htmlDocument(): boolean {
+    return !this.plainText && isHtmlDocument(this.mimeType, this.label);
+  }
+
   override willUpdate(changed: PropertyValues<this>): void {
     if (changed.has("sourceIdentity")) {
       this.source = false;
     }
-    if (changed.has("src") || changed.has("sourceIdentity") || changed.has("sizeBytes")) {
+    // A retained attachment must revalidate bytes when its rendering policy changes.
+    const policyChanged =
+      changed.has("plainText") || changed.has("mimeType") || changed.has("label");
+    if (
+      policyChanged ||
+      changed.has("src") ||
+      changed.has("sourceIdentity") ||
+      changed.has("sizeBytes")
+    ) {
       this.cancelLoad();
       // Ticket refreshes must not detach a focused reader of the same attachment.
       if (
+        policyChanged ||
         !this.src ||
         !this.sourceIdentity ||
         changed.has("sourceIdentity") ||
@@ -104,7 +117,12 @@ class ChatTextAttachment extends OpenClawLightDomContentsElement {
     const controller = new AbortController();
     this.abortController = controller;
     try {
-      const text = await readAttachmentText(this.src, this.sizeBytes, controller.signal);
+      const text = await readAttachmentText(
+        this.src,
+        this.sizeBytes,
+        controller.signal,
+        this.htmlDocument ? "html" : "full",
+      );
       if (version === this.loadVersion && this.isConnected) {
         this.text = text;
       }
@@ -128,7 +146,7 @@ class ChatTextAttachment extends OpenClawLightDomContentsElement {
   }
 
   override render() {
-    const htmlDocument = !this.plainText && isHtmlDocument(this.mimeType, this.label);
+    const htmlDocument = this.htmlDocument;
     const mimeType = this.mimeType.split(";", 1)[0]?.trim().toLowerCase();
     const markdown =
       !this.plainText &&
@@ -226,7 +244,9 @@ ${this.text}</pre>`,
       }
       ${
         this.failed
-          ? html`<p class="muted" role="status">${t("chat.attachments.textPreviewUnavailable")}</p>`
+          ? html`<p class="muted" role="status">
+              ${t(htmlDocument ? "chat.attachments.htmlPreviewUnavailable" : "chat.attachments.textPreviewUnavailable")}
+            </p>`
           : reader
       }
     `;

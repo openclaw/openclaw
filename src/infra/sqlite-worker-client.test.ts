@@ -1,5 +1,6 @@
 import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import type { Actor } from "./sqlite-worker-broker.types.js";
 import {
   createSqliteWorkerClient,
   runSqliteWorkerClientOperation,
@@ -8,11 +9,32 @@ import {
 type Operations = { write: { input: string; output: string } };
 const closedError = { code: "closed", message: "SQLite worker store is closed" };
 
+function createActor(): Actor {
+  return {
+    id: 1,
+    key: "client-fixture",
+    databasePath: "/fixture/state.sqlite",
+    pathReferences: new Map([["/fixture/state.sqlite", 1]]),
+    moduleUrl: "file:///fixture/sqlite-backend.js",
+    inputHash: "client-fixture",
+    get slot(): never {
+      throw new Error("Client scope must not access the broker's native Worker slot");
+    },
+    references: 1,
+    opened: Promise.resolve(),
+    openDispatch: { dispatched: true },
+    initialized: true,
+    backendClosed: false,
+    pendingStateLifecycles: new Set(),
+  };
+}
+
 it.each(["missing", "sealed"] as const)(
   "refuses a %s client before entering an operation or dispatching work",
   async (boundary) => {
     const dispatch = vi.fn(async () => "committed");
     const { client, store } = createSqliteWorkerClient<Operations>({
+      actor: createActor(),
       isDraining: () => boundary === "sealed",
       isAvailable: () => true,
       dispatch,
@@ -55,6 +77,7 @@ it("lets an admitted scope finish through close before releasing its owner", asy
     events.push("released");
   });
   const { client, store } = createSqliteWorkerClient<Operations>({
+    actor: createActor(),
     isDraining: () => draining,
     isAvailable: () => true,
     dispatch: () => {

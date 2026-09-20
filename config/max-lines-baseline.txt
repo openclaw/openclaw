@@ -39,7 +39,6 @@ extensions/codex/src/app-server/elicitation-bridge.ts
 extensions/codex/src/app-server/native-subagent-monitor.test.ts
 extensions/codex/src/app-server/native-subagent-monitor.ts
 extensions/codex/src/app-server/plugin-thread-config.test.ts
-extensions/codex/src/app-server/rate-limits.ts
 extensions/codex/src/app-server/run-attempt.context-engine.test.ts
 extensions/codex/src/app-server/run-attempt.test.ts
 extensions/codex/src/app-server/run-attempt.turn-watches.test.ts
@@ -635,7 +634,6 @@ src/gateway/test-helpers.server.ts
 src/gateway/tools-invoke-http.test.ts
 src/gateway/watch-node-http.ts
 src/gateway/worker-environments/bootstrap.ts
-src/gateway/worker-environments/inference-runtime.ts
 src/gateway/worker-environments/store.ts
 src/infra/approval-handler-runtime.ts
 src/infra/backup-create.test.ts
@@ -755,7 +753,6 @@ src/security/audit.ts
 src/shared/json-schema-defaults.ts
 src/shared/text/assistant-visible-text.ts
 src/skills/lifecycle/clawhub.test.ts
-src/skills/lifecycle/install.ts
 src/skills/security/scanner.ts
 src/skills/workshop/service.test.ts
 src/snapshot/local-repository.test.ts

@@ -14,8 +14,6 @@ import ai.openclaw.app.ui.image.RemoteImageResult
 import ai.openclaw.app.ui.image.safeRemoteImageStore
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
-import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.DragInteraction
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -23,7 +21,6 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
-import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
@@ -37,7 +34,6 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.OpenInFull
 import androidx.compose.material3.Icon
@@ -70,8 +66,6 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.LineHeightStyle
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.window.Dialog
-import androidx.compose.ui.window.DialogProperties
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.util.Locale
@@ -516,37 +510,7 @@ private fun ChatImagePreview(
     }
   }
   if (previewVisible) {
-    Dialog(
-      onDismissRequest = { previewVisible = false },
-      properties = DialogProperties(usePlatformDefaultWidth = false),
-    ) {
-      Box(
-        modifier = Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.96f)).clickable { previewVisible = false },
-        contentAlignment = Alignment.Center,
-      ) {
-        Image(
-          bitmap = image,
-          contentDescription = nativeString("Image preview"),
-          contentScale = ContentScale.Fit,
-          modifier = Modifier.fillMaxSize().padding(20.dp),
-        )
-        Surface(
-          onClick = { previewVisible = false },
-          modifier = Modifier.align(Alignment.TopEnd).padding(16.dp).size(44.dp),
-          shape = CircleShape,
-          color = Color.Black.copy(alpha = 0.62f),
-          contentColor = Color.White,
-        ) {
-          Box(contentAlignment = Alignment.Center) {
-            Icon(
-              imageVector = Icons.Default.Close,
-              contentDescription = nativeString("Close image preview"),
-              modifier = Modifier.size(22.dp),
-            )
-          }
-        }
-      }
-    }
+    ChatImageViewer(image = image, onDismiss = { previewVisible = false })
   }
 }
 

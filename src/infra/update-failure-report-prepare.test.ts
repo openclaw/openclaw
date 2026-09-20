@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
+import { preparePublicUpdateFailureIdentifiers } from "./update-failure-public-identifiers.js";
 import { prepareUpdateFailureReport } from "./update-failure-report-prepare.js";
+
+// Prepare the real catalog/worker prerequisites before individual test deadlines.
+await preparePublicUpdateFailureIdentifiers();
 
 const context = { env: {}, stateDir: "/report-test-state" };
 
@@ -200,12 +204,13 @@ describe("update report diagnostic command boundary", () => {
   });
 
   it.each(
-    (["check", "code", "pluginId", "affectedKey"] as const).flatMap((field) =>
+    (["check", "code", "pluginId", "affectedKey", "errorName"] as const).flatMap((field) =>
       [
         "private-host.example",
         "private-host.example:8123",
         "10.20.30.40",
         "mcp.servers.private-host.example",
+        "PrivateTenantError",
       ].map((host) => ({
         field,
         host,
@@ -226,7 +231,13 @@ describe("update report diagnostic command boundary", () => {
               cwd: "",
               durationMs: 0,
               exitCode: 1,
-              failureFacts: [{ check: "readyz", code: "readyz-unhealthy", [field]: host }],
+              failureFacts: [
+                {
+                  check: "readyz",
+                  code: field === "errorName" ? "private-code" : "readyz-unhealthy",
+                  [field]: host,
+                },
+              ],
             },
           ],
         },
@@ -494,7 +505,7 @@ describe("update report diagnostic command boundary", () => {
     expect(report.body).toContain("- Update target: [redacted-command]\n");
   });
 
-  it("uses the failure code when a phase label is executable text", async () => {
+  it("withholds an executable phase label without substituting the failure code", async () => {
     const report = await prepareUpdateFailureReport(
       {
         attemptId: "structured-phase",
@@ -516,7 +527,8 @@ describe("update report diagnostic command boundary", () => {
       },
       context,
     );
-    expect(report.body).toContain("- Failed phase: doctor-failed\n");
+    expect(report.body).toContain("- Failed phase: [redacted-command]\n");
+    expect(report.body).toContain("- Reason code: doctor-failed\n");
     expect(report.body).not.toContain("openclaw doctor");
   });
 

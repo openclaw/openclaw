@@ -33,6 +33,7 @@ type LoginGateProps = LoginFailureFeedbackParams & {
   onSecretChange: (value: string) => void;
   onToggleGatewaySecret: () => void;
   onConnect: () => void;
+  onOpenGatewaySettings?: () => void;
 };
 
 const TONE_ICONS: Record<LoginFailureTone, TemplateResult> = {
@@ -359,6 +360,13 @@ function renderLoginGate(props: LoginGateProps, refreshAction: RefreshAction) {
           <span class="login-gate__brand-name">OpenClaw</span>
         </header>
         ${body}
+        ${
+          props.onOpenGatewaySettings
+            ? html`<button class="btn" @click=${props.onOpenGatewaySettings}>
+                ${t("login.gatewaySettings")}
+              </button>`
+            : nothing
+        }
       </div>
     </div>
   `;

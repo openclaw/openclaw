@@ -150,6 +150,8 @@ describe("update repair ledger recovery", () => {
       recordUpdateRunStep(run.runId, { step: "driver:adopted", status: "completed" });
       if (legacy) {
         recordUpdateRunStep(run.runId, { step: "requested", status: "failed", detail });
+      } else {
+        recordUpdateRunStep(run.runId, { step: "installation-inspection", status: "in_progress" });
       }
       finishUpdateRun(run.runId, {
         status: legacy ? "failed" : "skipped",

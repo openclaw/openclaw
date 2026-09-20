@@ -2,9 +2,9 @@ import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import * as authProfiles from "../auth-profiles.js";
 import { createOAuthManager } from "../auth-profiles/oauth-manager.js";
 import { isPendingOAuthRefreshFence } from "../auth-profiles/oauth-refresh-marker.js";
+import * as oauthObservation from "../auth-profiles/oauth-refresh-observation.js";
 import { loadPersistedAuthProfileStore } from "../auth-profiles/persisted.js";
 import { clearRuntimeAuthProfileStoreSnapshots } from "../auth-profiles/runtime-snapshots.js";
 import * as sqliteRead from "../auth-profiles/sqlite-read.js";
@@ -113,12 +113,16 @@ it.each(["settled", "replaced", "removed", "failed"] as const)(
           };
         },
       });
-      vi.spyOn(authProfiles, "waitForActiveOAuthRefreshes").mockImplementation(
-        async (provider, pinnedProfileId) => {
-          joiningRefresh.resolve();
-          await manager.waitForActiveOAuthRefreshes(provider, pinnedProfileId);
-        },
-      );
+      const captureSettlement = oauthObservation.captureOAuthRefreshSettlement;
+      vi.spyOn(oauthObservation, "captureOAuthRefreshSettlement").mockImplementation((params) => {
+        const wait = captureSettlement(params);
+        return wait
+          ? async () => {
+              joiningRefresh.resolve();
+              await wait();
+            }
+          : undefined;
+      });
       let ownerReads = 0;
       let refresh: Promise<unknown> | undefined;
       vi.spyOn(sqliteRead, "prepareAgentAuthProfileRowsRead").mockImplementation((owner) => ({
@@ -196,42 +200,3 @@ it.each(["settled", "replaced", "removed", "failed"] as const)(
     });
   },
 );
-
-it.each([
-  { provider: "unrelated", profileId: undefined },
-  { provider: "openai", profileId: "openai:other" },
-])("does not join an unrelated refresh for $provider / $profileId", async (selection) => {
-  await withOpenClawTestState({ label: "model-auth-refresh-scope" }, async (state) => {
-    const agentDir = state.agentDir("reader");
-    const profileId = "openai:held";
-    const original = credential();
-    const store: AuthProfileStore = { version: 1, profiles: { [profileId]: original } };
-    saveAuthProfileStore(store, agentDir);
-    const entered = createDeferredCore();
-    const release = createDeferredCore();
-    const manager = createOAuthManager({
-      canRefreshCredential: async () => true,
-      readBootstrapCredential: () => null,
-      buildApiKey: async (_provider, current) => current.access,
-      refreshCredential: async () => {
-        entered.resolve();
-        await release.promise;
-        return { ...original, access: "synthetic-settled-access" };
-      },
-    });
-    let refreshed = false;
-    const refreshing = manager
-      .resolveOAuthAccess({ store, profileId, credential: original, agentDir, forceRefresh: true })
-      .finally(() => {
-        refreshed = true;
-      });
-    try {
-      await Promise.race([entered.promise, refreshing]);
-      await manager.waitForActiveOAuthRefreshes(selection.provider, selection.profileId);
-      expect(refreshed).toBe(false);
-    } finally {
-      release.resolve();
-      await refreshing;
-    }
-  });
-});

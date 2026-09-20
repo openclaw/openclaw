@@ -16,7 +16,7 @@ import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.opencla
 import { isLoopbackAddress, isSecureWebSocketUrl } from "../gateway/net.js";
 import { normalizeWebSocketProtocol } from "../gateway/websocket-protocol.js";
 import { FLAG_TERMINATOR, isValueToken } from "../infra/cli-root-options.js";
-import { normalizeEnv } from "../infra/env.js";
+import { isTruthyEnvValue, normalizeEnv } from "../infra/env.js";
 import type { ProxyHandle } from "../infra/net/proxy/proxy-lifecycle.js";
 import { tryProcessCwd } from "../infra/safe-cwd.js";
 import type { PluginCliLoadSession } from "../plugins/cli-registry-loader.js";
@@ -71,11 +71,6 @@ import {
   shouldUseRootHelpFastPath,
   shouldUseSetupOnboardConfigureHelpFastPath,
 } from "./run-main-policy.js";
-import {
-  bootstrapCliProxyCaptureAndDispatcher,
-  ensureCliEnvProxyDispatcher,
-  shouldBootstrapCliProxyBeforeFastPath,
-} from "./run-main-proxy.js";
 import { withCliCommandCleanup, type CliHarnessCleanup } from "./runtime-cleanup-scope.js";
 import { closeCliResources, runCliDisposer } from "./runtime-cleanup.js";
 import { registerSignalExitBarrier, waitForSignalExitBarriers } from "./signal-exit-barrier.js";
@@ -95,6 +90,14 @@ export {
   shouldUseSetupOnboardConfigureHelpFastPath,
 } from "./run-main-policy.js";
 
+const CLI_PROXY_ENV_KEYS = [
+  "HTTP_PROXY",
+  "HTTPS_PROXY",
+  "ALL_PROXY",
+  "http_proxy",
+  "https_proxy",
+  "all_proxy",
+] as const;
 const UNKNOWN_COMMAND_DISPLAY_LIMIT = 128;
 
 const loadRootHelpLiveConfigModule = async () => await import("./root-help-live-config.js");
@@ -732,6 +735,37 @@ function normalizeRootLogLevelArgvForProgram(argv: string[], program: CommanderC
   });
 }
 
+async function ensureCliEnvProxyDispatcher(): Promise<void> {
+  try {
+    const { hasEnvHttpProxyAgentConfigured } = await import("../infra/net/proxy-env.js");
+    if (!hasEnvHttpProxyAgentConfigured()) {
+      return;
+    }
+    const { ensureGlobalUndiciEnvProxyDispatcher } =
+      await import("../infra/net/undici-global-dispatcher.js");
+    ensureGlobalUndiciEnvProxyDispatcher();
+  } catch {
+    // Best-effort proxy bootstrap; CLI startup should continue without it.
+  }
+}
+
+function isDebugProxyCaptureEnvEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
+  return (
+    isTruthyEnvValue(env.OPENCLAW_DEBUG_PROXY_ENABLED) ||
+    isTruthyEnvValue(env.OPENCLAW_DEBUG_PROXY_REQUIRE)
+  );
+}
+
+function shouldBootstrapCliProxyBeforeFastPath(env: NodeJS.ProcessEnv = process.env): boolean {
+  if (isDebugProxyCaptureEnvEnabled(env)) {
+    return true;
+  }
+  return CLI_PROXY_ENV_KEYS.some((key) => {
+    const value = env[key];
+    return typeof value === "string" && value.trim().length > 0;
+  });
+}
+
 function isKnownBuiltInCommandRoot(primary: string): boolean {
   return (
     getCoreCliCommandNamesCore().includes(primary) ||
@@ -904,6 +938,31 @@ async function resolveUnownedCliPrimaryError(params: {
 async function createExpectedPluginPolicyError(message: string): Promise<Error> {
   const { ExpectedCliError } = await import("./failure-output.js");
   return new ExpectedCliError({ message, humanOutput: message, machineOutput: message });
+}
+
+async function bootstrapCliProxyCaptureAndDispatcher(
+  startupTrace: ReturnType<typeof createGatewayDispatchStartupTrace>,
+  options: { ensureDispatcher?: boolean; capture?: boolean } = {},
+): Promise<void> {
+  // Capture init, exit finalize, and coverage warnings all no-op unless the
+  // debug-proxy env requests capture; importing their sqlite-store graph anyway
+  // costs ~100 MB RSS on metadata-only commands such as `plugins list --json`.
+  if (options.capture !== false && isDebugProxyCaptureEnvEnabled()) {
+    const [
+      { initializeDebugProxyCapture, finalizeDebugProxyCapture },
+      { maybeWarnAboutDebugProxyCoverage },
+    ] = await startupTrace.measure("proxy-imports", () =>
+      Promise.all([import("../proxy-capture/runtime.js"), import("../proxy-capture/coverage.js")]),
+    );
+    initializeDebugProxyCapture("cli");
+    process.once("exit", () => {
+      finalizeDebugProxyCapture();
+    });
+    maybeWarnAboutDebugProxyCoverage(undefined, (message) => console.warn(message));
+  }
+  if (options.ensureDispatcher !== false) {
+    await startupTrace.measure("proxy-dispatcher", () => ensureCliEnvProxyDispatcher());
+  }
 }
 
 export async function runCli(
@@ -1531,7 +1590,7 @@ async function runCliWithPreparedOutputMode(
           ]),
         );
         const program = await startupTrace.measure("build-program", () =>
-          buildProgram({ doctorDatabasePreflight }),
+          buildProgram({ doctorDatabasePreflight, runtimeRecoveryEnv: options.runtimeRecoveryEnv }),
         );
         await options.harnessCleanup?.pluginResources?.waitForRegistrations();
 

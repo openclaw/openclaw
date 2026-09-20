@@ -39,6 +39,28 @@ describeControlUiE2e("Control UI chat file links", () => {
     await server?.close();
   });
 
+  it("preserves domain/path text in user messages", async () => {
+    const context = await browser.newContext({ viewport: { height: 900, width: 1280 } });
+    try {
+      const page = await context.newPage();
+      page.setDefaultTimeout(controlUiE2eWaitTimeoutMs);
+      const text = "Please check the portal.example/service.test reference.";
+      const gateway = await installMockGateway(page, {
+        historyMessages: [{ role: "user", content: [{ type: "text", text }], timestamp: 1 }],
+      });
+      await page.goto(`${server.baseUrl}chat`);
+      const bubble = page.locator(".chat-bubble").filter({ hasText: "Please check" });
+      await bubble.waitFor({ state: "visible" });
+      // Capture the original wrong-label state too, before asserting the fixed behavior.
+      await bubble.screenshot({ path: path.join(artifactDir, "domain-path-message.png") });
+      expect(await bubble.textContent()).toContain(text);
+      expect(await bubble.locator("a[data-file-path]").count()).toBe(0);
+      expect(await gateway.getRequests("sessions.files.get")).toHaveLength(0);
+    } finally {
+      await context.close();
+    }
+  });
+
   it.each(["file", "task", "close", "list"] as const)(
     "shows a file tab before completion and honors the %s intent",
     async (intent) => {

@@ -114,7 +114,10 @@ describe("worker environment service", () => {
         }),
         { ensureNodeWorkerBundle: async () => structuredClone(support.BOOTSTRAP_RECEIPT) },
       );
-      const environment = await workerService.create("development", `request-${lease.leaseId}`);
+      const environment = await workerService.createWithRequest({
+        profileId: "development",
+        idempotencyKey: `request-${lease.leaseId}`,
+      });
       support.testState.config.cloudWorkers!.profiles = {};
 
       await workerService.reconcileOnce();
@@ -140,12 +143,11 @@ describe("worker environment service", () => {
       destroy,
     });
     const workerService = support.createService(provider);
-    const environment = await workerService.create(
-      "development",
-      "request-unadvertised-persisted-ssh",
-      undefined,
-      "remote-exec",
-    );
+    const environment = await workerService.createWithRequest({
+      profileId: "development",
+      idempotencyKey: "request-unadvertised-persisted-ssh",
+      executionMode: "remote-exec",
+    });
     provider.supportedExecutionModes = undefined;
     support.testState.config.cloudWorkers!.profiles = {};
 
@@ -181,12 +183,11 @@ describe("worker environment service", () => {
       const workerService = support.createService(provider, {
         ensureNodeWorkerBundle: async () => structuredClone(support.BOOTSTRAP_RECEIPT),
       });
-      const environment = await workerService.create(
-        "development",
-        "request-unadvertised-persisted-node",
-        undefined,
-        "remote-exec",
-      );
+      const environment = await workerService.createWithRequest({
+        profileId: "development",
+        idempotencyKey: "request-unadvertised-persisted-node",
+        executionMode: "remote-exec",
+      });
       provider.supportedExecutionModes = supportedExecutionModes;
       support.getDevelopmentProfile().settings = { region: "edited" };
 
@@ -223,12 +224,11 @@ describe("worker environment service", () => {
         }),
         { ensureNodeWorkerBundle: async () => structuredClone(support.BOOTSTRAP_RECEIPT) },
       );
-      const environment = await initial.create(
-        "development",
-        "request-persisted-multimode-node",
-        undefined,
-        "remote-exec",
-      );
+      const environment = await initial.createWithRequest({
+        profileId: "development",
+        idempotencyKey: "request-persisted-multimode-node",
+        executionMode: "remote-exec",
+      });
       await initial.stop();
 
       const restarted = support.createService(
@@ -503,7 +503,9 @@ describe("worker environment service", () => {
       },
     });
 
-    const result = await support.createService(provider).create("development", "request-npm");
+    const result = await support
+      .createService(provider)
+      .createWithRequest({ profileId: "development", idempotencyKey: "request-npm" });
 
     expect(result).toMatchObject({
       state: "ready",

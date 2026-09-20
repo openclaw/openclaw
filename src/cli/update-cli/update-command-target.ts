@@ -28,7 +28,6 @@ import {
   type ResolvedGlobalInstallTarget,
 } from "../../infra/update-global.js";
 import { createUpdatePreflightFailure } from "../../infra/update-preflight-details.js";
-import { recordUpdateRunStep } from "../../infra/update-run-ledger.js";
 import { updateRunStepsFromResultStep } from "../../infra/update-run-step.js";
 import {
   describeUpdateInstallRoot,
@@ -48,6 +47,7 @@ import {
   readPackageName,
   readPackageVersion,
   resolveGlobalManager,
+  resolveNodeRunner,
   resolveTargetVersion,
   UpdatePreMutationError,
   type UpdateCommandOptions,
@@ -63,6 +63,7 @@ import { UnreportedUpdateAdmissionOutcome, type RefuseUpdate } from "./update-co
 import {
   assertUpdatePackageActivationAdmission,
   readDevUpdateTarget,
+  recordUpdateCommandTarget,
   type prepareUpdateCommand,
 } from "./update-command-run.js";
 import {
@@ -170,6 +171,9 @@ export async function resolveUpdateCommandTarget(
         );
       }
 
+      recordUpdateCommandTarget(opts.run, {
+        step: { step: "installation-inspection", status: "in_progress" },
+      });
       if (requestedChannel === "extended-stable" && installKind === "git") {
         await refuseUpdate("unsupported_git_channel");
         return undefined;
@@ -245,6 +249,7 @@ export async function resolveUpdateCommandTarget(
       let packageTargetSchemaVersions: OpenClawSchemaVersions | undefined;
       let packageRuntimeTarget: { version: string; nodeEngine: string | null } | undefined;
       let managedServiceRootRedirect: ManagedServiceRootRedirect | null = null;
+      let managedServiceRoot: string | undefined;
       // The service's Node can differ even when its package root matches the shell.
       let managedServiceNodeRunner: string | undefined;
       let packageUpdateNodeRunner: string | undefined;
@@ -253,10 +258,15 @@ export async function resolveUpdateCommandTarget(
       if (updateInstallKind === "package") {
         const servicePlan =
           prepared.servicePlan ??
-          (await resolveManagedServicePackageUpdatePlan({ root, pkgOwnership }));
+          (await resolveManagedServicePackageUpdatePlan({
+            root,
+            pkgOwnership,
+            rebind: prepared.shouldRestart,
+          }));
         await pkgOwnership.assertUnowned(servicePlan.rootRedirect?.root ?? root);
         managedServiceRootRedirect = servicePlan.rootRedirect;
         serviceUnitTarget = servicePlan.serviceUnitTarget;
+        managedServiceRoot = servicePlan.serviceRoot;
         managedServiceNodeRunner = servicePlan.nodeRunner;
         if (managedServiceRootRedirect) {
           root = managedServiceRootRedirect.root;
@@ -266,14 +276,19 @@ export async function resolveUpdateCommandTarget(
             defaultRuntime.log(theme[level](message));
           }
         }
-        packageUpdateNodeRunner = managedServiceNodeRunner;
+        packageUpdateNodeRunner = managedServiceRoot
+          ? resolveNodeRunner()
+          : managedServiceNodeRunner;
       }
 
       // Read-only native/root admission is complete. Own interruption settlement
       // before metadata can block, but defer mutable housekeeping until target admission.
       if (updateInstallKind === "package" && !opts.dryRun) {
         assertUpdatePackageActivationAdmission(root);
-        const fence = await executor.enter(root, { preflight: true });
+        const fence = await executor.enter(root, {
+          preflight: true,
+          serviceRoot: managedServiceRoot,
+        });
         if (opts.run) {
           opts.run.executorFence = fence;
         }
@@ -315,6 +330,9 @@ export async function resolveUpdateCommandTarget(
             throw new UnreportedUpdateAdmissionOutcome(report, { exitCode: 0 });
           });
           packageManager = manager;
+          recordUpdateCommandTarget(opts.run, {
+            target: { kind: updateInstallKind, tag, installationMethod: `${manager}-global` },
+          });
           packageInstallTarget = await resolveGlobalInstallTarget({
             manager,
             runCommand: runCommandWithTimeout,
@@ -323,6 +341,7 @@ export async function resolveUpdateCommandTarget(
             honorPackageRoot:
               opts.bridge !== undefined ||
               managedServiceRootRedirect !== null ||
+              managedServiceRoot !== undefined ||
               managedServiceNodeRunner !== undefined,
             packageName: installedPackageName,
             pkgOwnership,
@@ -350,15 +369,13 @@ export async function resolveUpdateCommandTarget(
             } else {
               defaultRuntime.log(theme.warn(diskWarning));
             }
-            if (opts.run) {
-              opts.run.executorFence?.assertCurrent();
-              for (const step of updateRunStepsFromResultStep({
-                name: "disk-space-preflight",
-                exitCode: 0,
-                warnings: [diskWarning],
-              })) {
-                recordUpdateRunStep(opts.run.runId, step, { env: opts.run.env });
-              }
+            opts.run?.executorFence?.assertCurrent();
+            for (const step of updateRunStepsFromResultStep({
+              name: "disk-space-preflight",
+              exitCode: 0,
+              warnings: [diskWarning],
+            })) {
+              recordUpdateCommandTarget(opts.run, { step });
             }
           }
           const npmLifecycleGate = resolveNpmLifecyclePolicyGate(packageInstallTarget);
@@ -367,6 +384,13 @@ export async function resolveUpdateCommandTarget(
             return undefined;
           }
         }
+        recordUpdateCommandTarget(opts.run, {
+          step: { step: "installation-inspection", status: "completed", endedAtMs: Date.now() },
+        });
+        recordUpdateCommandTarget(opts.run, {
+          target: { kind: updateInstallKind, tag },
+          step: { step: "target-resolution", status: "in_progress", startedAtMs: Date.now() },
+        });
         const npmMetadataCommand =
           packageInstallTarget?.manager === "npm" ? packageInstallTarget.command : undefined;
         if (channel === "extended-stable") {
@@ -416,6 +440,7 @@ export async function resolveUpdateCommandTarget(
           env: packageInstallEnv,
         });
         packageAlreadyCurrent =
+          !managedServiceRoot &&
           updateInstallKind === "package" &&
           !switchToPackage &&
           isPackageTargetAlreadyCurrent({
@@ -455,7 +480,8 @@ export async function resolveUpdateCommandTarget(
             packageTargetSchemaVersions = await readInstalledUpdateSchemaVersions(root);
           } else {
             packageTargetSchemaVersions = targetMetadata.schemaVersions;
-            // Pin runtime/schema checks to the package selected for installation.
+            // Runtime and schema checks must use the same exact package that will be
+            // installed; rereading a mutable dist-tag can inspect a different release.
             packageRuntimeTarget = {
               version: targetVersion,
               nodeEngine: targetMetadata.nodeEngine,
@@ -475,6 +501,19 @@ export async function resolveUpdateCommandTarget(
         }
       }
 
+      recordUpdateCommandTarget(opts.run, {
+        target: {
+          kind: updateInstallKind,
+          tag,
+          ...(targetVersion ? { version: targetVersion } : {}),
+          ...(updateInstallKind === "git" ? { installationMethod: "git-checkout" } : {}),
+        },
+        step: {
+          step: updateInstallKind === "git" ? "installation-inspection" : "target-resolution",
+          status: "completed",
+          endedAtMs: Date.now(),
+        },
+      });
       // No-op updates need no candidate snapshot; package-space warnings remain advisory above.
       if (updateInstallKind === "package" && !packageAlreadyCurrent && !opts.dryRun) {
         const env = opts.run?.env ?? process.env;
@@ -485,10 +524,8 @@ export async function resolveUpdateCommandTarget(
           env,
         });
         opts.run?.executorFence?.assertCurrent();
-        if (opts.run) {
-          for (const step of updateRunStepsFromResultStep(snapshot)) {
-            recordUpdateRunStep(opts.run.runId, step, { env });
-          }
+        for (const step of updateRunStepsFromResultStep(snapshot)) {
+          recordUpdateCommandTarget(opts.run, { step });
         }
         if (snapshot.exitCode !== 0) {
           await refuseUpdate("snapshot-capacity-insufficient", snapshot.stderrTail ?? undefined);
@@ -528,6 +565,7 @@ export async function resolveUpdateCommandTarget(
         packageTargetSchemaVersions,
         packageRuntimeTarget,
         managedServiceRootRedirect,
+        managedServiceRoot,
         managedServiceNodeRunner,
         packageUpdateNodeRunner,
         devTarget,

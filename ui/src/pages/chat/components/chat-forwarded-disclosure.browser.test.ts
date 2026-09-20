@@ -1,6 +1,6 @@
 import { render } from "lit";
 import { afterEach, beforeEach, expect, it } from "vitest";
-import { THEME_TYPEFACES, syncTypefaceStylesheets } from "../../../app/typography.ts";
+import { resolveTypefaces, syncTypefaceStylesheets } from "../../../app/typography.ts";
 import type { MessageGroup } from "../../../lib/chat/chat-types.ts";
 import { renderMessageGroup } from "./chat-message-group.ts";
 import baseCss from "../../../styles/base.css?inline";
@@ -19,7 +19,7 @@ beforeEach(async () => {
     "\n",
   );
   document.head.append(stylesheet);
-  const typefaces = THEME_TYPEFACES.claw;
+  const typefaces = resolveTypefaces("claw");
   syncTypefaceStylesheets(typefaces);
   await expect
     .poll(() =>

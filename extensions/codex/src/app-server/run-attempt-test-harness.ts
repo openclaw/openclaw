@@ -16,7 +16,13 @@ import type { ExecApprovalsFile } from "openclaw/plugin-sdk/exec-approvals-runti
 import { clearInternalHooks, resetGlobalHookRunner } from "openclaw/plugin-sdk/hook-runtime";
 import { clearMemoryPluginState } from "openclaw/plugin-sdk/memory-core-host-runtime-core";
 import { clearPluginCommands } from "openclaw/plugin-sdk/plugin-runtime";
-import { createAgentHarnessHostCapabilitiesForTest } from "openclaw/plugin-sdk/plugin-test-runtime";
+import {
+  createAgentHarnessHostCapabilitiesForTest,
+  createEmptyPluginRegistry,
+  disposePluginRegistryInstances,
+  getActivePluginRegistry,
+  setActivePluginRegistry,
+} from "openclaw/plugin-sdk/plugin-test-runtime";
 import { drainSessionDiskBudgetWorkers } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { afterAll, afterEach, beforeEach, expect, vi } from "vitest";
@@ -663,6 +669,10 @@ export function setupRunAttemptTestHooks(): void {
     await nativeHookRelayTesting.clearNativeHookRelaysForTests();
     vi.restoreAllMocks();
     vi.useRealTimers();
+    // Registry retirement can access session storage, so join it before closing databases.
+    const registry = getActivePluginRegistry();
+    setActivePluginRegistry(createEmptyPluginRegistry());
+    const pluginCleanup = registry ? await disposePluginRegistryInstances(registry) : undefined;
     await cleanupRunSessionOwnersForTest();
     resetCodexAppServerClientFactoryForTest();
     setManagedCodexPluginRoot(undefined);
@@ -678,5 +688,8 @@ export function setupRunAttemptTestHooks(): void {
     defaultCodexPluginMetadataCache.clear();
     vi.unstubAllEnvs();
     await fs.rm(tempDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 });
+    if (pluginCleanup) {
+      expect(pluginCleanup.failures).toEqual([]);
+    }
   });
 }

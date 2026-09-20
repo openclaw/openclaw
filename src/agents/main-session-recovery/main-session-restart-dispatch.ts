@@ -232,11 +232,19 @@ async function resumeMainSessionWithinAdmission(
       : randomUUID();
   const reusingRecoveryRunId = recoveryRunId === claimedRunId;
   const dispatchSessionKey = params.canonicalSessionKey ?? params.sessionKey;
-  const recoverySessionKeys = Array.from(new Set([dispatchSessionKey, params.sessionKey]));
   const target = {
     agentId: params.agentId,
     sessionKey: params.sessionKey,
     storePath: params.storePath,
+  };
+  const settlementTarget = {
+    ...target,
+    expectedRecoveryRunId: recoveryRunId,
+    expectedRecoverySourceRunId: sourceRunId,
+    expectedSessionId: params.entry.sessionId,
+    lifecycleGeneration,
+    sessionKeys: Array.from(new Set([dispatchSessionKey, params.sessionKey])),
+    shouldContinue: params.shouldContinue,
   };
   let reservation: MainSessionRecoveryReservation | undefined;
   let dispatchStarted = false;
@@ -248,14 +256,13 @@ async function resumeMainSessionWithinAdmission(
     if (!reservation) {
       return undefined;
     }
-    const current = reservation;
     const result = await rollbackRestartRecoveryReservation({
       ...target,
       kind,
-      reservation: current,
+      reservation,
     });
     reservation = undefined;
-    return { current, result };
+    return result;
   };
   const restoreAcceptedRecovery = async () => {
     if (params.shouldContinue?.() === false) {
@@ -368,7 +375,7 @@ async function resumeMainSessionWithinAdmission(
       if (params.shouldContinue?.() === false) {
         return "skipped";
       }
-      const current = rollback?.result.entry;
+      const current = rollback?.entry;
       return current?.sessionId === params.entry.sessionId &&
         current.status === "running" &&
         current.abortedLastRun === true &&
@@ -477,13 +484,7 @@ async function resumeMainSessionWithinAdmission(
     }
     if (
       !(await settleAcceptedRestartRecovery({
-        ...target,
-        expectedRecoveryRunId: recoveryRunId,
-        expectedRecoverySourceRunId: sourceRunId,
-        expectedSessionId: params.entry.sessionId,
-        lifecycleGeneration,
-        sessionKeys: recoverySessionKeys,
-        shouldContinue: params.shouldContinue,
+        ...settlementTarget,
         terminalStatus,
       }))
     ) {
@@ -562,14 +563,8 @@ async function resumeMainSessionWithinAdmission(
         );
         if (terminalStatus && params.shouldContinue?.() !== false) {
           const settled = await settleAcceptedRestartRecovery({
-            ...target,
-            expectedRecoveryRunId: recoveryRunId,
-            expectedRecoverySourceRunId: sourceRunId,
-            expectedSessionId: params.entry.sessionId,
-            lifecycleGeneration,
+            ...settlementTarget,
             reservation,
-            sessionKeys: recoverySessionKeys,
-            shouldContinue: params.shouldContinue,
             terminalStatus,
           });
           if (!settled) {

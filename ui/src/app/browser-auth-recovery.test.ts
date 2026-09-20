@@ -1,6 +1,7 @@
 /* @vitest-environment jsdom */
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import { registerSettingsEnglish } from "../i18n/locales/en-settings.ts";
 import { getRenderedModalDialog, installDialogPolyfill } from "../test-helpers/modal-dialog.ts";
 import { startBrowserAuthRecovery } from "./browser-auth-recovery.ts";
 import { fetchControlUiResource, subscribeBrowserAuthRestored } from "./browser-http.ts";
@@ -53,6 +54,8 @@ describe("browser sign-in recovery", () => {
   });
 
   it("deduplicates failed reads and retries their owners after sign-in without navigating the chat", async () => {
+    // Opening Gateway settings must not replace website-session recovery copy.
+    registerSettingsEnglish();
     let authenticated = false;
     const fetchMock = vi.fn(async (_url: string, init?: RequestInit) => {
       if (init?.method === "HEAD") {

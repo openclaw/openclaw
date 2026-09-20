@@ -52,11 +52,14 @@ function normalizeLinkReaderMetadata(value: unknown): ControlUiLinkReaderMetadat
   const methodPattern = /^[a-zA-Z][a-zA-Z0-9_.-]{0,127}$/u;
   const detailMethod = value.detailMethod;
   const previewMethod = value.previewMethod;
+  const imageMethod = value.imageMethod;
   if (
     typeof detailMethod !== "string" ||
     !methodPattern.test(detailMethod) ||
     (previewMethod !== undefined &&
-      (typeof previewMethod !== "string" || !methodPattern.test(previewMethod)))
+      (typeof previewMethod !== "string" || !methodPattern.test(previewMethod))) ||
+    (imageMethod !== undefined &&
+      (typeof imageMethod !== "string" || !methodPattern.test(imageMethod)))
   ) {
     return undefined;
   }
@@ -65,6 +68,7 @@ function normalizeLinkReaderMetadata(value: unknown): ControlUiLinkReaderMetadat
     pathPattern,
     detailMethod,
     ...(previewMethod !== undefined ? { previewMethod } : {}),
+    ...(imageMethod !== undefined ? { imageMethod } : {}),
   };
 }
 

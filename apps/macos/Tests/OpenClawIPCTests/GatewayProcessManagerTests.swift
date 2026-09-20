@@ -1304,47 +1304,90 @@ struct GatewayProcessManagerTests {
 
     @Test func `readiness waiter rechecks after current owner fails past its timeout`() async throws {
         let port = 19114
+        let waiterTimeout: TimeInterval = 6
         let url = try #require(URL(string: "ws://example.invalid"))
-        let (session, connection, manager) = self.makeGatewayReadinessFixture(url: url) {
-            self.gatewayTask(
-                healthSucceedsAfter: 0,
-                stallsFirstHealthResponse: true)
+        let ownerReachedFailure = AsyncTestGate()
+        let finishOwner = AsyncTestGate()
+        let waiterStarted = AsyncTestGate()
+        let readinessFinished = Mutex(false)
+        let healthMaySucceed = Mutex(false)
+        let recoveryHealthRequests = Mutex(0)
+        defer { finishOwner.open() }
+        let (_, connection, manager) = self.makeGatewayReadinessFixture(url: url) {
+            GatewayTestWebSocketTask(sendHook: { task, message, sendIndex in
+                guard sendIndex > 0,
+                      let id = GatewayWebSocketTestSupport.requestID(from: message)
+                else { return }
+                if GatewayWebSocketTestSupport.requestMethod(from: message) == "health" {
+                    guard healthMaySucceed.withLock({ $0 }) else { return }
+                    recoveryHealthRequests.withLock { $0 += 1 }
+                }
+                task.emitReceiveSuccess(.data(GatewayWebSocketTestSupport.okResponseData(id: id)))
+            })
         }
 
         try await self.withLaunchAgentEnvironment(
             port: port,
-            statusPayload: self.loadedGatewayStatus(port: port))
-        {
-            manager.setTestingLastFailureReason(nil)
-            manager._testClearLaunchAgentReadinessFailure()
-            let descriptor = self.gatewayDescriptor(pid: 4242)
-            await PortGuardian.shared.setTestingDescriptor(descriptor, forPort: port)
-            defer {
+            statusPayload: self.loadedGatewayStatus(port: port),
+            commandHook: { arguments in
+                guard arguments.first == "status" else { return }
+                ownerReachedFailure.open()
+                await finishOwner.wait()
+            }) {
                 manager.setTestingLastFailureReason(nil)
                 manager._testClearLaunchAgentReadinessFailure()
+                let descriptor = self.gatewayDescriptor(pid: 4242)
+                await PortGuardian.shared.setTestingDescriptor(descriptor, forPort: port)
+                defer {
+                    manager.setTestingDesiredActive(false)
+                    manager.setTestingLastFailureReason(nil)
+                    manager._testClearLaunchAgentReadinessFailure()
+                }
+
+                _ = try await connection.request(method: "status", params: nil, retryTransportFailures: false)
+                manager._testStartLaunchdGatewayReadiness(
+                    port: port,
+                    pid: 4242,
+                    readinessWindow: 0.5,
+                    firstInstallReadinessBudget: 0.5)
+                let readiness = Task { @MainActor in
+                    waiterStarted.open()
+                    let ready = await manager.waitForGatewayReady(timeout: waiterTimeout)
+                    readinessFinished.withLock { $0 = true }
+                    return ready
+                }
+
+                await waiterStarted.wait()
+                await ownerReachedFailure.wait()
+                // Keep the owner pending beyond the waiter's audit budget.
+                // Recovery then gets its own budget, independent of this wait.
+                do {
+                    try await Task.sleep(for: .seconds(waiterTimeout))
+                } catch {
+                    readiness.cancel()
+                    finishOwner.open()
+                    await manager.waitForStartupAttempt()
+                    _ = await readiness.value
+                    await connection.shutdown()
+                    await PortGuardian.shared.setTestingDescriptor(nil, forPort: port)
+                    throw error
+                }
+                #expect(!readinessFinished.withLock { $0 })
+                #expect(manager.status == .starting)
+                #expect(manager.lastFailureReason == nil)
+                #expect(!manager._testHasLaunchAgentReadinessFailure())
+                healthMaySucceed.withLock { $0 = true }
+                finishOwner.open()
+
+                #expect(await readiness.value)
+                #expect(manager.status == .running(details: "pid 4242"))
+                #expect(recoveryHealthRequests.withLock { $0 } == 1)
+                #expect(manager.lastFailureReason == nil)
+                #expect(!manager._testHasLaunchAgentReadinessFailure())
+
+                await connection.shutdown()
+                await PortGuardian.shared.setTestingDescriptor(nil, forPort: port)
             }
-
-            manager._testStartLaunchdGatewayReadiness(
-                port: port,
-                pid: 4242,
-                readinessWindow: 0.5,
-                firstInstallReadinessBudget: 0.5)
-            let readiness = Task { @MainActor in
-                await manager.waitForGatewayReady(timeout: 0.01)
-            }
-
-            await self.waitForCondition { session.snapshotMakeCount() > 0 }
-            #expect(session.snapshotMakeCount() > 0)
-            #expect(manager.status == .starting)
-            #expect(manager.lastFailureReason == nil)
-            #expect(!manager._testHasLaunchAgentReadinessFailure())
-            #expect(await readiness.value)
-            #expect(manager.status == .running(details: "pid 4242"))
-            #expect((session.latestTask()?.snapshotSendCount() ?? 0) > 1)
-
-            await connection.shutdown()
-            await PortGuardian.shared.setTestingDescriptor(nil, forPort: port)
-        }
     }
 
     @Test func `cancelling an owner readiness waiter preserves startup state`() async throws {

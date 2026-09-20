@@ -2,7 +2,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionsSearchResult } from "../../../packages/gateway-protocol/src/index.js";
 import type { SessionsListResult } from "../api/types.ts";
-import type { RouteId } from "../app-route-paths.ts";
 import type { ApplicationContext } from "../app/context.ts";
 import { installDialogPolyfill } from "../test-helpers/modal-dialog.ts";
 import {
@@ -39,7 +38,7 @@ describe("CommandPalette session search", () => {
         totalCount: 2,
         sessions: [...metadata.sessions, ...contextOnly.sessions],
       } as SessionsListResult;
-      const list = vi.fn<ApplicationContext<RouteId>["sessions"]["list"]>(async (options) =>
+      const list = vi.fn<ApplicationContext["sessions"]["list"]>(async (options) =>
         options?.search && !serverMatch ? metadata : roster,
       );
       const searchResult: SessionsSearchResult = {
@@ -103,7 +102,7 @@ describe("CommandPalette session search", () => {
       displayName: "Recent discussion " + index,
       updatedAt: 300 - index,
     }));
-    const list = vi.fn<ApplicationContext<RouteId>["sessions"]["list"]>(async (options) => {
+    const list = vi.fn<ApplicationContext["sessions"]["list"]>(async (options) => {
       const rows = options?.search ? [] : [...recent, ...older.sessions];
       const offset = options?.offset ?? 0;
       const limit = options?.limit ?? 100;
@@ -153,7 +152,7 @@ describe("CommandPalette session search", () => {
 
   it("keeps metadata matches selectable when transcript search fails", async () => {
     const metadata = createSessionResult("agent:main:metadata", "Needle planning");
-    const list = vi.fn<ApplicationContext<RouteId>["sessions"]["list"]>(async () => metadata);
+    const list = vi.fn<ApplicationContext["sessions"]["list"]>(async () => metadata);
     const request = vi.fn(async (method: string) => {
       if (method === "models.list") {
         return { models: [] };
@@ -211,7 +210,7 @@ describe("CommandPalette session search", () => {
         totalCount: 2,
         sessions: [...metadata.sessions, ...contextOnly.sessions],
       } as SessionsListResult;
-      const list = vi.fn<ApplicationContext<RouteId>["sessions"]["list"]>(async (options) =>
+      const list = vi.fn<ApplicationContext["sessions"]["list"]>(async (options) =>
         options?.search ? metadata : roster,
       );
       const request = vi.fn(async (method: string) =>

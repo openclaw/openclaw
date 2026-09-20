@@ -251,8 +251,14 @@ export function sidebarPanelDefinitions(
   const workspace = state ? getSessionWorkspace(state) : null;
   // The region owns mounting and visibility. Hidden Review tabs must keep the
   // same cached diff loader so their live content and selection survive.
+  const taskId = state ? openTaskDetailId(state.sidebarContent, state.sidebarLayout) : undefined;
   const detailContent =
-    state?.sidebarContent ?? (state ? resolveSessionDiffSidebarContent(state) : null);
+    state?.sidebarContent ??
+    (taskId !== undefined
+      ? { kind: "task" as const, taskId }
+      : state
+        ? resolveSessionDiffSidebarContent(state)
+        : null);
   const workspaceContent =
     state && params && workspace
       ? html`<openclaw-chat-files-panel

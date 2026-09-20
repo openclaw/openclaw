@@ -152,11 +152,8 @@ function createBuildRecoveryHarness(
     attachSession: vi.fn(async () => {
       throw new Error("unexpected worker session attachment");
     }),
-    create: vi.fn(async () => {
+    createWithRequest: vi.fn(async () => {
       throw new Error("unexpected worker environment creation");
-    }),
-    createFromProfileSnapshot: vi.fn(async () => {
-      throw new Error("unexpected inherited worker environment creation");
     }),
     reconcileOnce: async () => retire(),
     reconcileEnvironment: vi.fn(),

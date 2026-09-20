@@ -895,7 +895,14 @@ describe("CI job details", () => {
     expect(h.request).toHaveBeenCalledTimes(1);
   });
 
-  it("clears prior details when a refresh rejects session or credential authority", async () => {
+  it.each([
+    ["GitHub identity changed", "GitHub identity changed"],
+    [
+      "GitHub API rate limit exceeded (HTTP 403). Wait 2382 seconds and retry.",
+      "GitHub API rate limit exceeded (HTTP 403). Wait 2382 seconds and retry.",
+    ],
+    ["GitHub request failed: token=synthetic-secret", "GitHub request failed: token=[redacted]"],
+  ])("clears prior details and preserves the safe RPC error: %s", async (message, expected) => {
     const h = harness();
     h.request.mockResolvedValueOnce(
       details({
@@ -908,12 +915,19 @@ describe("CI job details", () => {
     h.disclosure.open = true;
     await settle(h.element);
     expect(container.textContent).toContain("Private build");
-    h.request.mockRejectedValue(new Error("GitHub identity changed"));
+    h.request.mockRejectedValue(new Error(message));
     await vi.advanceTimersByTimeAsync(30_000);
     await h.element.updateComplete;
     expect(container.querySelector(".chat-ci__job")).toBeNull();
     expect(container.textContent).not.toContain("Private build");
     expect(container.querySelector('.chat-ci__notice[data-state="unavailable"]')).not.toBeNull();
+    expect(container.textContent).toContain(expected);
+    expect(container.textContent).not.toContain("synthetic-secret");
+    h.request.mockResolvedValue(details());
+    container.querySelector<HTMLButtonElement>(".chat-ci__retry")?.click();
+    await settle(h.element);
+    expect(container.querySelector(".chat-ci__notice")).toBeNull();
+    expect(container.querySelector(".chat-ci__job")).not.toBeNull();
   });
 
   it("clears details when the connection retires", async () => {

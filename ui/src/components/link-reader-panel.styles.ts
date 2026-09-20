@@ -197,10 +197,12 @@ export const linkReaderPanelStyles = css`
     margin-left: 10px;
     font-size: 11px;
   }
-  .lr-add {
+  .lr-add,
+  .lr-item-meta [data-tone="positive"] {
     color: var(--ok);
   }
-  .lr-delete {
+  .lr-delete,
+  .lr-item-meta [data-tone="negative"] {
     color: var(--danger);
   }
   .lr-file > p {

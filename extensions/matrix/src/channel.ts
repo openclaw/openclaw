@@ -53,7 +53,7 @@ import {
   resolveMatrixGroupToolPolicy,
 } from "./group-mentions.js";
 import {
-  resolveMatrixAccount,
+  resolveDefaultMatrixAccountId,
   resolveMatrixAccountConfig,
   type ResolvedMatrixAccount,
 } from "./matrix/accounts.js";
@@ -76,7 +76,7 @@ import {
   defaultTopLevelPlacement,
   resolveMatrixInboundConversation,
 } from "./thread-binding-api.js";
-import type { CoreConfig } from "./types.js";
+import type { CoreConfig, MatrixConfig } from "./types.js";
 // Mutex for serializing account startup (workaround for concurrent dynamic import race condition)
 let matrixStartupLock: Promise<void> = Promise.resolve();
 
@@ -112,45 +112,49 @@ const matrixDoctor: ChannelDoctorAdapter = {
     await (await loadMatrixDoctorModule()).cleanStaleMatrixPluginConfig(cfg),
 };
 
-const listMatrixDirectoryPeersFromConfig =
-  createResolvedDirectoryEntriesLister<ResolvedMatrixAccount>({
-    kind: "user",
-    resolveAccount: adaptScopedAccountAccessor(resolveMatrixAccount),
-    resolveSources: (account) => [
-      account.config.dm?.allowFrom ?? [],
-      account.config.groupAllowFrom ?? [],
-      ...Object.values(account.config.groups ?? account.config.rooms ?? {}).map(
-        (room) => room.users ?? [],
-      ),
-    ],
-    normalizeId: (entry) => {
-      const raw = entry.replace(/^matrix:/i, "").trim();
-      if (!raw || raw === "*") {
-        return null;
-      }
-      const lowered = normalizeLowercaseStringOrEmpty(raw);
-      const cleaned = lowered.startsWith("user:") ? raw.slice("user:".length).trim() : raw;
-      return cleaned.startsWith("@") ? `user:${cleaned}` : cleaned;
-    },
-  });
+const listMatrixDirectoryPeersFromConfig = createResolvedDirectoryEntriesLister<MatrixConfig>({
+  kind: "user",
+  resolveAccount: (cfg, accountId) =>
+    resolveMatrixAccountConfig({
+      cfg,
+      accountId: accountId ?? resolveDefaultMatrixAccountId(cfg),
+    }),
+  resolveSources: (account) => [
+    account.dm?.allowFrom ?? [],
+    account.groupAllowFrom ?? [],
+    ...Object.values(account.groups ?? account.rooms ?? {}).map((room) => room.users ?? []),
+  ],
+  normalizeId: (entry) => {
+    const raw = entry.replace(/^matrix:/i, "").trim();
+    if (!raw || raw === "*") {
+      return null;
+    }
+    const lowered = normalizeLowercaseStringOrEmpty(raw);
+    const cleaned = lowered.startsWith("user:") ? raw.slice("user:".length).trim() : raw;
+    return cleaned.startsWith("@") ? `user:${cleaned}` : cleaned;
+  },
+});
 
-const listMatrixDirectoryGroupsFromConfig =
-  createResolvedDirectoryEntriesLister<ResolvedMatrixAccount>({
-    kind: "group",
-    resolveAccount: adaptScopedAccountAccessor(resolveMatrixAccount),
-    resolveSources: (account) => [Object.keys(account.config.groups ?? account.config.rooms ?? {})],
-    normalizeId: (entry) => {
-      const raw = entry.replace(/^matrix:/i, "").trim();
-      if (!raw || raw === "*") {
-        return null;
-      }
-      const lowered = normalizeLowercaseStringOrEmpty(raw);
-      if (lowered.startsWith("room:") || lowered.startsWith("channel:")) {
-        return raw;
-      }
-      return raw.startsWith("!") ? `room:${raw}` : raw;
-    },
-  });
+const listMatrixDirectoryGroupsFromConfig = createResolvedDirectoryEntriesLister<MatrixConfig>({
+  kind: "group",
+  resolveAccount: (cfg, accountId) =>
+    resolveMatrixAccountConfig({
+      cfg,
+      accountId: accountId ?? resolveDefaultMatrixAccountId(cfg),
+    }),
+  resolveSources: (account) => [Object.keys(account.groups ?? account.rooms ?? {})],
+  normalizeId: (entry) => {
+    const raw = entry.replace(/^matrix:/i, "").trim();
+    if (!raw || raw === "*") {
+      return null;
+    }
+    const lowered = normalizeLowercaseStringOrEmpty(raw);
+    if (lowered.startsWith("room:") || lowered.startsWith("channel:")) {
+      return raw;
+    }
+    return raw.startsWith("!") ? `room:${raw}` : raw;
+  },
+});
 
 function projectMatrixConversationBinding(binding: {
   boundAt: number;

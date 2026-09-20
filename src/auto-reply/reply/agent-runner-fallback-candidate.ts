@@ -325,6 +325,7 @@ export async function runAgentFallbackCandidates(params: AgentFallbackCycleParam
           const candidate = await runEmbeddedFallbackCandidate({
             ...common,
             effectiveRun: params.effectiveRun,
+            directBlockDeliveries: params.directBlockDeliveries,
             sessionRuntimeOverride: runtime.sessionRuntimeOverride,
             getLifecycleGeneration: () => params.state.lifecycleGeneration,
             onLifecycleGeneration: (generation) => {

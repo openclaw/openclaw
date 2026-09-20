@@ -252,15 +252,6 @@ function resolveTextEditorCommand(args: unknown): TextEditorCommand | undefined 
   }
 }
 
-export function resolveToolCallTargetPaths(name: string, args?: unknown): string[] {
-  const record = asRecord(args);
-  if (PATCH_TOOL_NAMES.has(normalizeKey(name))) {
-    return parsePatchView(record)?.paths ?? [];
-  }
-  const path = resolvePathArg(record);
-  return path ? [path] : [];
-}
-
 function resolveToolCallKind(name: string, args?: unknown): ToolCallKind {
   const key = normalizeKey(name);
   if (TEXT_EDITOR_TOOL_NAMES.has(key)) {

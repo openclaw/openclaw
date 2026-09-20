@@ -394,6 +394,47 @@ it("does not drain queued Gateway edits into a newer disconnected browser choice
   });
 });
 
+it.each([false, true])(
+  "publishes only a committed disposed-owner edit and drops its queued successor, conflict=%s",
+  async (conflict) => {
+    const prefs = identityPreferences();
+    const first = prefs.make();
+    await prefs.ready(first);
+    const observer = prefs.make(first.context.gateway);
+    await prefs.ready(observer);
+    const started = createDeferred();
+    const release = createDeferred();
+    prefs.beforeSave.mockImplementationOnce(async () => {
+      started.resolve();
+      await release.promise;
+    });
+    const saving = first.gateway.persistPreference("main", "/repo", { baseRef: "release" });
+    await started.promise;
+    const queued = first.gateway.persistPreference("main", "/repo", {
+      worktreeName: "queued-task",
+    });
+    try {
+      first.gateway.disconnect();
+      if (conflict) {
+        await prefs.publish(observer, { baseRef: "external-base" });
+      }
+    } finally {
+      release.resolve();
+      await Promise.all([saving, queued]);
+    }
+    const baseRef = conflict ? "external-base" : "release";
+    expect(prefs.stored()).toMatchObject({ baseRef, worktreeName: "first-task" });
+    expect(prefs.beforeSave).toHaveBeenCalledTimes(conflict ? 2 : 1);
+    expect(observer.gateway.readPreference("main")?.baseRef).toBe(conflict ? "main" : "release");
+    // Confirmed defaults refresh the projection, not another open draft’s active fields.
+    expect(observer.place.baseRef).toBe("main");
+    const next = prefs.make(first.context.gateway);
+    await prefs.ready(next);
+    expect(next.place.baseRef).toBe(baseRef);
+    expect(next.place.worktreeName).toBe("first-task");
+  },
+);
+
 it("retires the submitted agent preference while the same view has selected another agent", async () => {
   const prefs = identityPreferences();
   const first = prefs.make();

@@ -258,7 +258,7 @@ export async function prepareSessionLifecycleArtifactCleanup(
           ),
         databaseOptions,
       );
-      if (candidates.found ? !candidates.value : candidates.reason !== "table-missing") {
+      if (!candidates.found || !candidates.value) {
         return { entries: [], deletePlans: [] };
       }
     } catch {

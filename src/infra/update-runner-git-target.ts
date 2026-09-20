@@ -104,16 +104,22 @@ export async function withGitTargetInspectionRoot<T>(
     root: string;
     runCommand: CommandRunner;
     timeoutMs: number;
+    work?: { timeoutMs?: number };
     onWarning: (step: UpdateStepResult) => void;
   },
   inspect: (root: string, runCommand: CommandRunner) => Promise<T>,
 ): Promise<T> {
   const temporaryRoot = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-git-admission-"));
   const inspectionRoot = path.join(temporaryRoot, "repository.git");
-  const command = async (root: string, args: string[], allowMissing = false) => {
+  const command = async (
+    root: string,
+    args: string[],
+    allowMissing = false,
+    budget: { timeoutMs?: number } = { timeoutMs: params.timeoutMs },
+  ) => {
     const result = await params.runCommand(["git", "-C", root, ...args], {
       cwd: root,
-      timeoutMs: params.timeoutMs,
+      timeoutMs: budget.timeoutMs,
     });
     if (result.code !== 0 && !(allowMissing && result.code === 1)) {
       // Configuration can contain credentials; never include its output in errors.
@@ -122,15 +128,12 @@ export async function withGitTargetInspectionRoot<T>(
     return result.stdout;
   };
   try {
-    await command(params.root, [
-      "clone",
-      "--mirror",
-      "--shared",
-      "--template=",
-      "--",
+    await command(
       params.root,
-      inspectionRoot,
-    ]);
+      ["clone", "--mirror", "--shared", "--template=", "--", params.root, inspectionRoot],
+      false,
+      params.work ?? { timeoutMs: params.timeoutMs },
+    );
     await command(inspectionRoot, ["config", "--remove-section", "remote.origin"]);
     const config = await command(
       params.root,
@@ -325,11 +328,12 @@ export async function fetchGitUpdateTarget(params: {
   channel: UpdateChannel;
   name: string;
   step: (name: string, argv: string[], cwd: string) => RunStepOptions;
+  workStep: (name: string, argv: string[], cwd: string) => RunStepOptions;
   steps: UpdateStepResult[];
 }): Promise<boolean> {
-  const { root, channel, name, step: targetStep, steps } = params;
+  const { root, channel, name, step: targetStep, workStep, steps } = params;
   const fetch = await runStep(
-    targetStep(
+    workStep(
       name,
       ["git", "-C", root, "fetch", "--all", "--prune", "--no-tags", "--no-prune-tags"],
       root,
@@ -369,7 +373,7 @@ export async function fetchGitUpdateTarget(params: {
   // Only the release authority may replace shared tag refs. Disable pruning
   // even when Git config enables it, so operator-only tags survive.
   const tags = await runStep(
-    targetStep(
+    workStep(
       `git fetch tags ${tagRemote}`,
       [
         "git",

@@ -396,70 +396,78 @@ describe("resolveNpmSpecMetadata", () => {
 });
 
 describe("packNpmSpecToArchive", () => {
-  it("packs spec and returns archive path using JSON output metadata", async () => {
-    const cwd = await createFixtureDir();
-    const archivePath = path.join(cwd, "openclaw-plugin-1.2.3.tgz");
-    await fs.writeFile(archivePath, "", "utf-8");
-    mockPackCommandResult({
-      stdout: JSON.stringify([
-        {
-          id: "openclaw-plugin@1.2.3",
+  it.each([
+    { workTimeoutMs: undefined, expectedTimeoutMs: 300_000 },
+    { workTimeoutMs: null, expectedTimeoutMs: undefined },
+    { workTimeoutMs: 50, expectedTimeoutMs: 50 },
+  ])(
+    "packs spec with work deadline $workTimeoutMs and retains metadata",
+    async ({ workTimeoutMs, expectedTimeoutMs }) => {
+      const cwd = await createFixtureDir();
+      const archivePath = path.join(cwd, "openclaw-plugin-1.2.3.tgz");
+      await fs.writeFile(archivePath, "", "utf-8");
+      mockPackCommandResult({
+        stdout: JSON.stringify([
+          {
+            id: "openclaw-plugin@1.2.3",
+            name: "openclaw-plugin",
+            version: "1.2.3",
+            filename: "openclaw-plugin-1.2.3.tgz",
+            integrity: "sha512-test-integrity",
+            shasum: "abc123",
+          },
+        ]),
+      });
+
+      const signal = new AbortController().signal;
+      const result = await packNpmSpecToArchive({
+        spec: "openclaw-plugin@1.2.3",
+        timeoutMs: 1000,
+        workTimeoutMs,
+        cwd,
+        signal,
+      });
+
+      expect(result).toEqual({
+        ok: true,
+        archivePath,
+        metadata: {
           name: "openclaw-plugin",
           version: "1.2.3",
-          filename: "openclaw-plugin-1.2.3.tgz",
+          resolvedSpec: "openclaw-plugin@1.2.3",
           integrity: "sha512-test-integrity",
           shasum: "abc123",
         },
-      ]),
-    });
-
-    const signal = new AbortController().signal;
-    const result = await packNpmSpecToArchive({
-      spec: "openclaw-plugin@1.2.3",
-      timeoutMs: 1000,
-      cwd,
-      signal,
-    });
-
-    expect(result).toEqual({
-      ok: true,
-      archivePath,
-      metadata: {
-        name: "openclaw-plugin",
-        version: "1.2.3",
-        resolvedSpec: "openclaw-plugin@1.2.3",
-        integrity: "sha512-test-integrity",
-        shasum: "abc123",
-      },
-    });
-    expect(runCommandWithTimeoutMock).toHaveBeenCalledWith(
-      [
-        "npm",
-        "pack",
-        "openclaw-plugin@1.2.3",
-        "--ignore-scripts",
-        "--json",
-        "--dry-run=false",
-        `--pack-destination=${cwd}`,
-      ],
-      {
-        cwd,
-        timeoutMs: 300_000,
-        signal,
-        killProcessTree: true,
-        env: {
-          COREPACK_ENABLE_DOWNLOAD_PROMPT: "0",
-          NPM_CONFIG_IGNORE_SCRIPTS: "true",
-          NPM_CONFIG_BEFORE: "",
-          NPM_CONFIG_MIN_RELEASE_AGE: "",
-          "NPM_CONFIG_MIN-RELEASE-AGE": "",
-          npm_config_before: "",
-          "npm_config_min-release-age": "",
-          npm_config_min_release_age: "0",
+      });
+      expect(runCommandWithTimeoutMock).toHaveBeenCalledWith(
+        [
+          "npm",
+          "pack",
+          "openclaw-plugin@1.2.3",
+          "--ignore-scripts",
+          "--json",
+          "--dry-run=false",
+          `--pack-destination=${cwd}`,
+        ],
+        {
+          cwd,
+          timeoutMs: expectedTimeoutMs,
+          signal,
+          killProcessTree: true,
+          env: {
+            COREPACK_ENABLE_DOWNLOAD_PROMPT: "0",
+            NPM_CONFIG_IGNORE_SCRIPTS: "true",
+            NPM_CONFIG_BEFORE: "",
+            NPM_CONFIG_MIN_RELEASE_AGE: "",
+            "NPM_CONFIG_MIN-RELEASE-AGE": "",
+            npm_config_before: "",
+            "npm_config_min-release-age": "",
+            npm_config_min_release_age: "0",
+          },
         },
-      },
-    );
-  });
+      );
+    },
+  );
 
   it("unpacks npm 12 name-keyed pack json output", async () => {
     const cwd = await createFixtureDir();

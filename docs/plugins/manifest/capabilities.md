@@ -21,6 +21,7 @@ Use `contracts` only for static capability ownership metadata that OpenClaw can 
     "trustedToolPolicies": ["workflow-budget"],
     "externalAuthProviders": ["acme-ai"],
     "embeddingProviders": ["openai-compatible"],
+    "decisionProviders": ["example-decisions"],
     "speechProviders": ["openai"],
     "realtimeTranscriptionProviders": ["openai"],
     "realtimeVoiceProviders": ["openai"],
@@ -50,6 +51,7 @@ Each list is optional. For `speechProviders` and `realtimeVoiceProviders`, list 
 | `trustedToolPolicies`            | `string[]` | Plugin-local trusted pre-tool policy ids an installed plugin may register. Bundled plugins may register policies without this field. |
 | `externalAuthProviders`          | `string[]` | Provider ids whose external auth profile hook this plugin owns.                                                                      |
 | `embeddingProviders`             | `string[]` | General embedding provider ids this plugin owns for reusable vector embedding use, including memory.                                 |
+| `decisionProviders`              | `string[]` | Typed decision providers registered with `api.registerDecisionProvider`; selected through `decisionModel`.                           |
 | `speechProviders`                | `string[]` | Speech provider ids this plugin owns.                                                                                                |
 | `realtimeTranscriptionProviders` | `string[]` | Realtime-transcription provider ids this plugin owns.                                                                                |
 | `realtimeVoiceProviders`         | `string[]` | Realtime-voice provider ids this plugin owns.                                                                                        |
@@ -85,6 +87,24 @@ Worker providers must declare each `api.registerWorkerProvider(...)` id in `cont
 `contracts.gatewayMethodDispatch` accepts a single value, `"authenticated-request"`. It is an API hygiene gate for authenticated native plugin HTTP routes and registered RPC handlers that intentionally dispatch Gateway methods in-process, not a sandbox against malicious native plugins. Dispatch retains the original authenticated client and profile, applies the target method’s scopes, and never creates a synthetic caller. Use it only for tightly reviewed surfaces. RPC handlers still pass ordinary Gateway admission; this contract adds no suspension bypass. An entitled route remains reachable while Gateway root-work admission is closed only when it also declares `auth: "gateway"` and the route-specific `gatewayRuntimeScopeSurface: "trusted-operator"`; ordinary sibling routes from the same plugin remain behind the admission boundary. This keeps suspension status and resume reachable without granting the whole plugin an admission bypass. Keep parsing and response shaping bounded outside dispatch; substantive or mutating work must go through Gateway method dispatch, which owns admission and scope enforcement.
 
 Worker providers may set `allowsDesktopResize: true` when their desktop endpoints are safe to resize, such as dedicated virtual displays. Omission or `false` does not grant permission. An endpoint can further restrict this provider-wide permission with `allowsResize: false`, for example for a native display. Core carries this fact as optional `canResize` in desktop observation results for both SSH and node transports. It is permission to request a resize, not negotiated VNC support. The viewer must also hold control and complete authentication before requesting a resize.
+
+## Decision models reference
+
+Declare `decisionModels` as static picker metadata for providers owned by
+`contracts.decisionProviders`. These entries are separate from conversational
+`modelCatalog` and `providers` metadata. Discovery reads the manifest without
+loading the provider runtime or resolving credentials.
+
+```json
+{
+  "contracts": { "decisionProviders": ["example-decisions"] },
+  "decisionModels": [{ "provider": "example-decisions", "id": "fast", "name": "Fast decisions" }]
+}
+```
+
+Each entry requires a provider ID, model ID, and display name. The selector uses
+`example-decisions/fast`. Disabled plugins are excluded from the decision picker;
+saved unavailable selections remain visible for the operator to repair.
 
 ## Tool metadata reference
 

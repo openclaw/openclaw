@@ -87,7 +87,7 @@ export function mapTaskSummary(task: TaskRecord, opts?: { includePrompt?: boolea
     ...(task.parentTaskId ? { parentTaskId: task.parentTaskId } : {}),
     ...(task.sourceId ? { sourceId: task.sourceId } : {}),
     createdAt: task.createdAt,
-    updatedAt: Math.max(taskUpdatedAt(task), activity?.lastActivityAt ?? 0),
+    updatedAt: taskUpdatedAt(task),
     ...(task.startedAt !== undefined ? { startedAt: task.startedAt } : {}),
     ...(task.endedAt !== undefined ? { endedAt: task.endedAt } : {}),
     ...(toolUseCount !== undefined ? { toolUseCount } : {}),

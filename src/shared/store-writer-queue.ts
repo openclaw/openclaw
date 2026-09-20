@@ -226,6 +226,7 @@ export function clearStoreWriterQueuesForTest(queues: StoreWriterQueues, message
     for (const task of queue.pending) {
       task.reject(new Error(message));
     }
+    queue.pending.length = 0;
   }
   queues.clear();
 }

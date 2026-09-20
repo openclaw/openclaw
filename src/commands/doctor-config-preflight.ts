@@ -236,7 +236,7 @@ async function runDoctorConfigPreflightOperation(
     measure: measurePreflightStep,
   });
   const readConfigSnapshotForPreflight = async (allowCurrentPluginMetadata = true) =>
-    await measurePreflightStep("config-snapshot", () =>
+    await measurePreflightStep("config-snapshot", async () =>
       readDoctorConfigPreflightSnapshot({
         allowCurrentPluginMetadata,
         includePluginMetadata:
@@ -246,10 +246,10 @@ async function runDoctorConfigPreflightOperation(
         preparePluginMetadataSnapshot: options.preparePluginMetadataSnapshot === true,
         skipPluginValidation: shouldSkipPluginValidationForDoctorConfigPreflight(),
         prepareSnapshot: getSnapshotPreparation(options.doctorOnlyStateMigrations === true),
-        ...pluginMigrations.snapshotOptions(),
+        ...(await pluginMigrations.snapshotOptions()),
       }),
     );
-  const readAdmittedStartupSnapshot = () =>
+  const readAdmittedStartupSnapshot = async () =>
     readStartupMigrationSnapshot({
       env: startupMigrationEnv,
       readSnapshot: () => readConfigSnapshotForPreflight(false),
@@ -262,7 +262,7 @@ async function runDoctorConfigPreflightOperation(
       validateConfig: options.validateStartupConfig,
       beforeStateMigrations: options.beforeStateMigrations,
       preparePluginMigrations: pluginMigrations.prepare,
-      deferredPluginMigrations: pluginMigrations.snapshotOptions().deferredPluginMigrations,
+      deferredPluginMigrations: (await pluginMigrations.snapshotOptions()).deferredPluginMigrations,
     });
   try {
     if (migrationCheckpoint && !skipPristineStartupStateMigrations) {

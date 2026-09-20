@@ -8,6 +8,7 @@ import { asResolvedSourceConfig, asRuntimeConfig } from "../../config/materializ
 import { readRestartSentinel } from "../../infra/restart-sentinel.js";
 import * as temporaryRoot from "../../infra/tmp-openclaw-dir.js";
 import { createManagedHandoffLeaseStore } from "../../infra/update-managed-service-handoff-lease.js";
+import * as ledgerCodec from "../../infra/update-run-codec.js";
 import { createUpdateRun, getUpdateRun } from "../../infra/update-run-ledger.js";
 import { runUtf8CommandWithTimeout } from "../../process/exec.js";
 import { defaultRuntime } from "../../runtime.js";
@@ -15,7 +16,10 @@ import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db
 import { withUpdateCommandExecutor } from "./update-command-executor.js";
 import type { FinishUpdateParams } from "./update-command-finish-types.js";
 import { continueMigratedUpdateInFreshProcess } from "./update-command-migrated.js";
-import { UpdateCommandFailure } from "./update-command-result.js";
+import {
+  UpdateCommandFailure,
+  UpdateCommandPendingRecoveryFailure,
+} from "./update-command-result.js";
 import { rollbackFailedUpdate } from "./update-command-rollback.js";
 import type { UpdateCommandRecoveryState } from "./update-command-service-maintenance.js";
 import { withUpdateCommandTerminalResult } from "./update-command-terminal.js";
@@ -58,7 +62,7 @@ vi.mock("../../process/exec.js", async (original) => {
           const value = JSON.parse(input);
           require("node:fs").writeFileSync(value.resultPath, JSON.stringify({
             result: { ...value.params.result, status: "error", reason: "restart-unhealthy" },
-            exitCode: 1, executorDelegation: "pid-start-v1", recoveryRequired: true
+            exitCode: 1, executorDelegation: "pid-start-v1", recoveryRequired: true, definitionRecovery: {}
           }));
         });
       `,
@@ -90,6 +94,7 @@ afterEach(() => {
 });
 
 type Scenario =
+  | "ledger-publication-revoked"
   | "normal"
   | "cleanup-throws"
   | "release-fails"
@@ -213,6 +218,21 @@ async function scenario(kind: Scenario) {
   };
   const recoveryState: UpdateCommandRecoveryState = { triageTarget: { root, env: run.env } };
   let injected = false;
+  if (kind === "ledger-publication-revoked") {
+    const encode = ledgerCodec.encodeRun;
+    vi.spyOn(ledgerCodec, "encodeRun").mockImplementation((...args) => {
+      const row = encode(...args);
+      if (row.status === "rolled-back") {
+        injected = true;
+        throw new UpdateCommandPendingRecoveryFailure(
+          params.result,
+          "terminal ledger publication revoked",
+        );
+      }
+      return row;
+    });
+  }
+
   let failure: unknown;
   try {
     await withUpdateCommandTerminalResult(async (registerRun) => {
@@ -382,3 +402,12 @@ it.each(["sibling", "not-rolled-back"] as const)(
     expect(observed.errors).toEqual([]);
   },
 );
+
+it("withholds the migrated sentinel when terminal ledger publication is revoked", async () => {
+  const observed = await scenario("ledger-publication-revoked");
+  expect(observed.injected).toBe(true);
+  expect(observed.failure).toBeInstanceOf(UpdateCommandPendingRecoveryFailure);
+  expect(observed.history?.status).toBe("running");
+  expect(observed.sentinel).toBeNull();
+  expect(observed.output).toEqual([]);
+});

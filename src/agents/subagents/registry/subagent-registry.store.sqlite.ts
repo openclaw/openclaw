@@ -2,6 +2,7 @@
  * Persists subagent run records in the shared sqlite state database, with
  * query-bearing identity columns indexing canonical normalized payload JSON.
  */
+import type { DatabaseSync } from "node:sqlite";
 import { safeParseJson } from "@openclaw/normalization-core";
 import { asFiniteNumber as normalizeFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
@@ -17,7 +18,9 @@ import {
   getNodeSqliteKysely,
   sqliteStringSet,
 } from "../../../infra/kysely-sync.js";
+import { deferSqlitePostCommitPublication } from "../../../infra/sqlite-post-commit.js";
 import { runSqliteDeferredTransactionSync } from "../../../infra/sqlite-transaction.js";
+import { ensureColumn, tableHasColumns } from "../../../state/openclaw-state-db-schema-helpers.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../../../state/openclaw-state-db.generated.js";
 import {
   openOpenClawStateDatabase,
@@ -41,7 +44,13 @@ type SubagentRunSqliteInsert = BoundSubagentRunRecord;
 type SubagentRunSqliteUpdate = Updateable<SubagentRunsTable>;
 type SubagentRunReadSqliteRow = Pick<
   SubagentRunSqliteRow,
-  "run_id" | "child_session_key" | "controller_session_key" | "requester_session_key" | "created_at"
+  | "run_id"
+  | "child_session_key"
+  | "controller_session_key"
+  | "requester_session_key"
+  | "controller_store_path"
+  | "requester_store_path"
+  | "created_at"
 > & {
   model: string | null;
   swarm_run_id: string | null;
@@ -69,6 +78,30 @@ const EXECUTION_STATUSES = new Set("queued running interrupted terminal".split("
 const DELIVERY_STATUSES = new Set(
   "not_required pending in_progress delivered failed suspended discarded".split(" "),
 );
+const parentStoreSchemas = new WeakSet<DatabaseSync>();
+
+function hasParentStoreColumns(db: DatabaseSync): boolean {
+  if (parentStoreSchemas.has(db)) {
+    return true;
+  }
+  const present = tableHasColumns(db, "subagent_runs", [
+    "requester_store_path",
+    "controller_store_path",
+  ]);
+  if (present && !db.isTransaction) {
+    parentStoreSchemas.add(db);
+  }
+  return present;
+}
+
+function parentStoreColumns(db: DatabaseSync) {
+  return hasParentStoreColumns(db)
+    ? (["requester_store_path", "controller_store_path"] as const)
+    : [
+        sql.val<string | null>(null).as("requester_store_path"),
+        sql.val<string | null>(null).as("controller_store_path"),
+      ];
+}
 
 function hasStateStatus(
   value: unknown,
@@ -113,6 +146,8 @@ function rowToSubagentRunRecord(row: SubagentRunSqliteRow): SubagentRunRecord | 
   payload.runId = row.run_id;
   payload.childSessionKey = row.child_session_key;
   payload.requesterSessionKey = row.requester_session_key;
+  payload.requesterStorePath = row.requester_store_path ?? undefined;
+  payload.controllerStorePath = row.controller_store_path ?? undefined;
   const controllerSessionKey = row.controller_session_key?.trim();
   if (controllerSessionKey) {
     payload.controllerSessionKey = controllerSessionKey;
@@ -140,6 +175,8 @@ export function bindSubagentRunRecord(entry: SubagentRunRecord): BoundSubagentRu
     child_session_key: normalized.childSessionKey,
     controller_session_key: normalized.controllerSessionKey?.trim() || null,
     requester_session_key: normalized.requesterSessionKey,
+    requester_store_path: normalized.requesterStorePath ?? null,
+    controller_store_path: normalized.controllerStorePath ?? null,
     created_at: normalized.createdAt,
     // Released readers require root execution/completion/delivery state. Hiding
     // the whole private record also excludes it from legacy mixed/nested summaries.
@@ -155,6 +192,14 @@ export function upsertSubagentRunRowInDatabase(
   database: OpenClawStateDatabase,
   row: BoundSubagentRunRecord,
 ): void {
+  if (!parentStoreSchemas.has(database.db)) {
+    if (!hasParentStoreColumns(database.db)) {
+      ensureColumn(database.db, "subagent_runs", "requester_store_path TEXT");
+      ensureColumn(database.db, "subagent_runs", "controller_store_path TEXT");
+    }
+    // A failed registration must roll back its first-use columns with the record.
+    deferSqlitePostCommitPublication(database.db, () => parentStoreSchemas.add(database.db));
+  }
   const stateDb = getNodeSqliteKysely<SubagentRegistryDatabase>(database.db);
   executeSqliteQuerySync(
     database.db,
@@ -262,6 +307,7 @@ function readSubagentRegistryRows(
       "child_session_key",
       "controller_session_key",
       "requester_session_key",
+      ...parentStoreColumns(db),
       "created_at",
     ])
     .select(projection === "full" ? "payload_json" : subagentMaintenancePayload.as("payload_json"));
@@ -360,6 +406,7 @@ function readSubagentSessionListRows(
             "child_session_key",
             "controller_session_key",
             "requester_session_key",
+            ...parentStoreColumns(db),
             "created_at",
             // Materialize compact metadata once; an inline CTE repeats retained JSON work per field.
             subagentMetadataPayload.as("payload_json"),
@@ -378,6 +425,8 @@ function readSubagentSessionListRows(
         "child_session_key",
         "controller_session_key",
         "requester_session_key",
+        "requester_store_path",
+        "controller_store_path",
         "created_at",
         subagentPayloadJsonValue<string | null>("$.swarmRunId").as("swarm_run_id"),
         subagentPayloadJsonValue<string | null>("$.model").as("model"),
@@ -443,6 +492,8 @@ function rowToSubagentRunReadRecord(row: SubagentRunReadSqliteRow): SubagentRunR
       childSessionKey,
       controllerSessionKey: row.controller_session_key?.trim() || undefined,
       requesterSessionKey,
+      requesterStorePath: row.requester_store_path ?? undefined,
+      controllerStorePath: row.controller_store_path ?? undefined,
       requesterAgentId: row.requester_agent_id?.trim() || undefined,
       collect: row.collect === 1 ? true : undefined,
       groupId: row.group_id || undefined,

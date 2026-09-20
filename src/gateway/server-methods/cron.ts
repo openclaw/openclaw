@@ -4,6 +4,7 @@ import { timestampMsToIsoString } from "@openclaw/normalization-core/number-coer
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import {
   type CronListParams,
+  type CronRunsParams,
   ErrorCodes,
   errorShape,
   GatewayErrorDetailCodes,
@@ -97,20 +98,6 @@ import type { GatewayClient, GatewayRequestHandlers, RespondFn } from "./types.j
 import { assertValidParams } from "./validation.js";
 
 type CronJobIdParams = { id?: string; jobId?: string };
-
-type CronRunsRequestParams = CronJobIdParams & {
-  agentId?: string;
-  scope?: "job" | "all";
-  runId?: string;
-  limit?: number;
-  offset?: number;
-  statuses?: Array<"ok" | "error" | "skipped">;
-  status?: "all" | "ok" | "error" | "skipped";
-  deliveryStatuses?: Array<"delivered" | "not-delivered" | "unknown" | "not-requested">;
-  deliveryStatus?: "delivered" | "not-delivered" | "unknown" | "not-requested";
-  query?: string;
-  sortDir?: "asc" | "desc";
-};
 
 class CronJobConfigRevisionConflictError extends Error {
   constructor(
@@ -1228,7 +1215,7 @@ export const cronHandlers: GatewayRequestHandlers = {
     if (!assertValidParams(params, validateCronRunsParams, "cron.runs", respond)) {
       return;
     }
-    const p = params as CronRunsRequestParams;
+    const p = params as CronRunsParams;
     const callerScope = readCronCallerScope(client);
     const explicitScope = p.scope;
     const hasJobSelector = p.id !== undefined || p.jobId !== undefined;
@@ -1286,10 +1273,7 @@ export const cronHandlers: GatewayRequestHandlers = {
           : undefined;
       // Operator history survives job deletion; scoped reads still need a live, matching owner.
       const storeKey = cronStoreKey(context.cronStorePath);
-      if (
-        ((callerScope || p.agentId || cronVisibility) && !matchedJob) ||
-        (!job && readCronTaskRunHistoryPage({ storeKey, jobId, limit: 1 }).total === 0)
-      ) {
+      if ((callerScope || p.agentId || cronVisibility) && !matchedJob) {
         respondCronJobNotFound(respond, jobId);
         return;
       }
@@ -1306,6 +1290,14 @@ export const cronHandlers: GatewayRequestHandlers = {
           ? (entry) => !entry.sessionKey || cronVisibility(entry.sessionKey, matchedJob?.agentId)
           : undefined,
       });
+      if (
+        !job &&
+        page.total === 0 &&
+        readCronTaskRunHistoryPage({ storeKey, jobId, limit: 1 }).total === 0
+      ) {
+        respondCronJobNotFound(respond, jobId);
+        return;
+      }
       respond(true, page, undefined);
     } catch (err) {
       if (!isInvalidCronTaskRunJobIdError(err)) {

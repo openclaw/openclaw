@@ -175,9 +175,11 @@ vi.mock("../../../plugins/hook-runner-global.js", () => ({
   resetGlobalHookRunner: vi.fn(),
 }));
 
-vi.mock("../../../sessions/session-lifecycle-events.js", () => ({
-  emitSessionLifecycleEvent: emitSessionLifecycleEventMock,
-}));
+vi.mock("../../../sessions/session-lifecycle-events.js", async (importOriginal) => {
+  const { onSessionIdentityMutation } =
+    await importOriginal<typeof import("../../../sessions/session-lifecycle-events.js")>();
+  return { emitSessionLifecycleEvent: emitSessionLifecycleEventMock, onSessionIdentityMutation };
+});
 
 vi.mock("../../internal-session-effects.js", () => ({
   removeInternalSessionEffectsSession: removeInternalSessionEffectsSessionMock,

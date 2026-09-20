@@ -43,7 +43,12 @@ function nodeProof(connId = "conn-1", available = 2): NodeWorkerSupervisorNodePr
     clientId: GATEWAY_CLIENT_IDS.NODE_HOST,
     clientMode: GATEWAY_CLIENT_MODES.NODE,
     protocolFeature: NODE_WORKER_SUPERVISOR_PROTOCOL_FEATURE,
-    workerHost: { enabled: true, capacity: { total: 2, available }, environmentSession: 1 },
+    workerHost: {
+      enabled: true,
+      capacity: { total: 2, available },
+      environmentSession: 1,
+      capturedExecPolicy: true,
+    },
     commands: ["system.run"],
   };
 }
@@ -453,17 +458,20 @@ describe("node worker launch adapter", () => {
     expect(invoke).toHaveBeenCalledOnce();
   });
 
-  it("requires environment lifetime support before dispatching a turn", async () => {
-    const node = nodeProof();
-    delete node.workerHost.environmentSession;
-    const invoke = vi.fn<NodeWorkerSupervisorTransport["invoke"]>();
-    const adapter = createNodeWorkerLaunchAdapter({
-      getTransport: () => transportWith(invoke, async () => [node]),
-    });
+  it.each(["environmentSession", "capturedExecPolicy"] as const)(
+    "requires %s support before dispatching a turn",
+    async (feature) => {
+      const node = nodeProof();
+      delete node.workerHost[feature];
+      const invoke = vi.fn<NodeWorkerSupervisorTransport["invoke"]>();
+      const adapter = createNodeWorkerLaunchAdapter({
+        getTransport: () => transportWith(invoke, async () => [node]),
+      });
 
-    await expect(adapter.launch(launchRequest())).rejects.toThrow("openclaw update");
-    expect(invoke).not.toHaveBeenCalled();
-  });
+      await expect(adapter.launch(launchRequest())).rejects.toThrow("openclaw update");
+      expect(invoke).not.toHaveBeenCalled();
+    },
+  );
 
   it("reacquires the node and replays the identical launch after ambiguous disconnect", async () => {
     const input = launchInput();

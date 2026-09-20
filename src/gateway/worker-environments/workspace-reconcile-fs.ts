@@ -5,6 +5,7 @@ import { hasNodeErrorCode } from "../../infra/path-guards.js";
 import { WorkerTaskError } from "../../infra/worker-task-pool.js";
 import type { createStagedInputPathMatcher } from "../../media/staged-inputs.js";
 import { runCommandBuffered } from "../../process/exec.js";
+import { isManagedSandboxSkillsPath } from "../../shared/sandbox-workspace-paths.js";
 import type { WorkspaceNode } from "./workspace-manifest-comparison.js";
 import { computeWorkspaceFileSnapshot } from "./workspace-manifest-worker.js";
 import {
@@ -206,6 +207,9 @@ export async function directoryContainsOnlyJournalPaths(
 ): Promise<boolean> {
   for (const name of await fs.readdir(localPath(root, directory))) {
     const child = `${directory}/${name}`;
+    if (isManagedSandboxSkillsPath(child)) {
+      return false;
+    }
     if (isDerivedWorkspacePath(child, await isRetainedInput(child))) {
       continue;
     }
@@ -239,6 +243,9 @@ export async function directoryContainsOnlyDerivedWorkspaceEntries(
   let foundDerivedEntry = false;
   for (const name of names) {
     const child = `${directory}/${name}`;
+    if (isManagedSandboxSkillsPath(child)) {
+      return false;
+    }
     if (isDerivedWorkspacePath(child, await isRetainedInput(child))) {
       foundDerivedEntry = true;
       continue;

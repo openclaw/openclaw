@@ -149,6 +149,13 @@ Native dependency policy:
     - Local worker auto-scaling is intentionally conservative and backs off
       when the host load average is already high, so multiple concurrent
       Vitest runs do less damage by default.
+      CI hosts with at least eight available CPUs can use six workers at
+      24 to below 28 GiB and eight workers at 28–128 GiB. The measured memory allowance
+      reserves 25% of RAM even for two heavy test processes. Interactive local
+      sizing is unchanged; explicit worker overrides, load backoff, process
+      memory constraints, free-memory pressure limits, and the 16-worker cap
+      still apply. See [CI worker sizing](/ci/capacity#vitest-worker-sizing)
+      for the measurements and workflow limits.
     - The base Vitest config marks the projects/config files as
       `forceRerunTriggers` so changed-mode reruns stay correct when test
       wiring changes.

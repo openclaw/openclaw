@@ -50,9 +50,9 @@ import {
 } from "./update-run-reader.js";
 import {
   finishUpdateRunRecord,
-  upsertUpdateRunStep,
   isAbandonedUpdateRun,
   isUnacknowledgedPackageOwnerRefusal,
+  upsertUpdateRunStep,
   type FinishUpdateRunResult,
   type UpdateRunRecord,
   type UpdateRunPhase,
@@ -62,7 +62,6 @@ import { isUpdateRecoveryPending } from "./update-run-recovery-schema.js";
 import { hasStoredUpdateRecovery, readRecoveries } from "./update-run-recovery-store.js";
 import { recordUpdateRunVerificationRecord } from "./update-run-verification.js";
 import { mutateRun, mutateRunInTransaction, persistRun } from "./update-run-write.js";
-
 export { recordUpdateRunRecoveryCapture } from "./update-run-write.js";
 
 export {
@@ -73,6 +72,8 @@ export {
   listUpdateRuns,
   listUpdateRunsAsync,
 } from "./update-run-reader.js";
+
+export { recordUpdateRunDiagnostics } from "./update-run-write.js";
 
 type LedgerDatabase = Pick<DB, "update_runs">;
 type RunPatch = Partial<
@@ -420,6 +421,7 @@ export function recordUpdateRunPhase(
   phase: UpdateRunPhase,
   patch: RunPatch & { step?: UpdateRunStep } = {},
   options: LedgerOptions = {},
+  captureBefore?: Parameters<typeof mutateRun>[3],
 ): UpdateRunRecord {
   return mutateRun(
     runId,
@@ -467,6 +469,7 @@ export function recordUpdateRunPhase(
       }
     },
     options,
+    captureBefore,
   );
 }
 

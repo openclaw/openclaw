@@ -266,7 +266,8 @@ function createSpawnEnv(envVars: Record<string, string | undefined>): NodeJS.Pro
 }
 
 async function writeJsonFile(filePath: string, value: unknown): Promise<string> {
-  await fs.mkdir(path.dirname(filePath), { recursive: true });
+  await fs.mkdir(path.dirname(filePath), { recursive: true, mode: 0o700 });
+  await fs.chmod(path.dirname(filePath), 0o700);
   await fs.writeFile(filePath, `${JSON.stringify(value, null, 2)}\n`, "utf8");
   return filePath;
 }
@@ -337,7 +338,8 @@ export async function createOpenClawTestState(
         writeJsonFile(path.join(paths.stateDir, relativePath), value),
       writeText: async (relativePath, value) => {
         const filePath = path.join(paths.stateDir, relativePath);
-        await fs.mkdir(path.dirname(filePath), { recursive: true });
+        await fs.mkdir(path.dirname(filePath), { recursive: true, mode: 0o700 });
+        await fs.chmod(path.dirname(filePath), 0o700);
         await fs.writeFile(filePath, value, "utf8");
         return filePath;
       },
@@ -397,10 +399,13 @@ export async function createOpenClawTestState(
     };
     rollbackEnv = restoreAppliedEnv;
 
-    await fs.mkdir(paths.stateDir, { recursive: true });
-    await fs.mkdir(paths.workspaceDir, { recursive: true });
-    if (layout !== "state-only") {
-      await fs.mkdir(paths.home, { recursive: true });
+    for (const dir of [
+      paths.stateDir,
+      paths.workspaceDir,
+      ...(layout === "state-only" ? [] : [paths.home]),
+    ]) {
+      await fs.mkdir(dir, { recursive: true, mode: 0o700 });
+      await fs.chmod(dir, 0o700);
     }
     if (config !== undefined) {
       await writeJsonFile(paths.configPath, config);

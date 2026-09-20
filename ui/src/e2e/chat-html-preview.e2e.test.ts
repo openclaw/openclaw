@@ -27,6 +27,8 @@ const source = `<!doctype html>
 let count=0;document.querySelector('#count').onclick=()=>document.querySelector('#value').textContent=String(++count);
 </script></body></html>`;
 const editedSource = source.replace("Local HTML page", "Unsaved HTML draft");
+// Self-contained reports with embedded data exceed the generic text-preview budget.
+const attachmentSource = `${source}<!--${"x".repeat(1_700_000)}-->`;
 
 async function listen(server: Server): Promise<number> {
   return await new Promise((resolve, reject) => {
@@ -64,7 +66,7 @@ suite.define(() => {
               await page.route("**/__openclaw__/assistant-media?**", (route) =>
                 route.fulfill({
                   contentType: "text/html; charset=utf-8",
-                  body: source,
+                  body: attachmentSource,
                   headers: { "Content-Disposition": 'attachment; filename="attachment.htm"' },
                 }),
               );
@@ -121,6 +123,7 @@ suite.define(() => {
                     cases: [
                       { match: { html: source }, response: view(source) },
                       { match: { html: editedSource }, response: view(editedSource) },
+                      { match: { html: attachmentSource }, response: view(attachmentSource) },
                     ],
                   },
                 },
@@ -238,7 +241,7 @@ suite.define(() => {
               await page.setViewportSize({ width: 1440, height: 1000 });
               const attachmentFrame = await outer.elementHandle();
               await panel.getByRole("button", { name: "Source", exact: true }).click();
-              expect(await panel.locator("pre:visible").textContent()).toBe(source);
+              expect(await panel.locator("pre:visible").textContent()).toBe(attachmentSource);
               expect(await panel.locator("a[download]").getAttribute("href")).toBe(mediaUrl);
               await tab.click();
               expect(await originalFrame!.evaluate((frame) => frame.isConnected)).toBe(true);

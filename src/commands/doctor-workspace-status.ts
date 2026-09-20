@@ -11,6 +11,7 @@ import type { HealthFinding } from "../flows/health-checks.js";
 import { resolveOpenClawReleaseCohortVersion } from "../infra/npm-registry-spec.js";
 import type { PluginMetadataSnapshotScopeRunner } from "../plugins/current-plugin-metadata-snapshot.js";
 import {
+  resolvePluginVersionDriftRegistryLag,
   resolvePluginVersionDriftUpdateCommand,
   type PluginVersionDriftReport,
   type PluginVersionRestartReadiness,
@@ -136,7 +137,18 @@ function pluginVersionDriftToHealthFindings(
       },
     ];
   }
-  return drift.drifts.map((entry) => {
+  return drift.drifts.map((entry): HealthFinding => {
+    const registryLag = resolvePluginVersionDriftRegistryLag(entry);
+    if (registryLag) {
+      return {
+        checkId: WORKSPACE_STATUS_CHECK_ID,
+        severity: "info",
+        message: `Plugin ${entry.pluginId} is ${entry.installedVersion} and its registry publishes no newer release (registry version ${registryLag.registryVersion}), but a Gateway restart will load OpenClaw ${drift.gatewayVersion}.${runningGatewayVersion ? ` The running Gateway is ${runningGatewayVersion}.` : ""} No plugin update can reach ${registryLag.expectedVersion}.`,
+        path: `plugins.entries.${entry.pluginId}`,
+        target: entry.pluginId,
+        requirement: "plugin-version-drift",
+      };
+    }
     const updateCommand = resolvePluginVersionDriftUpdateCommand(entry);
     const targetResolution = entry.targetResolution;
     const targetError =
@@ -146,7 +158,7 @@ function pluginVersionDriftToHealthFindings(
     return {
       checkId: WORKSPACE_STATUS_CHECK_ID,
       severity: "warning",
-      message: `Plugin ${entry.pluginId} is ${entry.installedVersion}, but a Gateway restart will load OpenClaw ${drift.gatewayVersion}.${runningGatewayVersion ? ` The running Gateway is ${runningGatewayVersion}.` : ""}${updateCommand ? "" : ` Repair target resolution failed: ${targetError}.`}`,
+      message: `Plugin ${entry.pluginId} is ${entry.installedVersion}, but a Gateway restart will load OpenClaw ${drift.gatewayVersion}.${targetResolution?.status === "resolved" ? ` The confirmed plugin target is ${targetResolution.version}.` : ""}${runningGatewayVersion ? ` The running Gateway is ${runningGatewayVersion}.` : ""}${updateCommand ? "" : ` Repair target resolution failed: ${targetError}.`}`,
       path: `plugins.entries.${entry.pluginId}`,
       target: entry.pluginId,
       requirement: "plugin-version-drift",
@@ -317,7 +329,12 @@ function notePluginVersionReadiness(readiness: PluginVersionRestartReadiness | u
     .map(({ command }) => command)
     .filter((command): command is string => Boolean(command))
     .map((command) => formatCliCommand(command));
-  const unresolvedRepairs = repairs.filter(({ command }) => !command);
+  const registryLagRepairs = repairs.filter(({ entry }) =>
+    Boolean(resolvePluginVersionDriftRegistryLag(entry)),
+  );
+  const unresolvedRepairs = repairs.filter(
+    ({ entry, command }) => !command && !resolvePluginVersionDriftRegistryLag(entry),
+  );
   const lines = [
     ...(readiness.runningGatewayVersion
       ? [`Running Gateway: OpenClaw ${readiness.runningGatewayVersion}`]
@@ -327,7 +344,15 @@ function notePluginVersionReadiness(readiness: PluginVersionRestartReadiness | u
     } not on post-restart OpenClaw ${drift.gatewayVersion}`,
     ...drift.drifts.map((entry) => {
       const sourceLabel = entry.source === "clawhub" ? "clawhub" : "npm";
-      return `- ${entry.pluginId}: ${entry.installedVersion} (${sourceLabel}) -> expected ${drift.gatewayVersion}`;
+      const expectedVersion =
+        entry.targetResolution?.status === "resolved"
+          ? entry.targetResolution.version
+          : drift.gatewayVersion;
+      return `- ${entry.pluginId}: ${entry.installedVersion} (${sourceLabel}) -> expected ${expectedVersion}`;
+    }),
+    ...registryLagRepairs.map(({ entry }) => {
+      const registryLag = resolvePluginVersionDriftRegistryLag(entry);
+      return `${entry.pluginId} already holds registry version ${registryLag?.registryVersion}; no release reaches ${registryLag?.expectedVersion} yet, so no update command applies.`;
     }),
     ...unresolvedRepairs.map(({ entry }) => {
       const targetResolution = entry.targetResolution;

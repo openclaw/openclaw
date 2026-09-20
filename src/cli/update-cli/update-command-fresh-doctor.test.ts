@@ -20,6 +20,7 @@ import {
 } from "../../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { removePreparedWorkerOwnershipColumns } from "../../state/openclaw-state-schema-v17.test-support.js";
+import type { UpdateCommandOptions } from "./shared.js";
 import {
   completePostCorePluginUpdate,
   runUpdateFinalizationDoctorInFreshProcess,
@@ -47,9 +48,9 @@ vi.mock("../../process/exec.js", async (importOriginal) => {
     ...actual,
     runExec: mocks.runExec,
     runUtf8CommandWithTimeout: (...args: Parameters<typeof actual.runUtf8CommandWithTimeout>) =>
-      args[0][1] === "--input-type=commonjs"
-        ? actual.runUtf8CommandWithTimeout([process.execPath, ...args[0].slice(1)], args[1])
-        : mocks.runDoctor(...args),
+      args[0].includes("doctor")
+        ? mocks.runDoctor(...args)
+        : actual.runUtf8CommandWithTimeout(...args),
   };
 });
 
@@ -127,6 +128,36 @@ describe("post-plugin update readiness", () => {
     }));
   });
 
+  it("keeps a fresh Doctor requester refusal terminal when later checks would pass", async () => {
+    const isCurrent = vi.fn().mockReturnValueOnce(false).mockReturnValue(true);
+    const opts: UpdateCommandOptions = {
+      run: {
+        runId: "live-run",
+        env: {},
+        executorFence: { assertCurrent: vi.fn() },
+        requesterAuthority: { requester: {}, isCurrent },
+      },
+    };
+    await expect(completePostCorePluginUpdate({ ...updateOptions, opts })).rejects.toThrow(
+      "requester-revoked",
+    );
+    expect(isCurrent).toHaveBeenCalledTimes(1);
+    expect(mocks.runExec).not.toHaveBeenCalled();
+  });
+
+  it.each(["", "  "])(
+    "never downgrades a present run with invalid id %j to legacy Doctor",
+    async (runId) => {
+      const opts: UpdateCommandOptions = {
+        run: { runId, env: {}, executorFence: { assertCurrent: vi.fn() } },
+      };
+      await expect(
+        runUpdateFinalizationDoctorInFreshProcess({ ...updateOptions, opts, phase: "post-plugin" }),
+      ).rejects.toThrow("original update executor");
+      expect(mocks.runExec).not.toHaveBeenCalled();
+    },
+  );
+
   it.each([
     { phase: "pre-plugin", operatorPolicy: "external" },
     { phase: "post-plugin", operatorPolicy: "external" },
@@ -136,12 +167,12 @@ describe("post-plugin update readiness", () => {
     "keeps service authority with the parent in the $phase child (operator policy: $operatorPolicy)",
     async ({ phase, operatorPolicy }) => {
       vi.stubEnv("OPENCLAW_SERVICE_REPAIR_POLICY", operatorPolicy);
-      const { runExec } =
+      const { runUtf8CommandWithTimeout } =
         await vi.importActual<typeof import("../../process/exec.js")>("../../process/exec.js");
-      mocks.runExec.mockImplementationOnce(async (_command, _args, options) => {
-        const result = await runExec(
-          process.execPath,
+      mocks.runDoctor.mockImplementationOnce(async (_argv, options) => {
+        const result = await runUtf8CommandWithTimeout(
           [
+            process.execPath,
             "-e",
             "process.stdout.write(JSON.stringify({ policy: process.env.OPENCLAW_SERVICE_REPAIR_POLICY, repair: process.env.OPENCLAW_UPDATE_PARENT_ALLOWS_GATEWAY_SERVICE_REPAIR, activation: process.env.OPENCLAW_UPDATE_PARENT_ALLOWS_GATEWAY_ACTIVATION }))",
           ],
@@ -160,6 +191,26 @@ describe("post-plugin update readiness", () => {
         phase,
         root: tempDirs.make("fresh-doctor-policy-"),
       });
+    },
+  );
+
+  it.each([
+    { phase: "pre-plugin", timeout: undefined, expected: undefined },
+    { phase: "post-plugin", timeout: undefined, expected: undefined },
+    { phase: "pre-plugin", timeout: "3", expected: 3_000 },
+    { phase: "post-plugin", timeout: "3", expected: 3_000 },
+  ] as const)(
+    "uses the operator deadline for $phase Doctor ($timeout)",
+    async ({ phase, timeout, expected }) => {
+      await runUpdateFinalizationDoctorInFreshProcess({
+        ...updateOptions,
+        phase,
+        opts: { timeout },
+      });
+      expect(mocks.runDoctor).toHaveBeenCalledExactlyOnceWith(
+        expect.arrayContaining(["/usr/bin/node", "doctor", "--repair"]),
+        expect.objectContaining({ timeoutMs: expected }),
+      );
     },
   );
 
@@ -269,7 +320,6 @@ describe("post-plugin update readiness", () => {
       testCase.budget,
       testCase.budget,
     ]);
-    expect(mocks.runDoctor.mock.calls[0]?.[1].timeoutMs).toBeUndefined();
   });
 
   it("budgets configured agent stores without enumerating unrelated agent directories", async () => {
@@ -344,8 +394,7 @@ describe("post-plugin update readiness", () => {
       });
 
       expect(beforeDoctor).toHaveBeenCalledOnce();
-      expect(mocks.runDoctor.mock.calls[0]?.[0]).toEqual([
-        "/usr/bin/node",
+      expect(mocks.runDoctor.mock.calls[0]?.[0].slice(1)).toEqual([
         "/opt/openclaw/dist/index.js",
         "doctor",
         "--repair",

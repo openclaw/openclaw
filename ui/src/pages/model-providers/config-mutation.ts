@@ -39,6 +39,7 @@ export function modelDefaultsActions(
       });
     },
     onUtilityChange: (model: string | null) => stageDefaults({ utilityModel: model }),
+    onDecisionChange: (model: string | null) => stageDefaults({ decisionModel: model }),
     onThinkingChange: (level: string) =>
       stageDefaults({ thinkingLevel: level, thinkingOverridden: true }),
     onThinkingReset: () => stageDefaults({ thinkingLevel: undefined, thinkingOverridden: false }),
@@ -72,6 +73,7 @@ export function buildDefaultsPatch(params: {
   primary: string;
   fallbacks: readonly string[];
   utilityModel: string | null;
+  decisionModel?: string | null;
   thinkingLevel: string | undefined;
   thinkingOverridden: boolean;
   fastMode: FastMode | undefined;
@@ -89,6 +91,7 @@ export function buildDefaultsPatch(params: {
             }
           : {}),
         utilityModel: params.utilityModel,
+        ...(params.decisionModel !== undefined ? { decisionModel: params.decisionModel } : {}),
         thinkingDefault:
           params.thinkingOverridden && params.thinkingLevel ? params.thinkingLevel : null,
         fastModeDefault:

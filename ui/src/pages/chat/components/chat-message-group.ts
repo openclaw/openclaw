@@ -244,13 +244,13 @@ export function renderActivityGroup(
       }
     }
   }
-  const groupSummaryLabel = runningOperation
-    ? `${runningOperation.title}…`
-    : summarizeToolGroup(visibleActivity);
   const visibleCalls = new Set(visibleActivity.map((item) => item.toolCallId ?? item.itemId));
   const activityDisclosureId = `activity:${firstGroup.key}`;
   const activityBodyId = `activity-body-${fnv1aUtf16(firstGroup.key).toString(16)}`;
   const activityExpanded = opts.isToolMessageExpanded?.(activityDisclosureId) ?? false;
+  const groupSummaryLabel = runningOperation
+    ? `${runningOperation.title}…`
+    : summarizeToolGroup(visibleActivity, { includeFailureCount: activityExpanded });
   const toolCardOverrides = new Map<ToolCard, unknown>();
   const toolContexts = new Map(
     groups.flatMap((group) =>
@@ -345,7 +345,15 @@ export function renderActivityGroup(
               >`
             : nothing
         }
-        ${activityExpanded ? nothing : renderToolOutcomeSummary(cards.filter((card) => card.callId && visibleCalls.has(card.callId)))}
+        ${
+          activityExpanded
+            ? nothing
+            : renderToolOutcomeSummary(
+                cards.filter((card) => card.callId && visibleCalls.has(card.callId)),
+                true,
+                visibleActivity,
+              )
+        }
         <span class="chat-tool-row__chevron" aria-hidden="true">${icons.chevronRight}</span>
       </button>
       <div class="chat-activity-group__body" id=${activityBodyId} ?hidden=${!activityExpanded}>

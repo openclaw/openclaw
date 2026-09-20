@@ -106,7 +106,21 @@ async function seedSessions(owner: OpenClawTestInstance, config: OpenClawConfig)
           updatedAt: fixture.updatedAt,
           label: fixture.label,
           visibility: "shared",
-          createdActor: { type: "human", source: "profile", id: profile.id },
+          ...(fixture.key === targetKey
+            ? {
+                category: "HOME ASSISTANT",
+                spawnedBy: "agent:main:search-roster-0",
+                parentSessionKey: "agent:main:search-roster-0",
+                createdVia: "spawn" as const,
+                createdActor: { type: "agent" as const, id: "main" },
+              }
+            : {
+                createdActor: {
+                  type: "human" as const,
+                  source: "profile" as const,
+                  id: profile.id,
+                },
+              }),
         },
       }),
       { cwd: owner.state.workspaceDir },
@@ -171,11 +185,14 @@ const suite = createControlUiE2eSuite({
           controlUi: { enabled: true },
         },
         cron: { enabled: false },
+        // Core search proof must not depend on external plugin catalog refreshes.
+        plugins: { enabled: false },
         agents: {
           ownership: "explicit",
           defaults: {
             workspace: owner.state.workspaceDir,
             model: "fixture/search-model",
+            modelPolicy: { allow: ["fixture/*"] },
             heartbeat: { every: "0m" },
           },
           entries: Object.fromEntries(
@@ -297,7 +314,7 @@ function observeSearchTraffic(page: Page, rpc: RpcObservation[]) {
 }
 
 suite.define(() => {
-  it("finds an older fifth-agent message beyond the roster and treats a full result page as success", async () => {
+  it("finds a grouped spawned conversation beyond the roster and treats a full result page as success", async () => {
     if (!instance) {
       throw new Error("Gateway fixture is not running");
     }
@@ -381,10 +398,20 @@ suite.define(() => {
           };
           await page.keyboard.press("ControlOrMeta+K");
           const palette = page.locator(".cmd-palette");
-          const input = palette.getByRole("combobox");
-          const results = palette.getByRole("listbox");
+          const input = palette.getByRole("textbox", {
+            name: "Search or start a task…",
+            exact: true,
+          });
+          const results = palette.locator(".cmd-palette__results");
+          const emptyState = palette.locator(".cmd-palette__no-results");
           await input.waitFor();
-          const search = async (query: string, expectedHits: number, filename: string) => {
+          const search = async (
+            query: string,
+            expectedHits: number,
+            filename: string,
+            metadataKeys: string[] = [],
+          ) => {
+            const noMatches = expectedHits === 0 && metadataKeys.length === 0;
             const start = rpc.length;
             const started = performance.now();
             await input.fill(query);
@@ -404,10 +431,11 @@ suite.define(() => {
             // by its metadata-search intent, not by arrival time alone.
             const listRequests = traffic.filter((entry) => entry.method === "sessions.list");
             const metadata = listRequests.filter((entry) => entry.params.search === query);
+            const visibleResults = await results.getByRole("option").count();
             queries.push({
               query,
               elapsedMs: performance.now() - started,
-              visibleResults: await results.getByRole("option").count(),
+              visibleResults,
               searchRequests: searches.length,
               metadataRequests: metadata.length,
               backgroundListRequests: listRequests.length - metadata.length,
@@ -415,7 +443,7 @@ suite.define(() => {
             });
             // Capture the settled state before assertions too, retaining useful
             // before-fix evidence when run against the original regression.
-            await capture(filename, palette, [input, results]);
+            await capture(filename, palette, [input, visibleResults === 0 ? emptyState : results]);
             expect(searches).toHaveLength(1);
             const response = searches[0]!;
             expect(response.params).toEqual({ query, limit: 25, scope });
@@ -430,8 +458,8 @@ suite.define(() => {
             expect(metadata).toHaveLength(1);
             expect(metadata[0]?.params).toEqual({ ...scope, search: query, limit: 10 });
             expect(metadata[0]?.ok).toBe(true);
-            expect(metadata[0]?.sessionKeys).toEqual([]);
-            expect(notices).toEqual([]);
+            expect(metadata[0]?.sessionKeys).toEqual(metadataKeys);
+            expect(notices).toEqual(noMatches ? [expect.stringContaining("No results found")] : []);
             expect(
               await palette
                 .getByText(/Search notices|incomplete|unavailable|indexing older/i)
@@ -448,6 +476,33 @@ suite.define(() => {
               (key) => typeof key === "string" && key.includes(":search-roster-"),
             ),
           ).toBe(true);
+
+          await search(targetLabel, 0, "02-grouped-metadata-match.png", [targetKey]);
+          await results.getByRole("option").filter({ hasText: targetLabel }).click();
+          await input.waitFor({ state: "hidden" });
+          const activePane = () =>
+            page.locator("openclaw-chat-pane.chat-pane-cache__pane--active:not([inert])");
+          await expect
+            .poll(() =>
+              activePane().evaluate(
+                (element) => (element as HTMLElement & { sessionKey: string }).sessionKey,
+              ),
+            )
+            .toBe(targetKey);
+          await activePane()
+            .locator(".chat-thread")
+            .getByText(targetMessage, { exact: true })
+            .waitFor();
+          await page.goBack();
+          await expect
+            .poll(() =>
+              activePane().evaluate(
+                (element) => (element as HTMLElement & { sessionKey: string }).sessionKey,
+              ),
+            )
+            .toBe("agent:main:main");
+          await page.keyboard.press("ControlOrMeta+K");
+          await input.waitFor();
 
           const unique = await search(uniqueQuery, 1, "02-older-fifth-agent-match.png");
           expect(unique.resultKeys).toEqual([targetKey]);
@@ -466,7 +521,9 @@ suite.define(() => {
           const absent = await search("copperfinch absentconstellation", 0, "05-no-match.png");
           expect(absent.truncated).toBe(false);
           expect(await results.getByRole("option").count()).toBe(0);
-          await results.getByText("No results", { exact: true }).waitFor();
+          await emptyState
+            .getByRole("heading", { name: "No results found", exact: true })
+            .waitFor();
 
           await search("copperfinch observatory", 1, "06-selected-search-result.png");
           await results.getByRole("option").filter({ hasText: targetLabel }).click();
@@ -485,6 +542,68 @@ suite.define(() => {
           await capture("07-opened-fifth-agent-transcript.png", pane, [
             pane.locator(".chat-thread"),
           ]);
+
+          const otherKey = "agent:fifth:search-roster-4";
+          await page
+            .locator(
+              `.sidebar-recent-session[data-session-key="${otherKey}"] .sidebar-recent-session__link`,
+            )
+            .click();
+          await expect
+            .poll(() =>
+              activePane().evaluate(
+                (element) => (element as HTMLElement & { sessionKey: string }).sessionKey,
+              ),
+            )
+            .toBe(otherKey);
+          const call = async (method: string, params: Record<string, unknown>) => {
+            const rpcResult = await owner.cli([
+              "gateway",
+              "call",
+              method,
+              "--json",
+              "--params",
+              JSON.stringify(params),
+            ]);
+            expect(rpcResult.code, rpcResult.stderr).toBe(0);
+            return requireRecord(JSON.parse(rpcResult.stdout));
+          };
+          for (const category of ["Research", null, "HOME ASSISTANT"]) {
+            await call("sessions.patch", { key: targetKey, category });
+            const groupRows = page.locator(
+              `[data-session-section^="category:"] [data-session-key="${targetKey}"]`,
+            );
+            await expect.poll(() => groupRows.count()).toBe(category ? 1 : 0);
+            if (category) {
+              await page
+                .locator(
+                  `[data-session-section="category:${category}"] [data-session-key="${targetKey}"]`,
+                )
+                .waitFor({ state: "visible" });
+            }
+            const inventory = await call("sessions.list", {
+              ...scope,
+              search: targetLabel,
+              includePeople: true,
+            });
+            expect(inventory).toMatchObject({
+              totalCount: category ? 1 : 0,
+              peopleSessionCount: category ? 1 : 0,
+            });
+            expect(inventory.owners).toHaveLength(category ? 1 : 0);
+            await page.keyboard.press("ControlOrMeta+K");
+            await input.waitFor();
+            const stage = category?.replaceAll(" ", "-") ?? "ungrouped";
+            await search(
+              targetLabel,
+              0,
+              `category-${stage}-metadata.png`,
+              category ? [targetKey] : [],
+            );
+            await search(uniqueQuery, category ? 1 : 0, `category-${stage}-transcript.png`);
+            await page.keyboard.press("Escape");
+            await input.waitFor({ state: "hidden" });
+          }
           expect(rpc.filter((metric) => metric.method === "sessions.search")).toHaveLength(
             queries.length,
           );

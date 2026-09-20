@@ -174,6 +174,9 @@ vi.mock("./server-methods/chat-send-background.js", async (importOriginal) => {
   return { ...actual, scheduleChatDashboardSessionTitle: dashboardTitleScheduleMocks.schedule };
 });
 
+// Shared Gateway helpers must register dispatch and lifecycle mocks before this graph loads.
+const chatSendOwner = await import("./server-methods/chat-send-external-entry.js");
+
 let gitWorkspaceTemplate: string;
 const {
   createSessionStoreDir,
@@ -478,8 +481,8 @@ test("sessions.create commits the personal default before dispatching its initia
       await createPersonalAccountSessionFixture();
     const key = "agent:main:dashboard:personal-default-initial-turn";
     const observedProfiles: Array<string | undefined> = [];
-    const { chatHandlers } = await import("./server-methods/chat.js");
-    const chatSend = vi.spyOn(chatHandlers, "chat.send").mockImplementation(({ respond }) => {
+    const chatSend = vi.spyOn(chatSendOwner, "handleDirectExternalChatSend");
+    chatSend.mockImplementation(async ({ respond }) => {
       observedProfiles.push(loadSessionEntry({ sessionKey: key, storePath })?.authProfileOverride);
       respond(true, { runId: "personal-default-first-turn", status: "started" });
     });
@@ -692,22 +695,20 @@ test.each([
                 profile: string | undefined;
                 source: string | undefined;
               }> = [];
-              const { chatHandlers } = await import("./server-methods/chat.js");
-              const chatSend = vi
-                .spyOn(chatHandlers, "chat.send")
-                .mockImplementation(({ respond }) => {
-                  const entry = loadSessionEntry({
-                    sessionKey: key,
-                    storePath,
-                    readConsistency: "latest",
-                  });
-                  observedSelections.push({
-                    ...resolveSessionModelRef(cfg, entry, "main"),
-                    profile: entry?.authProfileOverride,
-                    source: entry?.authProfileOverrideSource,
-                  });
-                  respond(true, { runId: "arcee-linked-default-first-turn", status: "started" });
+              const chatSend = vi.spyOn(chatSendOwner, "handleDirectExternalChatSend");
+              chatSend.mockImplementation(async ({ respond }) => {
+                const entry = loadSessionEntry({
+                  sessionKey: key,
+                  storePath,
+                  readConsistency: "latest",
                 });
+                observedSelections.push({
+                  ...resolveSessionModelRef(cfg, entry, "main"),
+                  profile: entry?.authProfileOverride,
+                  source: entry?.authProfileOverrideSource,
+                });
+                respond(true, { runId: "arcee-linked-default-first-turn", status: "started" });
+              });
               try {
                 const created = await directSessionReq<{ runStarted: boolean }>(
                   "sessions.create",
@@ -2080,9 +2081,9 @@ test("sessions.create fences the first workspace write behind its diff baseline"
   sessionDiffBaselineMocks.useReal = true;
 
   const { ensureSessionDiffBaseline } = await import("../sessions/session-diff-baseline.js");
-  const { chatHandlers } = await import("./server-methods/chat.js");
   let firstTurn: Promise<void> | undefined;
-  const chatSend = vi.spyOn(chatHandlers, "chat.send").mockImplementation(async ({ respond }) => {
+  const chatSend = vi.spyOn(chatSendOwner, "handleDirectExternalChatSend");
+  chatSend.mockImplementation(async ({ respond }) => {
     respond(true, { runId: "diff-first-write-run", status: "started" });
     firstTurn = (async () => {
       const entry = loadSessionEntry({ agentId: "main", sessionKey, storePath });
@@ -2286,9 +2287,9 @@ test("sessions.create persists explicit tool overrides before the first turn", a
     skills: { release: false },
     webSearch: false,
   };
-  const { chatHandlers } = await import("./server-methods/chat.js");
   const observed: Array<unknown> = [];
-  const chatSend = vi.spyOn(chatHandlers, "chat.send").mockImplementation(async ({ respond }) => {
+  const chatSend = vi.spyOn(chatSendOwner, "handleDirectExternalChatSend");
+  chatSend.mockImplementation(async ({ respond }) => {
     observed.push(loadSessionEntry({ agentId: "main", sessionKey, storePath })?.toolOverrides);
     respond(true, { runId: "create-tool-overrides-run", status: "started" });
   });
@@ -4930,8 +4931,8 @@ test("sessions.create commits no child after its worker turn closes", async () =
 test("sessions.create starts no initial turn when authority closes after session commit", async () => {
   const { storePath } = await createSessionStoreDir();
   const sessionKey = "agent:main:dashboard:authority-post-commit";
-  const { chatHandlers } = await import("./server-methods/chat.js");
-  const chatSend = vi.spyOn(chatHandlers, "chat.send").mockImplementation(async ({ respond }) => {
+  const chatSend = vi.spyOn(chatSendOwner, "handleDirectExternalChatSend");
+  chatSend.mockImplementation(async ({ respond }) => {
     respond(true, { runId: "must-not-start", status: "started" });
   });
   let authorityCurrent = true;
@@ -5947,8 +5948,8 @@ test("sessions.create adopting an existing key does not restamp node provenance"
       }),
     },
   });
-  const { chatHandlers } = await import("./server-methods/chat.js");
-  const chatSend = vi.spyOn(chatHandlers, "chat.send").mockImplementation(async ({ respond }) => {
+  const chatSend = vi.spyOn(chatSendOwner, "handleDirectExternalChatSend");
+  chatSend.mockImplementation(async ({ respond }) => {
     respond(true, { runId: "adopted-run", status: "started" });
   });
 
@@ -5996,17 +5997,15 @@ test("sessions.create adopting an existing key does not restamp node provenance"
 
 test("sessions.create replays an identical creation once and rejects conflicting intent", async () => {
   await createSessionStoreDir();
-  const { chatHandlers } = await import("./server-methods/chat.js");
   const { sessionCreateHandlers } = await import("./server-methods/sessions-create.js");
   let sharedContext:
-    | Parameters<NonNullable<(typeof chatHandlers)["chat.send"]>>[0]["context"]
+    | Parameters<typeof chatSendOwner.handleDirectExternalChatSend>[0]["context"]
     | undefined;
-  const chatSend = vi
-    .spyOn(chatHandlers, "chat.send")
-    .mockImplementation(async ({ context, respond }) => {
-      sharedContext ??= context;
-      respond(true, { runId: "create-once", status: "started" });
-    });
+  const chatSend = vi.spyOn(chatSendOwner, "handleDirectExternalChatSend");
+  chatSend.mockImplementation(async ({ context, respond }) => {
+    sharedContext ??= context;
+    respond(true, { runId: "create-once", status: "started" });
+  });
   const dedupe = new Map();
   const client = {
     connect: {
@@ -7445,8 +7444,8 @@ test.each(mentionCreationOwners)(
 test("sessions.create forwards an attachment-only first turn", async () => {
   await createSessionStoreDir();
   testState.agentsConfig = { list: [{ id: "main", default: true }] };
-  const { chatHandlers } = await import("./server-methods/chat.js");
-  const chatSend = vi.spyOn(chatHandlers, "chat.send").mockImplementation(async ({ respond }) => {
+  const chatSend = vi.spyOn(chatSendOwner, "handleDirectExternalChatSend");
+  chatSend.mockImplementation(async ({ respond }) => {
     respond(true, { runId: "attachment-run", status: "started" });
   });
   const attachment = {

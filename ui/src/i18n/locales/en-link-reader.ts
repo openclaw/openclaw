@@ -25,6 +25,7 @@ const enLinkReader = {
     openExternal: "Open on {provider}",
     openOriginal: "Open original",
     byAuthor: "by {author}",
+    coAuthors: "Co-authors: {authors}",
     description: "Description",
     noDescription: "No description provided.",
     comments: "Comments",
@@ -41,9 +42,9 @@ const enLinkReader = {
     patchTruncated: "This diff was shortened. Open the original for the full patch.",
     patchUnavailable:
       "No text diff available in this view. Open the original to inspect this file.",
-    unavailableTitle: "Item unavailable",
-    unavailable:
-      "This item may be private or deleted, or its service may be unavailable or rate-limiting requests. Try again later or open the original.",
+    unavailableTitle: "Could not load item",
+    previewUnavailable: "Could not load preview",
+    unavailable: "Try again or open the original.",
     disconnected: "This reader is unavailable on this connection. Reconnect or open the original.",
     retry: "Retry",
   },

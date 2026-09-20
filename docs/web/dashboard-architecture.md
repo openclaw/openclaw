@@ -505,7 +505,7 @@ RPCs (core method table, typebox schemas in `gateway-protocol`):
 
 - `canvas.document.preview { html }` → unchanged caller-owned HTML and the same
   isolated sandbox connection metadata as `canvas.document.view` — `operator.read`.
-  It accepts at most 256 KiB of UTF-8 data (including empty HTML), rejects extra
+  It accepts at most 2 MiB of UTF-8 data (including empty HTML), rejects extra
   fields, and never reads or creates a stored document. It honors Canvas host
   disablement and returns no capability ticket or prompt/tool/host access. File-tab
   clients use the default SandboxHost policy with descendant frames blocked, not

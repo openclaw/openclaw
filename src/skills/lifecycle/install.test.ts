@@ -18,6 +18,7 @@ import { withMockedPlatform } from "../../test-utils/vitest-spies.js";
 import { buildWorkspaceSkillStatus } from "../discovery/status.js";
 import { hasBinary } from "../loading/config.js";
 import { loadWorkspaceSkills } from "../loading/workspace-skill-loader.js";
+import { closeSkillsWatchers } from "../runtime/refresh.js";
 import { runCommandWithTimeoutMock } from "../test-support/install-test-mocks.js";
 import type { SkillEntry, SkillInstallSpec } from "../types.js";
 import { resolveWorkshopSkillsDir } from "../workshop/skills-root.js";
@@ -122,10 +123,14 @@ afterAll(async () => {
   vi.mocked(hasBinary).mockReset();
   vi.mocked(resolveBrewExecutable).mockReset();
   vi.mocked(isContainerEnvironment).mockReset();
+  // skills.status starts native watchers; close them before removing their fixture roots.
+  await closeSkillsWatchers(true);
   await workspaceSuite.cleanup();
 });
 
-afterEach(() => {
+afterEach(async () => {
+  // skills.status acquires real watchers; retire them before another suite borrows the worker.
+  await closeSkillsWatchers(true);
   vi.restoreAllMocks();
 });
 
@@ -158,9 +163,14 @@ async function withWorkspaceCase(
     process.env.OPENCLAW_STATE_DIR = stateDir;
     await run({ workspaceDir, stateDir, homeDir });
   } finally {
-    mkdirSpy.mockRestore();
-    homeSpy.mockRestore();
-    envSnapshot.restore();
+    try {
+      // Close real skills.status watchers before retiring their workspace and state roots.
+      await closeSkillsWatchers();
+    } finally {
+      mkdirSpy.mockRestore();
+      homeSpy.mockRestore();
+      envSnapshot.restore();
+    }
   }
 }
 

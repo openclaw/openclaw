@@ -439,6 +439,10 @@ it("continues normal history admission when no operational update is pending", a
 it.skipIf(process.platform === "win32").each([
   { signal: "SIGINT", mode: "fresh" },
   { signal: "SIGTERM", mode: "fresh" },
+  { signal: "SIGINT", mode: "resolved" },
+  { signal: "SIGTERM", mode: "resolved" },
+  { signal: "SIGINT", mode: "resolved-foreign-before" },
+  { signal: "SIGINT", mode: "resolved-foreign-after" },
   { signal: "SIGINT", mode: "repeat" },
   { signal: "SIGINT", mode: "inherited" },
   { signal: "SIGINT", mode: "handoff" },
@@ -460,12 +464,25 @@ it.skipIf(process.platform === "win32").each([
       import { createRetainedUpdateRecovery } from ${JSON.stringify(resolveRuntimeWorkerUrl(updateExecutorNativeEntrypoints.retainedRecovery).href)};
       import { closeOpenClawStateDatabaseForTest } from ${JSON.stringify(resolveRuntimeWorkerUrl(cronOwnerHardeningEntrypoints.stateDatabase).href)};
       import { admitUpdateCommandRun, withUpdatePreviewSignals } from ${JSON.stringify(resolveRuntimeWorkerUrl(updateExecutorNativeEntrypoints.commandRun).href)};
+      import { resolveUpdateCommandTarget } from ${JSON.stringify(resolveRuntimeWorkerUrl(updateExecutorNativeEntrypoints.commandTarget).href)};
       const opts = { dryRun: true };
       const mode = ${JSON.stringify(mode)};
       if (mode === 'inherited') process.env.OPENCLAW_UPDATE_RUN_ID = createUpdateRun({trigger:'cli'}).runId;
-      const run = await admitUpdateCommandRun({ opts, root: ${JSON.stringify(root)} });
+      const run = await admitUpdateCommandRun({ opts, root: ${JSON.stringify(root)}, installKind: "package" });
       await withUpdatePreviewSignals({ ...opts, run }, async () => {
         const sibling = createUpdateRun({ trigger: 'cli' });
+        if (mode.startsWith('resolved')) {
+          const foreign = () => recordUpdateRunPhase(run.runId, 'requested', { target: { tag: 'foreign' } });
+          if (mode === 'resolved-foreign-before') foreign();
+          const root = ${JSON.stringify(root)};
+          await resolveUpdateCommandTarget({ ...opts, run }, { triageTarget: { root, env: run.env } }, undefined, {
+            startedAt: Date.now(), postCoreUpdateResume: false, postCoreUpdateChannel: undefined,
+            timeoutMs: 1000, shouldRestart: false, requestedChannel: null, devTarget: undefined,
+            controlPlaneUpdateSentinelMeta: null, discoveredRoot: root, installKind: 'git',
+            servicePlan: undefined,
+          }, { enter: () => { throw new Error('preview must not acquire a mutable executor'); } }, 1000);
+          if (mode === 'resolved-foreign-after') foreign();
+        }
         if (mode === 'repeat') {
           registerSignalExitGate(new Promise((resolve) => process.once('message', resolve)));
           process.once('SIGINT', () => process.send('interrupted'));
@@ -548,7 +565,15 @@ it.skipIf(process.platform === "win32").each([
             }
           : { env: { OPENCLAW_STATE_DIR: root } };
       const record = getUpdateRun(message.runId, options);
-      if (mode === "fresh" || mode === "repeat") {
+      if (mode.startsWith("resolved")) {
+        expect(message.expected).toMatchObject({
+          target: { kind: "git", installationMethod: "git-checkout" },
+          steps: expect.arrayContaining([
+            expect.objectContaining({ step: "installation-inspection", status: "completed" }),
+          ]),
+        });
+      }
+      if (mode === "fresh" || mode === "repeat" || mode === "resolved") {
         expect(record).toMatchObject({
           status: "skipped",
           phase: "finished",

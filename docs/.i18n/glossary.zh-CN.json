@@ -2900,6 +2900,10 @@
     "target": "llmman（本地模型）"
   },
   {
+    "source": "llmman (local + hybrid local/hosted models)",
+    "target": "llmman（本地 + 本地/托管混合模型）"
+  },
+  {
     "source": "llama.cpp (managed or existing server)",
     "target": "llama.cpp（托管或现有服务器）"
   },
@@ -4858,5 +4862,21 @@
   {
     "source": "FAQ: providers, hardware, and hosting",
     "target": "常见问题：服务商、硬件与托管"
+  },
+  {
+    "source": "Decision models",
+    "target": "决策模型"
+  },
+  {
+    "source": "TypeSafe AI",
+    "target": "TypeSafe AI"
+  },
+  {
+    "source": "Typesafe plugin reference",
+    "target": "TypeSafe 插件参考"
+  },
+  {
+    "source": "typesafe",
+    "target": "typesafe"
   }
 ]

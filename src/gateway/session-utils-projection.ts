@@ -10,6 +10,11 @@ import { captureRuntimeStateEnvironment } from "../config/paths.js";
 import { resolveSessionStorePathCore, type SessionEntry } from "../config/sessions.js";
 import { resolveConcreteSessionStorePath } from "../config/sessions/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import {
+  buildProjectedAgentRunIndex,
+  resolveProjectedAgentRunProgressState,
+  type ProjectedAgentRunIndex,
+} from "../infra/agent-run-registry.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
 import { readRecentSessionUsageFromTranscript as readScopedRecentSessionUsageFromTranscript } from "./session-transcript-usage.js";
 import {
@@ -24,10 +29,12 @@ export function buildSessionListRowMetadataContext(params: {
   now: number;
   sessionKeys?: readonly string[];
   subagentRuns?: SessionListRowContext["subagentRuns"];
+  projectedAgentRuns?: ProjectedAgentRunIndex;
   userProfileIdentityById?: Map<string, SessionActorProfileIdentity | undefined>;
 }): SessionListRowContext {
   const subagentRuns =
     params.subagentRuns ?? buildSubagentSessionListReadIndex(params.now, params.sessionKeys);
+  const projectedAgentRuns = params.projectedAgentRuns ?? buildProjectedAgentRunIndex();
   const catalogEntries = new WeakMap<
     ModelCatalogEntry[],
     Map<string, ModelCatalogEntry | undefined>
@@ -38,6 +45,8 @@ export function buildSessionListRowMetadataContext(params: {
   >();
   return {
     subagentRuns,
+    projectedAgentRuns,
+    projectedSubagentActivity: buildProjectedSubagentActivity(subagentRuns, projectedAgentRuns),
     subagentRunsByChildSessionKey: subagentRuns.runsByChildSessionKey,
     configuredDefaultModelByAgent: new Map(),
     thinkingFactsByModelRef: new Map(),
@@ -71,6 +80,37 @@ export function buildSessionListRowMetadataContext(params: {
     modelCostConfigByModelRef: new Map(),
     userProfileIdentityById: params.userProfileIdentityById ?? new Map(),
   };
+}
+
+/** Prepare follow-up ancestor membership with the indexes, outside per-row presentation. */
+export function buildProjectedSubagentActivity(
+  subagentRuns: SessionListRowContext["subagentRuns"],
+  projectedAgentRuns: ProjectedAgentRunIndex,
+): ReadonlySet<string> {
+  const active = new Set<string>();
+  if (
+    projectedAgentRuns.sessionKeys.size === 0 &&
+    projectedAgentRuns.sessionIds.size === 0 &&
+    projectedAgentRuns.ownerlessSessionKeys.size === 0 &&
+    projectedAgentRuns.ownerlessSessionIds.size === 0
+  ) {
+    return active;
+  }
+  for (const [key, run] of subagentRuns.latestRunsByChildSessionKey) {
+    if (
+      resolveProjectedAgentRunProgressState({ sessionKeys: [key], index: projectedAgentRuns }) ===
+      undefined
+    ) {
+      continue;
+    }
+    let requester = run.requesterSessionKey;
+    while (requester && !active.has(requester)) {
+      active.add(requester);
+      requester =
+        subagentRuns.latestRunsByChildSessionKey.get(requester)?.requesterSessionKey ?? "";
+    }
+  }
+  return active;
 }
 
 export function resolveTranscriptUsageFallbacks(params: {

@@ -7,6 +7,7 @@ import type {
 import { GatewayRequestError, type GatewayBrowserClient } from "../api/gateway.ts";
 import type { ApplicationGatewaySnapshot } from "../app/gateway.ts";
 import { formatUiError } from "../lib/format-error.ts";
+import { isAwaitingGatewayFailure } from "../lib/gateway-availability.ts";
 import { isGatewayMethodAdvertised } from "../lib/gateway-methods.ts";
 import { createSessionEventRefreshCoordinator } from "../lib/sessions/event-refresh-coordinator.ts";
 import { normalizeAgentId } from "../lib/sessions/session-key.ts";
@@ -19,6 +20,7 @@ import { sessionCatalogHostKey } from "./app-sidebar-session-types.ts";
 
 const SESSION_CATALOG_SAFETY_REFRESH_MS = 10 * 60_000;
 const SESSION_CATALOG_STABLE_REFRESH_MS = 30_000;
+const SESSION_CATALOG_MAX_RETRIES = 3;
 
 export function sessionCatalogListClient(
   snapshot: ApplicationGatewaySnapshot | undefined,
@@ -86,6 +88,36 @@ export class SessionCatalogLiveState {
   private readonly requestChangedHostKeys = new Set<string>();
   private readonly warnedRequestErrors = new Set<string>();
   private requestOwner: symbol | null = null;
+  private retryAttempts = 0;
+  private retryAt = 0;
+
+  get retryDelayMs() {
+    return Math.max(0, this.retryAt - Date.now());
+  }
+
+  resetRetry() {
+    this.retryAttempts = 0;
+    this.retryAt = 0;
+  }
+
+  retryRequest(error: unknown): number | null {
+    if (
+      !(error instanceof GatewayRequestError) ||
+      !error.retryable ||
+      isAwaitingGatewayFailure(error, null) ||
+      this.retryAttempts >= SESSION_CATALOG_MAX_RETRIES
+    ) {
+      this.resetRetry();
+      return null;
+    }
+    const serverDelay =
+      typeof error.retryAfterMs === "number" && Number.isFinite(error.retryAfterMs)
+        ? error.retryAfterMs
+        : 0;
+    const delay = Math.max(serverDelay, 1_000 * 2 ** this.retryAttempts++);
+    this.retryAt = Date.now() + delay;
+    return delay;
+  }
 
   cancelTimer() {
     const handle = this.timer;
@@ -98,6 +130,7 @@ export class SessionCatalogLiveState {
   clear() {
     this.refreshScope = {};
     this.cancelScheduledRefreshes();
+    this.resetRetry();
     this.requestGeneration = null;
     this.requestOwner = null;
     this.progressSequence = 0;
@@ -384,8 +417,14 @@ export async function refreshSessionCatalogsLive(params: {
   if (live.requestGeneration === generation) {
     return;
   }
+  // Events and returning tabs share the same cooldown as the scheduled retry.
+  if (live.retryDelayMs > 0) {
+    live.schedule(live.retryDelayMs, params.connected(), () => void params.refresh());
+    return;
+  }
   const { progressId, progressSequence, requestOwner } = live.beginRequest(generation);
   let refetchOwner: symbol | null = null;
+  let retryDelayMs: number | null = null;
   const requestIsCurrent = () =>
     live.ownsRequest(requestOwner) &&
     generation === params.currentGeneration() &&
@@ -414,6 +453,7 @@ export async function refreshSessionCatalogsLive(params: {
     if (!revisionIsCurrent()) {
       return;
     }
+    live.resetRetry();
     params.applyFinal(
       catalogs,
       new Set([...params.catalogs(), ...catalogs].map((catalog) => catalog.id)),
@@ -425,8 +465,11 @@ export async function refreshSessionCatalogsLive(params: {
   } catch (error) {
     // A transient refresh failure must not collapse already visible or expanded pages.
     if (revisionIsCurrent()) {
-      live.warnRequestError(error);
-      params.applyError(error);
+      retryDelayMs = live.retryRequest(error);
+      if (retryDelayMs === null) {
+        live.warnRequestError(error);
+        params.applyError(error);
+      }
     }
   } finally {
     live.endRefetch(refetchOwner);
@@ -437,13 +480,15 @@ export async function refreshSessionCatalogsLive(params: {
     if (ownsRequest && requestIsCurrent() && params.connected()) {
       const pending = live.refreshPending;
       live.refreshPending = false;
-      const interval = params.catalogChangedEvents
-        ? SESSION_CATALOG_SAFETY_REFRESH_MS
-        : SESSION_CATALOG_STABLE_REFRESH_MS;
+      const interval =
+        retryDelayMs ??
+        (params.catalogChangedEvents
+          ? SESSION_CATALOG_SAFETY_REFRESH_MS
+          : SESSION_CATALOG_STABLE_REFRESH_MS);
       live.schedule(interval, params.connected(), () => {
         void params.refresh();
       });
-      if (pending) {
+      if (pending && retryDelayMs === null) {
         live.scheduleActivation(params.refresh);
       }
     }

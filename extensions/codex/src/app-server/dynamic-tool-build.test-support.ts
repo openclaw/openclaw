@@ -1,4 +1,9 @@
+import fs from "node:fs/promises";
 import type { EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams } from "openclaw/plugin-sdk/agent-harness-runtime";
+import {
+  closeOpenClawAgentDatabasesAsync,
+  closeOpenClawStateDatabaseAsync,
+} from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { vi } from "vitest";
 import { buildDynamicTools } from "./dynamic-tool-build.js";
 import type { createCodexDynamicToolBridge } from "./dynamic-tools.js";
@@ -164,4 +169,18 @@ export function createRuntimeDynamicTool(name: string): RuntimeDynamicToolForTes
       details: {},
     })),
   };
+}
+
+export async function cleanupDynamicToolBuildFixture(
+  tempDir: string,
+  hostCapabilityClosers: Array<() => void>,
+): Promise<void> {
+  for (const close of hostCapabilityClosers.splice(0)) {
+    close();
+  }
+  vi.restoreAllMocks();
+  await closeOpenClawAgentDatabasesAsync();
+  await closeOpenClawStateDatabaseAsync();
+  vi.unstubAllEnvs();
+  await fs.rm(tempDir, { recursive: true, force: true });
 }

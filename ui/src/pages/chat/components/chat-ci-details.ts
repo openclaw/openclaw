@@ -13,6 +13,7 @@ import { icons } from "../../../components/icons.ts";
 import { t } from "../../../i18n/index.ts";
 import { registerChatCiEnglish } from "../../../i18n/locales/en-chat-ci.ts";
 import { formatDurationCompact } from "../../../lib/format-duration.ts";
+import { formatUiError } from "../../../lib/format-error.ts";
 import { createGatewayConnectionLifecycle } from "../../../lib/gateway-connection-lifecycle.ts";
 import { resolveSafeExternalUrl } from "../../../lib/open-external-url.ts";
 import { OpenClawLightDomElement } from "../../../lit/openclaw-element.ts";
@@ -91,7 +92,7 @@ export class ChatCiDetailsElement extends OpenClawLightDomElement {
   @property({ type: Boolean }) presented = true;
   @reactiveState() private loading = false;
   @reactiveState() private result?: ControlUiSessionPullRequestCheckDetails;
-  @reactiveState() private failed = false;
+  @reactiveState() private error: string | null = null;
 
   private disclosure: HTMLDetailsElement | null = null;
   private stopGateway?: () => void;
@@ -178,7 +179,7 @@ export class ChatCiDetailsElement extends OpenClawLightDomElement {
       if (
         this.visible &&
         !this.loading &&
-        (changed.has("presented") || (!this.result && !this.failed))
+        (changed.has("presented") || (!this.result && !this.error))
       ) {
         void this.load();
       }
@@ -197,7 +198,7 @@ export class ChatCiDetailsElement extends OpenClawLightDomElement {
   private reset(): void {
     this.cancelRequest();
     this.result = undefined;
-    this.failed = false;
+    this.error = null;
     this.retryAt = 0;
     this.expandedJobs.clear();
     this.expansionInitialized = false;
@@ -234,7 +235,7 @@ export class ChatCiDetailsElement extends OpenClawLightDomElement {
     const gateway = this.gateway;
     const scope = this.connection.capture();
     if (!scope || !gateway || !pr?.headSha || !this.sessionKey) {
-      this.failed = true;
+      this.error = t("chat.pullRequests.checksUnavailable");
       return;
     }
     clearTimeout(this.refreshTimer);
@@ -245,7 +246,7 @@ export class ChatCiDetailsElement extends OpenClawLightDomElement {
     const controller = new AbortController();
     this.requestController = controller;
     this.loading = true;
-    this.failed = false;
+    this.error = null;
     const current = () =>
       this.visible &&
       generation === this.requestGeneration &&
@@ -278,7 +279,7 @@ export class ChatCiDetailsElement extends OpenClawLightDomElement {
         result.headSha !== pr.headSha
       ) {
         this.result = undefined;
-        this.failed = true;
+        this.error = t("chat.pullRequests.checksUnavailable");
         return;
       }
       this.result = result;
@@ -306,11 +307,11 @@ export class ChatCiDetailsElement extends OpenClawLightDomElement {
         // summary counts. Poll only the visible monitor, even after completion.
         this.refreshTimer = setTimeout(() => void this.load(), REFRESH_MS);
       }
-    } catch {
+    } catch (error) {
       if (current()) {
         // Only explicit stale responses authorize retaining previous details.
         this.result = undefined;
-        this.failed = true;
+        this.error = formatUiError(error, t("chat.pullRequests.checksUnavailable"));
       }
     } finally {
       if (current()) {
@@ -332,7 +333,7 @@ export class ChatCiDetailsElement extends OpenClawLightDomElement {
     const result = this.result;
     const limited = result?.rateLimited;
     const stale = result?.status === "stale";
-    const unavailable = this.failed || result?.status === "unavailable";
+    const unavailable = this.error || result?.status === "unavailable";
     const incomplete = Boolean(result?.error);
     if (this.loading && !result) {
       return html`<div class="chat-ci__notice" role="status">
@@ -350,11 +351,12 @@ export class ChatCiDetailsElement extends OpenClawLightDomElement {
     >
       <span
         >${
-          limited
+          this.error ??
+          (limited
             ? t("chat.pullRequests.checksRateLimited")
             : stale
               ? t("chat.pullRequests.checksStale")
-              : t("chat.pullRequests.checksUnavailable")
+              : t("chat.pullRequests.checksUnavailable"))
         }
         ${retryWait > 0 ? t("chat.pullRequests.checksRetryAfter", { duration: formatDurationCompact(retryWait) ?? "" }) : nothing}
       </span>

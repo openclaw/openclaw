@@ -54,7 +54,10 @@ function titleParams(name: string) {
   };
 }
 
-function sourceStages(context: AsyncLocalStorage<string>, unwindFailure?: Error) {
+function sourceStages(
+  context: AsyncLocalStorage<string>,
+  unwindFailure?: { after: Promise<void>; error: Error },
+) {
   const entered: string[] = [];
   const closed: string[] = [];
   const asserted: string[] = [];
@@ -74,7 +77,8 @@ function sourceStages(context: AsyncLocalStorage<string>, unwindFailure?: Error)
           },
         });
         if (unwindFailure) {
-          throw unwindFailure;
+          await unwindFailure.after;
+          throw unwindFailure.error;
         }
         return result;
       } finally {
@@ -270,7 +274,8 @@ describe("worktree title source lifecycle", () => {
     const context = new AsyncLocalStorage<string>();
     const owner = new AsyncWorkScope();
     const failure = new Error("source scope unwind failed");
-    const source = sourceStages(context, failure);
+    const generationAcquired = createDeferredCore();
+    const source = sourceStages(context, { after: generationAcquired.promise, error: failure });
     const cleanupStarted = createDeferredCore();
     const finishCleanup = createDeferredCore();
     const events: string[] = [];
@@ -300,6 +305,7 @@ describe("worktree title source lifecycle", () => {
             events.push("cleanup-finished");
           },
         });
+        generationAcquired.resolve();
         events.push("logical-result");
         return "Unpublished title";
       });
@@ -342,6 +348,7 @@ describe("worktree title source lifecycle", () => {
       expect(events.indexOf("cleanup-finished")).toBeLessThan(events.indexOf("rejected"));
       expect(current).toEqual(baseEntry);
     } finally {
+      generationAcquired.resolve();
       finishCleanup.resolve();
       await outcome;
       await owner.drain();

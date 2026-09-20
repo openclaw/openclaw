@@ -59,6 +59,7 @@ type ProviderControls = {
   embeddedQueryTexts: string[];
   embedBatchCalls: number;
   embeddedBatchTexts: string[];
+  embedBatchPermanentFailure: Error | null;
   embedBatchInputCalls: number;
   embeddedBatchInputs: EmbeddingInput[][];
   providerRuntimeBatchCalls: string[][];
@@ -123,6 +124,7 @@ const providerState = vi.hoisted(() => ({
   embeddedQueryTexts: [] as string[],
   embedBatchCalls: 0,
   embeddedBatchTexts: [] as string[],
+  embedBatchPermanentFailure: null as Error | null,
   embedBatchInputCalls: 0,
   embeddedBatchInputs: [] as EmbeddingInput[][],
   providerRuntimeBatchCalls: [] as string[][],
@@ -298,6 +300,9 @@ vi.mock("./embeddings.js", async (importOriginal) => {
                   return embedText(input.text);
                 });
               }
+            }
+            if (providerState.embedBatchPermanentFailure !== null) {
+              throw providerState.embedBatchPermanentFailure;
             }
             const texts = inputs.map((input) => (typeof input === "string" ? input : input.text));
             providerState.embedBatchCalls += 1;
@@ -539,6 +544,7 @@ export function createManagerIndexFixture(deps: {
     providerState.embeddedQueryTexts = [];
     providerState.embedBatchCalls = 0;
     providerState.embeddedBatchTexts = [];
+    providerState.embedBatchPermanentFailure = null;
     providerState.embedBatchInputCalls = 0;
     providerState.embeddedBatchInputs = [];
     providerState.providerRuntimeBatchCalls = [];

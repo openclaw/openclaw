@@ -455,6 +455,7 @@ The `linkReader` fields are:
 | `pathPattern`   | An anchored JavaScript Unicode regular expression, at most 1,024 characters, matched against the URL pathname. Installed plugin code owns the pattern; keep it simple and predictable. |
 | `detailMethod`  | Same-plugin read method receiving `{ url, refresh? }` and returning a `ControlUiLinkReaderDocument`.                                                                                   |
 | `previewMethod` | Optional same-plugin read method receiving `{ url }` and returning a `ControlUiLinkReaderPreview` for hover or keyboard focus. Omit it for URLs that should not fetch previews.        |
+| `imageMethod`   | Optional same-plugin read method receiving `{ url }` and returning `{ url, dataUrl }` for inline images.                                                                               |
 
 Method names are bounded to 128 characters. Credentials in URLs and non-HTTPS
 URLs are never intercepted. A descriptor is a routing hint, not authorization
@@ -468,10 +469,32 @@ optional comments and changed-file patches, totals, and explicit partial or
 truncated flags. Comment IDs and source links, review context labels, and badge
 text come from the plugin rather than service-specific conditions in core.
 `filesExpanded` optionally selects the initial file-diff view. Badge tones are
-`neutral`, `positive`, `negative`, `attention`, and `accent`.
+`neutral`, `positive`, `negative`, `attention`, and `accent`. Metadata entries may
+include `tone: "positive" | "negative"` to emphasize their values with the theme’s
+green/red colors in previews and the reader. Omit `tone` for neutral values; the
+host does not infer it from labels or signed numbers. Use an empty metadata label
+for a compact value-only preview, and return a fuller metadata list in the detail
+document when needed.
+
+`authorUrl` optionally links the primary author to an HTTPS profile on the source
+origin. `coAuthors` carries a bounded list of `{ name, imageUrl? }` entries, with
+`coAuthorCount` for the total when not all names are included. Hovercards show up
+to three available portraits and a `+N` remainder; missing portraits remain in
+that count. Failed images retain initials without dropping an author. Names are
+also available to assistive technology and in the full reader. Author images
+keep the preview’s anonymous-image rules; these are not Gateway user identities.
 
 Return only bounded data appropriate for the caller. Rendered content cannot
 activate embedded app widgets, script, file actions, or code execution. Inline
-remote images use anonymous CORS and no referrer; unsupported images retain an
-external link. Use an explicit error response for unavailable content so the UI
-can offer retry and the original URL.
+remote images use anonymous CORS and no referrer unless the reader declares
+`imageMethod`. That method resolves images through the plugin when the source
+does not support browser CORS. It must validate the source and every redirect,
+bound response size and time, and return the requested URL with a canonical
+base64 raster image data URL; SVG and HTML are not supported. Do not forward
+browser cookies or service credentials to image hosts. The host displays the
+validated image data without executing remote content. The host accepts PNG, JPEG, GIF, and WebP data up to
+2 MiB per image, queues at most four concurrent requests, and limits each
+document resolver to 32 unique images and 8 MiB of encoded image data. Images
+the resolver cannot serve retain the original anonymous-CORS path. If that also
+fails, they retain an external link. Use an explicit error response for unavailable content
+so the UI can offer retry and the original URL.

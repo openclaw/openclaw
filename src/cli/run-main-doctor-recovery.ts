@@ -48,12 +48,9 @@ export async function prepareDoctorBootstrapRecovery<T>(
     nonInteractive: hasFlag(argv, "--non-interactive"),
   });
   return runWithPreparedDoctorUpdateRecovery(async () => {
-    const [{ guardUpdateDoctorSchemaUpgrade }, { defaultRuntime }] = await Promise.all([
-      import("../commands/doctor-update-schema-guard.js"),
-      import("../runtime.js"),
-    ]);
+    const { guardUpdateDoctorSchemaUpgrade } =
+      await import("../commands/doctor-update-schema-guard.js");
     const preflight = await guardUpdateDoctorSchemaUpgrade({
-      runtime: defaultRuntime,
       json,
     });
     return run(preflight);

@@ -1,6 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as snapshots from "../../infra/sqlite-snapshot-source.js";
-import * as sourceHandle from "../../infra/sqlite-source-handle.js";
 import * as identity from "../../infra/sqlite-worker-identity.js";
 import * as coordinator from "../../infra/state-database-coordinator.js";
 import { createDeferredCore } from "../../shared/deferred.js";
@@ -48,9 +47,6 @@ beforeEach(() => {
   });
   vi.spyOn(coordinator, "prepareStateDatabaseCanonicalMutation").mockReturnValue(undefined);
   vi.spyOn(coordinator, "prepareStateDatabaseSourceExclusion").mockReturnValue(undefined);
-  vi.spyOn(sourceHandle, "withSqliteSourceHandleAsync").mockImplementation(async (_, operation) =>
-    operation(),
-  );
   child.read.mockReset().mockResolvedValue(rows);
 });
 

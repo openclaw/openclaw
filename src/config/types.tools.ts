@@ -53,10 +53,6 @@ export type MediaUnderstandingConfig = Omit<SchemaAudioConfig, "scope" | "reques
   request?: ConfiguredProviderRequest;
   /** Ordered model list (fallbacks in order). */
   models?: MediaUnderstandingModelConfig[];
-  /** Internal request-scoped prompt override injected by CLI/runtime wrappers. */
-  _requestPromptOverride?: string;
-  /** Internal request-scoped language override injected by CLI/runtime wrappers. */
-  _requestLanguageOverride?: string;
 };
 
 /** Per-capability defaults and policy. Models live only in tools.media.models. */

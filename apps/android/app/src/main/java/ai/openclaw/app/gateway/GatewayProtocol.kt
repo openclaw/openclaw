@@ -964,6 +964,10 @@ enum class GatewayMethod(
   SessionsSetInvolvement("sessions.setInvolvement"),
   TranscriptsSummarize("transcripts.summarize"),
   ControlUiLinkPreview("controlUi.linkPreview"),
+  ThemesList("themes.list"),
+  ThemesGet("themes.get"),
+  ThemesSet("themes.set"),
+  ThemesImport("themes.import"),
 }
 
 enum class GatewayEvent(

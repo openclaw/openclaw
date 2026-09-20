@@ -554,6 +554,7 @@ export class WorkerTaskPool<Input, Output> {
     task.runInContext(() => task.controller.abort());
     clearTimeout(task.timer);
     task.options.signal?.removeEventListener("abort", task.abort);
+    let executionNotified = false;
     // SAFETY: Only a validated successful reply reaches finish without an error and supplies Output.
     const complete = () =>
       task.runInContext(() => {
@@ -573,6 +574,14 @@ export class WorkerTaskPool<Input, Output> {
           release?.();
         } catch (releaseError) {
           completionError ??= toErrorObject(releaseError, "worker input release failed");
+        }
+        try {
+          if (!executionNotified) {
+            executionNotified = true;
+            task.options.onExecutionSettled?.({ retired: retire });
+          }
+        } catch (settlementError) {
+          completionError ??= toErrorObject(settlementError, "worker settlement receipt failed");
         }
         const permit = task.computePermit;
         task.computePermit = undefined;

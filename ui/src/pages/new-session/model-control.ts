@@ -34,9 +34,11 @@ import {
   type ChatModelCatalogState,
 } from "../chat/components/chat-model-controls.ts";
 import { CatalogTargetDiscovery } from "./catalog-target.ts";
-import { draftCloudProfileSupportsExecutionMode, type DraftCloudProfile } from "./discovery.ts";
+import type { DraftCloudProfile } from "./discovery.ts";
 import {
   reconcileDraftModelSelection,
+  resolveDraftDevicePlacementUnsupportedReason,
+  resolveDraftCloudRuntimeUnsupportedReason,
   resolveDraftAgentRuntime,
   resolveDraftContextWindowTarget,
   resolveDraftModelTarget,
@@ -526,10 +528,7 @@ export class NewSessionModelControl {
   }
 
   devicePlacementUnsupportedReason(): string | undefined {
-    const runtime = this.resolveAgentRuntime();
-    return runtime && !runtime.devicePlacement
-      ? t("newSession.deviceRuntimeUnsupported")
-      : undefined;
+    return resolveDraftDevicePlacementUnsupportedReason(this.resolveAgentRuntime());
   }
 
   // Worker-turn runtimes rank automatic placement by free worker slots;
@@ -542,16 +541,7 @@ export class NewSessionModelControl {
   }
 
   cloudRuntimeUnsupportedReason(profile?: DraftCloudProfile): string | undefined {
-    const runtime = this.resolveAgentRuntime();
-    if (runtime?.cloudPlacementSupported === false) {
-      return t("newSession.cloudRuntimeUnsupported", { runtime: runtime.id });
-    }
-    return runtime &&
-      profile &&
-      runtime.cloudPlacementExecutionMode &&
-      !draftCloudProfileSupportsExecutionMode(profile, runtime.cloudPlacementExecutionMode)
-      ? t("newSession.cloudProfileRuntimeUnsupported", { runtime: runtime.id })
-      : undefined;
+    return resolveDraftCloudRuntimeUnsupportedReason(this.resolveAgentRuntime(), profile);
   }
 
   render(options: {

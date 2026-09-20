@@ -32,7 +32,7 @@ function recordedPullRequest(number: number) {
   return {
     context: "openclaw/ci-gate",
     description: `PR #${number}: Checking security review`,
-    state: "failure",
+    state: "pending",
     creator: { login: "github-actions[bot]", type: "Bot" },
   };
 }
@@ -163,7 +163,7 @@ describe("automatic security review event resolution", () => {
           hadOutput: false,
           body: {
             context: "openclaw/ci-gate",
-            state: "failure",
+            state: "pending",
             description: "PR #42: Review scheduled; CI and security review have not completed",
             target_url: "https://github.com/openclaw/openclaw/actions/runs/789",
           },
@@ -172,7 +172,7 @@ describe("automatic security review event resolution", () => {
     },
   );
 
-  it("does not schedule a review job when its initial failure cannot be recorded", () => {
+  it("does not schedule a review job when its initial pending status cannot be recorded", () => {
     const result = evaluate({
       eventName: "pull_request_target",
       event: { action: "opened", pull_request: { number: 42 } },
@@ -246,13 +246,13 @@ describe("automatic security review event resolution", () => {
       {
         path: `${prefix}/statuses/${nextHead}`,
         description: "PR #42: Review scheduled; CI and security review have not completed",
-        state: "failure",
+        state: "pending",
         hadOutput: false,
       },
       {
         path: `${prefix}/statuses/${head}`,
         description: "PR #43: Review scheduled; CI and security review have not completed",
-        state: "failure",
+        state: "pending",
         hadOutput: false,
       },
     ]);
@@ -325,7 +325,7 @@ describe("automatic security review event resolution", () => {
     ).toMatchObject({
       status: 0,
       matrix: { include: [{ pr: 42, head }] },
-      published: [{ body: { context: "openclaw/ci-gate", state: "failure" } }],
+      published: [{ body: { context: "openclaw/ci-gate", state: "pending" } }],
     });
   });
 
@@ -380,7 +380,7 @@ describe("automatic security review event resolution", () => {
       ]);
       expect(result.requests.slice(0, -1).every((request) => request.method === "GET")).toBe(true);
       expect(result.published).toHaveLength(1);
-      expect(result.published[0]?.body?.state).toBe("failure");
+      expect(result.published[0]?.body?.state).toBe("pending");
     },
   );
 

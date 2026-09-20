@@ -98,16 +98,10 @@ export function readTranscriptSessionMatches(
   };
   const entries = (selection: typeof query) =>
     executeSqliteQuerySync(database, selection).rows.map(matchedEntry);
-  const canonical = executeSqliteQueryTakeFirstSync(
-    database,
-    meetingTranscriptDb(database)
-      .selectFrom("meeting_transcript_sessions")
-      .selectAll()
-      .where("selector", "=", value),
-  );
+  const canonical = entries(query.where("selector", "=", value))[0];
   const date = value.match(/^(\d{4}-\d{2}-\d{2})\//u)?.[1];
   const qualified = canonical
-    ? [matchedEntry(canonical)]
+    ? [canonical]
     : date
       ? entries(
           query.where("session_id", "=", value.slice(11)).where("started_at", "like", `${date}T%`),

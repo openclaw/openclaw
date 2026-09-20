@@ -1,5 +1,6 @@
 import type { GatewaySessionRow } from "../api/types.ts";
 import { t } from "../i18n/index.ts";
+import { registerNewSessionSetupEnglish } from "../i18n/locales/en-new-session-setup.ts";
 import type { ChatAttachment } from "../lib/chat/chat-types.ts";
 import { formatUiError } from "../lib/format-error.ts";
 import {
@@ -28,6 +29,8 @@ import {
   type ApplicationPlacementStartupRuntime,
   type ApplicationPlacementStartupDependencies,
 } from "./session-placement-startup.ts";
+
+registerNewSessionSetupEnglish();
 
 type PlacementStartupPhase = NonNullable<
   ReturnType<ApplicationPlacementStartupRuntime["get"]>

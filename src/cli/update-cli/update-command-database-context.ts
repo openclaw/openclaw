@@ -24,14 +24,17 @@ export async function inspectUpdateDatabaseContexts(params: {
   invocationCwd?: string;
   legacyConfigPlan?: LegacyConfigUpdatePlan;
   managedServiceRootRedirect: ManagedServiceRootRedirect | null;
+  managedServiceRoot?: string;
   expectedServices?: ReadonlyMap<string, PreManagedServiceStop>;
 }) {
   return await withCommandProcessScope(async () => {
     let service: PreManagedServiceStop | undefined;
     const services = new Map<string, PreManagedServiceStop>();
-    for (const root of new Set(params.roots)) {
+    const serviceRoots = params.managedServiceRoot ? [params.managedServiceRoot] : params.roots;
+    for (const root of new Set(serviceRoots)) {
       const inspected = await maybeStopManagedServiceBeforeMutableUpdate({
         root,
+        handoffRoot: params.managedServiceRoot ? params.roots[0] : undefined,
         updateInstallKind: params.updateInstallKind,
         shouldRestart: params.shouldRestart,
         jsonMode: params.jsonMode,
@@ -56,6 +59,16 @@ export async function inspectUpdateDatabaseContexts(params: {
           { failureFacts: collectServiceInspectionFailureFacts(inspected.serviceUpdateVerdict) },
         );
       }
+      if (
+        params.managedServiceRoot &&
+        (inspected.serviceUpdateVerdict?.kind !== "owned" ||
+          !inspected.serviceUpdateVerdict.refreshDefinition)
+      ) {
+        throw new UpdatePreMutationError(
+          "managed-service-preflight",
+          "The Gateway cannot be rebound from its current installation: its owned service definition must be writable before this update can align it with the CLI.",
+        );
+      }
       services.set(root, inspected);
       if (inspected.serviceUpdateVerdict?.kind === "owned") {
         service = inspected;
@@ -68,7 +81,7 @@ export async function inspectUpdateDatabaseContexts(params: {
       invocationCwd: params.invocationCwd,
       legacyConfigPlan: params.legacyConfigPlan,
     });
-    if (params.managedServiceRootRedirect && !managed) {
+    if ((params.managedServiceRootRedirect || params.managedServiceRoot) && !managed) {
       throw new UpdatePreMutationError(
         "managed-service-preflight",
         "The managed Gateway service changed before database admission. Retry so its package root and state can be inspected together.",

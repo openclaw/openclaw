@@ -1,4 +1,5 @@
 import type { WorkerTaskPool } from "openclaw/plugin-sdk/process-runtime";
+import { codexCatalogPageWorkerEntrypoint } from "../../catalog-page-worker-entrypoint.js";
 import type { CodexCatalogPreviewCache } from "../session-catalog-native-projection.js";
 import {
   projectCodexCatalogMessage,
@@ -85,12 +86,7 @@ export class CodexCatalogWorker {
         return undefined;
       }
       this.pool = new WorkerTaskPool<CodexCatalogDecodeInput, CodexCatalogDecodeResult>({
-        workerUrl: resolveRuntimeWorkerUrl({
-          currentModuleUrl: import.meta.url,
-          sourceWorkerName: "../../catalog-page.worker",
-          distWorkerPath: "extensions/codex/catalog-page.worker.js",
-          package: { name: "@openclaw/codex", distWorkerPath: "catalog-page.worker.js" },
-        }),
+        workerUrl: resolveRuntimeWorkerUrl(codexCatalogPageWorkerEntrypoint),
         maxWorkers: 1,
         maxPendingTasks: 1,
         // Framing admits one line at a time. Completed native messages have no size cap;

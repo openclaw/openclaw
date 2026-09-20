@@ -429,6 +429,11 @@ describe("session.message websocket events", () => {
     const mainWs = await harness.openWs({ origin: copilotOrigin });
     const otherWs = await harness.openWs();
     const legacyWs = await harness.openWs();
+    let otherReceived = false;
+    const observeOtherChat = (data: RawData) => {
+      const message = requireRecord(JSON.parse(rawDataToString(data)), "gateway message");
+      otherReceived ||= message.type === "event" && message.event === "chat";
+    };
     try {
       const scopedCaps = [GATEWAY_CLIENT_CAPS.SESSION_SCOPED_EVENTS];
       const unpaired = await connectReq(unpairedWs, {
@@ -479,49 +484,43 @@ describe("session.message websocket events", () => {
       await rpcReq(mainWs, "sessions.messages.subscribe", { key: "main" });
       await rpcReq(otherWs, "sessions.messages.subscribe", { key: "other" });
 
-      const mainEvent = onceMessage(
-        mainWs,
-        (message) =>
-          message.type === "event" &&
-          message.event === "chat" &&
-          (message.payload as { sessionKey?: string } | undefined)?.sessionKey ===
-            "agent:main:main",
-      );
-      const legacyEvent = onceMessage(
-        legacyWs,
-        (message) =>
-          message.type === "event" &&
-          message.event === "chat" &&
-          (message.payload as { sessionKey?: string } | undefined)?.sessionKey ===
-            "agent:main:main",
-      );
-      const otherReceived = onceMessage(
-        otherWs,
-        (message) => message.type === "event" && message.event === "chat",
-        300,
-      ).then(
-        () => true,
-        () => false,
+      otherWs.on("message", observeOtherChat);
+      const chatEvents = [mainWs, legacyWs].map((ws) =>
+        onceMessage(
+          ws,
+          (message) =>
+            message.type === "event" &&
+            message.event === "chat" &&
+            (message.payload as { sessionKey?: string } | undefined)?.sessionKey ===
+              "agent:main:main",
+        ),
       );
 
-      const send = await rpcReq(mainWs, "chat.send", {
-        sessionKey: "main",
-        message: "/status",
-        toolBindings: {
-          browser: {
-            kind: "tab",
-            tabId: 7,
-            target: "host",
-            profile: "chrome",
-            targetId: "target-7",
+      const [send, ...delivered] = await Promise.all([
+        rpcReq(mainWs, "chat.send", {
+          sessionKey: "main",
+          message: "/status",
+          toolBindings: {
+            browser: {
+              kind: "tab",
+              tabId: 7,
+              target: "host",
+              profile: "chrome",
+              targetId: "target-7",
+            },
           },
-        },
-        idempotencyKey: "scoped-delivery-proof",
-      });
+          idempotencyKey: "scoped-delivery-proof",
+        }),
+        ...chatEvents,
+      ]);
       expect(send.ok, JSON.stringify(send)).toBe(true);
-      await expect(Promise.all([mainEvent, legacyEvent])).resolves.toHaveLength(2);
-      await expect(otherReceived).resolves.toBe(false);
+      expect(delivered).toHaveLength(2);
+      // Reasserting existing membership replies after any chat frame already queued on this socket.
+      const barrier = rpcReq(otherWs, "sessions.messages.subscribe", { key: "other" });
+      await expect(barrier).resolves.toMatchObject({ ok: true });
+      expect(otherReceived).toBe(false);
     } finally {
+      otherWs.off("message", observeOtherChat);
       unpairedWs.close();
       pairingWs.close();
       wrongOriginWs.close();

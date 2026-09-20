@@ -5,11 +5,13 @@ import path from "node:path";
 import { WorkerTaskError } from "../../infra/worker-task-pool.js";
 import type { NodeWorkspaceTransferInvalidReason } from "../../worker/node-workspace-transfer-protocol.js";
 import { nodeWorkspaceTransferEntryPath } from "./node-workspace-transfer-snapshot.js";
-import { MAX_WORKSPACE_MANIFEST_BYTES } from "./workspace-inventory-limits.js";
+import {
+  MAX_WORKSPACE_INVENTORY_ENTRIES,
+  MAX_WORKSPACE_MANIFEST_BYTES,
+} from "./workspace-inventory-limits.js";
 import { decodeWorkspaceManifest } from "./workspace-manifest-worker.js";
 import {
   MAX_RECONCILIATION_TOTAL_BYTES,
-  MAX_RECONCILIATION_ENTRIES,
   type WorkerWorkspaceManifest,
   type WorkerWorkspaceManifestEntry,
 } from "./workspace-manifest.js";
@@ -19,7 +21,7 @@ import { workerWorkspaceTransferPaths } from "./workspace-result-staging.js";
 const MAX_UPLOAD_BYTES =
   MAX_WORKSPACE_MANIFEST_BYTES * 2 +
   MAX_RECONCILIATION_TOTAL_BYTES +
-  MAX_RECONCILIATION_ENTRIES * 8 +
+  MAX_WORKSPACE_INVENTORY_ENTRIES * 8 +
   8;
 export class NodeWorkspaceTransferLimitError extends Error {
   readonly code = "workspace-transfer-limit";

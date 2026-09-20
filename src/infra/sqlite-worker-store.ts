@@ -115,6 +115,15 @@ export function isSqliteWorkerStoreAvailable(store: object): boolean {
   return resolveSqliteWorkerBroker().isAvailable(store);
 }
 
+/** Internal identity for the existing canonical actor, never a transferable authority. */
+export function getSqliteWorkerActorIdentity(store: object): object {
+  return resolveSqliteWorkerBroker().getActorIdentity(store);
+}
+
+export function retireSqliteWorkerActor(identity: object): Promise<void> {
+  return withCallerErrors(resolveSqliteWorkerBroker().retireActor(identity));
+}
+
 /** Recorded orphan custody at its original shared-state opening path. */
 export function hasUnclaimedSharedStateSqliteCleanup(databasePath: string): boolean {
   return resolveSqliteWorkerBroker().hasUnclaimedSharedStateCleanup(databasePath);

@@ -52,7 +52,7 @@ beforeEach(() => vi.stubGlobal("sessionStorage", createStorageMock()));
 afterEach(() => vi.unstubAllGlobals());
 
 describe("outbox submission handoff", () => {
-  function admittedSubmission() {
+  function admittedSubmission(options = { inline: true, isCurrent: () => true }) {
     const host = { ...state, hello: null, chatQueue: new Array<ChatQueueItem>() };
     expect(
       admitStoredChatComposerQueueItem(host, captureChatOutboxAdmission(host, host.sessionKey), {
@@ -67,10 +67,26 @@ describe("outbox submission handoff", () => {
     ).toBe(true);
     const stored = listStoredChatOutboxes(host)[0]!.queue[0]!;
     const owner = chatOutboxOwner(host);
-    const submission = owner.beginSubmission(host, stored.id);
+    const submission = owner.beginSubmission(host, stored.id, options);
     expect(submission).toBeDefined();
     return { host, stored, owner, submission: submission! };
   }
+
+  it("holds a queued foreground row only while its captured owner is current", () => {
+    let current = true;
+    const { host, stored, owner, submission } = admittedSubmission({
+      inline: false,
+      isCurrent: () => current,
+    });
+    const scope = listStoredChatOutboxes(host)[0]!;
+    expect(owner.hasPendingSubmission(scope, stored)).toBe(true);
+    expect(readQueuedMessageById(host, stored.id)).toEqual(stored);
+    current = false;
+    expect(owner.hasPendingSubmission(scope, stored)).toBe(false);
+    expect(listStoredChatOutboxes(host)[0]?.queue).toEqual([stored]);
+    submission.release();
+    expect(readQueuedMessageById(host, stored.id)).toEqual(stored);
+  });
 
   it("retains unsent durable custody and preserves delivery that advances before release", () => {
     const { host, stored, submission } = admittedSubmission();

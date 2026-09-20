@@ -142,11 +142,14 @@ export async function listGatewayEnvironments(
   const connectedNodes = context.nodeRegistry.listConnectedForPairingStates(
     projectPairedDeviceNodeBindings(visibleDevices),
   );
-  const runtimeState = collectNodeCatalogRuntimeState(context.nodeRegistry, connectedNodes);
+  const placement = runtimeId ? resolveWorkerPlacementCapabilities(runtimeId) : undefined;
+  const runtimeState = collectNodeCatalogRuntimeState(
+    context.nodeRegistry,
+    connectedNodes,
+    placement?.executionMode === "worker-turn",
+  );
   const connectedNodesById = new Map(connectedNodes.map((node) => [node.nodeId, node]));
-  const requiredCommands = runtimeId
-    ? (resolveWorkerPlacementCapabilities(runtimeId).devicePlacement?.requiredNodeCommands ?? [])
-    : [];
+  const requiredCommands = placement?.devicePlacement?.requiredNodeCommands ?? [];
   const catalog = createKnownNodeCatalog({
     pairedDevices: visibleDevices,
     pairedNodes: nodes.paired.filter((node) => !managedCloudNodeIds.has(node.nodeId)),

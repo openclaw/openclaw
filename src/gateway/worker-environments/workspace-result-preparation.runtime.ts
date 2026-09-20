@@ -1,5 +1,4 @@
-import { ownedWorkerBytes } from "../../infra/worker-transfer-bytes.js";
-import { runTasksWithConcurrency } from "../../utils/run-with-concurrency.js";
+import fs from "node:fs/promises";
 import { readWorkspaceFileContentsWithLimit } from "./workspace-actual-manifest.js";
 import { parseChangedWorkspaceResult } from "./workspace-manifest-comparison.js";
 import type { WorkspaceManifestComputationOperations } from "./workspace-manifest-computation.js";
@@ -55,7 +54,7 @@ function quoteFastImportPath(entryPath: string): string {
 
 export async function buildWorkspaceStageInput(
   params: WorkspaceManifestComputationOperations["workspace.manifest.stage-input"]["input"],
-): Promise<Uint8Array> {
+): Promise<null> {
   const stagedResultRef = requireWorkerResultStorageRef(params.stagedResultRef);
   const compared = parseChangedWorkspaceResult(
     parseWorkerWorkspaceManifest(
@@ -78,61 +77,69 @@ export async function buildWorkspaceStageInput(
   // The authenticated manifests define the complete result. The durable tree
   // stores only changed resulting blobs; deletions intentionally have no blob.
   const entries = compared.entries.toSorted((left, right) => left.path.localeCompare(right.path));
-  const prepared = await runTasksWithConcurrency({
-    tasks: entries.map((entry, index) => async () => {
+  const input = await fs.open(params.inputPath, "wx", 0o600);
+  try {
+    for (const [index, entry] of entries.entries()) {
       const source = localPath(params.stagingRoot, entry.path);
+      let content: Uint8Array;
       if (entry.type === "symlink") {
         if (!(await absoluteEntryMatches(source, entry))) {
           throw new Error(`Cloud workspace staged payload is invalid: ${entry.path}`);
         }
-        return { entry, mark: index + 1, content: Buffer.from(entry.target) };
+        content = Buffer.from(entry.target);
+      } else {
+        const snapshot = await readWorkspaceFileContentsWithLimit(source, entry.size).catch(
+          (error: unknown) => {
+            throw new Error(`Cloud workspace staged payload is invalid: ${entry.path}`, {
+              cause: error,
+            });
+          },
+        );
+        if (
+          snapshot.type !== "file" ||
+          snapshot.size !== entry.size ||
+          snapshot.mode !== entry.mode ||
+          snapshot.sha256 !== entry.sha256
+        ) {
+          throw new Error(`Cloud workspace staged payload is invalid: ${entry.path}`);
+        }
+        content = snapshot.content;
       }
-      const snapshot = await readWorkspaceFileContentsWithLimit(source, entry.size).catch(
-        (error: unknown) => {
-          throw new Error(`Cloud workspace staged payload is invalid: ${entry.path}`, {
-            cause: error,
-          });
-        },
+      await input.writeFile(
+        Buffer.concat([
+          Buffer.from(`blob\nmark :${index + 1}\ndata ${content.byteLength}\n`),
+          content,
+          Buffer.from("\n"),
+        ]),
       );
-      if (
-        snapshot.type !== "file" ||
-        snapshot.size !== entry.size ||
-        snapshot.mode !== entry.mode ||
-        snapshot.sha256 !== entry.sha256
-      ) {
-        throw new Error(`Cloud workspace staged payload is invalid: ${entry.path}`);
-      }
-      return { entry, mark: index + 1, content: snapshot.content };
-    }),
-    limit: 4,
-    errorMode: "stop",
-  });
-  if (prepared.hasError) {
-    throw prepared.firstError;
-  }
-  const blobs = prepared.results;
-  const message = stagedResultMessage(params);
-  const chunks: Uint8Array[] = [];
-  for (const blob of blobs) {
-    chunks.push(Buffer.from(`blob\nmark :${blob.mark}\ndata ${blob.content.byteLength}\n`));
-    chunks.push(blob.content, Buffer.from("\n"));
-  }
-  chunks.push(
-    Buffer.from(
+    }
+    const message = stagedResultMessage(params);
+    await input.writeFile(
       `commit ${stagedResultRef}\nauthor OpenClaw <openclaw@localhost> 0 +0000\ncommitter OpenClaw <openclaw@localhost> 0 +0000\ndata ${message.byteLength}\n`,
-    ),
-    ...message.chunks,
-    Buffer.from("\ndeleteall\n"),
-  );
-  for (const blob of blobs) {
-    const mode =
-      blob.entry.type === "symlink"
-        ? "120000"
-        : (blob.entry.mode & 0o111) !== 0
-          ? "100755"
-          : "100644";
-    chunks.push(Buffer.from(`M ${mode} :${blob.mark} ${quoteFastImportPath(blob.entry.path)}\n`));
+    );
+    for (const chunk of message.chunks) {
+      await input.writeFile(chunk);
+    }
+    await input.writeFile("\ndeleteall\n");
+    for (let offset = 0; offset < entries.length; offset += 256) {
+      await input.writeFile(
+        entries
+          .slice(offset, offset + 256)
+          .map((entry, index) => {
+            const mode =
+              entry.type === "symlink"
+                ? "120000"
+                : (entry.mode & 0o111) !== 0
+                  ? "100755"
+                  : "100644";
+            return `M ${mode} :${offset + index + 1} ${quoteFastImportPath(entry.path)}\n`;
+          })
+          .join(""),
+      );
+    }
+    await input.writeFile("done\n");
+  } finally {
+    await input.close();
   }
-  chunks.push(Buffer.from("done\n"));
-  return ownedWorkerBytes(Buffer.concat(chunks));
+  return null;
 }

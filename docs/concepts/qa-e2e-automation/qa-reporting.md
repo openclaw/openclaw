@@ -108,6 +108,8 @@ extensionless files and unknown suffixes; the complete kind label is preserved.
 own Markdown table cells, collapsing whitespace for display. The JSON summary
 preserves the annotation values, including internal line breaks.
 
+For JSONL replay lanes, every transcript must report a nonnegative integer user-turn count, with matching numbers of drift entries and results for both runtimes. Missing or mismatched evidence is classified as `unknown`, so both strict confidence modes reject it. Zero-turn transcripts are allowed alongside complete replayed turns; a report with no replayed user turns remains unknown.
+
 Treat coverage output as a discovery aid, not a gate replacement; the
 selected scenario still needs the right provider mode, live transport,
 Multipass, Testbox, or release lane for the behavior under test. For

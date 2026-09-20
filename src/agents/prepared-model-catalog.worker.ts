@@ -2,6 +2,7 @@
 import { parentPort, workerData } from "node:worker_threads";
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { withClawInstallSchemaVersionFacts } from "../claws/provenance-runtime-read.js";
 import {
   copyConfigResolutionFacts,
   restoreConfigResolutionFacts,
@@ -173,6 +174,16 @@ export async function runPreparedModelCatalogWorkerRequest(
   value: PreparedModelCatalogWorkerInput,
   request: PreparedModelWorkerRequest,
   prepareGeneration = () => prepareWorkerGeneration(value),
+): Promise<PreparedModelWorkerResult> {
+  return withClawInstallSchemaVersionFacts(request.clawInstallSchemaVersions, () =>
+    runCatalogRequest(value, request, prepareGeneration),
+  );
+}
+
+async function runCatalogRequest(
+  value: PreparedModelCatalogWorkerInput,
+  request: PreparedModelWorkerRequest,
+  prepareGeneration: () => ReturnType<typeof prepareWorkerGeneration>,
 ): Promise<PreparedModelWorkerResult> {
   const directoryOwner = value.input.agentId
     ? { agentId: value.input.agentId, agentDir: value.input.agentDir, env: value.input.env }
@@ -366,7 +377,11 @@ export async function runPreparedModelCatalogWorkerRequest(
       ...credentials,
     };
     const runtimeModels = new Map<string, Model[]>();
-    for (const model of facts.templateModelRegistry.getAll()) {
+    // Lazy normalization must keep provider hooks on the selected catalog generation.
+    const catalogModels = withPluginRuntimeGenerationScope(pluginGenerationScope, () =>
+      facts.templateModelRegistry.getAll(),
+    );
+    for (const model of catalogModels) {
       const provider = normalizeProviderId(model.provider);
       const models = runtimeModels.get(provider) ?? [];
       models.push(model);
@@ -425,6 +440,9 @@ function isWorkerRequest(value: unknown): value is PreparedModelWorkerRequest {
   return (
     isRecord(value) &&
     Array.isArray(value.syntheticAuth) &&
+    isRecord(value.clawInstallSchemaVersions) &&
+    typeof value.clawInstallSchemaVersions.path === "string" &&
+    isRecord(value.clawInstallSchemaVersions.snapshot) &&
     ((value.kind === "catalog" &&
       (value.providerIds === undefined ||
         (Array.isArray(value.providerIds) &&

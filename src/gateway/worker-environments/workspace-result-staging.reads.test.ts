@@ -135,8 +135,10 @@ it.each([
             }
           }
         }
-        expect(materialized.filter((target) => target.startsWith(stagingRoot + path.sep))).toEqual(
-          snapshot.changedEntries.map((entry) => path.join(stagingRoot, entry.path)),
+        expect(
+          materialized.filter((target) => target.startsWith(stagingRoot + path.sep)).toSorted(),
+        ).toEqual(
+          snapshot.changedEntries.map((entry) => path.join(stagingRoot, entry.path)).toSorted(),
         );
       },
     );

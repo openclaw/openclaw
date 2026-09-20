@@ -23,6 +23,7 @@ import {
   admitUpdateCommandRun,
   prepareUpdateCommand,
   resolveUpdateCommandAdmissionEnv,
+  resolveUpdateCommandAdmissionRoot,
 } from "./update-command-run.js";
 import { maybeStopManagedServiceBeforeMutableUpdate } from "./update-command-service-maintenance.js";
 import { GatewayServiceUpdateOwnershipError } from "./update-command-service-plan.js";
@@ -107,7 +108,12 @@ it.each(
         return;
       }
       const prepared = await prepareUpdateCommand({ dryRun: true });
-      const root = prepared.servicePlan?.rootRedirect?.root ?? prepared.discoveredRoot;
+      const root = resolveUpdateCommandAdmissionRoot(prepared);
+      expect(prepared.discoveredRoot).toBe(callerRoot);
+      expect(prepared.servicePlan?.rootRedirect).toBeNull();
+      expect(prepared.servicePlan?.serviceRoot).toBe(
+        outcome === "unavailable" ? undefined : serviceRoot,
+      );
       const env = await resolveUpdateCommandAdmissionEnv({ root, opts: {} });
       expect(root).toBe(outcome === "unavailable" ? callerRoot : serviceRoot);
       expect(env.OPENCLAW_STATE_DIR).toBe(outcome === "unavailable" ? callerState : serviceState);

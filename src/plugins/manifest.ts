@@ -13,6 +13,7 @@ import { normalizeConfigGroups } from "./manifest-config-groups.js";
 import * as modelProviderNormalizers from "./manifest-model-provider-normalizers.js";
 import { normalizeManifestPlatforms } from "./manifest-platforms.js";
 import * as setupNormalizers from "./manifest-setup-normalizers.js";
+import { normalizeManifestThemes } from "./manifest-themes.js";
 import type {
   PluginManifestBackupResource,
   PluginManifestDoctorContract,
@@ -329,12 +330,22 @@ export function loadPluginManifest(
     });
   }
 
+  const themesResult = normalizeManifestThemes(raw.themes, id);
+  if (!themesResult.ok) {
+    return cacheResult({
+      ok: false,
+      error: `invalid plugin manifest themes: ${themesResult.error}`,
+      manifestPath,
+    });
+  }
+
   return cacheResult({
     ok: true,
     manifest: {
       ...manifestBeforeDashboard,
       dashboard: dashboardResult.dashboard,
       controlUi: controlUiResult.value,
+      themes: themesResult.themes,
       mcpServers: capabilityNormalizers.normalizeManifestMcpServers(raw.mcpServers),
       skills: normalizeTrimmedStringList(raw.skills),
       name: normalizeOptionalString(raw.name),
@@ -344,6 +355,10 @@ export function loadPluginManifest(
       uiHints: setupNormalizers.normalizeConfigUiHints(raw.uiHints),
       configGroups: normalizeConfigGroups(raw.configGroups, configSchema),
       contracts,
+      decisionModels: capabilityNormalizers.normalizeManifestDecisionModels(
+        raw.decisionModels,
+        contracts?.decisionProviders,
+      ),
       transcriptSources: capabilityNormalizers.normalizeManifestTranscriptSources(
         raw.transcriptSources,
         contracts?.transcriptSourceProviders,

@@ -1,7 +1,7 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
 import type { TasksHistoryResult } from "../../../packages/gateway-protocol/src/index.js";
-import { createDeferred } from "../../../test/helpers/promise.js";
+import { createDeferred, withTestTimeout } from "../../../test/helpers/promise.js";
 import { registerAgentHarness } from "../../agents/harness/registry.js";
 import type { AgentHarness } from "../../agents/harness/types.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
@@ -12,18 +12,23 @@ import {
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { emitAgentEvent } from "../../infra/agent-events.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import {
   captureActivePluginRegistrySnapshot,
   restoreActivePluginRegistrySnapshot,
   setActivePluginRegistry,
 } from "../../plugins/runtime.js";
+import { getActiveGatewayRootWorkCount } from "../../process/gateway-work-admission.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
-import { markTaskTerminalById } from "../../tasks/runtime-internal.js";
+import { markTaskTerminalById, recordTaskProgressByRunId } from "../../tasks/runtime-internal.js";
+import { createRunningTaskRunCoreWithReceiptAsync } from "../../tasks/task-executor-create.async.js";
+import { getTaskRegistryStore } from "../../tasks/task-registry.store.js";
 import {
   createTaskFixture,
   resetTaskRegistryForTests,
 } from "../../tasks/task-registry.test-support.js";
+import { resetTaskFlowRegistryForTests } from "../../tasks/task-runtime.test-helpers.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { loadGatewaySessionEntryReadOnly } from "../session-utils.js";
 import { createHistoryReadContext } from "./chat-history.test-helpers.js";
@@ -94,6 +99,120 @@ async function createRequester(actorId: string, incognito = false) {
 }
 
 describe("tasks.history", () => {
+  it.each(["progress", "history identity"] as const)(
+    "checks current history while a committed %s result is held",
+    async (change) => {
+      await withHistoryState(async () => {
+        const entered = createDeferred();
+        const history = createDeferred();
+        const committed = createDeferred();
+        const release = createDeferred();
+        registerHistoryReader(async ({ assertCurrent }) => {
+          entered.resolve();
+          await history.promise;
+          assertCurrent();
+          return { messages: [{ role: "assistant", content: "Held task output" }] };
+        });
+        const task = createNativeTask(`history-held-${change}`);
+        const pending = runTaskHandler("tasks.history", { taskId: task.taskId });
+        const store = getTaskRegistryStore();
+        let mutation: Promise<unknown> | undefined;
+        try {
+          await entered.promise;
+          if (change === "progress") {
+            const mutate = store.runAgentEventMutationAsync.bind(store);
+            vi.spyOn(store, "runAgentEventMutationAsync").mockImplementation(async (...args) => {
+              const result = await mutate(...args);
+              committed.resolve();
+              await release.promise;
+              return result;
+            });
+            emitAgentEvent({
+              runId: task.runId!,
+              stream: "tool",
+              data: { phase: "start", name: "progress" },
+            });
+          } else {
+            const read = store.loadMutationSnapshotAsync.bind(store);
+            let held = false;
+            vi.spyOn(store, "loadMutationSnapshotAsync").mockImplementation(async (...args) => {
+              const result = await read(...args);
+              if (!held && args[1]?.runId === task.runId) {
+                held = true;
+                committed.resolve();
+                await release.promise;
+              }
+              return result;
+            });
+            mutation = createRunningTaskRunCoreWithReceiptAsync({
+              runtime: task.runtime,
+              runId: task.runId!,
+              task: task.task,
+              taskKind: task.taskKind,
+              ownerKey: task.ownerKey,
+              scopeKind: task.scopeKind,
+              requesterSessionKey: task.requesterSessionKey,
+              requesterAgentId: task.requesterAgentId,
+              agentId: task.agentId,
+              deliveryStatus: task.deliveryStatus,
+              notifyPolicy: "silent",
+              detail: { historyGeneration: "replacement" },
+            });
+          }
+          await withTestTimeout(
+            committed.promise,
+            5_000,
+            "Task mutation did not reach its held result",
+          );
+          history.resolve();
+          const result = await withTestTimeout(pending, 5_000, "History joined a later mutation");
+          if (change === "progress") {
+            expect(result.calls[0]?.[0]).toBe(true);
+            expect(result.payload?.messages).toEqual([
+              { role: "assistant", content: "Held task output" },
+            ]);
+          } else {
+            expect(result.calls[0]).toMatchObject([false, undefined, { code: "UNAVAILABLE" }]);
+            expect(result.payload?.messages).toBeUndefined();
+          }
+        } finally {
+          history.resolve();
+          release.resolve();
+          await pending;
+          await mutation;
+          await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
+          resetTaskFlowRegistryForTests({ persist: false });
+        }
+      });
+    },
+  );
+
+  it("keeps live history authority across ordinary task progress", async () => {
+    await withHistoryState(async () => {
+      const entered = createDeferred();
+      const release = createDeferred();
+      registerHistoryReader(async ({ assertCurrent }) => {
+        entered.resolve();
+        await release.promise;
+        assertCurrent();
+        return { messages: [{ role: "assistant", content: "Current task output" }] };
+      });
+      const task = createNativeTask("history-progress");
+      const request = runTaskHandler("tasks.history", { taskId: task.taskId });
+      try {
+        await entered.promise;
+        recordTaskProgressByRunId({ runId: task.runId!, progressSummary: "Ordinary progress" });
+      } finally {
+        release.resolve();
+      }
+      const result = await request;
+      expect(result.calls[0]?.[0]).toBe(true);
+      expect(result.payload?.messages).toEqual([
+        { role: "assistant", content: "Current task output" },
+      ]);
+    });
+  });
+
   it("reads and pages a registered harness transcript without a child session", async () => {
     await withHistoryState(async () => {
       const older = { role: "user", content: "Inspect the files" };

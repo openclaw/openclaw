@@ -8,7 +8,7 @@ import {
   PROVIDER_POST_DISPATCH_AMBIGUITY_ERROR_CODE,
   type AssistantMessage,
 } from "../types.js";
-import { isRetryableAssistantError } from "./retry.js";
+import { isRetryableAssistantError, isTerminalAssistantError } from "./retry.js";
 
 function errorMessage(message: string): AssistantMessage {
   return {
@@ -25,6 +25,18 @@ function errorMessage(message: string): AssistantMessage {
 }
 
 describe("isRetryableAssistantError", () => {
+  it.each([undefined, "{}", "invalid", '{"retrySafe":false}'])(
+    "does not reclassify an identity conflict without safe-retry evidence: %s",
+    (errorBody) => {
+      const message = {
+        ...errorMessage("Responses stream changed output item identity; connection reset"),
+        errorCode: "responses_output_identity_conflict",
+        errorBody,
+      };
+      expect(isTerminalAssistantError(message)).toBe(true);
+      expect(isRetryableAssistantError(message)).toBe(false);
+    },
+  );
   it("freezes one retry decision for every failover corpus row", () => {
     expect(Object.keys(failoverRetryExpectations).toSorted()).toEqual(
       failoverClassificationCorpus.map((row) => row.id).toSorted(),

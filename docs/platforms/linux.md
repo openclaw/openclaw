@@ -190,6 +190,20 @@ variables are not copied into the service.
 
 ### Host sleep
 
+Choose **Keep computer awake** in the native tray menu to prevent idle sleep
+while the desktop companion is running, including when its windows are closed.
+The setting is off by default and remembers your choice across app restarts.
+Turning it off or quitting OpenClaw releases the keep-awake request. It does not
+change your permanent power settings or unlock the computer. If the operating
+system cannot honor a saved request, the menu marks the checked preference
+**inactive** and reports the error. You can still uncheck it to turn the saved
+preference off.
+
+Linux uses GNOME’s session manager or an xdg-desktop-portal backend that supports
+idle inhibition. Depending on the desktop, this can also prevent display dimming and automatic
+locking; manual locking remains available. The optional macOS and Windows Tauri
+builds prevent system idle sleep without requesting that the display stay on.
+
 On systems with systemd-logind, the companion prepares a suspension lease for
 its local Gateway before the host sleeps. After wake, it reconnects and resumes
 the Gateway; remote Gateway routes are left untouched. If logind or the system

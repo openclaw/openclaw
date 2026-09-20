@@ -263,6 +263,10 @@ suite.define(() => {
       async ({ page, context }) => {
         await installChatLoadingReadinessObserver(page);
         await page.addInitScript(() => {
+          window.localStorage.setItem(
+            "openclaw:control-ui:community-invite",
+            JSON.stringify({ dismissedAtMs: 1770000000000 }),
+          );
           const sample: BrowserPerformanceSample = {
             lcpMs: null,
             cls: 0,
@@ -541,7 +545,16 @@ suite.define(() => {
             )
             .toEqual({ loadingOlder: false, historyIntentConsumed: false });
         await thread.hover();
+        const profiler = captureUiProof ? await context.newCDPSession(page) : undefined;
+        if (profiler) {
+          await profiler.send("Profiler.enable");
+          await profiler.send("Profiler.start");
+        }
+        const paginationStartedAt = Date.now();
+        const performanceBeforePagination = await readPerformanceSample(page);
         let loadedMessages = await loadedMessageCount();
+        const initialLoadedMessages = loadedMessages;
+        let olderPageCommits = 0;
         while (loadedMessages < transcriptLength) {
           await waitForHistoryGesture();
           await thread.evaluate((element) => {
@@ -550,6 +563,7 @@ suite.define(() => {
           await page.mouse.wheel(0, -500);
           await expect.poll(loadedMessageCount).toBeGreaterThan(loadedMessages);
           loadedMessages = await loadedMessageCount();
+          olderPageCommits += 1;
           expect(loadedMessages).toBeLessThanOrEqual(transcriptLength);
         }
         await expect
@@ -564,6 +578,23 @@ suite.define(() => {
           )
           .toBe(true);
         expect(loadedMessages).toBe(transcriptLength);
+        const paginationLoadedMs = Date.now() - paginationStartedAt;
+        await selectedPane.evaluate(async (element) => {
+          await (element as HTMLElement & { updateComplete: Promise<boolean> }).updateComplete;
+          await new Promise<void>((resolve) => {
+            requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+          });
+        });
+        const paginationRenderedMs = Date.now() - paginationStartedAt;
+        const performanceAfterPagination = await readPerformanceSample(page);
+        if (profiler) {
+          const { profile } = await profiler.send("Profiler.stop");
+          await writeFile(
+            path.join(artifactDir, "history-pagination.cpuprofile"),
+            JSON.stringify(profile),
+          );
+          await profiler.detach();
+        }
         expect(
           await selectedPane.evaluate((element) =>
             (
@@ -593,11 +624,6 @@ suite.define(() => {
             metric.sessionKey === selectedKey &&
             (metric.offset ?? 0) > 0,
         );
-        expect(olderPages.length).toBeGreaterThan(1);
-        for (const metric of olderPages) {
-          expect(metric).toMatchObject({ limit: 1000, maxBytes: 512 * 1024 });
-          expect(metric.historyBytes).toBeLessThanOrEqual(512 * 1024);
-        }
         const captureNarrowReload = async (stage: string, homeOpen: boolean) => {
           await page.setViewportSize({ width: 1050, height: 900 });
           const requestStart = rpc.length;
@@ -675,6 +701,12 @@ suite.define(() => {
               startup: startupMetrics,
               startupIdentity,
               pagination: paginationMetrics,
+              paginationLoadedMs,
+              paginationRenderedMs,
+              initialLoadedMessages,
+              olderPageCommits,
+              performanceBeforePagination,
+              performanceAfterPagination,
               narrowHomeOpen,
               narrowHomeClosed,
               images,
@@ -688,6 +720,7 @@ suite.define(() => {
         );
 
         // Save measurements before asserting budgets so failures retain their evidence.
+        expect(olderPages).toHaveLength(1);
         const selectedStartup = startupMetrics.find(
           (metric) => metric.method === "chat.startup" && metric.sessionKey === selectedKey,
         );

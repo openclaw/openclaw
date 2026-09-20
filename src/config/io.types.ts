@@ -28,7 +28,10 @@ export const configWritePostCommitRollback = Symbol("configWritePostCommitRollba
 export const configWritePostCommitCapture = Symbol("configWritePostCommitCapture");
 
 export type InternalConfigWriteResult = ConfigWriteResult & {
-  [configWritePostCommitRollback]?: (assertCurrent: () => void) => void;
+  [configWritePostCommitRollback]?: {
+    restoreFile: (assertCurrent: () => void) => Promise<boolean>;
+    restoreEffects: (assertCurrent: () => void) => void;
+  };
 };
 
 export type ConfigWriteAuditOrigin =

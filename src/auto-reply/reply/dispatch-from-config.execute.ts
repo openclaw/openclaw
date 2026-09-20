@@ -8,7 +8,12 @@ import { settleProgressVisibilityCallbackResult } from "../../channels/progress-
 import { normalizeAgentPlanSteps } from "../../channels/streaming.js";
 import { logVerbose } from "../../globals.js";
 import { formatErrorMessage } from "../../infra/errors.js";
-import { isCommandReplyForDelivery, readAskUserQuestionId } from "../reply-payload.js";
+import { registerReplyDispatcherSettledTask } from "../dispatch-dispatcher.js";
+import {
+  getReplyPayloadMetadata,
+  isCommandReplyForDelivery,
+  readAskUserQuestionId,
+} from "../reply-payload.js";
 import { buildTerminalAgentRunFailureReplyPayload } from "./agent-runner-failure-reply.js";
 import { takeCommandSessionMetadataChanges } from "./command-session-metadata.js";
 import { runWithDispatchAbortSignal } from "./dispatch-from-config.abort.js";
@@ -71,7 +76,6 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
     params.configOverride ? undefined : state.preparedReplyDispatchRuntime,
     state.replyResolver,
   );
-  let deliberateSilentTerminalReply = false;
   let pendingContinuation = false;
   let pendingContinuationSettlement: PendingContinuationSettlement | undefined;
   const releasePendingContinuation = async () => {
@@ -114,8 +118,8 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
       await runWithDispatchAbortSignal(
         getDispatchAbortSignal(),
         () =>
-          state.traceReplyPhase("reply.run_reply_resolver", () =>
-            replyResolver(
+          state.traceReplyPhase("reply.run_reply_resolver", async () => {
+            const result = await replyResolver(
               ctx,
               {
                 ...state.getReplyOptions(),
@@ -125,9 +129,6 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
                 ...state.sourceReplyDeliveryRuntimeOptions,
                 ...({
                   mediaNormalizationOwner: state.isInternalWebchatTurn ? "gateway" : undefined,
-                  onDeliberateSilentTerminalReply: () => {
-                    deliberateSilentTerminalReply = true;
-                  },
                   onPendingContinuation: (settlement) => {
                     pendingContinuation = true;
                     pendingContinuationSettlement ??= settlement;
@@ -436,8 +437,22 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
               state.preparedReplyDispatchRuntime && !params.configOverride
                 ? undefined
                 : replyConfig,
-            ),
-          ),
+            );
+            // Register before finalization can fail. Queue admission is not
+            // delivery: adapters may adopt until the dispatcher drains.
+            for (const reply of Array.isArray(result) ? result : result ? [result] : []) {
+              const continuation = getReplyPayloadMetadata(reply)?.progressContinuation;
+              if (continuation) {
+                if (isDispatchOperationAborted()) {
+                  // The resolver may finish after its caller's abort race settled.
+                  continuation.close();
+                } else {
+                  registerReplyDispatcherSettledTask(dispatcher, continuation.close);
+                }
+              }
+            }
+            return result;
+          }),
         trackDispatchLifecycleWork,
       ).then(
         async (result) => {
@@ -466,16 +481,16 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
       // Adoption retires ingress replay before the model starts. A progress ACK
       // cannot settle a later failure; use normal final delivery and its policy.
       return adopted &&
-        state.noVisibleReplyFallbackDirected &&
+        state.replyOperationRunState.replyCompletion?.expectation === "required" &&
+        state.replyOperationRunState.replyCompletion.outcome !== "blocked" &&
         !state.suppressDelivery &&
         !state.getObservedReplyDelivery()
         ? { text: GENERIC_EXTERNAL_RUN_FAILURE_TEXT, isError: true }
         : undefined;
     }
     return buildTerminalAgentRunFailureReplyPayload({
+      replyExpectation: state.replyOperationRunState.replyCompletion?.expectation ?? "required",
       visibleReplyDelivered: true,
-      sessionCtx: ctx,
-      cfg: replyConfig,
     });
   });
   try {
@@ -508,7 +523,6 @@ export async function executeDispatch(state: PrepareDispatchExecutionReadyState)
       return acpTailResult;
     }
     const nextState = extendPreparedDispatchState(state, {
-      deliberateSilentTerminalReply,
       pendingContinuation,
       pendingContinuationSettlement,
       replyResult,

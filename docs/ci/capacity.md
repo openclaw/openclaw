@@ -122,6 +122,59 @@ The previous thirteen-serial-shard layout consumed 4,258 job-seconds in successf
 
 Canonical-repo CI keeps Blacksmith as the default runner path for pushes and first-attempt same-repo pull-request runs when the backend is unset or `blacksmith`. Hybrid keeps the heavy set plus the named critical-path plateau lanes on Blacksmith for attempt 1; other light lanes and every rerun Blacksmith lane use GitHub-hosted capacity. Pull-request retries of both UI E2E jobs use GitHub-hosted Ubuntu in every mode; push retries remain on their normal backend unless hybrid fallback applies. Manual `workflow_dispatch` and non-canonical repository runs use GitHub-hosted runners for the main test/build lanes. With an unset or `blacksmith` backend, ordinary canonical manual dispatches (`release_gate: false`) can still run the seven `check-shard` rows on their Blacksmith matrix runners; release-gate check rows remain hosted. Same-repo hybrid Full Release Validation sends only frozen-candidate lint to its matrix runner, both for exact main-ancestor SHAs without a release context and for canonical release-context candidates. These manual admissions are outside the main/PR arrival estimate above. The [`github` backend](/ci/runners#runner-backend-modes) provides a manual repository-wide fallback; canonical runs do not probe Blacksmith queue health or mutate the variable automatically.
 
+## Vitest worker sizing
+
+Current serial self-hosted Node jobs sample the shared worker scheduler after
+runtime preparation. Hosts with fewer than eight available CPUs or less than
+24 GiB retain the workflow's existing CPU-based ceiling. Hosted runners, frozen
+targets, and overlapping plans also retain their existing ceilings. Interactive
+local scheduling is unchanged.
+
+| Requested Blacksmith class | Observed CPUs / RAM | Serial job ceiling with headroom | Overlapping child ceiling |
+| -------------------------- | ------------------- | -------------------------------: | ------------------------: |
+| 4 / 8                      | 2 / 7.66 GiB        |                                2 |                         2 |
+| 16                         | 4 / 15.42 GiB       |                                3 |                         2 |
+| 32                         | 8 / 30.95 GiB       |                                8 |                         2 |
+
+Group pins can lower these ceilings. Only the measured `agentic-gateway-core-2`
+family loses its two-worker compact pin on Blacksmith and hybrid profiles;
+GitHub-hosted planning and other timing-sensitive groups retain it. Gateway
+plans still run exclusively. When core-2 shares a serial bin, its unproven
+siblings retain their two-worker caps at group scope.
+
+The [September 19 probe](https://github.com/openclaw/openclaw/actions/runs/35441442486)
+ran two predefined samples per cell on eight CPUs, 30.95 GiB, and Node 24.19.0.
+All twelve samples passed. Single-plan cells ran all 293 core-2 files; two-plan
+cells also ran the complete core-1 group concurrently through a disposable
+probe-only admission exception. Production Gateway exclusivity remains intact.
+The default resolved to three workers.
+
+|     Workers | Plans | Wall seconds, both samples | Peak summed RSS | Peak process RSS |
+| ----------: | ----: | -------------------------- | --------------: | ---------------: |
+| 3 (default) |     1 | 313.0 / 288.8              |        5.92 GiB |         5.63 GiB |
+|           6 |     1 | 248.5 / 239.7              |        8.49 GiB |         8.12 GiB |
+|           8 |     1 | 252.5 / 254.5              |       10.08 GiB |         9.69 GiB |
+| 3 (default) |     2 | 364.9 / 347.2              |        9.04 GiB |         5.66 GiB |
+|           6 |     2 | 359.0 / 316.4              |       12.12 GiB |         7.46 GiB |
+|           8 |     2 | 380.0 / 339.6              |       14.71 GiB |         8.59 GiB |
+
+Eight workers reduced the single-plan midpoint by 15.8%; six reduced it by
+18.9%. Eight did not improve the combined two-plan wall, and six was slightly
+faster in both layouts. These two-sample comparisons do not establish a precise
+optimum or a full-workflow speedup. No failures were rerun, and no test assertions
+or deadlines changed.
+
+The CI memory tiers reserve 25% of total capacity for other work. Two copies of
+the worst eight-worker single-plan RSS need `2 × 10.08 = 20.16 GiB`, fitting
+within `28 × 0.75 = 21 GiB`. The six-worker bound is
+`2 × 8.49 = 16.98 GiB`, fitting within `24 × 0.75 = 18 GiB`. Actual overlapping
+RSS already includes both plans and is not multiplied again. This gives six
+workers from 24 to below 28 GiB and eight from 28 through 128 GiB on hosts with
+at least eight CPUs. Larger memory tiers, explicit overrides, the 16-worker cap,
+load backoff, cgroup constraints, and the free-memory limits remain in place.
+At most 8 GiB of free/process-available memory still caps automatic workers at
+two; at most 4 GiB caps them at one. Committed timing weights are unchanged.
+
 ## Owner-path and release coverage
 
 Docker seed and QA Smoke use the same owner-path gates on canonical PRs and
@@ -157,13 +210,22 @@ server-isolated configs run with exclusive plan admission. Cold in-process
 Gateway boot measured 37 seconds alone and 50 seconds under contention against
 a 90-second test budget. Jobs containing these configs execute their packed
 plans serially. Existing bins, summed duration budgets, runner allocations,
-file partitions, and timing keys stay unchanged; formerly parallel jobs retain
-their two-worker ceiling through the job environment. This adds no jobs and
+file partitions, and timing weights stay unchanged; formerly parallel jobs retain
+their two-worker ceiling through the job environment, except measured core-2
+bins whose other groups retain that ceiling individually. This adds no jobs and
 leaves ordinary jobs' concurrency unchanged. The shard runner enforces the same
 config policy even when a caller requests two plans. Precise changed-test
 selection retains the Gateway config owner and its admission metadata.
 Gateway admission is finalized before runtime placement, so inventory changes
 retain the admitted job ceiling instead of creating a different group policy.
+
+Within its exclusive plan, the Gateway database-worker cohort runs files in
+parallel forks under the existing Vitest worker ceiling. Each fork retains the
+non-isolated runner's file-boundary cleanup for native database owners, admission,
+and module state. One worker still runs files serially; the file inventory and
+no-output watchdog are unchanged.
+Shared test port claims cover both child-process startup and in-process listener
+lifetimes, including the handoff before a child binds its socket.
 
 Complete hybrid main and pull-request plans retain their existing jobs and runner
 allocations while admitting measured runtime groups within 440 seconds, including

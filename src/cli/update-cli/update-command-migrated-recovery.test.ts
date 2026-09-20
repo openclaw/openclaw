@@ -28,6 +28,7 @@ vi.mock("../../process/exec.js", async (importOriginal) => ({
   runUtf8CommandWithTimeout: vi.fn(),
 }));
 vi.mock("./update-command-executor.js", () => ({
+  requiresRetainedUpdateCommandOwner: () => false,
   withUpdateCommandExecutorChild: async (
     _fence: UpdateRecoveryFence,
     _root: string,
@@ -156,6 +157,7 @@ function worker(
     | "success",
   parentRecoverySupported = true,
   afterChild?: () => void,
+  definitionRecovery: { unverified?: boolean } | null = {},
 ) {
   vi.mocked(runUtf8CommandWithTimeout).mockImplementation(async (argv, options) => {
     const command = {
@@ -207,6 +209,7 @@ function worker(
         },
         exitCode: outcome === "success" ? 0 : 1,
         executorDelegation: "pid-start-v1",
+        ...(definitionRecovery ? { definitionRecovery } : {}),
         ...(outcome === "success" || !parentRecoverySupported
           ? { terminalRunId: "recovery-run" }
           : { recoveryRequired: true }),
@@ -221,12 +224,13 @@ function worker(
   });
 }
 
-it.each(["failed"] as const)(
-  "restores the retained package and state after the candidate %s and exits",
-  async (outcome) => {
+it.each([{}, { unverified: true }, null] as const)(
+  "preserves candidate service-definition evidence for parent recovery (%j)",
+  async (definitionRecovery) => {
     const params = fixture();
-    worker(outcome);
+    worker("failed", true, undefined, definitionRecovery);
     vi.mocked(rollbackFailedUpdate).mockImplementation(async (input) => {
+      expect(input.definitionRecovery).toEqual(definitionRecovery ?? { unverified: true });
       expect(state.childActive).toBe(false);
       input.opts.run?.executorFence?.assertCurrent();
       expect(input.packageTransaction).toBe(params.packageTransaction);

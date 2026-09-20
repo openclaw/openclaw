@@ -4,6 +4,40 @@ import { en } from "./en.ts";
 // Session setup messages load with their consumers instead of every UI startup.
 const enNewSessionSetup = {
   newSession: {
+    title: en.newSession.title,
+    hint: en.newSession.hint,
+    environments: "Environments",
+    gateway: "Gateway · local",
+    cloudWorkerMachine: "{profile} · {machine}",
+    cloudWorkerOsMachine: "{profile} · {os} · {machine}",
+    cloudWorkerOs: "{profile} · {os}",
+    cloudRuntimeUnsupported: "The {runtime} runtime does not support cloud workers.",
+    cloudProfileRuntimeUnsupported:
+      "The {runtime} runtime cannot use this cloud worker. Choose a compatible cloud worker or run locally.",
+    deviceRuntimeUnsupported: "This runtime does not support paired devices",
+    placementStartFailed: "The session was created, but startup needs attention: {error}",
+    placementStillStarting:
+      "Worker setup is still in progress. Retry to check the existing worker; your message has not been sent.",
+    placementCompletionUnconfirmed:
+      "Could not confirm whether worker setup finished. Retry to check again; your message has not been sent.",
+    placementReloadBlocked: en.newSession.placementReloadBlocked,
+    placementCancelled:
+      "Session setup was interrupted and the temporary session was cleaned up. Your prompt is kept here.",
+    discardUnsavedAndReload: en.newSession.discardUnsavedAndReload,
+    yourDevices: "Your devices",
+    autoDeviceSub: "Least-busy device",
+    autoDeviceSubEligible: "First eligible device",
+    cloud: "Cloud",
+    machine: "Machine",
+    operatingSystem: "Operating system",
+    runsOn: "Runs on {place}",
+    browse: "Browse folders",
+    worktree: "Worktree",
+    checkingGit: "Checking Git availability…",
+    gitCheckUnavailable: "Couldn't verify Git for this folder. Choose it again to retry.",
+    starting: "Starting…",
+    createFailed: "Couldn't create the session.",
+    checkoutCurrentNote: "Works in the selected folder on its current branch.",
     preferenceSaveUnconfirmed:
       "Saving your new-session choices could not be confirmed. Check them before starting a session.",
     worktreeNameClearUnconfirmed:

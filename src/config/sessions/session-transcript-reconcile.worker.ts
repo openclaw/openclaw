@@ -14,13 +14,13 @@ import { closeOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import type { SqliteMutationWorkerCoordination } from "./session-accessor.sqlite-worker-coordination.js";
 import { listSessionsNeedingTranscriptIndexReconcile } from "./session-transcript-index.js";
+import type { TranscriptIndexEntry } from "./session-transcript-projection-append.js";
 import {
   prepareSessionTranscriptProjection,
   prepareMemorySessionTranscriptProjection,
   type SessionTranscriptProjectionRow,
   type PreparedSessionTranscriptProjection,
   type PreparedSessionTranscriptProjectionMetadata,
-  type TranscriptIndexEntry,
 } from "./session-transcript-projection-rebuild.js";
 import type { MemoryTranscriptProjectionFrame } from "./session-transcript-reconcile-memory.js";
 
@@ -265,6 +265,7 @@ async function prepareMemoryProjection(sessionId: string, port: MessagePort) {
         sessionId,
         frame.snapshot.transcriptUpdatedAt,
         rows,
+        frame.snapshot.generation,
       );
       rows.clear();
       return plan;

@@ -1,6 +1,6 @@
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
-import { toUSVString } from "node:util";
+import { isDeepStrictEqual, toUSVString } from "node:util";
 import { err, ok, type Result } from "@openclaw/normalization-core/result";
 import { GATEWAY_OWNER_PROFILE_ID } from "../../packages/gateway-protocol/src/schema/users.js";
 import { executeSqliteQuerySync } from "../infra/kysely-sync.js";
@@ -27,7 +27,8 @@ import {
   selectResolvedUserProfile,
   selectResolvedUserProfileMetadataById,
   normalizeUserProfileAvatarMime,
-  userProfileAvatarPresence,
+  userProfileDisplaySelection,
+  selectProfileDisplayEntries,
   userProfilesDb,
 } from "./user-profiles-internal.js";
 import {
@@ -35,6 +36,7 @@ import {
   UserProfileNotFoundError,
   hasEnsuredUserProfileRoleSchema,
 } from "./user-profiles-schema.js";
+import type { ProfileDisplayRow } from "./user-profiles.types.js";
 
 export function listUserProfilesSync(options: OpenClawStateDatabaseOptions = {}) {
   ensureUserProfilesSchema(options);
@@ -183,29 +185,6 @@ export function readUserProfileAliases(
   return new Set([profileId, ...(readUserProfileIdentity(profileId, options)?.aliases ?? [])]);
 }
 
-const userProfileDisplaySelection = [
-  "id",
-  "display_name",
-  "avatar_mime",
-  "avatar_sha256",
-  "merged_into",
-  "updated_at",
-  userProfileAvatarPresence,
-] as const;
-
-function selectProfileDisplayEntries(db: DatabaseSync, ids?: string[]) {
-  const query = userProfilesDb(db)
-    .selectFrom("user_profiles")
-    .select([
-      ...userProfileDisplaySelection,
-      ...(hasEnsuredUserProfileRoleSchema(db) || tableHasColumn(db, "user_profiles", "role")
-        ? (["role"] as const)
-        : []),
-    ]);
-  const rows = executeSqliteQuerySync(db, ids ? query.where("id", "in", ids) : query).rows;
-  return rows.map((row): [string, typeof row] => [row.id, row]);
-}
-type ProfileDisplayRow = ReturnType<typeof selectProfileDisplayEntries>[number][1];
 function resolveCatalogProfile(rows: Map<string, ProfileDisplayRow>, id: string) {
   const raw = rows.get(id);
   return rows.get(raw?.merged_into ?? id) ?? raw;
@@ -217,6 +196,16 @@ type ProfileCatalog = {
   leases: Set<symbol>;
 };
 const profileCatalogs = new Map<string, ProfileCatalog>();
+type AvatarPublication = {
+  identity: DatabasePathIdentity;
+  profileId: string;
+  witnesses: Map<
+    Map<string, ProfileDisplayRow>,
+    { row: ProfileDisplayRow | undefined; late: boolean }
+  >;
+  catalogs: Map<ProfileCatalog, symbol>;
+};
+const avatarPublications = new Set<AvatarPublication>();
 let stopCatalogEvents: (() => void) | undefined;
 let profileCatalogHandles = new WeakMap<DatabaseSync, Map<string, ProfileDisplayRow>>();
 const profileCatalogPath = (options: OpenClawStateDatabaseOptions) =>
@@ -249,9 +238,96 @@ function loadProfileCatalog(
       shared?.rows ??
       new Map(tableExists(db, "user_profiles") ? selectProfileDisplayEntries(db) : []);
     Object.assign(catalog, { identity, valid: true });
+    for (const publication of avatarPublications) {
+      retainAvatarPublicationCatalog(publication, catalog, true);
+    }
     return true;
   }
   return false;
+}
+
+function retainAvatarPublicationCatalog(
+  publication: AvatarPublication,
+  catalog: ProfileCatalog,
+  late: boolean,
+) {
+  if (!catalog.valid || catalog.identity.key !== publication.identity.key) {
+    return;
+  }
+  if (!publication.catalogs.has(catalog)) {
+    const lease = Symbol("pending avatar publication");
+    publication.catalogs.set(catalog, lease);
+    catalog.leases.add(lease);
+  }
+  if (!publication.witnesses.has(catalog.rows)) {
+    publication.witnesses.set(catalog.rows, { row: catalog.rows.get(publication.profileId), late });
+  }
+}
+
+function releaseProfileCatalog(catalog: ProfileCatalog, lease: symbol) {
+  if (catalog.leases.delete(lease) && catalog.leases.size === 0) {
+    for (const [pathname, current] of profileCatalogs) {
+      if (current === catalog) {
+        profileCatalogs.delete(pathname);
+      }
+    }
+  }
+  if (profileCatalogs.size === 0) {
+    stopCatalogEvents?.();
+    stopCatalogEvents = undefined;
+    profileCatalogHandles = new WeakMap();
+  }
+}
+
+/** Capture under the worker's write transaction; native commits replace these row objects. */
+export function retainUserProfileAvatarPublication(
+  identity: DatabasePathIdentity,
+  before: ProfileDisplayRow,
+) {
+  const profileId = before.id;
+  const publication: AvatarPublication = {
+    identity,
+    profileId,
+    witnesses: new Map(),
+    catalogs: new Map(),
+  };
+  avatarPublications.add(publication);
+  for (const catalog of profileCatalogs.values()) {
+    retainAvatarPublicationCatalog(publication, catalog, false);
+  }
+  return {
+    reconcile(this: void, observed: ProfileDisplayRow | undefined) {
+      let changed = false;
+      for (const catalog of publication.catalogs.keys()) {
+        const witness = publication.witnesses.get(catalog.rows);
+        if (
+          catalog.valid &&
+          catalog.identity.key === identity.key &&
+          witness &&
+          catalog.rows.get(profileId) === witness.row &&
+          (!witness.late || isDeepStrictEqual(witness.row, before)) &&
+          !isDeepStrictEqual(witness.row, observed)
+        ) {
+          if (observed) {
+            catalog.rows.set(profileId, observed);
+          } else {
+            catalog.rows.delete(profileId);
+          }
+          changed = true;
+        }
+      }
+      if (changed || !isDeepStrictEqual(before, observed)) {
+        emitUserProfilesChanged();
+      }
+    },
+    release(this: void) {
+      avatarPublications.delete(publication);
+      for (const [catalog, lease] of publication.catalogs) {
+        releaseProfileCatalog(catalog, lease);
+      }
+      publication.catalogs.clear();
+    },
+  };
 }
 
 /** Retain exact identity and display/navigation facts; physical admission updates every locator before observers. */
@@ -299,16 +375,7 @@ export function retainUserProfileCatalog(options: OpenClawStateDatabaseOptions =
   });
   const lease = Symbol("profile catalog lease");
   catalog.leases.add(lease);
-  return () => {
-    if (catalog.leases.delete(lease) && catalog.leases.size === 0) {
-      profileCatalogs.delete(pathname);
-    }
-    if (profileCatalogs.size === 0) {
-      stopCatalogEvents?.();
-      stopCatalogEvents = undefined;
-      profileCatalogHandles = new WeakMap();
-    }
-  };
+  return () => releaseProfileCatalog(catalog, lease);
 }
 
 /** Stage exact changed keys before commit so observers always see the whole committed catalog. */

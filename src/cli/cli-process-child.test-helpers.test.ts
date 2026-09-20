@@ -203,16 +203,30 @@ describe("runCliProcessChild", () => {
     },
   );
 
-  it.skipIf(process.platform === "win32" || Boolean(process.versions.bun))(
-    "bounds diagnostics when the child's event loop cannot handle the signal",
-    async () => {
-      await expect(
-        runCliProcessChild({
-          nodeArgs: ["-e", "process.stdout.write('blocked'); while (true) {}"],
-          env: process.env,
-          timeoutMs: 500,
-        }),
-      ).rejects.toThrow(/500ms deadlock guard[\s\S]*no response[\s\S]*blocked/u);
+  it.skipIf(process.platform === "win32" || Boolean(process.versions.bun)).each([
+    { label: "busy", block: "while (true) {}", state: "R" },
+    { label: "stopped", block: "process.kill(process.pid, 'SIGSTOP')", state: "T" },
+  ])(
+    "captures OS state when the child is $label and cannot answer signals",
+    async ({ block, state }) => {
+      let pid: number | undefined;
+      const failure = await runCliProcessChild({
+        nodeArgs: ["-e", `process.stdout.write('blocked'); ${block}`],
+        env: process.env,
+        timeoutMs: 500,
+        interact: (child) => {
+          pid = child.pid;
+          child.stdin.end();
+        },
+      }).catch((error: unknown) => error);
+      expect(String(failure)).toMatch(/500ms deadlock guard[\s\S]*no response[\s\S]*blocked/u);
+      expect(String(failure)).toContain(`root pid=${pid}`);
+      expect(String(failure)).toMatch(new RegExp(`"pid":${pid},"ppid":\\d+,"state":"${state}`));
+      if (process.platform === "linux") {
+        expect(String(failure)).toContain(`"tid":${pid}`);
+        expect(String(failure)).toContain('"stack":');
+        expect(String(failure)).toContain('"wchan":');
+      }
     },
   );
 

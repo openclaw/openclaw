@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import type { Stats } from "node:fs";
+import type { BigIntStats, Stats } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 import {
@@ -13,7 +13,6 @@ import {
   publishFileExclusive,
   requireDirectorySync,
   syncDirectoryIfSupported,
-  type DirectoryReceipt,
 } from "./directory-durability.js";
 import { sameFileIdentity } from "./fs-safe-advanced.js";
 
@@ -22,7 +21,7 @@ type BackupArchiveLogger = (message: string) => void;
 export type BackupArchivePublication = {
   canonicalOutputPath: string;
   canonicalParentPath: string;
-  parentReceipt: DirectoryReceipt;
+  parentReceipt: { path: string; realPath: string; identity: BigIntStats };
   pendingCleanupArchives: BackupArchiveCleanupReceipt[];
   requestedOutputPath: string;
   requestedParentPath: string;
@@ -83,7 +82,7 @@ export async function createBackupArchivePublication(
   const requestedOutputPath = path.resolve(outputPath);
   const requestedParentPath = path.dirname(requestedOutputPath);
   const canonicalParentPath = await fs.realpath(requestedParentPath);
-  const parentIdentity = await fs.lstat(canonicalParentPath);
+  const parentIdentity = await fs.lstat(canonicalParentPath, { bigint: true });
   if (!parentIdentity.isDirectory()) {
     throw new Error(`Backup output parent is not a directory: ${requestedParentPath}`);
   }
@@ -199,6 +198,8 @@ export async function publishPreparedBackupArchive(params: {
         sourcePath: prepared.archivePath,
         targetPath: plan.canonicalOutputPath,
         expectedSourceIdentity: prepared.identity,
+        // fs-safe 0.16 guards bigint receipt inputs but declares only numeric Stats.
+        // @ts-expect-error Remove after adopting the declaration fix in openclaw/fs-safe#495.
         parentReceipt: plan.parentReceipt,
         strategy: "link-required",
         onSyncFailure: "preserve",

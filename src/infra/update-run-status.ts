@@ -10,10 +10,9 @@ import {
   LEGACY_UPDATE_RUN_EXPIRED_REASON,
 } from "./update-run-legacy-expiry.js";
 import {
-  UNPROTECTED_GATEWAY_UPDATE_ADVISORY,
   isAcknowledgedAbandonedUpdateRun,
+  UNPROTECTED_GATEWAY_UPDATE_ADVISORY,
 } from "./update-run-record.js";
-
 /** Status heals the bounded legacy defect while other recovery keeps its existing owner. */
 export function readUpdateRunStatus() {
   let runReconciliationError: string | undefined;

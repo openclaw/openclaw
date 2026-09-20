@@ -584,19 +584,21 @@ export async function createVerifiedSqliteSnapshot(
         });
         try {
           source.exec("PRAGMA busy_timeout = 30000; PRAGMA trusted_schema = OFF; BEGIN;");
-          try {
-            // Pin validation and backup together; Node restarts stepped backups on concurrent writes.
-            source.prepare("PRAGMA schema_version;").get();
-            await loadSqliteVecExtension({ db: source });
-            assertSqliteIntegrity(source, options.sourcePath);
-            options.validate?.(source, options.sourcePath);
-            await backupNodeSqliteDatabase(source, stagedPath);
-          } finally {
-            source.exec("ROLLBACK;");
-          }
+          // Pin validation and backup together; Node restarts stepped backups on concurrent writes.
+          source.prepare("PRAGMA schema_version;").get();
+          await loadSqliteVecExtension({ db: source });
+          assertSqliteIntegrity(source, options.sourcePath);
+          options.validate?.(source, options.sourcePath);
+          await backupNodeSqliteDatabase(source, stagedPath);
         } finally {
           if (source.isOpen) {
-            source.close();
+            try {
+              if (source.isTransaction) {
+                source.exec("ROLLBACK;");
+              }
+            } finally {
+              source.close();
+            }
           }
         }
       },

@@ -37,7 +37,6 @@ import {
   mergeAdoptedSessionPullRequestRows,
 } from "./app-sidebar-session-lookup.ts";
 import {
-  applySidebarSessionOwnerFilter,
   buildReconciledSidebarZone,
   buildSidebarSessionNavigationState,
   createSidebarSessionRowsComparator,
@@ -54,6 +53,7 @@ import {
   toggleSidebarSessionSelection,
   type SidebarSessionNavigationState,
 } from "./app-sidebar-session-navigation-logic.ts";
+import { applySidebarSessionOwnerFilter } from "./app-sidebar-session-ownership.ts";
 import { SessionPullRequestIndicatorsController } from "./app-sidebar-session-pr-indicators.ts";
 import {
   SidebarSessionProjection,
@@ -166,7 +166,7 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
   get sessionOwnerFilterActive() {
     return this.sessionOwnerFilter.ownerId !== null;
   }
-  sessionOwnershipVisible = false;
+  sessionOwnershipVisibility = { filters: false, avatars: false };
 
   @state() selectedSessionKeys: ReadonlySet<string> = new Set();
   @state() sessionsGrouping: SidebarSessionsGrouping = loadStoredSidebarSessionsGrouping();
@@ -279,7 +279,7 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
       }
       pending.push(...session.children);
       if (
-        session.childSessionKeys.length > 0 &&
+        (session.childLoadParentKeys?.length ?? 0) > 0 &&
         (session.visuallyActive || this.isSessionChildrenExpanded(session))
       ) {
         for (const key of session.childLoadParentKeys ?? [session.key]) {
@@ -317,7 +317,7 @@ export class AppSidebarSessionNavigationElement extends AppSidebarBase {
     });
     this.sessionOwnerFilter.observeOwnerFacet(ownerFacet !== undefined, result.ownerOptions);
     this.sessionOwnerOptions = result.ownerOptions;
-    this.sessionOwnershipVisible = result.ownershipVisible;
+    this.sessionOwnershipVisibility = result.ownershipVisibility;
     this.activeSessionOwnerId = result.activeOwnerId;
     return result.rows;
   }

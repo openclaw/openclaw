@@ -11,7 +11,6 @@ import {
 import {
   cleanupDrafts,
   createDraftState,
-  prepareAnswerLaneForToolProgress,
   waitForDraftEvents,
 } from "./bot-message-dispatch-draft.js";
 import { createProgressState } from "./bot-message-dispatch-progress.js";
@@ -343,11 +342,7 @@ export const dispatchTelegramMessage = async (
     telegramDeps,
   };
   const draftState = createDraftState(turnConfig);
-  const progressState = createProgressState(
-    turnConfig,
-    draftState,
-    async () => await prepareAnswerLaneForToolProgress(turn),
-  );
+  const progressState = createProgressState(turnConfig, draftState, () => turn);
   const deliveryState = createDeliveryState({ ...turnConfig, lanes: draftState.lanes }, () => turn);
   const turn: TelegramDispatchTurn = {
     ...turnConfig,
@@ -435,8 +430,9 @@ export const dispatchTelegramMessage = async (
     (!suppressFailureFallback || turn.agentRunFailed) &&
     !turn.finalAnswerDelivered &&
     (terminalFailure ||
-      deliverySummary.failedNonSilent > 0 ||
-      (deliverySummary.skippedNonSilent > 0 && !turn.suppressSilentReplyFallback));
+      (!turn.progressContinuationAdopted &&
+        (deliverySummary.failedNonSilent > 0 ||
+          (deliverySummary.skippedNonSilent > 0 && !turn.suppressSilentReplyFallback))));
   if (shouldSendFailureFallback) {
     const fallbackText = terminalFailure
       ? "Something went wrong while processing your request. Please try again."
@@ -473,6 +469,7 @@ export const dispatchTelegramMessage = async (
   const hasFinalResponse =
     turn.finalReplyOutcome === "suppressed" ||
     turn.finalAnswerDelivered ||
+    turn.progressContinuationAdopted ||
     sentFallback ||
     turn.suppressSilentReplyFallback ||
     turn.queuedFinal;
@@ -485,6 +482,7 @@ export const dispatchTelegramMessage = async (
   const deliveryFailureWithoutFinalResponse =
     turn.finalReplyOutcome !== "suppressed" &&
     !turn.finalAnswerDelivered &&
+    !turn.progressContinuationAdopted &&
     (deliverySummary.skippedNonSilent > 0 || deliverySummary.failedNonSilent > 0);
   const retryableDispatchFailure =
     turn.dispatchError ??

@@ -15,7 +15,6 @@ import { SessionTranscriptProjectionUnavailableError } from "../config/sessions/
 import { withStateDatabaseCoordinatorRuntimeDirectory } from "../infra/state-database-coordinator.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { buildRunUserTurnIdempotencyKey } from "../sessions/user-turn-transcript.metadata.js";
-import { readOpenClawAgentDatabaseReadOnly } from "../state/openclaw-agent-db-readonly-open.js";
 import { withScopedOpenClawAgentDatabaseReadOnly } from "../state/openclaw-agent-db-readonly-scope.js";
 import {
   isSubagentCoordinationHistoryInput,
@@ -148,9 +147,7 @@ export function createReadonlySessionHistoryReader(target: PreparedSessionHistor
           // after dispatch. A current entry may name a successor; it never selects this transcript.
           const entryValidationKey = target.entryValidationKey;
           if (entryValidationKey !== undefined) {
-            readOpenClawAgentDatabaseReadOnly(database, (db) =>
-              readSessionEntryRow(db, entryValidationKey),
-            );
+            readSessionEntryRow(database, entryValidationKey);
           }
           return readCurrentProjectionSnapshot(
             database,
@@ -165,7 +162,6 @@ export function createReadonlySessionHistoryReader(target: PreparedSessionHistor
           );
         }),
       target.database,
-      { throwOnMissingTable: true },
     );
     if (!result.found) {
       throw new Error(

@@ -3,9 +3,18 @@ import path from "node:path";
 import { afterAll, beforeAll, expect, test } from "vitest";
 import {
   persistSessionTranscriptTurn,
-  upsertSessionEntryCore,
+  type TranscriptEvent,
 } from "../config/sessions/session-accessor.js";
+import { replaceSessionEntryInDatabase } from "../config/sessions/session-accessor.sqlite-entry-mutation.js";
+import { prepareSessionIdentityPublication } from "../config/sessions/session-accessor.sqlite-identity.js";
+import {
+  resolveSqliteTranscriptScope,
+  toDatabaseOptions,
+} from "../config/sessions/session-accessor.sqlite-scope.js";
+import { appendTranscriptEventsInTransaction } from "../config/sessions/session-accessor.sqlite-transcript-store.js";
+import { createSessionTranscriptHeader } from "../config/sessions/transcript-header.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
+import { runOpenClawAgentWriteTransaction } from "../state/openclaw-agent-db.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -20,19 +29,46 @@ beforeAll(async () => {
   state = await createOpenClawTestState({ label: "title-cache-retention", applyEnv: false });
   storePath = path.join(state.sessionsDir("main"), "sessions.json");
   const scope = { agentId: "main", env: state.env, storePath };
-  for (let index = 0; index < 128; index++) {
+  const transcripts = Array.from({ length: 128 }, (_, index) => {
     const sessionId = `preview-${index}`;
+    const timestamp = new Date().toISOString();
+    const userId = `${sessionId}-user`;
+    const events: TranscriptEvent[] = [
+      createSessionTranscriptHeader({ sessionId, timestamp }),
+      {
+        type: "message",
+        id: userId,
+        parentId: null,
+        timestamp,
+        message: { role: "user", content: index + ": " + "abcdefg ".repeat(32 * 1024) },
+      },
+      {
+        type: "message",
+        id: `${sessionId}-assistant`,
+        parentId: userId,
+        timestamp,
+        message: { role: "assistant", content: "Short reply." },
+      },
+    ];
     const target = { ...scope, sessionId, sessionKey: `agent:main:dashboard:${sessionId}` };
-    await upsertSessionEntryCore(target, { sessionId, updatedAt: 1, displayName: "Named session" });
-    await persistSessionTranscriptTurn(target, {
-      config: {},
-      messages: [
-        { message: { role: "user", content: index + ": " + "abcdefg ".repeat(32 * 1024) } },
-        { message: { role: "assistant", content: "Short reply." } },
-      ],
-      touchSessionEntry: false,
-    });
-  }
+    return {
+      target: resolveSqliteTranscriptScope(target),
+      entry: { sessionId, updatedAt: 1, displayName: "Named session" },
+      events,
+    };
+  });
+  // These sessions are new; appending avoids replacement's scan of existing FTS rows.
+  runOpenClawAgentWriteTransaction((database) => {
+    for (const { target, entry, events } of transcripts) {
+      const { previous, current } = replaceSessionEntryInDatabase(
+        database,
+        target.sessionKey,
+        entry,
+      );
+      appendTranscriptEventsInTransaction(database, target, events);
+      prepareSessionIdentityPublication(database, scope.agentId, previous, current)();
+    }
+  }, toDatabaseOptions(transcripts[0]!.target));
   await persistSessionTranscriptTurn(
     { ...scope, sessionId: "unicode-preview", sessionKey: "agent:main:unicode-preview" },
     {

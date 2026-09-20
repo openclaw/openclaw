@@ -14,13 +14,13 @@ import {
 } from "../../infra/update-run-ledger.js";
 import type { UpdateRunResult } from "../../infra/update-runner.js";
 import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
+import { CommandProcessScopeUnsettledError } from "../../process/exec-spawn.js";
 import { UpdateDoctorProcessUnsettledError } from "./update-command-fresh-doctor.js";
 import {
   UpdateCommandFailure,
   UpdateCommandPendingRecoveryFailure,
 } from "./update-command-result.js";
 import type { WindowsTaskAutoStartRecovery } from "./update-command-windows-task.js";
-
 /** State admission precedes the first reverse package replacement. */
 export async function prepareUpdateRecoveryRollback(
   backup: UpdateRecoveryBackupRef | undefined,
@@ -130,7 +130,9 @@ export function hasUnsettledUpdateProcesses(error: unknown): boolean {
   return (
     hasCommandProcessCleanupError(error) ||
     collectNestedErrorCandidates(error).some(
-      (candidate) => candidate instanceof UpdateDoctorProcessUnsettledError,
+      (candidate) =>
+        candidate instanceof UpdateDoctorProcessUnsettledError ||
+        candidate instanceof CommandProcessScopeUnsettledError,
     )
   );
 }

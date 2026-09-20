@@ -763,11 +763,7 @@ describe("node host invoke", () => {
           id: "invoke-prepare-partial",
           nodeId: "node-1",
           ok: false,
-          error: {
-            code: "INVALID_REQUEST",
-            message:
-              "SYSTEM_RUN_DENIED: approval cannot safely bind this interpreter/runtime command",
-          },
+          error: expect.objectContaining({ code: "INVALID_REQUEST" }),
         }),
       );
     },

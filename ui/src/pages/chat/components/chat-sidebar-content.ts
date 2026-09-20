@@ -258,6 +258,7 @@ type MarkdownSidebarProps = {
   embedSandboxMode?: EmbedSandboxMode;
   allowExternalEmbedUrls?: boolean;
   githubRepo?: MarkdownRenderOptions["githubRepo"];
+  githubRepositories?: MarkdownRenderOptions["githubRepositories"];
   embedded?: boolean;
   onAttachmentUpdate: () => void;
   attachmentRuntime: AttachmentSidebarRuntime;
@@ -271,6 +272,7 @@ function renderMarkdownSidebar(props: MarkdownSidebarProps) {
           codeBlockInteraction: "interactive",
           fileLinks: true,
           githubRepo: props.githubRepo ?? null,
+          githubRepositories: props.githubRepositories,
           interactiveImages: props.onOpenImage !== undefined,
           sessionLinks: true,
         })

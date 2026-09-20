@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import type { EventEmitter } from "node:events";
 import { setImmediate as yieldToEventLoop } from "node:timers/promises";
 import { expectDefined } from "@openclaw/normalization-core/expect";
@@ -248,17 +249,22 @@ describe("worker task retirement failures", () => {
       });
       const inputReleased = vi.fn();
       const responseReleased = vi.fn();
+      const context = new AsyncLocalStorage<string>();
+      const executionSettled = vi.fn(() => context.getStore());
       const responsePosted = createDeferredCore();
-      const result = pool
-        .run("input", {
-          inputBytes: 8,
-          onInputConsumed: inputReleased,
-          onRequest: async () => ({
-            input: "host reply",
-            timeoutMs: 60_000,
-            onConsumed: responseReleased,
+      const result = context
+        .run("admitted", () =>
+          pool.run("input", {
+            inputBytes: 8,
+            onInputConsumed: inputReleased,
+            onExecutionSettled: executionSettled,
+            onRequest: async () => ({
+              input: "host reply",
+              timeoutMs: 60_000,
+              onConsumed: responseReleased,
+            }),
           }),
-        })
+        )
         .catch((error: unknown) => error);
       const worker = expectDefined(workers[0], "task worker");
       worker.postMessage.mockImplementation((message) => {
@@ -291,6 +297,7 @@ describe("worker task retirement failures", () => {
       expect(resolveSessionHistoryUnavailableMessage(failure)).toBeUndefined();
       expect(inputReleased).not.toHaveBeenCalled();
       expect(responseReleased).not.toHaveBeenCalled();
+      expect(executionSettled).not.toHaveBeenCalled();
       expect(pool.getSnapshot().pendingTasks).toBe(1);
       await expect(pool.run("too large", { inputBytes: 3 })).rejects.toMatchObject({
         code: "overloaded",
@@ -312,6 +319,7 @@ describe("worker task retirement failures", () => {
         await terminating.promise;
         expect(inputReleased).not.toHaveBeenCalled();
         expect(responseReleased).not.toHaveBeenCalled();
+        expect(executionSettled).not.toHaveBeenCalled();
         expect(pool.getSnapshot().pendingTasks).toBe(1);
         expect(workers).toHaveLength(1);
       } finally {
@@ -320,6 +328,8 @@ describe("worker task retirement failures", () => {
       }
       expect(inputReleased).toHaveBeenCalledOnce();
       expect(responseReleased).toHaveBeenCalledOnce();
+      expect(executionSettled).toHaveBeenCalledExactlyOnceWith({ retired: true });
+      expect(executionSettled.mock.results[0]?.value).toBe("admitted");
       expect(pool.getSnapshot().pendingTasks).toBe(0);
       expect(await result).toBe(failure);
       const successor = expectDefined(workers[1], "waiting pool worker after exit");
@@ -328,6 +338,7 @@ describe("worker task retirement failures", () => {
       await pool[join]();
       expect(inputReleased).toHaveBeenCalledOnce();
       expect(responseReleased).toHaveBeenCalledOnce();
+      expect(executionSettled).toHaveBeenCalledOnce();
       expect(worker.terminate).toHaveBeenCalledTimes(2);
     },
   );
@@ -360,4 +371,48 @@ describe("worker task retirement failures", () => {
     await rejected;
     expect(released).toHaveBeenCalledOnce();
   });
+
+  it.each(["ok", "failed"] as const)(
+    "reports each native settlement when reusing frozen options after a %s reply",
+    async (outcome) => {
+      const pool = createPool();
+      const order: string[] = [];
+      const executionSettled = vi.fn(({ retired }: { retired: boolean }) => {
+        order.push(`settled:${retired}`);
+      });
+      const options = Object.freeze({ onExecutionSettled: executionSettled });
+      const first = pool.run("first", options).catch((error: unknown) => error);
+      const worker = expectDefined(workers[0], "task worker");
+      const nextPosted = createDeferredCore<{ taskId: number }>();
+      worker.postMessage.mockImplementation((message) => nextPosted.resolve(message));
+      const next = pool
+        .run(() => {
+          order.push("successor");
+          return "next";
+        }, options)
+        .catch((error: unknown) => error);
+      worker.emit(
+        "message",
+        outcome === "ok"
+          ? { status: "ok", taskId: taskId(worker), value: "completed" }
+          : { status: "failed", taskId: taskId(worker), error: "handler failure" },
+      );
+      const result = await first;
+      if (outcome === "ok") {
+        expect(result).toBe("completed");
+      } else {
+        expect(result).toMatchObject({ message: "handler failure", code: "failed" });
+      }
+      expect(executionSettled).toHaveBeenCalledExactlyOnceWith({ retired: false });
+      expect(order).toEqual(["settled:false", "successor"]);
+      expect(workers).toHaveLength(1);
+      expect(worker.terminate).not.toHaveBeenCalled();
+      const message = await nextPosted.promise;
+      worker.emit("message", { status: "ok", taskId: message.taskId, value: "next-completed" });
+      expect(await next).toBe("next-completed");
+      expect(executionSettled).toHaveBeenCalledTimes(2);
+      expect(order).toEqual(["settled:false", "successor", "settled:false"]);
+      expect(options.onExecutionSettled).toBe(executionSettled);
+    },
+  );
 });

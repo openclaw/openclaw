@@ -230,12 +230,11 @@ describe("worker environment service", () => {
           ensureNodeWorkerBundle: async () => structuredClone(support.BOOTSTRAP_RECEIPT),
         },
       );
-      const environment = await workerService.create(
-        "development",
-        "cloud-node-tunnel-gate",
-        undefined,
+      const environment = await workerService.createWithRequest({
+        profileId: "development",
+        idempotencyKey: "cloud-node-tunnel-gate",
         executionMode,
-      );
+      });
       const credential = await workerService.attachSession({
         environmentId: environment.environmentId,
         ownerEpoch: environment.ownerEpoch,
@@ -334,7 +333,10 @@ describe("worker environment service", () => {
         ensureNodeWorkerBundle: async () => structuredClone(support.BOOTSTRAP_RECEIPT),
       },
     );
-    const environment = await workerService.create("development", "device-tunnel-timeout");
+    const environment = await workerService.createWithRequest({
+      profileId: "development",
+      idempotencyKey: "device-tunnel-timeout",
+    });
     const credential = await workerService.attachSession({
       environmentId: environment.environmentId,
       ownerEpoch: environment.ownerEpoch,

@@ -1,7 +1,13 @@
 import { createSqliteLifecycleAggregateError } from "../infra/sqlite-coordinator.js";
+import type { SqliteWorkerNativeSettlementOwner } from "../infra/sqlite-worker-operation-settlement.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
 import type { TaskInitialWorkerOperations } from "./task-initial-worker.types.js";
+import type {
+  TaskAgentEventInput,
+  TaskAgentEventReceipt,
+} from "./task-registry-agent-event.operation.js";
 import type {
   TaskRegistryRestoreResult,
   TaskMirroredFlowSyncOutcome,
@@ -13,10 +19,10 @@ import {
   deleteTaskAndDeliveryStateFromSqlite,
   loadTaskRegistryStateFromSqlite,
   loadTaskRegistryMutationStateFromSqlite,
-  listTaskRegistryRecordsByOwnerKeyFromSqlite,
   upsertTaskWithDeliveryStateToSqlite,
   upsertTaskDeliveryStateToSqlite,
   withTaskRegistrySqliteMutation,
+  settleTaskRegistrySqliteWrites,
 } from "./task-registry.store.sqlite.js";
 import type {
   TaskExecutionRestoreStore,
@@ -31,10 +37,18 @@ import type { TaskDeliveryState, TaskRecord } from "./task-registry.types.js";
 export type { TaskRegistryStoreSnapshot } from "./task-registry.store.types.js";
 
 export type TaskRegistryStore = TaskExecutionRestoreStore & {
+  runAgentEventMutationAsync(
+    context: OpenClawStateWorkerContext,
+    input: TaskAgentEventInput,
+    assertCurrent: () => void,
+    onGranted: (owner: SqliteWorkerNativeSettlementOwner) => void,
+  ): Promise<TaskAgentEventReceipt | null>;
+  settleAgentEventWrites(join: (deadlineMs: number) => void): void;
   runInitialMutationAsync<Key extends keyof TaskInitialWorkerOperations>(
     context: OpenClawStateWorkerContext,
     command: { type: Key; input: TaskInitialWorkerOperations[Key]["input"] },
     assertCurrent: () => void,
+    onGranted?: (owner: SqliteWorkerNativeSettlementOwner) => void,
   ): Promise<TaskInitialWorkerOperations[Key]["output"]>;
   syncLiveTaskFlowAsync(
     context: OpenClawStateWorkerContext,
@@ -66,9 +80,19 @@ type TaskRegistryObservers = {
 };
 
 const defaultTaskRegistryStore: TaskRegistryStore = {
-  async runInitialMutationAsync(context, command, assertCurrent) {
-    const { runTaskInitialWorkerOperation } = await import("./task-initial-worker-operation.js");
-    return runTaskInitialWorkerOperation(context, command, assertCurrent);
+  async runAgentEventMutationAsync(context, input, assertCurrent, onGranted) {
+    const { runTaskRegistryWorkerOperation } = await import("./task-registry-worker-operation.js");
+    return runTaskRegistryWorkerOperation(
+      context,
+      { type: "tasks.observeAgentEvent", input },
+      assertCurrent,
+      onGranted,
+    );
+  },
+  settleAgentEventWrites: settleTaskRegistrySqliteWrites,
+  async runInitialMutationAsync(context, command, assertCurrent, onGranted) {
+    const { runTaskRegistryWorkerOperation } = await import("./task-registry-worker-operation.js");
+    return runTaskRegistryWorkerOperation(context, command, assertCurrent, onGranted);
   },
   async syncLiveTaskFlowAsync(context, params, authority) {
     const { syncLiveTaskFlowWithWorker } = await import("./task-registry-live-flow-sync.js");
@@ -97,7 +121,11 @@ const defaultTaskRegistryStore: TaskRegistryStore = {
   },
   loadMutationSnapshot: loadTaskRegistryMutationStateFromSqlite,
   withMutation: withTaskRegistrySqliteMutation,
-  listTasksForOwnerKey: listTaskRegistryRecordsByOwnerKeyFromSqlite,
+  async listTasksForOwnerKey(ownerKey) {
+    const context = captureOpenClawStateWorkerContext();
+    const { executeOpenClawStateWorker } = await import("../state/openclaw-state-worker-store.js");
+    return executeOpenClawStateWorker(context, { type: "tasks.ownerRecords", input: { ownerKey } });
+  },
   upsertTaskWithDeliveryState: upsertTaskWithDeliveryStateToSqlite,
   deleteTaskWithDeliveryState: deleteTaskAndDeliveryStateFromSqlite,
   upsertDeliveryState: upsertTaskDeliveryStateToSqlite,
@@ -143,6 +171,15 @@ export function getTaskRegistryObservers(): TaskRegistryObservers | null {
   return configuredTaskRegistryObservers;
 }
 
+/** Subscribe at the publication owner; readers recheck current task authority. */
+export function onTaskRegistryChange(
+  listener: (event?: TaskRegistryObserverEvent) => void,
+): () => void {
+  const listeners = getTaskRegistryProcessState().changeListeners;
+  listeners.add(listener);
+  return () => listeners.delete(listener);
+}
+
 export function configureTaskRegistryRuntime(params: {
   store?: TaskRegistryStore;
   observers?: TaskRegistryObservers | null;
@@ -176,8 +213,9 @@ export function deliverTaskRegistryObserverEvent(
   ) {
     return;
   }
+  let event: TaskRegistryObserverEvent | undefined;
   try {
-    const event = createEvent();
+    event = createEvent();
     recordPublication(event);
     observers?.onEvent?.(event);
   } catch (error) {
@@ -185,7 +223,7 @@ export function deliverTaskRegistryObserverEvent(
   } finally {
     for (const listener of state.changeListeners) {
       try {
-        listener();
+        listener(event);
       } catch (error) {
         storeLog.warn("Task registry change listener failed", { error });
       }

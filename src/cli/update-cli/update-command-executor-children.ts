@@ -25,9 +25,12 @@ export type UpdateCommandChildGrant = {
   originalParent?: ManagedHandoffLease;
   originalChildKey?: string;
   spawner?: ManagedHandoffLease;
+  retainedParent?: ManagedHandoffLease;
+  retainedChildKey?: string;
   childKey: string;
   databaseIdentity?: ManagedUpdateLeaseDatabaseIdentity;
 };
+export type ChildPurpose = { auxiliaryPreflight?: true };
 export type ChildOperation<T> = (
   grant: UpdateCommandChildGrant,
   bindChild: (pid: number, argv?: readonly string[]) => void,
@@ -41,6 +44,7 @@ export function childLineageDigest(
   spawner: ManagedHandoffLease,
   parent: ManagedHandoffLease,
   database: ManagedUpdateLeaseDatabaseIdentity,
+  retained?: ManagedHandoffLease,
 ): string {
   return createHash("sha256")
     .update(
@@ -54,6 +58,18 @@ export function childLineageDigest(
           lease.payload,
           lease.updatedAt,
         ]),
+        // Absent retention preserves the shipped single-root digest bytes.
+        ...(retained
+          ? [
+              [
+                "retained-owner-v1",
+                retained.key,
+                retained.owner,
+                retained.payload,
+                retained.updatedAt,
+              ],
+            ]
+          : []),
       ]),
     )
     .digest("hex");
@@ -67,11 +83,12 @@ export function createChildOwner(params: {
     parent: ManagedHandoffLease;
     original: ManagedHandoffLease;
     spawner: ManagedHandoffLease;
+    retainedParent?: ManagedHandoffLease;
     databasePath: string;
     databaseIdentity?: ManagedUpdateLeaseDatabaseIdentity;
   };
   assertBase: () => void;
-  onStart?: () => void;
+  onStart?: (purpose?: ChildPurpose) => void;
 }) {
   let admissionOpen = true;
   let delegating = false;
@@ -96,19 +113,20 @@ export function createChildOwner(params: {
         throw failure;
       }
     },
-    run<T>(root: string, operation: ChildOperation<T>): Promise<T> {
+    run<T>(root: string, operation: ChildOperation<T>, purpose?: ChildPurpose): Promise<T> {
       params.assertBase();
       assertIdle();
       if (!admissionOpen) {
         throw new UpdateCommandRecoveryPendingError("Child executor admission is closed.");
       }
-      const { store, parent, original, spawner, databasePath, databaseIdentity } = params.binding();
+      const { store, parent, original, spawner, retainedParent, databasePath, databaseIdentity } =
+        params.binding();
       if (!databaseIdentity) {
         throw new UpdateCommandRecoveryPendingError(
           "Native child requires its pinned lease database.",
         );
       }
-      params.onStart?.();
+      params.onStart?.(purpose);
       const candidateRoot = resolveUpdateInstallRoot(root);
       let candidateParent = parent;
       let acquiredParent = false;
@@ -119,6 +137,7 @@ export function createChildOwner(params: {
         params.assertBase();
         if (
           !store.current(candidateParent) ||
+          (retainedParent && !store.current(retainedParent)) ||
           resolveUpdateInstallRoot(root) !== candidateParent.key
         ) {
           throw new UpdateCommandRecoveryPendingError("Update installation ownership changed.");
@@ -128,6 +147,11 @@ export function createChildOwner(params: {
         let outcome: { result: T } | { error: unknown };
         try {
           params.assertBase();
+          if (retainedParent && candidateRoot === retainedParent.key) {
+            throw new UpdateCommandRecoveryPendingError(
+              "Retained service root is not a candidate executor.",
+            );
+          }
           if (candidateRoot !== parent.key) {
             const acquired = store.acquire(candidateRoot, randomUUID(), { kind: "update" });
             if (acquired.kind !== "acquired") {
@@ -141,9 +165,20 @@ export function createChildOwner(params: {
           assertOwners();
           // Keep the full original spawner lineage AND the active generation.
           // Neither root may be reclaimed while a nested process group survives.
-          const parents =
-            candidateParent.key === original.key ? [spawner] : [spawner, candidateParent];
-          const childName = `${randomUUID()}-lineage-${childLineageDigest(original, spawner, candidateParent, databaseIdentity)}`;
+          const parents = [
+            ...new Map(
+              [
+                spawner,
+                ...(retainedParent ? [retainedParent] : []),
+                ...(candidateParent.key === original.key ? [] : [candidateParent]),
+              ].map((owner) => [owner.key, owner]),
+            ).values(),
+          ];
+          const candidateChildIndex =
+            candidateParent.key === original.key
+              ? 0
+              : parents.findIndex((owner) => owner.key === candidateParent.key);
+          const childName = `${randomUUID()}-lineage-${childLineageDigest(original, spawner, candidateParent, databaseIdentity, retainedParent)}`;
           for (const childParent of parents) {
             const acquired = store.acquire(
               `${childParent.key}/.openclaw-update-child-${childName}`,
@@ -166,8 +201,15 @@ export function createChildOwner(params: {
             originalParent: original,
             spawner,
             originalChildKey: children[0]!.key,
-            childKey: children[children.length - 1]!.key,
+            childKey: children[candidateChildIndex]!.key,
             databaseIdentity,
+            ...(retainedParent
+              ? {
+                  retainedParent,
+                  retainedChildKey:
+                    children[parents.findIndex((owner) => owner.key === retainedParent.key)]!.key,
+                }
+              : {}),
           };
           const result = await withCommandProcessScope(() =>
             operation(grant, (pid, argv) => {
@@ -204,8 +246,10 @@ export function createChildOwner(params: {
         try {
           // Release the active generation before the original lineage, as in
           // the shipped finalizer. A failed release never reactivates the parent.
-          if (children.length > 1 && !store.release(children[1]!)) {
-            throw new UpdateCommandRecoveryPendingError("The update process has not finished.");
+          for (let index = children.length - 1; index > 0; index--) {
+            if (!store.release(children[index]!)) {
+              throw new UpdateCommandRecoveryPendingError("The update process has not finished.");
+            }
           }
           if (acquiredParent && !store.release(candidateParent)) {
             throw new UpdateCommandRecoveryPendingError("Update installation release failed.");

@@ -2,7 +2,6 @@ import {
   gatewayCredentialScope,
   isRetryableGatewayStartupUnavailableError,
   readControlUiBuildMismatchId,
-  resolveSafeTimeoutDelayMs,
 } from "@openclaw/gateway-client/browser";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import type { ModelCatalogTarget } from "../../../packages/gateway-protocol/src/index.js";
@@ -50,6 +49,8 @@ import {
   notifyGatewayObservers,
 } from "./gateway-observers.ts";
 import { readSuspensionPhase } from "./gateway-readiness.ts";
+import { createAvailabilityIndicators } from "./gateway-store.availability.ts";
+import { createDeviceCredentialMethods } from "./gateway-store.device-credential.ts";
 import { readHelloPluginCapabilities } from "./plugin-capabilities.ts";
 import {
   loadGatewaySessionSelection,
@@ -63,8 +64,6 @@ import { readPresenceEntries, resolveSelfPresenceUser, sameSelfUser } from "./us
 
 type GatewayClientFactory = (opts: GatewayBrowserClientOptions) => GatewayBrowserClient;
 const defaultClientFactory: GatewayClientFactory = (opts) => new GatewayBrowserClient(opts);
-// Grace window before offline presentation appears; reconnects never wait.
-const OFFLINE_INDICATOR_DELAY_MS = 2_000;
 
 export function createApplicationGateway(
   initialSettings: ReturnType<typeof loadSettings>,
@@ -119,10 +118,13 @@ export function createApplicationGateway(
   // Snapshot observers can synchronously stop or replace their publishing client.
   const isCurrentClient = (expected: GatewayBrowserClient | null) =>
     !stopped && client === expected;
-  let offlineIndicatorTimer: ReturnType<typeof globalThis.setTimeout> | null = null;
-  const unavailableDeadlines: Partial<
-    Record<"restartPending" | "suspensionPhase", ReturnType<typeof globalThis.setTimeout>>
-  > = {};
+  const availability = createAvailabilityIndicators({
+    isStopped: () => stopped,
+    getSnapshot: () => snapshot,
+    applySnapshot: (patch) => setSnapshot(patch),
+  });
+  const { clearOfflineIndicatorTimer, setUnavailableDeadline, scheduleOfflineIndicator } =
+    availability;
   const listeners = new Set<(next: ApplicationGatewaySnapshot) => void>();
   const eventListeners = new Set<GatewayEventListener>();
   const eventLogListeners = new Set<(events: readonly EventLogEntry[]) => void>();
@@ -137,41 +139,6 @@ export function createApplicationGateway(
       (current) => current === eventLog.entries,
     );
   };
-  const clearOfflineIndicatorTimer = () => {
-    globalThis.clearTimeout(offlineIndicatorTimer ?? undefined);
-    offlineIndicatorTimer = null;
-  };
-  const setUnavailableDeadline = (key: keyof typeof unavailableDeadlines, expectedMs?: number) => {
-    globalThis.clearTimeout(unavailableDeadlines[key]);
-    delete unavailableDeadlines[key];
-    if (expectedMs === undefined) {
-      return;
-    }
-    unavailableDeadlines[key] = globalThis.setTimeout(
-      () => {
-        delete unavailableDeadlines[key];
-        setSnapshot({ [key]: key === "restartPending" ? false : undefined });
-      },
-      // Floor 15s: stale lifecycle evidence must degrade to the ordinary offline pill.
-      resolveSafeTimeoutDelayMs(expectedMs * 3, { minMs: 15_000 }),
-    );
-  };
-  const scheduleOfflineIndicator = () => {
-    if (
-      stopped ||
-      snapshot.phase === "connected" ||
-      snapshot.offlineStable ||
-      offlineIndicatorTimer !== null
-    ) {
-      return;
-    }
-    offlineIndicatorTimer = globalThis.setTimeout(() => {
-      offlineIndicatorTimer = null;
-      if (!stopped && snapshot.phase !== "connected") {
-        setSnapshot({ offlineStable: true });
-      }
-    }, OFFLINE_INDICATOR_DELAY_MS);
-  };
   const setSnapshot = (patch: Partial<ApplicationGatewaySnapshot>) => {
     const previous = snapshot;
     snapshot = { ...previous, ...patch };
@@ -180,7 +147,7 @@ export function createApplicationGateway(
       snapshot.offlineStable = false;
     } else {
       // A disconnected transport cannot vouch for admission; the next hello replaces it.
-      snapshot.suspensionPhase = unavailableDeadlines.suspensionPhase
+      snapshot.suspensionPhase = availability.hasSuspensionDeadline()
         ? snapshot.suspensionPhase
         : undefined;
       snapshot.pluginCapabilities = null;
@@ -659,6 +626,11 @@ export function createApplicationGateway(
       }
       setSnapshot({ selfUser: { ...snapshot.selfUser, ...patch } });
     },
+    ...createDeviceCredentialMethods({
+      gatewayUrl: () => connection.gatewayUrl,
+      connect,
+      isStopped: () => stopped,
+    }),
   };
   return gateway;
 }

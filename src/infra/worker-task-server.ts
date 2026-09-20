@@ -1,12 +1,18 @@
 import { parentPort, type Transferable } from "node:worker_threads";
 import { createDeferredCore, type Deferred } from "../shared/deferred.js";
-import { createWorkerTaskControl, type WorkerTaskControl } from "./worker-task-native-sections.js";
+import {
+  createWorkerTaskControl,
+  observeWorkerTaskCancellation,
+  type WorkerTaskControl,
+} from "./worker-task-native-sections.js";
 
 type WorkerChannelResponse = { input: unknown; consumed: () => void };
 type WorkerConversation = {
   taskId: number;
   responseId: number;
   pending?: Deferred<WorkerChannelResponse>;
+  assertCurrent: () => void;
+  cancelPending: (error: unknown) => void;
 };
 
 /** A conversation never outlives the pool task or crosses worker generations. */
@@ -32,6 +38,7 @@ export function serveWorkerTasks<Output>(
     return;
   }
   let active: WorkerConversation | undefined;
+  let cancelledResponse: { taskId: number; responseId: number } | undefined;
   port.on(
     "message",
     (message: {
@@ -43,12 +50,24 @@ export function serveWorkerTasks<Output>(
     }) => {
       if (message.responseId !== undefined) {
         if (
+          message.taskId === cancelledResponse?.taskId &&
+          message.responseId === cancelledResponse.responseId
+        ) {
+          return;
+        }
+        if (
           !active ||
           message.taskId !== active.taskId ||
           message.responseId !== active.responseId ||
           !active.pending
         ) {
           throw new Error("stale worker task response");
+        }
+        try {
+          active.assertCurrent();
+        } catch (error) {
+          active.cancelPending(error);
+          return;
         }
         const pending = active.pending;
         active.pending = undefined;
@@ -70,48 +89,78 @@ export function serveWorkerTasks<Output>(
       if (active) {
         throw new Error("overlapping worker tasks");
       }
-      const task: WorkerConversation = { taskId: message.taskId, responseId: 0 };
+      const nativeSections = new Int32Array(message.nativeSections);
+      const task: WorkerConversation = {
+        taskId: message.taskId,
+        responseId: 0,
+        assertCurrent: () => control.throwIfCancelled(),
+        cancelPending: (error) => {
+          const pending = task.pending;
+          if (!pending) {
+            return;
+          }
+          task.pending = undefined;
+          cancelledResponse = { taskId: task.taskId, responseId: task.responseId };
+          pending.reject(error);
+        },
+      };
+      const control = createWorkerTaskControl(nativeSections, () => active === task);
       active = task;
-      const control = createWorkerTaskControl(
-        new Int32Array(message.nativeSections),
-        () => active === task,
-      );
+      const stopObserving = message.interactive
+        ? observeWorkerTaskCancellation(
+            nativeSections,
+            () => active === task,
+            () => task.cancelPending(new Error("worker task cancelled")),
+          )
+        : undefined;
       const channel: WorkerTaskChannel | undefined = message.interactive
         ? {
             consumeInput: () =>
               port.postMessage({ status: "consumed", taskId: task.taskId, id: 0 }),
             request: (value, transferList) => {
+              control.throwIfCancelled();
               if (active !== task || task.pending) {
                 throw new Error("closed or busy worker channel");
               }
-              task.pending = createDeferredCore();
-              port.postMessage(
-                {
-                  status: "request",
-                  taskId: task.taskId,
-                  id: ++task.responseId,
-                  value,
-                },
-                transferList ? [...transferList] : [],
-              );
-              return task.pending.promise;
+              const pending = createDeferredCore<WorkerChannelResponse>();
+              task.pending = pending;
+              try {
+                const transfers = transferList ? [...transferList] : [];
+                control.throwIfCancelled();
+                port.postMessage(
+                  {
+                    status: "request",
+                    taskId: task.taskId,
+                    id: ++task.responseId,
+                    value,
+                  },
+                  transfers,
+                );
+              } catch (error) {
+                task.pending = undefined;
+                pending.reject(error);
+              }
+              return pending.promise;
             },
           }
         : undefined;
       void Promise.resolve()
-        .then(() => {
-          control.throwIfCancelled();
-          return handler(message.input, channel, control);
+        .then(async () => {
+          try {
+            control.throwIfCancelled();
+            return await handler(message.input, channel, control);
+          } finally {
+            await stopObserving?.();
+            active = undefined;
+          }
         })
         .then((value) => {
-          active = undefined;
           port.postMessage(
             { status: "ok", value, taskId: task.taskId },
             options.transferList?.(value) ?? [],
           );
         })
         .catch((error: unknown) => {
-          active = undefined;
           port.postMessage({
             status: "failed",
             taskId: task.taskId,

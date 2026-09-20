@@ -15,6 +15,8 @@ import type { PostCorePluginUpdateResult } from "./update-command-plugins.js";
 import {
   continuePostCoreUpdateInFreshProcess,
   preparePostCorePluginInstallRecordsForFreshProcess,
+  postCoreUpdateParentOwnsCompletion,
+  resolvePostCoreUpdateOperatorOptions,
   readPostCorePluginInstallRecordsFile,
   shouldResumePostCoreUpdateInFreshProcess,
   writePostCorePluginInstallRecordsFile,
@@ -138,7 +140,14 @@ await fs.writeFile(process.env.OPENCLAW_UPDATE_POST_CORE_RESULT_PATH, ${JSON.str
       expect(handoff).toEqual({
         resultDir: expect.any(String),
         mode: 0o700,
-        marker: { completionOwner: "parent" },
+        marker: {
+          completionOwner: "parent",
+          timeout: {
+            version: 1,
+            serialized: cooperative ? "5" : "3600",
+            operator: cooperative ? null : "3600",
+          },
+        },
         installRecords: `${JSON.stringify(pluginInstallRecords)}\n`,
         sourceConfig: `${JSON.stringify(preUpdateConfig)}\n`,
       });
@@ -381,5 +390,73 @@ describe("shouldResumePostCoreUpdateInFreshProcess", () => {
         downgradeRisk: true,
       }),
     ).toBe(fresh);
+  });
+});
+
+describe("post-core operator deadline provenance", () => {
+  it.each([
+    {
+      name: "omitted operator deadline",
+      value: { version: 1, serialized: "2700", operator: null },
+      expected: undefined,
+    },
+    {
+      name: "explicit operator deadline",
+      value: { version: 1, serialized: "2700", operator: "2700" },
+      expected: "2700",
+    },
+    { name: "legacy metadata", value: undefined, expected: "2700" },
+    {
+      name: "missing operator provenance",
+      value: { version: 1, serialized: "2700" },
+      expected: "2700",
+    },
+    {
+      name: "mismatched command",
+      value: { version: 1, serialized: "1800", operator: null },
+      expected: "2700",
+    },
+    {
+      name: "unknown version",
+      value: { version: 2, serialized: "2700", operator: null },
+      expected: "2700",
+    },
+    {
+      name: "malformed operator",
+      value: { version: 1, serialized: "2700", operator: false },
+      expected: "2700",
+    },
+    { name: "malformed metadata", value: "default", expected: "2700" },
+  ])("preserves intent for $name", async ({ value, expected }) => {
+    const root = await withTempDir();
+    const resultPath = path.join(root, "plugins.json");
+    await fs.writeFile(
+      path.join(root, "handoff.json"),
+      JSON.stringify({ completionOwner: "parent", timeout: value }),
+    );
+    const opts = { json: true, timeout: "2700" };
+    expect(await resolvePostCoreUpdateOperatorOptions({ opts, resultPath })).toEqual({
+      ...opts,
+      timeout: expected,
+    });
+    // The shipped completion reader ignores added metadata and keeps its ownership contract.
+    expect(await postCoreUpdateParentOwnsCompletion(resultPath)).toBe(true);
+  });
+
+  it("retains an explicit deadline without private parent ownership", async () => {
+    const root = await withTempDir();
+    const resultPath = path.join(root, "plugins.json");
+    const opts = { timeout: "3" };
+    expect(await resolvePostCoreUpdateOperatorOptions({ opts, resultPath })).toBe(opts);
+    await fs.writeFile(
+      path.join(root, "handoff.json"),
+      JSON.stringify({
+        completionOwner: "child",
+        timeout: { version: 1, serialized: "3", operator: null },
+      }),
+    );
+    expect(await resolvePostCoreUpdateOperatorOptions({ opts, resultPath })).toBe(opts);
+    await fs.writeFile(path.join(root, "handoff.json"), "{");
+    await expect(resolvePostCoreUpdateOperatorOptions({ opts, resultPath })).rejects.toThrow();
   });
 });

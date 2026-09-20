@@ -18,6 +18,7 @@ import { resolveExistingUsageSessionFile } from "../../infra/session-cost-usage.
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { resolvePreferredSessionKeyForSessionIdMatches } from "../../sessions/session-id-resolution.js";
 import { resolveStoredSessionKeyForAgentStore } from "../session-store-key.js";
+import { resolveGatewaySessionDisplayName } from "../session-utils-display.js";
 import {
   loadCombinedSessionStoreForGatewayCore,
   loadGatewaySessionEntryReadOnly,
@@ -79,6 +80,8 @@ export type UsageSessionSelection = UsageSessionSummaryTarget & {
   label?: string;
   updatedAt: number;
   storeEntry?: SessionEntry;
+  /** Recorded lineage attribution when a retained instance has no current store row. */
+  creatorEntry?: SessionEntry;
   scope?: "instance" | "family";
   sessionFamilyKey?: string;
   currentSessionId?: string;
@@ -196,7 +199,6 @@ export async function selectUsageSessions(params: {
   groupingMode: UsageGroupingMode;
   startMs: number;
   endMs: number;
-  limit: number;
   visibilityFilter?: (key: string, entry: SessionEntry) => boolean;
 }): Promise<UsageSessionSelection[]> {
   const {
@@ -311,7 +313,7 @@ export async function selectUsageSessions(params: {
             agentId: agentIdFromKey,
             sessionId,
             sessionFile,
-            label: storeEntry?.label,
+            label: resolveGatewaySessionDisplayName(resolvedStoreKey, storeEntry),
             updatedAt,
             storeEntry,
           },
@@ -338,6 +340,7 @@ export async function selectUsageSessions(params: {
             instances: [discovered],
             updatedAt: discovered.mtime,
             scope: "instance",
+            creatorEntry: familyOwners.get(identity)?.entry,
           });
         }
         continue;
@@ -370,7 +373,7 @@ export async function selectUsageSessions(params: {
             agentId: discovered.agentId,
             sessionId: entry.sessionId,
             sessionFile,
-            label: entry.label,
+            label: resolveGatewaySessionDisplayName(key, entry),
             updatedAt: entry.updatedAt ?? discovered.mtime,
             storeEntry: entry,
           },
@@ -388,11 +391,8 @@ export async function selectUsageSessions(params: {
   // Sort by most recent first
   mergedEntries.sort((a, b) => b.updatedAt - a.updatedAt);
 
-  // Only response rows need context reports; totals still include every selected instance.
-  for (const [index, row] of mergedEntries.entries()) {
-    if (index >= params.limit) {
-      break;
-    }
+  // Carry physical targets through filtering; only emitted rows will hydrate context.
+  for (const row of mergedEntries) {
     const target = targetsBySessionKey.get(row.key);
     if (!target) {
       continue;

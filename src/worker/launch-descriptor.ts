@@ -42,7 +42,11 @@ import {
   type ComputerUseCapabilityDescriptor,
 } from "../plugins/computer-use-contract.js";
 import { hasExactOwnKeys, workerProtocolObject } from "./protocol-record.js";
-import { isWorkerToolName, type WorkerToolAuthority } from "./tool-authority.js";
+import {
+  isWorkerToolName,
+  type WorkerToolAuthority,
+  type WorkerToolName,
+} from "./tool-authority.js";
 import { isWorkerTranscriptMessageFrameSafe } from "./transcript-message.js";
 import {
   parseWorkerConnectionEndpoint,
@@ -91,63 +95,43 @@ const AbsoluteHostPath = z
 const WorkspacePath = AbsoluteHostPath.refine(
   (value) => value.trim() === value && value.length <= 4_096 && !value.includes("\0"),
 );
-function parseToolAuthority(value: unknown): WorkerToolAuthority | undefined {
-  if (
-    !isRecord(value) ||
-    !hasExactOwnKeys(value, ["allowedToolNames"], ["exec"]) ||
-    !Array.isArray(value.allowedToolNames) ||
-    !value.allowedToolNames.every(isWorkerToolName) ||
-    new Set(value.allowedToolNames).size !== value.allowedToolNames.length
-  ) {
-    return undefined;
-  }
-  const allowedToolNames = [...value.allowedToolNames];
-  const exec = value.exec;
-  if (exec === undefined) {
-    return { allowedToolNames };
-  }
-  if (!isRecord(exec)) {
-    return undefined;
-  }
-  const { host, security, ask, node, safeBins } = exec;
-  if (
-    !hasExactOwnKeys(
-      exec,
-      ["host", "security", "ask"],
-      host === "node" ? ["node", "safeBins"] : ["safeBins"],
-    ) ||
-    (Object.hasOwn(exec, "safeBins") && (!Array.isArray(safeBins) || safeBins.length !== 0)) ||
-    (host !== "sandbox" && host !== "gateway" && host !== "node") ||
-    (security !== "deny" && security !== "allowlist" && security !== "full") ||
-    (ask !== "off" && ask !== "on-miss" && ask !== "always") ||
-    (node !== undefined &&
-      (host !== "node" || typeof node !== "string" || node.length === 0 || node.trim() !== node))
-  ) {
-    return undefined;
-  }
-  const execAuthority: NonNullable<WorkerToolAuthority["exec"]> =
-    host === "node"
-      ? {
-          host,
-          security,
-          ask,
-          ...(typeof node === "string" ? { node } : {}),
-        }
-      : { host, security, ask };
-  return {
-    allowedToolNames,
-    exec: { ...execAuthority, ...(safeBins !== undefined ? { safeBins: [] } : {}) },
-  };
-}
-
-const ToolAuthoritySchema = z.unknown().transform((value, ctx) => {
-  const authority = parseToolAuthority(value);
-  if (!authority) {
-    ctx.addIssue({ code: "custom", message: "invalid worker tool authority" });
-    return z.NEVER;
-  }
-  return authority;
-});
+const ExecAuthorityFields = {
+  security: z.enum(["deny", "allowlist", "full"]),
+  ask: z.enum(["off", "on-miss", "always"]),
+  safeBins: z.tuple([]).optional(),
+};
+const ExecAuthoritySchema = z
+  .union([
+    z
+      .unknown()
+      .refine((value) => isRecord(value) && value.node === undefined)
+      .pipe(workerProtocolObject({ host: z.enum(["sandbox", "gateway"]), ...ExecAuthorityFields })),
+    workerProtocolObject({
+      host: z.literal("node"),
+      ...ExecAuthorityFields,
+      node: z
+        .string()
+        .min(1)
+        .refine((value) => value.trim() === value)
+        .optional(),
+    }).transform(({ node, ...authority }) =>
+      node === undefined ? authority : { ...authority, node },
+    ),
+  ])
+  .refine((value) => !Object.hasOwn(value, "safeBins") || value.safeBins !== undefined);
+const ToolAuthoritySchema = workerProtocolObject({
+  allowedToolNames: z
+    .custom<WorkerToolName[]>(
+      (names) =>
+        Array.isArray(names) &&
+        names.every(isWorkerToolName) &&
+        new Set(names).size === names.length,
+    )
+    .transform((names) => [...names]),
+  exec: ExecAuthoritySchema.optional(),
+}).transform(({ exec, ...authority }): WorkerToolAuthority =>
+  exec === undefined ? authority : { ...authority, exec },
+);
 const BrowserLaunchSchema = workerProtocolObject({
   cdpUrl: z.string().refine((value) => {
     const url = URL.parse(value);

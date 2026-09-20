@@ -338,6 +338,7 @@
   "param-readers",
   "secret-input",
   "secret-input-runtime",
+  "decisions",
   "secret-ref-readonly",
   "channel-status",
   "status-helpers",

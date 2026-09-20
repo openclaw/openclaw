@@ -17,6 +17,7 @@ export type SidebarPanel = {
   slot: SidebarSlotId;
   environmentId?: string;
   portalId?: string;
+  taskId?: string;
 };
 export type SidebarDock = "bottom" | "left" | "right";
 export type SidebarColumn = {

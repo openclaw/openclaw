@@ -181,6 +181,11 @@ it("publishes coalesced exec activity and cleanup without durable writes or late
         background: true,
       });
       expect(result.details.status).toBe("running");
+      const durableSnapshot = taskStore.loadSnapshot();
+      const durableTasks = [...durableSnapshot.tasks.values()];
+      expect(durableTasks).toHaveLength(1);
+      const durableUpdatedAt = durableTasks[0]?.lastEventAt;
+      expect(durableUpdatedAt).toEqual(expect.any(Number));
       observations.length = 0;
       writes.mockClear();
       const outputAt = Date.now() + 1_000;
@@ -196,10 +201,11 @@ it("publishes coalesced exec activity and cleanup without durable writes or late
       expect(observations).toEqual([
         {
           execution: { state: "running", lastActivityAt: outputAt },
-          updatedAt: outputAt,
+          updatedAt: durableUpdatedAt,
         },
       ]);
       expect(writes).not.toHaveBeenCalled();
+      expect(taskStore.loadSnapshot()).toEqual(durableSnapshot);
       observations.length = 0;
       adapter.settle(0);
       await finalizing.promise;
@@ -211,13 +217,17 @@ it("publishes coalesced exec activity and cleanup without durable writes or late
             wait: { kind: "external" },
             lastActivityAt: outputAt + 1_000,
           },
-          updatedAt: outputAt + 1_000,
+          updatedAt: durableUpdatedAt,
         },
       ]);
       expect(writes).not.toHaveBeenCalled();
+      expect(taskStore.loadSnapshot()).toEqual(durableSnapshot);
       finalize.resolve();
       await waitForExecScope(sessionKey);
-      expect(observations.at(-1)).toMatchObject({ execution: { state: "finished" } });
+      expect(observations.at(-1)).toMatchObject({
+        execution: { state: "finished" },
+        updatedAt: outputAt + 2_000,
+      });
       observations.length = 0;
       adapter.emitStdout("late");
       await vi.advanceTimersByTimeAsync(2_000);

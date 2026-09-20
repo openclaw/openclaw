@@ -6,11 +6,13 @@ import { resolveInlineCommandMatch } from "../infra/shell-inline-command.js";
 import { POSIX_SHELL_WRAPPERS } from "../infra/shell-wrapper-resolution.js";
 import { parseTcpPort } from "../infra/tcp-port.js";
 import { auditLaunchdDefinition } from "./service-audit-launchd.js";
+import { auditGatewayInstallPreservation } from "./service-audit-preservation.js";
 import { auditGatewayRuntime, SERVICE_RUNTIME_AUDIT_CODES } from "./service-audit-runtime.js";
 import { auditScheduledTaskDefinition } from "./service-audit-schtasks.js";
 import { auditSystemdUnit, SYSTEMD_SERVICE_AUDIT_CODES } from "./service-audit-systemd.js";
 import type {
   GatewayServiceCommand,
+  GatewayServiceExpectedCommand,
   ServiceConfigIssue,
   ServiceDefinitionDrift,
 } from "./service-audit-types.js";
@@ -26,6 +28,7 @@ import { isNonMinimalServicePathEntry, normalizeServicePathEntry } from "./servi
 
 export type {
   GatewayServiceCommand,
+  GatewayServiceExpectedCommand,
   ServiceConfigIssue,
   ServiceDefinitionDrift,
 } from "./service-audit-types.js";
@@ -385,6 +388,7 @@ export function checkTokenDrift(params: {
 export async function auditGatewayServiceConfig(params: {
   env: Record<string, string | undefined>;
   command: GatewayServiceCommand;
+  expectedCommand?: GatewayServiceExpectedCommand;
   platform?: NodeJS.Platform;
   expectedGatewayToken?: string;
   expectedManagedServiceEnvKeys?: Iterable<string>;
@@ -396,6 +400,14 @@ export async function auditGatewayServiceConfig(params: {
   const definitionDrift: ServiceDefinitionDrift[] = [];
   let definitionDriftError: string | undefined;
   const platform = params.platform ?? process.platform;
+  if (params.expectedCommand) {
+    auditGatewayInstallPreservation(
+      params.command,
+      params.expectedCommand,
+      platform,
+      definitionDrift,
+    );
+  }
 
   auditGatewayCommand(params.command?.programArguments, issues);
   auditGatewayServicePort({
@@ -423,14 +435,26 @@ export async function auditGatewayServiceConfig(params: {
       params.timeoutMs,
       params.command,
       definitionDrift,
+      Boolean(params.expectedCommand),
     );
   }
 
   try {
     if (platform === "darwin") {
-      await auditLaunchdDefinition(params.env, issues, definitionDrift, params.timeoutMs);
+      await auditLaunchdDefinition(
+        params.env,
+        issues,
+        definitionDrift,
+        params.timeoutMs,
+        Boolean(params.expectedCommand),
+      );
     } else if (platform === "win32" && params.command) {
-      await auditScheduledTaskDefinition(params.env, definitionDrift, params.timeoutMs);
+      await auditScheduledTaskDefinition(
+        params.env,
+        definitionDrift,
+        params.timeoutMs,
+        params.expectedCommand,
+      );
     }
   } catch {
     definitionDriftError = "Service definition inspection could not be completed.";

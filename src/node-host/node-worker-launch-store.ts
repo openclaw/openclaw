@@ -1,9 +1,11 @@
 import type { DatabaseSync } from "node:sqlite";
+import { isGatewayExternallySupervised } from "../infra/gateway-supervision.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
+import { extractSqliteTableSchema } from "../infra/sqlite-schema-sql.js";
 import { tableExists } from "../state/openclaw-state-db-schema-helpers.js";
 import type { DB as OpenClawStateDatabase } from "../state/openclaw-state-db.generated.js";
 import {
@@ -16,6 +18,8 @@ import {
   isNodeWorkerTerminalState,
   nodeWorkerLaunchReceiptFromRow,
   validateNodeWorkerContainerIdentity,
+  type NodeWorkerCleanupBinding,
+  type NodeWorkerCleanupMode,
   type NodeWorkerContainerIdentity,
   type NodeWorkerLaunchReceipt,
   type NodeWorkerLaunchRow,
@@ -34,7 +38,10 @@ export type {
 
 type NodeWorkerLaunchDatabase = Pick<
   OpenClawStateDatabase,
-  "node_worker_launch_containers" | "node_worker_launches" | "node_worker_turns"
+  | "node_worker_launch_cleanup"
+  | "node_worker_launch_containers"
+  | "node_worker_launches"
+  | "node_worker_turns"
 >;
 
 export type NodeWorkerLaunchClaim = Pick<
@@ -60,31 +67,21 @@ export type NodeWorkerLaunchClaimResult =
       nonterminalCount: number;
     };
 
-const NODE_WORKER_LAUNCH_SCHEMA_START = "CREATE TABLE IF NOT EXISTS node_worker_launches (";
 const NODE_WORKER_LAUNCH_SCHEMA_END = "\n  WHERE completed_at_ms IS NOT NULL;";
-const NODE_WORKER_LAUNCH_CONTAINER_SCHEMA_START =
-  "CREATE TABLE IF NOT EXISTS node_worker_launch_containers (";
-const NODE_WORKER_LAUNCH_CONTAINER_SCHEMA_END = "\n) STRICT;";
 const initializedDatabases = new WeakSet<DatabaseSync>();
 const TERMINAL_RECEIPT_RETENTION_MS = 24 * 60 * 60 * 1_000;
 const TERMINAL_PRUNE_BATCH_LIMIT = 256;
 
 function ensureNodeWorkerLaunchSchema(
   database: DatabaseSync,
-  kind: "journal" | "container" = "journal",
+  table: Exclude<keyof NodeWorkerLaunchDatabase, "node_worker_turns">,
 ): void {
-  const startMarker =
-    kind === "journal"
-      ? NODE_WORKER_LAUNCH_SCHEMA_START
-      : NODE_WORKER_LAUNCH_CONTAINER_SCHEMA_START;
-  const endMarker =
-    kind === "journal" ? NODE_WORKER_LAUNCH_SCHEMA_END : NODE_WORKER_LAUNCH_CONTAINER_SCHEMA_END;
-  const start = OPENCLAW_STATE_SCHEMA_SQL.indexOf(startMarker);
-  const end = start >= 0 ? OPENCLAW_STATE_SCHEMA_SQL.indexOf(endMarker, start) : -1;
-  if (start < 0 || end < start) {
-    throw new Error(`OpenClaw node worker launch ${kind} schema marker is missing.`);
-  }
-  database.exec(OPENCLAW_STATE_SCHEMA_SQL.slice(start, end + endMarker.length)); // sqlite-allow-raw -- Canonical feature-local additive DDL only.
+  // sqlite-allow-raw -- Canonical feature-local additive DDL only.
+  database.exec(
+    extractSqliteTableSchema(OPENCLAW_STATE_SCHEMA_SQL, table, {
+      endMarker: table === "node_worker_launches" ? NODE_WORKER_LAUNCH_SCHEMA_END : undefined,
+    }),
+  );
 }
 
 function query(database: DatabaseSync) {
@@ -103,6 +100,18 @@ function selectLaunchRows(database: DatabaseSync) {
           "node_worker_launches.launch_id",
         )
         .select("node_worker_launch_containers.container_json"),
+    )
+    .$if(tableExists(database, "node_worker_launch_cleanup"), (selection) =>
+      selection
+        .leftJoin(
+          "node_worker_launch_cleanup",
+          "node_worker_launch_cleanup.launch_id",
+          "node_worker_launches.launch_id",
+        )
+        .select([
+          "node_worker_launch_cleanup.cleanup_mode",
+          "node_worker_launch_cleanup.lineage_settled",
+        ]),
     );
 }
 
@@ -312,6 +321,53 @@ function rowMatchesImmutableIdentity(
   );
 }
 
+function finishOwnedRow(
+  database: DatabaseSync,
+  current: NodeWorkerLaunchRow,
+  params: Omit<Parameters<NodeWorkerLaunchStore["finish"]>[0], "launchId" | "planHash" | "nowMs">,
+  nowMs: number,
+  expected?: NodeWorkerSupervisorIdentity,
+): boolean {
+  if (
+    isNodeWorkerTerminalState(current.state) ||
+    !rowHasSupervisor(current, params.supervisor) ||
+    !rowHasWorker(current, params.worker)
+  ) {
+    return false;
+  }
+  const completedAtMs = Math.max(nowMs, current.created_at_ms, current.updated_at_ms);
+  let update = query(database)
+    .updateTable("node_worker_launches")
+    .set({
+      state: params.state,
+      result_json: params.state === "completed" ? (params.resultJson ?? null) : null,
+      error_text: params.state === "completed" ? null : (params.errorText ?? null),
+      completed_at_ms: completedAtMs,
+      updated_at_ms: completedAtMs,
+    })
+    .where("launch_id", "=", current.launch_id)
+    .where("plan_hash", "=", current.plan_hash);
+  if (expected) {
+    update = update
+      .where("environment_id", "=", expected.environmentId)
+      .where("session_id", "=", expected.sessionId)
+      .where("owner_epoch", "=", expected.ownerEpoch)
+      .where("placement_generation", "=", expected.placementGeneration)
+      .where("run_id", "=", expected.runId);
+  }
+  update = update
+    .where("state", "in", ["pending", "running"])
+    .where("supervisor_pid", "=", params.supervisor.pid)
+    .where("supervisor_start_time", "=", params.supervisor.startTime);
+  update = params.worker
+    ? update
+        .where("worker_pid", "=", params.worker.pid)
+        .where("worker_start_time", "=", params.worker.startTime)
+    : update.where("worker_pid", "is", null).where("worker_start_time", "is", null);
+  executeSqliteQuerySync(database, update);
+  return true;
+}
+
 /** Synchronous shared-state owner for durable node worker launch supervision. */
 export class NodeWorkerLaunchStore {
   private readonly databaseOptions: OpenClawStateDatabaseOptions;
@@ -320,15 +376,18 @@ export class NodeWorkerLaunchStore {
     this.databaseOptions = options.env ? { env: options.env } : {};
   }
 
-  private write<T>(operationLabel: string, operation: (database: DatabaseSync) => T): T {
+  private write<T>(
+    operationLabel: string,
+    operation: (database: DatabaseSync, databasePath: string) => T,
+  ): T {
     let initializedDatabase: DatabaseSync | undefined;
     const result = runOpenClawStateWriteTransaction(
-      ({ db }) => {
+      ({ db, path }) => {
         if (!initializedDatabases.has(db)) {
-          ensureNodeWorkerLaunchSchema(db);
+          ensureNodeWorkerLaunchSchema(db, "node_worker_launches");
           initializedDatabase = db;
         }
-        return operation(db);
+        return operation(db, path);
       },
       this.databaseOptions,
       { operationLabel },
@@ -381,6 +440,7 @@ export class NodeWorkerLaunchStore {
         return result;
       };
       let current = readRow(database, claim.launchId);
+      let action: "start" | "replay" | "recover" = "replay";
       if (!current) {
         // The pending row is the physical slot reservation. Count and insert stay
         // in one transaction so concurrent supervisors cannot over-admit.
@@ -411,64 +471,42 @@ export class NodeWorkerLaunchStore {
             updated_at_ms: nowMs,
           }),
         );
-        return finalize({
-          action: "start",
-          receipt: nodeWorkerLaunchReceiptFromRow(
-            requireMatchingRow(database, claim.launchId, claim.planHash),
-          ),
-          nonterminalCount: readNonterminalCount(database),
-        });
-      }
-      if (current.plan_hash !== claim.planHash) {
-        throw new Error(`node worker launch ${claim.launchId} was replayed with a different plan`);
-      }
-      const previousOwnerDefinitelyStale =
-        observedSupervisorState === "dead" || observedSupervisorState === "reused";
-      if (
-        current.state === "pending" &&
-        observed &&
-        sameObservedOwner(current, observed) &&
-        previousOwnerDefinitelyStale
-      ) {
-        const updatedAtMs = Math.max(nowMs, current.created_at_ms, current.updated_at_ms);
-        executeSqliteQuerySync(
-          database,
-          query(database)
-            .updateTable("node_worker_launches")
-            .set({
-              supervisor_pid: supervisor.pid,
-              supervisor_start_time: supervisor.startTime,
-              updated_at_ms: updatedAtMs,
-            })
-            .where("launch_id", "=", claim.launchId)
-            .where("plan_hash", "=", claim.planHash)
-            .where("state", "=", "pending")
-            .where("supervisor_pid", "=", observed.supervisor_pid)
-            .where("supervisor_start_time", "=", observed.supervisor_start_time)
-            .where("worker_pid", "is", null)
-            .where("worker_start_time", "is", null),
-        );
         current = requireMatchingRow(database, claim.launchId, claim.planHash);
-        return finalize({
-          action: rowHasSupervisor(current, supervisor) ? "start" : "replay",
-          receipt: nodeWorkerLaunchReceiptFromRow(current),
-          nonterminalCount: readNonterminalCount(database),
-        });
-      }
-      if (
-        current.state === "running" &&
+        action = "start";
+      } else if (current.plan_hash !== claim.planHash) {
+        throw new Error(`node worker launch ${claim.launchId} was replayed with a different plan`);
+      } else if (
         observed &&
         sameObservedOwner(current, observed) &&
-        previousOwnerDefinitelyStale
+        (observedSupervisorState === "dead" || observedSupervisorState === "reused")
       ) {
-        return finalize({
-          action: "recover",
-          receipt: nodeWorkerLaunchReceiptFromRow(current),
-          nonterminalCount: readNonterminalCount(database),
-        });
+        if (current.state === "pending") {
+          const updatedAtMs = Math.max(nowMs, current.created_at_ms, current.updated_at_ms);
+          executeSqliteQuerySync(
+            database,
+            query(database)
+              .updateTable("node_worker_launches")
+              .set({
+                supervisor_pid: supervisor.pid,
+                supervisor_start_time: supervisor.startTime,
+                updated_at_ms: updatedAtMs,
+              })
+              .where("launch_id", "=", claim.launchId)
+              .where("plan_hash", "=", claim.planHash)
+              .where("state", "=", "pending")
+              .where("supervisor_pid", "=", observed.supervisor_pid)
+              .where("supervisor_start_time", "=", observed.supervisor_start_time)
+              .where("worker_pid", "is", null)
+              .where("worker_start_time", "is", null),
+          );
+          current = requireMatchingRow(database, claim.launchId, claim.planHash);
+          action = rowHasSupervisor(current, supervisor) ? "start" : "replay";
+        } else if (current.state === "running") {
+          action = "recover";
+        }
       }
       return finalize({
-        action: "replay",
+        action,
         receipt: nodeWorkerLaunchReceiptFromRow(current),
         nonterminalCount: readNonterminalCount(database),
       });
@@ -518,6 +556,27 @@ export class NodeWorkerLaunchStore {
     });
   }
 
+  cleanupBinding(
+    params: Pick<NodeWorkerCleanupBinding, "launchId" | "planHash" | "supervisor">,
+  ): NodeWorkerCleanupBinding {
+    return this.write("node-worker-launch.cleanup-binding", (database, databasePath) => {
+      const current = requireMatchingRow(database, params.launchId, params.planHash);
+      if (
+        isNodeWorkerTerminalState(current.state) ||
+        !rowHasSupervisor(current, params.supervisor)
+      ) {
+        throw new Error("node worker cleanup binding no longer owns its launch");
+      }
+      return {
+        databasePath,
+        externallySupervised: isGatewayExternallySupervised(this.databaseOptions.env),
+        launchId: params.launchId,
+        planHash: params.planHash,
+        supervisor: { ...params.supervisor },
+      };
+    });
+  }
+
   finishCancelled(params: {
     expected: NodeWorkerSupervisorIdentity;
     supervisor: NodeWorkerProcessIdentity;
@@ -535,41 +594,19 @@ export class NodeWorkerLaunchStore {
       if (!current || !rowMatchesImmutableIdentity(current, params.expected)) {
         return undefined;
       }
-      if (isNodeWorkerTerminalState(current.state)) {
-        const receipt = nodeWorkerLaunchReceiptFromRow(current);
-        settleNodeWorkerActiveTurns(database, receipt);
-        return receipt;
-      }
-      if (!rowHasSupervisor(current, params.supervisor) || !rowHasWorker(current, params.worker)) {
-        return nodeWorkerLaunchReceiptFromRow(current);
-      }
-      const completedAtMs = Math.max(nowMs, current.created_at_ms, current.updated_at_ms);
-      let update = query(database)
-        .updateTable("node_worker_launches")
-        .set({
+      const updated = finishOwnedRow(
+        database,
+        current,
+        {
+          supervisor: params.supervisor,
+          worker: params.worker,
           state: "cancelled",
-          result_json: null,
-          error_text: "node worker launch cancelled",
-          completed_at_ms: completedAtMs,
-          updated_at_ms: completedAtMs,
-        })
-        .where("launch_id", "=", params.expected.launchId)
-        .where("plan_hash", "=", params.expected.planHash)
-        .where("environment_id", "=", params.expected.environmentId)
-        .where("session_id", "=", params.expected.sessionId)
-        .where("owner_epoch", "=", params.expected.ownerEpoch)
-        .where("placement_generation", "=", params.expected.placementGeneration)
-        .where("run_id", "=", params.expected.runId)
-        .where("state", "in", ["pending", "running"])
-        .where("supervisor_pid", "=", params.supervisor.pid)
-        .where("supervisor_start_time", "=", params.supervisor.startTime);
-      update = params.worker
-        ? update
-            .where("worker_pid", "=", params.worker.pid)
-            .where("worker_start_time", "=", params.worker.startTime)
-        : update.where("worker_pid", "is", null).where("worker_start_time", "is", null);
-      executeSqliteQuerySync(database, update);
-      const settled = readRow(database, params.expected.launchId);
+          errorText: "node worker launch cancelled",
+        },
+        nowMs,
+        params.expected,
+      );
+      const settled = updated ? readRow(database, params.expected.launchId) : current;
       if (!settled || !rowMatchesImmutableIdentity(settled, params.expected)) {
         return undefined;
       }
@@ -584,6 +621,7 @@ export class NodeWorkerLaunchStore {
     planHash: string;
     supervisor: NodeWorkerProcessIdentity;
     worker: NodeWorkerProcessIdentity;
+    cleanupMode: NodeWorkerCleanupMode | null;
     container?: NodeWorkerContainerIdentity;
     nowMs?: number;
   }): NodeWorkerLaunchReceipt {
@@ -606,7 +644,7 @@ export class NodeWorkerLaunchStore {
         return nodeWorkerLaunchReceiptFromRow(current);
       }
       if (params.container) {
-        ensureNodeWorkerLaunchSchema(database, "container");
+        ensureNodeWorkerLaunchSchema(database, "node_worker_launch_containers");
         executeSqliteQuerySync(
           database,
           query(database)
@@ -619,6 +657,17 @@ export class NodeWorkerLaunchStore {
                 engineTarget: params.container.engineTarget,
               }),
             }),
+        );
+      }
+      if (params.cleanupMode !== null) {
+        ensureNodeWorkerLaunchSchema(database, "node_worker_launch_cleanup");
+        executeSqliteQuerySync(
+          database,
+          query(database).insertInto("node_worker_launch_cleanup").values({
+            launch_id: params.launchId,
+            cleanup_mode: params.cleanupMode,
+            lineage_settled: null,
+          }),
         );
       }
       const updatedAtMs = Math.max(nowMs, current.created_at_ms, current.updated_at_ms);
@@ -664,37 +713,9 @@ export class NodeWorkerLaunchStore {
     }
     return this.write("node-worker-launch.finish", (database) => {
       const current = requireMatchingRow(database, params.launchId, params.planHash);
-      if (isNodeWorkerTerminalState(current.state)) {
-        const receipt = nodeWorkerLaunchReceiptFromRow(current);
-        settleNodeWorkerActiveTurns(database, receipt);
-        return receipt;
-      }
-      if (!rowHasSupervisor(current, params.supervisor) || !rowHasWorker(current, params.worker)) {
-        return nodeWorkerLaunchReceiptFromRow(current);
-      }
-      const completedAtMs = Math.max(nowMs, current.created_at_ms, current.updated_at_ms);
-      let update = query(database)
-        .updateTable("node_worker_launches")
-        .set({
-          state: params.state,
-          result_json: params.state === "completed" ? (params.resultJson ?? null) : null,
-          error_text: params.state === "completed" ? null : (params.errorText ?? null),
-          completed_at_ms: completedAtMs,
-          updated_at_ms: completedAtMs,
-        })
-        .where("launch_id", "=", params.launchId)
-        .where("plan_hash", "=", params.planHash)
-        .where("state", "in", ["pending", "running"])
-        .where("supervisor_pid", "=", params.supervisor.pid)
-        .where("supervisor_start_time", "=", params.supervisor.startTime);
-      update = params.worker
-        ? update
-            .where("worker_pid", "=", params.worker.pid)
-            .where("worker_start_time", "=", params.worker.startTime)
-        : update.where("worker_pid", "is", null).where("worker_start_time", "is", null);
-      executeSqliteQuerySync(database, update);
+      const updated = finishOwnedRow(database, current, params, nowMs);
       const receipt = nodeWorkerLaunchReceiptFromRow(
-        requireMatchingRow(database, params.launchId, params.planHash),
+        updated ? requireMatchingRow(database, params.launchId, params.planHash) : current,
       );
       settleNodeWorkerActiveTurns(database, receipt);
       return receipt;

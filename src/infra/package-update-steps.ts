@@ -10,9 +10,15 @@ import { resolveBunGlobalInstallOwner } from "./detect-package-manager.js";
 import { formatErrorMessage } from "./errors.js";
 import { collectPackageDistContentInventoryErrors } from "./package-dist-inventory.js";
 import { readPackageVersion } from "./package-json.js";
-import { completePendingPackageLifecycle } from "./package-lifecycle.js";
 import type { LocalPackageOverridesResult } from "./package-local-overrides.js";
 import { readPackageVersionIfPresent } from "./package-update-integrity.js";
+import type { PackageUpdateStepRunner } from "./package-update-lifecycle.js";
+import {
+  discardPackageUpdateStage,
+  resolveNpmUpdateLifecyclePolicy,
+  runPackageUpdateLifecycle,
+  verifyUnchangedPackageUpdateRecovery,
+} from "./package-update-lifecycle.js";
 import {
   checkGlobalPackageUpdatePermissions,
   classifyPackageUpdatePermissionFailure,
@@ -51,7 +57,6 @@ import {
   listActivePnpmIsolatedGlobalPackages,
   resolvePnpmIsolatedInstallOwner,
   resolvePnpmGlobalDirFromGlobalRoot,
-  resolveNpmLifecyclePolicyGate,
   resolveExpectedInstalledVersionFromSpec,
   resolveGlobalInstallTarget,
   verifyPackageUpdateRecovery,
@@ -68,14 +73,6 @@ import type { UpdateRecovery } from "./update-recovery.js";
 import type { UpdateStepResult } from "./update-runner-types.js";
 export type { PackageUpdateTransaction } from "./package-update-swap.js";
 
-type PackageUpdateStepRunner = (params: {
-  name: string;
-  argv: string[];
-  cwd?: string;
-  timeoutMs: number;
-  env?: NodeJS.ProcessEnv;
-}) => Promise<UpdateStepResult>;
-
 type PackageUpdateStepsResult = {
   localOverrides?: LocalPackageOverridesResult;
   reason?: "already-current" | typeof UPDATE_GLOBAL_PERMISSION_REASON;
@@ -87,32 +84,6 @@ type PackageUpdateStepsResult = {
 };
 
 const NPM_PACK_QUIET_FLAGS = ["--json", "--loglevel=error"] as const;
-
-async function resolveNpmUpdateLifecyclePolicy(params: {
-  installTarget: ResolvedGlobalInstallTarget;
-}): Promise<{
-  policy: ReturnType<typeof resolveNpmLifecyclePolicyGate>["policy"];
-  failedStep: UpdateStepResult | null;
-}> {
-  const gate = resolveNpmLifecyclePolicyGate(params.installTarget);
-  if (!gate.error) {
-    return { policy: gate.policy, failedStep: null };
-  }
-  const argv = [params.installTarget.command, "--version"];
-  const version = params.installTarget.npmOwner?.version ?? "";
-  return {
-    policy: null,
-    failedStep: {
-      name: "npm lifecycle policy preflight",
-      command: argv.join(" "),
-      cwd: process.cwd(),
-      durationMs: 0,
-      exitCode: 1,
-      stdoutTail: version || null,
-      stderrTail: gate.error,
-    },
-  };
-}
 
 function isNormalProcessExit(step: {
   signal?: NodeJS.Signals | null;
@@ -549,15 +520,6 @@ async function prepareStagedPackageInstall(
   }
 }
 
-async function cleanupStagedPackageInstall(stage: StagedPackageInstall | null): Promise<void> {
-  if (stage) {
-    if (stage.native) {
-      await removePackageUpdatePath(stage.native.binDir);
-    }
-    await removePackageUpdatePath(stage.prefix);
-  }
-}
-
 /**
  * Runs the global package update flow, including npm staging when possible,
  * package verification, optional post-verification, and cleanup.
@@ -595,53 +557,70 @@ export async function runGlobalPackageUpdateSteps(params: {
   );
   let localOverrides: LocalPackageOverridesResult | undefined;
   let stagedInstall: StagedPackageInstall | null = null;
+  let uncertainLifecycleStage: StagedPackageInstall | null = null;
   let packedInstallDir: string | null = null;
   const originalPackageRoot = params.installTarget.packageRoot ?? params.packageRoot ?? null;
   let activePackageRoot = originalPackageRoot;
   let afterVersion: string | null = null;
   const initialRecovery = await verifyPackageUpdateRecovery(originalPackageRoot);
   let liveTreeMutated = false;
+  let committed = false;
   let packageRollbackVerified: boolean | undefined;
   const steps: UpdateStepResult[] = [];
+  const cleanupStage = async (): Promise<UpdateStepResult | null> => {
+    if (!stagedInstall || stagedInstall === uncertainLifecycleStage) {
+      return null;
+    }
+    const cleanup = await discardPackageUpdateStage({
+      stage: stagedInstall,
+      manager: params.installTarget.manager,
+      committed,
+    });
+    if (cleanup.status === "failed") {
+      uncertainLifecycleStage = stagedInstall;
+      return cleanup.step;
+    }
+    if (cleanup.status === "advisory") {
+      steps.push(cleanup.step);
+    }
+    stagedInstall = null;
+    return null;
+  };
   const packageUpdateFailure = async (
     failedStep: UpdateStepResult,
     failedSteps = [failedStep],
   ): Promise<PackageUpdateStepsResult> => {
-    failedStep.failureFacts ??= [
+    const cleanupFailure = await cleanupStage();
+    const finalFailedStep = cleanupFailure ?? failedStep;
+    const finalFailedSteps = cleanupFailure ? [...failedSteps, cleanupFailure] : failedSteps;
+    finalFailedStep.failureFacts ??= [
       createUpdateFailureFact(
         {
-          check: failedStep.name,
+          check: finalFailedStep.name,
           code: "global-install-failed",
-          message: failedStep.stderrTail ?? undefined,
+          message: finalFailedStep.stderrTail ?? undefined,
         },
         params.env,
       ),
     ];
-    let recovery: UpdateRecovery = liveTreeMutated
+    const recovery: UpdateRecovery = liveTreeMutated
       ? {
           serviceRestartSafe: false,
           reason: "runtime-verification-failed",
           ...(packageRollbackVerified === undefined ? {} : { packageRollbackVerified }),
         }
-      : initialRecovery;
-    // A discarded stage must not hide damage to the live tree. Before mutation,
-    // recovery still belongs to the original runtime, verified again at failure.
-    if (!liveTreeMutated && initialRecovery.serviceRestartSafe) {
-      const liveRecovery = await verifyPackageUpdateRecovery(originalPackageRoot);
-      recovery =
-        liveRecovery.serviceRestartSafe && liveRecovery.version === initialRecovery.version
-          ? liveRecovery
-          : { serviceRestartSafe: false, reason: "runtime-verification-failed" };
-    }
+      : await verifyUnchangedPackageUpdateRecovery(originalPackageRoot, initialRecovery);
     return {
       localOverrides,
-      ...(failedStep.failureFacts?.some((fact) => fact.code === UPDATE_GLOBAL_PERMISSION_REASON)
+      ...(finalFailedStep.failureFacts?.some(
+        (fact) => fact.code === UPDATE_GLOBAL_PERMISSION_REASON,
+      )
         ? { reason: UPDATE_GLOBAL_PERMISSION_REASON }
         : {}),
-      steps: failedSteps,
+      steps: finalFailedSteps,
       activePackageRoot,
       afterVersion,
-      failedStep,
+      failedStep: finalFailedStep,
       recovery,
     };
   };
@@ -849,8 +828,10 @@ export async function runGlobalPackageUpdateSteps(params: {
       if (updateStep.failureFacts?.some((fact) => fact.code === UPDATE_GLOBAL_PERMISSION_REASON)) {
         return await packageUpdateFailure(updateStep, steps);
       }
-      await cleanupStagedPackageInstall(stagedInstall);
-      stagedInstall = null;
+      const cleanupFailure = await cleanupStage();
+      if (cleanupFailure) {
+        return await packageUpdateFailure(cleanupFailure, [...steps, cleanupFailure]);
+      }
       const preparedFallbackInstall =
         installCommandTarget.manager === "npm"
           ? await prepareStagedPackageInstall(
@@ -890,8 +871,13 @@ export async function runGlobalPackageUpdateSteps(params: {
         steps.push(fallbackStep);
         finalInstallStep = fallbackStep;
       } else {
-        await cleanupStagedPackageInstall(stagedInstall);
-        stagedInstall = null;
+        const fallbackCleanupFailure = await cleanupStage();
+        if (fallbackCleanupFailure) {
+          return await packageUpdateFailure(fallbackCleanupFailure, [
+            ...steps,
+            fallbackCleanupFailure,
+          ]);
+        }
       }
     }
 
@@ -1034,6 +1020,10 @@ export async function runGlobalPackageUpdateSteps(params: {
         candidateVersion &&
         candidateVersion === (await readPackageVersionIfPresent(originalPackageRoot))
       ) {
+        const cleanupFailure = await cleanupStage();
+        if (cleanupFailure) {
+          return await packageUpdateFailure(cleanupFailure, [...steps, cleanupFailure]);
+        }
         return {
           reason: "already-current",
           steps,
@@ -1050,47 +1040,28 @@ export async function runGlobalPackageUpdateSteps(params: {
           error !== `unexpected packaged dist file ${LEGACY_PACKAGE_INSTALL_GUARD_RELATIVE_PATH}`,
       );
       if (blockingVerificationErrors.length === 0) {
-        let failedLifecycleStep: UpdateStepResult | null = null;
-        try {
-          const completedLifecycle = await completePendingPackageLifecycle({
-            packageRoot: verificationPackageRoot,
-            timeoutMs: params.timeoutMs,
-            runScript: async (script) => {
-              const lifecycleStep = await params.runStep({
-                name: `${params.installTarget.manager} package ${script.name}`,
-                argv: [process.execPath, path.join(verificationPackageRoot, script.relativePath)],
-                cwd: verificationPackageRoot,
-                env: commandEnv,
-                timeoutMs: params.timeoutMs,
-              });
-              steps.push(lifecycleStep);
-              if (lifecycleStep.exitCode !== 0) {
-                failedLifecycleStep = lifecycleStep;
-                throw new Error(lifecycleStep.stderrTail ?? `${lifecycleStep.name} failed`);
-              }
-            },
-          });
-          if (completedLifecycle) {
+        const lifecycle = await runPackageUpdateLifecycle({
+          packageRoot: verificationPackageRoot,
+          manager: params.installTarget.manager,
+          timeoutMs: params.timeoutMs,
+          env: commandEnv,
+          runStep: params.runStep,
+          steps,
+          verifyCompleted: async () => {
             verificationErrors = await collectInstalledGlobalPackageErrors({
               packageRoot: verificationPackageRoot,
               expectedVersion,
               expectedGitCheckout: params.expectedGitCheckout,
             });
+          },
+        });
+        if (lifecycle.status === "failed") {
+          if (lifecycle.preserveStage) {
+            // Another writer may still use this exact candidate. Recovery verifies
+            // the previous runtime while the finalizer preserves this stage.
+            uncertainLifecycleStage = stagedInstall;
           }
-        } catch (error) {
-          if (failedLifecycleStep) {
-            return await packageUpdateFailure(failedLifecycleStep, steps);
-          }
-          const lifecycleStep: UpdateStepResult = {
-            name: `${params.installTarget.manager} package lifecycle`,
-            command: `complete ${verificationPackageRoot}`,
-            cwd: verificationPackageRoot,
-            durationMs: 0,
-            exitCode: 1,
-            stderrTail: formatErrorMessage(error),
-          };
-          steps.push(lifecycleStep);
-          return await packageUpdateFailure(lifecycleStep, steps);
+          return await packageUpdateFailure(lifecycle.step, steps);
         }
       }
       if (!params.expectedGitCheckout && verificationErrors.length === 0) {
@@ -1183,6 +1154,7 @@ export async function runGlobalPackageUpdateSteps(params: {
         activePackageRoot = swap.activePackageRoot;
         // Verified rollback restores package files, not state changed by hooks.
         if (swap.status === "committed") {
+          committed = true;
           afterVersion = candidateVersion;
         } else {
           packageRollbackVerified = swap.packageRollbackVerified;
@@ -1210,6 +1182,10 @@ export async function runGlobalPackageUpdateSteps(params: {
 
     if (failedStep) {
       return await packageUpdateFailure(failedStep, steps);
+    }
+    const cleanupFailure = await cleanupStage();
+    if (cleanupFailure) {
+      return await packageUpdateFailure(cleanupFailure, [...steps, cleanupFailure]);
     }
     return {
       localOverrides,
@@ -1244,7 +1220,9 @@ export async function runGlobalPackageUpdateSteps(params: {
     );
     return await packageUpdateFailure(failedStep, [...steps, failedStep]);
   } finally {
-    await cleanupStagedPackageInstall(stagedInstall);
+    // Normal returns already disposed or retained their exact stage. Exceptional
+    // activation/service causes still clean safely without replacing their cause.
+    await cleanupStage();
     if (packedInstallDir) {
       await removePackageUpdatePath(packedInstallDir);
     }

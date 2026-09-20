@@ -104,7 +104,7 @@ export async function reviewSecuritySensitiveChanges(prepared) {
     prepared,
   );
   if (!guard) {
-    return;
+    return true;
   }
   const { api, owner, repo, issuePath, files, pullRequest } = guard;
   const { collectSecuritySensitiveChanges } = loadSecurityReviewPolicy();
@@ -157,9 +157,7 @@ export async function reviewSecuritySensitiveChanges(prepared) {
   } else {
     console.log(summary);
   }
-  if (!allowed) {
-    throw new Error("A maintainer must approve the current revision's sensitive changes.");
-  }
+  return allowed;
 }
 
 if (import.meta.url === `file://${process.argv[1]}`) {

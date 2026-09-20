@@ -39,6 +39,7 @@ type LiveProjection = {
   item: ChatQueueItem;
   owner: Host;
   expectedDurableVersion?: ChatQueueItem;
+  submissionIsCurrent?: () => boolean;
 };
 const LIVE_VERSION_KEYS = ["sendRunId", "sendAttempts", "sendState", "sendError"] as const;
 const storageIds = new WeakMap<Storage, number>();
@@ -117,8 +118,9 @@ class ChatOutboxGatewayOwner {
     }
     const live = entries.get(id);
     if (
-      live?.expectedDurableVersion &&
-      (!durable || !sameQueuedDeliveryVersion(live.expectedDurableVersion, durable))
+      (live?.expectedDurableVersion &&
+        (!durable || !sameQueuedDeliveryVersion(live.expectedDurableVersion, durable))) ||
+      (live?.submissionIsCurrent && !live.submissionIsCurrent())
     ) {
       entries.delete(id);
       if (!entries.size) {
@@ -492,7 +494,16 @@ class ChatOutboxGatewayOwner {
     }
     return false;
   }
-  beginSubmission(host: Host, id: string): { release(): void } | undefined {
+  hasPendingSubmission(scope: Scope, item: ChatQueueItem): boolean {
+    return Boolean(
+      this.readLive(storedChatOutboxScopeKey(scope), item.id, item)?.submissionIsCurrent,
+    );
+  }
+  beginSubmission(
+    host: Host,
+    id: string,
+    options: { inline: boolean; isCurrent: () => boolean },
+  ): { release(): void } | undefined {
     const located = this.locate(host, id);
     if (
       !located?.durable ||
@@ -507,9 +518,10 @@ class ChatOutboxGatewayOwner {
     const key = storedChatOutboxScopeKey(located.scope);
     const entries = this.live.get(key) ?? new Map<string, LiveProjection>();
     const projection: LiveProjection = {
-      item: { ...located.item, sendState: "submitting" },
+      item: options.inline ? { ...located.item, sendState: "submitting" } : located.item,
       owner: host,
       expectedDurableVersion: located.durable,
+      submissionIsCurrent: options.isCurrent,
     };
     entries.set(id, projection);
     this.live.set(key, entries);

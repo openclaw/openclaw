@@ -110,6 +110,14 @@ subscription quota are separate billing buckets.
 
 - xAI decides which accounts can receive OAuth API tokens. If an account is
   not eligible, use the API-key path or check the subscription on xAI's side.
+- If the Gateway log shows `xai: OAuth profile "..." could not be resolved`,
+  credential preparation failed, for example because a refresh token expired
+  or was revoked. The warning includes the redacted cause and the resulting
+  live catalog origin, or reports that no live catalog was returned.
+  An existing API key can still supply the API catalog; OAuth-only models stay
+  unavailable. Run the warning's sign-in command on the Gateway host; it targets
+  the catalog's agent and saved profile. This describes catalog discovery, not
+  proof of an inference request or an API charge.
 
 Existing `xai/auto` selections on the native xAI API and Grok subscription routes are retired.
 Run `openclaw doctor --fix` to replace affected config and session selections

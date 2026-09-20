@@ -33,9 +33,10 @@ import {
 } from "./update-command-executor.js";
 import * as freshDoctor from "./update-command-fresh-doctor.js";
 import * as pluginUpdater from "./update-command-plugins.js";
-import * as postCoreOwner from "./update-command-post-core.js";
+import * as postCore from "./update-command-post-core.js";
 import { finishUpdate, type FinishUpdateParams } from "./update-command-post-update.js";
 import { UpdateCommandPendingRecoveryFailure } from "./update-command-result.js";
+import * as postCoreResume from "./update-command-resume.js";
 import * as rollbackOwner from "./update-command-rollback.js";
 import { withUpdateCommandTerminalResult } from "./update-command-terminal.js";
 import { withUpdateFailureTriage } from "./update-command-triage.js";
@@ -45,6 +46,36 @@ vi.mock("../../process/exec.js", async (importOriginal) => ({
   runExec: transport.exec,
   runCommandWithTimeout: transport.command,
 }));
+// Native Doctor delegation has real-child coverage. Keep this suite focused on
+// the real in-process plugin/config owners, with both Doctor transports inert.
+vi.mock("./update-command-doctor-child.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./update-command-doctor-child.js")>()),
+  inspectUpdateDoctorChildSupport: async () => true,
+  withUpdateDoctorChild: async (
+    params: Parameters<typeof import("./update-command-doctor-child.js").withUpdateDoctorChild>[0],
+    operation: Parameters<
+      typeof import("./update-command-doctor-child.js").withUpdateDoctorChild
+    >[1],
+  ) => {
+    params.context.executorFence.assertCurrent();
+    params.context.assertRequesterCurrent();
+    const result = await operation(async (_argv, options) => ({
+      ...(await transport.exec(
+        process.execPath,
+        [path.join(params.root, "dist", "entry.js"), "doctor"],
+        options,
+      )),
+      code: 0,
+      signal: null,
+      killed: false,
+      cleanup: "normal",
+      termination: "exit",
+    }));
+    params.context.assertRequesterCurrent();
+    params.context.executorFence.assertCurrent();
+    return result;
+  },
+}));
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -52,18 +83,27 @@ afterEach(() => {
 });
 
 describe("connected in-process plugin finalization authority", () => {
-  it.each([
-    "healthy",
-    "index-revoked",
-    "config-revoked",
-    "run-replaced",
-    "fence-replaced",
-    "cohort-revoked",
-    "cohort-run-replaced",
-    "cohort-fence-replaced",
-    "host-link-recovery",
-    "registry-revoked",
-  ] as const)("protects persistence and terminal behavior with %s", async (scenario) => {
+  const cases = [
+    ...(
+      [
+        "healthy",
+        "index-revoked",
+        "config-revoked",
+        "run-replaced",
+        "fence-replaced",
+        "cohort-revoked",
+        "cohort-run-replaced",
+        "cohort-fence-replaced",
+        "host-link-recovery",
+        "registry-revoked",
+      ] as const
+    ).map((scenario) => ({ scenario, candidateRuntime: false })),
+    ...(["healthy", "index-revoked", "run-replaced", "fence-replaced"] as const).map(
+      (scenario) => ({ scenario, candidateRuntime: true }),
+    ),
+  ];
+  it.each(cases)("$scenario (candidate=$candidateRuntime)", async (testCase) => {
+    const { scenario, candidateRuntime } = testCase;
     await withOpenClawTestState(
       {
         label: `plugin-caller-${scenario}`,
@@ -164,6 +204,8 @@ describe("connected in-process plugin finalization authority", () => {
         let completed: Awaited<ReturnType<typeof finishUpdate>> | undefined;
         const cohortScenario = scenario.startsWith("cohort-");
         const npmUpdates = vi.spyOn(pluginUpdates, "updateNpmInstalledPlugins");
+        const phase = vi.spyOn(postCoreResume, "convergePostCoreUpdatePlugins");
+        const delegate = vi.spyOn(postCore, "continuePostCoreUpdateInFreshProcess");
         let convergenceReached = false;
         let recovering = false;
         let configAtRegistryRead: string | undefined;
@@ -306,7 +348,7 @@ describe("connected in-process plugin finalization authority", () => {
                 },
               );
               try {
-                completed = await finishUpdate(params);
+                completed = await finishUpdate(params, { candidateRuntime });
               } catch (cause) {
                 refused = cause;
                 // Refusal cannot rewrite history before terminal settlement. The later
@@ -392,6 +434,10 @@ describe("connected in-process plugin finalization authority", () => {
           });
           expect(transport.exec).not.toHaveBeenCalled();
           expect(error).not.toHaveBeenCalled();
+        }
+        if (candidateRuntime) {
+          expect(phase).toHaveBeenCalledOnce();
+          expect(delegate).not.toHaveBeenCalled();
         }
         if (cohortScenario) {
           expect(npmUpdates).not.toHaveBeenCalled();
@@ -648,8 +694,8 @@ it("converges a fresh protected worker without a raw compatibility handoff", asy
       integrityDrifts: [],
       warnings: [],
     };
-    vi.spyOn(postCoreOwner, "shouldResumePostCoreUpdateInFreshProcess").mockReturnValue(true);
-    vi.spyOn(postCoreOwner, "continuePostCoreUpdateInFreshProcess").mockRejectedValue(
+    vi.spyOn(postCore, "shouldResumePostCoreUpdateInFreshProcess").mockReturnValue(true);
+    vi.spyOn(postCore, "continuePostCoreUpdateInFreshProcess").mockRejectedValue(
       new Error("raw compatibility handoff launched"),
     );
     vi.spyOn(pluginUpdater, "updatePluginsAfterCoreUpdate").mockResolvedValue(pluginResult);

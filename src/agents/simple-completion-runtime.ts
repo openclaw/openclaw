@@ -227,6 +227,7 @@ async function prepareSimpleCompletionModelCore(
     params.agentDir,
     params.cfg,
     {
+      abortSignal: params.signal,
       assertCurrent,
       modelIdSource: params.modelIdSource,
       ...(params.agentId ? { agentId: params.agentId } : {}),
@@ -336,6 +337,7 @@ async function prepareSimpleCompletionModelCore(
         forceResolve,
         resolveModel: ({ config, authProfileId, authProfileMode }) =>
           modelResolver(initialModel.provider, initialModel.id, params.agentDir, config, {
+            abortSignal: params.signal,
             assertCurrent,
             modelIdSource: "selected",
             ...(params.agentId ? { agentId: params.agentId } : {}),

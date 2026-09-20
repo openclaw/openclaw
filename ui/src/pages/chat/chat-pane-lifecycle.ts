@@ -21,7 +21,6 @@ import {
   TERMINAL_PANEL_TOGGLE_EVENT,
 } from "../../components/panel-toggle-contract.ts";
 import { matchesShortcutCombo } from "../../lib/keyboard-shortcut-contract.ts";
-import { sessionPullRequestsForGateway } from "../../lib/session-pull-requests.ts";
 import { parseCatalogSessionKey } from "../../lib/sessions/catalog-key.ts";
 import { resolveSessionKey } from "../../lib/sessions/index.ts";
 import {
@@ -514,13 +513,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionCreation {
         this.activateComposerPresentation();
       }),
     );
-    const sessionPullRequests = sessionPullRequestsForGateway(this.context.gateway);
-    chatState.addCleanup(
-      sessionPullRequests.subscribe(() => {
-        void this.refreshSessionPullRequests();
-      }),
-    );
-    chatState.addCleanup(() => sessionPullRequests.unwatch(this));
+    this.subscribeSessionRepositoryContext();
     chatState.addCleanup(
       this.context.gateway.subscribeEvents((event) => {
         const state = this.state;

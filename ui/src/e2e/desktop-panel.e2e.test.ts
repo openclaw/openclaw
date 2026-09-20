@@ -59,7 +59,10 @@ async function openPalette(page: import("playwright").Page) {
   await page.evaluate(() => {
     window.dispatchEvent(new CustomEvent("openclaw:command-palette-open"));
   });
-  await page.getByRole("combobox", { name: "Search chats and commands…" }).waitFor();
+  await page
+    .locator("openclaw-command-palette")
+    .getByRole("textbox", { name: "Search or start a task…" })
+    .waitFor();
 }
 
 async function openDesktopPanel(page: import("playwright").Page) {
@@ -211,7 +214,8 @@ suite.define(() => {
         await openPalette(page);
         await page.getByRole("option", { name: "Desktop", exact: true }).click();
         await page
-          .getByRole("combobox", { name: "Search chats and commands…" })
+          .locator("openclaw-command-palette")
+          .getByRole("textbox", { name: "Search or start a task…" })
           .waitFor({ state: "hidden" });
         expect(await passwordInput?.evaluate((element) => element.isConnected)).toBe(true);
         expect(await password.inputValue()).toBe("synthetic-unsent-password");

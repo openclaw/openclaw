@@ -6,8 +6,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { getRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import "../../claws/tool-policy-runtime.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { resolveLifecycleCoordinatorPath } from "../../infra/state-database-coordinator-paths.js";
-import { resolveStateLifecycleRuntimeDirectory } from "../../infra/state-database-coordinator.js";
 import { withPluginMetadataSnapshotScope } from "../../plugins/current-plugin-metadata-snapshot.js";
 import { resolveInstalledPluginIndexPolicyHash } from "../../plugins/installed-plugin-index-policy.js";
 import { clearPluginMetadataLifecycleCaches } from "../../plugins/plugin-metadata-lifecycle.js";
@@ -21,7 +19,6 @@ import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
-import { resolveAuthProfileDatabasePath } from "../auth-profiles/sqlite.js";
 import { ensureAuthProfileStoreWithoutExternalProfiles } from "../auth-profiles/store-runtime.js";
 import { resolveModelPluginMetadataSnapshot } from "../model-discovery-context.js";
 import { AuthStorage, ModelRegistry } from "../sessions/index.js";
@@ -408,11 +405,6 @@ describe("model runtime generation scope", () => {
     });
     const databasePath = openOpenClawStateDatabase({ env: state.env }).path;
     await closeOpenClawStateDatabaseAsync();
-    const coordinatorPath = resolveLifecycleCoordinatorPath("state-handles", {
-      databasePath: resolveAuthProfileDatabasePath(state.agentDir()),
-      runtimeDirectory: resolveStateLifecycleRuntimeDirectory(),
-      uid: process.getuid?.(),
-    });
     const preparedPaths: Array<string | null> = [];
     const execPaths: Array<string | null> = [];
     const prepare = vi.spyOn(DatabaseSync.prototype, "prepare");
@@ -441,7 +433,6 @@ describe("model runtime generation scope", () => {
       expect(preparedPaths).toEqual([databasePath]);
       negative.exec("SELECT 1");
       expect(execPaths).toEqual([databasePath]);
-      expect(databasePath).not.toBe(coordinatorPath);
     } finally {
       negative.close();
     }
@@ -470,9 +461,7 @@ describe("model runtime generation scope", () => {
       for (const spy of rowReads) {
         expect(spy).not.toHaveBeenCalled();
       }
-      // Auth retains its exact agent source through the separate coordination database.
-      expect(execPaths.length).toBeGreaterThan(0);
-      expect(execPaths.every((pathname) => pathname === coordinatorPath)).toBe(true);
+      expect(execPaths).toEqual([]);
       expect(getRuntimeConfigSnapshot()).toBeNull();
       expect(await fs.readFile(databasePath)).toEqual(before);
     } finally {

@@ -87,7 +87,7 @@ describe("Windows skills watcher paths", () => {
           normalized(scenario === "existing" ? skillsRoot : path.dirname(skillsRoot)),
         );
         expect(skillsWatch.options).toMatchObject({
-          depth: scenario === "existing" ? 7 : 8,
+          depth: scenario === "existing" ? 7 : 0,
           followSymlinks: false,
         });
         const repoSkillsRoot = path.join(longRoot, "repo", "skills");

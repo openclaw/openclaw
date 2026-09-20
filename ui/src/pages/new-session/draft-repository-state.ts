@@ -70,6 +70,10 @@ export class DraftRepositoryController {
     return this.worktreeValue;
   }
 
+  get preferenceWorktree(): boolean {
+    return this.worktreeValue || this.preferredWorktreeRestore;
+  }
+
   get worktreeName(): string {
     return this.worktreeNameValue;
   }

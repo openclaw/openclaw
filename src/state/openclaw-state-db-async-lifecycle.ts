@@ -39,6 +39,7 @@ type CloseAttempt = {
   seal: ReadSeal;
   retained: Set<OpenClawStateDatabaseAsyncResource>;
   pending?: Promise<boolean>;
+  queue?: Set<OpenClawStateDatabaseAsyncResource>;
 };
 
 type MaintenanceResource = {
@@ -222,6 +223,10 @@ export function createOpenClawDatabaseMaintenanceScope(
               "shared-handles",
             ] as const) {
               while ([...resources.values()].some((resource) => resource.phase === phase)) {
+                // Earlier cleanup can start tracked work using resources in this batch.
+                while (pending.size) {
+                  await Promise.allSettled(pending);
+                }
                 const batch = [...resources].filter(([, resource]) => resource.phase === phase);
                 const results = await Promise.allSettled(
                   batch.map(async ([key, resource]) => {
@@ -392,6 +397,9 @@ export function createOpenClawStateDatabaseAsyncLifecycle() {
     },
     register(resource: OpenClawStateDatabaseAsyncResource): () => void {
       resources.add(resource);
+      for (const attempt of attempts.values()) {
+        attempt.queue?.add(resource);
+      }
       return () => {
         resources.delete(resource);
       };
@@ -448,55 +456,64 @@ export function createOpenClawStateDatabaseAsyncLifecycle() {
         attempts.set(record, attempt);
       }
       const current = attempt;
-      const pending = tail.then(async () => {
-        const closing = new Set([...resources, ...current.retained]);
-        for (const entry of attempts.values()) {
-          for (const resource of entry.retained) {
-            closing.add(resource);
-          }
-        }
-        const errors: unknown[] = [];
-        await Promise.all(
-          [...closing].map(async (resource) => {
-            try {
-              await resource.close(record?.identity);
-              current.retained.delete(resource);
-            } catch (error) {
-              // Unregistration cannot abandon a resource whose close failed.
-              current.retained.add(resource);
-              errors.push(error);
-            }
-          }),
-        );
-        if (errors.length === 1) {
-          throw errors[0];
-        }
-        if (errors.length > 1) {
-          throw createSqliteLifecycleAggregateError(
-            errors,
-            "OpenClaw state resource drainage failed",
-            errors[0],
-          );
-        }
-        const retired = retireNative(record?.identity);
-        attempts.delete(record);
-        seals.delete(current.seal);
-        if (record === undefined) {
-          // A successful whole-cache retry also discharges prior failed path closes.
-          for (const [key, entry] of attempts) {
-            if (!entry.pending) {
-              attempts.delete(key);
-              seals.delete(entry.seal);
+      const pending = tail
+        .then(async () => {
+          const closing = new Set([...resources, ...current.retained]);
+          for (const entry of attempts.values()) {
+            for (const resource of entry.retained) {
+              closing.add(resource);
             }
           }
-          for (const entry of records.values()) {
-            forget(entry);
+          current.queue = closing;
+          const errors: unknown[] = [];
+          while (current.queue.size) {
+            const batch = [...current.queue];
+            current.queue.clear();
+            await Promise.all(
+              batch.map(async (resource) => {
+                try {
+                  await resource.close(record?.identity);
+                  current.retained.delete(resource);
+                } catch (error) {
+                  // Unregistration cannot abandon a resource whose close failed.
+                  current.retained.add(resource);
+                  errors.push(error);
+                }
+              }),
+            );
           }
-        } else {
-          forget(record);
-        }
-        return retired;
-      });
+          if (errors.length === 1) {
+            throw errors[0];
+          }
+          if (errors.length > 1) {
+            throw createSqliteLifecycleAggregateError(
+              errors,
+              "OpenClaw state resource drainage failed",
+              errors[0],
+            );
+          }
+          const retired = retireNative(record?.identity);
+          attempts.delete(record);
+          seals.delete(current.seal);
+          if (record === undefined) {
+            // A successful whole-cache retry also discharges prior failed path closes.
+            for (const [key, entry] of attempts) {
+              if (!entry.pending) {
+                attempts.delete(key);
+                seals.delete(entry.seal);
+              }
+            }
+            for (const entry of records.values()) {
+              forget(entry);
+            }
+          } else {
+            forget(record);
+          }
+          return retired;
+        })
+        .finally(() => {
+          current.queue = undefined;
+        });
       current.pending = pending;
       tail = pending.then(
         () => undefined,

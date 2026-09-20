@@ -7,6 +7,8 @@ export type ControlUiLinkReaderMetadata = {
   /** Same-plugin gateway method requiring operator.read. */
   detailMethod: string;
   previewMethod?: string;
+  /** Optional same-plugin read method resolving inline images without browser CORS. */
+  imageMethod?: string;
 };
 
 /** Scope-filtered descriptor advertised in hello.controlUiLinkReaders. */
@@ -25,6 +27,12 @@ export type ControlUiLinkReaderPreviewParams = {
   agentId?: string;
 };
 export type ControlUiLinkReaderDetailParams = { url: string; refresh?: boolean };
+export type ControlUiLinkReaderImage = {
+  /** Echo the validated requested image URL. */
+  url: string;
+  /** Canonical base64 data URL for a bounded, validated raster image; never SVG or HTML. */
+  dataUrl: string;
+};
 
 export type ControlUiLinkReaderPreview = {
   /** Echo the validated requested URL; query parameters remain part of the resource identity. */
@@ -36,9 +44,14 @@ export type ControlUiLinkReaderPreview = {
     tone: "neutral" | "positive" | "negative" | "attention" | "accent";
   };
   author?: string;
+  /** Optional HTTPS profile link on the source origin. */
+  authorUrl?: string;
+  coAuthors?: Array<{ name: string; imageUrl?: string }>;
+  /** Total including authors omitted from the bounded coAuthors array. */
+  coAuthorCount?: number;
   createdAt?: string;
   updatedAt?: string;
-  metadata?: Array<{ label: string; value: string }>;
+  metadata?: Array<{ label: string; value: string; tone?: "positive" | "negative" }>;
   imageUrl?: string;
 };
 

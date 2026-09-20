@@ -31,6 +31,17 @@ backups or [update recovery sets](/cli/backup#update-recovery-sets), and retaine
 Preserve every recovery location named in the update report until you have
 verified the installation.
 
+Launcher backups compare the link type and target, plus ownership when it can
+be preserved. Symlink permission bits do not block an update; macOS link modes
+are copied when supported. Regular-file launchers still require matching modes
+and contents. If backup verification fails, the report names the differing
+fields and the retained failed copy for inspection before retrying.
+
+This behavior belongs to the installed updater. An older updater, including
+2026.9.4, can refuse a macOS launcher backup before the target version runs.
+Use the installation's [manual package-manager update procedure](/install/updating/update-methods#alternative-manual-npm-pnpm-or-bun)
+if that first update is blocked.
+
 For a target that can read the current state, preview and use the managed
 rollback path:
 
@@ -201,7 +212,7 @@ package rollback path remains limited to unchanged database formats. If a newly
 activated package fails verification, `openclaw update` compares the
 shared and affected per-agent SQLite applied schema versions, including deferred
 content versions, with their pre-activation values and checks that the config file still matches the content
-reported by the candidate’s activation Doctor writer.
+reported by the new version’s activation Doctor writer.
 Databases first created during activation or verification are
 schema-neutral when their version matches the new version's supported version for
 that database kind. A changed schema version or missing pre-existing database,
@@ -274,7 +285,7 @@ already restored. If repair cannot pass verification, the update
 fails with the original reason and recorded repair attempts. Use `openclaw triage`
 or the printed repair command before considering an older version.
 This compatibility-only rollback restores code and the captured config without a state recovery set.
-The candidate's temporary migration-rehearsal snapshots are removed after
+The temporary migration-rehearsal snapshots are removed after
 validation and do not replace your backup.
 If the schema comparison cannot be completed, automatic rollback is refused
 (`rollback-state-unverified`). The newly installed version owns final

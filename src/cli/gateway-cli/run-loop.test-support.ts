@@ -1,6 +1,8 @@
-import { expect, vi, type Mock } from "vitest";
+import { expect, it, vi, type Mock } from "vitest";
 import type { GatewayServer } from "../../gateway/server-public.js";
 import type { GatewayActiveWorkSnapshot } from "../../infra/gateway-active-work.js";
+import type { GatewayRestartIntent } from "../../infra/restart-intent.js";
+import type { GatewayRestartSnapshot } from "../daemon-cli/restart-health.js";
 
 export const createActiveWorkSnapshot = (
   counts: Partial<GatewayActiveWorkSnapshot["counts"]> = {},
@@ -170,4 +172,159 @@ export function createRuntimeWithExitSignal(exitCallOrder?: string[]) {
     }),
   };
   return { runtime, exited };
+}
+
+export function createCloseMock() {
+  return vi.fn<GatewayServer["close"]>(async (_opts) => {});
+}
+
+export function createGatewayServer(
+  close: GatewayServer["close"],
+  startupSettled = Promise.resolve(),
+) {
+  return {
+    getTailscaleIngressEndpoint: () => undefined,
+    close,
+    startupSettled,
+  } satisfies GatewayServer;
+}
+
+export async function waitForStart(started: Promise<void>) {
+  await started;
+  await new Promise<void>((resolve) => {
+    setImmediate(resolve);
+  });
+}
+
+export async function waitForLoopCondition(predicate: () => boolean, message: string) {
+  const deadline = Date.now() + 1_000;
+  while (Date.now() < deadline) {
+    if (predicate()) {
+      return;
+    }
+    await new Promise<void>((resolve) => {
+      setImmediate(resolve);
+    });
+  }
+  throw new Error(message);
+}
+
+export type UpdateRespawnResultFixture = {
+  mode: "spawned" | "disabled" | "failed";
+  pid?: number;
+  detail?: string;
+  child?: {
+    kill: () => void;
+    pid?: number;
+    exitCode?: number | null;
+    signalCode?: NodeJS.Signals | null;
+  };
+};
+
+export function registerUpdateRespawnProgressTests({
+  runLoopWithStart,
+  peekGatewaySigusr1RestartReason,
+  consumeGatewaySigusr1RestartIntent,
+  respawnGatewayProcessForUpdate,
+  readRestartSentinelReadOnly,
+  waitForGatewayHealthyRestart,
+  respawnHealth,
+  markUpdateRestartSentinelFailure,
+  writeRestartSentinelIfUnchanged,
+  writeGatewayRestartHandoffSync,
+}: {
+  runLoopWithStart: (params: {
+    start: ReturnType<typeof createSignaledStart>["start"];
+    runtime: ReturnType<typeof createRuntimeWithExitSignal>["runtime"];
+    lockPort: number;
+  }) => Promise<unknown>;
+  peekGatewaySigusr1RestartReason: Mock<() => string | undefined>;
+  consumeGatewaySigusr1RestartIntent: Mock<() => GatewayRestartIntent | null>;
+  respawnGatewayProcessForUpdate: Mock<
+    (_opts?: { env?: NodeJS.ProcessEnv }) => UpdateRespawnResultFixture
+  >;
+  readRestartSentinelReadOnly: Mock<
+    typeof import("../../infra/restart-sentinel.js").readRestartSentinelReadOnly
+  >;
+  waitForGatewayHealthyRestart: Mock<
+    typeof import("../daemon-cli/restart-health.js").waitForGatewayHealthyRestart
+  >;
+  respawnHealth: (overrides?: Partial<GatewayRestartSnapshot>) => GatewayRestartSnapshot;
+  markUpdateRestartSentinelFailure: Mock<(reason: string) => Promise<null>>;
+  writeRestartSentinelIfUnchanged: Mock<
+    typeof import("../../infra/restart-sentinel.js").writeRestartSentinelIfUnchanged
+  >;
+  writeGatewayRestartHandoffSync: Mock;
+}) {
+  it.each([
+    { waitOutcome: "healthy", elapsedMs: 20_000, closeMs: 0, sentinelStatus: "ok" },
+    { waitOutcome: "still-starting", elapsedMs: 300_000, closeMs: 40_000, sentinelStatus: "ok" },
+    { waitOutcome: "still-starting", elapsedMs: 300_000, closeMs: 0, sentinelStatus: "error" },
+  ] as const)(
+    "leaves a $waitOutcome replacement running after $elapsedMs ms",
+    async ({ waitOutcome, elapsedMs, closeMs, sentinelStatus }) => {
+      vi.clearAllMocks();
+      peekGatewaySigusr1RestartReason.mockReturnValue("update.run");
+      consumeGatewaySigusr1RestartIntent.mockReturnValueOnce({ reason: "update.run", force: true });
+      const kill = vi.fn();
+      readRestartSentinelReadOnly.mockResolvedValueOnce({
+        version: 1,
+        revision: 1,
+        payload: { kind: "update", status: sentinelStatus, ts: 1, stats: {} },
+      });
+      respawnGatewayProcessForUpdate.mockReturnValueOnce({
+        mode: "spawned",
+        pid: process.pid,
+        child: { kill, pid: process.pid, exitCode: null, signalCode: null },
+      });
+      waitForGatewayHealthyRestart.mockImplementationOnce(async ({ child }) => {
+        expect(child).toMatchObject({ pid: process.pid, exitCode: null, signalCode: null });
+        await new Promise<void>((resolve) => {
+          setTimeout(resolve, elapsedMs);
+        });
+        return respawnHealth({ healthy: waitOutcome === "healthy", waitOutcome, elapsedMs });
+      });
+
+      await withIsolatedSignals(async ({ captureSignal }) => {
+        const close = vi.fn(async () => {
+          await new Promise<void>((resolve) => {
+            setTimeout(resolve, closeMs);
+          });
+        });
+        const { start, started } = createSignaledStart(close);
+        const { runtime, exited } = createRuntimeWithExitSignal();
+        await runLoopWithStart({ start, runtime, lockPort: 18789 });
+        await waitForStart(started);
+        const sigusr1 = captureSignal("SIGUSR1");
+
+        vi.useFakeTimers();
+        sigusr1();
+        await vi.advanceTimersByTimeAsync(10_000);
+        expect(runtime.exit).not.toHaveBeenCalled();
+        expect(kill).not.toHaveBeenCalled();
+        await vi.advanceTimersByTimeAsync(closeMs + elapsedMs - 10_000);
+
+        expect(runtime.exit).toHaveBeenCalledExactlyOnceWith(0);
+        await expect(exited).resolves.toBe(0);
+        expect(kill).not.toHaveBeenCalled();
+        expect(respawnGatewayProcessForUpdate).toHaveBeenCalledTimes(1);
+        expect(start).toHaveBeenCalledTimes(1);
+        expect(markUpdateRestartSentinelFailure).not.toHaveBeenCalled();
+        if (waitOutcome === "still-starting" && sentinelStatus !== "error") {
+          expect(writeRestartSentinelIfUnchanged).toHaveBeenCalledWith(
+            expect.objectContaining({
+              expectedRevision: 1,
+              payload: expect.objectContaining({
+                status: "skipped",
+                stats: { reason: "still-starting" },
+              }),
+            }),
+          );
+        } else {
+          expect(writeRestartSentinelIfUnchanged).not.toHaveBeenCalled();
+        }
+        expect(writeGatewayRestartHandoffSync).not.toHaveBeenCalled();
+      });
+    },
+  );
 }

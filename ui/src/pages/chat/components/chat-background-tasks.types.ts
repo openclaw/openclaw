@@ -24,6 +24,6 @@ export type BackgroundTasksProps = {
   onToggleFinished: () => void;
   onRefresh: () => void;
   onCancel: (taskId: string) => void;
-  onLoadDetail?: (task: TaskSummary) => void;
+  onLoadDetail?: (task: Pick<TaskSummary, "id">) => void;
   onOpenTaskDetail?: (task: TaskSummary) => void;
 };

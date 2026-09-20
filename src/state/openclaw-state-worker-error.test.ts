@@ -8,6 +8,7 @@ import {
   StartupMaintenanceRequiredError,
 } from "../infra/startup-maintenance-required.js";
 import { StateDatabaseCoordinatorContentionError } from "../infra/state-database-coordinator.js";
+import { SkillUploadRequestError } from "../skills/lifecycle/upload-store-error.js";
 import { OpenClawAgentDatabaseMediaMigrationRequiredError } from "./openclaw-agent-db-migration-required.js";
 import { OpenClawStateDatabaseSchemaMigrationRequiredError } from "./openclaw-state-db-schema-migration-required.js";
 import {
@@ -40,21 +41,24 @@ function roundTrip(error: Error): Error {
 }
 
 describe("shared-state worker error transport", () => {
-  it.each([false, true])("preserves RangeError identity with aggregate=%s", (aggregate) => {
-    const original = Object.assign(
-      new RangeError("Synthetic integer cannot be decoded safely", {
-        cause: new Error("Synthetic decoding cause"),
-      }),
-      { code: "ERR_OUT_OF_RANGE" },
-    );
+  it.each([
+    [RangeError, false],
+    [RangeError, true],
+    [SkillUploadRequestError, false],
+    [SkillUploadRequestError, true],
+  ] as const)("preserves %s identity with aggregate=%s", (ErrorType, aggregate) => {
+    const original = Object.assign(new ErrorType("Synthetic invalid request"), {
+      code: "ERR_OUT_OF_RANGE",
+      cause: new Error("Synthetic decoding cause"),
+    });
     const root = aggregate
       ? new AggregateError([original, original], "Read and cleanup", { cause: original })
       : original;
     const decoded = roundTrip(root);
     const restored = aggregate ? decoded.cause : decoded;
-    expect(restored).toBeInstanceOf(RangeError);
+    expect(restored).toBeInstanceOf(ErrorType);
     expect(restored).toMatchObject({
-      name: "RangeError",
+      name: original.name,
       message: original.message,
       code: original.code,
       cause: { message: "Synthetic decoding cause" },
@@ -436,6 +440,7 @@ describe("shared-state worker error transport", () => {
     for (const error of [
       new Error("ordinary"),
       Object.assign(new Error("range imitation"), { name: "RangeError", code: "ERR_OUT_OF_RANGE" }),
+      Object.assign(new Error("upload imitation"), { name: "SkillUploadRequestError" }),
       imitation,
       new AggregateError([imitation], "ordinary aggregate"),
       { cause: new OpenClawStateOwnershipError("nested object") },

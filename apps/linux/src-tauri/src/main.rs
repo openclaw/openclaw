@@ -15,6 +15,8 @@ mod gateway_sleep_logind_listener;
 mod gateway_windows;
 mod gateway_ws;
 mod installer;
+mod keep_awake;
+mod keep_awake_platform;
 mod native_browser;
 mod native_browser_bridge;
 mod native_browser_platform;
@@ -1527,6 +1529,9 @@ impl DesktopState {
 
     // Only the successful claim owner calls this, after releasing any route guard.
     pub(crate) fn finish_quit(&self, app: &AppHandle, code: i32) {
+        if let Some(power) = app.try_state::<keep_awake::KeepAwake>() {
+            power.stop();
+        }
         self.cancel_watchdog();
         app.state::<GatewayOperationQueue>().invalidate_recovery();
         self.inner.remote_tunnels.close();
@@ -1534,6 +1539,9 @@ impl DesktopState {
         let state = self.clone();
         let app = app.clone();
         thread::spawn(move || {
+            if let Some(power) = app.try_state::<keep_awake::KeepAwake>() {
+                power.wait_stopped();
+            }
             state.inner.remote_tunnels.wait_closed();
             app.state::<gateway_windows::GatewayWindows>().wait_closed();
             state
@@ -3182,7 +3190,8 @@ fn main() {
         let namespace = remote_gateway::config_path()?
             .to_string_lossy()
             .into_owned();
-        app.manage(gateway_windows::GatewayWindows::new(&namespace));
+        let profiles = Arc::new(gateway_profiles::GatewayProfiles::new(&namespace));
+        app.manage(gateway_windows::GatewayWindows::new(Arc::clone(&profiles)));
         app.manage(native_browser::NativeBrowserState::default());
         app.manage(native_browser_bridge::NativeBrowserBridgeState::default());
         let window_config = app
@@ -3277,6 +3286,14 @@ fn main() {
         app.manage(quickchat_state.clone());
         app.manage(updater::UpdaterState::default());
         state.set_tray(tray::build(app, state.clone(), global_shortcuts_supported)?);
+        let read_profiles = Arc::clone(&profiles);
+        let power_app = app.handle().clone();
+        app.manage(keep_awake::KeepAwake::start(
+            move || read_profiles.keep_computer_awake(),
+            move |enabled| profiles.set_keep_computer_awake(enabled),
+            keep_awake_platform::Inhibitor::acquire,
+            move |status| tray::publish_keep_awake(&power_app, status),
+        )?);
         if let Some(menu) = app.menu() {
             menu.append(&gateway_windows::menu(app.handle())?)?;
         }
@@ -3394,8 +3411,11 @@ fn main() {
                 }
             }
         }
-        #[cfg(target_os = "linux")]
         if matches!(event, tauri::RunEvent::Exit) {
+            if let Some(power) = app.try_state::<keep_awake::KeepAwake>() {
+                power.wait_stopped();
+            }
+            #[cfg(target_os = "linux")]
             if let Some(bridge) = app.try_state::<gateway_sleep_logind::SleepBridge>() {
                 bridge.shutdown();
             }

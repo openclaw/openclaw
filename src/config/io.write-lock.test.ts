@@ -400,7 +400,9 @@ describe("included config writer exclusion", () => {
                 /executor ownership is no longer current|source ownership changed/,
               );
             } else {
-              await mutation;
+              await expect(mutation).resolves.toMatchObject({
+                persistedSourceConfig: { gateway: { mode: "local", port: 19001 } },
+              });
             }
             expect(preflightReached).toBe(phase !== "before");
             expect(await fs.readFile(configPath, "utf8")).toBe(rootRaw);

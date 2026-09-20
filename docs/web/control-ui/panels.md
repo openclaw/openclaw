@@ -150,8 +150,10 @@ commit comments, published inline PR review comments with file/line and diff
 context, and expandable file diffs. Comment timestamps link to their source on
 GitHub. Markdown images and standalone HTML image attachments display inline;
 full-size links remain available when an image cannot load. Inline image
-requests omit cross-origin credentials and referrers, so the image host must
-support anonymous CORS. Scripts and embedded app widgets never run in these
+requests use the reader plugin's anonymous image resolver when available; GitHub
+attachments therefore work without browser CORS headers. Readers without an
+image resolver use anonymous CORS and omit cross-origin credentials and referrers.
+Scripts and embedded app widgets never run in these
 documents.
 
 The resizable panel is read-only and supports public repositories. Long

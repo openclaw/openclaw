@@ -90,15 +90,6 @@ export type UpdateRunRecord = z.infer<typeof UpdateRunRecordSchema>;
 export type UpdateRunPhase = UpdateRunRecord["phase"];
 export type UpdateRunStep = UpdateRunRecord["steps"][number];
 
-export function hasActiveUpdateDoctorStep(
-  run: UpdateRunRecord | undefined,
-): run is UpdateRunRecord {
-  return (
-    run?.status === "running" &&
-    run.steps.some((step) => step.step === "openclaw doctor" && step.status === "in_progress")
-  );
-}
-
 // Record recovery depends on legacy expiry for its reason; both use the leaf recovery-state type.
 export function isAbandonedUpdateRun(
   record: Pick<UpdateRunRecoveryState, "status" | "reason">,
@@ -117,6 +108,15 @@ export function isAcknowledgedAbandonedUpdateRun(
     record.steps.some(
       (step) => step.step === "reconcile:acknowledged" && step.status === "completed",
     )
+  );
+}
+
+export function hasActiveUpdateDoctorStep(
+  run: UpdateRunRecord | undefined,
+): run is UpdateRunRecord {
+  return (
+    run?.status === "running" &&
+    run.steps.some((step) => step.step === "openclaw doctor" && step.status === "in_progress")
   );
 }
 
@@ -170,7 +170,8 @@ export function isUnacknowledgedPackageOwnerRefusal(record: UpdateRunRecord): bo
     record.steps.every(
       (step) =>
         step.step === "requested" ||
-        (step.step === "driver:adopted" && step.status === "completed"),
+        (step.step === "driver:adopted" && step.status === "completed") ||
+        (step.step === "installation-inspection" && step.status === "skipped"),
     ) &&
     ((record.status === "skipped" &&
       record.reason === "unmanaged-package-install" &&

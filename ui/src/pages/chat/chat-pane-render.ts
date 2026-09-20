@@ -24,6 +24,7 @@ import {
   resolveChatPaneObserverRunId,
 } from "../../lib/observer-digest.ts";
 import { hasSessionPresenceViewers } from "../../lib/presence-users.ts";
+import { projectsForGateway } from "../../lib/projects.ts";
 import { GitHubPublicationController } from "../../lib/sessions/github-publication-controller.ts";
 import {
   buildAgentMainSessionKey,
@@ -273,6 +274,7 @@ export class ChatPane extends ChatPaneLayoutRender {
           onModelAccounts: () => this.context.navigate("profile"),
         });
     const composerState = getChatComposerState(this.presentationId);
+    const projectCatalog = projectsForGateway(this.context.gateway).snapshot;
     const publicationScope = this.captureConnectionScope();
     const readPublicationRow = () => {
       const row = selectedChatSessionRow(state);
@@ -543,7 +545,10 @@ export class ChatPane extends ChatPaneLayoutRender {
       backgroundTasks: catalogKey ? undefined : backgroundTasks,
       ...this.suggestionChatProps(state.connected, selectedSessionArchived, multiIdentity),
       pullRequests: this.visibleSessionPullRequests,
-      githubRepo: this.githubRepo,
+      // Until catalog success, a lowercase name may be a hidden/ambiguous alias.
+      // Do not mint a checkout link that can prefetch the wrong repository.
+      githubRepo: projectCatalog.result ? this.githubRepo : null,
+      githubRepositories: projectCatalog.repositories,
       pullRequestsGateway: this.context.gateway,
       pullRequestsBranch: this.sessionPullRequestsBranch,
       pullRequestsStatus: this.sessionPullRequestsStatus,

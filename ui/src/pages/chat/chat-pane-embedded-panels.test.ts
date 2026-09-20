@@ -7,27 +7,15 @@ import { html, nothing, render, type LitElement } from "lit";
 import "./components/chat-detail-panel.ts";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import type { SessionWorkspaceGetResult, SessionWorkspaceListResult } from "../../api/types.ts";
+import type { SessionWorkspaceGetResult } from "../../api/types.ts";
 import { loadSettings } from "../../app/settings.ts";
-import type { TaskSummary } from "../../lib/tasks/task-summary.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { resolveChatAgentId } from "./chat-agent-id.ts";
 import { resolveChatMessageAccess } from "./chat-message-access.ts";
-import {
-  availableSidebarSlots,
-  sidebarPanelDefinitions,
-  sidebarPanelTemplates,
-} from "./chat-pane-embedded-panels.ts";
-import { createChatPaneRails } from "./chat-pane-rails.ts";
-import { renderSidebarRegion } from "./chat-pane-sidebar-layout.ts";
-import {
-  createGatewayBrowserClientFixture,
-  createInitializationContext,
-  createSessionCapabilityFixture,
-} from "./chat-pane.test-support.ts";
+import { availableSidebarSlots, sidebarPanelDefinitions } from "./chat-pane-embedded-panels.ts";
+import { createGatewayBrowserClientFixture } from "./chat-pane.test-support.ts";
 import { handlePageGatewayEvent } from "./chat-state-events.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
-import { createPageState } from "./chat-state-page.ts";
 import { createTestTranscript } from "./chat-view.test-helpers.ts";
 import type { ChatProps } from "./chat-view.ts";
 import { createBackgroundTasksProps } from "./components/chat-background-tasks.ts";
@@ -40,18 +28,16 @@ import {
 import {
   createSessionWorkspaceProps,
   openSessionWorkspaceFile,
-  renderSessionWorkspaceRail,
   retireSessionWorkspaceCheckout,
 } from "./components/chat-session-workspace.ts";
 import type { SidebarContent } from "./components/chat-sidebar-content-types.ts";
-import { resetTaskDetail } from "./components/chat-task-detail-state.ts";
 import { renderChatThread } from "./components/chat-thread.ts";
-import "./components/chat-sidebar-region.runtime.ts";
 import {
   installTranscriptDomMocks,
   resetTranscriptTestDom,
   threadProps,
 } from "./components/chat-transcript.test-support.ts";
+import "./components/chat-sidebar-region.runtime.ts";
 import type { SessionDiscussionPanelConfig } from "./components/session-discussion-panel.ts";
 import {
   closeSlot,
@@ -61,8 +47,8 @@ import {
   setSidebarExpanded,
   setSidebarOpen,
   type SidebarLayout,
-  type SidebarSlotId,
 } from "./sidebar-layout.ts";
+import { createReviewFixture, renderPanelFixture } from "./test-helpers/chat-pane-review.ts";
 
 function discussionSlots(discussionAvailable: boolean) {
   const discussion = {} as SessionDiscussionPanelConfig;
@@ -76,144 +62,6 @@ function discussionSlots(discussionAvailable: boolean) {
 afterEach(() => {
   document.body.replaceChildren();
 });
-
-async function renderPanelFixture(
-  mount: HTMLElement,
-  layout: SidebarLayout,
-  definitions: ReturnType<typeof sidebarPanelDefinitions>,
-  closePanelSlot: (slot: SidebarSlotId) => void = vi.fn(),
-) {
-  render(
-    renderSidebarRegion({
-      availableWidth: 1400,
-      availableSlots: ["detail", "workspace"],
-      callbacks: {
-        activatePanel: vi.fn(),
-        togglePanelExpanded: vi.fn(),
-        closeSlot: closePanelSlot,
-        openSlot: vi.fn(),
-        reorderPanel: vi.fn(),
-        resizePanel: vi.fn(),
-        setOpen: vi.fn(),
-      },
-      layout,
-      narrow: false,
-      panelDefinitions: definitions,
-      panelActions: {},
-      panelTemplates: sidebarPanelTemplates(definitions),
-      primary: html`<main>Chat</main>`,
-      requestUpdate: vi.fn(),
-    }),
-    mount,
-  );
-  await mount.querySelector("openclaw-chat-sidebar-region")?.updateComplete;
-  await mount.querySelector<LitElement>("openclaw-chat-files-panel")?.updateComplete;
-  await Promise.all(
-    [...mount.querySelectorAll<LitElement>("openclaw-chat-detail-panel")].map(
-      (panel) => panel.updateComplete,
-    ),
-  );
-  await mount.querySelector("openclaw-panel-loading-skeleton")?.updateComplete;
-}
-
-function createReviewFixture(taskFields: Partial<TaskSummary> = {}) {
-  const file = createDeferred<SessionWorkspaceGetResult | null>();
-  const list = createDeferred<SessionWorkspaceListResult | null>();
-  const sessions = createSessionCapabilityFixture({
-    getFile: vi.fn(() => file.promise),
-    listFiles: vi.fn(() => list.promise),
-  });
-  const mount = document.body.appendChild(document.createElement("div"));
-  const context = { ...createInitializationContext(), sessions };
-  const state = createPageState(
-    context,
-    { invalidate: vi.fn(), afterCommit: () => () => {} },
-    mount,
-  );
-  const history = vi.fn().mockResolvedValue({
-    messages: [{ role: "assistant", content: "The selected task transcript." }],
-  });
-  state.client = createGatewayBrowserClientFixture({
-    request: (method, params) =>
-      method === "tasks.history"
-        ? history(params)
-        : method === "tasks.list"
-          ? { tasks: [] }
-          : { artifacts: [] },
-  });
-  state.connected = true;
-  state.connectionEpoch = 1;
-  state.sessionKey = "agent:main:review-intent";
-  state.sidebarLayout = { columns: [] };
-  const task = {
-    id: "review-task",
-    taskId: "review-task",
-    runtime: "subagent",
-    status: "completed",
-    title: "Inspect the completed task",
-    prompt: "Review the synthetic result",
-    terminalSummary: "Review completed",
-    sessionKey: state.sessionKey,
-    agentId: "main",
-    createdAt: 1,
-    updatedAt: 2,
-    ...taskFields,
-  } satisfies TaskSummary;
-  const backgroundTasks = {
-    ...createBackgroundTasksProps(state, { presented: false }),
-    tasks: [task],
-    taskDetails: new Map([[task.id, task]]),
-  };
-  const preview = {
-    sessionKey: state.sessionKey,
-    root: "/synthetic/workspace",
-    file: {
-      kind: "read",
-      path: "images/preview.png",
-      name: "preview.png",
-      missing: false,
-      previewKind: "image",
-      contentEncoding: "base64",
-      mimeType: "image/png",
-      content:
-        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aV9kAAAAASUVORK5CYII=",
-    },
-  } satisfies SessionWorkspaceGetResult;
-  const rails = () =>
-    createChatPaneRails({
-      state,
-      sidebarLayout: state.sidebarLayout,
-      presentationId: "review-intent",
-      presented: true,
-      gatewaySnapshot: { ...context.gateway.snapshot, phase: "connected" },
-      setObserverVisibility: vi.fn(),
-      updateSidebarLayout: state.updateSidebarLayout,
-    });
-  onTestFinished(async () => {
-    file.resolve(null);
-    list.resolve(null);
-    await Promise.allSettled([file.promise, list.promise]);
-    resetTaskDetail(state);
-  });
-  const renderPanels = async () => {
-    const definitions = sidebarPanelDefinitions({
-      state,
-      renderDetail: (content) =>
-        renderChatDetailSlot({
-          backgroundTasks,
-          chat: threadProps("review-intent", state.sessionKey) as ChatProps,
-          content,
-          host: state,
-          layout: state.sidebarLayout,
-        }),
-      workspace: renderSessionWorkspaceRail(createSessionWorkspaceProps(state), {
-        embedded: true,
-      }),
-    } as Parameters<typeof sidebarPanelDefinitions>[0]);
-    await renderPanelFixture(mount, state.sidebarLayout, definitions, rails().closePanelSlot);
-  };
-  return { file, history, list, mount, preview, rails, renderPanels, sessions, state, task };
-}
 
 describe("chat pane embedded panels", () => {
   it("navigates an existing file tab to an explicit line without resetting its editor or draft", async () => {

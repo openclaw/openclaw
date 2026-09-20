@@ -38,8 +38,8 @@ import {
 import { prepareSkillLibrarySessionCreation } from "../skill-library-session.js";
 import { createAgentRuntimeAuthorityGuard } from "./agent-runtime-authority.js";
 import { scheduleCreatedDashboardSessionTitle } from "./chat-send-background.js";
+import { handleDirectExternalChatSend } from "./chat-send-external-entry.js";
 import { normalizeChatSendRequest } from "./chat-send-request.js";
-import { chatHandlers } from "./chat.js";
 import { resolveRegisteredCatalogCreateTarget } from "./session-catalog.js";
 import { emitSessionsChanged } from "./session-change-event.js";
 import { registerCreatedSessionCategory } from "./session-create-category.js";
@@ -359,7 +359,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
         : prepareSessionCreateFilesystemRoot({
             cfg,
             enforceSandboxContainment: Boolean(
-              sessionCwd && !requestedExecNode && (requestedProjectId || p.worktree !== true),
+              sessionCwd && !requestedExecNode && p.worktree !== true,
             ),
             requestedExecNode,
             requestedProjectId,
@@ -535,8 +535,7 @@ export const sessionCreateHandlers: GatewayRequestHandlers = {
           scheduleCreatedDashboardSessionTitle(session, cfg, context, p.titleSource);
           return;
         }
-        const sendChat = expectDefined(chatHandlers["chat.send"], "chat.send handler");
-        await sendChat({
+        await handleDirectExternalChatSend({
           req,
           params: {
             sessionKey: session.key,

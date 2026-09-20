@@ -51,7 +51,6 @@ import androidx.compose.material.icons.outlined.ErrorOutline
 import androidx.compose.material.icons.outlined.Folder
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material3.CircularProgressIndicator
-import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
@@ -511,6 +510,26 @@ internal fun OpenClawSidebar(
   val recentSections = recentPresentation.recentSections
   val orderedPages = orderedSidebarDestinations(pageOrder)
   val visiblePageIdSet = visiblePageIds.toSet()
+  val visiblePages = orderedPages.filter { it.stableId in visiblePageIdSet }
+
+  fun movePage(
+    destination: SidebarDestination,
+    direction: Int,
+    visibleOnly: Boolean,
+  ): Boolean {
+    // Drag and accessibility both recheck authoritative preferences, including back-to-back actions.
+    val current = viewModel.sidebarPageOrder.value
+    val next =
+      moveSidebarDestination(
+        pageIds = current,
+        destinationId = destination.stableId,
+        direction = direction,
+        visiblePageIds = if (visibleOnly) viewModel.sidebarVisiblePages.value.toSet() else null,
+      )
+    if (next == current) return false
+    viewModel.setSidebarPageOrder(next)
+    return true
+  }
   val setSessionPinned: (String, String?, Boolean) -> Unit = { key, ownerAgentId, pinned ->
     scope.launch {
       viewModel.patchChatSession(key = key, ownerAgentId = ownerAgentId, pinned = pinned)
@@ -716,15 +735,7 @@ internal fun OpenClawSidebar(
                 ),
               )
             },
-            onMove = { destination, direction ->
-              viewModel.setSidebarPageOrder(
-                moveSidebarDestination(
-                  pageIds = pageOrder,
-                  destinationId = destination.stableId,
-                  direction = direction,
-                ),
-              )
-            },
+            onMove = { destination, direction -> movePage(destination, direction, visibleOnly = false) },
             onReset = {
               viewModel.setSidebarPageOrder(defaultSidebarPageOrder)
               viewModel.setSidebarVisiblePages(defaultSidebarVisiblePages)
@@ -732,7 +743,7 @@ internal fun OpenClawSidebar(
             onDragActiveChange = onDragActiveChange,
           )
           if (pagesExpanded) {
-            orderedPages.filter { it.stableId in visiblePageIdSet }.forEach { destination ->
+            visiblePages.forEachIndexed { index, destination ->
               key(destination.stableId) {
                 SidebarNavigationRow(
                   destination = destination,
@@ -740,16 +751,9 @@ internal fun OpenClawSidebar(
                   selected = destination == activeDestination,
                   palette = palette,
                   onClick = { onSelectDestination(destination) },
-                  onMove = { direction ->
-                    viewModel.setSidebarPageOrder(
-                      moveSidebarDestination(
-                        pageIds = pageOrder,
-                        destinationId = destination.stableId,
-                        direction = direction,
-                        visiblePageIds = visiblePageIdSet,
-                      ),
-                    )
-                  },
+                  canMoveUp = index > 0,
+                  canMoveDown = index < visiblePages.lastIndex,
+                  onMove = { direction -> movePage(destination, direction, visibleOnly = true) },
                   onDragActiveChange = onDragActiveChange,
                 )
               }
@@ -975,7 +979,7 @@ private fun SidebarPagesHeader(
   onMenuModeChange: (SidebarPagesMenuMode) -> Unit,
   onSelectDestination: (SidebarDestination) -> Unit,
   onVisibilityChange: (SidebarDestination, Boolean) -> Unit,
-  onMove: (SidebarDestination, Int) -> Unit,
+  onMove: (SidebarDestination, Int) -> Boolean,
   onReset: () -> Unit,
   onDragActiveChange: (Boolean) -> Unit,
 ) {
@@ -1026,7 +1030,7 @@ private fun SidebarPagesHeader(
         )
       }
 
-      DropdownMenu(
+      AppDropdownMenu(
         expanded = menuMode != SidebarPagesMenuMode.Closed,
         onDismissRequest = { onMenuModeChange(SidebarPagesMenuMode.Closed) },
         modifier = Modifier.widthIn(min = 210.dp, max = 340.dp),
@@ -1089,7 +1093,7 @@ private fun SidebarPagesHeader(
               color = palette.muted,
               modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
             )
-            destinations.forEach { destination ->
+            destinations.forEachIndexed { index, destination ->
               key(destination.stableId) {
                 val visible = destination.stableId in visiblePageIds
                 SidebarNavigationRow(
@@ -1099,6 +1103,8 @@ private fun SidebarPagesHeader(
                   pinned = visible,
                   palette = palette,
                   onClick = { onVisibilityChange(destination, !visible) },
+                  canMoveUp = index > 0,
+                  canMoveDown = index < destinations.lastIndex,
                   onMove = { direction -> onMove(destination, direction) },
                   onDragActiveChange = onDragActiveChange,
                 )

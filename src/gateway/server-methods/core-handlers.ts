@@ -31,6 +31,10 @@ const CORE_GATEWAY_HANDLER_MODULES = {
   "channel-pairing": () =>
     import("./channel-pairing.js").then((module) => module.channelPairingHandlers),
   chat: () => import("./chat.js").then((module) => module.chatHandlers),
+  "chat-send": () =>
+    import("./chat-send-external-entry.js").then((module) => ({
+      "chat.send": module.handleDirectExternalChatSend,
+    })),
   // Cancellation must not wait for unrelated chat history and send workflows to load.
   "chat-abort": () =>
     import("./chat-abort-handler.js").then((module) => ({
@@ -62,6 +66,7 @@ const CORE_GATEWAY_HANDLER_MODULES = {
   terminal: () => import("./terminal.js").then((module) => module.terminalHandlers),
   transcripts: () => import("./transcripts.js").then((module) => module.transcriptsHandlers),
   "ui-command": () => import("./ui-command.js").then((module) => module.uiCommandHandlers),
+  themes: () => import("./themes.js").then((module) => module.themeHandlers),
   "models-auth-status": () =>
     import("./models-auth-status.js").then((module) => module.modelsAuthStatusHandlers),
   "models-auth-login": () =>

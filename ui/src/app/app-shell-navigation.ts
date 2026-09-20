@@ -26,7 +26,7 @@ import { readDeletedSessionStartup } from "./deleted-session-startup.ts";
 import { considerRouteRestore, persistRoute } from "./native-route-memory.ts";
 
 export interface ShellNavigationHost {
-  readonly context: ApplicationContext<RouteId> | undefined;
+  readonly context: ApplicationContext | undefined;
   activeSessionKey: string;
   routeState: ShellRouteState;
   lastWorkspaceLocation: ({ routeId: RouteId } & Required<ApplicationNavigationOptions>) | null;

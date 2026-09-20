@@ -45,6 +45,35 @@ never guesses their owner. Confirmed process-exit settlement uses existing task
 terminal fields and retention rules. Downgrading code does not undo a terminal
 outcome already recorded by restore.
 
+Node worker recovery uses the private `node_worker_launch_cleanup` companion
+table in the existing launch journal. The launch owner adds it on first use and
+records the selected process-group or owned-anchor transport in `cleanup_mode`,
+in the same transaction as the worker identity, before allowing execution. An owned anchor
+can record `lineage_settled = 1` only for its exact current running identity after its root exits
+and its inherited lineage reaches positive EOF. Recovery also verifies that the
+recorded process group has disappeared before releasing capacity. A missing or
+ambiguous lineage result remains unknown; an empty anchor group alone cannot
+prove that descendants in other groups have stopped.
+
+The [node recovery repair](https://github.com/openclaw/openclaw/pull/149158)
+keeps the journal as the sole durable owner. Cleanup records contain no launch
+descriptor or credentials, do not enter public receipts, and share the launch's
+existing 24-hour terminal receipt retention through a cascading foreign key.
+The schema version stays unchanged; older readers ignore the new companion
+table without changing their launch-table contract. Missing cleanup records preserve the
+released `2026.9.4` process-group contract without backfilling guessed identities.
+Untagged intermediate builds that used unmarked anchors must drain their workers
+on that original build before replacement. Active modern workers must also drain
+before downgrade or rollback to an older writer, which cannot interpret anchor
+lineage completion.
+
+Notification ownership uses bare nullable `TEXT` columns at the same schema
+version: `session_watch_cursors.watcher_store_path`,
+`subagent_runs.requester_store_path`, and `subagent_runs.controller_store_path`.
+Their writers ensure them idempotently on first use; reads do not install them.
+Older readers ignore the columns. NULL remains unknown, so Gateway notification
+delivery does not assign historical records to a current parent by key alone.
+
 Retained ACP imports use the same-version additive-column exception for the bare
 nullable `session_nodes.legacy_acp_migration_json TEXT` column. Legacy session
 import ensures it on first use and records exact source-component provenance;
@@ -152,6 +181,26 @@ Conversation associations use the same rule for the nullable bare
 for updated binaries. Older readers ignore it and can reopen and update the
 same database safely; their association update invalidates context captured by
 a newer writer so it cannot be replayed after re-upgrade.
+
+Conversation progress continuations reuse the agent database's `cache_entries`
+table with scope `conversation-progress` and the delivery operation ID as the key.
+No table, column, schema-version change, or migration is required. A missing cache
+entry means no retained presentation; older receipts are not backfilled.
+
+The receipt owns the known platform message identity and delivery status.
+Adoption records that evidence and its bounded, data-only prepared snapshot in
+one guarded transaction. Later updates write only the snapshot cache, leaving
+the receipt unchanged: desired presentation is not proof that a platform edit
+was delivered or that work completed. Snapshots are limited to 64 KiB of JSON,
+4,096 characters per string, 128 rolling lines, and 64 checklist steps or prepared
+blocks. Invalid optional snapshots are ignored without hiding delivery evidence.
+
+Reopening restores cached presentation only under the existing task and
+requester checks; the snapshot never grants authority. Older builds ignore the
+cache scope and cannot resume the newer presentation flow. Canonical session
+repair carries snapshots with their receipt identities. The existing session
+delivery cleanup removes matching snapshot keys with their receipts, with no new
+expiry policy, cleanup loop, or completion owner.
 
 Transcript context eligibility uses a bare nullable
 `session_transcript_active_events.context_eligible INTEGER` column without

@@ -921,13 +921,27 @@ describe("retained npm package integrity", () => {
     });
   });
 
-  it.each(["external link", "oversized file", "unavailable inode"] as const)(
+  it.each([
+    "external link",
+    "sibling dependency link",
+    "oversized file",
+    "unavailable inode",
+  ] as const)(
     "refuses an unverifiable %s before service preparation or live mutation",
     async (shape) => {
       await withTestDir({ prefix: "openclaw-rollback-admission-" }, async (base) => {
-        const { params, packageRoot, launcher } = await createPackageSwapFixture(base);
+        const { params, packageRoot, globalRoot, launcher } = await createPackageSwapFixture(base);
         if (shape === "external link") {
           await fs.symlink(base, path.join(packageRoot, "external"));
+        }
+        if (shape === "sibling dependency link") {
+          const dependency = path.join(globalRoot, "fixture-dependency");
+          await fs.mkdir(dependency);
+          await fs.writeFile(path.join(dependency, "index.js"), "export default 42;\n");
+          await fs.mkdir(path.join(packageRoot, "node_modules"));
+          const link = path.join(packageRoot, "node_modules", "fixture-dependency");
+          await fs.symlink("../../fixture-dependency", link);
+          expect(await fs.realpath(link)).toBe(await fs.realpath(dependency));
         }
         if (shape === "oversized file") {
           const file = path.join(packageRoot, "oversized.bin");
@@ -952,6 +966,9 @@ describe("retained npm package integrity", () => {
           onLiveMutation,
         });
         expect(result.status).toBe("failed");
+        expect(result.step.stderrTail).not.toContain("package tree changed");
+        expect(result.step.stderrTail).not.toContain("Installation recovery is unverified");
+        expect(result).toMatchObject({ packageRollbackVerified: false });
         expect(beforeActivate).not.toHaveBeenCalled();
         expect(onLiveMutation).not.toHaveBeenCalled();
         await expect(

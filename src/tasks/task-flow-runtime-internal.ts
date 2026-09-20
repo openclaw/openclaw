@@ -5,9 +5,11 @@ export {
   deleteTaskFlowRecordById,
   ensureTaskFlowRegistryReady,
   ensureTaskFlowRegistryReadyAsync,
+  prepareTaskFlowRegistryRead,
   failFlow,
   finishFlow,
   getTaskFlowById,
+  readResidentTaskFlow,
   getTaskMirroredFlowIds,
   listTaskFlowRecords,
   prepareTaskMirroredFlowSync,
@@ -24,3 +26,4 @@ export {
 } from "./task-flow-registry.js";
 
 export type { TaskFlowUpdateResult } from "./task-flow-registry.js";
+export type { TaskFlowRegistryRead } from "./task-flow-registry.read.js";

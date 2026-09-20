@@ -1,3 +1,4 @@
+import { MAX_RECONCILIATION_ENTRIES } from "./workspace-manifest.js";
 import { REMOTE_WORKSPACE_MUTATION_LOCK_JS } from "./workspace-mutation-lock-remote-script.js";
 import {
   REMOTE_WORKSPACE_MUTATION_CONTEXT_JS,
@@ -78,7 +79,7 @@ function isSafeRelativePath(relative) {
 }
 function parsePaths(raw) {
   const values = JSON.parse(raw);
-  if (!Array.isArray(values) || values.length > 25_000) {
+  if (!Array.isArray(values) || values.length > ${MAX_RECONCILIATION_ENTRIES}) {
     throw new Error("invalid accepted workspace paths");
   }
   const paths = [...new Set(values)];
@@ -203,7 +204,7 @@ function normalizeRecoveredPhase(candidate, cleanupNamespace = false) {
 }
 function readState(candidate) {
   const value = JSON.parse(fs.readFileSync(path.join(candidate, "state.json"), "utf8"));
-  if (!Array.isArray(value) || value.length > 25_000) {
+  if (!Array.isArray(value) || value.length > ${MAX_RECONCILIATION_ENTRIES}) {
     throw new Error("invalid accepted workspace transaction state");
   }
   const relatives = parsePaths(JSON.stringify(value.map((entry) => entry && entry.relative)));

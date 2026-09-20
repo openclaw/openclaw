@@ -1,9 +1,16 @@
 import type { Result } from "@openclaw/normalization-core/result";
 // Tracks task process state transitions used to reconcile running work.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import type { AgentActivityItem } from "../../packages/gateway-protocol/src/schema/logs-chat.js";
 import type { TaskSummary } from "../../packages/gateway-protocol/src/schema/tasks.js";
+import type { SubagentRunRecord } from "../agents/subagents/registry/subagent-registry.types.js";
+import type { GetReplyOptions } from "../auto-reply/get-reply-options.types.js";
+import type { OpenClawStateDatabaseReadAdmission } from "../state/openclaw-state-db-async-lifecycle.js";
+import type { DeliveryContext } from "../utils/delivery-context.types.js";
+import type { TaskAgentEventTarget } from "./task-registry-agent-event-target.js";
 import {
   getTaskRelatedSessionIndexKeys,
+  filterTasksByRunScope,
   cloneTaskRecordForObserver,
   isEquivalentTaskRecord,
   listTasksFromIndex,
@@ -12,10 +19,12 @@ import type {
   TaskRegistryMutationScope,
   TaskRegistryObserverEvent,
 } from "./task-registry.store.types.js";
-import type { TaskDeliveryState, TaskRecord } from "./task-registry.types.js";
+import type { TaskDeliveryState, TaskRecord, TaskRuntime } from "./task-registry.types.js";
 
 export type PendingTaskRegistryMutation = {
   scope: TaskRegistryMutationScope;
+  readEventTarget?: () => TaskAgentEventTarget | undefined;
+  readIdentity?: "preserved";
   published: Map<string, Omit<TaskRecord, "detail"> | undefined>;
   publication?: {
     records: Map<string, TaskRecord>;
@@ -23,6 +32,7 @@ export type PendingTaskRegistryMutation = {
     invalidated: Set<string>;
   };
   readWitness?: { writtenTaskIds: Set<string>; replaced: boolean };
+  recoveryWitness?: { writtenTaskIds: Set<string>; replaced: boolean };
 };
 
 export type TaskRunOwner = {
@@ -37,12 +47,14 @@ export type TaskActivityOverlayState = {
   executionRunId?: string;
   executionId?: string;
   executionSourceId?: string;
-  executionState?: "running" | "waiting" | "unknown";
+  executionState?: "running" | "waiting" | "finished" | "unknown";
   executionWait?: NonNullable<TaskSummary["execution"]>["wait"];
   pendingApprovalIds: Set<string>;
   approvalObservationOverflow?: true;
   lastActivityAt?: number;
   currentTools: Map<string, { name: string; startedAt: number }>;
+  preparedItems: Map<string, AgentActivityItem>;
+  preparedGeneration?: number;
   assistantText: string;
   thinkingText: string;
   hasAssistantActivity: boolean;
@@ -56,13 +68,50 @@ export type TaskActivityOverlayState = {
   flushTimer?: ReturnType<typeof setTimeout>;
 };
 
+export type TaskProgressItem = {
+  item: AgentActivityItem;
+  source?: { taskId: string; runId: string; generation: number; label: string };
+};
+export type TaskProgressPlan = Pick<
+  Parameters<NonNullable<GetReplyOptions["onPlanUpdate"]>>[0],
+  "steps" | "explanation" | "explanationFormat"
+>;
+
+export type TaskProgressMember = {
+  runId: string;
+  taskRunId: string;
+  generation: number;
+  childSessionKey: string;
+  progressOrigin?: SubagentRunRecord["progressOrigin"];
+};
+
 export type TaskProgressBatch = {
   lifecycleGeneration: string;
-  members: Map<string, { runId: string; generation: number }>;
+  requesterSessionKey: string;
+  requesterAgentId?: string;
+  requesterSessionId?: string;
+  operationId?: string;
+  origin: DeliveryContext;
+  abortController: AbortController;
+  lastPublishedContent?: string;
+  typingStarted?: boolean;
+  members: Map<string, TaskProgressMember>;
+  pendingItems: Map<string, TaskProgressItem>;
+  pendingPlan?: TaskProgressPlan;
+  requesterContinuation?: {
+    runId: string;
+    requesterSessionId: string;
+    isCurrent: () => boolean;
+  };
   revision: number;
   timer?: ReturnType<typeof setTimeout>;
-  publishing?: boolean;
-  overflow: boolean;
+  publication?: Promise<void>;
+};
+
+export type TaskRegistryEventMutations = {
+  prepare: () => { consume: () => void; release: () => void } | undefined;
+  pending: () => boolean;
+  captureReadFence: (admission: OpenClawStateDatabaseReadAdmission) => Promise<void>;
 };
 
 /** Process-local indexes backing task lookup, owner access, and pending delivery scans. */
@@ -81,8 +130,11 @@ type TaskRegistryProcessState = {
   /** Live owners survive store reloads, but are never persisted or restored after restart. */
   runOwners: Map<string, TaskRunOwner>;
   // Listener ownership must survive module reloads alongside the task indexes it updates.
-  listenerStop?: (() => void) | null;
-  changeListeners: Set<() => void>;
+  listener?: {
+    stop: (() => void) | null;
+    events: TaskRegistryEventMutations;
+  };
+  changeListeners: Set<(event?: TaskRegistryObserverEvent) => void>;
   projection: {
     epoch: number;
     dirty: boolean;
@@ -127,11 +179,30 @@ export function clearTaskProgressBatches(): void {
   const batches = getTaskRegistryProcessState().taskProgressBatches;
   for (const batch of batches.values()) {
     clearTimeout(batch.timer);
+    batch.abortController.abort();
   }
   batches.clear();
 }
 
 const indexState = getTaskRegistryProcessState();
+
+export function getTasksByRunId(runId: string): TaskRecord[] {
+  const ids = indexState.taskIdsByRunId.get(runId.trim());
+  if (!ids || ids.size === 0) {
+    return [];
+  }
+  return [...ids]
+    .map((taskId) => indexState.tasks.get(taskId))
+    .filter((task): task is TaskRecord => Boolean(task));
+}
+
+export function getTasksByRunScope(params: {
+  runId: string;
+  runtime?: TaskRuntime;
+  sessionKey?: string;
+}): TaskRecord[] {
+  return filterTasksByRunScope(getTasksByRunId(params.runId), params);
+}
 
 export function addRunIdIndex(taskId: string, runId?: string) {
   const trimmed = runId?.trim();
@@ -260,13 +331,66 @@ export function matchesScope(task: TaskRecord, scope: TaskRegistryMutationScope)
   );
 }
 
+/** Restore transaction-local publication facts without replacing held witness objects. */
+export function captureTaskRegistryPublicationRollback(): () => void {
+  const captured = [...indexState.projection.pending].map((pending) => ({
+    pending,
+    published: new Map(pending.published),
+    witnesses: [pending.readWitness, pending.recoveryWitness].flatMap((witness) =>
+      witness
+        ? [{ witness, writtenTaskIds: new Set(witness.writtenTaskIds), replaced: witness.replaced }]
+        : [],
+    ),
+    publication: pending.publication && {
+      owner: pending.publication,
+      invalidated: new Set(pending.publication.invalidated),
+    },
+  }));
+  return () => {
+    for (const { pending, published, witnesses, publication } of captured) {
+      pending.published.clear();
+      for (const [taskId, task] of published) {
+        pending.published.set(taskId, task);
+      }
+      for (const { witness, writtenTaskIds, replaced } of witnesses) {
+        witness.writtenTaskIds.clear();
+        for (const taskId of writtenTaskIds) {
+          witness.writtenTaskIds.add(taskId);
+        }
+        witness.replaced = replaced;
+      }
+      if (publication) {
+        publication.owner.invalidated.clear();
+        for (const taskId of publication.invalidated) {
+          publication.owner.invalidated.add(taskId);
+        }
+      }
+    }
+  };
+}
+
 /** A committed projection write supersedes held reads even when its value returns to the original. */
 export function recordTaskRegistryProjectionWrite(
-  source: "task" | "snapshot" | "delivery",
+  source: "task" | "snapshot" | "refresh" | "delivery" | ReadonlyMap<string, TaskRecord>,
   taskId?: string,
   deleted = false,
 ): void {
+  // A writer's readback can refresh peers outside its committed receipt.
+  const kind =
+    typeof source === "string"
+      ? source
+      : taskId !== undefined && source.has(taskId)
+        ? "snapshot"
+        : "refresh";
   for (const pending of indexState.projection.pending) {
+    const recovery = pending.recoveryWitness;
+    if (recovery && kind !== "delivery" && kind !== "refresh") {
+      if (taskId === undefined) {
+        recovery.replaced = true;
+      } else if (taskId === pending.scope.taskId) {
+        recovery.writtenTaskIds.add(taskId);
+      }
+    }
     const witness = pending.readWitness;
     if (witness) {
       const current = taskId === undefined ? undefined : indexState.tasks.get(taskId);
@@ -281,13 +405,16 @@ export function recordTaskRegistryProjectionWrite(
       }
     }
     const publication = pending.publication;
-    if (!publication || source === "delivery") {
+    if (!publication || kind === "delivery") {
       continue;
     }
     for (const id of taskId === undefined ? publication.records.keys() : [taskId]) {
       // A predecessor's snapshot cannot supersede a receipt still waiting for its own read.
       const expected = publication.records.get(id);
-      if (!expected || (source === "snapshot" && !witness && !publication.ready.has(id))) {
+      if (
+        !expected ||
+        ((kind === "snapshot" || kind === "refresh") && !witness && !publication.ready.has(id))
+      ) {
         continue;
       }
       const current = deleted ? undefined : indexState.tasks.get(id);

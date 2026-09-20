@@ -12,6 +12,7 @@ import { quoteCliArg, quotePowerShellArg } from "../quote-cli-arg.js";
 import * as shared from "./shared.js";
 import * as databaseContext from "./update-command-database-context.js";
 import { installFreshUpdateFixture, targetMetadata } from "./update-command-fresh.test-support.js";
+import * as runtimeRecovery from "./update-command-node-runtime-resolution.js";
 import * as packageUpdate from "./update-command-package.js";
 import { updateCommand } from "./update-command.js";
 
@@ -53,6 +54,9 @@ it.each(cases.flatMap((entry) => [true, false].map((json) => Object.assign({}, e
   "previews package runtime admission without mutation ($name, json=$json)",
   async ({ restart, compatible, current, refresh, json, owned = true, running = true }) => {
     fixture.managedServiceNodeRunner = "/service/node";
+    const provisionRuntime = vi
+      .spyOn(runtimeRecovery, "resolveTargetNodeRuntime")
+      .mockRejectedValue(new Error("A retained service runtime must not be provisioned"));
     vi.spyOn(shared, "resolveNodeRunner").mockReturnValue("/current/node");
     vi.spyOn(gatewaySupervision, "assertGatewayServiceMutationAllowed").mockReturnValue();
     const service = createMockGatewayService({
@@ -225,6 +229,43 @@ it.each(cases.flatMap((entry) => [true, false].map((json) => Object.assign({}, e
         expect(packageUpdate.stagePackageInstallUpdate).not.toHaveBeenCalled();
       }
       expect(fs.existsSync(fixture.databasePath)).toBe(false);
+    }
+    expect(provisionRuntime).not.toHaveBeenCalled();
+  },
+);
+
+it.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
+  "previews the global directory permission reason without staging or creating state",
+  async () => {
+    const globalRoot = path.join(path.dirname(fixture.root), "prefix", "lib", "node_modules");
+    fs.mkdirSync(globalRoot, { recursive: true });
+    vi.mocked(updateGlobal.resolveGlobalInstallTarget).mockResolvedValue({
+      manager: "npm",
+      command: "npm",
+      globalRoot,
+      packageRoot: fixture.root,
+      npmOwner: { version: "12.0.0", lifecyclePolicy: "allow-scripts" },
+    });
+    fs.chmodSync(globalRoot, 0o555);
+    try {
+      await updateCommand({ dryRun: true, json: true, yes: true });
+      expect(defaultRuntime.writeJson).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          dryRun: true,
+          failures: [
+            expect.objectContaining({
+              reason: "global-install-permission-denied",
+              message: expect.stringContaining(globalRoot),
+              failureFacts: [expect.objectContaining({ code: "global-install-permission-denied" })],
+            }),
+          ],
+        }),
+      );
+      expect(packageUpdate.stagePackageInstallUpdate).not.toHaveBeenCalled();
+      expect(fs.existsSync(fixture.databasePath)).toBe(false);
+      expect(fs.readdirSync(globalRoot)).toEqual([]);
+    } finally {
+      fs.chmodSync(globalRoot, 0o755);
     }
   },
 );

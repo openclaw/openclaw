@@ -1,5 +1,6 @@
 // Codex tests cover rate limits plugin behavior.
 import { describe, expect, it } from "vitest";
+import { formatCodexStatus } from "../command-formatters.js";
 import {
   buildCodexAppServerUsageSnapshot,
   formatCodexUsageLimitErrorMessage,
@@ -194,6 +195,42 @@ describe("formatCodexUsageLimitErrorMessage", () => {
 });
 
 describe("buildCodexAppServerUsageSnapshot", () => {
+  it.each(["gpt-reserve", "other-quota"])(
+    "discloses only the distinct reserve route (%s)",
+    (limitName) => {
+      const value = {
+        rateLimitsByLimitId: {
+          codex: { limitId: "codex", primary: { usedPercent: 100 } },
+          alias: {
+            limitId: "base_model_inference",
+            limitName,
+            normalModelSlug: "gpt-5.6-luna",
+            secondary: { usedPercent: 0 },
+          },
+        },
+      };
+      const snapshot = buildCodexAppServerUsageSnapshot(value);
+      const status = summarizeCodexRateLimits(value);
+      expect(snapshot.windows).toHaveLength(1);
+      if (limitName === "gpt-reserve") {
+        expect(snapshot.summary).toContain("Ordinary Luna does not use this reserve");
+        expect(status).toContain("Luna Reserve (separate route)");
+        expect(status).toContain("does not establish eligibility or per-request billing");
+        const command = formatCodexStatus({
+          models: { ok: true, value: { models: [] } },
+          account: { ok: true, value: {} },
+          limits: { ok: true, value },
+          mcps: { ok: true, value: [] },
+          skills: { ok: true, value: [] },
+        });
+        expect(command).toContain(". Luna Reserve is a separate");
+      } else {
+        expect(snapshot.summary).toBeUndefined();
+        expect(status).not.toContain("Luna Reserve");
+      }
+    },
+  );
+
   it("includes additional quota groups and precise balances for account rows", () => {
     const payload = {
       rateLimitsByLimitId: {

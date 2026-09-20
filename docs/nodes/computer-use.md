@@ -280,7 +280,7 @@ On macOS, default-on means a paired gateway can drive pointer and keyboard input
 
 - Tool policy, local provider enablement, and platform permissions must agree. Node targets also require Gateway command policy, pairing, and node-app settings. On macOS that includes **Allow Computer Control**, Accessibility, and Screen Recording; the native Peekaboo path also requires Event Posting. Actions execute while those durable controls remain enabled; there is no per-action confirmation.
 - The macOS fulfiller posts text one grapheme at a time, so cancellation, disconnect, pause, disable, or endpoint replacement stops it before the next grapheme. The experimental CUA Driver fulfiller passes node cancellation to the SDK for each call.
-- On macOS, capture and input require a verified unlocked desktop. Temporary keep-awake covers an active Computer execution, including background actions, for at most one hour. Manual lock, logout, or unknown state releases assertions and retires the execution; a later unlock requires a new execution. Optional [unattended desktop hosting](/platforms/mac/permissions#desktop-availability-and-keeping-awake) keeps a connected host awake between jobs without changing persistent macOS power or lock settings.
+- On macOS, capture and input require a verified unlocked desktop. Temporary keep-awake covers an active Computer execution, including background actions, for at most one hour. Manual lock, logout, or unknown state releases assertions and retires the execution; a later unlock requires a new execution. Optional [Keep computer awake](/platforms/mac/permissions#desktop-availability-and-keeping-awake) keeps a connected host awake between jobs without changing persistent macOS power or lock settings.
 - CUA recording, replay, browser upload, and browser download paths belong to the selected computer host. The model receives only opaque execution-scoped resource handles; traversal, absolute paths, symlink escapes, and helper selection are rejected before driver dispatch.
 - Screenshots are model-only and never auto-sent to chat (issue [#44759](https://github.com/openclaw/openclaw/issues/44759)).
 - Treat screen content as untrusted; it can carry prompt injection.
@@ -334,10 +334,10 @@ viewer, use a supported local or remote login path. OpenClaw's availability
 reporting does not change how macOS captures that secure screen.
 
 For a dedicated Mac that should stay awake between jobs, explicitly enable
-**Unattended desktop hosting** in **Dashboard → Settings → This Mac**. It remains
+**Keep computer awake** in **Dashboard → Settings → This Mac**. It remains
 subject to the current connection, hosting, and unlocked-session requirements.
 Screen Sharing may request an immediate lock when its last viewer disconnects;
-OpenClaw honors that lock even when unattended desktop hosting is enabled. The
+OpenClaw honors that lock even when **Keep computer awake** is enabled. The
 web Desktop viewer does not create an OpenClaw keep-awake execution.
 See [Desktop availability and keeping awake](/platforms/mac/permissions#desktop-availability-and-keeping-awake).
 

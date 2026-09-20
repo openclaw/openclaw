@@ -97,6 +97,18 @@ describe("GitHub detail public read boundary", () => {
         bodyTruncated: false,
       });
       expect(first.body).toBe(kind === "commit" ? "Subject\n\nDetails" : item().body);
+      if (kind === "commit") {
+        expect(first.metadata).toEqual([
+          { label: "Additions", value: "+1", tone: "positive" },
+          { label: "Deletions", value: "−1", tone: "negative" },
+        ]);
+      }
+      if (kind === "pull") {
+        expect(first.metadata).toEqual([
+          { label: "Files", value: "0" },
+          { label: "Comments", value: "0" },
+        ]);
+      }
       expect(first.url).toBe(
         "https://github.com/octocat/" +
           input.repo +

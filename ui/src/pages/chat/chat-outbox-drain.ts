@@ -26,6 +26,7 @@ import {
   type ChatCommandTarget,
   type ChatCommandResetOptions,
 } from "./chat-commands.ts";
+import { chatOutboxOwner } from "./chat-outbox-owner.ts";
 import {
   isInterruptedChatInput,
   readCurrentStoredChatHistory,
@@ -267,6 +268,9 @@ async function drainStoredChatOutbox(
       return "empty";
     }
     if (
+      // Browser input still belongs to the foreground submitter. Only its fresh
+      // admission may deliver this version; passive wakes must not drop its fence.
+      (!freshItem && chatOutboxOwner(host).hasPendingSubmission(outbox, storedItem)) ||
       (item.sendState === "unconfirmed" && (!item.sendRunId || item.localCommandName)) ||
       (item.sendState === "waiting-model" && !lane.pendingOptions.has(item.id)) ||
       // An open edit owns this row: sending the superseded text would deliver a

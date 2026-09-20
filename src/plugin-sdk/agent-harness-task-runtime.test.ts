@@ -206,7 +206,7 @@ describe("agent-harness-task-runtime", () => {
   });
 
   it("lists only task records owned by the scoped requester session", () => {
-    vi.mocked(listTaskRecords).mockReturnValue([
+    const records = [
       {
         taskId: "task-1",
         runtime: "subagent",
@@ -235,7 +235,10 @@ describe("agent-harness-task-runtime", () => {
         notifyPolicy: "silent",
         createdAt: 1,
       },
-    ]);
+    ] satisfies ReturnType<typeof listTaskRecords>;
+    vi.mocked(listTaskRecords).mockImplementation((filter) =>
+      filter ? records.filter(filter) : records,
+    );
     const runtime = createAgentHarnessTaskRuntime({
       runtime: "subagent",
       taskKind: "example-harness",

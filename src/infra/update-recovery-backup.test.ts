@@ -392,7 +392,7 @@ describe("update recovery backup", () => {
             : undefined;
           try {
             await expect(restoreUpdateRecoveryBackup(ref, authority)).rejects.toThrow(
-              /candidate preservation failed|Synthetic verification staging cleanup failure/,
+              /candidate preservation failed|Synthetic verification staging cleanup failure/i,
             );
           } finally {
             cleanup?.mockRestore();
@@ -430,6 +430,44 @@ describe("update recovery backup", () => {
       });
     },
   );
+
+  it("preserves both candidate admission and verification cleanup failures", async () => {
+    await withOpenClawTestState({ layout: "state-only", scenario: "minimal" }, async (state) => {
+      const { database, installRoot, runId } = await fixture(state);
+      try {
+        const ref = await createUpdateRecoveryBackup({ ...authority, installRoot, runId });
+        const restoreFailure = new Error("Synthetic candidate authority refusal");
+        const cleanupFailure = new Error("Synthetic verification staging cleanup failure");
+        const assertOwned = vi.fn(() => {
+          throw restoreFailure;
+        });
+        const remove = fs.rm;
+        const cleanup = vi.spyOn(fs, "rm").mockImplementation(async (pathname, options) => {
+          if (
+            typeof pathname === "string" &&
+            path.dirname(pathname) === ref.directory &&
+            path.basename(pathname).startsWith(".verify-")
+          ) {
+            throw cleanupFailure;
+          }
+          await remove(pathname, options);
+        });
+        try {
+          await expect(restoreUpdateRecoveryBackup(ref, { assertOwned })).rejects.toMatchObject({
+            name: "AggregateError",
+            cause: restoreFailure,
+            errors: [restoreFailure, cleanupFailure],
+          });
+          expect(assertOwned).toHaveBeenCalled();
+        } finally {
+          cleanup.mockRestore();
+        }
+        await expect(verifyUpdateRecoveryBackup(ref)).resolves.toMatchObject({ runId });
+      } finally {
+        database.close();
+      }
+    });
+  });
 
   it("retains captured plugin leases as evidence without resurrecting deleted plugin records", async () => {
     await withOpenClawTestState({ layout: "state-only", scenario: "minimal" }, async (state) => {

@@ -263,8 +263,8 @@ describe("profile-bound appearance preferences", () => {
     pushServerUiPrefs(writer, { theme: "knot" }, { profileId, canWrite: true });
 
     await waitForFast(() =>
-      expect(request).toHaveBeenCalledExactlyOnceWith("users.prefs.set", {
-        entries: { "ui.theme": "knot" },
+      expect(request).toHaveBeenCalledExactlyOnceWith("themes.set", {
+        id: "knot",
       }),
     );
   });
@@ -301,8 +301,10 @@ describe("profile-bound appearance preferences", () => {
         }
         return { status: "ok", entries };
       }
-      expect(method).toBe("users.prefs.set");
-      expect(params).toEqual({ entries: { [preferenceKey]: null } });
+      expect(method).toBe(key === "theme" ? "themes.set" : "users.prefs.set");
+      expect(params).toEqual(
+        key === "theme" ? { id: null } : { entries: { [preferenceKey]: null } },
+      );
       entries = {};
       return { status: "ok" };
     });
@@ -413,9 +415,10 @@ describe("profile-bound appearance preferences", () => {
       patchSettings({ [key]: edited });
       pushServerUiPrefs(writer, { [key]: edited }, { profileId, canWrite: true });
       await waitForFast(() =>
-        expect(request).toHaveBeenLastCalledWith("users.prefs.set", {
-          entries: { [preferenceKey]: edited },
-        }),
+        expect(request).toHaveBeenLastCalledWith(
+          key === "theme" ? "themes.set" : "users.prefs.set",
+          key === "theme" ? { id: edited } : { entries: { [preferenceKey]: edited } },
+        ),
       );
 
       const previous = loadSettings();
@@ -426,9 +429,10 @@ describe("profile-bound appearance preferences", () => {
       const afterCommit = vi.fn();
       pushServerUiPrefs(writer, { [key]: null }, { profileId, canWrite: true, afterCommit });
       await waitForFast(() => expect(afterCommit).toHaveBeenCalledOnce());
-      expect(request).toHaveBeenLastCalledWith("users.prefs.set", {
-        entries: { [preferenceKey]: null },
-      });
+      expect(request).toHaveBeenLastCalledWith(
+        key === "theme" ? "themes.set" : "users.prefs.set",
+        key === "theme" ? { id: null } : { entries: { [preferenceKey]: null } },
+      );
       expect(
         resolveServerUiPrefState(config, key, scope, loadSettings(), { profileId }),
       ).toMatchObject({ provenance, value: resetValue });
@@ -476,17 +480,23 @@ describe("profile-bound appearance preferences", () => {
     };
     await refreshProfileAppearancePrefs(options);
     patchSettings({ theme: "dash" });
-    pushServerUiPrefs(writer, { theme: "dash" }, { profileId, canWrite: true });
+    const afterCommit = vi.fn();
+    pushServerUiPrefs(writer, { theme: "dash" }, { profileId, canWrite: true, afterCommit });
+    await waitForFast(() => expect(request).toHaveBeenCalledWith("themes.set", { id: "dash" }));
     profileTheme = "absolutely";
 
     await refreshProfileAppearancePrefs(options);
+    expect(request.mock.calls.filter(([method]) => method === "users.prefs.get")).toHaveLength(2);
 
     expect(loadSettings().theme).toBe("dash");
     expect(
       resolveServerUiPrefState(config, "theme", scope, loadSettings(), { profileId }),
     ).toMatchObject({ provenance: "pending", value: "dash" });
     releaseWrite({ status: "ok" });
-    await waitForFast(() => expect(request).toHaveBeenCalledTimes(3));
+    await waitForFast(() => expect(afterCommit).toHaveBeenCalledOnce());
+    expect(
+      resolveServerUiPrefState(config, "theme", scope, loadSettings(), { profileId }),
+    ).toMatchObject({ provenance: "profile", value: "dash" });
   });
 
   it("keeps read-only profile edits device-local without attempting a profile write", async () => {
@@ -541,8 +551,8 @@ describe("profile-bound appearance preferences", () => {
     patchSettings({ theme: "claw" });
     pushServerUiPrefs(writer, { theme: "claw" }, { profileId, canWrite: true });
     await waitForFast(() =>
-      expect(request).toHaveBeenLastCalledWith("users.prefs.set", {
-        entries: { "ui.theme": "claw" },
+      expect(request).toHaveBeenLastCalledWith("themes.set", {
+        id: "claw",
       }),
     );
 

@@ -302,13 +302,19 @@ describe("worker task pool", () => {
     const pool = createPool({ workerUrl, maxPendingTasks: 1 });
     const gate = createDeferredCore<PoolFixtureInput>();
     const controller = new AbortController();
-    const first = pool.run(() => gate.promise, { signal: controller.signal });
+    const executionSettled = vi.fn();
+    const first = pool.run(() => gate.promise, {
+      signal: controller.signal,
+      onExecutionSettled: executionSettled,
+    });
     const settled = Promise.allSettled([first]);
     controller.abort();
     await settled;
+    expect(executionSettled).toHaveBeenCalledExactlyOnceWith({ retired: true });
     await expect(pool.run({ label: "excess" }, {})).rejects.toMatchObject({ code: "overloaded" });
     gate.resolve({ label: "canceled" });
     await gate.promise;
+    expect(executionSettled).toHaveBeenCalledOnce();
     expect(await pool.run({ label: "recovered" }, {})).toMatchObject({ label: "recovered" });
   });
 

@@ -514,7 +514,12 @@ export function installDeferredCompletionFixture() {
     vi.mocked(resolveGatewayInstallEntrypoint).mockResolvedValue(entrypoint);
     vi.mocked(runUtf8CommandWithTimeout).mockImplementation(
       await createUpdateUtf8CommandTransportFixture(
-        { hostCwd: process.cwd(), hostEnv: { ...process.env } },
+        {
+          hostCwd: process.cwd(),
+          hostEnv: { ...process.env },
+          npmPrefix: installRoot,
+          run: async () => doctorProcessResult(),
+        },
         async (argv, options) => {
           if (argv[2] === "--doctor") {
             return runDelegatedDoctorFixture(argv, options, {

@@ -28,9 +28,7 @@ function readSessionMembers<T>(
   fallback: T,
   operation: (database: Pick<OpenClawAgentDatabase, "db">) => T,
 ): T {
-  const result = withOpenClawAgentDatabaseReadOnly(operation, resolveDatabaseOptions(scope), {
-    throwOnMissingTable: true,
-  });
+  const result = withOpenClawAgentDatabaseReadOnly(operation, resolveDatabaseOptions(scope));
   return result.found ? result.value : fallback;
 }
 

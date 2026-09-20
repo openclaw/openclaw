@@ -1,6 +1,10 @@
 import { deferSqlitePostCommitPublication } from "../infra/sqlite-post-commit.js";
 import { runSqliteDeferredTransactionSync } from "../infra/sqlite-transaction.js";
 import type { SqliteWorkerCommand } from "../infra/sqlite-worker-contract.js";
+import {
+  deferSqliteWorkerCommitReceipt,
+  requestSqliteWorkerOperationAdmission,
+} from "../infra/sqlite-worker-operation-admission.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import type {
   OpenClawStateDatabase,
@@ -30,6 +34,8 @@ import {
 } from "./task-flow-registry.store.kernel.js";
 import { isTerminalTaskFlow, type TaskFlowRecord } from "./task-flow-registry.types.js";
 import { executeTaskInitialMutation } from "./task-initial.worker.js";
+import { captureTaskCreationEventTarget } from "./task-registry-agent-event-target.js";
+import { observeTaskAgentEventInDatabase } from "./task-registry-agent-event.worker.js";
 import { syncLiveTaskFlowInDatabase } from "./task-registry-live-flow.worker.js";
 import {
   restoreTaskRegistryInDatabase,
@@ -39,9 +45,11 @@ import {
   findTaskRecordByRunIdForViewInDatabase,
   listTaskRecordsForFlowReadInDatabase,
   listTaskRecordsForOwnerReadInDatabase,
+  listTaskRecordsByOwnerKeyInDatabase,
   readTaskViewRecordInDatabase,
   readTaskRegistryMutationSnapshotInDatabase,
   readTaskRegistrySnapshot,
+  readTaskRecord,
   summarizeTaskRecordsForFlowInDatabase,
 } from "./task-registry.store.kernel.js";
 import { readTaskRegistryStatusSnapshot } from "./task-registry.store.status.js";
@@ -57,6 +65,9 @@ export function executeTaskRegistryCommand(
   options: OpenClawStateDatabaseOptions & { path: string },
   open: () => OpenClawStateDatabase,
 ): TaskRegistryWorkerOperations[keyof TaskRegistryWorkerOperations]["output"] {
+  if (command.type === "tasks.observeAgentEvent") {
+    return observeTaskAgentEventInDatabase(open(), command.input);
+  }
   if (
     command.type === "tasks.createRecord" ||
     command.type === "tasks.settleUnstarted" ||
@@ -92,6 +103,26 @@ export function executeTaskRegistryCommand(
             (operation) => runOpenClawStateWriteTransaction(operation, { ...options, database }),
             (result) => {
               committed = result;
+            },
+            {
+              assertCurrent: () =>
+                requestSqliteWorkerOperationAdmission({
+                  stage: "transaction",
+                  facts: {
+                    kind: "task-registry-mutation",
+                    operation: command.type,
+                    taskId: command.input.taskId,
+                  },
+                }),
+              retainTaskCommit(taskId) {
+                const task = readTaskRecord(database.db, taskId);
+                if (task?.runId) {
+                  deferSqliteWorkerCommitReceipt(
+                    database.db,
+                    captureTaskCreationEventTarget(task, command.type, command.input.taskId),
+                  );
+                }
+              },
             },
           ),
       );
@@ -190,6 +221,8 @@ export function executeTaskRegistryCommand(
         return findTaskRecordByRunIdForViewInDatabase(db, command.input.runId);
       case "tasks.list":
         return listTaskRecordsForOwnerReadInDatabase(db, command.input.ownerKey);
+      case "tasks.ownerRecords":
+        return listTaskRecordsByOwnerKeyInDatabase(db, command.input.ownerKey);
       case "tasks.resolve": {
         const { ownerKey, token } = command.input;
         return {

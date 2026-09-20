@@ -4,13 +4,13 @@ import { Stream } from "openai/streaming";
 import type { Model } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it, vi } from "vitest";
 import { SsrFBlockedError } from "../infra/net/ssrf.js";
-import { mintSecretSentinel } from "../secrets/sentinel.js";
 import {
   buildGuardedModelFetch,
   buildProviderRequestDispatcherPolicyMock,
   ensureModelProviderLocalServiceMock,
   fetchWithSsrFGuardMock,
   installProviderTransportFetchTestHooks,
+  latestGuardedFetchParams,
   managedStreamCleanupRegistrations,
   mergeModelProviderRequestOverridesMock,
   resolveProviderRequestPolicyConfigMock,
@@ -18,16 +18,6 @@ import {
   withTrustedEnvProxyGuardedFetchModeMock,
 } from "./provider-transport-fetch.test-harness.js";
 import { makeProviderModelFixture } from "./test-helpers/provider-model-fixture.js";
-
-function latestGuardedFetchParams(): Record<string, unknown> {
-  // All transport calls should pass through the SSRF-guarded fetch seam.
-  const calls = fetchWithSsrFGuardMock.mock.calls;
-  const params = calls[calls.length - 1]?.[0];
-  if (!params || typeof params !== "object") {
-    throw new Error("Expected guarded fetch call");
-  }
-  return params;
-}
 
 function latestTrustedEnvProxyParams(): Record<string, unknown> {
   const calls = withTrustedEnvProxyGuardedFetchModeMock.mock.calls;
@@ -76,110 +66,6 @@ function openResponseStreamText(text: string): {
 
 describe("buildGuardedModelFetch", () => {
   installProviderTransportFetchTestHooks();
-
-  function sentinelModel(): Model<"openai-responses"> {
-    return makeProviderModelFixture<"openai-responses">({
-      id: "gpt-5.5",
-      provider: "openai",
-      api: "openai-responses",
-      baseUrl: "https://api.openai.com/v1",
-    });
-  }
-
-  it("swaps sentinels in Request-form headers", async () => {
-    const sentinel = mintSecretSentinel("request-form-secret", { label: "request-form" });
-    const request = new Request("https://api.openai.com/v1/responses", {
-      method: "POST",
-      headers: { Authorization: `Bearer ${sentinel}` },
-    });
-
-    const response = await buildGuardedModelFetch(sentinelModel())(request);
-    await response.text();
-
-    const headers = new Headers((latestGuardedFetchParams().init as RequestInit).headers);
-    expect(headers.get("authorization")).toBe("Bearer request-form-secret");
-  });
-
-  it("swaps sentinels in record init headers", async () => {
-    const recordSentinel = mintSecretSentinel("record-header-secret", { label: "record-header" });
-    const response = await buildGuardedModelFetch(sentinelModel())(
-      "https://api.openai.com/v1/responses",
-      {
-        headers: { "x-api-key": recordSentinel },
-      },
-    );
-    await response.text();
-    expect(
-      new Headers((latestGuardedFetchParams().init as RequestInit).headers).get("x-api-key"),
-    ).toBe("record-header-secret");
-    expect(
-      new Headers(ensureModelProviderLocalServiceMock.mock.calls[0]?.[1] as HeadersInit).get(
-        "x-api-key",
-      ),
-    ).toBe(recordSentinel);
-  });
-
-  it("swaps sentinels in tuple init headers", async () => {
-    const tupleSentinel = mintSecretSentinel("tuple-header-secret", { label: "tuple-header" });
-    const response = await buildGuardedModelFetch(sentinelModel())(
-      "https://api.openai.com/v1/responses",
-      {
-        headers: [["x-api-key", tupleSentinel]],
-      },
-    );
-    await response.text();
-    expect(
-      new Headers((latestGuardedFetchParams().init as RequestInit).headers).get("x-api-key"),
-    ).toBe("tuple-header-secret");
-  });
-
-  it("swaps sentinels in Headers init and composed Cloudflare auth values", async () => {
-    const sentinel = mintSecretSentinel("cloudflare-upstream-secret", { label: "cloudflare" });
-    const response = await buildGuardedModelFetch(sentinelModel())(
-      "https://api.openai.com/v1/responses",
-      {
-        headers: new Headers({ "cf-aig-authorization": `Bearer ${sentinel}` }),
-      },
-    );
-    await response.text();
-
-    const headers = new Headers((latestGuardedFetchParams().init as RequestInit).headers);
-    expect(headers.get("cf-aig-authorization")).toBe("Bearer cloudflare-upstream-secret");
-  });
-
-  it("swaps sentinels in URL query parameters", async () => {
-    const sentinel = mintSecretSentinel("gemini&scope=two+#%", { label: "gemini-query" });
-    const response = await buildGuardedModelFetch(sentinelModel())(
-      `https://api.openai.com/v1/responses?key=${sentinel}`,
-    );
-    await response.text();
-
-    expect(latestGuardedFetchParams().url).toBe(
-      "https://api.openai.com/v1/responses?key=gemini%26scope%3Dtwo%2B%23%25",
-    );
-  });
-
-  it("rejects unknown sentinel-shaped values before guarded fetch", async () => {
-    const unknown = "oc-sent-v2.AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA.end";
-    await expect(
-      buildGuardedModelFetch(sentinelModel())("https://api.openai.com/v1/responses", {
-        headers: { Authorization: `Bearer ${unknown}` },
-      }),
-    ).rejects.toThrow(
-      `Secret sentinel ${unknown} is not registered in this process; refusing to send request`,
-    );
-    expect(fetchWithSsrFGuardMock).not.toHaveBeenCalled();
-  });
-
-  it("keeps the no-sentinel fast path request init untouched", async () => {
-    const init: RequestInit = { headers: { Authorization: "Bearer plain-env-key" } };
-    const response = await buildGuardedModelFetch(sentinelModel())(
-      "https://api.openai.com/v1/responses",
-      init,
-    );
-    await response.text();
-    expect(latestGuardedFetchParams().init).toStrictEqual(init);
-  });
 
   it("pushes provider capture metadata into the shared guarded fetch seam", async () => {
     const model = makeProviderModelFixture<"openai-responses">({

@@ -4,6 +4,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { testing } from "../agents/cli-backends.test-support.js";
+import { executeDeps } from "../agents/cli-runner/execute-deps.js";
 import { cliBackendLog } from "../agents/cli-runner/log.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type {
@@ -13,15 +14,15 @@ import type {
 import { resolveRuntimeCliBackends } from "../plugins/cli-backends.runtime.js";
 import { setTestEnvValue } from "../test-utils/env.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import * as agentJobs from "./agent-turn/agent-job.js";
+import type { GatewayClient } from "./client.js";
 import * as gatewayFixture from "./test-helpers.e2e.js";
 
 const FREEZE_CONTROLLER = String.raw`const { execFileSync } = require("node:child_process");
 const fs = require("node:fs");
 const root = Number(process.argv[2]);
 const receipt = process.argv[3];
-const duration = Number(process.argv[4]);
-const outputFirst = process.argv[5] === "true";
-const cliPid = Number(process.argv[6]);
+const cliPid = Number(process.argv[4]);
 const identity = (pid) => {
   try {
     return execFileSync("/bin/ps", ["-p", String(pid), "-o", "lstart=", "-o", "command="], { encoding: "utf8" }).trim();
@@ -41,9 +42,14 @@ for (let index = 0; index < owned.length; index++) {
     .map((row) => ({ pid: row.pid, identity: identity(row.pid) })));
 }
 if (!owned.some((entry) => entry.pid === cliPid)) throw new Error("CLI is not in the owned tree");
+const cliTree = [owned.find((entry) => entry.pid === cliPid)];
+for (let index = 0; index < cliTree.length; index++) {
+  cliTree.push(...rows.filter((row) => row.parent === cliTree[index].pid)
+    .map((row) => owned.find((entry) => entry.pid === row.pid)));
+}
 const stopped = [];
 let finished = false;
-const record = { root, controller: process.pid, owned, duration, armedAt: Date.now() };
+const record = { root, controller: process.pid, owned, armedAt: Date.now() };
 const signal = (entry, name) => {
   if (entry.identity && identity(entry.pid) === entry.identity) process.kill(entry.pid, name);
 };
@@ -57,22 +63,67 @@ const resume = () => {
 process.on("SIGTERM", () => { resume(); process.exit(143); });
 process.on("SIGINT", () => { resume(); process.exit(130); });
 process.on("exit", resume);
-setTimeout(() => {
-  if (outputFirst) {
-    signal(owned.find((entry) => entry.pid === cliPid), "SIGCONT");
-    setTimeout(() => { resume(); process.exit(0); }, 500);
-  } else {
-    resume(); process.exit(0);
-  }
-}, duration);
+process.on("disconnect", () => { resume(); process.exit(0); });
+process.on("message", (message) => {
+  if (message === "resume") { resume(); process.exit(0); }
+});
 fs.writeFileSync(receipt, JSON.stringify(record));
-for (const entry of owned.slice().reverse()) {
+// The test drives the Gateway's clock; its verified CLI tree stops in the OS.
+for (const entry of cliTree.slice().reverse()) {
   signal(entry, "SIGSTOP");
   stopped.push(entry);
 }
-record.stoppedAt = Date.now();
-fs.writeFileSync(receipt, JSON.stringify(record));
+const confirmStopped = () => {
+  if (finished) return;
+  for (const entry of stopped) {
+    const state = execFileSync("/bin/ps", ["-p", String(entry.pid), "-o", "state="], { encoding: "utf8" });
+    if (!state.includes("T")) {
+      if (state.includes("Z")) throw new Error("Owned CLI exited before stopping");
+      setImmediate(confirmStopped);
+      return;
+    }
+  }
+  record.stoppedAt = Date.now();
+  fs.writeFileSync(receipt, JSON.stringify(record));
+  process.send("stopped");
+};
+confirmStopped();
 `;
+
+function createWatchdogClock() {
+  let now = 0;
+  const timers = new Map<() => void, { at: number; callback: () => void }>();
+  const advance = (ms: number) => {
+    const target = now + ms;
+    for (;;) {
+      const next = [...timers].toSorted(([, a], [, b]) => a.at - b.at)[0];
+      if (!next || next[1].at > target) {
+        break;
+      }
+      const [cancel, timer] = next;
+      now = Math.max(now, timer.at);
+      timers.delete(cancel);
+      timer.callback();
+    }
+    now = target;
+  };
+  return {
+    now: () => now,
+    setTimeout: (callback: () => void, delayMs: number) => {
+      const cancel = () => {
+        timers.delete(cancel);
+      };
+      timers.set(cancel, { at: now + delayMs, callback });
+      return cancel;
+    },
+    // A suspended event loop observes elapsed time before it can dispatch overdue timers.
+    jump: (ms: number) => {
+      now += ms;
+    },
+    advance,
+    pending: () => timers.size,
+  };
+}
 
 type WatchdogCase = {
   name: string;
@@ -83,6 +134,8 @@ type WatchdogCase = {
   outputFirst: boolean;
   resume: boolean;
 };
+
+type WatchdogCompletion = { status: string; endedAt: number; error?: string };
 
 const cases: WatchdogCase[] = [
   {
@@ -157,19 +210,15 @@ describe.skipIf(process.platform === "win32")(
 );
 
 async function runWatchdogCase(testCase: WatchdogCase, signal: AbortSignal) {
-  const realNow = Date.now;
-  let frozenNow: number | undefined;
+  const clock = createWatchdogClock();
+  const realClock = executeDeps.watchdogClock;
   let orderedOutputAt: number | undefined;
-  let restoreClock: (() => void) | undefined;
-  let observedCredit = false;
-  const info = cliBackendLog.info.bind(cliBackendLog);
-  const log = vi.spyOn(cliBackendLog, "info").mockImplementation((...args) => {
-    info(...args);
-    if (frozenNow !== undefined && args[0].includes("cli watchdog credited timer gap")) {
-      frozenNow = undefined;
-      observedCredit = true;
-    }
-  });
+  let abortedAt: number | undefined;
+  let thawedAt: number | undefined;
+  let outputs = 0;
+  const waitForAgentJob =
+    testCase.behavior === "cancel" ? vi.spyOn(agentJobs, "waitForAgentJob") : undefined;
+  const log = vi.spyOn(cliBackendLog, "info");
 
   const state = await createOpenClawTestState({
     label: "cli-freeze",
@@ -198,7 +247,11 @@ async function runWatchdogCase(testCase: WatchdogCase, signal: AbortSignal) {
   });
   const proof = state.path("proof");
   let gateway: Awaited<ReturnType<typeof gatewayFixture.startGatewayWithClient>> | undefined;
+  let pendingCompletion: Promise<WatchdogCompletion> | undefined;
+  let controller: ReturnType<typeof spawn> | undefined;
+  let controllerExit: Promise<void> | undefined;
   try {
+    executeDeps.watchdogClock = clock;
     await fs.mkdir(proof);
     await fs.writeFile(path.join(proof, "freeze-tree.cjs"), FREEZE_CONTROLLER);
     const binDir = state.path("bin");
@@ -210,26 +263,28 @@ const fs = require("node:fs");
 const path = require("node:path");
 const { createInterface } = require("node:readline");
 const send = (message) => process.stdout.write(JSON.stringify(message) + "\n");
+const publish = (name, value) => {
+  const target = path.join(process.env.CLAUDE_CONFIG_DIR, name);
+  fs.writeFileSync(target + ".tmp", JSON.stringify(value));
+  fs.renameSync(target + ".tmp", target);
+};
 if (process.argv.includes("--version")) { console.log("2.1.226 (fixture)"); process.exit(0); }
 if (process.argv.includes("auth")) { send({ loggedIn: true }); process.exit(0); }
 let sessionId;
 let turns = 0;
-let heartbeat;
 let resumed = false;
 const behavior = ${JSON.stringify(testCase.behavior)};
+const reply = () => send({ type: "assistant", message: { role: "assistant", content: [{ type: "text", text: "Preserved reply." }] } });
 process.on("SIGCONT", () => {
   if (resumed) return;
   resumed = true;
-  if (behavior === "quiet") return;
-  const reply = () => send({ type: "assistant", message: { role: "assistant", content: [{ type: "text", text: "Preserved reply." }] } });
-  const complete = () => {
-    reply();
-    fs.writeFileSync(path.join(process.env.CLAUDE_CONFIG_DIR, "resumed.json"), JSON.stringify({ time: Date.now() }));
-    if (behavior === "complete") send({ type: "result", subtype: "success", is_error: false, result: "Preserved reply.", session_id: sessionId });
-    if (behavior === "overall") heartbeat = setInterval(reply, 5000);
-  };
-  if (behavior === "complete") setTimeout(complete, 250);
-  else complete();
+  publish("resumed.json", { time: Date.now() });
+  if (behavior !== "quiet" && behavior !== "complete") reply();
+});
+// Completion and heartbeat delays use the same scenario clock as the host watchdog.
+process.on("SIGUSR1", () => {
+  reply();
+  if (behavior === "complete") send({ type: "result", subtype: "success", is_error: false, result: "Preserved reply.", session_id: sessionId });
 });
 createInterface({ input: process.stdin }).on("line", (line) => {
   const message = JSON.parse(line);
@@ -245,7 +300,7 @@ createInterface({ input: process.stdin }).on("line", (line) => {
       return;
     }
     send({ type: "assistant", message: { role: "assistant", content: [{ type: "text", text: "Working." }] } });
-    fs.writeFileSync(path.join(process.env.CLAUDE_CONFIG_DIR, "ready.json"), JSON.stringify({ pid: process.pid, time: Date.now(), turns }));
+    publish("ready.json", { pid: process.pid, time: Date.now(), turns });
   }
 });`;
     await fs.writeFile(path.join(binDir, "claude"), `#!${process.execPath}\n${fixture}`, {
@@ -300,35 +355,40 @@ createInterface({ input: process.stdin }).on("line", (line) => {
       resolveRuntimeCliBackends: () =>
         backends.map((backend) =>
           Object.assign({}, backend, {
-            ...(testCase.behavior === "ordered"
-              ? {
-                  prepareExecution: async (context: CliBackendPrepareExecutionContext) => {
-                    const prepared = await backend.prepareExecution?.(context);
-                    if (!prepared?.execute) {
-                      throw new Error(
-                        "Registered CLI backend must provide its execution transport.",
-                      );
+            prepareExecution: async (context: CliBackendPrepareExecutionContext) => {
+              const prepared = await backend.prepareExecution?.(context);
+              if (!prepared?.execute) {
+                throw new Error("Registered CLI backend must provide its execution transport.");
+              }
+              const execute = prepared.execute;
+              return {
+                ...prepared,
+                async *execute(execution: CliBackendExecuteContext) {
+                  execution.abortSignal?.addEventListener(
+                    "abort",
+                    () => {
+                      abortedAt = clock.now();
+                    },
+                    { once: true },
+                  );
+                  for await (const event of execute(execution)) {
+                    if (
+                      event.type === "assistant" &&
+                      testCase.behavior === "ordered" &&
+                      orderedOutputAt === undefined
+                    ) {
+                      orderedOutputAt = clock.now();
+                      clock.jump(60_000);
                     }
-                    const execute = prepared.execute;
-                    return {
-                      ...prepared,
-                      async *execute(execution: CliBackendExecuteContext) {
-                        for await (const event of execute(execution)) {
-                          if (event.type === "assistant" && orderedOutputAt === undefined) {
-                            orderedOutputAt = realNow();
-                            frozenNow = orderedOutputAt + 60_000;
-                            const clock = vi
-                              .spyOn(Date, "now")
-                              .mockImplementation(() => frozenNow ?? realNow() + 60_000);
-                            restoreClock = () => clock.mockRestore();
-                          }
-                          yield event;
-                        }
-                      },
-                    };
-                  },
-                }
-              : {}),
+                    yield event;
+                    // The consumer has called noteOutput before requesting the next event.
+                    if (event.type === "assistant") {
+                      outputs++;
+                    }
+                  }
+                },
+              };
+            },
             config: {
               ...backend.config,
               reliability: {
@@ -355,6 +415,9 @@ createInterface({ input: process.stdin }).on("line", (line) => {
       });
       expect(warmResult.status).toBe("ok");
     }
+    outputs = 0;
+    abortedAt = undefined;
+    const acceptedAt = Date.now();
     const accepted = await gateway.client.request<{ runId: string; status: string }>("chat.send", {
       sessionKey,
       message: "Reply after resume.",
@@ -377,43 +440,110 @@ createInterface({ input: process.stdin }).on("line", (line) => {
       await fs.readFile(path.join(nativeRoot, "ready.json"), "utf8"),
     );
     expect(ready.turns).toBe(testCase.resume ? 2 : 1);
+    await expect.poll(() => outputs, { timeout: 5_000 }).toBe(1);
+    const pulse = async () => {
+      const expected = outputs + 1;
+      process.kill(ready.pid, "SIGUSR1");
+      await expect.poll(() => outputs, { timeout: 5_000 }).toBe(expected);
+    };
+    const waitForCompletion = (client: GatewayClient) =>
+      client.request<WatchdogCompletion>(
+        "agent.wait",
+        {
+          runId: accepted.runId,
+          timeoutMs: 50_000,
+        },
+        { timeoutMs: 55_000 },
+      );
     if (testCase.behavior === "cancel") {
+      pendingCompletion = waitForCompletion(gateway.client);
+      void pendingCompletion.catch(() => {});
+      await expect
+        .poll(
+          () =>
+            waitForAgentJob?.mock.calls.some(
+              ([params]) => params.runId === accepted.runId && params.source === "chat",
+            ),
+          { timeout: 5_000 },
+        )
+        .toBe(true);
       const cancelled = await gateway.client.request("chat.abort", {
         sessionKey,
         runId: accepted.runId,
       });
       expect(cancelled).toMatchObject({ aborted: true, runIds: [accepted.runId] });
     } else if (testCase.behavior === "ordered") {
-      await expect.poll(() => observedCredit, { timeout: 5_000 }).toBe(true);
-      gateway.client.stop();
-      gateway.client = await gatewayFixture.connectGatewayClient({
-        url: `ws://127.0.0.1:${gateway.port}`,
-        token,
-        scopes: ["operator.admin", "operator.read", "operator.write"],
-      });
+      clock.advance(0);
+      expect(
+        log.mock.calls.some(([message]) => message.includes("cli watchdog credited timer gap")),
+      ).toBe(true);
+      thawedAt = clock.now();
     } else {
-      const controller = spawn(
+      controller = spawn(
         process.execPath,
         [
           path.join(proof, "freeze-tree.cjs"),
           String(process.pid),
           path.join(proof, "freeze-receipt.json"),
-          String(testCase.freezeMs),
-          String(testCase.outputFirst),
           String(ready.pid),
         ],
         {
           detached: true,
-          stdio: "ignore",
+          signal,
+          stdio: ["ignore", "ignore", "inherit", "ipc"],
           env: { PATH: "/usr/bin:/bin" },
         },
       );
-      await new Promise<void>((resolve, reject) => {
-        controller.once("error", reject);
-        controller.once("exit", (code) =>
+      const ownedController = controller;
+      controllerExit = new Promise<void>((resolve, reject) => {
+        ownedController.once("error", reject);
+        ownedController.once("exit", (code) =>
           code === 0 ? resolve() : reject(new Error(`controller ${code}`)),
         );
       });
+      void controllerExit.catch(() => {});
+      const stopped = await Promise.race([
+        new Promise<unknown>((resolve) => {
+          ownedController.once("message", resolve);
+        }),
+        controllerExit.then(() => {
+          throw new Error("Controller exited before stopping the tree");
+        }),
+      ]);
+      expect(stopped).toBe("stopped");
+      signal.throwIfAborted();
+      clock.jump(testCase.freezeMs);
+      thawedAt = clock.now();
+      if (!testCase.outputFirst) {
+        clock.advance(0);
+      }
+      expect(abortedAt).toBeUndefined();
+      ownedController.send("resume");
+      await controllerExit;
+      controller = undefined;
+      if (testCase.behavior === "complete" || testCase.behavior === "quiet") {
+        await expect
+          .poll(
+            async () =>
+              fs.access(path.join(nativeRoot, "resumed.json")).then(
+                () => true,
+                () => false,
+              ),
+            { timeout: 5_000 },
+          )
+          .toBe(true);
+      } else {
+        await expect.poll(() => outputs, { timeout: 5_000 }).toBe(2);
+      }
+      if (testCase.outputFirst) {
+        clock.advance(0);
+      }
+      if (testCase.behavior === "complete") {
+        clock.advance(250);
+        await pulse();
+      }
+    }
+    if (testCase.behavior !== "cancel") {
       gateway.client.stop();
       gateway.client = await gatewayFixture.connectGatewayClient({
         url: `ws://127.0.0.1:${gateway.port}`,
@@ -421,18 +551,25 @@ createInterface({ input: process.stdin }).on("line", (line) => {
         scopes: ["operator.admin", "operator.read", "operator.write"],
       });
     }
-    const completed = await gateway.client.request<{
-      status: string;
-      endedAt: number;
-      error?: string;
-    }>(
-      "agent.wait",
-      {
-        runId: accepted.runId,
-        timeoutMs: 50_000,
-      },
-      { timeoutMs: 55_000 },
-    );
+    if (!["complete", "cancel"].includes(testCase.behavior)) {
+      // The overdue one-second tick is active time; only its lateness is credited.
+      const remaining =
+        testCase.behavior === "quiet" ? 20_000 : testCase.behavior === "overall" ? 39_000 : 40_000;
+      for (let elapsed = 0; elapsed < remaining - 1;) {
+        const step = Math.min(5_000, remaining - 1 - elapsed);
+        clock.advance(step);
+        elapsed += step;
+        expect(abortedAt).toBeUndefined();
+        if (testCase.behavior === "overall" && step === 5_000) {
+          await pulse();
+        }
+      }
+      clock.advance(1);
+      expect(abortedAt).toBe(clock.now());
+    }
+    const completed = await (pendingCompletion ?? waitForCompletion(gateway.client));
+    expect(completed.endedAt).toBeGreaterThanOrEqual(acceptedAt);
+    expect(clock.pending()).toBe(0);
     const history = await gateway.client.request("chat.history", { sessionKey });
     await fs.writeFile(
       path.join(proof, "gateway-result.json"),
@@ -459,12 +596,13 @@ createInterface({ input: process.stdin }).on("line", (line) => {
         if (orderedOutputAt === undefined) {
           throw new Error("Registered CLI transport did not deliver its ordered output.");
         }
-        elapsedAfterThaw = completed.endedAt - 60_000 - orderedOutputAt;
+        elapsedAfterThaw = (abortedAt ?? Number.NaN) - 60_000 - orderedOutputAt;
       } else {
-        const freeze: { resumedAt: number } = JSON.parse(
+        const freeze: { stoppedAt: number; resumedAt: number } = JSON.parse(
           await fs.readFile(path.join(proof, "freeze-receipt.json"), "utf8"),
         );
-        elapsedAfterThaw = completed.endedAt - freeze.resumedAt;
+        expect(freeze.resumedAt).toBeGreaterThanOrEqual(freeze.stoppedAt);
+        elapsedAfterThaw = (abortedAt ?? Number.NaN) - (thawedAt ?? Number.NaN);
       }
       const expectedRemaining = testCase.behavior === "quiet" ? 20_000 : 40_000;
       expect(elapsedAfterThaw).toBeGreaterThan(expectedRemaining - 5_000);
@@ -474,8 +612,11 @@ createInterface({ input: process.stdin }).on("line", (line) => {
       );
     }
   } finally {
-    restoreClock?.();
+    controller?.kill("SIGTERM");
+    await controllerExit?.catch(() => {});
+    executeDeps.watchdogClock = realClock;
     log.mockRestore();
+    waitForAgentJob?.mockRestore();
     try {
       const evidenceRoot = process.env.OPENCLAW_CLI_WATCHDOG_PROOF_DIR;
       if (evidenceRoot) {
@@ -485,6 +626,7 @@ createInterface({ input: process.stdin }).on("line", (line) => {
     } finally {
       testing.resetDepsForTest();
       gateway?.client.stop();
+      await pendingCompletion?.catch(() => {});
       try {
         await gateway?.server.close({ reason: "freeze proof complete" });
       } finally {

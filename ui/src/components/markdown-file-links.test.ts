@@ -43,7 +43,9 @@ describe("file links", () => {
 
   it("links prefixed single-segment paths but not bare prose filenames", () => {
     const fragment = htmlFragment(
-      toSanitizedMarkdownHtml("~/notes.md ./x.ts ../y.ts foo.ts", { fileLinks: true }),
+      toSanitizedMarkdownHtml("~/notes.md ./x.ts ../y.ts foo.ts inventory.csv", {
+        fileLinks: true,
+      }),
     );
     expect(
       [...fragment.querySelectorAll<HTMLAnchorElement>("a.markdown-file-link")].map(
@@ -51,6 +53,7 @@ describe("file links", () => {
       ),
     ).toEqual(["~/notes.md", "./x.ts", "../y.ts"]);
     expect(fragment.textContent).toContain("foo.ts");
+    expect(fragment.textContent).toContain("inventory.csv");
   });
 
   it("keeps line suffixes on the label while storing the parsed line", () => {
@@ -117,15 +120,18 @@ describe("file links", () => {
 
   it("links inline-code paths and conservative bare filenames", () => {
     const fragment = htmlFragment(
-      toSanitizedMarkdownHtml("`src/lib/foo.ts` `navigation.ts` `foo.bar()` `notes.xyz123`", {
-        fileLinks: true,
-      }),
+      toSanitizedMarkdownHtml(
+        "`src/lib/foo.ts` `navigation.ts` `inventory.csv` `foo.bar()` `notes.xyz123`",
+        {
+          fileLinks: true,
+        },
+      ),
     );
     expect(
       [...fragment.querySelectorAll<HTMLAnchorElement>("a.markdown-file-link")].map(
         (link) => link.dataset.filePath,
       ),
-    ).toEqual(["src/lib/foo.ts", "navigation.ts"]);
+    ).toEqual(["src/lib/foo.ts", "navigation.ts", "inventory.csv"]);
     expect(fragment.textContent).toContain("foo.bar()");
     expect(fragment.textContent).toContain("notes.xyz123");
   });
@@ -149,6 +155,24 @@ describe("file links", () => {
     expect(disabled.querySelector("a")?.hasAttribute("href")).toBe(false);
     expect(disabled.querySelector("a")?.hasAttribute("data-file-path")).toBe(false);
   });
+
+  it.each(["inventory.csv", "./inventory.csv", "inventory.CSV", "inventory report.csv"])(
+    "opens authored CSV destination %s as a workspace file instead of navigating",
+    (path) => {
+      const markdown = `[Read inventory](${encodeURI(path)})`;
+      const fragment = htmlFragment(toSanitizedMarkdownHtml(markdown, { fileLinks: true }));
+      const link = fragment.querySelector<HTMLAnchorElement>("a.markdown-file-link");
+      expect(link?.dataset.filePath).toBe(path);
+      expect(link?.textContent).toBe("Read inventory");
+      expect(link?.getAttribute("role")).toBe("button");
+      expect(link?.getAttribute("tabindex")).toBe("0");
+      expect(link?.hasAttribute("href")).toBe(false);
+
+      const disabled = htmlFragment(toSanitizedMarkdownHtml(markdown));
+      expect(disabled.querySelector("a[data-file-path]")).toBeNull();
+      expect(disabled.querySelector("a")?.getAttribute("href")).toBe(encodeURI(path));
+    },
+  );
 
   it.each([
     "qa-café/index.md",
@@ -232,6 +256,11 @@ describe("file links", () => {
       "notes/readme.md?raw=1",
       "notes/readme.md#intro",
       "/chat/main/notes/readme.md",
+      "https://example.com/inventory.csv",
+      "//example.com/inventory.csv",
+      "inventory.csv?download=1",
+      "inventory.csv#totals",
+      "example.com",
     ];
     const fragment = htmlFragment(
       toSanitizedMarkdownHtml(destinations.map((href) => `[Read](${href})`).join("\n"), {
@@ -252,6 +281,37 @@ describe("file links", () => {
     const link = fragment.querySelector<HTMLAnchorElement>("a");
     expect(link?.href).toBe("https://example.com/a/b.ts");
     expect(link?.hasAttribute("data-file-path")).toBe(false);
+  });
+
+  it.each([
+    "portal.example/service.test",
+    "example.com/src/app.ts",
+    "docs.example.dev/guide.md:42",
+    "example.ai/config.json?raw=1",
+    "münich.de/guide.md",
+    "example.xn--p1ai/guide.md",
+  ])("never treats the domain/path reference %s as a workspace file", (reference) => {
+    for (const input of [reference, `\`${reference}\``, `[website](${reference})`]) {
+      const fragment = htmlFragment(toSanitizedMarkdownHtml(input, { fileLinks: true }));
+      expect(fragment.querySelector("a[data-file-path]")).toBeNull();
+      expect(fragment.textContent?.trim()).toBe(input.startsWith("[") ? "website" : reference);
+    }
+  });
+
+  it.each([
+    "./portal.example/service.test",
+    "../example.com/src/app.ts",
+    "~/example.com/guide.md",
+    "/example.com/guide.md",
+    "C:/example.com/guide.md",
+    ".config/workflows/check.yml",
+    "src/components.v2/Button.tsx",
+    "src.v2/app.ts",
+  ])("keeps the local path %s addressable", (path) => {
+    const fragment = htmlFragment(toSanitizedMarkdownHtml(path, { fileLinks: true }));
+    expect(fragment.querySelector<HTMLAnchorElement>("a[data-file-path]")?.dataset.filePath).toBe(
+      path,
+    );
   });
 
   it("does not link paths inside fenced code blocks", () => {

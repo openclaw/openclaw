@@ -11,7 +11,6 @@ import {
   type ReplyMediaFailure,
   type ReplyPayload,
 } from "../../auto-reply/reply-payload.js";
-import { createReplyMediaPathNormalizer } from "../../auto-reply/reply/reply-media-paths.runtime.js";
 import type { MsgContext } from "../../auto-reply/templating.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -256,6 +255,10 @@ export async function normalizeWebchatReplyMediaPathsForDisplay(
     if (!workspaceDir) {
       return params.payloads;
     }
+    const assertCurrent = captureChannelReadAuthority();
+    const { createReplyMediaPathNormalizer } =
+      await import("../../auto-reply/reply/reply-media-paths.runtime.js");
+    assertCurrent?.();
     const workspaceOnly = resolveWebchatReplyWorkspaceOnly(params);
     const normalizeMediaPaths = createReplyMediaPathNormalizer({
       cfg: params.cfg,

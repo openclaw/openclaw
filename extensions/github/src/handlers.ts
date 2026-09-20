@@ -6,6 +6,7 @@ import {
 } from "openclaw/plugin-sdk/gateway-runtime";
 import { loadGitHubDetail } from "./detail.js";
 import { ControlUiGitHubError, formatControlUiGitHubPreviewError } from "./github-api.js";
+import { loadGitHubImage, parseGitHubImageParams } from "./image.js";
 import { isControlUiGitHubPreview } from "./preview-contract.js";
 import { githubTargetUrl, parseGitHubLinkParams } from "./targets.js";
 import { githubPreviewView } from "./view-model.js";
@@ -70,6 +71,23 @@ async function handleGitHubRequest(
 }
 
 export const githubHandlers = {
+  "github.image": async ({ params, respond }: GatewayRequestHandlerOptions) => {
+    const url = parseGitHubImageParams(params);
+    if (!url) {
+      respond(
+        false,
+        undefined,
+        errorShape(ErrorCodes.INVALID_REQUEST, "invalid github.image params"),
+      );
+      return;
+    }
+    try {
+      respond(true, await loadGitHubImage(url), undefined);
+    } catch {
+      // Signed redirect URLs can appear in transport errors; never expose them.
+      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, "GitHub image is unavailable"));
+    }
+  },
   "github.preview": (options: GatewayRequestHandlerOptions) =>
     handleGitHubRequest("github.preview", options),
   "github.detail": (options: GatewayRequestHandlerOptions) =>

@@ -251,6 +251,30 @@ describe("chat transcript invalidation", () => {
     });
   });
 
+  it("updates persisted named references when the connection catalog changes without transcript edits", () => {
+    const props = threadProps("pane-named", "agent:main:named", [
+      { role: "assistant", content: "ClawSweeper PR **#1576 opened**", timestamp: 1_000 },
+    ]);
+    props.githubRepo = { owner: "openclaw", repo: "openclaw" };
+    const transcript = createTestTranscript();
+    const container = document.body.appendChild(document.createElement("div"));
+    const rerender = () => render(renderChatThread(props, transcript), container);
+    const chip = () => container.querySelector<HTMLAnchorElement>("a.markdown-github-item");
+    rerender();
+    expect(chip()).toBeNull();
+    props.githubRepositories = [
+      { owner: "openclaw", repo: "clawsweeper", aliases: ["ClawSweeper"] },
+    ];
+    rerender();
+    expect(chip()?.href).toBe("https://github.com/openclaw/clawsweeper/pull/1576");
+    props.githubRepositories = [{ aliases: ["ClawSweeper"] }];
+    rerender();
+    expect(chip()).toBeNull();
+    props.githubRepositories = [{ owner: "fork", repo: "clawsweeper", aliases: ["ClawSweeper"] }];
+    rerender();
+    expect(chip()?.href).toBe("https://github.com/fork/clawsweeper/pull/1576");
+  });
+
   it("updates settled GitHub reference chips when the session repository arrives or changes", () => {
     vi.spyOn(Date, "now").mockReturnValue(60_000);
     const props = threadProps("pane-github-repository", "agent:main:github-repository", [

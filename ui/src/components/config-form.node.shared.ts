@@ -20,7 +20,7 @@ import {
   redactedPlaceholder,
   type JsonSchema,
 } from "./config-form.shared.ts";
-import { renderSettingsSegmented } from "./settings-ui.ts";
+import { renderSettingsDefaultDescription, renderSettingsSegmented } from "./settings-ui.ts";
 
 const META_KEYS = new Set([
   "title",
@@ -210,7 +210,10 @@ export function renderFieldRow(params: {
   // wildcard segments collapse), so their help is the parent's. Showing it again
   // per item is noise; a row with no label of its own gets no help of its own.
   const help = params.showLabel ? params.help : undefined;
-  const defaultDescription = params.showLabel ? params.defaultDescription : undefined;
+  const defaultDescription =
+    params.showLabel && params.defaultDescription !== nothing
+      ? params.defaultDescription
+      : undefined;
   const hasText =
     params.showLabel || Boolean(help) || Boolean(defaultDescription) || Boolean(params.error);
   // Control-only rows (array/map item values) stack so the control gets full width.
@@ -278,9 +281,10 @@ export function renderSchemaDefaultDescription(
   if (schema.default === undefined) {
     return nothing;
   }
-  return html`${t(value === undefined ? "configForm.usingDefault" : "configForm.defaultValue", {
-    value: formatConfigValueText(schema.default),
-  })}`;
+  return (
+    renderSettingsDefaultDescription(formatConfigValueText(schema.default), value !== undefined) ??
+    nothing
+  );
 }
 
 export function renderSegmentedControl(params: {

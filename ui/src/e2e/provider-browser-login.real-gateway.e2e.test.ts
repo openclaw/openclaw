@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { expectDefined } from "@openclaw/normalization-core";
+import { expectDefined, isRecord } from "@openclaw/normalization-core";
 import { expect, it } from "vitest";
 import type { ModelAuthStatusResult } from "../api/types.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
@@ -95,6 +95,15 @@ suite.define(() => {
         viewport: { width: 1280, height: 900 },
       },
       async ({ page, context }) => {
+        let pagePreviewRequests = 0;
+        page.on("websocket", (socket) =>
+          socket.on("framesent", (frame) => {
+            const request: unknown = JSON.parse(String(frame.payload));
+            if (isRecord(request) && request.method === "controlUi.linkPreview") {
+              pagePreviewRequests++;
+            }
+          }),
+        );
         await page.goto(url.href);
         expect(await page.evaluate(() => window.isSecureContext)).toBe(true);
         await page
@@ -126,6 +135,8 @@ suite.define(() => {
         };
         const cancelledPage = await begin();
         await page.screenshot({ path: path.join(suite.artifactDir, "login-started.png") });
+        expect(pagePreviewRequests).toBe(0);
+        expect(await page.locator(".link-hovercard").count()).toBe(0);
         await page
           .locator("openclaw-modal-dialog")
           .getByRole("button", { name: "Cancel", exact: true })
@@ -199,6 +210,7 @@ suite.define(() => {
           .toContain("Signed-in fixture reply");
         expect(fixture.requests).toContain("/models");
         expect(fixture.requests).toContain("/chat/completions");
+        expect(pagePreviewRequests).toBe(0);
         await page.screenshot({ path: path.join(suite.artifactDir, "after-restart.png") });
         await fs.copyFile(fixture.edgeReceipt, path.join(suite.artifactDir, "edge-receipt.json"));
       },

@@ -5,7 +5,7 @@ import { guard } from "lit/directives/guard.js";
 import type { ControlUiLinkReaderDocument } from "../../../src/shared/control-ui-link-reader.js";
 import { i18n, t } from "../i18n/index.ts";
 import { registerLinkReaderEnglish } from "../i18n/locales/en-link-reader.ts";
-import type { LinkReaderTarget } from "./link-reader-target.ts";
+import { linkReaderAuthorHref, type LinkReaderTarget } from "./link-reader-target.ts";
 import { createMarkdownParser } from "./markdown-parser.ts";
 import { normalizeMarkdownRenderOptions } from "./markdown-render-options.ts";
 import { escapeMarkdownHtml } from "./markdown-text.ts";
@@ -30,6 +30,10 @@ for (const kind of ["html_inline", "html_block"] as const) {
   const original = markdown.renderer.rules[kind]!;
   markdown.renderer.rules[kind] = (tokens, index, options, env, renderer) => {
     const source = tokens[index]?.content ?? "";
+    // Reader documents hide comment metadata; code examples never enter these HTML rules.
+    if (source.trimStart().startsWith("<!--")) {
+      return escapeMarkdownHtml(source.replace(/<!--[\s\S]*?(?:-->|$)/gu, ""));
+    }
     return /^<img\s[^<>]*>\s*$/iu.test(source)
       ? source
       : original(tokens, index, options, env, renderer);
@@ -100,7 +104,9 @@ function externalAnchor(url: string, label: string): HTMLAnchorElement {
   return anchor;
 }
 
-function prepareImage(source: HTMLImageElement, base: string): void {
+type LoadImage = (url: string) => Promise<string>;
+
+function prepareImage(source: HTMLImageElement, base: string, loadImage?: LoadImage): void {
   const url = documentUrl(source.getAttribute("src") ?? "", base);
   const label = source.alt.trim() || t("linkReader.image");
   const wrapper = document.createElement("span");
@@ -132,15 +138,12 @@ function prepareImage(source: HTMLImageElement, base: string): void {
     image.referrerPolicy = "no-referrer";
     image.loading = "lazy";
     image.decoding = "async";
-    image.addEventListener(
-      "error",
-      () => {
-        image.hidden = true;
-        status.textContent = t("linkReader.imageUnavailable", { title: label });
-        status.setAttribute("role", "status");
-      },
-      { once: true },
-    );
+    const unavailable = () => {
+      image.hidden = true;
+      status.textContent = t("linkReader.imageUnavailable", { title: label });
+      status.setAttribute("role", "status");
+    };
+    image.addEventListener("error", unavailable, { once: true });
     if (linkedImage) {
       wrapper.append(image);
     } else {
@@ -149,7 +152,15 @@ function prepareImage(source: HTMLImageElement, base: string): void {
       open.append(image);
       wrapper.append(open);
     }
-    image.src = url.href;
+    if (loadImage) {
+      void loadImage(url.href).then((imageUrl) => {
+        if (image.isConnected) {
+          image.src = imageUrl;
+        }
+      }, unavailable);
+    } else {
+      image.src = url.href;
+    }
   } else {
     status.textContent = t("linkReader.imageUnavailable", { title: label });
   }
@@ -162,8 +173,8 @@ function prepareImage(source: HTMLImageElement, base: string): void {
   }
 }
 
-function renderMarkdown(body: string, base: string) {
-  return guard([body, base, i18n.getLocale()], () => {
+function renderMarkdown(body: string, base: string, loadImage?: LoadImage) {
+  return guard([body, base, loadImage, i18n.getLocale()], () => {
     let rendered: string;
     try {
       rendered = markdown.render(body, documentOptions);
@@ -204,7 +215,7 @@ function renderMarkdown(body: string, base: string) {
       input.disabled = true;
     }
     for (const image of fragment.querySelectorAll<HTMLImageElement>("img")) {
-      prepareImage(image, base);
+      prepareImage(image, base, loadImage);
     }
     return fragment;
   });
@@ -264,7 +275,7 @@ function renderFile(file: ControlUiLinkReaderFile, expanded: boolean) {
   </details>`;
 }
 
-function renderComment(comment: ControlUiLinkReaderComment, base: string) {
+function renderComment(comment: ControlUiLinkReaderComment, base: string, loadImage?: LoadImage) {
   const context = comment.context;
   const location = [context?.path, context?.lineLabel].filter(Boolean).join(":");
   const permalink = documentUrl(comment.url, base)?.href;
@@ -320,7 +331,7 @@ function renderComment(comment: ControlUiLinkReaderComment, base: string) {
           </details>`
         : nothing
     }
-    <div class="lr-markdown">${renderMarkdown(comment.body, base)}</div>
+    <div class="lr-markdown">${renderMarkdown(comment.body, base, loadImage)}</div>
     ${
       comment.bodyTruncated
         ? html`<p class="lr-note">${t("linkReader.bodyTruncated")}</p>`
@@ -332,7 +343,13 @@ function renderComment(comment: ControlUiLinkReaderComment, base: string) {
 export function renderLinkReaderContent(
   detail: ControlUiLinkReaderDocument,
   target: LinkReaderTarget,
+  loadImage?: LoadImage,
 ) {
+  const authorHref = linkReaderAuthorHref(detail.authorUrl, detail.url);
+  const coAuthors = detail.coAuthors ?? [];
+  const unnamed = Math.max(coAuthors.length, detail.coAuthorCount ?? 0) - coAuthors.length;
+  const coAuthorNames =
+    coAuthors.map((author) => author.name).join(", ") + (unnamed ? " +" + unnamed : "");
   return html`<div class="lr-meta">${detail.subtitle ?? target.reader.label}</div>
     <h1>${detail.title}</h1>
     <div class="lr-meta lr-item-meta">
@@ -345,12 +362,24 @@ export function renderLinkReaderContent(
       }
       ${
         detail.author
-          ? html`<span>${t("linkReader.byAuthor", { author: detail.author })}</span>`
+          ? authorHref
+            ? html`<a
+                href=${authorHref}
+                target="_blank"
+                rel="noopener noreferrer"
+                data-link-reader-external
+                >${t("linkReader.byAuthor", { author: detail.author })}</a
+              >`
+            : html`<span>${t("linkReader.byAuthor", { author: detail.author })}</span>`
           : nothing
       }
+      ${coAuthorNames.trim() ? html`<span class="lr-coauthors">${t("linkReader.coAuthors", { authors: coAuthorNames.trim() })}</span>` : nothing}
       ${renderDate(detail.createdAt)}
       ${detail.metadata?.map(
-        ({ label, value }) => html`<span>${label ? label + ": " : ""}${value}</span>`,
+        ({ label, value, tone }) =>
+          html`<span
+            >${label ? label + ": " : ""}<span data-tone=${tone ?? nothing}>${value}</span></span
+          >`,
       )}
     </div>
     ${
@@ -362,7 +391,7 @@ export function renderLinkReaderContent(
       <div class="lr-markdown">
         ${
           detail.body
-            ? renderMarkdown(detail.body, detail.url)
+            ? renderMarkdown(detail.body, detail.url, loadImage)
             : html`<p class="lr-meta">${t("linkReader.noDescription")}</p>`
         }
       </div>
@@ -408,7 +437,7 @@ export function renderLinkReaderContent(
                 }</span
               >
             </h2>
-            ${detail.comments.map((comment) => renderComment(comment, detail.url))}
+            ${detail.comments.map((comment) => renderComment(comment, detail.url, loadImage))}
             ${
               detail.commentsTruncated
                 ? html`<p class="lr-note">${t("linkReader.commentsTruncated")}</p>`

@@ -156,6 +156,98 @@ afterEach(() => {
 });
 
 describe("follow-up delivery channel boundary", () => {
+  it.each([
+    {
+      name: "optional group classified guidance",
+      expectation: "optional",
+      channel: "discord",
+      recipient: "channel:C1",
+      text: "Rate limit reached. Try again later.",
+      delivered: true,
+    },
+    {
+      name: "optional group generic silence",
+      expectation: "optional",
+      channel: "discord",
+      recipient: "channel:C1",
+      text: "NO_REPLY",
+      delivered: false,
+    },
+    {
+      name: "optional work without a recipient",
+      expectation: "optional",
+      channel: "discord",
+      recipient: undefined,
+      text: "Rate limit reached. Try again later.",
+      delivered: false,
+    },
+    {
+      name: "required WebChat without a channel recipient",
+      expectation: "required",
+      channel: "webchat",
+      recipient: undefined,
+      text: "The run failed. Please try again.",
+      delivered: true,
+    },
+    {
+      name: "required group",
+      expectation: "required",
+      channel: "discord",
+      recipient: "channel:C1",
+      text: "The run failed. Please try again.",
+      delivered: true,
+    },
+  ] as const)(
+    "preserves the producer failure decision for $name",
+    async ({ expectation, channel, recipient, text, delivered }) => {
+      const turn = createTurn({ messageProvider: "discord", originatingChannel: "discord" });
+      turn.queued.run.terminalReplyExpectation = expectation;
+      turn.queued.originatingChannel = channel;
+      turn.queued.originatingTo = recipient;
+      turn.queued.originatingChatType = channel === "webchat" ? "direct" : "group";
+
+      const decision = await resolveFollowupDeliveryDecision({
+        turn,
+        execution: {
+          runId: "run-1",
+          outcome: { kind: "rejected", payload: { text, isError: true } },
+        },
+        opts: { isHeartbeat: true },
+      });
+
+      expect(decision).toMatchObject(
+        delivered
+          ? { kind: "deliver", payloads: [{ isError: true }] }
+          : { kind: "suppress", reason: "silent" },
+      );
+    },
+  );
+  it("delivers optional group recovery guidance through a callback-only recipient", async () => {
+    const turn = createTurn({ messageProvider: "discord", originatingChannel: "discord" });
+    turn.queued.originatingTo = undefined;
+    turn.queued.originatingChatType = "group";
+    turn.queued.run.terminalReplyExpectation = "optional";
+    const onBlockReply = vi.fn(async (_payload: ReplyPayload) => {});
+    const defaults = createDefaults(onBlockReply);
+    const failure = { text: "Rate limit reached. Try again later.", isError: true };
+    const decision = await resolveFollowupDeliveryDecision({
+      turn,
+      execution: { runId: "run-1", outcome: { kind: "rejected", payload: failure } },
+      opts: defaults.opts,
+    });
+
+    await deliverFollowupDecision({
+      decision,
+      turn,
+      defaults,
+      runId: "run-1",
+      runFollowup: vi.fn(async () => {}),
+    });
+
+    expect(onBlockReply).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ isError: true, text: expect.stringMatching(/rate limit/i) }),
+    );
+  });
   it.each<{
     name: string;
     payload?: ReplyPayload;
@@ -294,8 +386,8 @@ describe("follow-up delivery channel boundary", () => {
     ).toEqual([]);
   });
 
-  it("renders post-compaction model failures after queued payload selection", () => {
-    const decision = resolveFollowupDeliveryDecision({
+  it("renders post-compaction model failures after queued payload selection", async () => {
+    const decision = await resolveFollowupDeliveryDecision({
       turn: createTurn({ messageProvider: "discord", originatingChannel: "discord" }),
       execution: {
         runId: "run-1",

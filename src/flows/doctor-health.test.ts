@@ -7,10 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { assertNoUnmigratedWorkspaceState } from "../agents/workspace-legacy-state.js";
 import { readWorkspaceStateSnapshot } from "../agents/workspace-state-store.js";
 import { runCommandWithRuntime } from "../cli/cli-utils.js";
-import {
-  maybeStopManagedServiceBeforeMutableUpdate,
-  resolvePreparedGatewayUpdatePolicy,
-} from "../cli/update-cli/update-command-service-maintenance.js";
+import { maybeStopManagedServiceBeforeMutableUpdate } from "../cli/update-cli/update-command-service-maintenance.js";
 import { collectSecurityWarnings } from "../commands/doctor-security.js";
 import { noteSessionTranscriptHealth } from "../commands/doctor-session-transcripts.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
@@ -535,12 +532,13 @@ describe("runDoctorHealthFlow", () => {
             expect(events).toEqual(parentRestarts ? ["stop"] : []);
             events.length = 0;
             stop.mockClear();
-            const policy = resolvePreparedGatewayUpdatePolicy(prepared, parentRestarts);
-            expect(policy).toEqual({
-              allowGatewayServiceRepair: true,
-              allowGatewayActivation: parentRestarts,
-            });
-            for (const [key, value] of Object.entries(buildUpdateDoctorEnv(policy))) {
+            // Published parents grant repair; the candidate still owns maintenance inspection.
+            for (const [key, value] of Object.entries(
+              buildUpdateDoctorEnv({
+                allowGatewayServiceRepair: true,
+                allowGatewayActivation: parentRestarts,
+              }),
+            )) {
               vi.stubEnv(key, value);
             }
           } else if (outcome === "update-legacy") {

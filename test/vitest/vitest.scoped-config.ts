@@ -254,7 +254,7 @@ export function createScopedVitestConfig(
       ...(options?.pool
         ? {
             pool:
-              options.pool === "forks" && scopedDir === "extensions"
+              options.pool === "forks" && (scopedDir === "extensions" || options.name === "infra")
                 ? diagnosticForksPool
                 : options.pool,
           }

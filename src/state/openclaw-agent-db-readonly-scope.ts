@@ -1,10 +1,11 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import { enableNodeSqliteKyselyStatementCache } from "../infra/kysely-sync-cache-state.js";
 import type { OpenClawAgentDatabaseOptions } from "./openclaw-agent-db-contract.js";
 import { isOpenClawAgentDatabasePathCurrent } from "./openclaw-agent-db-identity.js";
 import {
   hasOpenClawAgentReadOnlySchema,
   openOpenClawAgentDatabaseReadOnly,
-  readOpenClawAgentDatabaseReadOnly,
+  readOpenClawAgentDatabase,
   withFreshOpenClawAgentDatabaseReadOnly,
   type OpenClawAgentDatabaseReadOnlyResult,
   type OpenClawAgentReadOnlyDatabase,
@@ -12,7 +13,6 @@ import {
 } from "./openclaw-agent-db-readonly-open.js";
 
 export type OpenClawAgentDatabaseReadOnlyBehavior = {
-  throwOnMissingTable?: boolean;
   allowExtension?: boolean;
 };
 
@@ -51,10 +51,9 @@ export class OpenClawAgentDatabaseReadOnlyScope {
   read<T>(
     operation: (database: OpenClawAgentReadOnlyDatabase) => T,
     options: OpenClawAgentDatabaseOptions,
-    behavior: OpenClawAgentDatabaseReadOnlyBehavior,
   ): OpenClawAgentDatabaseReadOnlyResult<T> {
     if (this.database?.db.isTransaction) {
-      return withFreshOpenClawAgentDatabaseReadOnly(operation, options, behavior);
+      return withFreshOpenClawAgentDatabaseReadOnly(operation, options);
     }
     if (this.database && !isOpenClawAgentDatabasePathCurrent(this.database)) {
       this.database.close();
@@ -66,12 +65,13 @@ export class OpenClawAgentDatabaseReadOnlyScope {
         return opened;
       }
       this.database = opened.database;
+      enableNodeSqliteKyselyStatementCache(this.database.db);
     } else if (!hasOpenClawAgentReadOnlySchema(this.database)) {
       this.database.close();
       this.database = undefined;
       return { found: false, reason: "schema-missing" };
     }
-    return readOpenClawAgentDatabaseReadOnly(this.database, operation, behavior);
+    return readOpenClawAgentDatabase(this.database, operation);
   }
 }
 
@@ -83,6 +83,6 @@ export function withScopedOpenClawAgentDatabaseReadOnly<T>(
 ): OpenClawAgentDatabaseReadOnlyResult<T> {
   const scope = behavior.allowExtension ? undefined : readOnlyScope.getStore();
   return scope?.matches(options.agentId, options.path)
-    ? scope.read(operation, options, behavior)
+    ? scope.read(operation, options)
     : withFreshOpenClawAgentDatabaseReadOnly(operation, options, behavior);
 }

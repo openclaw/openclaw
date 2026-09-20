@@ -821,7 +821,14 @@ describe("cold transcript storage workers", () => {
     { version: 19, expected: /uses schema version 19/ },
     {
       version: OPENCLAW_AGENT_SCHEMA_VERSION,
-      expected: /no such table: session_transcript_cold_archives/,
+      expected: expect.objectContaining({
+        name: "SessionMetadataUnavailableError",
+        reason: "table-missing",
+        missingTables: ["session_transcript_cold_archives"],
+        cause: expect.objectContaining({
+          message: expect.stringMatching(/no such table: session_transcript_cold_archives/),
+        }),
+      }),
     },
   ])(
     "rejects unmigrated or damaged schema $version instead of reporting zero transcripts",

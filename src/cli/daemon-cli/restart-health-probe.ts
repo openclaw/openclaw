@@ -249,7 +249,7 @@ export async function confirmGatewayReachable(params: {
       params.configuredProbe ?? createConfiguredGatewayLocalProbe(context.config);
     const target = await configuredProbe.resolveWebSocketTarget(params.port, params.signal);
     if (!target) {
-      return { ...result, gatewayBuildId: null, probeError: "gateway TLS certificate unavailable" };
+      return { ...result, probeError: "gateway TLS certificate unavailable" };
     }
     const authNone = context.config.gateway?.auth?.mode === "none";
     // Readiness is first-party local control. CLI shared auth preserves read scopes;
@@ -291,9 +291,7 @@ export async function confirmGatewayReachable(params: {
       (isGatewayAuthRejection(error.message) ||
         (params.allowDeviceIdentityRequired === true &&
           error.message === "device identity required"));
-    if (result.reachable) {
-      result.gatewayBuildId ??= null;
-    } else {
+    if (!result.reachable) {
       result.probeError = formatGatewayRestartProbeError(error);
     }
   }

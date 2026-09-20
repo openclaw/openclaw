@@ -8,8 +8,9 @@ import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
+import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
 import { NodeWorkerLaunchStore } from "./node-worker-launch-store.js";
-import { requireNodeWorkerProcessIdentity } from "./node-worker-process-identity.js";
+import * as workerProcessIdentity from "./node-worker-process-identity.js";
 import { createNodeWorkerSupervisorFixture } from "./node-worker-supervisor.fixture.test-support.js";
 import { createNodeWorkerSupervisor } from "./node-worker-supervisor.js";
 import {
@@ -17,6 +18,7 @@ import {
   testWorkerLaunchInput,
   writeNodeWorkerFixture,
 } from "./node-worker-supervisor.test-support.js";
+import * as workerTreeControl from "./node-worker-tree-control.js";
 import { NodeWorkerTurnStore } from "./node-worker-turn-store.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -124,7 +126,7 @@ describe("node worker supervisor initialization", () => {
   it("keeps pending and running launches owned by a live supervisor unchanged", async () => {
     const { bundleRoot, env, supervisor, workspaceDir } = fixture();
     await supervisor.status("schema-probe");
-    const supervisorIdentity = requireNodeWorkerProcessIdentity(process.pid);
+    const supervisorIdentity = workerProcessIdentity.requireNodeWorkerProcessIdentity(process.pid);
     const store = new NodeWorkerLaunchStore({ env });
     const turns = new NodeWorkerTurnStore({ env });
     for (const launchId of ["pending-launch", "running-launch"]) {
@@ -136,7 +138,12 @@ describe("node worker supervisor initialization", () => {
       store.claim(claim, supervisorIdentity, 2);
       turns.claim({ claim, ownerLaunchId: launchId, supervisor: supervisorIdentity });
       if (launchId === "running-launch") {
-        store.markRunning({ ...claim, supervisor: supervisorIdentity, worker: supervisorIdentity });
+        store.markRunning({
+          ...claim,
+          supervisor: supervisorIdentity,
+          worker: supervisorIdentity,
+          cleanupMode: "process-group",
+        });
       }
     }
 
@@ -176,4 +183,64 @@ describe("node worker supervisor initialization", () => {
     });
     await recovered.close();
   });
+
+  it.each(["dead", "reused"] as const)(
+    "retains Windows restart capacity when the recorded worker root is %s",
+    async (rootState) => {
+      const { bundleRoot, env, supervisor, workspaceDir } = fixture();
+      const store = new NodeWorkerLaunchStore({ env });
+      const input = launchInput(workspaceDir, `windows-${rootState}`, "wait");
+      const claim = {
+        ...testNodeWorkerLaunchIdentity(input),
+        gatewayNamespace: input.gatewayNamespace,
+      };
+      const previousSupervisor = { pid: 2_000_000_001, startTime: 1 };
+      const worker = { pid: 2_000_000_002, startTime: 2 };
+      store.claim(claim, previousSupervisor, 1);
+      store.markRunning({
+        ...claim,
+        supervisor: previousSupervisor,
+        worker,
+        cleanupMode: "process-group",
+      });
+
+      const inspectIdentity = workerProcessIdentity.inspectNodeWorkerProcessIdentity;
+      vi.spyOn(workerProcessIdentity, "inspectNodeWorkerProcessIdentity").mockImplementation(
+        (identity) => {
+          if (identity.pid === previousSupervisor.pid) {
+            return "dead";
+          }
+          return identity.pid === worker.pid ? rootState : inspectIdentity(identity);
+        },
+      );
+      const inspectTree = workerTreeControl.inspectOwnedNodeWorkerTree;
+      vi.spyOn(workerTreeControl, "inspectOwnedNodeWorkerTree").mockImplementation((identity) => {
+        // Scope the Windows observation to its owner; the real database remains host-native.
+        const platform = mockProcessPlatform("win32");
+        try {
+          return inspectTree(identity);
+        } finally {
+          platform.mockRestore();
+        }
+      });
+      const signal = vi.spyOn(workerTreeControl, "signalOwnedNodeWorkerTree").mockResolvedValue();
+      const capacities: Array<{ total: number; available: number }> = [];
+      const recovered = createNodeWorkerSupervisor({
+        bundleRoot,
+        env,
+        capacity: 1,
+        onCapacityChanged: (value) => capacities.push(value),
+      });
+      try {
+        await recovered.initialize();
+        expect(store.get(input.launchId)).toMatchObject({ state: "running", worker });
+        expect(capacities.at(-1)).toEqual({ total: 1, available: 0 });
+        expect(recovered.hasActiveWork()).toBe(true);
+        expect(signal).not.toHaveBeenCalled();
+      } finally {
+        await recovered.close();
+        await supervisor.close();
+      }
+    },
+  );
 });

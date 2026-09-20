@@ -495,6 +495,13 @@ describe("OpenClaw performance workflow", () => {
         expectedContract: "legacy-list",
         expectedRef: "18c9eb8c3950a35794d196f4e40ad471e9308e27",
       },
+      {
+        name: "extended-stable correction pin",
+        schema: legacy,
+        version: "2026.7.34",
+        expectedContract: "legacy-list",
+        expectedRef: "18c9eb8c3950a35794d196f4e40ad471e9308e27",
+      },
     ];
     posixIt.each(cases)("resolves $name without executing target metadata", (fixture) => {
       const { outputs, result, sha } = runTargetMetadataResolution(fixture);

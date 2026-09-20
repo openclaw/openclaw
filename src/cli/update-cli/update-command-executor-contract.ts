@@ -5,6 +5,6 @@ export type UpdateCommandExecutor = {
   /** Acquire only after read-only service admission, before the first mutable phase. */
   enter(
     root: string,
-    options?: { preflight?: true; activationTimeoutMs?: number },
+    options?: { preflight?: true; activationTimeoutMs?: number; serviceRoot?: string },
   ): Promise<UpdateRecoveryFence>;
 };

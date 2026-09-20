@@ -10,7 +10,9 @@ export function readSessionListSelectionFacts(key: string, entry?: SessionEntry)
   return {
     agentId: parsed ? normalizeAgentId(parsed.agentId) : undefined,
     isCronRun: isCronRunSessionKey(key),
-    isSubagent: isSubagentSessionKey(key) || Boolean(entry?.spawnedBy),
+    isSubagent:
+      isSubagentSessionKey(key) ||
+      Boolean(entry?.spawnedBy && !normalizeOptionalString(entry.category)),
     isPhantom:
       entry?.updatedAt == null &&
       !normalizeOptionalString(entry?.sessionId) &&

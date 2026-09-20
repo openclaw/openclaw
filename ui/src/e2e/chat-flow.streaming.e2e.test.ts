@@ -525,7 +525,9 @@ suite.define(() => {
           .poll(() => page.evaluate(() => navigator.clipboard.readText()))
           .toBe(errorText);
         expect(await details.getAttribute("open")).not.toBeNull();
-        expect(await alert.getByRole("button").count()).toBe(1);
+        expect(await alert.getByRole("button", { name: /^(Copy error|Copied!)$/u }).count()).toBe(
+          1,
+        );
         await summary.press("Space");
         await alert.locator("pre").waitFor({ state: "hidden" });
         if (label === "mobile") {

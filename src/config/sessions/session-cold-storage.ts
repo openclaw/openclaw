@@ -548,7 +548,6 @@ export async function getSessionColdStorageStatus(config: OpenClawConfig): Promi
             { databaseLabel: database.path, operationLabel: "session cold storage inventory" },
           ),
         { agentId, path: storePath },
-        { throwOnMissingTable: true },
       );
       const directory = path.join(resolveSessionArtifactDirectory(storePath), "cold");
       const files = await fs.readdir(directory, { withFileTypes: true }).catch((error: unknown) => {

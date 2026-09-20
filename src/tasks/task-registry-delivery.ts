@@ -21,6 +21,7 @@ import {
   shouldSuppressDuplicateTerminalDelivery,
   shouldUseParentReviewTaskTerminalMessage,
 } from "./task-executor-policy.js";
+import type { TaskFlowRecord } from "./task-flow-registry.types.js";
 import { getTaskFlowById } from "./task-flow-runtime-internal.js";
 import {
   getTaskDeliveryState,
@@ -70,12 +71,15 @@ function resolveTaskTerminalIdempotencyKey(task: TaskRecord, owner: TaskDelivery
   return `${prefix}:${task.taskId}:${task.status}:${outcome}`;
 }
 
-export function resolveTaskDeliveryOwner(task: TaskRecord): TaskDeliveryOwner {
+export function resolveTaskDeliveryOwner(
+  task: TaskRecord,
+  readFlow: (flowId: string) => Readonly<TaskFlowRecord> | undefined = getTaskFlowById,
+): TaskDeliveryOwner {
   if (task.scopeKind !== "session") {
     return {};
   }
   const flowId = task.parentFlowId?.trim();
-  const candidate = flowId ? getTaskFlowById(flowId) : undefined;
+  const candidate = flowId ? readFlow(flowId) : undefined;
   const flow =
     candidate &&
     normalizeOptionalString(candidate.ownerKey) === normalizeOptionalString(task.ownerKey)
@@ -330,14 +334,6 @@ async function maybeDeliverTaskTerminalUpdateUnderAdmission(
 ): Promise<TaskRecord | null> {
   let claimed = false;
   try {
-    const candidate = tasks.get(taskId);
-    // Native cancellation may still owe its requester a complete sibling batch.
-    // Resolve its owner lazily, then recheck current rows at each delivery boundary.
-    const readSubagentRun =
-      candidate?.runtime === "subagent" && candidate.status === "cancelled"
-        ? (await import("../agents/subagents/registry/subagent-registry-read.js"))
-            .getLatestSubagentRunByChildSessionKey
-        : undefined;
     const early = withTaskRegistryMutation(
       () => {
         ensureTaskRegistryReady();
@@ -358,6 +354,14 @@ async function maybeDeliverTaskTerminalUpdateUnderAdmission(
     if (!claimed) {
       return early ?? null;
     }
+    const candidate = tasks.get(taskId);
+    // Native cancellation may still owe its requester a complete sibling batch.
+    // Resolve its owner lazily, then recheck current rows at each delivery boundary.
+    const readSubagentRun =
+      candidate?.runtime === "subagent" && candidate.status === "cancelled"
+        ? (await import("../agents/subagents/registry/subagent-registry-read.js"))
+            .getLatestSubagentRunByChildSessionKey
+        : undefined;
     let prepared = withTaskRegistryMutation(
       () => prepareTaskTerminalDelivery(taskId, readSubagentRun),
       () => ({ result: null }),

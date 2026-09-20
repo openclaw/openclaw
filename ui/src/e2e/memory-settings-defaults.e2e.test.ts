@@ -147,9 +147,7 @@ suite.define(() => {
         await expect
           .poll(() => reloadedEngineRow.textContent())
           .toContain("Default: OpenClaw Memory");
-        await expect
-          .poll(() => reloadedFrequencyRow.textContent())
-          .toContain("Using default: 0 3 * * *");
+        await expect.poll(() => reloadedFrequencyRow.textContent()).not.toContain("Using default:");
         await expect.poll(() => reloadedFrequencyRow.getByRole("textbox").inputValue()).toBe("");
         await expect
           .poll(() => reloadedFrequencyRow.getByRole("textbox").getAttribute("placeholder"))
