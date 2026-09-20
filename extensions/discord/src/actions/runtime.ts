@@ -4,7 +4,7 @@ import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createDiscordActionGate } from "../accounts.js";
 import { handleDiscordGuildAction } from "./runtime.guild.js";
 import { handleDiscordMessagingAction } from "./runtime.messaging.js";
-import type { DiscordMessagingActionOptions } from "./runtime.messaging.shared.js";
+import type { DiscordMessagingActionOptions } from "./runtime.messaging.options.js";
 import { handleDiscordModerationAction } from "./runtime.moderation.js";
 import { handleDiscordPresenceAction } from "./runtime.presence.js";
 

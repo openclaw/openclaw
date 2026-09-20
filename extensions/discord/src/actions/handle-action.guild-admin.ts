@@ -10,7 +10,7 @@ import {
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { handleDiscordAction } from "../../action-runtime-api.js";
 import { isTrustedRequesterGuildAdminAction } from "../trusted-requester-actions.js";
-import type { DiscordMessagingActionOptions } from "./runtime.messaging.shared.js";
+import type { DiscordMessagingActionOptions } from "./runtime.messaging.options.js";
 import {
   isDiscordModerationAction,
   readDiscordModerationCommand,

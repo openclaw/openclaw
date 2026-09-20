@@ -14,10 +14,8 @@ import { isDiscordThreadChannelType } from "../channel-type.js";
 import { getGateway } from "../monitor/gateway-registry.js";
 import { getPresence } from "../monitor/presence-cache.js";
 import * as discordGuildActionRuntime from "../send.js";
-import {
-  createDiscordMessagingActionContext,
-  type DiscordMessagingActionOptions,
-} from "./runtime.messaging.shared.js";
+import type { DiscordMessagingActionOptions } from "./runtime.messaging.options.js";
+import { createDiscordMessagingActionContext } from "./runtime.messaging.shared.js";
 import {
   createDiscordActionOptions,
   readDiscordChannelCreateParams,
