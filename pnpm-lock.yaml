@@ -706,9 +706,6 @@ importers:
       '@smithy/node-http-handler':
         specifier: 4.12.1
         version: 4.12.1
-      '@smithy/shared-ini-file-loader':
-        specifier: 4.7.2
-        version: 4.7.2
       '@smithy/types':
         specifier: 4.18.0
         version: 4.18.0
@@ -5484,10 +5481,6 @@ packages:
 
   '@smithy/protocol-http@5.6.2':
     resolution: {integrity: sha512-Asd04MaxODN6FNY8EPTeCAM4kPNi3jDUAjZU0Y4F9rHvpLUrrUo7KLcxFgSthywFr6dZfIyDLIJda6jxmVTk5w==}
-    engines: {node: '>=18.0.0'}
-
-  '@smithy/shared-ini-file-loader@4.7.2':
-    resolution: {integrity: sha512-XsIDj5gVG4YRxGS4n4TiBDAogPWRHXKZyor6JW/sEuaa/7BvKADe9j45jI2dPYCnYbKkLBmbZ4qN9ns0sH+kMQ==}
     engines: {node: '>=18.0.0'}
 
   '@smithy/signature-v4@5.7.3':
@@ -12940,11 +12933,6 @@ snapshots:
       tslib: 2.8.1
 
   '@smithy/protocol-http@5.6.2':
-    dependencies:
-      '@smithy/core': 3.34.1
-      tslib: 2.8.1
-
-  '@smithy/shared-ini-file-loader@4.7.2':
     dependencies:
       '@smithy/core': 3.34.1
       tslib: 2.8.1
