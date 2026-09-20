@@ -21,6 +21,8 @@ it("doctor upgrades BLOB-stored TEXT values to STRICT storage", async () => {
 
     const { DatabaseSync } = requireNodeSqlite();
     const legacy = new DatabaseSync(databasePath);
+    // The synthetic pre-STRICT database predates this placement index.
+    legacy.exec("DROP INDEX IF EXISTS idx_worker_session_placements_environment;");
     legacy.exec(`
       DROP TABLE workspace_path_aliases;
       CREATE TABLE workspace_path_aliases (
