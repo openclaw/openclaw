@@ -1264,6 +1264,7 @@ describe("executeSendAction", () => {
       token: "tok",
       timeoutMs: 5000,
     });
+    expect(pollArgs).not.toHaveProperty("onDeliveryResult");
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

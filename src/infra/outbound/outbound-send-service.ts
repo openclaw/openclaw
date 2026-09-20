@@ -459,10 +459,14 @@ export async function executePollAction(params: {
     inboundEventKind: params.ctx.input.inboundEventKind,
     onPlatformSendDispatch: params.ctx.input.onPlatformSendDispatch,
     assertDirectAdapterHandoff: params.ctx.input.assertDirectAdapterHandoff,
-    onDeliveryResult: async (evidence) => {
-      await params.ctx.onSendAccepted?.();
-      await params.ctx.input.onDeliveryResult?.(evidence);
-    },
+    ...(params.ctx.onSendAccepted || params.ctx.input.onDeliveryResult
+      ? {
+          onDeliveryResult: async (evidence) => {
+            await params.ctx.onSendAccepted?.();
+            await params.ctx.input.onDeliveryResult?.(evidence);
+          },
+        }
+      : {}),
   });
 
   return {
