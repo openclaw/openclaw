@@ -25,14 +25,20 @@
 //     → { errors, warnings }; on Linux the errors/warnings originate in
 //       checkLinuxDependencies() (src/sandbox/linux-sandbox-utils.ts:419) —
 //       a non-empty `errors` means the sandbox cannot run.
-import { SandboxManager } from "@anthropic-ai/sandbox-runtime";
+import {
+  SandboxManager,
+  VENDORED_SRT_WIN_EXE,
+  checkWindowsDependenciesAsync,
+  resolveSrtWin,
+  type SrtWinSpawn,
+} from "@anthropic-ai/sandbox-runtime";
 
 /**
- * Platforms the SRT backend enforces today: macOS Seatbelt (S1) and Linux
- * bwrap + seccomp + netns (S5). Windows (low-privilege account + NTFS ACL + WFP)
- * is a later stage (S6).
+ * Platforms the SRT backend enforces today: macOS Seatbelt (S1), Linux
+ * bwrap + seccomp + netns (S5), and Windows low-privilege account + NTFS ACL +
+ * WFP + worker-RPC per-scope (S6).
  */
-const SUPPORTED_PLATFORMS = new Set<NodeJS.Platform>(["darwin", "linux"]);
+const SUPPORTED_PLATFORMS = new Set<NodeJS.Platform>(["darwin", "linux", "win32"]);
 
 export class SrtSandboxUnavailableError extends Error {
   constructor(message: string) {
@@ -42,10 +48,22 @@ export class SrtSandboxUnavailableError extends Error {
 }
 
 function platformGuidance(platform: NodeJS.Platform): string {
-  if (platform === "win32") {
-    return "Windows (low-privilege account + NTFS ACL + WFP) support is a later SRT sandbox stage (S6) and is not enabled yet.";
-  }
   return `Platform "${platform}" is not supported by the SRT sandbox backend.`;
+}
+
+/**
+ * Windows dependency guidance. SRT's Windows probe reports missing pieces of the
+ * low-priv-account / WFP toolchain (the vendored `srt-win.exe`, the VC++ runtime
+ * it links, the Secondary Logon service the two-hop launch needs). Surface them
+ * verbatim plus the fail-closed note.
+ */
+function windowsGuidance(problems: readonly string[]): string {
+  return (
+    `${problems.join("; ")}. Ensure the vendored srt-win.exe is present (reinstall ` +
+    `@anthropic-ai/sandbox-runtime), the Microsoft Visual C++ 2015-2022 Redistributable is ` +
+    `installed, and the Secondary Logon (seclogon) service is enabled. The SRT sandbox refuses ` +
+    `to run commands unsandboxed (fail-closed).`
+  );
 }
 
 /**
@@ -99,14 +117,30 @@ function linuxInstallGuidance(problems: readonly string[]): string {
  *
  * Runs BEFORE the backend factory constructs a scope (see backend.ts
  * createSrtSandboxBackendFactory) so a host missing bwrap/socat/ripgrep/seccomp
- * never gets a handle that could execute a command outside the sandbox.
+ * (Linux) or srt-win.exe / VC++ runtime / seclogon (Windows) never gets a handle
+ * that could execute a command outside the sandbox.
+ *
+ * `srtWin` is required on Windows (the SRT Windows probe spawns `srt-win.exe`);
+ * it is ignored on macOS/Linux.
  */
-export async function assertSrtSandboxAvailable(): Promise<void> {
+export async function assertSrtSandboxAvailable(srtWin?: SrtWinSpawn): Promise<void> {
   const platform = process.platform;
   if (!SUPPORTED_PLATFORMS.has(platform)) {
     throw new SrtSandboxUnavailableError(
       `SRT sandbox backend cannot start: ${platformGuidance(platform)}`,
     );
+  }
+  if (platform === "win32") {
+    // Windows enforcement is CLI-based (srt-win.exe), not the SandboxManager
+    // path used by macOS/Linux — probe it directly.
+    const resolved = srtWin ?? resolveSrtWin({ path: VENDORED_SRT_WIN_EXE });
+    const check = await checkWindowsDependenciesAsync({ srtWin: resolved });
+    if (check.errors.length > 0) {
+      throw new SrtSandboxUnavailableError(
+        `SRT sandbox backend cannot start: missing Windows dependencies — ${windowsGuidance(check.errors)}`,
+      );
+    }
+    return;
   }
   if (!SandboxManager.isSupportedPlatform()) {
     throw new SrtSandboxUnavailableError(

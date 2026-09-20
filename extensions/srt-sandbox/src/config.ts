@@ -52,6 +52,18 @@ export type ResolvedSrtPluginConfig = {
    * perSessionNetwork is true.
    */
   parentProxy?: { http?: string; https?: string; noProxy?: string };
+  /**
+   * S6 Windows options. Each scope maps to a low-privilege account + WFP
+   * sublayer + loopback port range (per-scope isolation). `srtWinPath` overrides
+   * the vendored per-arch `srt-win.exe`; `sandboxUsers` is the account pool a
+   * scope adopts (default a single managed account); `proxyPortBase` is the base
+   * loopback PERMIT port. Only consulted on win32.
+   */
+  windows?: {
+    srtWinPath?: string;
+    sandboxUsers?: string[];
+    proxyPortBase?: number;
+  };
 };
 
 const DEFAULT_BIN_SHELL = "/bin/bash";
@@ -95,6 +107,22 @@ const SrtPluginConfigSchema = z.strictObject({
       http: z.string().url({ error: "parentProxy.http must be a URL" }).optional(),
       https: z.string().url({ error: "parentProxy.https must be a URL" }).optional(),
       noProxy: nonEmptyTrimmedString("parentProxy.noProxy must be a non-empty string").optional(),
+    })
+    .optional(),
+  windows: z
+    .strictObject({
+      srtWinPath: nonEmptyTrimmedString("windows.srtWinPath must be a non-empty string").optional(),
+      sandboxUsers: z
+        .array(nonEmptyTrimmedString("windows.sandboxUsers entries must be non-empty strings"), {
+          error: "windows.sandboxUsers must be an array of non-empty account names",
+        })
+        .optional(),
+      proxyPortBase: z
+        .number({ error: "windows.proxyPortBase must be a number" })
+        .int({ error: "windows.proxyPortBase must be an integer" })
+        .min(1024, { error: "windows.proxyPortBase must be >= 1024" })
+        .max(60000, { error: "windows.proxyPortBase must be <= 60000" })
+        .optional(),
     })
     .optional(),
 });
@@ -178,5 +206,6 @@ export function resolveSrtPluginConfig(value: unknown): ResolvedSrtPluginConfig 
         : DEFAULT_COMMAND_TIMEOUT_MS,
     perSessionNetwork: cfg.perSessionNetwork ?? false,
     parentProxy: cfg.parentProxy,
+    windows: cfg.windows,
   };
 }

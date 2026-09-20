@@ -8,11 +8,19 @@
 // SandboxManager is stubbed so both outcomes (deps present / deps missing) and
 // the platform gate can be exercised on any host — the LIVE bwrap-present path
 // is proven separately on a real Linux host (backend.linux.test.ts, AC-L2..L6).
-import { SandboxManager } from "@anthropic-ai/sandbox-runtime";
+import { SandboxManager, checkWindowsDependenciesAsync } from "@anthropic-ai/sandbox-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createSrtSandboxBackendFactory, SRT_SANDBOX_BACKEND_ID } from "./backend.js";
 import { resolveSrtPluginConfig } from "./config.js";
 import { assertSrtSandboxAvailable, SrtSandboxUnavailableError } from "./dependency-probe.js";
+
+// ESM function exports can't be spied in place; mock just the Windows probe fn
+// (everything else passes through so the SandboxManager spies below still work).
+vi.mock("@anthropic-ai/sandbox-runtime", async (importActual) => {
+  const actual = await importActual<typeof import("@anthropic-ai/sandbox-runtime")>();
+  return { ...actual, checkWindowsDependenciesAsync: vi.fn() };
+});
+const mockCheckWindows = vi.mocked(checkWindowsDependenciesAsync);
 
 const originalPlatform = process.platform;
 
@@ -155,12 +163,20 @@ describe("srt dependency probe (fail-closed gate)", () => {
     await expect(assertSrtSandboxAvailable()).resolves.toBeUndefined();
   });
 
-  it("fails closed on Windows with an S6 not-yet-enabled message", async () => {
+  it("S6: passes on Windows when the srt-win dependencies are present", async () => {
     setPlatform("win32");
-    // isSupportedPlatform is never reached; the platform gate rejects first.
-    const err = await assertSrtSandboxAvailable().catch((e) => e);
+    mockCheckWindows.mockResolvedValue({ errors: [], warnings: [] });
+    const srtWin = { exe: "C:\\srt-win.exe", prependArgs: ["--srt-win"] as const };
+    await expect(assertSrtSandboxAvailable(srtWin)).resolves.toBeUndefined();
+  });
+
+  it("S6: fails closed on Windows when the srt-win toolchain is unusable", async () => {
+    setPlatform("win32");
+    mockCheckWindows.mockResolvedValue({ errors: ["srt-win.exe not found"], warnings: [] });
+    const srtWin = { exe: "C:\\srt-win.exe", prependArgs: ["--srt-win"] as const };
+    const err = await assertSrtSandboxAvailable(srtWin).catch((e) => e);
     expect(err).toBeInstanceOf(SrtSandboxUnavailableError);
     expect(err.message).toMatch(/Windows/);
-    expect(err.message).toMatch(/S6/);
+    expect(err.message).toMatch(/fail-closed/i);
   });
 });

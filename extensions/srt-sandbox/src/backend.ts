@@ -43,6 +43,8 @@ import {
   resolveWritableRoots,
   type SrtScopePolicyInput,
 } from "./srt-runtime-config.js";
+import { WindowsSrtSandboxBackend } from "./windows-backend.js";
+import { resolveWindowsSrtWin } from "./windows-sandbox-config.js";
 
 /** Public backend id used with registerSandboxBackend() and agents.defaults.sandbox.backend. */
 export const SRT_SANDBOX_BACKEND_ID = "srt";
@@ -52,12 +54,22 @@ type SrtBackendDependencies = {
 };
 
 /**
+ * A live per-scope backend (macOS/Linux SrtSandboxBackend or the Windows
+ * WindowsSrtSandboxBackend). Both expose the scope key and a dispose() that
+ * reaps the scope's sandbox processes, so teardown treats them uniformly.
+ */
+type DisposableScopeBackend = { readonly scopeKey: string; dispose(): void };
+
+/**
  * Live per-scope backend instances, so scope teardown (manager.removeRuntime)
  * and plugin lifecycle cleanup can reap each scope's sandbox process groups.
  * A scope may have more than one live handle across re-creations, so this is a
  * set filtered by scopeKey rather than a map.
  */
-const liveScopeBackends = new Set<SrtSandboxBackend>();
+const liveScopeBackends = new Set<DisposableScopeBackend>();
+
+/** Monotonic per-scope index (Windows account-pool / port-slot assignment). */
+let windowsScopeCounter = 0;
 
 /** Dispose every live SRT scope backend (plugin disable/restart teardown). */
 export function disposeAllSrtScopeBackends(): void {
@@ -295,6 +307,22 @@ export function createSrtSandboxBackendFactory(
   deps: SrtBackendDependencies,
 ): SandboxBackendFactory {
   return async (params) => {
+    if (process.platform === "win32") {
+      // S6 Windows path: low-priv account + NTFS ACL + WFP + worker-RPC per-scope
+      // (windows-backend.ts). Additive; the macOS/Linux path below is untouched.
+      const srtWin = resolveWindowsSrtWin(deps.pluginConfig.windows ?? {});
+      await assertSrtSandboxAvailable(srtWin);
+      const backend = new WindowsSrtSandboxBackend(params, deps, windowsScopeCounter++);
+      const entry: DisposableScopeBackend = {
+        scopeKey: backend.scopeKey,
+        dispose: () => {
+          backend.dispose();
+          liveScopeBackends.delete(entry);
+        },
+      };
+      liveScopeBackends.add(entry);
+      return backend.asHandle();
+    }
     await assertSrtSandboxAvailable();
     const backend = new SrtSandboxBackend(params, deps);
     liveScopeBackends.add(backend);
