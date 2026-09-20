@@ -650,10 +650,13 @@ export function resolveConfiguredPrimaryProviderFallback(
 export function resolveConfiguredModelRef(
   params: ConfiguredModelSelectionParams & { defaultModel: string },
 ): ModelRef {
+  const agentEntry = params.agentId ? resolveAgentConfig(params.cfg, params.agentId) : undefined;
+  // An ACP-runtime agent's model.primary is its ACP harness's own model id, consumed verbatim
+  // by the ACP binding. Harness ids are not OpenClaw model refs, so normalizing one here would
+  // hand every generic dispatch path a provider-prefixed ref that matches no catalog entry.
+  const agentModel = agentEntry?.runtime?.type === "acp" ? undefined : agentEntry?.model;
   const rawModel =
-    (params.agentId
-      ? resolveAgentModelPrimaryValue(resolveAgentConfig(params.cfg, params.agentId)?.model)
-      : undefined) ??
+    resolveAgentModelPrimaryValue(agentModel) ??
     resolveAgentModelPrimaryValue(params.cfg.agents?.defaults?.model) ??
     "";
   if (rawModel) {

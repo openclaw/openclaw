@@ -126,7 +126,11 @@ Use `agents.entries.*.runtime` to define ACP defaults once per agent:
 3. Global ACP defaults (e.g. `acp.backend`)
 
 Configured bindings also forward the owning agent's explicit model and thinking
-policy. Thinking uses the agent's `thinkingDefault`, then per-model
+policy. For an agent with `runtime.type: "acp"`, `agents.entries.*.model.primary`
+is that harness's own model id and is used only for the ACP session; harness ids
+are not OpenClaw model refs, so OpenClaw-side model calls for that agent (internal
+tool and skill dispatch, `/btw`, compaction) resolve `agents.defaults.model`
+instead. Thinking uses the agent's `thinkingDefault`, then per-model
 `agents.defaults.models["provider/model"].params.thinking`, then
 `agents.defaults.thinkingDefault`. Without configured policy, the external
 harness keeps its own defaults.
