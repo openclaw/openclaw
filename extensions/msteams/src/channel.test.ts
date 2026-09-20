@@ -294,6 +294,36 @@ describe("msteamsPlugin", () => {
 });
 
 describe("msteams config schema", () => {
+  it.each(["thread", "channel"])("accepts threadSessionPolicy=%s at every level", (policy) => {
+    const input = {
+      threadSessionPolicy: policy,
+      teams: {
+        team123: {
+          threadSessionPolicy: policy,
+          channels: { chan456: { threadSessionPolicy: policy } },
+        },
+      },
+    };
+    expect(MSTeamsConfigSchema.parse(input)).toMatchObject(input);
+  });
+
+  it("preserves omitted threadSessionPolicy overrides for runtime inheritance", () => {
+    const parsed = MSTeamsConfigSchema.parse({
+      teams: { team123: { channels: { chan456: {} } } },
+    });
+    expect(parsed.threadSessionPolicy).toBeUndefined();
+    expect(parsed.teams?.team123?.threadSessionPolicy).toBeUndefined();
+    expect(parsed.teams?.team123?.channels?.chan456?.threadSessionPolicy).toBeUndefined();
+  });
+
+  it.each([
+    { threadSessionPolicy: "shared" },
+    { teams: { team123: { threadSessionPolicy: "shared" } } },
+    { teams: { team123: { channels: { chan456: { threadSessionPolicy: "shared" } } } } },
+  ])("rejects unsupported threadSessionPolicy values: %j", (input) => {
+    expect(MSTeamsConfigSchema.safeParse(input).success).toBe(false);
+  });
+
   it("rejects unsupported Teams serviceUrl hosts", () => {
     const res = MSTeamsConfigSchema.safeParse({
       cloud: "USGovDoD",

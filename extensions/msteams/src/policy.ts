@@ -251,3 +251,16 @@ export function resolveMSTeamsReplyPolicy(params: {
     ...(requireMentionInBotThreads === undefined ? {} : { requireMentionInBotThreads }),
   };
 }
+
+export function resolveMSTeamsThreadSessionPolicy(params: {
+  globalConfig?: MSTeamsConfig;
+  teamConfig?: MSTeamsTeamConfig;
+  channelConfig?: MSTeamsChannelConfig;
+}): NonNullable<MSTeamsConfig["threadSessionPolicy"]> {
+  return (
+    params.channelConfig?.threadSessionPolicy ??
+    params.teamConfig?.threadSessionPolicy ??
+    params.globalConfig?.threadSessionPolicy ??
+    "thread"
+  );
+}
