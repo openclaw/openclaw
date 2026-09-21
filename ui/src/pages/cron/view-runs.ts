@@ -3,18 +3,12 @@
 // detail history tab.
 import { html, nothing } from "lit";
 import { unsafeHTML } from "lit/directives/unsafe-html.js";
-import type {
-  CronRunLogEntry,
-  CronDeliveryStatus,
-  CronRunsStatusValue,
-  CronSortDir,
-} from "../../api/types.ts";
+import type { CronRunLogEntry, CronDeliveryStatus, CronRunsStatusValue } from "../../api/types.ts";
 import { icon } from "../../components/icons.ts";
 import "../../components/web-awesome.ts";
 import { toSanitizedMarkdownHtml } from "../../components/markdown.ts";
 import { i18n, t } from "../../i18n/index.ts";
 import { registerCronEnglish } from "../../i18n/locales/en-cron.ts";
-import type { CronRunsViewState } from "../../lib/cron/runs.ts";
 import { formatDurationCompact, formatDurationHuman } from "../../lib/format-duration.ts";
 import { formatUiExternalText } from "../../lib/format-error.ts";
 import {
@@ -23,38 +17,33 @@ import {
   formatCompactTokenCount,
 } from "../../lib/format.ts";
 import { cronRunEntryMatchesLink } from "./route-model.ts";
+import type { CronProps } from "./view-types.ts";
 
 registerCronEnglish();
 
-// Leaf contract: the slice of the cron view props this module needs. Keeping
-// it local (instead of importing CronProps from view.ts) avoids a module
-// cycle between view.ts and view-runs.ts.
-type CronRunsSectionProps = {
-  basePath: string;
-  agentId: string;
-  runs: CronRunLogEntry[];
-  runsState: CronRunsViewState;
-  highlightedRunId?: string | null;
-  runsHasMore: boolean;
-  runsLoadingMore: boolean;
-  runsStatuses: CronRunsStatusValue[];
-  runsDeliveryStatuses: CronDeliveryStatus[];
-  runsQuery: string;
-  runsSortDir: CronSortDir;
+type CronRunsSectionProps = Pick<
+  CronProps,
+  | "basePath"
+  | "agentId"
+  | "runs"
+  | "runsState"
+  | "highlightedRunId"
+  | "runsHasMore"
+  | "runsLoadingMore"
+  | "runsStatuses"
+  | "runsDeliveryStatuses"
+  | "runsQuery"
+  | "runsSortDir"
+  | "onLoadMoreRuns"
+  | "onRefresh"
+  | "onRunsFiltersChange"
+  | "onViewRunTranscript"
+> & {
   conditionActivity?: {
     checkCount: number;
     lastCheckedAtMs?: number;
     lastFiredAtMs?: number;
   };
-  onLoadMoreRuns: () => void;
-  onRefresh: () => void;
-  onRunsFiltersChange: (patch: {
-    cronRunsStatuses?: CronRunsStatusValue[];
-    cronRunsDeliveryStatuses?: CronDeliveryStatus[];
-    cronRunsQuery?: string;
-    cronRunsSortDir?: CronSortDir;
-  }) => void | Promise<void>;
-  onViewRunTranscript?: (entry: CronRunLogEntry) => void;
 };
 
 function renderConditionMetric(label: string, value: string) {

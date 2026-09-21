@@ -48,7 +48,8 @@ import { CronEditorClearance } from "./editor-clearance.ts";
 import { buildCronSuggestions, THINKING_SUGGESTIONS } from "./form-suggestions.ts";
 import { resolveCronRouteData } from "./route-model.ts";
 import { CronRunTranscript } from "./run-transcript.ts";
-import { renderCron, type CronDetailTab, type CronListTab } from "./view.ts";
+import type { CronDetailTab, CronListTab } from "./view-types.ts";
+import { renderCron } from "./view.ts";
 
 registerCronEnglish();
 
