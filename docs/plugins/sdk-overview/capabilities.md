@@ -129,7 +129,9 @@ IDs are rejected. Registration and optional `isReady()` must be local, synchrono
 and network-free. Import types from `openclaw/plugin-sdk/decisions`.
 
 Consumers call `api.runtime.decisions.evaluate(batch, { agentId?, purpose, rubricVersion,
-timeoutMs, signal })`. State and rubric entries are finite JSON. Choices preserve
+timeoutMs, signal })`. State and rubric entries are finite JSON. Use plain objects
+and arrays; custom prototypes, serialization hooks, and getters are rejected on
+both request and response boundaries. Choices preserve
 all offered labels and probabilities; the chosen label is the provider's decision
 and need not equal the largest rounded probability. Consumers choose whether to
 use that label or an explicit distribution policy. Ordered scores are fractional

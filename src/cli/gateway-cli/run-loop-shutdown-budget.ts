@@ -72,6 +72,7 @@ export async function resolveGatewayShutdownBudget(
 export function resolveGatewayShutdownDrainBudget(params: {
   budget: { nativeStopBudget: boolean; timeoutMs: number; reserveMs: number };
   isRestart: boolean;
+  forceRestart: boolean;
   restartWithoutSupervisor: boolean;
   acceptedAtMs: number;
   requestedRestartDrainTimeoutMs?: number;
@@ -87,15 +88,23 @@ export function resolveGatewayShutdownDrainBudget(params: {
     isRestart && restartDrainTimeoutMs !== undefined
       ? Date.now() + restartDrainTimeoutMs
       : undefined;
-  const restartTimeoutMs = (drainTimeoutMs: number) =>
+  const forcedRestartDeadlineAt =
+    params.forceRestart && restartDrainDeadlineAt !== undefined
+      ? restartDrainDeadlineAt + budget.reserveMs
+      : undefined;
+  const restartTimeoutMs = (drainTimeoutMs: number) => {
+    if (forcedRestartDeadlineAt !== undefined) {
+      return Math.max(0, forcedRestartDeadlineAt - Date.now());
+    }
     // A containing service can bound an in-process restart without replacing it.
-    budget.nativeStopBudget && params.restartWithoutSupervisor
+    return budget.nativeStopBudget && params.restartWithoutSupervisor
       ? budget.timeoutMs
       : drainTimeoutMs + (budget.nativeStopBudget ? budget.reserveMs : GATEWAY_SHUTDOWN_TIMEOUT_MS);
+  };
   return {
     restartDrainDeadlineAt,
     restartTimeoutMs: () =>
-      budget.nativeStopBudget
+      budget.nativeStopBudget || params.forceRestart
         ? restartTimeoutMs(Math.max(0, (restartDrainDeadlineAt ?? Date.now()) - Date.now()))
         : GATEWAY_SHUTDOWN_TIMEOUT_MS,
     closeDrainTimeoutMs: () =>

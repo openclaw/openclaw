@@ -55,7 +55,7 @@ export function registerTaskRegistryScheduledMaintenanceTests() {
           await waitForScheduledMaintenance(admissions);
           expect(getTaskFlowById(flow.flowId)).toBeUndefined();
         } finally {
-          stopTaskRegistryMaintenance();
+          await stopTaskRegistryMaintenance();
         }
       },
       { durableStore: true },
@@ -88,7 +88,7 @@ export function registerTaskRegistryScheduledMaintenanceTests() {
         expect(gatewayWorkAdmission.getActiveGatewayRootWorkCount()).toBe(0);
       } finally {
         releaseInspection([]);
-        stopTaskRegistryMaintenance();
+        await stopTaskRegistryMaintenance();
       }
     });
   });

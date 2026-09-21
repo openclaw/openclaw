@@ -4,7 +4,7 @@ import type { InstalledPluginIndex } from "./installed-plugin-index-types.js";
 import type { PluginManifestRecord } from "./manifest-registry.types.js";
 import type { OfficialCatalogResult } from "./official-external-plugin-catalog.types.js";
 import type { PluginMetadataSnapshot } from "./plugin-metadata-snapshot.types.js";
-import type { PluginDependencyStatus } from "./status-dependencies-core.js";
+import type { PluginDependencyStatus } from "./status-dependencies.types.js";
 
 export type PersistedInstalledPluginIndexCacheEntry = {
   state: { status: "missing" | "invalid" } | { status: "present"; value: unknown };

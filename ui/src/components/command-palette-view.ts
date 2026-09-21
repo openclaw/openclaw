@@ -5,12 +5,19 @@ import type { ApplicationContext } from "../app/context.ts";
 import { t } from "../i18n/index.ts";
 import { registerCommandPaletteEnglish } from "../i18n/locales/en-command-palette.ts";
 import type { AgentIdentityCapability } from "../lib/agents/identity.ts";
+import { MAX_HUMAN_MENTIONS } from "../lib/chat/human-mentions.ts";
 import {
   formatKeyboardShortcutCombo,
   KEYBOARD_SHORTCUT_COMBOS,
   matchesShortcutCombo,
 } from "../lib/keyboard-shortcut-contract.ts";
 import { resolveUiSessionRowAgentId } from "../lib/sessions/session-key.ts";
+import { paneDomId } from "../pages/chat/components/chat-composer-dom.ts";
+import type {
+  HumanMentionMenu,
+  HumanMentionMenuHost,
+} from "../pages/chat/components/chat-composer-mention-menu.ts";
+import { renderSelectedHumanMentions } from "../pages/chat/components/chat-composer-selected-mentions.ts";
 import type { PaletteSessionDraft } from "../pages/new-session/palette-session-draft.ts";
 import {
   commandPaletteCategoryLabel,
@@ -55,7 +62,15 @@ type CommandPaletteProps = {
   sessionSearchIndexing: boolean;
   archivedTranscriptsExcluded: number;
   onToggle: () => void;
-  onQueryChange: (query: string) => void;
+  onQueryChange: (query: string, event: InputEvent) => void;
+  onBeforeInput: (event: InputEvent) => void;
+  onSelectionChange: (event: Event) => void;
+  onCompositionStart: () => void;
+  onCompositionEnd: () => void;
+  composing: boolean;
+  mentionMenu: HumanMentionMenu;
+  mentionHost: HumanMentionMenuHost;
+  requestUpdate: () => void;
   onActiveIdChange: (id: string) => void;
   onNavigate?: ApplicationContext["navigate"];
   onSelectSession?: (sessionKey: string) => void;
@@ -127,7 +142,7 @@ function handleKeydown(
   if (event.defaultPrevented) {
     return;
   }
-  if (event.isComposing || event.keyCode === 229) {
+  if (props.composing || event.isComposing || event.keyCode === 229) {
     event.stopPropagation();
     return;
   }
@@ -138,6 +153,17 @@ function handleKeydown(
   }
   if (event.key === "Enter" && event.repeat) {
     event.preventDefault();
+    return;
+  }
+  if (
+    !props.draft.messageLocked &&
+    !event.shiftKey &&
+    !event.altKey &&
+    !event.metaKey &&
+    !event.ctrlKey &&
+    props.mentionMenu.handleKeydown(event, props.mentionHost, props.requestUpdate)
+  ) {
+    event.stopPropagation();
     return;
   }
   if (matchesShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.modifiedEnter, event)) {
@@ -188,7 +214,11 @@ export function renderCommandPalette(props: CommandPaletteProps) {
   if (!props.open) {
     return nothing;
   }
-  const matches = props.promptMode
+  const mentionsOpen = props.mentionMenu.open;
+  const hideSearch = props.promptMode || mentionsOpen || props.draft.mentions.length > 0;
+  const mentionListboxId = paneDomId(props.mentionHost.paneId, "mention-menu-listbox");
+  const mentionAnnouncementId = paneDomId(props.mentionHost.paneId, "mention-announcement");
+  const matches = hideSearch
     ? []
     : filterCommandPaletteItems({
         ...props,
@@ -221,7 +251,7 @@ export function renderCommandPalette(props: CommandPaletteProps) {
   const activeOptionId = items[activeIndex] ? getOptionId(activeIndex) : undefined;
   const paletteLabel = t("palette.placeholder");
   const startLabel = t(props.draft.submitting ? "palette.startingSession" : "palette.startSession");
-  const startDisabled = !props.draft.canSubmit;
+  const startDisabled = props.composing || !props.draft.canSubmit;
   const startReason =
     props.draft.disabledReason ?? (props.draft.hasPrompt ? undefined : t("palette.promptRequired"));
   const startShortcut = formatKeyboardShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.modifiedEnter);
@@ -243,6 +273,14 @@ export function renderCommandPalette(props: CommandPaletteProps) {
       label=${paletteLabel}
       style=${COMMAND_PALETTE_DIALOG_STYLE}
       @modal-cancel=${(event: Event) => {
+        if (props.composing || props.mentionMenu.open) {
+          event.preventDefault();
+          if (!props.composing) {
+            props.mentionMenu.close();
+            props.requestUpdate();
+          }
+          return;
+        }
         if (props.draft.submitting) {
           event.preventDefault();
           return;
@@ -251,7 +289,7 @@ export function renderCommandPalette(props: CommandPaletteProps) {
       }}
     >
       <div
-        class="cmd-palette ${props.promptMode ? "cmd-palette--prompt" : ""}"
+        class="cmd-palette ${hideSearch ? "cmd-palette--prompt" : ""}"
         @click=${(e: Event) => e.stopPropagation()}
         @keydown=${(e: KeyboardEvent) => handleKeydown(e, props, items, activeIndex)}
       >
@@ -260,12 +298,25 @@ export function renderCommandPalette(props: CommandPaletteProps) {
           placeholder: paletteLabel,
           onInputRef: props.onInputRef,
           onValueChange: props.onQueryChange,
+          onBeforeInput: props.onBeforeInput,
+          onSelectionChange: props.onSelectionChange,
+          onCompositionStart: props.onCompositionStart,
+          onCompositionEnd: props.onCompositionEnd,
           onPaste: props.draft.pasteImages,
           disabled: props.draft.submitting,
           readOnly: props.draft.messageLocked,
-          controls: props.promptMode ? undefined : paletteListboxId,
-          activeDescendant: activeOptionId,
-          describedBy: props.promptMode ? undefined : "cmd-palette-keys",
+          controls: mentionsOpen ? mentionListboxId : hideSearch ? undefined : paletteListboxId,
+          activeDescendant: mentionsOpen
+            ? ((props.draft.mentions.length < MAX_HUMAN_MENTIONS
+                ? props.mentionMenu.activeId(props.mentionHost.paneId)
+                : null) ?? undefined)
+            : activeOptionId,
+          expanded: mentionsOpen ? true : undefined,
+          describedBy: mentionsOpen
+            ? mentionAnnouncementId
+            : hideSearch
+              ? undefined
+              : "cmd-palette-keys",
           actions: html`
             <openclaw-tooltip content=${startReason ?? t("palette.startSessionBackground")}>
               <button
@@ -274,7 +325,11 @@ export function renderCommandPalette(props: CommandPaletteProps) {
                 aria-label=${t("palette.startSessionBackground")}
                 aria-busy=${String(props.draft.submitting)}
                 ?disabled=${startDisabled}
-                @click=${() => void props.draft.submit()}
+                @click=${() => {
+                  if (!props.composing) {
+                    void props.draft.submit();
+                  }
+                }}
               >
                 ${startLabel}<kbd>${startShortcut}</kbd>
               </button>
@@ -282,15 +337,41 @@ export function renderCommandPalette(props: CommandPaletteProps) {
             ${props.draft.renderControls()}
           `,
         })}
+        ${
+          props.draft.mentions.length
+            ? html`<div class="cmd-palette__mentions" ?inert=${props.draft.messageLocked}>
+                ${renderSelectedHumanMentions(
+                  props.query,
+                  props.draft.mentions,
+                  () => {
+                    props.draft.setMessage(props.query, []);
+                    // The unchanged text needs search resumed after recipient metadata is removed.
+                    props.requestUpdate();
+                    props.mentionHost.getTextarea()?.focus({ preventScroll: true });
+                  },
+                  props.mentionMenu.selectedAvatarUrls,
+                )}
+              </div>`
+            : nothing
+        }
         ${props.draft.renderAttachments()}
+        ${props.mentionMenu.render(props.mentionHost, props.requestUpdate)}
+        <span
+          id=${mentionAnnouncementId}
+          class="sr-only"
+          role="status"
+          aria-live="polite"
+          aria-atomic="true"
+          >${props.mentionMenu.activeLabel()}</span
+        >
         <div
           class="cmd-palette__search"
-          ?inert=${props.promptMode}
-          aria-hidden=${props.promptMode ? "true" : nothing}
+          ?inert=${hideSearch}
+          aria-hidden=${hideSearch ? "true" : nothing}
         >
           <div class="cmd-palette__search-content">
             ${
-              props.promptMode
+              hideSearch
                 ? noChange
                 : html`
                     ${

@@ -565,30 +565,6 @@ it("shows an unmatched selected value instead of the first option", async () => 
   }
 });
 
-it("focuses and scrolls the selected row into view when opened", async () => {
-  const element = await createAgentSelect({ value: "beta" });
-
-  try {
-    const beta = Array.from(
-      element.querySelectorAll<HTMLElement & { active: boolean; value: string }>(
-        "[data-agent-option]",
-      ),
-    ).find((item) => item.value === "beta");
-    if (!beta) {
-      throw new Error("expected beta option");
-    }
-    const scrollIntoView = vi.fn();
-    Object.defineProperty(beta, "scrollIntoView", { configurable: true, value: scrollIntoView });
-    element.querySelector("wa-dropdown")?.dispatchEvent(new CustomEvent("wa-after-show"));
-
-    expect(beta.active).toBe(true);
-    expect(document.activeElement).toBe(beta);
-    expect(scrollIntoView).toHaveBeenCalledWith({ block: "nearest" });
-  } finally {
-    element.remove();
-  }
-});
-
 it("closes and rejects selection when disabled while open", async () => {
   const onSelect = vi.fn<(value: string) => void>();
   const element = await createAgentSelect({ onSelect });

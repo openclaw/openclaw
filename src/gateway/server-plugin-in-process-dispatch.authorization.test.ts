@@ -1,6 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { GATEWAY_CLIENT_CAPS } from "../../packages/gateway-protocol/src/client-info.js";
-import { createOperationalRunInstanceRef } from "../agents/admitted-run-context.js";
+import {
+  assertAdmittedRunOperatorAuthority,
+  createOperationalRunInstanceRef,
+} from "../agents/admitted-run-context.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import { withPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
@@ -96,7 +99,12 @@ describe("typed in-process agent authorization", () => {
         result,
       );
       expect(createFacade).toHaveBeenCalledOnce();
-      expect(createFacade.mock.calls[0]?.[0].client).toBe(client);
+      const capturedClient = createFacade.mock.calls[0]?.[0].client;
+      expect(capturedClient).toMatchObject(client);
+      const authority = capturedClient?.internal?.operatorRunAuthority;
+      assertAdmittedRunOperatorAuthority(authority);
+      expect(authority).toMatchObject({ profileId: "owner", scopes: ["operator.write"] });
+      expect(client.internal?.operatorRunAuthority).toBeUndefined();
 
       delete context.createAgentTurnFacade;
       await expect(dispatchScopedMethod({ client, context, method, params })).rejects.toThrow(

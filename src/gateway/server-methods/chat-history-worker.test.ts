@@ -6,6 +6,8 @@ import {
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import * as deltaEvents from "../../config/sessions/session-accessor.sqlite-history-events.js";
+import type { SessionTranscriptDisplayDeltaResult } from "../../config/sessions/session-accessor.sqlite-history-query.js";
+import type { SessionHistoryWorkerRequest } from "../../config/sessions/session-history-types.js";
 import * as historyWorker from "../../config/sessions/session-history-worker-runtime.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { chatHistoryHandlers } from "./chat-history-handler.js";
@@ -51,8 +53,13 @@ it("keeps cursor response bytes while reading transcript events off the request 
     });
     const clock = vi.spyOn(Date, "now").mockReturnValue(Date.now());
     try {
+      const deltaReader: {
+        readSessionHistoryPageInWorker(
+          request: Extract<SessionHistoryWorkerRequest, { kind: "delta" }>,
+        ): Promise<SessionTranscriptDisplayDeltaResult>;
+      } = historyWorker;
       const native = vi
-        .spyOn(historyWorker, "readSessionHistoryPageInWorker")
+        .spyOn(deltaReader, "readSessionHistoryPageInWorker")
         .mockImplementationOnce(async (request) =>
           deltaEvents.readTranscriptDisplayDelta(request.params.target, request.params.limits),
         );

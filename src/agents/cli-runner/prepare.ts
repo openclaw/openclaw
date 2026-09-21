@@ -4,7 +4,6 @@ import { ensureSystemPromptCacheBoundary } from "@openclaw/ai/internal/shared";
  * MCP, auth epoch, and reusable session metadata.
  */
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
-import { prepareReplyToolAuthority } from "../../auto-reply/reply/reply-tool-authority.js";
 import { messageToolOwnsVisibleReply } from "../../auto-reply/source-reply-delivery-mode.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import { canonicalizeMainSessionAlias } from "../../config/sessions/main-session.js";
@@ -178,6 +177,7 @@ import {
   loadCliSessionPromptContext,
   resolveAutoCliSessionReseedHistoryChars,
 } from "./session-history.js";
+import { prepareCliReplyToolAuthority } from "./tool-authority.js";
 import {
   captureCliRunStartTime,
   type CliReusableSession,
@@ -648,29 +648,10 @@ async function prepareCliRunContextWithinReadFence(
   const assertQuestionSourceCurrent = params.assertCurrent;
   const questionSnapshot = questionOperation
     ? undefined
-    : prepareReplyToolAuthority({
-        originatingChannel: normalizeMessageChannel(params.messageChannel),
-        toolsAllow: params.toolsAllow,
-        disableTools: params.disableTools,
-        run: {
-          ...params,
-          agentId: workspaceResolution.agentId,
-          chatType: runtimeChatType,
-          provider: params.modelProvider ?? params.provider,
-          model: params.model ?? "default",
-          workspaceDir,
-          cwd,
-          permissionMode: params.sessionEntry?.permissionMode,
-          toolOverrides: params.toolOverrides ?? params.sessionEntry?.toolOverrides,
-          senderId: params.senderId ?? undefined,
-          senderName: params.senderName ?? undefined,
-          senderUsername: params.senderUsername ?? undefined,
-          senderE164: params.senderE164 ?? undefined,
-          groupId: params.groupId ?? undefined,
-          groupChannel: params.groupChannel ?? undefined,
-          groupSpace: params.groupSpace ?? undefined,
-          spawnedBy: params.spawnedBy ?? undefined,
-        },
+    : prepareCliReplyToolAuthority(params, {
+        agentId: workspaceResolution.agentId,
+        workspaceDir,
+        cwd,
       });
   let runtimeToolsAllowPolicy: string[] | undefined;
   const rootedToolsAllow = params.rootedExecution

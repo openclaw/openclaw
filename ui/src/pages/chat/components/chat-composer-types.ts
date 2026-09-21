@@ -217,6 +217,7 @@ export type ChatComposerState = SkillMenuState &
     goalComposer: (ChatGoalDraftMode & { key: string; pending: boolean }) | null;
     activeQuestionKey: string | null;
     gatewayQuestionIds: Set<string>;
+    asyncQuestionIds: Set<string>;
     questionCollapsed: boolean;
     questionTakeoverActive: boolean;
     restoreComposerFocus: boolean;

@@ -15,14 +15,16 @@ checkout_prep_branch() {
 resolve_pr_author_access_at_prepare() {
   # This lookup is optional: ordinary access refusals retain unknown access;
   # an exhausted/throttled API budget must stop preparation with its diagnostics.
-  local author="$1" repo_nwo response permission exit_code
-  repo_nwo=$(pr_gh repo view --json nameWithOwner --jq .nameWithOwner) || {
+  local author="$1" repo repo_nwo repo_host response permission exit_code
+  repo=$(pr_gh repo view --json nameWithOwner,url) || {
     exit_code=$?
     [ "$exit_code" -ne 75 ] || return 1
     printf 'unknown\n'
     return
   }
-  if response=$(pr_gh api "repos/$repo_nwo/collaborators/$author/permission") &&
+  repo_nwo=$(printf '%s\n' "$repo" | jq -er '.nameWithOwner') || return 1
+  repo_host=$(printf '%s\n' "$repo" | jq -er '.url | capture("^https://(?<host>[^/]+)/").host') || return 1
+  if response=$(pr_gh author-permission "$repo_nwo" "$repo_host" "$author") &&
     permission=$(printf '%s\n' "$response" | jq -er '.permission | select(type == "string")' 2>/dev/null); then
     case "$permission" in
       admin | write) printf 'maintainer\n' ;;

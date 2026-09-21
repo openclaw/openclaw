@@ -38,7 +38,7 @@ not prove available physical capacity or faster preflight execution.
 
 The protected cache warmer has two platform rows: the existing Linux workload and one hosted macOS pnpm-store publisher. Its per-ref concurrency and pending-run coalescing are unchanged. Each admitted warmer run adds one hosted macOS job and no Blacksmith registrations; pull-request CI adds no writers or jobs. Native producer and consumer measurements must include cache transfer, extraction, installation, and archive size before claiming a setup-time saving.
 
-The published-upgrade PR/main tripwire reuses the reserved `docker-seed-e2e` job,
+The published-upgrade main tripwire reuses the reserved `docker-seed-e2e` job,
 so the retained peak envelope stays `4 × 150 + 21 × 210 = 5,010` registrations.
 Docs-only main tips remain excluded by the `**/*.md` and `docs/**` push filters.
 Admitted main pushes retain the same two non-canceling parity slots; the bound
@@ -213,6 +213,13 @@ GitHub-hosted planning and other timing-sensitive groups retain it. Gateway
 plans still run exclusively. When core-2 shares a serial bin, its unproven
 siblings retain their two-worker caps at group scope.
 
+Agents-core files share the configured worker pool, including local scheduling
+and its one-worker throttle. Compact agents-core groups retain a two-worker cap.
+Their initial estimates divide serial timing history by the effective file
+workers, preserving the cost of an indivisible file. Separate parallel timing
+keys let subsequent measurements replace those estimates without being divided
+again. The file inventory and import-heavy CLI stripes remain unchanged.
+
 The [September 19 probe](https://github.com/openclaw/openclaw/actions/runs/35441442486)
 ran two predefined samples per cell on eight CPUs, 30.95 GiB, and Node 24.19.0.
 All twelve samples passed. Single-plan cells ran all 293 core-2 files; two-plan
@@ -248,33 +255,71 @@ two; at most 4 GiB caps them at one. Committed timing weights are unchanged.
 
 ## Owner-path and release coverage
 
-Docker seed and QA Smoke use the same owner-path gates on canonical PRs and
-`main`. Unrelated main changes can omit one 16-class Docker job and four 16-class
-QA profile jobs on a normal hybrid first attempt. Control UI performance uses
-its own UI/build/dependency/import scope; in hybrid it already runs hosted, so
-narrowing its scope removes a hosted row and candidate/base UI builds.
+Docker seed and QA Smoke retain owner-path selection on canonical main pushes;
+ordinary manual CI and Full Release Validation retain the supported complete
+proofs. Pull requests and their exact-head fallback dispatches omit these jobs,
+real-Gateway UI, and named built-process verifiers. Unit/boundary and mocked
+Gateway coverage remain. The complete-file proof inventory belongs to
+`scripts/lib/ci-proof-test-inventory.mts` and applies to precise and compact PR
+plans after owner resolution. Main/manual plans keep every proof assertion.
 
-The 2026-09-16 burden analysis estimated about 1,526 Blacksmith vCPU-minutes per
-hour from Docker and QA gating, using the sampled workload and head-commit diff
-proxies. Its 20 Docker and 80 QA main jobs had no failures; that small sample
-does not establish that the lanes cannot catch integration regressions.
-These are projected savings, with no measured post-change timing improvement.
-Production routing uses the triggering push's changed-path manifest; it does not
-accumulate earlier pushes whose pending runs were coalesced away.
+The Windows planner consumes all explicit files in the two existing package
+scripts and keeps every file intact. Reference run `35520647082` had
+689/837-second Windows jobs. The first five-row run `35530187452` passed all
+Windows tests in 333/496/425/450/370 seconds, exposing both uneven file costs
+and a duplicated 67.2-second runtime build.
 
-| Lane                   | Automatic PR/main coverage                                                                   | Manual and full release coverage                                                                                     |
-| ---------------------- | -------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------- |
-| Docker seed            | Existing seed owners; unknown paths retain survivor                                          | Canonical CI retains `legacy-operator-state` with `auto-auth`; Package Acceptance retains expanded upgrade scenarios |
-| QA Smoke CI            | Existing QA, channel, packaging, and orchestration owners                                    | Complete smoke profile on supported targets                                                                          |
-| Control UI performance | UI, plugin browser, workspace-package, build, dependency, policy, and relative-import owners | Retained independently of changed paths, subject to existing target capabilities                                     |
+The planner now uses elapsed whole-file segments from that run, including
+imports and hooks, instead of summed concurrent case times. Canonical Vitest
+metadata groups compatible project files together; an oversized project splits
+only at file boundaries. The canonical runtime prerequisite owner places its
+two consumers together, so preparation happens once. Current project
+invocations fall from 72 to 35, without changing process isolation or coverage.
+The model reserves 104 seconds per row for observed setup, shared worker
+compilation, and wrapper transitions, plus 68 seconds for the one runtime
+preparation. It retains a three-second fallback for unmeasured files.
+Four rows predict 489 seconds each; five predict 412 seconds each. These are
+estimates requiring hosted verification, including actual runner queue time.
+All 133 files and the shared worker-artifact fixture remain intact.
 
-Per-main integration detection outside these owners moves to manual/release
-validation. Keep the conservative peak registration envelope above: a broad owner
-change can still select every lane. This scope change does not change runner
-backends, caps, budgets, or timeouts. Verify emitted rows and observed timing
-before claiming realized savings.
+The worker-artifact fixture remains a Windows follow-up: the reference logged
+one shared 18.087-second compile, then at least 139.608 seconds before its last
+case finished (213.267 seconds summed concurrent cases). The first five-row run measured 170.203 seconds elapsed for the whole file
+versus 217.299 summed concurrent case seconds. Profile generation
+copy/verification and borrower startup on Windows before another optimization.
+
+Proof tiering alone leaves the reference 924-second critical path unchanged.
+With five Windows rows and every C1–C6 target shard at or below 500 seconds,
+retaining the recorded Node matrix waits gives 793 seconds, led by compact-small-46.
+If all job queues instead stay below eight seconds, compact-small-4 still gives
+680 seconds. The 96-row Node concurrency cap caused observed waits of 140–160
+seconds; reducing proof admission does not prove those waits disappear. Neither
+scenario claims the ten-minute goal is already achieved.
+
+Full-tier Windows expansion adds at most three non-Node registrations. Without
+spending any PR proof savings, use 83 potentially eligible non-Node rows and the
+unchanged 70/130 Node caps: `4 × 153 + 21 × 213 = 5,085`, leaving 915 below the
+6,000 reference envelope. Historical calculations elsewhere on this page use
+the earlier two-row Windows inventory. Compact90, push70, PR130, and the
+96-concurrent-Node limit remain unchanged. The daily timing refit still observes
+main and release proofs; no committed weight baseline was changed for tiering.
+
+| Lane                            | PR coverage                                                                                             | Main/manual and full release coverage                                           |
+| ------------------------------- | ------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------- |
+| Docker seed                     | Selector, scheduler, update/Doctor/state unit and boundary owners                                       | Owner-selected main; exact published-upgrade survivor on ordinary manual CI     |
+| QA Smoke CI                     | QA plan, catalog, transport, lifecycle and channel unit suites                                          | Owner-selected main; complete supported smoke profile on manual CI              |
+| Real-Gateway UI                 | UI units and mocked-Gateway browser projects                                                            | Existing selected main/manual real-Gateway inventory                            |
+| Built process proofs            | Browser registration, Doctor persistence, Discord multipart, SQLite store, watch and TUI boundary tests | Native host, Doctor, Discord, SQLite, watch and TUI canaries in build-artifacts |
+| Doctor refusal / Codex recovery | Doctor admission/repair and harness replacement/cancellation boundaries                                 | Complete files in main/manual Node plans                                        |
+| Windows                         | All 133 native unit/boundary/process files in measured whole-file rows                                  | Same inventory, historical targets retain their package commands                |
 
 ## Measured shard weights
+
+Infrastructure and host-owned SQLite test consumers also follow the existing
+worker ceiling, retaining isolated forks and fixture-owned home/state directories.
+Directory-sensitive regressions run in joined child processes, and backup command
+fixtures consume the invocation's prepared runtime. File parallelism does not add
+compact groups, runner registrations, or a separate worker budget.
 
 Gateway core, database-worker, methods, methods-isolated, server, and
 server-isolated configs run with exclusive plan admission. Cold in-process

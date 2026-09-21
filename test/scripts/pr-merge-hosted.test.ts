@@ -232,7 +232,7 @@ describePosix("native pending GitHub merge handoff", () => {
   });
 
   beforeEach(() => {
-    f.configure({ requiredChecks: "pending" });
+    f.configure({ requiredChecks: "pending", requiredCheckRows: undefined });
     writeFileSync(join(f.local, "gates.env"), pendingGates);
   });
 
@@ -290,6 +290,51 @@ describePosix("native pending GitHub merge handoff", () => {
         "refs/openclaw/pr-merge-outcomes/42",
       ),
     ).toBe("");
+  });
+
+  it.each(["pending", "pass"] as const)(
+    "admits a skipped draft gate beside the current %s gate",
+    (bucket) => {
+      f.configure({
+        requiredChecks: bucket,
+        requiredCheckRows: [
+          { name: "openclaw/ci-gate", bucket: "skipping", state: "SKIPPED" },
+          { name: "openclaw/ci-gate", bucket, state: bucket === "pass" ? "SUCCESS" : "PENDING" },
+        ],
+      });
+      const result = f.shell("merge_verify 42 '' true || exit 1");
+      expect(result.status, result.stdout + result.stderr).toBe(0);
+    },
+  );
+
+  it.each([
+    ["skipped only", [{ name: "openclaw/ci-gate", bucket: "skipping", state: "SKIPPED" }]],
+    [
+      "unmatched skipped gate",
+      [
+        { name: "openclaw/ci-gate", bucket: "pending", state: "PENDING" },
+        { name: "independent required check", bucket: "skipping", state: "SKIPPED" },
+      ],
+    ],
+    [
+      "failed current gate",
+      [
+        { name: "openclaw/ci-gate", bucket: "skipping", state: "SKIPPED" },
+        { name: "openclaw/ci-gate", bucket: "fail", state: "FAILURE" },
+      ],
+    ],
+  ])("rejects %s before auto-merge dispatch", (_name, requiredCheckRows) => {
+    f.configure({ requiredCheckRows });
+    const before = f.events().length;
+    const result = f.shell("merge_run 42 true || exit 1");
+    expect(result.status, result.stdout + result.stderr).toBe(1);
+    expect(result.stdout + result.stderr).toContain("Required checks are failing");
+    expect(
+      f
+        .events()
+        .slice(before)
+        .some((event) => event.kind === "gh" && event.args?.[1] === "merge"),
+    ).toBe(false);
   });
 
   it("submits one exact-head auto request and returns pending without polling or cleanup", () => {

@@ -27,6 +27,8 @@ type BodyScenario = {
   previewQueue?: boolean;
   previewError?: boolean;
   restPreview?: boolean;
+  squashTitle?: string;
+  squashMessage?: string;
   authorReadError?: boolean;
   authorReadFault?: "empty" | "malformed" | "wrong-head" | "multiple";
   prAuthor?: string;
@@ -238,7 +240,11 @@ pr_git() {
   command git -C "$BODY_SOURCE_REPO" "$@"
 }
 PR_MAIN_SHA=$(git rev-parse --verify refs/remotes/origin/main)
-pr_gh_plain() { [ "$BODY_PREVIEW_ERROR" = false ] || return 1; printf '%s\\n' "$BODY_PREVIEW"; }
+merge_read() {
+  [ "$*" = "preview 123" ] || return 99
+  [ "$BODY_PREVIEW_ERROR" = false ] || return 1
+  printf '%s\\n' "$BODY_PREVIEW"
+}
 mktemp() { [ "$BODY_WRITE_ERROR" = false ] || return 1; command mktemp "$@"; }
 snapshot=""
 [ -z "$BODY_OVERRIDE" ] || snapshot=$(snapshot_merge_body "$BODY_OVERRIDE")
@@ -283,17 +289,21 @@ file=$(prepare_squash_merge_body 123 "$snapshot")
       BODY_AUTHOR_TRACE: authorTrace,
       BODY_COMMITS: JSON.stringify(githubCommits),
       BODY_PREVIEW: JSON.stringify({
-        ...(scenario.restPreview ? { transport: "rest" } : {}),
-        data: {
-          repository: {
-            pullRequest: {
-              author: { login: scenario.prAuthor ?? "maintainer", __typename: "User" },
-              headRefOid: scenario.previewHead ?? publishedHead,
-              isMergeQueueEnabled: scenario.previewQueue ?? false,
-              viewerMergeBodyText:
-                scenario.previewBody === undefined
-                  ? "Server description\n\nCo-authored-by: Maintainer <maintainer@example.com>\n\n"
-                  : scenario.previewBody,
+        transport: scenario.restPreview ? "rest" : "graphql",
+        payload: {
+          data: {
+            repository: {
+              squashMergeCommitTitle: scenario.squashTitle ?? "PR_TITLE",
+              squashMergeCommitMessage: scenario.squashMessage ?? "PR_BODY",
+              pullRequest: {
+                author: { login: scenario.prAuthor ?? "maintainer", __typename: "User" },
+                headRefOid: scenario.previewHead ?? publishedHead,
+                isMergeQueueEnabled: scenario.previewQueue ?? false,
+                viewerMergeBodyText:
+                  scenario.previewBody === undefined
+                    ? "Server description\n\nCo-authored-by: Maintainer <maintainer@example.com>\n\n"
+                    : scenario.previewBody,
+              },
             },
           },
         },
@@ -312,6 +322,63 @@ file=$(prepare_squash_merge_body 123 "$snapshot")
 }
 
 describePosix("native squash attribution", () => {
+  it.each([
+    {
+      title: "COMMIT_OR_PR_TITLE",
+      message: "COMMIT_MESSAGES",
+      count: 1,
+      expected: "First description\n\n- Detail",
+    },
+    {
+      title: "COMMIT_OR_PR_TITLE",
+      message: "COMMIT_MESSAGES",
+      count: 2,
+      refresh: true,
+      expected:
+        "* First title\n\nFirst description\n\n- Detail\n\n* Second title\n\nSecond description\n\n* Merge refreshed main\n\nRefresh description",
+    },
+    {
+      title: "PR_TITLE",
+      message: "COMMIT_MESSAGES",
+      count: 1,
+      expected: "* First title\n\nFirst description\n\n- Detail",
+    },
+    { title: "PR_TITLE", message: "BLANK", count: 1, expected: "" },
+    { title: "PR_TITLE", message: "PR_BODY", count: 1, expected: "PR description" },
+    {
+      title: "COMMIT_OR_PR_TITLE",
+      message: "COMMIT_MESSAGES",
+      count: 2,
+      override: "Reviewed bytes\n",
+      expected: "Reviewed bytes",
+    },
+  ])(
+    "preserves REST squash defaults $title/$message for $count source commits with refresh=$refresh and override=$override",
+    ({ title, message, count, refresh, override, expected }) => {
+      const result = prepareBody({
+        restPreview: true,
+        squashTitle: title,
+        squashMessage: message,
+        previewBody: "PR description",
+        sourceCommits: [
+          { message: "First title\n\nFirst description\n\n- Detail" },
+          { message: "Second title\n\nSecond description", empty: true },
+        ].slice(0, count),
+        refreshMergeAuthor: refresh ? { name: "Refresh", email: "refresh@example.com" } : undefined,
+        refreshMergeMessage: "Merge refreshed main\n\nRefresh description",
+        localFixup: {
+          message: "Unpublished description",
+          author: { name: "Local", email: "local@example.com" },
+        },
+        overrideBody: override,
+      });
+      expect(result.status, result.stderr).toBe(0);
+      expect(result.mergeBody).toBe(
+        `${expected}${expected ? "\n\n" : ""}Co-authored-by: Maintainer <maintainer@example.com>\n`,
+      );
+    },
+  );
+
   it("batches published author reads while preserving human credit in source order", () => {
     const result = prepareBody({
       restPreview: true,
@@ -1216,6 +1283,8 @@ describePosix("native squash attribution", () => {
     { authorReadFault: "wrong-head" },
     { authorReadFault: "multiple" },
     { bodyWriteError: true },
+    { restPreview: true, squashTitle: "UNKNOWN" },
+    { restPreview: true, squashMessage: "UNKNOWN" },
   ])("refuses before merge when attribution evidence is unavailable: %j", (failure) => {
     for (const overrideBody of [undefined, "Explicit corrected prose"]) {
       const result = prepareBody({

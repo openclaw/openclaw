@@ -1,7 +1,15 @@
 import { afterEach, expect, it, vi } from "vitest";
+import {
+  QuestionAnswerUnconfirmedError,
+  QuestionDispatchRefusedError,
+  QuestionDispatchUnsupportedError,
+} from "../../agents/harness/gateway-question-dispatch.js";
 import { clearAgentRunContext, registerAgentRunContext } from "../../infra/agent-run-registry.js";
 import { createDeferredCore } from "../../shared/deferred.js";
-import type { ReplyBackendMessageInjectionV2 } from "./reply-run-registry.contracts.js";
+import type {
+  ReplyBackendMessageInjectionV2,
+  ReplyBackendQueueMessageOptions,
+} from "./reply-run-registry.contracts.js";
 import {
   beginReplyMessageInjectionTarget,
   finalizeReplyMessageInjectionAttempt,
@@ -75,6 +83,91 @@ async function withHiddenQuestionRun(
     operation.complete();
   }
 }
+
+it.each([
+  ...(["claim", "image"] as const).flatMap((sink) =>
+    (["unsupported", "refused", "unconfirmed", "wrapped-unconfirmed"] as const).map((failure) => ({
+      sink,
+      failure,
+    })),
+  ),
+  { sink: "claim", failure: "accepted" },
+  { sink: "claim", failure: "source-closed" },
+  { sink: "image", failure: "generic" },
+] as const)("keeps $sink replay decisions bounded after $failure", async ({ sink, failure }) => {
+  const unsupported = new QuestionDispatchUnsupportedError("legacy dispatcher");
+  const error =
+    failure === "refused"
+      ? new QuestionDispatchRefusedError("owner refused", { cause: unsupported })
+      : failure === "unconfirmed"
+        ? new Error("runtime failure", { cause: new QuestionAnswerUnconfirmedError(unsupported) })
+        : failure === "wrapped-unconfirmed"
+          ? new Error("runtime failure", {
+              cause: new QuestionAnswerUnconfirmedError(new Error("confirmation lost")),
+            })
+          : failure === "generic"
+            ? new Error("unknown cancellation failure")
+            : unsupported;
+  let sourceCurrent = true;
+  const throwFromSink = (
+    options: ReplyBackendQueueMessageOptions | undefined,
+    assertCurrent: () => void,
+  ): never => {
+    assertCurrent();
+    if (failure === "accepted") {
+      options?.onQueueAccepted?.(true);
+    }
+    if (failure === "source-closed") {
+      sourceCurrent = false;
+    }
+    throw error;
+  };
+  const queueMessage = vi.fn(async () => {});
+  await withHiddenQuestionRun(
+    {
+      version: 2,
+      isAvailable: () => true,
+      queueMessage,
+      claimPendingUserInputAnswer: async (_text, options, assertCurrent) =>
+        throwFromSink(options, assertCurrent),
+      cancelPendingUserInput: async (_resolvedBy, assertCurrent) =>
+        throwFromSink(undefined, assertCurrent),
+    },
+    async (operation) => {
+      const target = replyRunRegistry.resolveCurrentMessageInjectionTarget(operation.key)!;
+      const attempt = beginReplyMessageInjectionTarget(target, "Keep this input", {
+        isInboundUserMessage: true,
+        toolAuthorityFingerprint: "same-owner",
+        ...(sink === "image"
+          ? { images: [{ type: "image", data: "aW1hZ2U=", mimeType: "image/png" }] }
+          : {}),
+        assertCurrent: () => {
+          if (!sourceCurrent) {
+            throw new Error("source ended after unsupported dispatch");
+          }
+        },
+      });
+      if (failure === "generic") {
+        await expect(attempt.outcome).rejects.toBe(error);
+      } else {
+        await expect(attempt.outcome).resolves.toMatchObject({
+          status:
+            failure === "unsupported"
+              ? "rejected"
+              : failure === "unconfirmed" || failure === "wrapped-unconfirmed"
+                ? "indeterminate"
+                : "failed",
+          ...(failure === "unsupported" ? { reason: "injection_unavailable" } : {}),
+        });
+      }
+      await expect(attempt.acceptance).resolves.toBe(
+        failure === "accepted" || failure === "unconfirmed" || failure === "wrapped-unconfirmed",
+      );
+      expect(queueMessage).not.toHaveBeenCalled();
+      expect(operation.result).toBeNull();
+    },
+  );
+});
 
 it.each([
   { input: "same authority", fingerprint: "same-owner", pending: undefined, claimed: true },

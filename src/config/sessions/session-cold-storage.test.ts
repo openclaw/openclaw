@@ -681,6 +681,14 @@ describe("cold transcript storage workers", () => {
       try {
         await restoreSessionColdTranscript(fixture.scope);
         expect(fixture.snapshot()).toEqual(fixture.original);
+        expect(
+          fixture
+            .database()
+            .prepare(`SELECT f.message_id FROM session_transcript_fts_rows m
+            JOIN session_transcript_fts f ON f.rowid=m.fts_rowid AND f.session_id=m.session_id
+            WHERE m.session_id=? ORDER BY f.message_id`)
+            .all(historicalId),
+        ).toEqual([{ message_id: "history-assistant" }, { message_id: "history-user" }]);
         expect(readSessionColdTranscript(fixture.database(), historicalId)).toBeUndefined();
         expect(fixture.database().prepare("PRAGMA quick_check").get()).toEqual({
           quick_check: "ok",

@@ -14,6 +14,8 @@ export type CommandPaletteInputSnapshot = Pick<
 export type CommandPaletteOpenInput = CommandPaletteInputSnapshot & {
   returnFocus?: HTMLElement | null;
   submitRequested?: true;
+  /** Position of an explicitly typed @ retained only during the cold-input handoff. */
+  mentionTrigger?: number;
   /** Clipboard Files remain in memory until the canonical draft admits and reads them. */
   imageFiles?: readonly File[];
 };

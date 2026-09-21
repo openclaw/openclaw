@@ -1,6 +1,7 @@
 // Tests media-only get-reply runs and sandboxed media attachment handling.
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { createAdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
 import { createTestAdmittedRunContext } from "../../agents/admitted-run-context.test-support.js";
 import {
   createCronCreatorAuthorityCapability,
@@ -54,6 +55,13 @@ import {
   loadSessionUpdatesRuntime,
 } from "./get-reply-run-helpers.js";
 import { runPreparedReply } from "./get-reply-run.js";
+import {
+  createInboundBody,
+  createInboundTurn,
+  createProviderSurface,
+  createSessionBody,
+  createSessionTurn,
+} from "./get-reply-run.test-support.js";
 import { buildDirectChatContext, buildGroupChatContext, buildGroupIntro } from "./groups.js";
 import { finalizeInboundContext, finalizeInboundContextForSdk } from "./inbound-context.js";
 import {
@@ -62,6 +70,7 @@ import {
   resolveInboundUserContextPromptJoiner,
 } from "./inbound-meta.js";
 import { prepareReplyConversation } from "./prompt-session-context.js";
+import { resolveFollowupAbortSignal } from "./queue/types.js";
 import { REPLY_RUN_IDLE_SETTLE_TIMEOUT_MS, createReplyOperation } from "./reply-run-registry.js";
 import { getActiveReplyRunCount } from "./reply-run-registry.registry.js";
 import { testing as replyRunTesting } from "./reply-run-registry.test-support.js";
@@ -364,34 +373,6 @@ function createGatewayDrainingError(): Error {
 
 const ROOM_EVENT_MESSAGE_TOOL_DIRECTIVE =
   "Treat this message as observed room activity, not a request. You were not explicitly tagged or mentioned in this room event. Default: stay silent. Only respond if you have something useful, substantial, or important to add. A previous mention or reply is not an invitation to keep talking. To respond visibly, use message(action=send); your final text here stays private either way.";
-
-function createInboundBody<T extends string>(body: T) {
-  return { Body: body, RawBody: body, CommandBody: body };
-}
-
-function createSessionBody<T extends string>(body: T) {
-  return { Body: body, BodyStripped: body };
-}
-
-function createProviderSurface<T extends string>(provider: T) {
-  return { Provider: provider, Surface: provider };
-}
-
-function createInboundTurn<
-  TBody extends string,
-  TProvider extends string,
-  TChatType extends string,
->(body: TBody, provider: TProvider, chatType: TChatType) {
-  return { ...createInboundBody(body), ...createProviderSurface(provider), ChatType: chatType };
-}
-
-function createSessionTurn<
-  TBody extends string,
-  TProvider extends string,
-  TChatType extends string,
->(body: TBody, provider: TProvider, chatType: TChatType) {
-  return { ...createSessionBody(body), ...createProviderSurface(provider), ChatType: chatType };
-}
 
 function baseParams(
   overrides: Partial<Parameters<typeof runPreparedReply>[0]> = {},
@@ -3878,6 +3859,13 @@ describe("runPreparedReply media-only handling", () => {
     const queueSettings = await import("./queue/settings-runtime.js");
     const embeddedAgentRuntime = await import("../../agents/embedded-agent.runtime.js");
     const abortController = new AbortController();
+    const operatorController = new AbortController();
+    const operatorAuthority = createAdmittedRunOperatorAuthority({
+      profileId: "guest",
+      scopes: ["operator.write"],
+      assertCurrent: () => operatorController.signal.throwIfAborted(),
+      signal: operatorController.signal,
+    });
     vi.mocked(queueSettings.resolveQueueSettings).mockReturnValueOnce({
       mode: "collect",
       debounceMs: 500,
@@ -3892,7 +3880,7 @@ describe("runPreparedReply media-only handling", () => {
     vi.mocked(buildInboundUserContextPrefix).mockReturnValueOnce("user request context");
 
     await runPrepared({
-      opts: { abortSignal: abortController.signal },
+      opts: { abortSignal: abortController.signal, operatorAuthority },
       ctx: {
         ...createInboundTurn("@bot keep this", "telegram", "group"),
       },
@@ -3909,6 +3897,11 @@ describe("runPreparedReply media-only handling", () => {
     expect(call.isActive).toBe(true);
     expect(call.followupRun.currentInboundEventKind).toBe("user_request");
     expect(call.followupRun.abortSignal).toBeUndefined();
+    expect(call.followupRun.operatorAuthority).toBe(operatorAuthority);
+    abortController.abort();
+    expect(resolveFollowupAbortSignal(call.followupRun)?.aborted).toBe(false);
+    operatorController.abort();
+    expect(resolveFollowupAbortSignal(call.followupRun)?.aborted).toBe(true);
   });
 
   it("queues active room events instead of interrupting active user requests", async () => {

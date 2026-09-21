@@ -37,6 +37,7 @@ operator steering. Do not preserve superseded scope.
 - Plugin NPM Release: `<run id / URL or none>`
 - publish parent: `<run id / URL or none>`
 - Docker release/repair: `<run ids / tag / aliases or none>`
+- GitHub Release: `<public URL / non-Latest readback or none>`
 - immutable successful children: `<run ids / artifacts or none>`
 - registry/provenance readback: `<artifact or command result>`
 
@@ -45,7 +46,8 @@ operator steering. Do not preserve superseded scope.
 Keep one row per selected surface, with its exact run/attempt or immutable
 receipt, current state, and next action. Remove unselected rows rather than
 reporting them as passed. Stable/full includes macOS unless explicitly scoped
-out; extended-stable does not inherit ClawHub, GitHub Release, or native apps.
+out; extended-stable carries non-Latest GitHub Release evidence but does not inherit
+ClawHub or native apps.
 
 | Surface                   | Evidence and state                                                       | Next action or blocker |
 | ------------------------- | ------------------------------------------------------------------------ | ---------------------- |

@@ -94,10 +94,16 @@ export function readSessionHistoryPageInWorker(
   request: Extract<SessionHistoryWorkerRequest, { kind: "delta" }>,
   signal?: AbortSignal,
 ): Promise<SessionTranscriptDisplayDeltaResult>;
+export function readSessionHistoryPageInWorker(
+  request: Extract<SessionHistoryWorkerRequest, { kind: "message-lookup" }>,
+  signal?: AbortSignal,
+): Promise<unknown[]>;
 export async function readSessionHistoryPageInWorker(
   request: SessionHistoryWorkerRequest,
   signal?: AbortSignal,
-): Promise<ChatHistoryPage | SessionHistorySnapshot | SessionTranscriptDisplayDeltaResult> {
+): Promise<
+  ChatHistoryPage | SessionHistorySnapshot | SessionTranscriptDisplayDeltaResult | unknown[]
+> {
   signal?.throwIfAborted();
   const scope: SessionTranscriptReadScope =
     request.kind === "rpc"
@@ -197,7 +203,9 @@ export async function readSessionHistoryPageInWorker(
       ? result.page
       : result.kind === "http"
         ? result.snapshot
-        : result.delta;
+        : result.kind === "delta"
+          ? result.delta
+          : result.messages;
   } catch (error) {
     if (isSessionTranscriptProjectionUnavailableError(error)) {
       startSessionTranscriptIndexReconcile({

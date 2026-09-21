@@ -315,7 +315,19 @@ removing them leaves the input, **New session** action, and settings control in
 place; the palette grows downward. Images can start a session on their own or
 accompany text. There is no attachment picker in the palette.
 
-- **Enter** opens or runs the selected result. With no result, Enter does not send.
+Type **@** to search eligible people by name or verified GitHub handle, just as
+in the chat composer. Use **↑/↓** or **Home/End**, then **Enter** or **Tab** to
+select a person; **Escape** dismisses the people picker before the palette.
+The compact **Will notify** row shows selected people once each, with **+N**
+when space is tight. You can select up to ten mention references. Editing or
+deleting a selected name removes that reference; **Remove mention** clears all
+recipient selections without deleting the text. Pasted names and email addresses
+remain ordinary text. The picker replaces search results while open, and selected
+mentions keep the palette in composer mode. Mentions travel with the first message
+of the new session; they never share a session, invite people, or grant access.
+
+- **Enter** selects a person while the people picker is open; otherwise it opens
+  or runs the selected search result. With no result, Enter does not send.
 - **Shift+Enter** adds a line. The field grows downward to three lines, then scrolls
   without moving the palette or its top-right controls.
 - **Command+Enter** on macOS or **Ctrl+Enter** on Windows/Linux starts a new session
@@ -332,7 +344,7 @@ the checkbox restores your usual choices immediately and leaves the prompt
 intact. One-off choices are not remembered for the next palette session.
 
 Accepted creation closes the palette and offers **Open session** without changing
-the foreground view or its draft. A failed submission retains the prompt, images, and
+the foreground view or its draft. A failed submission retains the prompt, selected mentions, images, and
 choices with an error. These settings do not affect sessions opened from search,
 and the existing conversation composer keeps its own send and steer/queue
 shortcuts. Long prompts remain intact for session creation and are never sent as

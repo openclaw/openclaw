@@ -316,7 +316,7 @@ module.exports = {
       output.push(value);
     });
     const projectionError = new Error("fixture report projection failed");
-    const projection = vi.spyOn(statusSnapshot, "collectPluginCapabilityConsentDiagnostics");
+    const projection = vi.spyOn(statusSnapshot, "projectPluginInstallHealth");
     try {
       await withEnvAsync(
         {

@@ -39,7 +39,7 @@ import {
   withOperatorToolGatewayAuthority,
 } from "./server-plugin-in-process-dispatch.js";
 import { dispatchGatewayMethodInProcess } from "./server-plugins.js";
-import { roleClient, rolePolicyConfig, sharingPolicyClient } from "./session-sharing.test-utils.js";
+import { roleClient, rolePolicyConfig } from "./session-sharing.test-utils.js";
 
 // This authority fixture creates no browser tabs; lifecycle cleanup and tab
 // ownership have dedicated coverage without cold-loading Browser's source graph here.
@@ -677,10 +677,12 @@ describe("built-in session tool role authority", () => {
       if (!scope) {
         throw new Error("expected local Gateway scope");
       }
+      const reader = roleClient("view", "reader-profile");
+      reader.connect.scopes = ["operator.read"];
       await withPluginRuntimeGatewayRequestScope(
         {
           ...scope,
-          client: sharingPolicyClient({ user: "reader-profile", scopes: ["operator.read"] }),
+          client: reader,
         },
         async () => {
           await expect(

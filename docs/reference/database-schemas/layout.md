@@ -33,6 +33,16 @@ Payload version 1 records the recap text, generation time, session ID and lifecy
 
 The latest recap survives restart and archival. Deleting the session removes it; reset or replacement makes the prior lifecycle's recap unusable. Incognito sessions do not persist or generate this cache. A shared, bounded Gateway queue deduplicates generation across viewers, retains the previous recap on failure, and uses only the configured utility route. Disabling that route stops new generation. Removing or ignoring the optional field is a rollback path that leaves session and transcript data intact; removing the feature does not require reversing a database migration.
 
+### Transcript search row ownership
+
+The per-agent `session_transcript_fts_rows` table maps each FTS `rowid` to its
+session. `fts_rowid` is the primary key, and `session_id` has a nonunique index.
+The projection's nullable `fts_row_count` distinguishes unknown legacy ownership
+from a complete mapping, including an empty index. The transcript projection
+owner maintains and removes these derived facts with the corresponding FTS rows.
+See [agent schema 22](/reference/database-schemas/agent-schema-history#transcript-fts-row-ownership)
+for migration, recovery and downgrade behavior.
+
 ### Cold transcript archives
 
 The per-agent `session_transcript_cold_archives` table records cold transcript

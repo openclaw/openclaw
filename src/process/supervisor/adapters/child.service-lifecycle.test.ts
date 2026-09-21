@@ -302,7 +302,7 @@ describeSpawnTransports("service-managed child lifecycle", () => {
       stdinMode: "pipe-closed",
     });
     await new Promise<void>((resolve) => {
-      setTimeout(resolve, 100);
+      adapter.onExit!(() => resolve());
     });
 
     let stdout = "";

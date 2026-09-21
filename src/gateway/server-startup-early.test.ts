@@ -420,7 +420,7 @@ describe("early startup task maintenance", () => {
   });
 
   afterEach(async () => {
-    maintenance.stopTaskRegistryMaintenance();
+    await maintenance.stopTaskRegistryMaintenance();
     vi.useRealTimers();
     resetDetachedTaskLifecycleRuntimeForTests();
     maintenance.resetTaskRegistryMaintenanceRuntimeForTests();
@@ -499,7 +499,7 @@ describe("early startup task maintenance", () => {
             }
           }
         } finally {
-          maintenance.stopTaskRegistryMaintenance();
+          await maintenance.stopTaskRegistryMaintenance();
           try {
             await Promise.allSettled(scheduledSweeps);
             await earlyRuntime.skillsChangeUnsub();

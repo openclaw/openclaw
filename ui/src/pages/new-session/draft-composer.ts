@@ -1,7 +1,6 @@
 import { html, nothing, type TemplateResult } from "lit";
 import type { GatewayAgentRow } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
-import { hasOperatorWriteAccess } from "../../app/operator-access.ts";
 import type { ImageLightboxItem } from "../../components/image-lightbox.types.ts";
 import {
   lobsterPetSeed,
@@ -22,6 +21,7 @@ import { isWorktreeNameValid, type NewSessionVisibility } from "./create-params.
 import { renderDraftError } from "./draft-body.ts";
 import type { DraftPlaceState } from "./draft-place-state.ts";
 import type { DraftSubmissionFlow } from "./draft-submission-flow.ts";
+import { resolveNewSessionMentionDirectory } from "./mention-directory.ts";
 import type { NewSessionModelControl } from "./model-control.ts";
 
 registerNewSessionSetupEnglish();
@@ -111,28 +111,7 @@ export function renderNewSessionDraftComposer(options: {
     ? null
     : (options.context?.gateway.snapshot.client ?? null);
   const gateway = options.context?.gateway;
-  const profile = gateway?.snapshot.selfUser?.identity;
-  const mentionDirectory =
-    commandClient &&
-    gateway?.snapshot.phase === "connected" &&
-    profile?.type === "profile" &&
-    hasOperatorWriteAccess(gateway.snapshot.hello?.auth ?? null) &&
-    !options.isCatalogTarget &&
-    options.visibility !== "incognito"
-      ? {
-          client: commandClient,
-          ownerKey: JSON.stringify([
-            gateway.connectionRevision,
-            commandClient.recoveryScope,
-            profile.id,
-            options.draftOwnerKey,
-          ]),
-          params: {
-            agentId: options.agentId,
-            ...(options.visibility === "draft" ? { visibility: "draft" as const } : {}),
-          },
-        }
-      : undefined;
+  const mentionDirectory = resolveNewSessionMentionDirectory(options);
   options.textareaController.syncSkillCommandOwner(
     commandClient,
     options.agentId,

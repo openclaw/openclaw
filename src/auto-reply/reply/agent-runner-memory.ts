@@ -1,6 +1,4 @@
 import crypto from "node:crypto";
-import fs from "node:fs";
-import path from "node:path";
 import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
@@ -89,9 +87,10 @@ import {
   shouldRunPreflightCompaction,
 } from "./memory-flush.js";
 import { resolveContextTokens } from "./model-selection-context.js";
-import { readPostCompactionContext } from "./post-compaction-context.js";
+import { appendPostCompactionRefreshPrompt } from "./post-compaction-context.js";
 import { refreshQueuedFollowupSession, type FollowupRun } from "./queue.js";
 import { startFollowupRunPreAdoptionHeartbeat } from "./queue/lifecycle.js";
+import { resolveFollowupAbortSignal } from "./queue/types.js";
 import type { ReplyOperation } from "./reply-run-registry.js";
 import { incrementCompactionCount } from "./session-updates.js";
 
@@ -121,30 +120,6 @@ async function compactEmbeddedAgentSession(
 async function runEmbeddedAgent(params: RunEmbeddedAgentInternalParams) {
   const runtime = await embeddedAgentRuntimeLoader.load();
   return await runtime.runEmbeddedAgent(params);
-}
-
-async function ensureMemoryFlushTargetFile(params: {
-  workspaceDir: string;
-  relativePath: string;
-}): Promise<void> {
-  const workspaceDir = normalizeOptionalString(params.workspaceDir);
-  const relativePath = normalizeOptionalString(params.relativePath);
-  if (!workspaceDir || !relativePath || path.isAbsolute(relativePath)) {
-    throw new Error("Invalid memory flush target path");
-  }
-  const workspaceRoot = path.resolve(workspaceDir);
-  const targetPath = path.resolve(workspaceRoot, relativePath);
-  const targetRelativePath = path.relative(workspaceRoot, targetPath);
-  if (
-    !targetRelativePath ||
-    targetRelativePath.startsWith("..") ||
-    path.isAbsolute(targetRelativePath)
-  ) {
-    throw new Error("Memory flush target path must stay inside the workspace");
-  }
-  await fs.promises.mkdir(path.dirname(targetPath), { recursive: true });
-  const handle = await fs.promises.open(targetPath, "a");
-  await handle.close();
 }
 
 function hasMatchingTranscriptByteCompactionLatch(
@@ -530,28 +505,6 @@ type SessionLogSnapshot = {
   usage?: SessionTranscriptUsageSnapshot;
 };
 
-async function appendPostCompactionRefreshPrompt(params: {
-  cfg: OpenClawConfig;
-  followupRun: FollowupRun;
-}): Promise<void> {
-  const refreshPrompt = await readPostCompactionContext(params.followupRun.run.workspaceDir, {
-    cfg: params.cfg,
-    agentId: params.followupRun.run.agentId,
-  });
-  if (!refreshPrompt) {
-    return;
-  }
-
-  const existingPrompt = normalizeOptionalString(params.followupRun.run.extraSystemPrompt);
-  if (existingPrompt?.includes(refreshPrompt)) {
-    return;
-  }
-
-  params.followupRun.run.extraSystemPrompt = [existingPrompt, refreshPrompt]
-    .filter(Boolean)
-    .join("\n\n");
-}
-
 type TranscriptTokenEstimate = {
   promptTokens: number;
   promptTokenSource:
@@ -704,6 +657,7 @@ export async function runSessionCompactionIfNeeded(params: {
 }): Promise<SessionEntry | undefined> {
   const assertActive = () => {
     params.abortSignal?.throwIfAborted();
+    params.followupRun.operatorAuthority?.assertCurrent();
     if (params.authorize?.() === false) {
       throw new Error("Session compaction maintenance is no longer active");
     }
@@ -1233,7 +1187,10 @@ export async function runMemoryFlushIfNeeded(params: {
   abortSignal?: AbortSignal;
   onVisibleErrorPayloads?: (payloads: ReplyPayload[]) => void;
 }): Promise<MemoryFlushResult> {
-  const abortSignal = params.replyOperation?.abortSignal ?? params.abortSignal;
+  const abortSignal = resolveFollowupAbortSignal({
+    abortSignal: params.replyOperation?.abortSignal ?? params.abortSignal,
+    operatorAuthority: params.followupRun.operatorAuthority,
+  });
   const memoryFlushWritable = (() => {
     if (!params.sessionKey) {
       return true;
@@ -1451,7 +1408,12 @@ export async function runMemoryFlushIfNeeded(params: {
         ? params.sessionStore?.[params.sessionKey]?.systemPromptReport
         : undefined),
   );
+  const assertMemoryFlushCurrent = () => {
+    abortSignal?.throwIfAborted();
+    params.followupRun.operatorAuthority?.assertCurrent();
+  };
   const prepareMemoryFlushAttempt = async () => {
+    assertMemoryFlushCurrent();
     const plan = resolveMemoryFlushPlan({
       cfg: params.cfg,
       nowMs: Date.now(),
@@ -1466,6 +1428,7 @@ export async function runMemoryFlushIfNeeded(params: {
     }
     const agentId = params.followupRun.run.agentId ?? resolveDefaultAgentId(params.cfg);
     const runtime = await memoryFlushSessionRuntimeLoader.load();
+    assertMemoryFlushCurrent();
     const memorySession = await runtime.prepareMemoryFlushSession({
       admission: params.preflightAdmission,
       source: {
@@ -1481,9 +1444,10 @@ export async function runMemoryFlushIfNeeded(params: {
       workspaceDir: params.followupRun.run.workspaceDir,
       signal: abortSignal,
     });
-    await ensureMemoryFlushTargetFile({
+    await runtime.ensureMemoryFlushTargetFile({
       workspaceDir: params.followupRun.run.workspaceDir,
       relativePath: writePath,
+      assertCurrent: assertMemoryFlushCurrent,
     });
     const systemPrompt = [params.followupRun.run.extraSystemPrompt, plan.systemPrompt]
       .filter(Boolean)
@@ -1499,6 +1463,8 @@ export async function runMemoryFlushIfNeeded(params: {
       flushRunId,
       params.followupRun.run.agentId,
       "auto-reply.memory-flush",
+      undefined,
+      params.followupRun.operatorAuthority,
     );
     return {
       plan,

@@ -95,9 +95,7 @@ source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/merge-outcome.sh"
 
 fetch_clawsweeper_review_comments() {
   local pr="$1" repo_name="$2" repo_host="$3"
-  if ! CLAWSWEEPER_REVIEW_COMMENTS=$(pr_gh_plain api --hostname "$repo_host" --paginate --slurp \
-    "repos/$repo_name/issues/$pr/comments?per_page=100" \
-    -H 'Cache-Control: max-age=0'); then
+  if ! CLAWSWEEPER_REVIEW_COMMENTS=$(pr_gh_plain issue-comments "$repo_name" "$repo_host" "$pr"); then
     echo "ClawSweeper review gate failed: unable to read current issue comments." >&2
     return 1
   fi
@@ -206,6 +204,7 @@ merge_verify() {
   source .local/gates.env || return 1
   # shellcheck disable=SC1091
   source .local/prep.env || return 1
+  if [ "${GATES_MODE:-}" = remote_crabbox_aws ]; then MERGE_TRANSPORT=graphql; fi
   local github_pending=false
   if [ "${GATES_MODE:-}" = github_pending ]; then
     if [ "$auto_merge_requested" != true ] || [ -n "$replacement_head" ] ||
@@ -273,44 +272,31 @@ merge_verify() {
     fi
   fi
   local checks_json
+  local checks_response
   local checks_err_file
   local checks_exit_status
   checks_err_file=$(mktemp)
-  if [ "${MERGE_TRANSPORT:-graphql}" = rest ]; then
-    checks_json=$(merge_rest checks "$pr") || { rm -f "$checks_err_file"; return 1; }
-    checks_exit_status=0
-  elif checks_json=$(pr_gh_quota_read pr checks "$pr" --required --json name,bucket,state 2>"$checks_err_file"); then
+  if checks_response=$(merge_read checks "$pr" 2>"$checks_err_file"); then
     checks_exit_status=0
   else
     checks_exit_status=$?
   fi
-  if pr_gh_quota_exhausted "$checks_json"; then
-    if [ "$github_pending" = true ]; then
+  if [ "$checks_exit_status" -eq 0 ] || [ "$checks_exit_status" -eq 8 ]; then
+    MERGE_TRANSPORT=$(printf '%s\n' "$checks_response" | jq -er '.transport') || { rm -f "$checks_err_file"; return 1; }
+    checks_json=$(printf '%s\n' "$checks_response" | jq -c '.payload') || { rm -f "$checks_err_file"; return 1; }
+    if [ "$github_pending" = true ] && [ "$MERGE_TRANSPORT" != graphql ]; then
       echo "GitHub auto-merge requires GraphQL quota; no merge was requested." >&2
       rm -f "$checks_err_file"
       return 1
     fi
-    MERGE_TRANSPORT=rest
-    echo "GraphQL quota exhausted; verifying required checks through REST."
-    checks_json=$(merge_rest checks "$pr") || { rm -f "$checks_err_file"; return 1; }
   fi
   # gh documents exit 8 for pending checks even when it emits valid JSON. Let
   # the checked evidence below reject pending checks without hiding API errors.
   if [ "$checks_exit_status" -ne 0 ] && [ "$checks_exit_status" -ne 8 ]; then
-    local checks_error
-    checks_error=$(cat "$checks_err_file")
-    case "$checks_error" in
-      "no required checks reported on the '"*"' branch")
-        # gh reports the valid empty-required set as an error, not a JSON array.
-        checks_json='[]'
-        ;;
-      *)
-        echo "Merge verify failed: unable to verify the required GitHub checks." >&2
-        printf '%s\n' "$checks_error" >&2
-        rm -f "$checks_err_file"
-        return 1
-        ;;
-    esac
+    echo "Merge verify failed: unable to verify the required GitHub checks." >&2
+    cat "$checks_err_file" >&2
+    rm -f "$checks_err_file"
+    return 1
   fi
   rm -f "$checks_err_file"
   # merge_run calls this function in an OR-list, disabling Bash errexit.
@@ -335,7 +321,17 @@ merge_verify() {
   printf '%s\n' "$checks_json" | jq -r '.[] | "\(.bucket)\t\(.name)\t\(.state)"' || return 1
 
   local failed_required
-  failed_required=$(printf '%s\n' "$checks_json" | jq '[.[] | select(.bucket!="pass" and .bucket!="pending")] | length') || return 1
+  # gh retains the draft's skipped check beside the current CI status. Deferred
+  # admission still requires that same enforced gate to be pending or passing.
+  failed_required=$(printf '%s\n' "$checks_json" | jq --argjson deferred "$github_pending" '
+    . as $checks | [.[] |
+      select(.bucket != "pass" and .bucket != "pending") |
+      select(($deferred and .name == "openclaw/ci-gate" and
+        .bucket == "skipping" and .state == "SKIPPED" and
+        any($checks[]; .name == "openclaw/ci-gate" and
+          (.bucket == "pass" or .bucket == "pending"))) | not)
+    ] | length
+  ') || return 1
   local pending_required
   pending_required=$(printf '%s\n' "$checks_json" | jq '[.[] | select(.bucket=="pending")] | length') || return 1
 
@@ -421,19 +417,9 @@ prepare_squash_merge_body() {
       '{oid:$oid,changesTree:($tree != $parentTree)}' || exit 1
   done) || return 1
   authors=$(printf '%s\n' "$author_commits" | jq -s . | pr_gh commit-authors "$repo_nwo" "$repo_host") || return 1
-  if [ "${MERGE_TRANSPORT:-graphql}" = rest ]; then
-    preview=$(merge_rest preview "$pr") || return 1
-  else
-    preview=$(pr_gh_quota_read api graphql --hostname "$repo_host" \
-    -f 'query=query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){headRefOid author{login __typename} isMergeQueueEnabled viewerMergeBodyText(mergeType:SQUASH)}}}' \
-    -f owner="${repo_nwo%/*}" -f name="${repo_nwo#*/}" -F number="$pr") || return 1
-    if pr_gh_quota_exhausted "$preview"; then
-      preview=$(merge_rest preview "$pr") || return 1
-    fi
-  fi
-  if [ "$(printf '%s\n' "$preview" | jq -r '.transport // "graphql"')" = rest ]; then
-    MERGE_TRANSPORT=rest
-  fi
+  preview=$(merge_read preview "$pr") || return 1
+  MERGE_TRANSPORT=$(printf '%s\n' "$preview" | jq -er '.transport') || return 1
+  preview=$(printf '%s\n' "$preview" | jq -c '.payload') || return 1
   if ! printf '%s\n' "$preview" | jq -e --arg head "$PREP_HEAD_SHA" '
     .data.repository.pullRequest | .headRefOid == $head and
       (.viewerMergeBodyText | type == "string") and (.isMergeQueueEnabled | type == "boolean")
@@ -449,12 +435,23 @@ prepare_squash_merge_body() {
     return 1
   fi
 
+  local messages='[]'
+  if [ "$MERGE_TRANSPORT" = rest ] &&
+    [ "$(printf '%s\n' "$preview" | jq -r '.data.repository.squashMergeCommitMessage')" = COMMIT_MESSAGES ]; then
+    # Message defaults include every published commit, not only the non-merge,
+    # tree-changing author subset. Local-only fixups contribute trailers above.
+    messages=$(pr_git log --reverse --topo-order --no-show-signature --no-notes \
+      --no-color --no-decorate --encoding=UTF-8 -z --format=%B \
+      "$PR_MAIN_SHA..$PREP_HEAD_SHA" | jq -Rs 'split("\u0000")[:-1]') || return 1
+  fi
+
   local body_file
   body_file=$(mktemp .local/merge-body.XXXXXX) || return 1
   printf '%s\n' "$preview" | jq -c \
     --arg source "$source_trailers" --argjson authors "$authors" --arg captured "$captured" \
-    --argjson queue "$queue_enabled" --arg transport "${MERGE_TRANSPORT:-graphql}" '
-    {preview:.data.repository.pullRequest.viewerMergeBodyText,prAuthor:.data.repository.pullRequest.author,source:$source,authors:$authors,captured:$captured,queue:$queue,sourceCredit:($transport == "rest")}
+    --argjson queue "$queue_enabled" --arg transport "${MERGE_TRANSPORT:-graphql}" --argjson messages "$messages" '
+    {preview:.data.repository.pullRequest.viewerMergeBodyText,prAuthor:.data.repository.pullRequest.author,source:$source,authors:$authors,captured:$captured,queue:$queue,sourceCredit:($transport == "rest"),
+     squashDefault:(if $transport == "rest" then {title:.data.repository.squashMergeCommitTitle,message:.data.repository.squashMergeCommitMessage,commits:$messages} else null end)}
   ' | node "${BASH_SOURCE[0]%/*}/merge-body.mjs" compose > "$body_file" || return 1
   # Queue admission cannot accept an override, but its preview still needs validation.
   if [ "$queue_enabled" = true ]; then
@@ -506,7 +503,7 @@ merge_run() {
     return 2
   fi
   local MERGE_OUTCOME_REF MERGE_OUTCOME_OID MERGE_OUTCOME_RECORD MERGE_REPO
-  local MERGE_REPO_URL MERGE_REPO_HOST MERGE_REPO_NAME MERGE_OBSERVATION MERGE_TRANSPORT=graphql
+  local MERGE_REPO_URL MERGE_REPO_HOST MERGE_REPO_NAME MERGE_OBSERVATION MERGE_TRANSPORT=rest
   merge_outcome_init "$pr" || return 1
   if [ -n "$legacy_directory" ]; then
     [ -z "$MERGE_OUTCOME_OID" ] && [ -n "$recovery_oid" ] && [ -n "$replacement_head" ] || {
@@ -525,6 +522,9 @@ merge_run() {
     # Reconciliation needs neither the old worktree nor its prepare artifacts.
     merge_outcome_resume "$pr"
     return
+  fi
+  if [ "$auto_merge_requested" = true ] || [ "${OPENCLAW_PR_MERGE_METHOD:-squash}" != squash ]; then
+    MERGE_TRANSPORT=graphql
   fi
   review_artifact_preflight "$pr" true || return 1
   # Capture before gates or cwd changes; retained outcomes above reconcile even
@@ -649,7 +649,6 @@ merge_run() {
     local merge_body_file
     prepare_squash_merge_body "$pr" "$captured_body" >/dev/null || return 1
     merge_body_file="$MERGE_BODY_FILE"
-    [ -z "$merge_body_file" ] || merge_args+=(--body-file "$merge_body_file")
     if [ -n "$merge_body_file" ]; then
       merge_body_snapshot=$(snapshot_merge_body "$merge_body_file") || return 1
     fi
@@ -682,7 +681,7 @@ merge_run() {
     if [ -n "$previous_observation" ] && ! printf '%s\n' "$MERGE_OBSERVATION" | jq -e --argjson previous "$previous_observation" --argjson admin "$MERGE_USE_CRABBOX_ADMIN_BYPASS" '
       def facts: del(.pr.mergeable,.pr.mergeStateStatus) |
         if $admin then . else del(.main) end;
-      (if .transport == "rest" and ($previous.transport // "graphql") == "graphql" then
+      (if (.transport // "graphql") != ($previous.transport // "graphql") then
          (facts | del(.transport,.restPolicy)) == ($previous | facts | del(.transport,.restPolicy))
        else facts == ($previous | facts) end) and
       ($previous.pr.mergeable == "UNKNOWN" or .pr.mergeable == $previous.pr.mergeable) and
@@ -828,6 +827,9 @@ merge_run() {
       return 1
     fi
   fi
+  # A quota-driven transport change can replace the prepared body file. Bind
+  # GraphQL dispatch to the final file, after all admission reads have settled.
+  [ -z "${merge_body_file:-}" ] || merge_args+=(--body-file "$merge_body_file")
   local intent attempt
   attempt=$(node -e 'process.stdout.write(require("node:crypto").randomUUID())') || return 1
   intent=$(printf '%s\n' "$MERGE_OBSERVATION" | jq -c --argjson repo "$MERGE_REPO" \

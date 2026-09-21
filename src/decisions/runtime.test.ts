@@ -514,6 +514,34 @@ describe("fault settlement and generation health", () => {
 });
 
 describe("immutable finite JSON boundaries", () => {
+  it.each(["input", "output"] as const)(
+    "rejects inherited array serialization at the %s boundary",
+    async (boundary) => {
+      const serialize = vi.fn(() => []);
+      const prototype = { toJSON: serialize };
+      Object.setPrototypeOf(prototype, Array.prototype);
+      // JSON escaping takes this beyond the one-MiB limit.
+      const state = ["\u0000".repeat(200_000)];
+      const returned = structuredClone(answer);
+      if (boundary === "input") {
+        Object.setPrototypeOf(state, prototype);
+      } else {
+        Object.setPrototypeOf(returned.result.answers.rank.probabilities, prototype);
+      }
+      const call = vi.fn<DecisionProviderV1["evaluate"]>(async () => returned);
+      const host = registered(call);
+      if (boundary === "input") {
+        await expect(
+          evaluateDecisionInRegistry({ ...batch, state }, options(), host.registry, config),
+        ).rejects.toThrow("Invalid decision contract");
+        expect(call).not.toHaveBeenCalled();
+      } else {
+        expect(await host.run()).toEqual({ status: "unavailable", reason: "invalid-response" });
+      }
+      expect(serialize).not.toHaveBeenCalled();
+    },
+  );
+
   it("rejects hidden input evidence before the provider receives an incomplete clone", async () => {
     const call = vi.fn<DecisionProviderV1["evaluate"]>(async () => answer);
     const host = registered(call);

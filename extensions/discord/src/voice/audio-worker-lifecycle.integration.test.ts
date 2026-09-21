@@ -1,12 +1,16 @@
 import { once } from "node:events";
 import { Worker } from "node:worker_threads";
 import { GatewayOpcodes } from "discord-api-types/v10";
-import { resolveRuntimeWorkerArgv } from "openclaw/plugin-sdk/process-runtime";
+import {
+  resolveRuntimeWorkerArgv,
+  resolveRuntimeWorkerUrl,
+} from "openclaw/plugin-sdk/process-runtime";
 import { expect, it } from "vitest";
+import { discordAudioTestEntrypoints } from "./audio-worker-entrypoints.test-support.js";
 import type { DiscordAudioEvent, DiscordAudioWorkerOptions } from "./audio-worker-protocol.js";
 
 it("exits cooperatively when stopped during the real SDK connection wait", async () => {
-  const url = new URL("./audio-worker.runtime.ts", import.meta.url);
+  const url = resolveRuntimeWorkerUrl(discordAudioTestEntrypoints.lifecycle);
   const worker = new Worker(url, {
     execArgv: resolveRuntimeWorkerArgv(url).slice(0, -1),
     workerData: {

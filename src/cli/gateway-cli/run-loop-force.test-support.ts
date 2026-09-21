@@ -94,13 +94,16 @@ export function registerGatewayForcedRestartTests({
   );
 
   it.each([
-    { waitMs: undefined, refreshMs: 0 },
-    { waitMs: undefined, refreshMs: 10_000 },
-    { waitMs: 0, refreshMs: 0 },
-    { waitMs: 180_000, refreshMs: 0 },
+    { waitMs: undefined, refreshMs: 0, stallClose: false },
+    { waitMs: undefined, refreshMs: 10_000, stallClose: false },
+    { waitMs: 0, refreshMs: 0, stallClose: false },
+    { waitMs: 180_000, refreshMs: 0, stallClose: false },
+    { waitMs: undefined, refreshMs: 0, stallClose: true },
+    { waitMs: undefined, refreshMs: 10_000, stallClose: true },
+    { waitMs: 180_000, refreshMs: 0, stallClose: true },
   ])(
-    "records cut work only when the forced caller drain budget expires (waitMs=$waitMs, refresh=$refreshMs)",
-    async ({ waitMs, refreshMs }) => {
+    "records cut work only when the forced caller drain budget expires (waitMs=$waitMs, refresh=$refreshMs, stalled close=$stallClose)",
+    async ({ waitMs, refreshMs, stallClose }) => {
       const budget = waitMs ?? 45_000;
       const active = createActiveWorkSnapshot({ activeTasks: 1, cronRuns: 1 });
       const drain = createDeferredCore<{ drained: boolean; snapshot: GatewayActiveWorkSnapshot }>();
@@ -125,7 +128,11 @@ export function registerGatewayForcedRestartTests({
         return drain.promise;
       });
       await withIsolatedSignals(async ({ captureSignal }) => {
+        const closing = createDeferredCore<void>();
         const close = createCloseMock();
+        if (stallClose) {
+          close.mockImplementationOnce(() => closing.promise);
+        }
         const { start, started } = createSignaledStart(close);
         const { runtime, exited } = createRuntimeWithExitSignal();
         const completeBoot = vi.fn();
@@ -149,19 +156,38 @@ export function registerGatewayForcedRestartTests({
           await vi.advanceTimersByTimeAsync(budget > 0 ? 1 : 0);
           expect(abortActiveCronTaskRuns).toHaveBeenCalledWith("Gateway restarting.");
           expectRestartCloseCall(close, 0);
-          expect(start).toHaveBeenCalledTimes(2);
           const warning = `restart drain budget ${budget - refreshMs}ms exhausted; cutting short cronRuns=1 activeTasks=1`;
           expect(gatewayLog.warn).toHaveBeenCalledWith(warning);
-          expect(completeBoot).toHaveBeenCalledExactlyOnceWith({
-            outcome: "planned_restart",
-            reason: `${warning}; restart (SIGUSR2)`,
-          });
+          if (stallClose) {
+            expect(start).toHaveBeenCalledOnce();
+            expect(completeBoot).not.toHaveBeenCalled();
+            expect(runtime.exit).not.toHaveBeenCalled();
+            await vi.advanceTimersByTimeAsync(9_999);
+            expect(completeBoot).not.toHaveBeenCalled();
+            expect(runtime.exit).not.toHaveBeenCalled();
+            await vi.advanceTimersByTimeAsync(1);
+            expect(runtime.exit).toHaveBeenCalledExactlyOnceWith(1);
+            expect(completeBoot).toHaveBeenCalledExactlyOnceWith({
+              outcome: "forced_stop",
+              reason: `${warning}; gateway.restart_shutdown_timeout`,
+            });
+            expect(start).toHaveBeenCalledOnce();
+          } else {
+            expect(start).toHaveBeenCalledTimes(2);
+            expect(completeBoot).toHaveBeenCalledExactlyOnceWith({
+              outcome: "planned_restart",
+              reason: `${warning}; restart (SIGUSR2)`,
+            });
+          }
         } finally {
           clearTimeout(deadline);
           drain.resolve({ drained: true, snapshot: idleActiveWorkSnapshot });
+          closing.resolve();
           await vi.advanceTimersByTimeAsync(0);
-          captureSignal("SIGINT")();
-          await vi.advanceTimersByTimeAsync(0);
+          if (runtime.exit.mock.calls.length === 0) {
+            captureSignal("SIGINT")();
+            await vi.advanceTimersByTimeAsync(0);
+          }
           await exited;
           clock.mockRestore();
           vi.useRealTimers();

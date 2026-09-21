@@ -1,15 +1,19 @@
 import { once } from "node:events";
 import { MessageChannel, Worker } from "node:worker_threads";
-import { resolveRuntimeWorkerArgv } from "openclaw/plugin-sdk/process-runtime";
+import {
+  resolveRuntimeWorkerArgv,
+  resolveRuntimeWorkerUrl,
+} from "openclaw/plugin-sdk/process-runtime";
 import { describe, expect, it } from "vitest";
 import { startDiscordPacingReceiver } from "./audio-starvation.test-support.js";
+import { discordAudioTestEntrypoints } from "./audio-worker-entrypoints.test-support.js";
 
 function launch(
   role: "producer" | "receiver",
   port: import("node:worker_threads").MessagePort,
   state: SharedArrayBuffer,
 ) {
-  const url = new URL("./audio-starvation.test-support.ts", import.meta.url);
+  const url = resolveRuntimeWorkerUrl(discordAudioTestEntrypoints.pacing);
   return new Worker(url, {
     workerData: { runtime: "discord-audio-starvation-test", role, port, state },
     transferList: [port],

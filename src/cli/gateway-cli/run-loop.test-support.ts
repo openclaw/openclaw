@@ -581,6 +581,7 @@ export function registerGatewayRestartOwnershipTests({
       consumeGatewayRestartIntent.mockReturnValueOnce({
         reason: "update.run",
         force: true,
+        waitMs: 300_000,
         successorOwner: managedUpdateSuccessorOwner,
       });
       isForegroundUpdateHandoff.mockReturnValue(true);

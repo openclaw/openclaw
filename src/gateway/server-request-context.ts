@@ -12,6 +12,7 @@ import { NODE_DESKTOP_SERVICE_CONTEXT } from "./desktop/node-source-context.js";
 import { invalidateGatewayDeviceRevocation } from "./device-revocation.js";
 import { ScopeUpgradeCoordinator } from "./device-scope-upgrade.js";
 import { prepareGatewayRecipientProfile } from "./expected-profile.js";
+import { publishOperatorRoleConfigChange } from "./operator-role-policy.js";
 import { WEBSOCKET_OPEN_READY_STATE } from "./server-constants.js";
 import type { startGatewayCoreRuntime } from "./server-core-runtime.js";
 import type { GatewayClient, GatewayRequestContext } from "./server-methods/types.js";
@@ -26,6 +27,7 @@ import {
   incrementPresenceVersion,
 } from "./server/health-state.js";
 import { broadcastPresenceSnapshot } from "./server/presence-events.js";
+import { invalidateGatewayPolicyClient } from "./server/ws-policy-close.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
 import { bindSessionRowProjection } from "./session-row-projection-access.js";
 
@@ -118,7 +120,7 @@ type GatewayRequestContextRuntime = Pick<
     > & {
       configReloader: Pick<
         GatewayCoreRuntime["runtimeState"]["configReloader"],
-        "isConfigReloadSettled" | "getDeferredChannelReloads"
+        "getCommittedRuntimeConfig" | "isConfigReloadSettled" | "getDeferredChannelReloads"
       >;
     };
     lifecycle: Pick<GatewayCoreRuntime["lifecycle"], "closePreludeStarted">;
@@ -253,6 +255,8 @@ export function createGatewayRequestContext(
       return runtimeState.cronState.storePath;
     },
     getRuntimeConfig,
+    getCommittedRuntimeConfig: () =>
+      runtimeState.configReloader.getCommittedRuntimeConfig?.() ?? getRuntimeConfig(),
     isConfigReloadSettled: () =>
       !lifecycle.closePreludeStarted && runtimeState.configReloader.isConfigReloadSettled(),
     getDeferredChannelReloads: () =>
@@ -485,18 +489,15 @@ export function createGatewayRequestContext(
         if (gatewayClient.authenticatedUserProfile?.profileId !== profileId) {
           continue;
         }
-        // Invalidate before closing so buffered requests cannot retain revoked role scopes.
-        gatewayClient.invalidated = true;
-        gatewayClient.invalidatedReason = "operator-role-changed";
-        try {
-          gatewayClient.socket.close(4001, "operator role changed");
-        } catch {
-          /* ignore */
-        }
+        invalidateGatewayPolicyClient(gatewayClient, {
+          reason: "operator-role-changed",
+          code: 4001,
+          message: "operator role changed",
+        });
       }
     },
     disconnectClientsUsingSharedGatewayAuth: () => {
-      disconnectAllSharedGatewayAuthClients(clients);
+      disconnectAllSharedGatewayAuthClients(clients, sharedGatewaySessionGenerationState);
     },
     enforceSharedGatewayAuthGenerationForConfigWrite: (nextConfig) => {
       enforceSharedGatewaySessionGenerationForConfigWrite({
@@ -505,6 +506,7 @@ export function createGatewayRequestContext(
         resolveRuntimeSnapshotGeneration: resolveSharedGatewaySessionGenerationForRuntimeSnapshot,
         clients,
       });
+      publishOperatorRoleConfigChange(context);
     },
     nodeRegistry,
     ...(runtime.nodeDesktopService

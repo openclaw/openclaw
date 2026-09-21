@@ -239,18 +239,32 @@ These are intentionally guarded by `test/scripts/ci-workflow-guards.test.ts`:
   lists and package commands; channel invocations retain four project slots and
   one worker per project. Any nonzero exit stops admission of the next envelope.
   Frozen targets retain their original separate rows.
-- CI matrix caps: fast/check lanes at 12, Node test shards at 96, Windows at 2,
+- CI matrix caps: fast/check lanes at 12, Node test shards at 96, Windows at 5,
   and Android at 2. Every compact profile has an enforced 90-row budget, plugin
   fallback has a 50-row budget, and the final Node matrix enforces 70 push or
   130 PR rows, including precise plans. Preflight reserves actual appended
   plugin Node rows in compact admission so existing hosted tooling compaction
   can meet that tighter budget; dist rows remain outside the Node budget and
   inside the compact cap. Excess inventory fails preflight.
-- Windows keeps two disjoint file inventories and at most two concurrent jobs.
-  Each job runs project processes serially with one Vitest worker on every
-  backend, after runtime preparation completes. Native allocation can be smaller
-  than the runner label. Native proof must cover available CPUs/RAM, fixture
-  memory and cleanup. This adds no runner registrations.
+- Windows consumes the complete two package-script inventories and balances
+  whole files into up to five rows. Current measured inputs need five to keep
+  the longest prediction below 420 seconds (four predict 489, five predict 412). Each
+  row retains serial projects and shared file fixtures. Self-hosted Windows uses
+  four Vitest workers; hosted fallback uses one. Selected files enable file
+  parallelism while single-file project budgets remain unchanged.
+  Group by canonical project metadata; keep runtime consumers in one preparation
+  row. Elapsed file costs include imports/hooks instead of concurrent case sums.
+  Frozen targets without the planner retain their original two rows. Native
+  runner capacity must be measured; a max-parallel setting is not capacity proof.
+  Budget three additional non-Node registrations: the conservative full-tier
+  envelope becomes `4 × 153 + 21 × 213 = 5,085`, with 915 below the historical
+  6,000 target. Earlier 5,010 calculations below describe the two-row inventory;
+  do not spend PR proof savings or raise the 90/70/130 Node caps.
+- PRs and exact-head PR fallback dispatches omit Docker seed, QA smoke,
+  real-Gateway UI, named built-process verifiers, and the explicit complete-file
+  process-proof inventory. Main/ordinary manual CI retains that proof, including
+  Full Release Validation's exact-target normal_ci child. PR unit/boundary and
+  mocked-Gateway owners stay selected; no blanket E2E suffix filter is permitted.
 - macOS Swift regular PR/main and PR `release_gate` CI runs complete app tests
   plus lint/schema guards in `tests`, alongside independent OpenClawKit trait,
   OpenClawKit test, and Swabble test graphs in `packages`.
@@ -370,12 +384,18 @@ These are intentionally guarded by `test/scripts/ci-workflow-guards.test.ts`:
   not measured file walls. Do not discount them to make row caps pass.
 - The Docker seed job requests `blacksmith-16vcpu-ubuntu-2404`; its weighted
   scheduler and serial declaration compiler policy stay unchanged.
-  Canonical PRs and `main` share `resolveChangedDockerSeedLanes` owner-path
+  Canonical `main` uses `resolveChangedDockerSeedLanes` owner-path
   selection; unknown paths retain the published survivor. Canonical manual CI
   selects survivor when the target declares the Docker seed capability, retaining
   `legacy-operator-state` with `auto-auth`. Full Release Validation reaches this
   exact proof through `normal_ci`; expanded Package Acceptance scenarios alone
   do not replace its restart mode.
+  PRs and exact-head PR fallbacks do not run Docker seed. Main selection uses
+  only the triggering push's diff, without accumulating coalesced/cancelled
+  pushes. A skipped proof waits for a later non-cancelled main run that selects
+  its lane or applicable manual/release validation; the next main run alone
+  does not guarantee coverage. Ordinary manual CI and `normal_ci` select the
+  published-upgrade survivor independently of changed paths.
 - `run_control_ui_performance` selects production UI, plugin browser, workspace
   package, dependency/build/policy inputs and their relative import graph,
   including tooling. Workspace package aliases require conservative package
@@ -415,7 +435,7 @@ These are intentionally guarded by `test/scripts/ci-workflow-guards.test.ts`:
   matrix. Keep the complete scenario inventory, separate Matrix run, worker
   limits, stagger, cleanup and deadlines. Measure the four-part jobs natively;
   summed build intervals are not a wall-time saving estimate.
-  PR and main selection uses the existing QA/channel/packaging/orchestration
+  Main selection uses the existing QA/channel/packaging/orchestration
   owners. Manual and Full Release Validation retain the full profile; unknown
   paths or older selectors retain supported coverage. Integration detection
   outside these owners now waits for manual/release validation. The burden

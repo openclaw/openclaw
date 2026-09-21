@@ -84,7 +84,7 @@ env:
   IOS_SCREENSHOT_FASTLANE_VERSION: "2.239.0"
   IOS_SCREENSHOT_NODE_VERSION: "24.16.0"
   IOS_SCREENSHOT_XCODE_VERSION: "Xcode 26.6 Build version 17F113"
-  NODE_VERSION: "24.x"
+  NODE_VERSION: "24.19.0"
 
 jobs:
   # Preflight: establish routing truth and job matrices once, then let real
@@ -122,6 +122,7 @@ jobs:
       run_skills_python_job: ${{ steps.manifest.outputs.run_skills_python_job }}
       run_windows: ${{ steps.manifest.outputs.run_windows }}
       run_build_artifacts: ${{ steps.manifest.outputs.run_build_artifacts }}
+      run_proof_tier: ${{ steps.manifest.outputs.run_proof_tier }}
       run_checks_fast_core: ${{ steps.manifest.outputs.run_checks_fast_core }}
       run_checks_fast: ${{ steps.manifest.outputs.run_checks_fast }}
       historical_target: ${{ steps.manifest.outputs.historical_target }}
@@ -1335,6 +1336,9 @@ jobs:
               ? "./scripts/lib/channel-contract-test-plan.mts"
               : "./scripts/lib/channel-contract-test-plan.mjs",
           );
+          const windowsTestPlan = existsSync("./scripts/lib/ci-windows-test-plan.mts")
+            ? await import("./scripts/lib/ci-windows-test-plan.mts")
+            : null;
           const createChannelContractTestShards =
             typeof channelContractPlan.createChannelContractTestShards === "function"
               ? channelContractPlan.createChannelContractTestShards
@@ -1389,6 +1393,9 @@ jobs:
           const docsOnly = parseBoolean(process.env.OPENCLAW_CI_DOCS_ONLY);
           const docsChanged = parseBoolean(process.env.OPENCLAW_CI_DOCS_CHANGED);
           const releaseGate = parseBoolean(process.env.OPENCLAW_CI_RELEASE_GATE);
+          // Exact-head release gates substitute for PR CI. Ordinary manual CI
+          // is Full Release Validation's owner for the complete process proofs.
+          const runProofTier = eventName !== "pull_request" && !releaseGate;
           const releaseScope = process.env.OPENCLAW_CI_RELEASE_SCOPE ?? "full";
           const npmQualification = releaseScope === "npm-beta" || releaseScope === "npm-stable";
           const fullNativeValidation =
@@ -1596,10 +1603,8 @@ jobs:
           }
 
           const compactPullRequest = isCanonicalRepository && eventName === "pull_request";
-          const ownerPathEvent = isCanonicalRepository && (
-            eventName === "pull_request" ||
-            (eventName === "push" && process.env.GITHUB_REF === "refs/heads/main")
-          );
+          const ownerPathEvent = isCanonicalRepository &&
+            eventName === "push" && process.env.GITHUB_REF === "refs/heads/main";
           const dockerSeedLanes =
             ownerPathEvent &&
             changedPaths &&
@@ -1609,7 +1614,7 @@ jobs:
               : [];
           // Manual CI is Full Release Validation's owner for the exact
           // legacy-operator-state + auto-auth seed contract.
-          if (isCanonicalRepository && supportsDockerSeedE2e && (
+          if (runProofTier && isCanonicalRepository && supportsDockerSeedE2e && (
               eventName === "workflow_dispatch" || (ownerPathEvent && changedPaths === null))) {
             dockerSeedLanes.push("published-upgrade-survivor");
           }
@@ -1678,6 +1683,7 @@ jobs:
             typeof changedNodeTestPlan.hasSqliteSessionLifecycleAffectingChange !== "function" ||
             changedNodeTestPlan.hasSqliteSessionLifecycleAffectingChange(changedPaths);
           const runSqliteSessionLifecycle =
+            runProofTier &&
             runNodeFull &&
             supportsSqliteSessionLifecycleProof &&
             changedScopeHasSqliteSessionLifecycleImpact;
@@ -1689,6 +1695,7 @@ jobs:
             changedNodeTestPlan.hasControlUiPerformanceAffectingChange(changedPaths)
           );
           const runQaSmokeCi =
+            runProofTier &&
             runNodeFull &&
             changedScopeHasQaImpact &&
             (!frozenTarget || existsSync("extensions/qa-lab/src/ci-smoke-plan.ts"));
@@ -1698,6 +1705,7 @@ jobs:
               ? changedNodeTestShards
               : [
                   ...createNodeTestPlan({
+                    includeProofTests: runProofTier,
                     includeReleaseOnlyPluginShards: false,
                     ...(compactPullRequest && changedPaths ? { changedPaths } : {}),
                     // Keep the legacy boolean for historical target planners;
@@ -1867,6 +1875,7 @@ jobs:
             run_skills_python: runSkillsPython,
             run_windows: runWindows,
             run_build_artifacts: runBuildArtifacts,
+            run_proof_tier: runProofTier,
             run_checks_fast_core: checksFastCoreTasks.length > 0,
             run_checks_fast: runNodeFull,
             historical_target: historicalTarget,
@@ -1921,13 +1930,17 @@ jobs:
             run_native_i18n: runNativeI18n,
             run_skills_python_job: runSkillsPython,
             run_checks_windows: runWindows,
-            // Blacksmith's Windows runner class admits exactly 2 concurrent jobs
-            // (measured on run 31865243804), so the split width is pinned to 2 on
-            // every backend. A 3rd part queues behind a finished one there, and a
-            // single lane serializes the whole 226s body onto the wall.
+            // Current targets balance the complete Windows inventory by measured
+            // file cost; historical targets retain their original package commands.
             checks_windows_matrix: createMatrix(
               runWindows
-                ? [1, 2].map((part) => ({
+                ? windowsTestPlan
+                  ? windowsTestPlan.createWindowsTestShards(packageScripts).map((shard) => ({
+                      ...shard,
+                      runtime: "node",
+                      task: "test",
+                    }))
+                  : [1, 2].map((part) => ({
                     check_name: `checks-windows-node-test-${part}`,
                     runtime: "node",
                     task: `test-${part}`,
@@ -2361,7 +2374,7 @@ jobs:
       - name: Verify built browser native host
         # Frozen candidates may predate this source proof; a skipped step is
         # unavailable historical coverage, never a successful native-host test.
-        if: ${{ needs.preflight.outputs.frozen_target != 'true' || hashFiles('extensions/browser/src/browser/extension-install.native-host.e2e.test.ts') != '' }}
+        if: ${{ needs.preflight.outputs.run_proof_tier == 'true' && (needs.preflight.outputs.frozen_target != 'true' || hashFiles('extensions/browser/src/browser/extension-install.native-host.e2e.test.ts') != '') }}
         env:
           OPENCLAW_E2E_USE_PREBUILT_DIST: "1"
           OPENCLAW_VITEST_MAX_WORKERS: "1"
@@ -2406,10 +2419,11 @@ jobs:
           # the same built CLI. Keep the tighter Blacksmith regression ceiling.
           OPENCLAW_STARTUP_MEMORY_PLUGINS_LIST_MB: ${{ runner.environment == 'github-hosted' && '425' || '400' }}
           RUN_CHANNELS: ${{ needs.preflight.outputs.run_checks }}
+          RUN_PROCESS_PROOFS: ${{ needs.preflight.outputs.run_proof_tier }}
           RUN_CORE_SUPPORT_BOUNDARY: ${{ needs.preflight.outputs.run_checks_node_core_dist }}
-          RUN_GATEWAY_WATCH: ${{ needs.preflight.outputs.run_check_additional }}
+          RUN_GATEWAY_WATCH: ${{ needs.preflight.outputs.run_proof_tier == 'true' && needs.preflight.outputs.run_check_additional == 'true' }}
           RUN_SQLITE_SESSION_LIFECYCLE: ${{ needs.preflight.outputs.run_sqlite_session_lifecycle }}
-          RUN_TUI_PTY: ${{ needs.preflight.outputs.run_checks_node_core_dist }}
+          RUN_TUI_PTY: ${{ needs.preflight.outputs.run_proof_tier == 'true' && needs.preflight.outputs.run_checks_node_core_dist == 'true' }}
           FROZEN_TARGET: ${{ needs.preflight.outputs.frozen_target }}
         shell: bash
         run: |
@@ -2555,7 +2569,9 @@ jobs:
             wait_checks
           fi
 
-          run_verifier "doctor-plugin-index" run_doctor_plugin_index
+          if [ "$RUN_PROCESS_PROOFS" = "true" ]; then
+            run_verifier "doctor-plugin-index" run_doctor_plugin_index
+          fi
 
           if [ "$RUN_SQLITE_SESSION_LIFECYCLE" = "true" ]; then
             run_verifier "sqlite-session-lifecycle" env \
@@ -2578,7 +2594,7 @@ jobs:
               node scripts/run-vitest.mjs run --config test/vitest/vitest.full-core-support-boundary.config.ts
           fi
 
-          if [ "$RUN_CHANNELS" = "true" ] && [ "$PARALLEL_BUILT_VERIFIERS" = "true" ]; then
+          if [ "$RUN_PROCESS_PROOFS" = "true" ] && [ "$RUN_CHANNELS" = "true" ] && [ "$PARALLEL_BUILT_VERIFIERS" = "true" ]; then
             start_check "discord-component-attachments" run_discord_component_attachments
           fi
 
@@ -2593,7 +2609,7 @@ jobs:
           fi
 
           # Preserve the low-core hosted path: its real Gateway send stays serial.
-          if [ "$RUN_CHANNELS" = "true" ] && [ "$PARALLEL_BUILT_VERIFIERS" != "true" ]; then
+          if [ "$RUN_PROCESS_PROOFS" = "true" ] && [ "$RUN_CHANNELS" = "true" ] && [ "$PARALLEL_BUILT_VERIFIERS" != "true" ]; then
             start_check "discord-component-attachments" run_discord_component_attachments
             wait_checks
           fi
@@ -2631,7 +2647,7 @@ jobs:
           exit "$failures"
 
       - name: Upload Discord component attachment proof
-        if: always() && needs.preflight.outputs.run_checks == 'true'
+        if: always() && needs.preflight.outputs.run_proof_tier == 'true' && needs.preflight.outputs.run_checks == 'true'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: discord-component-attachments
@@ -2651,7 +2667,7 @@ jobs:
           retention-days: 7
 
       - name: Upload gateway watch regression artifacts
-        if: always() && needs.preflight.outputs.run_check_additional == 'true'
+        if: always() && needs.preflight.outputs.run_proof_tier == 'true' && needs.preflight.outputs.run_check_additional == 'true'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: gateway-watch-regression
@@ -2904,7 +2920,7 @@ jobs:
     needs: [preflight]
     # Compatibility targets pin a frozen Control UI whose e2e expectations track
     # that release, not current main.
-    if: needs.preflight.outputs.run_ui_e2e == 'true' && needs.preflight.outputs.compatibility_target != 'true'
+    if: needs.preflight.outputs.run_proof_tier == 'true' && needs.preflight.outputs.run_ui_e2e == 'true' && needs.preflight.outputs.compatibility_target != 'true'
     # Contributor trust controls Blacksmith eligibility; manual runs and PR retries
     # stay hosted. Hybrid also uses hosted capacity on push retries.
     # Restore eight-CPU capacity for the fixed 20-minute budget; actual
@@ -4704,7 +4720,7 @@ jobs:
       fail-fast: false
       # Both parts must run concurrently or the split gains nothing; Blacksmith's
       # Windows class admits exactly 2, so this is the width, not a cap.
-      max-parallel: 2
+      max-parallel: 5
       matrix: ${{ fromJson(needs.preflight.outputs.checks_windows_matrix) }}
     steps:
       - &platform_checkout_step
@@ -4782,13 +4798,29 @@ jobs:
           TASK: ${{ matrix.task }}
           # The 16-class delivers four native CPUs; hosted fallback keeps its serial budget.
           OPENCLAW_VITEST_MAX_WORKERS: ${{ runner.environment == 'self-hosted' && 4 || 1 }}
+          WINDOWS_TARGETS_JSON: ${{ toJSON(matrix.targets || null) }}
         shell: bash
         run: |
           set -euo pipefail
           # Native allocation can be smaller than the runner label. Keep projects
-          # serial within each machine; the two matrix jobs still run concurrently.
+          # serial within each machine; matrix rows own disjoint complete files.
           export OPENCLAW_TEST_PROJECTS_PARALLEL=1
           case "$TASK" in
+            test)
+              node --input-type=module <<'WINDOWS_TESTS'
+          import { spawnSync } from "node:child_process";
+          const targets = JSON.parse(process.env.WINDOWS_TARGETS_JSON);
+          if (!Array.isArray(targets) || targets.length === 0 ||
+              targets.some((file) => typeof file !== "string" || !/^[\w./-]+\.test\.tsx?$/u.test(file))) {
+            throw new Error("Windows test row requires explicit test files");
+          }
+          const result = spawnSync(process.execPath, [
+            "--import", "./scripts/tsx.mjs", "scripts/test-projects.mts", ...targets, "--fileParallelism",
+          ], { stdio: "inherit" });
+          if (result.error) throw result.error;
+          process.exit(result.status ?? 1);
+          WINDOWS_TESTS
+              ;;
             # Linux owns the full repo test suite. Keep the Windows runner focused on
             # Windows-native process/path wrappers so platform regressions fail fast.
             test-1)
@@ -6172,7 +6204,7 @@ jobs:
             native-i18n=${{ needs.native-i18n.result }}|${{ needs.preflight.outputs.run_native_i18n }}
             checks-ui=${{ needs.checks-ui.result }}|${{ needs.preflight.outputs.run_ui_tests }}
             checks-ui-e2e=${{ needs.checks-ui-e2e.result }}|${{ needs.preflight.outputs.run_ui_e2e == 'true' && needs.preflight.outputs.compatibility_target != 'true' }}
-            checks-ui-e2e-real-gateway=${{ needs.checks-ui-e2e-real-gateway.result }}|${{ needs.preflight.outputs.run_ui_e2e == 'true' && needs.preflight.outputs.compatibility_target != 'true' }}
+            checks-ui-e2e-real-gateway=${{ needs.checks-ui-e2e-real-gateway.result }}|${{ needs.preflight.outputs.run_proof_tier == 'true' && needs.preflight.outputs.run_ui_e2e == 'true' && needs.preflight.outputs.compatibility_target != 'true' }}
             control-ui-i18n=${{ needs.control-ui-i18n.result }}|${{ needs.preflight.outputs.run_control_ui_i18n }}
             checks-fast-core=${{ needs.checks-fast-core.result }}|${{ needs.preflight.outputs.run_checks_fast_core }}
             qa-smoke-ci-profile=${{ needs.qa-smoke-ci-profile.result }}|${{ needs.preflight.outputs.run_qa_smoke_ci }}

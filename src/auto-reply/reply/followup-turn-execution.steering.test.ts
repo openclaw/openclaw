@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createAdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
 import {
   createFollowupTurnTestTypingController as createTypingController,
   createFollowupTurnTestTurn as createTurn,
@@ -25,6 +26,14 @@ describe("queued turn steering", () => {
       resetTriggered: false,
     });
     const turn = createTurn({ operation });
+    const operatorAuthority = createAdmittedRunOperatorAuthority({
+      profileId: "guest",
+      scopes: ["operator.read", "operator.write"],
+      source: {},
+      signal: new AbortController().signal,
+      assertCurrent: () => {},
+    });
+    turn.queued.operatorAuthority = operatorAuthority;
     const queueMessage = vi.fn(async () => {});
     state.execute.mockImplementation(async () => {
       operation.bindToolAuthorityRoute({ provider: "anthropic", model: "claude" });
@@ -39,6 +48,11 @@ describe("queued turn steering", () => {
       const target = replyRunRegistry.resolveCurrentMessageInjectionTarget("main");
       expect(target).toBeDefined();
       const overlay = {
+        operatorAuthority: createAdmittedRunOperatorAuthority({
+          ...operatorAuthority,
+          scopes: ["operator.write", "operator.read"],
+          signal: new AbortController().signal,
+        }),
         originatingChannel: turn.queued.originatingChannel,
         messageProvider: turn.queued.run.messageProvider,
         senderId: "user-2",
@@ -58,6 +72,19 @@ describe("queued turn steering", () => {
           toolAuthorityOverlay: { ...overlay, disableTools: true },
         }).outcome,
       ).resolves.toMatchObject({ status: "rejected", reason: "tool_authority_mismatch" });
+      for (const incomingOperator of [
+        undefined,
+        createAdmittedRunOperatorAuthority({ ...operatorAuthority, profileId: "maintainer" }),
+        createAdmittedRunOperatorAuthority({ ...operatorAuthority, scopes: ["operator.admin"] }),
+        createAdmittedRunOperatorAuthority({ ...operatorAuthority, source: {} }),
+      ]) {
+        await expect(
+          beginReplyMessageInjectionTarget(target!, "Different original operator authority", {
+            isInboundUserMessage: true,
+            toolAuthorityOverlay: { ...overlay, operatorAuthority: incomingOperator },
+          }).outcome,
+        ).resolves.toMatchObject({ status: "rejected", reason: "tool_authority_mismatch" });
+      }
       expect(queueMessage).toHaveBeenCalledOnce();
       return { runId: "run-1", outcome: { kind: "rejected", payload: { text: "done" } } };
     });

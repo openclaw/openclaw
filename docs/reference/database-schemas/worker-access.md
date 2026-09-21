@@ -87,6 +87,13 @@ reads remain migration debt. Process-held incognito databases and the existing
 CLI-import history path still need their owner/lifetime migration; they are not
 new synchronous exceptions or fallbacks for a failed durable worker read.
 
+Exact message membership reads for managed attachments also use the history
+worker. The worker validates the entire visible JSON range on every lookup,
+including unchanged projection revisions, and returns only matching messages.
+Cold archive decoding and restoration retain the existing archive worker and
+host generation/commit authorization; transcript read fences still bind the
+subsequent read. No validation cache or new restoration owner is introduced.
+
 The asynchronous transcript-search facade similarly moves durable FTS reads for
 all four Gateway/tool callers through the existing worker lifecycle. Each caller
 rechecks current scope and authorization after awaiting. Warm `sessions.list`

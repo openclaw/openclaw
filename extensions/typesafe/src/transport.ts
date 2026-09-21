@@ -83,6 +83,7 @@ export async function requestEvaluation(params: {
   baseUrl?: string;
   timeoutMs: number;
   signal?: AbortSignal;
+  deadlineMonotonicMs?: number;
 }): Promise<unknown> {
   const baseUrl = localBaseUrl(params.baseUrl);
   const endpoint = baseUrl ? `${baseUrl}/v1/systemone` : ENDPOINT;
@@ -90,13 +91,30 @@ export async function requestEvaluation(params: {
   if (Buffer.byteLength(body) > MAX_JSON_BYTES) {
     throw new EvaluationError("TypeSafe request exceeds its limit.", "unsupported-input");
   }
+  const timeoutMs =
+    params.deadlineMonotonicMs === undefined
+      ? params.timeoutMs
+      : Math.min(params.timeoutMs, params.deadlineMonotonicMs - performance.now());
+  if (timeoutMs <= 0) {
+    throw new EvaluationError("TypeSafe evaluation timed out.", "transport");
+  }
   const { signal, cleanup } = buildTimeoutAbortSignal({
     signal: params.signal,
-    timeoutMs: params.timeoutMs,
+    timeoutMs,
     operation: "TypeSafe evaluation",
   });
-  try {
+  const assertActive = () => {
     signal?.throwIfAborted();
+    // Synchronous preparation can exhaust the deadline before its abort timer runs.
+    if (
+      params.deadlineMonotonicMs !== undefined &&
+      performance.now() >= params.deadlineMonotonicMs
+    ) {
+      throw new EvaluationError("TypeSafe evaluation timed out.", "transport");
+    }
+  };
+  try {
+    assertActive();
     const request = {
       url: endpoint,
       fetchImpl: globalThis.fetch,
@@ -113,7 +131,7 @@ export async function requestEvaluation(params: {
         : {}),
       maxRedirects: 0,
       signal,
-      beforeRequest: () => signal?.throwIfAborted(),
+      beforeRequest: assertActive,
       init: {
         method: "POST",
         headers: {

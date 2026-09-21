@@ -121,6 +121,10 @@ Several commands: warm once, save id, reuse, stop.
 Rules:
 
 - One lease, one active command. No sync/reclaim during run.
+- Compound payloads: prefer `bash -c`, not `bash -lc`. Bash syntax support does
+  not require login startup; login profiles can change directories. Before
+  validation, assert the exact physical checkout and expected source/patch
+  inside the shell that runs it. A matching HEAD alone cannot prove dirty sync.
 - Native Testbox runs own sync, including reused `--id` runs. Never rely on
   `--no-sync` to preserve a remote baseline: Blacksmith has no native bypass,
   and released Crabbox versions can silently ignore the flag. An unchanged

@@ -124,18 +124,6 @@ vi.mock("../auto-reply/reply/session-stable-reply-mode.js", () => ({
   resolveSessionStableReplyMode: vi.fn(() => "automatic"),
 }));
 
-vi.mock("../auto-reply/reply/source-reply-delivery-mode.js", () => ({
-  // Source-reply policy has focused owner coverage. Command preparation only
-  // needs to distinguish synthetic turns before forwarding stable facts.
-  isSyntheticSourceReplyTurn: (params: {
-    inputProvenance?: { kind?: string };
-    isHeartbeat?: boolean;
-  }) =>
-    params.isHeartbeat === true ||
-    params.inputProvenance?.kind === "inter_session" ||
-    params.inputProvenance?.kind === "internal_system",
-}));
-
 vi.mock("../agents/harness/selection.js", () => ({
   // Availability fallback has focused owner coverage in selection.test.ts. The
   // command suite only needs a stable policy for auth-profile validation.

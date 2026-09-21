@@ -3,7 +3,7 @@ import {
   isRealtimeVoiceAudioAudible,
   REALTIME_VOICE_AUDIO_FORMAT_PCM16_24KHZ,
   type RealtimeVoiceAudioOutputMessage,
-} from "openclaw/plugin-sdk/realtime-voice";
+} from "openclaw/plugin-sdk/realtime-voice-provider";
 import {
   DISCORD_AUDIO_CLOCK_BYTES,
   DISCORD_CONTINUOUS_ACTIVE,

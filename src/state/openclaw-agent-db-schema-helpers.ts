@@ -18,7 +18,12 @@ import {
   AGENT_V14_BOARD_SCHEMA_SQL,
   ensureOpenClawAgentBoardSchemaInTransaction,
 } from "./openclaw-agent-board-schema.js";
-import { OPENCLAW_AGENT_SCHEMA_VERSION } from "./openclaw-agent-db-contract.js";
+import { withoutCanonicalSessionValidationSchema } from "./openclaw-agent-canonical-validation-schema.js";
+import {
+  CANONICAL_SESSION_VALIDATION_SCHEMA_VERSION,
+  OPENCLAW_AGENT_SCHEMA_VERSION,
+  TRANSCRIPT_FTS_ROW_SCHEMA_VERSION,
+} from "./openclaw-agent-db-contract.js";
 import { AGENT_SCHEMA_COMPATIBILITY } from "./openclaw-agent-db-schema-compatibility.js";
 import {
   readExistingAgentSchemaMeta,
@@ -32,7 +37,10 @@ import {
   hasPendingSessionTranscriptContextEligibilityColumn,
   ensureSessionEntryValidityProjection,
 } from "./openclaw-agent-db-session-migrations.js";
-import { LEGACY_PARTICIPANT_OPTIONAL_COLUMNS } from "./openclaw-agent-participants-migration.js";
+import {
+  LEGACY_PARTICIPANT_OPTIONAL_COLUMNS,
+  withLegacySessionParticipantsSchema,
+} from "./openclaw-agent-participants-migration.js";
 import { hasPendingInputConsumptionColumnMigration } from "./openclaw-agent-pending-inputs-schema.js";
 import {
   ensureOpenClawAgentProgressCardSchemaInTransaction,
@@ -44,6 +52,7 @@ import {
   AGENT_V14_CORE_SCHEMA_SQL,
   AGENT_V14_SESSION_SHARING_SCHEMA_SQL,
 } from "./openclaw-agent-session-sharing-schema.js";
+import { withoutTranscriptFtsRowSchema } from "./openclaw-agent-transcript-fts-schema.js";
 
 export {
   assertSupportedAgentSchemaVersion,
@@ -51,6 +60,19 @@ export {
   readExistingAgentSchemaMeta,
   assertExistingAgentSchemaOwner,
 } from "./openclaw-agent-db-schema-read.js";
+
+/** Compare historical migration targets against only the representation they support. */
+export function getOpenClawAgentMigrationSchema(targetVersion: number): string {
+  const targetSchemaSql =
+    targetVersion < TRANSCRIPT_FTS_ROW_SCHEMA_VERSION
+      ? withoutTranscriptFtsRowSchema(OPENCLAW_AGENT_SCHEMA_SQL)
+      : OPENCLAW_AGENT_SCHEMA_SQL;
+  return targetVersion < 18
+    ? withLegacySessionParticipantsSchema(targetSchemaSql)
+    : targetVersion < CANONICAL_SESSION_VALIDATION_SCHEMA_VERSION
+      ? withoutCanonicalSessionValidationSchema(targetSchemaSql)
+      : targetSchemaSql;
+}
 
 export function migratedSessionColumn(
   columns: ReadonlySet<string>,

@@ -284,6 +284,13 @@ Discord and Slack use scalar conditional deletion when relinquishing a presence
 cooldown. On older hosts without that optional capability, they leave it to expire
 instead of risking deletion of a newer reservation.
 
+FaceTime persists pending dial snapshots in invocation order and uses worker
+comparisons to clear only the matching dial. Helper dispatch waits for durable
+intent, and shutdown joins accepted persistence. Its supported 2026.9.4 hosts
+without comparisons retain atomic `deleteIf` cleanup; a failed worker operation
+never selects that compatibility path. The namespace, stored records, and
+retention remain unchanged, so this cutover requires no data migration.
+
 This deprecation adds editor annotations, documentation, and compatibility
 inventory metadata. It adds no runtime warning and changes no trust eligibility:
 the runtime openers remain limited to bundled plugins and trusted official

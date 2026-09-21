@@ -122,6 +122,7 @@ function agentKysely() {
         OpenClawAgentKyselyDatabase,
         | "session_transcript_active_events"
         | "session_transcript_fts"
+        | "session_transcript_fts_rows"
         | "session_transcript_index_state"
         | "transcript_events"
       >
@@ -555,6 +556,15 @@ describe("searchSessionTranscripts", () => {
 
     expect(pending()).toEqual([]);
     expect(search("indexed").indexing).toBe(false);
+    executeSqliteQuerySync(
+      db,
+      kysely.deleteFrom("session_transcript_fts_rows").where("session_id", "=", "session-1"),
+    );
+    expect(pending()).toEqual(["session-1"]);
+    expect(search("indexed").indexing).toBe(true);
+    await waitForSearchReconcile("indexed");
+    expect(pending()).toEqual([]);
+    expect(search("indexed").hits).toHaveLength(2);
 
     executeSqliteQuerySync(
       db,

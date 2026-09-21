@@ -2740,7 +2740,13 @@ describe("installPluginFromNpmSpec", () => {
     expect(managedManifest.dependencies?.["@openclaw/msteams"]).toBe("2026.5.28-beta.3");
   });
 
-  it("does not resolve explicit prerelease tags to stable compatible versions", async () => {
+  it.each([
+    ["does not resolve explicit prerelease tags to stable compatible versions", "2026.5.27"],
+    [
+      "does not resolve explicit prerelease tags to a different prerelease channel",
+      "2026.5.28-alpha.10",
+    ],
+  ])("%s", async (_name, candidateVersion) => {
     const stateDir = suiteTempRootTracker.makeTempDir();
     const npmRoot = path.join(stateDir, "npm");
     vi.stubEnv("OPENCLAW_COMPATIBILITY_HOST_VERSION", "2026.5.28-beta.3");
@@ -2752,45 +2758,7 @@ describe("installPluginFromNpmSpec", () => {
         version: "2026.5.28-beta.4",
         pluginId: "msteams",
         npmRoot,
-        versions: ["2026.5.27", "2026.5.28-beta.4"],
-        openclaw: {
-          extensions: ["./dist/index.js"],
-          compat: { pluginApi: ">=2026.5.28-beta.4" },
-        },
-      },
-    ]);
-
-    const result = await installPluginFromNpmSpec({
-      spec: "@openclaw/msteams@beta",
-      npmDir: npmRoot,
-      mode: "update",
-      logger: { info: () => {}, warn: () => {} },
-    });
-
-    expect(result.ok).toBe(false);
-    if (result.ok) {
-      return;
-    }
-    expect(result.code).toBe(PLUGIN_INSTALL_ERROR_CODE.INCOMPATIBLE_PLUGIN_API);
-    expect(result.error).toContain("requires plugin API >=2026.5.28-beta.4");
-    expect(
-      runCommandWithTimeoutMock.mock.calls.some(([argv]) => isManagedNpmInstallCommand(argv)),
-    ).toBe(false);
-  });
-
-  it("does not resolve explicit prerelease tags to a different prerelease channel", async () => {
-    const stateDir = suiteTempRootTracker.makeTempDir();
-    const npmRoot = path.join(stateDir, "npm");
-    vi.stubEnv("OPENCLAW_COMPATIBILITY_HOST_VERSION", "2026.5.28-beta.3");
-
-    mockNpmViewAndInstallMany([
-      {
-        spec: "@openclaw/msteams@beta",
-        packageName: "@openclaw/msteams",
-        version: "2026.5.28-beta.4",
-        pluginId: "msteams",
-        npmRoot,
-        versions: ["2026.5.28-alpha.10", "2026.5.28-beta.4"],
+        versions: [candidateVersion, "2026.5.28-beta.4"],
         openclaw: {
           extensions: ["./dist/index.js"],
           compat: { pluginApi: ">=2026.5.28-beta.4" },

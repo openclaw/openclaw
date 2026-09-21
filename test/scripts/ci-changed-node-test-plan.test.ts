@@ -25,6 +25,10 @@ import {
   createSelectedNodeTestShardBundles,
   type CompactNodeTestShard,
 } from "../../scripts/lib/ci-node-test-plan.mts";
+import {
+  CI_PROOF_TEST_FILES,
+  isCiProofTestFile,
+} from "../../scripts/lib/ci-proof-test-inventory.mts";
 import { refitTestTimings } from "../../scripts/lib/ci-test-timings-refit.mts";
 import * as testTimings from "../../scripts/lib/ci-test-timings.mts";
 import {
@@ -230,6 +234,32 @@ function expectAllExtensionConfigs(
 }
 
 describe("CI changed Node test plan", () => {
+  it("defers named process proofs without dropping mixed ordinary targets", () => {
+    const ordinary = "src/plugin-sdk/config-runtime.test.ts";
+    const shards = createChangedNodeTestShards([...CI_PROOF_TEST_FILES, ordinary]);
+    expect(shards).not.toBeNull();
+    const files = (shards ?? []).flatMap((shard) =>
+      (shard.targets ?? []).concat(
+        shard.includePatterns ?? [],
+        shard.groups?.flatMap((group) => group.includePatterns ?? []) ?? [],
+      ),
+    );
+    expect(files).toContain(ordinary);
+    expect(files.some(isCiProofTestFile)).toBe(false);
+  });
+
+  it("keeps boundary coverage when only a deferred proof helper changes", () => {
+    const helper = "test/helpers/sqlite-sessions-transcripts-flip-proof-assertions.ts";
+    const shards = createChangedNodeTestShards([helper]);
+    expect(shards).toEqual([
+      expect.objectContaining({
+        checkName: "checks-node-changed-boundary",
+        configs: ["test/vitest/vitest.boundary.config.ts"],
+      }),
+    ]);
+    expect(createChangedNodeTestShards([helper, "src/deleted-unowned-source.ts"])).toBeNull();
+  });
+
   it("retains the paired tooling group for direct Docker helper selection", () => {
     const shards = createSelectedNodeTestShardBundles(["test/scripts/docker-build-helper.test.ts"]);
     expect(shards).not.toBeNull();

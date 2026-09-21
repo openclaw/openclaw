@@ -143,7 +143,10 @@ rubrics; ordinary state text can contain punctuation.
 
 Up to `maxLoadedModels` selected models warm during plugin service startup. Later
 requests reuse native sessions; the resident cache evicts the least recently
-used model when full. `threads` sets CPU intra-operation parallelism from 1 to 8.
+used model when full. Missing files and failed artifact-integrity checks leave
+warm sessions available. Eviction happens after artifact verification and
+tokenizer preparation, before loading the replacement native session. `threads`
+sets CPU intra-operation parallelism from 1 to 8.
 
 Cold-loading a large model can exhaust a request's deadline on slower machines.
 The host allows up to ten seconds; consumers can request less.

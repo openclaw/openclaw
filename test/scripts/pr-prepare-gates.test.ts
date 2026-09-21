@@ -912,7 +912,7 @@ describe("prepare author access snapshot", () => {
     const result = runGatesBash(
       [
         "pr_gh() {",
-        '  if [ "$1 $2" = "repo view" ]; then printf "fixture/repo\\n";',
+        `  if [ "$1 $2" = "repo view" ]; then printf '{"nameWithOwner":"fixture/repo","url":"https://github.com/fixture/repo"}\\n';`,
         `  else printf '{"permission":"${permission}"}\\n'; fi`,
         "}",
         "resolve_pr_author_access_at_prepare fixture",
@@ -928,7 +928,7 @@ describe("prepare author access snapshot", () => {
     const result = runGatesBash(
       [
         "pr_gh() {",
-        '  if [ "$1 $2" = "repo view" ]; then printf "fixture/repo\\n";',
+        `  if [ "$1 $2" = "repo view" ]; then printf '{"nameWithOwner":"fixture/repo","url":"https://github.com/fixture/repo"}\\n';`,
         mode === "error" ? "  else return 1; fi" : "  else printf '{}\\n'; fi",
         "}",
         "resolve_pr_author_access_at_prepare fixture",

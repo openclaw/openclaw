@@ -12,6 +12,9 @@ import {
   TranscriptLibraryError,
 } from "./store-read.js";
 import {
+  readTranscriptExportOwnership,
+  readTranscriptExportPathCollisions,
+  readTranscriptExportPathOwners,
   readTranscriptSessionByIdentity,
   readTranscriptSessionEntries,
   readTranscriptSessionMatches,
@@ -46,6 +49,21 @@ export function executeTranscriptRead(
             command.input.params,
             createPreparedTranscriptDateReader(),
           ),
+        };
+      case "transcripts.exportOwnership":
+        return {
+          ok: true,
+          value: readTranscriptExportOwnership(database, command.input.params.session),
+        };
+      case "transcripts.exportPathCollisions":
+        return {
+          ok: true,
+          value: readTranscriptExportPathCollisions(database, command.input.params.exportKey),
+        };
+      case "transcripts.exportPathOwners":
+        return {
+          ok: true,
+          value: readTranscriptExportPathOwners(database, command.input.params.exportKey),
         };
       case "transcripts.summarySnapshot":
         return {

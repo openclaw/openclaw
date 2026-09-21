@@ -14,6 +14,11 @@ This directory owns local tooling, script wrappers, and generated-artifact helpe
 - For changed-file verification, prefer `scripts/check-changed.mjs` and keep lane classification in `scripts/changed-lanes.mjs`. Use `node scripts/check-changed.mjs --dry-run [--staged|-- <files...>]` to inspect the plan before running anything expensive. Do not copy path-scope rules into new hooks or ad hoc CI snippets.
 - For one/few lint files, prefer direct `node scripts/run-oxlint.mjs --tsconfig <matching config> <files...>` over sharded `pnpm lint`; `check-changed.mjs` owns this targeting for core, extension, and script diffs.
 
+## Testbox Command Checkout
+
+- `.github/actions/prepare-testbox-shell` owns the Testbox shell/working-directory contract. Noninteractive login shells preserve the caller-selected directory; hydration adapts only the known Blacksmith interactive-SSH auto-`cd` and probes exact physical cwd before ready registration. Do not force nested shells into `GITHUB_WORKSPACE` or the transport checkout.
+- Raw Crabbox payloads start in the synchronized transport checkout. `crabbox-wrapper.mjs` instead verifies/applies its source capsule and reconciles dependencies in the prepared execution workspace before running the payload. Preserve that intentional receiver handoff; its pathname alone does not identify stale source. Verify selected source bytes/patch as well as directory, and stop/re-warm leases when preparation changes.
+
 ## TypeScript Syntax
 
 - Keep TypeScript implementation files under `scripts/**` erasable by Node without transformation. Do not use parameter properties, runtime enums or namespaces, import-equals, export-assignment, or other transform-required TypeScript syntax.
@@ -22,7 +27,7 @@ This directory owns local tooling, script wrappers, and generated-artifact helpe
 
 ## PR Prepare Gates
 
-- The default agent handoff uses `OPENCLAW_PR_GATES_REMOTE=github` and `merge-run --auto-merge`. Preparation records `github_pending` bound to the published head without successful-proof stamps. Merge requires completed review, the exact prepared head, and the enforced `openclaw/ci-gate`; it rejects known failed required checks, accepts pending checks, and skips hosted workflow verification and CI watchers. GitHub owns required CI/security checks and reviews. This mode replaces separate scheduled Testbox evidence with the PR's enforced gate; existing completed-evidence modes remain available. Accepted requests return pending; agents stop polling and reconcile on a completion/failure notification or an explicit status request. No admin or REST fallback applies to pending-gate admission.
+- The default agent handoff uses `OPENCLAW_PR_GATES_REMOTE=github` and `merge-run --auto-merge`. Preparation records `github_pending` bound to the published head without successful-proof stamps. Merge requires completed review, the exact prepared head, and the enforced `openclaw/ci-gate`; it rejects known failed required checks, accepts pending checks, and skips separate hosted workflow verification and its synchronous CI watcher. GitHub enforces required CI/security checks and reviews; the agent retains responsibility for follow-through. This mode replaces separate scheduled Testbox evidence with the PR's enforced gate; existing completed-evidence modes remain available. Accepted requests return pending, not completion. Follow the maintainer skill's polling cadence, investigate failures and conflicts, and reconcile through native recovery until merge and cleanup are verified. Preserve accepted or uncertain outcome records; never blindly re-arm a request. No admin or REST fallback applies to pending-gate admission.
 
 - PR source acquisition fetches the full head SHA authenticated by live PR metadata from the canonical origin, verifies the fetched commit, and checks that head SHA, branch, and repository identity stayed unchanged across the fetch. GitHub's asynchronous `refs/pull/<PR>/head` projection is not source authority. All review, prepare, publication, and merge fetches use this owner without changing the private main checkpoint or shared tracking refs.
 - Supervised PR operations disable automatic Git maintenance through inherited process configuration, preserving repository settings. Explicit maintenance must still join before completion. PR source fetches also disable automatic maintenance: fetching one PR does not authorize repository-wide pruning of unrelated worktree metadata.
@@ -47,25 +52,36 @@ context, and wrapper selection stays unchanged.
 
 `OPENCLAW_PR_GIT` selects the Git executable. Startup checks that binary with a
 10-second deadline before choosing wrapper code; Darwin process-identity Python
-calls use the same deadline. Ordinary PR metadata uses REST; review snapshots omit
-unused check rollups, and preparation reads only the live head fields it consumes.
-Host-qualified repository locators go directly to REST; review metadata carries
-the resolved URL through its reads instead of repeating `gh browse` HEAD probes.
+calls use the same deadline. PR metadata, repository authority, writer identity,
+comments, contributor authors, and author permissions prefer REST, with GraphQL
+fallback on confirmed primary core quota exhaustion. Review snapshots omit unused
+check rollups, and preparation reads only the live head fields it consumes.
+Host-qualified repository locators go directly to the API; review metadata carries
+the resolved URL through its reads instead of repeating repository discovery.
 Each PR-head observation and merge snapshot explicitly requests
 `Cache-Control: max-age=0`: the relay revalidates that read and may publish its
 result, while separate before/after observations must never reuse one cached fact.
-Writer identity uses REST `GET /user --include` through the protected selected CLI;
-included headers keep relay callers on the native writer route. Reviewer assignment
-uses REST and verifies that GitHub retained the requested assignee. The CI watcher
-polls GraphQL summaries, expanding check details only for failure analysis or
-pending checks after CI succeeds. Primary GraphQL exhaustion selects a bounded
+Writer identity uses the protected selected CLI with included headers on both
+transports, keeping relay callers on the native writer route. Repository selection
+uses the CLI's local default and host resolution without a quota-dependent HEAD.
+Reviewer assignment uses REST and verifies that GitHub retained the requested
+assignee. The CI watcher polls GraphQL summaries, expanding check details only for
+failure analysis or pending checks after CI succeeds. Primary GraphQL exhaustion selects a bounded
 REST fallback; secondary throttles and access failures never authorize a transport
-switch. The watcher retains complete check/status and workflow evidence. Native
-REST landing is limited to ordinary immediate squash with authoritative absence
+switch. The watcher retains complete check/status and workflow evidence. Ordinary
+immediate squash prefers REST; admission reads can switch in either direction on
+confirmed primary quota exhaustion. Unsupported REST policy contracts select
+GraphQL before dispatch. REST landing requires authoritative absence
 of classic protection, supported effective rules without a merge queue, exact-head
 publisher-bound checks, and the existing retained-outcome lifecycle. Choose the
 transport before dispatch; never retry an uncertain mutation through another API.
-Other landing modes retain their GraphQL contracts.
+REST squash preserves configured message content from the pinned published commits
+or PR body and leaves the configured title to GitHub.
+Completion comments use the successful receipt observation's transport and retain
+their one-attempt marker. Native auto-merge, queues, admin admission, and non-squash
+merges retain their GraphQL contracts; GitHub has no REST auto-merge endpoint.
+Legacy hosted workflow proof and reviewer assignment still require REST. Neither
+quota fallback nor unavailable evidence waives a required gate.
 API failures preserve safe quota and retry metadata from the original response.
 When that response has no usable HTTP framing, a separate GraphQL/core quota
 probe is labeled supplemental and does not establish the failed request's reset.

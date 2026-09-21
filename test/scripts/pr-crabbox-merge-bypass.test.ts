@@ -379,7 +379,7 @@ const endpoint = args.find(arg => /^(?:repos\\/|orgs\\/|user$|graphql$)/u.test(a
 if (args[0] === "api" && args.includes("repos/openclaw/openclaw") &&
     JSON.stringify(args) !== JSON.stringify(["api", "--hostname", "github.com", "repos/openclaw/openclaw", "-H", "Cache-Control: max-age=0"])) fail("unexpected repository authority request");
 if (endpoint && endpoint === process.env.FAKE_DENIED) fail("protected refusal");
-if (args[0] === "browse" && args[1] === "--no-browser") out(repo.url);
+if (args[0] === "browse") out(repo.url);
 else if (args[0] === "pr" && args[1] === "checks" && args.includes("--required")) {
   // gh v2.98.0 checks.go exports JSON before applying its human-output exit codes.
   out(value.requiredChecks);

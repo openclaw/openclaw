@@ -180,7 +180,9 @@ export function registerShutdownCompletionTests({
       vi.useFakeTimers();
       try {
         captureSignal("SIGUSR2")();
-        await vi.advanceTimersByTimeAsync(325_000);
+        await vi.advanceTimersByTimeAsync(9_999);
+        expect(runtime.exit).not.toHaveBeenCalled();
+        await vi.advanceTimersByTimeAsync(1);
         expect(writeGatewayRestartHandoffSync).not.toHaveBeenCalled();
         expect(runtime.exit).toHaveBeenCalledExactlyOnceWith(1);
       } finally {
@@ -231,7 +233,7 @@ export function registerShutdownCompletionTests({
       vi.useFakeTimers();
       try {
         restartSignal();
-        await vi.advanceTimersByTimeAsync(10_000);
+        await vi.advanceTimersByTimeAsync(0);
         expect(close).toHaveBeenCalledOnce();
         expect(gatewayLog.error).toHaveBeenCalledWith(
           "gateway lifecycle completion failed: shutdown cleanup failed",
@@ -242,7 +244,7 @@ export function registerShutdownCompletionTests({
           successorOwner: managedUpdateSuccessorOwner,
         });
         restartSignal();
-        await vi.advanceTimersByTimeAsync(314_999);
+        await vi.advanceTimersByTimeAsync(9_999);
         expect(runtime.exit).not.toHaveBeenCalled();
         await vi.advanceTimersByTimeAsync(1);
         expect(runtime.exit).toHaveBeenCalledExactlyOnceWith(1);

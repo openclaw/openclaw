@@ -15,7 +15,7 @@ import type {
 } from "./package-manifest.types.js";
 import type { PluginOrigin } from "./plugin-origin.types.js";
 import type { PluginTrust } from "./plugin-trust.js";
-import type { PluginDependencySpecMap } from "./status-dependencies-core.js";
+import type { PluginDependencySpecMap } from "./status-dependencies.types.js";
 
 export type PluginManifestContractListKey =
   | "decisionProviders"

@@ -468,6 +468,7 @@ src/config/zod-schema.agent-runtime.ts
 src/config/zod-schema.agents.ts
 src/config/zod-schema.allowdeny.ts
 src/config/zod-schema.approvals.ts
+src/config/zod-schema.channel-bot-loop.ts
 src/config/zod-schema.channels-config.ts
 src/config/zod-schema.channels.ts
 src/config/zod-schema.cloud-workers.ts

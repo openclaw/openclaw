@@ -6,7 +6,6 @@ import type {
 import { evaluate as evaluateTypeSafe } from "./client.js";
 import type { RuntimeConfig } from "./config.js";
 import { decisionFailure } from "./errors.js";
-import { MAX_CHOICE_OPTIONS, MAX_SCORE_LEVELS, parseInput } from "./schema.js";
 
 /** Transport and result validation are shared with the independently usable agent tool. */
 export function createDecisionProvider(getConfig: () => RuntimeConfig): DecisionProviderV1 {
@@ -27,34 +26,18 @@ export function createDecisionProvider(getConfig: () => RuntimeConfig): Decision
       if (remaining <= 0) {
         return { status: "unavailable", reason: "transport" };
       }
-      if (
-        Object.values(batch.questions).some((q) =>
-          q.type === "choice"
-            ? Object.keys(q.criteria).length > MAX_CHOICE_OPTIONS
-            : q.type === "score" && q.criteria.length > MAX_SCORE_LEVELS,
-        )
-      ) {
-        return { status: "unavailable", reason: "unsupported-input" };
-      }
       const questions = Object.fromEntries(
         Object.entries(batch.questions).map(([id, q]) => [
           id,
           q.type === "boolean" ? { ...q, type: "noul" } : q,
         ]),
       );
-      // The vendor contract is narrower than host JSON (for example reserved keys).
-      // Validate locally before credentials can be sent; never truncate/split a rubric.
-      let input: ReturnType<typeof parseInput>;
-      try {
-        input = parseInput({ state: batch.state, questions, model: context.model });
-      } catch {
-        return { status: "unavailable", reason: "unsupported-input" };
-      }
       try {
         const { evaluation } = await evaluateTypeSafe(
-          input,
+          { state: batch.state, questions, model: context.model },
           { ...config, timeoutMs: Math.min(config.timeoutMs, remaining) },
           context.signal,
+          context.deadlineMonotonicMs,
         );
         context.signal.throwIfAborted();
         const answers: Record<string, DecisionBatchResult["answers"][string]> = {};

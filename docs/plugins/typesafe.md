@@ -183,6 +183,17 @@ for installation, model selection, and hardware requirements. OpenClaw does not
 download weights or start that process. An unavailable server produces an
 unavailable decision, without automatically switching to hosted Jev.
 
+For lower latency, batch independent questions over the same state in one call.
+Keep repeated evidence unchanged when possible so Kev can reuse its prefix
+cache. The tested Kev server serializes inference; more concurrent HTTP calls
+increase queueing time. Native decisions admit at most four concurrent requests
+per provider and return `overloaded` beyond that limit. This admission limit does
+not apply to the optional evaluation tool.
+
+Cancellation closes OpenClaw's HTTP request, but the Kev server may finish
+inference already in progress. Avoid immediately resubmitting canceled work;
+choose a deadline that allows for inference and queueing on your hardware.
+
 For local compatibility, omitted question instructions are sent as `null`.
 Structured Score rubric levels are encoded as text; returned legends must match
 that transmitted rubric before the original level descriptions are restored in

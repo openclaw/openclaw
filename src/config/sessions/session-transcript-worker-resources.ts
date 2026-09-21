@@ -34,6 +34,8 @@ import type {
   SessionTargetInventoryWorkerInput,
   SessionIdentityEvidenceWorkerInput,
   SessionMembersWorkerInput,
+  SessionPreviewWorkerInput,
+  SessionTitleFieldsWorkerInput,
   SessionRowPresenceWorkerInput,
   SessionTranscriptHistoryWorkerInput,
   SessionTranscriptWorkerReply,
@@ -44,6 +46,8 @@ import type {
 const workerUrl = resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.sessionTranscript);
 export const historyPages = new WorkerTaskPool<
   | SessionTranscriptHistoryWorkerInput
+  | SessionPreviewWorkerInput
+  | SessionTitleFieldsWorkerInput
   | SessionRowPresenceWorkerInput
   | SessionMembersWorkerInput
   | SessionEntryListWorkerInput
@@ -53,6 +57,8 @@ export const historyPages = new WorkerTaskPool<
   | SessionTranscriptSearchWorkerInput,
   SessionTranscriptWorkerReply<
     | "history-page"
+    | "session-preview"
+    | "session-title-fields"
     | "session-row-presence"
     | "session-members"
     | "session-entry-list"
@@ -360,6 +366,8 @@ export async function withSessionHistoryWorkerReadCandidates<T>(
           );
           const result = unwrapSessionTranscriptWorkerReply<
             | "history-page"
+            | "session-preview"
+            | "session-title-fields"
             | "session-row-presence"
             | "session-members"
             | "session-entry-list"

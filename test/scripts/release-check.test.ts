@@ -2,6 +2,7 @@
 import { createHash } from "node:crypto";
 import {
   copyFileSync,
+  existsSync,
   mkdtempSync,
   mkdirSync,
   readFileSync,
@@ -11,9 +12,9 @@ import {
 } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
-import { pathToFileURL } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { create } from "tar";
-import { describe, expect } from "vitest";
+import { describe, expect, vi } from "vitest";
 import { parse } from "yaml";
 import {
   collectRootPackageExcludedExtensionDirs,
@@ -22,6 +23,7 @@ import {
 import { collectRuntimeImportClosure } from "../../scripts/lib/runtime-import-closure.mts";
 import { resolveVitestNodeArgs } from "../../scripts/lib/vitest-process-env.mts";
 import {
+  checkPackedTargetBootstrap,
   createPackedTarballInstallArgs,
   prepareReleaseCheckLocalPackageTarballs,
   RELEASE_CHECK_LOCAL_PACKAGE_TARBALL_DIR_ENV,
@@ -30,9 +32,57 @@ import {
   writePackedTarballInstallManifest,
   writePackedBundledPluginActivationConfig,
 } from "../../scripts/release-check.ts";
-import { createCommandTest } from "../helpers/command-fixture.js";
+import { createCommandTest, type CommandFixture } from "../helpers/command-fixture.js";
 
 const it = createCommandTest();
+
+const legacyWorkerContract =
+  'export const WORKER_BUNDLE_ENTRY_PATH = "worker.mjs";\n' +
+  'export const WORKER_BUNDLE_RSYNC_RECEIVER_PATH = "workspace-rsync-receiver.mjs";\n';
+const launcherWorkerContract =
+  legacyWorkerContract +
+  'export const WORKER_BUNDLE_GITHUB_EXEC_LAUNCHER_PATH = "github-exec-launcher.mjs";\n';
+const currentWorkerContract =
+  'export const WORKER_BUNDLE_ARTIFACT_PATHS = ["github-exec-launcher.mjs", "service-child-group-anchor.mjs", "service-child-relay.mjs", "worker.mjs", "workspace-rsync-receiver.mjs"];\n';
+const legacyArtifacts = ["worker.mjs", "workspace-rsync-receiver.mjs"];
+const currentArtifacts = [
+  "github-exec-launcher.mjs",
+  "service-child-group-anchor.mjs",
+  "service-child-relay.mjs",
+  "worker.mjs",
+  "workspace-rsync-receiver.mjs",
+];
+
+function createPackedTargetFixture(command: CommandFixture) {
+  const root = command.createTempDir("openclaw-release-check-target-");
+  const packageJson = JSON.stringify({ name: "openclaw", version: "2026.9.1", files: ["dist"] });
+  const packedRoot = join(root, "package");
+  const packedFiles = {
+    "package.json": packageJson,
+    "dist/entry.js": 'import "./cli/run-main.js";',
+    "dist/cli/run-main.js": "export {};",
+    "dist/run-gateway.js": "const GATEWAY_AUTH_MODES = []; function addGatewayRunCommand() {}",
+  };
+  for (const [relativePath, source] of Object.entries(packedFiles)) {
+    const destination = join(packedRoot, relativePath);
+    mkdirSync(dirname(destination), { recursive: true });
+    writeFileSync(destination, source);
+  }
+  mkdirSync(join(root, "scripts/lib"), { recursive: true });
+  mkdirSync(join(root, "src/shared"), { recursive: true });
+  mkdirSync(join(root, "src/worker"), { recursive: true });
+  writeFileSync(join(root, "package.json"), packageJson);
+  writeFileSync(join(root, "src/worker/worker-deploy-entry.ts"), "export {};\n");
+  return { root, packedRoot, packedFiles };
+}
+
+function writeWorkerArtifacts(packedRoot: string, artifacts: string[]) {
+  const workerRoot = join(packedRoot, "dist/worker");
+  mkdirSync(workerRoot, { recursive: true });
+  for (const artifact of artifacts) {
+    writeFileSync(join(workerRoot, artifact), "export {};");
+  }
+}
 
 function requirePluginEntries(config: { plugins?: { entries?: Record<string, unknown> } }) {
   if (!config.plugins?.entries) {
@@ -72,10 +122,12 @@ describe("release-check", () => {
     );
   });
 
-  it("loads sparse release tooling and checks the target worker contract", async ({ command }) => {
+  it("loads sparse release tooling and rejects a tarball missing a target worker artifact", async ({
+    command,
+  }) => {
     const diagnostics = command.enableDiagnostics("release-check-target");
     await command.lifetime.run(async () => {
-      const root = command.createTempDir("openclaw-release-check-target-");
+      const { root, packedRoot } = createPackedTargetFixture(command);
       const toolingRoot = join(root, "tooling");
       const workflow = parse(readFileSync(".github/workflows/openclaw-npm-preflight.yml", "utf8"));
       const checkout = workflow.jobs.check_contents_npm.steps.find(
@@ -106,6 +158,8 @@ describe("release-check", () => {
           ? ["scripts/lib/plugin-sdk-private-local-only-subpaths.json"]
           : []),
       ]);
+      expect(requiredPaths.has("scripts/package-openclaw-for-docker.mts")).toBe(false);
+      expect(requiredPaths.has("scripts/openclaw-prepack.ts")).toBe(false);
       const sparsePaths = new Set(trackedPaths);
       expect(
         [...requiredPaths].filter((file) => !sparsePaths.has(file)),
@@ -120,14 +174,7 @@ describe("release-check", () => {
         copyFileSync(relativePath, destination);
       }
       symlinkSync(resolve("node_modules"), join(toolingRoot, "node_modules"), "junction");
-      mkdirSync(join(root, "scripts", "lib"), { recursive: true });
       mkdirSync(join(root, "extensions"));
-      const packageJson = JSON.stringify({
-        name: "openclaw",
-        version: "2026.9.1",
-        files: ["dist"],
-      });
-      writeFileSync(join(root, "package.json"), packageJson);
       mkdirSync(join(root, "scripts", "fixtures"), { recursive: true });
       writeFileSync(
         join(root, "scripts/fixtures/packed-plugin-sdk-type-smoke.ts"),
@@ -160,7 +207,8 @@ describe("release-check", () => {
             `console.log(JSON.stringify({\n` +
             `  execArgv: process.execArgv,\n` +
             `  fixture: readFileSync("consumer/src/index.ts", "utf8"),\n` +
-            `  setupConsumer: readFileSync("consumer/src/packed-plugin-sdk-setup-consumer.ts", "utf8")\n` +
+            `  setupConsumer: readFileSync("consumer/src/packed-plugin-sdk-setup-consumer.ts", "utf8"),\n` +
+            `  concurrentSparkplugDisabled: process.execArgv.includes("--no-concurrent-sparkplug")\n` +
             `}));`,
         ],
         {
@@ -186,42 +234,127 @@ describe("release-check", () => {
           join(toolingRoot, "scripts/fixtures/packed-plugin-sdk-setup-consumer.ts"),
           "utf8",
         ),
+        concurrentSparkplugDisabled: !process.versions.bun,
       });
 
       diagnostics.stage("packed-fixture-setup");
       copyFileSync("appcast.xml", join(root, "appcast.xml"));
-      mkdirSync(join(root, "src/shared"), { recursive: true });
-      mkdirSync(join(root, "src/worker"), { recursive: true });
-      writeFileSync(join(root, "src/worker/worker-deploy-entry.ts"), "export {};\n");
-      const packedRoot = join(root, "package");
-      const packedFiles = {
-        "package.json": packageJson,
-        "dist/entry.js": 'import "./cli/run-main.js";',
-        "dist/cli/run-main.js": "export {};",
-        "dist/run-gateway.js": "const GATEWAY_AUTH_MODES = []; function addGatewayRunCommand() {}",
-      };
-      for (const [relativePath, source] of Object.entries(packedFiles)) {
-        const destination = join(packedRoot, relativePath);
-        mkdirSync(dirname(destination), { recursive: true });
-        writeFileSync(destination, source);
-      }
+      writeFileSync(join(root, "src/shared/worker-bundle-hash.ts"), launcherWorkerContract);
+      writeWorkerArtifacts(packedRoot, legacyArtifacts);
       const tarball = join(root, "target.tgz");
-      const legacyWorkerContract =
-        'export const WORKER_BUNDLE_ENTRY_PATH = "worker.mjs";\n' +
-        'export const WORKER_BUNDLE_RSYNC_RECEIVER_PATH = "workspace-rsync-receiver.mjs";\n';
-      const launcherWorkerContract =
-        legacyWorkerContract +
-        'export const WORKER_BUNDLE_GITHUB_EXEC_LAUNCHER_PATH = "github-exec-launcher.mjs";\n';
-      const currentWorkerContract =
-        'export const WORKER_BUNDLE_ARTIFACT_PATHS = ["github-exec-launcher.mjs", "service-child-group-anchor.mjs", "service-child-relay.mjs", "worker.mjs", "workspace-rsync-receiver.mjs"];\n';
-      const legacyArtifacts = ["worker.mjs", "workspace-rsync-receiver.mjs"];
-      const currentArtifacts = [
-        "github-exec-launcher.mjs",
-        "service-child-group-anchor.mjs",
-        "service-child-relay.mjs",
-        "worker.mjs",
-        "workspace-rsync-receiver.mjs",
-      ];
+      create({ cwd: root, file: tarball, gzip: true, sync: true }, ["package"]);
+      diagnostics.stage("legacy three-file contract requires the launcher");
+      const result = await command.run(
+        process.execPath,
+        [...runtimeArgs, join(toolingRoot, "scripts/release-check.ts"), "--tarball", tarball],
+        { cwd: root, encoding: "utf8", env: fixtureEnv },
+      );
+      expect(result.error).toBeUndefined();
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain(
+        "Worker deploy artifact dist/worker/github-exec-launcher.mjs is missing.",
+      );
+      expect(result.stderr).not.toContain("Packing OpenClaw package");
+      diagnostics.stage("assertions-complete");
+    });
+  });
+
+  it("packs an isolated bundled source through the canonical owner before inspecting it", async ({
+    command,
+  }) => {
+    await command.lifetime.run(async () => {
+      const { root, packedFiles } = createPackedTargetFixture(command);
+      const packageJson = JSON.stringify({
+        name: "openclaw",
+        version: "2026.9.1",
+        packageManager: JSON.parse(readFileSync("package.json", "utf8")).packageManager,
+        files: ["dist"],
+        dependencies: { "fixture-runtime": "1.0.0" },
+        bundleDependencies: ["fixture-runtime"],
+        scripts: {
+          "update:compat:check":
+            "node -e \"require('node:fs').writeFileSync('compat-checked', 'yes')\"",
+        },
+      });
+      for (const [relativePath, contents] of Object.entries({
+        ...packedFiles,
+        "dist/index.js": "export {};",
+        "dist/control-ui/index.html": "<html></html>",
+        "dist/control-ui/assets/app.js.br": "prepared Brotli fixture",
+      })) {
+        if (relativePath === "package.json") {
+          continue;
+        }
+        const destination = join(root, relativePath);
+        mkdirSync(dirname(destination), { recursive: true });
+        writeFileSync(destination, contents);
+      }
+      writeFileSync(join(root, "package.json"), packageJson);
+      // Match the prepared source: scripts must not reconcile its existing install.
+      expect(parse(readFileSync("pnpm-workspace.yaml", "utf8"))).toMatchObject({
+        nodeLinker: "isolated",
+        verifyDepsBeforeRun: false,
+      });
+      writeFileSync(
+        join(root, "pnpm-workspace.yaml"),
+        "nodeLinker: isolated\nverifyDepsBeforeRun: false\n",
+      );
+      const changelog =
+        "# Changelog\n\n## 2026.9.1\n\n- Preserve the prepared bundled runtime package and source files.\n";
+      writeFileSync(join(root, "CHANGELOG.md"), changelog);
+      copyFileSync("appcast.xml", join(root, "appcast.xml"));
+      mkdirSync(join(root, "extensions"));
+      mkdirSync(join(root, "node_modules/fixture-runtime"), { recursive: true });
+      writeFileSync(
+        join(root, "node_modules/fixture-runtime/package.json"),
+        JSON.stringify({ name: "fixture-runtime", version: "1.0.0" }),
+      );
+      symlinkSync(
+        dirname(fileURLToPath(import.meta.resolve("tsx/package.json"))),
+        join(root, "node_modules/tsx"),
+        "junction",
+      );
+      const inventoryUrl = pathToFileURL(resolve("scripts/lib/package-dist-inventory.ts")).href;
+      writeFileSync(
+        join(root, "scripts/write-package-dist-inventory.ts"),
+        `import(${JSON.stringify(inventoryUrl)}).then(({ writePackageDistInventoryForPublish }) => writePackageDistInventoryForPublish(process.cwd()));\n`,
+      );
+      writeFileSync(join(root, "src/shared/worker-bundle-hash.ts"), launcherWorkerContract);
+      writeWorkerArtifacts(root, legacyArtifacts);
+      const runtimeArgs = process.versions.bun
+        ? []
+        : [...resolveVitestNodeArgs(), "--import", resolve("scripts/tsx.mjs")];
+      const runReleaseCheck = () =>
+        command.run(process.execPath, [...runtimeArgs, resolve("scripts/release-check.ts")], {
+          cwd: root,
+          env: { ...process.env, TSX_TSCONFIG_PATH: resolve("tsconfig.json") },
+        });
+      const unprepared = await runReleaseCheck();
+      expect(unprepared.error).toBeUndefined();
+      expect(unprepared.status).toBe(1);
+      expect(unprepared.stderr).toContain("missing prepared Control UI .gz asset");
+      expect(unprepared.stderr).not.toContain("Packing OpenClaw package");
+
+      writeFileSync(join(root, "dist/control-ui/assets/app.js.gz"), "prepared gzip fixture");
+      const result = await runReleaseCheck();
+      expect(result.error).toBeUndefined();
+      expect(result.status).toBe(1);
+      expect(result.stderr).toContain("Packing OpenClaw package");
+      expect(result.stderr).toContain(
+        "Worker deploy artifact dist/worker/github-exec-launcher.mjs is missing.",
+      );
+      expect(result.stderr).not.toContain("ERR_PNPM_BUNDLED_DEPENDENCIES_WITHOUT_HOISTED");
+      expect(readFileSync(join(root, "compat-checked"), "utf8")).toBe("yes");
+      expect(readFileSync(join(root, "package.json"), "utf8")).toBe(packageJson);
+      expect(readFileSync(join(root, "CHANGELOG.md"), "utf8")).toBe(changelog);
+      expect(existsSync(join(root, "dist/postinstall-inventory.json"))).toBe(true);
+    });
+  });
+
+  it("checks target worker and gateway contracts against prepared output", async ({ command }) => {
+    const diagnostics = command.enableDiagnostics("release-check-contracts");
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
       const cases = [
         {
           name: "legacy two-file worker contract",
@@ -229,7 +362,7 @@ describe("release-check", () => {
           artifacts: legacyArtifacts,
           declaresLocator: false,
           includesLocator: false,
-          expected: "release-check: packed dist/plugin-sdk directory not found.",
+          expected: undefined,
         },
         {
           name: "current array overrides obsolete individual paths",
@@ -239,7 +372,7 @@ describe("release-check", () => {
           artifacts: currentArtifacts,
           declaresLocator: false,
           includesLocator: false,
-          expected: "release-check: packed dist/plugin-sdk directory not found.",
+          expected: undefined,
         },
         {
           name: "legacy three-file contract requires the launcher",
@@ -255,7 +388,7 @@ describe("release-check", () => {
           artifacts: ["github-exec-launcher.mjs", ...legacyArtifacts],
           declaresLocator: false,
           includesLocator: false,
-          expected: "release-check: packed dist/plugin-sdk directory not found.",
+          expected: undefined,
         },
         ...["service-child-group-anchor.mjs", "service-child-relay.mjs"].map((missingArtifact) => ({
           name: `current array requires ${missingArtifact}`,
@@ -279,7 +412,7 @@ describe("release-check", () => {
           artifacts: legacyArtifacts,
           declaresLocator: true,
           includesLocator: true,
-          expected: "release-check: packed dist/plugin-sdk directory not found.",
+          expected: undefined,
         },
       ];
       for (const {
@@ -291,17 +424,15 @@ describe("release-check", () => {
         expected,
       } of cases) {
         diagnostics.stage(name);
-        const packedWorkerRoot = join(packedRoot, "dist/worker");
-        rmSync(packedWorkerRoot, { recursive: true, force: true });
-        mkdirSync(packedWorkerRoot);
-        for (const artifact of artifacts) {
-          writeFileSync(join(packedWorkerRoot, artifact), "export {};");
-        }
-        const locatorSource = join(root, "scripts/lib/gateway-run-chunk-metadata.mts");
+        // Separate targets keep module caches from reusing another frozen release's declarations.
+        const { root, packedRoot, packedFiles } = createPackedTargetFixture(command);
+        writeWorkerArtifacts(packedRoot, artifacts);
+        writeFileSync(join(root, "src/shared/worker-bundle-hash.ts"), workerContract);
         if (declaresLocator) {
-          writeFileSync(locatorSource, "export const GATEWAY_RUN_CHUNK_METADATA_VERSION = 1;");
-        } else {
-          rmSync(locatorSource, { force: true });
+          writeFileSync(
+            join(root, "scripts/lib/gateway-run-chunk-metadata.mts"),
+            "export const GATEWAY_RUN_CHUNK_METADATA_VERSION = 1;",
+          );
         }
         if (includesLocator) {
           writeFileSync(
@@ -318,26 +449,16 @@ describe("release-check", () => {
               ],
             }),
           );
-        } else {
-          rmSync(join(packedRoot, "dist/cli/gateway-run-chunk.json"), { force: true });
         }
-        create({ cwd: root, file: tarball, gzip: true, sync: true }, ["package"]);
-        writeFileSync(join(root, "src/shared/worker-bundle-hash.ts"), workerContract);
-        const result = await command.run(
-          process.execPath,
-          [...runtimeArgs, join(toolingRoot, "scripts/release-check.ts"), "--tarball", tarball],
-          {
-            cwd: root,
-            encoding: "utf8",
-            env: fixtureEnv,
-          },
-        );
-        expect(result.error, name).toBeUndefined();
-        expect(result.status, name).toBe(1);
-        // Valid target-specific artifacts reach the SDK check; this fixture omits SDK output.
-        expect(result.stderr, name).toContain(expected);
+        errors.mockClear();
+        if (expected) {
+          await expect(checkPackedTargetBootstrap(root, packedRoot), name).rejects.toThrow();
+          expect(errors.mock.calls.flat().join("\n"), name).toContain(expected);
+        } else {
+          await expect(checkPackedTargetBootstrap(root, packedRoot), name).resolves.toBeUndefined();
+          expect(errors, name).not.toHaveBeenCalled();
+        }
       }
-
       const invalidContracts = [
         {
           source: 'export const WORKER_BUNDLE_ENTRY_PATH = "";\n',
@@ -372,54 +493,28 @@ describe("release-check", () => {
       ];
       for (const [index, { source, expected }] of invalidContracts.entries()) {
         diagnostics.stage(`invalid-worker-contract-${index}`);
+        const { root, packedRoot } = createPackedTargetFixture(command);
         writeFileSync(join(root, "src/shared/worker-bundle-hash.ts"), source);
-        const result = await command.run(
-          process.execPath,
-          [...runtimeArgs, join(toolingRoot, "scripts/release-check.ts"), "--tarball", tarball],
-          {
-            cwd: root,
-            encoding: "utf8",
-            env: fixtureEnv,
-          },
+        await expect(checkPackedTargetBootstrap(root, packedRoot), source).rejects.toThrow(
+          expected,
         );
-        expect(result.error, "invalid worker contract").toBeUndefined();
-        expect(result.status, source).toBe(1);
-        expect(result.stderr, source).toContain(expected);
       }
 
-      // Shared worker helpers predate the deploy producer and cannot define the
-      // package contract for those historical frozen targets.
+      // Shared hash helpers alone do not impose a worker contract on historical targets.
       diagnostics.stage("target-without-worker-producer");
+      const { root, packedRoot } = createPackedTargetFixture(command);
       writeFileSync(
         join(root, "src/shared/worker-bundle-hash.ts"),
         "export const WORKER_BUNDLE_ARTIFACT_PATHS = [];\n",
       );
       rmSync(join(root, "src/worker/worker-deploy-entry.ts"));
-      rmSync(join(packedRoot, "dist/worker"), { recursive: true, force: true });
-      const noWorkerTarball = join(root, "target-without-workers.tgz");
-      create({ cwd: root, file: noWorkerTarball, gzip: true, sync: true }, ["package"]);
-      const noWorkerResult = await command.run(
-        process.execPath,
-        [
-          ...runtimeArgs,
-          join(toolingRoot, "scripts/release-check.ts"),
-          "--tarball",
-          noWorkerTarball,
-        ],
-        {
-          cwd: root,
-          encoding: "utf8",
-          env: fixtureEnv,
-        },
-      );
-      expect(noWorkerResult.error, "target without a worker producer").toBeUndefined();
-      expect(noWorkerResult.status).toBe(1);
-      expect(noWorkerResult.stderr).toContain(
-        "release-check: packed dist/plugin-sdk directory not found.",
-      );
-      expect(noWorkerResult.stderr).not.toContain("Worker deploy artifact");
+      errors.mockClear();
+      await expect(checkPackedTargetBootstrap(root, packedRoot)).resolves.toBeUndefined();
+      expect(errors).not.toHaveBeenCalled();
       diagnostics.stage("assertions-complete");
-    });
+    } finally {
+      errors.mockRestore();
+    }
   });
 
   it("installs the prepared tarball with its real package lifecycle", () => {

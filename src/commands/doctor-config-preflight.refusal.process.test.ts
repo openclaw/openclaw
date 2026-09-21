@@ -5,6 +5,7 @@ import { DatabaseSync } from "node:sqlite";
 import { afterAll, describe, expect, it } from "vitest";
 import { createFixtureLifetime } from "../../test/helpers/fixture-lifetime.js";
 import { getCliProcessTestTimeout } from "../cli/cli-process-child.test-helpers.js";
+import { disableUpdatedPackageCompileCacheEnv } from "../cli/update-cli/update-command-service-env.js";
 import {
   createUpdatePostInstallDoctorResultPath,
   consumeUpdatePostInstallDoctorResult,
@@ -493,9 +494,10 @@ it.each([
           managedRoot = fs.realpathSync(previous);
         }
         const resultPath = createUpdatePostInstallDoctorResultPath();
+        // The shipped updater disables compile caching before both child handoffs.
         const result = await runBuiltRuntime(
           runtimeRoot,
-          {
+          disableUpdatedPackageCompileCacheEnv({
             ...process.env,
             OPENCLAW_DEBUG_PROXY_ENABLED: "1",
             [UPDATE_POST_INSTALL_DOCTOR_RESULT_PATH_ENV]: resultPath,
@@ -503,7 +505,7 @@ it.each([
             VITEST: undefined,
             VITEST_POOL_ID: undefined,
             VITEST_WORKER_ID: undefined,
-          },
+          }),
           ["doctor", "--fix", "--non-interactive", "--no-workspace-suggestions"],
           DOCTOR_CHILD_TIMEOUT_MS,
         );
@@ -593,7 +595,7 @@ it.each([
         const resume = () =>
           runBuiltRuntime(
             runtimeRoot,
-            {
+            disableUpdatedPackageCompileCacheEnv({
               ...process.env,
               OPENCLAW_UPDATE_POST_CORE: "1",
               OPENCLAW_UPDATE_RUN_HANDOFF: managed ? "1" : undefined,
@@ -609,7 +611,7 @@ it.each([
               VITEST: undefined,
               VITEST_POOL_ID: undefined,
               VITEST_WORKER_ID: undefined,
-            },
+            }),
             ["update", "--json", "--yes", "--no-restart"],
             DOCTOR_CHILD_TIMEOUT_MS,
           );

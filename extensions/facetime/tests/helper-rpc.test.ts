@@ -795,7 +795,9 @@ describe("FaceTime helper RPC", () => {
       logger: console,
       ipcKey: TEST_HELPER_AUTH_TOKEN,
       buildId: TEST_HELPER_BUILD_ID,
-      onMessage: (message) => events.push(message),
+      onMessage: (message) => {
+        events.push(message);
+      },
     });
     await helper.start();
     client = net.createConnection({ host: "127.0.0.1", port });

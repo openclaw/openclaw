@@ -28,7 +28,9 @@ import {
 } from "../../routing/session-key.js";
 import { hasOperatorBoundary } from "../operator-role-policy.js";
 import { resolveRequestedSessionAgentId as resolveRequestedGlobalAgentId } from "../session-request-agent.js";
+import type { SessionRowReadView } from "../session-row-prepared-read.js";
 import { getSessionRowProjection } from "../session-row-projection-access.js";
+import type { MaterializedRow } from "../session-row-projection-record.js";
 import {
   canAccessIncognitoSession,
   createSessionListEntryFilter,
@@ -37,12 +39,10 @@ import {
   resolveSessionSharingTarget,
 } from "../session-sharing.js";
 import { resolveSessionStoreAgentId } from "../session-store-key.js";
-import { readSessionPreviewItemsFromTranscript } from "../session-transcript-preview.js";
+import { readSessionPreviewItemsFromTranscriptAsync } from "../session-transcript-preview.js";
 import type { GatewaySessionStoreDiscoveryCache } from "../session-utils-store-lookup.js";
 import {
   listProjectedSessions,
-  resolveCanonicalSessionEntryFromStoreKeys,
-  resolveGatewaySessionStoreTargetWithStore,
   type SessionsPreviewEntry,
   type SessionsPreviewResult,
 } from "../session-utils.js";
@@ -282,58 +282,125 @@ export const sessionReadHandlers: GatewayRequestHandlers = {
       return;
     }
 
-    const cfg = context.getRuntimeConfig();
-    const roleVisibilityFilter = hasOperatorBoundary(client, cfg)
-      ? createSessionListEntryFilter({ client, cfg })
-      : undefined;
+    const projection = getSessionRowProjection(context);
+    if (!projection) {
+      throw new Error("Session projection is unavailable before Gateway startup completes");
+    }
+    const withPreviewRows = async <T>(
+      requestedKeys: readonly string[],
+      consume: (read: SessionRowReadView) => T,
+    ): Promise<T> => {
+      while (true) {
+        const prepared = await projection.withPreparedExactRows(
+          (cfg) =>
+            requestedKeys.flatMap((key) => {
+              const agent = resolveRequestedGlobalAgentId(cfg, key);
+              return agent.ok ? [{ key, agentId: agent.agentId }] : [];
+            }),
+          consume,
+        );
+        if (prepared.kind === "complete") {
+          return prepared.value;
+        }
+        const { certifySessionCanonicalValidationPending } =
+          await import("../../config/sessions/session-canonical-validation-readiness.js");
+        await certifySessionCanonicalValidationPending(prepared.database);
+      }
+    };
     const previews: SessionsPreviewEntry[] = [];
+    const buffered: Array<{
+      preview: SessionsPreviewEntry;
+      record: MaterializedRow;
+      generation: MaterializedRow["generation"];
+      sessionId: string;
+      lifecycleRevision?: string;
+    }> = [];
 
     for (const key of keys) {
       if (previews.length > 0) {
         await yieldToEventLoop();
       }
-      const requestedAgent = resolveRequestedGlobalAgentId(cfg, key);
+      const requestedAgent = resolveRequestedGlobalAgentId(context.getRuntimeConfig(), key);
       if (!requestedAgent.ok) {
         respond(false, undefined, requestedAgent.error);
         return;
       }
+      const preview: SessionsPreviewEntry = { key, status: "missing", items: [] };
+      previews.push(preview);
       try {
-        // Each preview resumes after a yield; read its canonical row from the current store.
-        const target = resolveGatewaySessionStoreTargetWithStore({
-          cfg,
-          key,
-          agentId: requestedAgent.agentId,
-          exactRead: true,
-          readOnly: true,
-          projection: "list",
+        const record = await withPreviewRows([key], (read) => {
+          const cfg = context.getRuntimeConfig();
+          const currentAgent = resolveRequestedGlobalAgentId(cfg, key);
+          if (!currentAgent.ok) {
+            return undefined;
+          }
+          const current = read.describe({ key, agentId: currentAgent.agentId });
+          const visibilityFilter = hasOperatorBoundary(client, cfg)
+            ? createSessionListEntryFilter({ client, cfg })
+            : undefined;
+          return current?.entry.sessionId &&
+            visibilityFilter?.(current.key, current.entry) !== false
+            ? current
+            : undefined;
         });
-        const entry = resolveCanonicalSessionEntryFromStoreKeys(target.store, target.storeKeys);
-        if (!entry?.sessionId || roleVisibilityFilter?.(target.canonicalKey, entry) === false) {
-          previews.push({ key, status: "missing", items: [] });
+        if (!record) {
           continue;
         }
-        const items = readSessionPreviewItemsFromTranscript(
+        buffered.push({
+          preview,
+          record,
+          generation: record.generation,
+          sessionId: record.entry.sessionId,
+          lifecycleRevision: record.entry.lifecycleRevision,
+        });
+        preview.items = await readSessionPreviewItemsFromTranscriptAsync(
           {
-            agentId: target.agentId,
-            sessionEntry: entry,
-            sessionId: entry.sessionId,
-            sessionKey: target.canonicalKey,
-            storePath: target.storePath,
+            agentId: record.agentId,
+            sessionEntry: record.entry,
+            sessionId: record.entry.sessionId,
+            sessionKey: record.key,
+            storePath: record.storeTarget.storePath,
           },
           limit,
           maxChars,
         );
-        previews.push({ key, status: items.length > 0 ? "ok" : "empty", items });
+        preview.status = preview.items.length > 0 ? "ok" : "empty";
       } catch (error) {
-        previews.push({
-          key,
-          status: error instanceof SessionTranscriptColdError ? "cold" : "error",
-          items: [],
-        });
+        preview.status = error instanceof SessionTranscriptColdError ? "cold" : "error";
       }
     }
 
-    respond(true, { ts: Date.now(), previews } satisfies SessionsPreviewResult, undefined);
+    // Later keys yield after earlier previews are buffered. Reauthorize the exact
+    // incarnations together, without another await before publishing their content.
+    await withPreviewRows(
+      buffered.map(({ preview }) => preview.key),
+      (read) => {
+        const cfg = context.getRuntimeConfig();
+        const visibilityFilter = hasOperatorBoundary(client, cfg)
+          ? createSessionListEntryFilter({ client, cfg })
+          : undefined;
+        for (const previous of buffered) {
+          const agent = resolveRequestedGlobalAgentId(cfg, previous.preview.key);
+          const current = agent.ok
+            ? read.describe({ key: previous.preview.key, agentId: agent.agentId }, previous.record)
+            : undefined;
+          if (
+            !current ||
+            current.agentId !== previous.record.agentId ||
+            current.key !== previous.record.key ||
+            current.storeTarget.storePath !== previous.record.storeTarget.storePath ||
+            current.generation !== previous.generation ||
+            current.entry.sessionId !== previous.sessionId ||
+            current.entry.lifecycleRevision !== previous.lifecycleRevision ||
+            visibilityFilter?.(current.key, current.entry) === false
+          ) {
+            previous.preview.status = "missing";
+            previous.preview.items = [];
+          }
+        }
+        respond(true, { ts: Date.now(), previews } satisfies SessionsPreviewResult, undefined);
+      },
+    );
   },
   "sessions.resolve": ({ params, respond, context, client }) => {
     if (!assertValidParams(params, validateSessionsResolveParams, "sessions.resolve", respond)) {

@@ -5,7 +5,12 @@ import { parseInput, parseResult } from "./schema.js";
 import { requestEvaluation } from "./transport.js";
 
 /** Evaluate explicit state without ambient credentials, retries, or vendor diagnostics. */
-export async function evaluate(input: unknown, config: RuntimeConfig, signal?: AbortSignal) {
+export async function evaluate(
+  input: unknown,
+  config: RuntimeConfig,
+  signal?: AbortSignal,
+  deadlineMonotonicMs?: number,
+) {
   if (signal?.aborted) {
     throw evaluationError(undefined, true);
   }
@@ -28,6 +33,7 @@ export async function evaluate(input: unknown, config: RuntimeConfig, signal?: A
       baseUrl: config.baseUrl,
       timeoutMs: config.timeoutMs,
       signal,
+      deadlineMonotonicMs,
     });
     signal?.throwIfAborted();
     const evaluation = config.baseUrl

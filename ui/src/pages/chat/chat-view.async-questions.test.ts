@@ -118,3 +118,43 @@ it("selects a reopened historical question ahead of another pending request with
     "New contributors",
   );
 });
+
+it("refreshes a mounted question summary when a canonical answer appears or is replaced", () => {
+  installTranscriptDomMocks();
+  document.body.append(container);
+  const question = {
+    role: "assistant",
+    content: "Which audience?",
+    __openclaw: { id: "audience-question", seq: 1 },
+    openclawAsyncDelivery: {
+      itemId: "audience",
+      questions: [{ title: "Which audience?", options: ["Engineers", "Everyone"] }],
+    },
+  };
+  const answer = {
+    role: "user",
+    content: "> Which audience?\n\nEveryone",
+    __openclaw: { id: "audience-answer", seq: 2 },
+  };
+  const props = createChatProps({
+    sessionKey: "agent:main:main",
+    messages: [question],
+    onAsyncQuestionSubmit: vi.fn(async () => true),
+  });
+  const draw = () => render(renderChat(props), container);
+  const summary = () => container.querySelector(".chat-question-summary")?.textContent;
+  draw();
+  expect(summary()).toContain("Answer above");
+  props.messages = [question, answer];
+  draw();
+  expect(summary()).toContain("Everyone");
+  expect(summary()).not.toContain("Answer above");
+  props.messages = [question, { ...answer, content: "> Which audience?\n\nEngineers" }];
+  draw();
+  expect(summary()).toContain("Engineers");
+  expect(summary()).not.toContain("Everyone");
+  props.messages = [question];
+  draw();
+  expect(summary()).toContain("Answer above");
+  expect(summary()).not.toContain("Engineers");
+});
