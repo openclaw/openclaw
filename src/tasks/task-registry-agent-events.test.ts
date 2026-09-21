@@ -24,6 +24,7 @@ import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { holdStateDatabaseCoordinator as holdCoordinator } from "../test-utils/state-database-contention.js";
 import { createTaskFlowForTask, readResidentTaskFlow } from "./task-flow-registry.js";
 import { getTaskFlowRegistryStore } from "./task-flow-registry.store.js";
+import { captureTaskDeliveryWork } from "./task-registry-delivery.test-support.js";
 import { captureTaskRegistryReadFence } from "./task-registry-listener-state.js";
 import { updateTask } from "./task-registry-mutation.js";
 import { publishTaskRecordAfterAtomicStore } from "./task-registry-publication.js";
@@ -105,6 +106,7 @@ describe("task agent event persistence", () => {
           notifyPolicy: phase === "start" ? "state_changes" : "done_only",
           deliveryStatus: "pending",
         });
+        using deliveries = captureTaskDeliveryWork();
         const failure = new Error("Synthetic enclosing transaction rollback");
         let observerReplaced = false;
         const stop = onTaskRegistryChange(() => {
@@ -148,6 +150,7 @@ describe("task agent event persistence", () => {
           transactionError = error;
         }
         try {
+          await deliveries.settle();
           await joinEvents();
         } finally {
           stop();

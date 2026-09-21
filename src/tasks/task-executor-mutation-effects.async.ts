@@ -1,7 +1,9 @@
 import { isSqliteWorkerError } from "../infra/sqlite-worker-contract.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
+import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
-import type { getTaskFlowRegistryStore } from "./task-flow-registry.store.js";
+import type { TaskMutationContext } from "./task-executor.types.js";
+import { getTaskFlowRegistryStore } from "./task-flow-registry.store.js";
 import {
   ensureTaskFlowRegistryReadyAsync,
   runTaskFlowRegistryWorkerMutation,
@@ -12,11 +14,28 @@ import {
   syncFlowFromTaskAfterTaskMutationAsync,
   tasks,
 } from "./task-registry-state.js";
-import type { TaskRegistryStore } from "./task-registry.store.js";
+import { getTaskRegistryStore, type TaskRegistryStore } from "./task-registry.store.js";
 import type { TaskRecord } from "./task-registry.types.js";
 
 const log = createSubsystemLogger("tasks/executor");
 type FlowStore = ReturnType<typeof getTaskFlowRegistryStore>;
+
+export function captureTaskMutationContext(): TaskMutationContext {
+  const context = captureOpenClawStateWorkerContext();
+  const store = getTaskRegistryStore();
+  const flowStore = getTaskFlowRegistryStore();
+  return {
+    context,
+    store,
+    flowStore,
+    assertStores() {
+      context.admission.assertCurrent();
+      if (getTaskRegistryStore() !== store || getTaskFlowRegistryStore() !== flowStore) {
+        throw new Error("Task mutation lost its selected registry owners");
+      }
+    },
+  };
+}
 
 /** Report unfinished effects without discarding their existing repair or failure handling. */
 export async function finishTaskMutation(

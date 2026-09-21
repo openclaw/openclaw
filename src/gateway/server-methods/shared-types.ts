@@ -166,6 +166,8 @@ export type GatewaySystemAgentSession = {
     dispose: () => Promise<void>;
   };
   welcome: string;
+  /** Recorded with the welcome; external-edit notices and setup are not optional. */
+  optionalWelcome?: boolean;
   /** Passive creation entry, retained so reconnects do not append duplicate history. */
   newAgentWelcome?: string;
   welcomeQuestion?: SystemAgentChatQuestion;

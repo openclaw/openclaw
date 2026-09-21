@@ -1,6 +1,8 @@
 import { projectAgentToolActivity } from "../../infra/agent-activity-events.js";
 import { emitAgentEvent } from "../../infra/agent-events.js";
 import { emitTrustedDiagnosticEvent } from "../../infra/diagnostic-events.js";
+import { projectProgressCardChannelUpdate } from "../../session-cards/progress-card-channel-summary.js";
+import { isAgentPlanProgressToolName } from "../../session-cards/progress-card-input.js";
 import type {
   CliCompactionDelta,
   CliStreamingDelta,
@@ -42,7 +44,7 @@ export function createCliEventHandlers(params: {
   const toolSummaryById = new Map<string, { name: string; failed: boolean }>();
   // CLI results report an outcome without repeating the request, so the terminal
   // progress event would otherwise describe the output instead of the command.
-  const toolArgsByCallId = new Map<string, Record<string, unknown>>();
+  const toolArgsByCallId = new Map<string, { args: Record<string, unknown>; tracked: boolean }>();
   const emitToolEvent = (
     data: Parameters<typeof projectAgentToolActivity>[0] & {
       result?: unknown;
@@ -96,9 +98,8 @@ export function createCliEventHandlers(params: {
   });
   const emitToolUseStart = (event: CliToolUseStartDelta, tracked: boolean) => {
     observedCliActivity = true;
-    if (event.args && Object.keys(event.args).length > 0) {
-      toolArgsByCallId.set(event.toolCallId, event.args);
-    }
+    // Empty arguments are meaningful: progress-card calls use {} to clear the card.
+    toolArgsByCallId.set(event.toolCallId, { args: event.args, tracked });
     recordToolSummary(event, false);
     if (!signaledToolExecutionStarted) {
       signaledToolExecutionStarted = true;
@@ -124,13 +125,38 @@ export function createCliEventHandlers(params: {
   const emitToolResult = (event: CliToolResult, tracked: boolean) => {
     observedCliActivity = true;
     recordToolSummary(event, event.isError);
+    const loopbackOutcome = tracked
+      ? params.toolTracking.resolveCliLoopbackTerminalOutcome(event.toolCallId)
+      : undefined;
     const executedArgs = tracked ? params.toolTracking.handleCliToolResult(event) : undefined;
     if (emitLiveEvents) {
+      const strippedName = stripOpenClawMcpToolPrefix(event.name);
       const resultContentSource = tracked
-        ? context.resultContentSourceByToolName?.get(stripOpenClawMcpToolPrefix(event.name))
+        ? context.resultContentSourceByToolName?.get(strippedName)
         : undefined;
-      const startedArgs = toolArgsByCallId.get(event.toolCallId);
+      const startedCall = toolArgsByCallId.get(event.toolCallId);
+      const startedArgs = startedCall?.args;
       toolArgsByCallId.delete(event.toolCallId);
+      const planUpdate =
+        tracked &&
+        startedCall?.tracked &&
+        !event.isError &&
+        (!loopbackOutcome || loopbackOutcome.outcome === "completed") &&
+        isAgentPlanProgressToolName(strippedName)
+          ? projectProgressCardChannelUpdate(executedArgs ?? startedArgs)
+          : undefined;
+      if (planUpdate) {
+        emitAgentEvent({
+          runId: runParams.runId,
+          stream: "plan",
+          data: {
+            phase: "update",
+            title: "Plan updated",
+            source: "openclaw",
+            ...planUpdate,
+          },
+        });
+      }
       emitToolEvent(
         {
           phase: "result",

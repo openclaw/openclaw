@@ -370,6 +370,7 @@ function registerEventHandlers(
       fireAndForget,
       channelRuntime,
       autoJoin: context.vcAutoJoin,
+      abortSignal: context.abortSignal,
       isAccountActive: context.isAccountActive,
       trackTask: context.trackTask,
     }),
@@ -539,7 +540,10 @@ export async function monitorSingleAccount(params: MonitorSingleAccountParams): 
   }
 
   let threadBindingManager: ReturnType<typeof createFeishuThreadBindingManager> | null | undefined;
-  let stopped = false;
+  const accountStopped = new AbortController();
+  const accountAbortSignal = abortSignal
+    ? AbortSignal.any([abortSignal, accountStopped.signal])
+    : accountStopped.signal;
   const pendingTasks = new Set<Promise<void>>();
   const trackTask = (task: Promise<void>) => {
     pendingTasks.add(task);
@@ -579,10 +583,10 @@ export async function monitorSingleAccount(params: MonitorSingleAccountParams): 
       runtime,
       chatHistories,
       fireAndForget: params.fireAndForget ?? true,
-      isAccountActive: () => !stopped && !abortSignal?.aborted,
+      isAccountActive: () => !accountAbortSignal.aborted,
       trackTask,
       vcAutoJoin: account.config.vcAutoJoin === true,
-      abortSignal,
+      abortSignal: accountAbortSignal,
       ...(durableIngress ? { resolveIngressLifecycle: durableIngress.resolveLifecycle } : {}),
       ...(params.statusSink ? { statusSink: params.statusSink } : {}),
     });
@@ -610,7 +614,7 @@ export async function monitorSingleAccount(params: MonitorSingleAccountParams): 
         ...(params.statusSink ? { statusSink: params.statusSink } : {}),
       });
     } finally {
-      stopped = true;
+      accountStopped.abort(new Error("Feishu account stopped"));
       try {
         await durableIngress?.stop();
       } finally {

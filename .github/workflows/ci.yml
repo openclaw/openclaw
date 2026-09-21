@@ -83,7 +83,7 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
   IOS_SCREENSHOT_FASTLANE_VERSION: "2.239.0"
   IOS_SCREENSHOT_NODE_VERSION: "24.16.0"
-  IOS_SCREENSHOT_XCODE_VERSION: "Xcode 26.6 Build version 17F113"
+  IOS_SCREENSHOT_XCODE_VERSION: "Xcode 27.0 Build version 27A266a"
   NODE_VERSION: "24.19.0"
 
 jobs:
@@ -691,6 +691,7 @@ jobs:
               action = ".github/actions/setup-node-env/action.yml"
               node_setup_scripts = ("scripts/lib/pnpm-lockfile-documents.mjs",)
               evidence_scripts = ("scripts/ios-screenshot-evidence.mjs", "scripts/lib/direct-run.mjs")
+              platform_scripts = ("scripts/lib/swift-toolchain.sh",)
               upgrade_scripts = ("scripts/lib/release-upgrade-baseline.mjs", "scripts/lib/release-version.mjs")
               if kind == "linux-node" and not os.path.isfile(os.path.join(workspace, action)):
                   raise GitFailure(1)
@@ -712,6 +713,8 @@ jobs:
                       pathspecs += evidence_scripts
                   elif kind == "preflight":
                       pathspecs += ["scripts/lib/release-context.mjs", "scripts/lib/release-version.mjs"]
+                  if kind == "platform":
+                      pathspecs += platform_scripts
                   if kind == "linux-node":
                       pathspecs += upgrade_scripts
                   paths = git_output(workspace, "ls-files", "-z", "--", *pathspecs).split("\0")[:-1]
@@ -722,6 +725,8 @@ jobs:
                   sparse_paths = ["/.github/actions/", *(f"/{path}" for path in node_setup_scripts)]
                   if kind in ("platform", "linux-node"):
                       sparse_paths += [f"/{path}" for path in evidence_scripts]
+                  if kind == "platform":
+                      sparse_paths += [f"/{path}" for path in platform_scripts]
                   if kind == "linux-node":
                       sparse_paths += [f"/{path}" for path in upgrade_scripts]
                   # Rooted non-cone patterns keep the kind-owned workflow files exact.
@@ -1670,6 +1675,7 @@ jobs:
             }
             changedNodeTestShards = changedNodeTestPlan.createChangedNodeTestShards(changedPaths, {
               runnerBackend: runnerProfile,
+              onFallback: (reason) => console.log(`Node test plan broad fallback: ${reason}`),
               dedicatedContractShards: [...pluginContractShards, ...channelContractShards],
               dedicatedUiE2e: runUiE2e && !compatibilityTarget,
               dedicatedMaxLinesRatchet: checksFastCoreTasks.some(({ task }) => task === "baseline-ratchets"),
@@ -1677,6 +1683,8 @@ jobs:
             if (changedNodeTestShards === null) {
               changedExtensionFallbackShards =
                 changedNodeTestPlan.createChangedExtensionFallbackShards(changedPaths);
+            } else {
+              console.log(`Node test plan changed-set: ${changedNodeTestShards.filter((shard) => !shard.requiresDist).length} rows`);
             }
           }
           // Heavy packaging lanes run only when the diff touches surfaces they
@@ -3087,6 +3095,7 @@ jobs:
             ui/src/e2e/provider-browser-login.real-gateway.e2e.test.ts \
             ui/src/e2e/device-alias-rename.real-gateway.e2e.test.ts \
             ui/src/e2e/device-platform-family.real-gateway.e2e.test.ts \
+            ui/src/e2e/session-pr-reader-lifetime.real-gateway.e2e.test.ts \
             ui/src/e2e/session-progress-hovercard.real-gateway.e2e.test.ts \
             ui/src/e2e/worker-initial-setup.real-gateway.e2e.test.ts \
             extensions/qa-lab/src/control-ui-media-transcript.real-gateway.e2e.test.ts \
@@ -5015,9 +5024,8 @@ jobs:
       max-parallel: 2
       matrix:
         phase: ${{ fromJSON(github.event_name == 'workflow_dispatch' && !inputs.release_gate && needs.preflight.outputs.release_scope == 'full' && '["release","tests","packages"]' || '["tests","packages"]') }}
-    # Unassigned Blacksmith Mac jobs can hold both non-canceling main slots.
-    # Use the existing hosted image and budget from the first attempt.
-    runs-on: macos-26
+    # Keep hosted admission and the existing budget while validating Xcode 27.
+    runs-on: xcode-27
     timeout-minutes: 30
     env:
       HISTORICAL_TARGET: ${{ needs.preflight.outputs.compatibility_target }}
@@ -5038,6 +5046,13 @@ jobs:
           PYTHON
 
       - *platform_checkout_step
+
+      - &select_xcode_step
+        name: Select Xcode 27
+        run: |
+          set -euo pipefail
+          source .ci-harness/scripts/lib/swift-toolchain.sh
+          select_xcode_toolchain 27.0
 
       - name: Setup Node environment for Apple assets
         if: hashFiles('scripts/prepare-apple-mermaid.mjs') != ''
@@ -5281,6 +5296,9 @@ jobs:
         if: matrix.phase == 'tests'
         run: |
           set -euo pipefail
+          source .ci-harness/scripts/lib/swift-toolchain.sh
+          native_test_log_dir="$RUNNER_TEMP/openclaw-native-test-logs"
+          native_test_log_id="$(node -e 'process.stdout.write(require("node:crypto").randomUUID())')"
           # SwiftPM's swiftbuild backend can omit the test-bundle rpath for Sparkle.
           # Remove once runner toolchains pass with swiftlang/swift-package-manager#10394.
           # Keep the release build above on the default backend.
@@ -5298,17 +5316,32 @@ jobs:
             swift_test_width=$(( logical_cpu < 12 ? logical_cpu : 12 ))
             echo "[macos-swift] Swift Testing parallelization width: $swift_test_width"
             swift_test_args+=(--experimental-maximum-parallelization-width "$swift_test_width")
-            node scripts/test-macos-native.mts default "${swift_test_args[@]}" --skip "AppStateIsolationTests|ProfileChatPreferencesTests"
-            node scripts/test-macos-native.mts named "${swift_test_args[@]}" --filter "AppStateIsolationTests|ProfileChatPreferencesTests"
+            if [[ "$HISTORICAL_TARGET" == "true" ]]; then
+              run_apple_command_logged "$native_test_log_dir/default-$native_test_log_id.log" node scripts/test-macos-native.mts default "${swift_test_args[@]}" --skip "AppStateIsolationTests|ProfileChatPreferencesTests"
+            else
+              run_apple_command_logged "$native_test_log_dir/default-$native_test_log_id.log" node scripts/test-macos-native.mts default "${swift_test_args[@]}" --skip "AppStateIsolationTests|ProfileChatPreferencesTests|QuickChatCatalogPresentationTests"
+              # Rendered Quick Chat keeps its former XCTest process isolation from executor-changing tests.
+              run_apple_command_logged "$native_test_log_dir/default-rendered-$native_test_log_id.log" node scripts/test-macos-native.mts default "${swift_test_args[@]}" --filter "QuickChatCatalogPresentationTests"
+            fi
+            run_apple_command_logged "$native_test_log_dir/named-$native_test_log_id.log" node scripts/test-macos-native.mts named "${swift_test_args[@]}" --filter "AppStateIsolationTests|ProfileChatPreferencesTests"
           elif [[ "$HISTORICAL_TARGET" == "true" ]]; then
             # Frozen release targets predate the resource-owner script and its tests.
             # Their original suite still runs only on this disposable macOS worker.
             swift_test_args+=(--no-parallel)
-            swift test "${swift_test_args[@]}"
+            run_apple_command_logged "$native_test_log_dir/default-$native_test_log_id.log" swift test "${swift_test_args[@]}"
           else
             echo "Current CI targets must provide scripts/test-macos-native.mts." >&2
             exit 1
           fi
+
+      - name: Upload macOS native test logs
+        if: ${{ always() && matrix.phase == 'tests' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: macos-native-test-logs
+          path: ${{ runner.temp }}/openclaw-native-test-logs/*.log
+          if-no-files-found: ignore
+          retention-days: 7
 
       - name: Upload default-profile chat menu captures
         if: ${{ always() && steps.swift-test.outputs.menu-default-artifact-path != '' }}
@@ -5316,10 +5349,10 @@ jobs:
         with:
           name: macos-chat-menu-captures-default
           path: |
-            ${{ steps.swift-test.outputs.menu-default-artifact-path }}/*-window.png
-            ${{ steps.swift-test.outputs.menu-default-artifact-path }}/*-menu-*.png
-            ${{ steps.swift-test.outputs.menu-default-artifact-path }}/*-capture-status.json
-            ${{ steps.swift-test.outputs.menu-default-artifact-path }}/capture-export.json
+            ${{ runner.temp }}/openclaw-menu-default-*/*-window.png
+            ${{ runner.temp }}/openclaw-menu-default-*/*-menu-*.png
+            ${{ runner.temp }}/openclaw-menu-default-*/*-capture-status.json
+            ${{ runner.temp }}/openclaw-menu-default-*/capture-export.json
           if-no-files-found: error
           retention-days: 7
 
@@ -5420,31 +5453,14 @@ jobs:
       max-parallel: 2
       matrix:
         phase: ${{ fromJSON(github.event_name == 'workflow_dispatch' && !inputs.release_gate && needs.preflight.outputs.release_scope == 'full' && (needs.preflight.outputs.compatibility_target == 'true' && '["tests"]' || '["release","tests"]') || '["smoke"]') }}
-    # Blacksmith macOS 26 admission stalled while hosted retries completed.
-    # Start each phase on the verified hosted image instead of waiting to retry.
-    runs-on: macos-26
+    runs-on: xcode-27
     timeout-minutes: 150
     env:
       HISTORICAL_TARGET: ${{ needs.preflight.outputs.compatibility_target }}
     steps:
       - *platform_checkout_step
 
-      - name: Select Xcode 26
-        run: |
-          set -euo pipefail
-          for xcode_app in /Applications/Xcode_26.6.app /Applications/Xcode-26.6.0.app; do
-            if [ -d "$xcode_app/Contents/Developer" ]; then
-              sudo xcode-select -s "$xcode_app/Contents/Developer"
-              break
-            fi
-          done
-          xcodebuild -version
-          xcode_version="$(xcodebuild -version | awk 'NR == 1 { print $2 }')"
-          if [[ "$xcode_version" != 26.6* ]]; then
-            echo "error: expected Xcode 26.6, got $xcode_version" >&2
-            exit 1
-          fi
-          swift --version
+      - *select_xcode_step
 
       - name: Setup Node environment
         uses: ./.ci-harness/.github/actions/setup-node-env
@@ -5567,6 +5583,7 @@ jobs:
         if: (matrix.phase == 'smoke' || matrix.phase == 'tests') && needs.preflight.outputs.compatibility_target != 'true'
         run: |
           set -euo pipefail
+          source .ci-harness/scripts/lib/swift-toolchain.sh
           simulator_id="$(
             xcrun simctl list devices available --json | node --input-type=module -e '
               const chunks = [];
@@ -5580,7 +5597,7 @@ jobs:
             '
           )"
           mkdir -p apps/ios/build/LifecycleTestResults
-          xcodebuild \
+          run_apple_command_logged apps/ios/build/LifecycleTestResults/OpenClawVoiceCleanupTests.log xcodebuild \
             -project apps/ios/OpenClaw.xcodeproj \
             -scheme OpenClaw \
             -configuration Debug \
@@ -5600,6 +5617,7 @@ jobs:
         if: matrix.phase == 'tests' && needs.preflight.outputs.compatibility_target != 'true'
         run: |
           set -euo pipefail
+          source .ci-harness/scripts/lib/swift-toolchain.sh
           simulator_id="$(
             xcrun simctl list devices available --json | node --input-type=module -e '
               const chunks = [];
@@ -5617,7 +5635,7 @@ jobs:
           )"
           result_bundle="apps/ios/build/LifecycleTestResults/OpenClawLifecycleTests.xcresult"
           mkdir -p "apps/ios/build/LifecycleTestResults"
-          xcodebuild \
+          run_apple_command_logged "${result_bundle%.xcresult}.log" xcodebuild \
             -project apps/ios/OpenClaw.xcodeproj \
             -scheme OpenClaw \
             -configuration Debug \
@@ -5638,7 +5656,7 @@ jobs:
             -only-testing:OpenClawTests/RootTabsSourceGuardTests \
             -only-testing:OpenClawTests/TraceHeadingVisualProofTests \
             test
-          xcodebuild \
+          run_apple_command_logged apps/ios/build/LifecycleTestResults/OpenClawWatchDeliveryUITests.log xcodebuild \
             -project apps/ios/OpenClaw.xcodeproj \
             -scheme OpenClawUITests \
             -configuration Debug \
@@ -5652,6 +5670,7 @@ jobs:
         if: matrix.phase == 'tests' && needs.preflight.outputs.compatibility_target != 'true'
         run: |
           set -euo pipefail
+          source .ci-harness/scripts/lib/swift-toolchain.sh
           simulator_id="$(
             xcrun simctl list devices available --json | node --input-type=module -e '
               const chunks = [];
@@ -5683,7 +5702,8 @@ jobs:
             -only-testing:OpenClawWatchTests/WatchRealtimeMediaTests
             -only-testing:OpenClawWatchTests/WatchGatewayConfigurationTests
           )
-          xcodebuild "${xcodebuild_args[@]}" "${test_args[@]}" build-for-testing
+          run_apple_command_logged apps/ios/build/LifecycleTestResults/OpenClawWatchBuild.log xcodebuild \
+            "${xcodebuild_args[@]}" "${test_args[@]}" build-for-testing
           app_path="$(
             xcodebuild "${xcodebuild_args[@]}" -showBuildSettings -json |
               node --input-type=module -e '
@@ -5703,7 +5723,8 @@ jobs:
           xcrun simctl boot "$simulator_id" 2>/dev/null || true
           xcrun simctl bootstatus "$simulator_id" -b
           xcrun simctl install "$simulator_id" "$app_path"
-          xcodebuild "${xcodebuild_args[@]}" "${test_args[@]}" \
+          run_apple_command_logged apps/ios/build/LifecycleTestResults/OpenClawWatchOperationTests.log xcodebuild \
+            "${xcodebuild_args[@]}" "${test_args[@]}" \
             -resultBundlePath apps/ios/build/LifecycleTestResults/OpenClawWatchOperationTests.xcresult \
             test-without-building
 
@@ -5712,7 +5733,9 @@ jobs:
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: ios-lifecycle-tests-${{ needs.preflight.outputs.checkout_revision }}
-          path: apps/ios/build/LifecycleTestResults/*.xcresult
+          path: |
+            apps/ios/build/LifecycleTestResults/*.xcresult
+            apps/ios/build/LifecycleTestResults/*.log
           if-no-files-found: warn
           retention-days: 14
 
@@ -5726,7 +5749,7 @@ jobs:
     # PRs and their exact-head release-gate substitutes retain only the build smoke.
     if: ${{ github.event_name == 'workflow_dispatch' && !inputs.release_gate && needs.preflight.outputs.release_scope == 'full' && needs.preflight.outputs.compatibility_target != 'true' }}
     # Keep capture on the same verified hosted image as the iOS build phases.
-    runs-on: macos-26
+    runs-on: xcode-27
     timeout-minutes: 90
     env:
       BUNDLE_DEPLOYMENT: "true"
@@ -5754,22 +5777,7 @@ jobs:
           bundle _2.6.9_ check
           bundle _2.6.9_ exec fastlane --version
 
-      - name: Select Xcode 26
-        run: |
-          set -euo pipefail
-          for xcode_app in /Applications/Xcode_26.6.app /Applications/Xcode-26.6.0.app; do
-            if [ -d "$xcode_app/Contents/Developer" ]; then
-              sudo xcode-select -s "$xcode_app/Contents/Developer"
-              break
-            fi
-          done
-          xcodebuild -version
-          xcode_version="$(xcodebuild -version | awk 'NR == 1 { print $2 }')"
-          if [[ "$xcode_version" != 26.6* ]]; then
-            echo "error: expected Xcode 26.6, got $xcode_version" >&2
-            exit 1
-          fi
-          swift --version
+      - *select_xcode_step
 
       - name: Setup Node environment
         uses: ./.ci-harness/.github/actions/setup-node-env

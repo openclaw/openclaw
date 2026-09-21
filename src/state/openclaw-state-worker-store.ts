@@ -1,7 +1,6 @@
 import { channel } from "node:diagnostics_channel";
 import { performance } from "node:perf_hooks";
-import { runtimeProcessEntrypoints } from "../infra/runtime-process-entrypoints.js";
-import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
+import { resolveRuntimeProcessEntrypointUrl } from "../infra/runtime-process-url.js";
 import { SQLITE_IDLE_HANDLE_TTL_MS } from "../infra/sqlite-handle-lifecycle.js";
 import type { SqliteWorkerAdmissionCleanup } from "../infra/sqlite-worker-broker.types.js";
 import type { DatabasePathIdentity } from "../infra/sqlite-worker-identity.js";
@@ -53,7 +52,7 @@ const log = createSubsystemLogger("state/worker");
 const SHARED_STATE_WORKER_IDLE_INSPECT_MS = 60_000;
 
 function createSharedStateWorkerOwner() {
-  const moduleUrl = resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.sharedStateStore);
+  const moduleUrl = resolveRuntimeProcessEntrypointUrl("sharedStateStore");
   type IdleTimer = ReturnType<typeof setTimeout> & { unref?: () => void };
   type Entry = {
     context: OpenClawStateWorkerContext;

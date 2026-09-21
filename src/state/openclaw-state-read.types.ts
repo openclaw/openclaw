@@ -1,5 +1,6 @@
 import type { DatabaseSync } from "node:sqlite";
 import type { Selectable } from "kysely";
+import type { McpOAuthReadOnlyOperations } from "../agents/mcp-oauth-store.kernel.js";
 import type {
   SandboxBrowserRegistryEntry,
   SandboxRegistryEntry,
@@ -65,6 +66,12 @@ export type OpenClawStateReadAuthority = {
 };
 
 export type OpenClawStateReadCommand =
+  | {
+      [Kind in keyof McpOAuthReadOnlyOperations]: {
+        type: Kind;
+        input: McpOAuthReadOnlyOperations[Kind]["input"];
+      };
+    }[keyof McpOAuthReadOnlyOperations]
   | { type: "conversationBindings.inspect"; conversation: ConversationRef }
   | DevicePairingReadCommand
   | {
@@ -92,6 +99,7 @@ export type OpenClawStateReadCommand =
   | { type: "fleet.get"; tenantId: string }
   | { type: "nodeHost.config" }
   | { type: "workspace.snapshot"; workspaceDir: string }
+  | { type: "workerEnvironments.hasSessionAttachment"; environmentId: string }
   | { type: "sandboxRegistry.list" }
   | { type: "sandboxRegistry.get"; containerName: string }
   | { type: "sandboxRegistry.runtimeIds"; backendId: string; scopeKey: string }
@@ -111,6 +119,14 @@ export type OpenClawStateReadRequest = {
   command: OpenClawStateReadCommand | { type: "admit" };
 };
 export type OpenClawStateReadReply = (
+  | {
+      [Kind in keyof McpOAuthReadOnlyOperations]: {
+        ok: true;
+        type: Kind;
+        sourceAdmitted: true;
+        value: McpOAuthReadOnlyOperations[Kind]["output"];
+      };
+    }[keyof McpOAuthReadOnlyOperations]
   | {
       ok: true;
       type: "conversationBindings.inspect";
@@ -205,6 +221,12 @@ export type OpenClawStateReadReply = (
   | { ok: true; type: "workspace.snapshot"; sourceAdmitted: true; snapshot: WorkspaceStateSnapshot }
   | {
       ok: true;
+      type: "workerEnvironments.hasSessionAttachment";
+      sourceAdmitted: true;
+      attached: boolean;
+    }
+  | {
+      ok: true;
       type: "sandboxRegistry.list";
       sourceAdmitted: true;
       entries: SandboxRegistryEntry[];
@@ -245,6 +267,8 @@ export type OpenClawStateReadOutcome =
 
 export type OpenClawStateReadPhase = "before-read" | "read" | "unobserved";
 export type OpenClawStateReadOptions = {
+  /** Reuse the caller's captured authority instead of admitting a newer lifecycle. */
+  context?: OpenClawStateWorkerContext;
   /** Publication and authority reads must not inherit an inspection snapshot. */
   current?: boolean;
   mapError?: (error: unknown, phase: OpenClawStateReadPhase) => unknown;

@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { sessionPersonalProfileId } from "../config/sessions/session-entry-provenance.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { ensureProfileForEmail, linkEmail } from "../state/user-profiles.js";
 import {
@@ -30,8 +31,45 @@ afterEach(async () => {
   await state.cleanup();
 });
 describe("personal bootstrap", () => {
-  it("refreshes personal overlays without leaking between people in a shared session", async () => {
-    const workspaceDir = tempDirs.make("bootstrap-people-");
+  it("stacks only the session-selected owner or creator after shared defaults", async () => {
+    const workspaceDir = tempDirs.make("session-personal-");
+    const alice = ensureProfileForEmail("alice@example.test");
+    const bob = ensureProfileForEmail("bob@example.test");
+    const charlie = ensureProfileForEmail("charlie@example.test");
+    await fs.writeFile(path.join(workspaceDir, "USER.md"), "Shared defaults");
+    for (const { id, text } of [
+      { id: alice.id, text: "Alice preferences" },
+      { id: bob.id, text: "Bob preferences" },
+    ]) {
+      const dir = path.join(workspaceDir, "users", id);
+      await fs.mkdir(dir, { recursive: true });
+      await fs.writeFile(path.join(dir, "USER.md"), text);
+    }
+    const entry: NonNullable<Parameters<typeof sessionPersonalProfileId>[0]> = {
+      createdActor: { type: "human", source: "profile", id: alice.id },
+    };
+    const load = async () => {
+      const result = await resolveBootstrapContextForRun({
+        workspaceDir,
+        sessionKey: "agent:main:session-owned",
+        bootstrapUserProfileId: sessionPersonalProfileId(entry),
+      });
+      return result.contextFiles
+        .filter((file) => file.path.endsWith("USER.md"))
+        .map((file) => file.content);
+    };
+    expect(await load()).toEqual(["Shared defaults", "Alice preferences"]);
+    entry.owner = { actor: { type: "human", id: bob.id } };
+    expect(await load()).toEqual(["Shared defaults", "Bob preferences"]);
+    entry.owner = { actor: { type: "human", id: charlie.id } };
+    expect(await load()).toEqual(["Shared defaults"]);
+    delete entry.owner;
+    expect(await load()).toEqual(["Shared defaults", "Alice preferences"]);
+  });
+
+  it("refreshes the selected overlay without retaining a previous selection", async () => {
+    const workspaceDir = path.join(tempDirs.make("bootstrap-people-"), "users", "arbitrary");
+    await fs.mkdir(workspaceDir, { recursive: true });
     const alice = ensureProfileForEmail("alice@example.test");
     const bob = ensureProfileForEmail("bob@example.test");
     const writePersonal = async (id: string, content: string) => {
@@ -50,9 +88,13 @@ describe("personal bootstrap", () => {
       });
       return context.contextFiles.filter((file) => file.path.endsWith("USER.md"));
     };
-    expect((await load(alice.id)).map((file) => file.content)).toEqual([
-      "Shared defaults",
-      "Alice preferences",
+    expect(await load(alice.id)).toEqual([
+      { path: path.join(workspaceDir, "USER.md"), content: "Shared defaults" },
+      {
+        path: path.join(workspaceDir, "users", alice.id, "USER.md"),
+        content: "Alice preferences",
+        personalUser: true,
+      },
     ]);
     expect((await load(bob.id)).map((file) => file.content)).toEqual([
       "Shared defaults",
@@ -70,6 +112,25 @@ describe("personal bootstrap", () => {
     ]);
     await fs.unlink(path.join(workspaceDir, "users", bob.id, "USER.md"));
     expect((await load(bob.id)).map((file) => file.content)).toEqual(["Shared defaults"]);
+  });
+
+  it("retains the shared USER budget when the workspace resembles a personal directory", async () => {
+    const workspaceDir = path.join(tempDirs.make("bootstrap-solo-"), "users", "arbitrary");
+    await fs.mkdir(workspaceDir, { recursive: true });
+    await fs.writeFile(path.join(workspaceDir, "USER.md"), "Shared preferences. ".repeat(300));
+    const alice = ensureProfileForEmail("alice@example.test");
+    const warn = vi.fn();
+    const context = await resolveBootstrapContextForRun({
+      workspaceDir,
+      bootstrapUserProfileId: alice.id,
+      warn,
+    });
+    const users = context.contextFiles.filter((file) => file.path.endsWith("USER.md"));
+    expect(users).toHaveLength(1);
+    expect(users[0]?.content).toContain("Shared preferences.");
+    expect(users[0]?.content).toContain("read USER.md for full content");
+    expect(users[0]?.personalUser).toBeUndefined();
+    expect(warn).not.toHaveBeenCalledWith(expect.stringContaining("Personal USER.md"));
   });
 
   it.each(["file", "parent", "hardlink"] as const)(

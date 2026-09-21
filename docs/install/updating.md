@@ -310,6 +310,13 @@ connected chat. Natural-language requests use the existing `gateway` tool's
 action without granting configuration reads or other Gateway controls. Explicit tool
 restrictions still apply.
 
+Operator-created scheduled automations can also call `gateway` → `update.run`
+without a chat owner identity. The Gateway uses the active scheduled run's
+authority; a notification destination does not become its requester. Jobs created
+by external chat users and webhook turns do not gain this authority. External
+chat update requests still require `commands.ownerAllowFrom`; the refusal tells
+the operator which sender to add.
+
 `/update` is the model-independent fallback: it works without a functioning model
 or access to the `gateway` tool. The tool, slash command, and Control UI all use
 the same Gateway update handler and current authorization checks.

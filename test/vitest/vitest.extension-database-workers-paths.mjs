@@ -85,6 +85,7 @@ export const databaseWorkerExtensionTestFiles = [
   "extensions/codex/src/app-server/run-attempt.activation.test.ts",
   "extensions/codex/src/app-server/run-attempt.agent-end-context.test.ts",
   "extensions/codex/src/app-server/run-attempt.auth-context.test.ts",
+  "extensions/codex/src/app-server/run-attempt.bounded-continuity.test.ts",
   "extensions/codex/src/app-server/run-attempt-lifecycle-controller.test.ts",
   "extensions/codex/src/app-server/run-attempt-native-process-authority.test.ts",
   "extensions/codex/src/app-server/run-attempt-one-shot-cleanup.test.ts",

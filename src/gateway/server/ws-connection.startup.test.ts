@@ -53,6 +53,7 @@ import * as gatewayAuth from "../auth.js";
 import { buildDeviceAuthPayload } from "../device-auth.js";
 import { MAX_QUEUED_GATEWAY_PREAUTH_FRAMES } from "../server-constants.js";
 import { createWorkerEnvironmentStore } from "../worker-environments/store.js";
+import { GatewayClientRegistry } from "./client-registry.js";
 import { attachGatewayWsConnectionHandler } from "./ws-connection.js";
 import {
   attachGatewayWsForTest,
@@ -85,7 +86,7 @@ async function attachStartupNodeConnect(params: {
   const sent: unknown[] = [];
   const connectResponse = createDeferred<StartupConnectResponse>();
   const setupCompletion = createDeferred<unknown>();
-  const clients = new Set<unknown>();
+  const clients = new GatewayClientRegistry();
   const socket = createGatewayWsTestSocket({
     onSend: (data) => {
       const frame = JSON.parse(data) as StartupConnectResponse;
@@ -275,7 +276,7 @@ describe("attachGatewayWsConnectionHandler startup readiness", () => {
 
   it("admits only one of two connect frames that race during lazy handler loading", async () => {
     const sent: unknown[] = [];
-    const clients = new Set<unknown>();
+    const clients = new GatewayClientRegistry();
     const socket = createGatewayWsTestSocket({
       onSend: (data) => {
         sent.push(JSON.parse(data));

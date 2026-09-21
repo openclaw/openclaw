@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { chmodSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, copyFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { parse } from "yaml";
@@ -21,8 +21,11 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 function runSimulatorStep(mode = "ready", step = watchStep) {
   const root = tempDirs.make("openclaw-watch-workflow-");
   const bin = path.join(root, "bin");
+  const harnessLib = path.join(root, ".ci-harness", "scripts", "lib");
   const product = path.join(root, "project derived data", "Watch Product.app");
   mkdirSync(bin, { recursive: true });
+  mkdirSync(harnessLib, { recursive: true });
+  copyFileSync("scripts/lib/swift-toolchain.sh", path.join(harnessLib, "swift-toolchain.sh"));
   mkdirSync(product, { recursive: true });
   const runner = path.join(root, "tools.mjs");
   writeFileSync(

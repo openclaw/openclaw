@@ -545,6 +545,9 @@ export function renderChatComposerView(context: ChatComposerViewContext) {
                     placeholder=${dictation?.active ? "" : placeholder}
                     rows="1"
                   ></textarea>
+                  <span class="agent-chat__composer-placeholder" aria-hidden="true"
+                    >${dictation?.active ? "" : placeholder}</span
+                  >
                   <span
                     id=${slashMenuAnnouncementId}
                     class="sr-only"

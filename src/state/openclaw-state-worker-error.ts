@@ -1,4 +1,5 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { McpOAuthStoreCorruptionError } from "../agents/mcp-oauth-store-error.js";
 import { WorkspaceAliasRepointedError } from "../agents/workspace-state-identity.js";
 import { SqliteCoordinatorError } from "../infra/sqlite-coordinator.js";
 import {
@@ -51,7 +52,8 @@ type ErrorIdentity =
         | "range-error"
         | "syntax-error"
         | "type-error"
-        | "skill-upload-request";
+        | "skill-upload-request"
+        | "mcp-oauth-corruption";
     }
   | { type: "coordinator-contention"; family: CoordinatorFamily }
   | { type: "ownership-metadata"; databasePath: string }
@@ -102,6 +104,9 @@ function identifyError(error: Error): ErrorIdentity {
       storedWorkspacePath: error.storedWorkspacePath,
       currentWorkspacePath: error.currentWorkspacePath,
     };
+  }
+  if (error instanceof McpOAuthStoreCorruptionError) {
+    return { type: "mcp-oauth-corruption" };
   }
   if (error instanceof SkillUploadRequestError) {
     return { type: "skill-upload-request" };
@@ -281,6 +286,7 @@ function parseIdentity(node: Record<string, unknown>): ErrorIdentity | undefined
     case "syntax-error":
     case "type-error":
     case "skill-upload-request":
+    case "mcp-oauth-corruption":
       return { type: node.type };
     case "coordinator-contention":
       return node.family === "gateway-lifecycle" ||
@@ -422,6 +428,8 @@ function createError(node: ErrorNode): Error {
       return new TypeError(node.message);
     case "skill-upload-request":
       return new SkillUploadRequestError(node.message);
+    case "mcp-oauth-corruption":
+      return new McpOAuthStoreCorruptionError("", "");
     case "aggregate":
       return new AggregateError([], node.message);
     case "coordinator":

@@ -296,8 +296,8 @@ class ChatOutboxGatewayOwner {
     }
     this.prune(host);
   }
-  subscribe(host: Host): () => void {
-    const subscription = { owner: this };
+  subscribe(host: Host, onDiscard?: (item: ChatQueueItem) => void): () => void {
+    const subscription = { owner: this, onDiscard };
     subscriptions.set(host, subscription);
     this.attach(host);
     this.reconcile(host, this.state(host));
@@ -453,7 +453,7 @@ class ChatOutboxGatewayOwner {
     }
     return result;
   }
-  remove(host: Host, id: string): ChatQueueItem | null {
+  remove(host: Host, id: string, options?: { discard?: boolean }): ChatQueueItem | null {
     const located = this.locate(host, id);
     const durable = located?.durable;
     const local = host.chatQueue.find((item) => item.id === id);
@@ -479,6 +479,13 @@ class ChatOutboxGatewayOwner {
       this.change(host, id);
     }
     this.publish(undefined, true);
+    if (located && options?.discard) {
+      // Row disappearance also means ACK retirement. Only successful explicit
+      // discard invalidates admission presentation in every subscribed pane.
+      for (const pane of this.panes) {
+        subscriptions.get(pane)?.onDiscard?.(located.item);
+      }
+    }
     return located?.item ?? null;
   }
   hasVolatile(host: Host, id: string): boolean {
@@ -604,7 +611,10 @@ class ChatOutboxGatewayOwner {
   }
 }
 const owners = new Map<string, ChatOutboxGatewayOwner>();
-const subscriptions = new WeakMap<Composer, { owner: ChatOutboxGatewayOwner }>();
+const subscriptions = new WeakMap<
+  Composer,
+  { owner: ChatOutboxGatewayOwner; onDiscard?: (item: ChatQueueItem) => void }
+>();
 function outboxOwnerKey(host: Composer): string {
   const storage = getSafeSessionStorage();
   if (storage && !storageIds.has(storage)) {

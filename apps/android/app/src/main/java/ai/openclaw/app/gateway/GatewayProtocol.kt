@@ -1020,6 +1020,7 @@ enum class GatewayEvent(
   UsersPrefsChanged("users.prefs.changed"),
   SkillsChanged("skills.changed"),
   PluginsChanged("plugins.changed"),
+  PluginsInstallProgress("plugins.install.progress"),
   VoicewakeChanged("voicewake.changed"),
   VoicewakeRoutingChanged("voicewake.routing.changed"),
   ExecApprovalRequested("exec.approval.requested"),

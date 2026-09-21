@@ -2,6 +2,7 @@
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
+import chokidar from "chokidar";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { ChannelPlugin } from "../channels/plugins/types.public.js";
@@ -173,6 +174,18 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
       onTestFinished(() => runtimeLoader.mockRestore());
       const portClaim = await acquireTestPortBlock({ offsets: [0, 1, 2, 3, 4] });
       const port = portClaim.port;
+      const watch = chokidar.watch;
+      let configWatcher: ReturnType<typeof watch> | undefined;
+      const watchSpy = vi.spyOn(chokidar, "watch").mockImplementation((paths, options) => {
+        if (!(typeof paths === "string" ? [paths] : paths).includes(configPath)) {
+          return watch(paths, options);
+        }
+        // Explicit writes own reloads; inject the filesystem echo at its race boundary below.
+        configWatcher = new chokidar.FSWatcher(options);
+        queueMicrotask(() => configWatcher?.emit("ready"));
+        return configWatcher;
+      });
+      onTestFinished(() => watchSpy.mockRestore());
       server = await startTestGatewayServer(portClaim, {
         auth: { mode: "none" },
         controlUiEnabled: false,
@@ -266,9 +279,27 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
         .toBe("installed setup");
       expect(await settledProbe("cold-chat")).toMatchObject({ starts: 1, stops: 0, pid: cold.pid });
       expect(await settledProbe("sibling-chat")).toEqual(sibling);
+      assert.ok(configWatcher);
+      const watcher = configWatcher;
+      const metadataModule = await import("../config/io.plugin-metadata.js");
+      const resolveMetadata = metadataModule.resolveConfigWidePluginMetadataSnapshotAsync;
+      let echoed = false;
+      const metadataSpy = vi
+        .spyOn(metadataModule, "resolveConfigWidePluginMetadataSnapshotAsync")
+        .mockImplementation(async (params) => {
+          const metadata = await resolveMetadata(params);
+          if (!echoed && params.allowCurrent === false) {
+            echoed = true;
+            // The config write can echo while explicit reload prepares its metadata.
+            watcher.emit("change", configPath);
+          }
+          return metadata;
+        });
+      onTestFinished(() => metadataSpy.mockRestore());
       const explicit = await rpcReq(connected, "plugins.reload", {
         plugins: [{ pluginId: "cold-chat-owner" }],
       });
+      expect(echoed).toBe(true);
       expect(explicit.ok, explicit.error?.message).toBe(true);
       expect(await settledProbe("sibling-chat")).toEqual(sibling);
       expect(connected.readyState).toBe(connected.OPEN);

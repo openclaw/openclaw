@@ -33,7 +33,8 @@ import {
 import { getTaskFlowRegistryStore } from "./task-flow-registry.store.js";
 import { upsertTaskFlowRegistryRecordToSqlite } from "./task-flow-registry.store.sqlite.js";
 import type { TaskFlowRecord } from "./task-flow-registry.types.js";
-import { getTaskDeliveryState, upsertTaskDeliveryState } from "./task-registry-mutation.js";
+import { commitTaskDeliveryFixture } from "./task-registry-delivery.test-support.js";
+import { getTaskDeliveryState } from "./task-registry-mutation.js";
 import type { TaskRegistryRestoreResult } from "./task-registry-restore.worker.js";
 import {
   ensureTaskRegistryReadyAsync,
@@ -679,7 +680,7 @@ describe("asynchronous registry restoration", () => {
     const pending = ensureTaskRegistryReadyAsync(captureOpenClawStateWorkerContext());
     await started.promise;
     try {
-      upsertTaskDeliveryState({ taskId: task.taskId, lastNotifiedEventAt: 30 });
+      commitTaskDeliveryFixture({ taskId: task.taskId, lastNotifiedEventAt: 30 });
     } finally {
       release.resolve();
     }

@@ -136,6 +136,15 @@ Those are separate from the supported runtime and test-job versions. GitHub
 JavaScript actions also have their own runtime, independent of the `node` on
 the job's `PATH`.
 
+### iOS simulator evidence
+
+iOS and Watch simulator test commands write complete `xcodebuild` output directly
+to files. Forwarding simulator logs into a congested Actions pipe can stall timed
+test operations before their mocked transport runs. After each command exits,
+CI prints at most 8 KiB of its log and preserves its exit status. The lifecycle
+evidence artifact retains the full logs alongside `.xcresult` bundles on success
+and failure; test timeouts, assertions, and diagnostic collection stay unchanged.
+
 ### macOS Swift phases
 
 `macos-swift (tests)` builds and runs the app's complete default- and named-profile
@@ -146,11 +155,33 @@ baseline spent 7m57s on them in a 21m48s job. Separating them gives app compilat
 and tests their own 30-minute budget without removing coverage or increasing
 test-process parallelism.
 
-Both phases use `macos-26`, with at most two concurrent jobs. Full manual
-validation adds the existing `release` phase under the same cap. This adds one
+App tests run in three sequential launcher invocations: the default-profile suite,
+rendered Quick Chat in a fresh default-profile process, then named-profile fixtures.
+The rendered suite keeps its catalog, disclosure, and shortcut flows together and
+separate from tests that change the process-wide executor. Each partition retains
+coverage instrumentation and completion checks; a failure stops later partitions.
+Rendered Quick Chat uses an AppKit-owned run loop for native menu tracking.
+Historical targets with a launcher retain their original default- and named-profile
+partitions, including XCTest's rendered-flow ordering.
+
+Each launcher invocation retains a full log in the `macos-native-test-logs`
+artifact. CI forwards only a bounded tail after the invocation exits, keeping
+Actions log backpressure outside the tests while preserving process and output
+closure checks before resource cleanup.
+The default-profile capture artifact retains each invocation's directory, so
+browser sign-in captures from the bulk suite survive the later Quick Chat run.
+
+Both phases use Xcode 27 on GitHub-hosted `xcode-27`, the preview macOS 27
+image, with at most two concurrent jobs. Full manual
+validation adds the existing `release` phase under the same cap. The package split adds one
 hosted Mac job and its checkout/setup cost per selected run, with no additional
 Blacksmith registrations. Compare complete hosted timings, including queue and
 setup time, before treating the removed serial work as an observed speedup.
+
+The Xcode 27 rollout preserves the existing hosted placement, job counts,
+30-minute phase budgets, coverage, and Swift 6.3 source-language minimum.
+Native builds/tests and complete job timings must qualify the new toolchain;
+the earlier package-split measurement does not establish its performance.
 
 Only the app phases restore the app build cache. SwiftPM dependency caches remain
 restore-only in `packages`; the existing primary phase owns shared cache writes.
@@ -161,6 +192,10 @@ Coverage instrumentation and source-line backtraces remain enabled; interactive
 debugger type/value inspection requires a normal local debug build. The app test
 cache uses a separate build profile so it cannot restore the old indexed products;
 Release build flags and caches remain unchanged.
+
+The macOS Periphery configuration retains the native SwiftPM backend because
+Periphery 3.8 reads its `.build/debug/index/store` layout. Native test
+crashes emit noninteractive Swift backtraces, without register dumps.
 
 Ordinary Markdown and MDX pages under `docs/`, plus root `README.md`, retain
 their separate `check-docs` coverage beside precise pull-request Node tests.
@@ -233,7 +268,7 @@ Standalone Periphery workflows enforce zero dead-code findings for the iOS and m
 
 All four scans use `scripts/install-periphery.sh` to install the checksum-pinned Periphery 3.8.0 OSS release, including its adjacent `libIndexStore.dylib`, in a dedicated runner-temporary directory. The installer rejects download, checksum, and version failures without falling back to Homebrew. Installer changes select all three native workflows.
 
-[Upstream archived the OSS project](https://github.com/peripheryapp/periphery/commit/56a0eb6fb97b785c8fbc1044ccbc7b5d9f06ebec). The pin is a maintainer-owned bridge for the workflows' Xcode 26.6 toolchain, not a claim of ongoing upstream support. Native CI maintainers must revalidate both app scans and both shared consumers before changing Xcode, the pinned release, or the analyzer; retain the zero-findings policy and exact-USR intersection rather than adding a baseline or a weaker fallback.
+[Upstream archived the OSS project](https://github.com/peripheryapp/periphery/commit/56a0eb6fb97b785c8fbc1044ccbc7b5d9f06ebec). The pin remains a maintainer-owned bridge, not a claim of ongoing upstream support. All four scans target Xcode 27 on GitHub-hosted `xcode-27`. Toolchain, pinned-release, or analyzer changes require native compatibility proof for both app scans and both shared consumers, preserving the zero-findings policy and exact-USR intersection without a baseline or weaker fallback. Four declaration-specific annotations retain confirmed SwiftUI false positives; they do not exclude their files or runtime tests from validation.
 
 ## Security review checks
 
@@ -260,6 +295,12 @@ This prevents an earlier evaluation from leaving a stale failed job after automa
 reevaluation clears the status. Evaluation errors still fail the job and keep the
 required status closed.
 
+If the PR head changes before or during evaluation, the obsolete run stops
+successfully without publishing approval for the replacement commit. The new
+head's automatic event owns its evaluation. Changes to approval-relevant metadata
+on the same head and real evaluation errors still fail; supersession does not hide
+an earlier guard error.
+
 When GitHub returns a rate-limit response, the resolver and review scripts stop
 API requests, honor `Retry-After` and exhausted-quota reset times, and restart
 with fresh PR, approval, role, and CI data. Each script permits up to three restarts
@@ -273,6 +314,17 @@ quota exhaustion can also prevent a new status from being published. Ordinary
 permission errors, uncertain writes, and other evaluation errors are not retried.
 Checkout, runtime setup, and separately minted autoscrub token expiry are outside
 this recovery mechanism.
+
+Separately, read-only `GET` and `HEAD` requests retry HTTP `500`, `502`, `503`,
+and `504` responses after one, two, and four seconds, within the original
+30-second request timeout. These request retries exclude writes. HTTP errors
+include the request method and endpoint to identify the failed operation.
+
+If GitHub's changed-file count and file list disagree, the guards retry the complete
+file-list read after one, two, and four seconds. Each retry rereads PR metadata;
+changes to the head, target branch, or author still invalidate the evaluation.
+Both guards share the validated result and retry budget. A persistent mismatch
+fails the review and reports the expected, returned, and current file counts.
 
 The **Security Sensitive Guard** publishes `openclaw/security-sensitive-review`.
 Its inventory in `.github/security-review-policy.yml` covers Gateway

@@ -1,11 +1,21 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
+import {
+  abortEmbeddedAgentRun,
+  isEmbeddedAgentRunHandleActive,
+} from "../../agents/embedded-agent-runner/runs.js";
 import { makeAgentAssistantMessage } from "../../agents/test-helpers/agent-message-fixtures.js";
+import { createReplyOperation } from "../../auto-reply/reply/reply-run-registry.js";
+import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import { STALE_WORKER_BUILD_REASON, StaleWorkerBuildError } from "./admission.js";
 import { createWorkerPlacementDispatchService } from "./placement-dispatch.js";
 import { createWorkerSessionPlacementGate } from "./placement-worker-gate.js";
 import { WorkerRuntimeRefreshPendingError } from "./provider-runtime-refresh.js";
-import type { WorkerTurnTunnelHandle } from "./tunnel-contract.js";
+import {
+  WorkerTunnelOwnerDisconnectedError,
+  type WorkerTurnTunnelHandle,
+} from "./tunnel-contract.js";
 import {
   ENVIRONMENT_ID,
   MANIFEST_REF,
@@ -27,17 +37,27 @@ import {
   turn,
   unusedEnvironments,
   type WorkerTurnEnvironmentService,
+  type WorkerTurnLauncherOptions,
 } from "./worker-turn-launcher.test-support.js";
 import { createWorkerWorkspaceOperationCoordinator } from "./workspace-operation-coordinator.js";
 
 function createBuildRecoveryHarness(
   options: {
-    rejection?: "recorded" | "admission" | "pending refresh" | "launch" | "handoff";
+    rejection?:
+      | "recorded"
+      | "admission"
+      | "pending refresh"
+      | "disconnected"
+      | "launch"
+      | "handoff";
     repeated?: boolean;
     pendingResult?: boolean;
     refreshInPlace?: boolean;
     withoutRecorder?: boolean;
     afterReconcile?: () => void | Promise<void>;
+    waitForAdmissionNode?: WorkerTurnLauncherOptions["waitForAdmissionNode"];
+    replyOperation?: ReturnType<typeof createReplyOperation>;
+    duringRetryPreparation?: () => void;
   } = {},
 ) {
   seedActivePlacement();
@@ -119,6 +139,11 @@ function createBuildRecoveryHarness(
     acknowledgeCredentialDelivery: vi.fn(() => true),
     startTunnel: async () => {
       if (rejection !== "handoff" && rejection !== "launch" && (!replaced || options.repeated)) {
+        if (rejection === "disconnected") {
+          throw new WorkerTunnelOwnerDisconnectedError(
+            "device worker node is not connected with the supervisor dialect",
+          );
+        }
         if (rejection === "pending refresh") {
           throw new WorkerRuntimeRefreshPendingError("node was disconnected during startup");
         }
@@ -191,9 +216,22 @@ function createBuildRecoveryHarness(
     }
     return placement;
   });
+  let workspacePreparations = 0;
   const provider = createWorkerSessionTurnPlacementProvider({
     environments,
     placements,
+    waitForAdmissionNode: async (params) => {
+      await options.waitForAdmissionNode?.(params);
+      if (rejection === "disconnected") {
+        replaced = true;
+      }
+    },
+    resolveWorkspace: async () => {
+      if (++workspacePreparations === 2) {
+        options.duringRetryPreparation?.();
+      }
+      return { kind: "local", path: root };
+    },
     reconcileActivePlacement: async (environmentId) => {
       if (!options.pendingResult) {
         if (options.refreshInPlace) {
@@ -253,6 +291,7 @@ function createBuildRecoveryHarness(
         { sessionId: SESSION_ID, sessionKey: SESSION_KEY, agentId: "main", runId },
         {
           ...input,
+          ...(options.replyOperation ? { replyOperation: options.replyOperation } : {}),
           ...(options.withoutRecorder ? {} : { userTurnTranscriptRecorder: recorder }),
           onUserMessagePersisted,
           ...(abortSignal ? { abortSignal } : {}),
@@ -267,6 +306,139 @@ function createBuildRecoveryHarness(
 describe("worker turn launcher build recovery", () => {
   beforeEach(setupWorkerTurnLauncherTest);
   afterEach(cleanupWorkerTurnLauncherTest);
+
+  it("accepts Stop through the reply owner between refresh and retry preparation", async () => {
+    const operation = createReplyOperation({
+      sessionId: SESSION_ID,
+      sessionKey: SESSION_KEY,
+      resetTriggered: false,
+    });
+    operation.setPhase("running");
+    const duringRetryPreparation = vi.fn(() => {
+      expect(isEmbeddedAgentRunHandleActive(SESSION_ID)).toBe(false);
+      expect(abortEmbeddedAgentRun(SESSION_ID)).toBe(true);
+    });
+    const harness = createBuildRecoveryHarness({
+      rejection: "pending refresh",
+      refreshInPlace: true,
+      replyOperation: operation,
+      duringRetryPreparation,
+    });
+    try {
+      await expect(harness.execute(operation.abortSignal)).rejects.toThrow();
+      expect(duringRetryPreparation).toHaveBeenCalledOnce();
+      expect(operation.abortSignal.aborted).toBe(true);
+      expect(harness.launchTurn).not.toHaveBeenCalled();
+      expect(placements.get(SESSION_ID)?.turnClaim).toBeNull();
+    } finally {
+      operation.complete();
+    }
+  });
+
+  it.each(
+    (["pending refresh", "disconnected"] as const).flatMap((rejection) =>
+      (["reconnected", "cancelled", "backend-cancelled", "superseded"] as const).map((outcome) => ({
+        rejection,
+        outcome,
+      })),
+    ),
+  )(
+    "retains the original submission through $rejection while availability is $outcome",
+    async ({ rejection, outcome }) => {
+      const reconnect = createDeferred();
+      const waiting = createDeferred();
+      const controller = new AbortController();
+      let current = true;
+      let nodeWaitSignal: AbortSignal | undefined;
+      const waitForAdmissionNode = vi.fn<WorkerTurnLauncherOptions["waitForAdmissionNode"]>(
+        async ({ signal, assertCurrent }) => {
+          nodeWaitSignal = signal;
+          assertCurrent();
+          expect(placements.get(SESSION_ID)?.turnClaim).toBeNull();
+          waiting.resolve();
+          await racePromiseWithAbortSignal(reconnect.promise, signal);
+          assertCurrent();
+        },
+      );
+      const harness = createBuildRecoveryHarness({
+        rejection,
+        refreshInPlace: true,
+        waitForAdmissionNode,
+      });
+      const before = harness.environments.get(ENVIRONMENT_ID);
+      const execution = harness.execute(controller.signal, () => {
+        if (!current) {
+          throw new Error("original run superseded");
+        }
+      });
+      const result = execution.then(
+        (value) => ({ value }),
+        (error: unknown) => ({ error }),
+      );
+      try {
+        await Promise.race([waiting.promise, execution]);
+        expect(harness.launchTurn).not.toHaveBeenCalled();
+        expect(waitForAdmissionNode).toHaveBeenCalledOnce();
+        if (outcome === "cancelled") {
+          controller.abort(new Error("original turn cancelled"));
+          expect(nodeWaitSignal?.aborted).toBe(true);
+        } else if (outcome === "backend-cancelled") {
+          expect(abortEmbeddedAgentRun(SESSION_ID)).toBe(true);
+          expect(nodeWaitSignal?.aborted).toBe(true);
+        } else {
+          current = outcome !== "superseded";
+          reconnect.resolve();
+        }
+        const settled = await result;
+        if (outcome === "reconnected") {
+          expect(settled).toHaveProperty("value");
+          expect(harness.launchTurn).toHaveBeenCalledOnce();
+          expect(
+            openSessionManager()
+              .buildSessionContext()
+              .messages.filter((message) => message.role === "user"),
+          ).toHaveLength(1);
+        } else {
+          expect(settled).toHaveProperty("error");
+          expect(harness.launchTurn).not.toHaveBeenCalled();
+          expect(harness.environments.get(ENVIRONMENT_ID)).toEqual(before);
+        }
+        expect(harness.redispatchReclaimed).not.toHaveBeenCalled();
+        expect(placements.get(SESSION_ID)?.turnClaim).toBeNull();
+      } finally {
+        reconnect.resolve();
+        await result;
+      }
+    },
+  );
+
+  it("bounds reconnect admission by the caller's timeout", async () => {
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+    const waiting = createDeferred();
+    const reconnect = createDeferred();
+    const harness = createBuildRecoveryHarness({
+      rejection: "pending refresh",
+      refreshInPlace: true,
+      waitForAdmissionNode: async ({ signal }) => {
+        waiting.resolve();
+        await racePromiseWithAbortSignal(reconnect.promise, signal);
+      },
+    });
+    const execution = harness.execute();
+    const result = execution.catch((error: unknown) => error);
+    try {
+      await waiting.promise;
+      await vi.advanceTimersByTimeAsync(5_000);
+      expect(await result).toBeInstanceOf(Error);
+      expect(harness.launchTurn).not.toHaveBeenCalled();
+      expect(harness.redispatchReclaimed).not.toHaveBeenCalled();
+      expect(placements.get(SESSION_ID)?.turnClaim).toBeNull();
+    } finally {
+      reconnect.resolve();
+      await result;
+      vi.useRealTimers();
+    }
+  });
 
   it.each([false, true])(
     "persists fallback input once after pre-handoff rejection (refreshInPlace=%s)",
@@ -411,10 +583,12 @@ describe("worker turn launcher build recovery", () => {
   );
 
   it("does not retry a build error after worker handoff", async () => {
-    const harness = createBuildRecoveryHarness({ rejection: "handoff" });
+    const waitForAdmissionNode = vi.fn(async () => {});
+    const harness = createBuildRecoveryHarness({ rejection: "handoff", waitForAdmissionNode });
     await expect(harness.execute()).rejects.toThrow(STALE_WORKER_BUILD_REASON);
     expect(harness.redispatchReclaimed).not.toHaveBeenCalled();
     expect(harness.launchTurn).toHaveBeenCalledOnce();
+    expect(waitForAdmissionNode).not.toHaveBeenCalled();
     expect(placements.get(SESSION_ID)).toMatchObject({ state: "failed", turnClaim: null });
   });
 

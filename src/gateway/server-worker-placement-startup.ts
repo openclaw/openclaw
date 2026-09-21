@@ -32,6 +32,7 @@ import {
   createWorkerPlacementInitialRecovery,
   installWorkerPlacementReconcileGuard,
 } from "./server-worker-placement-reconcile-guard.js";
+import { createWorkerRuntimeRefreshWaiter } from "./server-worker-placement-runtime-refresh.js";
 import { createWorkerPlacementSessionEvidenceResolver } from "./server-worker-placement-session-evidence.js";
 import {
   createWorkerPlacementNodeWorkspaceBindingResolver,
@@ -112,6 +113,10 @@ export function createGatewayWorkerPlacementRuntime(
 ) {
   let nodeWorkerSupervisorTransport: NodeWorkerSupervisorTransport | undefined;
   let stopped = false;
+  const runtimeRefresh = createWorkerRuntimeRefreshWaiter({
+    environments: params.environments,
+    isStopping: () => stopped,
+  });
   const workspaceOperations = createWorkerWorkspaceOperationCoordinator();
   const {
     coordinator: githubPublication,
@@ -448,6 +453,7 @@ export function createGatewayWorkerPlacementRuntime(
     placements: params.placements,
     resolveWorkspace,
     reconcileActivePlacement: async (id) => await dispatchService.reconcileActive(id),
+    waitForAdmissionNode: runtimeRefresh.wait,
     waitForInitialPlacement: dispatchService.waitForInitialPlacement,
     redispatchReclaimed: createReclaimedPlacementRedispatch({
       environments: params.environments,
@@ -687,6 +693,7 @@ export function createGatewayWorkerPlacementRuntime(
       nodeWorkerSupervisorTransport = transport;
       nodeWorkspaceRetention.bindTransport(transport);
     },
+    bindNodeWorkerAvailability: runtimeRefresh.bind,
     scheduleNodeWorkspaceRetention: (nodeId?: string) => nodeWorkspaceRetention.schedule(nodeId),
     startRuntime,
   };

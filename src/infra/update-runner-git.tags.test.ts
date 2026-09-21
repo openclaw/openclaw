@@ -218,7 +218,7 @@ describe("Git updater release tag refresh", () => {
       const { result, fetches } = await update(setup);
       expect(result).toMatchObject({ status: "error", reason: "fetch-failed" });
       expect(result.steps.at(-1)?.stderrTail).toContain("Set branch.main.remote");
-      expect(fetches).toHaveLength(1);
+      expect(fetches).toHaveLength(0);
       expect(git(setup.root, "rev-parse", "v2026.9.1")).toBe(setup.oldTag);
     });
   });

@@ -43,6 +43,7 @@ async function writeFixture(
     ["image-processor.worker.mjs", "export const imageProcessor = true;\n"],
     ["service-child-group-anchor.mjs", "export const anchor = true;\n"],
     ["service-child-relay.mjs", "export const relay = true;\n"],
+    ["sqlite-store.worker.mjs", "export const sqliteStore = true;\n"],
     ["worker.mjs", workerSource],
     ["workspace-rsync-receiver.mjs", "export const receiver = true;\n"],
   ] as const) {
@@ -139,6 +140,7 @@ describe("worker bundle producer", () => {
         "image-processor.worker.mjs",
         "service-child-group-anchor.mjs",
         "service-child-relay.mjs",
+        "sqlite-store.worker.mjs",
         "worker.mjs",
         "workspace-rsync-receiver.mjs",
       ]);
@@ -150,6 +152,7 @@ describe("worker bundle producer", () => {
         ["image-processor.worker.mjs", "export const imageProcessor = true;\n"],
         ["service-child-group-anchor.mjs", "export const anchor = true;\n"],
         ["service-child-relay.mjs", "export const relay = true;\n"],
+        ["sqlite-store.worker.mjs", "export const sqliteStore = true;\n"],
         ["worker.mjs", "export const worker = true;\n"],
         ["workspace-rsync-receiver.mjs", "export const receiver = true;\n"],
       ] as const) {
@@ -185,6 +188,7 @@ describe("worker bundle producer", () => {
         "image-processor.worker.mjs",
         "service-child-group-anchor.mjs",
         "service-child-relay.mjs",
+        "sqlite-store.worker.mjs",
         "worker.mjs",
         "workspace-rsync-receiver.mjs",
       ]) {
@@ -594,6 +598,7 @@ describe("worker bundle producer", () => {
         "image-processor.worker.mjs",
         "service-child-group-anchor.mjs",
         "service-child-relay.mjs",
+        "sqlite-store.worker.mjs",
         "worker.mjs",
         "workspace-rsync-receiver.mjs",
       ]);
@@ -606,6 +611,7 @@ describe("worker bundle producer", () => {
       "image-processor.worker.mjs",
       "service-child-group-anchor.mjs",
       "service-child-relay.mjs",
+      "sqlite-store.worker.mjs",
       "worker.mjs",
       "workspace-rsync-receiver.mjs",
     ]) {

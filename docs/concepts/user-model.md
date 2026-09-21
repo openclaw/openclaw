@@ -19,19 +19,29 @@ Keep workspace-root `USER.md` for shared defaults. To add preferences for one
 signed-in person, create `users/<canonical-profile-id>/USER.md` in the **agent
 workspace**, not the task's Git worktree. Obtain the durable profile ID from the
 Gateway's authenticated profile/People data; do not use a display name, GitHub
-login, email, or a profile ID pasted into a message. No new configuration is needed.
+login, email, or a profile ID pasted into a message. This uses existing session
+ownership and creation records; no schema or configuration change is needed.
 
-For an authenticated external chat turn, OpenClaw loads the shared file first and
-that person's optional file second. The personal file overrides conflicting
-shared user preferences for that turn, not project rules or security policy.
-Files are refreshed on later turns, including when another person uses the same
-session. A message from another person cannot steer a running turn with frozen
-personal instructions; it follows the normal queued-turn path instead. Profile merges select the surviving canonical ID; move the preferences
-to that directory yourself. OpenClaw does not merge files or create a dossier.
+Each session selects **one personal `USER.md`**: the assigned human owner's file
+first, otherwise the authenticated human creator's file. An agent or system
+assignment does not prevent that creator fallback. For eligible external chat
+turns, OpenClaw loads the shared file first and the selected personal file second.
+The personal file supplements, rather than replaces, the shared file, overriding
+conflicting shared user preferences, not project rules or security policy. The
+workspace-root `USER.md` remains shared regardless of the workspace directory's name.
 
-Missing files, unknown identity, and collected turns from multiple people use
-shared defaults only. Channel sender labels and session/agent owners are never
-identity fallbacks. Internal events and delegated tasks do not automatically
+Files are refreshed on later turns. Reassigning the session changes personal
+context on the next new turn, not the running turn. Another participant can steer
+under the normal permission and queue rules without switching personal context.
+Queued and collected messages from multiple people keep the session's selection;
+the current sender does not select a different file. Profile merges select the
+surviving canonical ID; move the preferences to that directory yourself. OpenClaw
+does not merge files or create a dossier.
+
+Missing files or missing qualifying human identity use shared defaults only. A
+human assignment without a profile ID does not fall back to the creator. Display
+labels, channel sender IDs, unknown-source creator IDs, and agent owners cannot
+select a personal file. Internal events and delegated tasks do not automatically
 inherit a personal profile. Subagent bootstrap still contains only its existing
 allowed project instructions. The shared local owner profile represents all
 connections using that identity, not separate people; use per-person sign-in on
@@ -44,15 +54,16 @@ budget); otherwise it is omitted with a warning rather than partially injected.
 Shared files retain their existing limits. Existing harness-specific bootstrap
 suppression still applies: for example, the embedded runner's
 `contextInjection: "never"` and `continuation-skip` settings, and lightweight
-bootstrap modes. Use the default `always` mode for per-turn personalization.
+bootstrap modes. Use the default `always` mode to refresh session-selected
+personal instructions on later turns.
 This selection is supported by the local embedded, generic CLI, and native Codex
 bootstrap paths. ACP agents, realtime sessions, and remote worker execution do
 not gain per-person selection from this feature.
 
 This is **prompt selection, not filesystem secrecy**. Workspace tools, trusted
 plugins, shared transcripts, and previously generated responses can expose other
-context. Changing the current person does not erase conversation history. Do not
-store secrets in these files.
+context. Reassigning the session or changing participants does not erase
+conversation history. Do not store secrets in these files.
 
 ## Gateway profile and GitHub credit
 

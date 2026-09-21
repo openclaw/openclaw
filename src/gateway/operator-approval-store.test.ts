@@ -1,16 +1,17 @@
-import { spawn } from "node:child_process";
-import { once } from "node:events";
 // Persistent operator approval store tests cover terminal CAS, expiry, replay, and recovery.
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { DatabaseSync } from "node:sqlite";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildApprovalResolutionRef } from "../infra/approval-resolution-ref.js";
 import {
   executeSqliteQuerySync,
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
 } from "../infra/kysely-sync.js";
+import { withSqliteWriteAdmissionService } from "../infra/sqlite-transaction.js";
+import * as workerAdmission from "../infra/sqlite-worker-operation-admission.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
   closeOpenClawStateDatabaseAsync,
@@ -32,6 +33,7 @@ import {
   pruneTerminalOperatorApprovals,
   resolveOperatorApproval,
 } from "./operator-approval-store.js";
+import { executeOperatorApprovalCommand } from "./operator-approval-store.worker.js";
 
 type OperatorApprovalDatabase = Pick<OpenClawStateKyselyDatabase, "operator_approvals">;
 type NewOperatorApproval = Parameters<typeof insertOperatorApproval>[0]["approval"];
@@ -387,55 +389,42 @@ describe("operator approval store", () => {
 
   it("reads the default clock after waiting for the SQLite write lock", async () => {
     const databaseOptions = createDatabaseOptions();
-    const createdAtMs = Date.now();
-    const expiresAtMs = createdAtMs + 1_500;
+    const createdAtMs = 1_000;
+    const expiresAtMs = 2_000;
     await insertOperatorApproval({
       approval: approval("lock-delayed-clock", { createdAtMs, expiresAtMs }),
       databaseOptions,
     });
-    const databasePath = openOpenClawStateDatabase(databaseOptions).path;
-    const releaseAtMs = expiresAtMs + 200;
-    const child = spawn(
-      process.execPath,
-      [
-        "--input-type=module",
-        "--eval",
-        [
-          'import { DatabaseSync } from "node:sqlite";',
-          "const [databasePath, releaseAtRaw] = process.argv.slice(1);",
-          "const database = new DatabaseSync(databasePath);",
-          'database.exec("PRAGMA busy_timeout=5000; BEGIN IMMEDIATE;");',
-          'process.stdout.write("locked\\n");',
-          'setTimeout(() => { database.exec("COMMIT"); database.close(); }, Math.max(0, Number(releaseAtRaw) - Date.now()));',
-        ].join("\n"),
-        databasePath,
-        String(releaseAtMs),
-      ],
-      { stdio: ["ignore", "pipe", "pipe"] },
-    );
-    let stderr = "";
-    child.stderr.on("data", (chunk) => {
-      stderr += String(chunk);
+    const database = openOpenClawStateDatabase(databaseOptions);
+    const writer = new DatabaseSync(database.path);
+    using clock = vi.spyOn(Date, "now").mockReturnValue(createdAtMs);
+    // Run the real worker transaction locally so its clock is controlled; transport authority
+    // is covered separately by the worker integration tests.
+    using _ = vi
+      .spyOn(workerAdmission, "requestSqliteWorkerOperationAdmission")
+      .mockImplementation(() => {});
+    const releaseWriter = vi.fn(() => {
+      writer.exec("COMMIT");
+      clock.mockReturnValue(3_000);
     });
-    const exitPromise = once(child, "exit");
-    await new Promise<void>((resolve, reject) => {
-      child.once("error", reject);
-      child.once("exit", (code) => reject(new Error(`lock holder exited early (${code})`)));
-      child.stdout.once("data", (chunk) => {
-        if (String(chunk).includes("locked")) {
-          resolve();
-        } else {
-          reject(new Error(`unexpected lock holder output: ${String(chunk)}`));
-        }
+    try {
+      writer.exec("BEGIN IMMEDIATE");
+      expect(Date.now()).toBeLessThan(expiresAtMs);
+      const result = await withSqliteWriteAdmissionService(database.db, releaseWriter, async () =>
+        executeOperatorApprovalCommand(
+          { type: "operatorApprovals.get", input: { id: "lock-delayed-clock" } },
+          databaseOptions,
+        ),
+      );
+
+      expect(releaseWriter).toHaveBeenCalledOnce();
+      expect(result).toMatchObject({
+        outcome: "found",
+        record: { status: "expired", terminalReason: "timeout" },
       });
-    });
-    expect(Date.now()).toBeLessThan(expiresAtMs);
-
-    const record = await getOperatorApproval({ id: "lock-delayed-clock", databaseOptions });
-    const [exitCode] = await exitPromise;
-
-    expect(exitCode, stderr).toBe(0);
-    expect(record).toMatchObject({ status: "expired", terminalReason: "timeout" });
+    } finally {
+      writer.close();
+    }
   });
 
   it("preserves BOM, NBSP, and boundary spaces as opaque approval identity", async () => {

@@ -1780,7 +1780,6 @@ src/agents/mcp-auth-profile.ts	2
 src/agents/mcp-codex-tool-approval.ts	4
 src/agents/mcp-http-fetch.ts	3
 src/agents/mcp-json-schema-validator.ts	4
-src/agents/mcp-oauth-store.ts	2
 src/agents/mcp-transport-config.ts	5
 src/agents/mcp-transport.ts	2
 src/agents/mcp-ui-resource.ts	4
@@ -1905,7 +1904,6 @@ src/agents/tool-search-transcript.ts	1
 src/agents/tool-search.ts	1
 src/agents/tools-effective-inventory-build.ts	2
 src/agents/tools-effective-inventory.ts	4
-src/agents/tools/agent-step.ts	2
 src/agents/tools/agents-wait-tool.ts	1
 src/agents/tools/ask-user-tool-normalization.ts	1
 src/agents/tools/ask-user-tool.ts	8
@@ -2417,17 +2415,16 @@ src/config/implicit-mentions.ts	1
 src/config/includes-scan.ts	1
 src/config/io.audit.ts	3
 src/config/io.clobber-snapshot.ts	2
-src/config/io.context.ts	1
 src/config/io.load.ts	2
 src/config/io.observe-recovery.ts	7
 src/config/io.observe.ts	1
-src/config/io.read-helpers.ts	3
+src/config/io.read-helpers.ts	2
 src/config/io.session-store-owner.ts	2
 src/config/io.snapshot.ts	1
 src/config/io.warnings.ts	2
 src/config/io.write-prepare.ts	12
 src/config/io.write-safety.ts	3
-src/config/io.write.ts	6
+src/config/io.write.ts	2
 src/config/issue-location.ts	2
 src/config/legacy.default-agent-roles.ts	1
 src/config/legacy.roster.ts	13
@@ -2439,7 +2436,7 @@ src/config/mcp-config.ts	1
 src/config/merge-patch.ts	1
 src/config/model-input-normalization.ts	2
 src/config/model-input.ts	1
-src/config/mutate.ts	4
+src/config/mutate.ts	3
 src/config/normalize-exec-safe-bin.ts	2
 src/config/official-external-channel-secret-schema.ts	4
 src/config/plugin-auto-enable.apply.ts	1

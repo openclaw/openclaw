@@ -1,5 +1,5 @@
 /** Shared harness for node invoke plugin-policy tests. */
-import { expect, onTestFinished, vi } from "vitest";
+import { expect, vi } from "vitest";
 import type { PluginApprovalRequestPayload } from "../infra/plugin-approvals.js";
 import { createPluginRecord } from "../plugins/loader-records.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
@@ -198,26 +198,15 @@ export async function invokeDemoPolicy(
   });
 }
 
-export async function expectSinglePendingApproval(
+export async function expectSinglePendingApproval<T>(
   manager: ExecApprovalManager<PluginApprovalRequestPayload>,
   context: GatewayRequestContext,
-  invocation: Promise<unknown>,
-): Promise<PluginApprovalRecord> {
-  // Join the invocation before the manager fixture closes its database, even if an assertion fails.
-  onTestFinished(async () => {
-    await manager.drain();
-    await Promise.allSettled([invocation]);
-  });
-  await waitForApprovalRequested(
-    context.broadcastToConnIds,
+  start: () => Promise<T>,
+) {
+  const { pending, payload } = await waitForApprovalRequested(
+    context,
     "plugin.approval.requested",
-    invocation,
-    // Reused contexts retain broadcasts for resolved approvals. Only the
-    // publication for a currently pending record establishes readiness.
-    (payload) =>
-      manager
-        .listLocalPendingRecords()
-        .some((record) => record.id === (payload as { id: string }).id),
+    start,
   );
   const records = await manager.listPendingRecords();
   expect(records).toHaveLength(1);
@@ -225,7 +214,8 @@ export async function expectSinglePendingApproval(
   if (!record) {
     throw new Error("expected pending approval");
   }
-  return record;
+  expect(payload).toMatchObject({ id: record.id });
+  return { record, pending };
 }
 
 export async function expectApprovalResolution(

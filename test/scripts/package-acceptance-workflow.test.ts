@@ -9714,14 +9714,14 @@ describe("package artifact reuse", () => {
 
     expect(workflow.on?.schedule).toEqual([{ cron: "23 4 * * *" }, { cron: "41 6 * * 1" }]);
     expect(daily.if).toBe(
-      "github.event_name == 'workflow_dispatch' || github.event.schedule == '23 4 * * *'",
+      "github.repository == 'openclaw/openclaw' && (github.event_name == 'workflow_dispatch' || github.event.schedule == '23 4 * * *')",
     );
     expect(daily.with).toMatchObject({
       enable_prepublish_plugin_registry: true,
       ref: "${{ github.sha }}",
     });
     expect(weekly.if).toBe(
-      "github.event_name == 'schedule' && github.event.schedule == '41 6 * * 1'",
+      "github.repository == 'openclaw/openclaw' && github.event_name == 'schedule' && github.event.schedule == '41 6 * * 1'",
     );
     expect(weekly.permissions).toEqual({
       actions: "read",

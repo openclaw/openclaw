@@ -135,8 +135,11 @@ describe("session catalog provider diagnostics", () => {
     const gate = createDeferredCore<SessionCatalogHost[]>();
     const activeOwner = new AbortController();
     const blocker = provider("active-catalog", () => gate.promise);
-    const active = Array.from({ length: 4 }, () =>
-      listSessionCatalogProvider(blocker, { signal: activeOwner.signal }),
+    const active = Array.from({ length: 4 }, (_, index) =>
+      listSessionCatalogProvider(
+        { ...blocker, id: `active-catalog-${index}` },
+        { signal: activeOwner.signal },
+      ),
     );
     const queuedOwner = new AbortController();
     const list = vi.fn(async () => []);

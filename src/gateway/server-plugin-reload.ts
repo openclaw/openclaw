@@ -126,13 +126,12 @@ export async function reloadGatewayPlugins(
   const quiescedInstances: PluginInstanceHandle[] = [];
   let rollbackConfigEffects: (() => Promise<void>) | undefined;
   let releaseResourceHandoff: (() => void) | undefined;
-  const skipChannels =
-    isTruthyEnvValue(params.env?.OPENCLAW_SKIP_CHANNELS) ||
-    isTruthyEnvValue(params.env?.OPENCLAW_SKIP_PROVIDERS);
   const channels = createPluginReloadChannels({
     channelManager,
     previousRegistry,
-    skipChannels,
+    skipChannels:
+      isTruthyEnvValue(params.env?.OPENCLAW_SKIP_CHANNELS) ||
+      isTruthyEnvValue(params.env?.OPENCLAW_SKIP_PROVIDERS),
     previousStopStarted: () => previousStopStarted,
     reloadParams: params,
     ambientEnvTriggers,
@@ -190,6 +189,7 @@ export async function reloadGatewayPlugins(
         allowCurrent: false,
       }),
     );
+    await params.checkpoint?.();
     assertCurrent();
     const activationConfig = resolveGatewayStartupPluginActivationConfig({
       runtimeConfig: params.nextConfig,

@@ -90,7 +90,7 @@ an invalid source folder.
 Select **+** beside the chat composer to open attachments and session capabilities in one menu:
 
 - **Skills** enables or disables individual skills for this session.
-- **Connectors** enables or disables configured MCP servers for this session. A **session** tag marks values that differ from the inherited configuration. **Browse connectors** opens the Plugins page on **Discover**.
+- **Connectors** enables or disables configured MCP servers for this session. A **session** tag marks values that differ from the inherited configuration.
 - **Web search** enables or disables managed web search plus native OpenAI and Codex search for this session.
 - **Manage plugins** opens the Plugins page.
 
@@ -323,8 +323,10 @@ If you use the `coding` tool profile, include `"message"` in `tools.alsoAllow`
 deny rules still apply. See [Tool access configuration](/gateway/config-tools).
 
 Select a card to open its listing inside the Control UI: plugins open in
-**Plugins**, and skills open in **Skills**. A plugin's **Install** button opens
-the existing installation review; a skill's **Install** button opens its details.
+**Plugins**, and skills open in **Skills**. A card's **Install** button opens
+the capability details. Select **Install** on a plugin overview to start installation
+immediately. Configured install-policy warnings still require an explicit
+acknowledgment; see [Manage plugins](/web/control-ui/settings#manage-plugins).
 **Dismiss** dismisses the card from the current view.
 
 An installed capability shows a green checkmark and **Installed**. This means the
@@ -578,6 +580,8 @@ markers. Enter or Space jumps to the focused message. Tab or Shift+Tab leaves th
 rail in one step, and Escape closes the preview and returns focus to the transcript.
 In split view, Escape handles the focused pane before a hovered preview in another pane.
 Focusing a marker also shows its preview without jumping to the message.
+Changing the draft height or entering Goal mode keeps the rail's scroll position
+stable. Navigation and keyboard focus still reveal the selected marker.
 
 The chat transcript uses a centered readable frame aligned with the composer. Assistant and tool output stay left-aligned while your own messages stay right-aligned inside that frame. In multi-user sessions (for example a group chat relayed from a channel plugin), messages from other attributed participants render left-aligned with the author's avatar, name, and a stable per-identity color, so only the signed-in viewer's messages read as "mine". When two or more attributed participants are present, assistant replies carry a small "Replying to name" marker naming the participant whose message triggered the turn. System entries such as local slash-command output render as centered notice rows without an avatar.
 

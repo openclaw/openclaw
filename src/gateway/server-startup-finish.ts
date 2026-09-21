@@ -552,7 +552,7 @@ export async function finishGatewayStartup(params: {
         (nextConfig.gateway?.terminal?.detachedSessionTimeoutSeconds ??
           DEFAULT_TERMINAL_DETACH_SECONDS) * 1000,
       );
-      disconnectDisallowedGatewayPolicyClients(clients, nextConfig);
+      disconnectDisallowedGatewayPolicyClients(clients.authorityClients, nextConfig);
       for (const nodeSession of nodeRegistry.refreshRuntimePolicy(nextConfig)) {
         refreshConnectedNodeSurfaceCaches({ context: gatewayRequestContext, nodeSession });
       }

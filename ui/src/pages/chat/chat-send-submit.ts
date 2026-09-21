@@ -87,6 +87,7 @@ import { scheduleChatScroll } from "./scroll.ts";
 registerChatGoalsEnglish();
 
 export type ChatSendSubmitOptions = {
+  asyncQuestionItemId?: string;
   intent?: ChatSendIntent;
   attachmentsOverride?: readonly ChatAttachment[];
   mentionsOverride?: readonly HumanMention[];
@@ -577,6 +578,8 @@ export async function handleSendChat(
       return;
     }
     let queued = submission.item;
+    queued.asyncQuestionItemId =
+      resumedEdit?.source.asyncQuestionItemId ?? opts?.asyncQuestionItemId;
     if (queued.attachments?.length) {
       const payload = await prepareOutboxPayload(host, queued);
       const currentEdit = activeQueuedMessageEdit(host);

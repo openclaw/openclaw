@@ -372,7 +372,7 @@ export async function admitChatSend(params: {
     });
     if (request.goalOperation && !restartSafeAdmission) {
       throw new Error(
-        "Goal start or resume requires an idle local session with recoverable history. Finish current work or start a fresh session, then retry.",
+        "Goal start or resume requires the built-in OpenClaw runtime and an idle local session with recoverable history. This action is unavailable for native Codex and other external runtimes.",
       );
     }
     if (retryableClaim && !restartSafeAdmission) {

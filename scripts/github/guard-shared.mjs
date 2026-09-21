@@ -6,7 +6,7 @@ export const GITHUB_ERROR_BODY_MAX_BYTES = 64 * 1024;
 export const GITHUB_RESPONSE_BODY_MAX_BYTES = 4 * 1024 * 1024;
 export const GITHUB_API_REQUEST_TIMEOUT_MS = 30_000;
 
-const githubApiRetryStatuses = new Set([502, 503, 504]);
+const githubApiRetryStatuses = new Set([500, 502, 503, 504]);
 const githubApiRetryDelaysMs = [1_000, 2_000, 4_000];
 // One primary quota window plus room for a fresh evaluation. Persist the deadline
 // across detect/autoscrub/enforce so each step cannot start another hour of waits.
@@ -359,7 +359,7 @@ export function createGitHubApi(token, options = {}) {
           } catch (bodyError) {
             errorText = bodyError instanceof Error ? bodyError.message : String(bodyError);
           }
-          const message = `${response.status} ${response.statusText}: ${errorText}`;
+          const message = `GitHub API ${method} ${path} failed: ${response.status} ${response.statusText}: ${errorText}`;
           if (
             (response.status === 403 || response.status === 429) &&
             (response.status === 429 ||

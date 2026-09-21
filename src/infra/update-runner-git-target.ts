@@ -12,6 +12,7 @@ import { hasErrnoCode } from "./errno.js";
 import { gitNullConfigPath, normalizeGitPathForFilesystem } from "./git-exec.js";
 import { DEV_BRANCH, isBetaTag, isStableTag, type UpdateChannel } from "./update-channels.js";
 import { compareSemverStrings } from "./update-check.js";
+import type { DevUpdateTarget } from "./update-dev-target.js";
 import { cleanupUpdateTemporaryDirectory } from "./update-maintenance.js";
 import { runStep } from "./update-runner-command.js";
 import { runGitCandidatePreflight } from "./update-runner-git-preflight.js";
@@ -360,25 +361,18 @@ function resolveReleaseTagRemote(
 export async function fetchGitUpdateTarget(params: {
   root: string;
   channel: UpdateChannel;
+  devTarget?: DevUpdateTarget;
   name: string;
   step: (name: string, argv: string[], cwd: string) => RunStepOptions;
   workStep: (name: string, argv: string[], cwd: string) => RunStepOptions;
   steps: UpdateStepResult[];
-}): Promise<boolean> {
-  const { root, channel, name, step: targetStep, workStep, steps } = params;
-  const fetch = await runStep(
-    workStep(
-      name,
-      ["git", "-C", root, "fetch", "--all", "--prune", "--no-tags", "--no-prune-tags"],
-      root,
-    ),
-  );
-  if (fetch.exitCode !== 0 || channel === "dev") {
-    return fetch.exitCode === 0;
-  }
+}): Promise<{ ok: boolean; refreshedRemotes: string[] }> {
+  const { root, channel, devTarget, name, step: targetStep, workStep, steps } = params;
+  const refreshedRemotes: string[] = [];
+  const result = (ok: boolean) => ({ ok, refreshedRemotes });
   const remote = await runStep(targetStep("git-remote", ["git", "-C", root, "remote"], root));
   if (remote.exitCode !== 0) {
-    return false;
+    return result(false);
   }
   const remotes = normalizeStringEntries((remote.stdoutTail ?? "").split("\n"));
   const tracked = await runStep(
@@ -389,9 +383,89 @@ export async function fetchGitUpdateTarget(params: {
     ),
   );
   if (tracked.exitCode !== 0 && tracked.exitCode !== 1) {
-    return false;
+    return result(false);
   }
-  const tagRemote = resolveReleaseTagRemote(remotes, (tracked.stdoutTail ?? "").trim());
+  const trackedRemote = (tracked.stdoutTail ?? "").trim();
+  const targetRef = devTarget?.mode === "tracked" ? devTarget.upstreamRef : devTarget?.ref;
+  const remoteRef =
+    devTarget?.mode === "tracked" ||
+    targetRef?.startsWith("refs/remotes/") ||
+    targetRef?.startsWith("origin/")
+      ? targetRef?.replace(/^refs\/remotes\//u, "")
+      : undefined;
+  const targetRemote = remoteRef
+    ? remotes
+        .toSorted((left, right) => right.length - left.length)
+        .find((candidate) => remoteRef.startsWith(`${candidate}/`))
+    : undefined;
+  const tagRemote = resolveReleaseTagRemote(remotes, trackedRemote);
+  // A configured tracking remote is authoritative even when its refs are cold.
+  // Unqualified explicit branches use origin; explicit tags resolve separately.
+  const authority =
+    channel !== "dev"
+      ? tagRemote
+      : devTarget
+        ? (targetRemote ?? (targetRef?.startsWith("refs/heads/") ? "origin" : undefined))
+        : trackedRemote || undefined;
+  if (channel === "dev" && !devTarget && !authority) {
+    const main = await runStep(
+      targetStep(
+        "git-show-branch",
+        ["git", "-C", root, "show-ref", "--verify", `refs/heads/${DEV_BRANCH}`],
+        root,
+      ),
+    );
+    if (main.exitCode === 0) {
+      return result(true);
+    }
+  }
+  const fetchRemotes = authority
+    ? [authority]
+    : channel !== "dev" || remoteRef || targetRef?.startsWith("refs/tags/")
+      ? []
+      : targetRef && !/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/iu.test(targetRef)
+        ? remotes.filter((candidate) => candidate === "origin")
+        : remotes;
+  for (const fetchRemote of fetchRemotes) {
+    if (fetchRemote === ".") {
+      continue;
+    }
+    const options = workStep(
+      authority ? name : `${name}:${fetchRemote}`,
+      ["git", "-C", root, "fetch", fetchRemote, "--prune", "--no-tags", "--no-prune-tags"],
+      root,
+    );
+    const fetch = await runStep({
+      ...options,
+      progress: { ...options.progress, onStepComplete: undefined },
+    });
+    const interrupted =
+      fetch.termination === "signal" || fetch.exitCode === 130 || fetch.exitCode === 143;
+    if (fetch.exitCode === 0 && !interrupted) {
+      refreshedRemotes.push(fetchRemote);
+      if (authority && remotes.some((candidate) => candidate !== authority)) {
+        fetch.warnings = [
+          `Fetched only the update remote ${authority}; unrelated remotes were left untouched.`,
+        ];
+      }
+    } else if (!authority && !interrupted) {
+      fetch.advisory = {
+        kind: "recoverable-maintenance",
+        message: `Could not refresh optional target remote ${fetchRemote}; continuing target resolution. ${fetch.stderrTail ?? ""}`,
+      };
+    }
+    options.progress?.onStepComplete?.({
+      ...fetch,
+      index: options.stepIndex,
+      total: options.totalSteps,
+    });
+    if (interrupted || (fetch.exitCode !== 0 && authority)) {
+      return result(false);
+    }
+  }
+  if (channel === "dev") {
+    return result(true);
+  }
   if (!tagRemote) {
     steps.push({
       name: "git-release-remote",
@@ -402,7 +476,7 @@ export async function fetchGitUpdateTarget(params: {
       stderrTail:
         "Cannot determine the release remote. Set branch.main.remote to the remote that publishes releases.",
     });
-    return false;
+    return result(false);
   }
   // Only the release authority may replace shared tag refs. Disable pruning
   // even when Git config enables it, so operator-only tags survive.
@@ -423,7 +497,7 @@ export async function fetchGitUpdateTarget(params: {
       root,
     ),
   );
-  return tags.exitCode === 0;
+  return result(tags.exitCode === 0);
 }
 
 async function resolveChannelTag(

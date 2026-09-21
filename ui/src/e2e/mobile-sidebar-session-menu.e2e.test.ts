@@ -7,6 +7,7 @@ import {
   createSessionManagementE2eSuite,
   installMockGateway,
   sessionsListResponse,
+  waitForMobileSidebarDrawerOpen,
 } from "./session-management.test-support.ts";
 
 const suite = createSessionManagementE2eSuite(true);
@@ -52,6 +53,7 @@ suite.define(() => {
           .first();
         await drawerToggle.waitFor({ state: "visible", timeout: 10_000 });
         await drawerToggle.click();
+        await waitForMobileSidebarDrawerOpen(page);
 
         const row = page.locator(`[data-session-key="${sessionKey}"]`);
         await row.waitFor({ state: "visible" });

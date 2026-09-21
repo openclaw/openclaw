@@ -821,6 +821,7 @@ export function createWorkerEnvironmentStore(
   };
   const prepared = createPreparedEnvironmentStoreOps({ now, read, write, createIntent, get: find });
   const sessionAttachments = createWorkerEnvironmentSessionAttachmentStore({
+    path,
     now,
     read,
     write,
@@ -830,9 +831,8 @@ export function createWorkerEnvironmentStore(
   return {
     ...prepared,
     ...sessionAttachments,
-    createIntent(input: WorkerEnvironmentIntentInput): WorkerEnvironmentRecord {
-      return write((db) => createIntent(db, input));
-    },
+    createIntent: (input: WorkerEnvironmentIntentInput): WorkerEnvironmentRecord =>
+      write((db) => createIntent(db, input)),
     get: (environmentId: string) => find(read(), required(environmentId, "id")),
     inventoryVersion,
     hasNodeEnrollmentOwner(nodeId: string): boolean {

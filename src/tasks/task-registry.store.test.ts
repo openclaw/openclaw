@@ -979,19 +979,10 @@ describe("task-registry store runtime", () => {
   });
 
   it("uses atomic task-plus-delivery store methods", async () => {
-    const upsertTaskWithDeliveryState = vi.fn();
-    const deleteTaskWithDeliveryState = vi.fn();
-    configureTaskRegistryRuntime({
-      store: {
-        ...createInMemoryTaskRegistryStore(),
-        loadSnapshot: () => ({
-          tasks: new Map(),
-          deliveryStates: new Map(),
-        }),
-        upsertTaskWithDeliveryState,
-        deleteTaskWithDeliveryState,
-      },
-    });
+    const store = createInMemoryTaskRegistryStore();
+    const upsertTaskWithDeliveryState = vi.spyOn(store, "upsertTaskWithDeliveryState");
+    const deleteTaskWithDeliveryState = vi.spyOn(store, "deleteTaskWithDeliveryState");
+    configureTaskRegistryRuntime({ store });
 
     const created = createTaskRecord({
       runtime: "acp",
@@ -1005,7 +996,7 @@ describe("task-registry store runtime", () => {
       deliveryStatus: "pending",
     });
 
-    await maybeDeliverTaskStateChangeUpdate(created.taskId, {
+    await maybeDeliverTaskStateChangeUpdate(created, {
       at: 200,
       kind: "progress",
       summary: "working",

@@ -47,7 +47,7 @@ vi.mock("./recommended-tool-installs.js", () => ({
 const { clearManagedPluginCatalogCache } = await import("./management-catalog.js");
 const {
   listManagedPlugins,
-  resolveManagedPluginIconSource,
+  resolveManagedPluginIconSources,
   resolveManagedPluginActivityIconSource,
   resolveManagedSetupCatalogIconUrl,
 } = await import("./management-service.js");
@@ -300,6 +300,17 @@ describe("managed plugin catalog", () => {
         action: matches ? "manage" : "install",
       });
       expect(entry?.local.pluginId).toBe(matches ? "diffs" : undefined);
+      const sources = await resolveManagedPluginIconSources({
+        config: {},
+        env: {},
+        pluginId: "diffs",
+      });
+      const expectedRegistry =
+        source === "npm" ? "https://clawhub.ai" : clawhubUrl?.replace(/\/+$/, "");
+      expect(sources).toEqual(
+        expectedRegistry ? [{ kind: "clawhub", baseUrl: expectedRegistry, packageName }] : [],
+      );
+      expect(local.plugins[0]?.hasIcon).toBe(expectedRegistry ? true : undefined);
     },
   );
 
@@ -572,7 +583,7 @@ describe("managed plugin catalog", () => {
       env,
       officialCatalog: { entries: [] },
     });
-    const resolved = await resolveManagedPluginIconSource({
+    const resolved = await resolveManagedPluginIconSources({
       config,
       env,
       pluginId: "workboard",
@@ -580,7 +591,7 @@ describe("managed plugin catalog", () => {
 
     expect(catalog.plugins[0]).toMatchObject({ id: "workboard" });
     expect(catalog.plugins[0]).not.toHaveProperty("hasIcon");
-    expect(resolved).toBeUndefined();
+    expect(resolved).toEqual([]);
     expect(mocks.metadata).toHaveBeenNthCalledWith(1, {
       config,
       env,
@@ -611,7 +622,7 @@ describe("managed plugin catalog", () => {
     mocks.metadata.mockReturnValue(emptyMetadataSnapshot());
 
     const catalog = await listManagedPlugins({ config: {}, env: {}, officialCatalog });
-    const resolved = await resolveManagedPluginIconSource({
+    const resolved = await resolveManagedPluginIconSources({
       config: {},
       env: {},
       pluginId: "firecrawl",
@@ -620,7 +631,7 @@ describe("managed plugin catalog", () => {
     expect(catalog.plugins[0]).toMatchObject({ id: "firecrawl" });
     expect(catalog.plugins[0]).not.toHaveProperty("hasIcon");
     expect(catalog.plugins[0]).not.toHaveProperty("icon");
-    expect(resolved).toBeUndefined();
+    expect(resolved).toEqual([]);
   });
 
   it("resolves the portable package icon", async () => {
@@ -637,7 +648,7 @@ describe("managed plugin catalog", () => {
       config: {},
       env: {},
     });
-    const resolved = await resolveManagedPluginIconSource({
+    const resolved = await resolveManagedPluginIconSources({
       config: {},
       env: {},
       pluginId: "workboard",
@@ -648,7 +659,7 @@ describe("managed plugin catalog", () => {
       hasIcon: true,
       channelIds: ["workboard-chat"],
     });
-    expect(resolved).toEqual({ kind: "file", path: iconPath, rootPath: "/tmp/workboard" });
+    expect(resolved).toEqual([{ kind: "file", path: iconPath, rootPath: "/tmp/workboard" }]);
     expect(catalog.plugins[0]).not.toHaveProperty("hasActivityIcon");
     expect(catalog.plugins[0]).not.toHaveProperty("activityIconTools");
     expect(
@@ -775,13 +786,13 @@ describe("managed plugin catalog", () => {
       env: {},
       officialCatalog: { entries: [] },
     });
-    const resolved = await resolveManagedPluginIconSource({
+    const resolved = await resolveManagedPluginIconSources({
       config: {},
       env: {},
       pluginId: "workboard",
     });
 
     expect(catalog.plugins[0]).not.toHaveProperty("hasIcon");
-    expect(resolved).toBeUndefined();
+    expect(resolved).toEqual([]);
   });
 });

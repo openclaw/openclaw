@@ -1,7 +1,12 @@
 #!/usr/bin/env node
 
 import { appendFile } from "node:fs/promises";
-import { finishGuard, openGuard, withApprovalRequest } from "./guard-review.mjs";
+import {
+  SupersededReviewError,
+  finishGuard,
+  openGuard,
+  withApprovalRequest,
+} from "./guard-review.mjs";
 import { createIssueMutationHelpers, sanitizeGuardDisplayValue } from "./guard-shared.mjs";
 import { loadSecurityReviewPolicy } from "./security-review-policy.mjs";
 
@@ -161,6 +166,10 @@ export async function reviewSecuritySensitiveChanges(prepared) {
 if (import.meta.url === `file://${process.argv[1]}`) {
   reviewSecuritySensitiveChanges().catch(
     /** @param {unknown} error */ (error) => {
+      if (error instanceof SupersededReviewError) {
+        console.log(error.message);
+        return;
+      }
       console.error(error instanceof Error ? error.message : String(error));
       process.exitCode = 1;
     },

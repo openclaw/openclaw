@@ -1,4 +1,5 @@
 // Repo-local helpers for environment, network, filesystem, and time fixtures.
+export { runCliProcessChild } from "../cli/cli-process-child.test-helpers.js";
 export { jsonResponse, requestBodyText, requestUrl } from "../test-helpers/http.js";
 export { mockPinnedHostnameResolution } from "../test-helpers/ssrf.js";
 export { PROXY_FIXTURE_CERTIFICATE, PROXY_FIXTURE_KEY } from "../test-helpers/proxy-tls-fixture.js";

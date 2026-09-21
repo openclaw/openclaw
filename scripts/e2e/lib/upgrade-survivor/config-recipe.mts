@@ -137,6 +137,18 @@ function configSetJsonFile(
 
 const representativeConfigSteps: ConfigStep[] = [
   configSetJsonFile("models-openai", "models", "models.providers.openai", "models-openai.json"),
+  configSetJsonFile(
+    "models-anthropic",
+    "models-anthropic",
+    "models.providers.anthropic",
+    "models-anthropic.json",
+  ),
+  configSetJsonFile(
+    "models-google",
+    "models-google",
+    "models.providers.google",
+    "models-google.json",
+  ),
   // Keep the migration specimen idle while baseline and candidate services run:
   // a heartbeat refreshes its skills snapshot before inference, even when auth fails.
   configSetJsonFile("agents", "agents", "agents", "agents.json"),
@@ -232,7 +244,16 @@ const scenarioConfigSteps = new Map<string, ConfigStep[]>([
           "config",
           "set",
           "plugins.allow",
-          JSON.stringify(["discord", "memory", "telegram", "whatsapp", "codex"]),
+          JSON.stringify([
+            "anthropic",
+            "google",
+            "openai",
+            "discord",
+            "memory",
+            "telegram",
+            "whatsapp",
+            "codex",
+          ]),
           "--strict-json",
         ],
       },

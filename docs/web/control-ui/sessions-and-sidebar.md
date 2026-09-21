@@ -169,7 +169,9 @@ CPU because Apple silicon Macs and desktop-mode iPads also report it.
 
 Toggle the sidebar with **⌘B** on Mac or **Ctrl+B** on Windows/Linux. Open the command palette with **⌘K** on Mac or **Ctrl+K** on Windows/Linux. Mac **Ctrl+B** and **Ctrl+K** remain available for native text editing.
 
-During text composition, the command palette leaves Enter, Escape, and arrow keys to the input method.
+The search field updates immediately, while command filtering and session searches wait until you pause typing for 200 ms. Previous results stay in place during that pause but cannot be selected until the new query applies. Press Enter to apply a pending query immediately and select an available matching result. Clearing the field restores the default commands immediately.
+
+During text composition, the command palette pauses searches and leaves Enter, Escape, and arrow keys to the input method.
 
 After token or device-token authentication, the sidebar can show its cached session roster on reload only when the browser will present the Gateway token that authenticated the previous connection, or the paired device token retained from that connection. The cached roster has no live run state and is replaced by the live list after connecting. Other authentication methods wait for the connection; see [Warm reload](/web/control-ui/offline-and-reconnect#warm-reload).
 
@@ -426,7 +428,7 @@ For a remote target, the Control UI creates the repository or managed-worktree s
 
 Model and **Effort** are separate adjacent composer controls in chat and New session, on desktop and mobile. The model picker never contains Effort or Fast-mode controls. Long model labels ellipsize to leave room for the other controls; the full name remains in the picker, accessible label, and tooltip. Narrow composers, including split panes in wider windows, use compact controls so each picker stays independently clickable. Effort uses a gauge in these layouts whose needle reflects the current level, with a lightning badge when Fast mode is active. In chat, Fast mode stays in the Effort menu, or appears as the adjacent control when reasoning is unavailable. Models with neither available control omit it.
 
-Search the model picker by model name or provider. Your search stays applied as the model catalog refreshes. Press **Escape** to clear a nonempty search while keeping the picker open; press it again to close the picker and return focus to its trigger.
+Search the model picker by model name, model ID, provider, or provider/model reference. Your search stays applied as the model catalog refreshes. Press **Escape** to clear a nonempty search while keeping the picker open; press it again to close the picker and return focus to its trigger.
 
 When you switch sessions, the composer keeps the session's known model name visible while refreshing the model options available for that session. If the model is not yet known, the control shows a loading placeholder. Locked chats also show the selected model, or **Session model** when it is not known. The lock prevents model selection changes; it does not indicate that a native runtime owns the model.
 

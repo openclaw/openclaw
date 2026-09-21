@@ -95,7 +95,11 @@ function modelMatchRank(row: HTMLButtonElement, query: string): number | null {
   if (provider.startsWith(query)) {
     return 3;
   }
-  return provider.includes(query) ? 4 : null;
+  if (provider.includes(query)) {
+    return 4;
+  }
+  const reference = row.dataset.chatModelTarget ?? row.dataset.chatModelOption ?? "";
+  return reference.toLocaleLowerCase().includes(query) ? 5 : null;
 }
 
 export function updateModelSearch(input: HTMLInputElement, preserveHighlight = false): void {

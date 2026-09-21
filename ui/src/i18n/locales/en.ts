@@ -1455,8 +1455,7 @@ export const en: TranslationMap & {
     hideValue: "Hide value",
     revealValue: "Reveal value",
     disableStreamToReveal: "Disable stream mode to reveal value",
-    storedSecretNotRevealable:
-      "Stored secrets are never sent to the browser; enter a new value to replace it",
+    storedSecretNotRevealable: "This editor cannot reveal the stored value.",
     unsupportedType: "Unsupported type: {type}. Use Raw mode.",
     structuredSecretRaw: "Structured value (SecretRef) - use Raw mode to edit",
     structuredSecretFile: "Structured value (SecretRef) - edit the config file directly",
@@ -1479,7 +1478,6 @@ export const en: TranslationMap & {
     removeItem: "Remove item",
     customEntries: "Custom entries",
     addEntry: "Add Entry",
-    noCustomEntries: "No custom entries.",
     key: "Key",
     removeEntry: "Remove entry",
     renameRedactedBlocked:
@@ -3908,6 +3906,12 @@ export const en: TranslationMap & {
       archived: "No longer pending",
       archivedReason: "The conversation moved on. You can still answer this question.",
       sendFailed: "Could not send your answer. Your draft is preserved.",
+      queued: "Answer queued",
+      sending: "Sending answer…",
+      sent: "Answer sent",
+      failed: "Answer not sent",
+      awaitingConfirmation: "Awaiting delivery confirmation",
+      retry: "Retry answer",
       draftStorageFailed:
         "This answer is not saved on this device. Keep this page open or copy your answer.",
       draftConflict: "This question was edited in another tab. Copy your answer before reloading.",

@@ -146,6 +146,8 @@ Channel setup catalogs retain the requested workspace and load-path scope, inclu
 
 After startup, runtime readers reuse that inventory without filesystem discovery, manifest rereads, or freshness checks. Narrow plugin selections are in-memory views of the same inventory. Changing an account or an agent's run workspace does not invalidate it. Explicit plugin lifecycle operations prepare a new inventory for installs, updates, removals, source or manifest edits, and discovery-root changes before publishing it to the running Gateway.
 
+Plugin reload reconciles config watcher events after asynchronous metadata preparation. An unchanged source event does not cancel the operation; newer writes or changed config, install records, or source ownership still supersede it.
+
 Legacy session-key migration selects plugins that declare that capability before checking channel presence. Owners already eligible under migration policy do not need a channel-presence probe. Scoped selections probe persisted credentials only for their channel owners, so unrelated authentication modules stay unloaded during Doctor repairs. This credential scope does not limit environment-based presence signals: configured channels with missing plugins still produce installation and recovery hints.
 
 Model-id normalization policies are prepared with each snapshot or narrowed view. Model selection, catalogs, and runtime normalization carry that view forward instead of rebuilding policies from its plugin list. An empty view remains authoritative and cannot inherit policies from a broader process snapshot.
@@ -300,7 +302,8 @@ state temporary directory, `~/.openclaw/tmp` even when another state directory i
 selected, the current system temporary directory, `/tmp` on
 POSIX hosts, and recorded managed-service `TMPDIR` locations. It deduplicates
 directory aliases and reports each capture's path and regular-file size without
-following links inside captures.
+following links inside captures. Catalog roots include all nested
+`openclaw-plugin-build-*` trees in their reported size and removal receipt.
 
 `openclaw doctor --fix` reclaims these legacy roots only while Doctor holds Gateway
 maintenance and a complete host process census finds no other OpenClaw producer.
@@ -323,6 +326,9 @@ Configured Gateway agents share one model-catalog worker per plugin-inventory
 lifetime. Agent and authentication facts belong to each task; plugin registrations
 and captured source remain with the shared inventory. Standalone hosts that supply
 their own environment retain an isolated catalog worker for that environment.
+Provider-discovery entries use the exact selected runtime instance's captured
+source when it is already loaded, so discovery does not create a second copy of
+the same plugin package. Standalone discovery keeps its own setup lifetime.
 Each worker retains one prepared catalog generation. Replacement releases the
 previous generation's registrations after its work settles. Successfully disposed
 registrations leave their plugin caches; unchanged registrations remain reusable

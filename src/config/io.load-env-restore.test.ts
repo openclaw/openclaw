@@ -1,10 +1,53 @@
 import { describe, expect, it } from "vitest";
 import { DuplicateAgentDirError } from "./agent-dirs.js";
+import { applyConfigEnvVars, createConfigRuntimeEnvBase, snapshotEnv } from "./config-env-vars.js";
 import { createConfigIO, restoreEnvChangesIfUnchanged } from "./io.js";
 import { getConfigResolutionFacts } from "./resolution-facts.js";
 import { withTempHome, writeOpenClawConfig } from "./test-helpers.js";
 
 describe("restoreEnvChangesIfUnchanged", () => {
+  it("restores external ownership when rejected config replaced equal lower-precedence bytes", () => {
+    const env = { KEY: "same" };
+    const cfg = { env: { vars: { KEY: "same" } } };
+    const before = snapshotEnv(env);
+    applyConfigEnvVars(cfg, env, { lowerPrecedenceEnv: { KEY: "same" } });
+    const after = snapshotEnv(env);
+    expect(createConfigRuntimeEnvBase(cfg, env).KEY).toBeUndefined();
+
+    restoreEnvChangesIfUnchanged({ env, before, after });
+
+    expect(env.KEY).toBe("same");
+    expect(createConfigRuntimeEnvBase(cfg, env).KEY).toBe("same");
+  });
+
+  it("preserves a later ownership change even when environment bytes are unchanged", () => {
+    const env: NodeJS.ProcessEnv = {};
+    const before = snapshotEnv(env);
+    applyConfigEnvVars({ env: { vars: { KEY: "value" } } }, env);
+    const after = snapshotEnv(env);
+    applyConfigEnvVars({}, env);
+
+    restoreEnvChangesIfUnchanged({ env, before, after });
+
+    expect(env.KEY).toBe("value");
+  });
+
+  it("restores earlier config ownership with its value after a rejected replacement", () => {
+    const env: NodeJS.ProcessEnv = {};
+    const cfg = { env: { vars: { KEY: "old" } } };
+    applyConfigEnvVars(cfg, env);
+    const before = snapshotEnv(env);
+    applyConfigEnvVars({ env: { vars: { KEY: "new" } } }, env, {
+      lowerPrecedenceEnv: { KEY: "old" },
+    });
+    const after = snapshotEnv(env);
+
+    restoreEnvChangesIfUnchanged({ env, before, after });
+
+    expect(env.KEY).toBe("old");
+    expect(createConfigRuntimeEnvBase(cfg, env).KEY).toBeUndefined();
+  });
+
   it.each([
     {
       name: "removes a newly injected key when unchanged from after snapshot",

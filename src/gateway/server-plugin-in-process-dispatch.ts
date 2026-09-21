@@ -146,6 +146,57 @@ export function runWithOperatorToolGatewayCleanupContext<T>(run: () => T): T {
   );
 }
 
+/** Holds the original operator source until an accepted asynchronous follow-up settles. */
+export async function runWithOperatorToolGatewayContinuationContext<T>(
+  run: () => Promise<T>,
+): Promise<T> {
+  const scope = getPluginRuntimeGatewayRequestScope();
+  const caller = getGatewayToolCallerIdentity();
+  const resolveGatewayContext = caller?.gatewayContextResolver ?? scope?.resolveGatewayContext;
+  if (!getInProcessGatewayRequestContext(resolveGatewayContext)) {
+    return await runWithOperatorToolGatewayCleanupContext(run);
+  }
+  const invocation = operatorToolGatewayAuthority.getStore();
+  const scopes =
+    caller?.operatorAuthority?.scopes ?? invocation?.scopes ?? scope?.client?.connect.scopes;
+  // Use the normal dispatch owner to intersect scopes and validate the live caller
+  // before transferring its source. A cleanup scope alone retains request lifetime.
+  const resolved = resolveInProcessGatewayDispatch("agent", {
+    forceSyntheticClient: true,
+    operatorRoleActor: { kind: "system" },
+    resolveGatewayContext,
+    ...(scopes ? { syntheticScopes: [...scopes] } : {}),
+  });
+  const captured = captureGatewayOperatorRunAuthority({
+    client: resolved.operatorSourceClient,
+    context: resolved.context,
+    hasCurrentClientAuthority: resolved.hasCurrentClientAuthority,
+  });
+  try {
+    return await runWithOperatorToolGatewayCleanupContext(() =>
+      withPluginRuntimeGatewayRequestScope(
+        {
+          ...getPluginRuntimeGatewayRequestScope(),
+          client: captured
+            ? mergePluginRuntimeClientInternal(resolved.client, {
+                operatorRunAuthority: captured.authority,
+              })
+            : resolved.client,
+          context: resolved.context,
+          resolveGatewayContext,
+          isWebchatConnect: resolved.isWebchatConnect,
+          // The retained source still checks device/profile/role and Gateway revocation;
+          // the completed request or disconnected transport no longer owns this work.
+          hasCurrentClientAuthority: captured ? undefined : resolved.hasCurrentClientAuthority,
+        },
+        run,
+      ),
+    );
+  } finally {
+    captured?.release();
+  }
+}
+
 type DispatchGatewayMethodInProcessOptions = {
   privateCompletion?: true;
   settleWakeReplay?: RequesterSettleWakeReplay;

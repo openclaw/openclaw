@@ -129,12 +129,20 @@ async function resetPreflightCandidateWorktree(worktreeDir: string, step: StepFa
 
 async function resolveExplicitTarget(params: {
   devTargetRef: string;
+  refreshedRemotes: readonly string[];
   gitRoot: string;
   steps: UpdateStepResult[];
   step: StepFactory;
   workStep: StepFactory;
 }): Promise<string | null> {
+  const warnings: string[] = [];
   for (const candidate of buildDevTargetRefResolutionCandidates(params.devTargetRef)) {
+    if (
+      candidate.startsWith("refs/remotes/") &&
+      !params.refreshedRemotes.some((remote) => candidate.startsWith(`refs/remotes/${remote}/`))
+    ) {
+      continue;
+    }
     const tagFetchRef = resolveTagFetchRef(candidate);
     if (tagFetchRef) {
       const remoteStep = await runStep(
@@ -146,13 +154,37 @@ async function resolveExplicitTarget(params: {
       const remotes = normalizeStringEntries((remoteStep.stdoutTail ?? "").split("\n"));
       let fetchedTag = false;
       for (const remote of remotes) {
-        const fetchStep = await runStep(
-          params.workStep(
-            "git-fetch-target-tag",
-            ["git", "-C", params.gitRoot, "fetch", remote, `+${tagFetchRef}:${tagFetchRef}`],
-            params.gitRoot,
-          ),
+        const options = params.workStep(
+          "git-fetch-target-tag",
+          ["git", "-C", params.gitRoot, "fetch", remote, `+${tagFetchRef}:${tagFetchRef}`],
+          params.gitRoot,
         );
+        const fetchStep = await runStep({
+          ...options,
+          progress: { ...options.progress, onStepComplete: undefined },
+        });
+        const interrupted =
+          fetchStep.termination === "signal" ||
+          fetchStep.exitCode === 130 ||
+          fetchStep.exitCode === 143;
+        if (fetchStep.exitCode !== 0 && !interrupted) {
+          fetchStep.advisory = {
+            kind: "recoverable-maintenance",
+            message: `Could not fetch the requested tag from ${remote}; trying another remote. ${fetchStep.stderrTail ?? ""}`,
+          };
+          warnings.push(fetchStep.advisory.message);
+        }
+        if (warnings.length > 0) {
+          fetchStep.warnings = [...warnings];
+        }
+        options.progress?.onStepComplete?.({
+          ...fetchStep,
+          index: options.stepIndex,
+          total: options.totalSteps,
+        });
+        if (interrupted) {
+          return null;
+        }
         if (fetchStep.exitCode === 0) {
           fetchedTag = true;
           break;
@@ -180,6 +212,7 @@ async function resolveExplicitTarget(params: {
 async function resolveUpstreamCandidates(params: {
   gitRoot: string;
   needsCheckoutMain: boolean;
+  refreshedRemotes: readonly string[];
   steps: UpdateStepResult[];
   step: StepFactory;
 }): Promise<
@@ -205,13 +238,7 @@ async function resolveUpstreamCandidates(params: {
     localDevBranchExists = localMainStep.exitCode === 0;
   }
   if (params.needsCheckoutMain && localDevBranchExists === false) {
-    const remoteStep = await runStep(
-      params.step("git-remote", ["git", "-C", params.gitRoot, "remote"], params.gitRoot),
-    );
-    if (remoteStep.exitCode !== 0) {
-      return { status: "error", reason: "preflight-remote-failed" };
-    }
-    remoteBranchRefs = normalizeStringEntries((remoteStep.stdoutTail ?? "").split("\n")).map(
+    remoteBranchRefs = params.refreshedRemotes.map(
       (remote) => `refs/remotes/${remote}/${DEV_BRANCH}`,
     );
   }
@@ -510,6 +537,7 @@ async function testPreflightCandidate(params: {
 export async function runGitCandidatePreflight(params: {
   gitRoot: string;
   devTarget?: DevUpdateTarget;
+  refreshedRemotes: readonly string[];
   targetRevision?: string;
   beforeSha?: string | null;
   beforeGitStaging?: UpdateRunnerOptions["beforeGitStaging"];

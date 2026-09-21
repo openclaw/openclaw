@@ -27,6 +27,8 @@ export type OperationalRunInstanceRef = Readonly<{
 /** Exact context carried by one admitted execution and every retry/fallback it owns. */
 export type AdmittedRunContext = Readonly<{
   operationalRunInstance: OperationalRunInstanceRef;
+  /** Scheduler-authored ingress authority, independent of optional audit collection. */
+  admissionSource?: "operator-schedule" | "requester-schedule";
   executionIdentityToken?: ExecutionIdentityAdmissionToken;
 }>;
 
@@ -107,6 +109,7 @@ type DelegatedAuthorityLease = {
 };
 
 const delegatedAuthorityLeases = new WeakMap<AdmittedRunContext, DelegatedAuthorityLease>();
+const admittedContextsByAuthority = new WeakMap<AgentRunDelegatedAuthority, AdmittedRunContext>();
 const activeNativeHookRecoveryLeases = new Map<
   string,
   { lease: DelegatedAuthorityLease; releaseOperatorAuthority?: () => void }
@@ -126,6 +129,9 @@ function bindAdmittedRunDelegatedAuthority(
   previousRecovery?.releaseOperatorAuthority?.();
   const lease = { authority, foregroundClosed: false, assertSourceCurrent, operatorAuthority };
   delegatedAuthorityLeases.set(context, lease);
+  if (!admittedContextsByAuthority.has(authority)) {
+    admittedContextsByAuthority.set(authority, context);
+  }
 }
 
 /** Reads the immutable outer-run authority without reviving a closed claim. */
@@ -164,6 +170,16 @@ export function readPreparedRunOperatorAuthority(
     assertAdmittedRunOperatorAuthority(authority);
   }
   return authority;
+}
+
+/** Reads the original admission source only through its exact live authority. */
+export function getAdmittedRunSource(
+  authority: AgentRunDelegatedAuthority | undefined,
+): AdmittedRunContext["admissionSource"] {
+  const context = authority && admittedContextsByAuthority.get(authority);
+  return context && getAdmittedRunDelegatedAuthority(context) === authority
+    ? context.admissionSource
+    : undefined;
 }
 
 /** Captures an exact admitted-run assertion for work that may cross an await boundary. */
@@ -315,6 +331,7 @@ export function prepareSystemAgentRunAdmission(
  */
 export function prepareAgentRunAdmission(params: {
   cfg: OpenClawConfig;
+  admissionSource?: AdmittedRunContext["admissionSource"];
   facts: Omit<ExecutionIdentityAdmissionFacts, "runtime">;
   operationalRunInstance: OperationalRunInstanceRef;
   recovery?: ExecutionIdentityRecoveryAdmission;
@@ -394,6 +411,7 @@ export function prepareAgentRunAdmission(params: {
         });
         const context = admitPreparedAgentRun({
           cfg: params.cfg,
+          admissionSource: params.admissionSource,
           facts,
           operationalRunInstance,
           runtimeInstanceId: admittedRuntimeInstanceId,
@@ -468,6 +486,7 @@ function consumeRecoveryAdmission(params: {
  */
 function admitPreparedAgentRun(params: {
   cfg: OpenClawConfig;
+  admissionSource?: AdmittedRunContext["admissionSource"];
   facts: ExecutionIdentityAdmissionFacts;
   operationalRunInstance: OperationalRunInstanceRef;
   runtimeInstanceId?: string;
@@ -477,6 +496,10 @@ function admitPreparedAgentRun(params: {
     throw new Error("operational run instance disagrees with prepared admission");
   }
   const operationalRunInstance = params.operationalRunInstance;
+  const admitted = {
+    operationalRunInstance,
+    ...(params.admissionSource ? { admissionSource: params.admissionSource } : {}),
+  };
   // Consume the one-shot recovery lease even while collection is disabled so a
   // later operational instance cannot adopt evidence that belonged to this run.
   const recovery = consumeRecoveryAdmission({
@@ -484,7 +507,7 @@ function admitPreparedAgentRun(params: {
     runId: params.facts.runId,
   });
   if (!isExecutionIdentityCollectionEnabled(params.cfg)) {
-    return Object.freeze({ operationalRunInstance });
+    return Object.freeze(admitted);
   }
   const executionIdentityToken =
     recovery.token ??
@@ -492,7 +515,7 @@ function admitPreparedAgentRun(params: {
       ? createExecutionIdentityAdmissionToken(params.facts.runId)
       : undefined);
   if (!executionIdentityToken) {
-    return Object.freeze({ operationalRunInstance });
+    return Object.freeze(admitted);
   }
 
   enqueueExecutionIdentityContextAtAdmission(params.facts, {
@@ -501,5 +524,5 @@ function admitPreparedAgentRun(params: {
     runtimeInstanceId: params.runtimeInstanceId,
     retryOnly: params.recovery?.retryOnly === true,
   });
-  return Object.freeze({ operationalRunInstance, executionIdentityToken });
+  return Object.freeze({ ...admitted, executionIdentityToken });
 }

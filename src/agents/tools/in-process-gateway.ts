@@ -23,6 +23,7 @@ import {
   dispatchGatewayMethodInProcess,
   getInProcessGatewayRequestContext,
   runWithOperatorToolGatewayCleanupContext,
+  runWithOperatorToolGatewayContinuationContext,
 } from "../../gateway/server-plugin-in-process-dispatch.js";
 import {
   getPluginRuntimeGatewayRequestScope,
@@ -102,6 +103,18 @@ export function runWithGatewayToolCleanupContext<T>(
   const resolveGatewayContext = callerGatewayContextResolver(explicitResolver);
   return withoutGatewayToolCallerIdentity(() =>
     runWithOperatorToolGatewayCleanupContext(() =>
+      resolveGatewayContext
+        ? withPluginRuntimeGatewayContextResolver(resolveGatewayContext, run)
+        : run(),
+    ),
+  );
+}
+
+/** Transfers accepted reply work to a bounded source-authority hold, not the tool lifetime. */
+export function runWithGatewayToolContinuationContext<T>(run: () => Promise<T>): Promise<T> {
+  const resolveGatewayContext = callerGatewayContextResolver();
+  return runWithOperatorToolGatewayContinuationContext(() =>
+    withoutGatewayToolCallerIdentity(() =>
       resolveGatewayContext
         ? withPluginRuntimeGatewayContextResolver(resolveGatewayContext, run)
         : run(),

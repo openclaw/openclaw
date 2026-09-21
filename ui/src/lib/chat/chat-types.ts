@@ -120,6 +120,8 @@ export type ToolApprovalReview = {
 
 export type ChatQueueItem = {
   id: string;
+  /** UI question associated with this input; delivery and retry stay outbox-owned. */
+  asyncQuestionItemId?: string;
   workContext?: ChatWorkContext;
   workContextUnavailable?: true;
   text: string;

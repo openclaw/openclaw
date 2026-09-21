@@ -340,7 +340,7 @@ export function createPageState(
       renderLifecycle.invalidate();
       return;
     }
-    const outcome = removeQueuedMessage(state, id);
+    const outcome = removeQueuedMessage(state, id, { discard: true });
     if (outcome === "removed") {
       setChatError(state, null);
       void resumeStoredChatOutboxes(state);

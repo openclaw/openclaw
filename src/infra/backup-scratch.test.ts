@@ -9,6 +9,7 @@ import {
   maintainBackupScratch,
 } from "./backup-scratch.js";
 import * as fsSafe from "./fs-safe.js";
+import * as nodeSqlite from "./node-sqlite.js";
 import * as stagingToken from "./sqlite-staging-token.js";
 
 const dirs = useAutoCleanupTempDirTracker(afterEach);
@@ -53,6 +54,47 @@ it.each(["lstat", "boundary", "cleanup"] as const)(
     expect(report.reclaimed).toEqual([]);
     expect(report.alreadyReclaimed).toEqual([directory]);
     expect(log).toHaveBeenCalledWith(`Backup scratch already reclaimed: ${directory}`);
+  },
+);
+
+it.each(["directory", "token"] as const)(
+  "reports native token-open failure according to remaining scratch (%s removed)",
+  async (removed) => {
+    const root = dirs.make("backup-scratch-token-vanished-");
+    const { directory, release } = await createBackupScratchDirectory(root);
+    release(true);
+    const tokenPath = path.join(directory, stagingToken.SQLITE_STAGING_TOKEN_FILES[0]);
+    const tokenLocation = nodeSqlite.resolveExistingSqliteFileUri(tokenPath);
+    const open = nodeSqlite.openNodeSqliteDatabase;
+    let nativeFailure: unknown;
+    vi.spyOn(nodeSqlite, "openNodeSqliteDatabase").mockImplementation((...args) => {
+      if (args[0] !== tokenLocation) {
+        return open(...args);
+      }
+      fsSync.rmSync(removed === "directory" ? directory : tokenPath, { recursive: true });
+      try {
+        return open(...args);
+      } catch (error) {
+        nativeFailure = error;
+        throw error;
+      }
+    });
+    const log = vi.fn();
+    const report = await maintainBackupScratch({ roots: [root], repair: true, log });
+    expect(nativeFailure).toBeInstanceOf(Error);
+    expect(report.reclaimed).toEqual([]);
+    expect(report.active).toEqual([]);
+    if (removed === "directory") {
+      expect(report.warnings).toEqual([]);
+      expect(report.alreadyReclaimed).toEqual([directory]);
+      expect(log).toHaveBeenCalledWith(`Backup scratch already reclaimed: ${directory}`);
+    } else {
+      expect(report.alreadyReclaimed).toEqual([]);
+      expect(report.warnings).toEqual([
+        expect.stringContaining(`Backup scratch preserved at ${directory}:`),
+      ]);
+      await expect(fs.stat(directory)).resolves.toBeDefined();
+    }
   },
 );
 

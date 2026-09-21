@@ -236,6 +236,7 @@ describe("tsdown config", () => {
       unifiedGraph,
       expectDefined(workerGraph, "deploy worker graph"),
       requireStandaloneRuntimeGraph("worker/image-processor.worker"),
+      requireStandaloneRuntimeGraph("worker/sqlite-store.worker"),
       expectDefined(handoffGraph, "managed handoff graph"),
       requireNativeHookRelayGraph(),
       requireStandaloneRuntimeGraph("infra/sqlite-readonly-location.worker"),

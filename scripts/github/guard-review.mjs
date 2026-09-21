@@ -1,4 +1,5 @@
 import { readFile } from "node:fs/promises";
+import { setTimeout as wait } from "node:timers/promises";
 import {
   GitHubRateLimitError,
   createGitHubApi,
@@ -8,6 +9,19 @@ import {
 import { securityReviewRollout } from "./security-review-rollout.mjs";
 
 const requestMarker = "<!-- openclaw:approval-request ";
+
+export class SupersededReviewError extends Error {
+  constructor() {
+    super(
+      "Superseded by a newer PR head; skipping this evaluation. Its automatic event will evaluate it.",
+    );
+  }
+}
+
+function isSupersededHead(expected, current) {
+  const validHead = (sha) => typeof sha === "string" && /^[a-f0-9]{40}$/u.test(sha);
+  return validHead(expected) && validHead(current) && expected !== current;
+}
 
 function pullRequestNumber(event) {
   if (event.pull_request) {
@@ -40,14 +54,49 @@ function snapshot(pr) {
   ]);
 }
 
-export async function assertGuardUnchanged(guard) {
+export async function assertGuardUnchanged(guard, { allowFileCountChange = false } = {}) {
   const current = await guard.api.request(guard.pullPath);
-  if (snapshot(current) !== snapshot(guard.pullRequest)) {
+  if (
+    current.number === guard.pullRequest.number &&
+    isSupersededHead(guard.pullRequest.head?.sha, current.head?.sha)
+  ) {
+    throw new SupersededReviewError();
+  }
+  const expected = allowFileCountChange
+    ? { ...guard.pullRequest, changed_files: current.changed_files }
+    : guard.pullRequest;
+  if (snapshot(current) !== snapshot(expected)) {
     throw new Error(
       "The pull request changed during security review; the next automatic event will evaluate it.",
     );
   }
   return current;
+}
+
+async function readGuardFileSnapshot(review) {
+  const retryDelays = [1_000, 2_000, 4_000];
+  let pullRequest = review.pullRequest;
+  for (let attempt = 0; ; attempt += 1) {
+    const files = await review.api.paginate(`${review.pullPath}/files`);
+    const current = await assertGuardUnchanged(review, { allowFileCountChange: true });
+    if (
+      files.length === pullRequest.changed_files &&
+      current.changed_files === pullRequest.changed_files
+    ) {
+      return { pullRequest: current, files };
+    }
+    const detail = `GitHub did not return a consistent, complete changed-file list (expected ${pullRequest.changed_files}, received ${files.length}, current count ${current.changed_files})`;
+    if (attempt >= retryDelays.length) {
+      throw new Error(
+        `${detail}. Automatic file-list recovery exhausted; security review remains incomplete.`,
+      );
+    }
+    console.warn(`${detail}; retrying in ${retryDelays[attempt] / 1_000}s.`);
+    await wait(retryDelays[attempt]);
+    // Only the count may settle. A changed head, target, or author invalidates
+    // this evaluation; never reuse partial files against a corrected count.
+    pullRequest = await assertGuardUnchanged(review, { allowFileCountChange: true });
+  }
 }
 
 export async function readGuardReview() {
@@ -73,6 +122,9 @@ export async function readGuardReview() {
   const pullRequest = await api.request(pullPath);
   const expectedHead = process.env.OPENCLAW_SECURITY_REVIEW_HEAD_SHA;
   if (expectedHead !== undefined && expectedHead !== pullRequest.head?.sha) {
+    if (pullRequest.number === number && isSupersededHead(expectedHead, pullRequest.head?.sha)) {
+      throw new SupersededReviewError();
+    }
     throw new Error(
       "The PR head changed after scheduling; its next automatic event will evaluate it.",
     );
@@ -114,14 +166,16 @@ export async function openGuard({ context, commentMarker, approvalCommand }, pre
   }
   // Invalidate previous approval before any fallible file or authority reads.
   await publishGuardStatus(guard, "failure", "Security review has not completed");
-  review.files ??= await guard.api.paginate(`${guard.pullPath}/files`);
-  if (review.files.length !== guard.pullRequest.changed_files) {
-    throw new Error(
-      "GitHub did not return the complete changed-file list. Split the PR and retry.",
-    );
+  if (review.fileSnapshot) {
+    await assertGuardUnchanged(review);
+  } else {
+    // Share success or failure so the sibling guard cannot restart the budget.
+    review.fileSnapshot = readGuardFileSnapshot(review);
   }
-  await assertGuardUnchanged(guard);
-  guard.files = review.files;
+  const { pullRequest, files } = await review.fileSnapshot;
+  review.pullRequest = pullRequest;
+  guard.pullRequest = pullRequest;
+  guard.files = files;
   review.guards?.push(guard);
   return guard;
 }

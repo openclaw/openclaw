@@ -290,18 +290,24 @@ describe.skipIf(process.platform === "win32")("native inference admission", () =
       });
       await client.initialize();
       expect(client.getRuntimeIdentity()?.serverVersion).toBe(CODEX_APP_SERVER_VERSION);
+      const started = new Map<string, string>();
       const terminals = new Map<string, string>();
       client.addNotificationHandler((event) => {
         if (
-          event.method !== "turn/completed" ||
+          (event.method !== "turn/started" && event.method !== "turn/completed") ||
           !isJsonObject(event.params) ||
           typeof event.params.threadId !== "string" ||
           !isJsonObject(event.params.turn) ||
+          typeof event.params.turn.id !== "string" ||
           typeof event.params.turn.status !== "string"
         ) {
           return;
         }
-        terminals.set(event.params.threadId, event.params.turn.status);
+        if (event.method === "turn/started") {
+          started.set(event.params.threadId, event.params.turn.id);
+        } else {
+          terminals.set(event.params.threadId, event.params.turn.status);
+        }
         changed.emit("changed");
       });
       const begin = async (parent = false) => {
@@ -340,6 +346,10 @@ describe.skipIf(process.platform === "win32")("native inference admission", () =
       const activeDials = transport.dials;
       const cancelled = await begin();
       await waitFor(() => (transport.upgrades.has(cancelled.threadId) ? true : undefined));
+      // Native prewarm can open the socket before turn/started establishes the active turn.
+      await waitFor(() =>
+        started.get(cancelled.threadId) === cancelled.turnId ? true : undefined,
+      );
       await client.request("turn/interrupt", {
         threadId: cancelled.threadId,
         turnId: cancelled.turnId,

@@ -282,7 +282,7 @@ describe("command palette people mentions", () => {
     await f.palette.updateComplete;
     expect(f.input.value).toBe(value);
     expect(f.recipients()).toHaveLength(0);
-    await vi.advanceTimersByTimeAsync(50);
+    await vi.advanceTimersByTimeAsync(200);
     expect(f.context.sessions.list).toHaveBeenCalledWith(
       expect.objectContaining({ search: value.trim() }),
     );

@@ -701,6 +701,16 @@ Deferred publication or required flow work stops settlement before another task 
 admitted. The committed result survives, and the existing bounded flow-repair owner
 retains its obligation without replaying that task write.
 
+Task state-change notification acknowledgements use the same shared-state worker
+and publication owner. Direct sends and queued session events retain their producing
+task and event across preparation and transport waits. Acknowledgements preserve
+the current delivery origin and newest event watermark, with separate best-effort
+watermark and task timestamp writes. A committed acknowledgement is not replayed
+when projection publication fails; the existing read and flow owners retain recovery.
+Preparation cleanup joins any acknowledgement it already started. Terminal delivery
+status writes and native notification preparation retain their existing owners.
+Storage representation, schemas, retention, and update behavior are unchanged.
+
 Agent-event task progress uses the same shared-state worker and publication owner.
 Ingestion retains exact task, run, and backing identities without waiting for a native
 coordinator. Bounded progress batches preserve every tool-start count and the latest
@@ -965,6 +975,25 @@ remain stable, and concurrent loads retain the first complete publication.
 Workspace filtering still precedes appended library pins; workspace-only loads omit them. Workspace
 plugin discovery retains its existing synchronous metadata path. Schemas,
 retention, and update behavior are unchanged.
+
+MCP OAuth storage reads, pending callback lookup, and requester counts run in
+workers. Read-only operations retain the captured store and the caller's snapshot
+and artifact-preserving scope through the shared-state read owner. Its existing
+worker pool owns queue admission, and canonical close joins accepted reads and
+worker cleanup. Provider creation prepares the redirect facts required by the
+SDK's synchronous metadata getters; credential and discovery callbacks await
+fresh storage reads. An earlier read cannot replace metadata acknowledged by a
+later write. If a write reports an error after a possible commit, the provider
+requires an acknowledged read before serving metadata again. Login callbacks
+recheck their current lifecycle after awaited reads. Status and inventory reads
+do not create state. Lease validation and mutations retain their native owners
+and captured store context until their complete lifecycle moves off the
+application thread.
+
+Requester MCP setup reads its sorted authorization set in one current read-worker
+operation. The worker decodes selected rows in caller order and returns only
+status facts; each message still observes current storage before runtime reuse.
+No schema, stored format, migration, or updater behavior changes.
 
 Model-context reads and session transcript preparation use the session-transcript
 worker with separate bounded queues. Background preparation cannot occupy the

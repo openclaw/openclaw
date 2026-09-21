@@ -20,6 +20,7 @@ permissions:
 jobs:
   prepare-mermaid:
     name: Prepare Mermaid assets
+    if: github.event_name != 'schedule' || github.repository == 'openclaw/openclaw'
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     permissions:

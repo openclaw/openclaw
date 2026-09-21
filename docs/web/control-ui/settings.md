@@ -194,20 +194,27 @@ the Control UI. For example, a base path of `/openclaw` uses
 optional plugin is disabled.
 
 The **Plugins** hub at `/plugins` browses the catalog. Its **Skills** and
-**Workshop** tabs open the per-agent skill manager at `/skills` and Skill
+**Skill workshop** tabs open the per-agent skill manager at `/skills` and Skill
 Workshop at `/skills/workshop`. **Settings → Plugins** at `/settings/plugins`
-shows the local inventory, with search and installed/enabled filters. Select a
-plugin to open its overview.
+shows the searchable local inventory. Select a plugin to open its overview.
 
-Opening a plugin shows its description, publisher, supported capabilities, and
-full README on one overview. Select a tool to read its full description. The
-metadata rail shows available release details, categories, repository, and
+Opening a plugin shows its description, publisher when available, skills, tools,
+MCP servers, and full README on one overview. Select a tool to read its full
+description. The metadata rail shows available release details, categories, repository, and
 documentation. Security audits link to ClawHub.
 
-Installed plugins offer **Reload plugin**, **Enable** or **Disable**, **Uninstall**
-when removable, and **Settings**. Installing from a catalog overview keeps the
-same URL and changes those actions in place. **Settings** opens an addressable
-editor with plugin configuration and permissions; Back returns to the overview.
+Installed plugins offer **Ask OpenClaw**, **Enable** or **Disable**, **Uninstall**
+when removable, and an icon button for **Settings**, in that order. **Install**
+starts installation immediately and accepts the staged plugin’s declared
+capabilities without changing your hook and model permissions. Configured
+install-policy warnings still require an explicit acknowledgment. Installing from
+a catalog overview keeps the same URL. Its progress popover shows the reported
+steps and elapsed time, including runtime application. Installed actions appear
+only after the Gateway returns the final result.
+Ready new plugins become enabled; missing required configuration or an existing
+disabled choice keeps them disabled. **Settings** opens an addressable
+editor with plugin configuration and editable **Permissions** controls; Back returns
+to the overview.
 Existing `#configuration` links still open the editor. Local controls and the
 installed README remain available when optional ClawHub metadata cannot load.
 The catalog shows featured plugins and category shelves. Search queries
@@ -225,7 +232,7 @@ Copy controls. Reading a bundle requires `operator.read`.
 
 The **Skills** tab keeps the skill status report, enable/disable toggles, API
 key entry, and inline ClawHub skill search, scoped to the selected agent. The
-**Workshop** tab shows installed skills and pending
+**Skill workshop** tab shows installed skills and pending
 [skill proposals](/tools/skill-workshop). **Learn from past conversations** opens
 a normal session with the selected agent's configured model and permitted tools.
 The agent chooses which history and skills to inspect, following the current
@@ -241,8 +248,12 @@ enabling, disabling, or removing a plugin and changing MCP servers require
 `operator.admin`; those actions stay disabled for read-only operators.
 
 Plugin-declared credential fields support masked key entry and an inline key-signup
-link. The eye reveals only the key you are entering; it never retrieves the stored
-secret. Leaving an empty input unchanged preserves its existing credential.
+link. The eye reveals the key you are entering. With no new key entered,
+administrators can choose **Show API key** to retrieve the stored literal for that
+field and current config revision. A revealed saved value is hidden again when
+the field, configuration revision, or Gateway connection changes. Secret references
+and environment values are never resolved or revealed. Leaving an empty input
+unchanged preserves its existing credential.
 
 Administrators can inspect and edit a declared credential's secret reference: its
 source (`env`, `file`, `exec`, or `store`), provider alias, and identifier. The
@@ -262,7 +273,7 @@ the ordinary schema editor.
 
 ClawHub installs run through the Gateway and keep the same trust, integrity,
 and plugin-install policy checks as other Gateway-mediated installs. Install,
-enable, disable, remove, and Reload actions wait for runtime application without
+enable, disable, and remove actions wait for runtime application without
 restarting the Gateway. Ordinary plugin config edits also apply automatically
 in the default hybrid reload mode. See
 [Apply changes and inspect](/plugins/manage-plugins#apply-changes-and-inspect)

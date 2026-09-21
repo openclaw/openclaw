@@ -21,9 +21,10 @@ import {
 import { renderNode } from "../../components/config-form.ts";
 import { icons } from "../../components/icons.ts";
 import { renderSettingsLoadingSkeleton } from "../../components/settings-ui.ts";
-import "../../components/web-awesome.ts";
 import { t } from "../../i18n/index.ts";
+import "../../components/web-awesome.ts";
 import { registerPluginManagementEnglish } from "../../i18n/locales/en-plugin-management.ts";
+import { resolveScrollBehavior } from "../../lib/scroll-behavior.ts";
 import { OpenClawLightDomElement } from "../../lit/openclaw-element.ts";
 import { renderPluginDetailBreadcrumb } from "./detail-shell.ts";
 import { pluginEntryValue, type PluginSettingsEditorModel } from "./settings-model.ts";
@@ -34,9 +35,11 @@ export type PluginSettingsField = ConfigNodeRenderParams & {
   label: string;
   help?: string;
   property: string;
+  /** Inspected host grants supply effective state without becoming configured defaults. */
+  effectiveValue?: unknown;
 };
 
-function flattenFields(
+export function flattenPluginSettingsFields(
   params: ConfigNodeRenderParams,
   rootProperty: string,
   ancestors: string[] = [],
@@ -58,7 +61,7 @@ function flattenFields(
     !shouldStageStructuredDraft(params, initial)
   ) {
     return resolveConfigObjectFields(params).fields.flatMap((field) =>
-      flattenFields(field, rootProperty, labels),
+      flattenPluginSettingsFields(field, rootProperty, labels),
     );
   }
   return [{ ...params, property: rootProperty, label: labels.join(": "), help }];
@@ -66,9 +69,10 @@ function flattenFields(
 
 export class PluginSettingsEditor extends OpenClawLightDomElement {
   @property({ attribute: false }) model?: PluginSettingsEditorModel;
-  @property({ attribute: false }) renderPermissions?: (
-    query: string,
-  ) => TemplateResult | typeof nothing;
+  @property({ attribute: false }) permissions?: {
+    fields: PluginSettingsField[];
+    loading?: boolean;
+  };
   @property({ attribute: false }) onAskSetting?: (field: PluginSettingsField) => void;
   @property({ attribute: false }) renderCredential?: (
     field: PluginSettingsField,
@@ -85,7 +89,8 @@ export class PluginSettingsEditor extends OpenClawLightDomElement {
     const { label, help, path, disabled } = field;
     // A retired dropdown keeps the callback that owns its rendered plugin selection.
     const onAskSetting = this.onAskSetting;
-    const effective = field.value === undefined ? field.schema.default : field.value;
+    const effective =
+      field.value === undefined ? (field.effectiveValue ?? field.schema.default) : field.value;
     const isBoolean =
       !hintForPath(path, field.hints)?.placeholder &&
       schemaType(field.schema) === "boolean" &&
@@ -93,7 +98,11 @@ export class PluginSettingsEditor extends OpenClawLightDomElement {
       !field.schema.anyOf &&
       !field.schema.oneOf;
     const descriptionId = configFieldId(path, "plugin-help");
-    const controlParams = { ...field, descriptionId: help ? descriptionId : undefined };
+    const controlParams = {
+      ...field,
+      value: field.value === undefined ? field.effectiveValue : field.value,
+      descriptionId: help ? descriptionId : undefined,
+    };
     const credential = this.renderCredential?.(controlParams);
     const control =
       credential ??
@@ -104,7 +113,7 @@ export class PluginSettingsEditor extends OpenClawLightDomElement {
       });
     return html`<div
       class="plugin-editor__row"
-      data-setting=${path.slice(4).join(".")}
+      data-setting=${path.slice(path[3] === "config" ? 4 : 3).join(".")}
       @click=${(event: MouseEvent) => {
         if (!isBoolean || disabled || getSelection()?.toString()) {
           return;
@@ -132,7 +141,7 @@ export class PluginSettingsEditor extends OpenClawLightDomElement {
               );
             }
             if (event.detail.item.value === "ask") {
-              onAskSetting?.(field);
+              onAskSetting?.({ ...field, value: effective });
             }
           }}
         >
@@ -160,7 +169,35 @@ export class PluginSettingsEditor extends OpenClawLightDomElement {
     </div>`;
   }
 
-  private renderGroups(params: ConfigNodeRenderParams, hasPermissions: boolean): TemplateResult {
+  private renderPermissions(): TemplateResult | typeof nothing {
+    if (!this.permissions) {
+      return nothing;
+    }
+    const query = this.query.trim().toLocaleLowerCase();
+    const fields = this.permissions.fields.filter(
+      (field) =>
+        !query ||
+        `${t("pluginsPage.editor.permissions")} ${field.label} ${field.help ?? ""}`
+          .toLocaleLowerCase()
+          .includes(query) ||
+        matchesNodeSearch({ ...field, criteria: { text: query, tags: [] } }),
+    );
+    return this.permissions.loading && !query
+      ? renderSettingsLoadingSkeleton({ rows: 3, carapace: true })
+      : fields.length
+        ? html`${repeat(
+            fields,
+            (field) => JSON.stringify(field.path),
+            (field) => this.renderField(field),
+          )}`
+        : nothing;
+  }
+
+  private renderGroups(
+    params: ConfigNodeRenderParams,
+    permissions: TemplateResult | typeof nothing,
+  ): TemplateResult {
+    const hasPermissions = permissions !== nothing;
     // Grouping changes presentation only: unions and enums must keep the
     // canonical whole-value control or valid alternatives become uneditable.
     const object =
@@ -175,7 +212,9 @@ export class PluginSettingsEditor extends OpenClawLightDomElement {
       (a, b) => (a.order ?? 0) - (b.order ?? 0),
     );
     const query = this.query.trim().toLocaleLowerCase();
-    const all = object.fields.flatMap((field) => flattenFields(field, String(field.path.at(-1))));
+    const all = object.fields.flatMap((field) =>
+      flattenPluginSettingsFields(field, String(field.path.at(-1))),
+    );
     const fields = all.filter(
       (field) =>
         !query ||
@@ -209,22 +248,68 @@ export class PluginSettingsEditor extends OpenClawLightDomElement {
           renderNode,
         )
       : nothing;
-    return html`${sections.map((section) =>
-      section.fields.length
-        ? html`<section class="plugin-editor__section">
-            ${section.title ? html`<h2>${section.title}</h2>` : nothing}
-            <div class="plugin-editor__group">
-              ${repeat(
-                section.fields,
-                (field) => JSON.stringify(field.path),
-                (field) => this.renderField(field),
+    const sectionId = (id: string) => configFieldId([...params.path, id], "section");
+    const links = sections.filter((section) => section.fields.length && section.title);
+    if (hasPermissions) {
+      links.push({ id: "__permissions", title: t("pluginsPage.editor.permissions"), fields: [] });
+    }
+    return html`<div class="plugin-editor__layout">
+      ${
+        groups.length
+          ? html`<nav class="plugin-editor__nav" aria-label=${t("pluginsPage.editor.navigation")}>
+              ${links.map(
+                (section) =>
+                  html`<a
+                    href=${`#${sectionId(section.id)}`}
+                    @click=${(event: MouseEvent) => {
+                      event.preventDefault();
+                      const target = this.querySelector<HTMLElement>(
+                        `#${CSS.escape(sectionId(section.id))}`,
+                      );
+                      target?.scrollIntoView({ block: "start", behavior: resolveScrollBehavior() });
+                      target?.focus({ preventScroll: true });
+                    }}
+                    >${section.title}</a
+                  >`,
               )}
-            </div>
-          </section>`
-        : nothing,
-    )}
-    ${additional !== nothing ? html`<section class="plugin-editor__section"><div class="plugin-editor__group">${additional}</div></section>` : nothing}
-    ${!fields.length && additional === nothing && !hasPermissions ? html`<p class="plugin-editor__empty">${t(query ? "pluginsPage.editor.noMatches" : "pluginsPage.editor.empty")}</p>` : nothing}`;
+            </nav>`
+          : nothing
+      }
+      <div class="plugin-editor__sections">
+        ${sections.map((section) =>
+          section.fields.length
+            ? html`<section
+                class="plugin-editor__section"
+                id=${sectionId(section.id)}
+                tabindex="-1"
+              >
+                ${section.title ? html`<h2>${section.title}</h2>` : nothing}
+                <div class="plugin-editor__group">
+                  ${repeat(
+                    section.fields,
+                    (field) => JSON.stringify(field.path),
+                    (field) => this.renderField(field),
+                  )}
+                </div>
+              </section>`
+            : nothing,
+        )}
+        ${additional !== nothing ? html`<section class="plugin-editor__section"><div class="plugin-editor__group">${additional}</div></section>` : nothing}
+        ${
+          hasPermissions
+            ? html`<section
+                class="plugin-editor__section"
+                id=${sectionId("__permissions")}
+                tabindex="-1"
+              >
+                <h2>${t("pluginsPage.editor.permissions")}</h2>
+                <div class="plugin-editor__group">${permissions}</div>
+              </section>`
+            : nothing
+        }
+        ${!fields.length && additional === nothing && !hasPermissions ? html`<p class="plugin-editor__empty">${t(query ? "pluginsPage.editor.noMatches" : "pluginsPage.editor.empty")}</p>` : nothing}
+      </div>
+    </div>`;
   }
 
   override render() {
@@ -234,7 +319,7 @@ export class PluginSettingsEditor extends OpenClawLightDomElement {
     }
     const plugin = props.result?.plugins.find((p) => p.id === props.pluginId);
     const title = plugin?.name ?? props.pluginId;
-    const permissions = this.renderPermissions?.(this.query.trim().toLocaleLowerCase()) ?? nothing;
+    const permissions = this.renderPermissions();
     const hasPermissions = permissions !== nothing;
     const params: ConfigNodeRenderParams | null = props.configSchema
       ? {
@@ -257,10 +342,10 @@ export class PluginSettingsEditor extends OpenClawLightDomElement {
     const fields =
       params && shouldStageStructuredDraft(params, initial)
         ? html`<openclaw-config-form-structured-draft
-            .props=${{ identity: JSON.stringify(params.path), sourceIdentity: params.value, initialValue: initial, params, renderNode: (p: ConfigNodeRenderParams) => this.renderGroups(p, hasPermissions) }}
+            .props=${{ identity: JSON.stringify(params.path), sourceIdentity: params.value, initialValue: initial, params, renderNode: (p: ConfigNodeRenderParams) => this.renderGroups(p, permissions) }}
           ></openclaw-config-form-structured-draft>`
         : params
-          ? this.renderGroups(params, hasPermissions)
+          ? this.renderGroups(params, permissions)
           : nothing;
     return html`<section class="plugin-editor">
       <header class="plugin-editor__header">
@@ -270,7 +355,6 @@ export class PluginSettingsEditor extends OpenClawLightDomElement {
           backLabel: title,
           onBack: props.onBack,
         })}
-        <h1>${t("pluginsPage.editor.title", { name: title })}</h1>
       </header>
       <label class="plugin-editor__search"
         >${icons.search}<input
@@ -287,7 +371,7 @@ export class PluginSettingsEditor extends OpenClawLightDomElement {
       ${props.configError ? html`<div class="callout danger" role="alert">${props.configError}<button class="btn btn--sm" @click=${props.configValue && props.configSchema ? props.onConfigWriteRetry : props.onConfigReadRetry}>${t("common.retry")}</button></div>` : nothing}
       ${props.configSchemaLoading || !props.configValue ? renderSettingsLoadingSkeleton({ rows: 2, carapace: true }) : fields}
       ${
-        hasPermissions
+        hasPermissions && !params
           ? html`<section class="plugin-editor__section">
               <h2>${t("pluginsPage.editor.permissions")}</h2>
               <div class="plugin-editor__group">${permissions}</div>

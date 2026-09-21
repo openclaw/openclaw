@@ -115,6 +115,20 @@ it("runs pending scans and expiry without opening a SQLite statement on the requ
   expect(prepare).not.toHaveBeenCalled();
 });
 
+it("leaves the default approval clock to the worker when dispatching a public read", async () => {
+  const databaseOptions = options();
+  const input = approval("worker-clock");
+  await store.insertOperatorApproval({ approval: input, databaseOptions });
+  // Only the requesting thread sees this pre-expiry clock; the real worker must
+  // expire the historical fixture using its own transaction-time clock.
+  using _ = vi.spyOn(Date, "now").mockReturnValue(input.createdAtMs);
+
+  expect(await store.getOperatorApprovalDetailed({ id: input.id, databaseOptions })).toMatchObject({
+    outcome: "found",
+    record: { status: "expired", terminalReason: "timeout" },
+  });
+});
+
 it("revalidates live authority after dispatch and rolls back refused decisions", async () => {
   const databaseOptions = options();
   await store.insertOperatorApproval({ approval: approval("guarded"), databaseOptions });

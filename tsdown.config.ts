@@ -977,6 +977,9 @@ const configs: UserConfig[] = [
   workerDeployBuildConfig({
     "worker/image-processor.worker": "src/worker/worker-deploy-image-processor.ts",
   }),
+  workerDeployBuildConfig({
+    "worker/sqlite-store.worker": "src/worker/worker-deploy-sqlite-store.ts",
+  }),
   { ...createManagedHandoffBuildConfig(), name: TSDOWN_UNIFIED_CONFIG_GROUP, env },
   nodeBuildConfig(
     {

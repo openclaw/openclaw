@@ -99,7 +99,6 @@ export type ReplyToolAuthorityOverlay = Readonly<{
   traceAuthorized: boolean;
   approvalReviewerDeviceId?: string;
   clientCaps?: string[];
-  bootstrapUserProfileId?: string;
   gatewayUiCommandTarget?: GatewayUiCommandTarget;
   toolBindings?: Readonly<Record<string, unknown>>;
 }>;

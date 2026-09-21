@@ -5,6 +5,7 @@ import { pathToFileURL } from "node:url";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { waitForSignalExitBarriers } from "../cli/signal-exit-barrier.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { acquireOpenClawStateDatabaseFileExclusion } from "../state/openclaw-state-db-cache.js";
 import {
   closeOpenClawStateDatabaseForTest,
@@ -133,12 +134,16 @@ function fixture(count = 3, payloadBytes = 4096) {
   vi.spyOn(workerUrls, "resolveRuntimeWorkerUrl").mockReturnValue(pathToFileURL(harness));
   let watcher: fs.FSWatcher;
   let timer: ReturnType<typeof setTimeout>;
+  let gatePoll: ReturnType<typeof setInterval>;
   const entered = new Promise<{ claimedRoot: string; file: string }>((resolve, reject) => {
-    watcher = fs.watch(root, () => {
+    const readEntered = () => {
       if (fs.existsSync(marker)) {
         resolve(JSON.parse(fs.readFileSync(marker, "utf8")));
       }
-    });
+    };
+    watcher = fs.watch(root, readEntered);
+    // Native directory notifications can be coalesced; the atomic marker owns readiness.
+    gatePoll = setInterval(readEntered, 25);
     watcher.once("error", reject);
     timer = setTimeout(
       () =>
@@ -152,6 +157,7 @@ function fixture(count = 3, payloadBytes = 4096) {
   }).finally(() => {
     watcher.close();
     clearTimeout(timer);
+    clearInterval(gatePoll);
   });
   const release = () => {
     if (gate.isTransaction) {
@@ -176,6 +182,7 @@ function fixture(count = 3, payloadBytes = 4096) {
       gate.close();
       watcher.close();
       clearTimeout(timer);
+      clearInterval(gatePoll);
     },
   };
 }
@@ -217,6 +224,7 @@ it("keeps caller cancellation independent of idle reclamation", async () => {
     const reason = new DOMException(`${mode} caller stopped`, "AbortError");
     const reclamation = reclaimAbandonedSqliteSnapshotsAsync(f.cache);
     const entered = await f.entered;
+    const ownedSetupReady = owned ? createDeferredCore() : undefined;
     // Establish the native owner before measuring cancellation of its snapshot.
     if (owned) {
       vi.stubEnv("XDG_CACHE_HOME", owned.bootstrapCache);
@@ -240,6 +248,7 @@ it("keeps caller cancellation independent of idle reclamation", async () => {
         try {
           await owner.runWithSourceReads(async () => {
             vi.stubEnv("XDG_CACHE_HOME", path.dirname(f.cache));
+            ownedSetupReady?.resolve();
             await readSnapshot(owned.options.path, controller.signal);
           });
         } finally {
@@ -251,6 +260,10 @@ it("keeps caller cancellation independent of idle reclamation", async () => {
       (error: unknown) => error,
     );
     try {
+      if (ownedSetupReady) {
+        // Exclusion acquisition and cold-open belong to fixture setup, not cancellation.
+        await Promise.race([ownedSetupReady.promise, operation]);
+      }
       const started = performance.now();
       controller.abort(reason);
       const error = await operation;

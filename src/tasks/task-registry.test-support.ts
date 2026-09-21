@@ -96,7 +96,7 @@ export function createTerminalSubagentKillResult(
 
 type TaskRegistryTestApi = {
   maybeDeliverTaskStateChangeUpdate(
-    taskId: string,
+    task: TaskRecord,
     latestEvent?: TaskEventRecord,
   ): Promise<TaskRecord | null>;
   resetTaskRegistryForTests(): void;
@@ -117,10 +117,10 @@ function getTestApi(): TaskRegistryTestApi {
 }
 
 export async function maybeDeliverTaskStateChangeUpdate(
-  taskId: string,
+  task: TaskRecord,
   latestEvent?: TaskEventRecord,
 ): Promise<TaskRecord | null> {
-  return await getTestApi().maybeDeliverTaskStateChangeUpdate(taskId, latestEvent);
+  return await getTestApi().maybeDeliverTaskStateChangeUpdate(task, latestEvent);
 }
 
 export function resetTaskRegistryForTests(opts?: { persist?: boolean }): void {

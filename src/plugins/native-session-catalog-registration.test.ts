@@ -328,8 +328,8 @@ describe("registered native catalog access", () => {
         list: () => blockers.promise,
         read: async ({ hostId, threadId }) => ({ hostId, threadId, items: [] }),
       };
-      const active = Array.from({ length: phase === "queued" ? 3 : 0 }, () =>
-        listSessionCatalogProvider(blocker, {}),
+      const active = Array.from({ length: phase === "queued" ? 3 : 0 }, (_, index) =>
+        listSessionCatalogProvider({ ...blocker, id: `blocking-${index}` }, {}),
       );
       const pending = withPluginRuntimeGatewayRequestScope(
         { pluginRegistry: state.registry, pluginId: "fixture", isWebchatConnect: () => false },
@@ -345,6 +345,7 @@ describe("registered native catalog access", () => {
           ? listSessionCatalogProvider(
               {
                 ...blocker,
+                id: "successor",
                 list: () => {
                   successorStarted.resolve();
                   return blockers.promise;

@@ -214,7 +214,7 @@ function publishDelivery(receipt: TaskAgentEventPublication): void {
     return;
   }
   if (receipt.nextEvent) {
-    void maybeDeliverTaskStateChangeUpdate(receipt.task.taskId, receipt.nextEvent);
+    void maybeDeliverTaskStateChangeUpdate(receipt.task, receipt.nextEvent);
   }
   if (isTerminalTaskStatus(receipt.task.status)) {
     void maybeDeliverTaskTerminalUpdate(receipt.task.taskId);

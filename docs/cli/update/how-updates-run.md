@@ -691,11 +691,19 @@ the sentinel.
   <Step title="Resolve the target">
     Selects the channel's tag or branch and fetches upstream as needed. If the resolved target SHA equals `HEAD`, finishes `skipped` with reason `already-current` before staging or stopping the service.
 
+    Dev updates fetch only the configured tracking remote for `main`, or the remote identified by an explicit tracked target. Unrelated remotes remain untouched, with a scope warning in update history; their availability cannot fail the update. When no local `main` exists, or an explicit commit or tag needs discovery, candidate remotes may be tried. Failed optional attempts are warnings, and stale refs from failed fetches cannot select a branch. A failed fetch from the configured authority still reports `fetch-failed` before activation. Fetching does not rewrite Git configuration.
+
+    Fetch behavior belongs to the updater already running. An older updater may still fail before candidate code executes. For that first hop, use Git's process-only `remote.<name>.skipFetchAll=true` override for the unrelated remote, or update through the installation's [manual method](/install/updating/update-methods); no persistent Git config change is needed.
+
     Shallow and partial source checkouts retain their installed refs, shallow boundaries, and object database during target inspection. Missing objects are fetched into the private inspection repository through the checkout's configured remotes. This behavior belongs to the installed updater; an older updater that fails with `Git target inspection clone failed` needs its checkout's missing objects fetched before retrying.
 
   </Step>
   <Step id="build-a-candidate" title="Build the update">
     Stable, beta, and dev updates install dependencies and build in a temporary worktree while the old Gateway serves. Dev rebases the staged checkout first so local commits are preserved and the build validates the exact source that will be activated. On POSIX, staging uses a private directory in the checkout's existing ignored `.artifacts` area. By default, the full workspace stays on the checkout filesystem, not a potentially small system temporary filesystem. An existing `.artifacts` redirect is honored as an operator storage choice, just like the build cache. Existing checkout, parent, and artifact directory permissions are not changed. Windows keeps its short system-drive staging path. Only dev updates walk back through earlier commits; stable and beta updates validate their selected target.
+
+    Git object transfer reads its prepared pack directly from disk. Packs above 256 MiB record a size warning and continue when the installed Git object volume has room for the measured pack and index. A known shortfall reports `snapshot-capacity-insufficient` before stopping the Gateway; unknown free space remains a warning. The pack import duration is recorded with the update steps. This check is separate from state-snapshot placement and runtime build-cache exclusions.
+
+    This repair runs in the installed updater. An older updater that refuses a pack above its fixed limit cannot acquire the repair through that same failing update; update the source installation manually using the [source-checkout reference script](/install/updating/update-methods#source-checkout-servers-reference-script).
 
     The updater prepares the built runtime (`dist`, `dist-runtime`, and dependencies, including nested workspace outputs) on the destination filesystem and removes the temporary Git worktree registration before changing the live checkout. Cleanup failures remain visible in the update result. If an interruption leaves staging behind, artifact-area staging does not dirty the checkout or block the next update's clean check.
 

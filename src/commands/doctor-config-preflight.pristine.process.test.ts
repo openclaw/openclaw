@@ -2,7 +2,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { afterAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
@@ -105,6 +105,17 @@ describe("gateway startup-migration refusal", () => {
 });
 
 describe("CLI pristine startup after early config observation", () => {
+  let runtimeRoot: string;
+  let runtimeTempDir: string;
+
+  beforeAll(() => {
+    // Stable source URLs and a shared temp root let fresh children reuse tsx transforms.
+    const root = fs.realpathSync(tempDirs.make("openclaw-cli-pristine-runtime-"));
+    runtimeRoot = createSourceRuntime(root);
+    runtimeTempDir = path.join(root, "tmp");
+    fs.mkdirSync(runtimeTempDir);
+  });
+
   it.each([
     { name: "explicit Gateway target", explicit: true, existingState: false, stateful: false },
     { name: "configured Gateway target", explicit: false, existingState: false, stateful: false },
@@ -114,7 +125,6 @@ describe("CLI pristine startup after early config observation", () => {
     "preserves the migration decision for $name",
     async ({ explicit, existingState, stateful }) => {
       const root = fs.realpathSync(tempDirs.make("openclaw-cli-pristine-observation-"));
-      const runtimeRoot = createSourceRuntime(root);
       const stateDir = path.join(root, "state");
       const configPath = path.join(root, "openclaw.json");
       const timelinePath = path.join(root, "timeline.jsonl");
@@ -139,7 +149,9 @@ describe("CLI pristine startup after early config observation", () => {
         XDG_DATA_HOME: path.join(root, "xdg-data"),
         XDG_STATE_HOME: path.join(root, "xdg-state"),
         XDG_CACHE_HOME: path.join(root, "cache"),
-        TMPDIR: root,
+        TMPDIR: runtimeTempDir,
+        TMP: runtimeTempDir,
+        TEMP: runtimeTempDir,
         NO_COLOR: "1",
       };
       delete env.NODE_ENV;

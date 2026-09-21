@@ -111,6 +111,8 @@ export function isFollowupRunDeferredError(error: unknown): error is FollowupRun
 }
 
 export type FollowupRun = {
+  /** External-turn eligibility; queued execution refreshes the session-selected profile. */
+  personalBootstrapEligible?: boolean;
   prompt: string;
   /** Original operator capability retained by this turn's queue/run lifecycle. */
   operatorAuthority?: AdmittedRunOperatorAuthority;

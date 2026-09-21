@@ -2,6 +2,13 @@ import { toStringifiedError } from "@openclaw/normalization-core/error-coercion"
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { SKILL_LIBRARY_MAX_SELECTIONS } from "../../packages/gateway-protocol/src/schema/skill-library.js";
 import {
+  countMcpOAuthPrincipalsInDatabase,
+  listMcpOAuthStoreKeysInDatabase,
+  readMcpOAuthPendingInDatabase,
+  readMcpOAuthStoreIfPresentInDatabase,
+  readMcpOAuthStatusesInDatabase,
+} from "../agents/mcp-oauth-store.kernel.js";
+import {
   readSandboxBrowserRegistryInDatabase,
   readSandboxRegistryEntryInDatabase,
   readSandboxRegistryInDatabase,
@@ -15,6 +22,7 @@ import { getFleetCellInDatabase, listFleetCellsInDatabase } from "../fleet/regis
 import { listTerminalOperatorApprovalsInDatabase } from "../gateway/operator-approval-store.kernel.js";
 import { readWorkerSessionPlacementProjectionInDatabase } from "../gateway/worker-environments/placement-read-projection.js";
 import { readWorkerPlacementChangeSnapshotInDatabase } from "../gateway/worker-environments/placement-row-codec.js";
+import { hasWorkerEnvironmentSessionAttachment } from "../gateway/worker-environments/session-attachment-store.js";
 import { executeDevicePairingRead } from "../infra/device-pairing-read.kernel.js";
 import { readExecApprovalsConfigRow } from "../infra/exec-approvals-sqlite.js";
 import { inspectCurrentConversationBindingRecordInDatabase } from "../infra/outbound/current-conversation-bindings.kernel.js";
@@ -70,7 +78,15 @@ function isReadRequest(input: unknown): input is OpenClawStateReadRequest {
     isRecord(coordinatorRuntime) &&
     typeof coordinatorRuntime.directory === "string" &&
     typeof coordinatorRuntime.keepAlive === "boolean" &&
-    (isPluginBlobReadCommand(input.command) ||
+    ((input.command.type === "mcpOAuth.statuses" &&
+      Array.isArray(input.command.input) &&
+      input.command.input.every((key) => typeof key === "string")) ||
+      ((input.command.type === "mcpOAuth.readOnly" ||
+        input.command.type === "mcpOAuth.keys" ||
+        input.command.type === "mcpOAuth.pending" ||
+        input.command.type === "mcpOAuth.countPrincipals") &&
+        typeof input.command.input === "string") ||
+      isPluginBlobReadCommand(input.command) ||
       (input.command.type === "conversationBindings.inspect" &&
         isRecord(input.command.conversation) &&
         typeof input.command.conversation.channel === "string" &&
@@ -122,6 +138,8 @@ function isReadRequest(input: unknown): input is OpenClawStateReadRequest {
           typeof input.command.input.executionId === "string")) ||
       (input.command.type === "workspace.snapshot" &&
         typeof input.command.workspaceDir === "string") ||
+      (input.command.type === "workerEnvironments.hasSessionAttachment" &&
+        typeof input.command.environmentId === "string") ||
       (input.command.type === "updateRuns.get" && typeof input.command.runId === "string") ||
       (input.command.type === "updateRuns.list" &&
         isRecord(input.command.input) &&
@@ -207,6 +225,46 @@ serveOwnedWorkerTasks(
             return withOpenClawStateReadOnlyLocation(
               ({ db }) => {
                 sourceAdmitted = true;
+                if (command.type === "mcpOAuth.statuses") {
+                  return {
+                    ok: true,
+                    type: command.type,
+                    sourceAdmitted,
+                    value: readMcpOAuthStatusesInDatabase(db, command.input),
+                  };
+                }
+                if (command.type === "mcpOAuth.readOnly") {
+                  return {
+                    ok: true,
+                    type: command.type,
+                    sourceAdmitted,
+                    value: readMcpOAuthStoreIfPresentInDatabase(db, command.input),
+                  };
+                }
+                if (command.type === "mcpOAuth.keys") {
+                  return {
+                    ok: true,
+                    type: command.type,
+                    sourceAdmitted,
+                    value: listMcpOAuthStoreKeysInDatabase(db, command.input),
+                  };
+                }
+                if (command.type === "mcpOAuth.pending") {
+                  return {
+                    ok: true,
+                    type: command.type,
+                    sourceAdmitted,
+                    value: readMcpOAuthPendingInDatabase(db, command.input),
+                  };
+                }
+                if (command.type === "mcpOAuth.countPrincipals") {
+                  return {
+                    ok: true,
+                    type: command.type,
+                    sourceAdmitted,
+                    value: countMcpOAuthPrincipalsInDatabase(db, command.input),
+                  };
+                }
                 if (command.type === "conversationBindings.inspect") {
                   return {
                     ok: true,
@@ -360,6 +418,14 @@ serveOwnedWorkerTasks(
                       workspaceDir: command.workspaceDir,
                       database: { db, path: input.databasePath },
                     }),
+                  };
+                }
+                if (command.type === "workerEnvironments.hasSessionAttachment") {
+                  return {
+                    ok: true,
+                    type: command.type,
+                    sourceAdmitted,
+                    attached: hasWorkerEnvironmentSessionAttachment(db, command.environmentId),
                   };
                 }
                 if (command.type === "userProfiles.reconcile") {

@@ -273,6 +273,7 @@ describe("detectChangedScope", () => {
       "scripts/format-swift.sh",
       "scripts/install-swift-tools.sh",
       "scripts/install-xcodegen.sh",
+      "scripts/lib/swift-toolchain.sh",
       "scripts/lint-swift.sh",
       "scripts/prepare-apple-mermaid.mjs",
     ]) {
@@ -404,7 +405,6 @@ describe("detectChangedScope", () => {
     "scripts/codesign-mac-app.sh",
     "scripts/create-dmg.sh",
     "scripts/lib/plistbuddy.sh",
-    "scripts/lib/swift-toolchain.sh",
     "scripts/notarize-mac-artifact.sh",
     "scripts/package-mac-app.sh",
     "scripts/package-mac-dist.sh",

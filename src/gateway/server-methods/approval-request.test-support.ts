@@ -1,34 +1,66 @@
-import { vi } from "vitest";
+import { expect } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
+import type { GatewayRequestContext, GatewayRequestHandlerOptions } from "./types.js";
 
-/** Observe the approval event, including calls made before observation was installed. */
-export async function waitForApprovalRequested<TArgs extends [string, ...unknown[]]>(
-  broadcast: (...args: TArgs) => void,
+/** Install before starting: a previous request's publication cannot admit the next one. */
+export async function waitForApprovalRequested<T>(
+  context: Pick<GatewayRequestContext, "broadcast"> &
+    Partial<Pick<GatewayRequestContext, "broadcastToConnIds">>,
   eventName: string,
-  request: Promise<unknown> | void,
-  matchesRequest: (payload: TArgs[1]) => boolean = () => true,
-): Promise<void> {
-  const mock = vi.mocked(broadcast);
-  const observed = createDeferred();
-  const implementation = mock.getMockImplementation();
-  const matches = (args: TArgs) => args[0] === eventName && matchesRequest(args[1]);
-  mock.mockImplementation((...args) => {
-    implementation?.(...args);
-    if (matches(args)) {
-      observed.resolve();
+  start: () => Promise<T>,
+) {
+  const observed = createDeferred<unknown>();
+  const broadcast = context.broadcast;
+  const broadcastToConnIds = context.broadcastToConnIds;
+  context.broadcast = (...args) => {
+    broadcast.call(context, ...args);
+    if (args[0] === eventName) {
+      observed.resolve(args[1]);
     }
-  });
+  };
+  if (broadcastToConnIds) {
+    context.broadcastToConnIds = (...args) => {
+      broadcastToConnIds.call(context, ...args);
+      if (args[0] === eventName) {
+        observed.resolve(args[1]);
+      }
+    };
+  }
   try {
-    if (mock.mock.calls.some(matches)) {
-      observed.resolve();
-    }
-    await Promise.race([
+    const pending = start();
+    const payload = await Promise.race([
       observed.promise,
-      Promise.resolve(request).then(() => {
-        throw new Error("Approval request completed before the expected approval event");
+      pending.then(() => {
+        throw new Error("Approval request completed before the expected RPC event");
       }),
     ]);
+    return { pending, payload };
   } finally {
-    mock.mockImplementation(implementation ?? (() => {}));
+    context.broadcast = broadcast;
+    if (broadcastToConnIds) {
+      context.broadcastToConnIds = broadcastToConnIds;
+    }
   }
+}
+
+/** Capture the first response; the same callback later receives the decision. */
+export async function waitForApprovalAccepted<T>(
+  respond: GatewayRequestHandlerOptions["respond"],
+  start: (respond: GatewayRequestHandlerOptions["respond"]) => Promise<T>,
+) {
+  const firstResponse = createDeferred<Parameters<typeof respond>>();
+  const pending = start((...response) => {
+    respond(...response);
+    firstResponse.resolve(response);
+  });
+  const response = await Promise.race([
+    firstResponse.promise,
+    pending.then(() => {
+      throw new Error("Approval request ended before acceptance");
+    }),
+  ]);
+  expect(response[0]).toBe(true);
+  expect(response[1]).toMatchObject({ status: "accepted", id: expect.any(String) });
+  expect(response[2]).toBeUndefined();
+  return { pending, response };
 }

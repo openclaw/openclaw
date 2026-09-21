@@ -1,3 +1,5 @@
+import "./openclaw-tools.sessions.mocks.test-support.js";
+import "./test-helpers/fast-openclaw-tools-sessions.js";
 // Verifies sessions list/history/send behavior across gateway and channel targets.
 import fs from "node:fs";
 import os from "node:os";
@@ -21,6 +23,7 @@ import {
   resetSystemEventsForTest,
 } from "../infra/system-events.js";
 import { createSessionVisibilityChecker } from "../plugin-sdk/session-visibility.js";
+import { setActivePluginRegistry } from "../plugins/runtime.js";
 import {
   GatewayDrainingError,
   getActiveGatewayRootWorkCount,
@@ -31,33 +34,6 @@ import { runWithGatewayRootWorkAdmissionForTest } from "../process/gateway-work-
 import { isCompletionReportInputProvenance } from "../sessions/input-provenance.js";
 import { disposeOpenClawAgentDatabaseByPath } from "../state/openclaw-agent-db.js";
 import { createTestRegistry } from "../test-utils/channel-plugins.js";
-
-const callGatewayMock = vi.fn();
-vi.mock("../gateway/call.js", () => ({
-  callGateway: (opts: unknown) => callGatewayMock(opts),
-}));
-const loadSessionEntryByKeyMock = vi.fn();
-vi.mock("./subagents/announce/subagent-announce-delivery.js", () => ({
-  loadSessionEntryByKey: (sessionKey: string) => loadSessionEntryByKeyMock(sessionKey),
-}));
-
-vi.mock("../config/config.js", () => ({
-  getRuntimeConfig: () => ({
-    session: {
-      mainKey: "main",
-      scope: "per-sender",
-    },
-    tools: {
-      // Keep sessions tools permissive in this suite; dedicated visibility tests cover defaults.
-      sessions: { visibility: "all" },
-      agentToAgent: { enabled: true },
-    },
-  }),
-  resolveGatewayPort: () => 18789,
-}));
-
-import "./test-helpers/fast-openclaw-tools-sessions.js";
-import { setActivePluginRegistry } from "../plugins/runtime.js";
 import { setActiveEmbeddedRun } from "./embedded-agent-runner/runs.js";
 import { testing as embeddedRunsTesting } from "./embedded-agent-runner/runs.test-support.js";
 import { registerSessionsSendResumeTests } from "./openclaw-tools.sessions-resume.test-support.js";
@@ -70,6 +46,9 @@ import { createSessionsHistoryTool } from "./tools/sessions-history-tool.js";
 import { createSessionsListTool } from "./tools/sessions-list-tool.js";
 import { createSessionsSearchTool } from "./tools/sessions-search-tool.js";
 import { createSessionsSendTool } from "./tools/sessions-send-tool.js";
+
+const { callGatewayMock, loadSessionEntryByKeyMock } =
+  await import("./openclaw-tools.sessions.mocks.test-support.js");
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -283,14 +262,14 @@ function sessionsSendDetails(details: unknown): SessionsSendDetails {
 }
 
 describe("sessions tools", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
     resetGatewayWorkAdmission();
     callGatewayMock.mockClear();
     embeddedRunsTesting.resetActiveEmbeddedRuns();
     loadSessionEntryByKeyMock.mockReset();
     loadSessionEntryByKeyMock.mockReturnValue(undefined);
     installMessagingTestRegistry();
-    agentStepTesting.setDepsForTest({
+    await agentStepTesting.setDepsForTest({
       agentCommandFromIngress: async () => ({
         payloads: [{ text: "ANNOUNCE_SKIP", mediaUrl: null }],
         meta: { durationMs: 1 },
@@ -1679,7 +1658,7 @@ describe("sessions tools", () => {
       }
       return {};
     });
-    agentStepTesting.setDepsForTest({
+    await agentStepTesting.setDepsForTest({
       agentCommandFromIngress: async () => ({
         payloads: [{ text: "announce now", mediaUrl: null }],
         meta: { durationMs: 1 },
@@ -1884,7 +1863,7 @@ describe("sessions tools", () => {
         }
         return {};
       });
-      agentStepTesting.setDepsForTest({
+      await agentStepTesting.setDepsForTest({
         agentCommandFromIngress: async (opts) => {
           expect(opts.sessionKey).toBe(targetKey);
           expect(opts.extraSystemPrompt).toContain("Agent-to-agent announce step");
@@ -2501,7 +2480,7 @@ describe("sessions tools", () => {
       }
       return {};
     });
-    agentStepTesting.setDepsForTest({
+    await agentStepTesting.setDepsForTest({
       agentCommandFromIngress: async () => ({
         payloads: [{ text: "announce now", mediaUrl: null }],
         meta: { durationMs: 1 },

@@ -1261,12 +1261,18 @@ describe("CI changed Node test plan", () => {
       [["docs/guide.md"], "file", true],
       [["docs/guide.mdx"], "file", true],
       [["README.md"], "file", true],
+      [["AGENTS.md"], "file", true],
+      [["src/agents/AGENTS.md"], "file", true],
+      [["src/agents/AGENTS.md"], "missing", true],
+      [[".agents/skills/example/SKILL.md"], "file", true],
+      [["skills/example/SKILL.md"], "file", true],
       [["docs/deleted.md"], "missing", true],
       [["docs/old.md", "docs/new.md"], "rename", true],
       [["docs/reference/templates/AGENTS.md"], "file", false],
       [["docs/reference/templates/AGENTS.md"], "missing", false],
       [["src/runtime.md"], "file", false],
       [["test/fixtures/payload.md"], "file", false],
+      [["test/fixtures/AGENTS.md"], "file", false],
       [["docs/script.ts"], "file", false],
       [["src/deleted.ts", "docs/new.md"], "rename", false],
       [["docs/reference/templates/old.md", "docs/new.md"], "rename", false],
@@ -2110,6 +2116,69 @@ describe("CI changed Node test plan", () => {
     expect(
       createChangedNodeTestShards(["ui/src/app-routes.ts", "ui/src/app-navigation.ts"]),
     ).toBeNull();
+  });
+
+  it("keeps UI fallback with its complete canonical owners beside precise core changes", () => {
+    const paths = [
+      "ui/src/components/markdown-file-links.ts",
+      "src/agents/live-provider-owner.ts",
+      "ui/config/control-ui-boot-modules.json",
+    ];
+    const options = { runnerBackend: "hybrid", dedicatedUiE2e: true };
+    const shards = createChangedNodeTestShards(paths, options);
+    expect(shards).not.toBeNull();
+    expect(hasControlUiPerformanceAffectingChange([paths[2]!])).toBe(true);
+    const full = createNodeTestShardBundles({
+      compactMode: "pull-request",
+      runnerBackend: "hybrid",
+    });
+    const uiOwners = full.filter((shard) =>
+      shard.groups?.some((group) =>
+        group.configs.some((config) =>
+          /^test\/vitest\/vitest\.ui(?:-isolated|-timing)?\.config\.ts$/u.test(config),
+        ),
+      ),
+    );
+    expect(uiOwners.length).toBeGreaterThan(0);
+    for (const owner of uiOwners) {
+      expect(shards).toContainEqual({
+        ...owner,
+        configs: [],
+        checkName: `checks-node-changed-ui-${owner.shardName}`,
+        shardName: `changed-ui-${owner.shardName}`,
+      });
+    }
+    expect(shards!.length).toBeLessThan(full.length);
+    expect(new Set(shards?.map((shard) => shard.checkName)).size).toBe(shards?.length);
+    const selectedGroups = fallbackGroups(shards ?? []);
+    for (const consumer of [
+      "src/agents/live-model-filter.test.ts",
+      "test/ui.presenter-next-run.test.ts",
+      "test/talk-browser-defaults.test.ts",
+    ]) {
+      const consumerConfig = buildVitestRunPlans([consumer])[0]!.config;
+      expect(
+        shards?.some((shard) => shard.targets?.includes(consumer)) ||
+          selectedGroups.some(
+            (group) =>
+              group.configs.includes(consumerConfig) &&
+              (!group.includePatterns ||
+                group.includePatterns.some((pattern) => path.matchesGlob(consumer, pattern))),
+          ),
+        consumer,
+      ).toBe(true);
+    }
+    expect(createChangedNodeTestShards(paths)).toBeNull();
+    expect(createChangedNodeTestShards([paths[1]!, "ui/src/AGENTS.md"], options)).toEqual(
+      createChangedNodeTestShards([paths[1]!], options),
+    );
+    const onFallback = vi.fn();
+    expect(
+      createChangedNodeTestShards([...paths, "package.json"], { ...options, onFallback }),
+    ).toBeNull();
+    expect(onFallback).toHaveBeenCalledWith(
+      "core change reaches public SDK or extension consumers",
+    );
   });
 
   it("chunks many targets into bounded parallel jobs", () => {

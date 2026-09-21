@@ -12,6 +12,8 @@ What runs on the leased box before enrollment, how the Gateway prepares and veri
 
 The example profile supports both OpenClaw and Codex. Keep setup focused on machine prerequisites and project tools. You do not need to install OpenClaw globally, append a versioned Codex plugin install, or maintain a package URL in the profile. Remove those old runtime-install steps when updating an existing profile; bootstrap supplies the running Gateway's runtime automatically.
 
+When an agent tool waits for a bounded in-process Gateway request, stalled-run recovery honors the active response deadline, including nested Crabbox creation calls. Completing, failing, canceling, or timing out the wait removes its allowance; a prior run's pending request cannot extend the current run's budget. A response timeout does not by itself cancel provisioning. Inspect the environment's state before retrying an uncertain creation request.
+
 ### Native Windows prerequisites
 
 For `windows/normal`, Crabbox executes `settings.setup` with Windows PowerShell. Write setup commands for PowerShell; Linux, macOS, and Windows (WSL2) continue to use POSIX scripts. For example, this prerequisite check uses the machine's existing Node and npm installation:

@@ -1,5 +1,8 @@
 // These consumers need the host-owned SQLite broker, which runs in forked processes.
 export const databaseWorkerCoreTestFiles = [
+  "src/agents/agent-bundle-mcp-requester-connect.read.test.ts",
+  "src/agents/mcp-oauth-provider.read.test.ts",
+  "src/agents/mcp-oauth-store.test.ts",
   "src/plugins/diffs-cleanup.lifecycle.test.ts",
   "src/agents/agent-tools-agent-config.exec.test.ts",
   "src/agents/agent-tools.safe-bins.test.ts",
@@ -24,6 +27,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/agents/code-mode.bridge.host-denial.test.ts",
   "src/agents/core-coding-tools.exec-workdir.test.ts",
   "src/agents/sessions/agent-session-tool-result-redaction.test.ts",
+  "src/agents/subagents/registry/subagent-registry-sweeper-recovery.test.ts",
   "src/agents/subagents/spawn/acp-spawn.authority.test.ts",
   "src/node-host/invoke-agent-cli-claude.test.ts",
   "src/node-host/invoke-system-run.test.ts",
@@ -106,6 +110,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/cli/plugins-cli.registry.test.ts",
   "src/cli/plugins-cli.uninstall-multi.test.ts",
   "src/cli/plugins-install-bundled-failures.test.ts",
+  "src/cli/plugins-install-warning-output.test.ts",
   "src/cli/program/register.backup.product-path.test.ts",
   "src/cli/program/register.configure.persistence.test.ts",
   "src/cli/skills-cli.workshop-cache.test.ts",
@@ -234,6 +239,8 @@ export const databaseWorkerCoreTestFiles = [
   "src/agents/worktrees/service.remove-lease.test.ts",
   "src/agents/worktrees/service.run-end-cleanup.test.ts",
   "src/agents/worktrees/service.snapshot-index.test.ts",
+  "src/agents/worktrees/service.exact-state.test.ts",
+  "src/agents/worktrees/service.exact-state-races.test.ts",
   "src/agents/worktrees/service.source-only-filters.test.ts",
   "src/agents/worktrees/service.sparse-isolation.test.ts",
   "src/agents/worktrees/service.stale-probe.test.ts",
@@ -324,6 +331,7 @@ export const databaseWorkerCoreTestFiles = [
   "src/tasks/task-registry.async-restore.test.ts",
   "src/tasks/task-registry-agent-events.test.ts",
   "src/tasks/task-registry-agent-events.lineage.test.ts",
+  "src/tasks/task-registry-state-notification.test.ts",
   "src/tasks/task-registry-owner-read.test.ts",
   "src/tasks/task-registry-read.test.ts",
   "src/tasks/task-registry-read-metadata-churn.test.ts",
@@ -558,6 +566,7 @@ const databaseWorkerCoreTestFileSet = new Set(databaseWorkerCoreTestFiles);
 
 // Preserve watch admission for consumers previously inferred into fast lanes.
 export const databaseWorkerCoreFormerFastKinds = new Map([
+  ["src/agents/mcp-oauth-store.test.ts", "unitFast"],
   ["src/node-host/invoke-system-run.test.ts", "unitFastIsolated"],
   ["src/state/openclaw-agent-execution-cleanup.test.ts", "unitFastIsolated"],
   ["src/auto-reply/reply/agent-runner-memory.private-transcript.test.ts", "unitFast"],
