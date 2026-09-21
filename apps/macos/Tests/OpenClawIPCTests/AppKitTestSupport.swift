@@ -7,12 +7,19 @@ import Testing
 enum AppKitTestSupport {
     /// Rendered suites share one process and must initialize AppKit only once.
     private static let initializedApplication: (application: NSApplication, didSetActivationPolicy: Bool) = {
+        atexit { AppKitTestSupport.recordProcessExit() }
         let application = NSApplication.shared
         let didSetActivationPolicy = application.setActivationPolicy(.accessory)
         #expect(didSetActivationPolicy)
         application.finishLaunching()
         return (application, didSetActivationPolicy)
     }()
+
+    private nonisolated static func recordProcessExit() {
+        let diagnostic = "[macos-native] AppKit test process exit\n" + Thread.callStackSymbols
+            .joined(separator: "\n") + "\n"
+        FileHandle.standardError.write(Data(diagnostic.utf8))
+    }
 
     static var application: NSApplication {
         self.initializedApplication.application
