@@ -523,6 +523,19 @@ class UserDriver:
                 elif state == "authorizationStateWaitPassword":
                     password = getattr(args, "password", "") or prompt_secret("Telegram 2FA password: ")
                     self.client.send({"@type": "checkAuthenticationPassword", "password": password})
+                elif state == "authorizationStateWaitRegistration":
+                    first_name = getattr(args, "first_name", "").strip()
+                    if not first_name:
+                        raise DriverError(
+                            "New Telegram Test Server users require login --first-name."
+                        )
+                    self.client.send(
+                        {
+                            "@type": "registerUser",
+                            "first_name": first_name,
+                            "last_name": getattr(args, "last_name", "").strip(),
+                        }
+                    )
                 elif state == "authorizationStateReady":
                     return True
                 elif state in {"authorizationStateClosing", "authorizationStateClosed", "authorizationStateLoggingOut"}:
@@ -1525,6 +1538,8 @@ def main():
     login.add_argument("--phone", default="")
     login.add_argument("--code", default="")
     login.add_argument("--password", default="")
+    login.add_argument("--first-name", default="")
+    login.add_argument("--last-name", default="")
     login.set_defaults(func=command_login)
 
     status = sub.add_parser("status")

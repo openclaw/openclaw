@@ -42,6 +42,59 @@ def native_message(content, chat_id=-1001, message_id=42 << 20, sender_id=101):
     }
 
 
+class AuthorizationTest(unittest.TestCase):
+    def test_registers_a_new_test_user_with_explicit_names(self):
+        class Client:
+            def __init__(self):
+                self.requests = []
+                self.updates = [
+                    {
+                        "@type": "updateAuthorizationState",
+                        "authorization_state": {
+                            "@type": "authorizationStateWaitRegistration",
+                        },
+                    },
+                    {
+                        "@type": "updateAuthorizationState",
+                        "authorization_state": {"@type": "authorizationStateReady"},
+                    },
+                ]
+
+            def execute(self, payload):
+                self.requests.append(payload)
+
+            def send(self, payload):
+                self.requests.append(payload)
+
+            def receive(self, _timeout):
+                return self.updates.pop(0)
+
+        instance = driver.UserDriver.__new__(driver.UserDriver)
+        instance.client = Client()
+        instance.printed_qr_link = None
+        instance.config = {}
+        instance.bot_config = {}
+        instance.authorize(
+            SimpleNamespace(
+                timeout_ms=1000,
+                phone="",
+                qr=False,
+                code="",
+                password="",
+                first_name="OpenClaw",
+                last_name="Guest",
+            ),
+        )
+        self.assertIn(
+            {
+                "@type": "registerUser",
+                "first_name": "OpenClaw",
+                "last_name": "Guest",
+            },
+            instance.client.requests,
+        )
+
+
 class OwnedGroupTest(unittest.TestCase):
     def fixture(self):
         class Client:
