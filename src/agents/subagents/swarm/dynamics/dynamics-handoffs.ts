@@ -56,17 +56,6 @@ export function buildHandoffManifest(params: {
         evidenceRefs: [],
         summary: params.payload.summary,
       };
-    case "fork":
-      return {
-        version: 1,
-        sourceReplicaId: params.sourceReplicaId,
-        targetReplicaId: params.targetReplicaId,
-        boundary: params.boundary,
-        candidateDigest: params.payload.candidateDigest,
-        artifactRefs,
-        evidenceRefs,
-        summary: params.payload.summary,
-      };
     default: {
       const exhaustiveBoundary: never = params.boundary;
       throw new Error(`Unsupported dynamics handoff boundary: ${String(exhaustiveBoundary)}`);
