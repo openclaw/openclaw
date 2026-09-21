@@ -6,6 +6,10 @@ export {
   normalizeAcceptedSessionSpawnResult,
   type AcceptedSessionSpawn,
 } from "../agents/accepted-session-spawn.js";
+export {
+  isAsyncStartedToolResult,
+  readAsyncStartedTaskIds,
+} from "../agents/embedded-agent-tool-results.js";
 export { getCoreTtsToolResultMediaUrls } from "../agents/tools/tts-tool-result-provenance.js";
 export { consumeTrustedToolNoStartError } from "../agents/tool-result-error.js";
 export {
