@@ -36,10 +36,10 @@ scenario:
             alsoAllow: [message]
   successCriteria:
     - A QA Channel reply records queued, platform-started, and delivered as attribution-only owner-native receipts.
-    - A message-tool metadata echo records one exact private suppression fact without a visible outbound message.
+    - A message-tool metadata echo records one exact private suppression fact and delivers exactly one host-owned fallback reply.
     - Public inspection reports the private generic fact as explicitly unknown without exposing its reason.
     - JSON and human CLI inspection expose no raw sender, conversation, message content, or platform message id.
-    - Both receipt sets remain stable after a lifecycle-owned Gateway restart.
+    - Both receipt sets remain stable after a lifecycle-owned Gateway restart without adding another outbound message.
   docsRefs:
     - docs/gateway/audit.md
     - docs/cli/audit.md
@@ -58,6 +58,7 @@ scenario:
     summary: Drive delivered and intentionally suppressed channel turns through an ephemeral Gateway and mock provider, then inspect exact decision receipts before and after restart.
     config:
       requiredProviderMode: mock-openai
+      expectedFallbackText: "The tool run finished, but no final summary was produced. I did not repeat any completed actions."
 
 flow:
   steps:
@@ -177,12 +178,14 @@ flow:
         - assert:
             expr: "suppressionPrivacySentinels.every((value) => typeof value === 'string' && value.length > 0)"
             message: suppression QA message did not expose complete real privacy sentinels
-        - waitForNoOutbound:
-            sinceIndex: { ref: suppressionOutboundStart }
-            quietMs: 1500
+        - waitForOutbound:
+            conversation: { id: qa-message-suppression-room, kind: direct }
+            textIncludes: { ref: config.expectedFallbackText }
+            timeoutMs: 60000
+          saveAs: suppressionOutbound
         - assert:
-            expr: "state.getSnapshot().messages.filter((message) => message.direction === 'outbound').length === suppressionOutboundStart"
-            message: suppression interval produced a visible outbound QA message
+            expr: "state.getSnapshot().messages.filter((message) => message.direction === 'outbound').length === suppressionOutboundStart + 1 && suppressionOutbound.text === config.expectedFallbackText"
+            message: suppression interval did not produce exactly one host-owned fallback reply
         - call: waitForCondition
           saveAs: suppressionRunId
           args:
@@ -228,9 +231,9 @@ flow:
             expr: "suppressionPrivacySentinels.every((sentinel) => !JSON.stringify(suppressionInspect).includes(sentinel) && !suppressionText.includes(sentinel))"
             message: suppression JSON or human inspection exposed a raw sender, conversation, inbound message id, or content sentinel
         - assert:
-            expr: "state.getSnapshot().messages.filter((message) => message.direction === 'outbound').length === suppressionOutboundStart"
-            message: suppression path did not retain exact zero visible outbound messages
-      detailsExpr: "`suppression facts=1; publicCoverage=unknown; selectorIds=nonempty-unique; visibleOutbound=0; privacy=json+human-pass`"
+            expr: "state.getSnapshot().messages.filter((message) => message.direction === 'outbound').length === suppressionOutboundStart + 1"
+            message: suppression path did not retain exactly one visible fallback reply
+      detailsExpr: "`suppression facts=1; publicCoverage=unknown; selectorIds=nonempty-unique; visibleOutbound=1; privacy=json+human-pass`"
 
     - name: preserves delivery and suppression receipts across restart
       actions:
@@ -281,6 +284,6 @@ flow:
             expr: "deliveryPrivacySentinels.every((sentinel) => !JSON.stringify(deliveryAfterRestart).includes(sentinel) && !deliveryTextAfterRestart.includes(sentinel)) && suppressionPrivacySentinels.every((sentinel) => !JSON.stringify(suppressionAfterRestart).includes(sentinel) && !suppressionTextAfterRestart.includes(sentinel))"
             message: restarted JSON or human inspection exposed a raw sender, conversation, message id, or content sentinel
         - assert:
-            expr: "state.getSnapshot().messages.filter((message) => message.direction === 'outbound').length === suppressionOutboundStart"
-            message: suppression path produced a visible outbound message after restart
+            expr: "state.getSnapshot().messages.filter((message) => message.direction === 'outbound').length === suppressionOutboundStart + 1"
+            message: suppression path added another outbound message after restart
       detailsExpr: "`restart-stable decisions=byte-identical; selectorIds=nonempty-unique; privacy=json+human-pass`"

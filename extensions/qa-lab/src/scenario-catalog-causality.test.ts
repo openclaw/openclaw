@@ -22,6 +22,43 @@ describe("qa scenario catalog causality", () => {
     });
   });
 
+  it("requires one host-owned fallback for message suppression and no duplicate after restart", () => {
+    const scenario = requireFlowScenario(
+      readQaScenarioById("message-delivery-decision-inspection"),
+    );
+    const suppressionActions = scenario.execution.flow?.steps[1]?.actions ?? [];
+    const restartActions = scenario.execution.flow?.steps[2]?.actions ?? [];
+    const outboundCount =
+      "state.getSnapshot().messages.filter((message) => message.direction === 'outbound').length";
+
+    expect(scenario.execution.config?.expectedFallbackText).toBe(
+      "The tool run finished, but no final summary was produced. I did not repeat any completed actions.",
+    );
+    expect(suppressionActions).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          waitForOutbound: {
+            conversation: { id: "qa-message-suppression-room", kind: "direct" },
+            textIncludes: { ref: "config.expectedFallbackText" },
+            timeoutMs: 60000,
+          },
+          saveAs: "suppressionOutbound",
+        }),
+      ]),
+    );
+    expect(suppressionActions.map(readFlowAssertExpression)).toContain(
+      `${outboundCount} === suppressionOutboundStart + 1 && suppressionOutbound.text === config.expectedFallbackText`,
+    );
+    expect(restartActions.map(readFlowAssertExpression)).toContain(
+      `${outboundCount} === suppressionOutboundStart + 1`,
+    );
+    expect([...suppressionActions, ...restartActions].map(readFlowAssertExpression)).not.toContain(
+      `${outboundCount} === suppressionOutboundStart`,
+    );
+    expect(JSON.stringify(scenario.execution.flow)).not.toContain("waitForNoOutbound");
+    expect(JSON.stringify(scenario.execution.flow)).not.toContain("visibleOutbound=0");
+  });
+
   it("treats denied Telegram admission as silent transport suppression", () => {
     for (const scenarioId of [
       "telegram-policy-hot-reload",
