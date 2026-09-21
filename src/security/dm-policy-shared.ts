@@ -29,6 +29,9 @@ export function resolvePinnedMainDmOwnerFromAllowlist(params: {
         .filter((entry): entry is string => Boolean(entry)),
     ),
   );
+  if (normalizedOwners.includes("*")) {
+    return null;
+  }
   return normalizedOwners.length === 1
     ? expectDefined(normalizedOwners[0], "normalized owners entry at 0")
     : null;
