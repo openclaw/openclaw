@@ -1,20 +1,8 @@
-type DynamicsRole =
-  | "explorer"
-  | "builder"
-  | "integrator"
-  | "critic"
-  | "security"
-  | "performance"
-  | "reproducer"
-  | "verifier"
-  | "glass-breaker";
-
 export type InformationBoundary =
   | "isolated"
   | "artifact-only"
   | "evidence-only"
-  | "summary-only"
-  | "fork";
+  | "summary-only";
 
 export type DynamicsRequirement = "optional" | "required";
 
@@ -24,19 +12,10 @@ export type DynamicsSpawnRequirements = {
   artifactRefs: DynamicsRequirement;
 };
 
-export type DynamicsProfile = {
+export type DynamicsContract = {
   version: 1;
-  id: string;
-  role: DynamicsRole;
-  effectiveTemperature: number;
-  mutationBudget: number;
-  verificationWeight: number;
-  contextBoundary: InformationBoundary;
+  boundary: InformationBoundary;
   requirements: DynamicsSpawnRequirements;
-};
-
-export type ResolvedDynamicsProfile = DynamicsProfile & {
-  digestInput: string;
 };
 
 export type HandoffManifest = {
