@@ -1,19 +1,21 @@
 import { describe, expect, it } from "vitest";
 import { assessPopulation, buildPopulationSnapshot } from "./population-controller.js";
 
-function observation(overrides: Partial<{
-  replicaId: string;
-  candidateEntropy: number;
-  coherence: number;
-  mobility: number;
-  evidenceCompleteness: number;
-  verifierDisagreement: number;
-  resourcePressure: number;
-  contextPressure: number;
-  debtPressure: number;
-  branchingRatio: number;
-  progressRate: number;
-}> = {}) {
+function observation(
+  overrides: Partial<{
+    replicaId: string;
+    candidateEntropy: number;
+    coherence: number;
+    mobility: number;
+    evidenceCompleteness: number;
+    verifierDisagreement: number;
+    resourcePressure: number;
+    contextPressure: number;
+    debtPressure: number;
+    branchingRatio: number;
+    progressRate: number;
+  }> = {},
+) {
   return {
     replicaId: "r1",
     candidateEntropy: 0.5,

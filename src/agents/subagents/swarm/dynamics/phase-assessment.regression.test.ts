@@ -32,6 +32,8 @@ describe("local phase regressions", () => {
 
   it("cannot double-count a replica in the phase mixture", () => {
     const assessment = assessLocalPhase(stalled);
-    expect(() => phaseMixture([assessment, assessment])).toThrow("one valid assessment per replica");
+    expect(() => phaseMixture([assessment, assessment])).toThrow(
+      "one valid assessment per replica",
+    );
   });
 });

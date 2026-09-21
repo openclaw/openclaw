@@ -38,7 +38,6 @@ import { resolveInternalSessionKey, resolveMainSessionAlias } from "./tools/sess
 const dynamicsGroups = new Set<string>();
 const dynamicsAdvisoryByGroup = new Map<string, string>();
 
-
 function resolveCodeModeRequesterSessionKey(ctx: ToolSearchToolContext): string {
   const sessionKey = ctx.sessionKey?.trim();
   if (!sessionKey) {
