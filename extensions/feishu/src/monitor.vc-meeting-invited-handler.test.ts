@@ -355,6 +355,9 @@ describe("monitorSingleAccount VC event registration", () => {
     try {
       await started.promise;
       const handler = handlers["vc.bot.meeting_invited_v1"];
+      if (!handler) {
+        throw new Error("VC invitation handler was not registered");
+      }
       await handler(vcEvent);
       const key = dedupMocks.claimUnprocessedFeishuMessage.mock.calls[0]?.[0].messageId;
       expect((await feishuDedupeState.guard.claim(key, { namespace: "default" })).kind).toBe(
