@@ -102,8 +102,34 @@ outside the receipt still need inspection.
 When the legacy index and live transcript inputs are gone, verified historical
 archives keep their existing receipts. They do not require a new legacy-index
 receipt or block post-session plugin repair. The plugin's completion releases
-its retained configuration. Unverified live inputs still require their matching
-index; Doctor names the missing source and the recovery action.
+its retained configuration.
+
+If the original `sessions.json` is unavailable but the completed import receipt
+still identifies the canonical database, import rebuilds its source index from
+the receipt's recorded hashes. It records that repair in the existing receipt
+without recreating `sessions.json` or replaying session metadata. Hash-matching
+sources continue through import; changed or unverifiable sources remain protected
+and are listed by path. Preserve those files for inspection.
+
+A restored copy with the recorded SHA-256 and size remains valid even when its
+inode or modification time differs. `--session-sqlite recover` records its current
+identity in the existing receipt, including when no failed migration manifest exists.
+If the database file was replaced, recovery first verifies retained transcript
+content against the current SQLite database before rebinding the receipt. It does
+not overwrite current session settings or resurrect deleted history. Incomplete
+matches stay protected with an actionable finding naming the remaining source.
+
+A receipt identity mismatch does not prevent Gateway readiness when retained
+content verifies. Doctor owns the repair and the Gateway keeps serving SQLite.
+Recovery reports include every remaining issue code and distinguish unresolved
+findings from completed validation.
+
+When both a recorded legacy index and its archive are missing, Doctor verifies
+the remaining transcripts against canonical SQLite before reporting that the
+canonical transcripts are complete and the legacy index entries are informational.
+It preserves those live transcripts and migration records, skips another import,
+and allows post-session plugin repair to continue. It does not keep requesting
+an import for that verified history.
 
 Doctor also discovers primary conversation transcripts omitted from the legacy
 registry, including timestamp-prefixed filenames. It verifies the session header,

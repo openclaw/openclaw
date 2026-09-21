@@ -244,6 +244,64 @@ describe("message tool discovery cache stability", () => {
   });
 });
 
+describe("message tool discovery without a current channel", () => {
+  it.each([
+    { allow: undefined, actions: ["broadcast", "send"], compact: true },
+    { allow: ["broadcast"], actions: ["broadcast"], compact: true },
+    { allow: ["send", "react"], actions: ["react", "send"], compact: false },
+  ])("keeps the fields needed by $actions", ({ allow, actions, compact }) => {
+    const deliveryTag = Type.Optional(Type.String());
+    const channels: PreparedMessageToolCatalog["channels"] = [
+      {
+        id: "telegram",
+        reconcilesUnknownSend: false,
+        actions: {
+          describeMessageTool: () => ({
+            actions: compact ? ["send"] : ["send", "react"],
+            capabilities: ["presentation", "delivery-pin"],
+            schema: { visibility: "all-configured", properties: { deliveryTag } },
+          }),
+        },
+      },
+    ];
+    const params: MessageToolDiscoveryParams = {
+      cfg: { tools: { message: { actions: { allow } } } },
+      preparedMessageToolCatalog: {
+        version: 1,
+        channels,
+        getChannel: (id) => channels.find((channel) => channel.id === id),
+      },
+    };
+    const discovered = resolveMessageToolActionSchemaActions(params);
+    const schema = buildMessageToolSchema(params, discovered);
+    const properties = expectDefined(
+      asOptionalRecord(schema.properties),
+      "message schema properties",
+    );
+
+    expect(discovered).toEqual(actions);
+    for (const field of ["target", "targets", "media", "attachments", "presentation", "delivery"]) {
+      expect(properties).toHaveProperty(field);
+    }
+    expect(properties.deliveryTag).toEqual(deliveryTag);
+    for (const field of ["messageId", "pollId", "eventName", "deleteDays", "activityState"]) {
+      expect(Object.hasOwn(properties, field)).toBe(!compact);
+    }
+    const payload = {
+      action: compact ? "broadcast" : "send",
+      target: "telegram:chat:one",
+      targets: ["telegram:chat:one", "telegram:chat:two"],
+      message: "Hello",
+      attachments: [{ type: "file", media: "https://example.com/report.txt" }],
+      presentation: { blocks: [{ type: "text", text: "Report" }] },
+      delivery: { pin: true },
+      deliveryTag: "report",
+    };
+    expect(Value.Check(schema, payload)).toBe(true);
+    expect(Value.Check(schema, { ...payload, deliveryTag: 1 })).toBe(false);
+  });
+});
+
 describe("scheduled account discovery", () => {
   const cfg: OpenClawConfig = {
     channels: {

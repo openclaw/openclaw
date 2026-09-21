@@ -63,7 +63,7 @@ suite.define(() => {
           const target = page.locator('[data-session-key="' + sessionKey + '"]');
           await expectBrowser(target).toBeVisible();
           await target.hover();
-          await target.getByRole("button", { name: "Open session menu" }).click();
+          await target.click({ button: "right" });
           await expectBrowser(page.locator('openclaw-session-menu [value="rename"]')).toBeVisible();
           await captureUiProof(
             suite,
@@ -124,7 +124,7 @@ suite.define(() => {
         await expectBrowser(target).toBeVisible();
         await captureUiProof(suite, page, "02-after-mention.png");
         await target.hover();
-        await target.getByRole("button", { name: "Open session menu" }).click();
+        await target.click({ button: "right" });
         const hide = page.getByRole("menuitem", { name: "Hide from Involving me", exact: true });
         await expectBrowser(hide).toBeVisible();
         await captureUiProof(suite, page, "03-personal-hide-menu.png");
@@ -145,7 +145,7 @@ suite.define(() => {
         await chooseFilter("All owners");
         await expectBrowser(target).toBeVisible();
         await target.hover();
-        await target.getByRole("button", { name: "Open session menu" }).click();
+        await target.click({ button: "right" });
         const show = page.getByRole("menuitem", { name: "Show in Involving me", exact: true });
         await expectBrowser(show).toBeVisible();
         await captureUiProof(suite, page, "04-restore-from-all-owners.png");

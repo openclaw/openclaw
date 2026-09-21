@@ -101,8 +101,10 @@ automatically expire them: a record must remain until policy cleanup succeeds.
 
 An invite records the grant before calling Cloudflare. If that call fails, the
 record remains so a later list can expose the drift and a sweep can clean up any
-expired grant. Revoke removes policy access before deleting the record. Re-invite
-to retry an unsuccessful invite, or revoke to clean up its record.
+expired grant. An explicit revoke records immediate expiry before contacting
+Cloudflare, so a later sweep retries cleanup after a failed or lost response.
+Once policy access is removed, the record is deleted. Re-invite to retry an
+unsuccessful invite, or revoke to clean up its record.
 
 The plugin sweeps expired grants on Gateway startup and hourly while the Gateway
 runs. It removes each expired email from the named Access policy and the local

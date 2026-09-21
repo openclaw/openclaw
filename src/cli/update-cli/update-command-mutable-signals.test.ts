@@ -3,6 +3,7 @@ import { once } from "node:events";
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, expect, it } from "vitest";
+import { resolveVitestNodeArgs } from "../../../scripts/lib/vitest-process-env.mts";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { cronOwnerHardeningEntrypoints } from "../../cron/owner-hardening-runtime.test-support.js";
 import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
@@ -84,21 +85,25 @@ it.skipIf(process.platform === "win32").each([
     });
   `,
     );
-    const child = spawn(process.execPath, [...sourceImportArgs, script], {
-      cwd: process.cwd(),
-      env: {
-        ...process.env,
-        HOME: root,
-        USERPROFILE: root,
-        OPENCLAW_STATE_DIR: root,
-        OPENCLAW_CONFIG_PATH: path.join(root, "openclaw.json"),
-        OPENCLAW_SUPERVISOR_MODE: "external",
-        OPENCLAW_UPDATE_RUN_ID: undefined,
-        OPENCLAW_UPDATE_RUN_HANDOFF: undefined,
-        OPENCLAW_UPDATE_POST_CORE: undefined,
+    const child = spawn(
+      process.execPath,
+      [...(process.versions.bun ? [] : resolveVitestNodeArgs()), ...sourceImportArgs, script],
+      {
+        cwd: process.cwd(),
+        env: {
+          ...process.env,
+          HOME: root,
+          USERPROFILE: root,
+          OPENCLAW_STATE_DIR: root,
+          OPENCLAW_CONFIG_PATH: path.join(root, "openclaw.json"),
+          OPENCLAW_SUPERVISOR_MODE: "external",
+          OPENCLAW_UPDATE_RUN_ID: undefined,
+          OPENCLAW_UPDATE_RUN_HANDOFF: undefined,
+          OPENCLAW_UPDATE_POST_CORE: undefined,
+        },
+        stdio: ["ignore", "ignore", "pipe", "ipc"],
       },
-      stdio: ["ignore", "ignore", "pipe", "ipc"],
-    });
+    );
     let stderr = "";
     child.stderr?.on("data", (chunk) => {
       stderr += chunk;

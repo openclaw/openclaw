@@ -38,6 +38,15 @@ clean up long-running resources. The cron scheduler can still be loading when
 `gateway_start` runs, so do not use it as the baseline signal for an external
 cron projection.
 
+Gateway hosts pass an optional `ctx.abortSignal` to `gateway_start`. It aborts
+when restart drain or Gateway close begins, before shutdown joins admitted work.
+Use it to stop periodic scheduling and prevent pending callbacks from rearming
+their timers. Check an already-aborted signal before starting work, and remove
+listeners when a service stops or reloads. Keep shared-resource disposal in
+`gateway_stop` or the service's `stop()` method so admitted work retains its
+dependencies until it settles. Plugin replacement and recovery start hooks receive
+the same Gateway drain lifetime; plugin-only replacement does not abort it.
+
 The legacy `api.on("deactivate", ...)` alias was removed in August 2026. Use
 `gateway_stop` for cleanup; see the
 [migration note](/plugins/sdk-migration#deactivate-hook-alias).

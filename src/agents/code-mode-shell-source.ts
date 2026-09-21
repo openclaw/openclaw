@@ -100,7 +100,7 @@ function stripShellEnvAssignments(source: string): string {
 }
 
 /** Reject recognizable shell commands without guessing at JavaScript expressions. */
-export function isShellLikeCodeModeSource(source: string, preparedSource = source): boolean {
+export function isShellLikeCodeModeSource(source: string): boolean {
   const trimmed = source.trim();
   if (trimmed.startsWith("#!")) {
     return true;
@@ -136,15 +136,13 @@ export function isShellLikeCodeModeSource(source: string, preparedSource = sourc
     return knownCommand !== null;
   }
 
-  // A binding only matters when the actual guest program parses. TypeScript
-  // callers supply transformed JavaScript so shell text inside a comment,
-  // string, or unrelated declaration cannot bypass source validation.
-  if (!parsesAsGuestJavaScript(preparedSource)) {
+  // A binding only matters when the actual guest program parses.
+  if (!parsesAsGuestJavaScript(source)) {
     return true;
   }
 
   const commandName = command?.[1];
-  if (commandName && hasHoistedGuestBinding(preparedSource, commandName)) {
+  if (commandName && hasHoistedGuestBinding(source, commandName)) {
     return false;
   }
 
@@ -167,7 +165,7 @@ export function isShellLikeCodeModeSource(source: string, preparedSource = sourc
 }
 
 export const CODE_MODE_SHELL_SOURCE_ERROR =
-  "code-mode exec runs JavaScript or TypeScript, not shell commands. " +
+  "code-mode exec runs JavaScript, not shell commands. " +
   "Call an enabled async tool global from guest JavaScript; use " +
   "catalog.search(query) when the bounded quick index omits it. " +
   "Do not retry the same shell command as code.";

@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
+import type { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { makeTempDir } from "../../test/helpers/temp-dir.js";
 import {
@@ -198,6 +199,84 @@ afterEach(() => {
 });
 
 describe("media migration of canonical SQLite transcript archives", () => {
+  it("seeks across archive batches without skipping retained generations", async () => {
+    const f = fixture({ fileContent: null });
+    const { DatabaseSync } = requireNodeSqlite();
+    const database = new DatabaseSync(f.databasePath);
+    try {
+      const insert = database.prepare(`INSERT INTO session_transcript_archives(
+          session_id,generation,session_key,reason,encoding,archive_blob,archive_sha256,
+          archive_name,created_at,published_at)
+        SELECT ?, ?, session_key, reason, encoding, archive_blob, archive_sha256,
+          ?, created_at, published_at FROM session_transcript_archives
+        WHERE session_id = ? AND generation = ?`);
+      database.exec("BEGIN");
+      for (const session of ["a", "b", "c"]) {
+        for (let index = 0; index < 40; index++) {
+          const retained = String(index).padStart(3, "0");
+          insert.run(session, retained, `${session}-${retained}.jsonl`, sessionId, generation);
+        }
+      }
+      database.exec("COMMIT");
+    } finally {
+      database.close();
+    }
+    // oxlint-disable-next-line typescript/unbound-method -- called below with the intercepted database receiver.
+    const prepare = DatabaseSync.prototype.prepare;
+    const plans: string[] = [];
+    const observed = vi
+      .spyOn(DatabaseSync.prototype, "prepare")
+      .mockImplementation(function (this: DatabaseSync, sql) {
+        if (
+          /^select .*archive_blob.* from "session_transcript_archives" where .* order by /i.test(
+            sql,
+          )
+        ) {
+          const bindings = Array.from({ length: (sql.match(/\?/g) ?? []).length }, () => "");
+          plans.push(
+            ...prepare
+              .call(this, `EXPLAIN QUERY PLAN ${sql}`)
+              .all(...bindings)
+              .map((row) => String(row.detail)),
+          );
+        }
+        return prepare.call(this, sql);
+      });
+    const result = await migrateLegacyMediaPersistence({ env: f.env }).finally(() =>
+      observed.mockRestore(),
+    );
+    expect(result.warnings).toEqual([]);
+    expect(plans.length).toBeGreaterThan(0);
+    // A page must seek both parts of the existing archive key, not rescan its visited prefix.
+    expect(
+      plans.every(
+        (detail) =>
+          detail.startsWith("SEARCH ") &&
+          detail.includes("session_id") &&
+          detail.includes("generation"),
+      ),
+    ).toBe(true);
+    const migrated = new DatabaseSync(f.databasePath, { readOnly: true });
+    try {
+      const rows = migrated
+        .prepare("SELECT * FROM session_transcript_archives ORDER BY session_id,generation")
+        .all() as ArchiveRow[];
+      expect(rows).toHaveLength(121);
+      for (const row of rows) {
+        expectCanonical(row);
+      }
+      expect(rows.filter((row) => row.session_id === "b").map((row) => row.generation)).toEqual(
+        Array.from({ length: 40 }, (_, index) => String(index).padStart(3, "0")),
+      );
+    } finally {
+      migrated.close();
+    }
+    expect(await migrateLegacyMediaPersistence({ env: f.env })).toEqual({
+      changes: [],
+      warnings: [],
+    });
+  });
+
   it.each(["identity", "zstd"] as const)(
     "converges the %s blob, digest and published file without changing archive identity",
     async (encoding) => {

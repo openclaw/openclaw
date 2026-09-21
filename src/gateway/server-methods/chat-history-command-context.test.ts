@@ -110,7 +110,7 @@ it.each([
     messageId: undefined,
     ignoreCliSessionImports: true,
   });
-  const delta = readChatHistoryDelta({
+  const delta = await readChatHistoryDelta({
     agentId: "main",
     cursor,
     scope,

@@ -12,6 +12,8 @@ export function launchCanary(params: {
   assertCurrent?: () => void;
   capture: (line: string) => void;
   onSpawn: () => void;
+  onLine?: (line: string) => void;
+  onStdout?: (stdout: string) => void;
 }) {
   const { entry, args, env, capture } = params;
   params.assertCurrent?.();
@@ -62,6 +64,7 @@ export function launchCanary(params: {
           captureStderr(line);
         }
         capture(line);
+        params.onLine?.(line);
       }
       if (pending.length > 64 * 1024) {
         // Discard an oversized unterminated line whole, never through a secret.
@@ -79,6 +82,7 @@ export function launchCanary(params: {
           captureStderr(pending);
         }
         capture(pending);
+        params.onLine?.(pending);
         pending = "";
       }
     };
@@ -87,18 +91,21 @@ export function launchCanary(params: {
     stdoutBytes += Buffer.byteLength(chunk);
     if (stdoutBytes <= 1024 * 1024) {
       stdout += chunk;
+      params.onStdout?.(stdout);
     } else {
       outputExceeded = true;
     }
   });
   let exited = false;
   let processExited = false;
-  let killed = false;
-  child.once("exit", (_code, signal) => {
-    processExited = true;
-    killed = Boolean(signal);
-  });
   const result = new Promise<number | null>((resolve) => {
+    child.once("exit", (code) => {
+      processExited = true;
+      // A failed leader cannot become a successful timeout while inherited pipes stay open.
+      if (code !== 0) {
+        resolve(code);
+      }
+    });
     child.once("error", (error) => {
       captureStderr(error.message);
       capture(error.message);
@@ -113,7 +120,7 @@ export function launchCanary(params: {
       resolve(code);
     });
   });
-  // An error can settle validation without proving that the child and its pipes closed.
+  // Failed processes can settle validation before their inherited pipes close.
   const closed = new Promise<void>((resolve) => {
     child.once("close", () => resolve());
   });
@@ -123,7 +130,6 @@ export function launchCanary(params: {
     closed,
     hasExited: () => exited,
     processExited: () => processExited,
-    wasKilled: () => killed,
     stdout: () => stdout,
     firstStderrLine: () => cliReason ?? firstStderrLine,
     outputExceeded: () => outputExceeded,

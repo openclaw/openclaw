@@ -107,7 +107,7 @@ function runCloseout(options: {
     `#!${process.execPath}
 import { appendFileSync, readFileSync } from 'node:fs';
 const args = process.argv.slice(2);
-if (args[0] === 'browse' && args[1] === '--no-browser') {
+if (args[0] === 'browse') {
   console.log('https://github.com/openclaw/openclaw');
   process.exit(0);
 }

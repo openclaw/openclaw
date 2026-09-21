@@ -6,7 +6,11 @@ import {
   resolveDefaultAgentId,
 } from "../../agents/agent-scope-config.js";
 import { resolveSessionAgentId } from "../../agents/agent-scope.js";
-import { copyReplyPayloadMetadata, type ReplyPayload } from "../../auto-reply/reply-payload.js";
+import {
+  copyReplyPayloadMetadata,
+  type ReplyPayload,
+  formatBtwTextForExternalDelivery,
+} from "../../auto-reply/reply-payload.js";
 import {
   normalizeReplyPayloadOutcome,
   type NormalizeReplyOutcome,
@@ -14,7 +18,6 @@ import {
 } from "../../auto-reply/reply/normalize-reply.js";
 import { resolvePendingFinalDeliveryCompletion } from "../../auto-reply/reply/pending-final-delivery.js";
 import { createReplyMediaPathNormalizer } from "../../auto-reply/reply/reply-media-paths.runtime.js";
-import { formatBtwTextForExternalDelivery } from "../../auto-reply/reply/reply-payloads-base.js";
 import {
   filterMessagingToolMediaDuplicates,
   hasEnabledDeliveryOperation,
@@ -54,7 +57,10 @@ import type { OutboundSessionContext } from "../../infra/outbound/session-contex
 import { hasReplyPayloadContent } from "../../interactive/payload.js";
 import { type RuntimeEnv, writeRuntimeJson } from "../../runtime.js";
 import { isInternalMessageChannel } from "../../utils/message-channel.js";
-import { hasAnyNonEmptyString as hasNonEmptyStringArray } from "../delivery-evidence-values.js";
+import {
+  hasAnyNonEmptyString as hasNonEmptyStringArray,
+  normalizeSentMediaUrlsForDelivery,
+} from "../delivery-evidence-values.js";
 import type { MessagingToolSend } from "../embedded-agent-messaging.types.js";
 import type { EmbeddedAgentRunMeta } from "../embedded-agent-runner/types.js";
 import { isNestedAgentLane } from "../lanes.js";
@@ -332,44 +338,6 @@ async function normalizeReplyMediaPathsForDelivery(params: {
     result.push(await normalizeMediaPaths(payload));
   }
   return { payloads: result, normalizeMediaPaths };
-}
-
-async function normalizeSentMediaUrlsForDelivery(params: {
-  sentMediaUrls: readonly string[];
-  normalizeMediaPaths?: (payload: ReplyPayload) => Promise<ReplyPayload>;
-}): Promise<string[]> {
-  const normalizedUrls: string[] = [];
-  const seen = new Set<string>();
-  for (const raw of params.sentMediaUrls) {
-    const trimmed = raw.trim();
-    if (!trimmed) {
-      continue;
-    }
-    if (!seen.has(trimmed)) {
-      seen.add(trimmed);
-      normalizedUrls.push(trimmed);
-    }
-    if (!params.normalizeMediaPaths) {
-      continue;
-    }
-    try {
-      const normalized = await params.normalizeMediaPaths({
-        mediaUrl: trimmed,
-        mediaUrls: [trimmed],
-      });
-      for (const mediaUrl of [normalized.mediaUrl, ...(normalized.mediaUrls ?? [])]) {
-        const candidate = mediaUrl?.trim();
-        if (!candidate || seen.has(candidate)) {
-          continue;
-        }
-        seen.add(candidate);
-        normalizedUrls.push(candidate);
-      }
-    } catch {
-      // Keep the original evidence. Delivery normalization will report invalid media separately.
-    }
-  }
-  return normalizedUrls;
 }
 
 const UNRESOLVED_RESPONSE_PREFIX_VAR_PATTERN = /\{[a-zA-Z][a-zA-Z0-9.]*\}/;

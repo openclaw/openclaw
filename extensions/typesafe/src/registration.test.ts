@@ -68,6 +68,7 @@ describe("plugin ownership and configuration", () => {
     expect(manifest.decisionModels).toEqual([
       { provider: "typesafe", id: "jev-latest", name: "Jev" },
       { provider: "typesafe", id: "jev-1.13.0", name: "Jev 1.13.0" },
+      { provider: "typesafe", id: "kev-latest", name: "Kev (local server)" },
     ]);
     expect(manifest.providers).toBeUndefined();
     expect(manifest.modelCatalog).toBeUndefined();

@@ -2,13 +2,14 @@ import { isDeepStrictEqual } from "node:util";
 import { Type, type Static, type TSchema } from "typebox";
 import { Compile } from "typebox/compile";
 import { Check } from "typebox/value";
+import { EvaluationError } from "./errors.js";
 
-// Transport/CPU guards, not Jev token limits. Jev enforces its own context budget.
+// Transport/CPU guards; each server enforces its model's context budget.
 export const MAX_JSON_BYTES = 4 * 1024 * 1024;
 const MAX_JSON_NODES = 262144;
 const MAX_JSON_DEPTH = 64;
-export const MAX_CHOICE_OPTIONS = 255;
-export const MAX_SCORE_LEVELS = 10;
+const MAX_CHOICE_OPTIONS = 255;
+const MAX_SCORE_LEVELS = 10;
 
 // Use additionalProperties, not patternProperties: tool declaration renderers can
 // expose the value type as an index signature rather than erasing it to {}.
@@ -31,7 +32,7 @@ const entry = Type.Union(
 const instructions = Type.Optional(
   Type.Union(entry.anyOf, {
     description:
-      "The complete judgment to make; question IDs are not read by Jev. Text, structured object/array, or null. May be omitted when criteria express the judgment.",
+      "The complete judgment to make; question IDs are not read by the model. Text, structured object/array, or null. May be omitted when criteria express the judgment.",
   }),
 );
 const model = Type.String({ minLength: 1, maxLength: 128, pattern: "^[a-zA-Z0-9._/-]+$" });
@@ -102,13 +103,13 @@ export const EvaluateInput = Type.Object(
     questions: map(question, {
       minProperties: 1,
       description:
-        "Nonempty map of question IDs to Choice, Score, or Noul questions. Mix types in one call. IDs only match answers; put all meaning in instructions/criteria. Questions are independent. Jev enforces token limits; plugin JSON guard is 4 MiB.",
+        "Nonempty map of question IDs to Choice, Score, or Noul questions. Mix types in one call. IDs only match answers; put all meaning in instructions/criteria. Questions are independent. The server enforces token limits; plugin JSON guard is 4 MiB.",
     }),
     model: Type.Optional(
       Type.String({
         ...model,
         description:
-          "Optional Jev model ID or alias for this explicit tool call; defaults to the plugin’s evaluation-tool model. Native decisions use the host-selected model.",
+          "Optional System One model ID or alias for this explicit tool call; defaults to the plugin’s evaluation-tool model. Native decisions use the host-selected model. A local Kev server uses its loaded checkpoint regardless of this label.",
       }),
     ),
   },
@@ -171,7 +172,10 @@ function assertBoundedJson(value: unknown): void {
   let nodes = 0;
   const visit = (node: unknown, depth: number): void => {
     if (++nodes > MAX_JSON_NODES || depth > MAX_JSON_DEPTH) {
-      throw new Error("TypeSafe JSON exceeds resource limits (262144 nodes or depth 64).");
+      throw new EvaluationError(
+        "TypeSafe JSON exceeds resource limits (262144 nodes or depth 64).",
+        "unsupported-input",
+      );
     }
     if (node === null || typeof node === "string" || typeof node === "boolean") {
       return;
@@ -180,25 +184,52 @@ function assertBoundedJson(value: unknown): void {
       return;
     }
     if (typeof node !== "object" || !node) {
-      throw new Error("TypeSafe input must be JSON.");
+      throw new EvaluationError("TypeSafe input must be JSON.", "unsupported-input");
     }
+    const array = Array.isArray(node);
+    const prototype = Object.getPrototypeOf(node);
     if (
-      !Array.isArray(node) &&
-      Object.getPrototypeOf(node) !== Object.prototype &&
-      Object.getPrototypeOf(node) !== null
+      array ? prototype !== Array.prototype : prototype !== Object.prototype && prototype !== null
     ) {
-      throw new Error("TypeSafe input must be plain JSON.");
+      throw new EvaluationError("TypeSafe input must be plain JSON.", "unsupported-input");
     }
-    for (const [key, item] of Object.entries(node)) {
-      if (["__proto__", "constructor", "prototype"].includes(key)) {
-        throw new Error("TypeSafe input contains a reserved key.");
+    if (array) {
+      if (
+        node.length > MAX_JSON_NODES ||
+        Object.keys(node).length !== node.length ||
+        Object.hasOwn(node, "toJSON")
+      ) {
+        throw new EvaluationError(
+          "TypeSafe input must be a bounded JSON array.",
+          "unsupported-input",
+        );
       }
-      visit(item, depth + 1);
+      for (let index = 0; index < node.length; index++) {
+        const descriptor = Object.getOwnPropertyDescriptor(node, index);
+        if (!descriptor?.enumerable || !("value" in descriptor)) {
+          throw new EvaluationError("TypeSafe input must be plain JSON.", "unsupported-input");
+        }
+        visit(descriptor.value, depth + 1);
+      }
+      return;
+    }
+    for (const key of Object.getOwnPropertyNames(node)) {
+      if (["__proto__", "constructor", "prototype"].includes(key)) {
+        throw new EvaluationError("TypeSafe input contains a reserved key.", "unsupported-input");
+      }
+      const descriptor = Object.getOwnPropertyDescriptor(node, key);
+      if (!descriptor?.enumerable || !("value" in descriptor)) {
+        throw new EvaluationError("TypeSafe input must be plain JSON.", "unsupported-input");
+      }
+      visit(descriptor.value, depth + 1);
     }
   };
   visit(value, 0);
   if (Buffer.byteLength(JSON.stringify(value), "utf8") > MAX_JSON_BYTES) {
-    throw new Error("TypeSafe JSON exceeds the plugin resource limit of 4 MiB.");
+    throw new EvaluationError(
+      "TypeSafe JSON exceeds the plugin resource limit of 4 MiB.",
+      "unsupported-input",
+    );
   }
 }
 
@@ -226,14 +257,16 @@ export function parseInput(value: unknown): EvaluationInput {
                 : kind === "noul"
                   ? "Noul criteria may contain only true/false descriptions, or null."
                   : "type must be choice, score, or noul.";
-          throw new Error(
+          throw new EvaluationError(
             `Invalid TypeSafe questions entry #${index + 1}: ${hint} Instructions/descriptions accept text, object, array, or null; no extra question fields.`,
+            "unsupported-input",
           );
         }
       }
     }
-    throw new Error(
+    throw new EvaluationError(
       "Invalid TypeSafe evaluation input: supply state (text/object/array/null), a nonempty questions map, and optionally a valid model ID; no extra fields.",
+      "unsupported-input",
     );
   }
   return value;

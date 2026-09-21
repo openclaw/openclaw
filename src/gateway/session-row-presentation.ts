@@ -131,7 +131,7 @@ export function prepareProjectedSessionPresentation(
       );
     }
     if (options.includeActivitySummary === false) {
-      delete row.activitySummary;
+      row.activitySummary = undefined;
     }
     if (client !== undefined) {
       const value = toProjectedSessionSharingTarget(record);

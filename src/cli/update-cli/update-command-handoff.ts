@@ -13,6 +13,9 @@ import { detectRespawnSupervisor } from "../../infra/supervisor-markers.js";
 import { normalizeUpdateChannel } from "../../infra/update-channels.js";
 import {
   CONTROL_PLANE_UPDATE_HANDOFF_STARTED_REASON,
+  CONTROL_PLANE_UPDATE_SENTINEL_META_ENV,
+  readControlPlaneUpdateSentinelMeta,
+  UPDATE_RUN_ID_ENV,
   writeControlPlaneUpdateRestartSentinel,
 } from "../../infra/update-control-plane-sentinel.js";
 import type { DevUpdateTarget } from "../../infra/update-dev-target.js";
@@ -20,6 +23,8 @@ import { resolveUpdateInstallRoot } from "../../infra/update-install-root.js";
 import { createManagedHandoffLeaseStore } from "../../infra/update-managed-service-handoff-lease.js";
 import {
   cancelManagedServiceUpdateHandoff,
+  isCurrentForegroundUpdateHandoffProcess,
+  parkForegroundUpdateHandoff,
   startManagedServiceUpdateHandoff,
   transferManagedServiceUpdateHandoff,
 } from "../../infra/update-managed-service-handoff.js";
@@ -255,5 +260,53 @@ export async function handoffUpdateFromGateway(params: {
     defaultRuntime.log(guidance);
   }
   process.exitCode = UPDATE_HANDOFF_IN_PROGRESS_EXIT_CODE;
+  return true;
+}
+
+export async function parkForegroundUpdateForActivation(
+  params: { root: string; opts: UpdateCommandOptions },
+  assertCurrent: () => void,
+): Promise<void> {
+  assertCurrent();
+  const run = params.opts.run;
+  if (run?.completionOwner === "gateway-restart" && !run.gatewayRestartRequired) {
+    await parkForegroundUpdateHandoff({ root: params.root, run });
+    assertCurrent();
+  }
+}
+
+/** Invalid handoff metadata may not fall back to another native owner. */
+export async function resolveForegroundUpdateAdmission(params: {
+  root: string | undefined;
+  env?: NodeJS.ProcessEnv;
+  meta?: Awaited<ReturnType<typeof readControlPlaneUpdateSentinelMeta>>;
+  expectedForeground?: true;
+}): Promise<boolean> {
+  const env = params.env ?? process.env;
+  const meta =
+    params.meta === undefined ? await readControlPlaneUpdateSentinelMeta(env) : params.meta;
+  const claimed = meta?.completionOwner === "gateway-restart";
+  if (
+    !claimed &&
+    !params.expectedForeground &&
+    !meta?.foregroundOrigin &&
+    !(env[CONTROL_PLANE_UPDATE_SENTINEL_META_ENV]?.trim() && meta === null)
+  ) {
+    return false;
+  }
+  if (
+    !claimed ||
+    !params.root ||
+    !(await isCurrentForegroundUpdateHandoffProcess({
+      root: params.root,
+      runId: env[UPDATE_RUN_ID_ENV],
+      env,
+    }))
+  ) {
+    throw new UpdatePreMutationError(
+      "managed-service-preflight",
+      "The update handoff metadata or this Gateway's current ownership could not be verified. Retry the update from its current owner.",
+    );
+  }
   return true;
 }

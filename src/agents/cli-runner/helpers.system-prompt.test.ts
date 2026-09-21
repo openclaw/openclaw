@@ -61,7 +61,9 @@ describe("buildCliAgentSystemPrompt", () => {
         modelDisplay: "test/model",
       });
 
-      expect(prompt.includes("including when it is already installed")).toBe(available);
+      expect(
+        prompt.includes("For explicit plugin/skill search/install or missing capability"),
+      ).toBe(available);
     },
   );
 

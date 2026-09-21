@@ -5,11 +5,34 @@ import { afterEach, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { runCommandWithTimeout } from "../process/exec.js";
 import { gitNullConfigPath } from "./git-exec.js";
-import { classifyPartialCloneGitFailure } from "./update-runner-git-target.js";
+import {
+  classifyPartialCloneGitFailure,
+  withGitTargetInspectionRoot,
+} from "./update-runner-git-target.js";
 import { prepareGitCandidateTransfer } from "./update-runner-git-transfer.js";
 import type { CommandRunner, RunStepOptions, UpdateStepResult } from "./update-runner-types.js";
 
 const temporary = useAutoCleanupTempDirTracker(afterEach);
+
+it("rejects incomplete target inspection output even when Git exits zero", async () => {
+  const runCommand: CommandRunner = async (argv) => ({
+    code: 0,
+    stdout: "a".repeat(40),
+    stderr: "",
+    ...(argv.includes("for-each-ref") ? { killed: true, termination: "signal" as const } : {}),
+  });
+  await expect(
+    withGitTargetInspectionRoot(
+      {
+        root: temporary.make("incomplete-git-inspection-"),
+        runCommand,
+        timeoutMs: 1_000,
+        onWarning: () => {},
+      },
+      async () => {},
+    ),
+  ).rejects.toThrow("Git target inspection for-each-ref failed");
+});
 
 it.each([
   { state: "partial-clone", expected: "promised objects in this partial clone" },
@@ -96,14 +119,14 @@ it
   .each([
     "none",
     "inventory",
-    "pack",
+    "missing-pack",
     "retry",
     "missing-before",
     "legacy-git",
     "configured-limit",
-  ] as const)("bounds transfer inventories and binary input (failure=%s)", async (failure) => {
+  ] as const)("stages complete Git transfers (failure=%s)", async (failure) => {
   const overflow = failure === "inventory";
-  const oversized = failure === "pack";
+  const missingPack = failure === "missing-pack";
   const root = temporary.make("git-transfer-bounds-");
   const source = path.join(root, "source");
   const install = path.join(root, "install");
@@ -196,14 +219,13 @@ it
       inventoryBytes = Buffer.byteLength(options.input as string);
     }
     if (argv.includes("index-pack")) {
-      packBytes = (options.input as Buffer).byteLength;
+      expect(options.input).toBeUndefined();
+      expect(options.stdinFileDescriptor).toBeTypeOf("number");
+      packBytes = fs.fstatSync(options.stdinFileDescriptor!).size;
     }
     const result = await runCommandWithTimeout(argv, { ...options, env });
-    if (oversized && argv.includes("pack-objects") && result.code === 0) {
-      // Grow a real staged pack sparsely; refusal must precede a large allocation.
-      const packPath = `${argv.at(-1)}-${result.stdout.trim()}.pack`;
-      fs.chmodSync(packPath, 0o600);
-      fs.truncateSync(packPath, 256 * 1024 * 1024 + 1);
+    if (missingPack && argv.includes("pack-objects") && result.code === 0) {
+      fs.unlinkSync(`${argv.at(-1)}-${result.stdout.trim()}.pack`);
     }
     return result;
   };
@@ -217,7 +239,7 @@ it
     totalSteps: 1,
     results,
   });
-  let transfer = await prepareGitCandidateTransfer({
+  await using initialTransfer = await prepareGitCandidateTransfer({
     candidateSha,
     beforeSha,
     installedRoot: install,
@@ -225,8 +247,9 @@ it
     probeTimeoutMs: 15_000,
     step: step(source),
   });
+  let transfer = initialTransfer;
   expect(historyInventoryAllowsMissingObjects).toBe(true);
-  if (overflow || oversized) {
+  if (overflow || missingPack) {
     expect(transfer).toBeUndefined();
     if (overflow) {
       expect(boundedExitObserved).toBe(true);
@@ -235,7 +258,8 @@ it
       expect(results).toContainEqual(
         expect.objectContaining({
           exitCode: 1,
-          stderrTail: expect.stringContaining("file exceeds limit of 268435456 bytes"),
+          name: "git-update-pack-read",
+          stderrTail: expect.stringContaining("Cannot stage the Git update pack"),
         }),
       );
     }
@@ -244,6 +268,11 @@ it
   }
   expect(transfer).toBeDefined();
   expect(inventoryBytes).toBeGreaterThan(8000);
+  if (failure === "none") {
+    // The pinned descriptor survives removal of the staging pathname.
+    const packName = fs.readdirSync(source).find((name) => name.endsWith(".pack"))!;
+    fs.unlinkSync(path.join(source, packName));
+  }
   expect(await transfer!.importInto(step(install))).toBe(true);
   expect(packBytes).toBeGreaterThan(8000);
   if (failure === "none") {
@@ -257,7 +286,7 @@ it
     const inspection = path.join(root, "inspection.git");
     await git(root, "clone", "--mirror", "--shared", install, inspection);
     await git(inspection, "update-ref", "refs/heads/candidate", candidateSha);
-    transfer = await prepareGitCandidateTransfer({
+    await using retryTransfer = await prepareGitCandidateTransfer({
       candidateSha,
       beforeSha,
       installedRoot: install,
@@ -265,6 +294,7 @@ it
       probeTimeoutMs: 15_000,
       step: step(inspection),
     });
+    transfer = retryTransfer;
     expect(transfer).toBeDefined();
     expect(await transfer!.importInto(step(install))).toBe(true);
     await git(install, "repack", "-a", "-d");

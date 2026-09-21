@@ -15,6 +15,21 @@ export const cliRecoveryEntrypoints = {
     sourceWorkerName: "../agents/cli-session",
     distWorkerPath: "agents/cli-session.js",
   },
+  doctorLintSupervisor: {
+    currentModuleUrl: import.meta.url,
+    sourceWorkerName: "../commands/doctor-lint-process",
+    distWorkerPath: "commands/doctor-lint-process.js",
+  },
+  signalExitBarrier: {
+    currentModuleUrl: import.meta.url,
+    sourceWorkerName: "signal-exit-barrier",
+    distWorkerPath: "cli/signal-exit-barrier.js",
+  },
+  outputDrain: {
+    currentModuleUrl: import.meta.url,
+    sourceWorkerName: "../process/output-drain",
+    distWorkerPath: "process/output-drain.js",
+  },
 } as const;
 
 // Failure reporting and exit finalization must share their compiled error classes.

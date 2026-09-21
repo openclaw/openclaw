@@ -5,7 +5,7 @@ import { html, nothing, render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { makeChatHost } from "../chat-host.test-support.ts";
 import { stubAnimationFrames } from "../chat-view.test-helpers.ts";
-import { handleChatScroll, handleChatScrollTakeover } from "../scroll.ts";
+import { handleChatScroll, handleChatScrollTakeover, lockChatScroll } from "../scroll.ts";
 import {
   configureNativeKeyTarget,
   nativeControlNavigationCases,
@@ -17,12 +17,86 @@ import {
   resetTranscriptTestDom,
   resizeObservers,
   transcriptDomState,
+  transcriptSize,
   type TestContentRow,
 } from "./chat-transcript.test-support.ts";
 
 describe("chat transcript scroll ownership", () => {
   beforeEach(installTranscriptDomMocks);
   afterEach(resetTranscriptTestDom);
+
+  it("cancels the active native target when a remote input locks following", async () => {
+    const flushFrames = stubAnimationFrames();
+    const policy = makeChatHost({ chatHasAutoScrolled: true });
+    const transcript = new ChatTranscriptController(
+      {
+        addController: vi.fn(),
+        removeController: vi.fn(),
+        requestUpdate: vi.fn(),
+        updateComplete: Promise.resolve(true),
+      },
+      { canFollowEnd: () => !policy.chatFollowLocked },
+    );
+    Object.assign(policy, {
+      chatCancelScroll: () => transcript.cancelScroll(),
+      chatIsManualScroll: () => transcript.isManualScroll,
+    });
+    const content: TestContentRow[] = Array.from({ length: 12 }, (_, index) => ({
+      kind: "content",
+      key: `row:${index}`,
+      content: html`<div>Row</div>`,
+    }));
+    const typing: TestContentRow = {
+      kind: "content",
+      key: "presence:typing",
+      content: html`<div>Typing</div>`,
+    };
+    const { container, renderRows } = await mountTestTranscript(
+      "retired-end-index",
+      [...content, typing],
+      transcript,
+    );
+    Object.defineProperties(container, {
+      clientHeight: { configurable: true, value: 600 },
+      scrollHeight: { configurable: true, get: () => transcriptSize(container) },
+    });
+    container.scrollTo = vi.fn((options?: ScrollToOptions | number, y?: number) => {
+      container.scrollTop = typeof options === "number" ? (y ?? 0) : (options?.top ?? 0);
+    });
+    const typingRow = expectDefined(
+      container.querySelector<HTMLElement>('[data-virtual-row-key="presence:typing"]'),
+      "typing row",
+    );
+    Object.defineProperty(typingRow, "offsetHeight", { configurable: true, value: 30 });
+    for (const observer of resizeObservers) {
+      observer.emitTarget(container, 800, 600);
+      observer.emitTarget(typingRow, 800, 30);
+    }
+    renderRows([...content, typing]);
+    flushFrames();
+    try {
+      transcript.scrollToEnd({ source: "auto", behavior: "auto" });
+      container.dispatchEvent(new Event("scroll"));
+      lockChatScroll(policy, "remote-input");
+      expect(policy.chatFollowLocked).toBe(true);
+      const before = container.scrollTop;
+      transcriptDomState.measuredRowHeight = 120;
+      const next: TestContentRow[] = [
+        ...content,
+        { kind: "content", key: "peer", content: html`<div>Peer</div>` },
+        typing,
+      ];
+      renderRows(next);
+      await Promise.resolve();
+      renderRows(next);
+      flushFrames();
+      expect(container.scrollTop, "retired index must not follow the peer replacing typing").toBe(
+        before,
+      );
+    } finally {
+      transcript.hostDisconnected();
+    }
+  });
 
   it("preserves reader policy when row measurement clamps a positive adjustment to the end", async () => {
     transcriptDomState.measuredRowHeight = 120;

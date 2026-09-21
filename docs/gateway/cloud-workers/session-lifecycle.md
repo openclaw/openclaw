@@ -16,7 +16,7 @@ Starting a cloud session in the Control UI shows your submitted prompt immediate
 
 Gateway updates retain an attached cloud machine and install the new worker bundle in place. The Gateway stops the old worker and revokes its credential before admitting the new build. The machine's workspace, installed packages, and desktop remain available. Failed installation retains the lease for recovery rather than allocating a replacement. The node must support the current bundle installer and reconnect before recovery can finish.
 
-If a submitted turn encounters the old build before execution starts, OpenClaw releases that unstarted claim, refreshes the runtime, and retries admission once with fresh authority. The session and original submission stay intact. Work already handed to a worker is never replayed through this admission retry.
+If a submitted turn encounters the old build before execution starts, OpenClaw releases that unstarted claim, refreshes the runtime, and retries admission once with fresh authority. This also retries an earlier failed update, so a reconnected worker can handle the submission without waiting for periodic recovery. The session and original submission stay intact. Work already handed to a worker is never replayed through this admission retry.
 
 For node-backed sessions interrupted by a restart, recovery settles pending workspace results and retires the interrupted turn while retaining the machine. The resumed turn receives fresh authority; it does not replay the interrupted tool call automatically. Explicit Stop, Move, and failed-provider cleanup retain their normal teardown behavior.
 

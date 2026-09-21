@@ -78,6 +78,7 @@ export async function runEmbeddedAttemptExecutionPhase(
       session: activeSession,
       sessionManager: sessionRuntime.sessionManager,
       aborted: attempt.abortSignal?.aborted,
+      abortSignal: attempt.abortSignal,
     });
     throw error;
   }

@@ -134,20 +134,19 @@ export async function retireStandaloneGitWrapper(params: {
         await createFreeBsdPkgOwnershipInspection(UPDATE_RUNNER_TIMEOUT_MS).assertEntryUnowned(
           wrapperPath,
         );
-        // Ownership inspection can await pkg for seconds. Retire only the exact
-        // matched wrapper while this finalizer still owns the update.
-        const currentFile = await readRegularFile({ filePath: wrapperPath, maxBytes: 4096 });
-        const current = await fs.lstat(wrapperPath);
-        if (
-          !current.isFile() ||
-          !sameFileIdentity(stat, currentFile.stat) ||
-          !sameFileIdentity(currentFile.stat, current) ||
-          currentFile.buffer.toString("utf8") !== contents
-        ) {
-          throw new Error("The installer wrapper changed during ownership inspection.");
-        }
-        params.assertCurrent?.();
       }
+      // Filesystem and pkg reads can outlive this wrapper or the update's authority.
+      const currentFile = await readRegularFile({ filePath: wrapperPath, maxBytes: 4096 });
+      const current = await fs.lstat(wrapperPath);
+      if (
+        !current.isFile() ||
+        !sameFileIdentity(stat, currentFile.stat) ||
+        !sameFileIdentity(currentFile.stat, current) ||
+        currentFile.buffer.toString("utf8") !== contents
+      ) {
+        throw new Error("The installer wrapper changed before retirement.");
+      }
+      params.assertCurrent?.();
       await fs.unlink(wrapperPath);
     } catch (error) {
       return { error: `Could not retire ${wrapperPath}: ${String(error)}` };

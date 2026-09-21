@@ -15,7 +15,6 @@ read_when:
 - QuickJS-WASI runtime adapter: load, eval, snapshot, restore, dispose
 - worker supervisor: timeout, abort, crash isolation
 - bridge adapter: JSON-safe host callbacks and result delivery
-- TypeScript transform adapter
 - snapshot store: TTL, size caps, run/session scoping
 - trajectory projection for nested tool calls
 - telemetry counters and diagnostics
@@ -55,8 +54,9 @@ Code mode coverage should prove:
 - shell `exec` is hidden from the model but callable as a guest global when
   allowed
 - recursive code-mode `exec` and `wait` are not callable from guest code
-- TypeScript input is transformed and evaluated without loading TypeScript on
-  disabled or JavaScript-only paths
+- executable cells accept plain JavaScript while typed discovery remains available
+- TypeScript-only syntax and retired `language`/`typecheck` arguments fail before
+  any nested tool dispatch
 - `import`, `require`, filesystem, network, and environment access fail
 - infinite loops time out and cannot block the Gateway
 - memory cap failures terminate the guest VM

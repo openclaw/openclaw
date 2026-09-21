@@ -41,18 +41,26 @@ function fixture(
     rejectRecovery?: boolean;
     send?: boolean;
     repeatRefusal?: boolean;
+    unbound?: boolean;
+    materializedSessionId?: string;
   } = {},
 ) {
-  const result = createSessionsListResult({ model: "original", modelProvider: "fixture" });
+  const result = createSessionsListResult({
+    model: "original",
+    modelProvider: "fixture",
+    ...(options.unbound ? { defaultsModel: "original", defaultsProvider: "fixture" } : {}),
+  });
   result.sessions[0] = {
     ...result.sessions[0],
     key: "global",
     kind: "direct",
     updatedAt: 1,
-    sessionId: recovery.sessionId,
+    sessionId: options.materializedSessionId ?? recovery.sessionId,
     permissionMode: "guarded",
     ...(options.send ? { agentRuntime: { id: "opencode", source: "session-key" as const } } : {}),
   };
+  const initialResult = options.unbound ? { ...result, count: 0, sessions: [] } : result;
+  let materialized = !options.unbound;
   const details: AgentRuntimeRestrictionErrorDetails = {
     code: "AGENT_RUNTIME_RESTRICTED",
     runtimeId: "opencode",
@@ -68,18 +76,18 @@ function fixture(
     key: "global",
     path: "",
     entry: { sessionId: recovery.sessionId, permissionMode: "full", updatedAt: 2 },
-    resolved: { model: "selected", modelProvider: "fixture" },
+    resolved: { model: options.unbound ? "original" : "selected", modelProvider: "fixture" },
   };
   const host = makeChatHost({
     sessionKey: "global",
     assistantAgentId: "selected-agent",
     agentsList: { defaultId: "main", scope: "global", agents: [{ id: "selected-agent" }] },
     hello: sessionMutationGatewayHello(options.scopes),
-    sessionsResult: result,
+    sessionsResult: initialResult,
     chatMessage: "Keep this draft; never replay it",
-    currentSessionId: recovery.sessionId,
+    currentSessionId: options.unbound ? undefined : recovery.sessionId,
     requestHandlers: {
-      "sessions.list": result,
+      "sessions.list": () => (materialized ? result : initialResult),
       "sessions.patch": () => {
         patches += 1;
         if (patches === 1 && !options.send) {
@@ -98,6 +106,7 @@ function fixture(
         return receipt;
       },
       "chat.send": () => {
+        materialized = true;
         if (++sends > 1 && !options.repeatRefusal) {
           return { runId: "native-confirmed-retry", status: "started" };
         }
@@ -109,7 +118,13 @@ function fixture(
       },
     },
   });
+  const stopSessionUpdates = options.unbound
+    ? host.sessions.subscribe((state) => {
+        host.sessionsResult = state.result;
+      })
+    : undefined;
   onTestFinished(() => {
+    stopSessionUpdates?.();
     retireChatModelSelectionOwnership(host);
     host.sessions.dispose();
   });
@@ -387,3 +402,47 @@ it.each(["newer-selection", "server-selection", "authority", "connection", "sess
     expect(host.request.mock.calls.filter(([method]) => method === "chat.send")).toHaveLength(1);
   },
 );
+
+it("binds the real first-send refusal incarnation and retries without pinning the default model", async () => {
+  installOutboxBrowserStorage();
+  vi.stubGlobal("localStorage", createStorageMock());
+  vi.stubGlobal("sessionStorage", createStorageMock());
+  vi.stubGlobal("requestAnimationFrame", () => 1);
+  vi.stubGlobal("cancelAnimationFrame", () => undefined);
+  const { host } = fixture({ send: true, unbound: true });
+  const sending = handleSendChat(host);
+  click(await dialog(), "Continue for this chat");
+  await sending;
+  const sends = host.request.mock.calls.filter(([method]) => method === "chat.send");
+  expect(sends).toHaveLength(2);
+  expect(sends[1]?.[1]).toMatchObject({
+    message: "Keep this draft; never replay it",
+    sessionId: recovery.sessionId,
+  });
+  const patches = host.request.mock.calls.filter(([method]) => method === "sessions.patch");
+  expect(patches).toHaveLength(1);
+  expect(patches[0]?.[1]).toMatchObject({
+    expectedSessionId: recovery.sessionId,
+    nativeRuntimeConsent: "opencode",
+  });
+  expect(patches[0]?.[1]).not.toHaveProperty("model");
+  expect(patches[0]?.[1]).not.toHaveProperty("agentRuntime");
+  expect(host.request.mock.calls.some(([method]) => method === "sessions.create")).toBe(false);
+});
+
+it("does not adopt an unrelated incarnation after a first-send refusal", async () => {
+  installOutboxBrowserStorage();
+  vi.stubGlobal("localStorage", createStorageMock());
+  vi.stubGlobal("sessionStorage", createStorageMock());
+  vi.stubGlobal("requestAnimationFrame", () => 1);
+  vi.stubGlobal("cancelAnimationFrame", () => undefined);
+  const { host } = fixture({
+    send: true,
+    unbound: true,
+    materializedSessionId: "unrelated-incarnation",
+  });
+  await handleSendChat(host);
+  expect(document.querySelector("openclaw-modal-dialog")).toBeNull();
+  expect(host.request.mock.calls.filter(([method]) => method === "chat.send")).toHaveLength(1);
+  expect(host.request.mock.calls.filter(([method]) => method === "sessions.patch")).toEqual([]);
+});

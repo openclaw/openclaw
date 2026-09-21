@@ -106,7 +106,9 @@ describe("AppSidebar agent chip", () => {
       expect.stringContaining("Check tests"),
     ]);
     expect(childRows.every((row) => row.getAttribute("draggable") === "false")).toBe(true);
-    expect(childRows.every((row) => row.querySelector("[data-session-menu]") !== null)).toBe(true);
+    expect(
+      childRows.every((row) => row.querySelector("[data-sidebar-session-archive]") !== null),
+    ).toBe(true);
     expect(childRows.every((row) => row.querySelector("[data-sidebar-session-pin]") === null)).toBe(
       true,
     );

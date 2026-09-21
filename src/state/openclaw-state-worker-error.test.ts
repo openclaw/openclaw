@@ -12,6 +12,7 @@ import {
   StartupMaintenanceRequiredError,
 } from "../infra/startup-maintenance-required.js";
 import { StateDatabaseCoordinatorContentionError } from "../infra/state-database-coordinator.js";
+import { PluginBlobStoreError } from "../plugin-state/plugin-blob-store.types.js";
 import { SkillUploadRequestError } from "../skills/lifecycle/upload-store-error.js";
 import { OpenClawAgentDatabaseMediaMigrationRequiredError } from "./openclaw-agent-db-migration-required.js";
 import { OpenClawStateDatabaseSchemaMigrationRequiredError } from "./openclaw-state-db-schema-migration-required.js";
@@ -64,12 +65,11 @@ describe("shared-state worker error transport", () => {
     },
   );
 
-  it.each([
-    [RangeError, false],
-    [RangeError, true],
-    [SkillUploadRequestError, false],
-    [SkillUploadRequestError, true],
-  ] as const)("preserves %s identity with aggregate=%s", (ErrorType, aggregate) => {
+  it.each(
+    [RangeError, SyntaxError, TypeError, SkillUploadRequestError].flatMap((ErrorType) =>
+      [false, true].map((aggregate) => ({ ErrorType, name: ErrorType.name, aggregate })),
+    ),
+  )("preserves $name identity with aggregate=$aggregate", ({ ErrorType, aggregate }) => {
     const original = Object.assign(new ErrorType("Synthetic invalid request"), {
       code: "ERR_OUT_OF_RANGE",
       cause: new Error("Synthetic decoding cause"),
@@ -96,6 +96,56 @@ describe("shared-state worker error transport", () => {
       expect(decoded.errors[1]).toBe(restored);
     }
     expect(hydrateOpenClawStateWorkerError(decoded)).toBe(decoded);
+  });
+
+  it.each([
+    ["PLUGIN_BLOB_OPEN_FAILED", "open"],
+    ["PLUGIN_BLOB_WRITE_FAILED", "register"],
+    ["PLUGIN_BLOB_READ_FAILED", "lookup"],
+    ["PLUGIN_BLOB_CORRUPT", "entries"],
+    ["PLUGIN_BLOB_LIMIT_EXCEEDED", "register"],
+    ["PLUGIN_BLOB_INVALID_INPUT", "sweep"],
+  ] as const)("preserves Blob error identity for %s", (code, operation) => {
+    const error = new PluginBlobStoreError("Synthetic blob refusal", {
+      code,
+      operation,
+      path: "/fixture/blob.sqlite",
+      cause: Object.assign(new Error("Synthetic SQLite cause"), {
+        code: "ERR_SQLITE_ERROR",
+        errcode: 1,
+      }),
+    });
+    const decoded = roundTrip(error);
+    expect(decoded).toBeInstanceOf(PluginBlobStoreError);
+    expect(decoded).toMatchObject({
+      code,
+      operation,
+      path: "/fixture/blob.sqlite",
+      cause: { message: "Synthetic SQLite cause", code: "ERR_SQLITE_ERROR", errcode: 1 },
+    });
+  });
+
+  it("retains Blob primary failure and shared references in cleanup aggregates", () => {
+    const primary = new PluginBlobStoreError("Synthetic read failure", {
+      code: "PLUGIN_BLOB_READ_FAILED",
+      operation: "lookup",
+      path: "/fixture/blob.sqlite",
+    });
+    const cleanup = new Error("Synthetic cleanup failure");
+    const combined = new AggregateError([primary, cleanup, primary], "read and cleanup", {
+      cause: primary,
+    });
+    combined.errors.push(combined);
+    const decoded = roundTrip(combined);
+    expect(decoded).toBeInstanceOf(AggregateError);
+    if (!(decoded instanceof AggregateError)) {
+      throw new Error("Expected aggregate");
+    }
+    expect(decoded.errors[0]).toBeInstanceOf(PluginBlobStoreError);
+    expect(decoded.errors[0]).toBe(decoded.errors[2]);
+    expect(decoded.cause).toBe(decoded.errors[0]);
+    expect(decoded.errors[1]).toMatchObject({ message: cleanup.message });
+    expect(decoded.errors[3]).toBe(decoded);
   });
 
   it.each([
@@ -462,6 +512,8 @@ describe("shared-state worker error transport", () => {
     for (const error of [
       new Error("ordinary"),
       Object.assign(new Error("range imitation"), { name: "RangeError", code: "ERR_OUT_OF_RANGE" }),
+      Object.assign(new Error("syntax imitation"), { name: "SyntaxError" }),
+      Object.assign(new Error("type imitation"), { name: "TypeError" }),
       Object.assign(new Error("upload imitation"), { name: "SkillUploadRequestError" }),
       Object.assign(new Error("native open imitation"), { nativeOpen: true, code: "SQLITE_IOERR" }),
       imitation,

@@ -156,7 +156,7 @@ describe("failed canary rehearsal ownership", () => {
     expect(result.retainedRehearsal).toBeUndefined();
     expect(result.steps).toContainEqual(
       expect.objectContaining({
-        name: "Checking data migrations cleanup",
+        name: "candidate-doctor-cleanup",
         advisory: expect.objectContaining({ kind: "recoverable-maintenance" }),
       }),
     );
@@ -207,7 +207,7 @@ describe("failed canary rehearsal ownership", () => {
       expect(result).toMatchObject({ status: "error", phase: "lint" });
       const warning = result.steps.at(-1);
       expect(warning).toMatchObject({
-        name: "Removing temporary update files",
+        name: "candidate-state-cleanup",
         advisory: {
           kind: "recoverable-maintenance",
           message: expect.stringContaining("Synthetic cleanup permission denied"),

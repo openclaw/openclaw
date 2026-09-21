@@ -10,8 +10,11 @@ import {
   closeAdmittedRunDelegatedAuthority,
   createExecutionIdentityRecoveryAdmission,
   createOperationalRunInstanceRef,
+  createAdmittedRunOperatorAuthority,
   getAdmittedRunDelegatedAuthority,
   prepareAgentRunAdmission,
+  readAdmittedRunOperatorAuthority,
+  readPreparedRunOperatorAuthority,
   retainAdmittedRunBeforeToolCallRecovery,
   resolveAdmittedRunActiveAssertion,
   resolvePreparedRunAdmission,
@@ -84,6 +87,7 @@ describe("prepared run admission", () => {
       first.operationalRunInstance.instanceId,
     );
     expect(first).not.toHaveProperty("executionIdentityToken");
+    expect(readAdmittedRunOperatorAuthority(first)).toBeUndefined();
     expect(Object.isFrozen(first)).toBe(true);
     expect(Object.isFrozen(first.operationalRunInstance)).toBe(true);
   });
@@ -323,18 +327,34 @@ describe("prepared run admission", () => {
     "keeps retained native policy fenced after foreground close (refusedRebind=%s)",
     async (refusedRebind) => {
       let current = true;
+      let sourceHolds = 0;
       const { runtime, ...admissionFacts } = facts;
       const source = prepareAgentRunAdmission({
         cfg: {},
         facts: { ...admissionFacts, runId: "native-source-lease" },
         operationalRunInstance: createOperationalRunInstanceRef("native-source-lease"),
-        assertSourceCurrent: () => {
-          if (!current) {
-            throw new Error("source claim lost");
-          }
-        },
+        operatorAuthority: createAdmittedRunOperatorAuthority({
+          profileId: "native-operator",
+          scopes: ["operator.write"],
+          assertCurrent: () => {
+            if (!current || sourceHolds === 0) {
+              throw new Error("source claim lost");
+            }
+          },
+          retain: () => {
+            sourceHolds += 1;
+            let released = false;
+            return () => {
+              if (!released) {
+                released = true;
+                sourceHolds -= 1;
+              }
+            };
+          },
+        }),
       });
       const prepared = withPostAdmissionExecutionOwnerBinding(source, () => {});
+      expect(readPreparedRunOperatorAuthority(prepared)?.profileId).toBe("native-operator");
       const admitted = await prepared.admit(runtime.kind);
       const recovery = retainAdmittedRunBeforeToolCallRecovery(admitted);
       expect(recovery).toBeDefined();
@@ -354,6 +374,9 @@ describe("prepared run admission", () => {
           expect(() => recovery!.assertActive()).not.toThrow();
         }
         prepared.close();
+        expect(sourceHolds).toBe(1);
+        expect(() => readAdmittedRunOperatorAuthority(admitted)).toThrow("no longer active");
+        expect(() => readPreparedRunOperatorAuthority(prepared)).toThrow("no longer active");
         expect(() => prepared.assertSourceCurrent()).not.toThrow();
         expect(() => recovery!.assertActive()).not.toThrow();
         current = false;
@@ -368,6 +391,7 @@ describe("prepared run admission", () => {
       } finally {
         recovery?.release();
         prepared.close();
+        expect(sourceHolds).toBe(0);
       }
     },
   );

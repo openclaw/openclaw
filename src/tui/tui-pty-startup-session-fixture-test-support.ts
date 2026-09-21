@@ -1,3 +1,5 @@
+import { writeFile } from "node:fs/promises";
+import path from "node:path";
 import { expect } from "vitest";
 import {
   hasHistoricalSynchronizedFrameRow,
@@ -5,6 +7,47 @@ import {
   type StartTuiPtyFixture,
   waitForSynchronizedFrameRows,
 } from "./tui-pty-harness-assertion-test-support.js";
+
+export function createTuiStartupRelease(
+  tempDir: string,
+  opts: { holdStartupHistory?: boolean; holdSessionDescription?: boolean },
+) {
+  const startupReleasePath =
+    opts.holdStartupHistory || opts.holdSessionDescription
+      ? path.join(tempDir, "startup.release")
+      : undefined;
+  let releaseStartupPromise: Promise<void> | undefined;
+  const releaseStartup = () => {
+    releaseStartupPromise ??= startupReleasePath
+      ? writeFile(startupReleasePath, "")
+      : Promise.resolve();
+    return releaseStartupPromise;
+  };
+  return {
+    env: {
+      OPENCLAW_TUI_PTY_STARTUP_RELEASE_PATH: opts.holdStartupHistory
+        ? startupReleasePath
+        : undefined,
+      OPENCLAW_TUI_PTY_SESSION_DESCRIPTION_RELEASE_PATH: opts.holdSessionDescription
+        ? startupReleasePath
+        : undefined,
+    },
+    releaseStartup,
+    wrapDispose(run: { dispose: () => Promise<void> }) {
+      if (startupReleasePath) {
+        const dispose = run.dispose;
+        // Suite cleanup must release held initialization even when its test never runs.
+        run.dispose = async () => {
+          try {
+            await releaseStartup();
+          } finally {
+            await dispose();
+          }
+        };
+      }
+    },
+  };
+}
 
 // Injects delayed session restore and history controls into the real-runTui PTY fixture.
 export const TUI_PTY_STARTUP_SESSION_FIXTURE = {
@@ -59,6 +102,14 @@ export const TUI_PTY_STARTUP_SESSION_FIXTURE = {
             this.onDisconnected?.("fixture reconnect during restore");
             queueMicrotask(() => this.onConnected?.());
           }
+          const descriptionReleasePath = process.env.OPENCLAW_TUI_PTY_SESSION_DESCRIPTION_RELEASE_PATH;
+          if (descriptionReleasePath) {
+            record("sessionDescriptionPending", { sessionKey: opts.sessionKey });
+            while (!existsSync(descriptionReleasePath)) {
+              await new Promise((resolve) => setTimeout(resolve, 5));
+            }
+            record("sessionDescriptionReleased", { sessionKey: opts.sessionKey });
+          }
           if (restoreDelayMs > 0) {
             await new Promise((resolve) => setTimeout(resolve, restoreDelayMs));
           }
@@ -70,7 +121,7 @@ export const TUI_PTY_STARTUP_SESSION_FIXTURE = {
 
 export async function exerciseStartupHistoryRendering(
   fixture: Awaited<ReturnType<StartTuiPtyFixture>> & {
-    releaseStartupHistory: () => Promise<void>;
+    releaseStartup: () => Promise<void>;
   },
   timeoutMs: number,
 ) {
@@ -93,13 +144,13 @@ export async function exerciseStartupHistoryRendering(
       expect.objectContaining({ method: "startupHistoryReleased" }),
     );
 
-    await fixture.releaseStartupHistory();
+    await fixture.releaseStartup();
     await waitForSynchronizedFrameRows(
       fixture.run,
       (rows) => rows.some((row) => row.includes("local ready | idle")),
       timeoutMs,
     );
   } finally {
-    await fixture.releaseStartupHistory();
+    await fixture.releaseStartup();
   }
 }

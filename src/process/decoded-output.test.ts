@@ -159,6 +159,34 @@ describe("awaited decoded output", () => {
     }
   });
 
+  it("rejects disposal after EOF while the sink finish event is queued", async () => {
+    const source = new PassThrough();
+    let stopCount = 0;
+    const output = createAwaitedDecodedOutput(source, () => {
+      stopCount += 1;
+    });
+    const firstChunk = createDeferred();
+    const consumed = output.consume(async () => {
+      await Promise.resolve();
+      firstChunk.resolve();
+    });
+    try {
+      source.write("accepted");
+      await firstChunk.promise;
+      source.end();
+      await finished(source);
+      // Let the async final callback queue finish before disposal queues its error.
+      await Promise.resolve();
+      output.close();
+      await expect(consumed).rejects.toThrow("Process stdout consumption closed");
+      expect(stopCount).toBe(0);
+    } finally {
+      output.close();
+      source.destroy();
+      await consumed.catch(() => undefined);
+    }
+  });
+
   it("retains an accepted consumer after disposal until it settles", async () => {
     const source = new PassThrough();
     let stopCount = 0;

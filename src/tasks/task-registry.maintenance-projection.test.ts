@@ -109,7 +109,9 @@ describe("task maintenance session metadata", () => {
           const snapshot = await readSnapshot(...args);
           if (
             !held &&
-            args[1]?.taskId === active.taskId &&
+            args[1] &&
+            "taskId" in args[1] &&
+            args[1].taskId === active.taskId &&
             snapshot.tasks.get(active.taskId)?.status === "succeeded"
           ) {
             held = true;

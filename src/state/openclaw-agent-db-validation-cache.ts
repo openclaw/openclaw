@@ -92,6 +92,21 @@ export function getOpenClawAgentDatabaseValidation(
   return validation;
 }
 
+/** The receiving opener must adopt this proof against its own physical file identity. */
+export function getOpenClawAgentDatabaseValidationForTransfer(
+  database: Pick<ValidationDatabase, "agentId" | "path">,
+): OpenClawAgentDatabaseValidation | undefined {
+  const entry = validatedPaths.get(path.resolve(database.path));
+  if (
+    !entry?.integrityVerified ||
+    entry.validation.agentId !== database.agentId ||
+    Atomics.load(new Int32Array(entry.validation.valid), 0) !== 1
+  ) {
+    return undefined;
+  }
+  return entry.validation;
+}
+
 function canonicalValidationReceipt(
   database: CanonicalValidationDatabase,
 ): OpenClawAgentDatabaseValidation | undefined {

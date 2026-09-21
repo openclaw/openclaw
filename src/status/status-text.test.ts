@@ -4,6 +4,10 @@ import {
   resetSubagentRegistryForTests,
 } from "../agents/subagents/registry/subagent-registry.test-helpers.js";
 import { formatSqliteSessionFileMarker } from "../config/sessions/legacy-sqlite-marker.js";
+import { createQueuedTaskRunCore } from "../tasks/task-executor.js";
+import { configureTaskRegistryRuntime } from "../tasks/task-registry.store.js";
+import { resetTaskRegistryForTests } from "../tasks/task-runtime.test-helpers.js";
+import { createInMemoryTaskRegistryStore } from "../test-utils/task-registry-store.js";
 import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.js";
 import { appendSessionCostLine } from "./status-runtime-lines.js";
 import { buildStatusText } from "./status-text.js";
@@ -37,6 +41,7 @@ async function renderTelegramStatus(params: {
   statusAccountId?: string;
   sessionKey?: string;
   agentId?: string;
+  taskLookup?: Pick<StatusTextParams, "taskLineOverride" | "skipDefaultTaskLookup">;
 }): Promise<string> {
   return await buildStatusText({
     cfg: params.cfg,
@@ -56,6 +61,7 @@ async function renderTelegramStatus(params: {
     pluginHealthLineOverride: "Plugins: test",
     taskLineOverride: "",
     skipDefaultTaskLookup: true,
+    ...params.taskLookup,
     primaryModelLabelOverride: "openai/gpt-5.4-mini",
     modelAuthOverride: "test",
     activeModelAuthOverride: "test",
@@ -125,6 +131,60 @@ describe("buildStatusText channel features", () => {
 
     expect(text).toContain("Telegram rich messages: off");
     expect(text).toContain("enable richMessages for this Telegram account");
+  });
+});
+
+describe("buildStatusText task lookup overrides", () => {
+  beforeEach(() => resetTaskRegistryForTests({ persist: false }));
+  afterEach(() => resetTaskRegistryForTests({ persist: false }));
+
+  it.each([
+    { taskLineOverride: "Prepared task line", skipDefaultTaskLookup: false },
+    { taskLineOverride: "Prepared task line", skipDefaultTaskLookup: true },
+    { taskLineOverride: "", skipDefaultTaskLookup: true },
+  ])("renders an override without registry availability: %j", async (taskLookup) => {
+    configureTaskRegistryRuntime({
+      store: {
+        ...createInMemoryTaskRegistryStore(),
+        loadSnapshot() {
+          throw new Error("task registry unavailable");
+        },
+        async withSnapshotAsync() {
+          throw new Error("task registry unavailable");
+        },
+      },
+    });
+    const text = await renderTelegramStatus({
+      cfg: {},
+      sessionEntry: { sessionId: "override-status", updatedAt: 0 },
+      taskLookup,
+    });
+    if (taskLookup.taskLineOverride) {
+      expect(text).toContain(taskLookup.taskLineOverride);
+    } else {
+      expect(text).not.toContain("📌 Tasks:");
+    }
+  });
+
+  it("keeps an empty task override on the agent-only fallback", async () => {
+    configureTaskRegistryRuntime({ store: createInMemoryTaskRegistryStore() });
+    createQueuedTaskRunCore({
+      runtime: "cli",
+      requesterSessionKey: "agent:main:main",
+      ownerKey: "agent:main:main",
+      agentId: "main",
+      task: "private task detail",
+      runId: "override-agent-task",
+      deliveryStatus: "not_applicable",
+      notifyPolicy: "silent",
+    });
+    const text = await renderTelegramStatus({
+      cfg: {},
+      sessionEntry: { sessionId: "empty-override-status", updatedAt: 0 },
+      taskLookup: { taskLineOverride: "", skipDefaultTaskLookup: false },
+    });
+    expect(text).toContain("📌 Tasks: 1 active · 1 total · agent-local");
+    expect(text).not.toContain("private task detail");
   });
 });
 

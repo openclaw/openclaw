@@ -1,11 +1,20 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { vi } from "vitest";
+import { afterAll, vi } from "vitest";
 import { withTempHome } from "../config/test-helpers.js";
+import { createSqliteReadOnlyWorkerScope } from "../infra/sqlite-readonly-worker.js";
 import { withStateDatabaseCoordinatorRuntimeDirectory } from "../infra/state-database-coordinator.js";
 import * as temporaryState from "../infra/tmp-openclaw-dir.js";
 import { listKnownProviderAuthEnvVarNamesCore } from "../secrets/provider-env-vars.js";
 import { withEnvAsync } from "../test-utils/env.js";
+
+/** Retain inspection imports across repair and reread; changed launch environments still retire the child. */
+export function useDoctorConfigPreflightHome() {
+  const workers = createSqliteReadOnlyWorkerScope();
+  afterAll(() => workers.close());
+  return <T>(run: (home: string) => Promise<T>): Promise<T> =>
+    workers.run(() => withDoctorConfigPreflightHome(run));
+}
 
 /** Keep real preflight fixtures from provisioning plugins for the developer's credentials. */
 export async function withDoctorConfigPreflightHome<T>(

@@ -1,9 +1,6 @@
 import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
 import { getTaskRegistryProcessState } from "./task-registry.process-state.js";
-import {
-  loadTaskRegistryMutationSnapshots,
-  type TaskRegistryStore,
-} from "./task-registry.store.js";
+import type { TaskRegistryStore } from "./task-registry.store.js";
 import type {
   TaskRegistryMutationScope,
   TaskRegistryStoreSnapshot,
@@ -12,7 +9,10 @@ import type {
 export function createTaskRegistryProjectionPreparation(owner: {
   ensureReady: (context: OpenClawStateWorkerContext) => Promise<void>;
   assertCurrent: (context: OpenClawStateWorkerContext, store: TaskRegistryStore) => void;
-  installSnapshot: (snapshot: TaskRegistryStoreSnapshot, scope?: TaskRegistryMutationScope) => void;
+  installSnapshot: (
+    snapshot: TaskRegistryStoreSnapshot,
+    scope?: TaskRegistryMutationScope | readonly TaskRegistryMutationScope[],
+  ) => void;
   markRestored: () => void;
 }) {
   const { projection } = getTaskRegistryProcessState();
@@ -51,21 +51,17 @@ export function createTaskRegistryProjectionPreparation(owner: {
         preparation.store !== store ||
         preparation.epoch !== epoch
       ) {
-        const scopes = projection.dirty ? [undefined] : [...projection.dirtyScopes];
-        const result = loadTaskRegistryMutationSnapshots(context, store, scopes).then(
-          (snapshots) => {
-            owner.assertCurrent(context, store);
-            if (epoch !== projection.epoch) {
-              return false;
-            }
-            for (const { snapshot, scope } of snapshots) {
-              owner.installSnapshot(snapshot, scope);
-            }
-            // In-flight mutations retain their publication obligations after this read.
-            owner.markRestored();
-            return true;
-          },
-        );
+        const scopes = projection.dirty ? undefined : [...projection.dirtyScopes];
+        const result = store.loadMutationSnapshotAsync(context, scopes).then((snapshot) => {
+          owner.assertCurrent(context, store);
+          if (epoch !== projection.epoch) {
+            return false;
+          }
+          owner.installSnapshot(snapshot, scopes);
+          // In-flight mutations retain their publication obligations after this read.
+          owner.markRestored();
+          return true;
+        });
         preparation = { databaseKey, store, epoch, result };
         pending = preparation;
       }

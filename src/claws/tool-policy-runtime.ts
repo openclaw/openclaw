@@ -111,7 +111,10 @@ function replaceClawToolPolicyCandidates(
 
 function prepareClawToolPolicyConsent(config: OpenClawConfig): void {
   replaceClawToolPolicyCandidates(collectClawToolPolicyCandidates(config));
-  initializeCachedClawInstallSchemaVersions(preparedStateOptions);
+  initializeCachedClawInstallSchemaVersions({
+    ...preparedStateOptions,
+    artifactPreservingReadOnly: false,
+  });
   applyPreparedClawToolPolicyConsent();
 }
 
@@ -119,7 +122,10 @@ async function prepareClawToolPolicyConsentAsync(
   config: OpenClawConfig,
   context: RuntimeConfigSnapshotPreparationContext,
 ): Promise<() => void> {
-  const preparedSchemaVersions = await prepareClawInstallSchemaVersions({ env: context.env });
+  const preparedSchemaVersions = await prepareClawInstallSchemaVersions({
+    env: context.env,
+    artifactPreservingReadOnly: false,
+  });
   return () => {
     replaceClawToolPolicyCandidates(collectClawToolPolicyCandidates(config), {
       path: preparedSchemaVersions.path,

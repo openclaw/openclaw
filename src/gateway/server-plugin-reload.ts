@@ -3,6 +3,7 @@ import { isCoreCanvasHostEnabled } from "../canvas/config.js";
 import { withCoreCanvasNodeCapability } from "../canvas/constants.js";
 import { validateConfiguredBindings } from "../channels/plugins/configured-binding-registry.js";
 import { getRuntimeConfig } from "../config/io.js";
+import { resolveConfigWidePluginMetadataSnapshot } from "../config/io.plugin-metadata.js";
 import { prepareDecisionProviderReload } from "../decisions/runtime.js";
 import { isTruthyEnvValue } from "../infra/env.js";
 import { formatErrorMessage } from "../infra/errors.js";
@@ -19,7 +20,6 @@ import { prepareMemoryRuntimeReload } from "../plugins/memory-runtime.js";
 import { createPluginCache, retirePluginCache, withPluginCache } from "../plugins/plugin-cache.js";
 import { getPluginInstance, type PluginInstanceHandle } from "../plugins/plugin-instance-scope.js";
 import { loadPluginLookUpTable } from "../plugins/plugin-lookup-table.js";
-import { loadPluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import { withPluginRegistryPreparationScope } from "../plugins/registry-lifecycle.js";
 import { getPluginRegistryVersion } from "../plugins/runtime-state.js";
 import { waitForPluginRegistryRetirement } from "../plugins/runtime.js";
@@ -52,7 +52,7 @@ import {
   GatewayConfigReloadSupersededError,
   type GatewayReloadHandlerParams,
 } from "./server-reload-contracts.js";
-import type { GatewayPostReadySidecarHandle } from "./server-startup-post-attach.js";
+import type { GatewayPostReadySidecarHandle } from "./server-startup-sidecar-scheduler.js";
 import { listPluginNodeCapabilities } from "./server/plugins-http/route-capability.js";
 
 export async function reloadGatewayPlugins(
@@ -158,6 +158,7 @@ export async function reloadGatewayPlugins(
     changedPluginIds,
     port,
     pluginWorkspaceDir,
+    abortSignal: AbortSignal.any([runtime.requestEntryLifetime.signal, restartDrainSignal]),
     log,
     // SAFETY: Gateway cron implements the SDK hook surface, which erases core-only job fields.
     getCron: kernel.getCronService as () => PluginHookGatewayCronService,
@@ -183,9 +184,8 @@ export async function reloadGatewayPlugins(
     assertCurrent();
     // Refresh this operation's cache while retaining the durable ledger of installed package roots.
     const nextMetadata = withPluginCache(cache, () =>
-      loadPluginMetadataSnapshot({
+      resolveConfigWidePluginMetadataSnapshot({
         config: params.sourceConfig,
-        workspaceDir: pluginWorkspaceDir,
         env: params.env,
         allowCurrent: false,
       }),

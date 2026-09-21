@@ -1,6 +1,6 @@
 // Covers task registry audit summaries used for maintenance diagnostics.
 import { describe, expect, it } from "vitest";
-import { normalizeTaskRecord } from "./task-registry-records.js";
+import { normalizeTaskTimestamps } from "./task-registry-records.js";
 import {
   listTaskAuditFindings,
   summarizeRetainedLostTaskAuditFindings,
@@ -268,7 +268,7 @@ describe("task-registry audit", () => {
     for (const task of rawTasks) {
       addTaskStatusSummaryRecord(
         summary,
-        normalizeTaskRecord({
+        normalizeTaskTimestamps({
           runtime: task.runtime,
           status: task.status,
           deliveryStatus: task.deliveryStatus,
@@ -317,6 +317,8 @@ describe("task-registry audit", () => {
       nextCleanupAfter: now + 60_000,
     });
 
-    expect(summary).toEqual(summarizeFullTaskInspection(rawTasks.map(normalizeTaskRecord), now));
+    expect(summary).toEqual(
+      summarizeFullTaskInspection(rawTasks.map(normalizeTaskTimestamps), now),
+    );
   });
 });

@@ -31,6 +31,25 @@ describe("detectChangedScope Windows routing", () => {
     expect(detectChangedScope(["extensions/canvas/src/a2ui-jsonl.ts"]).runWindows).toBe(false);
   });
 
+  it("routes the Windows Testbox admission owner, caller, and native proof", () => {
+    for (const changedPath of [
+      "scripts/windows-testbox-openssh.ps1",
+      ".github/workflows/windows-blacksmith-testbox.yml",
+      "test/scripts/windows-blacksmith-testbox.test.ts",
+    ]) {
+      expect(detectChangedScope([changedPath]), changedPath).toMatchObject({
+        runNode: true,
+        runWindows: true,
+      });
+    }
+    expect(detectChangedScope(["scripts/windows-testbox-openssh-extra.ps1"]).runWindows).toBe(
+      false,
+    );
+    expect(
+      detectChangedScope([".github/workflows/windows-blacksmith-testbox-extra.yml"]).runWindows,
+    ).toBe(false);
+  });
+
   it("routes source CLI invocation owners and their native proof to Windows", () => {
     for (const sourceCliPath of [
       "src/infra/openclaw-cli-invocation.ts",

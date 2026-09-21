@@ -56,6 +56,10 @@ const previewCache = new Map<string, CacheEntry<ControlUiGitHubPreview>>();
 
 export const parseControlUiGitHubPreviewTarget = parseGitHubItemTarget;
 
+export function isPublicGitHubRepository(value: unknown): value is Record<string, unknown> {
+  return isRecord(value) && value.private === false && value.visibility === "public";
+}
+
 export async function assertPublicGitHubRepository(
   repositoryUrl: string,
   fetchImpl: typeof fetch,
@@ -66,7 +70,7 @@ export async function assertPublicGitHubRepository(
   const repository = await readGitHubJsonResponse(
     await fetchGitHubApi(repositoryUrl, fetchImpl, token, undefined, identity),
   );
-  if (!isRecord(repository) || repository.private !== false) {
+  if (!isPublicGitHubRepository(repository)) {
     throw new ControlUiGitHubError(404, "GitHub repository is not public");
   }
 }

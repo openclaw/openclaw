@@ -11,7 +11,7 @@ import { getActivePluginRegistry } from "../plugins/runtime.js";
 import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { createChannelTestPluginBase } from "../test-utils/channel-plugins.js";
-import { getFreePort } from "../test-utils/ports.js";
+import { acquireTestPortBlock } from "../test-utils/port-claims.js";
 import {
   clearInstanceBindingProbeCoordinators,
   installInstanceBindingProbeCoordinator,
@@ -161,7 +161,6 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
       };
       config.channels = { "sibling-chat": { enabled: true, label: "retained" } };
       await fs.writeFile(configPath, JSON.stringify(config));
-      const port = await getFreePort();
       const hotReloadRecovery = vi.fn(() => ({ status: "emitted" as const }));
       const runtimeModule = await import("../plugins/runtime/index.js");
       const loaderModule = await import("../plugins/loader-module-runtime.js");
@@ -172,7 +171,9 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
           createLazyRuntime({ ...params, loadPluginModule: () => runtimeModule }),
         );
       onTestFinished(() => runtimeLoader.mockRestore());
-      server = await startTestGatewayServer(port, {
+      const portClaim = await acquireTestPortBlock({ offsets: [0, 1, 2, 3, 4] });
+      const port = portClaim.port;
+      server = await startTestGatewayServer(portClaim, {
         auth: { mode: "none" },
         controlUiEnabled: false,
         sidecarStartup: "start",
@@ -337,7 +338,6 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
       },
     };
     await fs.writeFile(configPath, JSON.stringify(config));
-    const port = await getFreePort();
     const hotReloadRecovery = vi.fn(() => ({
       status: "emitted" as const,
     }));
@@ -351,7 +351,9 @@ module.exports = { id: ${JSON.stringify(id)}, register(api) {
         createLazyRuntime({ ...params, loadPluginModule: () => runtimeModule }),
       );
     onTestFinished(() => runtimeLoader.mockRestore());
-    server = await startTestGatewayServer(port, {
+    const portClaim = await acquireTestPortBlock({ offsets: [0, 1, 2, 3, 4] });
+    const port = portClaim.port;
+    server = await startTestGatewayServer(portClaim, {
       auth: { mode: "none" },
       controlUiEnabled: false,
       sidecarStartup: "start",

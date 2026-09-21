@@ -1,13 +1,20 @@
 // Feishu type declarations define plugin contracts.
 import type { MessageReceipt } from "openclaw/plugin-sdk/channel-outbound";
 import type { BaseProbeResult } from "openclaw/plugin-sdk/core";
-import type { FeishuConfigSchema, FeishuAccountConfigSchema, z } from "./config-schema.js";
+import type {
+  DynamicAgentCreationSchema,
+  FeishuAccountConfigSchema,
+  FeishuConfigSchema,
+  FeishuDomainSchema,
+  FeishuToolsConfigSchema,
+  z,
+} from "./config-schema.js";
 import type { MentionTarget } from "./mention-target.types.js";
 
 export type FeishuConfig = z.infer<typeof FeishuConfigSchema>;
 export type FeishuAccountConfig = z.infer<typeof FeishuAccountConfigSchema>;
 
-export type FeishuDomain = "feishu" | "lark" | (string & {});
+export type FeishuDomain = "feishu" | "lark" | (z.infer<typeof FeishuDomainSchema> & {});
 
 export type FeishuDefaultAccountSelectionSource =
   | "explicit-default"
@@ -100,20 +107,6 @@ export type FeishuMediaInfo = {
   kind: Exclude<import("openclaw/plugin-sdk/media-runtime").MediaKind, "unknown">;
 };
 
-export type FeishuToolsConfig = {
-  doc?: boolean;
-  chat?: boolean;
-  wiki?: boolean;
-  drive?: boolean;
-  perm?: boolean;
-  scopes?: boolean;
-  /** Bitable/Base operations (default: true). */
-  bitable?: boolean;
-};
+export type FeishuToolsConfig = NonNullable<z.infer<typeof FeishuToolsConfigSchema>>;
 
-export type DynamicAgentCreationConfig = {
-  enabled?: boolean;
-  workspaceTemplate?: string;
-  agentDirTemplate?: string;
-  maxAgents?: number;
-};
+export type DynamicAgentCreationConfig = NonNullable<z.infer<typeof DynamicAgentCreationSchema>>;

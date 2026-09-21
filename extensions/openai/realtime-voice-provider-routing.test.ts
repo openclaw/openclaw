@@ -26,6 +26,15 @@ vi.mock("ws", () => ({
   default: mocks.FakeWebSocket,
 }));
 
+vi.mock("./realtime-quicksilver-socket.js", async () => {
+  const { createTestMediaSocketFactory } = await import("./realtime-voice-test-support.js");
+  return {
+    OpenAIQuicksilverWorkerSocket: {
+      create: await createTestMediaSocketFactory(mocks.FakeWebSocket),
+    },
+  };
+});
+
 vi.mock("openclaw/plugin-sdk/ssrf-runtime", () => ({
   fetchWithSsrFGuard: mocks.fetchWithSsrFGuardMock,
 }));
@@ -85,129 +94,6 @@ describe("OpenAI realtime voice provider routing", () => {
       supportsToolCalls: true,
       supportsVideoFrames: true,
     });
-  });
-
-  it("admits opaque realtime models without publishing them", () => {
-    const { broker } = createQuicksilverBrowserBrokerFixture();
-    const provider = buildOpenAIRealtimeVoiceProvider({
-      quicksilverBrowserSessionBroker: broker,
-    });
-    const internalApi = readInternalRealtimeVoiceProviderApi(provider);
-    const providerConfig = {
-      apiKey: "test-api-key-platform",
-      model: OPAQUE_REALTIME_MODEL,
-    };
-
-    expect(provider.models).toContain("gpt-live-1-codex");
-    expect(provider.models).not.toContain(OPAQUE_REALTIME_MODEL);
-    expect(provider.capabilities).toMatchObject({
-      voicesByModel: {
-        "gpt-live-1-codex": [
-          "arbor",
-          "breeze",
-          "cove",
-          "ember",
-          "juniper",
-          "maple",
-          "sol",
-          "spruce",
-          "vale",
-        ],
-      },
-    });
-    expect(
-      internalApi.isGatewayRelayConfigured({
-        providerConfig,
-        agentId: "main",
-      }),
-    ).toBe(true);
-    expect(
-      internalApi.resolveGatewayRelayCapabilities({
-        providerConfig,
-        model: OPAQUE_REALTIME_MODEL,
-      }),
-    ).toMatchObject({
-      handlesAgentConsult: true,
-      supportsToolCalls: false,
-      voices: ["marin", "cedar"],
-      voiceSelectionPolicy: "allowlist-default",
-    });
-    expect(
-      internalApi.projectPublicProjection({
-        providerConfig,
-        config: { model: OPAQUE_REALTIME_MODEL },
-      }),
-    ).toMatchObject({ config: {} });
-    expect(
-      internalApi.projectPublicProjection({
-        providerConfig: { model: "gpt-realtime-2.1" },
-        config: { model: "gpt-realtime-2.1" },
-      }),
-    ).toEqual({ config: { model: "gpt-realtime-2.1" } });
-  });
-
-  it.each([
-    {
-      model: "gpt-live-1",
-      selectedVoice: "quartz",
-      voices: [
-        "alloy",
-        "ash",
-        "ballad",
-        "beacon",
-        "bossa",
-        "cedar",
-        "cinder",
-        "coral",
-        "delta",
-        "echo",
-        "gleam",
-        "marin",
-        "meridian",
-        "quartz",
-        "ripple",
-        "sage",
-        "shimmer",
-        "stone",
-        "tempo",
-        "verse",
-        "vesper",
-        "willow",
-      ],
-    },
-    {
-      model: "gpt-live-1-codex",
-      selectedVoice: "spruce",
-      voices: ["arbor", "breeze", "cove", "ember", "juniper", "maple", "sol", "spruce", "vale"],
-    },
-  ])("publishes $model with its own catalog voice profile", ({ model, selectedVoice, voices }) => {
-    const { broker } = createQuicksilverBrowserBrokerFixture();
-    const provider = buildOpenAIRealtimeVoiceProvider({
-      quicksilverBrowserSessionBroker: broker,
-    });
-    const internalApi = readInternalRealtimeVoiceProviderApi(provider);
-
-    expect(provider.models).toContain(model);
-    expect(provider.capabilities).toMatchObject({ voicesByModel: { [model]: voices } });
-    expect(
-      internalApi.resolveGatewayRelayCapabilities({
-        providerConfig: { model },
-      }),
-    ).toMatchObject({
-      handlesAgentConsult: true,
-      supportsToolCalls: false,
-      supportsBargeIn: false,
-      handlesInputAudioBargeIn: true,
-      supportsActivationNameGating: false,
-      voices,
-      voiceSelectionPolicy: "allowlist-default",
-    });
-    expect(
-      internalApi.projectPublicProjection({
-        providerConfig: { model },
-        config: { model, voice: selectedVoice },
-      }),
-    ).toEqual({ config: { model, voice: selectedVoice } });
   });
 
   it("advertises continuing realtime tool results", () => {

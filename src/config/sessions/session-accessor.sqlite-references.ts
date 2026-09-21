@@ -7,6 +7,7 @@ import {
 } from "../../infra/kysely-sync.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../../state/openclaw-agent-db.generated.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
+import { readLegacyCompactionHistory } from "./legacy-compaction-history.js";
 import { getSessionKysely } from "./session-accessor.sqlite-scope.js";
 import {
   parseSessionEntryJson,
@@ -32,7 +33,7 @@ export function collectSessionStateIdsForEntry(entry: SessionEntry): string[] {
   for (const sessionId of entry.usageFamilySessionIds ?? []) {
     add(sessionId);
   }
-  for (const checkpoint of entry.compactionCheckpoints ?? []) {
+  for (const checkpoint of readLegacyCompactionHistory(entry)) {
     add(checkpoint.sessionId);
     add(checkpoint.preCompaction.sessionId);
     add(checkpoint.postCompaction.sessionId);

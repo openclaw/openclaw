@@ -1,15 +1,4 @@
-// extensions/browser/src/browser/screenshot-annotate.ts
-//
-// Pure helper module for screenshot label annotations.
-// Has no Playwright / CDP / page dependency: takes document-space inputs,
-// returns coordinate-projected annotations + IIFE strings the caller can
-// hand to page.evaluate / Runtime.evaluate.
-//
-// Used by:
-//   - pw-tools-core.interactions.ts (Playwright path, M1.2-a)
-//   - planned: raw-CDP path in M1.2-b
-//
-// chrome-mcp path keeps its own inline overlay (renderChromeMcpLabels) for now.
+// Projects document-space boxes into screenshot coordinates and builds Playwright overlays.
 
 const ANNOTATION_OVERLAY_ATTR = "data-openclaw-labels";
 const ANNOTATION_OVERLAY_ROOT_ID = "__openclaw-annotations__";

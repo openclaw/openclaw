@@ -475,8 +475,10 @@ async function sendPreparedChatMessage(
           flushStoredChatOutbox(host, chatOutboxDrainDependencies),
         );
       } else if (isNonTerminalAgentRunStatus(ack.status)) {
-        // A steer ACK identifies its client operation, not the active model run.
-        if (prepared.queueMode !== "steer" || !host.chatRunId) {
+        // Accepted steering/queued custody identifies the input, not a replacement
+        // for the active model run. Only an explicit interrupt may replace it here;
+        // otherwise live execution events own adoption when the queued turn starts.
+        if (!host.chatRunId || prepared.queueMode === "interrupt") {
           adoptStartedChatRun(host, ack.runId, startedAt);
         }
         // Hydrate approved custody during setup without changing ordinary send

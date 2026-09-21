@@ -72,7 +72,7 @@ export function resolveUpdateResultNextAction(params: {
         : `${params.serviceRunning === false ? "Managed gateway remains stopped because update recovery" : "Update recovery"} could not prove a runnable installation (${failure}).${params.serviceRunning === false ? " Keep the gateway stopped until the update succeeds." : ""}`
       : "";
     const configRefusal = result.steps.findLast(
-      (step) => step.name === "config rollback",
+      (step) => step.name === "config-rollback",
     )?.stderrTail;
     const failedStep = result.failedStep;
     const detail =
@@ -88,8 +88,9 @@ export function resolveUpdateResultNextAction(params: {
             (failedStep !== undefined &&
               failedStep.exitCode !== 0 &&
               !failedStep.advisory &&
-              (failedStep.name.startsWith("global update") ||
-                failedStep.name.startsWith("global install")) &&
+              /^package-(?:install|pack|stage|verify|swap|rollback|backup-retention|permissions)(?:-|$)/.test(
+                failedStep.name,
+              ) &&
               /\beacces\b/i.test(failedStep.stderrTail ?? ""))))) &&
       isContainerEnvironment();
     // Record deployment-specific advice here so CLI output and later reports agree.

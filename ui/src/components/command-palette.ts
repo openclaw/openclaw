@@ -5,12 +5,17 @@ import { property, state } from "lit/decorators.js";
 import { applicationContext, type ApplicationContext } from "../app/context.ts";
 import { gatewayPresentationScope } from "../app/gateway-presentation-scope.ts";
 import { hasOperatorAdminAccess } from "../app/operator-access.ts";
+import { updateHumanMentions, type HumanMentionInput } from "../lib/chat/human-mentions.ts";
 import { isGatewayMethodAdvertised } from "../lib/gateway-methods.ts";
 import { resolveUiSelectedGlobalAgentId } from "../lib/sessions/session-key.ts";
 import { searchVisibleSessionTranscripts } from "../lib/sessions/transcript-search.ts";
 import { GatewayPageController } from "../lit/gateway-page-controller.ts";
 import { OpenClawLightDomContentsElement } from "../lit/openclaw-element.ts";
 import { SubscriptionsController } from "../lit/subscriptions-controller.ts";
+import {
+  HumanMentionMenu,
+  type HumanMentionMenuHost,
+} from "../pages/chat/components/chat-composer-mention-menu.ts";
 import { PaletteSessionDraft } from "../pages/new-session/palette-session-draft.ts";
 import {
   getStaticCommandPaletteCatalogItems,
@@ -58,6 +63,25 @@ export class CommandPalette extends OpenClawLightDomContentsElement {
   private initialInput: CommandPaletteOpenInput | undefined;
   private takeInitialInput: CommandPaletteInputHandoff | undefined;
   private inputElement: HTMLTextAreaElement | undefined;
+  private readonly mentionMenu = new HumanMentionMenu();
+  private mentionInput: HumanMentionInput | undefined;
+  @state() private composing = false;
+  private readonly mentionHost: HumanMentionMenuHost = {
+    paneId: "command-palette",
+    getDraft: () => this.query,
+    getMentions: () => this.draft.mentions,
+    getTextarea: () => this.inputElement ?? null,
+    commitDraft: (value, mentions) => this.draft.setMessage(value, mentions),
+  };
+  private readonly requestMentionUpdate = () => {
+    if (this.mentionMenu.open || this.draft.mentions.length > 0) {
+      this.clearSessionSearch();
+      this.clearCatalogSearch();
+    } else {
+      this.scheduleSessionSearch(this.query);
+    }
+    this.requestUpdate();
+  };
   private presentationScope: ReturnType<typeof gatewayPresentationScope> | undefined;
   @state() private filter: PaletteFilter = "all";
   private readonly draft = new PaletteSessionDraft(
@@ -156,6 +180,9 @@ export class CommandPalette extends OpenClawLightDomContentsElement {
     this.inputElement?.removeEventListener("focus", this.adoptInitialInput);
     this.inputElement = undefined;
     this.open = false;
+    this.mentionMenu.dispose();
+    this.composing = false;
+    this.mentionInput = undefined;
     this.activeId = null;
     this.clearSessionSearch();
     this.clearCatalogSearch();
@@ -166,7 +193,10 @@ export class CommandPalette extends OpenClawLightDomContentsElement {
     const returnFocus =
       document.activeElement instanceof HTMLElement ? document.activeElement : null;
     this.open = true;
+    this.mentionMenu.close();
     this.draft.open();
+    this.composing = false;
+    this.mentionInput = undefined;
     this.takeInitialInput = typeof input === "function" ? input : undefined;
     this.initialInput =
       typeof input === "function"
@@ -214,6 +244,9 @@ export class CommandPalette extends OpenClawLightDomContentsElement {
   };
 
   private closePalette() {
+    this.mentionMenu.close();
+    this.composing = false;
+    this.mentionInput = undefined;
     this.initialInput = undefined;
     this.takeInitialInput = undefined;
     this.open = false;
@@ -257,7 +290,18 @@ export class CommandPalette extends OpenClawLightDomContentsElement {
         ?.setReturnFocusTarget(input.returnFocus);
     }
     element.setSelectionRange(input.selectionStart, input.selectionEnd, input.selectionDirection);
-    if (input.submitRequested) {
+    if (
+      !input.submitRequested &&
+      input.mentionTrigger !== undefined &&
+      input.selectionStart === input.selectionEnd &&
+      input.value.slice(0, input.selectionStart).lastIndexOf("@") === input.mentionTrigger
+    ) {
+      this.mentionMenu.syncDirectory(this.draft.mentionDirectory);
+      this.mentionMenu.update(element, this.requestMentionUpdate, "trigger");
+    }
+    if (input.imageFiles?.length) {
+      this.draft.adoptImageFiles(input.imageFiles, input.submitRequested);
+    } else if (input.submitRequested) {
       void this.draft.submit();
     }
   };
@@ -295,6 +339,8 @@ export class CommandPalette extends OpenClawLightDomContentsElement {
     if (
       !this.open ||
       this.promptMode ||
+      this.mentionMenu.open ||
+      this.draft.mentions.length > 0 ||
       !context ||
       !this.gateway.connected ||
       !gateway ||
@@ -348,7 +394,7 @@ export class CommandPalette extends OpenClawLightDomContentsElement {
     // Invalidate the previous query immediately so late responses cannot
     // repopulate selectable stale rows during the debounce window.
     this.clearSessionSearch();
-    if (this.promptMode) {
+    if (this.promptMode || this.mentionMenu.open || this.draft.mentions.length > 0) {
       // Retire catalog generations too: late results and refresh events must not
       // revive search while the same field is being used as a session draft.
       this.clearCatalogSearch();
@@ -441,7 +487,7 @@ export class CommandPalette extends OpenClawLightDomContentsElement {
   }
 
   private readonly handleGlobalKeydown = (event: KeyboardEvent) => {
-    if (event.defaultPrevented || event.isComposing || event.keyCode === 229) {
+    if (event.defaultPrevented || this.composing || event.isComposing || event.keyCode === 229) {
       return;
     }
     if (isCommandPaletteShortcut(event)) {
@@ -450,12 +496,66 @@ export class CommandPalette extends OpenClawLightDomContentsElement {
     }
   };
 
+  private updateMentionMenu(event?: InputEvent) {
+    this.mentionMenu.syncDirectory(this.draft.mentionDirectory);
+    if (!this.mentionMenu.open && !event) {
+      return;
+    }
+    const input = this.inputElement;
+    if (
+      !input ||
+      this.composing ||
+      event?.isComposing ||
+      event?.inputType === "insertFromPaste" ||
+      event?.inputType === "insertFromDrop"
+    ) {
+      this.mentionMenu.close();
+      this.requestMentionUpdate();
+      return;
+    }
+    this.mentionMenu.update(
+      input,
+      this.requestMentionUpdate,
+      !event
+        ? "selection"
+        : event.inputType === "insertText" && event.data?.includes("@") === true
+          ? "trigger"
+          : "input",
+    );
+  }
+
   override render() {
+    this.mentionMenu.syncDirectory(this.draft.mentionDirectory);
     return renderCommandPalette({
       basePath: this.context?.basePath ?? "",
       open: this.open,
       query: this.query,
       promptMode: this.promptMode,
+      mentionMenu: this.mentionMenu,
+      mentionHost: this.mentionHost,
+      requestUpdate: this.requestMentionUpdate,
+      composing: this.composing,
+      onBeforeInput: (event) => {
+        const input = this.inputElement;
+        this.mentionInput = input
+          ? {
+              value: input.value,
+              start: input.selectionStart,
+              end: input.selectionEnd,
+              inputType: event.inputType,
+            }
+          : undefined;
+      },
+      onSelectionChange: () => this.updateMentionMenu(),
+      onCompositionStart: () => {
+        this.composing = true;
+        this.mentionMenu.close();
+        this.requestUpdate();
+      },
+      onCompositionEnd: () => {
+        this.composing = false;
+        this.updateMentionMenu();
+      },
       activeId: this.activeId,
       filter: this.filter,
       onFilterChange: (filter) => {
@@ -492,8 +592,13 @@ export class CommandPalette extends OpenClawLightDomContentsElement {
       desktopAvailable: this.desktopAvailable,
       custodianAvailable: this.custodianAvailable,
       onToggle: this.togglePalette,
-      onQueryChange: (query) => {
-        this.draft.setMessage(query);
+      onQueryChange: (query, event) => {
+        this.draft.setMessage(
+          query,
+          updateHumanMentions(this.query, query, this.draft.mentions, this.mentionInput),
+        );
+        this.mentionInput = undefined;
+        this.updateMentionMenu(event);
       },
       onActiveIdChange: (id) => {
         this.activeId = id;

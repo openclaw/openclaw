@@ -4,7 +4,6 @@ import { ensureSystemPromptCacheBoundary } from "@openclaw/ai/internal/shared";
  * MCP, auth epoch, and reusable session metadata.
  */
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
-import { prepareReplyToolAuthority } from "../../auto-reply/reply/reply-tool-authority.js";
 import { messageToolOwnsVisibleReply } from "../../auto-reply/source-reply-delivery-mode.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import { canonicalizeMainSessionAlias } from "../../config/sessions/main-session.js";
@@ -144,7 +143,7 @@ import {
   isWorkspaceBootstrapPending as isWorkspaceBootstrapPendingImpl,
 } from "../workspace.js";
 import { CliAuthProfilePreparationError } from "./auth-profile-preparation-error.js";
-import { prepareCliBundleMcpConfig } from "./bundle-mcp.js";
+import { prepareCliBundleMcpConfig, resolveCliNativeWebSearchEnabled } from "./bundle-mcp.js";
 import { prepareClaudeCliSkillsPlugin } from "./claude-skills-plugin.js";
 import { runCliCleanup } from "./cleanup.js";
 import {
@@ -178,11 +177,13 @@ import {
   loadCliSessionPromptContext,
   resolveAutoCliSessionReseedHistoryChars,
 } from "./session-history.js";
-import type {
-  CliReusableSession,
-  CliSecretInput,
-  PreparedCliRunContext,
-  RunCliAgentParams,
+import { prepareCliReplyToolAuthority } from "./tool-authority.js";
+import {
+  captureCliRunStartTime,
+  type CliReusableSession,
+  type CliSecretInput,
+  type PreparedCliRunContext,
+  type RunCliAgentParams,
 } from "./types.js";
 
 type PrivateCliBackendPreparedExecution = CliBackendPreparedExecution & {
@@ -552,7 +553,9 @@ async function prepareCliRunContextWithinReadFence(
           entries: { [sessionOwner]: { default: true } },
         },
       } satisfies OpenClawConfig);
-  const started = Date.now();
+  const { started, startedMonotonicMs } = captureCliRunStartTime();
+  // Recovery retry budgets measure elapsed time; keep a monotonic anchor so a
+  // wall-clock correction cannot shorten or extend an operator-configured timeout.
   const executionMode = params.executionMode ?? "agent";
   const isSideQuestion = executionMode === "side-question";
   const isControlOperation = params.controlOperation !== undefined;
@@ -645,29 +648,10 @@ async function prepareCliRunContextWithinReadFence(
   const assertQuestionSourceCurrent = params.assertCurrent;
   const questionSnapshot = questionOperation
     ? undefined
-    : prepareReplyToolAuthority({
-        originatingChannel: normalizeMessageChannel(params.messageChannel),
-        toolsAllow: params.toolsAllow,
-        disableTools: params.disableTools,
-        run: {
-          ...params,
-          agentId: workspaceResolution.agentId,
-          chatType: runtimeChatType,
-          provider: params.modelProvider ?? params.provider,
-          model: params.model ?? "default",
-          workspaceDir,
-          cwd,
-          permissionMode: params.sessionEntry?.permissionMode,
-          toolOverrides: params.toolOverrides ?? params.sessionEntry?.toolOverrides,
-          senderId: params.senderId ?? undefined,
-          senderName: params.senderName ?? undefined,
-          senderUsername: params.senderUsername ?? undefined,
-          senderE164: params.senderE164 ?? undefined,
-          groupId: params.groupId ?? undefined,
-          groupChannel: params.groupChannel ?? undefined,
-          groupSpace: params.groupSpace ?? undefined,
-          spawnedBy: params.spawnedBy ?? undefined,
-        },
+    : prepareCliReplyToolAuthority(params, {
+        agentId: workspaceResolution.agentId,
+        workspaceDir,
+        cwd,
       });
   let runtimeToolsAllowPolicy: string[] | undefined;
   const rootedToolsAllow = params.rootedExecution
@@ -1364,12 +1348,10 @@ async function prepareCliRunContextWithinReadFence(
       },
     };
   }
-  const projectedTools = params.cliToolAvailability
-    ? applyEmbeddedAttemptToolsAllow(
-        hookFilteredProjectedTools,
-        params.cliToolAvailability.openClaw,
-      )
-    : hookFilteredProjectedTools;
+  const projectedTools = applyEmbeddedAttemptToolsAllow(
+    hookFilteredProjectedTools,
+    params.cliToolAvailability?.openClaw,
+  );
   const nodeSkillWorkshop = nodeWorkshopEnabled
     ? projectedTools.find((tool) => tool.name === "skill_workshop")
     : undefined;
@@ -1562,10 +1544,9 @@ async function prepareCliRunContextWithinReadFence(
                         selected ? tools.filter((name) => selected.includes(name)) : tools,
                       );
                       assertNativeCronCreatorCapabilities(capabilities);
-                      const allowed = capabilities.filter(
-                        (name) =>
-                          name !== "web_search" || params.toolOverrides?.webSearch !== false,
-                      );
+                      const allowed = resolveCliNativeWebSearchEnabled(params, backendResolved)
+                        ? capabilities
+                        : capabilities.filter((name) => name !== "web_search");
                       if (!activeCapture.captureNativeToolAuthority(allowed)) {
                         throw new Error("Native tool authority capture is no longer active.");
                       }
@@ -2228,15 +2209,14 @@ async function prepareCliRunContextWithinReadFence(
           .join("\n\n").length,
       },
     });
-    const buildPreparedContext = (
-      preparedParams: PreparedCliRunContext["params"],
-    ): Omit<PreparedCliRunContext, "hadSessionFile"> => ({
+    const buildPreparedContext = (preparedParams: PreparedCliRunContext["params"]) => ({
       params: preparedParams,
       bindQuestionAnswerAuthority,
       effectiveAuthProfileId,
       ...(authStore ? { authProfileStore: authStore } : {}),
       agentDir,
       started,
+      startedMonotonicMs,
       workspaceDir,
       cwd,
       backendResolved,
@@ -2254,14 +2234,14 @@ async function prepareCliRunContextWithinReadFence(
       ...(cliHistoryWriter ? { cliHistoryWriter } : {}),
       authEpoch,
       authBindingFingerprint,
-      ...(skipLocalCredentialEpoch ? { authBindingSkipsLocalCredential: true } : {}),
+      ...(skipLocalCredentialEpoch ? { authBindingSkipsLocalCredential: true as const } : {}),
       authEpochVersion: CLI_AUTH_EPOCH_VERSION,
       extraSystemPromptHash,
       messageToolPolicyHash,
       promptToolNamesHash,
       ...(resultContentSourceByToolName.size > 0 ? { resultContentSourceByToolName } : {}),
       cwdHash,
-      ...(mcpDeliveryCaptureEnabled ? { mcpDeliveryCapture: true } : {}),
+      ...(mcpDeliveryCaptureEnabled ? { mcpDeliveryCapture: true as const } : {}),
     });
     const admitFinalParams = () =>
       admitPreparedParams({

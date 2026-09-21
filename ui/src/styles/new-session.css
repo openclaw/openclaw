@@ -399,7 +399,12 @@ html:is(.openclaw-native-macos, .openclaw-native-desktop) .new-session-page__inc
 
 .new-session-page__trigger-chevron {
   display: inline-flex;
-  color: inherit;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  margin-inline-start: 2px;
+  color: var(--muted);
+  opacity: 0.8;
 }
 
 .new-session-page__trigger-chevron--mobile {
@@ -421,8 +426,34 @@ html:is(.openclaw-native-macos, .openclaw-native-desktop) .new-session-page__inc
 }
 
 .new-session-page__trigger-chevron svg {
-  width: 12px;
-  height: 12px;
+  width: 10px;
+  height: 10px;
+  stroke-width: 1.5px;
+}
+
+.new-session-page__trigger > .new-session-page__target-icon {
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 14px;
+  width: 14px;
+  height: 14px;
+}
+
+.new-session-page__trigger > .new-session-page__target-icon svg {
+  stroke-width: 1.5px;
+}
+
+.new-session-page__trigger .cloud-profile-icon {
+  align-items: center;
+  justify-content: center;
+}
+
+/* The wide AWS wordmark has generous vertical whitespace in its source art.
+   Scale its paint, not the shared leading column or the compact menu icons. */
+.new-session-page__trigger .cloud-provider-icon[data-provider-icon="aws"] {
+  width: 18px;
+  height: 18px;
+  flex-basis: 18px;
 }
 
 .session-group-defaults .exec-approval-header {
@@ -1279,8 +1310,8 @@ wa-popover.new-session-page__where-popover::part(body) {
 
   .new-session-page__triggers {
     display: grid;
-    /* Keep identity/project beside destination/checkout without growing extra rows. */
-    grid-template-columns: minmax(0, 1fr) minmax(0, 1.6fr);
+    /* Keep placement controls stacked while leaving breathing room on phones. */
+    grid-template-columns: minmax(0, 1fr);
     align-items: center;
     gap: 2px 4px;
     width: calc(100% - 8px);
@@ -1317,13 +1348,12 @@ wa-popover.new-session-page__where-popover::part(body) {
 
   .new-session-page__triggers > span.new-session-page__select > .new-session-page__trigger {
     width: fit-content;
-    max-width: 100%;
+    max-width: 90%;
   }
 
   .new-session-page__catalog-unavailable,
   .new-session-page__runtime,
-  .new-session-page__triggers > .new-session-page__menu-field,
-  .new-session-page__triggers > span.new-session-page__select:last-of-type:nth-of-type(odd) {
+  .new-session-page__triggers > .new-session-page__menu-field {
     grid-column: 1 / -1;
   }
 
@@ -1338,29 +1368,72 @@ wa-popover.new-session-page__where-popover::part(body) {
     max-width: 100%;
   }
 
+  .new-session-page__trigger-label,
+  .new-session-page__trigger-summary {
+    /* Padding keeps fitting text out of the fade; only overflow reaches the tail. */
+    padding-inline-end: 8px;
+    white-space: nowrap;
+    text-overflow: clip;
+    mask-image: linear-gradient(to right, black calc(100% - 8px), transparent);
+  }
+
+  .new-session-page__trigger-label:dir(rtl),
+  .new-session-page__trigger-summary:dir(rtl) {
+    mask-image: linear-gradient(to left, black calc(100% - 8px), transparent);
+  }
+
   .new-session-page__trigger {
     gap: 0;
+    min-height: 44px;
+    height: auto;
+    padding-block: 8px;
+    text-align: start;
+  }
+
+  .new-session-page__select--where
+    > .new-session-page__trigger:has(.new-session-page__trigger-summary) {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto;
   }
 
   .new-session-page__trigger-summary {
-    margin-inline-start: 6px;
+    grid-column: 2;
+    grid-row: 2;
+  }
+
+  .new-session-page__select--where .new-session-page__target-icon {
+    grid-column: 1;
+    grid-row: 1 / 3;
+  }
+
+  .new-session-page__select--where .new-session-page__trigger-chevron {
+    grid-column: 3;
+    grid-row: 1 / 3;
   }
 
   .new-session-page__trigger > .new-session-page__target-icon {
+    flex-basis: 20px;
+    width: 20px;
+    height: 20px;
     margin-inline-end: 8px;
   }
 
-  .new-session-page__triggers
-    :is(.new-session-page__target-icon, .new-session-page__trigger-chevron) {
-    flex-shrink: 0;
-    color: var(--muted);
-  }
-
-  .new-session-page__triggers
-    :is(.new-session-page__target-icon, .new-session-page__trigger-chevron)
-    svg {
+  .new-session-page__trigger > .new-session-page__target-icon svg {
+    flex: 0 0 16px;
     width: 16px;
     height: 16px;
+  }
+
+  .new-session-page__trigger .cloud-profile-icon {
+    flex-basis: 20px;
+    width: 20px;
+    height: 20px;
+  }
+
+  .new-session-page__trigger .cloud-provider-icon[data-provider-icon="aws"] {
+    flex-basis: 22px;
+    width: 22px;
+    height: 22px;
   }
 
   .new-session-page__trigger-chevron--desktop {

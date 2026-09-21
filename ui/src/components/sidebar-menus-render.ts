@@ -46,6 +46,7 @@ import {
   isSidebarAttentionDismissed,
   isUpdateAttentionForced,
   loadDismissals,
+  resolveSidebarAttentionKey,
   resolveUpdateAttentionDismissal,
 } from "./sidebar-attention-dismissals.ts";
 import type { SidebarMenusController } from "./sidebar-menus-controller.ts";
@@ -175,7 +176,7 @@ export function renderSidebarIdentityMenuForController(controller: SidebarMenusC
     overlaySnapshot?.updateSchedule?.campaign?.state !== "applying" &&
     !isUpdateAttentionForced(overlaySnapshot?.updateStatusBanner?.tone) &&
     isSidebarAttentionDismissed(
-      loadDismissals(context.gateway.connection.gatewayUrl),
+      loadDismissals(resolveSidebarAttentionKey(context.gateway)),
       updateAttentionDismissal,
     ),
   );

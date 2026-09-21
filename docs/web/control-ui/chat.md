@@ -35,8 +35,8 @@ button deletes the comment. Hover, keyboard-focus, or click the composer's comme
 count to open its preview. Deleting one comment keeps the remaining list open;
 Escape, a click outside, or moving the pointer away dismisses it. The count's
 **Remove all comments** action clears pending comments in one click and returns
-focus to the composer. **Undo** in the removal notification restores them. The
-clear action appears on hover or keyboard focus and stays visible on touch.
+focus to the composer without showing a notification. Cleared comments cannot
+be undone. The clear action appears on hover or keyboard focus and stays visible on touch.
 Clearing pending comments preserves ordinary attachments, the message draft,
 and comments already sent in the conversation.
 Archiving another split pane leaves the current comment editor and keyboard focus in place.
@@ -121,6 +121,18 @@ shortcodes, and unknown names stay literal. Existing messages are not rewritten.
 You can still paste emoji or use your operating system’s emoji keyboard; there
 is no separate emoji picker in the composer.
 
+## JSON in chat
+
+Completed JSON objects and arrays in assistant messages and code fences share a
+**Tree** view with expandable nested values and a **Raw** view of the original
+source. **Copy** copies the source in either view, preserving duplicate keys,
+large numbers, and escape sequences. Raw keeps the usual long-code preview,
+reveal control, and word wrapping.
+
+Unfinished streaming fences, invalid JSON, and JSON beyond the tree rendering
+budget stay readable as source. User-message fences and passive previews remain
+plain code without interactive controls.
+
 ## Chat behavior
 
 When you send a message, the model picker keeps your selected model visible with
@@ -192,7 +204,7 @@ Worktree creation waits up to 30 seconds for a title, then proceeds while naming
 finishes in the background. A late title still updates the session without
 renaming its existing Git branch. Concurrent naming requests share the same work;
 if that request fails, a waiting dashboard request retries once. If both model
-routes fail, the session uses a readable title derived from the first message.
+routes fail, the session uses a two-word crustacean-themed name.
 
 Collapsed tool rows keep the tool label visible and truncate long summaries with an ellipsis. Tool and subagent activity rows use the same text size and weight. Running subagents show **Subagent** beside an animated indicator; terminal rows show **Subagent finished**, **Subagent failed**, or **Subagent cancelled**. Subagent previews and their hover text flatten Markdown into a single plain-text line, including unfinished emphasis in live updates. Open the subagent details for a compact activity feed with formatted assistant text, grouped tool calls, and timestamps. Expand a tool row to inspect each command, path, or query. The panel shows current progress above the feed; finished tasks show their outcome and duration. **Show earlier** loads history without moving the entry you were reading. New activity follows the bottom only while you are already there.
 
@@ -237,7 +249,7 @@ Run-error banners offer **Refresh** to reload the conversation without resending
     - Every Chat pane has a title bar. Click the session title to rename it; the workspace chip copies the checkout path or branch and can reveal local Gateway workspaces in the host file manager. Remote and exec-node sessions keep copy actions but hide reveal.
     - The **Files** tab in each Chat pane's unified side panel lists thread files, project files, and artifacts. Search at the top covers session files, artifacts, and the project tree; surrounding whitespace is ignored while spaces inside the query remain literal; filter chips show changed files, read files, or artifacts, and collapsible groups share one scroll region. **Show in Files** from Review clears search and filters so the destination project directory is visible. For an active repository-only session it reads the node checkout. After Stop it exposes retained changed-file previews; unchanged upstream files, editing, and full diffs require the worker to run again. The stopped diff panel explains this limitation. Reopen it with ⇧⌘B, the files toggle in the title bar, or the panel's **+** menu; the title-bar toggle carries a changed-file count badge.
     - File paths recognized in chat messages read as their basename with a small glyph for the file type in front — a Markdown page, a `package.json` manifest, a TypeScript source, a `.tsx` component, a config or data file, a shell script, and an image each get their own mark, and anything else falls back to a plain document. When two links in the same message share a basename, each keeps just enough of its trailing path to stay distinct. The full path stays on the link: it is what the tooltip shows, what opens in the file panel, and what the message's **Copy** action returns, since copy hands back the original Markdown. Labels you write yourself in a `[label](path)` link are never rewritten. The glyph is drawn from the bundled icon set, never fetched from the network, and is decorative only: it is not read by screen readers and is not part of copied text. Text that is not a recognizable path — anything carrying spaces, parentheses, a `#` fragment, or a `?` query — stays plain prose.
-    - Clicking a file reference in chat, a file path in an expanded read/edit/write tool card, or a file row in **Files** opens its own filename tab in the shared side-panel header. Reopening the same file selects its existing tab and rereads its content when there is no unsaved draft. Selecting a filename tab keeps its current preview; unsaved drafts are never replaced by a file reopen. The folder action returns to the file browser without closing previews. The last opened file stays highlighted in both session and project lists, including after refreshing the file list. A pending listing cannot clear a newer file selection or replace results and errors for a different folder or search. If the folder being browsed becomes unavailable, **Files** keeps its parent-folder action so you can continue browsing without reloading or changing sessions. Session file labels show the filename and enough parent folders to distinguish matching names; hovering or copying a path keeps the full path. Closing a filename tab closes only its preview, never the underlying file. Closing or replacing a file preview cancels a delayed copy fallback; an already issued native clipboard write may still finish. Open previews are scoped to the current session, agent, and connection, and are not persisted across reconnects. HTML files open a sandboxed **Preview**, with **Source** in the same filename tab. Other UTF-8 text files use a CodeMirror-based code view with syntax highlighting, line numbers, jump-to-line, in-file search, copy actions, and an open-in-external-editor menu. The code view has a **Word wrap** toolbar toggle, including in HTML **Source** view. Wrapping starts off; the browser remembers your choice across files and reloads without changing file contents. Search follows the displayed line numbers for LF, CRLF, and CR line endings; editing preserves the original line endings. AVIF, GIF, JPEG, PNG, and WebP images no larger than 256 KiB render inline; other binary files show metadata without lossy text decoding. When the Gateway advertises `sessions.files.set` to an `operator.admin` connection, the text panel adds an Edit mode with dirty tracking and Cmd/Ctrl-S save; unsaved drafts survive file, panel, and session navigation in the current browser tab until explicitly saved or discarded. Saves are compare-and-swap on a content hash returned by `sessions.files.get`: if the file changed on disk since it was loaded (for example because the agent kept working), the panel shows a conflict notice with Reload (take the latest content) and Overwrite (keep the local edit) actions. Writes go through the same fs-safe workspace guards as reads — path containment, symlink/hardlink rejection, and a 256 KiB UTF-8 cap — and only overwrite existing files; the editor never creates or deletes them. If the editor cannot load, use **Retry** or **View Raw Text**. A missing editor chunk after an update offers **Reload**, which waits for the Gateway to become reachable.
+    - Clicking a file reference in chat, a file path in an expanded read/edit/write tool card, or a file row in **Files** opens its own filename tab in the shared side-panel header. Reopening the same file selects its existing tab and rereads its content when there is no unsaved draft. Selecting a filename tab keeps its current preview; unsaved drafts are never replaced by a file reopen. The folder action returns to the file browser without closing previews. The last opened file stays highlighted in both session and project lists, including after refreshing the file list. A pending listing cannot clear a newer file selection or replace results and errors for a different folder or search. If the folder being browsed becomes unavailable, **Files** keeps its parent-folder action so you can continue browsing without reloading or changing sessions. Session file labels show the filename and enough parent folders to distinguish matching names; hovering or copying a path keeps the full path. Closing a filename tab closes only its preview, never the underlying file. Closing or replacing a file preview cancels a delayed copy fallback; an already issued native clipboard write may still finish. Open previews are scoped to the current session, agent, and connection, and are not persisted across reconnects. HTML files open a sandboxed **Preview**, with **Source** in the same filename tab. Other UTF-8 text files use a CodeMirror-based code view with syntax highlighting, line numbers, jump-to-line, in-file search, copy actions, and an open-in-external-editor menu. The code view has a **Word wrap** toolbar toggle, including in HTML **Source** view. Wrapping starts off; the browser remembers your choice across files and reloads without changing file contents. Search follows the displayed line numbers for LF, CRLF, and CR line endings; editing preserves the original line endings. Escape closes in-file search and returns keyboard focus to **Search in file** in the toolbar. AVIF, GIF, JPEG, PNG, and WebP images no larger than 256 KiB render inline; other binary files show metadata without lossy text decoding. When the Gateway advertises `sessions.files.set` to an `operator.admin` connection, the text panel adds an Edit mode with dirty tracking and Cmd/Ctrl-S save; unsaved drafts survive file, panel, and session navigation in the current browser tab until explicitly saved or discarded. Saves are compare-and-swap on a content hash returned by `sessions.files.get`: if the file changed on disk since it was loaded (for example because the agent kept working), the panel shows a conflict notice with Reload (take the latest content) and Overwrite (keep the local edit) actions. Writes go through the same fs-safe workspace guards as reads — path containment, symlink/hardlink rejection, and a 256 KiB UTF-8 cap — and only overwrite existing files; the editor never creates or deletes them. If the editor cannot load, use **Retry** or **View Raw Text**. A missing editor chunk after an update offers **Reload**, which waits for the Gateway to become reachable.
     - Subagent runs appear in inline transcript activity rows, the chat **Tasks** tab, and the Tasks page. They have no sidebar row; opening a run in the main chat view is view-only. The composer identifies the parent session and offers **Open parent session** so you can continue the conversation there. Message input, reply actions, model and access pickers, microphone, and attachment controls are hidden. This does not change copy or fork availability; **Open parent session** takes you to the conversation where you can reply. **Stop** remains available when the Gateway reports an abortable run. Spawned persistent sessions (visible sessions in the session tree) are not subagents: a subagent run ends, a session does not, and you can always type in it.
     - The **Tasks** tab lists the current agent's background tasks and subagents (`tasks.list` scoped by agent, kept live by `task` events): running work shows a live elapsed timer, tool-use count, the tool currently in use, and a stop control, while the collapsible finished section adds run durations. Inline subagent activity rows show status and progress without per-task edit counters. Task details retain each task’s cumulative edit-activity counter; the checkout chip above the composer shows the session checkout’s actual Git diff. Selecting a task from either a task row or an inline subagent activity row opens its live status and transcript inside **Tasks** without replacing the main conversation or the **Review** diff; tasks whose session is the current conversation show their prompt and output inspector there instead. Select **Back to tasks** to return to the list. Closing the Tasks tab clears inspection; switching tabs or minimizing the panel preserves it. Open **Tasks** with the title-bar activity toggle or the panel's **+** menu; the task snapshot loads eagerly, so the title-bar toggle carries a running-count badge without opening the tab first. The Tasks page remains the full cross-agent ledger.
     - After a chat turn finishes, remaining background work appears as an inline task count followed by elapsed time. Hover or focus the count to preview tasks; select it to open **Tasks**. The status disappears when no active tasks remain or the Gateway disconnects.
@@ -299,9 +311,12 @@ Run-error banners offer **Refresh** to reload the conversation without resending
 
 ### ClawHub recommendation cards
 
-Ask about a capability, such as “Can you install WhatsApp?”, to let the agent find
-an official plugin or skill on ClawHub. When the `message` tool is available, it
-can present up to three matching cards in the conversation.
+Ask to find or install a plugin or skill, such as “Find the WhatsApp plugin”, to
+let the agent search ClawHub. The agent uses available tools and skills first;
+it suggests cards for explicit discovery or installation requests, or when a
+needed capability is missing. Routine tasks, tool errors, and permission fixes
+do not call for a catalog search. When the `message` tool is available, it can
+present up to three matching cards in the conversation.
 
 If you use the `coding` tool profile, include `"message"` in `tools.alsoAllow`
 (for example, `tools: { profile: "coding", alsoAllow: ["message"] }`). Existing
@@ -336,14 +351,18 @@ an explanation in chat.
 
 ### Source previews and copying code
 
-Long clipboard text appears as a compact chip in the composer and transcript.
-Its label shows the first 30 characters of a plain-text excerpt, with HTML and
-Markdown formatting removed. Empty or unavailable excerpts show **Pasted text**.
-In the transcript, chips sit above the text bubble alongside other attachments;
-multiple chips share a row and wrap when needed. Click a chip or press Enter to
-open the existing attachment side panel and copy the original text, preserving
-markup, line breaks, and indentation. The composer panel also offers **Show in
-text field** and removal. Messages containing only comment or pasted-text chips
+Long clipboard text appears as a file-sized card in the composer and a compact
+chip in the transcript. Its label shows the first 30 characters of a plain-text
+excerpt, with HTML and Markdown formatting removed. Empty or unavailable excerpts
+show **Pasted text**. In the transcript, chips sit above the text bubble alongside
+other attachments; multiple chips share a row and wrap when needed. Click the
+composer excerpt or icon, or a transcript chip, to open the existing attachment
+side panel and copy the original text, preserving markup, line breaks, and
+indentation. The excerpt and chip also support keyboard activation. Select
+**Show in text field** on the second row inside the composer card to return its
+text to the draft without opening the side panel.
+The composer side panel also offers the same action and removal. Messages
+containing only comment or pasted-text chips
 use a transparent shell.
 Newly uploaded text files remain file cards, even when their names resemble
 pasted-text attachments. Older history without origin metadata recognizes
@@ -514,8 +533,14 @@ higher threshold, and a second reopen keeps it open for that visit and task.
 See [Task progress cards](/tools/progress-card#where-the-card-appears) for gesture thresholds,
 manual-choice scope, and reset behavior.
 
-Streaming output and layout adjustments keep reading mode intact. Scroll back to
-the end or select **Latest** to resume following the conversation.
+Streaming output and layout adjustments keep reading mode intact. A message from
+another participant pauses following and preserves your current position, even
+when you were at the end. Typing indicators do not move the transcript. Sending
+a message from this pane resumes following your response; a send from another
+browser, including one signed in as you, does not count as a local send. Scroll
+back to the end or select **Latest** to resume following explicitly. Assistant
+text stays visible as it streams and becomes saved history, without a reply
+entry fade or slide.
 
 Completed replies can show a compact **Sources** strip when their web links match
 recorded `web_search` or `web_fetch` results from the same run. Select a title and
@@ -552,6 +577,8 @@ Focusing a marker also shows its preview without jumping to the message.
 The chat transcript uses a centered readable frame aligned with the composer. Assistant and tool output stay left-aligned while your own messages stay right-aligned inside that frame. In multi-user sessions (for example a group chat relayed from a channel plugin), messages from other attributed participants render left-aligned with the author's avatar, name, and a stable per-identity color, so only the signed-in viewer's messages read as "mine". When two or more attributed participants are present, assistant replies carry a small "Replying to name" marker naming the participant whose message triggered the turn. System entries such as local slash-command output render as centered notice rows without an avatar.
 
 Images and video previews in your own messages appear above any accompanying text, without a surrounding bubble background. Videos use a still frame with a play icon; select the preview to open the video in the Files panel. If a preview cannot load, the attachment card remains available. Hovering media leaves that layout unchanged, and the text keeps its normal bubble color, including any per-identity tint. Assistant videos retain their inline player.
+
+Images use a plain, lightly tinted shimmer while their availability or preview is loading. An image that needs explicit permission keeps a compact **Allow image** card until you choose to allow it; unavailable images retain their status and retry controls.
 
 Managed image previews retain enough detail for high-density displays. Open an image tile
 to inspect it immediately in the image viewer; the cached preview stays visible

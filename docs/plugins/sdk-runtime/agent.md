@@ -62,12 +62,28 @@ different configured profile.
 
 `SessionManager.openModelContext` and `openModelContextAsync` from
 `openclaw/plugin-sdk/agent-sessions` accept optional `limits: { maxBytes, maxEvents }`.
-The reader measures projected payload bytes in SQLite before loading them and
-selects a recent context with its latest compaction or reset boundary. It preserves
+Bounded reads are strict by default. The reader measures projected payload bytes
+in SQLite before loading them and selects a recent context with its latest
+compaction or reset boundary. It preserves
 tool-result ownership and rejects a limit that cannot retain the newest complete
 frame or required boundary. Stored transcripts stay unchanged. Omitting `limits`
 keeps the full selected context. Async reads retain admission, anchor, and
 cancellation checks.
+
+For a temporary model-only view, callers may explicitly add
+`toolResultOverflow: "omit"` to `limits`. If the newest atomic tool frame would
+otherwise leave no fitting context, recovery replaces only the tool-result bodies
+needed to fit with omission notices, before loading those bodies from SQLite.
+Each notice identifies the tool, call, and original projected event size. Recovery
+retains the latest historical user request and complete owned call/result frames.
+Unselected result bodies and tool-call arguments remain intact.
+
+This is a lossy model view, not a full-fidelity history API. It does not rewrite
+canonical transcripts or change evidence and fork readers. The same byte/event
+limits, required boundaries, and tool-result ownership checks still apply. Reads
+still fail if required user messages, call arguments, summaries, or event counts
+cannot fit, or result ownership is ambiguous. Omitting `toolResultOverflow`
+preserves strict bounded-read behavior.
 
 ## Scoped session visibility
 

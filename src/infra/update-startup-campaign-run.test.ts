@@ -88,56 +88,73 @@ describe("automatic campaign handoff failure", () => {
     await state.cleanup();
   });
 
-  it("cancels a rejected transfer when diagnostic persistence fails", async () => {
-    const run = createUpdateRun({ trigger: "campaign", target: { kind: "package" } });
-    const log = { info: vi.fn() };
-    cancel.mockResolvedValueOnce("restored-in-process");
-    let record: MockInstance<typeof import("./update-run-codec.js").encodeRun> | undefined;
-    transfer.mockImplementationOnce(async () => {
-      record = vi
-        .spyOn(await import("./update-run-codec.js"), "encodeRun")
-        .mockImplementationOnce(() => {
-          throw Object.assign(new Error("diagnostic ledger is read-only"), {
-            code: "SQLITE_READONLY",
-          });
+  it.each(["state", "diagnostics"] as const)(
+    "cancels a rejected transfer when %s persistence fails",
+    async (failure) => {
+      const run = createUpdateRun({ trigger: "campaign", target: { kind: "package" } });
+      const log = { info: vi.fn() };
+      cancel.mockResolvedValueOnce("restored-in-process");
+      let record: MockInstance<typeof import("./update-run-codec.js").encodeRun> | undefined;
+      transfer.mockImplementationOnce(async () => {
+        const codec = await import("./update-run-codec.js");
+        const encode = codec.encodeRun;
+        record = vi.spyOn(codec, "encodeRun").mockImplementation((current, options) => {
+          if (
+            failure === "state"
+              ? current.reason === "managed-service-handoff-failed"
+              : current.steps.some((step) =>
+                  step.failureFacts?.some((fact) => fact.check === "managed-service"),
+                )
+          ) {
+            record?.mockRestore();
+            throw Object.assign(new Error("diagnostic ledger is read-only"), {
+              code: "SQLITE_READONLY",
+            });
+          }
+          return encode(current, options);
         });
-      throw new Error("pipe closed");
-    });
-    try {
-      const outcome = await runAutoUpdateCommand(
-        {
-          runId: run.runId,
-          channel: "beta",
-          mode: "npm",
-          root: "/opt/openclaw",
-          timeoutMs: 1_000,
-          restartDrainTimeoutMs: undefined,
-        },
-        log,
-      );
-      expect(cancel).toHaveBeenCalledExactlyOnceWith({
-        kind: "managed-update-handoff",
-        handoffId: "auto-handoff-id",
-        installRoot: "/opt/openclaw",
+        throw new Error("pipe closed");
       });
-      expect(outcome).toMatchObject({
-        status: "failed",
-        result: {
-          reason: "managed-service-handoff-failed",
-          steps: [
-            expect.objectContaining({
-              failureFacts: [expect.objectContaining({ message: "pipe closed" })],
-            }),
-          ],
-        },
-      });
-      expect(log.info).toHaveBeenCalledWith(
-        expect.stringContaining("Update diagnostics could not be recorded (SQLITE_READONLY)"),
-      );
-    } finally {
-      record?.mockRestore();
-    }
-  });
+      try {
+        const outcome = await runAutoUpdateCommand(
+          {
+            runId: run.runId,
+            channel: "beta",
+            mode: "npm",
+            root: "/opt/openclaw",
+            timeoutMs: 1_000,
+            restartDrainTimeoutMs: undefined,
+          },
+          log,
+        );
+        expect(cancel).toHaveBeenCalledExactlyOnceWith({
+          kind: "managed-update-handoff",
+          handoffId: "auto-handoff-id",
+          installRoot: "/opt/openclaw",
+        });
+        expect(outcome).toMatchObject({
+          status: "failed",
+          result: {
+            reason: "managed-service-handoff-failed",
+            steps: [
+              expect.objectContaining({
+                failureFacts: [expect.objectContaining({ message: "pipe closed" })],
+              }),
+            ],
+          },
+        });
+        expect(log.info).toHaveBeenCalledWith(
+          expect.stringContaining(
+            failure === "state"
+              ? "Update failure state could not be recorded"
+              : "Update diagnostics could not be recorded (SQLITE_READONLY)",
+          ),
+        );
+      } finally {
+        record?.mockRestore();
+      }
+    },
+  );
 
   it.each([
     { throws: false, diagnosticFailure: null },
@@ -157,6 +174,12 @@ describe("automatic campaign handoff failure", () => {
       let beforeCancellation: ReturnType<typeof listUpdateRuns>[number] | undefined;
       cancel.mockImplementationOnce(async () => {
         const run = expectDefined(listUpdateRuns()[0], "admitted campaign run");
+        expect(run).toMatchObject({
+          reason: "managed-service-handoff-failed",
+          steps: expect.arrayContaining([
+            expect.objectContaining({ step: "requested", status: "failed" }),
+          ]),
+        });
         beforeCancellation = run;
         stepsBeforeCancellation = run.steps;
         recordUpdateRunVerification(run.runId, {
@@ -186,6 +209,7 @@ describe("automatic campaign handoff failure", () => {
               const outcome = await runAutoUpdateCommand(params, log);
               if (diagnosticFailure) {
                 const reader = await import("./update-run-reader.js");
+                const readKernel = await import("./update-run-read.kernel.js");
                 const verificationOwner = await import("./update-run-verification.js");
                 const failed = () => {
                   throw Object.assign(new Error("summary diagnostics unavailable"), {
@@ -196,7 +220,7 @@ describe("automatic campaign handoff failure", () => {
                   diagnosticFailure === "stale"
                     ? vi.spyOn(reader, "getUpdateRun").mockReturnValueOnce(beforeCancellation)
                     : diagnosticFailure === "read"
-                      ? vi.spyOn(reader, "readUpdateRunRecord").mockImplementationOnce(failed)
+                      ? vi.spyOn(readKernel, "readUpdateRunRecord").mockImplementationOnce(failed)
                       : vi
                           .spyOn(verificationOwner, "recordUpdateRunVerificationRecord")
                           .mockImplementationOnce(failed);

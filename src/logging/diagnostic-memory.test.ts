@@ -6,6 +6,7 @@ import {
   resetDiagnosticEventsForTest,
   type DiagnosticEventPayload,
 } from "../infra/diagnostic-events.js";
+import * as workerMemory from "../infra/worker-cpu.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { emitDiagnosticMemorySample, resetDiagnosticMemoryForTest } from "./diagnostic-memory.js";
 import {
@@ -46,6 +47,7 @@ describe("diagnostic memory", () => {
   });
 
   afterEach(() => {
+    vi.restoreAllMocks();
     stopDiagnosticStabilityRecorder();
     vi.useRealTimers();
     resetDiagnosticEventsForTest();
@@ -76,6 +78,11 @@ describe("diagnostic memory", () => {
         uptimeMs: 123,
         memory: {
           arrayBuffersBytes: 5,
+          workerCount: 0,
+          workerHeapSampledCount: 0,
+          workerHeapTotalBytes: 0,
+          workerHeapUsedBytes: 0,
+          workerHeaps: [],
           externalBytes: 10,
           heapTotalBytes: 80,
           rssBytes: 4096,
@@ -113,6 +120,11 @@ describe("diagnostic memory", () => {
         uptimeMs: 0,
         memory: {
           arrayBuffersBytes: 5,
+          workerCount: 0,
+          workerHeapSampledCount: 0,
+          workerHeapTotalBytes: 0,
+          workerHeapUsedBytes: 0,
+          workerHeaps: [],
           externalBytes: 10,
           heapTotalBytes: 80,
           heapUsedBytes: 40,
@@ -129,6 +141,11 @@ describe("diagnostic memory", () => {
         thresholdBytes: 1000,
         memory: {
           arrayBuffersBytes: 5,
+          workerCount: 0,
+          workerHeapSampledCount: 0,
+          workerHeapTotalBytes: 0,
+          workerHeapUsedBytes: 0,
+          workerHeaps: [],
           externalBytes: 10,
           heapTotalBytes: 80,
           heapUsedBytes: 40,
@@ -471,6 +488,11 @@ describe("diagnostic memory", () => {
       windowMs: 10_000,
       memory: {
         arrayBuffersBytes: 5,
+        workerCount: 0,
+        workerHeapSampledCount: 0,
+        workerHeapTotalBytes: 0,
+        workerHeapUsedBytes: 0,
+        workerHeaps: [],
         externalBytes: 10,
         heapTotalBytes: 80,
         heapUsedBytes: 40,
@@ -526,6 +548,17 @@ describe("diagnostic memory", () => {
   });
 
   it("logs memory pressure events through the gateway subsystem", async () => {
+    vi.spyOn(workerMemory, "sampleTrackedWorkerMemory").mockReturnValue({
+      workerCount: 7,
+      workerHeapSampledCount: 7,
+      workerHeapTotalBytes: 5600,
+      workerHeapUsedBytes: 2800,
+      workerHeaps: [200, 700, 400, 100, 600, 300, 500].map((heapUsed) => ({
+        script: "sqlite-store.worker.js",
+        heapUsed,
+        heapTotal: heapUsed * 2,
+      })),
+    });
     setLoggerOverride({ level: "info", consoleLevel: "silent" });
     const records: Array<Extract<DiagnosticEventPayload, { type: "log.record" }>> = [];
     const stop = onInternalDiagnosticEvent((event) => {
@@ -558,7 +591,18 @@ describe("diagnostic memory", () => {
       }),
     ]);
     expect(records[0]?.message).not.toMatch(/snapshot/i);
-    expect(records[0]?.message).toContain("rssBytes=4000 heapUsedBytes=3000 thresholdBytes=3000");
+    expect(records[0]?.message).toContain(
+      "rssBytes=4000 heapUsedBytes=3000 externalBytes=10 arrayBuffersBytes=5 workerHeapTotalBytes=5600 workerHeapUsedBytes=2800 workerCount=7 workerHeapSampledCount=7",
+    );
+    expect(records[0]?.message).toContain(
+      `workerHeaps=${JSON.stringify([
+        { script: "sqlite-store.worker.js", heapUsed: 700, heapTotal: 1400 },
+        { script: "sqlite-store.worker.js", heapUsed: 600, heapTotal: 1200 },
+        { script: "sqlite-store.worker.js", heapUsed: 500, heapTotal: 1000 },
+        { script: "sqlite-store.worker.js", heapUsed: 400, heapTotal: 800 },
+        { script: "sqlite-store.worker.js", heapUsed: 300, heapTotal: 600 },
+      ])} thresholdBytes=3000`,
+    );
     expect(records[0]?.message).toContain(
       "nextStep=run openclaw gateway diagnostics export, inspect an existing bundle with openclaw gateway stability --bundle latest, or on Node sample allocations with openclaw gateway call diagnostics.heapProfile --timeout 30000.",
     );

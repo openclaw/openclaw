@@ -4189,7 +4189,7 @@ describe("message tool description", () => {
 
   it("describes userId as required directly for member-info, not via target", () => {
     const tool = createMessageTool({
-      config: {} as never,
+      config: { tools: { message: { actions: { allow: ["member-info"] } } } },
     });
     const properties = getToolProperties(tool);
     const userId = properties.userId as { description?: string } | undefined;

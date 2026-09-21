@@ -20,6 +20,7 @@ import {
 import {
   createInMemoryTaskRegistryStore,
   createInMemoryTaskFlowRegistryStore,
+  reconcileTaskFlowRestoreForTests,
 } from "../test-utils/task-registry-store.js";
 import { ensureTaskFlowRegistryReadyAsync } from "./task-flow-registry.js";
 import type { TaskFlowRecord } from "./task-flow-registry.types.js";
@@ -255,10 +256,12 @@ describe("restored task flow synchronization", () => {
             retried.resolve({ context, error: failure });
           }
         },
-        async withSnapshotAsync(_context, consume) {
+        async withSnapshotAsync(context, consume) {
           started.resolve();
           await release.promise;
-          return consume(first.result);
+          return consume(first.result, () =>
+            reconcileTaskFlowRestoreForTests(context, [flow.flowId]),
+          );
         },
       },
     });
@@ -269,7 +272,8 @@ describe("restored task flow synchronization", () => {
       configureTaskRegistryRuntime({
         store: {
           ...second.store,
-          withSnapshotAsync: async (_context, consume) => consume(second.result),
+          withSnapshotAsync: async (context, consume) =>
+            consume(second.result, () => reconcileTaskFlowRestoreForTests(context, [flow.flowId])),
         },
       });
     }
@@ -344,18 +348,21 @@ it.each(["live", "restored"] as const)(
       flows,
     );
     if (kind === "restored") {
-      vi.spyOn(store, "withSnapshotAsync").mockImplementation(async (_context, consume) =>
-        consume({
-          ...taskRestoreResult(store.loadSnapshot()),
-          flowSyncs: [
-            {
-              taskId: task.taskId,
-              flowId: flow.flowId,
-              kind: "result",
-              result: { ok: false, reason: "persist_failed", current },
-            },
-          ],
-        }),
+      vi.spyOn(store, "withSnapshotAsync").mockImplementation(async (context, consume) =>
+        consume(
+          {
+            ...taskRestoreResult(store.loadSnapshot()),
+            flowSyncs: [
+              {
+                taskId: task.taskId,
+                flowId: flow.flowId,
+                kind: "result",
+                result: { ok: false, reason: "persist_failed", current },
+              },
+            ],
+          },
+          () => reconcileTaskFlowRestoreForTests(context, [flow.flowId]),
+        ),
       );
     }
     let published: TaskFlowRecord | undefined;

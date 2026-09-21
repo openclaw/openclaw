@@ -497,13 +497,23 @@ const enSettings = {
     },
     installedAgents: {
       title: "Installed agents",
-      description: "Coding apps on the computer that runs OpenClaw. Sign in through each app.",
+      description:
+        "Coding apps on the Gateway computer. Each app manages its own account and permissions. Enabling an app does not sign you in.",
       status: {
         installed: "Installed",
         missing: "Not detected",
         unverified: "Not verified",
+        signIn: "Sign in required",
+        discovering: "Discovering models…",
+        modelsAvailable: "Models available",
       },
-      unverifiedHint: "OpenClaw could not check the launch command set for this app.",
+      unverifiedHint:
+        "Check this app's custom launch command on the Gateway computer, then check again.",
+      installHint: "Install and sign in to {name} on the Gateway computer, then check again.",
+      disabledHint: "Enable this app to include its models in the picker.",
+      signInHint: "Open {name} on the Gateway computer and check its sign-in, then check again.",
+      discoveryHint:
+        "Open {name} on the Gateway computer and check its connection and sign-in, then check again.",
       toggle: "Use {name}",
       check: "Check again",
       checking: "Checking…",

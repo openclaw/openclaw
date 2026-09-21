@@ -4,6 +4,7 @@ import {
   NODE_WORKER_CAPACITY_MAX,
   type NodeWorkerCapacitySnapshot,
 } from "../infra/node-runner-inventory.js";
+import type { NodeWorkerJournalAuthority } from "./node-worker-journal.types.js";
 import {
   NodeWorkerLaunchStore,
   type NodeWorkerLaunchClaim,
@@ -55,6 +56,8 @@ export class NodeWorkerCapacity {
   private publishedCapacity: NodeWorkerCapacitySnapshot;
   private initialized = false;
 
+  private updates: Promise<void> = Promise.resolve();
+
   constructor(
     private readonly store: NodeWorkerLaunchStore,
     options: NodeWorkerCapacityOptions = {},
@@ -79,11 +82,11 @@ export class NodeWorkerCapacity {
     recoverRunning: (receipt: NodeWorkerLaunchReceipt) => Promise<void>,
   ): Promise<void> {
     this.onCapacityChanged?.(this.publishedCapacity);
-    for (const receipt of this.store.listNonterminal()) {
+    for (const receipt of await this.store.listNonterminal()) {
       if (receipt.state === "pending") {
         const supervisorState = inspectNodeWorkerProcessIdentity(receipt.supervisor);
         if (supervisorState === "dead" || supervisorState === "reused") {
-          this.finish(
+          await this.finish(
             {
               launchId: receipt.launchId,
               planHash: receipt.planHash,
@@ -99,9 +102,11 @@ export class NodeWorkerCapacity {
       }
       await recoverRunning(receipt);
     }
-    this.store.pruneExpiredTerminal();
-    this.refresh(true);
-    this.initialized = true;
+    await this.update(async () => {
+      await this.store.pruneExpiredTerminal();
+      await this.refresh(true);
+      this.initialized = true;
+    });
   }
 
   isInitialized(): boolean {
@@ -114,13 +119,22 @@ export class NodeWorkerCapacity {
     signal?: AbortSignal,
   ): Promise<Exclude<NodeWorkerLaunchClaimResult, { action: "at-capacity" }>> {
     const deadlineMs = Date.now() + this.waitMs;
-    while (true) {
+    const assertCurrent = () => {
       if (this.closeAbort.signal.aborted) {
         throw new Error("node worker supervisor is closed");
       }
       signal?.throwIfAborted();
-      const result = this.store.claim(claim, supervisor, this.capacity);
-      this.publishCount(result.nonterminalCount);
+    };
+    while (true) {
+      assertCurrent();
+      const result = await this.update(async () => {
+        assertCurrent();
+        const claimed = await this.store.claim(claim, supervisor, this.capacity, Date.now(), {
+          assertCurrent,
+        });
+        this.publishCount(claimed.nonterminalCount);
+        return claimed;
+      });
       if (result.action !== "at-capacity") {
         return result;
       }
@@ -128,30 +142,44 @@ export class NodeWorkerCapacity {
     }
   }
 
-  finish(
+  async finish(
     params: Parameters<NodeWorkerLaunchStore["finish"]>[0],
     notify = true,
-  ): NodeWorkerLaunchReceipt {
-    const receipt = this.store.finish(params);
-    if (notify && receipt.state !== "pending" && receipt.state !== "running") {
-      this.changed();
-    }
-    return receipt;
+    authority?: NodeWorkerJournalAuthority,
+  ): Promise<NodeWorkerLaunchReceipt> {
+    return this.update(async () => {
+      const receipt = await this.store.finish(params, authority);
+      if (notify && receipt.state !== "pending" && receipt.state !== "running") {
+        await this.changed();
+      }
+      return receipt;
+    });
   }
 
-  finishCancelled(
+  async finishCancelled(
     params: Parameters<NodeWorkerLaunchStore["finishCancelled"]>[0],
-  ): NodeWorkerLaunchReceipt | undefined {
-    const receipt = this.store.finishCancelled(params);
-    if (receipt && receipt.state !== "pending" && receipt.state !== "running") {
-      this.changed();
-    }
-    return receipt;
+  ): Promise<NodeWorkerLaunchReceipt | undefined> {
+    return this.update(async () => {
+      const receipt = await this.store.finishCancelled(params);
+      if (receipt && receipt.state !== "pending" && receipt.state !== "running") {
+        await this.changed();
+      }
+      return receipt;
+    });
   }
 
   close(): void {
     this.closeAbort.abort();
     this.wake();
+  }
+
+  private update<T>(operation: () => Promise<T>): Promise<T> {
+    const pending = this.updates.then(operation);
+    this.updates = pending.then(
+      () => undefined,
+      () => undefined,
+    );
+    return pending;
   }
 
   private publishCount(nonterminalCount: number, force = false): void {
@@ -163,21 +191,21 @@ export class NodeWorkerCapacity {
     this.onCapacityChanged?.(this.publishedCapacity);
   }
 
-  private refresh(force = false): void {
-    const count = this.store.nonterminalCount();
+  private async refresh(force = false): Promise<void> {
+    const count = await this.store.nonterminalCount();
     this.publishCount(count, force);
     if (count < this.capacity) {
       this.wake();
     }
   }
 
-  private changed(): void {
+  private async changed(): Promise<void> {
     if (!this.initialized) {
       return;
     }
     this.wake();
     try {
-      this.refresh();
+      await this.refresh();
     } catch {
       this.publishCount(this.capacity);
     }

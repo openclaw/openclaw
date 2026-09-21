@@ -817,7 +817,7 @@ suite.define(() => {
           await expect.poll(isMoving).toBe(status === "running");
           expect(await claw.count()).toBe(1);
           expect(await firstRow.locator(".chat-subagent-activity__badge").count()).toBe(
-            status === "failed" || status === "timed_out" ? 1 : 0,
+            ["completed", "failed", "timed_out"].includes(status) ? 1 : 0,
           );
           if (status === "queued") {
             idleColor = await indicator.evaluate((element) => getComputedStyle(element).color);

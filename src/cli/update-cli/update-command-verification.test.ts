@@ -5,8 +5,16 @@ import { createDeferred } from "../../../test/helpers/promise.js";
 import type { GatewayServiceRuntime } from "../../daemon/service-runtime.js";
 import * as gatewayService from "../../daemon/service.js";
 import { gatewayHealthResponse } from "../../gateway/health-response.test-support.js";
-import { recordUpdateRunVerification } from "../../infra/update-run-ledger.js";
+import { prepareUpdateFailureReport } from "../../infra/update-failure-report-prepare.js";
+import { recordUpdateRunStep, recordUpdateRunVerification } from "../../infra/update-run-ledger.js";
+import type { UpdateRunRecord } from "../../infra/update-run-record.js";
+import { readUpdateRunReportHealth } from "../../infra/update-run-report-health.js";
+import {
+  renderUpdateRunReport,
+  updateRunReportInputFromResult,
+} from "../../infra/update-run-report.js";
 import type { UpdateRunResult } from "../../infra/update-runner.js";
+import { CommandProcessCleanupError } from "../../process/exec-result.js";
 import { defaultRuntime } from "../../runtime.js";
 import { mockProcessPlatform } from "../../test-utils/vitest-spies.js";
 import {
@@ -28,6 +36,9 @@ vi.mock("../../infra/update-run-ledger.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../infra/update-run-ledger.js")>()),
   recordUpdateRunStep: vi.fn(),
   recordUpdateRunVerification: vi.fn(),
+}));
+vi.mock("../../infra/update-run-report-health.js", () => ({
+  readUpdateRunReportHealth: vi.fn(async () => ({ kind: "unavailable" })),
 }));
 vi.mock("../../runtime.js", () => ({
   defaultRuntime: { log: vi.fn(), error: vi.fn() },
@@ -52,6 +63,8 @@ beforeEach(() => {
   controller = new AbortController();
   pendingVerification = undefined;
   vi.clearAllMocks();
+  vi.mocked(recordUpdateRunVerification).mockReset();
+  vi.mocked(recordUpdateRunStep).mockReset();
   resetRestartHealthMocks();
 });
 afterEach(async () => {
@@ -67,6 +80,135 @@ afterEach(async () => {
 });
 
 describe("update readiness generation", () => {
+  it("prefers a pending recovery observation over previously saved healthy facts", async () => {
+    const result: UpdateRunResult = { status: "error", mode: "npm", steps: [], durationMs: 0 };
+    await expect(
+      verifyUpdatedGateway({
+        result,
+        opts: { json: true, run: { runId: "pending-recovery", env: {} } },
+        purpose: "recovery",
+        serviceEnv: { HOME: "/synthetic-home" },
+        gatewayPort: 19101,
+        expectedVersion: "2026.9.5",
+        health: {
+          healthy: false,
+          waitOutcome: "still-starting",
+          runtime: { status: "running", pid: 8000 },
+          portUsage: { port: 19101, status: "free", listeners: [], hints: [] },
+          staleGatewayPids: [],
+        },
+      }),
+    ).resolves.toMatchObject({ ok: false, stopReason: "still-starting" });
+    const saved: UpdateRunRecord["verification"] = {
+      versionMatch: true,
+      readyz: true,
+      settled: true,
+      runningVersion: "2026.9.5",
+      recovery: { serviceRestartSafe: true, service: "healthy", version: "2026.9.5" },
+    };
+    const input = updateRunReportInputFromResult(result);
+    const report = renderUpdateRunReport(input);
+    expect(report.markdown).not.toContain("verified serving");
+    expect(report.markdown).toContain("readiness is pending");
+    const publicReport = await prepareUpdateFailureReport(
+      {
+        attemptId: "pending-recovery",
+        result,
+        recordedRun: { runId: "pending-recovery", steps: input.steps, verification: saved },
+      },
+      { env: {}, stateDir: "/fixture/state" },
+    );
+    expect(publicReport.body).not.toContain("verified serving");
+    expect(publicReport.body).toContain("readiness is pending");
+    expect(readUpdateRunReportHealth).toHaveBeenLastCalledWith(
+      expect.objectContaining({ readyz: false, settled: false, port: 19101 }),
+      expect.anything(),
+    );
+  });
+
+  it.each(["none", "runtime", "port", "command"] as const)(
+    "keeps recovery observation factual with inspection cleanup: %s",
+    async (fault) => {
+      mockProcessPlatform("linux");
+      const service = makeGatewayService({ status: "running", pid: 8000 });
+      vi.spyOn(gatewayService, "resolveGatewayService").mockReturnValue(service);
+      inspectPortUsage.mockImplementation(async (port) => ({
+        port,
+        status: "busy",
+        listeners: [{ pid: 8000 }],
+        hints: [],
+      }));
+      callGateway.mockImplementation(
+        gatewayHealthResponse({
+          server: { version: "2026.9.5", buildId: "candidate-build", bootId: "recovery-boot" },
+        }),
+      );
+      server = createServer((_req, res) => res.writeHead(200).end());
+      server.listen(0, "127.0.0.1");
+      await once(server, "listening");
+      const address = server.address();
+      if (!address || typeof address === "string") {
+        throw new Error("missing loopback listener");
+      }
+      const cleanup = new AggregateError(
+        [new CommandProcessCleanupError()],
+        "inspection cleanup uncertain",
+      );
+      if (fault === "runtime") {
+        vi.spyOn(service, "readRuntime").mockRejectedValue(cleanup);
+      }
+      if (fault === "command") {
+        vi.spyOn(service, "readCommand").mockRejectedValue(cleanup);
+      }
+      if (fault === "port") {
+        inspectPortUsage.mockRejectedValue(cleanup);
+      }
+      const result: UpdateRunResult = {
+        status: "error",
+        mode: "npm",
+        reason: "post-update-plugins",
+        steps: [],
+        durationMs: 0,
+      };
+      const verification = verifyUpdatedGateway({
+        result,
+        opts: { json: true, run: { runId: "observed-recovery", env: {} } },
+        purpose: "recovery",
+        serviceEnv: { HOME: "/synthetic-home" },
+        gatewayPort: address.port,
+        expectedVersion: "2026.9.5",
+        expectedBuildId: "candidate-build",
+        signal: controller.signal,
+      });
+      pendingVerification = verification;
+      if (fault !== "none") {
+        await expect(verification).rejects.toBe(cleanup);
+        expect(result.verification).toBeUndefined();
+        expect(result.steps).toEqual([]);
+        return;
+      }
+      await expect(verification).resolves.toMatchObject({ ok: true });
+      expect(result).toMatchObject({ status: "error", reason: "post-update-plugins" });
+      expect(result.steps).toContainEqual(
+        expect.objectContaining({ name: "gateway recovery verification", exitCode: 0 }),
+      );
+      expect(
+        result.steps.some((step) =>
+          step.failureFacts?.some((fact) => fact.code === "gateway-probe-failed"),
+        ),
+      ).toBe(false);
+      expect(result.verification).toMatchObject({
+        runningVersion: "2026.9.5",
+        runningBuildId: "candidate-build",
+        readyz: true,
+        settled: true,
+        versionMatch: true,
+      });
+      expect(recordUpdateRunVerification).not.toHaveBeenCalled();
+      expect(recordUpdateRunStep).not.toHaveBeenCalled();
+    },
+  );
+
   it.each(["still-starting", "stopped-free"] as const)(
     "preserves the readiness owner's bounded verdict (%s)",
     async (waitOutcome) => {

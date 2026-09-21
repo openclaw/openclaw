@@ -1,12 +1,15 @@
 import path from "node:path";
+import { DatabaseSync, StatementSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { applySkillEnvOverridesFromSnapshot } from "../../skills/runtime/env-overrides.js";
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
+import { createTranscriptCaptureAppends } from "../../transcripts/capture-appends.js";
 import { activeSessions } from "../../transcripts/capture.js";
 import type { TranscriptSourceProvider } from "../../transcripts/provider-types.js";
 import { TranscriptsStore, transcriptSessionSelector } from "../../transcripts/store.js";
@@ -70,6 +73,45 @@ afterEach(async () => {
 });
 
 describe("transcripts read actions", () => {
+  it("uses the active skill timezone after the database worker is already warm", async () => {
+    vi.stubEnv("TZ", undefined);
+    const local = { ...session, sessionId: "local", startedAt: "2026-08-20T06:00:00" };
+    const explicit = { ...session, sessionId: "explicit", startedAt: "2026-08-20T09:00:00Z" };
+    let releaseSkill = () => {};
+    const expected = () =>
+      [local, explicit]
+        .toSorted((left, right) => Date.parse(right.startedAt) - Date.parse(left.startedAt))
+        .map(({ sessionId }) => ({ sessionId }));
+    try {
+      await store.writeSession(local);
+      await store.writeSession(explicit);
+      const original = expected();
+      expect((await run({ action: "list", limit: 2 })).details).toMatchObject({
+        sessions: original,
+      });
+      const timezone = original[0]?.sessionId === "local" ? "UTC" : "Pacific/Honolulu";
+      releaseSkill = applySkillEnvOverridesFromSnapshot({
+        snapshot: { prompt: "", skills: [{ name: "chronology" }] },
+        config: { skills: { entries: { chronology: { env: { TZ: timezone } } } } },
+      });
+      expect(process.env.TZ).toBe(timezone);
+      expect(expected()).not.toEqual(original);
+      expect((await run({ action: "list", limit: 2 })).details).toMatchObject({
+        sessions: expected(),
+      });
+      const pending = store.listReadEntries({ limit: 2 });
+      releaseSkill();
+      releaseSkill = () => {};
+      await expect(pending).rejects.toThrow("Transcript timezone changed while reading");
+      expect((await run({ action: "list", limit: 2 })).details).toMatchObject({
+        sessions: original,
+      });
+    } finally {
+      releaseSkill();
+      vi.unstubAllEnvs();
+    }
+  });
+
   it.each(["active", "stopped"] as const)(
     "rejects notes rewritten while %s source authorization is pending",
     async (state) => {
@@ -84,6 +126,7 @@ describe("transcripts read actions", () => {
       );
       if (state === "active") {
         activeSessions.set(session.sessionId, {
+          appends: createTranscriptCaptureAppends(() => {}),
           session: descriptor,
           providerId: "voice",
           provider: {},
@@ -145,15 +188,33 @@ describe("transcripts read actions", () => {
       summarizeTranscripts({ session, utterances: [{ text: "Ship the design" }] }),
       session,
     );
-    const listed = await run({ action: "list" });
-    expect(listed.details).toMatchObject({
-      sessions: [{ sessionId: "meeting", participants: ["Ada"], utteranceCount: 1 }],
-    });
-    expect(listed.details).not.toHaveProperty("sessions.0.overview");
-    const shown = await run({ action: "show", selector: transcriptSessionSelector(session) });
-    expect(shown.content).toEqual([
-      { type: "text", text: expect.stringContaining("Ship the design") },
-    ]);
+    await closeOpenClawStateDatabaseAsync();
+    closeOpenClawStateDatabaseForTest();
+    const parentCalls = [
+      vi.spyOn(DatabaseSync.prototype, "prepare"),
+      vi.spyOn(DatabaseSync.prototype, "exec"),
+      ...(["get", "all", "run", "iterate"] as const).map((method) =>
+        vi.spyOn(StatementSync.prototype, method),
+      ),
+    ];
+    try {
+      const listed = await run({ action: "list" });
+      expect(listed.details).toMatchObject({
+        sessions: [{ sessionId: "meeting", participants: ["Ada"], utteranceCount: 1 }],
+      });
+      expect(listed.details).not.toHaveProperty("sessions.0.overview");
+      const shown = await run({ action: "show", selector: transcriptSessionSelector(session) });
+      expect(shown.content).toEqual([
+        { type: "text", text: expect.stringContaining("Ship the design") },
+      ]);
+      for (const calls of parentCalls) {
+        expect(calls.mock.calls, "caller-thread SQLite activity during list/show").toHaveLength(0);
+      }
+    } finally {
+      for (const calls of parentCalls) {
+        calls.mockRestore();
+      }
+    }
     await expect(
       run({ action: "stop", selector: transcriptSessionSelector(session) }),
     ).rejects.toThrow("not found");
@@ -203,6 +264,7 @@ describe("transcripts read actions", () => {
       },
     });
     activeSessions.set(session.sessionId, {
+      appends: createTranscriptCaptureAppends(() => {}),
       session,
       providerId: "voice",
       provider: {},
@@ -262,6 +324,7 @@ describe("transcripts read actions", () => {
 
   it("bounds model-facing notes and reports active captures without summaries", async () => {
     activeSessions.set(session.sessionId, {
+      appends: createTranscriptCaptureAppends(() => {}),
       session,
       providerId: "voice",
       provider: {},

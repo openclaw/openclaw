@@ -37,6 +37,11 @@ Watch background behavior. See [Watch setup and limits](/platforms/ios#standalon
   lives in the Chat composer rather than a separate Voice tab.
 - Tap the composer microphone for on-device dictation. Long-press it to record
   a voice-note attachment. Start continuous Talk from the Talk waveform.
+- While Talk is active, Chat shows its current status. Native Talk identifies
+  device speech recognition and the configured Talk voice, and explains when
+  the Gateway does not advertise GPT-Live relay support or explicitly rejects
+  relay support for the configuration.
+  Explicit `stt-tts` mode is shown as native Talk, not as a realtime failure.
 - Dictation, voice-note recording, and Talk are mutually exclusive microphone
   paths; starting one stops or blocks the others.
 - Realtime Talk prefers a connected Bluetooth Classic or BLE headset

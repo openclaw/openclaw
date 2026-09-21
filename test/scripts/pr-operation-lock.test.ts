@@ -30,6 +30,7 @@ import { createVitestResourceOwner } from "../../scripts/lib/vitest-resource-own
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import { createFixtureLifetime } from "../helpers/fixture-lifetime.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import { assertFixtureProcessGroupStopped } from "./exited-descendant-reaper.test-support.js";
 import {
   validClawsweeperReviewCommentPages,
   validReview,
@@ -944,7 +945,7 @@ describePosix("scripts/pr per-PR operation lock", () => {
         "set -euo pipefail",
         'case "$*" in',
         '  "auth token") printf "token:1\\n" >> "$OPENCLAW_TEST_GH_EVENTS"; exit 1 ;;',
-        '  "browse --no-browser") printf "https://github.com/fixture/fixture\\n" ;;',
+        '  "browse") printf "https://github.com/fixture/fixture\\n" ;;',
         '  "api --hostname github.com repos/fixture/fixture -H Cache-Control: max-age=0") printf \'{"full_name":"fixture/fixture","html_url":"https://github.com/fixture/fixture"}\\n\' ;;',
         '  "api user --include")',
         '    if [ "$OPENCLAW_TEST_AUTH_FAILURE" = 1 ]; then',
@@ -952,7 +953,7 @@ describePosix("scripts/pr per-PR operation lock", () => {
         "    fi",
         '    printf "writer:0\\n" >> "$OPENCLAW_TEST_GH_EVENTS"',
         '    printf \'HTTP/2.0 200 OK\\n\\n{"login":"fixture-user"}\\n\' ;;',
-        '  "api --hostname github.com repos/fixture/fixture/pulls/42")',
+        '  "api --hostname github.com repos/fixture/fixture/pulls/42 -H Cache-Control: max-age=0")',
         '    jq \'{number,title,html_url:.url,state:(.state|ascii_downcase),draft:.isDraft,user:.author,base:{ref:.baseRefName,sha:.baseRefOid,repo:{id:123}},head:{ref:.headRefName,sha:.headRefOid,repo:{id:123,name:.headRepository.name,full_name:.headRepository.nameWithOwner,html_url:.headRepository.url,owner:.headRepositoryOwner}},body,labels,assignees,changed_files:.changedFiles,additions,deletions}\' "$OPENCLAW_TEST_PR_METADATA"; printf "pull:0\\n" >> "$OPENCLAW_TEST_GH_EVENTS" ;;',
         '  "api --hostname github.com repos/fixture/fixture/pulls/42/files?per_page=100 --paginate --slurp -H Cache-Control: max-age=0") printf "[[]]\\n" ;;',
         '  "api --hostname github.com repos/fixture/fixture/commits/"*"/check-runs?filter=latest&per_page=100 --paginate --slurp") printf \'[{"check_runs":[]}]\\n\' ;;',
@@ -1781,10 +1782,8 @@ describePosix("scripts/pr per-PR operation lock", () => {
         "fetch_count=0",
         "pr_gh_plain() {",
         `  printf 'auth\\n' >> '${traceFile}'`,
-        '  [ "$*" = "api user --include" ] || return 99',
-        failure === "auth"
-          ? `  return ${code}`
-          : '  printf \'HTTP/2.0 200 OK\\n\\n{"login":"fixture-user"}\\n\'',
+        '  [ "$*" = "writer-login" ] || return 99',
+        failure === "auth" ? `  return ${code}` : '  printf "fixture-user\\n"',
         "}",
         "pr_git() {",
         `  printf 'git %s\\n' "$*" >> '${traceFile}'`,
@@ -1919,8 +1918,13 @@ describePosix("scripts/pr per-PR operation lock", () => {
         "set -euo pipefail",
         'case "$*" in',
         '  "auth token") exit 1 ;;',
-        '  "browse --no-browser") printf "https://github.com/fixture/repo\\n" ;;',
+        '  "browse") printf "https://github.com/fixture/repo\\n" ;;',
         '  "api graphql --hostname "*)',
+        '    if [[ "$*" == *"addComment(input:"* ]]; then',
+        '      printf "comment\\n" >> "$OPENCLAW_TEST_LIFECYCLE"',
+        '      printf \'{"data":{"addComment":{"commentEdge":{"node":{"url":"https://example.invalid/comment"}}}}}\\n\'',
+        "      exit 0",
+        "    fi",
         '    state=OPEN; if grep -q "^merged$" "$OPENCLAW_TEST_LIFECYCLE"; then state=MERGED; fi',
         `    jq -cn --arg state "$state" --arg head '${preparedHead}' '{data:{repository:{id:"fixture-repo",databaseId:123,url:"https://github.com/fixture/repo",nameWithOwner:"fixture/repo",ref:{target:{oid:$head}},pullRequest:{id:"fixture-pr",number:42,url:"https://github.com/fixture/repo/pull/42",state:$state,headRefOid:$head,baseRefName:"main",isDraft:false,mergeCommit:(if $state=="MERGED" then {oid:$head} else null end),autoMergeRequest:null,isInMergeQueue:false,isMergeQueueEnabled:false,mergeable:"MERGEABLE",mergeStateStatus:"CLEAN"}}}}' ;;`,
         '  "api user --include" | "api --hostname github.com user --include")',
@@ -1933,10 +1937,7 @@ describePosix("scripts/pr per-PR operation lock", () => {
         '  "api --hostname github.com repos/fixture/repo -H Cache-Control: max-age=0")',
         '    if [ ! -f "$OPENCLAW_TEST_LIFECYCLE" ] || ! grep -q "^invocation" "$OPENCLAW_TEST_LIFECYCLE"; then printf "invocation\\t%s\\n" "$PWD" >> "$OPENCLAW_TEST_LIFECYCLE"; fi',
         `    printf '%s\\n' '{"id":123,"node_id":"fixture-repo","full_name":"fixture/repo","html_url":"https://github.com/fixture/repo"}' ;;`,
-        `  "api --hostname github.com --paginate --slurp repos/fixture/repo/issues/42/comments?per_page=100 -H Cache-Control: max-age=0") printf '%s\\n' ${JSON.stringify(reviewComments)} ;;`,
-        '  "api --hostname github.com --method POST repos/fixture/repo/issues/42/comments "*)',
-        '    printf "comment\\n" >> "$OPENCLAW_TEST_LIFECYCLE"',
-        '    printf "https://example.invalid/comment\\n" ;;',
+        `  "api --hostname github.com repos/fixture/repo/issues/42/comments?per_page=100 --paginate --slurp -H Cache-Control: max-age=0") printf '%s\\n' ${JSON.stringify(reviewComments)} ;;`,
         '  *) echo "unexpected fixture gh call: $*" >&2; exit 99 ;;',
         "esac",
       ]);
@@ -2728,25 +2729,38 @@ describePosix("scripts/pr per-PR operation lock", () => {
       ") &",
       'wait "$!"',
     ]);
-    const controller = spawn(
-      process.execPath,
-      ["--require", createProcessGroupTimingPreload(), processGroupRunner, repoDir, fixture],
-      {
-        cwd: repoDir,
-        stdio: "ignore",
-      },
-    );
+    const controller = spawn(process.execPath, [processGroupRunner, repoDir, fixture], {
+      cwd: repoDir,
+      stdio: ["ignore", "ignore", "pipe"],
+    });
+    let stderr = "";
+    let stderrOverflow = false;
+    controller.stderr.setEncoding("utf8");
+    controller.stderr.on("data", (chunk: string) => {
+      if (stderrOverflow || Buffer.byteLength(stderr) + Buffer.byteLength(chunk) > 16 * 1024) {
+        stderrOverflow = true;
+        return;
+      }
+      stderr += chunk;
+    });
     let pgid: number | undefined;
     try {
       expect(await waitFor(() => existsSync(pidFile) && existsSync(childReady))).toBe(true);
       pgid = await waitForProcessId(pidFile);
-      expect(refExists(repoDir)).toBe(true);
-      controller.kill("SIGTERM");
-      await waitForExit(controller, 12_000);
-      expect(controller.exitCode).toBe(143);
-      expect(processGroupExists(pgid!)).toBe(false);
-      expect(refExists(repoDir)).toBe(true);
       const ownerOid = refOid(repoDir);
+      const closed = once(controller, "close", { signal: AbortSignal.timeout(12_000) });
+      controller.kill("SIGTERM");
+      await closed;
+      expect(stderrOverflow, "supervisor stderr exceeded 16 KiB").toBe(false);
+      expect(controller.exitCode, stderr).toBe(143);
+      expect(stderr).toContain("child exited with code 143; wrapper received SIGTERM");
+      expect(stderr).not.toMatch(
+        /operation lifetime did not drain|after drain deadline|process-group state became indeterminate|Unable to signal scripts\/pr process group/u,
+      );
+      assertFixtureProcessGroupStopped(pgid!);
+      // The joined fixture is stopped; retire its PGID before cleanup can signal a reused ID.
+      goneProcessGroups.add(pgid!);
+      expect(refOid(repoDir)).toBe(ownerOid);
       recoverOperationLock(repoDir, ownerOid);
     } finally {
       await cleanupController(repoDir, controller, pidFile);

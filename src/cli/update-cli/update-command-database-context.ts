@@ -9,7 +9,10 @@ import {
   hasSchemaRefusal,
 } from "./schema-preflight.js";
 import { UpdatePreMutationError } from "./shared.js";
-import { formatUpdateAncestryBlockMessage } from "./update-command-handoff.js";
+import {
+  formatUpdateAncestryBlockMessage,
+  resolveForegroundUpdateAdmission,
+} from "./update-command-handoff.js";
 import {
   captureOwnedManagedUpdatePreflightContext,
   revalidateUpdateDatabaseContext,
@@ -35,8 +38,13 @@ export async function inspectUpdateDatabaseContexts(params: {
   managedServiceRootRedirect: ManagedServiceRootRedirect | null;
   managedServiceRoot?: string;
   expectedServices?: ReadonlyMap<string, PreManagedServiceStop>;
+  expectedForeground?: true;
 }) {
   return await withCommandProcessScope(async () => {
+    const foreground = await resolveForegroundUpdateAdmission({
+      root: params.roots[0],
+      expectedForeground: params.expectedForeground,
+    });
     let service: PreManagedServiceStop | undefined;
     const services = new Map<string, PreManagedServiceStop>();
     const serviceRoots = params.managedServiceRoot ? [params.managedServiceRoot] : params.roots;
@@ -65,6 +73,18 @@ export async function inspectUpdateDatabaseContexts(params: {
         throw new UpdatePreMutationError(
           "managed-service-preflight",
           formatUpdateAncestryBlockMessage(inspected.blockMessage),
+          { failureFacts: collectServiceInspectionFailureFacts(inspected.serviceUpdateVerdict) },
+        );
+      }
+      if (
+        foreground &&
+        (inspected.serviceUpdateVerdict?.kind === "owned" ||
+          inspected.serviceUpdateVerdict?.kind === "unresolved") &&
+        inspected.offline !== true
+      ) {
+        throw new UpdatePreMutationError(
+          "managed-service-preflight",
+          "Another Gateway service uses this installation and is not verified offline. Stop it through its service owner before updating the foreground Gateway.",
           { failureFacts: collectServiceInspectionFailureFacts(inspected.serviceUpdateVerdict) },
         );
       }
@@ -107,7 +127,13 @@ export async function inspectUpdateDatabaseContexts(params: {
     if (managed) {
       contexts.push(managed);
     }
-    return { service, services, contexts, managedEnv: managed?.env };
+    return {
+      service,
+      services,
+      contexts,
+      managedEnv: foreground ? undefined : managed?.env,
+      ...(foreground ? { foreground: true as const } : {}),
+    };
   });
 }
 
@@ -127,6 +153,7 @@ export async function revalidateUpdateDatabaseContexts(
     ...params,
     roots: [...admission.services.keys()],
     expectedServices: admission.services,
+    expectedForeground: admission.foreground,
   });
   admission.contexts = await Promise.all(admission.contexts.map(revalidateUpdateDatabaseContext));
   const schemas = await checkTargetDatabaseSchemasForContexts(versions, admission.contexts);

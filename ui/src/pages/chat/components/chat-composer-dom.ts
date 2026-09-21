@@ -206,9 +206,9 @@ export function observeTextareaOverflow(el: HTMLTextAreaElement) {
           updateTextareaOverflow(el);
         })
       : null;
-  // Native caret scrolling can leave the active line inside the fade. Keep
-  // editing unfaded until explicit navigation; a scroll event alone cannot
-  // distinguish the browser following the caret from the user browsing text.
+  // Native caret scrolling can leave the active line inside the fade. Typing
+  // and keyboard selection both need that line unfaded; only pointer browsing
+  // or blur restores fades, not moving the caret within an already visible line.
   const onInteraction = (event: Event) => {
     if (
       event instanceof KeyboardEvent &&
@@ -217,7 +217,7 @@ export function observeTextareaOverflow(el: HTMLTextAreaElement) {
     ) {
       return;
     }
-    state.editing = ["beforeinput", "input", "compositionstart"].includes(event.type);
+    state.editing = ["beforeinput", "input", "compositionstart", "keydown"].includes(event.type);
     updateTextareaOverflow(el);
   };
   const eventOptions = { passive: true, signal: state.events.signal };

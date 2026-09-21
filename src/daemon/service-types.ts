@@ -79,7 +79,6 @@ export type GatewayLifecycleMutationMode =
   | "kickstart"
   | "bootout"
   | "disable"
-  | "disable-stop"
   | "disable-bootout"
   | "handoff-kickstart"
   | "handoff-reload"

@@ -408,7 +408,8 @@ export function createWorkerNodeDesktopCarrier(options: WorkerNodeDesktopCarrier
         params: app,
         timeoutMs: APP_LAUNCH_TIMEOUT_MS,
         signal: controller.signal,
-        isDispatchAuthorized: () => bindingIsCurrent(binding, capturedRuntime, node),
+        isDispatchAuthorized: () =>
+          !controller.signal.aborted && bindingIsCurrent(binding, capturedRuntime, node),
       });
       requireLaunchReady(result);
       if (!bindingIsCurrent(binding, capturedRuntime, node)) {

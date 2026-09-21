@@ -39,6 +39,7 @@ import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { isTrustedSecretSurfaceUnavailableError } from "../../secrets/runtime-degraded-state.js";
 import { getSessionRepositoryWorkspaceStore } from "../../state/session-repository-workspaces.js";
 import { readCurrentUserProfileAliases } from "../../state/user-profile-list.js";
+import { runTasksWithConcurrency } from "../../utils/run-with-concurrency.js";
 import { readGatewayAccessRevision } from "../gateway-access-revision.js";
 import {
   CONTROL_UI_GITHUB_CREDENTIAL_UNAVAILABLE_MESSAGE,
@@ -361,60 +362,41 @@ async function listObservedProjects(
     });
   }
 
-  const candidates: ProjectCandidate[] = [];
-  type RepositoryIdentity = Awaited<
-    ReturnType<ProjectWorktreeService["resolveRepositoryIdentity"]>
-  >;
-  const identities = new Map<string, Promise<RepositoryIdentity>>();
-  let identityProbeCount = 0;
-  const resolveIdentity = (checkoutPath: string) => {
-    const existing = identities.get(checkoutPath);
-    if (existing) {
-      return existing;
-    }
-    if (identityProbeCount >= PROJECTS_LIST_MAX_IDENTITY_PROBES) {
-      return undefined;
-    }
-    identityProbeCount += 1;
-    const identity = Promise.resolve().then(() => service.resolveRepositoryIdentity(checkoutPath));
-    identities.set(checkoutPath, identity);
-    return identity;
-  };
+  // Admit the same newest-first distinct paths before overlapping Git work. Keep facts
+  // request-local: session/registry revisions cannot detect external Git metadata edits.
+  const probePaths = [
+    ...new Set(
+      rawCandidates.map((raw) => (raw.kind === "worktree" ? raw.repoRoot : raw.checkoutPath)),
+    ),
+  ].slice(0, PROJECTS_LIST_MAX_IDENTITY_PROBES);
+  const { results } = await runTasksWithConcurrency({
+    tasks: probePaths.map((checkoutPath) => () => service.resolveRepositoryIdentity(checkoutPath)),
+    limit: 4,
+  });
+  const identities = new Map(
+    probePaths.map((checkoutPath, index) => [checkoutPath, results[index]]),
+  );
 
-  // The buffer is already newest-first, so probes always go to the retained top-K candidates.
+  const candidates: ProjectCandidate[] = [];
   for (const raw of rawCandidates) {
+    const identity = identities.get(raw.kind === "worktree" ? raw.repoRoot : raw.checkoutPath);
     if (raw.kind === "worktree") {
-      let originUrl: string | undefined;
-      const pendingIdentity = resolveIdentity(raw.repoRoot);
-      try {
-        const identity = pendingIdentity ? await pendingIdentity : undefined;
-        originUrl = identity?.originUrl || undefined;
-      } catch {
-        // The registry fingerprint and checkout path remain authoritative if the source checkout
-        // disappears after the managed worktree record was written.
-      }
+      // Registry facts survive a missing source checkout or exhausted probe budget.
       candidates.push({
         checkoutPath: raw.checkoutPath,
         fingerprint: raw.fingerprint,
         lastUsedAt: raw.lastUsedAt,
-        ...(originUrl ? { originUrl } : {}),
+        ...(identity?.originUrl ? { originUrl: identity.originUrl } : {}),
       });
       continue;
     }
-    const pendingIdentity = resolveIdentity(raw.checkoutPath);
-    if (!pendingIdentity) {
-      continue;
-    }
-    try {
-      const identity = await pendingIdentity;
+    if (identity) {
       candidates.push({
         checkoutPath: identity.checkoutRoot,
         fingerprint: identity.fingerprint,
         lastUsedAt: raw.lastUsedAt,
         ...(identity.originUrl ? { originUrl: identity.originUrl } : {}),
       });
-    } catch {
-      // Plain folders remain available through the existing folder picker.
     }
   }
 

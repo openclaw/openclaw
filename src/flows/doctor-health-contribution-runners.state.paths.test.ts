@@ -14,6 +14,12 @@ import { OPENCLAW_STATE_SCHEMA_SQL } from "../state/openclaw-state-schema.js";
 import { runStateIntegrityHealth } from "./doctor-health-contribution-runners.state.js";
 import type { DoctorHealthFlowContext } from "./doctor-health-contribution-types.js";
 
+vi.hoisted(() => {
+  // Shared-worker setup can import path helpers before this Windows simulation.
+  // Re-evaluate that graph so it consumes this file’s node:path mock.
+  vi.resetModules();
+});
+
 const fixture = vi.hoisted(() => ({
   database: undefined as OpenClawStateDatabase | undefined,
   beforeAdmission: undefined as (() => void) | undefined,

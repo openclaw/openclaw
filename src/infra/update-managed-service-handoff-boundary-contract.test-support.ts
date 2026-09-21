@@ -13,23 +13,20 @@ export type ManagedRepairBoundary = {
 };
 
 export type ManagedServiceBoundaryOptions = ManagedServiceManagerBoundaryOptions & {
-  trigger?: "cli" | "api";
+  trigger?: "cli" | "api" | "campaign";
   origin?: UpdateRunRecord["origin"];
   controlDisconnect?: "transferred" | "unarmed" | "dead-parent";
-  beforeDisconnect?: (run: UpdateRunRecord | undefined, env: NodeJS.ProcessEnv) => void;
+  beforeDisconnect?: (
+    run: UpdateRunRecord | undefined,
+    env: NodeJS.ProcessEnv,
+  ) => void | Promise<void>;
   relativeInput?: boolean;
   validationResult?: "failed" | "skipped";
   validationClockAdvanceMs?: number;
   cancelDuringValidation?: boolean;
   cancelAtActivation?: "requester" | "inspection";
   runnerFallback?: boolean;
-  nativePreparation?:
-    | "complete"
-    | "refuse-stop"
-    | "timeout-stop"
-    | "fail-preparation"
-    | "fail-persistence-ack"
-    | "fail-commit-ack";
+  selectedDriver?: "2026.9.3";
   revokeWhileValidating?: boolean;
   replaceLedgerWriter?: boolean;
   finalizationWorkMs?: number;

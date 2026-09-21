@@ -149,6 +149,9 @@ export async function initializeAndRunUpdate(
                   invocationCwd,
                   packageTargetVersion: target.targetVersion ?? undefined,
                   opts,
+                  expectedForeground:
+                    prepared.controlPlaneUpdateSentinelMeta?.completionOwner ===
+                      "gateway-restart" || undefined,
                 });
               };
               const schemaPreflight = await checkSchemas();

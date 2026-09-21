@@ -3,7 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ACT_ERROR_CODES } from "./routes/agent.act.errors.js";
 import { isActKind } from "./routes/agent.act.shared.js";
 import {
@@ -28,6 +28,9 @@ import {
   startBrowserControlServerFromConfig,
 } from "./server.control-server.test-harness.js";
 import { getBrowserTestFetch } from "./test-support/fetch.js";
+
+// A timed-out lazy import must not start a late warmup teardown against the next suite.
+await import("../server.js");
 
 const BROWSER_NAVIGATION_BLOCKED_MESSAGE = "browser navigation blocked by policy";
 const NAVIGATION_TIMEOUT_CASES = [
@@ -101,12 +104,6 @@ describe("browser control server", () => {
   installAgentContractHooks();
 
   const slowTimeoutMs = 60_000;
-
-  beforeAll(async () => {
-    await resetBrowserControlServerTestContext();
-    await startBrowserControlServerFromConfig();
-    await cleanupBrowserControlServerTestContext();
-  }, slowTimeoutMs);
 
   it(
     "returns ACT_KIND_REQUIRED when kind is missing",
@@ -498,7 +495,7 @@ describe("browser control server", () => {
     expect(response.status).toBe(400);
     expect(await response.json()).toMatchObject({ error: BROWSER_NAVIGATION_BLOCKED_MESSAGE });
     expect(requirePwMock("getObservedBrowserStateViaPlaywright")).not.toHaveBeenCalled();
-    expect(requirePwMock("snapshotAiViaPlaywright")).not.toHaveBeenCalled();
+    expect(requirePwMock("snapshotRoleViaPlaywright")).not.toHaveBeenCalled();
   });
 
   it("agent contract: doctor deep runs a live snapshot probe", async () => {

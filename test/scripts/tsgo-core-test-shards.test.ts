@@ -54,9 +54,10 @@ describe("tsgo core test shards", () => {
       }),
     ).toEqual([]);
     for (const [file, owner] of [
+      ["src/agents/sessions/settings-storage.test.ts", "agents-sessions"],
       ["ui/src/pages/chat/chat-send-submit.test.ts", "ui-chat"],
       ["ui/src/pages/config/config-page.test.ts", "ui-pages"],
-      ["src/gateway/server-methods/update-chat-permission.test.ts", "gateway-methods"],
+      ["src/gateway/server-methods/update-owner.test.ts", "gateway-methods"],
       ["src/gateway/talk/client-authority.test.ts", "gateway-other"],
       ["src/gateway/worker-environments/service.plugin-create.test.ts", "gateway-server"],
       ["src/gateway/server-methods/environments.test.ts", "gateway-methods"],
@@ -72,6 +73,7 @@ describe("tsgo core test shards", () => {
       ["src/cli/cron-cli.test.ts", "services"],
       ["src/cli/cron-output.process.test.ts", "services"],
       ["src/cli/cron-cli/register.cron-edit.test.ts", "services"],
+      ["src/cli/program/command-registry.test.ts", "commands"],
       ["src/cli/update-cli.test.ts", "cli-update"],
       ["src/cli/update-cli/update-command-config-fence.test.ts", "cli-update"],
       ["src/gateway/worker-environments/admission.test.ts", "gateway-server"],

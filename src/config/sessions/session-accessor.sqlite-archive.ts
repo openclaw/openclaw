@@ -1,12 +1,13 @@
 import path from "node:path";
 import { performance } from "node:perf_hooks";
-import { isMainThread, threadId, Worker } from "node:worker_threads";
+import { isMainThread, threadId, type Worker } from "node:worker_threads";
 import { toStringifiedError } from "@openclaw/normalization-core/error-coercion";
 import { runtimeProcessEntrypoints } from "../../infra/runtime-process-entrypoints.js";
 import {
   resolveRuntimeWorkerThreadExecArgv,
   resolveRuntimeWorkerUrl,
 } from "../../infra/runtime-worker-url.js";
+import { createCpuTrackedWorker } from "../../infra/worker-cpu.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
@@ -34,7 +35,7 @@ import type { SessionColdWorkerData } from "./session-cold-storage-worker.js";
 
 export function createSqliteTranscriptArchiveWorker(workerData: object): Worker {
   const workerUrl = resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.sessionTranscriptArchive);
-  return new Worker(workerUrl, {
+  return createCpuTrackedWorker(workerUrl, {
     workerData,
     execArgv: resolveRuntimeWorkerThreadExecArgv(workerUrl),
   });

@@ -9,6 +9,7 @@ import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { splitMediaFromOutput } from "../../media/parse.js";
 import { normalizeAgentId } from "../../routing/session-key.js";
 import { parseAgentSessionKey } from "../../sessions/session-key-utils.js";
+import { isInternalMessageChannel } from "../../utils/message-channel.js";
 import {
   type AgentWaitResult,
   isTerminalAgentWaitTimeout,
@@ -181,9 +182,38 @@ export async function runSessionsSendA2AFlow(params: {
       rightKey: params.targetSessionKey,
       rightAgentId: params.targetAgentId,
     });
+    // Only same-session source delivery proves that the requester already saw the
+    // reply. For distinct peers, the receipt can belong to the target's channel.
     if (sameSessionSourceReply && sourceReplyDelivered) {
       return;
     }
+    // Control UI sessions are human-facing conversations, not autonomous peers.
+    // Deliver the target result to the requester once, but do not feed the
+    // requester's human-facing response back into the target session. Preserve
+    // any still-owed announcement to a target's external channel below.
+    const oneWayInternalRequesterSessionKey =
+      params.requesterSessionKey &&
+      !sameSessionSourceReply &&
+      isInternalMessageChannel(params.requesterChannel)
+        ? params.requesterSessionKey
+        : undefined;
+    if (oneWayInternalRequesterSessionKey) {
+      await runAgentStep({
+        agentId: params.requesterAgentId,
+        sessionKey: oneWayInternalRequesterSessionKey,
+        message: latestReply,
+        extraSystemPrompt: `Another session returned the result of your earlier sessions_send request. ${SUBAGENT_COMPLETION_OUTCOME_INSTRUCTION} This result is delivered once; your response will not be sent back to the target session.`,
+        timeoutMs: params.announceTimeoutMs,
+        sourceAgentId: params.targetAgentId,
+        sourceSessionKey: params.targetSessionKey,
+        sourceTool: "sessions_send",
+        callGateway: gatewayCall,
+      });
+      if (sourceReplyDelivered) {
+        return;
+      }
+    }
+
     const announceTarget = await resolveAnnounceTarget({
       sessionKey: params.targetSessionKey,
       displayKey: params.displayKey,
@@ -191,6 +221,12 @@ export async function runSessionsSendA2AFlow(params: {
       agentId: params.targetAgentId,
     });
     const targetChannel = announceTarget?.channel ?? "unknown";
+    if (
+      oneWayInternalRequesterSessionKey &&
+      (!announceTarget || isInternalMessageChannel(announceTarget.channel))
+    ) {
+      return;
+    }
     const canDirectDeliverSameSessionReply =
       announceTarget &&
       (!params.requesterChannel || params.requesterChannel === announceTarget.channel);
@@ -208,7 +244,12 @@ export async function runSessionsSendA2AFlow(params: {
       return;
     }
 
-    if (params.maxPingPongTurns > 0 && params.requesterSessionKey && !sameSessionSourceReply) {
+    if (
+      !oneWayInternalRequesterSessionKey &&
+      params.maxPingPongTurns > 0 &&
+      params.requesterSessionKey &&
+      !sameSessionSourceReply
+    ) {
       const requester = {
         sessionKey: params.requesterSessionKey,
         agentId: params.requesterAgentId,

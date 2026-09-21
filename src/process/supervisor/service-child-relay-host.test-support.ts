@@ -20,6 +20,27 @@ export async function createServiceChildRelayAdapter(
   return adapter;
 }
 
+export function createWritableRelayChild() {
+  const stub = createStubChild();
+  const stdout = new PassThrough();
+  const stderr = new PassThrough();
+  stub.child.stdout = stdout;
+  stub.child.stderr = stderr;
+  const control = new Duplex({
+    autoDestroy: false,
+    read() {},
+    write(_chunk, _encoding, callback) {
+      callback();
+    },
+  });
+  const lineage = new PassThrough();
+  Object.defineProperty(stub.child, "stdio", {
+    value: [stub.child.stdin, stub.child.stdout, stub.child.stderr, control, lineage],
+    configurable: true,
+  });
+  return { ...stub, control, lineage, stdout, stderr };
+}
+
 export async function createRelayFixture(
   platform: "linux" | "darwin" | "win32",
   retainLineage: boolean,

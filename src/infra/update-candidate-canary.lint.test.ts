@@ -217,7 +217,7 @@ describe("update candidate Doctor lint", () => {
             env,
           });
           expect(result.status).toBe("ok");
-          const step = result.steps.find((entry) => entry.name === "Checking update health")!;
+          const step = result.steps.find((entry) => entry.name === "candidate-doctor-lint")!;
           expect(step).toMatchObject({
             exitCode: 1,
             advisory: { kind: "recoverable-maintenance" },
@@ -292,7 +292,7 @@ describe("update candidate Doctor lint", () => {
         expect.stringContaining("Open group policy permits mention-gated requests."),
       );
       expect(
-        result.steps.find((step) => step.name === "Checking update health")?.doctorLintFindings,
+        result.steps.find((step) => step.name === "candidate-doctor-lint")?.doctorLintFindings,
       ).toEqual([...lintReport.findings, ...lintReport.warnings]);
     },
   );
@@ -311,7 +311,7 @@ describe("update candidate Doctor lint", () => {
     stubHealthyGateway();
     const result = await validateUpdateCandidateCanary(canaryStateOptions());
     expect(result.status).toBe("ok");
-    const step = result.steps.find((entry) => entry.name === "Checking update health");
+    const step = result.steps.find((entry) => entry.name === "candidate-doctor-lint");
     expect(step).toMatchObject({
       exitCode: 1,
       advisory: { kind: "recoverable-maintenance" },
@@ -350,7 +350,7 @@ describe("update candidate Doctor lint", () => {
     });
     const result = await validateUpdateCandidateCanary(canaryStateOptions());
     expect(result).toMatchObject({ status: "error", phase: "lint", reason: "doctor-failed" });
-    const step = result.steps.find((entry) => entry.name === "Checking update health")!;
+    const step = result.steps.find((entry) => entry.name === "candidate-doctor-lint")!;
     expect(step).toMatchObject({
       exitCode: physical.exitCode,
       signal: physical.signal,
@@ -372,7 +372,7 @@ describe("update candidate Doctor lint", () => {
         : "Update health check failed",
     );
     expect(renderUpdateRunReport(updateRunReportInputFromResult(failure)).markdown).toContain(
-      "Failed: Checking update health",
+      "Failed: candidate-doctor-lint",
     );
     expect(
       sanitizeTriageUpdateFailure({ result: failure }, { env: {}, stateDir: root }),

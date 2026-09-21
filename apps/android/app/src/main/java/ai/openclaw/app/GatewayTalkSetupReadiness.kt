@@ -103,8 +103,8 @@ val GatewayTalkSetupState.requiresSetup: Boolean
 
 internal fun isAndroidRealtimeRelayModelSupported(model: String?): Boolean {
   val normalized = model?.trim()?.lowercase() ?: return true
-  // extensions/openai/realtime-quicksilver.ts makes gpt-live WebRTC-only;
-  // the Gateway relay rejects it instead of providing a usable Android session.
+  // Older Gateways omit relay capability hints. Keep their native fallback;
+  // a positive Gateway hint overrides this legacy model check.
   return normalized != "gpt-live" && !normalized.startsWith("gpt-live-")
 }
 

@@ -37,14 +37,14 @@ describe("FaceTime runtime carrier aliases", () => {
       data: { ...incoming.data, conversation_uuid: "shared-conversation" },
     };
 
-    mocks.helperParams?.onMessage(active);
+    void mocks.helperParams?.onMessage(active);
     await vi.waitFor(() => expect(talk.activate).toHaveBeenCalledOnce());
-    mocks.helperParams?.onMessage({
+    void mocks.helperParams?.onMessage({
       ...active,
       data: { ...active.data, call_uuid: "replacement-call" },
     });
     await vi.waitFor(() => expect(talk.activate).toHaveBeenCalledTimes(2));
-    mocks.helperParams?.onMessage(active);
+    void mocks.helperParams?.onMessage(active);
     await vi.waitFor(() => expect(talk.activate).toHaveBeenCalledTimes(3));
 
     await expect(runtime.hangup()).resolves.toEqual({ callUUID: "call-1" });
@@ -68,16 +68,16 @@ describe("FaceTime runtime carrier aliases", () => {
       data: { ...incoming.data, conversation_uuid: "shared-conversation" },
     };
 
-    mocks.helperParams?.onMessage(active);
+    void mocks.helperParams?.onMessage(active);
     await vi.waitFor(() => expect(talk.activate).toHaveBeenCalledOnce());
     const replacement = {
       ...active,
       data: { ...active.data, call_uuid: "replacement-call" },
     };
-    mocks.helperParams?.onMessage(replacement);
+    void mocks.helperParams?.onMessage(replacement);
     await vi.waitFor(() => expect(talk.activate).toHaveBeenCalledTimes(2));
 
-    mocks.helperParams?.onMessage({
+    void mocks.helperParams?.onMessage({
       ...active,
       data: { ...active.data, call_status: 6, has_ended: true },
     });
@@ -85,7 +85,7 @@ describe("FaceTime runtime carrier aliases", () => {
     expect((await runtime.status()).calls).toHaveLength(1);
     expect(talk.close).not.toHaveBeenCalled();
 
-    mocks.helperParams?.onMessage({
+    void mocks.helperParams?.onMessage({
       ...replacement,
       data: { ...replacement.data, call_status: 6, has_ended: true },
     });

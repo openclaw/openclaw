@@ -715,26 +715,12 @@ describe("chunkByNewline", () => {
     expect(chunkByNewline(text, limit, options)).toEqual(expected);
   });
 
-  it.each([
-    {
-      name: "falls back to length-based for long lines",
-      run: () => {
-        const text = "Short line\n" + "a".repeat(50) + "\nAnother short";
-        const chunks = chunkByNewline(text, 20);
-        expect(chunks[0]).toBe("Short line");
-        expectChunkLengths(chunks.slice(1, 4), [20, 20, 10]);
-        expect(chunks[4]).toBe("Another short");
-      },
-    },
-    {
-      name: "does not split long lines when splitLongLines is false",
-      run: () => {
-        const text = "a".repeat(50);
-        expect(chunkByNewline(text, 20, { splitLongLines: false })).toEqual([text]);
-      },
-    },
-  ] as const)("$name", ({ run }) => {
-    run();
+  it("falls back to length-based for long lines", () => {
+    const text = "Short line\n" + "a".repeat(50) + "\nAnother short";
+    const chunks = chunkByNewline(text, 20);
+    expect(chunks[0]).toBe("Short line");
+    expectChunkLengths(chunks.slice(1, 4), [20, 20, 10]);
+    expect(chunks[4]).toBe("Another short");
   });
 
   it.each(["", "   \n\n   "] as const)("returns empty array for input %j", (text) => {

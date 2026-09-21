@@ -117,15 +117,15 @@ describe("renderAgents", () => {
           activePanel: "cron",
           selectedAgentId: "alpha",
           cron: {
-            status: { enabled: true, triggersEnabled: true, jobs: 51, nextWakeAtMs },
-            jobs: [job],
-            jobsTotal: 1,
-            jobsHasMore: false,
-            jobsLoadingMore: false,
-            scopedTotal: 1,
-            scopedNextWakeAtMs,
-            loading: false,
-            error: null,
+            cronStatus: { enabled: true, triggersEnabled: true, jobs: 51, nextWakeAtMs },
+            cronJobs: [job],
+            cronJobsTotal: 1,
+            cronJobsHasMore: false,
+            cronJobsLoadingMore: false,
+            cronScopedTotal: 1,
+            cronScopedNextWakeAtMs: scopedNextWakeAtMs,
+            cronLoading: false,
+            cronError: null,
           },
         }),
       ),
@@ -190,15 +190,15 @@ describe("renderAgents", () => {
             activePanel: "cron",
             selectedAgentId: "alpha",
             cron: {
-              status: { enabled: true, triggersEnabled: true, jobs: 80, nextWakeAtMs: null },
-              jobs: cronState.cronJobs,
-              jobsTotal: cronState.cronJobsTotal,
-              jobsHasMore: cronState.cronJobsHasMore,
-              jobsLoadingMore: cronState.cronJobsLoadingMore,
-              scopedTotal: 51,
-              scopedNextWakeAtMs: null,
-              loading: cronState.cronLoading,
-              error: cronState.cronError,
+              cronStatus: { enabled: true, triggersEnabled: true, jobs: 80, nextWakeAtMs: null },
+              cronJobs: cronState.cronJobs,
+              cronJobsTotal: cronState.cronJobsTotal,
+              cronJobsHasMore: cronState.cronJobsHasMore,
+              cronJobsLoadingMore: cronState.cronJobsLoadingMore,
+              cronScopedTotal: 51,
+              cronScopedNextWakeAtMs: null,
+              cronLoading: cronState.cronLoading,
+              cronError: cronState.cronError,
             },
             onCronLoadMore: () => {
               const nextPage = loadCronJobsPage(cronState, { append: true, tableFilters: true });
@@ -265,11 +265,12 @@ describe("renderAgents", () => {
         createProps({
           selectedAgentId: "alpha",
           config: {
-            form: configForm,
-            loading: false,
-            saving: false,
-            dirty: false,
-            error: null,
+            configForm,
+            configSnapshot: null,
+            configLoading: false,
+            configSaving: false,
+            configFormDirty: false,
+            lastError: null,
           },
         }),
       ),
@@ -288,11 +289,12 @@ describe("renderAgents", () => {
         createProps({
           selectedAgentId: "beta",
           config: {
-            form: configForm,
-            loading: false,
-            saving: false,
-            dirty: false,
-            error: null,
+            configForm,
+            configSnapshot: null,
+            configLoading: false,
+            configSaving: false,
+            configFormDirty: false,
+            lastError: null,
           },
         }),
       ),
@@ -336,11 +338,12 @@ describe("renderAgents", () => {
         createProps({
           selectedAgentId: "alpha",
           config: {
-            form: configForm,
-            loading: false,
-            saving: false,
-            dirty: false,
-            error: null,
+            configForm,
+            configSnapshot: null,
+            configLoading: false,
+            configSaving: false,
+            configFormDirty: false,
+            lastError: null,
           },
           modelCatalog: [
             {
@@ -400,7 +403,7 @@ describe("renderAgents", () => {
         createProps({
           selectedAgentId: "beta",
           config: {
-            form: {
+            configForm: {
               agents: {
                 defaults: {
                   model: { primary: "openai/gpt-5.4", fallbacks: [fallback] },
@@ -408,10 +411,11 @@ describe("renderAgents", () => {
                 entries: { alpha: {}, beta: { model } },
               },
             },
-            loading: false,
-            saving: false,
-            dirty: false,
-            error: null,
+            configSnapshot: null,
+            configLoading: false,
+            configSaving: false,
+            configFormDirty: false,
+            lastError: null,
           },
         }),
       ),
@@ -444,11 +448,12 @@ describe("renderAgents", () => {
         createProps({
           selectedAgentId: "beta",
           config: {
-            form: configForm,
-            loading: false,
-            saving: false,
-            dirty: false,
-            error: null,
+            configForm,
+            configSnapshot: null,
+            configLoading: false,
+            configSaving: false,
+            configFormDirty: false,
+            lastError: null,
           },
         }),
       ),
@@ -466,11 +471,12 @@ describe("renderAgents", () => {
         createProps({
           selectedAgentId: "alpha",
           config: {
-            form: configForm,
-            loading: false,
-            saving: false,
-            dirty: false,
-            error: null,
+            configForm,
+            configSnapshot: null,
+            configLoading: false,
+            configSaving: false,
+            configFormDirty: false,
+            lastError: null,
           },
         }),
       ),
@@ -520,15 +526,15 @@ describe("renderAgents", () => {
       renderAgents(
         createProps({
           agentSkills: {
-            report: {
+            agentSkillsReport: {
               workspaceDir: "/tmp/workspace",
               managedSkillsDir: "/tmp/skills",
               skills: [createSkill()],
             },
-            loading: false,
-            error: null,
-            agentId: "alpha",
-            filter: "",
+            agentSkillsLoading: false,
+            agentSkillsError: null,
+            agentSkillsAgentId: "alpha",
+            skillsFilter: "",
           },
         }),
       ),
@@ -544,15 +550,15 @@ describe("renderAgents", () => {
       renderAgents(
         createProps({
           agentSkills: {
-            report: {
+            agentSkillsReport: {
               workspaceDir: "/tmp/workspace",
               managedSkillsDir: "/tmp/skills",
               skills: [createSkill()],
             },
-            loading: false,
-            error: null,
-            agentId: "beta",
-            filter: "",
+            agentSkillsLoading: false,
+            agentSkillsError: null,
+            agentSkillsAgentId: "beta",
+            skillsFilter: "",
           },
         }),
       ),
@@ -577,10 +583,10 @@ describe("renderAgents", () => {
           createProps({
             activePanel: "channels",
             channels: {
-              snapshot: null,
-              loading: false,
-              error: null,
-              lastSuccess: null,
+              channelsSnapshot: null,
+              channelsLoading: false,
+              channelsError: null,
+              channelsLastSuccess: null,
             },
           }),
         ),

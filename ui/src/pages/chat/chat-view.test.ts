@@ -151,11 +151,7 @@ const buildChatItemsMock = vi.fn(
           key: "divider:compaction:test",
           icon: "foldVertical",
           label: "Compacted history",
-          description: "The compacted transcript is preserved as a checkpoint.",
-          action: {
-            kind: "session-checkpoints",
-            label: "Open checkpoints",
-          },
+          description: "Earlier messages were summarized to make room in the context window.",
           timestamp: 1,
         },
       ] as ReturnType<typeof chatThread.buildCachedChatItems>;
@@ -1025,25 +1021,17 @@ describe("chat run error", () => {
 });
 
 describe("chat compaction divider", () => {
-  it("renders checkpoint recovery copy and action", () => {
-    const onOpenSessionCheckpoints = vi.fn();
+  it("renders compaction copy without a checkpoint action", () => {
     const container = renderChatView({
       messages: [{ testDividerMarker: "compaction" }],
-      onOpenSessionCheckpoints,
     });
 
     expect(container.querySelector(".chat-divider__title")?.textContent).toBe("Compacted history");
     expect(container.querySelector(".chat-divider__description")?.textContent?.trim()).toBe(
-      "The compacted transcript is preserved as a checkpoint.",
+      "Earlier messages were summarized to make room in the context window.",
     );
     expect(container.querySelector(".chat-divider__icon svg")).not.toBeNull();
-    const button = container.querySelector<HTMLButtonElement>(".chat-divider__action");
-    expect(button?.textContent?.trim()).toBe("Open checkpoints");
-
-    expect(button).toBeInstanceOf(HTMLButtonElement);
-    button!.click();
-
-    expect(onOpenSessionCheckpoints).toHaveBeenCalledTimes(1);
+    expect(container.querySelector(".chat-divider__action")).toBeNull();
   });
 
   it("renders the session reset divider title", () => {
@@ -2776,89 +2764,6 @@ describe("chat loading skeleton", () => {
     expect(replyCall?.[1].activeContinuation).toBeUndefined();
   });
 
-  it("keeps multi-part run usage current when only output tokens change", () => {
-    const runId = "run-composed";
-    const user = {
-      kind: "group",
-      key: "group:user:run-composed",
-      role: "user",
-      visibleContent: "text",
-      messages: [
-        {
-          key: "message:user:run-composed",
-          message: {
-            role: "user",
-            content: "Start the work.",
-            timestamp: 0,
-            __openclaw: { id: "user:run-composed", idempotencyKey: `${runId}:user` },
-          },
-        },
-      ],
-      timestamp: 0,
-      isStreaming: false,
-    };
-    const assistant = {
-      kind: "group",
-      key: "group:assistant:run-start",
-      role: "assistant",
-      visibleContent: "text",
-      messages: [
-        {
-          key: "message:assistant:run-start",
-          message: { role: "assistant", content: "Starting the work.", timestamp: 1 },
-        },
-      ],
-      timestamp: 1,
-      isStreaming: false,
-      runId,
-    };
-    const tool = {
-      kind: "group",
-      key: "group:tool:run-work",
-      role: "tool",
-      visibleContent: "text",
-      messages: [
-        {
-          key: "message:tool:run-work",
-          message: { role: "toolResult", content: "Tool complete.", timestamp: 2 },
-        },
-      ],
-      timestamp: 2,
-      isStreaming: false,
-      runId,
-    };
-    const reading = {
-      kind: "reading-indicator",
-      key: "reading:run-composed",
-      startedAt: 1,
-      runId,
-    };
-    vi.mocked(chatThread.buildCachedChatItems).mockReturnValue([
-      user,
-      assistant,
-      tool,
-      reading,
-    ] as ReturnType<typeof chatThread.buildCachedChatItems>);
-    const container = document.createElement("div");
-    const streamPartsSpy = vi.spyOn(chatMessage, "renderStreamGroupParts");
-
-    renderChatInto(container, {
-      canAbort: true,
-      runId,
-      runUsageById: new Map([[runId, { outputTokens: 5_500, seq: 1 }]]),
-      stream: null,
-    });
-    streamPartsSpy.mockClear();
-    renderChatInto(container, {
-      canAbort: true,
-      runId,
-      runUsageById: new Map([[runId, { outputTokens: 7_200, seq: 2 }]]),
-      stream: null,
-    });
-
-    expect(streamPartsSpy.mock.calls.at(-1)?.[1].runOutputTokens).toBe(7_200);
-  });
-
   it("keeps the completed recap on one composed multi-part run", () => {
     const runId = "run-composed";
     vi.mocked(chatThread.buildCachedChatItems).mockReturnValue([
@@ -3198,7 +3103,6 @@ describe("chat voice controls", () => {
       'video[aria-label="Camera preview"]',
       "camera preview",
     ) as HTMLVideoElement;
-
     expect(onToggleRealtimeCamera).toHaveBeenCalledTimes(2);
     expect(preview.srcObject).toBe(stream);
     expect(preview.autoplay).toBe(true);
@@ -3597,7 +3501,6 @@ describe("chat composer IME composition", () => {
     });
 
     textarea.dispatchEvent(arrowEvent);
-
     expect(arrowEvent.defaultPrevented).toBe(true);
     expect(onHistoryKeydown).toHaveBeenCalledOnce();
     expect(onRequestUpdate).toHaveBeenCalledOnce();
@@ -4398,7 +4301,6 @@ describe("chat slash menu accessibility", () => {
 
     inputDraftAtEnd(container, "Please /reset");
     keydownComposer(container, "Enter");
-
     expect(onSlashCommand).toHaveBeenCalledExactlyOnceWith("/reset");
     expect(draft).toBe("Please ");
     expect(container.querySelector<HTMLTextAreaElement>("textarea")?.value).toBe(draft);
@@ -5602,16 +5504,14 @@ describe("chat attachment picker", () => {
     });
     document.body.append(remounted);
     await waitForFast(() => {
-      expect(remounted.querySelector(".chat-selection-annotations__chip")?.textContent).toContain(
+      expect(remounted.querySelector(".chat-attachment-file__open")?.textContent).toContain(
         "First words from a remounted p…",
       );
     });
     expect(attachments[0]?.origin).toBe("paste");
-    requireElement(
-      remounted,
-      ".chat-selection-annotations__chip",
-      "pasted text chip",
-    ).dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    requireElement(remounted, ".chat-attachment-file__open", "pasted text excerpt").dispatchEvent(
+      new MouseEvent("click", { bubbles: true }),
+    );
     requireElement(
       sidebar.container,
       ".chat-attachment-text-action",
@@ -6173,7 +6073,6 @@ describe("chat model controls", () => {
         expect(heading.querySelector(".chat-controls__auth-meta")?.textContent?.trim() ?? "").toBe(
           loaded ? expected : "",
         );
-        expect(heading.getAttribute("title")).toBe(loaded && expected ? expected : null);
         expect(heading.textContent).not.toContain("claude@example.com");
       }
     },
@@ -7766,65 +7665,6 @@ describe("chat model controls", () => {
     expect(overrideOption?.querySelector(".chat-controls__inline-select-check")).not.toBeNull();
   });
 
-  it("distinguishes model rows that use different agent runtimes", () => {
-    const { state } = createChatHeaderState({
-      model: "gpt-5.6",
-      modelProvider: "openai",
-      models: [
-        {
-          id: "gpt-5.6",
-          name: "GPT-5.6",
-          provider: "openai",
-          contextWindow: 1_000_000,
-          agentRuntime: { id: "openclaw", source: "model" },
-        },
-        {
-          id: "gpt-5.6-sol",
-          name: "GPT-5.6 Sol",
-          provider: "openai",
-          contextWindow: 1_000_000,
-          agentRuntime: { id: "codex", source: "model" },
-        },
-        {
-          id: "claude-opus-4-5",
-          name: "Claude Opus 4.5",
-          provider: "anthropic",
-          contextWindow: 200_000,
-          agentRuntime: { id: "claude-cli", source: "model" },
-        },
-        {
-          id: "gemini-3-pro",
-          name: "Gemini 3 Pro",
-          provider: "google",
-          contextWindow: 1_000_000,
-          agentRuntime: { id: "google-gemini-cli", source: "model" },
-        },
-        {
-          id: "gpt-5.6-terra",
-          name: "GPT-5.6 Terra",
-          provider: "openai",
-          contextWindow: 1_000_000,
-          agentRuntime: { id: "openclaw", source: "implicit" },
-        },
-      ],
-    });
-    const container = renderModelControls(state);
-    const metaFor = (value: string) =>
-      container.querySelector(
-        `[data-chat-model-option="${value}"] .chat-controls__model-option-meta`,
-      )?.textContent;
-
-    expect(metaFor("openai/gpt-5.6")).toBe("1M · OpenClaw");
-    expect(metaFor("openai/gpt-5.6")).not.toContain("Codex");
-    expect(metaFor("openai/gpt-5.6-sol")).toBe("1M · Codex");
-    // Known CLI runtime ids map to their product labels, not capitalized ids.
-    expect(metaFor("anthropic/claude-opus-4-5")).toBe("200k · Claude CLI");
-    expect(metaFor("google/gemini-3-pro")).toBe("1M · Gemini CLI");
-    // Implicitly resolved runtimes stay unlabeled; only operator-pinned
-    // (source model/provider) rows carry the runtime meta.
-    expect(metaFor("openai/gpt-5.6-terra")).toBe("1M");
-  });
-
   it("shows canonical OpenAI model names instead of command aliases", () => {
     const { state } = createChatHeaderState({
       model: "gpt-5.5",
@@ -8858,7 +8698,6 @@ describe("right-click Reply", () => {
     expect(document.querySelector(".chat-confirm-popover")).not.toBeNull();
 
     resetThreadPresentation("pane-a");
-
     expect(document.querySelector(".chat-reply-context-menu")).toBeNull();
     expect(document.querySelector(".chat-confirm-popover")).toBeNull();
     expect(onRewindMessage).not.toHaveBeenCalled();

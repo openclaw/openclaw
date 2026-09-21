@@ -12,6 +12,7 @@ import { assertUpdateRecoveryAdmission } from "../../infra/update-run-recovery-a
 import { isUpdateGatewayReadinessPending } from "../../infra/update-run-step.js";
 import { readCurrentGitUpdateRecovery } from "../../infra/update-runner-git-recovery.js";
 import type { UpdateRunResult, UpdateStepResult } from "../../infra/update-runner.js";
+import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
 import { defaultRuntime } from "../../runtime.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { exitCliAfterOutput } from "../one-shot-exit.js";
@@ -22,6 +23,7 @@ import type { FinishUpdateParams } from "./update-command-finish-types.js";
 import { UpdateCommandRecoveryPendingError } from "./update-command-recovery.js";
 import {
   recordUpdateResultNextAction,
+  failUpdateCommandRun,
   createUpdateCommandFailureResult,
   UnreportedUpdateAdmissionOutcome,
   type UpdateAdmissionReportParams,
@@ -30,7 +32,7 @@ import {
   UpdateCommandPendingRecoveryFailure,
   writeControlPlaneUpdateRestartSentinelBestEffort,
 } from "./update-command-result.js";
-import { completeUpdateCommandRun, failUpdateCommandRun } from "./update-command-run.js";
+import { completeUpdateCommandRun } from "./update-command-run.js";
 import {
   readUpdateCommandTerminalRecord,
   type UpdateCommandTerminalRecord,
@@ -128,6 +130,9 @@ export async function withUpdateCommandTerminalResult<T>(
       terminalOwners.delete(run);
     }
   }
+  if ("error" in outcome && hasCommandProcessCleanupError(outcome.error)) {
+    throw outcome.error;
+  }
   const activationTimeout =
     "error" in outcome
       ? collectNestedErrorCandidates(outcome.error).find(
@@ -209,7 +214,7 @@ export async function resolveSettledUpdateCommandResult(
   );
   const failedStep: UpdateStepResult | undefined = settlementFailed
     ? {
-        name: "update executor settlement",
+        name: "update-executor-settlement",
         command: "openclaw update",
         cwd: pendingResult.root ?? params.root,
         durationMs: 0,
@@ -256,7 +261,7 @@ export async function resolveSettledUpdateCommandResult(
 
 /** Share verified retirement and unverified recovery retention across finalizers. */
 export async function recordUpdatePackageCompletion(
-  params: Pick<FinishUpdateParams, "packageTransaction" | "root">,
+  params: Pick<FinishUpdateParams, "packageTransaction" | "root" | "opts">,
   result: UpdateRunResult,
   assertCurrent: () => void,
 ): Promise<UpdateCommandFailure | void> {
@@ -264,11 +269,16 @@ export async function recordUpdatePackageCompletion(
   if (!transaction) {
     return;
   }
-  if (isUpdateGatewayReadinessPending(result)) {
+  if (
+    isUpdateGatewayReadinessPending(result) ||
+    (result.status === "ok" &&
+      params.opts.run?.completionOwner === "gateway-restart" &&
+      params.opts.run.gatewayRestartRequired === true)
+  ) {
     assertCurrent();
     const message = `Gateway readiness is pending; backup retirement deferred for ${transaction.backupRoot}. Verify readiness before cleanup.`;
     result.steps.push({
-      name: "global install backup retention",
+      name: "package-backup-retention",
       command: "openclaw update",
       cwd: result.root ?? params.root,
       durationMs: 0,
@@ -288,7 +298,7 @@ export async function recordUpdatePackageCompletion(
       }
       cleanupFailure = error;
       return {
-        name: "global install backup retention",
+        name: "package-backup-retention",
         command: "openclaw update",
         cwd: result.root ?? params.root,
         durationMs: 0,

@@ -478,6 +478,7 @@ describe("gateway request suspension admission", () => {
           expiresAtMs: expect.any(Number),
           retryAfterMs: 20_000,
           activeCount: preservingTerminals ? 3 : 2,
+          writeCustody: [{ phase: "terminal-persistence", count: 1 }],
           blockers: expect.arrayContaining([
             expect.objectContaining({ kind: "root-request", count: 1 }),
             expect.objectContaining({ kind: "terminal-persistence", count: 1 }),
@@ -532,6 +533,7 @@ describe("gateway request suspension admission", () => {
           retryAfterMs: 20_000,
           activeCount: 1,
           blockers: [expect.objectContaining({ kind: "terminal-persistence", count: 1 })],
+          writeCustody: [{ phase: "terminal-persistence", count: 1 }],
         });
 
         chatAbortControllers.clear();
@@ -546,6 +548,7 @@ describe("gateway request suspension admission", () => {
         expect(ready.respond).toHaveBeenCalledWith(true, {
           status: "ready",
           expiresAtMs: result.expiresAtMs,
+          writeCustody: [],
         });
         expect(cron.resumeScheduling).not.toHaveBeenCalled();
 

@@ -15,13 +15,15 @@ title: "Database layout"
 
 The task registry uses the shared state database. Runtime trajectory events live with their sessions in the per-agent database or a configured shared session SQLite store.
 
-Task registry restore normalizes legacy task run and child-session identifiers
-before hydrating records, so scoped mutations can use their existing indexes.
-The repair runs in the existing write transaction once per registry restore;
-ordinary database opens and read-only inspection do not rewrite these rows.
-Doctor uses the same repair. New task records normalize these identifiers before
-persistence and receipt publication. Schema versions and retention are unchanged;
-after an older writer is used, the next registry restore repairs its padded rows again.
+Doctor normalizes historical task run and child-session identifiers together
+with their related subagent bindings, so scoped mutations can use the existing
+indexes. Legacy sidecar imports use the same transactional repair. Gateway
+restore and reads consume stored identifiers without repairing them. New task
+records and explicit identifier changes normalize before persistence and receipt
+publication; unrelated patches preserve the existing identity. Schema versions
+and retention are unchanged. `openclaw update` runs Doctor before activation;
+after a direct binary replacement or using an older writer, run
+`openclaw doctor --fix` before starting the new Gateway.
 
 ### Activity session recaps
 
@@ -30,6 +32,16 @@ after an older writer is used, the next registry restore repairs its padded rows
 Payload version 1 records the recap text, generation time, session ID and lifecycle revision, transcript generation and leaf, chronological coverage, and whether oversized message content was omitted. The optional `formatRevision` identifies the generated prose format; revision 2 uses one to three concise sentences. Missing or older format revisions retain their text and coverage while the existing queue refreshes the prose. This adds no SQL migration or payload-version bump. A rewind or replacement invalidates an incompatible source binding. The Gateway reads bounded transcript chunks outside the metadata write and rechecks the current lifecycle and transcript branch before committing. Recap writes preserve session activity timestamps and ordering.
 
 The latest recap survives restart and archival. Deleting the session removes it; reset or replacement makes the prior lifecycle's recap unusable. Incognito sessions do not persist or generate this cache. A shared, bounded Gateway queue deduplicates generation across viewers, retains the previous recap on failure, and uses only the configured utility route. Disabling that route stops new generation. Removing or ignoring the optional field is a rollback path that leaves session and transcript data intact; removing the feature does not require reversing a database migration.
+
+### Transcript search row ownership
+
+The per-agent `session_transcript_fts_rows` table maps each FTS `rowid` to its
+session. `fts_rowid` is the primary key, and `session_id` has a nonunique index.
+The projection's nullable `fts_row_count` distinguishes unknown legacy ownership
+from a complete mapping, including an empty index. The transcript projection
+owner maintains and removes these derived facts with the corresponding FTS rows.
+See [agent schema 22](/reference/database-schemas/agent-schema-history#transcript-fts-row-ownership)
+for migration, recovery and downgrade behavior.
 
 ### Cold transcript archives
 
@@ -197,6 +209,12 @@ verification facts, repair attempts, confirmation/finish timestamps, and known
 downtime. Each JSON column has a 16 KiB hard limit with deterministic truncation
 and redaction. The ledger stores bounded diagnostic summaries, not raw logs or
 credentials. There is no automatic history deletion.
+
+Asynchronous history lookup and listing run their queries and record decoding
+in the shared-state read worker. They preserve source artifacts and inherited
+snapshot or disposable-read scopes, and return empty history without creating
+a missing database or ledger table. Reconciliation and ledger writes retain
+their existing owners.
 
 New drivers store optional `origin.driver` fields `host` (the hostname), `pid`,
 and `startIdentity` (the operating system's process-start identity as a decimal

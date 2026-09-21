@@ -231,6 +231,7 @@ describe("agents tools panel (browser)", () => {
     expect(section.querySelector(".settings-segmented")).toBeNull();
     expect(section.querySelector(".settings-secret input")).toBeNull();
     expect(section.textContent).toContain("Manage connections in Profile");
+    expect(section.textContent).not.toContain("OS account running the Gateway");
     expect(section.textContent).not.toContain("Advanced: agent GitHub override");
   });
 
@@ -310,6 +311,7 @@ describe("agents tools panel (browser)", () => {
     expect(container.textContent).toContain("Managed GitHub authorization");
     expect(container.textContent).toContain("repo, workflow");
     expect(container.textContent).toContain("System GitHub");
+    expect(container.textContent).not.toContain("OS account running the Gateway");
   });
 
   it("keeps PAT fields hidden until the explicit fallback is selected", async () => {

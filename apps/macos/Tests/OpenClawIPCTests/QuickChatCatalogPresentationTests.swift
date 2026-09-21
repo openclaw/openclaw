@@ -88,11 +88,7 @@ final class QuickChatCatalogPresentationTests: XCTestCase {
                 XCTAssertEqual(selected.state, .on)
             }
 
-            let effort = try await AppKitTestSupport.waitForAccessibilityElement(
-                in: panel, description: "the effort control")
-            { elements in
-                elements.first { $0.accessibilityLabel?() == "Effort" && $0.accessibilityRole?() == .button }
-            }
+            var effort = try await self.waitForEffort(in: panel, value: "Inherited Brief")
             XCTAssertEqual(model.thinkingOptions.map(\.label), ["Brief", "Thorough"])
             XCTAssertTrue(effort.accessibilityPerformPress?() == true)
             let popover = try await self.waitForEffortPopover(application: application)
@@ -101,15 +97,21 @@ final class QuickChatCatalogPresentationTests: XCTestCase {
             })
             XCTAssertTrue(slider.accessibilityPerformIncrement?() == true)
             try await self.waitForModel { model.selectedThinkingLevel == "high" }
+            effort = try await self.waitForEffort(in: panel, value: "Thorough")
             let effortValue: Any? = effort.accessibilityValue?()
             XCTAssertEqual(effortValue as? String, "Thorough")
             try await self.captureEffortPopover(popover.window, name: "effort")
-            let fast = try XCTUnwrap(popover.elements.first { $0.accessibilityLabel?() == "Fast mode" })
+            let fast = try await AppKitTestSupport.waitForAccessibilityElement(
+                in: popover.window, description: "the enabled Fast mode control")
+            { elements in
+                elements.first { $0.accessibilityLabel?() == "Fast mode" && $0.isAccessibilityEnabled?() == true }
+            }
             XCTAssertTrue(fast.isAccessibilityEnabled?() == true)
             _ = fast.accessibilityPerformPress?()
             try await self.waitForModel { model.speed.isEnabled && !model.isUpdatingModel }
             XCTAssertTrue(model.speed.isEnabled)
             XCTAssertEqual(model.speed.override, .on)
+            effort = try await self.waitForEffort(in: panel, value: "Thorough, Fast")
             let fastEffortValue: Any? = effort.accessibilityValue?()
             XCTAssertEqual(fastEffortValue as? String, "Thorough, Fast")
             let defaults = try await AppKitTestSupport.accessibilityElements(in: popover.window)
@@ -120,6 +122,7 @@ final class QuickChatCatalogPresentationTests: XCTestCase {
             XCTAssertNil(model.speed.override)
             XCTAssertFalse(model.speed.isEnabled)
             XCTAssertEqual(model.selectedThinkingLevel, "high")
+            effort = try await self.waitForEffort(in: panel, value: "Thorough")
             XCTAssertTrue(effort.accessibilityPerformPress?() == true)
             try await AppKitTestSupport.openMenu(button, in: panel) { menu in
                 try AppKitTestSupport.record(menu: menu, content: content, name: "inherited")
@@ -137,6 +140,19 @@ final class QuickChatCatalogPresentationTests: XCTestCase {
             controller.stop()
             await gateway.shutdown()
             throw error
+        }
+    }
+
+    private func waitForEffort(in window: NSWindow, value expectedValue: String) async throws -> AnyObject {
+        // Model observation can complete before SwiftUI publishes its current accessibility tree.
+        try await AppKitTestSupport.waitForAccessibilityElement(
+            in: window, description: "the enabled effort control with value \(expectedValue)")
+        { elements in
+            elements.first { element in
+                let value: Any? = element.accessibilityValue?()
+                return element.accessibilityLabel?() == "Effort" && element.accessibilityRole?() == .button &&
+                    element.isAccessibilityEnabled?() == true && value as? String == expectedValue
+            }
         }
     }
 

@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { registerAgentWorkspaceAccess } from "../../agents/workspace-access.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { callGatewayHandler } from "../../gateway/server-methods/skills.test-helpers.js";
 import { resolveBrewExecutable } from "../../infra/brew.js";
@@ -11,18 +12,24 @@ import {
   initializeGlobalHookRunner,
   resetGlobalHookRunner,
 } from "../../plugins/hook-runner-global.js";
-import { createMockPluginRegistry } from "../../plugins/hooks.test-fixtures.js";
+import { addTestHook, createMockPluginRegistry } from "../../plugins/hooks.test-fixtures.js";
 import { captureEnv } from "../../test-utils/env.js";
 import { createFixtureSuite } from "../../test-utils/fixture-suite.js";
 import { withMockedPlatform } from "../../test-utils/vitest-spies.js";
 import { buildWorkspaceSkillStatus } from "../discovery/status.js";
 import { hasBinary } from "../loading/config.js";
-import { loadWorkspaceSkills } from "../loading/workspace-skill-loader.js";
+import {
+  loadWorkspaceSkills,
+  prepareWorkspaceSkills,
+  readWorkspaceSkillSources,
+} from "../loading/workspace-skill-loader.js";
+import { resolveWorkspaceSkillSourcePlan } from "../loading/workspace-skill-sources.js";
 import { closeSkillsWatchers } from "../runtime/refresh.js";
+import { readSkillResourceFiles } from "../runtime/resources.js";
 import { runCommandWithTimeoutMock } from "../test-support/install-test-mocks.js";
 import type { SkillEntry, SkillInstallSpec } from "../types.js";
 import { resolveWorkshopSkillsDir } from "../workshop/skills-root.js";
-import { installSkill } from "./install.js";
+import { installSkill, installSkillDependencies } from "./install.js";
 
 vi.mock("../../process/exec.js", () => ({
   runCommandWithTimeout: (...args: unknown[]) => runCommandWithTimeoutMock(...args),
@@ -39,7 +46,11 @@ vi.mock("../../infra/container-environment.js", { spy: true });
 // Keep the real split loader available without recursively calling its mocked export.
 vi.mock("../loading/workspace-skill-loader.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../loading/workspace-skill-loader.js")>();
-  return { ...actual, loadWorkspaceSkills: vi.fn(actual.loadWorkspaceSkills) };
+  return {
+    ...actual,
+    loadWorkspaceSkills: vi.fn(actual.loadWorkspaceSkills),
+    prepareWorkspaceSkills: vi.fn(actual.prepareWorkspaceSkills),
+  };
 });
 const originalLoadWorkspaceSkills = (() => {
   const implementation = vi.mocked(loadWorkspaceSkills).getMockImplementation();
@@ -48,6 +59,8 @@ const originalLoadWorkspaceSkills = (() => {
   }
   return implementation;
 })();
+
+const originalPrepareWorkspaceSkills = vi.mocked(prepareWorkspaceSkills).getMockImplementation()!;
 
 // Prefix-specific checks replace the shared mkdir spy; retain the real function to avoid recursion.
 const realMkdir = fs.mkdir.bind(fs);
@@ -120,6 +133,7 @@ beforeAll(async () => {
 afterAll(async () => {
   resetGlobalHookRunner();
   vi.mocked(loadWorkspaceSkills).mockReset();
+  vi.mocked(prepareWorkspaceSkills).mockReset();
   vi.mocked(hasBinary).mockReset();
   vi.mocked(resolveBrewExecutable).mockReset();
   vi.mocked(isContainerEnvironment).mockReset();
@@ -179,6 +193,11 @@ describe("installSkill before_install hooks", () => {
     resetGlobalHookRunner();
     runCommandWithTimeoutMock.mockClear();
     vi.mocked(loadWorkspaceSkills).mockReset().mockImplementation(loadTestWorkspaceSkillEntries);
+    vi.mocked(prepareWorkspaceSkills)
+      .mockReset()
+      .mockImplementation(async (workspaceDir, options) =>
+        loadWorkspaceSkills(workspaceDir, options),
+      );
     vi.mocked(hasBinary).mockReset();
     vi.mocked(resolveBrewExecutable).mockReset();
     vi.mocked(isContainerEnvironment).mockReset();
@@ -217,6 +236,215 @@ describe("installSkill before_install hooks", () => {
       } finally {
         uidSpy?.mockRestore();
         mkdirSpy.mockRestore();
+      }
+    });
+  });
+
+  it("installs the current host recipe for a hidden skill through the Gateway", async () => {
+    const { skillsHandlers } = await import("../../gateway/server-methods/skills.js");
+    await withWorkspaceCase(async ({ workspaceDir, stateDir }) => {
+      vi.spyOn(os, "tmpdir").mockReturnValue(workspaceDir);
+      const hostDir = path.join(workspaceDir, "host");
+      await fs.mkdir(hostDir, { recursive: true });
+      vi.mocked(prepareWorkspaceSkills).mockImplementation(originalPrepareWorkspaceSkills);
+      const skillName = "host-dependency";
+      for (const [dir, packageName] of [
+        [workspaceDir, "stale-gateway-package"],
+        [hostDir, "current-host-package"],
+      ] as const) {
+        await writeInstallableSkill(dir, skillName, {
+          id: "deps",
+          kind: "node",
+          package: packageName,
+        });
+      }
+      const hostInstall = vi.fn(async (request: Parameters<typeof installSkillDependencies>[0]) => {
+        const homedir = vi.spyOn(os, "homedir").mockReturnValue(hostDir);
+        const uid = process.getuid ? vi.spyOn(process, "getuid").mockReturnValue(501) : undefined;
+        try {
+          return await installSkillDependencies(request);
+        } finally {
+          uid?.mockRestore();
+          homedir.mockRestore();
+        }
+      });
+      const release = registerAgentWorkspaceAccess(workspaceDir, {
+        bridge: { readFile: vi.fn(), writeFile: vi.fn(), stat: vi.fn() },
+        installSkillDependencies: hostInstall,
+        skillResources: {
+          readSkillFiles: readSkillResourceFiles,
+          readInstructions: vi.fn(),
+          resolveExplicitSkill: vi.fn(),
+        },
+        loadSkills: async (request) =>
+          readWorkspaceSkillSources({
+            ...request,
+            sourcePlan: resolveWorkspaceSkillSourcePlan(hostDir, { workspaceOnly: true }),
+          }),
+      });
+      const config: OpenClawConfig = {
+        plugins: { enabled: false },
+        agents: {
+          ownership: "explicit",
+          list: [{ id: "ops", workspace: workspaceDir, skills: [] }],
+        },
+      };
+      try {
+        const result = await callGatewayHandler(
+          skillsHandlers,
+          "skills.install",
+          { agentId: "ops", name: skillName, installId: "deps" },
+          { context: { getRuntimeConfig: () => config } },
+        );
+        expect(result.ok).toBe(true);
+        expect(hostInstall).toHaveBeenCalledWith(
+          expect.objectContaining({
+            spec: expect.objectContaining({ package: "current-host-package" }),
+          }),
+        );
+        await expect(fs.stat(path.join(stateDir, "tools"))).rejects.toMatchObject({
+          code: "ENOENT",
+        });
+        expect(lastRunCommandCall()?.[0]).toEqual([
+          "npm",
+          "install",
+          "-g",
+          "--ignore-scripts",
+          "current-host-package",
+        ]);
+        expect(lastRunCommandCall()?.[1]).toMatchObject({
+          env: { NPM_CONFIG_PREFIX: path.join(hostDir, ".openclaw", "tools", "node", "npm") },
+        });
+      } finally {
+        release();
+      }
+    });
+  });
+
+  it.each(["deny", "host-failure", "missing-installer"] as const)(
+    "keeps remote dependency installs behind Gateway policy without local fallback (%s)",
+    async (outcome) => {
+      await withWorkspaceCase(async ({ workspaceDir }) => {
+        vi.spyOn(os, "tmpdir").mockReturnValue(workspaceDir);
+        const hostDir = path.join(workspaceDir, "policy-host");
+        await fs.mkdir(hostDir, { recursive: true });
+        await writeInstallableSkill(hostDir, "policy-host");
+        vi.mocked(prepareWorkspaceSkills).mockImplementation(originalPrepareWorkspaceSkills);
+        let inspectedPath: string | undefined;
+        const policy = vi.fn(async (event: { sourcePath: string }) => {
+          inspectedPath = event.sourcePath;
+          expect(inspectedPath).not.toContain(hostDir);
+          expect(await fs.readFile(path.join(inspectedPath, "runner.js"), "utf8")).toBe(
+            "export {};\n",
+          );
+          return outcome === "deny"
+            ? { block: true, blockReason: "Organization denied" }
+            : undefined;
+        });
+        const registry = createMockPluginRegistry([]);
+        addTestHook({
+          registry,
+          pluginId: "test-plugin",
+          hookName: "before_install",
+          handler: policy,
+        });
+        initializeGlobalHookRunner(registry);
+        const hostInstall = vi.fn(async () => {
+          throw new Error("Harness connection lost");
+        });
+        const release = registerAgentWorkspaceAccess(workspaceDir, {
+          bridge: { readFile: vi.fn(), writeFile: vi.fn(), stat: vi.fn() },
+          ...(outcome === "missing-installer" ? {} : { installSkillDependencies: hostInstall }),
+          skillResources: {
+            readSkillFiles: readSkillResourceFiles,
+            readInstructions: vi.fn(),
+            resolveExplicitSkill: vi.fn(),
+          },
+          loadSkills: async (request) =>
+            readWorkspaceSkillSources({
+              ...request,
+              sourcePlan: resolveWorkspaceSkillSourcePlan(hostDir, { workspaceOnly: true }),
+            }),
+        });
+        try {
+          const install = installSkill({
+            workspaceDir,
+            skillName: "policy-host",
+            installId: "deps",
+          });
+          if (outcome === "deny") {
+            expect(await install).toMatchObject({
+              ok: false,
+              message: expect.stringContaining("Organization denied"),
+            });
+            expect(hostInstall).not.toHaveBeenCalled();
+          } else {
+            await expect(install).rejects.toThrow(
+              outcome === "host-failure"
+                ? "Harness connection lost"
+                : "Remote skill dependency installation is unavailable",
+            );
+          }
+          expect(runCommandWithTimeoutMock).not.toHaveBeenCalled();
+          if (outcome !== "missing-installer") {
+            expect(policy).toHaveBeenCalledOnce();
+            await expect(fs.stat(inspectedPath!)).rejects.toMatchObject({ code: "ENOENT" });
+          }
+        } finally {
+          release();
+        }
+      });
+    },
+  );
+
+  it("checks Gateway-owned skill files locally but installs their dependencies on the Harness", async () => {
+    await withWorkspaceCase(async ({ workspaceDir }) => {
+      await writeInstallableSkill(workspaceDir, "gateway-owned");
+      const entries = loadTestWorkspaceSkillEntries(workspaceDir);
+      entries[0]!.skill.fileHost = "gateway";
+      vi.mocked(prepareWorkspaceSkills).mockResolvedValue(entries);
+      const hostInstall = vi.fn(async () => ({
+        ok: true,
+        message: "Installed",
+        stdout: "",
+        stderr: "",
+        code: 0,
+      }));
+      const readRemote = vi.fn();
+      const policy = vi.fn(async (event: { sourcePath: string }) => {
+        expect(event.sourcePath).toBe(entries[0]!.skill.baseDir);
+        expect(await fs.readFile(path.join(event.sourcePath, "runner.js"), "utf8")).toBe(
+          "export {};\n",
+        );
+      });
+      const registry = createMockPluginRegistry([]);
+      addTestHook({
+        registry,
+        pluginId: "test-plugin",
+        hookName: "before_install",
+        handler: policy,
+      });
+      initializeGlobalHookRunner(registry);
+      const release = registerAgentWorkspaceAccess(workspaceDir, {
+        bridge: { readFile: vi.fn(), writeFile: vi.fn(), stat: vi.fn() },
+        loadSkills: vi.fn(),
+        installSkillDependencies: hostInstall,
+        skillResources: {
+          readSkillFiles: readRemote,
+          readInstructions: vi.fn(),
+          resolveExplicitSkill: vi.fn(),
+        },
+      });
+      try {
+        expect(
+          await installSkill({ workspaceDir, skillName: "gateway-owned", installId: "deps" }),
+        ).toMatchObject({ ok: true });
+        expect(policy).toHaveBeenCalledOnce();
+        expect(hostInstall).toHaveBeenCalledOnce();
+        expect(readRemote).not.toHaveBeenCalled();
+        expect(runCommandWithTimeoutMock).not.toHaveBeenCalled();
+      } finally {
+        release();
       }
     });
   });

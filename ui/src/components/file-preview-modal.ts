@@ -415,6 +415,7 @@ const FILE_KIND_ICONS: Record<FileKind, TemplateResult> = {
   markdown: icons.book,
   package: icons.box,
   shell: icons.terminal,
+  skill: icons.pencilSparkles,
 };
 
 function iconForFile(path: string) {

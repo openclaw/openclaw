@@ -7,7 +7,9 @@ import {
   replaceTranscriptEvents,
   waitForSessionTranscriptProjection,
 } from "../config/sessions/session-accessor.js";
+import { readTranscriptDisplayDelta } from "../config/sessions/session-accessor.sqlite-history-events.js";
 import { readActiveTranscriptEntryAnchor } from "../config/sessions/session-accessor.sqlite-transcript-anchor.js";
+import { readSessionHistoryPageInWorker } from "../config/sessions/session-history-worker-runtime.js";
 import { runWithSessionTranscriptReadFence } from "../config/sessions/session-transcript-read-fence.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
@@ -208,6 +210,18 @@ it("reads a new branch and reset interval after earlier worker pages settle", as
     await waitForSessionTranscriptProjection(target);
     const read = () =>
       readSessionHistorySnapshotAsync({ target: { ...target, sessionEntry: entry }, limit: 10 });
+    const readDelta = async (cursor?: string) => {
+      const scope = { ...target, sessionEntry: entry };
+      const limits = { cursor, maxBytes: 1_000_000, maxEvents: 200 };
+      const golden = readTranscriptDisplayDelta(scope, limits);
+      const delta = await readSessionHistoryPageInWorker({
+        kind: "delta",
+        params: { target: scope, limits },
+      });
+      expect(JSON.stringify(delta)).toBe(JSON.stringify(golden));
+      return delta.kind === "page" ? delta.cursor : undefined;
+    };
+    const beforeBranch = await readDelta();
     expect((await read()).history.messages.map(readChatHistoryMessageId)).toEqual(["A"]);
     await appendTranscriptEvent(target, {
       type: "leaf",
@@ -217,6 +231,7 @@ it("reads a new branch and reset interval after earlier worker pages settle", as
       appendParentId: "B",
     });
     await waitForSessionTranscriptProjection(target);
+    const beforeReset = await readDelta(beforeBranch);
     expect((await read()).history.messages.map(readChatHistoryMessageId)).toEqual(["B"]);
     await appendTranscriptEvent(target, {
       type: "reset",
@@ -226,6 +241,7 @@ it("reads a new branch and reset interval after earlier worker pages settle", as
       timestamp: "2026-09-13T00:00:00.000Z",
     });
     await waitForSessionTranscriptProjection(target);
+    await readDelta(beforeReset);
     const reset = await read();
     expect(reset.history.messages.map(readChatHistoryMessageId)).toEqual(["reset-B"]);
     expect(reset.rawTranscriptSeq).toBe(1);

@@ -1,5 +1,4 @@
 // Runs Git checkout updates; package replacement belongs to the update CLI.
-import { withForegroundGitMaintenance } from "./git-exec.js";
 import { readPackageVersion } from "./package-json.js";
 import {
   resolveGitRoot,
@@ -25,7 +24,7 @@ export type {
   UpdateStepProgress,
   UpdateStepResult,
 } from "./update-runner-types.js";
-export { resolveUpdateDoctorExecutionPolicy, resolveUpdateInstallSurface };
+export { resolveUpdateDoctorExecutionPolicy };
 
 export async function runGatewayUpdate(opts: UpdateRunnerOptions = {}): Promise<UpdateRunResult> {
   const result = await runGatewayUpdateInternal(opts);
@@ -101,32 +100,4 @@ async function runGatewayUpdateInternal(opts: UpdateRunnerOptions): Promise<Upda
     steps: [],
     durationMs: Date.now() - startedAt,
   };
-}
-
-export async function runGatewayUpdatePreflight(
-  cwd: string | undefined,
-  timeoutMs: number | undefined,
-  devTarget?: UpdateRunnerOptions["devTarget"],
-  signal?: AbortSignal,
-) {
-  signal?.throwIfAborted();
-  const { runCommand } = await buildUpdateCommandRunner();
-  const complete = new Error("update-preflight-complete");
-  const result = await runGatewayUpdate({
-    cwd,
-    timeoutMs,
-    devTarget,
-    runCommand: (argv, options) =>
-      runCommand(withForegroundGitMaintenance(argv), {
-        ...options,
-        signal: options.signal ?? signal,
-      }),
-    beforeGitMutation: () => Promise.reject(complete),
-  }).catch((error: unknown) => {
-    if (error !== complete) {
-      throw error;
-    }
-  });
-  signal?.throwIfAborted();
-  return result;
 }

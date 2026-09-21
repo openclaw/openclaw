@@ -13,11 +13,9 @@ import { resolveStableNodePath } from "./stable-node-path.js";
 import type { UpdateChannel } from "./update-channels.js";
 import type { DevUpdateTarget } from "./update-dev-target.js";
 import { renderUpdateRunReport, updateRunReportInputFromResult } from "./update-run-report.js";
-import {
-  resolveUpdateInstallSurface,
-  runGatewayUpdate,
-  runGatewayUpdatePreflight,
-} from "./update-runner.js";
+import { expectCancelledGitCandidateCleanup } from "./update-runner-git-candidate.test-support.js";
+import { resolveUpdateInstallSurface } from "./update-runner-install-surface.js";
+import { runGatewayUpdate } from "./update-runner.js";
 
 const { runCommandWithTimeout } = processExec;
 const execFileSyncMock = vi.hoisted(() => vi.fn(() => "/tmp/openclaw-test-global-npmrc\n"));
@@ -383,12 +381,7 @@ describe("runGatewayUpdate", () => {
     return { calls, runCommand };
   }
 
-  type TestCommandOptions = {
-    env?: NodeJS.ProcessEnv;
-    cwd?: string;
-    input?: string | Uint8Array;
-    timeoutMs?: number;
-  };
+  type TestCommandOptions = import("../process/exec.js").CommandOptions;
 
   function createDevGitRunner(params?: {
     targetSha?: string;
@@ -503,78 +496,14 @@ describe("runGatewayUpdate", () => {
   }
 
   it.each(["build", "locked worktree creation"] as const)(
-    "cancels preflight %s and removes its Git worktree before returning",
+    "settles cancelled candidate %s and removes its Git worktree before returning",
     async (phase) => {
-      const { localRoot, baseSha, targetSha } = await createTrackedGitFixture(false);
-      const controller = new AbortController();
-      const stopped = new Error("preflight owner stopped");
-      let buildResult: Awaited<ReturnType<typeof runCommandWithTimeout>> | undefined;
-      let worktree: string | undefined;
-      const commandSpy = vi
-        .spyOn(processExec, "runCommandWithTimeout")
-        .mockImplementation(async (argv, optionsOrTimeout) => {
-          const options =
-            typeof optionsOrTimeout === "number"
-              ? { timeoutMs: optionsOrTimeout }
-              : optionsOrTimeout;
-          if (argv[0] !== "pnpm") {
-            const result = await runCommandWithTimeout(argv, options);
-            if (
-              phase === "locked worktree creation" &&
-              argv.includes("worktree") &&
-              argv.includes("add")
-            ) {
-              worktree = argv.at(-2);
-              assert.ok(worktree);
-              // Git can retain this lock when creation is forcibly terminated during checkout.
-              await runRealGit(worktree, "worktree", "lock", "--reason", "initializing", worktree);
-              controller.abort(stopped);
-            }
-            return result;
-          }
-          if (argv[1] === "build") {
-            worktree = options.cwd;
-            buildResult = await runCommandWithTimeout(
-              [
-                process.execPath,
-                "-e",
-                'process.stdout.write("ready\\n"); setInterval(() => {}, 1000)',
-              ],
-              { ...options, onOutputChunk: () => controller.abort(stopped) },
-            );
-            return buildResult;
-          }
-          return {
-            stdout: argv[1] === "--version" ? PNPM_VERSION : "",
-            stderr: "",
-            code: 0,
-            signal: null,
-            killed: false,
-            termination: "exit",
-            noOutputTimedOut: false,
-          };
-        });
-      try {
-        await expect(
-          runGatewayUpdatePreflight(
-            localRoot,
-            5000,
-            { mode: "tracked", upstreamRef: "origin/main", upstreamSha: targetSha },
-            controller.signal,
-          ),
-        ).rejects.toBe(stopped);
-      } finally {
-        commandSpy.mockRestore();
-      }
-      if (phase === "build") {
-        expect(buildResult?.termination).toBe("signal");
-      }
-      assert.ok(worktree);
-      expect(await pathExists(path.dirname(worktree))).toBe(false);
-      expect(await runRealGit(localRoot, "worktree", "list", "--porcelain")).not.toContain(
-        worktree,
-      );
-      expect(await runRealGit(localRoot, "rev-parse", "HEAD")).toBe(baseSha);
+      await expectCancelledGitCandidateCleanup({
+        phase,
+        fixture: await createTrackedGitFixture(false),
+        pnpmVersion: PNPM_VERSION,
+        runRealGit,
+      });
     },
   );
 
@@ -595,9 +524,7 @@ describe("runGatewayUpdate", () => {
           }
         }
         return await runCommandWithTimeout(argv, {
-          cwd: options.cwd,
-          input: options.input,
-          env: options.env,
+          ...options,
           timeoutMs: options.timeoutMs ?? 5000,
         });
       }
@@ -841,7 +768,7 @@ describe("runGatewayUpdate", () => {
       });
       expect(result.steps).toMatchObject([
         {
-          name: "clean check",
+          name: "clean-check",
           exitCode: reason === "dirty" ? 1 : code,
           stdoutTail: stdout || null,
           stderrTail:
@@ -1066,7 +993,7 @@ describe("runGatewayUpdate", () => {
     });
     expect(result.steps).toContainEqual(
       expect.objectContaining({
-        name: `preflight config validate (${targetSha.slice(0, 8)})`,
+        name: "preflight-config-validate",
         exitCode: 1,
         stderrTail: invalidConfig,
       }),
@@ -1295,8 +1222,7 @@ describe("runGatewayUpdate", () => {
         expect(result.status).toBe("error");
         expect(result.reason).toBe("checkout-failed");
         expect(
-          result.steps.find((step) => step.name.startsWith("git branch --set-upstream-to"))
-            ?.advisory,
+          result.steps.find((step) => step.name === "git-set-upstream")?.advisory,
         ).toBeUndefined();
         expect(calls).toContain(`git -C ${tempDir} checkout --force feature`);
         return;
@@ -1716,8 +1642,7 @@ describe("runGatewayUpdate", () => {
       expect(preflightBuildAttempts).toBe(2);
       expect(
         result.steps.some(
-          (step) =>
-            step.name === `preflight ${failedPreparation} (upstream)` && step.exitCode === 1,
+          (step) => step.name === `preflight-${failedPreparation}` && step.exitCode === 1,
         ),
       ).toBe(true);
       expect(calls).toContain(`git -C ${tempDir} checkout -B main older123`);
@@ -1755,15 +1680,15 @@ describe("runGatewayUpdate", () => {
     expect(result.status).toBe("ok");
     expect(buildAttempts).toBe(2);
     expect(
-      result.steps.filter((step) => step.name.startsWith("preflight deps install")),
+      result.steps.filter((step) => step.name.startsWith("preflight-deps-install")),
     ).toMatchObject([
       {
-        name: "preflight deps install (ignore scripts) (upstream)",
+        name: "preflight-deps-install-ignore-scripts",
         command: "pnpm install --ignore-scripts",
         exitCode: 0,
       },
       {
-        name: "preflight deps install (ignore scripts) (older123)",
+        name: "preflight-deps-install-ignore-scripts",
         command: "pnpm install --ignore-scripts",
         exitCode: 0,
       },
@@ -2031,7 +1956,7 @@ describe("runGatewayUpdate", () => {
       });
       const beforeGitMutation = vi.fn<() => Promise<void>>();
       const result = await runWithCommand(runCommand, { channel: "dev", beforeGitMutation });
-      const candidates = result.steps.filter((step) => step.name.startsWith("preflight checkout"));
+      const candidates = result.steps.filter((step) => step.name === "preflight-checkout");
       expect(candidates).toHaveLength(capacity ? 1 : 2);
       expect(result.status).toBe(capacity ? "error" : "ok");
       expect(result.reason).toBe(capacity ? "preflight-insufficient-space" : undefined);
@@ -2247,10 +2172,8 @@ describe("runGatewayUpdate", () => {
 
     expect(result.status).toBe("error");
     expect(result.reason).toBe("preflight-no-good-commit");
-    expect(result.steps.some((step) => step.name === "preflight package manager (bad123)")).toBe(
-      true,
-    );
-    expect(result.steps.some((step) => step.name === "preflight build (older123)")).toBe(true);
+    expect(result.steps.some((step) => step.name === "preflight-package-manager")).toBe(true);
+    expect(result.steps.some((step) => step.name === "preflight-build")).toBe(true);
     expect(calls).not.toContain(`git -C ${tempDir} rebase ${upstreamSha}`);
     expect(calls).not.toContain(`git -C ${tempDir} rebase ${olderSha}`);
   });
@@ -2275,7 +2198,7 @@ describe("runGatewayUpdate", () => {
     expect(result).toMatchObject({ status: "error", reason: "preflight-no-good-commit" });
     expect(result.steps).toContainEqual(
       expect.objectContaining({
-        name: "preflight update clean check (upstream)",
+        name: "preflight-update-clean-check",
         exitCode: 1,
         stdoutTail: diagnostic,
       }),
@@ -2558,9 +2481,9 @@ describe("runGatewayUpdate", () => {
       expect(preflightIgnoreScriptsAttempts).toBe(1);
       expect(finalInstallAttempts).toBe(0);
       expect(result.steps.map((step) => step.name)).toContain(
-        "preflight deps install (ignore scripts) (upstream)",
+        "preflight-deps-install-ignore-scripts",
       );
-      expect(result.steps.map((step) => step.name)).not.toContain("deps install (ignore scripts)");
+      expect(result.steps.map((step) => step.name)).not.toContain("deps-install-ignore-scripts");
       expect(calls).toContain("pnpm install --ignore-scripts");
       expect(calls).not.toContain("pnpm lint");
     });
@@ -2589,7 +2512,7 @@ describe("runGatewayUpdate", () => {
       const result = await runWithCommand(runCommand, { channel: "dev" });
 
       expect(result.status).toBe("ok");
-      const cleanupStep = result.steps.find((step) => step.name === "preflight cleanup");
+      const cleanupStep = result.steps.find((step) => step.name === "preflight-cleanup");
       expect(cleanupStep?.exitCode).toBe(0);
       expect(cleanupTimeouts[0]).toBeLessThanOrEqual(60_000);
       expect(cleanupStep?.stderrTail ?? "").toContain(
@@ -2617,7 +2540,7 @@ describe("runGatewayUpdate", () => {
     const result = await runWithCommand(runCommand, { channel: "dev" });
 
     expect(result.status).toBe("ok");
-    const cleanupStep = result.steps.find((step) => step.name === "preflight cleanup");
+    const cleanupStep = result.steps.find((step) => step.name === "preflight-cleanup");
     expect(cleanupStep?.exitCode).toBe(0);
     expect(cleanupTimeouts[0]).toBeLessThanOrEqual(60_000);
     expect(cleanupStep?.stderrTail ?? "").toContain("fallback cleanup removed preflight tree");
@@ -2654,7 +2577,7 @@ describe("runGatewayUpdate", () => {
       expect(calls).toContain(`git -C ${tempDir} checkout -B main upstream123`);
       expect(result.steps).toContainEqual(
         expect.objectContaining({
-          name: "preflight cleanup",
+          name: "preflight-cleanup",
           exitCode: 1,
           stderrTail: "error: failed to delete worktree: Permission denied",
           advisory: expect.objectContaining({
@@ -2666,7 +2589,7 @@ describe("runGatewayUpdate", () => {
       expect(preflightRoot && (await pathExists(preflightRoot))).toBe(true);
       expect(onStepComplete).toHaveBeenCalledWith(
         expect.objectContaining({
-          name: "preflight cleanup",
+          name: "preflight-cleanup",
           advisory: expect.objectContaining({ kind: "recoverable-maintenance" }),
         }),
       );
@@ -2961,9 +2884,7 @@ describe("runGatewayUpdate", () => {
 
     expect(result.status).toBe("error");
     expect(result.reason).toBe("pnpm-npm-bootstrap-failed");
-    expect(result.steps.some((step) => step.name === "preflight package manager (upstream)")).toBe(
-      true,
-    );
+    expect(result.steps.some((step) => step.name === "preflight-package-manager")).toBe(true);
     expect(calls).not.toContain("npm run build");
     expect(calls).not.toContain("npm run lint");
     expect(calls).not.toContain("npm install");
@@ -3054,8 +2975,8 @@ describe("runGatewayUpdate", () => {
 
     expect(result.status).toBe("error");
     expect(result.reason).toBe("doctor-entry-missing");
-    expect(result.steps.some((step) => step.name === "openclaw doctor entry")).toBe(true);
-    expect(result.steps.at(-1)?.name).toMatch(/^git rollback/);
+    expect(result.steps.some((step) => step.name === "package-doctor-entry")).toBe(true);
+    expect(result.steps.at(-1)?.name).toMatch(/^git-rollback-/);
   });
 
   it.each(["doctor-error", "doctor-throw", "post-doctor-head"] as const)(
@@ -3137,7 +3058,7 @@ describe("runGatewayUpdate", () => {
       expect(
         JSON.parse(await fs.readFile(path.join(tempDir, "dist", "build-info.json"), "utf8")),
       ).toMatchObject({ buildId: "candidate-built-runtime" });
-      expect(result.steps.some((step) => step.name.startsWith("git rollback"))).toBe(false);
+      expect(result.steps.some((step) => step.name.startsWith("git-rollback-"))).toBe(false);
       expect(calls.filter((call) => call === "pnpm install")).toHaveLength(1);
       expect(calls.filter((call) => call === "pnpm build")).toHaveLength(1);
     },
@@ -3224,7 +3145,7 @@ describe("runGatewayUpdate", () => {
       });
       expect(calls).toContain(doctorKey);
       expect(getUiBuildCount()).toBe(0);
-      expect(result.steps.some((step) => step.name.startsWith("git rollback"))).toBe(false);
+      expect(result.steps.some((step) => step.name.startsWith("git-rollback-"))).toBe(false);
     },
   );
 
@@ -3292,7 +3213,7 @@ describe("runGatewayUpdate", () => {
       expect(result).toMatchObject({ status: "error", reason: "preflight-no-good-commit" });
       expect(beforeGitMutation).not.toHaveBeenCalled();
       expect(result.steps).toContainEqual(
-        expect.objectContaining({ name: "preflight ui assets verify (v1.0.1)", exitCode: 1 }),
+        expect.objectContaining({ name: "preflight-ui-assets-verify", exitCode: 1 }),
       );
       expect(
         await fs.readFile(path.join(tempDir, "dist", "control-ui", "index.html"), "utf8"),

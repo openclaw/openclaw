@@ -152,7 +152,7 @@ export async function updateStatusCommand(opts: UpdateStatusOptions): Promise<vo
   const migrationWarnings: string[] = [];
   const migrationWarningErrors: string[] = [];
   for (const readWarnings of [
-    () => readDeferredPluginMigrations().map(formatDeferredPluginMigration),
+    () => readDeferredPluginMigrations().map((pending) => formatDeferredPluginMigration(pending)),
     () => readSessionSqliteMigrationWarnings(),
   ]) {
     try {

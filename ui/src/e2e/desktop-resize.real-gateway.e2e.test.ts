@@ -172,10 +172,10 @@ async function captureDesktopSockets(page: Page) {
                   : event.reason === "desktop stream closed"
                     ? "stream-close"
                     : [
-                          "desktop authentication failed",
+                          "desktop connection failed during authentication",
                           "desktop authentication timed out",
-                          "desktop ARD authentication failed",
-                          "desktop VNC authentication failed",
+                          "macOS denied desktop access; check credentials and Screen Sharing or Remote Management Observe/Control permissions",
+                          "desktop VNC authentication rejected",
                         ].includes(event.reason)
                       ? "authentication"
                       : event.reason

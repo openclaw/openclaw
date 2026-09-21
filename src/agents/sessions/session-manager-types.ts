@@ -47,6 +47,8 @@ export interface CompactionEntry<T = unknown> extends SessionEntryBase {
   summary: string;
   firstKeptEntryId: string;
   tokensBefore: number;
+  /** Context estimate after compaction, retained with its ordinary transcript marker. */
+  tokensAfter?: number;
   /** Extension-specific data, such as artifact indexes or version markers. */
   details?: T;
   /** True for extension-generated compaction entries. */

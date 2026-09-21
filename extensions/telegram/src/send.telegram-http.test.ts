@@ -98,7 +98,7 @@ describe("Telegram physical send acceptance over HTTP", () => {
           JSON.stringify({
             ok: true,
             result:
-              method === "pinChatMessage"
+              method === "pinChatMessage" || method === "deleteMessage"
                 ? true
                 : {
                     message_id: requests.length,
@@ -309,6 +309,43 @@ describe("Telegram physical send acceptance over HTTP", () => {
       } finally {
         held.release.resolve();
         await Promise.allSettled([blocker, outcome]);
+      }
+    },
+  );
+
+  it.each(["active", "closed"] as const)(
+    "checks %s adopted-message deletion authority at the registered action boundary",
+    async (state) => {
+      const revoked = new Error("Progress owner retired");
+      const action = telegramPlugin.actions?.handleAction?.({
+        channel: "telegram",
+        action: "delete",
+        params: { chatId: "123", messageId: 42 },
+        cfg: {
+          channels: {
+            telegram: {
+              botToken: cfg.channels.telegram.botToken,
+              apiRoot: `http://127.0.0.1:${(server.address() as AddressInfo).port}`,
+            },
+          },
+        },
+        accountId: "default",
+        conversationReadOrigin: "direct-operator",
+        assertDirectAdapterHandoff: () => {
+          if (state === "closed") {
+            throw revoked;
+          }
+        },
+      });
+      if (state === "closed") {
+        await expect(action).rejects.toBe(revoked);
+        expect(requests).toEqual([]);
+      } else {
+        await expect(action).resolves.toMatchObject({ details: { ok: true, deleted: true } });
+        expect(requests).toEqual([
+          { method: "deleteMessage", fields: { chat_id: "123", message_id: 42 } },
+        ]);
+        expect(telegramPlugin.actions?.writeAuthorityActions).toContain("delete");
       }
     },
   );

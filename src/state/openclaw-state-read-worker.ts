@@ -85,6 +85,17 @@ function readPool(): ReadPool {
 }
 
 function captureCommand(command: OpenClawStateReadCommand): OpenClawStateReadCommand {
+  if (command.type === "pluginBlob.lookup") {
+    const { pluginId, namespace, key } = command.input;
+    return { type: command.type, input: { pluginId, namespace, key } };
+  }
+  if (command.type === "pluginBlob.entries") {
+    const { pluginId, namespace } = command.input;
+    return { type: command.type, input: { pluginId, namespace } };
+  }
+  if (command.type === "updateRuns.list") {
+    return { ...command, input: { ...command.input } };
+  }
   if (command.type === "audit.run.inspect") {
     const input = command.input;
     const common = {
@@ -110,6 +121,14 @@ function captureCommand(command: OpenClawStateReadCommand): OpenClawStateReadCom
 
 function commandBytes(command: OpenClawStateReadRequest["command"]): number {
   let bytes = Buffer.byteLength(command.type, "utf8");
+  if (command.type === "pluginBlob.lookup" || command.type === "pluginBlob.entries") {
+    return (
+      bytes +
+      Buffer.byteLength(command.input.pluginId, "utf8") +
+      Buffer.byteLength(command.input.namespace, "utf8") +
+      (command.type === "pluginBlob.lookup" ? Buffer.byteLength(command.input.key, "utf8") : 0)
+    );
+  }
   if (command.type === "sandboxRegistry.get") {
     return bytes + Buffer.byteLength(command.containerName, "utf8");
   }
@@ -118,6 +137,18 @@ function commandBytes(command: OpenClawStateReadRequest["command"]): number {
       bytes +
       Buffer.byteLength(command.backendId, "utf8") +
       Buffer.byteLength(command.scopeKey, "utf8")
+    );
+  }
+  if (command.type === "updateRuns.get") {
+    return bytes + Buffer.byteLength(command.runId, "utf8");
+  }
+  if (command.type === "updateRuns.list") {
+    return (
+      bytes +
+      Buffer.byteLength(command.input.reason ?? "", "utf8") +
+      Buffer.byteLength(command.input.includeRunId ?? "", "utf8") +
+      (command.input.limit === undefined ? 0 : 8) +
+      (command.input.active === undefined ? 0 : 1)
     );
   }
   if (command.type === "fleet.get") {
@@ -175,7 +206,7 @@ function decodeTaskReply(reply: OpenClawStateReadReply): OpenClawStateReadOutcom
   retainOpenClawStateWorkerErrorPayload(error, reply.error);
   return {
     error: hydrateOpenClawStateWorkerError(error, { includeOrdinary: true }),
-    sourceAdmitted: reply.sourceAdmitted,
+    sourceAdmitted: reply.sourceAdmitted === true,
   };
 }
 

@@ -82,6 +82,53 @@ async function prepareControlUiGitHubIdentity(
   };
 }
 
+function createGitHubReadHandler<T>(
+  method: string,
+  parseTarget: (params: unknown) => T | null,
+  load: (
+    target: T,
+    identity?: ControlUiGitHubPreviewIdentity,
+    fetchImpl?: typeof fetch,
+    refresh?: boolean,
+  ) => Promise<unknown>,
+): GatewayRequestHandlers[string] {
+  return async (options) => {
+    const { params, respond, context } = options;
+    const target = parseTarget(params);
+    if (!target || (params.refresh !== undefined && typeof params.refresh !== "boolean")) {
+      respond(false, undefined, errorShape(ErrorCodes.INVALID_REQUEST, `invalid ${method} params`));
+      return;
+    }
+    const resolved = resolveAgentIdOrRespondError({
+      rawAgentId: params.agentId,
+      respond,
+      cfg: context.getRuntimeConfig(),
+      normalize: normalizeOptionalString,
+    });
+    if (!resolved) {
+      return;
+    }
+    try {
+      const { identity, assertSelected } = await prepareControlUiGitHubIdentity(
+        options,
+        resolved.agentId,
+      );
+      const result =
+        params.refresh === true
+          ? await load(target, identity, undefined, true)
+          : await load(target, identity);
+      assertSelected();
+      respond(true, result, undefined);
+    } catch (error) {
+      const { message, ...details } =
+        error instanceof GitHubIdentityError
+          ? { message: error.message, retryable: error.reason !== "unavailable" }
+          : gitHubPublicApi.formatControlUiGitHubPreviewError(error);
+      respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, message, details));
+    }
+  };
+}
+
 type SessionPreviewSource = {
   sessionKey: string;
   title?: string;
@@ -292,45 +339,16 @@ export function createControlUiHandlers(
       const preview = await loadControlUiLinkPreview(url, isEnabled);
       respond(true, !signal?.aborted && isEnabled() ? preview : {}, undefined);
     },
-    "controlUi.githubPreview": async (options) => {
-      const { params, respond, context } = options;
-      const target = gitHubPublicApi.parseControlUiGitHubPreviewTarget(params);
-      if (!target || (params.refresh !== undefined && typeof params.refresh !== "boolean")) {
-        respond(
-          false,
-          undefined,
-          errorShape(ErrorCodes.INVALID_REQUEST, "invalid controlUi.githubPreview params"),
-        );
-        return;
-      }
-      const resolved = resolveAgentIdOrRespondError({
-        rawAgentId: params.agentId,
-        respond,
-        cfg: context.getRuntimeConfig(),
-        normalize: normalizeOptionalString,
-      });
-      if (!resolved) {
-        return;
-      }
-      try {
-        const { identity, assertSelected } = await prepareControlUiGitHubIdentity(
-          options,
-          resolved.agentId,
-        );
-        const preview =
-          params.refresh === true
-            ? await loadGitHubPreview(target, identity, undefined, true)
-            : await loadGitHubPreview(target, identity);
-        assertSelected();
-        respond(true, preview, undefined);
-      } catch (error) {
-        const { message, ...details } =
-          error instanceof GitHubIdentityError
-            ? { message: error.message, retryable: error.reason !== "unavailable" }
-            : gitHubPublicApi.formatControlUiGitHubPreviewError(error);
-        respond(false, undefined, errorShape(ErrorCodes.UNAVAILABLE, message, details));
-      }
-    },
+    "controlUi.githubPreview": createGitHubReadHandler(
+      "controlUi.githubPreview",
+      (params) => gitHubPublicApi.parseControlUiGitHubPreviewTarget(params),
+      loadGitHubPreview,
+    ),
+    "controlUi.githubDetail": createGitHubReadHandler(
+      "controlUi.githubDetail",
+      (params) => gitHubPublicApi.parseGitHubTarget(params),
+      (...args) => gitHubPublicApi.loadGitHubDetail(...args),
+    ),
     "controlUi.sessionPreview": async ({ params, client, context, respond }) => {
       const sessionKey = parseSessionPreviewKey(params);
       if (!sessionKey) {

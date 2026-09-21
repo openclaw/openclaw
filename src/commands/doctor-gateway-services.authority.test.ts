@@ -6,7 +6,7 @@ import { PassThrough } from "node:stream";
 import { isDeepStrictEqual } from "node:util";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as servicePlan from "../cli/update-cli/update-command-service-plan.js";
-import type { OpenClawConfig } from "../config/config.js";
+import { replaceConfigFile, type OpenClawConfig } from "../config/config.js";
 import { isDefaultInstallIdentity } from "../config/paths.js";
 import * as gatewayService from "../daemon/service.js";
 import {
@@ -415,7 +415,16 @@ describe.skipIf(process.platform === "win32")("Doctor native repair authority or
             authorityFailure = error;
           }
         } else {
-          result = await maybeRepairGatewayServiceConfig(cfg, "local", runtime, prompter);
+          result = await maybeRepairGatewayServiceConfig(cfg, "local", runtime, prompter, {
+            async writeConfig(nextConfig) {
+              const committed = await replaceConfigFile({
+                nextConfig,
+                afterWrite: { mode: "auto" },
+                writeOptions: { auditOrigin: "doctor" },
+              });
+              return committed.nextConfig;
+            },
+          });
         }
         const configBytes = await fs.readFile(configPath, "utf8");
         const persisted: OpenClawConfig = JSON.parse(configBytes);

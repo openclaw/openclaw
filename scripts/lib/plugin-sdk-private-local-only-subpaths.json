@@ -210,5 +210,6 @@
   "video-generation-runtime",
   "web-content-extractor",
   "webhook-targets",
-  "windows-spawn"
+  "windows-spawn",
+  "worker-task-server"
 ]

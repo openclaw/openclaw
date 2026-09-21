@@ -23,7 +23,10 @@ vi.mock("../../infra/clawhub-plugin-catalog.js", () => ({
 vi.mock("../../plugins/management-service.js", () => ({ listManagedPlugins: registry.local }));
 vi.mock("../../infra/clawhub-skills.js", () => ({ searchClawHubSkills: registry.skills }));
 vi.mock("../../skills/discovery/status.js", () => ({
-  buildWorkspaceSkillStatus: registry.skillStatus,
+  prepareWorkspaceSkillStatus: async (...args: unknown[]) => ({
+    report: registry.skillStatus(...args),
+    files: [],
+  }),
 }));
 
 const remotePlugin = {

@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { expect, it } from "vitest";
 import type { UsersListResult } from "../../../packages/gateway-protocol/src/schema/users.js";
+import { createControlUiMockSameOriginGatewayScript } from "../test-helpers/control-ui-e2e.ts";
 import {
   captureUiProof,
   chatSessionListResponse,
@@ -40,6 +41,79 @@ const directory: UsersListResult = {
 };
 
 suite.define(() => {
+  it.each([
+    { width: 1280, colorScheme: "light" as const, scale: 1 },
+    { width: 390, colorScheme: "dark" as const, scale: 1.5 },
+  ])("keeps mention avatars aligned across image outcomes at $width px", async (viewport) => {
+    await suite.withPage(
+      { viewport: { width: viewport.width, height: 900 }, colorScheme: viewport.colorScheme },
+      async ({ page }) => {
+        const response = Promise.withResolvers<void>();
+        await page.addInitScript({ content: createControlUiMockSameOriginGatewayScript() });
+        await page.route("**/api/users/**/avatar*", async (route) => {
+          await response.promise;
+          await route.fulfill(
+            route.request().url().includes("profile-photo")
+              ? { contentType: "image/png", body: readFileSync("ui/public/apple-touch-icon.png") }
+              : { status: 404 },
+          );
+        });
+        await installMockGateway(page, {
+          historyMessages: [
+            {
+              ...historyMessages[0],
+              __openclaw: {
+                id: "mention-image-outcomes",
+                humanMentions: [
+                  { profileId: "profile-photo", start: 0, end: label.length },
+                  { profileId: "profile-missing", start: label.length + 4, end: text.length },
+                ],
+              },
+            },
+          ],
+        });
+        try {
+          await page.goto(suite.server.baseUrl + "chat");
+          const references = page.locator(".markdown-person-reference");
+          await expect.poll(() => references.count()).toBe(2);
+          await page.evaluate(async (scale) => {
+            document.documentElement.style.setProperty("--control-ui-text-scale", String(scale));
+            await document.fonts.ready;
+          }, viewport.scale);
+          const geometry = () =>
+            references.evaluateAll((elements) =>
+              elements.map((element) => {
+                const avatar = element.querySelector(".markdown-person-reference__avatar")!;
+                const name = [...element.childNodes].find(
+                  (node) => node.nodeType === Node.TEXT_NODE && node.textContent?.trim(),
+                )!;
+                const range = document.createRange();
+                range.selectNodeContents(name);
+                const textBox = range.getClientRects()[0];
+                if (!textBox) {
+                  throw new Error("Expected a rendered mention label");
+                }
+                const box = avatar.getBoundingClientRect();
+                return { offset: box.top - textBox.top, width: box.width, height: box.height };
+              }),
+            );
+          await expect
+            .poll(() => references.locator('[data-avatar-state="pending"]').count())
+            .toBe(2);
+          const pending = await geometry();
+          response.resolve();
+          await references.locator('[data-avatar-state="loaded"]').waitFor();
+          await references.locator('[data-avatar-state="failed"]').waitFor();
+          // Images and generated initials must not change the inline box's alignment.
+          expect(await geometry()).toEqual(pending);
+          expect(await references.allTextContents()).toEqual([label, label]);
+        } finally {
+          response.resolve();
+        }
+      },
+    );
+  });
+
   it("shares live person details and visible sessions with the sidebar", async () => {
     await suite.withPage(
       { viewport: { width: 1280, height: 900 }, colorScheme: "light" },

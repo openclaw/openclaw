@@ -1,21 +1,9 @@
 // Check Openclaw Package Tarball tests cover check openclaw package tarball script behavior.
 import { spawnSync } from "node:child_process";
-import {
-  chmodSync,
-  existsSync,
-  mkdtempSync,
-  mkdirSync,
-  readFileSync,
-  readdirSync,
-  rmSync,
-  statSync,
-  writeFileSync,
-} from "node:fs";
-import { tmpdir } from "node:os";
-import { basename, dirname, join, resolve } from "node:path";
+import { chmodSync, existsSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { gzipSync } from "node:zlib";
-import { gte as semverGte, valid as validSemver } from "semver";
 import { Header, type HeaderData, Pax } from "tar";
 import { afterEach, describe, expect, it } from "vitest";
 import { LOCAL_BUILD_METADATA_DIST_PATHS } from "../../scripts/lib/local-build-metadata-paths.mts";
@@ -25,13 +13,16 @@ import {
   PACKAGE_LIFECYCLE_PENDING_RELATIVE_PATH,
 } from "../../scripts/lib/package-lifecycle-marker.mjs";
 import { WORKSPACE_TEMPLATE_PACK_PATHS } from "../../scripts/lib/workspace-bootstrap-smoke.mts";
-import { resolvePnpmRunner } from "../../scripts/pnpm-runner.mts";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
+import {
+  CODE_MODE_WORKER_PATH,
+  FIRST_CODE_MODE_WORKER_VERSION,
+  listFilesRecursively,
+  withTarball,
+} from "./package-tarball-fixture.js";
 
 const CHECK_SCRIPT = "scripts/check-openclaw-package-tarball.mts";
 const PUBLIC_CHECK_SCRIPT = "scripts/check-openclaw-package-tarball.mjs";
-const CODE_MODE_WORKER_PATH = "dist/agents/code-mode.worker.js";
-const FIRST_CODE_MODE_WORKER_VERSION = "2026.5.14-beta.2";
 const FLAT_PLUGIN_SDK_DECLARATION = "dist/plugin-sdk/provider-entry.d.ts";
 const DEEP_PLUGIN_SDK_DECLARATION = "dist/plugin-sdk/src/plugin-sdk/provider-entry.d.ts";
 const AI_RUNTIME_PACKAGE_JSON = JSON.stringify({
@@ -55,27 +46,6 @@ const LEGACY_AI_RUNTIME_PACKAGE_JSON = JSON.stringify({
   },
 });
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-
-function chmodTreeWorldReadable(dir: string) {
-  chmodSync(dir, 0o755);
-  for (const entry of readdirSync(dir, { withFileTypes: true })) {
-    const entryPath = join(dir, entry.name);
-    if (entry.isDirectory()) {
-      chmodTreeWorldReadable(entryPath);
-    } else {
-      chmodSync(entryPath, 0o644);
-    }
-  }
-}
-
-function listFilesRecursively(dir: string, prefix = ""): string[] {
-  return readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
-    const relativePath = join(prefix, entry.name);
-    return entry.isDirectory()
-      ? listFilesRecursively(join(dir, entry.name), relativePath)
-      : [relativePath];
-  });
-}
 
 function writeCraftedTarball(
   tarball: string,
@@ -123,172 +93,6 @@ function checkCraftedTarball(
   expect(result.status).toBe(1);
   for (const expectedError of Array.isArray(expectedErrors) ? expectedErrors : [expectedErrors]) {
     expect(result.stderr).toContain(expectedError);
-  }
-}
-
-function withTarball(
-  inventory: string[],
-  files: Record<string, string>,
-  testBody: (tarball: string, root: string, packageRoot: string) => void,
-  version = "2026.7.2",
-  options: {
-    includeCodeModeWorker?: boolean;
-    includeCodeModeWorkerInInventory?: boolean;
-    includeControlUi?: boolean;
-    emptyDirectories?: string[];
-    filesOnlyArchive?: boolean;
-    includeLifecycleMarker?: boolean;
-    includeShrinkwrap?: boolean;
-    includeWorkspaceTemplates?: boolean;
-    inventoryBody?: string | null;
-    packageJson?: Record<string, unknown>;
-    pnpmPack?: boolean;
-    postinstall?: boolean;
-  } = {},
-) {
-  const root = mkdtempSync(join(tmpdir(), "openclaw-package-tarball-test-"));
-  try {
-    const validVersion = validSemver(version);
-    const includeCodeModeWorker =
-      options.includeCodeModeWorker ??
-      (validVersion !== null && semverGte(validVersion, FIRST_CODE_MODE_WORKER_VERSION));
-    const includeCodeModeWorkerInInventory =
-      options.includeCodeModeWorkerInInventory ?? includeCodeModeWorker;
-    const controlUiFiles =
-      options.includeControlUi === false
-        ? {}
-        : {
-            "dist/control-ui/index.html": "<!doctype html><openclaw-app></openclaw-app>",
-            "dist/control-ui/assets/app.js": "console.log('ok');\n",
-          };
-    const declaredFiles = Array.isArray(options.packageJson?.files)
-      ? options.packageJson.files
-      : [];
-    const fixturePackageFiles = Array.isArray(options.packageJson?.files)
-      ? [
-          ...(options.includeWorkspaceTemplates === false ? [] : ["docs/reference/templates/**"]),
-          ...(options.includeLifecycleMarker === false
-            ? []
-            : [
-                PACKAGE_LIFECYCLE_PENDING_RELATIVE_PATH,
-                PACKAGE_LIFECYCLE_MARKER_CONTRACT_RELATIVE_PATH,
-              ]),
-          ...declaredFiles,
-        ]
-      : undefined;
-    const packageInventory = [
-      ...new Set([
-        ...inventory,
-        ...(options.postinstall ? Object.keys(controlUiFiles) : []),
-        ...(includeCodeModeWorkerInInventory ? [CODE_MODE_WORKER_PATH] : []),
-      ]),
-    ];
-    const packageRoot = join(root, "package");
-    mkdirSync(join(packageRoot, "dist"), { recursive: true });
-    writeFileSync(
-      join(packageRoot, "package.json"),
-      JSON.stringify({
-        name: "openclaw",
-        version,
-        ...(options.postinstall
-          ? { scripts: { postinstall: "node scripts/postinstall-bundled-plugins.mjs" } }
-          : {}),
-        ...options.packageJson,
-        ...(fixturePackageFiles ? { files: fixturePackageFiles } : {}),
-      }),
-    );
-    if (options.inventoryBody !== null) {
-      writeFileSync(
-        join(packageRoot, "dist", "postinstall-inventory.json"),
-        options.inventoryBody ?? JSON.stringify(packageInventory),
-      );
-    }
-    const workspaceTemplates =
-      options.includeWorkspaceTemplates === false
-        ? {}
-        : Object.fromEntries(
-            WORKSPACE_TEMPLATE_PACK_PATHS.map((relativePath) => [
-              relativePath,
-              `# ${relativePath}\n`,
-            ]),
-          );
-    const lifecycleMarkerFile =
-      options.includeLifecycleMarker === false
-        ? {}
-        : {
-            [PACKAGE_LIFECYCLE_PENDING_RELATIVE_PATH]: "pending\n",
-            [PACKAGE_LIFECYCLE_MARKER_CONTRACT_RELATIVE_PATH]: "export {};\n",
-          };
-    const shrinkwrapFile =
-      (options.includeShrinkwrap ?? declaredFiles.includes("npm-shrinkwrap.json"))
-        ? {
-            "npm-shrinkwrap.json": `${JSON.stringify({
-              name: "openclaw",
-              version,
-              lockfileVersion: 3,
-              packages: { "": { name: "openclaw", version } },
-            })}\n`,
-          }
-        : {};
-    const tarFiles = {
-      ...workspaceTemplates,
-      ...controlUiFiles,
-      ...lifecycleMarkerFile,
-      ...shrinkwrapFile,
-      ...(includeCodeModeWorker ? { [CODE_MODE_WORKER_PATH]: "export {};\n" } : {}),
-      ...files,
-    };
-    for (const [relativePath, body] of Object.entries(tarFiles)) {
-      const filePath = join(packageRoot, relativePath);
-      mkdirSync(dirname(filePath), { recursive: true });
-      writeFileSync(filePath, body);
-    }
-    for (const relativePath of options.emptyDirectories ?? []) {
-      mkdirSync(join(packageRoot, relativePath), { recursive: true });
-    }
-    // The tarball mode gate requires world-readable entries; pin the fixture
-    // against restrictive host umasks the way the packer normalizes artifacts.
-    chmodTreeWorldReadable(packageRoot);
-
-    const tarball = options.pnpmPack
-      ? join(root, `openclaw-${version}.tgz`)
-      : join(root, process.platform === "win32" ? "openclaw.tgz" : "openclaw:local.tgz");
-    const pnpm = options.pnpmPack
-      ? resolvePnpmRunner({
-          cwd: packageRoot,
-          pnpmArgs: ["pack", "--config.ignore-scripts=true", "--pack-destination", root],
-        })
-      : undefined;
-    const pack = pnpm
-      ? spawnSync(pnpm.command, pnpm.args, {
-          cwd: packageRoot,
-          encoding: "utf8",
-          env: process.env,
-          shell: pnpm.shell,
-          timeout: 30_000,
-          windowsVerbatimArguments: pnpm.windowsVerbatimArguments,
-        })
-      : spawnSync(
-          "tar",
-          [
-            "-czf",
-            `./${basename(tarball)}`,
-            ...(options.filesOnlyArchive
-              ? listFilesRecursively(packageRoot).map(
-                  (relativePath) => `package/${relativePath.replaceAll("\\", "/")}`,
-                )
-              : ["package"]),
-          ],
-          {
-            cwd: root,
-            encoding: "utf8",
-            env: { ...process.env, COPYFILE_DISABLE: "1" },
-          },
-        );
-    expect(pack.status, pack.stderr || pack.error?.message).toBe(0);
-    testBody(tarball, root, packageRoot);
-  } finally {
-    rmSync(root, { recursive: true, force: true });
   }
 }
 
@@ -401,7 +205,7 @@ describe("check-openclaw-package-tarball", () => {
         expect(result.stderr).toMatch(/npm pack inventory \(npm \d+\.\d+\.\d+/u);
       },
       "2026.9.4",
-      { pnpmPack: true },
+      { pack: "pnpm" },
     );
   });
 
@@ -1058,7 +862,7 @@ syncBuiltinESMExports();
         "dist/managed-handoff-runtime.mjs":
           'new URL("./node_modules/koffi/indirect.cjs", import.meta.url);\n',
       },
-      options: { pnpmPack: true, postinstall: true },
+      options: { pack: "pnpm", postinstall: true },
       status: 0,
       successText: true,
     },

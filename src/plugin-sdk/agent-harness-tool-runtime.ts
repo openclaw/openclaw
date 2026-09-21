@@ -1,6 +1,7 @@
 // Keep Tool Search and Code Mode dependencies out of the lightweight harness lifecycle SDK.
 import { createAgentHarnessToolSurfaceRuntimeCore } from "../agents/harness/tool-surface-bridge.js";
 
+export { runWithAsyncWorkResources } from "../shared/async-work-resources.js";
 export {
   normalizeAcceptedSessionSpawnResult,
   type AcceptedSessionSpawn,

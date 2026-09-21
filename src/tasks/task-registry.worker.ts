@@ -23,6 +23,7 @@ import {
 } from "./task-flow-managed-run-task.kernel.js";
 import { assertControllerId, normalizeRestoredFlowRecord } from "./task-flow-registry.records.js";
 import {
+  bindTaskFlowExecutionInDatabase,
   bindTaskFlowRecord,
   listTaskFlowRecordsForOwnerReadInDatabase,
   readTaskFlowRecord,
@@ -42,6 +43,7 @@ import {
   syncTaskMirroredFlowInDatabase,
 } from "./task-registry-restore.worker.js";
 import {
+  bindTaskRunExecutionInDatabase,
   findTaskRecordByRunIdForViewInDatabase,
   listTaskRecordsForFlowReadInDatabase,
   listTaskRecordsForOwnerReadInDatabase,
@@ -65,6 +67,27 @@ export function executeTaskRegistryCommand(
   options: OpenClawStateDatabaseOptions & { path: string },
   open: () => OpenClawStateDatabase,
 ): TaskRegistryWorkerOperations[keyof TaskRegistryWorkerOperations]["output"] {
+  if (command.type === "tasks.bindExecution" || command.type === "flows.bindExecution") {
+    const database = open();
+    return runOpenClawStateWriteTransaction(
+      ({ db }) => {
+        requestSqliteWorkerOperationAdmission({ stage: "transaction", facts: undefined });
+        const result =
+          command.type === "tasks.bindExecution"
+            ? bindTaskRunExecutionInDatabase(db, command.input.taskId, command.input.binding)
+            : bindTaskFlowExecutionInDatabase(db, command.input.flowId, command.input.binding);
+        requestSqliteWorkerOperationAdmission({ stage: "commit", facts: undefined });
+        return result;
+      },
+      { ...options, database },
+      {
+        operationLabel:
+          command.type === "tasks.bindExecution"
+            ? "task.run.execution-binding"
+            : "task.flow.execution-binding",
+      },
+    );
+  }
   if (command.type === "tasks.observeAgentEvent") {
     return observeTaskAgentEventInDatabase(open(), command.input);
   }

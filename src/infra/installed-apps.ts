@@ -1,9 +1,8 @@
 import { execFile } from "node:child_process";
-import type { Dirent } from "node:fs";
-import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
+import { walkDirectory } from "@openclaw/fs-safe/walk";
 import pLimit from "p-limit";
 
 const execFileAsync = promisify(execFile);
@@ -67,37 +66,18 @@ async function listAppPaths(
   root: string,
   system: boolean,
 ): Promise<Array<{ path: string; system: boolean }>> {
-  let entries: Dirent[];
-  try {
-    entries = await fs.readdir(root, { withFileTypes: true });
-  } catch {
-    return [];
-  }
-  const results = await Promise.all(
-    entries.map(async (entry) => {
-      if (!entry.name.toLowerCase().endsWith(".app")) {
-        return [];
-      }
-      // Dirent.isDirectory() is false for symlinked bundles; /Applications
-      // commonly holds symlinks (brew cask, hand-linked apps) — stat through.
-      let isDirectory = entry.isDirectory();
-      if (!isDirectory && entry.isSymbolicLink()) {
-        isDirectory = await fs
-          .stat(path.join(root, entry.name))
-          .then((stats) => stats.isDirectory())
-          .catch(() => false);
-      }
-      if (!isDirectory) {
-        return [];
+  const { entries } = await walkDirectory(root, {
+    maxDepth: 1,
+    symlinks: "follow",
+    include: (entry) => {
+      if (entry.kind !== "directory" || !entry.name.toLowerCase().endsWith(".app")) {
+        return false;
       }
       const label = entry.name.slice(0, -4);
-      if (isBackupishBundle(label) || (system && !SYSTEM_APP_NAMES.has(label))) {
-        return [];
-      }
-      return [{ path: path.join(root, entry.name), system }];
-    }),
-  );
-  return results.flat();
+      return !isBackupishBundle(label) && (!system || SYSTEM_APP_NAMES.has(label));
+    },
+  });
+  return entries.map((entry) => ({ path: entry.path, system }));
 }
 
 async function readBundleIdWithPlutil(appPath: string): Promise<string | undefined> {

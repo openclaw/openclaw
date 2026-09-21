@@ -1,4 +1,5 @@
 import type { ConnectParams } from "../../../packages/gateway-protocol/src/schema/frames.js";
+import type { AdmittedRunOperatorAuthority } from "../../agents/admitted-run-context.js";
 import type { RuntimeContextFragment } from "../../agents/internal-runtime-context.js";
 import type { TranscriptSenderIdentity } from "../../chat/sender-identity.js";
 import type { PluginSubagentRequesterContext } from "../../plugins/runtime/subagent-requester-context.js";
@@ -76,6 +77,8 @@ export type GatewayClient = {
     syntheticClient?: true;
     /** Host-owned role authority retained separately from an autonomous run principal. */
     operatorRoleActor?: GatewayOperatorRoleActor;
+    /** Original source restriction carried only by trusted in-process run admission. */
+    operatorRunAuthority?: AdmittedRunOperatorAuthority;
     /** Overrides persisted sender attribution without changing the authorizing client identity. */
     senderAttribution?: { id: string; name?: string; identity?: TranscriptSenderIdentity };
     /** Trusted session creation provenance; never accepted from Gateway wire params. */

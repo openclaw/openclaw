@@ -101,6 +101,37 @@ it.each([false, true].flatMap((attachment) => [false, true].map((peer) => ({ att
   },
 );
 
+it.each(
+  (["steer", "followup", "collect", undefined] as const).flatMap((queueMode) =>
+    ["started", "in_flight"].map((status) => ({ queueMode, status })),
+  ),
+)("keeps the active reply on a $queueMode $status custody ACK", async ({ queueMode, status }) => {
+  const acknowledgement = createDeferred<{ runId: string; status: string }>();
+  const host = makeChatHost({
+    chatMessage: "A follow-up while another participant's reply is streaming",
+    chatRunId: "active-reply",
+    chatStream: "Already visible response text",
+    chatStreamStartedAt: 100,
+    chatStreamSegments: [{ text: "Earlier live commentary", ts: 90, itemId: "commentary" }],
+    chatRunStartup: { state: "activity", runId: "active-reply" },
+    requestHandlers: { "chat.send": () => acknowledgement.promise },
+  });
+  const sending = handleSendChat(host, undefined, {
+    followUpMode: queueMode,
+  });
+  await vi.waitFor(() => expect(host.request).toHaveBeenCalledWith("chat.send", expect.anything()));
+  expect(host.chatStream).toBe("Already visible response text");
+  acknowledgement.resolve({ runId: "accepted-input", status });
+  await sending;
+  expect(host.chatRunId).toBe("active-reply");
+  expect(host.chatStream).toBe("Already visible response text");
+  expect(host.chatStreamStartedAt).toBe(100);
+  expect(host.chatStreamSegments).toEqual([
+    { text: "Earlier live commentary", ts: 90, itemId: "commentary" },
+  ]);
+  expect(host.chatRunStartup).toEqual({ state: "activity", runId: "active-reply" });
+});
+
 it.each([false, true])(
   "retries only the confirmed first-message version after history settles (edited: %s)",
   async (edited) => {

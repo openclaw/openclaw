@@ -97,7 +97,7 @@ function approvalsCommand() {
 
 export function seedLegacyOperatorState() {
   const workspace = requiredEnv("OPENCLAW_TEST_WORKSPACE_DIR");
-  const mockPort = readTcpPortEnv("OPENCLAW_UPGRADE_SURVIVOR_MOCK_PORT", 44081);
+  const mockPort = readTcpPortEnv("OPENCLAW_UPGRADE_SURVIVOR_MOCK_PORT");
   const set = (key, value) =>
     cli(
       ["config", "set", key, JSON.stringify(value), "--strict-json"],

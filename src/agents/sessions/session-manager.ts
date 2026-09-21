@@ -14,6 +14,7 @@ import { prepareTranscriptRewriteSync } from "../../config/sessions/session-acce
 import {
   readSessionTranscriptContextMessages,
   readSessionTranscriptModelContext,
+  type SessionModelContextLimits,
   validateSessionTranscriptContextAdmission,
   validateSessionTranscriptContextAnchor,
   validateSessionTranscriptContextVersion,
@@ -245,7 +246,7 @@ export class SessionManager extends SessionManagerBranching {
       cwd?: string;
       admission?: UserTurnTranscriptAdmissionReceipt;
       through?: TranscriptEntryAnchor;
-      limits?: SessionManagerBoundedContextLimits;
+      limits?: SessionModelContextLimits;
     } = {},
   ): SessionManager {
     const context = withSessionContextAdmission(target, options.admission, () =>
@@ -262,7 +263,7 @@ export class SessionManager extends SessionManagerBranching {
       admission?: UserTurnTranscriptAdmissionReceipt;
       signal?: AbortSignal;
       through?: TranscriptEntryAnchor;
-      limits?: SessionManagerBoundedContextLimits;
+      limits?: SessionModelContextLimits;
     } = {},
   ): Promise<SessionManager> {
     const readTarget = { ...target };

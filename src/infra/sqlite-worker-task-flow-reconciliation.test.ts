@@ -711,14 +711,7 @@ describe("registered task flow reconciliation", () => {
         if (intervening === "lookup") {
           measureLookup("pending", "lookup-run", "lookup-0-16");
           measureLookup("pending-no-eligible", "ineligible-run", "ineligible");
-          const { db } = openOpenClawStateDatabase();
-          executeSqliteQuerySync(
-            db,
-            getNodeSqliteKysely<DB>(db)
-              .updateTable("flow_runs")
-              .set({ sync_mode: "managed" })
-              .where("flow_id", "=", "lookup-0-16"),
-          );
+          expect(deleteTaskFlowRecordById("lookup-0-16")).toBe(true);
           measureLookup("pending-fresh", "lookup-run", "lookup-0-15");
         } else if (intervening === "update") {
           expect(
@@ -777,7 +770,7 @@ describe("registered task flow reconciliation", () => {
           expect(legacy.get(created.flowId)).toEqual(settled);
           console.log("Run lookup flow snapshots", JSON.stringify(lookupReads));
           expect(lookupReads.map(({ count }) => count)).toEqual([0, 0, 1, 0, 1, 0, 1]);
-          expect(lookupReads.map(({ rows }) => rows)).toEqual([0, 0, 35, 0, 35, 0, 35]);
+          expect(lookupReads.map(({ rows }) => rows)).toEqual([0, 0, 1, 0, 1, 0, 34]);
           expect(
             lookupReads.filter(({ count }) => count > 0).every(({ textBytes }) => textBytes > 0),
           ).toBe(true);

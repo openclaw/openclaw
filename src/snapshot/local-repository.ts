@@ -1041,12 +1041,7 @@ async function withPrivateSqliteStagingDirectory<T>(options: {
       cause: cleanupOutcome.error,
     });
   }
-  requireDirectorySync(
-    // fs-safe 0.16 guards bigint receipt inputs but declares only numeric Stats.
-    // @ts-expect-error Remove after adopting the declaration fix in openclaw/fs-safe#495.
-    await syncDirectory(options.rootReceipt),
-    "Private SQLite staging root",
-  );
+  requireDirectorySync(await syncDirectory(options.rootReceipt), "Private SQLite staging root");
   if (!outcome.ok) {
     throw outcome.error;
   }

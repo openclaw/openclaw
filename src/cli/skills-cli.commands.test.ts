@@ -105,11 +105,9 @@ const mocks = vi.hoisted(() => {
       throw new Error(`__exit__:${code}`);
     }),
   };
-  const buildWorkspaceSkillStatusMock = vi.fn((workspaceDir: string, options?: unknown) => {
-    void workspaceDir;
-    void options;
-    return skillStatusReportFixture;
-  });
+  const buildWorkspaceSkillStatusMock = vi.fn(
+    (_workspaceDir: string, _options?: unknown) => skillStatusReportFixture,
+  );
   return {
     callGatewayMock: vi.fn(),
     loadConfigMock: vi.fn((_options?: unknown) => ({})),
@@ -306,8 +304,10 @@ vi.mock("../skills/lifecycle/source-install.js", () => ({
 
 vi.mock("../skills/discovery/status.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../skills/discovery/status.js")>()),
-  buildWorkspaceSkillStatus: (workspaceDir: string, options?: unknown) =>
-    mocks.buildWorkspaceSkillStatusMock(workspaceDir, options),
+  prepareWorkspaceSkillStatus: async (workspaceDir: string, options?: unknown) => ({
+    report: mocks.buildWorkspaceSkillStatusMock(workspaceDir, options),
+    files: [],
+  }),
 }));
 
 describe("skills cli commands", () => {

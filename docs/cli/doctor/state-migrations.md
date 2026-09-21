@@ -81,3 +81,15 @@ After explicit repair (`--fix`, `--repair`, or `--yes`), Doctor verifies runtime
 Doctor also discovers retired setup state and interrupted migration claims in every resolved agent workspace, active sandbox workspace, and explicitly configured `agents.defaults.workspace` root. That shared root is included even when an explicit multi-agent roster uses only its subdirectories. Doctor imports both `<workspace>/openclaw-workspace-state.json` and `<workspace>/.openclaw/workspace-state.json` through the existing migration; it does not assign the root to an agent or move persona and memory files.
 
 Repair exits nonzero while retained legacy state still blocks agent turns, even if its data already reached SQLite. Gateway startup and live config candidates check readiness only for the workspaces they would use, not an unused default root. An unready live candidate is rejected and the last-good runtime stays active. Stop OpenClaw processes, save the intended workspace path if the live write was rejected before persistence, and keep the retained files in place. Run `openclaw doctor --fix` before restarting. Readiness checks never import or delete legacy state.
+
+## Pending plugin migrations
+
+When Doctor runs inside an update or repair, let that command finish before
+following recovery advice from an intermediate plugin warning. The updater may
+complete package convergence and run Doctor again before it exits.
+
+If the installed plugin still has not reported migration completion, run
+`openclaw doctor --fix`. If that cannot complete the migration, report the
+remaining warning to the plugin maintainer. Repeating a package update alone
+does not prove that the plugin migrated its retained state. Keep the retained
+state and config inputs until the migration owner reports completion.

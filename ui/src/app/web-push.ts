@@ -1,4 +1,5 @@
 // Application-owned browser push subscription lifecycle.
+import { isIosBrowserPlatform } from "../lib/browser-platform.ts";
 import { formatUiError } from "../lib/format-error.ts";
 import type { ConnectionBootstrapCoordinator } from "./connection-bootstrap.ts";
 import type { ApplicationGateway } from "./gateway.ts";
@@ -31,9 +32,7 @@ export function createWebPushCapability(
   options: { connectionBootstrap?: ConnectionBootstrapCoordinator } = {},
 ): WebPushCapability {
   const nav = globalThis.navigator;
-  const ios =
-    /iPad|iPhone|iPod/u.test(nav.userAgent) ||
-    (nav.platform === "MacIntel" && nav.maxTouchPoints > 1);
+  const ios = isIosBrowserPlatform();
   // SAFETY: iOS Safari's non-standard standalone flag is optional and read-only.
   const installed = !ios || (nav as Navigator & { standalone?: boolean }).standalone === true;
   const supported =

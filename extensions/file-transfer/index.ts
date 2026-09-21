@@ -120,6 +120,46 @@ export default definePluginEntry({
   description: "Fetch, list, and write files on paired nodes via dedicated node commands.",
   nodeHostCommands: fileTransferNodeHostCommands,
   register(api) {
+    api.registerNodeHostCommand({
+      command: "workspace.memory",
+      cap: "file",
+      dangerous: true,
+      duplex: true,
+      handle: async (...args) => {
+        const { createWorkspaceMemoryCommand } =
+          await import("./src/node-host/workspace-memory.js");
+        return await createWorkspaceMemoryCommand(api).handle(...args);
+      },
+    });
+    api.registerNodeInvokePolicy({
+      commands: ["workspace.memory"],
+      dangerous: true,
+      async handle(ctx) {
+        const { createWorkspaceMemoryPolicy } =
+          await import("./src/shared/workspace-memory-policy.js");
+        return await createWorkspaceMemoryPolicy().handle(ctx);
+      },
+    });
+    api.registerNodeHostCommand({
+      command: "workspace.skills",
+      cap: "file",
+      dangerous: true,
+      duplex: true,
+      handle: async (...args) => {
+        const { createWorkspaceSkillsCommand } =
+          await import("./src/node-host/workspace-memory.js");
+        return await createWorkspaceSkillsCommand(api).handle(...args);
+      },
+    });
+    api.registerNodeInvokePolicy({
+      commands: ["workspace.skills"],
+      dangerous: true,
+      async handle(ctx) {
+        const { createWorkspaceSkillsPolicy } =
+          await import("./src/shared/workspace-memory-policy.js");
+        return await createWorkspaceSkillsPolicy().handle(ctx);
+      },
+    });
     registerNodeWorkspaces(api);
     api.registerCli(
       async ({ program }) => {

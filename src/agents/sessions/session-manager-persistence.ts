@@ -13,6 +13,7 @@ import {
   toDatabaseOptions,
 } from "../../config/sessions/session-accessor.sqlite-scope.js";
 import { requireTranscriptEventAppendSnapshot } from "../../config/sessions/session-accessor.sqlite-transcript-append-result.js";
+import type { PreparedTranscriptMessageAppend } from "../../config/sessions/session-accessor.sqlite-transcript-message-append.js";
 import {
   appendTranscriptEventSnapshotSync,
   appendTranscriptMessageSnapshotSync,
@@ -28,6 +29,7 @@ import {
   type InitialSessionTranscriptWriter,
 } from "../../config/sessions/transcript-write-context.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
+import type { AgentMessage } from "../runtime/index.js";
 import { copyCodeModeSourceAppendOptions } from "../transcript-code-mode-source.js";
 import { getSessionCompactionPersistence } from "./session-compaction-persistence.js";
 import { isIndexedSessionEntry, parseOpaqueLeafEntry } from "./session-manager-codec.js";
@@ -430,9 +432,13 @@ export class SessionManagerPersistence extends SessionManagerCore {
     return removedEntries.length;
   }
 
-  protected persistRecord(entry: unknown, options?: PersistRecordOptions): PersistRecordResult {
+  protected persistRecord(
+    entry: unknown,
+    options?: PersistRecordOptions,
+    preparedMessage?: PreparedTranscriptMessageAppend<AgentMessage>,
+  ): PersistRecordResult {
     if (this.persistenceTarget) {
-      return this.persistSqliteRecord(entry, options);
+      return this.persistSqliteRecord(entry, options, preparedMessage);
     }
     if (getSessionCompactionPersistence(this)) {
       throw new Error("Compaction boundary validation failed");
@@ -444,7 +450,11 @@ export class SessionManagerPersistence extends SessionManagerCore {
     return this.persistRecord(entry, options);
   }
 
-  private persistSqliteRecord(entry: unknown, options?: PersistRecordOptions): PersistRecordResult {
+  private persistSqliteRecord(
+    entry: unknown,
+    options?: PersistRecordOptions,
+    preparedMessage?: PreparedTranscriptMessageAppend<AgentMessage>,
+  ): PersistRecordResult {
     if (!this.persistenceTarget) {
       return undefined;
     }
@@ -585,7 +595,7 @@ export class SessionManagerPersistence extends SessionManagerCore {
       ...(options?.appendIntent === "active-branch" ? { appendIntent: options.appendIntent } : {}),
     } satisfies Parameters<typeof appendTranscriptMessageSnapshotSync>[1]);
     const loadedVersion = this.transcriptVersion;
-    const outcome = appendTranscriptMessageSnapshotSync(scope, appendOptions);
+    const outcome = appendTranscriptMessageSnapshotSync(scope, appendOptions, preparedMessage);
     if (!outcome.ok) {
       throw new Error(`Session transcript message was not persisted: ${entry.id}`, {
         cause: outcome.error,

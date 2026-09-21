@@ -52,7 +52,10 @@ function resolveSkillsWatchPath(raw: string): string {
     index += 1;
   }
   try {
-    return path.join(fs.realpathSync.native(cursor), ...parts.slice(index));
+    const resolved = fs.realpathSync.native(cursor);
+    // NTFS can return a delete-pending name if removal races the prefix scan.
+    // Keep discovery on the configured path instead of watching that namespace.
+    return fs.existsSync(resolved) ? path.join(resolved, ...parts.slice(index)) : raw;
   } catch {
     return raw;
   }
@@ -190,7 +193,8 @@ export function makeSkillsWatchTarget(
   depth: number,
   previousWatchRoot?: string,
 ): { path: string; watchRoot: string; depth: number } {
-  const watchPath = toWatchRoot(resolveSkillsWatchPath(raw));
+  // Reconciliation receives an admitted path: only its observation root moves.
+  const watchPath = toWatchRoot(previousWatchRoot ? raw : resolveSkillsWatchPath(raw));
   let watchRoot = watchPath;
   while (!fs.existsSync(watchRoot)) {
     const parent = path.dirname(watchRoot);

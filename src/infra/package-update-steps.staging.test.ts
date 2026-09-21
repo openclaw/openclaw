@@ -139,7 +139,7 @@ describe("runGlobalPackageUpdateSteps staging ownership", () => {
           recovery: { serviceRestartSafe: true, version: "2.0.0" },
         });
         expect(result.steps).toContainEqual(
-          expect.objectContaining({ name: "global install swap", exitCode: 0 }),
+          expect.objectContaining({ name: "package-swap", exitCode: 0 }),
         );
         expect(await Promise.all(readPackageBytes(packageRoot))).toEqual(candidateBytes);
       });

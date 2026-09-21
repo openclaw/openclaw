@@ -23,7 +23,6 @@ import { textAssistant } from "../test-helpers/sparse-transcript.test-support.js
 import { extractStoredAssistantText } from "./chat-history-text.js";
 
 const callGatewayMock = vi.fn();
-const inProcessGatewayRequestMock = vi.fn((opts: unknown) => callGatewayMock(opts));
 const inProcessCreationMock = vi.fn(
   async (..._args: [unknown, unknown, unknown]): Promise<unknown> => ({}),
 );
@@ -51,10 +50,12 @@ vi.mock("../../gateway/call.js", async (importOriginal) => {
   };
 });
 vi.mock("./in-process-gateway.js", () => ({
-  callAgentToolGatewayRequest: (opts: unknown) => inProcessGatewayRequestMock(opts),
+  callAgentToolGatewayRequest: (opts: unknown) => callGatewayMock(opts),
   callInProcessGatewayToolWithCreation: (method: unknown, params: unknown, creation: unknown) =>
     inProcessCreationMock(method, params, creation),
   hasInProcessGatewayToolContext: () => inProcessGatewayContextAvailable,
+  getInProcessGatewayToolContext: () => undefined,
+  hasGatewayToolRoutingContext: () => false,
   runWithGatewayToolCleanupContext: <T>(run: () => T): T => run(),
 }));
 vi.mock("../../plugin-sdk/facade-runtime.js", async () => {
@@ -437,8 +438,6 @@ describe("extractStoredAssistantText sanitization", () => {
 beforeEach(() => {
   recordParticipantMock.mockClear();
   facadeRuntimeMock.sessionKeyResolvers.clear();
-  inProcessGatewayRequestMock.mockReset();
-  inProcessGatewayRequestMock.mockImplementation((opts: unknown) => callGatewayMock(opts));
   loadConfigMock.mockReset();
   loadConfigMock.mockReturnValue({
     session: { scope: "per-sender", mainKey: "main" },

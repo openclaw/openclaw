@@ -76,6 +76,7 @@ Notes:
 - The proxy command never allows persistent profile mutations (`create-profile`, `delete-profile`, `reset-profile`) regardless of `allowProfiles`; make those changes on the node directly.
 - `nodeHost.browserProxy.allowProfiles` is optional. Leave it empty for the legacy/default behavior: all configured profiles remain reachable through the proxy.
 - If you set `nodeHost.browserProxy.allowProfiles`, OpenClaw treats it as a least-privilege boundary limiting which profile names the proxy will target.
+- Requests keep their selected profile while preparing work. The node rechecks proxy and profile access before browser actions, including after startup or upload preparation.
 - Disable if you don't want it:
   - On the node: `nodeHost.browserProxy.enabled=false`
   - On the gateway: `gateway.nodes.browser.mode="off"` (also accepts `"auto"` to prefer the host and fall back to a single connected browser node, or `"manual"` to require an explicit node selection or configured pin)

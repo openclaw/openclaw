@@ -17,6 +17,7 @@ import {
   writeControlPlaneUpdateRestartSentinel,
   type ControlPlaneUpdateSentinelMetaFile,
 } from "../../infra/update-control-plane-sentinel.js";
+import { formatUpdateFailureFact } from "../../infra/update-failure-facts-format.js";
 import {
   createUpdateErrorFact,
   createUpdateFailureFact,
@@ -27,15 +28,18 @@ import { UpdateRequesterRevokedError } from "../../infra/update-requester-author
 import { UpdateRunAdmissionBusyError } from "../../infra/update-run-admission.js";
 import {
   getUpdateRun,
+  recordUpdateRunDiagnostics,
   recordUpdateRunPhase,
   recordUpdateRunStep,
 } from "../../infra/update-run-ledger.js";
 import type { UpdateRunRecord } from "../../infra/update-run-record.js";
+import { loadUpdateRecovery } from "../../infra/update-run-recovery.js";
+import { updateRunReportInputFromResult } from "../../infra/update-run-report.js";
 import { isFailedUpdateStep, updateRunStepsFromResultStep } from "../../infra/update-run-step.js";
 import type { UpdateRunResult, UpdateStepResult } from "../../infra/update-runner.js";
 import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
 import { defaultRuntime } from "../../runtime.js";
-import type { UpdateRecoveryStep } from "../../shared/update-outcome.js";
+import { isVerifiedUpdateRollback, type UpdateRecoveryStep } from "../../shared/update-outcome.js";
 import type { OpenClawSchemaVersions } from "../../state/openclaw-schema-versions.js";
 import { formatCliCommand } from "../command-format.js";
 import {
@@ -52,10 +56,53 @@ import type {
   OriginalManagedServiceRuntime,
   ManagedGatewayUpdateVerdict,
   PreManagedServiceStop,
-  UpdateRestartParams,
 } from "./update-command-service-context-types.js";
 import { GatewayServiceUpdateOwnershipError } from "./update-command-service-plan.js";
 import { resolveUpdateResultNextAction } from "./update-recovery-guidance.js";
+
+export function failUpdateCommandRun(
+  error: unknown,
+  run: NonNullable<UpdateCommandOptions["run"]>,
+): ReturnType<typeof createUpdateErrorFact> | undefined {
+  const options = { env: run.env };
+  // Recovery owns failure/outcome publication; outer unwind must not rewrite a
+  // database whose exact contents may still be needed to reconcile restoration.
+  if (loadUpdateRecovery(run.runId, options)) {
+    return undefined;
+  }
+  const active = getUpdateRun(run.runId, options);
+  if (active?.status !== "running") {
+    return undefined;
+  }
+  const step =
+    active.steps.findLast((entry) => entry.status === "in_progress")?.step ?? active.phase;
+  const fact = createUpdateErrorFact(step, error, run.env);
+  recordUpdateRunDiagnostics(
+    run.runId,
+    { failure: { step, detail: fact.message, failureFacts: [fact] } },
+    defaultRuntime.error,
+    options,
+  );
+  if (!active.verification.rollbackOutcome) {
+    recordUpdateRunDiagnostics(
+      run.runId,
+      (recorded) => ({
+        rollbackOutcome:
+          recorded.rollbackOutcome ??
+          (active.phase === "requested"
+            ? { status: "not-needed", reason: "Update admission failed before package mutation" }
+            : {
+                status: "not-attempted",
+                reason:
+                  "CLI unwind does not attempt package rollback after an unexpected exception",
+              }),
+      }),
+      defaultRuntime.error,
+      options,
+    );
+  }
+  return fact;
+}
 
 export function collectServiceInspectionFailureFacts(
   verdict: ManagedGatewayUpdateVerdict | undefined,
@@ -118,11 +165,9 @@ export function recordServiceReconciliationWarnings(
 
 export function prepareUpdateServiceResult(
   params: Pick<
-    UpdateRestartParams,
-    "result" | "root" | "preManagedServiceStop" | "shouldRestart"
-  > & {
-    coreAlreadyCurrent?: boolean;
-  },
+    FinishUpdateParams,
+    "result" | "root" | "preManagedServiceStop" | "shouldRestart" | "coreAlreadyCurrent" | "opts"
+  >,
 ): boolean {
   const verdict = params.preManagedServiceStop?.serviceUpdateVerdict;
   const serviceEnv = params.preManagedServiceStop?.serviceEnv ?? process.env;
@@ -139,6 +184,7 @@ export function prepareUpdateServiceResult(
   }
   const shouldRestart =
     params.shouldRestart &&
+    params.opts.run?.completionOwner !== "gateway-restart" &&
     (!params.coreAlreadyCurrent || params.preManagedServiceStop?.running === true);
   if (verdict?.kind === "owned" && verdict.requiresInstallRootRefresh && !shouldRestart) {
     recordServiceReconciliationWarning(
@@ -403,15 +449,6 @@ export function mergeWindowsTaskRecoveryFailure(
   };
 }
 
-/** The restored package and its running service have both passed verification. */
-export function isVerifiedUpdateRollback(result: UpdateRunResult): boolean {
-  return (
-    result.recovery?.serviceRestartSafe === true &&
-    result.recovery.packageRollbackVerified === true &&
-    result.recovery.service === "healthy"
-  );
-}
-
 export function resolveAutomaticUpdateTriage(
   result: UpdateRunResult,
   detail: string | undefined,
@@ -502,6 +539,10 @@ export async function writeControlPlaneUpdateRestartSentinelBestEffort(params: {
       params.env,
     );
   } catch (err) {
+    if (params.meta.completionOwner === "gateway-restart") {
+      // The replacement cannot finish its run from a pending sentinel.
+      throw err;
+    }
     const message = `Failed to write update.run restart sentinel: ${String(err)}`;
     if (params.jsonMode) {
       defaultRuntime.error(message);
@@ -539,14 +580,23 @@ export function recordUpdateResultNextAction(
 ) {
   const run = params.opts.run;
   const active = committed ?? (run ? getUpdateRun(run.runId, { env: run.env }) : undefined);
+  const { verification, steps } = updateRunReportInputFromResult(result, active);
+  const failedVerification = steps.findLast(
+    (step) =>
+      (step.step === "gateway verification" || step.step === "gateway recovery verification") &&
+      step.status === "failed",
+  );
   const nextAction = resolveUpdateResultNextAction({
-    result,
+    result:
+      result.verification === undefined
+        ? result
+        : { ...result, recovery: verification.recovery ?? undefined },
     restart: params.coreAlreadyCurrent ? params.opts.restart : undefined,
-    serviceRunning: active?.verification.serviceRunning,
-    runningVersion: active?.verification.runningVersion,
-    verificationFailure: active?.steps.findLast(
-      (step) => step.step === "gateway verification" && step.status === "failed",
-    )?.detail,
+    serviceRunning: verification.serviceRunning,
+    runningVersion: verification.runningVersion,
+    verificationFailure: failedVerification?.failureFacts?.length
+      ? failedVerification.failureFacts.map(formatUpdateFailureFact).join("; ")
+      : failedVerification?.detail,
     env: run?.env ?? params.ownedManagedUpdateEnv ?? process.env,
   });
   if (run && active?.status === "running" && active.origin.nextAction !== nextAction) {

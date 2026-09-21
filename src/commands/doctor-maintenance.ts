@@ -7,22 +7,18 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   ServiceInspectionError,
   findServiceOwnershipRefusal,
+  hasGatewayServiceStopUnsafeError,
 } from "../daemon/service-inspection-error.js";
 import { GatewayServiceAuthorityError } from "../daemon/service-update-authority.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { assertLegacyGatewayStoppedForMaintenance } from "../infra/gateway-lock-legacy.js";
 import { readActiveGatewayLockIdentity } from "../infra/gateway-lock.js";
 import { readGatewayOwnerLease } from "../infra/gateway-owner-lease.js";
-import {
-  acquireGatewayMaintenanceCoordinator,
-  acquireStateDatabaseCoordinator,
-} from "../infra/state-database-coordinator.js";
+import { acquireStateDatabaseCoordinator } from "../infra/state-database-coordinator.js";
 import { DoctorUnreadableStateDatabaseError } from "../infra/state-repair-message.js";
 import { UPDATE_RUN_ID_ENV } from "../infra/update-control-plane-sentinel.js";
 import { UpdateDoctorError } from "../infra/update-doctor-result.js";
 import { createUpdateFailureFact, type UpdateFailureFact } from "../infra/update-failure-facts.js";
-import { inspectUpdateRepairDriverAdmission } from "../infra/update-run-activity.js";
-import { listUpdateRuns, recordUpdateRunRepairContinuation } from "../infra/update-run-ledger.js";
 import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import { withCommandProcessScope } from "../process/exec-spawn.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -36,6 +32,9 @@ import {
   assertDoctorAgentLeaseAdmission,
   preflightExternalDoctorAgentLease,
 } from "./doctor-agent-lease-refusal.js";
+import { resolveDoctorUpdateAdmission } from "./doctor-maintenance-admission.js";
+import { acquireDoctorGatewayMaintenanceCoordinator } from "./doctor-maintenance-foreground.js";
+import { assertDoctorMaintenanceInspection } from "./doctor-maintenance-inspection.js";
 import {
   assertStaleDoctorGatewayStopped,
   doctorGatewayMaintenanceError,
@@ -51,30 +50,12 @@ import {
   shouldManageGatewayService,
 } from "./doctor-service-repair-policy.js";
 import {
+  formatUpdateDoctorServiceStopRefusal,
   recordUpdateDoctorRefusal,
   resolveUpdateDoctorGitRecovery,
 } from "./doctor-update-refusal.js";
 
-function assertDoctorMaintenanceInspection(
-  inspection: PreManagedServiceStop,
-  env: NodeJS.ProcessEnv,
-): void {
-  const kind = inspection.serviceUpdateVerdict?.kind;
-  // Unavailable inspection grants no service authority. The state coordinators
-  // and agent leases below still exclude live writers before repair.
-  if (
-    !inspection.blockMessage &&
-    (kind === "unavailable" ||
-      (inspection.inspected &&
-        (kind === "owned" || kind === "absent" || inspection.offline === true)))
-  ) {
-    return;
-  }
-  throw new Error(
-    inspection.blockMessage ??
-      `Gateway service ownership or shutdown could not be verified. Run ${formatCliCommand("openclaw gateway status --deep", env)} and stop it through its service owner before retrying.`,
-  );
-}
+type DoctorConfigWriter = (nextConfig: OpenClawConfig) => Promise<OpenClawConfig>;
 
 export async function beginDoctorMaintenance(params: {
   options: DoctorOptions;
@@ -87,7 +68,7 @@ export async function beginDoctorMaintenance(params: {
       run<T>(operation: () => T): T;
       releaseState(): Promise<void>;
       release(): Promise<void>;
-      finish(cfg: OpenClawConfig): Promise<void>;
+      finish(cfg: OpenClawConfig, writeConfig?: DoctorConfigWriter): Promise<void>;
       warnings?: string[];
       failureFacts?: UpdateFailureFact[];
     }
@@ -135,13 +116,14 @@ export async function beginDoctorMaintenance(params: {
     }
   };
   const databasePath = path.resolve(resolveOpenClawStateSqlitePath(env));
-  const acquireMaintenanceResources = () => {
+  const acquireMaintenanceResources = async () => {
     if (resources) {
       return;
     }
     params.assertCurrent?.();
-    const owner = acquireGatewayMaintenanceCoordinator({ databasePath, busyTimeoutMs: 0 });
+    const owner = await acquireDoctorGatewayMaintenanceCoordinator(databasePath, env, params);
     coordinators.push(owner);
+    params.assertCurrent?.();
     resources = createOpenClawDatabaseMaintenanceScope(
       owner.createSchemaFenceDelegate,
       params.assertCurrent,
@@ -183,7 +165,12 @@ export async function beginDoctorMaintenance(params: {
       }
     });
   };
-  const finish = async (cfg: OpenClawConfig, assertCustody?: () => void) => {
+  const finish = async (
+    initialConfig: OpenClawConfig,
+    assertCustody?: () => void,
+    writeConfig?: DoctorConfigWriter,
+  ) => {
+    let cfg = initialConfig;
     await release(assertCustody);
     assertCustody?.();
     const before = stopped;
@@ -319,13 +306,26 @@ export async function beginDoctorMaintenance(params: {
                 import("./doctor-gateway-services.js"),
                 import("./doctor-prompter.js"),
               ]);
-            await settle(() =>
+            cfg = await settle(() =>
               maybeRepairGatewayServiceConfig(
                 cfg,
                 "local",
                 params.runtime,
                 createDoctorPrompter({ runtime: params.runtime, options: params.options }),
                 {
+                  async writeConfig(nextConfig) {
+                    assertMaintenanceCurrent();
+                    // Failed maintenance entry has no inspected Doctor writer context.
+                    // Do not fall back to an independent config replacement on recovery.
+                    if (!writeConfig) {
+                      throw new Error(
+                        "Doctor config writer is unavailable during service restoration.",
+                      );
+                    }
+                    const committed = await writeConfig(nextConfig);
+                    assertMaintenanceCurrent();
+                    return committed;
+                  },
                   serviceMaintenance: {
                     managerUid: before.serviceManagerUid,
                     assertCurrent: assertMaintenanceCurrent,
@@ -489,33 +489,7 @@ export async function beginDoctorMaintenance(params: {
         });
         assertDoctorMaintenanceInspection(inspection, env);
         if (inspection.serviceUpdateVerdict?.kind !== "absent" && inspection.offline !== true) {
-          const inheritedRunId = env[UPDATE_RUN_ID_ENV]?.trim();
-          const readAdmission = () => {
-            const runs = listUpdateRuns(
-              { active: true, limit: 100, includeRunId: inheritedRunId },
-              { env },
-              openDoctorStateSchemaReadAdmission,
-            );
-            const admission = inspectUpdateRepairDriverAdmission(runs, inheritedRunId);
-            if (admission.kind === "conflict") {
-              throw new Error(admission.message);
-            }
-            return admission;
-          };
-          const admission = readAdmission();
-          assertUpdateAdmissionCurrent = () => {
-            readAdmission();
-          };
-          const continuation =
-            admission.kind === "continuation"
-              ? admission.run
-              : admission.runs.find((run) => run.runId === inheritedRunId);
-          if (continuation?.steps.some((step) => step.step === "finalize:repair-continuation")) {
-            assertUpdateAdmissionCurrent = () => {
-              readAdmission();
-              recordUpdateRunRepairContinuation(continuation.runId, inheritedRunId, { env });
-            };
-          }
+          assertUpdateAdmissionCurrent = resolveDoctorUpdateAdmission(env);
         }
         if (inspection.serviceUpdateVerdict?.kind === "owned" && inspection.serviceEnv) {
           assertDoctorServiceSelection(env, inspection.serviceEnv);
@@ -533,12 +507,10 @@ export async function beginDoctorMaintenance(params: {
           inspection.offline !== true
         ) {
           parentMustStopGateway = true;
-          throw new Error(
-            "The update parent must stop the managed Gateway before Doctor maintenance; Doctor left the service unchanged.",
-          );
+          throw new Error(await formatUpdateDoctorServiceStopRefusal(inspection.serviceEnv ?? env));
         }
         try {
-          acquireMaintenanceResources();
+          await acquireMaintenanceResources();
         } catch (error) {
           // A running managed Gateway legitimately owns this coordinator until its
           // service is stopped. Any other holder is knowable before that mutation.
@@ -582,6 +554,10 @@ export async function beginDoctorMaintenance(params: {
                 expectedService: inspection,
                 retainNativeIdentity: true,
                 assertCurrent: assertUpdateAdmissionCurrent,
+                warn: (message) => {
+                  warnings.push(message);
+                  params.runtime.log(message);
+                },
                 onStopped: (before) => {
                   stopped = before;
                 },
@@ -628,7 +604,7 @@ export async function beginDoctorMaintenance(params: {
       // Hold the reentrant lifecycle coordinators, not an in-tree Gateway lock:
       // individual migrations acquire their own in-tree locks under this scope.
       // Gateway ownership lasts until that process stops, not for a short transaction.
-      acquireMaintenanceResources();
+      await acquireMaintenanceResources();
       await assertDoctorAgentLeaseAdmission(env);
       stopped?.windowsTaskAutoStartRecovery?.beginMutation();
       retainStoppedInstallation =
@@ -660,7 +636,7 @@ export async function beginDoctorMaintenance(params: {
       throw error;
     }
     const refusal = new Error(
-      `Doctor could not enter maintenance. ${String(error)}${parentMustStopGateway ? "" : ` Stop the Gateway service and other OpenClaw processes using this state, then run ${formatCliCommand("openclaw doctor --fix", env)} from an independent shell.`}`,
+      `Doctor could not enter maintenance. ${String(error)}${parentMustStopGateway || hasGatewayServiceStopUnsafeError(error) ? "" : ` Stop the Gateway service and other OpenClaw processes using this state, then run ${formatCliCommand("openclaw doctor --fix", env)} from an independent shell.`}`,
       { cause: error },
     );
     const recovery = inspectingActivation
@@ -685,7 +661,7 @@ export async function beginDoctorMaintenance(params: {
       custody = "released";
       await release();
     },
-    async finish(cfg: OpenClawConfig) {
+    async finish(cfg: OpenClawConfig, writeConfig?: DoctorConfigWriter) {
       if (cleanupFailure) {
         throw cleanupFailure.error;
       }
@@ -697,7 +673,7 @@ export async function beginDoctorMaintenance(params: {
       assertCustody("held");
       custody = "restoring";
       try {
-        await finish(cfg, assertCustody);
+        await finish(cfg, assertCustody, writeConfig);
       } finally {
         custody = "released";
       }

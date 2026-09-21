@@ -19,6 +19,7 @@ import * as gatewayProcess from "../../gateway/process-instance.js";
 import { cronHandlers } from "../../gateway/server-methods/cron.js";
 import type { GatewayRequestContext } from "../../gateway/server-methods/types.js";
 import {
+  clearCommandLane,
   enqueueCommandInLane,
   getCommandLaneSnapshot,
   getTotalQueueSize,
@@ -26,6 +27,7 @@ import {
 } from "../../process/command-queue.js";
 import { resetCommandQueueStateForTest } from "../../process/command-queue.test-support.js";
 import { CommandLane } from "../../process/lanes.js";
+import { runWithAsyncWorkResources } from "../../shared/async-work-resources.js";
 import { AsyncWorkScope } from "../../shared/async-work-scope.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
@@ -133,6 +135,83 @@ async function withCronGateway(
 }
 
 describe("Cron mutation outcomes through the in-process router", () => {
+  it.each(["execute", "revoke", "abort", "clear queue"] as const)(
+    "retains caller cleanup only through accepted manual admission: %s",
+    async (outcome) => {
+      await withCronGateway(async (fixture) => {
+        const now = Date.now();
+        const job = createDueIsolatedJob({ id: "retained-tool-run", nowMs: now, nextRunAtMs: now });
+        await saveCronStore(fixture.storePath, { version: 1, jobs: [job] });
+        setCommandLaneConcurrency(CommandLane.Cron, 1);
+        const blockerStarted = createDeferredCore();
+        const releaseBlocker = createDeferredCore();
+        const payloadStarted = createDeferredCore();
+        const releasePayload = createDeferredCore();
+        const cleanupFinished = createDeferredCore();
+        const releaseResources = vi.fn(() => {
+          fixture.closeCaller("aborted");
+          cleanupFinished.resolve();
+        });
+        vi.mocked(fixture.runIsolatedAgentJob).mockImplementation(async () => {
+          payloadStarted.resolve();
+          await releasePayload.promise;
+          return { status: "ok" };
+        });
+        const blocker = enqueueCommandInLane(CommandLane.Cron, async () => {
+          blockerStarted.resolve();
+          await releaseBlocker.promise;
+        });
+        await blockerStarted.promise;
+        try {
+          const ack = await runWithAsyncWorkResources(async (onAcquired) => {
+            onAcquired({ release: releaseResources });
+            return await fixture.call({
+              method: "cron.run",
+              params: { id: job.id, mode: "force" },
+            });
+          });
+          expect(ack).toMatchObject({ ok: true, enqueued: true });
+          expect(releaseResources).not.toHaveBeenCalled();
+          expect(fixture.runIsolatedAgentJob).not.toHaveBeenCalled();
+          if (outcome === "revoke") {
+            fixture.closeCaller("revoked");
+          }
+          if (outcome === "abort") {
+            fixture.closeCaller("aborted");
+          }
+          if (outcome === "clear queue") {
+            clearCommandLane(CommandLane.Cron);
+          }
+          releaseBlocker.resolve();
+          await blocker;
+          if (outcome === "execute") {
+            await payloadStarted.promise;
+            // Admission is finished: cleanup must not wait for the separately
+            // owned automation payload, which can itself wait on caller work.
+            await cleanupFinished.promise;
+            expect(releaseResources).toHaveBeenCalledOnce();
+            expect(fixture.runIsolatedAgentJob).toHaveBeenCalledOnce();
+          }
+          releasePayload.resolve();
+          const terminal = await fixture.finished.promise;
+          await cleanupFinished.promise;
+          expect(terminal.status).toBe(outcome === "execute" ? "ok" : "error");
+          if (outcome !== "execute") {
+            expect(fixture.runIsolatedAgentJob).not.toHaveBeenCalled();
+          }
+          expect(releaseResources).toHaveBeenCalledOnce();
+          expect(
+            (await loadCronStore(fixture.storePath)).jobs[0]?.state.queuedAtMs,
+          ).toBeUndefined();
+        } finally {
+          releaseBlocker.resolve();
+          releasePayload.resolve();
+          await blocker;
+        }
+      });
+    },
+  );
+
   it.each(["revoked", "aborted"] as const)(
     "leaves durable state unchanged when its caller is %s during validation",
     async (closure) => {

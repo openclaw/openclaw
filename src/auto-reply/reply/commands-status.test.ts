@@ -31,7 +31,7 @@ import {
 import { resetTaskRegistryForTests } from "../../tasks/task-runtime.test-helpers.js";
 import { withEnvAsync } from "../../test-utils/env.js";
 import { buildStatusPluginsReply, buildStatusReply, buildStatusText } from "./commands-status.js";
-import { buildStatusReplyForTest } from "./commands-status.test-support.js";
+import { buildKiraStatusReply, buildStatusReplyForTest } from "./commands-status.test-support.js";
 import {
   baseCommandTestConfig,
   buildCommandTestParams,
@@ -2358,25 +2358,6 @@ describe("buildStatusReply error handling", () => {
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
-
-async function buildKiraStatusReply(cfg: OpenClawConfig) {
-  return await buildStatusReply({
-    cfg,
-    command: {
-      isAuthorizedSender: true,
-      channel: "whatsapp",
-    } as never,
-    sessionKey: "agent:kira:main",
-    provider: "openai",
-    model: "gpt-5.4",
-    contextTokens: 0,
-    resolvedVerboseLevel: "off",
-    resolvedReasoningLevel: "off",
-    resolveDefaultThinkingLevel: async () => undefined,
-    isGroup: false,
-    defaultGroupActivation: () => "mention",
-  });
-}
 
 describe("buildStatusReply", () => {
   beforeAll(async () => {

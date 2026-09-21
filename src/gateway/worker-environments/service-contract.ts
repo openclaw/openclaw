@@ -125,6 +125,7 @@ export type WorkerEnvironmentServiceContract = {
   readMachineShape(environmentId: string): SessionPlacementMachine | undefined;
   machineShapeVersion(): number;
   supportsExecutionMode(profileId: string, mode: WorkerPlacementExecutionMode): boolean;
+  readProviderDisplayId(profileId: string): string | undefined;
   listMachineOptions(profileId: string): Promise<readonly WorkerMachineOption[] | undefined>;
   listOperatingSystems(profileId: string): Promise<readonly WorkerOperatingSystem[] | undefined>;
   prepare(

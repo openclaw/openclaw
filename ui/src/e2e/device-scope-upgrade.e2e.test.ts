@@ -126,7 +126,10 @@ suite.define(() => {
   it("moves limited access into the Inbox and persists its dismissal", async () => {
     const desktopContext = await createContext();
     const desktop = await desktopContext.newPage();
-    const gateway = await installMockGateway(desktop, { operatorScopes: LIMITED_SCOPES });
+    const gateway = await installMockGateway(desktop, {
+      operatorScopes: LIMITED_SCOPES,
+      presenceUsers: [{ self: true, id: "alice", name: "Alice" }],
+    });
     await desktop.goto(`${suite.server.baseUrl}activity`);
 
     expect(await desktop.locator(".scope-upgrade-status-trigger").count()).toBe(0);
@@ -189,6 +192,7 @@ suite.define(() => {
     await installMockGateway(guidancePage, {
       featureMethods: ["chat.metadata", "chat.startup", "device.scopes.requestUpgrade"],
       operatorScopes: LIMITED_SCOPES,
+      presenceUsers: [{ self: true, id: "alice", name: "Alice" }],
     });
     await guidancePage.goto(`${suite.server.baseUrl}activity`);
 
@@ -200,7 +204,10 @@ suite.define(() => {
     await guidancePage.close();
 
     const availablePage = await context.newPage();
-    await installMockGateway(availablePage, { operatorScopes: LIMITED_SCOPES });
+    await installMockGateway(availablePage, {
+      operatorScopes: LIMITED_SCOPES,
+      presenceUsers: [{ self: true, id: "alice", name: "Alice" }],
+    });
     await availablePage.goto(`${suite.server.baseUrl}activity`);
 
     const availableInbox = availablePage.locator(".sidebar-issues-button");
@@ -212,7 +219,10 @@ suite.define(() => {
   it("resurfaces Request admin after a dismissed incident clears directly in Settings", async () => {
     const context = await createContext();
     const dismissPage = await context.newPage();
-    await installMockGateway(dismissPage, { operatorScopes: LIMITED_SCOPES });
+    await installMockGateway(dismissPage, {
+      operatorScopes: LIMITED_SCOPES,
+      presenceUsers: [{ self: true, id: "alice", name: "Alice" }],
+    });
     await dismissPage.goto(`${suite.server.baseUrl}activity`);
     const dismissedItem = await openLimitedAccessItem(await openInbox(dismissPage));
     await dismissedItem.getByRole("button", { name: "Request admin" }).waitFor();
@@ -223,14 +233,20 @@ suite.define(() => {
     await dismissPage.close();
 
     const clearedPage = await context.newPage();
-    await installMockGateway(clearedPage, { operatorScopes: FULL_SCOPES });
+    await installMockGateway(clearedPage, {
+      operatorScopes: FULL_SCOPES,
+      presenceUsers: [{ self: true, id: "alice", name: "Alice" }],
+    });
     await clearedPage.goto(`${suite.server.baseUrl}settings/appearance`);
     await waitForControlUiSettingsTakeover(clearedPage);
     expect(await clearedPage.locator("openclaw-sidebar-attention").count()).toBe(0);
     await clearedPage.close();
 
     const recurrencePage = await context.newPage();
-    await installMockGateway(recurrencePage, { operatorScopes: LIMITED_SCOPES });
+    await installMockGateway(recurrencePage, {
+      operatorScopes: LIMITED_SCOPES,
+      presenceUsers: [{ self: true, id: "alice", name: "Alice" }],
+    });
     await recurrencePage.goto(`${suite.server.baseUrl}activity`);
 
     const inbox = recurrencePage.locator(".sidebar-issues-button");

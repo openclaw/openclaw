@@ -10,7 +10,8 @@ import {
 } from "../../../channels/plugins/types.public.js";
 import { resolveMessageSecretScope } from "../../../cli/message-secret-scope.js";
 import { parseAccountSelector } from "../../../commands/channels/account-selector.js";
-import { messageCommand } from "../../../commands/message.js";
+import { parseChannelSelector } from "../../../commands/channels/channel-selector.js";
+import type { messageCommand } from "../../../commands/message.js";
 import { getRuntimeConfig } from "../../../config/config.js";
 import { danger, setVerbose } from "../../../globals.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
@@ -22,8 +23,6 @@ import {
   resolveConfiguredChannelPluginIds,
   resolveDiscoverableScopedChannelPluginIds,
 } from "../../../plugins/channel-plugin-ids.js";
-import { createHookRunner } from "../../../plugins/hooks.js";
-import { loadPluginRegistryHandle } from "../../../plugins/loader.js";
 import type { PluginRegistry } from "../../../plugins/registry-types.js";
 import { withPluginRuntimeRegistryScope } from "../../../plugins/runtime/gateway-request-scope.js";
 import { defaultRuntime } from "../../../runtime.js";
@@ -32,7 +31,6 @@ import {
   awaitWithinDeadline,
 } from "../../../utils/absolute-deadline.js";
 import { runCommandWithRuntime } from "../../cli-utils.js";
-import { createDefaultDeps } from "../../deps.js";
 import { requestExitAfterOneShotOutput } from "../../one-shot-exit.js";
 
 /** Shared helpers used by every message subcommand registration. */
@@ -67,13 +65,6 @@ function normalizeMessageOptions(opts: Record<string, unknown>): Record<string, 
   };
 }
 
-function parseMessageChannelSelector(channel: string): string {
-  if (!channel.trim()) {
-    throw new Error("--channel must not be blank");
-  }
-  return channel;
-}
-
 function validateMessageNumericOptions(opts: Record<string, unknown>): void {
   for (const [key, flag] of STRICT_POSITIVE_INTEGER_OPTIONS) {
     if (opts[key] === undefined) {
@@ -94,6 +85,7 @@ function validateMessageNumericOptions(opts: Record<string, unknown>): void {
 }
 
 async function runPluginStopHooks(registry: PluginRegistry): Promise<void> {
+  const { createHookRunner } = await import("../../../plugins/hooks.js");
   const runner = createHookRunner(registry, { logger: createSubsystemLogger("plugins") });
   const result = await awaitWithinDeadline(
     () =>
@@ -157,11 +149,7 @@ export function createMessageCliHelpers(messageChannelOptions: string): MessageC
   return {
     withMessageBase: (command) =>
       command
-        .option(
-          "--channel <channel>",
-          `Channel: ${messageChannelOptions}`,
-          parseMessageChannelSelector,
-        )
+        .option("--channel <channel>", `Channel: ${messageChannelOptions}`, parseChannelSelector)
         .option("--account <id>", "Channel account id (accountId)", parseAccountSelector)
         .option("--json", "Output result as JSON", false)
         .option("--dry-run", "Print payload and skip sending", false)
@@ -201,6 +189,7 @@ export function createMessageCliHelpers(messageChannelOptions: string): MessageC
                     env: process.env,
                   });
               const activatedConfig = withActivatedPluginIds({ config, pluginIds }) ?? config;
+              const { loadPluginRegistryHandle } = await import("../../../plugins/loader.js");
               pluginRegistry = loadPluginRegistryHandle({
                 config: activatedConfig,
                 activationSourceConfig: activatedConfig,
@@ -208,6 +197,10 @@ export function createMessageCliHelpers(messageChannelOptions: string): MessageC
                 throwOnLoadError: true,
               });
             }
+            const [{ messageCommand }, { createDefaultDeps }] = await Promise.all([
+              import("../../../commands/message.js"),
+              import("../../deps.js"),
+            ]);
             const deps = createDefaultDeps();
             const run = () =>
               messageCommand(

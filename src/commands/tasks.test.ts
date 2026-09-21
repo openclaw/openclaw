@@ -119,8 +119,8 @@ async function writeSessionEntries(
   }
 }
 
-function resetTaskCommandRuntime() {
-  taskRegistryMaintenance.stopTaskRegistryMaintenance();
+async function resetTaskCommandRuntime() {
+  await taskRegistryMaintenance.stopTaskRegistryMaintenance();
   taskRegistryMaintenance.resetTaskRegistryMaintenanceRuntimeForTests();
   resetConfigRuntimeState();
   resetDetachedTaskLifecycleRuntimeForTests();
@@ -136,11 +136,11 @@ async function withTaskCommandStateDir(
   await withOpenClawTestState(
     { layout: "state-only", prefix: "openclaw-tasks-command-" },
     async (state) => {
-      resetTaskCommandRuntime();
+      await resetTaskCommandRuntime();
       try {
         await run(state);
       } finally {
-        resetTaskCommandRuntime();
+        await resetTaskCommandRuntime();
       }
     },
   );
@@ -151,9 +151,9 @@ describe("tasks commands", () => {
     vi.useRealTimers();
   });
 
-  afterEach(() => {
+  afterEach(async () => {
+    await resetTaskCommandRuntime();
     vi.useRealTimers();
-    resetTaskCommandRuntime();
     mocks.callGateway.mockReset();
   });
 

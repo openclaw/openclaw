@@ -711,6 +711,7 @@ describe("chat transcript rendering", () => {
 
   it.each(
     [
+      "skills/review/SKILL.md",
       "qa-café/index.md",
       "qa241-unicode/café note.md",
       "qa241-unicode/emoji-🌱.md",

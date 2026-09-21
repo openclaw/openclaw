@@ -34,29 +34,38 @@ import type {
   SessionTargetInventoryWorkerInput,
   SessionIdentityEvidenceWorkerInput,
   SessionMembersWorkerInput,
+  SessionPreviewWorkerInput,
+  SessionTitleFieldsWorkerInput,
   SessionRowPresenceWorkerInput,
   SessionTranscriptHistoryWorkerInput,
   SessionTranscriptWorkerReply,
   SessionUsageCacheWorkerInput,
+  SessionTranscriptSearchWorkerInput,
 } from "./session-transcript-worker.types.js";
 
 const workerUrl = resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.sessionTranscript);
 export const historyPages = new WorkerTaskPool<
   | SessionTranscriptHistoryWorkerInput
+  | SessionPreviewWorkerInput
+  | SessionTitleFieldsWorkerInput
   | SessionRowPresenceWorkerInput
   | SessionMembersWorkerInput
   | SessionEntryListWorkerInput
   | SessionTargetInventoryWorkerInput
   | SessionIdentityEvidenceWorkerInput
-  | SessionUsageCacheWorkerInput,
+  | SessionUsageCacheWorkerInput
+  | SessionTranscriptSearchWorkerInput,
   SessionTranscriptWorkerReply<
     | "history-page"
+    | "session-preview"
+    | "session-title-fields"
     | "session-row-presence"
     | "session-members"
     | "session-entry-list"
     | "session-target-inventory"
     | "session-identity-evidence"
     | "usage-cache"
+    | "transcript-search"
   >
 >({
   workerUrl,
@@ -357,12 +366,15 @@ export async function withSessionHistoryWorkerReadCandidates<T>(
           );
           const result = unwrapSessionTranscriptWorkerReply<
             | "history-page"
+            | "session-preview"
+            | "session-title-fields"
             | "session-row-presence"
             | "session-members"
             | "session-entry-list"
             | "session-target-inventory"
             | "session-identity-evidence"
             | "usage-cache"
+            | "transcript-search"
           >(reply);
           if (
             typeof result === "boolean" ||

@@ -122,6 +122,31 @@ async function runDoctorHealthFlowWithResult(
   let exitCode: number | undefined;
   let healthContext: DoctorHealthFlowContext | undefined;
   let doctorResult: UpdatePostInstallDoctorResult = { status: "error" };
+  const recordConfigWriteRefusal = (ctx: DoctorHealthFlowContext): boolean => {
+    if (!ctx.configWriteRefusal) {
+      return false;
+    }
+    // Config fixes were computed but refused by the writer; the warning above
+    // already lists the manual work. This failure outranks a recoverable
+    // post-install advisory because the run did not converge.
+    outro(
+      ctx.configResultWriteCommitted === true
+        ? "Doctor finished, but some config fixes were not applied."
+        : "Doctor finished, but config fixes were not applied.",
+    );
+    exitCode = 1;
+    doctorResult = {
+      status: "error",
+      failureFacts: [
+        createUpdateFailureFact({
+          check: "config-write",
+          code: ctx.configWriteRefusal,
+          message: "Doctor config fixes were not applied.",
+        }),
+      ],
+    };
+    return true;
+  };
   try {
     const { beginDoctorMaintenance } = await import("../commands/doctor-maintenance.js");
     maintenance = await beginDoctorMaintenance({
@@ -247,26 +272,7 @@ async function runDoctorHealthFlowWithResult(
       healthContext = ctx;
       const { runDoctorHealthContributions } = await import("./doctor-health-contributions.js");
       await runDoctorHealthContributions(ctx);
-      if (ctx.configWriteRefusal) {
-        // Config fixes were computed but refused by the writer; the warning above
-        // already lists the manual work. This failure outranks a recoverable
-        // post-install advisory because the run did not converge.
-        outro(
-          ctx.configResultWriteCommitted === true
-            ? "Doctor finished, but some config fixes were not applied."
-            : "Doctor finished, but config fixes were not applied.",
-        );
-        exitCode = 1;
-        doctorResult = {
-          status: "error",
-          failureFacts: [
-            createUpdateFailureFact({
-              check: "config-write",
-              code: ctx.configWriteRefusal,
-              message: "Doctor config fixes were not applied.",
-            }),
-          ],
-        };
+      if (recordConfigWriteRefusal(ctx)) {
         return undefined;
       }
       if (options.repair === true || options.yes === true) {
@@ -308,7 +314,14 @@ async function runDoctorHealthFlowWithResult(
     if (!ctx) {
       return;
     }
-    await maintenance?.finish(ctx.cfg);
+    if (maintenance) {
+      const { writeDoctorGatewayConfig } =
+        await import("./doctor-health-contribution-runners.gateway.js");
+      await maintenance.finish(ctx.cfg, (nextConfig) => writeDoctorGatewayConfig(ctx, nextConfig));
+      if (recordConfigWriteRefusal(ctx)) {
+        return;
+      }
+    }
     const pluginWarnings: string[] = [];
     if (diagnostics.length > 0) {
       const { collectPluginLoadHealthFindings } =

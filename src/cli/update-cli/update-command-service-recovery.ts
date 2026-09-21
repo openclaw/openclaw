@@ -9,6 +9,7 @@ import {
 } from "../../daemon/service.js";
 import { getUpdateRun, recordUpdateRunRepairAttempt } from "../../infra/update-run-ledger.js";
 import type { UpdateRunResult } from "../../infra/update-runner.js";
+import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
 import { defaultRuntime } from "../../runtime.js";
 import { formatCliCommand } from "../command-format.js";
 import {
@@ -370,6 +371,9 @@ export async function maybeRestartServiceAfterFailedMutableUpdate(params: {
     }
     return "healthy";
   } catch (err) {
+    if (hasCommandProcessCleanupError(err)) {
+      throw err;
+    }
     assertCurrent();
     if (err instanceof UpdateCommandRecoveryPendingError) {
       throw err;
@@ -431,7 +435,7 @@ export async function compensateOriginalManagedService(
       steps: [
         ...result.steps,
         {
-          name: "original managed service compensation",
+          name: "original-managed-service-compensation",
           command: "openclaw gateway restart --preserve-definition",
           cwd: original.root,
           durationMs: 0,

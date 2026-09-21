@@ -20,6 +20,7 @@ import type {
 } from "./session-attachment.js";
 import type { WorkerEnvironmentStore } from "./store.js";
 import type { WorkerWorkspaceCommand } from "./tunnel-contract.js";
+import { boundedWorkerError } from "./worker-error.js";
 
 export type WorkerEnvironmentSessionAttachmentOptions = {
   prepareAttachedComputer?: (
@@ -320,9 +321,9 @@ export function createWorkerEnvironmentSessionAttachments(
                 if (reservationCreated) {
                   await providerLifecycle
                     .destroy(environmentIntent.environmentId, { requireUnattached: true })
-                    .catch(() =>
+                    .catch((cleanupError: unknown) =>
                       options.warn(
-                        "Cancelled conversation environment reservation cleanup will retry",
+                        `Cancelled conversation environment reservation cleanup will retry: ${boundedWorkerError(cleanupError)}`,
                       ),
                     );
                 }
@@ -405,8 +406,10 @@ export function createWorkerEnvironmentSessionAttachments(
               }
             },
             record.environmentId,
-          ).catch(() =>
-            options.warn(`Conversation environment cleanup will retry (${record.environmentId})`),
+          ).catch((error: unknown) =>
+            options.warn(
+              `Conversation environment cleanup will retry (${record.environmentId}): ${boundedWorkerError(error)}`,
+            ),
           );
         }
       }
@@ -422,8 +425,10 @@ export function createWorkerEnvironmentSessionAttachments(
       ) {
         void options
           .trackOperation(attachments.retireSessionAttachment(mutation.previous.sessionId))
-          .catch(() =>
-            options.warn("Conversation environment cleanup will retry during reconciliation"),
+          .catch((error: unknown) =>
+            options.warn(
+              `Conversation environment cleanup will retry during reconciliation: ${boundedWorkerError(error)}`,
+            ),
           );
       }
     },

@@ -10,7 +10,6 @@ import { isDeepStrictEqual } from "node:util";
 import {
   AcpxRuntime as BaseAcpxRuntime,
   decodeAcpxRuntimeHandleState,
-  isRequestedModelUnsupportedError,
   type AcpAgentRegistry,
   type AcpRuntimeDoctorReport,
   type AcpRuntimeEvent,
@@ -19,7 +18,6 @@ import {
   type AcpProcessStarted,
   type AcpRuntimeStatus,
   type AcpRuntimeTurnResult,
-  type SessionAgentOptions,
 } from "acpx/runtime";
 import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
 import { redactSensitiveText } from "openclaw/plugin-sdk/security-runtime";
@@ -40,6 +38,11 @@ import {
   splitCommandParts,
   type AcpxAgentCommand,
 } from "./command-line.js";
+import {
+  ensureSessionWithModelRef,
+  withAcpxSessionOptions,
+  withOpenClawModelRef,
+} from "./model-ref.js";
 import {
   ACPX_PROBE_LEASE_SESSION_KEY,
   hashAcpxProcessCommand,
@@ -99,7 +102,6 @@ type OpenClawRuntimeEnsureInput = Parameters<AcpRuntime["ensureSession"]>[0] & {
 type OpenClawRuntimeHandle = Awaited<ReturnType<AcpRuntime["ensureSession"]>> & {
   bridgeSession?: BridgeSession | null;
 };
-type AcpxDelegateEnsureInput = Parameters<BaseAcpxRuntime["ensureSession"]>[0];
 type AcpxMcpServers = Extract<NonNullable<AcpRuntimeOptions["mcpServers"]>, unknown[]>;
 type AcpxMcpServer = AcpxMcpServers[number];
 
@@ -314,40 +316,6 @@ function normalizeClaudeAcpModelOverride(rawModel: string | undefined): string |
     return raw;
   }
   return raw.slice(prefix[0].length).trim() || undefined;
-}
-
-function withAcpxSessionOptions(input: OpenClawRuntimeEnsureInput): AcpxDelegateEnsureInput {
-  const existingOptions = (input as { sessionOptions?: SessionAgentOptions }).sessionOptions;
-  const model = input.model?.trim() || existingOptions?.model;
-  const sessionOptions = model ? { ...existingOptions, model } : existingOptions;
-  const { modelExplicit: _modelExplicit, thinkingExplicit: _thinkingExplicit, ...rest } = input;
-  return {
-    ...rest,
-    ...(sessionOptions ? { sessionOptions } : {}),
-  } as AcpxDelegateEnsureInput;
-}
-
-function isAcpModelCapabilityMissingError(error: unknown): boolean {
-  return isRequestedModelUnsupportedError(error) && error.reason === "missing-capability";
-}
-
-// Only inherited defaults may be dropped when a harness has no model control;
-// explicit selections and invalid model ids must remain visible failures.
-async function ensureDelegateSessionWithModelFallback(
-  delegate: BaseAcpxRuntime,
-  input: OpenClawRuntimeEnsureInput,
-): Promise<OpenClawRuntimeHandle> {
-  try {
-    return await delegate.ensureSession(withAcpxSessionOptions(input));
-  } catch (error) {
-    if (input.modelExplicit || !input.model || !isAcpModelCapabilityMissingError(error)) {
-      throw error;
-    }
-    return {
-      ...(await delegate.ensureSession(withAcpxSessionOptions({ ...input, model: undefined }))),
-      appliedModel: { kind: "dropped" },
-    };
-  }
 }
 
 function appendCodexAcpConfigOverrides(
@@ -1037,7 +1005,10 @@ export class AcpxRuntime implements CompleteAcpRuntime {
           run: () =>
             codexModelOverride
               ? delegate.ensureSession(withAcpxSessionOptions(ensureInput))
-              : ensureDelegateSessionWithModelFallback(delegate, ensureInput),
+              : ensureSessionWithModelRef((request) => {
+                  this.generationRegistry.assertCurrentGeneration(generation);
+                  return delegate.ensureSession(request);
+                }, ensureInput),
         }),
     });
     return {
@@ -1260,6 +1231,12 @@ export class AcpxRuntime implements CompleteAcpRuntime {
       return await delegate.setConfigOption({
         ...input,
         value: normalizeClaudeAcpModelOverride(input.value) ?? input.value,
+      });
+    }
+    if (key === "model") {
+      return await withOpenClawModelRef(input.value, (value) => {
+        this.generationRegistry.assertCurrentGeneration(snapshot.generation);
+        return delegate.setConfigOption({ ...input, value });
       });
     }
     return await delegate.setConfigOption(input);

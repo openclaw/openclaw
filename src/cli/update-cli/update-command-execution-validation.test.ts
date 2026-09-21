@@ -39,7 +39,7 @@ describe("mutable update validation", () => {
       const message =
         "Readiness probe http://127.0.0.1:18789/readyz failed: HTTP 502. Check the configured proxy.";
       const step: UpdateStepResult = {
-        name: "candidate gateway canary",
+        name: "candidate-gateway-startup",
         command: "gateway run",
         cwd: "/candidate",
         durationMs: 1,
@@ -273,7 +273,7 @@ describe("mutable update validation", () => {
             logTail: [],
             steps: [
               {
-                name: "Checking Gateway startup",
+                name: "candidate-gateway-startup",
                 command: "gateway run",
                 cwd: root,
                 durationMs: 70_000,
@@ -398,7 +398,7 @@ describe("mutable update validation", () => {
       logTail: [fact.message],
       steps: [
         {
-          name: "candidate doctor",
+          name: "candidate-doctor",
           command: "openclaw doctor",
           cwd: "/candidate",
           durationMs: 1,

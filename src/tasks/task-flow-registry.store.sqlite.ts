@@ -17,9 +17,10 @@ import {
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabaseOptions,
 } from "../state/openclaw-state-db.js";
+import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
+import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
 import type { TaskFlowSyncInput } from "./task-flow-registry.records.js";
 import {
-  bindTaskFlowExecutionInDatabase,
   bindTaskFlowRecord,
   deleteTaskFlowRowInDatabase,
   readTaskFlowRegistrySnapshot,
@@ -69,8 +70,10 @@ function withWriteTransaction(write: (database: FlowRegistryDatabase) => void) {
   });
 }
 
-export function loadTaskFlowRegistryStateFromSqlite(): TaskFlowRegistryStoreSnapshot {
-  return readTaskFlowRegistrySnapshot(openFlowRegistryDatabase().db);
+export function loadTaskFlowRegistryStateFromSqlite(
+  flowIds?: readonly string[],
+): TaskFlowRegistryStoreSnapshot {
+  return readTaskFlowRegistrySnapshot(openFlowRegistryDatabase().db, flowIds);
 }
 
 /** Loads task flows without creating or migrating shared state. */
@@ -141,19 +144,38 @@ export function updateTaskFlowRegistryRecordInSqlite(
 }
 
 /** Binds only the exact flow selected before admission; lifecycle settlement stays owner-native. */
-export function bindTaskFlowExecution(params: {
+export async function bindTaskFlowExecution(params: {
   admitted: AdmittedRunContext;
   flowId: string;
-  options?: OpenClawStateDatabaseOptions;
-}): ExecutionOwnerBindingResult {
+  options?: Pick<OpenClawStateDatabaseOptions, "path" | "env">;
+  context?: OpenClawStateWorkerContext;
+  assertCurrent?: () => void;
+}): Promise<ExecutionOwnerBindingResult> {
   const binding = executionOwnerBindingFromAdmission(params.admitted);
   if (!binding) {
     return "disabled";
   }
-  return runOpenClawStateWriteTransaction(
-    ({ db }) => bindTaskFlowExecutionInDatabase(db, params.flowId, binding),
-    params.options,
-    { operationLabel: "task.flow.execution-binding" },
+  const context = params.context ?? captureOpenClawStateWorkerContext(params.options);
+  const input = { flowId: params.flowId, binding };
+  const assertOwnerCurrent = params.assertCurrent;
+  const assertCurrent = () => {
+    context.admission.assertCurrent();
+    assertOwnerCurrent?.();
+  };
+  const [{ runOpenClawStateWorkerOperation }, { createSqliteWorkerWriteAdmission }] =
+    await Promise.all([
+      import("../state/openclaw-state-worker-store.js"),
+      import("../infra/sqlite-worker-store.js"),
+    ]);
+  return runOpenClawStateWorkerOperation(
+    context,
+    (scope) => scope.execute({ type: "flows.bindExecution", input }),
+    {
+      assertCurrent,
+      createAdmission: createSqliteWorkerWriteAdmission(assertCurrent, [
+        context.admission.databasePath,
+      ]),
+    },
   );
 }
 

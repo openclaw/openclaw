@@ -26,6 +26,9 @@ Related: [Browser tool](/tools/browser)
   `openclaw browser status --json` also works when the selected child command does not
   define its own `--json`.
 
+The CLI reserves 10 additional seconds beyond the request timeout for node and
+Gateway transport, allowing browser timeout diagnostics to reach the caller.
+
 ## Quick start (local)
 
 ```bash

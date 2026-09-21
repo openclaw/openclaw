@@ -1160,7 +1160,14 @@ describe("Docker scheduler trusted harness execution", () => {
         },
         [
           "  const kill = process.kill.bind(process);",
-          `  process.kill = (pid, signal) => signal === 0 && fs.existsSync(${JSON.stringify(groupPath)}) && pid === -Number(fs.readFileSync(${JSON.stringify(groupPath)}, 'utf8')) ? true : kill(pid, signal);`,
+          // A successful probe still permits Linux's zombie census to certify cleanup.
+          // Deny inspection so the simulated failure survives the real descendant's exit.
+          "  process.kill = (pid, signal) => {",
+          `    if (signal === 0 && fs.existsSync(${JSON.stringify(groupPath)}) && pid === -Number(fs.readFileSync(${JSON.stringify(groupPath)}, 'utf8'))) {`,
+          "      throw Object.assign(new Error('foreground cleanup probe denied'), { code: 'EPERM' });",
+          "    }",
+          "    return kill(pid, signal);",
+          "  };",
         ].join("\n"),
         [leaderPath, leafPath],
       );

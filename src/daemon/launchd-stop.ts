@@ -3,6 +3,7 @@ import { formatPortDiagnostics } from "../infra/ports-format.js";
 import { inspectPortUsage } from "../infra/ports-inspect.js";
 import { probePortUsage } from "../infra/ports-probe.js";
 import { cleanStaleGatewayProcessesSync } from "../infra/restart-stale-pids.js";
+import { isPidDefinitelyDead } from "../shared/pid-alive.js";
 import { sleep } from "../utils.js";
 import { isCurrentProcessInsideLaunchdService } from "./launchd-current-service.js";
 import {
@@ -14,9 +15,9 @@ import { resolveLaunchAgentLabel } from "./launchd-label.js";
 import { LAUNCH_AGENT_EXIT_TIMEOUT_SECONDS } from "./launchd-plist.js";
 import { scheduleDetachedLaunchdMaintenancePark } from "./launchd-restart-handoff.js";
 import {
+  probeLaunchAgentState,
   resolveLaunchAgentGatewayContext,
   resolveLaunchAgentGuiDomain,
-  waitForLaunchAgentStopped,
 } from "./launchd-runtime.js";
 import { formatLine } from "./output.js";
 import { createGatewayLifecycleMutationReporter } from "./service-mutation.js";
@@ -25,23 +26,65 @@ import { assertGatewayServiceUpdateCurrent } from "./service-update-authority.js
 
 const LAUNCH_AGENT_STOP_PORT_RELEASE_TIMEOUT_MS = LAUNCH_AGENT_EXIT_TIMEOUT_SECONDS * 1_000;
 const LAUNCH_AGENT_STOP_PORT_RELEASE_POLL_MS = 100;
-async function bootoutLaunchAgentOrThrow(params: {
-  serviceTarget: string;
-  warning: string;
-  stdout: NodeJS.WritableStream;
-  onMutation?: () => void;
-  assertCurrent?: () => void;
-}): Promise<void> {
-  params.assertCurrent?.();
-  const bootout = await execLaunchctl(["bootout", params.serviceTarget]);
-  if (bootout.code !== 0 && !isLaunchctlNotLoaded(bootout)) {
-    throw new Error(
-      `${params.warning}; launchctl bootout failed: ${formatLaunchctlResultDetail(bootout)}`,
+// launchd owns the graceful-exit deadline; allow teardown bookkeeping afterward.
+const LAUNCH_AGENT_STOP_TIMEOUT_MS = (LAUNCH_AGENT_EXIT_TIMEOUT_SECONDS + 10) * 1_000;
+
+function launchAgentStopError(serviceTarget: string, detail: string): Error {
+  return new Error(
+    `${detail}. Run \`launchctl bootout ${serviceTarget}\` from an external terminal in the service owner's logged-in macOS GUI session.`,
+  );
+}
+
+function verifyLaunchAgentStopProbe(
+  serviceTarget: string,
+  probe: Awaited<ReturnType<typeof probeLaunchAgentState>>,
+): number | undefined {
+  if (probe.state === "unknown") {
+    throw launchAgentStopError(
+      serviceTarget,
+      `launchctl print could not verify LaunchAgent stop: ${probe.detail ?? "unknown error"}`,
     );
   }
-  params.onMutation?.();
-  params.stdout.write(`${formatLine("Warning", params.warning)}\n`);
+  if (probe.state !== "running") {
+    return undefined;
+  }
+  if (probe.runtime.pid === undefined) {
+    throw launchAgentStopError(
+      serviceTarget,
+      "launchctl print reported a running job without a PID",
+    );
+  }
+  return probe.runtime.pid;
 }
+
+async function waitForLaunchAgentUnloaded(
+  serviceTarget: string,
+  initialPid: number | undefined,
+  assertCurrent?: () => void,
+): Promise<void> {
+  const pids = new Set<number>(initialPid === undefined ? [] : [initialPid]);
+  const deadline = Date.now() + LAUNCH_AGENT_STOP_TIMEOUT_MS;
+  for (;;) {
+    const probe = await probeLaunchAgentState(serviceTarget, 5_000);
+    assertCurrent?.();
+    const observedPid = verifyLaunchAgentStopProbe(serviceTarget, probe);
+    if (observedPid !== undefined) {
+      pids.add(observedPid);
+    }
+    const alivePids = [...pids].filter((pid) => !isPidDefinitelyDead(pid));
+    if (probe.state === "not-loaded" && alivePids.length === 0) {
+      return;
+    }
+    if (Date.now() >= deadline) {
+      throw launchAgentStopError(
+        serviceTarget,
+        `LaunchAgent stop did not complete: ${serviceTarget} is ${probe.state === "not-loaded" ? "unloaded" : "still loaded"}${alivePids.length ? `; PID ${alivePids.join(", ")} is still alive` : ""}`,
+      );
+    }
+    await sleep(Math.min(100, Math.max(0, deadline - Date.now())));
+  }
+}
+
 async function waitForGatewayPortRelease(
   port: number,
   probeHosts: readonly string[],
@@ -59,13 +102,13 @@ async function waitForGatewayPortRelease(
 
 async function assertGatewayPortReleasedAfterStop(
   env: GatewayServiceEnv,
-  assertCurrent?: () => void,
+  assertCurrent: () => Promise<void>,
 ): Promise<void> {
   const { env: cleanupEnv, port, probeHosts } = await resolveLaunchAgentGatewayContext(env);
   if (port === null) {
     return;
   }
-  assertCurrent?.();
+  await assertCurrent();
   assertGatewayServiceUpdateCurrent();
   cleanStaleGatewayProcessesSync(port, {
     env: cleanupEnv,
@@ -102,91 +145,61 @@ export async function stopLaunchAgent({
   const serviceTarget = `${domain}/${label}`;
   const reportMutation = createGatewayLifecycleMutationReporter(onMutation);
 
-  if (await isCurrentProcessInsideLaunchdService(label, process.env)) {
-    // A detached update executor can still descend from the serving Gateway.
-    // Keep the updater lazy for ordinary service commands; identity alone is no grant.
-    const authorized =
-      updateHandoff &&
-      (await (
-        await import("../infra/update-managed-service-handoff.js")
-      ).isCurrentManagedServiceUpdateHandoffProcess(updateHandoff));
-    if (!authorized) {
-      throw new Error(
-        `Refusing to stop LaunchAgent ${label} from inside the same launchd service; run this command from an external shell.`,
-      );
+  const insideService = await isCurrentProcessInsideLaunchdService(label, process.env);
+  const assertStopCurrent = async () => {
+    if (insideService) {
+      // Retain the ancestry decision after bootout; losing the label does not
+      // make a delegated updater an independent operator.
+      const authorized =
+        updateHandoff &&
+        (await (
+          await import("../infra/update-managed-service-handoff.js")
+        ).isCurrentManagedServiceUpdateHandoffProcess(updateHandoff));
+      if (!authorized) {
+        throw launchAgentStopError(
+          serviceTarget,
+          `Refusing to stop LaunchAgent ${label} from inside the same launchd service`,
+        );
+      }
+    }
+    assertCurrent?.();
+  };
+  await assertStopCurrent();
+  const initialPid = verifyLaunchAgentStopProbe(
+    serviceTarget,
+    await probeLaunchAgentState(serviceTarget, 5_000),
+  );
+  let warning: string | undefined;
+  if (persistDisable) {
+    await assertStopCurrent();
+    const disabled = await execLaunchctl(["disable", serviceTarget]);
+    if (disabled.code === 0) {
+      reportMutation("disable");
+    } else {
+      warning = `launchctl disable failed; used bootout fallback without persisting disable: ${formatLaunchctlResultDetail(disabled)}`;
     }
   }
 
+  // A stopped but loaded job can still respawn. Both stop modes must boot it out;
+  // --disable additionally preserves the operator's policy across login/reboot.
+  await assertStopCurrent();
+  const bootout = await execLaunchctl(["bootout", serviceTarget], LAUNCH_AGENT_STOP_TIMEOUT_MS);
+  if (bootout.code !== 0 && !isLaunchctlNotLoaded(bootout)) {
+    throw launchAgentStopError(
+      serviceTarget,
+      `launchctl bootout failed: ${formatLaunchctlResultDetail(bootout)}`,
+    );
+  }
+  reportMutation(persistDisable ? "disable-bootout" : "bootout");
+  await waitForLaunchAgentUnloaded(serviceTarget, initialPid, assertCurrent);
+  if (warning) {
+    stdout.write(`${formatLine("Warning", warning)}\n`);
+  }
+  await assertGatewayPortReleasedAfterStop(serviceEnv, assertStopCurrent);
   assertCurrent?.();
-  if (!persistDisable) {
-    // Default: bootout only. Removes the job from the current launchd domain without
-    // persisting a disable, so KeepAlive auto-recovery survives future crashes and
-    // `openclaw gateway start` re-enables cleanly without a manual `launchctl enable`.
-    const bootout = await execLaunchctl(["bootout", serviceTarget]);
-    if (bootout.code !== 0 && !isLaunchctlNotLoaded(bootout)) {
-      throw new Error(`launchctl bootout failed: ${formatLaunchctlResultDetail(bootout)}`);
-    }
-    reportMutation("bootout");
-    await assertGatewayPortReleasedAfterStop(serviceEnv, assertCurrent);
-    stdout.write(`${formatLine("Stopped LaunchAgent", serviceTarget)}\n`);
-    return;
-  }
-
-  // --disable: persistently suppress KeepAlive/RunAtLoad before stopping.
-  // Without this, launchd can relaunch the process as soon as `stop` exits.
-  const disableResult = await execLaunchctl(["disable", serviceTarget]);
-  if (disableResult.code !== 0) {
-    await bootoutLaunchAgentOrThrow({
-      serviceTarget,
-      assertCurrent,
-      stdout,
-      warning: `launchctl disable failed; used bootout fallback and left service unloaded: ${formatLaunchctlResultDetail(disableResult)}`,
-      onMutation: () => reportMutation("disable-bootout"),
-    });
-    await assertGatewayPortReleasedAfterStop(serviceEnv, assertCurrent);
-    stdout.write(`${formatLine("Stopped LaunchAgent (degraded)", serviceTarget)}\n`);
-    return;
-  }
-  reportMutation("disable");
-
-  // `launchctl stop` targets the plain label (not the fully-qualified service target).
-  assertCurrent?.();
-  const stop = await execLaunchctl(["stop", label]);
-  if (stop.code !== 0 && !isLaunchctlNotLoaded(stop)) {
-    await bootoutLaunchAgentOrThrow({
-      serviceTarget,
-      assertCurrent,
-      stdout,
-      warning: `launchctl stop failed; used bootout fallback and left service unloaded: ${formatLaunchctlResultDetail(stop)}`,
-      onMutation: () => reportMutation("disable-bootout"),
-    });
-    await assertGatewayPortReleasedAfterStop(serviceEnv, assertCurrent);
-    stdout.write(`${formatLine("Stopped LaunchAgent (degraded)", serviceTarget)}\n`);
-    return;
-  }
-
-  reportMutation("disable-stop");
-
-  const stopState = await waitForLaunchAgentStopped(serviceTarget);
-  if (stopState.state !== "stopped" && stopState.state !== "not-loaded") {
-    const warning =
-      stopState.state === "unknown"
-        ? `launchctl print could not confirm stop; used bootout fallback and left service unloaded: ${stopState.detail ?? "unknown error"}`
-        : "launchctl stop did not fully stop the service; used bootout fallback and left service unloaded";
-    await bootoutLaunchAgentOrThrow({
-      serviceTarget,
-      assertCurrent,
-      stdout,
-      warning,
-      onMutation: () => reportMutation("disable-bootout"),
-    });
-    await assertGatewayPortReleasedAfterStop(serviceEnv, assertCurrent);
-    stdout.write(`${formatLine("Stopped LaunchAgent (degraded)", serviceTarget)}\n`);
-    return;
-  }
-
-  await assertGatewayPortReleasedAfterStop(serviceEnv, assertCurrent);
-  stdout.write(`${formatLine("Stopped LaunchAgent", serviceTarget)}\n`);
+  stdout.write(
+    `${formatLine(warning ? "Stopped LaunchAgent (degraded)" : "Stopped LaunchAgent", serviceTarget)}\n`,
+  );
 }
 
 export async function parkCurrentLaunchAgentForMaintenance(

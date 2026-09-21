@@ -153,6 +153,46 @@ describe("skills watcher subscription lifecycle", () => {
     ]);
   });
 
+  it.each(["ensure", "dispose", "reacquire"] as const)(
+    "revalidates a later workspace after a listener performs %s",
+    async (action) => {
+      vi.useFakeTimers();
+      const secondWorkspace = await createFixtureDirectory("reentrant-workspace");
+      const sharedRoot = await createFixtureDirectory("reentrant-shared");
+      const config = { skills: { load: { extraDirs: [sharedRoot] } } };
+      refreshModule.ensureSkillsWatcher({ workspaceDir: fixtureWorkspaceDir, config });
+      refreshModule.ensureSkillsWatcher({ workspaceDir: secondWorkspace, config });
+      const seen: SkillsChangeEvent[] = [];
+      refreshModule.registerSkillsChangeListener((change) => {
+        if (change.reason !== "watch") {
+          return;
+        }
+        seen.push(change);
+        if (change.workspaceDir !== fixtureWorkspaceDir) {
+          return;
+        }
+        if (action !== "ensure") {
+          refreshModule.ensureSkillsWatcher({
+            workspaceDir: secondWorkspace,
+            config: { skills: { load: { watch: false } } },
+          });
+        }
+        if (action !== "dispose") {
+          refreshModule.ensureSkillsWatcher({ workspaceDir: secondWorkspace, config });
+        }
+      });
+      const changedPath = path.join(sharedRoot, "guide", "SKILL.md");
+      watchForSkillRoot(sharedRoot).watcher.emit("all", "change", changedPath);
+      await vi.advanceTimersByTimeAsync(250);
+      expect(seen).toEqual([
+        { workspaceDir: fixtureWorkspaceDir, reason: "watch", changedPath },
+        ...(action === "ensure"
+          ? [{ workspaceDir: secondWorkspace, reason: "watch", changedPath }]
+          : []),
+      ]);
+    },
+  );
+
   it("stops fanning a shared-directory change to a workspace after it unsubscribes", async () => {
     vi.useFakeTimers();
     const secondWorkspace = await createFixtureDirectory("second-workspace");

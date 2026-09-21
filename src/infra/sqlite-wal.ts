@@ -8,7 +8,10 @@ import { decodeMountInfoPath } from "@openclaw/normalization-core/mountinfo-path
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import type { Result } from "@openclaw/normalization-core/result";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import { normalizeSqliteNonNegativeInteger } from "./sqlite-busy-timeout.js";
+import {
+  normalizeSqliteNonNegativeInteger,
+  runWithSqliteBusyTimeout,
+} from "./sqlite-busy-timeout.js";
 import { createSqliteLifecycleAggregateError } from "./sqlite-coordinator.js";
 import { isSqliteLockError } from "./sqlite-error-diagnostics.js";
 import { runSqliteImmediateTransactionSync } from "./sqlite-transaction.js";
@@ -558,6 +561,15 @@ export function configureSqliteWalMaintenance(
       }
       runMaintenance(() => {
         const checkpointed = runCheckpoint(periodicCheckpointMode);
+        if (
+          checkpointed &&
+          periodicCheckpointMode === "PASSIVE" &&
+          (checkpointOwner.health?.walBytes ?? 0) > DEFAULT_SQLITE_WAL_JOURNAL_SIZE_LIMIT_BYTES
+        ) {
+          // A completed PASSIVE checkpoint need not recycle its high-water file
+          // until another commit. Try once without waiting for readers or writers.
+          runWithSqliteBusyTimeout(db, 0, () => runCheckpoint("TRUNCATE"));
+        }
         runIncrementalVacuum();
         return checkpointed;
       });

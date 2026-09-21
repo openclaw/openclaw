@@ -11,6 +11,7 @@ import {
   executeSqliteQueryTakeFirstSync,
   getNodeSqliteKysely,
   prepareSqliteQuerySync,
+  sqliteStringSet,
 } from "../infra/kysely-sync.js";
 import { normalizeSqliteNumber } from "../infra/sqlite-number.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
@@ -202,13 +203,22 @@ export function listTaskFlowRecordsForOwnerReadInDatabase(
   return read(ownerKey).rows.map(rowToFlowRecord);
 }
 
-export function readTaskFlowRegistrySnapshot(db: DatabaseSync): TaskFlowRegistryStoreSnapshot {
-  const query = getFlowRegistryKysely(db)
+export function readTaskFlowRegistrySnapshot(
+  db: DatabaseSync,
+  flowIds?: readonly string[],
+): TaskFlowRegistryStoreSnapshot {
+  let query = getFlowRegistryKysely(db)
     .selectFrom("flow_runs")
     .select(FLOW_RUN_SELECT_COLUMNS)
     .orderBy("created_at", "asc")
     .orderBy("flow_id", "asc");
   const flows = new Map<string, TaskFlowRecord>();
+  if (flowIds) {
+    if (flowIds.length === 0) {
+      return { flows };
+    }
+    query = query.where("flow_id", "in", sqliteStringSet(flowIds));
+  }
   // Finish native reads before decoding so SQLite errors retain precedence.
   for (const row of executeSqliteQuerySync(db, query).rows) {
     flows.set(row.flow_id, rowToFlowRecord(row));

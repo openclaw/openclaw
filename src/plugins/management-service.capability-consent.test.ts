@@ -18,7 +18,6 @@ import {
   metadataSnapshot,
 } from "./management-service.test-helpers.js";
 import { clearPluginMetadataLifecycleCaches } from "./plugin-metadata-lifecycle.js";
-import { collectPluginCapabilityConsentDiagnostics } from "./status-snapshot.js";
 import { createColdPluginFixture } from "./test-helpers/cold-plugin-fixtures.js";
 import { cleanupTrackedTempDirs, makeTrackedTempDir } from "./test-helpers/fs-fixtures.js";
 
@@ -403,7 +402,6 @@ describe("managed plugin capability consent", () => {
       resolvePluginCapabilityConsent({ config, env, pluginId: "diffs" }),
     ).resolves.toBeUndefined();
     expect(mocks.writeRecords).not.toHaveBeenCalled();
-    expect(collectPluginCapabilityConsentDiagnostics({ index, manifests: byPluginId })).toEqual([]);
     const catalog = await listManagedPlugins({ config, env });
     expect(catalog.diagnostics).not.toContainEqual(
       expect.objectContaining({ message: expect.stringContaining("requires capability consent") }),

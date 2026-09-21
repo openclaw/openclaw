@@ -8,7 +8,6 @@ import {
   type AgentRunTerminalOutcome,
 } from "../../agents/agent-run-terminal-outcome.js";
 import type { PreparedAgentCommandRuntimeContext } from "../../agents/command/prepare.js";
-import type { AgentCommandOpts } from "../../agents/command/types.js";
 import {
   createCronCreatorAuthorityCapability,
   runWithCronCreatorAuthorityCapability,
@@ -20,10 +19,6 @@ import {
   isAgentRunRestartAbortReason,
 } from "../../agents/run-termination.js";
 import { runWithCanonicalSkillWorkspace } from "../../agents/skill-workshop-workspace-context.js";
-import {
-  createExecutionStartedOwnerBinding,
-  isRetainedExecutionOwnerBinding,
-} from "../../audit/execution-owner-binding.js";
 import {
   readAgentRunTerminalError,
   readAgentRunTerminalOutcome,
@@ -45,9 +40,7 @@ import {
 } from "../../tasks/detached-task-runtime.js";
 import { getTaskById } from "../../tasks/runtime-internal.js";
 import { captureTaskCancellationControl } from "../../tasks/task-cancellation-context.js";
-import { bindTaskFlowExecution } from "../../tasks/task-flow-registry.store.sqlite.js";
 import { mapAgentRunTerminalOutcomeToTaskStatus } from "../../tasks/task-registry-common.js";
-import { bindTaskRunExecution } from "../../tasks/task-registry.store.sqlite.js";
 import type { TaskRecord } from "../../tasks/task-registry.types.js";
 import { bindTaskRunOwner, getTaskRunOwner } from "../../tasks/task-run-owner.js";
 import { normalizeDeliveryContext } from "../../utils/delivery-context.shared.js";
@@ -60,6 +53,7 @@ import { formatForLog } from "../ws-log.js";
 import { setGatewayDedupeEntries } from "./agent-dedupe.js";
 import { captureAgentJobSession } from "./agent-job.js";
 import { readAgentRunDispatchExecutionIdentity } from "./agent-run-dispatch-execution-identity.js";
+import { createGatewayTaskExecutionBinding } from "./agent-run-task-binding.js";
 import type { GatewayAgentDispatchTaskTracking } from "./agent-run-task-tracking.js";
 import type { AgentTurnContext, AgentTurnIo } from "./types.js";
 
@@ -359,31 +353,12 @@ export function dispatchAgentRunFromGateway(
     assertCurrent();
     const task = trackedTask;
     const trackedTaskBinding = task
-      ? createExecutionStartedOwnerBinding(
-          (admitted: Parameters<NonNullable<AgentCommandOpts["onPostAdmittedRunContext"]>>[0]) => {
-            try {
-              const taskResult = bindTaskRunExecution({ admitted, taskId: task.taskId });
-              const flowResult = task.parentFlowId
-                ? isRetainedExecutionOwnerBinding(taskResult)
-                  ? bindTaskFlowExecution({ admitted, flowId: task.parentFlowId })
-                  : taskResult
-                : undefined;
-              if (
-                [taskResult, flowResult].some(
-                  (result) => result === "mismatch" || result === "missing",
-                )
-              ) {
-                params.context.logGateway.warn(
-                  `exact tracked-task execution binding was not retained for ${params.runId}`,
-                );
-              }
-            } catch (error) {
-              params.context.logGateway.warn(
-                `failed to retain tracked-task execution binding ${params.runId}: ${formatForLog(error)}`,
-              );
-            }
-          },
-        )
+      ? createGatewayTaskExecutionBinding({
+          task,
+          runId: params.runId,
+          assertCurrent,
+          log: params.context.logGateway,
+        })
       : undefined;
     const ingressOptsWithTaskBinding = task
       ? {

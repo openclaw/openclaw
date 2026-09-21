@@ -500,9 +500,16 @@ export async function runDaemonInstall(opts: DaemonInstallOptions) {
       ...(opts.deferActivation ? { beforeLoad: waitForGatewayServiceLoad } : {}),
     });
   };
+  const successMessage = `Gateway service installed. Runtime readiness has not been checked; startup may still be in progress. Check with ${formatCliCommand("openclaw gateway status")} and ${formatCliCommand("openclaw health")}.`;
   await installDaemonServiceAndEmit({
     serviceNoun: "Gateway",
     service,
+    successMessage,
+    onVerified: async () => {
+      if (!json) {
+        defaultRuntime.log(successMessage);
+      }
+    },
     warnings,
     emit,
     fail,

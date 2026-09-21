@@ -2,6 +2,7 @@
 import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { once } from "node:events";
 import fs from "node:fs/promises";
+import { builtinModules } from "node:module";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { build as esbuild } from "esbuild";
@@ -1620,6 +1621,128 @@ describe("openclaw launcher", () => {
     expect(result.status).toBe(0);
     expect(result.stdout).toContain(path.join("node-compile-cache", "openclaw", "2026.4.29"));
     expect(result.stdout).not.toContain(path.join(runCwd, "openclaw"));
+  });
+
+  it.each([
+    "owned",
+    "direct",
+    "foreign",
+    "source",
+    "disabled-zero",
+    "disabled-empty",
+    "cache-empty",
+  ])("shares the first-success compile cache base with bundled helpers: %s", async (mode) => {
+    const fixtureRoot = await makeLauncherFixture(fixtureRoots);
+    const tmpRoot = makeTempDir(fixtureRoots, "openclaw-launcher-cache-");
+    await fs.writeFile(path.join(fixtureRoot, "package.json"), '{"version":"2026.9.6"}\n');
+    if (mode === "source") {
+      await addGitMarker(fixtureRoot);
+    }
+    // Separate compiled copies exercise the same cross-chunk boundary as runtime
+    // entry/worker consumers, without reading or seeding a private owner slot.
+    for (const [entryPoint, name, exportName] of [
+      ["src/infra/node-compile-cache-env.ts", "cache-a.mjs", "resolveNodeCompileCacheEnv"],
+      ["src/infra/node-compile-cache-env.ts", "cache-b.mjs", "resolveNodeCompileCacheEnv"],
+      ["src/entry.compile-cache.ts", "cache-owner.mjs", "enableOpenClawCompileCache"],
+    ] as const) {
+      const built = await esbuild({
+        bundle: true,
+        metafile: true,
+        stdin: {
+          contents: `export { ${exportName} } from ${JSON.stringify(path.resolve(entryPoint))};`,
+          resolveDir: process.cwd(),
+          sourcefile: "compile-cache-owner-fixture.ts",
+          loader: "ts",
+        },
+        format: "esm",
+        outfile: path.join(fixtureRoot, "dist", name),
+        platform: "node",
+        target: "node24",
+      });
+      if (!built.metafile) {
+        throw new Error("Compile-cache fixture bundle metadata is missing");
+      }
+      for (const output of Object.values(built.metafile.outputs)) {
+        for (const imported of output.imports) {
+          expect(
+            imported.path.startsWith("node:") || builtinModules.includes(imported.path),
+            `Fixture must own its nonbuiltin dependencies: ${imported.path}`,
+          ).toBe(true);
+        }
+      }
+    }
+    await fs.writeFile(
+      path.join(fixtureRoot, "dist", "entry.js"),
+      `import assert from "node:assert/strict";
+         import { getCompileCacheDir } from "node:module";
+         import { Worker } from "node:worker_threads";
+         import { once } from "node:events";
+         import { resolveNodeCompileCacheEnv as resolveA } from "./cache-a.mjs";
+         import { resolveNodeCompileCacheEnv as resolveB } from "./cache-b.mjs";
+         import { enableOpenClawCompileCache } from "./cache-owner.mjs";
+         const before = { ...process.env };
+         // First enable for direct entry; ALREADY_ENABLED after the real launcher.
+         enableOpenClawCompileCache({ installRoot: ${JSON.stringify(fixtureRoot)} });
+         const parentDirectory = getCompileCacheDir() ?? null;
+         const a = resolveA();
+         const b = resolveB();
+         assert.deepEqual(a, b, "separate built helpers must share the launcher fact");
+         if (["owned", "direct"].includes(${JSON.stringify(mode)})) {
+           assert.ok(parentDirectory);
+           assert.equal(process.env.NODE_COMPILE_CACHE, undefined);
+         } else if (${JSON.stringify(mode)} === "foreign") {
+           assert.ok(parentDirectory);
+           assert.equal(process.env.NODE_COMPILE_CACHE, undefined);
+           assert.equal(process.env.OPENCLAW_PACKAGED_COMPILE_CACHE_RESPAWNED, "1");
+           assert.strictEqual(a, process.env, "foreign first enable has no owned base");
+         } else {
+           assert.strictEqual(a, process.env, "authored policy or absent ownership wins");
+         }
+         const worker = new Worker(
+           'const { parentPort } = require("node:worker_threads"); parentPort.postMessage(require("node:module").getCompileCacheDir() ?? null);',
+           { eval: true, execArgv: [], env: b },
+         );
+         const exited = once(worker, "exit");
+         const [directory] = await once(worker, "message");
+         const [code] = await exited;
+         assert.equal(code, 0);
+         assert.equal(directory, ["owned", "direct"].includes(${JSON.stringify(mode)}) ? parentDirectory : null);
+         assert.deepEqual({ ...process.env }, before);
+         process.stdout.write("cache-base:verified");`,
+    );
+    const args = [path.join(fixtureRoot, mode === "direct" ? "dist/entry.js" : "openclaw.mjs")];
+    if (mode === "foreign") {
+      const preload = path.join(fixtureRoot, "foreign.mjs");
+      await fs.writeFile(
+        preload,
+        `import assert from "node:assert/strict";
+           import { enableCompileCache, constants } from "node:module";
+           assert.equal(enableCompileCache(${JSON.stringify(path.join(tmpRoot, "foreign"))}).status,
+             constants.compileCacheStatus.ENABLED);`,
+      );
+      args.unshift("--import", pathToFileURL(preload).href);
+    }
+    const result = spawnSync(testNodeExecPath, args, {
+      cwd: fixtureRoot,
+      env: launcherEnv({
+        HOME: tmpRoot,
+        TMP: tmpRoot,
+        TEMP: tmpRoot,
+        TMPDIR: tmpRoot,
+        NODE_OPTIONS: undefined,
+        NODE_DISABLE_COMPILE_CACHE:
+          mode === "disabled-zero" ? "0" : mode === "disabled-empty" ? "" : undefined,
+        NODE_COMPILE_CACHE: mode === "cache-empty" ? "" : undefined,
+        // This negative control must retain its foreign first enable in the same
+        // Node instance; all ordinary launch modes scrub inherited sentinels.
+        OPENCLAW_PACKAGED_COMPILE_CACHE_RESPAWNED: mode === "foreign" ? "1" : undefined,
+        OPENCLAW_COMPILE_CACHE_DISABLED_RESPAWNED: undefined,
+      }),
+      encoding: "utf8",
+      timeout: 10_000,
+    });
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.stdout).toBe("cache-base:verified");
   });
 
   it("enables compile cache for packaged launchers", async () => {

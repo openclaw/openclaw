@@ -176,7 +176,7 @@ exception), so the agent can self-correct:
     Grok models, web/x search, and code execution config.
   </Card>
   <Card title="Code Mode" href="/tools/code-mode" icon="code">
-    A separate surface: JavaScript/TypeScript orchestration of enabled tools in
+    A separate surface: JavaScript orchestration of enabled tools in
     OpenClaw's own worker, not this remote Python tool.
   </Card>
 </CardGroup>

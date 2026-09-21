@@ -76,6 +76,7 @@ function appendBranchEntry(params: {
       entry.fromHook,
       // An unknown historical run must not inherit the rewriting run's identity.
       { runId: identity?.runId, ...identity },
+      entry.tokensAfter,
     );
   }
   if (entry.type === "reset") {

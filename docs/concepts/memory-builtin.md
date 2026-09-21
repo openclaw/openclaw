@@ -26,6 +26,9 @@ started.
 Native sqlite-vec queries run in a separate, read-only process so a slow query
 does not block the Gateway event loop. Cancelling a search terminates its query
 process; OpenClaw does not retry that native query on the Gateway thread.
+Queries reuse a process for each database, with at most two processes alive.
+Idle processes retire after 30 minutes or when another database needs capacity.
+Each query reopens the database so committed updates and replaced indexes remain visible.
 
 If semantic retrieval reaches the 30-second tool deadline after keyword matches
 from memory files are ready, `memory_search` returns those matches with a

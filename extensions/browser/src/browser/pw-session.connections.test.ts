@@ -58,6 +58,7 @@ function makeBrowser(targetId: string, url: string): BrowserMockBundle {
 function makeDisconnectedReadBrowser(): BrowserMockBundle {
   const browserClose = vi.fn(async () => {});
   const page = {
+    isClosed: () => true,
     on: vi.fn(),
     context: () => context,
     title: vi.fn(async () => {
@@ -77,6 +78,7 @@ function makeDisconnectedReadBrowser(): BrowserMockBundle {
   } as unknown as import("playwright-core").BrowserContext;
 
   const browser = {
+    isConnected: () => false,
     contexts: () => [context],
     on: vi.fn(),
     off: vi.fn(),

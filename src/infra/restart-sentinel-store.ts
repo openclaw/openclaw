@@ -1,6 +1,7 @@
 import type { DatabaseSync } from "node:sqlite";
 import { safeParseJson } from "@openclaw/normalization-core";
 import { isRecord as isPlainRecord } from "@openclaw/normalization-core/record-coerce";
+import type { Selectable } from "kysely";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import {
   executeSqliteQuerySync,
@@ -101,6 +102,10 @@ const RESTART_SENTINEL_STATUSES = new Set<RestartSentinelPayload["status"]>([
 ]);
 
 type GatewayRestartSentinelDatabase = Pick<OpenClawStateKyselyDatabase, "gateway_restart_sentinel">;
+type RestartSentinelRow = Omit<
+  Selectable<GatewayRestartSentinelDatabase["gateway_restart_sentinel"]>,
+  "sentinel_key" | "payload_json"
+>;
 
 function isFiniteNumber(value: unknown): value is number {
   return typeof value === "number" && Number.isFinite(value);
@@ -135,17 +140,11 @@ function parseRestartSentinelLog(value: unknown): RestartSentinelLog | null {
   ) {
     return null;
   }
-  const result: RestartSentinelLog = {};
-  if (stdoutTail !== undefined) {
-    result.stdoutTail = stdoutTail;
-  }
-  if (stderrTail !== undefined) {
-    result.stderrTail = stderrTail;
-  }
-  if (exitCode !== undefined) {
-    result.exitCode = exitCode as number | null;
-  }
-  return result;
+  return {
+    ...(stdoutTail !== undefined ? { stdoutTail } : {}),
+    ...(stderrTail !== undefined ? { stderrTail } : {}),
+    ...(exitCode !== undefined ? { exitCode: exitCode as number | null } : {}),
+  };
 }
 
 function parseRestartSentinelStep(value: unknown): RestartSentinelStep | null {
@@ -168,24 +167,17 @@ function parseRestartSentinelStep(value: unknown): RestartSentinelStep | null {
   ) {
     return null;
   }
-  const result: RestartSentinelStep = { name: value.name, command: value.command };
+  const { name, command } = value;
   const facts = UpdateFailureFactSchema.array().max(5).safeParse(value.failureFacts);
-  if (facts.success) {
-    result.failureFacts = facts.data;
-  }
-  if (cwd !== undefined) {
-    result.cwd = cwd;
-  }
-  if (durationMs !== undefined) {
-    result.durationMs = durationMs as number | null;
-  }
-  if (log !== undefined) {
-    result.log = log === null ? null : parseRestartSentinelLog(log);
-  }
-  if (advisory !== undefined) {
-    result.advisory = advisory;
-  }
-  return result;
+  return {
+    name,
+    command,
+    ...(facts.success ? { failureFacts: facts.data } : {}),
+    ...(cwd !== undefined ? { cwd } : {}),
+    ...(durationMs !== undefined ? { durationMs: durationMs as number | null } : {}),
+    ...(log !== undefined ? { log: log === null ? null : parseRestartSentinelLog(log) } : {}),
+    ...(advisory !== undefined ? { advisory } : {}),
+  };
 }
 
 function parseRestartSentinelStats(value: unknown): RestartSentinelStats | null {
@@ -225,45 +217,23 @@ function parseRestartSentinelStats(value: unknown): RestartSentinelStats | null 
   ) {
     return null;
   }
-  const result: RestartSentinelStats = {};
   // Recovery is diagnostic here; unsupported metadata must not suppress the restart notice.
-  if (recovery?.success) {
-    result.recovery = recovery.data;
-  }
-  if (mode !== undefined) {
-    result.mode = mode;
-  }
-  if (root !== undefined) {
-    result.root = root;
-  }
-  if (target !== undefined) {
-    result.target = target;
-  }
-  if (value.requiresRestart !== undefined) {
-    result.requiresRestart = value.requiresRestart as boolean;
-  }
-  if (handoffId !== undefined) {
-    result.handoffId = handoffId;
-  }
-  if (runId !== undefined) {
-    result.runId = runId;
-  }
-  if (before !== undefined) {
-    result.before = before as Record<string, unknown> | null;
-  }
-  if (after !== undefined) {
-    result.after = after as Record<string, unknown> | null;
-  }
-  if (steps !== undefined) {
-    result.steps = steps.map((step) => parseRestartSentinelStep(step)!);
-  }
-  if (reason !== undefined) {
-    result.reason = reason;
-  }
-  if (durationMs !== undefined) {
-    result.durationMs = durationMs as number | null;
-  }
-  return result;
+  return {
+    ...(recovery?.success ? { recovery: recovery.data } : {}),
+    ...(mode !== undefined ? { mode } : {}),
+    ...(root !== undefined ? { root } : {}),
+    ...(target !== undefined ? { target } : {}),
+    ...(value.requiresRestart !== undefined
+      ? { requiresRestart: value.requiresRestart as boolean }
+      : {}),
+    ...(handoffId !== undefined ? { handoffId } : {}),
+    ...(runId !== undefined ? { runId } : {}),
+    ...(before !== undefined ? { before: before as Record<string, unknown> | null } : {}),
+    ...(after !== undefined ? { after: after as Record<string, unknown> | null } : {}),
+    ...(steps !== undefined ? { steps: steps.map((step) => parseRestartSentinelStep(step)!) } : {}),
+    ...(reason !== undefined ? { reason } : {}),
+    ...(durationMs !== undefined ? { durationMs: durationMs as number | null } : {}),
+  };
 }
 
 function parseRestartSentinelContinuation(value: unknown): RestartSentinelContinuation | null {
@@ -321,16 +291,11 @@ function parseRestartSentinelPayload(value: unknown): RestartSentinelPayload | n
     ) {
       return null;
     }
-    deliveryContext = {};
-    if (channel !== undefined) {
-      deliveryContext.channel = channel;
-    }
-    if (to !== undefined) {
-      deliveryContext.to = to;
-    }
-    if (accountId !== undefined) {
-      deliveryContext.accountId = accountId;
-    }
+    deliveryContext = {
+      ...(channel !== undefined ? { channel } : {}),
+      ...(to !== undefined ? { to } : {}),
+      ...(accountId !== undefined ? { accountId } : {}),
+    };
   }
 
   let continuation: RestartSentinelContinuation | null | undefined;
@@ -350,35 +315,22 @@ function parseRestartSentinelPayload(value: unknown): RestartSentinelPayload | n
     }
   }
 
-  const result: RestartSentinelPayload = {
+  // SQL NULL is canonical absence for optional top-level columns. Normalize
+  // legacy nulls and empty routes so writes and typed-column reads agree.
+  return {
     kind: value.kind as RestartSentinelPayload["kind"],
     status: value.status as RestartSentinelPayload["status"],
     ts: value.ts,
+    ...(sessionKey !== undefined ? { sessionKey } : {}),
+    ...(deliveryContext !== undefined && Object.keys(deliveryContext).length > 0
+      ? { deliveryContext }
+      : {}),
+    ...(threadId !== undefined ? { threadId } : {}),
+    ...(message !== undefined && message !== null ? { message } : {}),
+    ...(continuation !== undefined && continuation !== null ? { continuation } : {}),
+    ...(doctorHint !== undefined && doctorHint !== null ? { doctorHint } : {}),
+    ...(stats !== undefined && stats !== null ? { stats } : {}),
   };
-  if (sessionKey !== undefined) {
-    result.sessionKey = sessionKey;
-  }
-  // SQL NULL is canonical absence for optional top-level columns. Normalize
-  // legacy nulls and empty routes so writes and typed-column reads agree.
-  if (deliveryContext !== undefined && Object.keys(deliveryContext).length > 0) {
-    result.deliveryContext = deliveryContext;
-  }
-  if (threadId !== undefined) {
-    result.threadId = threadId;
-  }
-  if (message !== undefined && message !== null) {
-    result.message = message;
-  }
-  if (continuation !== undefined && continuation !== null) {
-    result.continuation = continuation;
-  }
-  if (doctorHint !== undefined && doctorHint !== null) {
-    result.doctorHint = doctorHint;
-  }
-  if (stats !== undefined && stats !== null) {
-    result.stats = stats;
-  }
-  return result;
 }
 
 export function parseRestartSentinelEnvelope(value: unknown): RestartSentinelEnvelope | null {
@@ -396,68 +348,34 @@ function parseRequiredJson(value: string | null): unknown {
   return safeParseJson(value);
 }
 
-function decodeRestartSentinelRow(row: {
-  version: number;
-  kind: string;
-  status: string;
-  ts: number;
-  session_key: string | null;
-  thread_id: string | null;
-  delivery_channel: string | null;
-  delivery_to: string | null;
-  delivery_account_id: string | null;
-  message: string | null;
-  continuation_json: string | null;
-  doctor_hint: string | null;
-  stats_json: string | null;
-  updated_at_ms: number;
-}): RestartSentinel | null {
+function decodeRestartSentinelRow(row: RestartSentinelRow): RestartSentinel | null {
   if (row.version !== 1 || !isSafeInteger(row.updated_at_ms)) {
     return null;
   }
-  const candidate: Record<string, unknown> = {
+  const continuation = parseRequiredJson(row.continuation_json);
+  if (row.continuation_json !== null && continuation === undefined) {
+    return null;
+  }
+  const stats = parseRequiredJson(row.stats_json);
+  if (row.stats_json !== null && stats === undefined) {
+    return null;
+  }
+  const payload = parseRestartSentinelPayload({
     kind: row.kind,
     status: row.status,
     ts: row.ts,
-  };
-  if (row.session_key !== null) {
-    candidate.sessionKey = row.session_key;
-  }
-  if (row.thread_id !== null) {
-    candidate.threadId = row.thread_id;
-  }
-  if (
-    row.delivery_channel !== null ||
-    row.delivery_to !== null ||
-    row.delivery_account_id !== null
-  ) {
-    candidate.deliveryContext = {
-      ...(row.delivery_channel === null ? {} : { channel: row.delivery_channel }),
-      ...(row.delivery_to === null ? {} : { to: row.delivery_to }),
-      ...(row.delivery_account_id === null ? {} : { accountId: row.delivery_account_id }),
-    };
-  }
-  if (row.message !== null) {
-    candidate.message = row.message;
-  }
-  if (row.continuation_json !== null) {
-    const continuation = parseRequiredJson(row.continuation_json);
-    if (continuation === undefined) {
-      return null;
-    }
-    candidate.continuation = continuation;
-  }
-  if (row.doctor_hint !== null) {
-    candidate.doctorHint = row.doctor_hint;
-  }
-  if (row.stats_json !== null) {
-    const stats = parseRequiredJson(row.stats_json);
-    if (stats === undefined) {
-      return null;
-    }
-    candidate.stats = stats;
-  }
-  const payload = parseRestartSentinelPayload(candidate);
+    sessionKey: row.session_key ?? undefined,
+    threadId: row.thread_id ?? undefined,
+    deliveryContext: {
+      channel: row.delivery_channel ?? undefined,
+      to: row.delivery_to ?? undefined,
+      accountId: row.delivery_account_id ?? undefined,
+    },
+    message: row.message,
+    continuation,
+    doctorHint: row.doctor_hint,
+    stats,
+  });
   return payload ? { version: 1, payload, revision: row.updated_at_ms } : null;
 }
 
@@ -584,30 +502,13 @@ function upsertRestartSentinelRowSync(
   row: ReturnType<typeof buildRestartSentinelRow>,
 ): void {
   const stateDb = getNodeSqliteKysely<GatewayRestartSentinelDatabase>(db);
+  const { sentinel_key: _key, ...values } = row;
   executeSqliteQuerySync(
     db,
     stateDb
       .insertInto("gateway_restart_sentinel")
       .values(row)
-      .onConflict((conflict) =>
-        conflict.column("sentinel_key").doUpdateSet({
-          version: (eb) => eb.ref("excluded.version"),
-          kind: (eb) => eb.ref("excluded.kind"),
-          status: (eb) => eb.ref("excluded.status"),
-          ts: (eb) => eb.ref("excluded.ts"),
-          session_key: (eb) => eb.ref("excluded.session_key"),
-          thread_id: (eb) => eb.ref("excluded.thread_id"),
-          delivery_channel: (eb) => eb.ref("excluded.delivery_channel"),
-          delivery_to: (eb) => eb.ref("excluded.delivery_to"),
-          delivery_account_id: (eb) => eb.ref("excluded.delivery_account_id"),
-          message: (eb) => eb.ref("excluded.message"),
-          continuation_json: (eb) => eb.ref("excluded.continuation_json"),
-          doctor_hint: (eb) => eb.ref("excluded.doctor_hint"),
-          stats_json: (eb) => eb.ref("excluded.stats_json"),
-          payload_json: (eb) => eb.ref("excluded.payload_json"),
-          updated_at_ms: (eb) => eb.ref("excluded.updated_at_ms"),
-        }),
-      ),
+      .onConflict((conflict) => conflict.column("sentinel_key").doUpdateSet(values)),
   );
 }
 
@@ -674,13 +575,18 @@ export function writeUpdateInstallReceiptRowSync(
   return { version: 1, payload, revision };
 }
 
+/** Compare inside the caller's transaction; null requires an absent current row. */
 export function writeRestartSentinelRowIfRevisionSync(
   db: DatabaseSync,
   rawPayload: RestartSentinelPayload,
-  expectedRevision: number,
+  expectedRevision: number | null,
 ): RestartSentinel | null {
   const { state: current, revision: previousRevision } = readRestartSentinelSnapshotSync(db);
-  if (current.kind !== "valid" || current.sentinel.revision !== expectedRevision) {
+  if (
+    expectedRevision === null
+      ? current.kind !== "missing"
+      : current.kind !== "valid" || current.sentinel.revision !== expectedRevision
+  ) {
     return null;
   }
   const payload = requireValidPayload(rawPayload);
@@ -689,11 +595,16 @@ export function writeRestartSentinelRowIfRevisionSync(
   const stateDb = getNodeSqliteKysely<GatewayRestartSentinelDatabase>(db);
   const result = executeSqliteQuerySync(
     db,
-    stateDb
-      .updateTable("gateway_restart_sentinel")
-      .set(row)
-      .where("sentinel_key", "=", RESTART_SENTINEL_KEY)
-      .where("updated_at_ms", "=", expectedRevision),
+    expectedRevision === null
+      ? stateDb
+          .insertInto("gateway_restart_sentinel")
+          .values(row)
+          .onConflict((conflict) => conflict.column("sentinel_key").doNothing())
+      : stateDb
+          .updateTable("gateway_restart_sentinel")
+          .set(row)
+          .where("sentinel_key", "=", RESTART_SENTINEL_KEY)
+          .where("updated_at_ms", "=", expectedRevision),
   );
   if (result.numAffectedRows !== 1n) {
     return null;

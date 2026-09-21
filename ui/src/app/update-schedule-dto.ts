@@ -50,6 +50,9 @@ export function readUpdateAvailableValue(update: unknown): UpdateAvailable | nul
     ...(isNonEmptyProtocolString(update.currentSha) ? { currentSha: update.currentSha } : {}),
     ...(isNonEmptyProtocolString(update.upstreamRef) ? { upstreamRef: update.upstreamRef } : {}),
     ...(isNonEmptyProtocolString(update.upstreamSha) ? { upstreamSha: update.upstreamSha } : {}),
+    ...(isNonEmptyProtocolString(update.repositoryUrl)
+      ? { repositoryUrl: update.repositoryUrl }
+      : {}),
     ...(isBoundedInteger(update.commitsBehind, 0) ? { commitsBehind: update.commitsBehind } : {}),
     ...(commits?.length ? { commits } : {}),
   };

@@ -12,6 +12,7 @@ import { makeTextToolResult } from "../../test/helpers/text-tool-result.js";
 import { makeUserMessage } from "../../test/helpers/user-message.js";
 import {
   appendTranscriptMessage,
+  appendTranscriptMessageSync,
   loadSessionEntry,
   listSessionPendingInputs,
   persistCompactionBoundaryWithSessionEntrySync,
@@ -34,6 +35,7 @@ import {
   createUserTurnTranscriptRecorder,
   type UserTurnTranscriptRecorder,
 } from "../sessions/user-turn-transcript.js";
+import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import { createAssistantErrorTranscript } from "./assistant-error-transcript.js";
 import { normalizeAssistantReplayContent } from "./embedded-agent-runner/replay-history.js";
 import { runAgentHarnessBeforeMessageWriteHook } from "./harness/hook-helpers.js";
@@ -77,6 +79,72 @@ afterEach(() => {
 });
 
 describe("guardSessionManager transcript updates", () => {
+  it("preserves prepared source and redaction when a concurrent append forces a retry", async () => {
+    const { sessionManager: manager, target } = await openPersistedSessionManager();
+    const baseId = manager.appendMessage(makeUserMessage("Compute a value", 1));
+    installSessionToolResultGuard(manager, {
+      config: { logging: { redactPatterns: [String.raw`/opaque\(([^)]+)\)/g`] } },
+    });
+    const code = "const API_TOKEN = computeToken(); return API_TOKEN;";
+    const toolCall = {
+      type: "toolCall" as const,
+      id: "retry-source",
+      name: "exec",
+      arguments: { code },
+    };
+    const message = makeAgentAssistantMessage({
+      content: [{ type: "text", text: "opaque(abcdefghijklmnopqrst)" }, toolCall],
+      stopReason: "toolUse",
+    });
+    const stream = createAssistantMessageEventStream();
+    stream.push({ type: "done", reason: "toolUse", message });
+    const response = await wrapStreamFnCodeModeSource(() => stream, new Set(["exec"]))(
+      makeProviderModelFixture({
+        id: "test-model",
+        api: "openai-responses",
+        provider: "openai",
+        baseUrl: "https://example.invalid",
+      }),
+      { messages: [] },
+    );
+    const emitted = await response.result();
+    const { db } = openOpenClawAgentDatabase({ agentId: target.agentId, path: target.storePath });
+    const exec = db.exec.bind(db);
+    let injected = false;
+    const execSpy = vi.spyOn(db, "exec").mockImplementation((statement) => {
+      if (statement === "BEGIN IMMEDIATE" && !injected) {
+        injected = true;
+        // Commit after validation but before the writer acquires its snapshot.
+        const concurrent = appendTranscriptMessageSync(target, {
+          eventId: "concurrent-assistant",
+          message: makeAgentAssistantMessage({ content: [{ type: "text", text: "Concurrent" }] }),
+        });
+        expect(concurrent.ok).toBe(true);
+      }
+      return exec(statement);
+    });
+    let entryId: string;
+    try {
+      entryId = manager.appendMessage(
+        emitted,
+        prepareCodeModeSourceAppend({}, emitted, takeCodeModeResponseSource(emitted)),
+      );
+      expect(execSpy).toHaveBeenCalledWith("ROLLBACK");
+    } finally {
+      execSpy.mockRestore();
+    }
+    closeOpenClawAgentDatabasesForTest();
+    const entries = SessionManager.open(target).getBranch();
+    expect(entries.map(({ id, parentId }) => ({ id, parentId }))).toEqual([
+      { id: baseId, parentId: null },
+      { id: "concurrent-assistant", parentId: baseId },
+      { id: entryId, parentId: "concurrent-assistant" },
+    ]);
+    expect(entries.at(-1)).toMatchObject({
+      message: { content: [{ type: "text", text: "opaque(abcdef…qrst)" }, toolCall] },
+    });
+  });
+
   it("refreshes the deferred error owner when a session manager serves a new run", async () => {
     const { sessionManager, target } = await openPersistedSessionManager();
     const first = createAssistantErrorTranscript({ runId: "run-first" });

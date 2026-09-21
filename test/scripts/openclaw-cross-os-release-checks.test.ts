@@ -16,7 +16,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve as resolvePath, win32 } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   agentOutputHasExpectedOkMarker,
   acquireManagedGatewayInstallerHostLease,
@@ -111,6 +111,7 @@ import {
   writePackageDistInventoryForCandidate,
   writeSummary,
 } from "../../scripts/lib/cross-os-release-checks/index.ts";
+import * as candidateProcess from "../../scripts/lib/cross-os-release-checks/process.ts";
 import { LOCAL_BUILD_METADATA_DIST_PATHS } from "../../scripts/lib/local-build-metadata-paths.mts";
 
 const rootPackageManager = (
@@ -1188,6 +1189,80 @@ describe("scripts/openclaw-cross-os-release-checks", () => {
       });
     });
   });
+
+  it.each([true, false])(
+    "prepares source-owned package inventory (helper=%s)",
+    async (hasHelper) => {
+      await withTempDirAsync("openclaw-cross-os-prepare-package-", async (sourceDir) => {
+        const outputDir = join(sourceDir, "out");
+        const logsDir = join(sourceDir, "logs");
+        const helperPath = join(sourceDir, "scripts", "package-openclaw-for-docker.mjs");
+        const inventoryPath = join(sourceDir, "dist", "postinstall-inventory.json");
+        const candidateTgz = join(outputDir, "package", "openclaw-2026.9.1.tgz");
+        const sourceSha = "a".repeat(40);
+        mkdirSync(dirname(helperPath), { recursive: true });
+        mkdirSync(dirname(inventoryPath), { recursive: true });
+        writeFileSync(
+          join(sourceDir, "CHANGELOG.md"),
+          "# Changelog\n\n## 2026.9.1\n\n- Preserve source-owned inventory during candidate packaging.\n",
+        );
+        writeFileSync(join(sourceDir, "pnpm-workspace.yaml"), "nodeLinker: isolated\n");
+        writeFileSync(
+          join(sourceDir, "package.json"),
+          JSON.stringify({
+            name: "openclaw",
+            version: "2026.9.1",
+            ...(hasHelper ? { bundleDependencies: ["fixture-runtime"] } : {}),
+          }),
+        );
+        if (hasHelper) {
+          writeFileSync(helperPath, "export {};\n");
+        }
+        const commands = vi
+          .spyOn(candidateProcess, "runCommand")
+          .mockImplementation(async (_, args) => {
+            let stdout = "";
+            if (args[0] === "rev-parse") {
+              stdout = sourceSha;
+            } else if (args[0] === helperPath) {
+              writeFileSync(inventoryPath, JSON.stringify(["dist/from-source-helper.js"]));
+              writeFileSync(candidateTgz, "fixture tarball");
+              stdout = `${candidateTgz}\n`;
+            } else if (args[0] === "pack") {
+              if (hasHelper) {
+                throw new Error('bundleDependencies does not work with "nodeLinker: isolated"');
+              }
+              stdout = JSON.stringify(
+                args.includes("--dry-run")
+                  ? { files: [{ path: "dist/from-historical-pack.js" }] }
+                  : { filename: candidateTgz, version: "2026.9.1" },
+              );
+            }
+            return { exitCode: 0, stdout, stderr: "" };
+          });
+        try {
+          const candidate = await prepareCandidate({ sourceDir, outputDir, logsDir });
+
+          expect(candidate).toMatchObject({
+            sourceSha,
+            candidateTgz,
+            candidateVersion: "2026.9.1",
+          });
+          expect(JSON.parse(readFileSync(inventoryPath, "utf8"))).toEqual([
+            hasHelper ? "dist/from-source-helper.js" : "dist/from-historical-pack.js",
+          ]);
+          expect(commands.mock.calls.filter(([, args]) => args[0] === "pack")).toHaveLength(
+            hasHelper ? 0 : 2,
+          );
+          expect(commands.mock.calls.filter(([, args]) => args[0] === helperPath)).toHaveLength(
+            hasHelper ? 1 : 0,
+          );
+        } finally {
+          commands.mockRestore();
+        }
+      });
+    },
+  );
 
   it("keeps the Windows packaged-upgrade fallback install out of npm lifecycle scripts", () => {
     const source = readFileSync("scripts/lib/cross-os-release-checks/lanes.ts", "utf8");

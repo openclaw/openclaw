@@ -378,21 +378,25 @@ describe("VisitorAccessService", () => {
     expect(fixture.mutations()).toEqual([]);
   });
 
-  it.each(["revoke", "sweep"] as const)(
-    "retains expiry records after a failed Cloudflare %s so cleanup can retry",
-    async (operation) => {
-      const expired = visitorGrant("expired@example.com", { expiresAt: NOW });
-      const fixture = visitorFixture({ grants: [expired], emails: [expired.email] });
+  it.each([
+    { operation: "revoke", expiresAt: NOW + DAY_MS },
+    { operation: "revoke", expiresAt: null },
+    { operation: "sweep", expiresAt: NOW },
+  ] as const)(
+    "retains ended grants after a failed Cloudflare $operation with expiry $expiresAt so cleanup can retry",
+    async ({ operation, expiresAt }) => {
+      const grant = visitorGrant("visitor@example.com", { expiresAt });
+      const fixture = visitorFixture({ grants: [grant], emails: [grant.email] });
       fixture.cloudflare.failWrites = true;
 
       await expect(
         operation === "revoke"
-          ? fixture.service.revoke({ email: expired.email })
+          ? fixture.service.revoke({ email: grant.email })
           : fixture.service.sweep(),
       ).rejects.toBeInstanceOf(VisitorAccessError);
 
-      expect(fixture.grants.get(expired.email)).toEqual(expired);
-      expect(fixture.emails()).toEqual([expired.email]);
+      expect(fixture.grants.get(grant.email)).toEqual({ ...grant, expiresAt: NOW });
+      expect(fixture.emails()).toEqual([grant.email]);
       fixture.cloudflare.failWrites = false;
       await fixture.service.sweep();
       expect(fixture.grants.size).toBe(0);

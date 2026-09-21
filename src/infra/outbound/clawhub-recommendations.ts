@@ -11,7 +11,7 @@ import {
   CLAWHUB_RECOMMENDATION_LIMIT,
   type ClawHubRecommendation,
 } from "../../shared/clawhub-recommendations.js";
-import { buildWorkspaceSkillStatus } from "../../skills/discovery/status.js";
+import { prepareWorkspaceSkillStatus } from "../../skills/discovery/status.js";
 import { resolveClawHubBaseUrl, resolveClawHubImageUrl } from "../clawhub-client.js";
 import { fetchClawHubPluginCatalog } from "../clawhub-plugin-catalog.js";
 import { searchClawHubSkills } from "../clawhub-skills.js";
@@ -86,10 +86,12 @@ export async function resolveClawHubRecommendations(params: {
     }
     const local =
       params.workspaceDir && official.length > 0
-        ? buildWorkspaceSkillStatus(params.workspaceDir, {
-            config: params.config,
-            agentId: params.agentId,
-          }).skills
+        ? (
+            await prepareWorkspaceSkillStatus(params.workspaceDir, {
+              config: params.config,
+              agentId: params.agentId,
+            })
+          ).report.skills
         : [];
     cards = official.map((entry) => {
       const iconUrl = resolveClawHubImageUrl(entry.icon);

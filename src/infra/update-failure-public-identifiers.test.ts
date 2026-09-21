@@ -3,7 +3,13 @@ import {
   SKIPPED_UPDATE_OUTCOMES,
   UPDATE_ENVIRONMENT_FAILURE_REASONS,
 } from "../shared/update-outcome.js";
-import { projectPublicUpdateFailureIdentifiers } from "./update-failure-public-identifiers.js";
+import {
+  preparePublicUpdateFailureIdentifiers,
+  projectPublicUpdateFailureIdentifiers,
+} from "./update-failure-public-identifiers.js";
+
+// Load the real catalogs before individual assertion deadlines, as the reporter does.
+await preparePublicUpdateFailureIdentifiers();
 
 it.each([...Object.keys(SKIPPED_UPDATE_OUTCOMES), ...UPDATE_ENVIRONMENT_FAILURE_REASONS])(
   "preserves the public update outcome %s in report identifiers",

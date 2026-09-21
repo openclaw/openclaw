@@ -5,7 +5,6 @@ import {
   type ExecutionOwnerBindingResult,
 } from "../audit/execution-owner-binding.js";
 import { readSqliteBusyTimeout } from "../infra/sqlite-busy-timeout.js";
-import { repairLegacyTaskIdentifiers } from "../state/openclaw-state-db-legacy-backfills.js";
 import { withExistingOpenClawStateDatabaseReadOnly } from "../state/openclaw-state-db-readonly.js";
 import { withSharedStateWriteCoordinator } from "../state/openclaw-state-db-write-coordination.js";
 import {
@@ -15,8 +14,9 @@ import {
   type OpenClawStateDatabase,
   type OpenClawStateDatabaseOptions,
 } from "../state/openclaw-state-db.js";
+import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
+import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
 import {
-  bindTaskRunExecutionInDatabase,
   deleteTaskRowsWithDeliveryState,
   listTaskRecordsByRuntimeSourceIdInDatabase,
   readTaskRegistrySnapshot,
@@ -59,10 +59,6 @@ function withWriteTransaction(write: (database: OpenClawStateDatabase) => void) 
 
 export function loadTaskRegistryStateFromSqlite(): TaskRegistryStoreSnapshot {
   return readTaskRegistrySnapshot(openTaskRegistryDatabase());
-}
-
-export function repairLegacyTaskIdentifiersInSqlite(): void {
-  withWriteTransaction(({ db }) => repairLegacyTaskIdentifiers(db));
 }
 
 export function withTaskRegistrySqliteMutation<T>(operation: () => T): T {
@@ -118,19 +114,38 @@ export function listTaskRegistryRecordsByRuntimeSourceIdFromSqlite(params: {
 }
 
 /** Binds only the exact task row selected before admission; runId is never a join key. */
-export function bindTaskRunExecution(params: {
+export async function bindTaskRunExecution(params: {
   admitted: AdmittedRunContext;
   taskId: string;
-  options?: OpenClawStateDatabaseOptions;
-}): ExecutionOwnerBindingResult {
+  options?: Pick<OpenClawStateDatabaseOptions, "path" | "env">;
+  context?: OpenClawStateWorkerContext;
+  assertCurrent?: () => void;
+}): Promise<ExecutionOwnerBindingResult> {
   const binding = executionOwnerBindingFromAdmission(params.admitted);
   if (!binding) {
     return "disabled";
   }
-  return runOpenClawStateWriteTransaction(
-    ({ db }) => bindTaskRunExecutionInDatabase(db, params.taskId, binding),
-    params.options,
-    { operationLabel: "task.run.execution-binding" },
+  const context = params.context ?? captureOpenClawStateWorkerContext(params.options);
+  const input = { taskId: params.taskId, binding };
+  const assertOwnerCurrent = params.assertCurrent;
+  const assertCurrent = () => {
+    context.admission.assertCurrent();
+    assertOwnerCurrent?.();
+  };
+  const [{ runOpenClawStateWorkerOperation }, { createSqliteWorkerWriteAdmission }] =
+    await Promise.all([
+      import("../state/openclaw-state-worker-store.js"),
+      import("../infra/sqlite-worker-store.js"),
+    ]);
+  return runOpenClawStateWorkerOperation(
+    context,
+    (scope) => scope.execute({ type: "tasks.bindExecution", input }),
+    {
+      assertCurrent,
+      createAdmission: createSqliteWorkerWriteAdmission(assertCurrent, [
+        context.admission.databasePath,
+      ]),
+    },
   );
 }
 

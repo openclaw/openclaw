@@ -90,7 +90,8 @@ vi.mock("./update-command-git.js", async (importOriginal) => ({
   updateGitInstall: mocks.runGitUpdate,
 }));
 
-vi.mock("./update-command-handoff.js", () => ({
+vi.mock("./update-command-handoff.js", async (original) => ({
+  ...(await original<typeof import("./update-command-handoff.js")>()),
   formatUpdateAncestryBlockMessage: (message: string) => message,
   handoffUpdateFromGateway: vi.fn(),
 }));

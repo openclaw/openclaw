@@ -265,6 +265,22 @@ export const GatewayConfigSchema = z
              * trust boundary and direct Gateway access is otherwise locked down.
              */
             allowLoopback: z.boolean().optional(),
+            /** Optional verified GitHub identity from one explicitly trusted Access OIDC provider. */
+            cloudflareAccessOidc: z
+              .strictObject({
+                /** Exact Cloudflare Access issuer origin, including https://. */
+                issuer: z
+                  .string()
+                  .regex(
+                    /^https:\/\/[a-z0-9](?:[a-z0-9.-]*[a-z0-9])?\.cloudflareaccess\.com$/u,
+                    "Expected a Cloudflare Access HTTPS issuer origin without a trailing slash",
+                  ),
+                /** Access identity-provider ID, not its display name or the OIDC subject. */
+                providerId: z.string().trim().min(1),
+                /** Forwarded claim containing a verified numeric GitHub account ID as a decimal string. */
+                githubAccountIdClaim: z.string().trim().min(1),
+              })
+              .optional(),
             /**
              * Automatically approve new browser/native UI operator devices and same-key scope upgrades after
              * trusted-proxy authentication. Disabled by default; configured scopes cap grants.

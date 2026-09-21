@@ -361,7 +361,7 @@ describe("fetchBrowserJson loopback auth", () => {
     await expectThrownBrowserFetchError(() => fetchBrowserJson<{ ok: boolean }>("/tabs"), {
       contains: [
         "Chrome CDP handshake timeout",
-        "Restart the OpenClaw gateway",
+        "openclaw browser doctor",
         "Retry the browser tool once",
         "If the same error persists",
       ],
@@ -373,7 +373,7 @@ describe("fetchBrowserJson loopback auth", () => {
     mocks.dispatch.mockRejectedValueOnce(new DOMException("operation aborted", "AbortError"));
 
     await expectThrownBrowserFetchError(() => fetchBrowserJson<{ ok: boolean }>("/tabs"), {
-      contains: ["operation aborted", "Restart the OpenClaw gateway"],
+      contains: ["operation aborted", "openclaw browser doctor"],
       omits: ["Do NOT retry the browser tool"],
     });
   });
@@ -463,7 +463,7 @@ describe("fetchBrowserJson loopback auth", () => {
     );
   });
 
-  it("keeps restart-gateway guidance for managed local dispatcher timeouts", async () => {
+  it("suggests browser diagnostics for managed local dispatcher timeouts", async () => {
     mocks.loadConfig.mockReturnValue({
       browser: {
         defaultProfile: "openclaw",
@@ -482,7 +482,7 @@ describe("fetchBrowserJson loopback auth", () => {
       {
         contains: [
           "Chrome CDP handshake timeout",
-          "Restart the OpenClaw gateway",
+          "openclaw browser doctor",
           "Retry the browser tool once",
           "If the same error persists",
         ],
@@ -491,7 +491,7 @@ describe("fetchBrowserJson loopback auth", () => {
     );
   });
 
-  it("keeps restart-gateway guidance when dispatcher profile resolution fails", async () => {
+  it("suggests browser diagnostics when dispatcher profile resolution fails", async () => {
     mocks.loadConfig.mockImplementation(() => {
       throw new Error("config unavailable");
     });
@@ -502,7 +502,7 @@ describe("fetchBrowserJson loopback auth", () => {
       {
         contains: [
           "Chrome CDP handshake timeout",
-          "Restart the OpenClaw gateway",
+          "openclaw browser doctor",
           "Retry the browser tool once",
           "If the same error persists",
         ],
@@ -511,7 +511,7 @@ describe("fetchBrowserJson loopback auth", () => {
     );
   });
 
-  it("keeps restart-gateway guidance for unknown dispatcher profiles", async () => {
+  it("suggests browser diagnostics for unknown dispatcher profiles", async () => {
     mocks.loadConfig.mockReturnValue({
       browser: {
         defaultProfile: "openclaw",
@@ -530,7 +530,7 @@ describe("fetchBrowserJson loopback auth", () => {
       {
         contains: [
           "Chrome CDP handshake timeout",
-          "Restart the OpenClaw gateway",
+          "openclaw browser doctor",
           "Retry the browser tool once",
           "If the same error persists",
         ],
@@ -645,7 +645,7 @@ describe("fetchBrowserJson loopback auth", () => {
 
     await expectThrownBrowserFetchError(() => fetchBrowserJson<{ ok: boolean }>("/tabs"), {
       contains: ["browser control disabled", "Do NOT retry the browser tool"],
-      omits: ["Retry the browser tool once"],
+      omits: ["Retry the browser tool once", "Restart the OpenClaw gateway"],
     });
   });
 

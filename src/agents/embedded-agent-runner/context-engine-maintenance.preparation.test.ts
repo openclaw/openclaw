@@ -282,6 +282,50 @@ describe("deferred maintenance synchronous preparation", () => {
     },
   );
 
+  it("releases generation leases inside closing cleanup after abort descendants settle", async () => {
+    const f = fixture();
+    const parent = new AsyncWorkScope();
+    const aborted = createDeferred();
+    const finishAbort = createDeferred();
+    let abortCompleted = false;
+    let released = false;
+    f.dispose.mockImplementation(async () => {
+      f.disposeEntered.resolve();
+      getAsyncWorkSignal()!.addEventListener("abort", () => {
+        void trackAsyncWork(async () => {
+          aborted.resolve();
+          await finishAbort.promise;
+          expect(released).toBe(false);
+          abortCompleted = true;
+        });
+      });
+      await f.disposeRelease.promise;
+    });
+    f.release.mockImplementation(() =>
+      trackAsyncWork(async () => {
+        expect(abortCompleted).toBe(true);
+        released = true;
+      }),
+    );
+    try {
+      await parent.track(f.schedule);
+      await parent.drain();
+      f.workRelease.resolve();
+      await f.disposeEntered.promise;
+      f.disposeRelease.resolve();
+      f.factoryRelease.resolve();
+      await aborted.promise;
+      expect(released).toBe(false);
+      finishAbort.resolve();
+      await Promise.all(f.deferred);
+      expect(released).toBe(true);
+    } finally {
+      finishAbort.resolve();
+      await f.cleanup();
+      await parent.drain();
+    }
+  });
+
   it("keeps preparation descendants independent of the foreground work scope", async () => {
     const f = fixture();
     const foreground = new AsyncWorkScope();

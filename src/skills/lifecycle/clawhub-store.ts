@@ -3,6 +3,10 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { normalizeOptionalString as normalizeOptionalStringValue } from "@openclaw/normalization-core/string-coerce";
 import {
+  getAgentWorkspaceAccess,
+  WorkspaceAccessUnavailableError,
+} from "../../agents/workspace-access.js";
+import {
   CLAWHUB_SKILLS_SH_REF_PREFIX,
   CLAWHUB_SKILLS_SH_TRUST_STATE,
   type ClawHubSkillsShTrustState,
@@ -412,7 +416,15 @@ export async function recordClawHubSkillInstall(
 }
 
 export async function readTrackedClawHubSkillSlugs(workspaceDir: string): Promise<string[]> {
-  return Object.keys((await readClawHubSkillsLockfile(workspaceDir)).skills).toSorted();
+  const workspaceAccess = getAgentWorkspaceAccess(workspaceDir, "loadSkills");
+  const access = workspaceAccess?.loadSkills ? workspaceAccess : undefined;
+  if (access && !access.clawHubSkills) {
+    throw new WorkspaceAccessUnavailableError("Remote workspace ClawHub tracking is unavailable");
+  }
+  const lock = await (
+    access?.clawHubSkills?.readClawHubSkillsLockfile ?? readClawHubSkillsLockfile
+  )(workspaceDir);
+  return Object.keys(lock.skills).toSorted();
 }
 
 export async function untrackClawHubSkill(
@@ -420,8 +432,13 @@ export async function untrackClawHubSkill(
   slug: string,
   beforePersistentApply?: () => void,
   beforeRollback = beforePersistentApply,
+  authorizeMutation?: (phase: "apply" | "rollback") => Promise<void>,
 ): Promise<() => Promise<void>> {
   const trackedSlug = normalizeTrackedSkillSlug(slug);
+  // Remote authorization can wait; read current tracking only after it returns.
+  if (authorizeMutation) {
+    await authorizeMutation("apply");
+  }
   const lock = await readClawHubSkillsLockfile(workspaceDir);
   const previous = lock.skills[trackedSlug];
   if (!previous) {
@@ -445,6 +462,9 @@ export async function untrackClawHubSkill(
   delete lock.skills[trackedSlug];
   writeLock(lock);
   return async () => {
+    if (authorizeMutation) {
+      await authorizeMutation("rollback");
+    }
     const current = await readClawHubSkillsLockfile(workspaceDir);
     if (current.skills[trackedSlug]) {
       throw new Error(`Skill ${JSON.stringify(trackedSlug)} was retracked during rollback.`);

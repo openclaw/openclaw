@@ -112,7 +112,7 @@ it("keeps successful candidate repair separate from a failed update and its proc
     phase: "snapshot" as const,
     steps: [
       {
-        name: "Preparing update checks",
+        name: "candidate-state-snapshot",
         command: "candidate validation",
         cwd: candidateRoot,
         durationMs: 1,
@@ -246,6 +246,14 @@ it("keeps successful candidate repair separate from a failed update and its proc
     [process.execPath, ...sourceImportArgs, childSource, childResultPath],
     { baseEnv: env, timeoutMs: 30_000 },
   );
-  expect(child.stdout.toString()).toContain("observed-failed-update:runtime-verification-failed");
-  expect(child.code, child.stderr.toString()).toBe(1);
+  const childDiagnostic = JSON.stringify({
+    code: child.code,
+    termination: child.termination,
+    signal: child.signal,
+    stderr: child.stderr.toString(),
+  });
+  expect(child.stdout.toString(), childDiagnostic).toContain(
+    "observed-failed-update:runtime-verification-failed",
+  );
+  expect(child.code, childDiagnostic).toBe(1);
 });

@@ -122,6 +122,7 @@ jobs:
       run_skills_python_job: ${{ steps.manifest.outputs.run_skills_python_job }}
       run_windows: ${{ steps.manifest.outputs.run_windows }}
       run_build_artifacts: ${{ steps.manifest.outputs.run_build_artifacts }}
+      run_proof_tier: ${{ steps.manifest.outputs.run_proof_tier }}
       run_checks_fast_core: ${{ steps.manifest.outputs.run_checks_fast_core }}
       run_checks_fast: ${{ steps.manifest.outputs.run_checks_fast }}
       historical_target: ${{ steps.manifest.outputs.historical_target }}
@@ -1335,6 +1336,9 @@ jobs:
               ? "./scripts/lib/channel-contract-test-plan.mts"
               : "./scripts/lib/channel-contract-test-plan.mjs",
           );
+          const windowsTestPlan = existsSync("./scripts/lib/ci-windows-test-plan.mts")
+            ? await import("./scripts/lib/ci-windows-test-plan.mts")
+            : null;
           const createChannelContractTestShards =
             typeof channelContractPlan.createChannelContractTestShards === "function"
               ? channelContractPlan.createChannelContractTestShards
@@ -1389,6 +1393,9 @@ jobs:
           const docsOnly = parseBoolean(process.env.OPENCLAW_CI_DOCS_ONLY);
           const docsChanged = parseBoolean(process.env.OPENCLAW_CI_DOCS_CHANGED);
           const releaseGate = parseBoolean(process.env.OPENCLAW_CI_RELEASE_GATE);
+          // Exact-head release gates substitute for PR CI. Ordinary manual CI
+          // is Full Release Validation's owner for the complete process proofs.
+          const runProofTier = eventName !== "pull_request" && !releaseGate;
           const releaseScope = process.env.OPENCLAW_CI_RELEASE_SCOPE ?? "full";
           const npmQualification = releaseScope === "npm-beta" || releaseScope === "npm-stable";
           const fullNativeValidation =
@@ -1596,10 +1603,8 @@ jobs:
           }
 
           const compactPullRequest = isCanonicalRepository && eventName === "pull_request";
-          const ownerPathEvent = isCanonicalRepository && (
-            eventName === "pull_request" ||
-            (eventName === "push" && process.env.GITHUB_REF === "refs/heads/main")
-          );
+          const ownerPathEvent = isCanonicalRepository &&
+            eventName === "push" && process.env.GITHUB_REF === "refs/heads/main";
           const dockerSeedLanes =
             ownerPathEvent &&
             changedPaths &&
@@ -1609,7 +1614,7 @@ jobs:
               : [];
           // Manual CI is Full Release Validation's owner for the exact
           // legacy-operator-state + auto-auth seed contract.
-          if (isCanonicalRepository && supportsDockerSeedE2e && (
+          if (runProofTier && isCanonicalRepository && supportsDockerSeedE2e && (
               eventName === "workflow_dispatch" || (ownerPathEvent && changedPaths === null))) {
             dockerSeedLanes.push("published-upgrade-survivor");
           }
@@ -1678,6 +1683,7 @@ jobs:
             typeof changedNodeTestPlan.hasSqliteSessionLifecycleAffectingChange !== "function" ||
             changedNodeTestPlan.hasSqliteSessionLifecycleAffectingChange(changedPaths);
           const runSqliteSessionLifecycle =
+            runProofTier &&
             runNodeFull &&
             supportsSqliteSessionLifecycleProof &&
             changedScopeHasSqliteSessionLifecycleImpact;
@@ -1689,20 +1695,24 @@ jobs:
             changedNodeTestPlan.hasControlUiPerformanceAffectingChange(changedPaths)
           );
           const runQaSmokeCi =
+            runProofTier &&
             runNodeFull &&
             changedScopeHasQaImpact &&
             (!frozenTarget || existsSync("extensions/qa-lab/src/ci-smoke-plan.ts"));
+          const nodeMatrixLimit = compactPlanMode === "pull-request" ? 130 : 70;
           const rawNodeTestShards = runNodeFull
             ? changedNodeTestShards
               ? changedNodeTestShards
               : [
                   ...createNodeTestPlan({
+                    includeProofTests: runProofTier,
                     includeReleaseOnlyPluginShards: false,
                     ...(compactPullRequest && changedPaths ? { changedPaths } : {}),
                     // Keep the legacy boolean for historical target planners;
                     // current planners use the event-specific mode.
                     compact: compactPlanMode !== undefined,
                     compactMode: compactPlanMode,
+                    compactNodeJobCap: nodeMatrixLimit - changedExtensionFallbackShards.filter((shard) => !shard.requiresDist).length,
                     runnerBackend: runnerProfile,
                   }),
                   ...changedExtensionFallbackShards,
@@ -1731,6 +1741,17 @@ jobs:
             shard_name,
             timing_key,
           }) => ({ configs, env, fallbackMaxWorkers, includePatterns, shard_name, timing_key });
+          const testRuntimePolicyPath = "./scripts/lib/ci-test-runtime.mts";
+          const testRuntimePolicy = existsSync(testRuntimePolicyPath)
+            ? await importTargetPlan(testRuntimePolicyPath)
+            : null;
+          const testRuntimeMode = testRuntimePolicy
+            ? eventName === "pull_request" || releaseGate
+              ? "bun-compatible"
+              : eventName === "workflow_dispatch"
+                ? "dual"
+                : "node"
+            : "node";
           const goToolingConfig = "test/vitest/vitest.tooling.config.ts";
           const knownToolingConfigs = new Set([
             goToolingConfig,
@@ -1745,6 +1766,8 @@ jobs:
               return {
                 check_name: shard.checkName,
                 runtime: "node",
+                test_runtime_policy: testRuntimeMode,
+                requires_bun: !shard.requiresDist && Boolean(testRuntimePolicy?.ciTestShardRequiresBun(shard, testRuntimeMode)),
                 task: "test-shard",
                 shard_name: shard.shardName,
                 groups_gzip_base64:
@@ -1791,7 +1814,6 @@ jobs:
             });
           const nodeTestNonDistShards = nodeTestShards.filter((shard) => !shard.requires_dist);
           // Bound the final matrix: precise plans and appended plugin rows can bypass compact caps.
-          const nodeMatrixLimit = compactPlanMode === "pull-request" ? 130 : 70;
           if (compactPlanMode && nodeTestNonDistShards.length > nodeMatrixLimit) {
             throw new Error(
               `Canonical ${eventName} Node matrix has ${nodeTestNonDistShards.length} jobs, exceeding limit ${nodeMatrixLimit}`,
@@ -1853,6 +1875,7 @@ jobs:
             run_skills_python: runSkillsPython,
             run_windows: runWindows,
             run_build_artifacts: runBuildArtifacts,
+            run_proof_tier: runProofTier,
             run_checks_fast_core: checksFastCoreTasks.length > 0,
             run_checks_fast: runNodeFull,
             historical_target: historicalTarget,
@@ -1907,13 +1930,17 @@ jobs:
             run_native_i18n: runNativeI18n,
             run_skills_python_job: runSkillsPython,
             run_checks_windows: runWindows,
-            // Blacksmith's Windows runner class admits exactly 2 concurrent jobs
-            // (measured on run 31865243804), so the split width is pinned to 2 on
-            // every backend. A 3rd part queues behind a finished one there, and a
-            // single lane serializes the whole 226s body onto the wall.
+            // Current targets balance the complete Windows inventory by measured
+            // file cost; historical targets retain their original package commands.
             checks_windows_matrix: createMatrix(
               runWindows
-                ? [1, 2].map((part) => ({
+                ? windowsTestPlan
+                  ? windowsTestPlan.createWindowsTestShards(packageScripts).map((shard) => ({
+                      ...shard,
+                      runtime: "node",
+                      task: "test",
+                    }))
+                  : [1, 2].map((part) => ({
                     check_name: `checks-windows-node-test-${part}`,
                     runtime: "node",
                     task: `test-${part}`,
@@ -2023,7 +2050,7 @@ jobs:
               "check-docs": count(manifest.run_check_docs),
               "skills-python": count(manifest.run_skills_python_job),
               "macos-node": count(manifest.run_macos_node, manifest.macos_node_matrix.include.length),
-              "macos-swift": count(manifest.run_macos_swift),
+              "macos-swift": count(manifest.run_macos_swift, 2),
               "ios-build": count(manifest.run_ios_build),
               "docker-seed-e2e": count(manifest.run_docker_seed_e2e && eventName === "pull_request" &&
                 process.env.OPENCLAW_CI_HEAD_REPOSITORY !== process.env.OPENCLAW_CI_REPOSITORY),
@@ -2259,7 +2286,7 @@ jobs:
       - name: Audit production dependencies
         run: node scripts/pre-commit/pnpm-audit-prod.mjs --audit-level=high
 
-  # Build dist once for Node-relevant changes and share it with downstream jobs.
+  # Build dist once for the built-artifact checks in this job.
   # Keep this overlapping with the fast correctness lanes so green PRs get heavy
   # test/build feedback sooner instead of waiting behind a full `check` pass.
   build-artifacts:
@@ -2286,7 +2313,6 @@ jobs:
           cache-mode: ${{ needs.preflight.outputs.cache_mode }}
           install-bun: "true"
           node-compile-cache: "true"
-          node-compile-cache-scope: "build"
           build-all-cache-scope: full
           # The trusted warmer publishes exact dependencies for Blacksmith.
           # Gate on the actual runner so hybrid hosted retries stay store-only.
@@ -2332,26 +2358,6 @@ jobs:
             echo "Selected release candidate predates plugins:assets:check; skipping unavailable check."
           fi
 
-      - name: Pack built runtime artifacts
-        run: tar --posix -cf dist-runtime-build.tar.zst --use-compress-program zstdmt dist dist-runtime packages/*/dist
-
-      - name: Upload built runtime artifacts
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
-        with:
-          name: dist-runtime-build
-          path: dist-runtime-build.tar.zst
-          retention-days: 1
-
-      - name: Upload bundled plugin asset artifacts
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
-        with:
-          name: bundled-plugin-assets
-          path: |
-            extensions/*/src/host/**/.bundle.hash
-            extensions/*/src/host/**/*.bundle.js
-          include-hidden-files: true
-          retention-days: 1
-
       - name: Smoke test CLI launcher help
         run: node openclaw.mjs --help
 
@@ -2368,7 +2374,7 @@ jobs:
       - name: Verify built browser native host
         # Frozen candidates may predate this source proof; a skipped step is
         # unavailable historical coverage, never a successful native-host test.
-        if: ${{ needs.preflight.outputs.frozen_target != 'true' || hashFiles('extensions/browser/src/browser/extension-install.native-host.e2e.test.ts') != '' }}
+        if: ${{ needs.preflight.outputs.run_proof_tier == 'true' && (needs.preflight.outputs.frozen_target != 'true' || hashFiles('extensions/browser/src/browser/extension-install.native-host.e2e.test.ts') != '') }}
         env:
           OPENCLAW_E2E_USE_PREBUILT_DIST: "1"
           OPENCLAW_VITEST_MAX_WORKERS: "1"
@@ -2413,10 +2419,11 @@ jobs:
           # the same built CLI. Keep the tighter Blacksmith regression ceiling.
           OPENCLAW_STARTUP_MEMORY_PLUGINS_LIST_MB: ${{ runner.environment == 'github-hosted' && '425' || '400' }}
           RUN_CHANNELS: ${{ needs.preflight.outputs.run_checks }}
+          RUN_PROCESS_PROOFS: ${{ needs.preflight.outputs.run_proof_tier }}
           RUN_CORE_SUPPORT_BOUNDARY: ${{ needs.preflight.outputs.run_checks_node_core_dist }}
-          RUN_GATEWAY_WATCH: ${{ needs.preflight.outputs.run_check_additional }}
+          RUN_GATEWAY_WATCH: ${{ needs.preflight.outputs.run_proof_tier == 'true' && needs.preflight.outputs.run_check_additional == 'true' }}
           RUN_SQLITE_SESSION_LIFECYCLE: ${{ needs.preflight.outputs.run_sqlite_session_lifecycle }}
-          RUN_TUI_PTY: ${{ needs.preflight.outputs.run_checks_node_core_dist }}
+          RUN_TUI_PTY: ${{ needs.preflight.outputs.run_proof_tier == 'true' && needs.preflight.outputs.run_checks_node_core_dist == 'true' }}
           FROZEN_TARGET: ${{ needs.preflight.outputs.frozen_target }}
         shell: bash
         run: |
@@ -2562,7 +2569,9 @@ jobs:
             wait_checks
           fi
 
-          run_verifier "doctor-plugin-index" run_doctor_plugin_index
+          if [ "$RUN_PROCESS_PROOFS" = "true" ]; then
+            run_verifier "doctor-plugin-index" run_doctor_plugin_index
+          fi
 
           if [ "$RUN_SQLITE_SESSION_LIFECYCLE" = "true" ]; then
             run_verifier "sqlite-session-lifecycle" env \
@@ -2585,7 +2594,7 @@ jobs:
               node scripts/run-vitest.mjs run --config test/vitest/vitest.full-core-support-boundary.config.ts
           fi
 
-          if [ "$RUN_CHANNELS" = "true" ] && [ "$PARALLEL_BUILT_VERIFIERS" = "true" ]; then
+          if [ "$RUN_PROCESS_PROOFS" = "true" ] && [ "$RUN_CHANNELS" = "true" ] && [ "$PARALLEL_BUILT_VERIFIERS" = "true" ]; then
             start_check "discord-component-attachments" run_discord_component_attachments
           fi
 
@@ -2600,7 +2609,7 @@ jobs:
           fi
 
           # Preserve the low-core hosted path: its real Gateway send stays serial.
-          if [ "$RUN_CHANNELS" = "true" ] && [ "$PARALLEL_BUILT_VERIFIERS" != "true" ]; then
+          if [ "$RUN_PROCESS_PROOFS" = "true" ] && [ "$RUN_CHANNELS" = "true" ] && [ "$PARALLEL_BUILT_VERIFIERS" != "true" ]; then
             start_check "discord-component-attachments" run_discord_component_attachments
             wait_checks
           fi
@@ -2638,7 +2647,7 @@ jobs:
           exit "$failures"
 
       - name: Upload Discord component attachment proof
-        if: always() && needs.preflight.outputs.run_checks == 'true'
+        if: always() && needs.preflight.outputs.run_proof_tier == 'true' && needs.preflight.outputs.run_checks == 'true'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: discord-component-attachments
@@ -2658,7 +2667,7 @@ jobs:
           retention-days: 7
 
       - name: Upload gateway watch regression artifacts
-        if: always() && needs.preflight.outputs.run_check_additional == 'true'
+        if: always() && needs.preflight.outputs.run_proof_tier == 'true' && needs.preflight.outputs.run_check_additional == 'true'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: gateway-watch-regression
@@ -2854,32 +2863,6 @@ jobs:
       - *cache_playwright_chromium
       - *install_playwright_chromium
 
-      - name: Restore Chrome MCP npm cache
-        id: chrome-mcp-cache
-        if: matrix.task == 'browser-extension' && needs.preflight.outputs.cache_mode != 'off'
-        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with: &chrome_mcp_npm_cache
-          path: |
-            ~/.npm/_cacache
-            ~/.npm/_npx
-          key: ${{ runner.os }}-${{ runner.arch }}-chrome-devtools-mcp@1.8.0-node24-v1
-
-      # Populate metadata and the executable before the 30-second MCP handshake.
-      - name: Pre-warm Chrome MCP
-        if: matrix.task == 'browser-extension' && steps.chrome-mcp-cache.outputs.cache-hit != 'true'
-        run: npx -y --audit=false chrome-devtools-mcp@1.8.0 --version
-
-      - name: Save Chrome MCP npm cache
-        if: matrix.task == 'browser-extension' && needs.preflight.outputs.cache_write_allowed == 'true' && steps.chrome-mcp-cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with: *chrome_mcp_npm_cache
-
-      - name: Configure offline Chrome MCP
-        if: matrix.task == 'browser-extension'
-        # npx revalidates cached pins; MCP filters npm_config_* and Vitest changes
-        # HOME. Project config keeps the warmed cache reachable without the registry.
-        run: npm config set cache="$HOME/.npm" offline=true --location=project
-
       - name: Test Control UI end-to-end
         if: matrix.task == 'control-ui'
         env:
@@ -2937,7 +2920,7 @@ jobs:
     needs: [preflight]
     # Compatibility targets pin a frozen Control UI whose e2e expectations track
     # that release, not current main.
-    if: needs.preflight.outputs.run_ui_e2e == 'true' && needs.preflight.outputs.compatibility_target != 'true'
+    if: needs.preflight.outputs.run_proof_tier == 'true' && needs.preflight.outputs.run_ui_e2e == 'true' && needs.preflight.outputs.compatibility_target != 'true'
     # Contributor trust controls Blacksmith eligibility; manual runs and PR retries
     # stay hosted. Hybrid also uses hosted capacity on push retries.
     # Restore eight-CPU capacity for the fixed 20-minute budget; actual
@@ -3016,6 +2999,7 @@ jobs:
             ui/src/e2e/quota-reset-status.real-gateway.e2e.test.ts \
             ui/src/e2e/logs-lifecycle.e2e.test.ts \
             ui/src/e2e/agent-file-lifecycle.real-gateway.e2e.test.ts \
+            ui/src/e2e/chat-collaborator-scroll.real-gateway.e2e.test.ts \
             ui/src/e2e/chat-composer-websearch-kill-switch.real-gateway.e2e.test.ts \
             ui/src/e2e/chat-flow.catalog-bootstrap.e2e.test.ts \
             ui/src/e2e/chat-agent-avatar.real-gateway.e2e.test.ts \
@@ -3364,10 +3348,8 @@ jobs:
           cache-mode: ${{ needs.preflight.outputs.cache_mode }}
           install-bun: "false"
           dependency-cache: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && runner.environment == 'self-hosted' && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false' }}
-          # Reader of build-artifacts' protected daily archive: warms tsdown
-          # tooling plus the repeated openclaw.mjs boots in the scenario loop.
+          # The trusted warmer seeds build tooling and Node orchestration together.
           node-compile-cache: "true"
-          node-compile-cache-scope: build
 
       - name: Build QA smoke runtime
         env:
@@ -3676,8 +3658,12 @@ jobs:
           # The trusted warmer seeds Node 24; other versions use the store.
           dependency-cache: ${{ (matrix.node_version == null || matrix.node_version == '24.x') && vars.OPENCLAW_CI_RUNNER_BACKEND != 'github' && runner.environment == 'self-hosted' && github.event_name != 'workflow_dispatch' && github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == 'openclaw/openclaw') && 'true' || 'false' }}
           vitest-fs-cache: "true"
+          vitest-worker-cache: ${{ needs.preflight.outputs.frozen_target != 'true' && matrix.pretest_build_mode == null && (matrix.node_version == null || matrix.node_version == '24.x') && 'true' || 'false' }}
           node-compile-cache: "true"
-          node-compile-cache-scope: "test"
+
+      - name: Setup pinned Bun test runtime
+        if: matrix.requires_bun == true
+        uses: ./.ci-harness/.github/actions/setup-test-bun
 
       - name: Setup Go for docs i18n
         if: matrix.requires_go == true
@@ -3802,6 +3788,7 @@ jobs:
       - name: Run Node test shard
         env:
           NODE_OPTIONS: --max-old-space-size=8192
+          OPENCLAW_CI_TEST_RUNTIME_POLICY: ${{ matrix.test_runtime_policy || 'node' }}
           FROZEN_TARGET: ${{ needs.preflight.outputs.frozen_target }}
           RUNNER_ENVIRONMENT: ${{ runner.environment }}
           OPENCLAW_NODE_TEST_GROUPS_GZIP_BASE64: ${{ matrix.groups_gzip_base64 || '' }}
@@ -4721,12 +4708,10 @@ jobs:
     name: ${{ matrix.check_name || 'checks-windows' }}
     needs: [preflight]
     if: needs.preflight.outputs.run_checks_windows == 'true'
-    runs-on: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'windows-2025' || (vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' && github.run_attempt > 1) && 'windows-2025' || (github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && github.run_attempt > 1)) && 'windows-2025' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || contains(fromJSON('["OWNER","MEMBER","COLLABORATOR","CONTRIBUTOR"]'), github.event.pull_request.author_association)) && 'blacksmith-8vcpu-windows-2025' || 'windows-2025') }}
+    runs-on: ${{ vars.OPENCLAW_CI_RUNNER_BACKEND == 'github' && 'windows-2025' || (vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' && github.run_attempt > 1) && 'windows-2025' || (github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && github.run_attempt > 1)) && 'windows-2025' || (github.repository == 'openclaw/openclaw' && (github.event_name != 'pull_request' || contains(fromJSON('["OWNER","MEMBER","COLLABORATOR","CONTRIBUTOR"]'), github.event.pull_request.author_association)) && 'blacksmith-16vcpu-windows-2025' || 'windows-2025') }}
     timeout-minutes: 60
     env:
       NODE_OPTIONS: --max-old-space-size=8192
-      # Keep total concurrency predictable on the smaller Windows runner.
-      OPENCLAW_VITEST_MAX_WORKERS: 1
       OPENCLAW_TEST_SKIP_FULL_EXTENSIONS_SHARD: 1
     defaults:
       run:
@@ -4735,7 +4720,7 @@ jobs:
       fail-fast: false
       # Both parts must run concurrently or the split gains nothing; Blacksmith's
       # Windows class admits exactly 2, so this is the width, not a cap.
-      max-parallel: 2
+      max-parallel: 5
       matrix: ${{ fromJson(needs.preflight.outputs.checks_windows_matrix) }}
     steps:
       - &platform_checkout_step
@@ -4804,32 +4789,50 @@ jobs:
           which node
           node -v
           pnpm -v
-          # Persist Windows-native postinstall outputs in the pnpm store so restored
-          # caches can skip repeated rebuild/download work on later shards/runs.
+          # Reuse native postinstall outputs within this job's pnpm store.
+          # Windows setup does not restore or publish a shared dependency cache.
           pnpm install --frozen-lockfile --prefer-offline --config.ignore-scripts=false --config.engine-strict=false --config.enable-pre-post-scripts=true --config.side-effects-cache=true || pnpm install --frozen-lockfile --prefer-offline --config.ignore-scripts=false --config.engine-strict=false --config.enable-pre-post-scripts=true --config.side-effects-cache=true
 
       - name: Run ${{ matrix.task }} (${{ matrix.runtime }})
         env:
           TASK: ${{ matrix.task }}
+          # The 16-class delivers four native CPUs; hosted fallback keeps its serial budget.
+          OPENCLAW_VITEST_MAX_WORKERS: ${{ runner.environment == 'self-hosted' && 4 || 1 }}
+          WINDOWS_TARGETS_JSON: ${{ toJSON(matrix.targets || null) }}
         shell: bash
         run: |
           set -euo pipefail
           # Native allocation can be smaller than the runner label. Keep projects
-          # serial within each machine; the two matrix jobs still run concurrently.
+          # serial within each machine; matrix rows own disjoint complete files.
           export OPENCLAW_TEST_PROJECTS_PARALLEL=1
           case "$TASK" in
+            test)
+              node --input-type=module <<'WINDOWS_TESTS'
+          import { spawnSync } from "node:child_process";
+          const targets = JSON.parse(process.env.WINDOWS_TARGETS_JSON);
+          if (!Array.isArray(targets) || targets.length === 0 ||
+              targets.some((file) => typeof file !== "string" || !/^[\w./-]+\.test\.tsx?$/u.test(file))) {
+            throw new Error("Windows test row requires explicit test files");
+          }
+          const result = spawnSync(process.execPath, [
+            "--import", "./scripts/tsx.mjs", "scripts/test-projects.mts", ...targets, "--fileParallelism",
+          ], { stdio: "inherit" });
+          if (result.error) throw result.error;
+          process.exit(result.status ?? 1);
+          WINDOWS_TESTS
+              ;;
             # Linux owns the full repo test suite. Keep the Windows runner focused on
             # Windows-native process/path wrappers so platform regressions fail fast.
             test-1)
               if node -e 'process.exit(require("./package.json").scripts?.["test:windows:ci:1"] ? 0 : 1)'; then
-                pnpm test:windows:ci:1
+                pnpm test:windows:ci:1 -- --fileParallelism
               else
                 pnpm test:windows:ci
               fi
               ;;
             test-2)
               if node -e 'process.exit(require("./package.json").scripts?.["test:windows:ci:2"] ? 0 : 1)'; then
-                pnpm test:windows:ci:2
+                pnpm test:windows:ci:2 -- --fileParallelism
               else
                 echo "[skip] target's combined Windows suite ran in test-1"
               fi
@@ -4891,13 +4894,13 @@ jobs:
     name: ${{ format('macos-swift ({0})', matrix.phase) }}
     needs: [preflight]
     if: needs.preflight.outputs.run_macos_swift == 'true'
-    # Debug/coverage tests remain required; full validation adds an independent
-    # optimized build whose products are not inputs to the test graph.
+    # Independent package builds must not consume the app test job's budget.
+    # Full validation also compiles the optimized app, within the same two-job cap.
     strategy:
       fail-fast: false
       max-parallel: 2
       matrix:
-        phase: ${{ fromJSON(github.event_name == 'workflow_dispatch' && !inputs.release_gate && needs.preflight.outputs.release_scope == 'full' && '["release","tests"]' || '["tests"]') }}
+        phase: ${{ fromJSON(github.event_name == 'workflow_dispatch' && !inputs.release_gate && needs.preflight.outputs.release_scope == 'full' && '["release","tests","packages"]' || '["tests","packages"]') }}
     # Unassigned Blacksmith Mac jobs can hold both non-canceling main slots.
     # Use the existing hosted image and budget from the first attempt.
     runs-on: macos-26
@@ -5018,6 +5021,7 @@ jobs:
 
       - name: Detect Swift toolchain cache key
         id: swift-toolchain
+        if: matrix.phase != 'packages'
         run: |
           set -euo pipefail
           xcode_version="$(xcodebuild -version | tr '\n' ' ' | sed 's/  */ /g; s/ $//')"
@@ -5037,18 +5041,19 @@ jobs:
 
       - name: Restore Swift build directory cache
         id: swift-build-cache
-        if: needs.preflight.outputs.cache_mode != 'off'
+        if: matrix.phase != 'packages' && needs.preflight.outputs.cache_mode != 'off'
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: apps/macos/.build
           # SwiftPM retains old dependency traits while resolving cached checkouts.
           # Phase-owned products must never race to populate the same archive key.
-          key: ${{ runner.os }}-swift-build-v6-${{ matrix.phase }}-${{ hashFiles('scripts/swift-build-cache-metadata.py') }}-graph-${{ steps.swift-toolchain.outputs.key }}-${{ hashFiles('apps/macos/Package*.swift', 'apps/macos/Package.resolved', 'apps/shared/**/Package*.swift', 'apps/shared/**/Package.resolved', 'apps/swabble/Package*.swift', 'apps/swabble/Package.resolved') }}-${{ hashFiles('apps/macos/Sources/**', 'apps/macos/Tests/**', 'apps/shared/**/Sources/**', 'apps/swabble/Sources/**') }}
+          key: ${{ runner.os }}-swift-build-${{ matrix.phase == 'tests' && 'v7' || 'v6' }}-${{ matrix.phase }}-${{ hashFiles('scripts/swift-build-cache-metadata.py') }}-graph-${{ steps.swift-toolchain.outputs.key }}-${{ hashFiles('apps/macos/Package*.swift', 'apps/macos/Package.resolved', 'apps/shared/**/Package*.swift', 'apps/shared/**/Package.resolved', 'apps/swabble/Package*.swift', 'apps/swabble/Package.resolved') }}-${{ hashFiles('apps/macos/Sources/**', 'apps/macos/Tests/**', 'apps/shared/**/Sources/**', 'apps/swabble/Sources/**') }}
           restore-keys: |
-            ${{ runner.os }}-swift-build-v6-${{ matrix.phase }}-${{ hashFiles('scripts/swift-build-cache-metadata.py') }}-graph-${{ steps.swift-toolchain.outputs.key }}-${{ hashFiles('apps/macos/Package*.swift', 'apps/macos/Package.resolved', 'apps/shared/**/Package*.swift', 'apps/shared/**/Package.resolved', 'apps/swabble/Package*.swift', 'apps/swabble/Package.resolved') }}-
+            ${{ runner.os }}-swift-build-${{ matrix.phase == 'tests' && 'v7' || 'v6' }}-${{ matrix.phase }}-${{ hashFiles('scripts/swift-build-cache-metadata.py') }}-graph-${{ steps.swift-toolchain.outputs.key }}-${{ hashFiles('apps/macos/Package*.swift', 'apps/macos/Package.resolved', 'apps/shared/**/Package*.swift', 'apps/shared/**/Package.resolved', 'apps/swabble/Package*.swift', 'apps/swabble/Package.resolved') }}-
 
       - name: Validate Swift build cache
         id: validate-swift-build-cache
+        if: matrix.phase != 'packages'
         run: |
           set -euo pipefail
           cache_valid=true
@@ -5115,7 +5120,7 @@ jobs:
           swift build --package-path apps/macos --product OpenClaw --configuration release
 
       - name: OpenClawKit Talk-trait opt-out (no ElevenLabsKit when default traits disabled)
-        if: matrix.phase == 'tests'
+        if: matrix.phase == 'packages'
         run: |
           set -euo pipefail
           # Guard: chat-only consumers build OpenClawKit with the Talk trait
@@ -5128,11 +5133,11 @@ jobs:
             echo "::error::ElevenLabsKit resolved with the Talk trait disabled; keep it gated behind the Talk trait."
             exit 1
           fi
-          swift build --package-path apps/shared/OpenClawKit --target OpenClawKit --disable-default-traits
+          swift build --package-path apps/shared/OpenClawKit --target OpenClawKit --disable-default-traits --disable-index-store -Xswiftc -gline-tables-only
 
       # openclawkit-tests-contract-v1: the target owns an independently runnable package suite.
       - name: OpenClawKit tests
-        if: matrix.phase == 'tests' && needs.preflight.outputs.run_openclawkit_tests == 'true'
+        if: matrix.phase == 'packages' && needs.preflight.outputs.run_openclawkit_tests == 'true'
         run: |
           set -euo pipefail
           openclawkit_scratch="$(mktemp -d "$RUNNER_TEMP/openclawkit.XXXXXX")"
@@ -5140,6 +5145,7 @@ jobs:
           openclawkit_test_args=(
             --package-path apps/shared/OpenClawKit
             --scratch-path "$openclawkit_scratch"
+            --disable-index-store -Xswiftc -gline-tables-only
           )
           if [[ "$OPENCLAWKIT_TEST_EXECUTION" == "parallel" ]]; then
             openclawkit_test_args+=(--parallel)
@@ -5149,12 +5155,12 @@ jobs:
           swift test "${openclawkit_test_args[@]}"
 
       - name: Swabble tests
-        if: matrix.phase == 'tests' && env.HISTORICAL_TARGET != 'true'
+        if: matrix.phase == 'packages' && env.HISTORICAL_TARGET != 'true'
         run: |
           set -euo pipefail
           swabble_scratch="$(mktemp -d "$RUNNER_TEMP/swabble.XXXXXX")"
           trap 'rm -rf "$swabble_scratch"' EXIT
-          swift test --package-path apps/swabble --scratch-path "$swabble_scratch" --build-system native --no-parallel
+          swift test --package-path apps/swabble --scratch-path "$swabble_scratch" --build-system native --disable-index-store -Xswiftc -gline-tables-only --no-parallel
 
       - name: Swift test
         id: swift-test
@@ -5164,7 +5170,8 @@ jobs:
           # SwiftPM's swiftbuild backend can omit the test-bundle rpath for Sparkle.
           # Remove once runner toolchains pass with swiftlang/swift-package-manager#10394.
           # Keep the release build above on the default backend.
-          swift_test_args=(--package-path apps/macos --build-system native --enable-code-coverage)
+          # CI needs coverage and source-line backtraces, not IDE indexes or debugger type metadata.
+          swift_test_args=(--package-path apps/macos --build-system native --enable-code-coverage --disable-index-store -Xswiftc -gline-tables-only)
           swift build "${swift_test_args[@]}" --build-tests
           echo "debug-tests-built=true" >> "$GITHUB_OUTPUT"
           swift_test_args+=(--skip-build)
@@ -5239,7 +5246,7 @@ jobs:
       # total five minutes, leaving five for runner startup, cancellation and cleanup.
       - name: Check Swift cache save budget
         id: swift-cache-budget
-        if: needs.preflight.outputs.cache_write_allowed == 'true'
+        if: matrix.phase != 'packages' && needs.preflight.outputs.cache_write_allowed == 'true'
         continue-on-error: true
         timeout-minutes: 1
         env:
@@ -6197,7 +6204,7 @@ jobs:
             native-i18n=${{ needs.native-i18n.result }}|${{ needs.preflight.outputs.run_native_i18n }}
             checks-ui=${{ needs.checks-ui.result }}|${{ needs.preflight.outputs.run_ui_tests }}
             checks-ui-e2e=${{ needs.checks-ui-e2e.result }}|${{ needs.preflight.outputs.run_ui_e2e == 'true' && needs.preflight.outputs.compatibility_target != 'true' }}
-            checks-ui-e2e-real-gateway=${{ needs.checks-ui-e2e-real-gateway.result }}|${{ needs.preflight.outputs.run_ui_e2e == 'true' && needs.preflight.outputs.compatibility_target != 'true' }}
+            checks-ui-e2e-real-gateway=${{ needs.checks-ui-e2e-real-gateway.result }}|${{ needs.preflight.outputs.run_proof_tier == 'true' && needs.preflight.outputs.run_ui_e2e == 'true' && needs.preflight.outputs.compatibility_target != 'true' }}
             control-ui-i18n=${{ needs.control-ui-i18n.result }}|${{ needs.preflight.outputs.run_control_ui_i18n }}
             checks-fast-core=${{ needs.checks-fast-core.result }}|${{ needs.preflight.outputs.run_checks_fast_core }}
             qa-smoke-ci-profile=${{ needs.qa-smoke-ci-profile.result }}|${{ needs.preflight.outputs.run_qa_smoke_ci }}

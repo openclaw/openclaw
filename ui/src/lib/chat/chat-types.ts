@@ -80,6 +80,12 @@ export type ChatGoalDraft = { sessionId?: string } & (
 
 export type ChatGoalAction = "pause" | "resume" | "clear";
 
+export type ChatGoalRecovery = {
+  pending: boolean;
+  retired?: "expired" | "invalid";
+  onCheck: () => Promise<boolean>;
+};
+
 export type ChatComposerMemoryFallback = {
   awaitingDefaults?: true;
   goalMode?: ChatGoalDraftMode;
@@ -183,7 +189,6 @@ export type ChatItem =
       icon?: keyof typeof toolIcons;
       metric?: string;
       description?: string;
-      action?: { kind: "session-checkpoints"; label: string };
       timestamp: number;
     }
   | {
@@ -192,6 +197,7 @@ export type ChatItem =
       text: string;
       startedAt: number;
       isStreaming: boolean;
+      replyToSender?: SenderIdentity;
       runId?: string;
       boundaryId?: string;
     }

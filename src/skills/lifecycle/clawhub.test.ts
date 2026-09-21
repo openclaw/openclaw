@@ -6,6 +6,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { hasErrnoCode } from "../../infra/errno.js";
 import { withTempDir } from "../../test-utils/temp-dir.js";
+import { registerRemoteClawHubTests } from "./clawhub.remote.test-support.js";
 import {
   fetchClawHubSkillDetailMock,
   fetchClawHubSkillInstallResolutionMock,
@@ -32,6 +33,7 @@ import {
   installTestSkill,
   updateTestSkill,
   mockArchiveInstallResolution,
+  mockDefaultPackageInstall,
   mockGitHubInstallResolution,
   mockSkillSecurityVerdict,
   mockSkillVerification,
@@ -168,22 +170,11 @@ describe("skills-clawhub", () => {
       expect(params.rootMarkers).toEqual(["SKILL.md", "skill.md", "skills.md", "SKILL.MD"]);
       return await params.onExtracted("/tmp/extracted-skill");
     });
-    installPackageDirMock.mockImplementation(
-      async (params: {
-        targetDir: string;
-        afterBackup?: (
-          backupDir: string,
-        ) => Promise<{ ok: boolean; error?: string; code?: string }>;
-      }) => {
-        const backup = await params.afterBackup?.(params.targetDir);
-        if (backup && !backup.ok) {
-          return backup;
-        }
-        return { ok: true, targetDir: path.join(testWorkspaceDir, "skills", "agentreceipt") };
-      },
-    );
+    mockDefaultPackageInstall(testWorkspaceDir);
     evaluateSkillInstallPolicyMock.mockResolvedValue(undefined);
   });
+
+  registerRemoteClawHubTests(() => testWorkspaceDir);
 
   it("installs ClawHub skills from flat-root archives", async () => {
     const result = await installTestSkill(testWorkspaceDir, "agentreceipt");

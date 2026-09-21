@@ -2,7 +2,7 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
 import { runSqliteReadOnlyWorkerSync } from "../../infra/sqlite-readonly-worker.js";
 import { withStateDatabaseCoordinatorRuntimeDirectory } from "../../infra/state-database-coordinator.js";
-import { serveWorkerTasks } from "../../infra/worker-task-pool.js";
+import { serveWorkerTasks } from "../../infra/worker-task-server.js";
 import { openOpenClawStateReadConnection } from "../../state/openclaw-state-db-read-connection.js";
 import { tableExists } from "../../state/openclaw-state-db-schema-helpers.js";
 import { serializeCronLoadError } from "./load-error.js";

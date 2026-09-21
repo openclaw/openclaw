@@ -5,6 +5,7 @@ import { runWithGatewayIndependentRootWorkContinuation } from "../../process/gat
 import { CommandLane } from "../../process/lanes.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { isCronActiveJobMarkerCurrent } from "../active-jobs.js";
+import { captureCronRunAdmissionTracker } from "../mutation-completion.js";
 import {
   CronRunReceiptRevisionError,
   finishCronRunReceipt,
@@ -416,6 +417,7 @@ async function executePreparedManualRun(
   state: CronServiceState,
   prepared: Extract<PreparedManualRun, { ran: true }>,
   mode?: CronRunMode,
+  onActivationSettled?: () => void,
 ) {
   const admission = await runWithCronAdmission(
     state,
@@ -437,6 +439,10 @@ async function executePreparedManualRun(
           );
         }
         throw error;
+      } finally {
+        // Activation owns the last caller-authorized write. The scheduled run
+        // owns execution afterward, so do not join its payload to the caller.
+        onActivationSettled?.();
       }
       if (!activeRun.ran) {
         return activeRun;
@@ -473,8 +479,20 @@ export async function enqueueRun(
   const acceptance = createDeferredCore<
     { ok: true; enqueued: true; runId: string } | Exclude<PreparedManualRun, { ran: true }>
   >();
+  const trackCallerWork = captureCronRunAdmissionTracker();
+  const activationSettled = createDeferredCore();
   let accepted = false;
   const acceptQueue = () => {
+    if (!accepted && trackCallerWork) {
+      // Retain the existing caller resources after the durable reservation and
+      // before acknowledging it. Genuine aborts and all commit guards stay live.
+      void trackCallerWork(() => activationSettled.promise).catch((error: unknown) => {
+        state.deps.log.error(
+          { jobId: id, runId, err: String(error) },
+          "cron: queued manual admission tracking failed",
+        );
+      });
+    }
     accepted = true;
     acceptance.resolve({ ok: true, enqueued: true, runId });
   };
@@ -504,6 +522,7 @@ export async function enqueueRun(
               state,
               { ...prepared, owningCronLaneTaskMarker },
               mode,
+              activationSettled.resolve,
             );
             if (result.ok && "ran" in result && !result.ran) {
               if (result.reason !== "invalid-spec" && result.reason !== "ownerless") {
@@ -557,6 +576,7 @@ export async function enqueueRun(
       }
     }, "cron:manual-run");
   } catch (error) {
+    activationSettled.resolve();
     releaseCallerAuthority?.();
     throw error;
   }
@@ -595,7 +615,12 @@ export async function enqueueRun(
         "cron: queued manual run background execution failed",
       );
     })
-    .finally(() => releaseCallerAuthority?.());
+    .finally(() => {
+      // Covers queue clearing, stopped admission, preparation failure, and any
+      // path that never entered the activation callback.
+      activationSettled.resolve();
+      releaseCallerAuthority?.();
+    });
   return await acceptance.promise;
 }
 

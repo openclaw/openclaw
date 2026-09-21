@@ -3,8 +3,7 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { getSelfAndAncestorPidsSync } from "../infra/restart-stale-pids.js";
 import { probeLaunchAgentState, resolveLaunchAgentGuiDomain } from "./launchd-runtime.js";
 
-/** Checks whether the current process appears to be running under the requested launchd label. */
-export function isCurrentProcessLaunchdServiceLabel(
+function hasNativeLaunchdServiceLabel(
   label: string,
   env: NodeJS.ProcessEnv = process.env,
 ): boolean {
@@ -21,6 +20,18 @@ export function isCurrentProcessLaunchdServiceLabel(
     }
   }
 
+  return false;
+}
+
+/** Environment hints for launchd identity; inherited markers do not prove ancestry. */
+export function isCurrentProcessLaunchdServiceLabel(
+  label: string,
+  env: NodeJS.ProcessEnv = process.env,
+): boolean {
+  return hasNativeLaunchdServiceLabel(label, env) || hasOpenClawServiceMarker(label, env);
+}
+
+function hasOpenClawServiceMarker(label: string, env: NodeJS.ProcessEnv): boolean {
   // Detached update/restart handoffs keep OPENCLAW_LAUNCHD_LABEL as the service
   // identity to manage while running outside the job, so the configured label
   // alone never proves membership: a restart that trusted it would schedule a
@@ -35,8 +46,8 @@ export function isCurrentProcessLaunchdServiceLabel(
 }
 
 /**
- * Env markers are the fast path. A hand-written plist can omit them, so the PID
- * launchd reports for the job is checked against the caller's ancestry instead.
+ * Native launchd labels are the fast path. OpenClaw markers can outlive the job
+ * in an external terminal, so reconcile them with the running job's ancestry.
  * The detached update helper's recovery CLI inherits OPENCLAW_LAUNCHD_LABEL but
  * descends from no running Gateway, so it stays on the synchronous path.
  */
@@ -44,13 +55,21 @@ export async function isCurrentProcessInsideLaunchdService(
   label: string,
   env: NodeJS.ProcessEnv = process.env,
 ): Promise<boolean> {
-  if (isCurrentProcessLaunchdServiceLabel(label, env)) {
+  if (hasNativeLaunchdServiceLabel(label, env)) {
     return true;
   }
-  // Probe failures resolve to "unknown"; only a running job has a PID to be inside.
+  // Preserve the in-service guard when launchd cannot supply authoritative facts.
   const probe = await probeLaunchAgentState(`${resolveLaunchAgentGuiDomain()}/${label}`);
-  if (probe.state !== "running" || probe.runtime.pid === undefined) {
-    return false;
+  if (probe.state === "running" && probe.runtime.pid !== undefined) {
+    const ancestors = getSelfAndAncestorPidsSync();
+    // The ancestor walk is best-effort. Only reaching launchd (PID 1) proves
+    // an external shell; a failed ps hop must not disable the in-service guard.
+    return (
+      ancestors.has(probe.runtime.pid) ||
+      (hasOpenClawServiceMarker(label, env) && !ancestors.has(1))
+    );
   }
-  return getSelfAndAncestorPidsSync().has(probe.runtime.pid);
+  return (
+    (probe.state === "unknown" || probe.state === "running") && hasOpenClawServiceMarker(label, env)
+  );
 }

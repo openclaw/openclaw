@@ -77,6 +77,7 @@ export async function createSessionRowProjection(params: {
   let topologyDirty = true,
     disposed = false;
   let epoch = 0;
+  let rowRevision = 0;
   let materializedCount = 0;
   let scope: ReturnType<typeof prepareSessionRowScopes>;
   let pending: Promise<void> | undefined;
@@ -140,6 +141,7 @@ export async function createSessionRowProjection(params: {
     transcriptUpdates.remove(id);
     const row = rows.get(id);
     if (row) {
+      rowRevision++;
       markRelated(row);
       creators.update(row);
       records.index(row, indexes, true);
@@ -149,6 +151,7 @@ export async function createSessionRowProjection(params: {
     backfill.remove(id);
   }
   function put(row: records.Row) {
+    rowRevision++;
     const previous = rows.get(records.identity(row));
     creators.update(previous, row);
     if (previous) {
@@ -572,6 +575,7 @@ export async function createSessionRowProjection(params: {
       return row;
     });
   function dispose() {
+    rowRevision++;
     disposed = true;
     catalog.dispose();
     transcriptUpdates.dispose();
@@ -679,6 +683,8 @@ export async function createSessionRowProjection(params: {
         metadata.prepare(epoch, cfg, matching, put);
       }
       return {
+        // Include replacements and lifecycle-only removals as well as publications/materialization.
+        revision: epoch + rowRevision + materializedCount,
         cfg,
         modelCatalog: catalog.current,
         rowContext: metadata.current,

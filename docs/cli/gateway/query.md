@@ -327,6 +327,9 @@ openclaw gateway call health --port 18999
 openclaw gateway call logs.tail --params '{"limit": 200}'
 ```
 
+To add an existing checkout to the Control UI's Place picker, use the
+[project registration and listing examples](/web/control-ui/sessions-and-sidebar#register-an-existing-repository).
+
 For `sessions.send` and `chat.send`, JSON `timeoutMs` is the receiving agent's
 execution budget, not an acknowledgment timeout. Omit it for ordinary
 coordination; `--timeout` independently limits how long this CLI waits:

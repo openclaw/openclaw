@@ -25,6 +25,10 @@ import {
   createSelectedNodeTestShardBundles,
   type CompactNodeTestShard,
 } from "../../scripts/lib/ci-node-test-plan.mts";
+import {
+  CI_PROOF_TEST_FILES,
+  isCiProofTestFile,
+} from "../../scripts/lib/ci-proof-test-inventory.mts";
 import { refitTestTimings } from "../../scripts/lib/ci-test-timings-refit.mts";
 import * as testTimings from "../../scripts/lib/ci-test-timings.mts";
 import {
@@ -47,7 +51,7 @@ import { isGatewayServerTestFile } from "../vitest/vitest.gateway-server-paths.m
 import { startupCorpusTestFiles } from "../vitest/vitest.startup-corpus-paths.mjs";
 import { boundaryTestFiles } from "../vitest/vitest.unit-paths.mjs";
 
-const CODEX_TEST_PROCESS_FILE_LIMIT = 12;
+const CODEX_TEST_PROCESS_FILE_LIMIT = 24;
 const argvTempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 it.each([
@@ -230,6 +234,32 @@ function expectAllExtensionConfigs(
 }
 
 describe("CI changed Node test plan", () => {
+  it("defers named process proofs without dropping mixed ordinary targets", () => {
+    const ordinary = "src/plugin-sdk/config-runtime.test.ts";
+    const shards = createChangedNodeTestShards([...CI_PROOF_TEST_FILES, ordinary]);
+    expect(shards).not.toBeNull();
+    const files = (shards ?? []).flatMap((shard) =>
+      (shard.targets ?? []).concat(
+        shard.includePatterns ?? [],
+        shard.groups?.flatMap((group) => group.includePatterns ?? []) ?? [],
+      ),
+    );
+    expect(files).toContain(ordinary);
+    expect(files.some(isCiProofTestFile)).toBe(false);
+  });
+
+  it("keeps boundary coverage when only a deferred proof helper changes", () => {
+    const helper = "test/helpers/sqlite-sessions-transcripts-flip-proof-assertions.ts";
+    const shards = createChangedNodeTestShards([helper]);
+    expect(shards).toEqual([
+      expect.objectContaining({
+        checkName: "checks-node-changed-boundary",
+        configs: ["test/vitest/vitest.boundary.config.ts"],
+      }),
+    ]);
+    expect(createChangedNodeTestShards([helper, "src/deleted-unowned-source.ts"])).toBeNull();
+  });
+
   it("retains the paired tooling group for direct Docker helper selection", () => {
     const shards = createSelectedNodeTestShardBundles(["test/scripts/docker-build-helper.test.ts"]);
     expect(shards).not.toBeNull();
@@ -1422,9 +1452,19 @@ describe("CI changed Node test plan", () => {
         ),
         "measured app-server envelope",
       );
-      // Run 35490342736 measured 499.843s here; the config median hides that tail.
-      expect(fallbackGroups([appServerJob])).toHaveLength(1);
-      expect(appServerJob.predictedSeconds).toBeGreaterThanOrEqual(499);
+      // After fixture reuse, run 35537743091 measured 190.394s for 11 app-server
+      // files. The mixed config median must still not hide that native-worker tail.
+      const appServerGroup = expectDefined(
+        fallbackGroups([appServerJob]).find((group) =>
+          group.includePatterns?.includes("extensions/codex/src/app-server/run-attempt.test.ts"),
+        ),
+        "measured app-server process",
+      );
+      const files = expectDefined(appServerGroup.includePatterns, "app-server files");
+      const config = expectDefined(appServerGroup.configs[0], "app-server config");
+      expect(
+        extensionTestPlan.estimateExtensionTestCost(config, files.length, files),
+      ).toBeGreaterThanOrEqual(191);
       expect(appServerJob.runner).toBe("blacksmith-8vcpu-ubuntu-2404");
     }
     expect(shards.length).toBeGreaterThan(1);

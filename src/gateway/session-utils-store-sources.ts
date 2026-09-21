@@ -1,4 +1,5 @@
 import { withAgentRosterFactsBatch } from "../agents/agent-scope-config.js";
+import { cloneEnvWithPlatformSemantics } from "../config/config-env-vars.js";
 import type { SessionEntryReadSource } from "../config/sessions/session-accessor.types.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import {
@@ -7,6 +8,7 @@ import {
   resolveSessionStoreCompatibilityAgentId,
 } from "../config/sessions/targets.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../state/openclaw-agent-db-contract.js";
 import {
   listOpenClawRegisteredAgentDatabases,
   readOpenClawAgentDatabaseRegistryToken,
@@ -24,12 +26,32 @@ export function prepareGatewaySessionStoreReadSources(params: {
   /** Only synchronous consumers may defer binding filesystem addresses. */
   deferSources?: boolean;
 }): { sources: GatewaySessionStoreReadSources; assertCurrent: () => void } {
-  const registryOptions = { env: params.env, path: params.registryPath };
-  const registryToken = readOpenClawAgentDatabaseRegistryToken(registryOptions);
+  const registryOptions = {
+    env: cloneEnvWithPlatformSemantics(params.env),
+    path: params.registryPath,
+    includeIncompatibleSchemaVersions: true,
+  };
+  const currentSource = params.currentSource;
+  const currentSourceAgentId = currentSource.agentId;
+  const currentSourcePath = currentSource.path;
+  let discoveryIsCurrent: (() => boolean) | undefined;
+  let registryToken = readOpenClawAgentDatabaseRegistryToken(registryOptions);
   const assertCurrent = () => {
-    if (readOpenClawAgentDatabaseRegistryToken(registryOptions) !== registryToken) {
-      throw new Error("Session store changed while preparing its metadata. Retry the request.");
+    const currentToken = readOpenClawAgentDatabaseRegistryToken(registryOptions);
+    if (currentToken === registryToken) {
+      return;
     }
+    // Registration admission and metadata refreshes also rotate the memo. Keep
+    // the prepared addresses only when their original discovery facts still hold.
+    try {
+      if (discoveryIsCurrent?.()) {
+        registryToken = currentToken;
+        return;
+      }
+    } catch {
+      // An unavailable registry or locator cannot establish the captured topology.
+    }
+    throw new Error("Session store changed while preparing its metadata. Retry the request.");
   };
   const bindSources = () =>
     withAgentRosterFactsBatch(params.cfg, () => {
@@ -39,6 +61,10 @@ export function prepareGatewaySessionStoreReadSources(params: {
       } catch {
         return {};
       }
+      const registryFacts = registered;
+      registered = registered.filter(
+        (entry) => entry.schemaVersion === OPENCLAW_AGENT_SCHEMA_VERSION,
+      );
       const agentIds = new Set([
         ...listConfiguredSessionStoreAgentIds(params.cfg),
         ...registered.map((entry) => entry.agentId),
@@ -50,11 +76,13 @@ export function prepareGatewaySessionStoreReadSources(params: {
         isSameDatabasePath,
       });
       const sources = new Map<string, readonly SessionEntryReadSource[]>();
-      const bindCurrentSource = (source: SessionEntryReadSource): SessionEntryReadSource =>
-        source.agentId === params.currentSource.agentId &&
-        isSameDatabasePath(source.path, params.currentSource.path)
-          ? params.currentSource
+      const bindCurrentSource = (source: SessionEntryReadSource): SessionEntryReadSource => {
+        isSameDatabasePath(source.path, source.path);
+        return source.agentId === currentSourceAgentId &&
+          isSameDatabasePath(source.path, currentSourcePath)
+          ? currentSource
           : source;
+      };
       for (const agentId of agentIds) {
         try {
           const { candidates, readSources } = resolveGatewaySessionStoreLookupCandidates({
@@ -110,12 +138,33 @@ export function prepareGatewaySessionStoreReadSources(params: {
           sources.set(agentId, []);
         }
       }
+      discoveryIsCurrent = () => {
+        const current = listOpenClawRegisteredAgentDatabases(registryOptions);
+        return (
+          currentSource.agentId === currentSourceAgentId &&
+          currentSource.path === currentSourcePath &&
+          current.length === registryFacts.length &&
+          current.every((entry, index) => {
+            const previous = registryFacts[index]!;
+            return (
+              entry.agentId === previous.agentId &&
+              entry.path === previous.path &&
+              entry.schemaVersion === previous.schemaVersion
+            );
+          }) &&
+          isSameDatabasePath.isCurrent()
+        );
+      };
       return Object.fromEntries(sources);
     });
   let sources = params.deferSources ? undefined : bindSources();
   return {
     get sources() {
-      return (sources ??= bindSources());
+      if (!sources) {
+        assertCurrent();
+        sources = bindSources();
+      }
+      return sources;
     },
     assertCurrent,
   };

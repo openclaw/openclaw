@@ -392,7 +392,7 @@ describe("maybeWakeRequesterAfterAllChildrenSettled", () => {
     expect(deliveredCallArg().requireVisibleReply).toBe(true);
     const message = String(deliveredCallArg().triggerMessage);
     expect(message).not.toContain("NO_REPLY");
-    expect(message).toContain("continue any remaining in-scope work before replying");
+    expect(message).toContain("in-scope fixable blockers require continued work");
     expect(deliveredCallArg().directIdempotencyKey).toBe(requesterSettleKey("run-b:yield-1"));
     expect(completeBatchSpy).toHaveBeenCalledWith(["run-b"], 1, {
       delivered: true,

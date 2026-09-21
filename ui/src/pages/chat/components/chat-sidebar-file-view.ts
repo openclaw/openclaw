@@ -5,10 +5,13 @@ import { icons } from "../../../components/icons.ts";
 import { renderPanelLoadingSkeleton } from "../../../components/panel-loading-skeleton.ts";
 import "../../../components/tooltip.ts";
 import { t } from "../../../i18n/index.ts";
+import { registerCodeBlocksEnglish } from "../../../i18n/locales/en-code-blocks.ts";
 import type { EditorId } from "../../../lib/editor-links.ts";
 import type { SidebarContent } from "./chat-sidebar-content-types.ts";
 import { renderChatSidebarEditorMenu } from "./chat-sidebar-editor-menu.ts";
 import { detectLineSeparator } from "./file-line-separator.ts";
+
+registerCodeBlocksEnglish();
 
 type FileSidebarContent = Extract<SidebarContent, { kind: "file" }>;
 
@@ -186,7 +189,7 @@ export function renderSidebarFile(
                           }
                           <openclaw-tooltip .content=${t("chat.detailPanel.searchInFile")}>
                             <button
-                              class="btn btn--sm sidebar-file-view__action"
+                              class="btn btn--sm sidebar-file-view__action sidebar-file-view__search-toggle"
                               type="button"
                               aria-label=${t("chat.detailPanel.searchInFile")}
                               aria-pressed=${String(controls.searchOpen)}

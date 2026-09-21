@@ -379,7 +379,7 @@ const endpoint = args.find(arg => /^(?:repos\\/|orgs\\/|user$|graphql$)/u.test(a
 if (args[0] === "api" && args.includes("repos/openclaw/openclaw") &&
     JSON.stringify(args) !== JSON.stringify(["api", "--hostname", "github.com", "repos/openclaw/openclaw", "-H", "Cache-Control: max-age=0"])) fail("unexpected repository authority request");
 if (endpoint && endpoint === process.env.FAKE_DENIED) fail("protected refusal");
-if (args[0] === "browse" && args[1] === "--no-browser") out(repo.url);
+if (args[0] === "browse") out(repo.url);
 else if (args[0] === "pr" && args[1] === "checks" && args.includes("--required")) {
   // gh v2.98.0 checks.go exports JSON before applying its human-output exit codes.
   out(value.requiredChecks);
@@ -401,8 +401,9 @@ else if (endpoint === "graphql" && args.some(arg => arg.includes("repository(own
     ["api", "--hostname", "github.com", "repos/openclaw/openclaw/pulls/131091"],
     ["api", "repos/openclaw/openclaw/pulls/131091", "--jq", ".head.sha"],
   ].some((request) => JSON.stringify(args) === JSON.stringify(request));
+  const immutableCommitList = /^repos\\/openclaw\\/openclaw\\/commits\\?sha=[a-f0-9]{40}&per_page=1$/u.test(endpoint);
   const mutable = endpoint.startsWith("orgs/") ||
-    (!process.env.FAKE_DISPATCH && !cacheableMetadata && !/\\/compare\\/|\\/commits\\/[a-f0-9]{40}$/u.test(endpoint));
+    (!process.env.FAKE_DISPATCH && !cacheableMetadata && !immutableCommitList && !/\\/compare\\/|\\/commits\\/[a-f0-9]{40}$/u.test(endpoint));
   if (mutable && !args.some((arg,i) => ["-H", "--header"].includes(arg) && args[i+1] === "Cache-Control: max-age=0")) fail("missing live header", 18);
   if (endpoint.includes("/check-runs?") || endpoint.includes("/jobs?") || endpoint.includes("/issues/131091/comments?")) {
     if (!args.includes("--paginate") || !args.includes("--slurp")) fail("missing pagination");
@@ -414,7 +415,7 @@ else if (endpoint === "graphql" && args.some(arg => arg.includes("repository(own
   else if (endpoint === prefix + "pulls/131091") apiOut({...value.pullRequest,html_url:pr.url,
     base:{...value.pullRequest.base,repo:{id:repo.id,...value.pullRequest.base.repo}},
     head:{...value.pullRequest.head,ref:pr.headRefName,repo:{id:repo.id,name:"openclaw",html_url:repo.url,owner:{login:"openclaw"},...value.pullRequest.head.repo}}});
-  else if (endpoint === prefix + "commits/" + value.headSha && args.includes("--jq")) out({name:"Fixture Contributor",email:"fixture@example.com",user:{login:"fixture-contributor",type:"User"}});
+  else if (endpoint === prefix + "commits?sha=" + value.headSha + "&per_page=1") out([{sha:value.headSha,commit:{author:{name:"Fixture Contributor",email:"fixture@example.com"}},author:{login:"fixture-contributor",type:"User"}}]);
   else if (endpoint === prefix + "issues/131091/comments?per_page=100") out(reviewComments);
   else if (endpoint === prefix + "commits/" + value.headSha + "/check-runs?filter=latest&per_page=100") out(value.checkRuns.check_runs.map(check => ({check_runs:[check]})));
   else if (endpoint === prefix + "actions/workflows/pr-crabbox-gate-publisher.yml/runs") out({workflow_runs:value.dispatched ? [{...value.publisherRun,html_url:repo.url+"/actions/runs/8001",display_title:"PR Crabbox gate #131091 / "+value.headSha}] : []});

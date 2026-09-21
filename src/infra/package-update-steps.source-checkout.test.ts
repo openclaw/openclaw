@@ -115,7 +115,7 @@ describe("runGlobalPackageUpdateSteps", () => {
       postVerifyStep,
     });
     expect(result.failedStep).toMatchObject({
-      name: "global install verify",
+      name: "package-verify",
       stderrTail: "could not identify the installed package root",
     });
     expect(postVerifyStep).not.toHaveBeenCalled();
@@ -224,7 +224,7 @@ describe("runGlobalPackageUpdateSteps", () => {
           installCwd: checkoutRoot,
           runCommand: createRootRunner(globalRoot),
           runStep: async ({ name, argv, cwd }) => {
-            expect(name).toBe("global update");
+            expect(name).toBe("package-install");
             let targetRoot = packageRoot;
             if (manager === "npm") {
               const stagePrefix = argv[argv.indexOf("--prefix") + 1];
@@ -263,13 +263,13 @@ describe("runGlobalPackageUpdateSteps", () => {
         });
         if (error) {
           expect(result.failedStep).toMatchObject({
-            name: "global install verify",
+            name: "package-verify",
             stderrTail: expect.stringContaining(error),
           });
           expect(postVerifyStep).not.toHaveBeenCalled();
           if (manager === "npm") {
             expect(result.afterVersion).toBe("1.0.0");
-            expect(result.steps.some((step) => step.name === "global install swap")).toBe(false);
+            expect(result.steps.some((step) => step.name === "package-swap")).toBe(false);
             await expect(
               fs.readFile(path.join(packageRoot, "package.json"), "utf8"),
             ).resolves.toContain('"version":"1.0.0"');
@@ -282,8 +282,8 @@ describe("runGlobalPackageUpdateSteps", () => {
           await expect(fs.realpath(packageRoot)).resolves.toBe(checkoutRoot);
           if (manager === "npm") {
             expect(result.steps.map((step) => step.name)).toEqual([
-              "global update",
-              "global install swap",
+              "package-install",
+              "package-swap",
               "candidate doctor",
             ]);
             await expect(fs.readlink(path.join(prefix, "bin", "openclaw"))).resolves.toBe(

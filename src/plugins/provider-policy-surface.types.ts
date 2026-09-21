@@ -4,6 +4,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type {
   ProviderFastModePolicyContext,
   ProviderModelRouteResolution,
+  ProviderNativeWebSearchPolicyContext,
   ProviderNormalizeModelCatalogIdContext,
   ProviderResponseModelEquivalenceContext,
   ProviderResolveModelRoutesContext,
@@ -70,6 +71,8 @@ export type ProviderPolicySurface = {
   resolveThinkingProfile?: (
     ctx: ProviderDefaultThinkingPolicyContext,
   ) => ProviderThinkingProfile | null | undefined;
+  /** Whether the provider supplies hosted web search instead of managed search. */
+  resolveNativeWebSearch?: (ctx: ProviderNativeWebSearchPolicyContext) => boolean;
   /** Prefer compact tool discovery, or veto a managed-service default for a hosted route. */
   resolveToolSearchMode?: (ctx: ProviderToolSearchPolicyContext) => "tools" | false | undefined;
   resolveModelRoutes?: (

@@ -288,7 +288,11 @@ describe("terminal resolution", () => {
       const input = makeTerminalInput({
         attempt,
         attemptAssistant: assistant,
-        runParams: { allowEmptyAssistantReplyAsSilent: true, terminalReplyExpectation: "required" },
+        runParams: {
+          allowEmptyAssistantReplyAsSilent: true,
+          terminalReplyExpectation: "required",
+          inputProvenance: { kind: "inter_session" },
+        },
         activateInternalPrompt,
       });
 
@@ -298,35 +302,45 @@ describe("terminal resolution", () => {
     },
   );
 
-  it("completes optional NO_REPLY without retrying even when legacy silence is disabled", async () => {
-    const assistant = buildEmbeddedRunnerAssistant({
-      content: [{ type: "text", text: SILENT_REPLY_TOKEN }],
-    });
-    const attempt = makeEmbeddedRunnerAttempt({
-      assistantTexts: [SILENT_REPLY_TOKEN],
-      lastAssistant: assistant,
-      currentAttemptAssistant: assistant,
-      currentAttemptReplayMetadata: { hadPotentialSideEffects: false, replaySafe: true },
-    });
-    const activateInternalPrompt = vi.fn();
-    const input = makeTerminalInput({
-      attempt,
-      attemptAssistant: assistant,
-      runParams: { allowEmptyAssistantReplyAsSilent: false, terminalReplyExpectation: "optional" },
-      activateInternalPrompt,
-    });
+  it.each(["explicit policy", "internal notification"])(
+    "completes NO_REPLY from %s without retrying",
+    async (source) => {
+      const assistant = buildEmbeddedRunnerAssistant({
+        content: [{ type: "text", text: SILENT_REPLY_TOKEN }],
+      });
+      const attempt = makeEmbeddedRunnerAttempt({
+        assistantTexts: [SILENT_REPLY_TOKEN],
+        lastAssistant: assistant,
+        currentAttemptAssistant: assistant,
+        currentAttemptReplayMetadata: { hadPotentialSideEffects: false, replaySafe: true },
+      });
+      const activateInternalPrompt = vi.fn();
+      const input = makeTerminalInput({
+        attempt,
+        attemptAssistant: assistant,
+        runParams:
+          source === "explicit policy"
+            ? { allowEmptyAssistantReplyAsSilent: false, terminalReplyExpectation: "optional" }
+            : {
+                allowEmptyAssistantReplyAsSilent: false,
+                trigger: "user",
+                inputProvenance: { kind: "inter_session", sourceTool: "subagent_announce" },
+              },
+        activateInternalPrompt,
+      });
 
-    const resolved = await resolveEmbeddedRunTerminal(input);
+      const resolved = await resolveEmbeddedRunTerminal(input);
 
-    expect(resolved.action).toBe("complete");
-    if (resolved.action !== "complete") {
-      return;
-    }
-    expect(resolved.result.payloads).toEqual([{ text: SILENT_REPLY_TOKEN }]);
-    expect(resolved.result.meta.terminalReplyKind).toBe("silent-empty");
-    expect(resolved.result.meta.livenessState).toBe("working");
-    expect(activateInternalPrompt).not.toHaveBeenCalled();
-  });
+      expect(resolved.action).toBe("complete");
+      if (resolved.action !== "complete") {
+        return;
+      }
+      expect(resolved.result.payloads).toEqual([{ text: SILENT_REPLY_TOKEN }]);
+      expect(resolved.result.meta.terminalReplyKind).toBe("silent-empty");
+      expect(resolved.result.meta.livenessState).toBe("working");
+      expect(activateInternalPrompt).not.toHaveBeenCalled();
+    },
+  );
 
   it("keeps an empty visible parent alive for accepted completion children", async () => {
     const attempt = makeEmbeddedRunnerAttempt({

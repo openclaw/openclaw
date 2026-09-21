@@ -1,6 +1,7 @@
 /**
  * Gateway post-attach startup task tests.
  */
+import "./server-worker-free.test-support.js";
 import fs from "node:fs";
 import path from "node:path";
 import { performance } from "node:perf_hooks";
@@ -859,6 +860,7 @@ describe("startGatewayPostAttachRuntime", () => {
     });
     const startGatewaySidecarsInner = vi.fn(async () => {
       events.push("sidecars");
+      vi.stubEnv("OPENCLAW_STATE_DIR", `${testState.stateDir}-moved`);
       return 0;
     });
 
@@ -876,6 +878,9 @@ describe("startGatewayPostAttachRuntime", () => {
     await waitForGatewayTestState(() => {
       expect(refreshLatestUpdateRestartSentinel).toHaveBeenCalledTimes(1);
     });
+    expect(refreshLatestUpdateRestartSentinel).toHaveBeenCalledWith(
+      expect.objectContaining({ OPENCLAW_STATE_DIR: testState.stateDir }),
+    );
     expect(events).toEqual(["sidecars", "returned", "sentinel"]);
   });
 
@@ -1099,12 +1104,16 @@ describe("startGatewayPostAttachRuntime", () => {
   it("loads update discovery only after the post-ready barrier", async () => {
     const events: string[] = [];
     const postReadyWork = createDeferred();
+    const started = createDeferred();
     const updateCheck = {
       initialize: vi.fn(async () => {
         events.push("install-identity");
         return await hoisted.updateCheck.initialize();
       }),
-      start: vi.fn(() => events.push("update-check")),
+      start: vi.fn(() => {
+        events.push("update-check");
+        started.resolve();
+      }),
       stop: vi.fn(async () => {}),
     };
     const startGatewaySidecarsItem = vi.fn(async () => {
@@ -1131,9 +1140,8 @@ describe("startGatewayPostAttachRuntime", () => {
       expect(events).toEqual(["sidecars", "returned"]);
 
       postReadyWork.resolve();
-      await waitForGatewayTestState(() => {
-        expect(updateCheck.start).toHaveBeenCalledTimes(1);
-      });
+      await started.promise;
+      expect(updateCheck.start).toHaveBeenCalledTimes(1);
       expect(updateCheck.initialize).toHaveBeenCalledTimes(1);
       expect(events).toEqual(["sidecars", "returned", "install-identity", "update-check"]);
     } finally {
@@ -4535,53 +4543,75 @@ describe("startGatewayPostAttachRuntime", () => {
     expect(otherStart).not.toHaveBeenCalled();
   });
 
-  it("passes typed gateway_start context with config, workspace dir, and a live cron getter", async () => {
-    const runGatewayStart = vi.fn<
-      (event: PluginHookGatewayStartEvent, ctx: PluginHookGatewayContext) => Promise<void>
-    >(async () => {});
-    const hookRunner = {
-      hasHooks: vi.fn((hookName: string) => hookName === "gateway_start"),
-      runGatewayStart,
-    };
-    const initialCron = createCronHost();
-    const params = createPostAttachParams({
-      gatewayPluginConfigAtStart: {
-        hooks: { internal: { enabled: false } },
-        plugins: { entries: { demo: { enabled: true } } },
-      } as never,
-      pluginRegistry: {
-        ...createPostAttachParams().pluginRegistry,
-        typedHooks: [{ hookName: "gateway_start" }],
-      } as never,
-      deps: { cron: initialCron } as never,
-    });
+  it.each(["close", "restart"] as const)(
+    "passes Gateway lifetime and live cron context through gateway_start (%s)",
+    async (closing) => {
+      const lifetime = new AbortController();
+      const startupWork: Promise<unknown>[] = [];
+      const runGatewayStart = vi.fn<
+        (event: PluginHookGatewayStartEvent, ctx: PluginHookGatewayContext) => Promise<void>
+      >(async () => {});
+      const hookRunner = {
+        hasHooks: vi.fn((hookName: string) => hookName === "gateway_start"),
+        runGatewayStart,
+      };
+      const initialCron = createCronHost();
+      const depsCron = closing === "close" ? initialCron : createCronHost();
+      let currentCron = initialCron;
+      const params = createPostAttachParams({
+        trackStartupWork: (run) => {
+          const operation = run(lifetime.signal);
+          startupWork.push(operation);
+          return operation;
+        },
+        gatewayPluginConfigAtStart: {
+          hooks: { internal: { enabled: false } },
+          plugins: { entries: { demo: { enabled: true } } },
+        } as never,
+        pluginRegistry: {
+          ...createPostAttachParams().pluginRegistry,
+          typedHooks: [{ hookName: "gateway_start" }],
+        } as never,
+        deps: { cron: depsCron } as never,
+        getCronService: closing === "restart" ? () => currentCron : undefined,
+      });
 
-    await startGatewayPostAttachRuntime(
-      params,
-      createPostAttachRuntimeDeps({
+      const runtimeDeps = createPostAttachRuntimeDeps({
         createHookRunner: vi.fn(async () => hookRunner as never),
-      }),
-    );
+      });
+      await startGatewayPostAttachRuntime(params, runtimeDeps);
 
-    await waitForGatewayTestState(() => {
+      await Promise.all(startupWork);
       expect(runGatewayStart).toHaveBeenCalledTimes(1);
-    });
 
-    const [event, ctx] = firstGatewayStartCall(runGatewayStart);
-    expect(event).toEqual({ port: 18789 });
-    expect(ctx.port).toBe(18789);
-    expect(ctx.config).toBe(params.gatewayPluginConfigAtStart);
-    expect(ctx.workspaceDir).toBe(testState.workspaceDir);
-    const getCron = ctx.getCron;
-    if (!getCron) {
-      throw new Error("gateway_start context did not expose getCron");
-    }
-    expect(getCron()).toBe(initialCron);
+      const [event, ctx] = firstGatewayStartCall(runGatewayStart);
+      expect(event).toEqual({ port: 18789 });
+      expect(ctx.port).toBe(18789);
+      expect(ctx.config).toBe(params.gatewayPluginConfigAtStart);
+      expect(ctx.workspaceDir).toBe(testState.workspaceDir);
+      const getCron = ctx.getCron;
+      if (!getCron) {
+        throw new Error("gateway_start context did not expose getCron");
+      }
+      expect(getCron()).toBe(initialCron);
+      const serviceGetter = vi.mocked(runtimeDeps.startGatewaySidecars).mock.calls[0]?.[0]
+        .getCronService;
+      expect(serviceGetter?.()).toBe(closing === "restart" ? initialCron : undefined);
 
-    const reloadedCron = createCronHost();
-    params.deps.cron = reloadedCron as never;
-    expect(getCron()).toBe(reloadedCron);
-  });
+      const reloadedCron = createCronHost();
+      currentCron = reloadedCron;
+      params.deps.cron = (closing === "close" ? reloadedCron : depsCron) as never;
+      expect(getCron()).toBe(reloadedCron);
+      expect(serviceGetter?.()).toBe(closing === "restart" ? reloadedCron : undefined);
+      expect(ctx.abortSignal?.aborted).toBe(false);
+      if (closing === "close") {
+        lifetime.abort();
+      } else {
+        markGatewayRestartDraining();
+      }
+      expect(ctx.abortSignal?.aborted).toBe(true);
+    },
+  );
 
   it("finishes startup without dispatching hooks for an empty registry", async () => {
     const startupWork: Promise<unknown>[] = [];
@@ -4606,51 +4636,6 @@ describe("startGatewayPostAttachRuntime", () => {
     await Promise.all(startupWork);
     expect(runGatewayStart).not.toHaveBeenCalled();
     expect(params.log.warn).not.toHaveBeenCalled();
-  });
-
-  it("resolves gateway_start cron from the live runtime getter before deps fallback", async () => {
-    const runGatewayStart = vi.fn<
-      (event: PluginHookGatewayStartEvent, ctx: PluginHookGatewayContext) => Promise<void>
-    >(async () => {});
-    const hookRunner = {
-      hasHooks: vi.fn((hookName: string) => hookName === "gateway_start"),
-      runGatewayStart,
-    };
-    const depsCron = createCronHost();
-    const liveCron = createCronHost();
-    const reloadedCron = createCronHost();
-    let currentLiveCron = liveCron;
-    const params = createPostAttachParams({
-      deps: { cron: depsCron } as never,
-      getCronService: () => currentLiveCron,
-      pluginRegistry: {
-        ...createPostAttachParams().pluginRegistry,
-        typedHooks: [{ hookName: "gateway_start" }],
-      } as never,
-    });
-
-    const runtimeDeps = createPostAttachRuntimeDeps({
-      createHookRunner: vi.fn(async () => hookRunner as never),
-    });
-    await startGatewayPostAttachRuntime(params, runtimeDeps);
-
-    await waitForGatewayTestState(() => {
-      expect(runGatewayStart).toHaveBeenCalledTimes(1);
-    });
-
-    const [, ctx] = firstGatewayStartCall(runGatewayStart);
-    if (!ctx?.getCron) {
-      throw new Error("gateway_start context did not expose getCron");
-    }
-    expect(ctx.getCron()).toBe(liveCron);
-    const serviceGetter = vi.mocked(runtimeDeps.startGatewaySidecars).mock.calls[0]?.[0]
-      .getCronService;
-    expect(serviceGetter?.()).toBe(liveCron);
-
-    params.deps.cron = depsCron as never;
-    currentLiveCron = reloadedCron;
-    expect(ctx.getCron()).toBe(reloadedCron);
-    expect(serviceGetter?.()).toBe(reloadedCron);
   });
 });
 

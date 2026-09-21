@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import type { SessionStoreTarget } from "../config/sessions/targets.js";
+import { hasDeferredPluginSessionImport } from "../infra/deferred-plugin-session-sources.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { assertSqliteIntegrity } from "../infra/sqlite-integrity.js";
 import {
@@ -69,6 +70,17 @@ export async function recoverDoctorSessionSqliteTargets(params: {
     if (recoveredCorruptTargets.length > 0) {
       return summarizeRecoverReport(recoveredCorruptTargets);
     }
+    const retainedReports: DoctorSessionSqliteTargetReport[] = [];
+    for (const target of trustedTargets) {
+      if (
+        hasDeferredPluginSessionImport({ target, sqlitePath: target.sqlitePath, env: params.env })
+      ) {
+        retainedReports.push(await params.validateTarget(target));
+      }
+    }
+    if (retainedReports.length > 0) {
+      return summarizeRecoverReport(retainedReports);
+    }
     return summarizeRecoverReport([
       createSyntheticRecoverTargetReport(
         params.env,
@@ -100,11 +112,15 @@ export async function recoverDoctorSessionSqliteTargets(params: {
       message: `${conflict.sourcePath}: ${conflict.reason}`,
     })),
   );
+  const report = summarizeRecoverReport(targetReports.length > 0 ? targetReports : [reportTarget]);
   const failureReports = writeSessionSqliteMigrationFailureReports(failedRun.manifestPath, {
-    reason: "doctor recover restored and validated a failed session SQLite migration run",
+    reason:
+      report.totals.issues > 0
+        ? "doctor recover completed with remaining issues"
+        : "doctor recover completed validation of a failed session SQLite migration run",
+    recoveryTargets: report.targets,
     trustedTargets,
   });
-  const report = summarizeRecoverReport(targetReports.length > 0 ? targetReports : [reportTarget]);
   report.migrationRun = {
     failureReportJsonPath: failureReports.jsonPath,
     failureReportMarkdownPath: failureReports.markdownPath,

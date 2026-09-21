@@ -26,8 +26,12 @@ import {
 import { resolveTestNodeExecPath } from "../../src/test-utils/node-process.js";
 import { waitForChildClose, waitForDead, waitForPidFile } from "../helpers/process-wait.js";
 import { startProcessWatchdogFixture } from "../helpers/process-watchdog.js";
+import { createDeferred } from "../helpers/promise.js";
 import { runQaGatewayFixture } from "../helpers/qa-gateway-cleanup.js";
-import { exitedDescendantReaper } from "./exited-descendant-reaper.test-support.js";
+import {
+  assertFixtureProcessGroupStopped,
+  exitedDescendantReaper,
+} from "./exited-descendant-reaper.test-support.js";
 import { createScriptTestHarness } from "./test-helpers.js";
 
 const testNodeExecPath = resolveTestNodeExecPath();
@@ -96,6 +100,20 @@ fs.renameSync(pidPath + ".tmp", pidPath);
 `;
 }
 
+// Advance only the readiness clock; native launch errors and all cleanup still settle normally.
+function expirePidReadiness(filePath: string, timeoutMs: number, commandOutcome: Promise<unknown>) {
+  let elapsed = 0;
+  return waitForPidFile(
+    filePath,
+    timeoutMs,
+    async () => {
+      await commandOutcome;
+      elapsed = timeoutMs;
+    },
+    () => elapsed,
+  );
+}
+
 describe("managed-child-process", () => {
   it("registers with the containing owner when the command creates its own TMP leaf", async () => {
     const root = createTempDir("managed-command-owner-");
@@ -126,12 +144,19 @@ describe("managed-child-process", () => {
       fs.writeFileSync(
         runnerPath,
         `
+import assert from "node:assert/strict";
 import { runManagedCommand } from ${JSON.stringify(pathToFileURL(path.resolve("scripts/lib/managed-child-process.mts")).href)};
+import { assertFixtureProcessGroupStopped } from ${JSON.stringify(pathToFileURL(path.resolve("test/scripts/exited-descendant-reaper.test-support.ts")).href)};
+let pgid;
 process.exitCode = await runManagedCommand({
   bin: process.execPath,
   args: ["--import", ${JSON.stringify(pathToFileURL(path.resolve("scripts/tsx.mjs")).href)}, ${JSON.stringify(childPath)}],
   requireProcessTreeExit: true,
+  onReady(child) { pgid = child.pid; },
 });
+assert.equal(process.exitCode, 0);
+assert.doesNotThrow(() => process.kill(-pgid, 0));
+assertFixtureProcessGroupStopped(pgid);
 `,
       );
       // Linux may reap orphaned tool services after the leader's close. Adopt
@@ -154,17 +179,73 @@ process.exitCode = await runManagedCommand({
     },
   );
 
+  it.each([
+    { name: "absent group", firstError: "ESRCH", accepted: true },
+    { name: "permission denied", firstError: "EPERM", accepted: false },
+    { name: "unknown probe failure", firstError: "EIO", accepted: false },
+    { name: "all zombie threads", stdout: "12345 Z\n12345 Z\n", accepted: true },
+    { name: "live group", stdout: "12345 S\n", accepted: false },
+    { name: "live sibling thread", stdout: "12345 Z\n12345 S\n", accepted: false },
+    { name: "wrong group", stdout: "54321 Z\n", accepted: false },
+    { name: "unknown state", stdout: "12345 ?\n", accepted: false },
+    { name: "malformed row", stdout: "12345 Z extra\n", accepted: false },
+    { name: "empty snapshot", stdout: "", accepted: false },
+    { name: "partial row", stdout: "12345 Z", accepted: false },
+    { name: "failed snapshot", stdout: "12345 Z\n", status: 1, accepted: false },
+    { name: "truncated snapshot", stdout: "12345 Z\n", error: "ENOBUFS", accepted: false },
+    { name: "signaled snapshot", stdout: "12345 Z\n", signal: "SIGKILL" as const, accepted: false },
+    { name: "reaped during snapshot", stdout: "", finalError: "ESRCH", accepted: true },
+    { name: "unavailable final probe", stdout: "", finalError: "EPERM", accepted: false },
+    { name: "non-Linux group", platform: "darwin" as const, accepted: false },
+  ])("verifies stopped fixture groups: $name", (scenario) => {
+    let probes = 0;
+    const kill = vi.spyOn(process, "kill").mockImplementation(() => {
+      const code = probes++ === 0 ? scenario.firstError : scenario.finalError;
+      if (code) {
+        throw Object.assign(new Error("process group lookup failed"), { code });
+      }
+      return true;
+    });
+    const ps = vi.mocked(spawnSync).mockImplementation((...call) => ({
+      pid: 12346,
+      output: [],
+      status: scenario.status ?? 0,
+      signal: scenario.signal ?? null,
+      // Without thread enumeration, a zombie leader can conceal a live thread.
+      stdout:
+        scenario.name === "live sibling thread" &&
+        !(Array.isArray(call[1]) && call[1].includes("-L"))
+          ? "12345 Z\n"
+          : (scenario.stdout ?? ""),
+      stderr: "",
+      ...(scenario.error ? { error: new Error(scenario.error) } : {}),
+    }));
+    try {
+      const verify = () => assertFixtureProcessGroupStopped(12345, scenario.platform ?? "linux");
+      if (scenario.accepted) {
+        expect(verify).not.toThrow();
+      } else {
+        expect(verify).toThrow();
+      }
+    } finally {
+      ps.mockRestore();
+      kill.mockRestore();
+    }
+  });
+
   async function runNestedCleanupFixture(
     {
       runner,
       resistant,
       abort,
       bin = testNodeExecPath,
+      waitForPid = (file: string, timeoutMs: number) => waitForPidFile(file, timeoutMs),
     }: {
       runner: "managed" | "managed-inherit" | "preparation";
       resistant: boolean;
       abort: boolean;
       bin?: string;
+      waitForPid?: typeof expirePidReadiness;
     },
     ...cleanups: Array<() => unknown>
   ) {
@@ -206,6 +287,7 @@ ${publish(2)}
     const abortController = new AbortController();
     const stdout = vi.spyOn(process.stdout, "write");
     let output = "";
+    let commandOutcome!: Promise<Error | undefined>;
     const releaseAndWait = startProcessWatchdogFixture(() => {
       const command =
         runner === "preparation"
@@ -220,10 +302,11 @@ ${publish(2)}
                   output += String(chunk);
                 }),
             });
-      return command.then(
+      commandOutcome = command.then(
         () => undefined,
         (error: unknown) => toErrorObject(error, "Nested fixture command failed"),
       );
+      return commandOutcome;
     });
     const pids: number[] = [];
     let commandOutcomeAsserted = false;
@@ -231,7 +314,7 @@ ${publish(2)}
     await runQaGatewayFixture(
       async () => {
         for (const pidPath of pidPaths) {
-          pids.push(await waitForPidFile(pidPath, 10_000));
+          pids.push(await waitForPid(pidPath, 10_000, commandOutcome));
         }
         expect(pids.every(isProcessAlive)).toBe(true);
         if (abort) {
@@ -295,7 +378,7 @@ ${publish(2)}
       const bin = path.join(createTempDir("openclaw-nested-startup-"), "missing-node");
       const lastCleanup = vi.fn();
       const failure = await runNestedCleanupFixture(
-        { runner, resistant: false, abort: false, bin },
+        { runner, resistant: false, abort: false, bin, waitForPid: expirePidReadiness },
         lastCleanup,
       ).catch((error: unknown) => error);
 
@@ -1477,10 +1560,11 @@ if (role === "leaf") {
     expectCase: typeof expect,
     {
       bin = process.execPath,
+      waitForPid = (file: string, timeoutMs: number) => waitForPidFile(file, timeoutMs),
       dir = fs.mkdtempSync(
         path.join(fs.realpathSync(os.tmpdir()), "openclaw-managed-held-output-"),
       ),
-    }: { bin?: string; dir?: string } = {},
+    }: { bin?: string; dir?: string; waitForPid?: typeof expirePidReadiness } = {},
   ) {
     // Concurrent rows own their roots; the shared afterEach can run while a sibling is alive.
     // This namespace owns the deliberate failed join and manual rescue. Pass
@@ -1579,8 +1663,8 @@ child.once('message', () => { ${normalExit ? "process.exit(0);" : ""} });
     });
     await runQaGatewayFixture(
       async () => {
-        escapedPid = await waitForPidFile(pidPath, 10_000);
-        const parentPid = await waitForPidFile(parentPidPath, 10_000);
+        escapedPid = await waitForPid(pidPath, 10_000, outcome);
+        const parentPid = await waitForPid(parentPidPath, 10_000, outcome);
         const canceledAt = Date.now();
         if (mode === "normal drainage") {
           await waitFor(() => exitedAt !== 0);
@@ -1692,9 +1776,17 @@ child.once('message', () => { ${normalExit ? "process.exit(0);" : ""} });
       const bin = path.join(dir, "missing-node");
       const signals = ["SIGHUP", "SIGINT", "SIGTERM"] as const;
       const listeners = signals.map((signal) => process.listenerCount(signal));
-      const completion = runEscapedOutputFixture(mode, expectCase, { bin, dir }).catch(
-        (error: unknown) => error,
-      );
+      const observedRelease = createDeferred();
+      const completion = runEscapedOutputFixture(mode, expectCase, {
+        bin,
+        dir,
+        waitForPid: (file, timeoutMs, commandOutcome) =>
+          expirePidReadiness(
+            file,
+            timeoutMs,
+            Promise.all([commandOutcome, observedRelease.promise]),
+          ),
+      }).catch((error: unknown) => error);
       const owner = findVitestResourceOwner(dir);
       await runQaGatewayFixture(
         async () => {
@@ -1713,6 +1805,8 @@ child.once('message', () => { ${normalExit ? "process.exit(0);" : ""} });
           }, 10_000);
         },
         async () => {
+          // Keep PID evidence until the release assertion has observed the real command join.
+          observedRelease.resolve();
           const failure = await completion;
           expectCase(fs.existsSync(dir)).toBe(false);
           expectCase(signals.map((signal) => process.listenerCount(signal))).toEqual(listeners);

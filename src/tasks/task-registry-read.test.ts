@@ -452,7 +452,7 @@ describe("task registry read preparation", () => {
       let held = false;
       vi.spyOn(store, "loadMutationSnapshotAsync").mockImplementation(async (...args) => {
         const result = await snapshot(...args);
-        if (!held && args[1]?.runId === selected.runId) {
+        if (!held && args[1] && "taskId" in args[1] && args[1].runId === selected.runId) {
           held = true;
           committed.resolve();
           await release.promise;

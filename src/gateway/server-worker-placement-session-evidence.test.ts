@@ -26,6 +26,7 @@ import { clearNodeSqliteKyselyCacheForDatabase } from "../infra/kysely-sync-cach
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import * as registryListing from "../state/openclaw-agent-db-registry-listing.js";
 import {
+  closeOpenClawAgentDatabaseByPathAsync,
   closeOpenClawAgentDatabasesForTest,
   closeOpenClawAgentDatabasesAsync,
   openOpenClawAgentDatabase,
@@ -261,13 +262,22 @@ describe("worker placement session evidence", () => {
           updatedAt: 1,
         });
       }
+      // Join seeded disk maintenance before corrupting a store; retain native incognito state.
+      for (const agentId of ["main", "healthy"]) {
+        const seeded = openOpenClawAgentDatabase({ agentId });
+        await closeOpenClawAgentDatabaseByPathAsync(seeded.path, agentId);
+      }
       const database = openOpenClawAgentDatabase({ agentId: "main" });
+      expect(
+        readSessionIdentityEvidenceInDatabase(database, [broken]).map((row) => row.status),
+      ).toEqual(["current"]);
       clearNodeSqliteKyselyCacheForDatabase(database.db);
       database.db.exec("DROP TABLE session_nodes");
 
       const requested = [broken, healthy, absent, incognito];
       const resolve = await createWorkerPlacementSessionEvidenceResolver(requested);
 
+      expect(evidenceWarnSpy).not.toHaveBeenCalled();
       expect(await Promise.all(requested.map(resolve))).toEqual([
         "unknown",
         "current",

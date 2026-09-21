@@ -262,6 +262,7 @@ export function createInternalAgentTurnFacade(
                 onRunObserved,
                 assertAdmissionCurrent: dispatchOptions.assertAdmissionCurrent,
                 privateCompletion: dispatchOptions.privateCompletion,
+                settleWakeReplay: dispatchOptions.settleWakeReplay,
               });
             },
             {

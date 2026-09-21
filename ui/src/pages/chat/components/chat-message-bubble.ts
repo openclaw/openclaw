@@ -5,6 +5,7 @@ import { unsafeHTML } from "lit/directives/unsafe-html.js";
 import { CHAT_PENDING_INPUT_MESSAGE_PREFIX } from "../../../../../packages/gateway-protocol/src/schema/chat-history-constants.js";
 import { icons } from "../../../components/icons.ts";
 import type { ImageLightboxItem } from "../../../components/image-lightbox.types.ts";
+import { parseMarkdownJson } from "../../../components/markdown-json.ts";
 import type { MarkdownRenderOptions } from "../../../components/markdown-render-options.ts";
 import { toSanitizedMarkdownHtml } from "../../../components/markdown.ts";
 import { t } from "../../../i18n/index.ts";
@@ -55,7 +56,6 @@ import {
   type ArtifactDownloadResolver,
 } from "./chat-message-media.ts";
 import {
-  detectJson,
   renderMessageJson,
   renderMessageMarkdown,
   type AssistantMessageDisclosure,
@@ -136,17 +136,21 @@ function renderPairingQrExpiryNotices(count: number) {
           <div
             class="chat-assistant-attachment-card chat-assistant-attachment-card--blocked chat-pairing-qr-expired"
           >
-            <div class="chat-assistant-attachment-card__header">
-              <span class="chat-assistant-attachment-card__icon">${icons.alertTriangle}</span>
-              <span class="chat-assistant-attachment-card__title"
-                >${t("chat.pairingQrExpired.title")}</span
-              >
-              <span class="chat-assistant-attachment-badge chat-assistant-attachment-badge--muted"
-                >${t("chat.pairingQrExpired.badge")}</span
-              >
-            </div>
-            <div class="chat-assistant-attachment-card__reason">
-              ${t("chat.pairingQrExpired.reason")}
+            <span class="chat-pairing-qr-expired__icon" aria-hidden="true"
+              >${icons.alertTriangle}</span
+            >
+            <div class="chat-pairing-qr-expired__content">
+              <div class="chat-pairing-qr-expired__heading">
+                <span class="chat-pairing-qr-expired__title"
+                  >${t("chat.pairingQrExpired.title")}</span
+                >
+                <span class="chat-pairing-qr-expired__badge"
+                  >${t("chat.pairingQrExpired.badge")}</span
+                >
+              </div>
+              <div class="chat-assistant-attachment-card__reason">
+                ${t("chat.pairingQrExpired.reason")}
+              </div>
             </div>
           </div>
         `,
@@ -299,8 +303,8 @@ export function renderGroupedMessage(
     linkFavicons: Boolean(opts.fetchLinkFavicon) && !opts.isStreaming,
   };
 
-  // Detect pure-JSON messages and render as collapsible block
-  const jsonResult = markdown && !opts.isStreaming ? detectJson(markdown) : null;
+  // Classify completed bare JSON before Markdown can interpret its literal values.
+  const jsonResult = markdown && !opts.isStreaming ? parseMarkdownJson(markdown) : null;
 
   const onlyPreviewChips =
     normalizedRole === "user" &&
@@ -466,7 +470,9 @@ export function renderGroupedMessage(
       : jsonResult
         ? renderMessageJson(
             jsonResult,
-            isStandaloneToolMessage && Boolean(opts.autoExpandToolCalls),
+            messageKey,
+            { ...opts, role: isStandaloneToolMessage ? "tool" : normalizedRole },
+            markdownRenderOptions,
           )
         : bodyMarkdown
           ? renderMessageMarkdown(

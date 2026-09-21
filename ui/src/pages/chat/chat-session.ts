@@ -8,6 +8,7 @@ import { GatewayRequestError } from "../../api/gateway.ts";
 import type { FastMode, GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import { t } from "../../i18n/index.ts";
 import { registerModelControlsEnglish } from "../../i18n/locales/en-model-controls.ts";
+import { resolvePreferredServerChatModelValue } from "../../lib/chat/model-ref.ts";
 import { resolveChatModelOverrideValue } from "../../lib/chat/model-select-state.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { isSessionRuntimePinned } from "../../lib/model-runtime-choice.ts";
@@ -266,10 +267,11 @@ export function switchChatFastMode(
 
 type ChatModelSelection = {
   owner: AbortController;
-  ownsSelection: () => boolean;
+  ownsSelection: (sessionId?: string) => boolean;
   agentScope: { agentId?: string };
   expectedSessionId?: string;
   activeRow?: GatewaySessionRow;
+  adoptCreatedSession: (sessionId: string) => boolean;
 };
 
 function claimChatModelSelection(host: ChatModelSettingsHost, targetSessionKey: string) {
@@ -284,8 +286,8 @@ function claimChatModelSelection(host: ChatModelSettingsHost, targetSessionKey: 
   const activeRow = host.sessionsResult?.sessions.find((row) =>
     areUiSessionKeysEquivalent(row.key, targetSessionKey),
   );
-  const expectedSessionId = activeRow?.sessionId;
-  const ownsSelection = () =>
+  let expectedSessionId = activeRow?.sessionId;
+  const ownsSelection = (sessionId = expectedSessionId) =>
     !owner.signal.aborted &&
     modelSelectionOwners.get(host) === owner &&
     host.connected &&
@@ -296,23 +298,35 @@ function claimChatModelSelection(host: ChatModelSettingsHost, targetSessionKey: 
     scopedAgentParamsForSession(host, targetSessionKey).agentId === agentScope.agentId &&
     host.sessionsResult?.sessions.find((row) =>
       areUiSessionKeysEquivalent(row.key, targetSessionKey),
-    )?.sessionId === expectedSessionId;
-  return { owner, ownsSelection, agentScope, expectedSessionId, activeRow };
+    )?.sessionId === sessionId;
+  return {
+    owner,
+    ownsSelection,
+    agentScope,
+    get expectedSessionId() {
+      return expectedSessionId;
+    },
+    activeRow,
+    adoptCreatedSession(sessionId: string) {
+      if (expectedSessionId !== undefined || !ownsSelection(sessionId)) {
+        return false;
+      }
+      expectedSessionId = sessionId;
+      return true;
+    },
+  };
 }
 
 async function confirmChatNativeRuntimeRecovery(
   host: ChatModelSettingsHost,
   restriction: AgentRuntimeRestrictionErrorDetails,
   targetSessionKey: string,
-  model: string,
+  model: string | undefined,
   selection: ChatModelSelection,
   selectionUnchanged: () => boolean = () => true,
   retriesMessage = false,
 ): Promise<boolean> {
-  const { owner, ownsSelection, agentScope, expectedSessionId } = selection;
-  if (!ownsSelection()) {
-    return false;
-  }
+  const { owner, ownsSelection, agentScope } = selection;
   const explanation = t(`chat.nativeRuntimeRecovery.reasons.${restriction.reason}`, {
     runtime: restriction.runtimeLabel,
   });
@@ -320,6 +334,19 @@ async function confirmChatNativeRuntimeRecovery(
     setChatError(host, `${explanation} ${t("chat.nativeRuntimeRecovery.chooseAnother")}`, true);
   const canRecover = () => ownsSelection() && selectionUnchanged();
   try {
+    const materializedSessionId = restriction.recovery?.sessionId;
+    if (selection.expectedSessionId === undefined && materializedSessionId) {
+      if (!ownsSelection() && !ownsSelection(materializedSessionId)) {
+        return false;
+      }
+      await refreshChatSessionListForTarget(host, { sessionKey: targetSessionKey, ...agentScope });
+      if (!selection.adoptCreatedSession(materializedSessionId)) {
+        return false;
+      }
+    }
+    if (!ownsSelection()) {
+      return false;
+    }
     // Consent is a refusal-only action, not part of ordinary settings or send startup.
     const { confirmNativeRuntimePermissionRecovery } =
       await import("./chat-native-runtime-recovery.ts");
@@ -329,8 +356,8 @@ async function confirmChatNativeRuntimeRecovery(
       restriction,
       {
         ...agentScope,
-        model: model || null,
-        expectedSessionId,
+        ...(model !== undefined ? { model: model || null } : {}),
+        expectedSessionId: selection.expectedSessionId,
         signal: owner.signal,
         retriesMessage,
         canDispatch: canRecover,
@@ -367,27 +394,47 @@ export function captureChatNativeRuntimeRecovery(
   targetSessionKey: string,
 ): (restriction: AgentRuntimeRestrictionErrorDetails) => Promise<(() => boolean) | undefined> {
   const selection = claimChatModelSelection(host, targetSessionKey);
+  const unbound = selection.expectedSessionId === undefined;
   const model = selection.activeRow?.model;
   const provider = selection.activeRow?.modelProvider;
   const runtimeId = selection.activeRow?.agentRuntime?.id;
-  const modelValue = resolveChatModelOverrideValue({
+  const overrideValue = resolveChatModelOverrideValue({
     activeSession: selection.activeRow,
     chatModelCatalog: host.chatModelCatalog,
     modelOverrides: host.sessions.state.modelOverrides,
     sessionKey: targetSessionKey,
     sessionsResult: host.sessionsResult ?? null,
   });
+  const modelValue =
+    overrideValue ||
+    resolvePreferredServerChatModelValue(
+      host.sessionsResult?.defaults?.model,
+      host.sessionsResult?.defaults?.modelProvider,
+      host.chatModelCatalog,
+    );
   return async (restriction) => {
     const recovered = await confirmChatNativeRuntimeRecovery(
       host,
       restriction,
       targetSessionKey,
-      modelValue,
+      undefined,
       selection,
       () => {
         const row = host.sessionsResult?.sessions.find((candidate) =>
           areUiSessionKeysEquivalent(candidate.key, targetSessionKey),
         );
+        if (unbound) {
+          return Boolean(
+            modelValue &&
+            resolvePreferredServerChatModelValue(
+              row?.model,
+              row?.modelProvider,
+              host.chatModelCatalog,
+            ) === modelValue &&
+            row?.agentRuntime?.id === restriction.runtimeId &&
+            (!runtimeId || runtimeId === restriction.runtimeId),
+          );
+        }
         return Boolean(
           modelValue &&
           row?.model === model &&

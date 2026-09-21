@@ -92,6 +92,9 @@ function createMainRefreshTemplate(directory: string, perWorktreeConfig: boolean
   git(canonical, "push", "origin", `${gateMain}:refs/heads/gate-movement`);
   git(canonical, "push", "origin", `${movedMain}:refs/heads/movement`);
   git(canonical, "checkout", "--detach", main);
+  // Pack private checkout copies, retaining unreferenced objects such as sameTreeHead.
+  // Leave origin loose so filtered-fetch fixtures keep their original transport behavior.
+  git(canonical, "repack", "-ad", "--keep-unreachable");
   return { canonical, origin, main, head, sameTreeHead, movedMain, gateMain };
 }
 
@@ -256,7 +259,10 @@ export function createMainRefreshFixture(
       | "wrong-workflow"
       | "scheduled-failure"
       | "api-error",
-    requiredChecks: "pass" as "pass" | "fail" | "pending" | "api-error",
+    requiredChecks: "pass" as "pass" | "fail" | "pending" | "api-error" | "missing-gate",
+    requiredCheckRows: undefined as
+      | Array<{ name: string; bucket: string; state: string }>
+      | undefined,
     reviewComments: [
       {
         id: 1,
@@ -392,7 +398,7 @@ exec ${shellQuote(realGit)} "$@"
     prelude +
       `
 event({ kind: 'gh', args });
-if (args[0] === 'browse' && args[1] === '--no-browser') {
+if (args[0] === 'browse') {
   console.log('https://github.com/fixture/repo');
   process.exit(0);
 }
@@ -403,7 +409,7 @@ if (repositoryLocatorRequest) {
   process.exit(0);
 }
 if (args[0] === 'api' && args.includes('repos/fixture/repo') &&
-    JSON.stringify(args) !== JSON.stringify(['api', '--hostname', 'github.com', 'repos/fixture/repo', '-H', 'Cache-Control: max-age=0'])) {
+    JSON.stringify(args.filter(arg => arg !== '--include')) !== JSON.stringify(['api', '--hostname', 'github.com', 'repos/fixture/repo', '-H', 'Cache-Control: max-age=0'])) {
   throw new Error('Unexpected authoritative repository request');
 }
 let value;
@@ -413,6 +419,12 @@ if (args[0] === 'pr' && args[1] === 'view') {
 } else if (args[0] === 'pr' && args[1] === 'merge') {
   if (!args.includes('--match-head-commit') || !args.includes(control.metadata.headRefOid)) {
     throw new Error('Unpinned synthetic merge');
+  }
+  if (args.includes('--auto')) {
+    control.metadata.autoMergeRequest = { mergeMethod: 'SQUASH' };
+    writeFileSync(controlFile, JSON.stringify(control));
+    console.log('{}');
+    process.exit(0);
   }
   const parent = runGit(['-C', origin, 'rev-parse', 'refs/heads/main']);
   const tree = runGit(['-C', origin, 'merge-tree', '--write-tree', parent, control.metadata.headRefOid]);
@@ -435,10 +447,16 @@ if (args[0] === 'pr' && args[1] === 'view') {
     process.exit(1);
   }
   value = [{ name: 'openclaw/ci-gate', bucket: 'pass', state: 'SUCCESS' }];
-  if (control.requiredChecks !== 'pass') value.push({
+  if (control.requiredChecks === 'missing-gate') value = [];
+  if (control.requiredChecks === 'pending') {
+    value[0] = { name: 'openclaw/ci-gate', bucket: 'pending', state: 'IN_PROGRESS' };
+    process.exitCode = 8;
+  }
+  if (control.requiredChecks === 'fail') value.push({
     name: 'independent required check', bucket: control.requiredChecks,
-    state: control.requiredChecks === 'pending' ? 'IN_PROGRESS' : 'FAILURE',
+    state: 'FAILURE',
   });
+  if (control.requiredCheckRows) value = control.requiredCheckRows;
 } else if (args[0] === 'repo' && args[1] === 'view') {
   value = { id: 'fixture-repo', nameWithOwner: 'fixture/repo', url: 'https://github.com/fixture/repo' };
 } else if (args[0] === 'run' && args[1] === 'view') {
@@ -470,7 +488,16 @@ if (args[0] === 'pr' && args[1] === 'view') {
     value = { login: 'fixture' };
   } else if (endpoint === 'graphql') {
     if (control.failAuth) process.exit(1);
-    if (args.some(arg => arg.includes('viewerMergeBodyText'))) {
+    if (args.some(arg => arg.includes('viewer{login}'))) {
+      if (control.writerRateLimited) {
+        process.stdout.write('HTTP/2.0 403 Forbidden\\nX-RateLimit-Resource: graphql\\nX-RateLimit-Remaining: 0\\n\\n');
+        console.log(JSON.stringify({ errors: [{ type: 'RATE_LIMITED', message: 'API rate limit exceeded for synthetic writer' }] }));
+        process.exit(1);
+      }
+      value = { data: { viewer: { login: 'fixture' } } };
+    } else if (args.some(arg => arg.includes('addComment('))) {
+      value = { data: { addComment: { commentEdge: { node: { url: 'https://example.invalid/pr/42#completion' } } } } };
+    } else if (args.some(arg => arg.includes('viewerMergeBodyText'))) {
       value = { data: { repository: { pullRequest: {
         headRefOid: control.metadata.headRefOid,
         author: { ...control.metadata.author, __typename: 'User' },
@@ -490,10 +517,25 @@ if (args[0] === 'pr' && args[1] === 'view') {
     value = {
       id: 123, node_id: 'fixture-repo', full_name: 'fixture/repo',
       html_url: 'https://github.com/fixture/repo',
+      permissions: { admin: true },
     };
+  } else if (endpoint === 'repos/fixture/repo/branches/main/protection') {
+    // Hosted CI fixtures retain GraphQL through explicit classic branch protection.
+    value = {};
+  } else if (endpoint === 'repos/fixture/repo/git/ref/heads/main') {
+    value = { ref: 'refs/heads/main', object: { type: 'commit',
+      sha: runGit(['-C', origin, 'rev-parse', 'refs/heads/main']) } };
   } else if (endpoint === 'repos/fixture/repo/commits/${head}') {
     const [name, email] = runGit(['-C', origin, 'show', '-s', '--format=%an%n%ae', ${JSON.stringify(head)}]).split('\\n');
     value = { commit: { author: { name, email } }, author: { ...control.metadata.author, type: 'User' } };
+  } else if (endpoint.startsWith('repos/fixture/repo/commits?')) {
+    const query = new URL(endpoint, 'https://github.com').searchParams;
+    const commits = runGit(['-C', origin, 'rev-list', '--max-count=' + query.get('per_page'), query.get('sha')]).split('\\n');
+    value = commits.map(oid => {
+      const [name, email] = runGit(['-C', origin, 'show', '-s', '--format=%an%n%ae', oid + '^{commit}']).split('\\n');
+      return { sha: oid, commit: { author: { name, email } },
+        author: oid === ${JSON.stringify(head)} ? { ...control.metadata.author, type: 'User' } : null };
+    });
   } else if (endpoint === 'users/fixture') {
     value = { id: 123 };
   } else if (endpoint?.includes('/commits/') && endpoint.includes('/check-runs?')) {
@@ -540,8 +582,13 @@ if (args[0] === 'pr' && args[1] === 'view') {
     }
     value = {
       number: control.metadata.number,
+      node_id: control.metadata.id,
       title: control.metadata.title,
       state: control.metadata.state === 'OPEN' ? 'open' : 'closed',
+      merged: control.metadata.state === 'MERGED',
+      merge_commit_sha: control.metadata.mergeCommit?.oid ?? null,
+      auto_merge: control.metadata.autoMergeRequest
+        ? { merge_method: control.metadata.autoMergeRequest.mergeMethod.toLowerCase() } : null,
       merged_at: control.metadata.state === 'MERGED' ? '2026-01-01T00:00:00Z' : null,
       draft: control.metadata.isDraft,
       user: control.metadata.author,
@@ -559,7 +606,10 @@ if (args[0] === 'pr' && args[1] === 'view') {
         name: control.metadata.headRepository.name, html_url: control.metadata.headRepository.url,
         owner: control.metadata.headRepositoryOwner,
       } },
-      base: { ref: control.metadata.baseRefName, sha: baseSha, repo: { id: control.metadata.isCrossRepository ? 456 : 123 } },
+      base: { ref: control.metadata.baseRefName, sha: baseSha, repo: {
+        id: control.metadata.isCrossRepository ? 456 : 123,
+        node_id: 'fixture-repo', full_name: 'fixture/repo',
+      } },
     };
   } else if (endpoint.endsWith('/actions/workflows/ci.yml/runs')) {
     event({ kind: 'ci-watched' });

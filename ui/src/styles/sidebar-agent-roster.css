@@ -5,7 +5,7 @@ openclaw-sidebar-agent-roster {
 
 .sidebar-workspace-header__main {
   gap: 4px;
-  padding-inline-end: 0;
+  padding-inline: 0;
 }
 .sidebar-workspace-header .sidebar-agent-card__name-text {
   padding-inline-end: 0;

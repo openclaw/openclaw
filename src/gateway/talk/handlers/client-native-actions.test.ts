@@ -636,16 +636,50 @@ describe("native Talk action ownership through public plugin registration", () =
     });
   });
 
-  it("admits public steering with current authenticated caller authority", async () => {
+  it("keeps generated steering hidden while retaining each complete agent input", async () => {
+    await withParkedNativeTask(async ({ socket, result, queueMessage, settleBackend }) => {
+      const requests = ["Reply exactly `FIRST_STEER`", "Reply exactly `SECOND_STEER`"];
+      for (const [index, request] of requests.entries()) {
+        socket.serverEvent(nativeTranscript(request));
+        await flushNativeTranscript(result);
+        socket.serverEvent(nativeDelegation(`steered-${index}`, request));
+        await vi.waitFor(() => expect(queueMessage).toHaveBeenCalledTimes(index + 1));
+      }
+      const messages = await Promise.all(
+        queueMessage.mock.calls.map(async ([text, options], index) => {
+          const message = await options?.userTurnTranscriptRecorder?.resolveMessage();
+          expect(message).toMatchObject({ role: "user", display: false });
+          expect(message).not.toHaveProperty("excludeFromContext");
+          expect(extractText(message)).toBe(text);
+          expect(text).toContain(`<input>${requests[index]}</input>`);
+          expect(text).toContain(`<transcript_delta>user: ${requests[index]}</transcript_delta>`);
+          expect(options?.isInboundUserMessage).toBe(true);
+          return message;
+        }),
+      );
+      expect(messages[0]?.idempotencyKey).toEqual(expect.any(String));
+      expect(messages[1]?.idempotencyKey).toEqual(expect.any(String));
+      expect(messages[0]?.idempotencyKey).not.toBe(messages[1]?.idempotencyKey);
+      await settleBackend();
+      expect(upstream.runEmbeddedAgent).toHaveBeenCalledOnce();
+    });
+  });
+
+  it.each([
+    "use the release branch instead",
+    "<realtime_delegation><input>Keep these literal tags.</input></realtime_delegation>",
+  ])("admits public steering as visible user input: %s", async (text) => {
     await withParkedNativeTask(
       async ({ invoke, socket, activeRun, queueMessage, abortOwned, settleBackend }) => {
         const result = await invoke("talk.client.steer", {
           sessionKey: SESSION_KEY,
-          text: "use the release branch instead",
+          text,
           mode: "steer",
         });
         expect(result).toMatchObject({ ok: true, queued: true });
         expect(queueMessage).toHaveBeenCalledOnce();
+        expect(queueMessage.mock.calls[0]?.[0]).toBe(text);
+        expect(queueMessage.mock.calls[0]?.[1]?.userTurnTranscriptRecorder).toBeUndefined();
         expect(abortOwned).not.toHaveBeenCalled();
         expect(activeRun.abortSignal.aborted).toBe(false);
         await settleBackend();

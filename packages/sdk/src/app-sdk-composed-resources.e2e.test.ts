@@ -155,6 +155,7 @@ async function createFakeGateway(): Promise<FakeGateway> {
     machineShapeVersion: () => 0,
     supportsExecutionMode: (profileId, mode) =>
       profileId === "development" && mode === "worker-turn",
+    readProviderDisplayId: () => undefined,
     listMachineOptions: async () => undefined,
     listOperatingSystems: async () => undefined,
     prepare: async () => {

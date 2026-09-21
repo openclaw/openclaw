@@ -19,14 +19,14 @@ export default definePluginEntry({
         name: "typesafe_evaluate",
         label: "TypeSafe typed decisions",
         description:
-          "Ask Jev for typed decisions over explicit shared state: classify/select with Choice (2–255 options), rate with Score (2–10 ordered levels; fractional zero-based result), or estimate probability of yes with Noul (optional true/false criteria). Batch independent questions; they cannot see each other’s answers. Instructions and descriptions accept text, JSON objects/arrays, or null. Returns distributions, confidence for Choice/Score, model, and usage—not generated explanations or authorization. Requires credentials; sends supplied data to TypeSafe and may incur API charges.",
+          "Ask the configured System One model for typed decisions over explicit shared state: classify/select with Choice (2–255 options), rate with Score (2–10 ordered levels; fractional zero-based result), or estimate probability of yes with Noul (optional true/false criteria). Batch independent questions; they cannot see each other’s answers. Instructions and descriptions accept text, JSON objects/arrays, or null. Returns distributions, confidence for Choice/Score, model, and usage—not generated explanations or authorization. Hosted Jev requires credentials and may incur API charges; a configured local Kev endpoint receives supplied data without hosted credentials.",
         parameters: EvaluateInput,
         outputSchema: EvaluateOutput,
         resultContentSource: "network",
         async execute(_id, params, signal) {
           signal?.throwIfAborted();
           const config = resolveRuntimeConfig(api.runtime.config.current());
-          if (!config.apiKey) {
+          if (!config.baseUrl && !config.apiKey) {
             throw new Error(
               "TypeSafe API key is missing. Configure a SecretRef in plugin Settings.",
             );

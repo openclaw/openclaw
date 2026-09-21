@@ -386,7 +386,7 @@ flow:
                 value:
                   expr: "privateSpawns.map((request) => privateTranscript.successfulToolCallEvents?.find((event) => event.name === (request.plannedWireToolName ?? request.plannedToolName) && event.toolCallId === (env.runtimeId !== 'codex' && request.plannedToolItemId ? `${request.plannedToolCallId}|${request.plannedToolItemId}` : request.plannedToolCallId)))"
               - assert:
-                  expr: "privateTranscript.successfulToolCallCounts.sessions_spawn === 2 && privateSpawnReceipts.every(Boolean) && privateSpawnReceipts[1].timestamp >= privateTasks[0].endedAt && !(privateTranscript.successfulToolCallCounts.message > 0) && privateRequests.every((request) => request.plannedToolName !== 'message')"
+                  expr: "privateSpawnReceipts.length === 2 && privateSpawnReceipts.every(Boolean) && new Set(privateSpawnReceipts.map((event) => event.toolCallId)).size === 2 && [...new Set(privateSpawns.map((request) => request.plannedWireToolName ?? request.plannedToolName))].every((wire) => privateTranscript.successfulToolCallCounts[wire] === privateSpawnReceipts.filter((event) => event.name === wire).length) && privateSpawnReceipts[1].timestamp >= privateTasks[0].endedAt && !(privateTranscript.successfulToolCallCounts.message > 0) && privateRequests.every((request) => request.plannedToolName !== 'message')"
                   message:
                     expr: "`private continuation lacks committed tool chronology or tried external messaging: tasks=${JSON.stringify(privateTasks)} transcript=${JSON.stringify(privateTranscript)}`"
               - set: activePhase

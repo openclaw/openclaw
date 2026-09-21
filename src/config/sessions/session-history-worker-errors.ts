@@ -19,6 +19,9 @@ export function unwrapSessionTranscriptWorkerReply<
   if (reply.error.kind === "projection") {
     throw new SessionTranscriptProjectionUnavailableError(reply.error.sessionId);
   }
+  if (reply.error.kind === "syntax") {
+    throw new SyntaxError(reply.error.message);
+  }
   throw new SessionTranscriptReadFenceError(reply.error.message);
 }
 

@@ -12,13 +12,13 @@
     "semver": "7.8.5",
     "ws": "8.21.3",
     "yaml": "2.9.0",
-    "zod": "4.6.2"
+    "zod": "4.6.4"
   },
   "devDependencies": {
     "@openclaw/crabbox-provider": "workspace:*",
     "@openclaw/discord": "workspace:*",
-    "@openclaw/mattermost": "workspace:*",
     "@openclaw/matrix": "workspace:*",
+    "@openclaw/mattermost": "workspace:*",
     "@openclaw/plugin-sdk": "workspace:*",
     "@openclaw/slack": "workspace:*",
     "@openclaw/whatsapp": "workspace:*",

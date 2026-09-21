@@ -113,6 +113,20 @@ describe("gateway identity scope grants", () => {
       expectedScopes: NARROW_SCOPES,
     },
     {
+      label: "read-only from an admin-only identity grant",
+      assignedRole: "read-only",
+      identityScopes: ["operator.admin"] satisfies OperatorScope[],
+      deviceScopes: [],
+      expectedScopes: ["operator.read"],
+    },
+    {
+      label: "write-only from an admin-only identity grant",
+      assignedRole: "write-only",
+      identityScopes: ["operator.admin"] satisfies OperatorScope[],
+      deviceScopes: [],
+      expectedScopes: ["operator.write"],
+    },
+    {
       label: "empty",
       assignedRole: "denied",
       deviceScopes: NARROW_SCOPES,
@@ -149,6 +163,11 @@ describe("gateway identity scope grants", () => {
               agents: "*",
               scopes: ["operator.admin"],
             },
+            "read-only": {
+              sessions: { others: "view" },
+              agents: "*",
+              scopes: ["operator.read"],
+            },
             "write-only": {
               sessions: { others: "write" },
               agents: "*",
@@ -178,6 +197,14 @@ describe("gateway identity scope grants", () => {
         expect(connected.ok).toBe(true);
         expect((await rpcReq(ws, "status")).ok).toBe(scenario.expectedScopes.length > 0);
         expect(responseScopes(connected)).toEqual(scenario.expectedScopes);
+        if (scenario.assignedRole === "read-only") {
+          expect(
+            await rpcReq(ws, "sessions.patch", { key: "agent:main:denied", label: "denied" }),
+          ).toMatchObject({
+            ok: false,
+            error: { message: expect.stringContaining("operator.write") },
+          });
+        }
         expect((connected.payload as { auth?: { deviceToken?: string } }).auth?.deviceToken).toBe(
           undefined,
         );

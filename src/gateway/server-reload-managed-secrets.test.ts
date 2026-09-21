@@ -176,10 +176,11 @@ describe.each([true, false])(
     });
 
     it("restores the predecessor's authored source when runtime commit fails", async () => {
-      const { initial, run } = await createReload(canonical, async () => {
+      const { initial, ownership, run } = await createReload(canonical, async () => {
         throw new Error("commit failed");
       });
       await expect(run()).rejects.toThrow("commit failed");
+      expect(ownership.markRuntimeCommitted).not.toHaveBeenCalled();
       expectAuthoredSource(initial.source);
     });
 

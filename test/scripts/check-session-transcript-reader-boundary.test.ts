@@ -31,8 +31,6 @@ describe("session transcript reader boundary guard", () => {
         "src/gateway/server-methods/sessions-files.ts",
         "src/gateway/server-methods/sessions-abort.ts",
         "src/gateway/server-methods/sessions-compact.ts",
-        "src/gateway/server-methods/sessions-compaction-checkpoints.ts",
-        "src/gateway/server-methods/sessions-compaction-queries.ts",
         "src/gateway/server-methods/sessions-compaction-runner.ts",
         "src/gateway/server-methods/sessions-create.ts",
         "src/gateway/server-methods/sessions-delete.ts",

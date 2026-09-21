@@ -696,16 +696,8 @@ export function createOpenClawCodingToolsInternal(
   );
   options?.recordToolPrepStage?.("message-provider-policy");
   const toolsForModelProvider = applyModelProviderToolPolicy(toolsForMessageProvider, {
-    config: options?.config,
-    modelProvider: options?.modelProvider,
-    modelApi: options?.modelApi,
-    modelId: options?.modelId,
+    ...options,
     agentId,
-    sessionKey: options?.sessionKey,
-    agentDir: options?.agentDir,
-    modelCompat: options?.modelCompat,
-    suppressManagedWebSearch: options?.suppressManagedWebSearch,
-    runtimeToolAllowlist: options?.runtimeToolAllowlist,
     localModelLeanPreserveToolNames,
   });
   options?.recordToolPrepStage?.("model-provider-policy");

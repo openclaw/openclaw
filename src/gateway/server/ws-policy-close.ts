@@ -1,8 +1,11 @@
+import { notifyListeners, registerListener } from "../../shared/listeners.js";
 import type { RespondFn } from "../server-methods/response-types.js";
 
 export type GatewayPolicyClient = {
   invalidated?: boolean;
   invalidatedReason?: string;
+  /** Committed source invalidation is independent of a tentative transport fence. */
+  sourceInvalidated?: boolean;
   socket: { close: (code: number, reason: string) => void };
 };
 
@@ -21,6 +24,34 @@ type PolicyResponse = { readonly pending: boolean; hold: () => void; finish: () 
 type PolicyClientState = { pending: number; close?: () => void };
 const responses = new WeakMap<RespondFn, PolicyResponse>();
 const clients = new WeakMap<GatewayPolicyClient, PolicyClientState>();
+const invalidationListeners = new WeakMap<GatewayPolicyClient, Set<() => void>>();
+
+export function hasCurrentGatewayPolicyClientSource(client: GatewayPolicyClient): boolean {
+  return !(client.sourceInvalidated ?? client.invalidated ?? false);
+}
+
+/** Accepted work follows authentication invalidation even after its transport disconnects. */
+export function onGatewayPolicyClientInvalidated(
+  client: GatewayPolicyClient,
+  listener: () => void,
+): () => void {
+  if (!hasCurrentGatewayPolicyClientSource(client)) {
+    listener();
+    return () => {};
+  }
+  let listeners = invalidationListeners.get(client);
+  if (!listeners) {
+    listeners = new Set();
+    invalidationListeners.set(client, listeners);
+  }
+  const unsubscribe = registerListener(listeners, listener);
+  return () => {
+    unsubscribe();
+    if (listeners.size === 0 && invalidationListeners.get(client) === listeners) {
+      invalidationListeners.delete(client);
+    }
+  };
+}
 
 /** The dispatcher owns response completion, including throws and handlers that return silently. */
 export function registerGatewayPolicyResponse(
@@ -71,13 +102,26 @@ export function holdGatewayPolicyResponse(respond: RespondFn | undefined): void 
   }
 }
 
-/** Fence authority immediately; only already accepted policy writers may send their final result. */
+/** Fence requests immediately; tentative reloads preserve already accepted source authority. */
 export function invalidateGatewayPolicyClient(
   client: GatewayPolicyClient,
-  policy: { reason: string; code: number; message: string; close?: () => void },
+  policy: {
+    reason: string;
+    code: number;
+    message: string;
+    close?: () => void;
+    revokeSource?: boolean;
+  },
 ): void {
+  client.sourceInvalidated =
+    (client.sourceInvalidated ?? client.invalidated ?? false) || policy.revokeSource !== false;
   client.invalidated = true;
   client.invalidatedReason ??= policy.reason;
+  if (client.sourceInvalidated) {
+    const listeners = invalidationListeners.get(client);
+    invalidationListeners.delete(client);
+    notifyListeners(listeners ?? [], undefined);
+  }
   const close = () => {
     try {
       if (policy.close) {

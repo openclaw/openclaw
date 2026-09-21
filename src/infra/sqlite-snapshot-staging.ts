@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { extractErrorCode } from "@openclaw/normalization-core/error-coercion";
 import { getChildLogger } from "../logging/logger.js";
+import { formatErrorMessage } from "./errors.js";
 import { openNodeSqliteDatabase, resolveExistingSqliteFileUri } from "./node-sqlite.js";
 import { markSqliteInspectionOperation } from "./sqlite-error-diagnostics.js";
 import {
@@ -206,8 +207,12 @@ export function* reclaimAbandonedSqliteSnapshots(root: string, report = warn): G
     return;
   }
   try {
-    let reclaimedBytes = 0;
+    let admittedBytes = 0;
     for (const entry of fs.readdirSync(root, { withFileTypes: true })) {
+      if (admittedBytes >= reclamationByteBudget) {
+        report("Stopped SQLite snapshot reclamation: byte budget exhausted for this pass.");
+        break;
+      }
       const legacy = legacyMarker.test(entry.name);
       if (!entry.isDirectory() || !isStagingName(entry.name)) {
         continue;
@@ -220,9 +225,12 @@ export function* reclaimAbandonedSqliteSnapshots(root: string, report = warn): G
           tokens,
           Date.now() - (legacy ? legacyAgeMs : currentAgeMs),
         );
-        if (bytes > reclamationByteBudget - reclaimedBytes) {
-          throw new Error("Snapshot reclamation byte budget exhausted");
+        // Admit one oversized directory before spending the pass budget; otherwise
+        // interrupted multi-gigabyte copies can never be reclaimed.
+        if (admittedBytes > 0 && bytes > reclamationByteBudget - admittedBytes) {
+          throw new Error("Snapshot reclamation byte budget exhausted for this pass");
         }
+        admittedBytes += bytes;
         for (const token of tokens) {
           token(true);
         }
@@ -234,10 +242,9 @@ export function* reclaimAbandonedSqliteSnapshots(root: string, report = warn): G
         if (!removeTempDirectory(claimed)) {
           throw new Error("Snapshot removal failed; check private cache permissions");
         }
-        reclaimedBytes += bytes;
         report(`Reclaimed ${bytes} bytes of interrupted SQLite snapshot data.`);
       } catch (error) {
-        report("Skipped SQLite snapshot reclamation: owner live, recent, or unverified.", error);
+        report(`Skipped SQLite snapshot reclamation: ${formatErrorMessage(error)}`, error);
       } finally {
         for (const token of tokens) {
           token();

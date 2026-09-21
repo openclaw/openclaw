@@ -148,7 +148,12 @@ struct CronJobsStoreTests {
             if replacement == "event" {
                 try self.sendCronEvent(fixture, sequence: 2)
             } else {
-                manualRefresh = Task { await store.refreshJobs() }
+                let admitted = AsyncTestGate()
+                manualRefresh = Task {
+                    admitted.open()
+                    await store.refreshJobs()
+                }
+                await admitted.wait()
             }
             try await AsyncTimeout.withTimeout(
                 seconds: 2,

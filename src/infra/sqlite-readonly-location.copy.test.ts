@@ -7,6 +7,7 @@ import {
   prepareSqliteReadOnlyLocationInProcess,
   prepareSqliteReadOnlyLocationSyncInProcess,
 } from "./sqlite-readonly-location.js";
+import { waitForSnapshotQuiescence } from "./sqlite-snapshot-policy.js";
 
 const MIB = 1024 * 1024;
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
@@ -49,9 +50,9 @@ function expectSnapshot(
   } finally {
     if (prepared) {
       expect(prepared.cleanup()).toBe(true);
+      expect(fs.readFileSync(fixture.sourcePath).equals(expected)).toBe(true);
     }
     expect(fs.readdirSync(fixture.stagingRoot)).toEqual([]);
-    expect(fs.readFileSync(fixture.sourcePath).equals(expected)).toBe(true);
   }
 }
 
@@ -99,26 +100,29 @@ function interceptSourceReads(
 }
 
 describe("stable read-only snapshot copies", () => {
-  it("proceeds after the bounded quiescence deadline while the source stays active", async () => {
+  it("bounds quiescence admission while the source stays active", async () => {
     const fixture = createFixture(Buffer.alloc(0));
-    const started = performance.now();
+    vi.useFakeTimers();
+    const controller = new AbortController();
+    const completed = vi.fn();
+    const settled = waitForSnapshotQuiescence(fixture.sourcePath, controller.signal).then(
+      completed,
+      completed,
+    );
     const timer = setInterval(() => {
       const now = new Date();
       fs.utimesSync(fixture.sourcePath, now, now);
     }, 5);
-    let prepared: Awaited<ReturnType<typeof prepareSqliteReadOnlyLocationInProcess>> | undefined;
     try {
-      prepared = await prepareSqliteReadOnlyLocationInProcess(
-        fixture.sourcePath,
-        fixture.stagingRoot,
+      await vi.advanceTimersByTimeAsync(200);
+      expect(completed).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ stabilized: false }),
       );
-      expect(performance.now() - started).toBeLessThan(1_000);
-      expect(fs.statSync(prepared.location).size).toBe(0);
     } finally {
       clearInterval(timer);
-      if (prepared) {
-        expect(await prepared.cleanupAsync()).toBe(true);
-      }
+      controller.abort();
+      await settled;
+      vi.useRealTimers();
     }
   });
 
@@ -134,21 +138,57 @@ describe("stable read-only snapshot copies", () => {
     expect(fs.readdirSync(fixture.sourceRoot)).toEqual(["source.sqlite"]);
   });
 
-  it("continues after positive short source reads", () => {
+  it("continues after unequal positive short source and private-copy reads", () => {
     const bytes = patternedBytes(MIB + 37);
     const fixture = createFixture(bytes);
+    const open = fs.openSync.bind(fs);
+    const close = fs.closeSync.bind(fs);
     const read = fs.readSync.bind(fs);
-    let shortened = 0;
-    interceptSourceReads(fixture.sourcePath, (descriptor, buffer, options) => {
-      const length = options.length ?? buffer.byteLength - (options.offset ?? 0);
-      if (length > 4093) {
-        shortened += 1;
+    const files = {
+      source: { maxBytes: 8191, shortReads: 0 },
+      copy: { maxBytes: 4093, shortReads: 0 },
+    };
+    const descriptors = new Map<number, (typeof files)[keyof typeof files]>();
+    vi.spyOn(fs, "openSync").mockImplementation((pathname, flags, mode) => {
+      const descriptor = open(pathname, flags, mode);
+      const resolved = path.resolve(String(pathname));
+      if (resolved === fixture.sourcePath) {
+        descriptors.set(descriptor, files.source);
+      } else if (flags === "r" && resolved.startsWith(`${fixture.stagingRoot}${path.sep}`)) {
+        descriptors.set(descriptor, files.copy);
       }
-      return read(descriptor, buffer, { ...options, length: Math.min(length, 4093) });
+      return descriptor;
     });
+    vi.spyOn(fs, "closeSync").mockImplementation((descriptor) => {
+      close(descriptor);
+      descriptors.delete(descriptor);
+    });
+    vi.spyOn(fs, "readSync").mockImplementation(
+      (
+        descriptor: number,
+        buffer: NodeJS.ArrayBufferView,
+        offsetOrOptions: number | fs.ReadOptions = {},
+        length?: number,
+        position?: fs.ReadPosition | null,
+      ) => {
+        const options =
+          typeof offsetOrOptions === "number"
+            ? { offset: offsetOrOptions, length, position }
+            : offsetOrOptions;
+        const file = descriptors.get(descriptor);
+        const requested = options.length ?? buffer.byteLength - (options.offset ?? 0);
+        if (file && requested > file.maxBytes) {
+          file.shortReads += 1;
+          return read(descriptor, buffer, { ...options, length: file.maxBytes });
+        }
+        return read(descriptor, buffer, options);
+      },
+    );
 
     expectSnapshot(fixture, bytes);
-    expect(shortened).toBeGreaterThan(0);
+    expect(files.source.shortReads).toBeGreaterThan(0);
+    expect(files.copy.shortReads).toBeGreaterThan(0);
+    expect(descriptors.size).toBe(0);
   });
 
   it("backs off between bounded asynchronous raw-copy retries", async () => {
@@ -224,6 +264,44 @@ describe("stable read-only snapshot copies", () => {
       expectSnapshot(fixture, after);
       expect(injected()).toBe(true);
       expect(fs.readdirSync(fixture.sourceRoot)).toEqual(["source.sqlite"]);
+    },
+  );
+
+  it.each(["header", "copy"] as const)(
+    "waits out a transient writer during synchronous %s inspection",
+    (phase) => {
+      const bytes = patternedBytes(4099);
+      const fixture = createFixture(bytes);
+      const open = fs.openSync.bind(fs);
+      const fsync = fs.fsyncSync.bind(fs);
+      const canonicalPath = fs.realpathSync.native(fixture.sourcePath);
+      let elapsedMs = 0;
+      let changes = 0;
+      vi.spyOn(Atomics, "wait").mockImplementation((_array, _index, _value, timeout) => {
+        elapsedMs += timeout ?? 0;
+        return "timed-out";
+      });
+      if (phase === "header") {
+        vi.spyOn(fs, "openSync").mockImplementation((pathname, flags, mode) => {
+          if (String(pathname) === canonicalPath && elapsedMs < 30) {
+            changes += 1;
+            throw Object.assign(new Error("source replacement in progress"), { code: "ENOENT" });
+          }
+          return open(pathname, flags, mode);
+        });
+      } else {
+        vi.spyOn(fs, "fsyncSync").mockImplementation((descriptor) => {
+          fsync(descriptor);
+          if (elapsedMs < 30) {
+            changes += 1;
+            bytes.writeUInt8(bytes.readUInt8(bytes.length - 1) ^ 0xff, bytes.length - 1);
+            fs.writeFileSync(fixture.sourcePath, bytes);
+          }
+        });
+      }
+
+      expectSnapshot(fixture, bytes);
+      expect(changes).toBeGreaterThan(0);
     },
   );
 

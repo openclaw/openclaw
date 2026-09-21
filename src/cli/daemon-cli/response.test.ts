@@ -119,6 +119,22 @@ describe("daemon install verification", () => {
     expect(params.emit).not.toHaveBeenCalled();
   });
 
+  it("reports registration separately from readiness for a still-starting service", async () => {
+    const params = {
+      ...createInstallParams(vi.fn(async () => true)),
+      successMessage:
+        "Gateway service installed. Runtime readiness has not been checked; startup may still be in progress.",
+    };
+    await installDaemonServiceAndEmit(params);
+    expect(params.emit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        ok: true,
+        result: "installed",
+        message: params.successMessage,
+      }),
+    );
+  });
+
   it("emits success only after the service-manager verification succeeds", async () => {
     const params = createInstallParams(vi.fn(async () => true));
 

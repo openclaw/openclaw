@@ -2,6 +2,7 @@ import { readGatewayServiceState, resolveGatewayService } from "../../daemon/ser
 import { formatErrorMessage } from "../../infra/errors.js";
 import { recordUpdateRunStep } from "../../infra/update-run-ledger.js";
 import type { UpdateRunResult } from "../../infra/update-runner.js";
+import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
 import type { UpdateCommandOptions } from "./shared.js";
 import { appendPluginUpdateWarnings } from "./update-command-plugins-internals.js";
 import { runUpdateCommandRepair } from "./update-command-repair.js";
@@ -130,6 +131,9 @@ export async function repairUpdateService(params: {
               "restart",
             );
           } catch (error) {
+            if (hasCommandProcessCleanupError(error)) {
+              throw error;
+            }
             // A stale restart error is not permission to append diagnostics or
             // start a new serving turn under the superseded repair attempt.
             assertCurrent();

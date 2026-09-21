@@ -216,7 +216,7 @@ describe("unproved Doctor authority callers", () => {
         .spyOn(postCore, "writePostCorePluginUpdateResultFile")
         .mockImplementation(async (...args) => {
           expect(getUpdateRun(run.runId)?.steps).toContainEqual(
-            expect.objectContaining({ step: "finalize:doctor-lint:post-plugin doctor lint" }),
+            expect.objectContaining({ step: "finalize:doctor-lint:post-plugin-doctor-lint" }),
           );
           expect(getUpdateRun(run.runId)?.status).toBe("running");
           const canonicalPath = state.statePath("update-reports", `${run.runId}.md`);

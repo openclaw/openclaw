@@ -31,6 +31,9 @@ export {
   cancelManagedServiceUpdateHandoff,
   claimManagedServiceUpdateHandoff,
   commitManagedServiceUpdateHandoff,
+  isForegroundUpdateHandoff,
+  completeForegroundUpdateHandoffAfterClose,
+  captureForegroundUpdateHandoffStop,
   requestManagedServiceUpdateHandoffPark,
 } from "../../infra/update-managed-service-handoff.js";
 export { resetGatewaySuspendCoordinatorForLifecycleRestart } from "../../infra/gateway-suspend-coordinator.js";

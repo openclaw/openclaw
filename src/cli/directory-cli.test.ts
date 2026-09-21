@@ -123,8 +123,13 @@ describe("registerDirectoryCli", () => {
     ["peers", ["directory", "peers", "list"]],
     ["groups", ["directory", "groups", "list"]],
     ["members", ["directory", "groups", "members", "--group-id", "group-1"]],
-  ])("%s account input", (_leaf, args) => {
-    it.each(["", " \t\n "])("rejects blank %j before command startup", async (account) => {
+  ])("%s selector input", (_leaf, args) => {
+    it.each([
+      ["account", ""],
+      ["account", " \t\n "],
+      ["channel", ""],
+      ["channel", " \t\n "],
+    ])("rejects blank %s=%j before command startup", async (selector, value) => {
       const startup = vi.fn(() => {
         throw new Error("Command startup reached");
       });
@@ -132,10 +137,8 @@ describe("registerDirectoryCli", () => {
       registerDirectoryCli(program);
 
       await expect(
-        program.parseAsync([...args, "--channel", "slack", "--account", account], {
-          from: "user",
-        }),
-      ).rejects.toThrow("--account must not be blank");
+        program.parseAsync([...args, `--${selector}`, value], { from: "user" }),
+      ).rejects.toThrow(new RegExp(`--${selector}.*blank`));
 
       expect(startup).not.toHaveBeenCalled();
     });

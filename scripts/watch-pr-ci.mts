@@ -580,6 +580,7 @@ function readPrRollup(
   reads: { remaining: number },
   readRollup: ReturnType<typeof createPrRollupReader>,
   reconciled?: ReadonlyMap<number, string>,
+  initial?: RollupPage,
 ) {
   const { run, runs } = attachment;
   const boundToPr = (candidate: RunListItem) =>
@@ -594,8 +595,11 @@ function readPrRollup(
     boundToPr(run) && run.workflow_id !== undefined && run.check_suite_id !== undefined
       ? { workflowId: run.workflow_id, checkSuites }
       : undefined;
+  let nextPage = initial;
   while (true) {
-    const pr = readRollup(deadline);
+    const pr = nextPage ?? readRollup(deadline).page;
+    // Any metadata work below requires a new observation on the next iteration.
+    nextPage = undefined;
     const blocked = precheck(pr, args.headSha, true);
     if (blocked !== null) {
       return { exitCode: blocked };
@@ -780,6 +784,8 @@ async function main(argv = process.argv.slice(2)) {
   let lastState = "NONE";
   let lastPending: number | "unknown" = 0;
   let pendingLabel = "pending";
+  // Reuse the previous poll's request shape, never its check state.
+  let detailedPoll = false;
   const watchResult = await pollUntilDeadline({
     deadline: watchDeadline,
     interval: args.interval,
@@ -807,13 +813,16 @@ async function main(argv = process.argv.slice(2)) {
           }
           return undefined;
         }
-        const summary = readRollup(watchDeadline, false);
+        const initial = readRollup(watchDeadline, detailedPoll);
+        const summary = initial.page;
         const blocked = precheck(summary, args.headSha, true);
         if (blocked !== null) {
           return blocked;
         }
         lastState = summary.statusCheckRollup?.state ?? "NONE";
-        if (!["FAILURE", "ERROR"].includes(lastState)) {
+        const detailedObservation =
+          initial.details && ["FAILURE", "ERROR", "PENDING"].includes(lastState);
+        if (!detailedObservation && !["FAILURE", "ERROR"].includes(lastState)) {
           const run = readRun(args.repo, runId, watchDeadline);
           if (run.status === "completed" && run.conclusion !== "success") {
             return emit(`FAILING checks=CI workflow (${run.conclusion ?? "unknown"})`, 15);
@@ -823,6 +832,7 @@ async function main(argv = process.argv.slice(2)) {
             run.status !== "completed" ||
             run.conclusion !== "success"
           ) {
+            detailedPoll = false;
             pendingLabel = "github_pending";
             lastPending = githubPendingCount(summary.statusCheckRollup);
             console.log(
@@ -830,7 +840,7 @@ async function main(argv = process.argv.slice(2)) {
             );
             if (lastState === "SUCCESS" && run.status === "completed") {
               // The run read can span a push or newly published checks on the same head.
-              const current = readRollup(watchDeadline, false);
+              const current = readRollup(watchDeadline, false).page;
               const moved = precheck(current, args.headSha, true);
               if (moved !== null) {
                 return moved;
@@ -844,8 +854,17 @@ async function main(argv = process.argv.slice(2)) {
             return undefined;
           }
         }
+        detailedPoll = true;
         const reads = { remaining: MAX_EVIDENCE_READS_PER_POLL };
-        let observed = readPrRollup(args, attachment, watchDeadline, reads, readRollup);
+        let observed = readPrRollup(
+          args,
+          attachment,
+          watchDeadline,
+          reads,
+          readRollup,
+          undefined,
+          detailedObservation ? summary : undefined,
+        );
         if ("exitCode" in observed) {
           return observed.exitCode;
         }
@@ -883,6 +902,9 @@ async function main(argv = process.argv.slice(2)) {
         }
         lastState = pr.statusCheckRollup?.state ?? "NONE";
         lastPending = result.pendingCount;
+        detailedPoll =
+          ["FAILURE", "ERROR"].includes(lastState) ||
+          (lastState === "PENDING" && run?.status === "completed" && run.conclusion === "success");
         console.log(
           `STATUS rollup=${result.verdict.toLowerCase()} github_rollup=${lastState} pending=${lastPending} superseded=${result.supersededCount}`,
         );

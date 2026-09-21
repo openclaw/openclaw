@@ -207,11 +207,11 @@ async function loadSkillsStatusReport(
     ) {
       throw error;
     }
-    const { buildWorkspaceSkillStatus } = await import("../skills/discovery/status.js");
-    return buildWorkspaceSkillStatus(resolved.workspaceDir, {
+    const { prepareWorkspaceSkillStatus } = await import("../skills/discovery/status.js");
+    return prepareWorkspaceSkillStatus(resolved.workspaceDir, {
       config: resolved.config,
       agentId: resolved.agentId,
-    });
+    }).then(({ report }) => report);
   }
 }
 
@@ -389,7 +389,7 @@ async function withOfflineGatewayLock<T>(
 async function callSkillCurator<T>(
   method: "status" | "pin" | "restore" | "unpin",
   params: { skill?: string },
-  loadLocal: (config: ResolvedSkillsWorkspace["config"]) => T,
+  loadLocal: (config: ResolvedSkillsWorkspace["config"]) => T | Promise<T>,
 ): Promise<T> {
   const config = getRuntimeConfig();
   try {

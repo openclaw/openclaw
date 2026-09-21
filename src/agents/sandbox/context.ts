@@ -316,7 +316,7 @@ async function resolveProvisionedSandboxContext(
     resolved,
   );
   if (cfg.prune.idleHours !== 0 || cfg.prune.maxAgeDays !== 0) {
-    await (await import("./prune.js")).maybePruneSandboxes(cfg);
+    await (await import("./prune.js")).maybePruneSandboxes();
   }
 
   const {

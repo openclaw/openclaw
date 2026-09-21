@@ -28,7 +28,6 @@ import {
   resolveCompatibleRuntimePluginRegistry,
 } from "./loader.js";
 import type { PluginDiagnostic } from "./manifest-types.js";
-import { tracksPluginDependencyStatus } from "./official-external-plugin-repair-hints.js";
 import { createPluginCache, withPluginCache } from "./plugin-cache.js";
 import {
   tracePluginLifecyclePhase,
@@ -49,11 +48,7 @@ import {
   formatPluginCompatibilityNotice,
   type PluginCompatibilityNotice,
 } from "./status-compatibility.js";
-import {
-  buildPluginDependencyStatus,
-  projectPluginDependencyHealth,
-} from "./status-dependencies-core.js";
-import { collectPluginCapabilityConsentDiagnostics } from "./status-snapshot.js";
+import { projectPluginInstallHealth } from "./status-snapshot.js";
 import type { PluginHookName, PluginLogger } from "./types.js";
 
 export type PluginStatusReport = PluginRegistry & {
@@ -241,11 +236,6 @@ function preparePluginReport(params: PluginReportParams | undefined) {
           ...baseContext,
           workspaceDir,
         };
-  const manifestByPluginId = metadataSnapshot.byPluginId;
-  // Runtime records drop package build metadata; the installed index still owns it.
-  const packageBuildByPluginId = new Map(
-    metadataSnapshot.index.plugins.map((plugin) => [plugin.pluginId, plugin.packageBuild]),
-  );
   const config = context.config;
 
   // Apply bundled-provider allowlist compat so that `plugins list` and `doctor`
@@ -280,8 +270,6 @@ function preparePluginReport(params: PluginReportParams | undefined) {
     workspaceDir,
     metadataSnapshot,
     context,
-    manifestByPluginId,
-    packageBuildByPluginId,
     runtimeCompatConfig,
     onlyPluginIds,
     runtimeLoadOptions: buildPluginRuntimeLoadOptions(context, {
@@ -335,8 +323,7 @@ function projectPluginReport(
   params: PluginReportParams | undefined,
   loadModules: boolean,
 ): PluginStatusReport {
-  const { workspace, workspaceDir, metadataSnapshot, manifestByPluginId, packageBuildByPluginId } =
-    prepared;
+  const { workspace, workspaceDir, metadataSnapshot } = prepared;
   const importedPluginIds = new Set([
     ...(loadModules
       ? registry.plugins
@@ -347,42 +334,24 @@ function projectPluginReport(
     ...listImportedBundledPluginFacadeIds(),
   ]);
 
-  return projectPluginDependencyHealth({
-    workspaceDir,
-    workspaceScope: workspace.workspaceScope,
-    ...registry,
-    diagnostics: appendPluginControlPlaneWorkspaceDiagnostic(
-      [
-        ...registry.diagnostics,
-        ...collectPluginCapabilityConsentDiagnostics({
-          index: metadataSnapshot.index,
-          manifests: manifestByPluginId,
+  return projectPluginInstallHealth(
+    {
+      workspaceDir,
+      workspaceScope: workspace.workspaceScope,
+      ...registry,
+      diagnostics: appendPluginControlPlaneWorkspaceDiagnostic(
+        [...registry.diagnostics],
+        workspace,
+      ),
+      plugins: registry.plugins.map((plugin) =>
+        Object.assign({}, plugin, {
+          imported: plugin.format !== `bundle` && importedPluginIds.has(plugin.id),
+          version: resolveReportedPluginVersion(plugin, params?.env),
         }),
-      ],
-      workspace,
-    ),
-    plugins: registry.plugins.map((plugin) =>
-      Object.assign({}, plugin, {
-        imported: plugin.format !== `bundle` && importedPluginIds.has(plugin.id),
-        version: resolveReportedPluginVersion(plugin, params?.env),
-        dependencyStatus:
-          plugin.dependencyStatus ??
-          (tracksPluginDependencyStatus({
-            origin: plugin.origin,
-            pluginId: plugin.id,
-            packageName: plugin.packageName ?? manifestByPluginId.get(plugin.id)?.packageName,
-            packageBuild: packageBuildByPluginId.get(plugin.id),
-          })
-            ? buildPluginDependencyStatus({
-                rootDir: plugin.rootDir,
-                dependencies: manifestByPluginId.get(plugin.id)?.packageDependencies,
-                optionalDependencies: manifestByPluginId.get(plugin.id)
-                  ?.packageOptionalDependencies,
-              })
-            : undefined),
-      }),
-    ),
-  });
+      ),
+    },
+    { metadata: metadataSnapshot, config: prepared.rawConfig, env: params?.env },
+  );
 }
 
 export function buildPluginSnapshotReport(params?: PluginReportParams): PluginStatusReport {

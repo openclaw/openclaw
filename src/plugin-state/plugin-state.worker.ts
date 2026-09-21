@@ -1,5 +1,6 @@
 import { err, ok } from "@openclaw/normalization-core/result";
 import type { SqliteWorkerCommand } from "../infra/sqlite-worker-contract.js";
+import { requestSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
 import { captureOpenClawStateDatabaseReadAdmission } from "../state/openclaw-state-db-cache.js";
 import type {
   OpenClawStateDatabase,
@@ -17,6 +18,7 @@ import {
 import { registerPluginStateSequencedJournalEntryInDatabase } from "./plugin-state-store.journal.js";
 import {
   countLivePluginStateNamespaceEntries,
+  deleteExpiredPluginStateEntries,
   deletePluginStateEntry,
   lookupPluginStateEntry,
 } from "./plugin-state-store.kernel.js";
@@ -167,6 +169,12 @@ export function executePluginStateCommand(
               return deletePluginStateEntry(store.db, command.input) > 0;
             case "pluginState.clear":
               return clearPluginStateNamespace(store.db, command.input);
+            case "pluginState.sweep": {
+              requestSqliteWorkerOperationAdmission({ stage: "transaction", facts: undefined });
+              const deleted = deleteExpiredPluginStateEntries(store.db, Date.now());
+              requestSqliteWorkerOperationAdmission({ stage: "commit", facts: undefined });
+              return deleted;
+            }
             default:
               throw new Error("Plugin-state read command entered its write path");
           }

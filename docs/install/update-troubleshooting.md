@@ -92,6 +92,28 @@ The controls require a connected Gateway, support for the corresponding typed
 Gateway method, and administrator scope. When those conditions are not met, use
 the CLI fallback on the Gateway host.
 
+## Doctor cannot enter maintenance during finalization
+
+`finalize:doctor` can report `Doctor could not enter maintenance` when a Gateway
+still owns the selected state directory. A starting Gateway and a healthy serving
+Gateway retain that ownership for their entire process lifetime; waiting for
+readiness does not release the lock.
+
+Finalizers with this recovery wait for startup through the existing readiness
+observer. If the same holder is verified serving the installed version and build,
+the update finishes with a warning and leaves the Gateway running. Update history
+names the holder and records the skipped Doctor pass. Config and plugin maintenance
+remain pending. At the next maintenance window, stop that Gateway through its
+service or deployment owner, run `openclaw update repair`, then start it through
+the same owner. Check `openclaw update status --json` and
+`openclaw gateway status --deep` for the recorded warning and current health.
+
+Do not delete lock files to force entry. A dead process releases the physical lock,
+and lease owners reclaim provably dead identities. Unknown ownership, an unreadable
+database, incompatible schemas, active database writers, or unconfirmed subprocess
+cleanup still require their named recovery action; a maintenance warning does not
+authorize concurrent repair or discard recovery backups.
+
 ## Node and global install permissions
 
 For `node-runtime-preflight`, upgrade the runtime named in the message to a
@@ -240,6 +262,10 @@ catalog omitted that source for Codex; the correction is on main in
 ## Reason codes
 
 - `dirty`, `no-upstream`: repair the source checkout before retrying.
+- `runtime-artifact-publication`: the affected Gateway is running or cannot be
+  verified offline. Inspect `openclaw gateway status --deep`, stop it through its
+  service owner, and retry. On macOS, a loaded LaunchAgent can respawn even when
+  disabled and temporarily has no PID; `openclaw gateway stop` unloads it.
 - `update-ledger-busy`: another process held the state database's write lock
   beyond the update step budget. The command exited successfully without admitting
   a run and left previous history intact. Retry once the Gateway's writes settle.

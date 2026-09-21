@@ -253,6 +253,11 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(
     return false;
   }
   const batchRunIds = settledBatch.map((entry) => entry.runId).toSorted();
+  // Scheduling is per child, but every replay of this frozen wave is one input.
+  // Retain all possible shipped sources only for exact accepted-input matching.
+  const settleWakeSourceSessionKeys = [
+    ...new Set(settledBatch.map((entry) => entry.childSessionKey)),
+  ].toSorted();
   const selectedState = readSharedBatchState(settledBatch);
   const isStoreCurrent = () =>
     settledBatch.every((entry) =>
@@ -600,7 +605,8 @@ export async function maybeWakeRequesterAfterAllChildrenSettled(
                 steerMessage: wakeMessage,
                 requesterSessionOrigin,
                 directOrigin,
-                sourceSessionKey: currentSettledEntry.childSessionKey,
+                sourceSessionKey: settleWakeSourceSessionKeys[0],
+                settleWakeSourceSessionKeys,
                 sourceTool: "subagent_settle",
                 targetRequesterSessionKey: requesterSessionKey,
                 requesterIsSubagent: requesterDepth >= 1,

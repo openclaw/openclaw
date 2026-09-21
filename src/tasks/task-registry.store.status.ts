@@ -5,7 +5,7 @@ import { normalizeSqliteNumber } from "../infra/sqlite-number.js";
 import { runSqliteDeferredTransactionSync } from "../infra/sqlite-transaction.js";
 import type { DB } from "../state/openclaw-state-db.generated.js";
 import { createSubagentTaskBackingDetail } from "./task-backing-records.js";
-import { normalizeTaskRecord } from "./task-registry-records.js";
+import { normalizeTaskTimestamps } from "./task-registry-records.js";
 import type { TaskAuditRecord } from "./task-registry.audit.js";
 import {
   hasReadableTaskRegistrySchema,
@@ -79,7 +79,7 @@ function earlierCronRow(
 }
 
 function auditRecord(row: AuditRow): TaskAuditRecord & Pick<TaskRecord, "runtime"> {
-  return normalizeTaskRecord({
+  return normalizeTaskTimestamps({
     runtime: parseTaskRuntime(row.runtime),
     status: parseTaskStatus(row.status),
     deliveryStatus: parseTaskDeliveryStatus(row.delivery_status),
@@ -133,25 +133,23 @@ export function readTaskRegistryStatusSnapshot(
       FROM task_runs NOT INDEXED WHERE ${candidate}`;
     for (const row of iterateSqliteQuerySync(db, { compile: () => candidates.compile(kysely) })) {
       const metadata = auditRecord(row);
-      result.candidates.push(
-        normalizeTaskRecord({
-          ...metadata,
-          taskId: row.task_id,
-          task: "",
-          ownerKey: row.owner_key,
-          requesterSessionKey: row.owner_key,
-          scopeKind: parseTaskScopeKind(row.scope_kind),
-          ...(row.task_kind ? { taskKind: row.task_kind } : {}),
-          ...(row.source_id ? { sourceId: row.source_id } : {}),
-          ...(row.child_session_key ? { childSessionKey: row.child_session_key } : {}),
-          ...(row.agent_id ? { agentId: row.agent_id } : {}),
-          ...(row.run_id ? { runId: row.run_id } : {}),
-          ...(metadata.status === "lost" ? { error: "backing session missing" } : {}),
-          ...(row.backing_generation !== null
-            ? { detail: createSubagentTaskBackingDetail(row.backing_generation) }
-            : {}),
-        }),
-      );
+      result.candidates.push({
+        ...metadata,
+        taskId: row.task_id,
+        task: "",
+        ownerKey: row.owner_key,
+        requesterSessionKey: row.owner_key,
+        scopeKind: parseTaskScopeKind(row.scope_kind),
+        ...(row.task_kind ? { taskKind: row.task_kind } : {}),
+        ...(row.source_id ? { sourceId: row.source_id } : {}),
+        ...(row.child_session_key ? { childSessionKey: row.child_session_key } : {}),
+        ...(row.agent_id ? { agentId: row.agent_id } : {}),
+        ...(row.run_id ? { runId: row.run_id } : {}),
+        ...(metadata.status === "lost" ? { error: "backing session missing" } : {}),
+        ...(row.backing_generation !== null
+          ? { detail: createSubagentTaskBackingDetail(row.backing_generation) }
+          : {}),
+      });
     }
     const candidateIds = new Set(result.candidates.map((task) => task.taskId));
     const cronLookups = new Map<string, CronRecoveryLookups>();
@@ -178,7 +176,7 @@ export function readTaskRegistryStatusSnapshot(
       }
       const lookup =
         row.runtime === "cron" && row.source_id ? cronLookups.get(row.source_id) : undefined;
-      const runId = row.run_id?.trim();
+      const runId = row.run_id;
       if (!lookup || (!lookup.taskIds.has(row.task_id) && !lookup.runIds.has(runId ?? ""))) {
         continue;
       }

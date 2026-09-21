@@ -202,13 +202,11 @@ export async function runUntilCompleted(params: {
   execTool: AnyAgentTool;
   waitTool: AnyAgentTool;
   code: string;
-  language?: "javascript" | "typescript";
   restartSafe?: boolean;
 }) {
   const details = resultDetails(
     await params.execTool.execute("code-call-1", {
       code: params.code,
-      language: params.language,
       restartSafe: params.restartSafe,
     }),
   );

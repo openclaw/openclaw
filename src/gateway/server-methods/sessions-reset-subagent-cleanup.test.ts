@@ -351,7 +351,7 @@ test("same-turn reset keeps its active continuation and task unsuppressed", asyn
   const readSnapshot = store.loadMutationSnapshotAsync.bind(store);
   vi.spyOn(store, "loadMutationSnapshotAsync").mockImplementation(async (...args) => {
     const snapshot = await readSnapshot(...args);
-    if (args[1]?.runId === activeId) {
+    if (args[1] && "taskId" in args[1] && args[1].runId === activeId) {
       snapshotReady.resolve();
       await releaseSnapshot.promise;
     }

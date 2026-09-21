@@ -2,6 +2,7 @@ import type { RetiredAuthProfileCleanupPlan } from "../commands/doctor-auth-lega
 import type { probeGatewayMemoryStatus } from "../commands/doctor-gateway-health.js";
 import type { DoctorOptions, DoctorPrompter } from "../commands/doctor-prompter.js";
 import type { ShippedPluginInstallConfigImport } from "../commands/doctor/shared/plugin-registry-migration.js";
+import type { ConfigWritePostCommitError } from "../config/io.write-errors.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.openclaw.js";
 import type { buildGatewayConnectionDetails } from "../gateway/call.js";
 import type {
@@ -66,6 +67,8 @@ export type DoctorHealthFlowContext = {
   configResultWriteCommitted?: boolean;
   /** The requested config write was refused; later repairs must not consume its candidate. */
   configWriteRefusal?: "validation" | "cron-owner-safety" | "include-ownership" | "config-conflict";
+  /** A post-commit failure is terminal for this context; retry needs a fresh inspected snapshot. */
+  configWriteError?: ConfigWritePostCommitError;
   /** One-shot repairs that require a durable config write have completed. */
   postConfigWriteRepairsCommitted?: boolean;
   sourceConfigValid: boolean;
@@ -97,6 +100,8 @@ export type DoctorHealthCheckContext = HealthCheckContext & {
   readonly lintConfigSnapshot?: Pick<ConfigFileSnapshot, "exists" | "issues" | "warnings">;
   readonly runWithPluginMetadataSnapshot?: PluginMetadataSnapshotScopeRunner;
   readonly agentDatabaseRefusals?: readonly AgentDatabaseAdmissionRefusal[];
+  /** The isolated lint worker retains its private state until these disposers settle. */
+  readonly deferInspectionDisposal?: (dispose: () => Promise<void>) => void;
 };
 
 export type DoctorHealthContribution = FlowContribution & {

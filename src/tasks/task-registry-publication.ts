@@ -2,7 +2,7 @@ import { clearTaskActivity, flushTaskActivity } from "./task-registry-activity.j
 import {
   cloneTaskRecord,
   cloneTaskRecordForObserver,
-  normalizeTaskRecord,
+  normalizeTaskTimestamps,
 } from "./task-registry-records.js";
 import {
   bumpTaskRegistryRevision,
@@ -26,7 +26,7 @@ export function publishTaskRecordAfterAtomicStore(
   record: TaskRecord,
   options?: { deferredObserverEvents?: Array<() => void> },
 ): TaskRecord {
-  const next = normalizeTaskRecord(cloneTaskRecord(record));
+  const next = normalizeTaskTimestamps(cloneTaskRecord(record));
   const current = tasks.get(next.taskId);
   const becomesTerminal =
     current !== undefined &&

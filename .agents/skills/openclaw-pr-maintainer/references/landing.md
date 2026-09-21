@@ -60,9 +60,9 @@ scripts/pr review-checkout-pr <pr>
 scripts/pr review-artifacts-init <pr>
 # Complete .local/review.json for this exact head.
 scripts/pr review-validate-artifacts <pr>
-# Invoke only after exact-head required CI is green.
-OPENCLAW_TESTBOX=1 scripts/pr prepare-run <pr>
-scripts/pr merge-run <pr>
+# After local review and a completed ClawSweeper review, hand CI waiting to GitHub.
+OPENCLAW_PR_GATES_REMOTE=github scripts/pr prepare-run <pr>
+scripts/pr merge-run <pr> --auto-merge
 ```
 
 Keep the `review.json` PR identity and head stamp intact. JSON owns the verdict;
@@ -72,16 +72,33 @@ FOR /prepare-pr`. After every push, rerun `review-init`; checkout alone does not
 refresh the guard. Validate from PR-head mode. Do not fabricate passing evidence
 or erase a failing review condition.
 
-The agent Testbox flag verifies hosted evidence instead of running full gates
-locally. The wrapper may accept a patch-identical recently green pre-rebase run
+The default agent path records pending GitHub gates, binds them to the prepared
+head, and submits one pinned squash/auto-merge request. GitHub owns waiting for
+the enforced `openclaw/ci-gate` (CI plus applicable security review) and required
+reviews. Known failed required checks still block submission. This path uses
+the PR's enforced checks rather than separately requiring scheduled Testbox
+workflow evidence. It never records pending checks as successful proof or uses
+an admin bypass. A clean, immediately mergeable PR lands in the same call.
+
+Once GitHub accepts auto-merge, report it as pending and stop. Do not start a CI
+watcher, poll `merge-run`, or repeatedly read checks. On a completion/failure
+notification or a later explicit status request, reconcile through `merge-run`
+and use the existing closeout below. GitHub's head precondition applies when
+the request is submitted; a collaborator push can leave auto-merge enabled.
+Treat a changed head as new review work, never as the original approved head.
+
+When completed hosted evidence is specifically needed, use
+`OPENCLAW_TESTBOX=1 scripts/pr prepare-run <pr>` after CI is green, then ordinary
+`scripts/pr merge-run <pr>`. The wrapper may accept a patch-identical recently green pre-rebase run
 when the main context incorporated into the candidate is unchanged or disjoint.
 Incorporated overlapping or critical input changes require current-head CI.
 The merge workflow still owns later main-drift policy. For explicitly
 owner-approved reviewed fork code without hosted Testbox, use the documented
 `OPENCLAW_PR_GATES_REMOTE=testbox` path.
 
-Watch one exact head with `node scripts/watch-pr-ci.mjs <pr> <head-sha>`; use narrow
-JSON check/run reads and fetch failed logs once. Address substantive human/bot
+For a requested diagnosis or the completed-evidence path, watch one exact head
+with `node scripts/watch-pr-ci.mjs <pr> <head-sha>`; use narrow JSON check/run reads
+and fetch failed logs once. Address substantive human/bot
 findings and resolve fixed conversations. A queued bot score update is not a
 separate landing gate. Check live rules and review state before claiming a human
 approval is mandatory; bypass ability is not authorization to skip an enforced

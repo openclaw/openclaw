@@ -10,7 +10,6 @@ export type ChatAttachmentControlsProps = {
   attachments?: ChatAttachment[];
   disabled?: boolean;
   getAttachments?: () => ChatAttachment[];
-  gatewayScope?: object;
   draft?: string;
   getDraft?: () => string;
   onAttachmentsChange?: (attachments: ChatAttachment[]) => void;

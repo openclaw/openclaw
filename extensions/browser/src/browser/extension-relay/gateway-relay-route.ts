@@ -14,6 +14,7 @@ import {
   startBrowserControlServiceFromConfig,
 } from "../../control-service.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
+import { describeBrowserControlUnavailable } from "../../plugin-enabled.js";
 import { resolveProfile } from "../config.js";
 import { getProfileLifecycle } from "../server-context.lifecycle.js";
 import {
@@ -64,7 +65,7 @@ async function resolveGatewayRelay(resource: string) {
   if (!state) {
     state = await startBrowserControlServiceFromConfig();
     if (!state) {
-      throw new Error("Browser control is disabled");
+      throw new Error(await describeBrowserControlUnavailable());
     }
   }
   const profileName = requestedProfileName(

@@ -13,7 +13,7 @@ export type CiTimingRun = {
   createdAt: string;
   logs: (
     | { kind: "uiE2e" | "repoE2e"; text: string }
-    | { kind: "compact"; text: string; labels: string[] }
+    | { kind: "compact" | "tooling"; text: string; labels: string[] }
   )[];
 };
 
@@ -195,6 +195,81 @@ function readCompactLog(
   }
 }
 
+function readToolingLog(text: string, samples: Samples) {
+  const descriptors = readRuntimeTimingGroups(text);
+  const active = new Map<
+    string,
+    {
+      cases: Map<string, number>;
+      files: Map<string, number>;
+      complete: boolean;
+      declaredFiles: Set<string>;
+    }
+  >();
+  for (const line of text.split("\n")) {
+    const event = /\[shard:([^\]]+)\] (begin|end \(exit (\d+)\))/u.exec(line);
+    if (event) {
+      const matches = descriptors.filter(
+        (group) => (group.timing_key ?? group.shard_name) === event[1],
+      );
+      const descriptor = matches.length === 1 ? matches[0] : undefined;
+      if (!descriptor || !/^core-tooling-\d+(?:-hosted-\d+)?$/u.test(descriptor.shard_name)) {
+        continue;
+      }
+      const shard = descriptor.shard_name;
+      if (event[2] === "begin") {
+        active.set(shard, {
+          cases: new Map(),
+          files: new Map(),
+          complete: false,
+          declaredFiles: new Set(descriptor.includePatterns),
+        });
+      } else {
+        const invocation = active.get(shard);
+        if (event[3] === "0" && invocation?.complete) {
+          // Native file summaries include hooks. Older verbose-only logs supply
+          // case-cost sums, which can exceed wall time for concurrent cases.
+          for (const [file, duration] of new Map([...invocation.cases, ...invocation.files])) {
+            // Tooling fixtures print nested reporters. Only this shard's
+            // declared inventory can supply measurements for its real files.
+            if (invocation.declaredFiles.has(file)) {
+              recordSample(samples, file, Math.max(0.001, duration));
+            }
+          }
+        }
+        active.delete(shard);
+      }
+      continue;
+    }
+    const row = /\[shard:([^\]]+)\]\s+(.*)$/u.exec(line);
+    const invocation = row && active.get(row[1]!);
+    if (!invocation) {
+      continue;
+    }
+    const file =
+      /^✓\s+(?:\|tooling\||tooling)\s+(\S+\.(?:test|spec)\.[cm]?[jt]sx?)\s+\(\d+ tests?(?: \| \d+ (?:skipped|todo))*\)\s+([\d.]+)(m?s)(?:\s|$)/u.exec(
+        row[2]!,
+      );
+    if (file) {
+      invocation.files.set(file[1]!, seconds(file[2]!, file[3]!));
+    } else {
+      const test =
+        /^✓\s+(?:\|tooling\||tooling)\s+(\S+\.(?:test|spec)\.[cm]?[jt]sx?)\s+> .+\s([\d.]+)(m?s)$/u.exec(
+          row[2]!,
+        );
+      if (test) {
+        invocation.cases.set(
+          test[1]!,
+          (invocation.cases.get(test[1]!) ?? 0) + seconds(test[2]!, test[3]!),
+        );
+      }
+    }
+    if (/^Duration\s+[\d.]+m?s(?:\s|$)/u.test(row[2]!)) {
+      invocation.complete = true;
+    }
+  }
+}
+
 function runtimePlacementSecondsMap(observations: readonly RuntimePlacementTiming[] = []) {
   return Object.fromEntries(
     observations.map((observation) => [
@@ -241,6 +316,7 @@ function refitMap(
   previous: Record<string, number> = {},
   contributingRuns = 0,
   observedParents?: Set<string>,
+  minimumSamples = 2,
 ) {
   const next = Object.fromEntries(
     Object.entries(previous).filter(
@@ -250,7 +326,7 @@ function refitMap(
   for (const [key, values] of samples) {
     const center = median(values);
     const retained = values.filter((value) => value <= center * 2.5);
-    if (retained.length >= 2) {
+    if (retained.length >= minimumSamples) {
       const measured = median(retained);
       if (
         previous[key] === undefined ||
@@ -265,18 +341,26 @@ function refitMap(
   );
 }
 
-export function refitTestTimings(runs: CiTimingRun[], previous?: CiTestTimings) {
+export function refitTestTimings(
+  runs: CiTimingRun[],
+  previous?: CiTestTimings,
+  options: { seedTooling?: boolean } = {},
+) {
   const samples = {
     uiE2e: new Map<string, number[]>(),
     repoE2e: new Map<string, number[]>(),
     blacksmith: new Map<string, number[]>(),
     github: new Map<string, number[]>(),
+    toolingBlacksmith: new Map<string, number[]>(),
+    toolingGithub: new Map<string, number[]>(),
   };
   const contributingRuns = {
     uiE2e: new Set<number>(),
     repoE2e: new Set<number>(),
     blacksmith: new Set<number>(),
     github: new Set<number>(),
+    toolingBlacksmith: new Set<number>(),
+    toolingGithub: new Set<number>(),
   };
   const overhead: number[] = [];
   const observedParents = { blacksmith: new Set<string>(), github: new Set<string>() };
@@ -304,6 +388,8 @@ export function refitTestTimings(runs: CiTimingRun[], previous?: CiTestTimings) 
       repoE2e: new Map<string, number[]>(),
       blacksmith: new Map<string, number[]>(),
       github: new Map<string, number[]>(),
+      toolingBlacksmith: new Map<string, number[]>(),
+      toolingGithub: new Map<string, number[]>(),
     };
     const currentRuntime = {
       blacksmith: new Map<string, number[]>(),
@@ -311,7 +397,12 @@ export function refitTestTimings(runs: CiTimingRun[], previous?: CiTestTimings) 
     };
     for (const log of run.logs) {
       const text = stripVTControlCharacters(log.text);
-      if (log.kind === "compact") {
+      if (log.kind === "tooling") {
+        const profile = log.labels.some((label) => label.startsWith("blacksmith-"))
+          ? "toolingBlacksmith"
+          : "toolingGithub";
+        readToolingLog(text, current[profile]);
+      } else if (log.kind === "compact") {
         readCompactLog(text, log.labels, current, currentRuntime, runtimeDescriptors);
       } else {
         readE2eLog(text, current[log.kind], log.kind === "uiE2e" ? overhead : undefined);
@@ -324,7 +415,14 @@ export function refitTestTimings(runs: CiTimingRun[], previous?: CiTestTimings) 
       }
     }
     // Retries or duplicate reporter lines in one run must not satisfy the two-run minimum.
-    for (const profile of ["uiE2e", "repoE2e", "blacksmith", "github"] as const) {
+    for (const profile of [
+      "uiE2e",
+      "repoE2e",
+      "blacksmith",
+      "github",
+      "toolingBlacksmith",
+      "toolingGithub",
+    ] as const) {
       // Missing or unparseable profile logs are not evidence that its keys disappeared.
       if (current[profile].size > 0) {
         contributingRuns[profile].add(run.id);
@@ -377,7 +475,27 @@ export function refitTestTimings(runs: CiTimingRun[], previous?: CiTestTimings) 
       blacksmith: refitRuntime("blacksmith"),
       github: refitRuntime("github"),
     },
-    source: `median of ${runIds.length} successful CI and release-check runs: ${runIds.join(", ")}`,
+    source: options.seedTooling
+      ? `tooling seed from successful pull_request CI merge-ref runs: ${runIds.join(", ")}; retained other timings: ${previous?.source ?? "none"}`
+      : `median of ${runIds.length} successful CI and release-check runs: ${runIds.join(", ")}`,
+    // PR plans may select only part of tooling. Absence is not evidence that
+    // a file disappeared; preserve unobserved measurements across those windows.
+    toolingFileSeconds: {
+      blacksmith: refitMap(
+        samples.toolingBlacksmith,
+        previous?.toolingFileSeconds.blacksmith,
+        0,
+        undefined,
+        options.seedTooling ? 1 : 2,
+      ),
+      github: refitMap(
+        samples.toolingGithub,
+        previous?.toolingFileSeconds.github,
+        0,
+        undefined,
+        options.seedTooling ? 1 : 2,
+      ),
+    },
     uiE2e: {
       fileSeconds: refitMap(
         samples.uiE2e,
@@ -419,6 +537,16 @@ export function refitTestTimings(runs: CiTimingRun[], previous?: CiTestTimings) 
     ["uiE2e.fileSeconds", timings.uiE2e.fileSeconds, previous?.uiE2e.fileSeconds],
     ["repoE2eFileSeconds", timings.repoE2eFileSeconds, previous?.repoE2eFileSeconds],
     [
+      "toolingFileSeconds.blacksmith",
+      timings.toolingFileSeconds.blacksmith,
+      previous?.toolingFileSeconds.blacksmith,
+    ],
+    [
+      "toolingFileSeconds.github",
+      timings.toolingFileSeconds.github,
+      previous?.toolingFileSeconds.github,
+    ],
+    [
       "uiE2e",
       { perFileOverheadSeconds: timings.uiE2e.perFileOverheadSeconds },
       oldOverhead === undefined ? undefined : { perFileOverheadSeconds: oldOverhead },
@@ -446,6 +574,8 @@ export function refitTestTimings(runs: CiTimingRun[], previous?: CiTestTimings) 
       github: [...contributingRuns.github].toSorted((a, b) => a - b),
       repoE2e: [...contributingRuns.repoE2e].toSorted((a, b) => a - b),
       uiE2e: [...contributingRuns.uiE2e].toSorted((a, b) => a - b),
+      toolingBlacksmith: [...contributingRuns.toolingBlacksmith].toSorted((a, b) => a - b),
+      toolingGithub: [...contributingRuns.toolingGithub].toSorted((a, b) => a - b),
     },
   };
 }

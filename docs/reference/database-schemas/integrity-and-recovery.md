@@ -33,6 +33,9 @@ full check even when runtime proof remains in memory.
 Cleanup workers and native agent execution workers borrow that proof under their
 existing writer admission. Cleanup workers return new verification to the Gateway
 after they finish.
+Native execution workers can also borrow retained host proof after the host handle
+closes or is evicted. The receiving opener rechecks the physical file identity and
+shared revocation cell; a closed handle alone does not discard valid proof.
 
 Cached opens, including later opens after startup, queue checks in the existing
 Gateway verifier. Background success is logged; only the full-check lease owner
@@ -94,12 +97,31 @@ copying the live database family. Each caller retains an independent cleanup
 lease, and cancellation detaches only that caller while the shared operation and
 remaining leases keep their original owner and cleanup authority.
 
+Ordinary observed config loads, including runtime reload preparation, read pending
+plugin migration obligations through the existing live shared-state reader or
+worker rather than copying the database and WAL. Each read sees current committed
+rows; it does not cache obligations or grant publication authority. Unobserved
+inspection and inherited artifact-preserving scopes retain private snapshots.
+Migration publication still rechecks the current generation under its coordinator.
+
+Runtime config publication, including model-catalog worker generations, also reads
+Claw consent provenance through the live shared-state reader instead of copying
+the database and WAL for every generation. Each publication refreshes committed
+provenance; config-digest checks, failure handling, and publication admission remain
+unchanged. Explicit provenance inspection and inherited artifact-preserving scopes
+still use private snapshots. Neither optimization changes schemas, stored records,
+retention, or update migrations.
+
 Unavoidable raw copies first sample the main database and WAL for a short stable
 interval. A hard admission deadline then allows copying to proceed under sustained
 write load instead of waiting indefinitely. Source-change retries use bounded
 cancellable backoff without restarting that quiescence deadline. Snapshot debug
 telemetry contains only bounded operational metadata: operation and owner labels,
 main and WAL sizes, copied bytes, attempt, wait and duration, and outcome.
+
+Synchronous CLI snapshots also pause between source-change retries, so a brief
+write burst does not exhaust all ten attempts immediately. These retries only
+repeat private snapshot preparation; they do not resend Gateway commands.
 
 Private snapshot files remain temporary artifacts: the creator registers cleanup
 before copying and publishes the finished copy by rename. Graceful shutdown
@@ -120,7 +142,10 @@ Reclamation runs in a SQLite worker, keeping directory traversal and removal off
 the Gateway event loop, and logs the copied-data byte count. Concurrent cleanup
 requests for one root share a pass. Reclamation requires verifiable inactive
 owner and worker tokens, applies a 15-minute grace period to current staging
-directories, and stops at a 512 MiB copied-byte budget per pass. Active, recent, over-budget, or
+directories, and uses a 512 MiB copied-byte budget per pass. The first reclaimed
+directory may exceed that budget, after the same ownership and age checks; the
+pass then stops, so oversized interrupted copies can make progress one at a time.
+Active, recent, over-budget, or
 structurally unknown directories remain untouched. Shutdown and the existing
 reclamation deadline stop at directory boundaries, after removal and token
 release settle together. Reclamation worker failures warn without preventing
@@ -156,6 +181,15 @@ The shared cache targets 64 handles, but live borrows, synchronous transactions,
 Concurrent runs normally share the cached writer for an agent database on the main thread. Workers and diagnostics can open additional connections to the same file; the connection count is operation-dependent. Canonical agent connections set SQLite's busy timeout before use. A timeout cannot resolve a worker holding a write transaction while waiting for a blocked main thread: synchronous transcript appends do not join the asynchronous session write queue. Transaction callbacks must finish synchronously, and a competing writer must not depend on the main event loop to release its lock.
 
 Periodic agent maintenance uses passive WAL checkpoints and bounded incremental vacuum. Session reclamation keeps deletion on a separate worker write connection and uses a passive checkpoint and bounded vacuum after commit; long deletion transactions can still contend with other writers. Full compaction belongs to offline Doctor maintenance. Run errors naming the Gateway state database retain a safe SQLite diagnosis; see [storage failure troubleshooting](/gateway/troubleshooting#agent-run-failed-with-a-storage-error).
+
+After an admitted periodic PASSIVE checkpoint completes, the WAL owner makes one
+zero-lock-wait TRUNCATE attempt if the observed WAL still exceeds its existing
+64 MiB recycling limit. A concurrent reader or writer can defer recycling to the
+next maintenance pass. The connection's busy timeout is restored afterward, and
+the existing checkpoint health records the result. This does not change
+durability, transaction contents, reader lifetimes, schemas, or history retention;
+it never unlinks a live WAL. Upgrades need no state migration, and older binaries
+can continue reading the same databases.
 
 Quarantine decisions live only in a dedicated `openclaw-quarantine.sqlite` store, so they survive damage to the databases being quarantined. Verification results are logged.
 

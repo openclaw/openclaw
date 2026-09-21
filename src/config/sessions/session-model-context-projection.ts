@@ -10,15 +10,20 @@ import { MODEL_CONTEXT_PRIVATE_METADATA_KEYS } from "../../shared/model-context-
 export function projectModelContextEventSql(
   event: Expression<string>,
   omitCheckpoint: Expression<number>,
+  toolResultOmission?: Expression<string | null>,
 ): RawBuilder<string> {
   const paths = MODEL_CONTEXT_PRIVATE_METADATA_KEYS.map((key) => `$.message.__openclaw.${key}`);
   const projected = /* kysely-allow-raw: query-time JSON projection preserves durable transcript bytes. */ sql<string>`json_remove(${event}, ${sql.join(paths)})`;
   const modelEvent = /* kysely-allow-raw: tool result details are not model input; other details can be runtime context. */ sql<string>`CASE WHEN json_extract(${event}, '$.message.role') = 'toolResult'
     THEN json_remove(${projected}, '$.message.details') ELSE ${projected} END`;
+  const boundedEvent = toolResultOmission
+    ? /* kysely-allow-raw: omit only selected result bodies before hydration; durable rows remain unchanged. */ sql<string>`CASE WHEN ${toolResultOmission} IS NOT NULL AND json_extract(${event}, '$.message.role') = 'toolResult'
+      THEN json_set(${modelEvent}, '$.message.content', json_array(json_object('type', 'text', 'text', ${toolResultOmission}))) ELSE ${modelEvent} END`
+    : modelEvent;
   // The context owner classifies invalidated prefix checkpoints using the transport
   // contract. Other replay state must survive, including checkpoints after the cut.
   return /* kysely-allow-raw: exclude invalidated replay before hydrating a retained prefix. */ sql<string>`CASE WHEN ${omitCheckpoint} = 1
-    THEN json_remove(${modelEvent}, '$.message.providerReplay') ELSE ${modelEvent} END`;
+    THEN json_remove(${boundedEvent}, '$.message.providerReplay') ELSE ${boundedEvent} END`;
 }
 
 function pickJsonObject(value: Expression<unknown>, keys: readonly string[]): RawBuilder<string> {

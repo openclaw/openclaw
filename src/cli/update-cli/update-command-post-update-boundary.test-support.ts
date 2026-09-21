@@ -126,16 +126,3 @@ export function registerBoundaryFinalizationControls({
     },
   );
 }
-
-export function expectUpdateFailure(
-  promise: Promise<unknown>,
-  reason: string,
-  details: object = {},
-) {
-  return expect(promise).rejects.toMatchObject({
-    name: "UpdateCommandFailure",
-    exitCode: 1,
-    result: { status: "error", reason },
-    ...details,
-  });
-}

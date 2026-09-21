@@ -17,7 +17,6 @@ import {
   withCdpSnapshotRoot,
 } from "./pw-session.page-cdp.js";
 import {
-  assertSnapshotFrameCurrent,
   collectSnapshotUrls,
   prepareSnapshotPageViaPlaywright,
   resolveSnapshotTimeoutMs,
@@ -31,7 +30,7 @@ async function finalizeRoleSnapshotViaPlaywright(params: {
   targetId?: string;
   frameSelector?: string;
   frame?: Frame;
-  isFrameCurrent?: () => boolean;
+  assertCurrent: () => void;
   mode: "aria" | "role";
   built: { snapshot: string; refs: RoleRefMap };
   urls?: boolean;
@@ -50,9 +49,7 @@ async function finalizeRoleSnapshotViaPlaywright(params: {
         await collectSnapshotUrls(params.frame ?? params.page),
       )
     : params.built.snapshot;
-  if (params.isFrameCurrent) {
-    assertSnapshotFrameCurrent(params.isFrameCurrent);
-  }
+  params.assertCurrent();
   const finalized = finalizeRoleSnapshot({
     snapshot,
     refs: params.built.refs,
@@ -82,6 +79,7 @@ export async function snapshotRoleViaPlaywright(opts: {
   urls?: boolean;
   maxChars?: number;
   timeoutMs?: number;
+  signal?: AbortSignal;
   ssrfPolicy?: SsrFPolicy;
   delta?: { mode: RoleSnapshotIdentityMode; previousKeys?: ReadonlySet<string> };
 }): Promise<{
@@ -98,6 +96,7 @@ export async function snapshotRoleViaPlaywright(opts: {
   });
 
   const ariaSnapshotTimeout = resolveSnapshotTimeoutMs(opts.timeoutMs);
+  const captureDeadline = performance.now() + ariaSnapshotTimeout;
 
   if (opts.refsMode === "aria") {
     if (normalizeOptionalString(opts.selector) || normalizeOptionalString(opts.frameSelector)) {
@@ -105,17 +104,22 @@ export async function snapshotRoleViaPlaywright(opts: {
     }
     return await withSnapshotFrameGuard({
       page,
-      run: async (isFrameCurrent) => {
+      signal: opts.signal,
+      deadlineMs: captureDeadline,
+      run: async (assertCurrent) => {
         const snapshot = await page.ariaSnapshot({
           mode: "ai",
           timeout: ariaSnapshotTimeout,
         });
         const built = buildRoleSnapshotFromAiSnapshot(snapshot, opts.options);
+        if (opts.options === undefined) {
+          built.snapshot = snapshot;
+        }
         return await finalizeRoleSnapshotViaPlaywright({
           page,
           cdpUrl: opts.cdpUrl,
           targetId: opts.targetId,
-          isFrameCurrent,
+          assertCurrent,
           built,
           mode: "aria",
           urls: opts.urls,
@@ -145,10 +149,11 @@ export async function snapshotRoleViaPlaywright(opts: {
   return await withSnapshotFrameGuard({
     page,
     frame: frame ?? page.mainFrame(),
-    run: async (isFrameCurrent) => {
+    signal: opts.signal,
+    deadlineMs: captureDeadline,
+    run: async (assertCurrent) => {
       const snapshotScope = frame ?? page;
       const locator = snapshotScope.locator(selector || ":root");
-      const captureDeadline = performance.now() + ariaSnapshotTimeout;
       // Count has no timeout; both capture stages share one budget before refs are published.
       const selectorMatched =
         !selector ||
@@ -159,7 +164,7 @@ export async function snapshotRoleViaPlaywright(opts: {
           page,
           frameSelector: frameSelector || undefined,
           frame,
-          isFrameCurrent,
+          assertCurrent,
           built: {
             snapshot: opts.options?.interactive ? "(no interactive elements)" : "(empty)",
             refs: {},
@@ -169,12 +174,8 @@ export async function snapshotRoleViaPlaywright(opts: {
         });
       }
       const remaining = () => {
-        const budget = Math.ceil(captureDeadline - performance.now());
-        if (budget <= 0) {
-          throw new Error("Role snapshot capture timed out.");
-        }
-        assertSnapshotFrameCurrent(isFrameCurrent);
-        return budget;
+        assertCurrent();
+        return Math.max(1, Math.ceil(captureDeadline - performance.now()));
       };
       const root = await locator.elementHandle({ timeout: remaining() });
       if (!root) {
@@ -188,6 +189,7 @@ export async function snapshotRoleViaPlaywright(opts: {
           frame,
           timeoutMs: remaining(),
           fn: async (send) => {
+            assertCurrent();
             captureOwnsRoot = true;
             try {
               return await withCdpSnapshotRoot({
@@ -214,7 +216,9 @@ export async function snapshotRoleViaPlaywright(opts: {
                     page,
                     frame,
                     send,
+                    rootBackendNodeId,
                     refs: backendRefs,
+                    assertCurrent,
                   });
                   if (marked.size !== backendRefs.length) {
                     throw new Error("Snapshot controls changed before refs were bound; retry.");

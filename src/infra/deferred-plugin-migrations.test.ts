@@ -16,6 +16,7 @@ import {
   assertDeferredPluginMigrationsCurrent,
   readDeferredPluginMigrations,
   recordDeferredPluginMigrations,
+  formatDeferredPluginMigration,
   withDeferredPluginMigrationsCurrent,
 } from "./deferred-plugin-migrations.js";
 import { tryAcquireExclusiveSqliteCoordinator } from "./sqlite-coordinator.js";
@@ -389,4 +390,33 @@ describe("deferred configured-plugin migrations", () => {
       expect(readDeferredPluginMigrations({ env })).toEqual([]);
     },
   );
+});
+
+describe("deferred plugin migration repair guidance", () => {
+  const pending = {
+    pluginId: "fixture-plugin",
+    reason: "Package repair deferred.",
+    command: "openclaw update repair",
+  };
+
+  it.each(["OPENCLAW_UPDATE_IN_PROGRESS", "OPENCLAW_UPDATE_POST_CORE_CONVERGENCE"])(
+    "waits for the owning update before suggesting another repair (%s)",
+    (marker) => {
+      const message = formatDeferredPluginMigration(pending, { [marker]: "1" });
+      expect(message).toContain("Let the current update or repair finish.");
+      expect(message).toContain('If this warning remains afterward, run "openclaw update repair"');
+    },
+  );
+
+  it("gives immediate recovery outside an update and avoids repeating Doctor", () => {
+    expect(formatDeferredPluginMigration(pending, {})).toContain(
+      'Run "openclaw update repair", then "openclaw doctor --fix".',
+    );
+    const message = formatDeferredPluginMigration(
+      { ...pending, command: "openclaw doctor --fix" },
+      {},
+    );
+    expect(message.match(/openclaw doctor --fix/g)).toHaveLength(1);
+    expect(message).not.toContain("Let the current");
+  });
 });

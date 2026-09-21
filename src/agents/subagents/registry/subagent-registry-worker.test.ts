@@ -32,7 +32,7 @@ vi.mock("../../../state/openclaw-state-worker-context.js", () => ({
 vi.mock("../../../state/openclaw-state-worker-store.js", () => ({
   runOpenClawStateWorkerOperation: mocks.runWorker,
 }));
-vi.mock("./subagent-registry.store.sqlite.js", () => ({
+vi.mock("./subagent-registry.store.codec.js", () => ({
   bindSubagentRunRecord: (entry: SubagentRunRecord) => ({
     run_id: entry.runId,
     child_session_key: entry.childSessionKey,
@@ -41,6 +41,8 @@ vi.mock("./subagent-registry.store.sqlite.js", () => ({
     created_at: entry.createdAt,
     payload_json: JSON.stringify(entry),
   }),
+}));
+vi.mock("./subagent-registry.store.sqlite.js", () => ({
   loadSubagentRegistryFromSqlite: () => new Map(),
   loadSubagentSessionListRunsFromSqlite: () => new Map(),
   loadSubagentMaintenanceRunsFromSqlite: () => new Map(),

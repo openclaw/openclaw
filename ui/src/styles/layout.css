@@ -1265,6 +1265,11 @@ openclaw-settings-save-indicator:empty {
   padding: 0;
 }
 
+/* Inset highlight surfaces without narrowing the header or agent roster. */
+.shell:not(.shell--mobile-nav) .sidebar-nav {
+  margin-inline: 2px;
+}
+
 /* Keep the live session tree mounted while a route owns the lower region. */
 .sidebar-session-content {
   display: contents;
@@ -1472,12 +1477,15 @@ openclaw-settings-save-indicator:empty {
   display: flex;
   flex-direction: column;
   gap: var(--sidebar-group-gap);
-  /* Left-only on purpose (#124879): the right 8px of .sidebar-sessions padding is
-     clearance so a classic (non-overlay) scrollbar cannot clip the selection pill.
-     Reclaim space inside the row instead of widening it, or that fix regresses. */
-  margin-inline: -8px 0;
+  /* The scroll body already keeps rows clear of a classic scrollbar. Reclaim
+     both section insets so overlay scrollbars do not leave a trailing gap. */
+  margin-inline: -8px;
   /* Sessions are stateful app chrome, not navigation links. */
   cursor: var(--cursor-action);
+}
+
+.shell:not(.shell--mobile-nav) .sidebar-recent-sessions {
+  margin-inline: -6px;
 }
 
 .sidebar-shell__body--scroll-top {
@@ -4005,11 +4013,6 @@ button.gateway-status:focus-visible {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.gateway-status__outbox {
-  white-space: nowrap;
-  font-variant-numeric: tabular-nums;
 }
 
 .gateway-status--offline .gateway-status__icon {

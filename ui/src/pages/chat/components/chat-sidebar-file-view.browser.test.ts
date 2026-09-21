@@ -180,6 +180,35 @@ describe.runIf(browserMode)("chat file editor", () => {
     await expect.poll(() => lineIndexes(".file-view__line--current")).toEqual([matchLines[0]]);
   });
 
+  it("returns focus to the file search toggle on Escape and can reopen with the keyboard", async () => {
+    const panel = await mountFile({
+      kind: "file",
+      path: "search.json",
+      name: "search.json",
+      content: '{"city":"雪"}\n',
+    });
+    const searchToggle = button(panel, "Search in file");
+    await userEvent.click(searchToggle);
+    const input = panel.querySelector<HTMLInputElement>('input[type="search"]')!;
+    await expect.poll(() => document.activeElement).toBe(input);
+    await userEvent.fill(input, "雪");
+    expect(panel.querySelector(".file-view__search-counter")?.textContent?.trim()).toBe("1/1");
+
+    await userEvent.keyboard("{Escape}");
+    await expect.poll(() => panel.querySelector('input[type="search"]')).toBeNull();
+    expect(document.activeElement).toBe(searchToggle);
+    expect(searchToggle.getAttribute("aria-pressed")).toBe("false");
+
+    await userEvent.keyboard("{Enter}");
+    await expect
+      .poll(() => document.activeElement === panel.querySelector('input[type="search"]'))
+      .toBe(true);
+    expect(panel.querySelector<HTMLInputElement>('input[type="search"]')?.value).toBe("");
+    await userEvent.click(searchToggle);
+    await expect.poll(() => panel.querySelector('input[type="search"]')).toBeNull();
+    expect(document.activeElement).toBe(searchToggle);
+  });
+
   it("enables save after an edit and keeps the saved content", async () => {
     const save = vi.fn().mockResolvedValue({ ok: true, hash: "hash-2" });
     const panel = await mountFile({

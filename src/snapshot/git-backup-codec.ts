@@ -31,9 +31,14 @@ const SQLITE_SIDECAR_SUFFIXES = ["-wal", "-shm", "-journal"] as const;
 const SAFE_TABLE_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
 // session_transcript_index_state: Gateway startup transcript reconciliation owns
 // rebuilding that FTS projection when the state rows are absent.
+// FTS row ownership must be rebuilt with that projection, never restored against different rowids.
 // backup_runs: the backup outcome log is written by every backup run, so dumping
 // it would make each cycle dirty the next one and defeat no-change detection.
-const GIT_BACKUP_PROJECTION_TABLES = ["backup_runs", "session_transcript_index_state"] as const;
+const GIT_BACKUP_PROJECTION_TABLES = [
+  "backup_runs",
+  "session_transcript_index_state",
+  "session_transcript_fts_rows",
+] as const;
 
 export type GitBackupIdentity = { role: "global" } | { role: "agent"; agentId: string };
 

@@ -97,6 +97,11 @@ export async function resumePostCoreUpdate(params: ResumePostCoreUpdateParams): 
     );
     const record =
       runId && !params.opts.run && !parentOwnsCompletion ? getUpdateRun(runId, { env }) : undefined;
+    if (runId && !params.opts.run && !parentOwnsCompletion && !record) {
+      throw new UpdateCommandRecoveryPendingError(
+        "Post-core update run is unavailable; resume cannot verify its owner.",
+      );
+    }
     let completed: Awaited<ReturnType<typeof resumePostCoreUpdateInternal>>;
     if (runId && record && isUnfencedUpdateDriver(record.before.version)) {
       if (!parent) {
@@ -407,6 +412,8 @@ export async function convergePostCoreUpdatePlugins(params: {
   updateStartedAtMs?: number;
   /** Modern parents finalize after consuming the result; legacy children finalize before publication. */
   parentOwnsCompletion?: boolean;
+  beforeDoctor?: () => Promise<void>;
+  onWarnings?: (warnings: string[]) => void;
   assertCurrent?: () => void;
 }) {
   const { assertCurrent } = params;
@@ -460,6 +467,8 @@ export async function convergePostCoreUpdatePlugins(params: {
             opts: params.opts,
             pluginUpdate: producedPluginUpdate,
             freshDoctorRequired: producedPluginUpdate.changed,
+            beforeDoctor: params.beforeDoctor,
+            onWarnings: params.onWarnings,
             assertCurrent,
             yes: params.opts.yes === true,
             json: params.opts.json === true,

@@ -74,7 +74,7 @@ export async function resolveGitDoctorEntry(root: string, steps: UpdateStepResul
     return entry;
   }
   steps.push({
-    name: "openclaw doctor entry",
+    name: "package-doctor-entry",
     command: `verify ${entry}`,
     cwd: root,
     durationMs: 0,

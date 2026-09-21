@@ -39,6 +39,7 @@ import {
   MANAGED_OUTGOING_ORIGINALS_SUBDIR,
   readManagedImageRecord,
 } from "./managed-image-record-store.js";
+import { createReadonlySessionHistoryReader } from "./session-history-readonly-reader.js";
 import {
   readSessionMessageCountAsync,
   readSessionMessagesMatchingIdAsync,
@@ -344,7 +345,6 @@ describe("managed attachment SQLite visibility", () => {
     const spy = vi.spyOn(JSON, "parse").mockImplementation((value, reviver) => {
       if (!rewrote && value === JSON.stringify(other)) {
         rewrote = true;
-        expect(database.db.isTransaction).toBe(true);
         writer.exec("BEGIN IMMEDIATE");
         try {
           rewriteSqliteTranscriptEventRowsInTransaction({ ...database, db: writer }, f.scope, [
@@ -363,7 +363,15 @@ describe("managed attachment SQLite visibility", () => {
       return parse(value, reviver);
     });
     try {
-      expect(await f.download()).not.toBeNull();
+      // Run the worker's reader kernel here so this deterministic competing writer
+      // fires inside its read snapshot; the other cases exercise actual dispatch.
+      const reader = createReadonlySessionHistoryReader({
+        database: { agentId: "main", path: database.path },
+        transcript: { ...f.scope, sessionFile: f.scope.sessionKey },
+      });
+      expect(await reader.readSessionMessagesMatchingIdAsync(f.scope, f.messageId)).toMatchObject([
+        { content: [f.block] },
+      ]);
       expect(rewrote).toBe(true);
       expect(database.db.isTransaction).toBe(false);
     } finally {

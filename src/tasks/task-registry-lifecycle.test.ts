@@ -1,14 +1,18 @@
+import { symlink } from "node:fs/promises";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { emitAcpLifecycleStart } from "../agents/command/attempt-execution.js";
 import { emitAgentEvent, resetAgentEventsForTest } from "../infra/agent-events.js";
+import { closeOpenClawStateDatabaseByPathAsync } from "../state/openclaw-state-db-cache.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createInMemoryTaskRegistryStore } from "../test-utils/task-registry-store.js";
 import { getTaskExecutionObservation } from "./task-execution-observation.js";
 import { getTaskActivitySnapshot } from "./task-registry-activity.js";
+import { listTaskRecordPage } from "./task-registry-query.js";
 import {
+  readTaskRegistryRevision,
   reloadTaskRegistryFromStoreAsync,
   runTaskRegistryWorkerMutation,
   tasks,
@@ -395,4 +399,47 @@ describe("task registry agent events", () => {
       });
     },
   );
+});
+
+describe("task registry database lifecycle", () => {
+  it.each([false, true])("invalidates only its admitted database (alias: %s)", async (alias) => {
+    await withOpenClawTestState({ layout: "state-only" }, async (state) => {
+      configureTaskRegistryRuntime({ store: createInMemoryTaskRegistryStore() });
+      const task = createTaskFixture("cli", {
+        task: "Keep the selected page current",
+        status: "succeeded",
+        deliveryStatus: "not_applicable",
+        notifyPolicy: "silent",
+      });
+      const owner = openOpenClawStateDatabase();
+      const unrelated = openOpenClawStateDatabase({ path: state.statePath("identity.sqlite") });
+      try {
+        if (alias) {
+          const aliasRoot = state.path("alias");
+          await symlink(state.stateDir, aliasRoot, "junction");
+          process.env.OPENCLAW_STATE_DIR = aliasRoot;
+        }
+        await reloadTaskRegistryFromStoreAsync(captureOpenClawStateWorkerContext());
+        const page = await listTaskRecordPage({ offset: 0, limit: 1 });
+        expect(page.ok).toBe(true);
+        if (!page.ok) {
+          throw new Error(page.error);
+        }
+        expect(page.value.tasks.map((record) => record.taskId)).toEqual([task.taskId]);
+        const revision = page.value.revision;
+        await closeOpenClawStateDatabaseByPathAsync(unrelated.path);
+        expect(readTaskRegistryRevision()).toBe(revision);
+        expect(page.value.isCurrent()).toBe(true);
+        expect(
+          await listTaskRecordPage({ offset: 0, limit: 1, expectedRevision: revision }),
+        ).toMatchObject({ ok: true, value: { revision } });
+
+        await closeOpenClawStateDatabaseByPathAsync(owner.path);
+        expect(readTaskRegistryRevision()).toBeGreaterThan(revision);
+        expect(page.value.isCurrent()).toBe(false);
+      } finally {
+        process.env.OPENCLAW_STATE_DIR = state.stateDir;
+      }
+    });
+  });
 });

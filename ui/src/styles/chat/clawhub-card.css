@@ -57,6 +57,7 @@ openclaw-chat-clawhub-card {
 }
 
 .chat-clawhub-card .card-sub {
+  margin-top: 2px;
   display: -webkit-box;
   overflow: hidden;
   -webkit-box-orient: vertical;

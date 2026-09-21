@@ -132,7 +132,7 @@ it("aborts and joins early update requests before the post-ready scheduler loads
     ]);
     await stopping;
     expect(stopped).toBe(true);
-    expect(checkUpdateStatus).toHaveBeenCalledOnce();
+    expect(checkUpdateStatus).toHaveBeenCalledTimes(2);
     expect(factory).not.toHaveBeenCalled();
   } finally {
     probe.resolve(status);

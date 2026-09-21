@@ -20,6 +20,7 @@ import { retryableGatewayDelayMs } from "./chat-outbox-retry.ts";
 import { applyChatPendingInputs } from "./chat-pending-inputs.ts";
 import {
   clearPendingQueueItemsForRun,
+  confirmQueuedMessageCustody,
   removeDeliveredQueuedChatSendForRun,
   syncVisibleChatQueueProjection,
   updateQueuedMessage,
@@ -82,6 +83,15 @@ function reconcilePendingChatOutboxInput(
   }
   const inputReceipt = readChatInputReceipt(history, item);
   if (inputReceipt === "pending") {
+    const pending = history.pendingInputs?.items.find((input) => input.runId === item.sendRunId);
+    const confirmsLocal = Boolean(
+      pending?.state !== "cancelled" &&
+      historySessionId &&
+      (!item.sessionId || item.sendState === "unconfirmed"),
+    );
+    if (confirmsLocal && !confirmQueuedMessageCustody(host, item, historySessionId)) {
+      return "blocked";
+    }
     if (
       visibleSessionMatches(host, outbox.sessionKey, outbox.agentId) &&
       historySessionId === host.currentSessionId &&
@@ -89,20 +99,14 @@ function reconcilePendingChatOutboxInput(
     ) {
       applyChatPendingInputs(host, history.pendingInputs);
     }
-    const pending = history.pendingInputs?.items.find((input) => input.runId === item.sendRunId);
     if (pending?.state === "cancelled") {
       return removeDeliveredQueuedChatSendForRun(host, item.sendRunId, outbox) !== null ||
         !readStoredChatOutbox(host, outbox)?.queue.some((entry) => entry.id === item.id)
         ? "continue"
         : "blocked";
     }
-    if (!item.sessionId && historySessionId) {
-      return updateQueuedMessage(host, item.id, (entry) => ({
-        ...entry,
-        sessionId: historySessionId,
-      }))
-        ? "continue"
-        : "blocked";
+    if (confirmsLocal) {
+      return "continue";
     }
     // Only positive unconsumed custody can cross a restart. The new request
     // acquires current authority; an absent receipt is still an uncertain send.

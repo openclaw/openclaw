@@ -393,6 +393,13 @@ describe("command-startup-policy", () => {
     expect(resolvePolicy({ commandPath: ["node", "run"] }).validateConfigOnly).toBeUndefined();
   });
 
+  it("keeps managed worktree commands out of shared-state migration preflight", () => {
+    const policy = resolvePolicy({ commandPath: ["worktrees", "gc"] });
+
+    expect(policy.validateConfigOnly).toBe(true);
+    expect(policy.skipConfigGuard).toBe(false);
+  });
+
   it("isolates cloud worker startup", () => {
     const policy = resolvePolicy({ commandPath: ["worker"] });
 

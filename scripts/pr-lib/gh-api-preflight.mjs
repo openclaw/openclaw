@@ -41,26 +41,32 @@ export function parseGithubResponse(response) {
   return { status, body, remaining, limit, resetUtc, retryAfter, resource };
 }
 
-export function isGraphqlQuotaExhausted(error) {
+function isPrimaryQuotaExhausted(error, resource) {
   const failure = error && typeof error === "object" ? error : {};
   const text = (value) =>
     typeof value === "string" ? value : Buffer.isBuffer(value) ? value.toString("utf8") : "";
   const stdout = text(typeof error === "string" ? error : failure.stdout);
   const stderr = text(failure.stderr);
   const response = parseGithubResponse(stdout);
+  const statuses = resource === "graphql" ? ["200", "403"] : ["403"];
+  const resourceHeader = /^x-ratelimit-resource:[ \t]*([^\r\n]+)\r?$/im.exec(stdout)?.[1]?.trim();
   if (
     failure.status === 0 ||
+    (resource === "core" && failure.status === null) ||
     failure.signal ||
     failure.killed ||
     (typeof failure.code === "string" && /^E[A-Z]+$/.test(failure.code)) ||
-    (response.status && !["200", "403"].includes(response.status)) ||
-    response.resource === "core" ||
+    (response.status && !statuses.includes(response.status)) ||
+    (resource === "graphql"
+      ? response.resource === "core"
+      : resourceHeader !== undefined &&
+        (resourceHeader !== "core" || response.resource !== "core")) ||
     (response.remaining !== undefined && response.remaining !== 0) ||
     /\b(?:secondary rate limit|abuse detection|retry-after|proxy authentication required)\b/i.test(
       `${stdout}\n${stderr}`,
     ) ||
     [...stderr.matchAll(/\bHTTP(?:\/\d+(?:\.\d+)?)?\s+([1-5]\d{2})\b/gi)].some(
-      ([, status]) => !["200", "403"].includes(status),
+      ([, status]) => !statuses.includes(status),
     )
   ) {
     return false;
@@ -78,9 +84,13 @@ export function isGraphqlQuotaExhausted(error) {
     }
   }
   const primary = (message) =>
-    typeof message === "string" && /^API rate limit (?:already )?exceeded\b/i.test(message);
+    typeof message === "string" &&
+    (resource === "graphql"
+      ? /^API rate limit (?:already )?exceeded\b/i.test(message)
+      : /^API rate limit (?:already )?exceeded(?: for [^\r\n]+)?\.?$/i.test(message));
   if (body?.errors !== undefined) {
     return (
+      resource === "graphql" &&
       Array.isArray(body.errors) &&
       body.errors.length > 0 &&
       body.errors.every(
@@ -89,11 +99,37 @@ export function isGraphqlQuotaExhausted(error) {
     );
   }
   if (body) {
-    return primary(body.message);
+    return (
+      primary(body.message) ||
+      (resource === "core" &&
+        response.status === "403" &&
+        response.resource === "core" &&
+        response.remaining === 0 &&
+        typeof body === "object" &&
+        !Array.isArray(body) &&
+        Object.keys(body).length === 0)
+    );
+  }
+  // PR commands render GraphQL errors as one comma-separated line, without JSON.
+  const rendered = /^GraphQL: ([^\r\n]+)\s*$/i.exec(stderr);
+  if (rendered) {
+    return rendered[1].split(", ").every(primary);
   }
   // gh emits this exact prefix; arbitrary error messages and supplemental quota
   // probes cannot establish which credential or budget rejected the request.
-  return /^gh: API rate limit (?:already )?exceeded[^\r\n]*\s*$/i.test(stderr);
+  return resource === "graphql"
+    ? /^gh: API rate limit (?:already )?exceeded[^\r\n]*\s*$/i.test(stderr)
+    : primary(/^gh: ([^\r\n]*?)(?: \(HTTP 403\))?\s*$/i.exec(stderr)?.[1]);
+}
+
+export function isGraphqlQuotaExhausted(error) {
+  return isPrimaryQuotaExhausted(error, "graphql");
+}
+
+// Headerless primary errors carry no resource identity. The caller must have
+// made a known core REST request; this never authorizes replaying a mutation.
+export function isCoreQuotaExhausted(error) {
+  return isPrimaryQuotaExhausted(error, "core");
 }
 
 export function rateLimitRetryGuidance({ remaining, resetUtc, retryAfter }) {

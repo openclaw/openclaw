@@ -3,53 +3,11 @@ import { createRequire } from "node:module";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { createJiti } from "jiti";
-import { afterEach, describe, expect, it } from "vitest";
-import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { createPluginCache, withPluginCache } from "./plugin-cache.js";
+import { describe, expect, it } from "vitest";
 import { capturePluginGenerationArtifact } from "./plugin-generation-artifact.js";
-import { bindPluginInstanceModuleLoader } from "./plugin-instance-module-loader.js";
-import { PluginInstance } from "./plugin-instance.js";
+import { createPluginModuleGenerationTestHarness } from "./plugin-module-generation.test-support.js";
 
-const temp = useAutoCleanupTempDirTracker(afterEach);
-const instances: PluginInstance[] = [];
-afterEach(async () => {
-  for (const instance of instances.splice(0).toReversed()) {
-    await instance.dispose();
-  }
-});
-function fixture(files: Record<string, string>) {
-  const root = temp.make("plugin-native-interop-");
-  for (const [name, source] of Object.entries(files)) {
-    const filename = path.join(root, name);
-    fs.mkdirSync(path.dirname(filename), { recursive: true });
-    fs.writeFileSync(filename, source);
-  }
-  return root;
-}
-function host(rootDir: string, standalone = false) {
-  let instance: PluginInstance | undefined;
-  return {
-    load(entry: string): unknown {
-      const source = path.join(rootDir, entry);
-      if (!instance) {
-        instance = new PluginInstance("interop-fixture");
-        instances.push(instance);
-        const owner = instance;
-        withPluginCache(createPluginCache(), () =>
-          bindPluginInstanceModuleLoader({
-            instance: owner,
-            origin: "config",
-            source,
-            rootDir,
-            standalone,
-          }),
-        );
-      }
-      return instance.loadModule(source);
-    },
-    dispose: () => instance?.dispose(),
-  };
-}
+const { temp, fixture, host } = createPluginModuleGenerationTestHarness();
 
 describe("native plugin generation interop", () => {
   it.each(["", "@fixture/"])(

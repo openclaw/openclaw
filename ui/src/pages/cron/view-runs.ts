@@ -368,7 +368,16 @@ function formatRunNextLabel(nextRunAtMs: number, nowMs = Date.now()) {
   return nextRunAtMs > nowMs ? t("cron.runEntry.next", { rel }) : t("cron.runEntry.due", { rel });
 }
 
-export function runStatusLabel(value: string): string {
+export function runStatusLabel(
+  value: string,
+  completion?: CronRunLogEntry["completionStatus"],
+): string {
+  if (value === "ok" && (completion === "failed" || completion === "unknown")) {
+    const completionLabel = t(
+      completion === "failed" ? "cron.runs.runStatusError" : "cron.runs.runStatusUnknown",
+    );
+    return `${t("cron.runs.runStatusOk")} · ${completionLabel}`;
+  }
   switch (value) {
     case "ok":
       return t("cron.runs.runStatusOk");
@@ -400,7 +409,7 @@ function renderRun(
   highlightedRunId?: string | null,
   onViewRunTranscript?: (entry: CronRunLogEntry) => void,
 ) {
-  const status = runStatusLabel(entry.status ?? "unknown");
+  const status = runStatusLabel(entry.status ?? "unknown", entry.completionStatus);
   const delivery = runDeliveryLabel(entry.deliveryStatus ?? "not-requested");
   const usage = entry.usage;
   const usageSummary =

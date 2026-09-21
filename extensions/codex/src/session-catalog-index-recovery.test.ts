@@ -433,9 +433,12 @@ describe("resident Codex catalog recovery", () => {
       readNative,
       assertCurrent: () => {},
     });
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval"] });
     try {
       await index.initialize();
-      await index.reconcile();
+      const initialScan = index.reconcile();
+      await vi.advanceTimersByTimeAsync(0);
+      await initialScan;
       const readCalls: Array<() => Promise<number[]>> = [];
       const realOpen = fs.open;
       vi.spyOn(fs, "open").mockImplementation(async (...args) => {
@@ -493,6 +496,7 @@ describe("resident Codex catalog recovery", () => {
       expect(readNative).toHaveBeenCalledOnce();
     } finally {
       await index.close();
+      vi.useRealTimers();
     }
   });
 });

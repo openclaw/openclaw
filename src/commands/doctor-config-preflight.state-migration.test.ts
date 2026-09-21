@@ -748,7 +748,11 @@ describe("runDoctorConfigPreflight state migration", () => {
               expect.objectContaining({
                 id: "plugin:discord",
                 outcome: "deferred",
-                warnings: [expect.stringContaining('Run "openclaw update repair"')],
+                warnings: [
+                  expect.stringContaining(
+                    'Let the current update or repair finish. If this warning remains afterward, run "openclaw update repair"',
+                  ),
+                ],
               }),
             );
           },

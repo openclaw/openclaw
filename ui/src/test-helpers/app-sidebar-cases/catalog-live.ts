@@ -245,7 +245,7 @@ describe("AppSidebar session catalog pagination", () => {
         ?.content,
     ).toBe("#107302 · Draft");
     expect(linkedRow?.querySelector('[data-sidebar-session-pin="true"]')).not.toBeNull();
-    expect(linkedRow?.querySelector('[data-session-menu="true"]')).not.toBeNull();
+    expect(linkedRow?.querySelector("[data-sidebar-session-archive]")).not.toBeNull();
     linkedRow?.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true }));
     await sidebar.updateComplete;
     const linkedMenu = sidebar.querySelector<TestSessionMenu>("openclaw-session-menu");

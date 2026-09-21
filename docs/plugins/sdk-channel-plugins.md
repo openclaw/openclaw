@@ -502,12 +502,16 @@ raw callback string. Actor and source-message checks remain channel-owned.
     </Note>
 
     Routes registered with `auth: "gateway"` use the Gateway's credential
-    checks. Before a handler performs a mutation or starts other side effects,
+    checks. Before a handler discloses protected data, performs a mutation, or starts other side effects,
     finish reading and validating its body and waiting for queued work, then call
     `await getPluginRuntimeGatewayRequestScope()?.revalidate?.()` from
     `openclaw/plugin-sdk/plugin-runtime`. The request-scoped capability rechecks
-    an admitted device credential and its original scopes through the Gateway
-    auth owner. It writes the standard HTTP 401 error and throws if the grant
+    an admitted device credential or signed Control UI cookie and its original
+    scopes through the Gateway auth owner. Cookie checks include expiry, the
+    current authentication generation, and the current profile role ceiling.
+    An effective role-policy change invalidates an in-flight cookie request, so
+    previously prepared data is not disclosed under outdated permissions.
+    It writes the standard HTTP 401 error and throws if the grant expired,
     was revoked, rotated, or narrowed. Let the rejection stop the handler; an
     error handler must not replace an already-ended response. The capability
     expires with the HTTP response and is absent for other authentication paths.

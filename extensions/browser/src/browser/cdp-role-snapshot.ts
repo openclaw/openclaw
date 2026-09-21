@@ -20,6 +20,54 @@ import { appendRoleSnapshotDepthTruncationMarker } from "./snapshot-depth-limit.
 import { CONTENT_ROLES, INTERACTIVE_ROLES } from "./snapshot-roles.js";
 import { appendSnapshotUrls, type SnapshotUrlEntry } from "./snapshot-urls.js";
 
+async function readScopedAXNodes(
+  send: CdpProtocolSend,
+  backendNodeId: number,
+  sessionId?: string,
+): Promise<RawAXNode[]> {
+  // Chromium queryAXTree omits an ignored root, including its visible descendants.
+  // SAFETY: queryAXTree returns native AXNodes in its protocol-defined nodes array.
+  const queried = (await send("Accessibility.queryAXTree", { backendNodeId }, sessionId)) as {
+    nodes: RawAXNode[];
+  };
+  if (queried.nodes.some((node) => node.backendDOMNodeId === backendNodeId)) {
+    return queried.nodes;
+  }
+  const partial = (await send(
+    "Accessibility.getPartialAXTree",
+    { backendNodeId, fetchRelatives: true },
+    sessionId,
+  )) as { nodes: RawAXNode[] }; // SAFETY: getPartialAXTree returns native AXNodes and their ancestors.
+  const root = partial.nodes.find((node) => node.backendDOMNodeId === backendNodeId);
+  if (!root?.ignored || !root.nodeId) {
+    throw new Error("Snapshot root is no longer present in the accessibility tree; retry.");
+  }
+  if (!root.childIds?.length) {
+    return [root];
+  }
+  const frameId = partial.nodes.find((node) => node.frameId)?.frameId;
+  if (!frameId) {
+    throw new Error("Snapshot frame identity is unavailable; retry.");
+  }
+  // SAFETY: getFullAXTree returns native AXNodes for the identified frame.
+  const full = (await send("Accessibility.getFullAXTree", { frameId }, sessionId)) as {
+    nodes: RawAXNode[];
+  };
+  const byId = new Map(full.nodes.map((node) => [node.nodeId, node]));
+  const nodes = [root];
+  const included = new Set([root.nodeId]);
+  for (const node of nodes) {
+    for (const id of node.childIds ?? []) {
+      const child = byId.get(id);
+      if (child && !included.has(id)) {
+        included.add(id);
+        nodes.push(child);
+      }
+    }
+  }
+  return nodes;
+}
+
 async function buildCdpRoleSnapshot(params: {
   send: CdpProtocolSend;
   rootBackendNodeId?: number;
@@ -34,17 +82,14 @@ async function buildCdpRoleSnapshot(params: {
   refs: Record<string, CdpRoleRef>;
   truncated: boolean;
 }> {
-  const res = (await params.send(
+  const res =
     params.rootBackendNodeId !== undefined
-      ? "Accessibility.queryAXTree"
-      : "Accessibility.getFullAXTree",
-    params.rootBackendNodeId !== undefined
-      ? { backendNodeId: params.rootBackendNodeId }
-      : params.frameId
-        ? { frameId: params.frameId }
-        : undefined,
-    params.sessionId,
-  )) as { nodes?: RawAXNode[] }; // SAFETY: Both selected Accessibility commands return AXNode arrays; missing nodes are handled below.
+      ? { nodes: await readScopedAXNodes(params.send, params.rootBackendNodeId, params.sessionId) }
+      : ((await params.send(
+          "Accessibility.getFullAXTree",
+          params.frameId ? { frameId: params.frameId } : undefined,
+          params.sessionId,
+        )) as { nodes?: RawAXNode[] }); // SAFETY: Accessibility commands return native AXNode arrays.
   const { tree, roots } = buildRoleTree(
     Array.isArray(res.nodes) ? res.nodes : [],
     params.rootBackendNodeId,

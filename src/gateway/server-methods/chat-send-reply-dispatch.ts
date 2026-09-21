@@ -241,7 +241,7 @@ export function createChatSendReplyDispatch(params: {
       return "missing";
     }
     const scope = admission;
-    await waitForSessionTranscriptProjection(scope);
+    await waitForSessionTranscriptProjection(scope, params.abortSignal);
     if (!isCurrent()) {
       return "missing";
     }

@@ -2181,6 +2181,33 @@ describe("scripts/changed-lanes", () => {
       },
     })),
     {
+      name: "selects consuming test graphs with UI CSS and docs companions",
+      path: "ui/src/e2e/chat-composer-picker-layout.e2e.test.ts",
+      extraPaths: [
+        "ui/src/styles/chat/composer.css",
+        "ui/src/styles/chat/composer-surface.css",
+        "docs/web/control-ui/sessions-and-sidebar.md",
+      ],
+      expected: {
+        lanes: { ui: true, coreTests: true, docs: true },
+        includes: ["tsgo:ui", "tsgo:core:test"],
+        excludes: ["tsgo:core"],
+        coreTestChecks: ["checkBoundary", "checkTypes"],
+      },
+    },
+    ...["ui/src/app.ts", "tsconfig.ui.json", "ui/src/e2e/chat-flow.test-support.ts"].map(
+      (companion) => ({
+        name: `retains full test graphs with ${companion}`,
+        path: "ui/src/e2e/chat-composer-picker-layout.e2e.test.ts",
+        extraPaths: ["ui/src/styles/chat/composer.css", companion],
+        expected: {
+          lanes: { ui: true, coreTests: true },
+          includes: ["tsgo:ui", "tsgo:core:test"],
+          excludes: ["tsgo:core"],
+        },
+      }),
+    ),
+    {
       name: "routes core test-only changes to core test lanes only",
       path: "packages/normalization-core/src/string-normalization.test-support.ts",
       expected: {
@@ -2225,8 +2252,12 @@ describe("scripts/changed-lanes", () => {
         excludes: ["tsgo:extensions"],
       },
     },
-  ])("$name: $path", ({ path: changedPath, expected }) => {
-    const result = detectChangedLanes([changedPath]);
+  ])("$name: $path", (testCase) => {
+    const { path: changedPath, expected } = testCase;
+    const result = detectChangedLanes([
+      changedPath,
+      ...("extraPaths" in testCase ? (testCase.extraPaths ?? []) : []),
+    ]);
     const plan = createChangedCheckPlan(result);
     const commands = plan.commands.map((command) => command.args[0]);
 

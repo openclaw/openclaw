@@ -238,7 +238,8 @@ export function getCompactionContent(
             }
             return blockText;
           })
-          .join("");
+          .filter(Boolean)
+          .join("\n");
   return { text, omissionText: [...omissions].join("\n") };
 }
 

@@ -31,6 +31,7 @@ import {
   renderSettingsToggleRow,
   renderSettingsValue,
 } from "../../components/settings-ui.ts";
+import { renderUpdateGitRevisions } from "../../components/update-git-revisions.ts";
 import { t } from "../../i18n/index.ts";
 import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
 import { formatDateTimeMs, formatTimeAgo } from "../../lib/format.ts";
@@ -548,7 +549,10 @@ export function renderUpdates(props: UpdatesViewProps): TemplateResult {
             title: t("updates.page.scheduleStatus"),
             control: html`
               <div class="updates-status-control">
-                ${renderScheduleStatus(props)}
+                <div>
+                  ${renderScheduleStatus(props)}
+                  ${!props.update.updateStatusRefreshing ? renderUpdateGitRevisions(props.update.updateSchedule, props.update.updateAvailable) : nothing}
+                </div>
                 ${
                   props.update.updateStatusCheckBanner
                     ? html`

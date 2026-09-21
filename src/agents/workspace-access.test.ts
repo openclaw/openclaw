@@ -196,6 +196,41 @@ describe("host-owned workspace access", () => {
     }
   });
 
+  it("revokes skill installation while Gateway policy is pending", async () => {
+    const root = workspace();
+    const policy = createDeferredCore<undefined>();
+    const policyStarted = createDeferredCore();
+    const mutate = vi.fn();
+    const release = registerAgentWorkspaceAccess(root, {
+      ...provider(),
+      applySkillRoot: async (params) => {
+        await params.beforeInstall?.("install");
+        mutate();
+        return { ok: true, targetDir: "/host/skills/test", mode: "install" };
+      },
+    });
+    const retained = getAgentWorkspaceAccess(root)!.applySkillRoot!;
+    const install = retained({
+      workspaceDir: root,
+      extractedRoot: "/source",
+      slug: "test",
+      mode: "install",
+      beforeInstall: async () => {
+        policyStarted.resolve();
+        return policy.promise;
+      },
+    });
+    const rejected = expect(install).rejects.toThrow("stopped or not ready");
+    await policyStarted.promise;
+    release();
+    policy.resolve(undefined);
+    await rejected;
+    expect(mutate).not.toHaveBeenCalled();
+    await expect(
+      retained({ workspaceDir: root, extractedRoot: "/source", slug: "test", mode: "install" }),
+    ).rejects.toThrow("stopped or not ready");
+  });
+
   it("rejects a result returned after ownership is revoked", async () => {
     const root = workspace();
     const host = provider();

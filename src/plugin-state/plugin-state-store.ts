@@ -96,8 +96,8 @@ export {
   MAX_PLUGIN_STATE_BULK_DELETE_ENTRIES,
   pluginStateDeleteEntriesIfUnchanged,
   pluginStateDoctorEntriesInKeyRange,
-  sweepExpiredPluginStateEntries,
 } from "./plugin-state-store.sqlite.js";
+export { sweepExpiredPluginStateEntriesInWorker as sweepExpiredPluginStateEntries } from "./plugin-state-worker-client.js";
 
 function createKeyedStoreForPluginId<T>(
   pluginId: string,

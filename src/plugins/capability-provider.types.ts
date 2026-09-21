@@ -269,6 +269,13 @@ export class WorkerProviderError extends Error {
 /** Cloud-worker lifecycle capability shared by plugin and internal providers. */
 export type WorkerProvider = {
   id: string;
+  /**
+   * Nonsecret backend display ID, never a routing or allocation identity.
+   * Synchronous local presentation only: no commands, network, or credential reads.
+   * Return 1–64 lowercase ASCII letters/digits/hyphens, starting with a letter.
+   * Omission, invalid values, and exceptions retain generic provider presentation.
+   */
+  resolveDisplayId?: (profile: WorkerProfile) => string | undefined;
   /** Safe to request virtual desktop resizing; the RFB server still negotiates support. */
   allowsDesktopResize?: boolean;
   /** Process-stable choices available for this profile; omit the hook to hide machine selection. */

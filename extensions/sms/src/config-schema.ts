@@ -12,7 +12,7 @@ import { z } from "zod";
 
 const SecretInputSchema = buildSecretInputSchema();
 
-const SmsAccountConfigSchema = z
+export const SmsAccountConfigSchema = z
   .object({
     name: z.string().optional(),
     enabled: z.boolean().optional(),
@@ -32,7 +32,7 @@ const SmsAccountConfigSchema = z
   })
   .strict();
 
-const SmsConfigSchema = buildMultiAccountChannelSchema(SmsAccountConfigSchema, {
+export const SmsConfigSchema = buildMultiAccountChannelSchema(SmsAccountConfigSchema, {
   optionalAccount: true,
   refine: (value, ctx) => {
     requireChannelOpenAllowFrom({

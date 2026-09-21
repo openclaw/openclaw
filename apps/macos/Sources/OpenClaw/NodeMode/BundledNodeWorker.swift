@@ -25,7 +25,7 @@ enum BundledNodeWorker {
         let root = bundle.bundleURL.appendingPathComponent("Contents/Resources/node-worker/\(architecture)")
         let node = root.appendingPathComponent("bin/node")
         let packageRoot = root.appendingPathComponent("lib/node_modules/openclaw")
-        let entry = packageRoot.appendingPathComponent("dist/entry.js")
+        let entry = packageRoot.appendingPathComponent("dist/mac-node-worker.js")
         let info = bundle.infoDictionary ?? [:]
         let appBuild = ArtifactBuildInfo(infoDictionary: info)
         do {

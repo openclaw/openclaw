@@ -36,7 +36,10 @@ import {
   toDatabaseOptions,
   transcriptWriteScopeIsCurrent,
 } from "./session-accessor.sqlite-scope.js";
-import { appendTranscriptMessageInTransaction } from "./session-accessor.sqlite-transcript-message-append.js";
+import {
+  appendTranscriptMessageInTransaction,
+  type PreparedTranscriptMessageAppend,
+} from "./session-accessor.sqlite-transcript-message-append.js";
 import { readTranscriptMirrorFacts } from "./session-accessor.sqlite-transcript-mirror.js";
 import { resolveTranscriptEventAppendParent } from "./session-accessor.sqlite-transcript-parent.js";
 import {
@@ -478,13 +481,15 @@ export function appendTranscriptMessageSync<TMessage>(
 export function appendTranscriptMessageSnapshotSync<TMessage>(
   scope: SessionTranscriptWriteScope,
   options: TranscriptMessageAppendOptions<TMessage>,
+  preparedMessage?: PreparedTranscriptMessageAppend<TMessage>,
 ): Result<
   TranscriptWriteSnapshot<TranscriptMessageAppendResult<TMessage> | undefined>,
   TranscriptAppendRefusal
 > {
   return runTranscriptWriteSnapshotSync(
     scope,
-    (database, resolved) => appendTranscriptMessageInTransaction(database, resolved, options),
+    (database, resolved) =>
+      appendTranscriptMessageInTransaction(database, resolved, options, preparedMessage),
     undefined,
     options.expectedMutationAt,
   );

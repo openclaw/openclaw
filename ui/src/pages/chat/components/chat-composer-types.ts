@@ -8,10 +8,12 @@ import type {
 } from "../../../api/types.ts";
 import type { QuestionPrompt } from "../../../app/question-prompt.ts";
 import type { ChatFollowUpMode, ChatSendShortcut } from "../../../app/settings.ts";
+import type { SessionProgressCardRefreshAction } from "../../../components/session-progress-card.ts";
 import type {
   ChatGoalAction,
   ChatGoalDraft,
   ChatGoalDraftMode,
+  ChatGoalRecovery,
   ChatQueueItem,
   HumanMention,
 } from "../../../lib/chat/chat-types.ts";
@@ -96,6 +98,8 @@ export type ChatComposerProps = ChatAttachmentControlsProps & {
   progressCard?: ProgressCard | null;
   progressCardIdentity?: string;
   progressCardInitialLoading?: boolean;
+  progressCardRefresh?: SessionProgressCardRefreshAction;
+  gatewayScope?: object;
   runActive?: boolean;
   collapseTaskProgress?: boolean;
   readingHistory?: boolean;
@@ -178,6 +182,7 @@ export type ChatComposerProps = ChatAttachmentControlsProps & {
   displayQueue?: ChatQueueItem[];
   queuedEdit?: ChatQueuedEditProps;
   onClearReply?: () => void;
+  goalRecovery?: ChatGoalRecovery;
   onGoalAction?: (goalId: string, action: ChatGoalAction) => void;
   onGoalSubmit?: (draft: ChatGoalDraft, submissionAction?: Event) => Promise<boolean>;
   goalDraftMode?: ChatGoalDraftMode | null;
@@ -212,6 +217,7 @@ export type ChatComposerState = SkillMenuState &
     goalComposer: (ChatGoalDraftMode & { key: string; pending: boolean }) | null;
     activeQuestionKey: string | null;
     gatewayQuestionIds: Set<string>;
+    asyncQuestionIds: Set<string>;
     questionCollapsed: boolean;
     questionTakeoverActive: boolean;
     restoreComposerFocus: boolean;

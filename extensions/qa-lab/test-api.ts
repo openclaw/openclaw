@@ -5,12 +5,15 @@ export {
 } from "./src/evidence-environment.js";
 export { createQaEvidenceInvocation } from "./src/evidence-invocation.js";
 export {
+  buildQaOccurrenceEvidenceSummary,
   buildScriptEvidenceSummary,
   QA_EVIDENCE_FILENAME,
   type QaEvidenceIdentity,
+  type QaEvidenceOccurrence,
   type QaEvidencePackageSource,
   type QaEvidenceStatus,
   type QaEvidenceSummaryJson,
+  type QaEvidenceSummaryV3Entry,
   validateQaEvidenceSummaryJson,
 } from "./src/evidence-summary.js";
 export { splitQaModelRef } from "./src/model-selection.js";

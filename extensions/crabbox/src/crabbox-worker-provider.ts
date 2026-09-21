@@ -558,6 +558,7 @@ export function createCrabboxWorkerProvider(
 
   return {
     id: CRABBOX_WORKER_PROVIDER_ID,
+    resolveDisplayId: (profile) => parseCrabboxProfile(profile).provider,
     // Desktop provisioning requires a dedicated Linux XFCE display. Older fixed-size
     // images are still safe to request: noVNC negotiates actual resize support.
     allowsDesktopResize: true,

@@ -15,10 +15,11 @@ Ordinary manual CI dispatches run the same job graph as normal CI but force ever
 
 PR baseline ratchets derive their comparison state from the checked-out synthetic merge tree and verify its head parent against the event head. The max-lines entry chains the environment-variable budget with the same fork-point ref before the assertion-safety check, so production source growth cannot first surface on `main`. Manual runs use a unique concurrency group so a release-candidate full suite is not cancelled by another push or PR run on the same ref. The optional `target_ref` input lets a trusted caller run that graph against a branch, tag, or full commit SHA while using the workflow file from the selected dispatch ref; ratchet baselines are compared with the target's merge base against the default-branch head resolved for that run. The `release_gate` input is an exact-SHA maintainer fallback for capacity-stalled PR CI: it requires `target_ref` to be a full commit SHA that matches the dispatched branch head and `pull_request_number` to identify the open PR whose merge tree is validated. Release-gate merge-tree lint uses the same five core stripes as hosted PR CI plus one extension stripe, so no single hosted runner owns the full type-aware lint workload.
 
-Canonical manual CI also retains QA Smoke's full profile and Control UI performance
+Ordinary canonical manual CI also retains QA Smoke's full profile and Control UI performance
 without owner-path filtering. It selects `published-upgrade-survivor` when the
 target declares `docker-seed-e2e-contract-v1`, preserving the exact
-`legacy-operator-state` plus `auto-auth` proof used by affected PR/main runs.
+`legacy-operator-state` plus `auto-auth` proof used by affected main runs.
+Pull requests and exact-head `release_gate` fallbacks omit Docker seed and QA Smoke.
 Full Release Validation reaches these lanes through its normal CI child without
 setting `release_gate`; frozen targets retain their existing capability checks.
 

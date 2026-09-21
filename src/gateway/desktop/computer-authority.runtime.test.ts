@@ -214,6 +214,7 @@ module.exports = {
       getConfig: () => config,
       getPluginRegistry: () => registry,
       hostDesktopService: {
+        reconcileRuntimePolicy: async () => {},
         observe: async () => {
           throw new Error("Unexpected desktop observer");
         },

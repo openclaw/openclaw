@@ -90,6 +90,7 @@ class ChatSidebarRegion extends OpenClawLightDomElement {
   @property({ type: Boolean }) narrow = false;
   @property({ type: Number }) availableWidth = 0;
   private previousGeometry = "";
+  private geometryFrame: number | null = null;
   private contentMounted = false;
   private focusedSurface: Element | null = null;
   private nativeCloseListeners: AbortController | undefined;
@@ -106,12 +107,17 @@ class ChatSidebarRegion extends OpenClawLightDomElement {
     document.addEventListener("pointerdown", this.trackFocus, options);
     document.addEventListener("focusin", this.trackFocus, options);
     window.addEventListener("openclaw:native-close-focused-panel", this.closeFocusedPanel, options);
+    this.requestUpdate();
   }
 
   override disconnectedCallback(): void {
     this.nativeCloseListeners?.abort();
     this.nativeCloseListeners = undefined;
     this.focusedSurface = null;
+    if (this.geometryFrame !== null) {
+      cancelAnimationFrame(this.geometryFrame);
+      this.geometryFrame = null;
+    }
     super.disconnectedCallback();
   }
 
@@ -603,11 +609,27 @@ class ChatSidebarRegion extends OpenClawLightDomElement {
     const root = this.parentElement?.querySelector<HTMLElement>(".sidebar-region__right-runtime");
     if (root) {
       renderTemplate(this.renderPanel(), root);
-      const panel = root.querySelector<HTMLElement>(".side-panel");
+      this.scheduleGeometryCommit();
+    }
+  }
+
+  private scheduleGeometryCommit() {
+    if (this.geometryFrame !== null) {
+      return;
+    }
+    // Nested panels commit after this host. Measure their final geometry once,
+    // rather than forcing layout in the middle of each parent/child update.
+    this.geometryFrame = requestAnimationFrame(() => {
+      this.geometryFrame = null;
+      const shell = this.parentElement;
+      if (!this.isConnected || !shell) {
+        return;
+      }
+      const panel = shell.querySelector<HTMLElement>(
+        ".sidebar-region__right-runtime > .side-panel",
+      );
       const geometry = Array.from(
-        this.parentElement!.querySelectorAll<HTMLElement>(
-          ".sidebar-region__primary, .side-panel__panel",
-        ),
+        shell.querySelectorAll<HTMLElement>(".sidebar-region__primary, .side-panel__panel"),
         (content) =>
           `${content.dataset.panelSlot ?? "conversation"}:${content.getBoundingClientRect().width}`,
       ).join(":");
@@ -623,7 +645,7 @@ class ChatSidebarRegion extends OpenClawLightDomElement {
         }),
       );
       this.previousGeometry = geometry;
-    }
+    });
   }
 
   override render() {

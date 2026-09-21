@@ -2,14 +2,10 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { hasErrnoCode } from "./errno.js";
-import { readLocalFileSafely } from "./fs-safe.js";
+import { openLocalFileSafely, type OpenResult } from "./fs-safe.js";
 import { runStep } from "./update-runner-command.js";
 import { classifyPartialCloneGitFailure } from "./update-runner-git-target.js";
 import type { RunStepOptions, UpdateStepResult } from "./update-runner-types.js";
-
-// Bound the retained import buffer independently of Git's pack-file size. An
-// oversized candidate must fail in staging while the installed runtime still serves.
-const MAX_CANDIDATE_PACK_BYTES = 256 * 1024 * 1024;
 
 function recordStagingFailure(
   step: RunStepOptions,
@@ -86,12 +82,12 @@ export async function prepareGitCandidateTransfer(params: {
       : undefined;
   };
   const upstreamSha = upstreamRef
-    ? await runGit("git pin update upstream", ["rev-parse", upstreamRef])
+    ? await runGit("git-pin-update-upstream", ["rev-parse", upstreamRef])
     : undefined;
   if (upstreamRef && !upstreamSha) {
     return undefined;
   }
-  const objects = await runGit("git update history", [
+  const objects = await runGit("git-update-history", [
     "rev-list",
     "--objects",
     "--no-object-names",
@@ -102,7 +98,7 @@ export async function prepareGitCandidateTransfer(params: {
   ]);
   // An older/divergent target may reuse blobs omitted from the installed partial
   // clone. Include its entire tree separately, even when no new commits exist.
-  const tree = await runGit("git update tree", [
+  const tree = await runGit("git-update-tree", [
     "rev-list",
     "--objects",
     "--no-object-names",
@@ -112,7 +108,7 @@ export async function prepareGitCandidateTransfer(params: {
     return undefined;
   }
   const retained = new Set<string>();
-  // Capability probing is read-only. Older Git safely transfers the full bounded
+  // Capability probing is read-only. Older Git safely transfers the full
   // candidate instead of risking a lazy fetch while checking installed objects.
   const probe = beforeSha
     ? await step.runCommand(["git", "--no-lazy-fetch", "version"], {
@@ -127,7 +123,7 @@ export async function prepareGitCandidateTransfer(params: {
     !probe.signal &&
     (!probe.termination || probe.termination === "exit")
   ) {
-    const beforeTree = await runGit("git retained tree", [
+    const beforeTree = await runGit("git-retained-tree", [
       "rev-list",
       "--objects",
       "--no-object-names",
@@ -137,7 +133,7 @@ export async function prepareGitCandidateTransfer(params: {
       return undefined;
     }
     const local = await runGit(
-      "git retained object availability",
+      "git-retained-object-availability",
       ["--no-lazy-fetch", "cat-file", "--batch-check=%(objectname) %(objecttype)"],
       `${beforeTree}\n`,
       installedRoot,
@@ -157,7 +153,7 @@ export async function prepareGitCandidateTransfer(params: {
       ) {
         return recordStagingFailure(
           { ...step, cwd: installedRoot },
-          "git retained object inventory",
+          "git-retained-object-inventory",
           "verify retained Git object availability",
           "Incomplete retained Git object availability inventory",
         );
@@ -169,7 +165,7 @@ export async function prepareGitCandidateTransfer(params: {
     if (pending.size) {
       return recordStagingFailure(
         { ...step, cwd: installedRoot },
-        "git retained object inventory",
+        "git-retained-object-inventory",
         "verify retained Git object availability",
         "Incomplete retained Git object availability inventory",
       );
@@ -186,7 +182,7 @@ export async function prepareGitCandidateTransfer(params: {
   // base can trigger a lazy network fetch when the installed Git imports it.
   // A configured packSizeLimit also needs clearing to guarantee a single pack.
   const hash = await runGit(
-    "git pack update",
+    "git-pack-update",
     ["-c", "pack.packSizeLimit=0", "pack-objects", "--max-pack-size=0", prefix],
     input,
     step.cwd,
@@ -195,18 +191,17 @@ export async function prepareGitCandidateTransfer(params: {
   if (!hash) {
     return undefined;
   }
-  let pack: Buffer;
+  let pack: OpenResult;
   const packPath = `${prefix}-${hash}.pack`;
   const readStarted = Date.now();
   try {
-    ({ buffer: pack } = await readLocalFileSafely({
-      filePath: packPath,
-      maxBytes: MAX_CANDIDATE_PACK_BYTES,
-    }));
+    // Pin the staged file before admission; Git reads this descriptor directly
+    // instead of retaining and copying the entire pack through JavaScript.
+    pack = await openLocalFileSafely({ filePath: packPath });
   } catch (error) {
     return recordStagingFailure(
       step,
-      "git update pack read",
+      "git-update-pack-read",
       `read update pack ${packPath}`,
       `Cannot stage the Git update pack: ${String(error)}`,
       Date.now() - readStarted,
@@ -214,13 +209,15 @@ export async function prepareGitCandidateTransfer(params: {
   }
   const keepMessage = `openclaw-update-${randomUUID()}`;
   return {
+    [Symbol.asyncDispose]: () => pack[Symbol.asyncDispose](),
     async importInto(target: RunStepOptions): Promise<boolean> {
       const imported = await runStep({
         ...target,
         // Repack may run before checkout makes the candidate reachable. Keep its
         // pack until activation/rollback finishes, including source publication.
         argv: ["git", "-C", target.cwd, "index-pack", "--stdin", `--keep=${keepMessage}`],
-        runCommand: (argv, options) => target.runCommand(argv, { ...options, input: pack }),
+        runCommand: (argv, options) =>
+          target.runCommand(argv, { ...options, stdinFileDescriptor: pack.handle.fd }),
       });
       if (imported.exitCode !== 0) {
         return false;
@@ -230,7 +227,7 @@ export async function prepareGitCandidateTransfer(params: {
       }
       const tracked = await runStep({
         ...target,
-        name: "git import admitted upstream",
+        name: "git-import-admitted-upstream",
         argv: ["git", "-C", target.cwd, "update-ref", upstreamRef, upstreamSha],
       });
       return tracked.exitCode === 0;
@@ -267,7 +264,7 @@ export async function prepareGitCandidateTransfer(params: {
         }
       } catch (error) {
         const warning: UpdateStepResult = {
-          name: "git update pack cleanup",
+          name: "git-update-pack-cleanup",
           command: "release retained Git update pack",
           cwd: target.cwd,
           durationMs: 0,

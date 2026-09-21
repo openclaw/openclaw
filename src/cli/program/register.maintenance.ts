@@ -240,7 +240,7 @@ export function registerMaintenanceCommands(
           throw error;
         }
         if (lintMode && (opts.json === true || !process.stdout.isTTY)) {
-          const { formatDoctorLintFailure } = await import("../../commands/doctor-lint.js");
+          const { formatDoctorLintFailure } = await import("../../commands/doctor-lint-output.js");
           defaultRuntime.writeJson(formatDoctorLintFailure(error));
           exitCliAfterOutput(defaultRuntime, 2);
         }

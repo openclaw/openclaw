@@ -24,6 +24,10 @@ export const GATEWAY_FIELD_LABELS: Record<string, string> = {
   "gateway.auth.identityScopes": "Gateway Identity Scope Grants",
   "gateway.auth.rateLimit": "Gateway Auth Rate Limit",
   "gateway.auth.trustedProxy": "Gateway Trusted Proxy Auth",
+  "gateway.auth.trustedProxy.cloudflareAccessOidc": "Cloudflare Access OIDC GitHub Identity",
+  "gateway.auth.trustedProxy.cloudflareAccessOidc.issuer": "Cloudflare Access Issuer",
+  "gateway.auth.trustedProxy.cloudflareAccessOidc.providerId": "Cloudflare Access OIDC Provider ID",
+  "gateway.auth.trustedProxy.cloudflareAccessOidc.githubAccountIdClaim": "GitHub Account ID Claim",
   "gateway.auth.trustedProxy.deviceAutoApprove": "Trusted Proxy Device Auto-Approval",
   "gateway.auth.trustedProxy.deviceAutoApprove.enabled":
     "Trusted Proxy Device Auto-Approval Enabled",

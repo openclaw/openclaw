@@ -41,7 +41,7 @@ suite.define(() => {
         await gateway.deferNext(method, { key: target.key });
         await row.waitFor({ state: "visible" });
         await row.hover();
-        await row.getByRole("button", { name: "Open session menu" }).click();
+        await row.click({ button: "right" });
         await activateSelfRemovingControl(
           page.locator("openclaw-session-menu").getByRole("menuitem", {
             name: action === "delete" ? "Delete…" : "Archive session",
@@ -461,7 +461,7 @@ suite.define(() => {
       const row = page.locator(`.sidebar-recent-session[data-session-key="${key}"]`);
       await row.waitFor({ state: "visible", timeout: 10_000 });
       await row.hover();
-      await row.getByRole("button", { name: "Open session menu" }).click();
+      await row.click({ button: "right" });
       await page
         .locator("openclaw-session-menu")
         .getByRole("menuitem", { name: "Delete…" })
@@ -551,7 +551,7 @@ suite.define(() => {
       const row = page.locator(`.sidebar-recent-session[data-session-key="${key}"]`);
       await row.waitFor({ state: "visible", timeout: 10_000 });
       await row.hover();
-      await row.getByRole("button", { name: "Open session menu" }).click();
+      await row.click({ button: "right" });
       await page
         .locator("openclaw-session-menu")
         .getByRole("menuitem", { name: "Delete…" })

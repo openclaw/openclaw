@@ -312,21 +312,21 @@ async function loadQueuePlans(queueId: string): Promise<MatrixDeliveryPlan[]> {
   const entries = await store.entries();
   const prefix = entries.length > 0 ? queuePrefix(queueId) : "";
   const keys = entries.filter((entry) => entry.key.startsWith(prefix)).map((entry) => entry.key);
-  return await Promise.all(
-    keys.map(async (key) => {
-      const entry = await store.lookup(key);
-      if (!entry) {
-        throw new MatrixDeliveryPlanInvariantError(
-          "Matrix durable delivery plan disappeared during reconciliation",
-        );
-      }
-      const plan = decodePlan(entry.bytes);
-      if (key !== planKey(plan)) {
-        throw new MatrixDeliveryPlanInvariantError("Matrix durable delivery plan key is invalid");
-      }
-      return plan;
-    }),
-  );
+  const plans: MatrixDeliveryPlan[] = [];
+  for (const key of keys) {
+    const entry = await store.lookup(key);
+    if (!entry) {
+      throw new MatrixDeliveryPlanInvariantError(
+        "Matrix durable delivery plan disappeared during reconciliation",
+      );
+    }
+    const plan = decodePlan(entry.bytes);
+    if (key !== planKey(plan)) {
+      throw new MatrixDeliveryPlanInvariantError("Matrix durable delivery plan key is invalid");
+    }
+    plans.push(plan);
+  }
+  return plans;
 }
 
 function assertCompletePartTopology(plans: readonly MatrixDeliveryPlan[]): void {
@@ -469,5 +469,7 @@ export async function cleanupMatrixDeliveryPlans(ctx: { queueId: string }): Prom
   const entries = await store.entries();
   const prefix = entries.length > 0 ? queuePrefix(ctx.queueId) : "";
   const keys = entries.filter((entry) => entry.key.startsWith(prefix)).map((entry) => entry.key);
-  await Promise.all(keys.map(async (key) => await store.delete(key)));
+  for (const key of keys) {
+    await store.delete(key);
+  }
 }

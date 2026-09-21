@@ -11,7 +11,7 @@ describe("silent reply config resolution", () => {
         sessionKey: "agent:main:telegram:group:123",
         surface: "telegram",
       }).policy,
-    ).toBe("allow");
+    ).toBe("disallow");
     expect(
       resolveSilentReplySettings({
         sessionKey: "agent:main:subagent:abc",

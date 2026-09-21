@@ -3,6 +3,7 @@ import path from "node:path";
 import { extractErrorCode } from "@openclaw/normalization-core/error-coercion";
 import { registerSignalExitFinalizer } from "../cli/signal-exit-barrier.js";
 import { getChildLogger } from "../logging/logger.js";
+import { walkDirectorySync } from "./fs-safe.js";
 import type { PreparedSqliteReadOnlyLocation } from "./sqlite-readonly-location.types.js";
 
 export class SqliteSnapshotCleanupError extends Error {}
@@ -191,14 +192,18 @@ function prepareSnapshotRemoval(directory: string): string[] {
   }
   // Keep every token until all copied data is gone. A partial recursive rm must
   // not leave a large modern snapshot whose lifetime can no longer be verified.
-  return fs
-    .readdirSync(directory, { recursive: true, withFileTypes: true })
-    .filter(
-      (entry) =>
-        !entry.isDirectory() && !SQLITE_SNAPSHOT_CONTROL_FILES.some((file) => file === entry.name),
-    )
-    .map((entry) => path.join(entry.parentPath, entry.name))
-    .concat(directory);
+  // Recursive readdir follows directory symlinks, including captured plugins' host links.
+  const scan = walkDirectorySync(directory, {
+    symlinks: "include",
+    include: (entry) =>
+      entry.kind !== "directory" &&
+      !SQLITE_SNAPSHOT_CONTROL_FILES.some((control) => control === entry.name),
+  });
+  const [failure] = scan.failedDirs;
+  if (failure) {
+    throw failure.error;
+  }
+  return scan.entries.map((entry) => entry.path).concat(directory);
 }
 
 export function removeTempDirectory(

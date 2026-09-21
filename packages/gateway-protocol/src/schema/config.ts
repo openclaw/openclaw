@@ -79,6 +79,7 @@ export const UpdateAvailableSchema = closedObject({
   currentSha: Type.Optional(NonEmptyString),
   upstreamRef: Type.Optional(NonEmptyString),
   upstreamSha: Type.Optional(NonEmptyString),
+  repositoryUrl: Type.Optional(NonEmptyString),
   commitsBehind: Type.Optional(Type.Integer({ minimum: 0 })),
   commits: Type.Optional(Type.Array(UpdateCommitSchema, { maxItems: 5 })),
 });

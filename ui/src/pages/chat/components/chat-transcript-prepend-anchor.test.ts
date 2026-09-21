@@ -1,6 +1,11 @@
 /* @vitest-environment jsdom */
+import { VirtualizerController } from "@tanstack/lit-virtual";
 import type { Virtualizer } from "@tanstack/virtual-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  createTranscriptOffsetState,
+  observeTranscriptOffset,
+} from "./chat-transcript-offset-observer.ts";
 import { TranscriptPrependAnchor } from "./chat-transcript-prepend-anchor.ts";
 
 function rect(top: number, height: number): DOMRect {
@@ -17,12 +22,12 @@ function rect(top: number, height: number): DOMRect {
   };
 }
 
-function fixture() {
+function fixture(scrollHeight = 1600) {
   const scroller = document.body.appendChild(document.createElement("div"));
   scroller.getBoundingClientRect = () => rect(100, 500);
   Object.defineProperties(scroller, {
     clientHeight: { value: 500 },
-    scrollHeight: { value: 1600 },
+    scrollHeight: { value: scrollHeight },
   });
   scroller.innerHTML =
     '<div class="chat-virtual-row" data-index="4"><div class="chat-bubble" data-message-id="visible"></div></div>';
@@ -31,7 +36,7 @@ function fixture() {
   bubble.getBoundingClientRect = () => rect(90, 180);
   const virtualizer = {
     scrollToOffset: vi.fn((offset: number) => {
-      scroller.scrollTop = Math.max(0, Math.min(offset, 1100));
+      scroller.scrollTop = Math.max(0, Math.min(offset, scrollHeight - scroller.clientHeight));
     }),
     scrollOffset: 200,
   };
@@ -114,6 +119,81 @@ describe("transcript prepend anchor", () => {
     anchor.capture(scroller, false);
     expect(anchor.update(scroller, instance, measureRows)).toBe(false);
     expect(measureRows).not.toHaveBeenCalled();
+  });
+
+  it("keeps the original reader target when another projection commits before restoration", () => {
+    const { scroller, bubble, instance, anchor, measureRows } = fixture();
+    let contentTop = 290;
+    bubble.getBoundingClientRect = () => rect(contentTop - scroller.scrollTop, 180);
+    anchor.messageKeys = messages("visible");
+    anchor.capture(scroller, false);
+    scroller.scrollTop = 200;
+    anchor.messageKeys = messages("visible", "peer-one");
+    anchor.capture(scroller, false, true);
+    anchor.update(scroller, instance, measureRows);
+    contentTop += 30;
+    anchor.messageKeys = messages("visible", "peer-one", "peer-two");
+    anchor.capture(scroller, false, true);
+    anchor.update(scroller, instance, measureRows);
+    contentTop += 30;
+    anchor.update(scroller, instance, measureRows);
+    expect(scroller.scrollTop).toBe(260);
+    expect(bubble.getBoundingClientRect().top).toBe(90);
+  });
+
+  it("preserves native wheel movement after a projection captures the reader", () => {
+    const { scroller, bubble, anchor, measureRows } = fixture(2000);
+    let headerGrowth = 0;
+    bubble.getBoundingClientRect = () => rect(290 + headerGrowth - scroller.scrollTop, 180);
+    const owner = {
+      state: createTranscriptOffsetState(),
+      getScrollElement: () => scroller,
+      prependAnchor: anchor,
+      isProgrammaticScroll: () => false,
+      cancelScroll: () => anchor.clear(),
+      requestUpdate: vi.fn(),
+      onReaderScroll: vi.fn(),
+    };
+    const controller = new VirtualizerController<HTMLDivElement, HTMLElement>(
+      {
+        addController: vi.fn(),
+        removeController: vi.fn(),
+        requestUpdate: vi.fn(),
+        updateComplete: Promise.resolve(true),
+      },
+      {
+        count: 1,
+        estimateSize: () => 2000,
+        initialOffset: 200,
+        getScrollElement: () => scroller,
+        observeElementRect: (_, callback) => {
+          callback({ width: 800, height: 500 });
+        },
+        observeElementOffset: (virtualizer, callback) =>
+          observeTranscriptOffset(owner, virtualizer, callback),
+        scrollToFn: (offset) => {
+          scroller.scrollTop = offset;
+        },
+      },
+    );
+    const instance = controller.getVirtualizer();
+    controller.hostConnected();
+    controller.hostUpdated();
+    scroller.dispatchEvent(new Event("scroll"));
+    try {
+      scroller.dispatchEvent(new WheelEvent("wheel", { deltaY: -40 }));
+      anchor.messageKeys = messages("visible");
+      anchor.capture(scroller, false, true);
+      anchor.update(scroller, instance, measureRows);
+      headerGrowth = 30;
+      scroller.scrollTop = 160;
+      scroller.dispatchEvent(new Event("scroll"));
+      anchor.update(scroller, instance, measureRows);
+      expect(scroller.scrollTop).toBe(190);
+      expect(bubble.getBoundingClientRect().top).toBe(130);
+    } finally {
+      controller.hostDisconnected();
+    }
   });
 
   it.each([false, true])(

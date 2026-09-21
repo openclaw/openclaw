@@ -9,6 +9,7 @@ import { DatabaseSync } from "node:sqlite";
 import { vi } from "vitest";
 import { inspectManagedProcessGroup } from "../../scripts/lib/managed-child-process.mts";
 import { resolveServiceManagerEnv } from "../daemon/service-process-env.js";
+import { resolveSystemdUnitPath } from "../daemon/systemd-service-files.js";
 import { buildCliRespawnPlan } from "../entry.respawn.js";
 import { getFileLockProcessStartTime, isPidAlive } from "../shared/pid-alive.js";
 import { resolveTestNodeExecPath } from "../test-utils/node-process.js";
@@ -27,6 +28,13 @@ import { stageManagedHandoffRuntime } from "./update-managed-service-handoff-run
 import { startManagedServiceUpdateHandoff } from "./update-managed-service-handoff.js";
 
 const testNodeExecPath = resolveTestNodeExecPath();
+
+// Readers may inspect either unit while another native controller publishes its state.
+const nativeStatePublisher = `function publishState(file, value) {
+  const temporary = file + "." + process.pid + ".tmp";
+  fs.writeFileSync(temporary, JSON.stringify(value));
+  fs.renameSync(temporary, file);
+}`;
 
 export function triageRuntimeNodeOptions(): string {
   // Prepared JavaScript does not need a source loader in every fixing descendant.
@@ -91,6 +99,7 @@ export async function createTriageBoundary(
     JSON.stringify({ name: mode === "startup" ? scope : updateScope, active: true }),
   );
   const common = `const fs = require('node:fs');
+${nativeStatePublisher}
 const root = ${JSON.stringify(root)};
 const scopeFile = ${JSON.stringify(scopeFile)};
 const primaryFile = ${JSON.stringify(primaryFile)};
@@ -173,10 +182,10 @@ if (action === 'show') {
   event('restart-preserved', {scope:scope.name});
 } else if (action === 'stop') {
   if (!name.endsWith('.scope')) {
-    primary.active = false; fs.writeFileSync(primaryFile,JSON.stringify(primary));
+    primary.active = false; publishState(primaryFile,primary);
   }
   if (name.endsWith('.scope') || scope.name.startsWith('openclaw-triage-')) {
-    scope.active=false; fs.writeFileSync(scopeFile,JSON.stringify(scope));
+    scope.active=false; publishState(scopeFile,scope);
     event('scope-stopped');
     for (const member of fs.readdirSync(root+'/members')) {
       try { process.kill(Number(member), 'SIGTERM'); } catch {}
@@ -193,7 +202,7 @@ if (action === 'show') {
       `
 const args=process.argv.slice(2), index=args.findIndex(x=>!x.startsWith('--'));
 const name=args.find(x=>x.startsWith('--unit=')).slice(7);
-fs.writeFileSync(scopeFile,JSON.stringify({name,active:true}));
+publishState(scopeFile,{name,active:true});
 event('attached', {name});
 process.execve(args[index],args.slice(index),process.env);
 `,
@@ -631,6 +640,13 @@ async function writeTriageMaintenanceProbe(params: {
   events: string;
 }): Promise<string> {
   const { root, primaryFile, unit, events } = params;
+  // Container-aware Doctor also checks the installation reported by the native fixture.
+  const unitPath = resolveSystemdUnitPath({ HOME: root, OPENCLAW_SYSTEMD_UNIT: unit });
+  await fs.mkdir(path.dirname(unitPath), { recursive: true });
+  await fs.writeFile(
+    unitPath,
+    `[Service]\nExecStart=${testNodeExecPath} ${root}/dist/index.js gateway run\n`,
+  );
   await fs.mkdir(path.join(root, "dist"));
   await fs.writeFile(path.join(root, "dist", "index.js"), "");
   await fs.writeFile(path.join(root, "package.json"), JSON.stringify({ name: "openclaw" }));
@@ -643,6 +659,7 @@ import os from 'node:os';
 import { spawn } from 'node:child_process';
 import { mock } from 'node:test';
 const root=${JSON.stringify(root)}, primaryFile=${JSON.stringify(primaryFile)};
+${nativeStatePublisher}
 const event=(kind,data={})=>fs.appendFileSync(${JSON.stringify(events)},JSON.stringify({kind,pid:process.pid,...data})+'\\n');
 const started=performance.now(); let sequence=0;
 const phase=(phase,data={})=>event('maintenance-phase',{phase,ppid:process.ppid,sequence:++sequence,elapsedMs:performance.now()-started,...data});
@@ -683,7 +700,7 @@ const {maybeStopManagedServiceBeforeMutableUpdate}=await import(${JSON.stringify
 phase('update-import-end');
 if(process.argv[2]==='inactive'){
   const primary=JSON.parse(fs.readFileSync(primaryFile,'utf8'));
-  fs.writeFileSync(primaryFile,JSON.stringify({...primary,active:false}));
+  publishState(primaryFile,{...primary,active:false});
   // Exercise Linux's inactive-unit policy on macOS too. No PID/native probes
   // are needed on the corrected inactive branch; this is not native proof.
   Object.defineProperty(process,'platform',{value:'linux'});

@@ -120,7 +120,10 @@ export function createConfigIoContext(options: ConfigIoFactoryOptions = {}): Con
       options.deferredPluginMigrations ??
       (options.pluginValidation === "core-only"
         ? []
-        : readDeferredPluginMigrations({ env: deps.env }))
+        : readDeferredPluginMigrations({
+            env: deps.env,
+            artifactPreservingReadOnly: !deps.observe,
+          }))
     );
   }
 
@@ -131,7 +134,10 @@ export function createConfigIoContext(options: ConfigIoFactoryOptions = {}): Con
       options.deferredPluginMigrations ??
       (options.pluginValidation === "core-only"
         ? []
-        : readDeferredPluginMigrationsAsync({ env: deps.env }))
+        : readDeferredPluginMigrationsAsync({
+            env: deps.env,
+            artifactPreservingReadOnly: !deps.observe,
+          }))
     );
   }
 

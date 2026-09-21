@@ -1408,17 +1408,23 @@
 }
 
 .chat-attachments-preview {
+  /* Ease across most of a thumbnail and clear the frame before clipping, so a
+     partially visible image does not read as a hard vertical border. */
+  --chat-attachment-fade-in:
+    transparent 4px, rgb(0 0 0 / 12%) 12px, rgb(0 0 0 / 50%) 24px, rgb(0 0 0 / 88%) 36px, black 48px;
+  --chat-attachment-fade-out:
+    black calc(100% - 48px), rgb(0 0 0 / 88%) calc(100% - 36px), rgb(0 0 0 / 50%) calc(100% - 24px),
+    rgb(0 0 0 / 12%) calc(100% - 12px), transparent calc(100% - 4px);
+
   display: flex;
   gap: calc(var(--chat-composer-editor-inset-block) * 3);
   flex-wrap: nowrap;
   flex-shrink: 0;
-  /* Extend only the scrollport's transparent bounds for the original remove
-     target and focus ring. The extra padding cancels the overlap, so the chips
-     keep the editor's visible inset without clipping the controls. */
-  width: calc(100% + var(--chat-attachment-hit-slop));
-  max-width: calc(100% + var(--chat-attachment-hit-slop));
+  /* Keep horizontal clipping inside the composer. Reserve remove-target and
+     focus-ring clearance in padding, not in a wider scrollport. */
+  width: 100%;
+  max-width: 100%;
   margin-block-start: calc(-1 * var(--chat-attachment-hit-slop));
-  margin-inline-end: calc(-1 * var(--chat-attachment-hit-slop));
   padding-block: calc(var(--chat-composer-editor-inset-block) * 2 + var(--chat-attachment-hit-slop))
     var(--chat-composer-editor-inset-block);
   padding-inline: var(--chat-composer-editor-inset-inline)
@@ -1446,31 +1452,19 @@
 }
 
 .chat-attachments-preview[data-scrollable="true"][data-at-start="true"][data-at-end="false"] {
-  mask-image: linear-gradient(
-    to right,
-    black 0,
-    black calc(100% - var(--chat-composer-editor-inset-inline)),
-    transparent 100%
-  );
+  mask-image: linear-gradient(to right, var(--chat-attachment-fade-out));
 }
 
 .chat-attachments-preview[data-scrollable="true"][data-at-start="false"][data-at-end="false"] {
   mask-image: linear-gradient(
     to right,
-    transparent 0,
-    black var(--chat-composer-editor-inset-inline),
-    black calc(100% - var(--chat-composer-editor-inset-inline)),
-    transparent 100%
+    var(--chat-attachment-fade-in),
+    var(--chat-attachment-fade-out)
   );
 }
 
 .chat-attachments-preview[data-scrollable="true"][data-at-start="false"][data-at-end="true"] {
-  mask-image: linear-gradient(
-    to right,
-    transparent 0,
-    black var(--chat-composer-editor-inset-inline),
-    black 100%
-  );
+  mask-image: linear-gradient(to right, var(--chat-attachment-fade-in));
 }
 
 .chat-attachment-thumb {
@@ -1826,6 +1820,17 @@ html[dir="rtl"] .chat-attachment-loading > span {
   white-space: nowrap;
 }
 
+.chat-attachment-file__open {
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  line-height: 1.15;
+  text-align: start;
+  cursor: var(--cursor-action);
+}
+
 .chat-attachment-text-action {
   display: inline-flex;
   width: fit-content;
@@ -1852,16 +1857,6 @@ html[dir="rtl"] .chat-attachment-loading > span {
   color: var(--text);
 }
 
-.chat-attachment-text-action svg {
-  width: 13px;
-  height: 13px;
-  stroke: currentColor;
-  fill: none;
-  stroke-width: 1.7px;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-}
-
 .agent-chat__file-input,
 .agent-chat__photo-input,
 .agent-chat__camera-input {
@@ -1885,16 +1880,22 @@ html[dir="rtl"] .chat-attachment-loading > span {
   gap: 2px;
 }
 
-/* Model text gives up width before the independent effort and action targets. */
+.chat-controls__inline-select {
+  min-width: 0;
+}
+
+/* Model text can shrink, but its flex item must still reserve the hit target. */
 .chat-controls__model-picker {
   flex: 0 1 auto;
+  min-width: 44px;
 }
 
 .chat-controls__effort-picker {
   flex: 0 0 auto;
 }
 
-.chat-controls__model-settings .chat-controls__inline-select-trigger {
+/* The model trigger fills its shrinkable wrapper; effort keeps its content width. */
+.chat-controls__model-settings .chat-controls__effort-trigger {
   width: auto;
 }
 
@@ -1908,10 +1909,6 @@ html[dir="rtl"] .chat-attachment-loading > span {
 .chat-controls__model-settings:not(:has(.chat-controls__model-picker[open]))
   .chat-controls__effort-picker--reserved {
   display: none;
-}
-
-.chat-controls__inline-select {
-  min-width: 0;
 }
 
 .chat-controls__inline-select summary {
@@ -2234,6 +2231,25 @@ html[dir="rtl"] .chat-attachment-loading > span {
   height: 14px;
   color: var(--muted);
   flex: 0 0 auto;
+}
+
+.chat-controls__model-refresh {
+  display: inline-flex;
+  align-items: center;
+  color: var(--muted);
+}
+
+.chat-controls__model-refresh-details {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: inherit;
 }
 
 .chat-controls__model-search {
@@ -3127,7 +3143,7 @@ html[dir="rtl"] .chat-attachment-loading > span {
     display: none;
   }
 }
-@media (max-width: 560px) {
+@container chat-composer (max-width: 560px) {
   .agent-chat__input--mobile-toolbar .chat-controls__inline-select-chevron,
   .agent-chat__input--mobile-toolbar .chat-controls__inline-select-chevron svg {
     width: var(--chat-mobile-row-chevron-size);

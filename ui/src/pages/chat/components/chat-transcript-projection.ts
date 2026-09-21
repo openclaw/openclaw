@@ -429,7 +429,7 @@ export function projectChatTranscript(
   };
   const renderItem = guardChatRenderItems(state, liveStatusSignature, (item) => {
     if (item.kind === "divider") {
-      return renderChatDivider(item, props.onOpenSessionCheckpoints);
+      return renderChatDivider(item);
     }
     if (item.kind === "notice") {
       return renderChatNotice(item);
@@ -555,7 +555,7 @@ export function projectChatTranscript(
     expandedToolCards,
     messageRowKeysById,
   );
-  transcript.entryAnimations.project(chatItems, props.sessionKey);
+  transcript.entryAnimations.project(chatItems);
   transcript.syncMessageRows(messageRowKeysById, transcriptMessageKeys);
   let turnRecapOwnerKey: string | null = null;
   if (turnRecap !== null && tailStatusOwner?.runId === turnRecap.runId) {
@@ -634,6 +634,7 @@ export function projectChatTranscript(
     Boolean(props.waitingApproval),
     props.questionPrompts,
     state.asyncQuestionRevision,
+    props.asyncQuestions?.historyKey,
     Boolean(props.autoExpandToolCalls),
     props.assistantName,
     assistantIdentity.avatar,

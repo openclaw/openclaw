@@ -68,8 +68,11 @@ const EXTENSION_TEST_COST_MULTIPLIERS: Record<string, number> = {
   // oxlint-disable-next-line oxc/approx-constant -- measured seconds per file, not Euler's constant.
   "test/vitest/vitest.extension-acpx.config.ts": 2.718,
   "test/vitest/vitest.extension-browser.config.ts": 0.478,
-  "test/vitest/vitest.extension-codex.config.ts": 2.567,
-  "test/vitest/vitest.extension-database-workers.config.ts": 7.582,
+  // Refreshed after #153539: median wrapper seconds/file in successful PR runs
+  // 35537834254, 35537743091 and 35537672782 (two CPUs, two-worker budget).
+  "test/vitest/vitest.extension-codex.config.ts": 2.49,
+  // Same refreshed cohort: 114 envelopes, including the Codex native fixtures.
+  "test/vitest/vitest.extension-database-workers.config.ts": 7.599,
   "test/vitest/vitest.extension-diffs.config.ts": 0.734,
   "test/vitest/vitest.extension-discord.config.ts": 0.55,
   "test/vitest/vitest.extension-feishu.config.ts": 0.411,
@@ -94,19 +97,17 @@ const EXTENSION_TEST_COST_MULTIPLIERS: Record<string, number> = {
   "test/vitest/vitest.extension-zalo.config.ts": 0.523,
   "test/vitest/vitest.extensions.config.ts": 0.642,
 };
-// A 34-file changed shard starved real-time watches and the no-output watchdog.
-// Keep serial, non-isolated Codex processes small enough for prompt output (#125768, #125839).
-const CODEX_EXTENSION_TEST_PROCESS_FILE_LIMIT = 12;
+// Isolated Codex workers retire each mocked graph instead of accumulating it (#125839).
+// Bound cold imports per envelope while sharing startup across parallel files.
+const CODEX_EXTENSION_TEST_PROCESS_FILE_LIMIT = 24;
+// Native app-server files already run in isolated forks. Preserve their measured
+// 12-file envelope boundary independently of the ordinary Codex lane.
+const CODEX_DATABASE_WORKER_TEST_PROCESS_FILE_LIMIT = 12;
 const MATRIX_EXTENSION_TEST_PROCESS_FILE_LIMIT = 40;
 const TELEGRAM_EXTENSION_TEST_PROCESS_FILE_LIMIT = 1;
 const TELEGRAM_EXTENSION_TEST_JOB_FILE_LIMIT = 10;
 const EXTENSION_TEST_PROCESS_FILE_LIMITS = new Map<string, number>([
-  [
-    "test/vitest/vitest.extension-codex.config.ts",
-    // This non-isolated fileParallelism:false lane accumulates every mocked module graph.
-    // At ~166 files, one worker exhausted its heap during teardown (#124413).
-    CODEX_EXTENSION_TEST_PROCESS_FILE_LIMIT,
-  ],
+  ["test/vitest/vitest.extension-codex.config.ts", CODEX_EXTENSION_TEST_PROCESS_FILE_LIMIT],
   // The non-isolated Matrix suite intentionally shares module state within a process.
   // Bound its lifetime so Vite's transformed module graph cannot grow across the whole suite.
   ["test/vitest/vitest.extension-matrix.config.ts", MATRIX_EXTENSION_TEST_PROCESS_FILE_LIMIT],
@@ -305,13 +306,16 @@ function splitWorkerTargetsByOriginalConfig(
     group.push(target);
     groups.set(config, group);
   }
-  return [...groups].flatMap(([config, files]) =>
-    config === DATABASE_WORKER_CONFIG
+  return [...groups].flatMap(([config, files]) => {
+    if (config === "test/vitest/vitest.extension-codex.config.ts") {
+      return splitTargetsByFileLimit(files, CODEX_DATABASE_WORKER_TEST_PROCESS_FILE_LIMIT);
+    }
+    return config === DATABASE_WORKER_CONFIG
       ? nativeFileLimit
         ? splitTargetsByFileLimit(files, nativeFileLimit)
         : [files]
-      : split(config, files),
-  );
+      : split(config, files);
+  });
 }
 
 function resolveExtensionTestJobFileLimit(config: string) {
@@ -401,13 +405,14 @@ export function estimateExtensionTestCost(
   files: readonly string[] = [],
 ) {
   const multiplier = EXTENSION_TEST_COST_MULTIPLIERS[config] ?? 1;
-  // The 11-file app-server envelope reached 508.783s in the same cohort.
-  // Its rounded-up 46.26s/file floor must survive the mixed config's median.
+  // After #153539, the slowest pure app-server envelope in PR runs 35537834254,
+  // 35537743091 and 35537672782 took 190.394s / 11 files on two workers.
+  // Preserve its rounded-up wrapper wall/file floor over the mixed config median.
   const appServerFiles =
     config === DATABASE_WORKER_CONFIG
       ? files.filter((file) => file.startsWith("extensions/codex/src/app-server/")).length
       : 0;
-  return Math.max(1, Math.ceil(testFileCount * multiplier + appServerFiles * (46.26 - multiplier)));
+  return Math.max(1, Math.ceil(testFileCount * multiplier + appServerFiles * (17.31 - multiplier)));
 }
 
 /** Resolve the dedicated Vitest config for an extension root or test file. */

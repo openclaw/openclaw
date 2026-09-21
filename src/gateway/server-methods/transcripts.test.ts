@@ -18,6 +18,7 @@ import {
   withOpenClawTestState,
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
+import { createTranscriptCaptureAppends } from "../../transcripts/capture-appends.js";
 import { activeSessions, startTranscripts } from "../../transcripts/capture.js";
 import { clearTranscriptCapturesForTest } from "../../transcripts/capture.test-support.js";
 import { resolveTranscriptsConfig } from "../../transcripts/config.js";
@@ -609,6 +610,7 @@ describe("meeting transcript RPC", () => {
     } satisfies TranscriptsSummary;
     await store.writeSummary(storedSummary, session);
     activeSessions.set(session.sessionId, {
+      appends: createTranscriptCaptureAppends(() => {}),
       session,
       providerId: "manual-transcript",
       provider: {},

@@ -4,6 +4,7 @@ import { hostname } from "node:os";
 import { afterEach, describe, expect, it } from "vitest";
 import { waitForGatewayActiveWork } from "../infra/gateway-active-work.js";
 import { getFileLockProcessStartTime } from "../shared/pid-alive.js";
+import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
 import {
@@ -154,6 +155,35 @@ describe("task execution ownership on successor restore", () => {
     const { task } = await restoreFixture({ ...owner, startIdentity: owner.startIdentity + 1 });
     expect((await waitForGatewayActiveWork(0)).drained).toBe(true);
     expect(getTaskById(task.taskId)?.status).toBe("cancelled");
+  });
+
+  it("retries orphan settlement after the first restore's enclosing transaction rolls back", async () => {
+    await withStateDirEnv("task-owner-restore-rollback-", async () => {
+      resetTaskRegistryForTests({ persist: false });
+      const owner = ownerFor(process.pid);
+      const task = createTaskFixture("subagent", {
+        runId: "harness:restore-rollback",
+        task: "Restore an orphan after rollback",
+        executionOwner: { ...owner, startIdentity: owner.startIdentity + 1 },
+        notifyPolicy: "silent",
+      });
+      resetTaskRegistryForTests({ persist: false });
+
+      const failure = new Error("Synthetic enclosing restore rollback");
+      expect(() =>
+        runOpenClawStateWriteTransaction(() => {
+          expect(getTaskById(task.taskId)?.status).toBe("cancelled");
+          expect(loadTaskRegistryStateFromSqlite().tasks.get(task.taskId)?.status).toBe(
+            "cancelled",
+          );
+          throw failure;
+        }),
+      ).toThrow(failure);
+
+      expect(loadTaskRegistryStateFromSqlite().tasks.get(task.taskId)?.status).toBe("running");
+      expect(getTaskById(task.taskId)?.status).toBe("cancelled");
+      expect(loadTaskRegistryStateFromSqlite().tasks.get(task.taskId)?.status).toBe("cancelled");
+    });
   });
 
   it.each(["live", "legacy", "foreign-host"] as const)(

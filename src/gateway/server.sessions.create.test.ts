@@ -109,7 +109,7 @@ import {
 } from "./test-helpers.js";
 import {
   setupGatewaySessionsTestHarness,
-  createCheckpointFixture,
+  createCompactedSessionFixture,
   getGatewayConfigModule,
   sessionStoreEntry,
   directSessionReq,
@@ -1798,7 +1798,6 @@ test("chat.send fences dashboard title persistence from concurrent session delet
     expect(dispatchAdmissionsReleased).toBeDefined();
     await dispatchAdmissionsReleased;
     expect(isSessionWorkAdmissionActive(storePath, [sessionKey])).toBe(true);
-
     const drainStarted = createDeferredCore();
     const drainProbe = await beginSessionWorkAdmission({
       scope: storePath,
@@ -3598,7 +3597,6 @@ test("sessions.create rechecks Fast Mode before interrupting reset work", async 
     admission.release();
   }
 });
-
 test("sessions.create rejects a Fast Mode change completed by draining work before reset cleanup", async () => {
   const { storePath } = await createSessionStoreDir();
   const key = "agent:main:main";
@@ -6642,7 +6640,7 @@ test("sessions.create rejects unknown parentSessionKey", async () => {
 test("sessions.create forks the parent transcript into the new session", async () => {
   const { dir, storePath } = await createSessionStoreDir();
   testState.sessionConfig = { scope: "per-sender" };
-  const parent = await createCheckpointFixture(dir);
+  const parent = await createCompactedSessionFixture(dir);
   const projectRoot = path.join(dir, "qa-writer");
   await fs.mkdir(projectRoot);
   await writeSessionStore({
@@ -6837,7 +6835,7 @@ test("sessions.create rejects a pre-existing locked harness session", async () =
 test("sessions.create rejects children of model-selection-locked sessions", async () => {
   const { dir } = await createSessionStoreDir();
   testState.sessionConfig = { dmScope: "main", scope: "per-sender" };
-  const parent = await createCheckpointFixture(dir);
+  const parent = await createCompactedSessionFixture(dir);
   await writeSessionStore({
     entries: {
       main: sessionStoreEntry(parent.sessionId, {
@@ -6907,7 +6905,7 @@ test("sessions.create retains the 100K fallback when only another provider has m
     cache: getContextWindowCaches().discoveredTokenCache,
     models: [{ id: "unresolved-model", provider: "other-provider", contextTokens: 300_000 }],
   });
-  const parent = await createCheckpointFixture(dir);
+  const parent = await createCompactedSessionFixture(dir);
   await writeSessionStore({
     entries: {
       main: sessionStoreEntry(parent.sessionId, {
@@ -6946,7 +6944,7 @@ test("sessions.create admits an explicit fork within the child model context win
   agentDiscoveryMock.models = [
     { id: "gpt-large", name: "Large", provider: "openai", contextWindow: 922_000 },
   ];
-  const parent = await createCheckpointFixture(dir);
+  const parent = await createCompactedSessionFixture(dir);
   await writeSessionStore({
     entries: {
       main: sessionStoreEntry(parent.sessionId, {
@@ -6977,7 +6975,7 @@ test("sessions.create rejects an explicit fork above the selected child model wi
   agentDiscoveryMock.models = [
     { id: "gpt-small", name: "Small", provider: "openai", contextWindow: 128_000 },
   ];
-  const parent = await createCheckpointFixture(dir);
+  const parent = await createCompactedSessionFixture(dir);
   await writeSessionStore({
     entries: {
       main: sessionStoreEntry(parent.sessionId, {
@@ -7019,7 +7017,7 @@ test("sessions.create clamps configured capacity to the selected child model win
       contextWindowDefault: "1m",
     },
   ];
-  const parent = await createCheckpointFixture(dir);
+  const parent = await createCompactedSessionFixture(dir);
   await writeSessionStore({
     entries: {
       main: sessionStoreEntry(parent.sessionId, {
@@ -7165,7 +7163,7 @@ test("sessions.create resolves an agent-qualified fork from the parent store", a
   testState.agentsConfig = { list: [{ id: "main", default: true }, { id: "work" }] };
   try {
     await fs.mkdir(workDir, { recursive: true });
-    const parent = await createCheckpointFixture(workDir);
+    const parent = await createCompactedSessionFixture(workDir);
     await writeSessionStore({
       storePath: workStorePath,
       agentId: "work",
@@ -7197,7 +7195,6 @@ test("sessions.create resolves an agent-qualified fork from the parent store", a
       parentSessionKey: "agent:work:main",
       fork: true,
     });
-
     expect(created.ok, JSON.stringify(created.error)).toBe(true);
     expect(created.payload?.key).toMatch(/^agent:main:dashboard:/);
     expect(created.payload?.entry?.parentSessionKey).toBe("agent:work:main");

@@ -2,7 +2,11 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { AsyncWorkScope, captureAsyncWorkTracker, getAsyncWorkSignal } from "./async-work-scope.js";
 import { createDeferredCore } from "./deferred.js";
 
-type AsyncWorkResources = { release: () => void | Promise<void> };
+type AsyncWorkResources = {
+  release: () => void | Promise<void>;
+  /** Preserve synchronous operation settlement unless admitted work still owns it. */
+  releaseBeforeResultWhenIdle?: true;
+};
 
 /** Returns the logical result while retaining resources through owned cleanup. */
 export async function runWithAsyncWorkResources<T>(
@@ -10,6 +14,7 @@ export async function runWithAsyncWorkResources<T>(
     onAcquired: (resources: AsyncWorkResources) => void,
     captureWorkContext: () => void,
   ) => Promise<T>,
+  options?: { cancelOnError: boolean },
 ): Promise<T> {
   const result = createDeferredCore<T>();
   const trackOwner = captureAsyncWorkTracker();
@@ -24,19 +29,29 @@ export async function runWithAsyncWorkResources<T>(
       closeFromParent();
     }
     try {
-      result.resolve(
-        await work.track(() =>
-          run(
-            (acquired) => {
-              resources = acquired;
-            },
-            () => {
-              runInContext = AsyncLocalStorage.snapshot();
-            },
-          ),
+      const value = await work.track(() =>
+        run(
+          (acquired) => {
+            resources = acquired;
+          },
+          () => {
+            runInContext = AsyncLocalStorage.snapshot();
+          },
         ),
       );
+      if (resources?.releaseBeforeResultWhenIdle && !work.hasPendingWork) {
+        const completedResources = resources;
+        resources = undefined;
+        await runInContext(() => work.drain());
+        await completedResources.release();
+      }
+      result.resolve(value);
     } catch (error) {
+      // Callers abandoning work on failure must join its cleanup before retrying.
+      if (options?.cancelOnError) {
+        runInContext(() => work.beginClose(error));
+        await runInContext(() => work.drain());
+      }
       result.reject(error);
     } finally {
       try {

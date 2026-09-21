@@ -15,6 +15,7 @@ import {
   WORKER_DEPLOY_OPTIONAL_NATIVE_MODULE_ID,
 } from "../../scripts/lib/worker-deploy-build-plugin.mts";
 import { createWorkerBundleProducer } from "../../src/gateway/worker-environments/bundle.js";
+import { WORKER_BUNDLE_ARTIFACT_PATHS } from "../../src/shared/worker-bundle-hash.js";
 import { createFixtureLifetime } from "../helpers/fixture-lifetime.js";
 import { runNodeScript } from "../helpers/run-node-script.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
@@ -56,6 +57,9 @@ describe("worker deploy build plugin", () => {
   describe("portable output", () => {
     const fixtureDirs = useAutoCleanupTempDirTracker(afterAll);
     const fixtureLifetime = createFixtureLifetime();
+    const workerEntryNames = WORKER_BUNDLE_ARTIFACT_PATHS.map(
+      (artifact) => `worker/${artifact.replace(/\.mjs$/u, "")}`,
+    );
     let preparedDist: string;
     let preparedArchive: string;
 
@@ -81,12 +85,14 @@ describe("worker deploy build plugin", () => {
       const activationSource = fs.realpathSync(
         path.resolve("src/plugin-sdk/facade-activation-check.runtime.ts"),
       );
+      // Mixed runtime/declaration graphs also contain worker paths, but are not archived.
       for (const sibling of configs.filter(
         (candidate) =>
           candidate !== config &&
           typeof candidate.entry === "object" &&
           !Array.isArray(candidate.entry) &&
-          Object.keys(candidate.entry).some((entry) => entry.startsWith("worker/")),
+          Object.keys(candidate.entry).length > 0 &&
+          Object.keys(candidate.entry).every((entry) => workerEntryNames.includes(entry)),
       )) {
         const { bundles } = await build({
           ...sibling,
@@ -139,6 +145,11 @@ export { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";`;
         ],
       });
       try {
+        const builtEntries = vi
+          .mocked(build)
+          .mock.calls.flatMap(([options]) => Object.keys(options?.entry ?? {}));
+        expect(builtEntries.length).toBe(workerEntryNames.length);
+        expect(builtEntries.toSorted()).toEqual(workerEntryNames.toSorted());
         // A dynamic import cycle can leave an unstaged root facade even with code splitting off.
         expect(bundles.flatMap((bundle) => bundle.chunks.map((chunk) => chunk.fileName))).toEqual([
           "worker/worker.mjs",

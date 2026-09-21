@@ -108,6 +108,7 @@ export async function readCodexMirroredSessionHistoryMessages(
             Math.max(1024, Math.floor((contextTokenBudget ?? 128_000) * 8)),
           ),
           maxEvents: 10_000,
+          toolResultOverflow: "omit",
         },
       });
       result = consumeCodexHistory(

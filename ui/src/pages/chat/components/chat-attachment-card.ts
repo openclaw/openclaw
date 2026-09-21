@@ -63,11 +63,13 @@ export function openAttachmentCardFromClick(
   if (!onOpen || event.defaultPrevented) {
     return;
   }
-  const target = event.target;
-  const card = event.currentTarget;
-  if (target instanceof Element && card instanceof Element) {
-    const interactive = target.closest(attachmentCardInteractiveSelector);
-    if (interactive && card.contains(interactive)) {
+  // A control can replace its SVG during this event (for example mute/unmute).
+  // The dispatch path retains the original button even after its icon detaches.
+  for (const target of event.composedPath()) {
+    if (target === event.currentTarget) {
+      break;
+    }
+    if (target instanceof Element && target.matches(attachmentCardInteractiveSelector)) {
       return;
     }
   }

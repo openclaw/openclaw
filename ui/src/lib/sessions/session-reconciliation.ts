@@ -32,7 +32,11 @@ import type { SessionPatchRowFact } from "./session-pending-rows.ts";
 import type { createSessionPermissionProjection } from "./session-permission-projection.ts";
 import type { createSessionRosterRefresh } from "./session-roster-refresh.ts";
 import { createSessionWriteObservation, type FieldObservation } from "./session-row-provenance.ts";
-import { sessionChangedSnapshots, type SessionChangedEventInfo } from "./session-row-reconcile.ts";
+import {
+  isOlderSessionSnapshot,
+  sessionChangedSnapshots,
+  type SessionChangedEventInfo,
+} from "./session-row-reconcile.ts";
 import type { createSessionThinkingClaims } from "./session-thinking-claims.ts";
 
 type Host = {
@@ -285,9 +289,12 @@ export function createSessionReconciliation(host: Host) {
         sourceCanonicalListRevision !== undefined &&
         host.canonicalListRevision() > sourceCanonicalListRevision);
     let observedKey: string | undefined;
+    // A descriptor can hold newer metadata even when its row is outside the primary page.
+    const held = row ? host.roster.currentRow(row, historyAgentId) : undefined;
+    const historyRow = row && isOlderSessionSnapshot(row, held) ? undefined : row;
     const normalized = reconcileSessionHistory(
       state.result,
-      row,
+      historyRow,
       defaults,
       options,
       preserveCanonicalRow,

@@ -52,7 +52,6 @@ use tauri::{
     WebviewWindowBuilder,
 };
 use tauri_plugin_deep_link::DeepLinkExt;
-use tauri_plugin_global_shortcut::{Code, Modifiers};
 use tauri_plugin_opener::OpenerExt;
 
 const CONNECTED_WATCH_INTERVAL: Duration = Duration::from_secs(15);
@@ -1075,9 +1074,16 @@ impl DesktopState {
                         // The submitting view will be destroyed. Its IPC reply
                         // cannot own completion or prove Gateway health.
                         let snapshot = GatewaySnapshot::remote_opening();
+                        let returning_from_settings = navigation.settings_return.is_some();
                         navigation.select_remote();
                         navigation.remote_snapshot = Some(snapshot.clone());
-                        state.navigate_authenticated_remote(&app, target, script, navigation)?;
+                        state.navigate_authenticated_remote(
+                            &app,
+                            target,
+                            script,
+                            navigation,
+                            returning_from_settings,
+                        )?;
                         Ok(snapshot)
                     })
                 })
@@ -1100,6 +1106,7 @@ impl DesktopState {
         dashboard: Url,
         script: String,
         navigation: &mut NavigationState,
+        returning_from_settings: bool,
     ) -> Result<(), String> {
         if !app
             .state::<gateway_windows::GatewayWindows>()
@@ -1110,10 +1117,11 @@ impl DesktopState {
                 gateway_ws::GatewayOwnership::Remote,
             )?
         {
-            if main_window(app)
-                .ok()
-                .and_then(|view| view.url().ok())
-                .is_some_and(|url| self.main_window_has_connection_settings_url(&url))
+            if returning_from_settings
+                && main_window(app)
+                    .ok()
+                    .and_then(|view| view.url().ok())
+                    .is_some_and(|url| self.main_window_has_connection_settings_url(&url))
             {
                 gateway_windows::restore_selected_main(app)?;
             }
@@ -3168,14 +3176,10 @@ fn main() {
         builder.plugin(
             tauri_plugin_global_shortcut::Builder::new()
                 .with_handler(move |app, shortcut, event| {
-                    if event.state == tauri_plugin_global_shortcut::ShortcutState::Pressed {
-                        if quickchat_shortcut_state.matches_shortcut(shortcut) {
-                            quickchat::toggle_quickchat(app);
-                        } else if shortcut
-                            .matches(Modifiers::CONTROL | Modifiers::SHIFT, Code::KeyO)
-                        {
-                            tray::show_window(app);
-                        }
+                    if event.state == tauri_plugin_global_shortcut::ShortcutState::Pressed
+                        && quickchat_shortcut_state.matches_shortcut(shortcut)
+                    {
+                        quickchat::toggle_quickchat(app);
                     }
                 })
                 .build(),
@@ -3207,7 +3211,7 @@ fn main() {
         app.manage(gateway_windows::GatewayWindows::new(Arc::clone(&profiles)));
         app.manage(native_browser::NativeBrowserState::default());
         app.manage(native_browser_bridge::NativeBrowserBridgeState::default());
-        let window_config = app
+        let mut window_config = app
             .config()
             .app
             .windows
@@ -3215,6 +3219,18 @@ fn main() {
             .find(|window| window.label == "main")
             .cloned()
             .expect("tauri.conf.json must define the main window");
+        // Setup and recovery always use embedded assets. WKWebView has no current
+        // URL until its first navigation commits, so share the target before building.
+        let local_url = Url::parse(
+            match (cfg!(target_os = "windows"), window_config.use_https_scheme) {
+                (true, true) => "https://tauri.localhost/",
+                (true, false) => "http://tauri.localhost/",
+                (false, _) => "tauri://localhost/",
+            },
+        )?;
+        window_config.url = WebviewUrl::CustomProtocol(local_url.clone());
+        let state = DesktopState::new(local_url);
+        app.manage(state.clone());
         let browser_app = app.handle().clone();
         let window = WebviewWindowBuilder::from_config(app.handle(), &window_config)?
             .initialization_script(window_chrome::initialization_script(None, true))
@@ -3241,8 +3257,6 @@ fn main() {
         if let Some(view) = app.get_webview("main") {
             window_chrome_macos::install_webview(&view)?;
         }
-        let state = DesktopState::new(window.url()?);
-        app.manage(state.clone());
         app.manage(gateway_ws::GatewayClient::new());
         app.manage(desktop_node::DesktopNode::start(
             app.handle().clone(),

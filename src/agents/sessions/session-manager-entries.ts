@@ -7,6 +7,7 @@ import {
   validatePreparedAssistantAppendSync,
   type TranscriptEntryAnchor,
 } from "../../config/sessions/session-accessor.js";
+import { prepareTranscriptMessageAppend } from "../../config/sessions/session-accessor.sqlite-transcript-message-append.js";
 import { resolveSessionTranscriptReadFence } from "../../config/sessions/session-transcript-read-fence.js";
 import { applyAssistantDeliveryDirectives } from "../../config/sessions/transcript-assistant-delivery.js";
 import { isSessionTranscriptSideAppendEntry } from "../../config/sessions/transcript-tree.js";
@@ -135,9 +136,20 @@ export class SessionManagerEntries extends SessionManagerPersistence {
         expectedMutationAt: validatedMutationAt,
       });
     }
+    // Keep preparation local to this append: retries must not redact the payload again or
+    // consume its code-mode source token against a different message object.
+    const preparedMessage =
+      this.persistenceTarget && canonicalEntry.type === "message"
+        ? prepareTranscriptMessageAppend(
+            copyCodeModeSourceAppendOptions(options, {
+              message: canonicalEntry.message,
+              config: options?.config,
+            }),
+          )
+        : undefined;
     let persistenceResult;
     try {
-      persistenceResult = this.persist(canonicalEntry, attemptOptions);
+      persistenceResult = this.persistRecord(canonicalEntry, attemptOptions, preparedMessage);
     } catch (error) {
       const deliberateBranchAppend = this.pendingDeliberateAppend;
       const sideBranchAppend =
@@ -182,7 +194,7 @@ export class SessionManagerEntries extends SessionManagerPersistence {
               ...persistenceOptions,
               expectedMutationAt: this.readPersistedTranscriptMutationAt(),
             });
-      persistenceResult = this.persist(canonicalEntry, retryOptions);
+      persistenceResult = this.persistRecord(canonicalEntry, retryOptions, preparedMessage);
     }
     if (persistenceResult?.adoptedMessageId) {
       this.reloadPersistedTranscript();
@@ -416,6 +428,7 @@ export class SessionManagerEntries extends SessionManagerPersistence {
     details?: unknown,
     fromHook?: boolean,
     metadata?: CompactionEntry["__openclaw"],
+    tokensAfter?: number,
   ): string {
     const entry: CompactionEntry = {
       type: "compaction",
@@ -425,6 +438,7 @@ export class SessionManagerEntries extends SessionManagerPersistence {
       summary,
       firstKeptEntryId,
       tokensBefore,
+      ...(tokensAfter !== undefined ? { tokensAfter } : {}),
       details,
       fromHook,
       ...(metadata?.runId || metadata?.itemId ? { __openclaw: metadata } : {}),

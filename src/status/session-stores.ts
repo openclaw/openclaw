@@ -39,6 +39,21 @@ function summarizeProjectionRows(
       entry,
     })),
   });
+  if (recentLimit >= 0) {
+    const byAgent: SessionStoreSummary["byAgent"] = new Map(
+      agentIds.map((agentId) => [agentId, { count: 0, recent: [] }]),
+    );
+    rows.forEach((row) => {
+      const agent = byAgent.get(row.agentId);
+      if (agent) {
+        agent.count += 1;
+        if (agent.count <= recentLimit) {
+          agent.recent.push({ sessionKey: row.key, entry: row.entry });
+        }
+      }
+    });
+    return { count: rows.length, recent: recentLimit === 0 ? [] : summarize(rows).recent, byAgent };
+  }
   return {
     ...summarize(rows),
     byAgent: new Map(

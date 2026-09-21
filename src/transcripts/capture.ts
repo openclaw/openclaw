@@ -4,6 +4,8 @@ import { isTranscriptArtifactText } from "../media-understanding/transcription-t
 import { runPluginCleanup } from "../plugins/plugin-instance-scope.js";
 import { resolveAgentRoute } from "../routing/resolve-route.js";
 import { truncateUtf16Safe } from "../utils.js";
+import { createTranscriptCaptureAppends } from "./capture-appends.js";
+import { TranscriptStartError } from "./capture-startup.js";
 import {
   createTranscriptSummaryUpdates,
   persistTranscriptSummary,
@@ -46,6 +48,7 @@ export type TranscriptsRuntimeContext = {
 };
 
 type ActiveTranscriptsSession = {
+  appends: ReturnType<typeof createTranscriptCaptureAppends>;
   session: TranscriptSessionDescriptor;
   providerId: string;
   // Cleanup belongs to the admitted provider, even after registry replacement.
@@ -139,52 +142,23 @@ export function isTranscriptSessionActive(
 }
 // Reserve ids across async provider startup so overlapping starts cannot
 // replace the only cleanup owner for an existing or still-starting capture.
-const startingSessionIds = new Set<string>();
+const startingSessions = new Map<string, ActiveTranscriptsSession>();
 
 export function isTranscriptSessionStarting(sessionId: string): boolean {
-  return startingSessionIds.has(sessionId);
+  return startingSessions.has(sessionId);
 }
 
-const pendingStartRetries = new Set<{
-  stateDir: string;
-  session: TranscriptSessionDescriptor;
-}>();
-
-export function retainTranscriptStartRetry(
-  ctx: TranscriptsRuntimeContext,
-  retry: NonNullable<TranscriptStartError["retry"]>,
-) {
-  const owner = { stateDir: ctx.stateDir, session: retry.session };
-  pendingStartRetries.add(owner);
-  return {
-    session: retry.session,
-    revision: retry.revision,
-    assertCurrent: () => {
-      if (!pendingStartRetries.has(owner)) {
-        throw new TranscriptStartError(
-          "id-conflict",
-          new Error("transcript changed or stopped before startup retry"),
-        );
-      }
-    },
-    release: () => pendingStartRetries.delete(owner),
-  };
-}
-
-export function revokeTranscriptStartRetries(
-  ctx: TranscriptsRuntimeContext,
-  session: TranscriptSessionDescriptor,
-) {
-  // Repeated historical stop preserves stoppedAt and summary inputs. Revoke
-  // pending process authority explicitly instead of rewriting that history.
-  for (const owner of pendingStartRetries) {
-    if (
-      owner.stateDir === ctx.stateDir &&
-      owner.session.sessionId === session.sessionId &&
-      owner.session.startedAt === session.startedAt
-    ) {
-      pendingStartRetries.delete(owner);
-    }
+async function settleTranscriptCaptureWork(entry: ActiveTranscriptsSession): Promise<void> {
+  // Capture pending append outcomes before summary shutdown can await inference.
+  const settled = await Promise.allSettled([entry.appends.drain(), entry.summaryUpdates?.stop()]);
+  const failures: unknown[] = settled.flatMap((result) =>
+    result.status === "rejected" ? [result.reason] : [],
+  );
+  if (failures.length === 1) {
+    throw failures[0];
+  }
+  if (failures.length > 1) {
+    throw new AggregateError(failures, "Transcript append and summary shutdown failed");
   }
 }
 
@@ -202,7 +176,7 @@ export function finalizeTranscriptCapture(params: {
     stoppedAt: entry.session.stoppedAt ?? new Date().toISOString(),
   };
   entry.finalization ??= (async () => {
-    await entry.summaryUpdates?.stop();
+    await settleTranscriptCaptureWork(entry);
     const assertCurrent = () => {
       if (activeSessions.get(entry.session.sessionId) !== entry) {
         throw new TranscriptsSummaryChangedError();
@@ -559,14 +533,22 @@ export async function startTranscripts(params: {
             params.sessionIdOrigin ?? (requestedSessionId ? "supplied" : "generated"),
         },
   };
-  if (activeSessions.has(session.sessionId) || startingSessionIds.has(session.sessionId)) {
+  if (activeSessions.has(session.sessionId) || startingSessions.has(session.sessionId)) {
     throw new TranscriptStartError(
       "id-conflict",
       new Error(`transcripts session already active: ${session.sessionId}`),
     );
   }
-  startingSessionIds.add(session.sessionId);
   const entry: ActiveTranscriptsSession = {
+    appends: createTranscriptCaptureAppends(() => {
+      const current = activeSessions.get(session.sessionId);
+      if (
+        current !== entry &&
+        (current !== undefined || startingSessions.get(session.sessionId) !== entry)
+      ) {
+        throw new Error("Transcript capture no longer owns its accepted append");
+      }
+    }),
     session,
     providerId: provider.id,
     provider,
@@ -574,6 +556,7 @@ export async function startTranscripts(params: {
     configuredSource,
     lifecycleToken: params.lifecycleToken,
   };
+  startingSessions.set(session.sessionId, entry);
   let admitted = false;
   let retry: TranscriptStartError["retry"];
   const startupAbort = createStartupAbortScope(params.abortSignal);
@@ -629,7 +612,9 @@ export async function startTranscripts(params: {
           ) {
             return;
           }
-          await params.store.appendUtteranceForSession(session, utterance);
+          await entry.appends.run((schedule) =>
+            params.store.appendUtteranceForSession(session, utterance, schedule),
+          );
         },
         onStatus: async (status) => {
           // Payload ids/source are descriptive, never authority over another capture.
@@ -696,15 +681,26 @@ export async function startTranscripts(params: {
     entry.summaryUpdates.start();
     return { status: "active" as const, session, providerId: provider.id };
   } catch (error) {
-    await entry.summaryUpdates?.stop();
+    const cleanupWasPending = entry.cleanupPending;
+    // Fence new speech before waiting for already accepted capture work.
+    entry.cleanupPending = true;
     let failure = error;
+    let settlementFailed = false;
+    try {
+      await settleTranscriptCaptureWork(entry);
+    } catch (settlementError) {
+      settlementFailed = true;
+      failure = new AggregateError(
+        [error, settlementError],
+        "Transcript startup and capture settlement failed",
+      );
+    }
     try {
       if (
         entry.phase === "starting" &&
-        !entry.cleanupPending &&
+        !cleanupWasPending &&
         activeSessions.get(session.sessionId) === entry
       ) {
-        entry.cleanupPending = true;
         const cleanupError = await stopTranscriptProviderCapture({
           ctx: params.ctx,
           entry,
@@ -734,7 +730,9 @@ export async function startTranscripts(params: {
         }
       }
     } catch (cleanupError) {
-      failure = cleanupError;
+      failure = settlementFailed
+        ? new AggregateError([failure, cleanupError], "Transcript startup restoration failed")
+        : cleanupError;
       retry = undefined;
     }
     // Cleanup and restoration failures remain terminal admissions, never authority
@@ -745,18 +743,8 @@ export async function startTranscripts(params: {
     throw admitted ? new TranscriptStartError("admitted-start-failed", failure, retry) : failure;
   } finally {
     startupAbort.detach();
-    startingSessionIds.delete(session.sessionId);
-  }
-}
-
-export class TranscriptStartError extends Error {
-  constructor(
-    readonly code: "id-conflict" | "admitted-start-failed",
-    cause: unknown,
-    // Only failed provider startup retains an admission that its owning service may retry.
-    readonly retry?: { session: TranscriptSessionDescriptor; revision: string },
-  ) {
-    super(cause instanceof Error ? cause.message : String(cause), { cause });
-    this.name = "TranscriptStartError";
+    if (startingSessions.get(session.sessionId) === entry) {
+      startingSessions.delete(session.sessionId);
+    }
   }
 }

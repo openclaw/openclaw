@@ -1,4 +1,3 @@
-// Browser tests cover browser cli state.option collisions plugin behavior.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import * as browserCliResizeModule from "./browser-cli-resize.js";
 import { mockBrowserGateway } from "./browser-cli.test-support.js";
@@ -97,7 +96,7 @@ describe("browser state option collisions", () => {
 
     expect(gatewayMock).toHaveBeenLastCalledWith(
       "browser.request",
-      expect.objectContaining({ timeout: "60000" }),
+      expect.objectContaining({ timeout: "70000" }),
       expect.objectContaining({ path, timeoutMs: 60000 }),
       expect.objectContaining({ scopes: ["operator.admin"] }),
     );
@@ -145,7 +144,7 @@ describe("browser state option collisions", () => {
 
     expect(gatewayMock).toHaveBeenLastCalledWith(
       "browser.request",
-      expect.objectContaining({ timeout: "60000" }),
+      expect.objectContaining({ timeout: "70000" }),
       expect.objectContaining({
         path: "/act",
         query: { profile: "work" },

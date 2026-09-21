@@ -1,6 +1,8 @@
 // Real Gateway proof: run only with isolated SQLite coordination.
 import { once } from "node:events";
 import { rawDataToString } from "@openclaw/gateway-client/websocket-data";
+import { expectDefined } from "@openclaw/normalization-core";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { describe, expect, it, vi } from "vitest";
 import type { WebSocket } from "ws";
 import { GATEWAY_CLIENT_CAPS } from "../../packages/gateway-protocol/src/client-info.js";
@@ -13,8 +15,10 @@ import {
 } from "../agents/harness/native-hook-relay.js";
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { callGateway } from "./call.js";
 import { getOperatorApprovalDetailed } from "./operator-approval-store.js";
 import * as approvalShared from "./server-methods/approval-shared.js";
+import { nativeHookRelayHandlers } from "./server-methods/native-hook-relay.js";
 import {
   connectOk,
   createGatewaySuiteHarness,
@@ -27,6 +31,127 @@ installGatewayTestHooks({ scope: "suite" });
 type GatewayHarness = Awaited<ReturnType<typeof createGatewaySuiteHarness>>;
 
 describe("native hook relay WebSocket request lifetime", () => {
+  it("preserves admitted foreground and claimed-child execution after callGateway closes its connection", async ({
+    signal,
+  }) => {
+    const assertions = new Map<string, () => void>();
+    const connections: AbortSignal[] = [];
+    const handler = expectDefined(
+      nativeHookRelayHandlers["nativeHook.invoke"],
+      "native hook handler",
+    );
+    const observation = vi
+      .spyOn(nativeHookRelayHandlers, "nativeHook.invoke")
+      .mockImplementation(async (request) => {
+        connections.push(
+          expectDefined(request.client?.connectionSignal, "Gateway connection signal"),
+        );
+        await handler(request);
+      });
+    let gateway: GatewayHarness | undefined;
+    let host: Awaited<ReturnType<typeof createAdmittedHostCapabilityTestFixture>> | undefined;
+    let relay: ReturnType<typeof registerOwnedNativeHookRelay> | undefined;
+    let childAdmissionCurrent = true;
+    try {
+      const token = "native-hook-close-fixture";
+      gateway = await createGatewaySuiteHarness({
+        serverOptions: { bind: "loopback", auth: { mode: "token", token } },
+      });
+      await gateway.server.startupSettled;
+      host = await createAdmittedHostCapabilityTestFixture({
+        sessionId: "native-gateway-execution",
+        runId: "native-gateway-execution",
+      });
+      relay = registerOwnedNativeHookRelay({
+        provider: "codex",
+        sessionId: "native-gateway-execution",
+        runId: "native-gateway-execution",
+        runBeforeToolCall: host.hostCapabilities.runBeforeToolCall,
+        assertActive: host.hostCapabilities.assertActive,
+        executionAdmission: {
+          toolNames: ["exec"],
+          admit: (invocation, assertCurrent) => {
+            assertions.set(
+              expectDefined(invocation.toolUseId, "native tool call id"),
+              assertCurrent,
+            );
+          },
+        },
+        retention: {
+          readClaim: (rawPayload) =>
+            isRecord(rawPayload) && typeof rawPayload.agent_id === "string"
+              ? rawPayload.agent_id
+              : undefined,
+          shouldRetainAfterForegroundClose: () => childAdmissionCurrent,
+          allowPreToolUse: (claim) => claim === "child-thread",
+          awaitForegroundAdmission: async (claim) =>
+            claim === "child-thread" ? () => childAdmissionCurrent : undefined,
+          onDispose: () => {},
+        },
+      });
+      await relay.ready;
+      for (const child of [false, true]) {
+        if (child) {
+          host.closeHost();
+          const assertForegroundCurrent = expectDefined(
+            assertions.get("foreground-command"),
+            "foreground guard",
+          );
+          expect.soft(assertForegroundCurrent).toThrow("host capability is no longer active");
+          relay.unregister();
+        }
+        const toolUseId = child ? "child-command" : "foreground-command";
+        await expect(
+          callGateway({
+            url: `ws://127.0.0.1:${gateway.port}`,
+            token,
+            config: { gateway: { mode: "local", auth: { mode: "token" } } },
+            deviceIdentity: null,
+            scopes: ["operator.admin"],
+            method: "nativeHook.invoke",
+            params: {
+              provider: "codex",
+              relayId: relay.relayId,
+              generation: relay.generation,
+              event: "pre_tool_use",
+              rawPayload: {
+                ...(child ? { agent_id: "child-thread" } : {}),
+                tool_name: "Bash",
+                tool_use_id: toolUseId,
+                tool_input: { command: "true" },
+              },
+            },
+            signal,
+          }),
+        ).resolves.toEqual({ stdout: "", stderr: "", exitCode: 0 });
+        const connection = expectDefined(connections.at(-1), "completed Gateway connection");
+        if (!connection.aborted) {
+          await once(connection, "abort", { signal });
+        }
+        expect(connection.aborted).toBe(true);
+        const assertCurrent = expectDefined(assertions.get(toolUseId), "admitted execution guard");
+        expect.soft(assertCurrent).not.toThrow();
+      }
+      expect(connections).toHaveLength(2);
+      expect(assertions.size).toBe(2);
+      const assertChildCurrent = expectDefined(
+        assertions.get("child-command"),
+        "claimed child guard",
+      );
+      expect.soft(assertChildCurrent).not.toThrow();
+      childAdmissionCurrent = false;
+      expect.soft(assertChildCurrent).toThrow("retained invocation not allowed");
+    } finally {
+      childAdmissionCurrent = false;
+      relay?.unregister();
+      host?.closeHost();
+      host?.closeAdmission();
+      await relay?.drain();
+      await gateway?.server.close();
+      observation.mockRestore();
+    }
+  });
+
   it.for([false, true])(
     "keeps accepted approval ownership across a lost callback (admitted host: %s)",
     async (owned, { signal }) => {

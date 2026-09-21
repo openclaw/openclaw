@@ -48,11 +48,19 @@ async function execute<T>(
       assertActive?.();
       return result === undefined ? missing() : result;
     }
+    const createAdmission =
+      name === "pluginState.sweep"
+        ? (await import("../infra/sqlite-worker-store.js")).createSqliteWorkerWriteAdmission(() => {
+            context.admission.assertCurrent();
+            assertActive?.();
+          }, [databasePath])
+        : undefined;
     // Writable operations, including comparison observations, must share the
     // host lifecycle owner before dispatch so sibling maintenance cannot overtake them.
     const result = await runOpenClawStateWorkerOperation(context, operation, {
       assertCurrent: assertActive,
       requireStateLifecycle: true,
+      createAdmission,
     });
     assertActive?.();
     return result;
@@ -170,6 +178,14 @@ export function clearPluginStateInWorker(params: Input<"pluginState.clear">): Pr
   const { env, assertActive, ...input } = params;
   return execute({ env, assertActive }, "pluginState.clear", (scope) =>
     scope.execute({ type: "pluginState.clear", input }),
+  );
+}
+
+export function sweepExpiredPluginStateEntriesInWorker(
+  params: HostAdmission = {},
+): Promise<number> {
+  return execute(params, "pluginState.sweep", (scope) =>
+    scope.execute({ type: "pluginState.sweep", input: undefined }),
   );
 }
 

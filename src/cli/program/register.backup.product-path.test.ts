@@ -1,4 +1,3 @@
-import { spawn } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { Worker } from "node:worker_threads";
@@ -9,6 +8,7 @@ import {
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { runCliProcessChild } from "../cli-process-child.test-helpers.js";
 
 function runBackupCli(params: {
   env: NodeJS.ProcessEnv;
@@ -16,37 +16,21 @@ function runBackupCli(params: {
   preloadPath?: string;
   includeWorkspace?: boolean;
 }): Promise<{ code: number | null; stdout: string; stderr: string }> {
-  return new Promise((resolve, reject) => {
-    const child = spawn(
-      process.execPath,
-      [
-        ...(params.preloadPath ? ["--import", params.preloadPath] : []),
-        "--import",
-        "tsx",
-        path.resolve("src/entry.ts"),
-        "backup",
-        "create",
-        "--output",
-        params.outputPath,
-        ...(params.includeWorkspace ? [] : ["--no-include-workspace"]),
-        "--verify",
-        "--json",
-      ],
-      {
-        env: { ...params.env, OPENCLAW_TEST_RUNTIME_LOG: "1" },
-        stdio: ["ignore", "pipe", "pipe"],
-      },
-    );
-    let stdout = "";
-    let stderr = "";
-    child.stdout.on("data", (chunk) => {
-      stdout += chunk;
-    });
-    child.stderr.on("data", (chunk) => {
-      stderr += chunk;
-    });
-    child.once("error", reject);
-    child.once("close", (code) => resolve({ code, stdout, stderr }));
+  return runCliProcessChild({
+    nodeArgs: [
+      ...(params.preloadPath ? ["--import", params.preloadPath] : []),
+      "--import",
+      "tsx",
+      path.resolve("src/entry.ts"),
+      "backup",
+      "create",
+      "--output",
+      params.outputPath,
+      ...(params.includeWorkspace ? [] : ["--no-include-workspace"]),
+      "--verify",
+      "--json",
+    ],
+    env: { ...params.env, OPENCLAW_TEST_RUNTIME_LOG: "1" },
   });
 }
 

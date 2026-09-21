@@ -14,6 +14,7 @@ import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
 } from "../state/openclaw-state-db.js";
+import { createTranscriptCaptureAppends } from "./capture-appends.js";
 import { activeSessions } from "./capture.js";
 import { exportTranscriptLibrary, getTranscriptLibrary, listTranscriptLibrary } from "./library.js";
 import {
@@ -144,6 +145,7 @@ describe("transcript library SQLite query budgets", () => {
       });
       await store.writeSession(target);
       activeSessions.set(target.sessionId, {
+        appends: createTranscriptCaptureAppends(() => {}),
         session: target,
         providerId: target.source.providerId,
         provider: {},

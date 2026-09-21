@@ -12,7 +12,7 @@ Install-type switching, the source-server reference script, the installer, and m
 
 ## Switch between npm and git installs
 
-Installer-driven switches verify the replacement before the working owner is retired. Source wrappers are published atomically; same-path npm shim transitions use an identity-checked backup that is restored on failure, so a failed candidate leaves the previous command runnable. The `openclaw update` command prints its final success result only after post-core convergence and requested restart health checks succeed.
+Installer-driven switches verify the replacement before the working owner is retired. Source wrappers are published atomically; same-path npm shim transitions use an identity-checked backup that is restored on failure, so a failed candidate leaves the previous command runnable. Before retiring an old source wrapper, the updater rechecks its identity and contents and confirms that it still owns the update. The `openclaw update` command prints its final success result only after post-core convergence and requested restart health checks succeed.
 
 Candidate validation failures leave the old Gateway serving. After activation,
 package recovery can restore the retained previous package only when the shared
@@ -67,7 +67,9 @@ installation's owner. Normal package-to-package updates keep using pnpm or Bun.
 Git updates build the complete runtime, including plugins and the Control UI,
 in a temporary candidate worktree. Dev updates preserve local commits by
 rebasing the candidate before its build. The updater publishes that prepared
-runtime during activation instead of repeating the build while stopped.
+runtime during activation instead of repeating the build while stopped. It
+preserves the build timestamps, so ordinary CLI commands keep using that
+validated runtime without regenerating it after the move.
 Candidate installs and nested build commands use a private pnpm virtual store,
 so preparing an update cannot prune dependencies used by the serving Gateway.
 The candidate's temporary workspace settings are restored before checking for

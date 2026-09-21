@@ -21,6 +21,7 @@ import {
 afterEach(() => {
   document.body.replaceChildren();
   vi.restoreAllMocks();
+  vi.useRealTimers();
 });
 
 function loginHarness(
@@ -194,6 +195,7 @@ describe("Models provider login", () => {
   ] as const)(
     "settles $kind sign-in through the registered Models page without a Continue (cancel: $cancel, submit: $submit)",
     async ({ kind, cancel, submit }) => {
+      vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
       vi.spyOn(window, "open").mockReturnValue(null);
       const { context, request } = loginHarness();
       const originalRequest = request.getMockImplementation()!;
@@ -316,6 +318,7 @@ describe("Models provider login", () => {
           expect(session?.getStatus()).toBe("cancelled");
         } else {
           completed.resolve();
+          await vi.advanceTimersByTimeAsync(1000);
           if (submit) {
             await terminalRead.promise;
             await submitCredential(page);
@@ -330,9 +333,7 @@ describe("Models provider login", () => {
           expect(page.textContent).toContain("Saved sign-in; configuration refresh failed.");
         }
         const reads = request.mock.calls.filter(([method]) => method === "wizard.next").length;
-        await new Promise((resolve) => {
-          setTimeout(resolve, 1100);
-        });
+        await vi.advanceTimersByTimeAsync(1100);
         expect(request.mock.calls.filter(([method]) => method === "wizard.next")).toHaveLength(
           reads,
         );

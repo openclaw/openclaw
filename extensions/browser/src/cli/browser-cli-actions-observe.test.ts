@@ -1,4 +1,3 @@
-// Browser tests cover browser cli actions observe plugin behavior.
 import { Command } from "commander";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -47,7 +46,7 @@ describe("browser action observe commands", () => {
 
     expect(gatewayMock).toHaveBeenLastCalledWith(
       "browser.request",
-      expect.objectContaining({ timeout }),
+      expect.objectContaining({ timeout: String(Number(timeout) + 10_000) }),
       expect.objectContaining({ path, timeoutMs: Number(timeout) }),
       expect.objectContaining({ scopes: ["operator.admin"] }),
     );

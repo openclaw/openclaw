@@ -25,11 +25,7 @@ import {
   recordedUpdateRunDrivers,
 } from "./update-run-activity.js";
 import { runUpdateRunAdmission } from "./update-run-admission.js";
-import {
-  decodeRun,
-  encodeRun,
-  type UpdateRunLedgerOptions as LedgerOptions,
-} from "./update-run-codec.js";
+import { encodeRun, type UpdateRunLedgerOptions as LedgerOptions } from "./update-run-codec.js";
 import {
   inspectUpdateRunDriver,
   readUpdateRunDriver,
@@ -37,10 +33,10 @@ import {
   type UpdateRunDriver,
 } from "./update-run-driver.js";
 import { LEGACY_UPDATE_RUN_EXPIRED_REASON } from "./update-run-legacy-expiry.js";
+import { decodeRun, readUpdateRunRecord as readRun } from "./update-run-read.kernel.js";
 import {
   inspectUpdateRunReconciliation,
   readUpdateRunReconciliationCandidates,
-  readUpdateRunRecord as readRun,
   type UpdateRunReconciliationCandidate,
   type UpdateRunReconciliationInput,
 } from "./update-run-reader.js";
@@ -48,7 +44,6 @@ import {
   finishUpdateRunRecord,
   isAbandonedUpdateRun,
   isUnacknowledgedPackageOwnerRefusal,
-  type FinishUpdateRunResult,
   type UpdateRunRecord,
   type UpdateRunPhase,
   type UpdateRunStep,
@@ -69,11 +64,12 @@ export {
   getLatestUpdateFetchFailure,
   getUpdateRun,
   getUpdateRunAsync,
+  getUpdateRunStatusAsync,
   listUpdateRuns,
   listUpdateRunsAsync,
 } from "./update-run-reader.js";
 
-export { recordUpdateRunDiagnostics } from "./update-run-write.js";
+export { finishUpdateRun, recordUpdateRunDiagnostics } from "./update-run-write.js";
 
 type LedgerDatabase = Pick<DB, "update_runs">;
 type RunPatch = Partial<
@@ -545,14 +541,6 @@ export function recordUpdateRunDiagnostic(
     },
     options,
   );
-}
-
-export function finishUpdateRun(
-  runId: string,
-  result: FinishUpdateRunResult,
-  options: LedgerOptions = {},
-): UpdateRunRecord {
-  return mutateRun(runId, (record) => finishUpdateRunRecord(record, result), options);
 }
 
 /** Correct the shipped refusal classification only after its install target was satisfied. */

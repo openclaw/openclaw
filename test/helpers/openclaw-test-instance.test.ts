@@ -30,7 +30,7 @@ import {
   type GatewayReadinessDiagnostic,
   testing,
 } from "./openclaw-test-instance.js";
-import { isProcessAlive, waitForDead, waitForFile } from "./process-wait.js";
+import { isProcessAlive, waitForDead, waitForFile, waitForFixtureFile } from "./process-wait.js";
 import { createDeferred, withTestTimeout } from "./promise.js";
 import { runQaGatewayFixture } from "./qa-gateway-cleanup.js";
 
@@ -300,6 +300,7 @@ if (kind === "cli" || kind === "cli-drain") {
   process.stderr.write("cli diagnostic\\n");
   if (argv[0] === "wait") {
     setInterval(() => {}, 1_000);
+    writeFileSync(tracePath + ".cli-ready", "ready");
     await new Promise(() => {});
   }
   if (kind === "cli-drain") {
@@ -1027,7 +1028,7 @@ describe("openclaw test instance", () => {
     );
     const command = trackOperation(instance.cli(["wait"], { timeoutMs: 1_000 }));
     const outcome = command.catch((error: unknown) => error);
-    await waitForFile(tracePath, 5_000);
+    await waitForFixtureFile(`${tracePath}.cli-ready`, command, "ready");
     const [attempt] = await readAttempts();
     expect(isProcessAlive(attempt!.pid)).toBe(true);
     controller.abort(new Error("instance owner cancelled during CLI"));

@@ -35,7 +35,7 @@ type TaskFlowRegistryStore = {
     context: OpenClawStateWorkerContext,
     flowId: string,
   ): Promise<TaskFlowRecord | undefined>;
-  loadSnapshot: () => TaskFlowRegistryStoreSnapshot;
+  loadSnapshot: (flowIds?: readonly string[]) => TaskFlowRegistryStoreSnapshot;
   upsertFlow: (flow: TaskFlowRecord) => void;
   syncMirroredTask: (
     task: TaskFlowSyncInput,

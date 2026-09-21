@@ -1042,7 +1042,6 @@ class AgentsPage
     const configState = this.context.runtimeConfig.state;
     const agentsState = this.context.agents.state;
     const selectedAgentId = this.resolveSelectedAgentId();
-    const config = currentConfigObject(configState);
     const access = {
       canCreateAgent: this.canCall("openclaw.chat", "operator.admin"),
       canPatchConfig: this.canCall("config.patch", "operator.admin"),
@@ -1071,40 +1070,11 @@ class AgentsPage
             agentsList: this.agentsList,
             selectedAgentId,
             activePanel: this.agentsPanel,
-            config: {
-              form: config,
-              loading: configState.configLoading,
-              saving: configState.configSaving,
-              dirty: configState.configFormDirty,
-              error: configState.lastError,
-            },
-            channels: {
-              snapshot: this.context.channels.state.channelsSnapshot,
-              loading: this.context.channels.state.channelsLoading,
-              error: this.context.channels.state.channelsError,
-              lastSuccess: this.context.channels.state.channelsLastSuccess,
-            },
-            cron: {
-              status: this.cron.cronStatus,
-              jobs: this.cron.cronJobs,
-              jobsTotal: this.cron.cronJobsTotal,
-              jobsHasMore: this.cron.cronJobsHasMore,
-              jobsLoadingMore: this.cron.cronJobsLoadingMore,
-              scopedTotal: this.cron.cronScopedTotal,
-              scopedNextWakeAtMs: this.cron.cronScopedNextWakeAtMs,
-              loading: this.cron.cronLoading,
-              error: this.cron.cronError,
-            },
-            agentFiles: {
-              list: this.agentFilesList,
-              loading: this.agentFilesLoading,
-              error: this.agentFilesError ?? this.context.agents.files(selectedAgentId).error,
-              active: this.agentFileActive,
-              contents: this.agentFileContents,
-              drafts: this.agentFileDrafts,
-              saving: this.agentFileSaving,
-              conflict: this.agentFileConflict,
-            },
+            config: configState,
+            channels: this.context.channels.state,
+            cron: this.cron,
+            agentFiles: this,
+            agentFilesListError: this.context.agents.files(selectedAgentId).error,
             agentIdentityLoading: this.agentIdentityLoading,
             agentIdentityError: this.agentIdentityError,
             agentIdentityById: this.agentIdentityById(),
@@ -1112,23 +1082,8 @@ class AgentsPage
             identityAvatarLoader: this.identityAvatarLoader,
             identitySaving: this.identitySaving,
             identityError: this.identityError,
-            agentSkills: {
-              report: this.agentSkillsReport,
-              loading: this.agentSkillsLoading,
-              error: this.agentSkillsError,
-              agentId: this.agentSkillsAgentId,
-              filter: this.skillsFilter,
-            },
-            toolsCatalog: {
-              loading: this.toolsCatalogLoading,
-              error: this.toolsCatalogError,
-              result: this.toolsCatalogResult,
-            },
-            toolsEffective: {
-              loading: this.toolsEffectiveLoading,
-              error: this.toolsEffectiveError,
-              result: this.toolsEffectiveResult,
-            },
+            agentSkills: this,
+            tools: this,
             githubIdentity: this.githubIdentity,
             onOpenGitHubConnections: () =>
               this.context.navigate("profile", { hash: "#settings-profile-github-connections" }),

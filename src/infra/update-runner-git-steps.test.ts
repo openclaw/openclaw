@@ -266,7 +266,7 @@ describe("activation Doctor ledger writes", () => {
     const exited = createDeferredCore();
 
     const running = runStep({
-      name: "git fetch",
+      name: "git-fetch",
       argv: ["git", "fetch"],
       cwd: "/synthetic/checkout",
       timeoutMs: 600_000,

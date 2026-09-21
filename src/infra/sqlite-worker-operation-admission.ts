@@ -146,6 +146,9 @@ export function createSqliteWorkerOperationAdmission(
     } catch (error) {
       refuse(decision, error);
       return;
+    } finally {
+      // Repeated preparation requests must not retain every settled decision.
+      decisions.delete(decision);
     }
     if (Atomics.load(decision, 0) === REQUESTED) {
       refuse(decision, new SqliteWorkerError("SQLite worker admission was not granted", "closed"));

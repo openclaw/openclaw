@@ -8,7 +8,8 @@ import {
   parsePackageOpenClawSchemaVersions,
   type OpenClawSchemaVersions,
 } from "../state/openclaw-schema-versions.js";
-import { gitNullConfigPath } from "./git-exec.js";
+import { hasErrnoCode } from "./errno.js";
+import { gitNullConfigPath, normalizeGitPathForFilesystem } from "./git-exec.js";
 import { DEV_BRANCH, isBetaTag, isStableTag, type UpdateChannel } from "./update-channels.js";
 import { compareSemverStrings } from "./update-check.js";
 import { cleanupUpdateTemporaryDirectory } from "./update-maintenance.js";
@@ -115,26 +116,63 @@ export async function withGitTargetInspectionRoot<T>(
     root: string,
     args: string[],
     allowMissing = false,
-    budget: { timeoutMs?: number } = { timeoutMs: params.timeoutMs },
+    options: Parameters<CommandRunner>[1] = { timeoutMs: params.timeoutMs },
   ) => {
     const result = await params.runCommand(["git", "-C", root, ...args], {
       cwd: root,
-      timeoutMs: budget.timeoutMs,
+      terminateOnOutputLimit: true,
+      ...options,
     });
-    if (result.code !== 0 && !(allowMissing && result.code === 1)) {
+    if (
+      result.killed ||
+      result.signal ||
+      (result.termination && result.termination !== "exit") ||
+      (result.code !== 0 && !(allowMissing && result.code === 1))
+    ) {
       // Configuration can contain credentials; never include its output in errors.
       throw new Error(`Git target inspection ${args[0]} failed (exit ${result.code})`);
     }
     return result.stdout;
   };
   try {
-    await command(
-      params.root,
-      ["clone", "--mirror", "--shared", "--template=", "--", params.root, inspectionRoot],
-      false,
-      params.work ?? { timeoutMs: params.timeoutMs },
+    const head = (await command(params.root, ["rev-parse", "HEAD"])).trim();
+    const headRef = (await command(params.root, ["symbolic-ref", "-q", "HEAD"], true)).trim();
+    const objects = normalizeGitPathForFilesystem(
+      (await command(params.root, ["rev-parse", "--git-path", "objects"])).trim(),
     );
-    await command(inspectionRoot, ["config", "--remove-section", "remote.origin"]);
+    const shallow = normalizeGitPathForFilesystem(
+      (await command(params.root, ["rev-parse", "--git-path", "shallow"])).trim(),
+    );
+    const refs = await command(params.root, [
+      "for-each-ref",
+      "--format=update %(refname) %(objectname)",
+    ]);
+    // Git transports shallow clones instead of sharing their object store, which
+    // cannot serve absent promised objects. Snapshot refs and the shallow boundary
+    // privately, then let the original remotes hydrate only this inspection repo.
+    await command(params.root, ["init", "--bare", "--template=", inspectionRoot], false, {
+      ...(params.work ?? { timeoutMs: params.timeoutMs }),
+      env: { GIT_DEFAULT_HASH: head.length === 64 ? "sha256" : "sha1" },
+    });
+    await fs.writeFile(
+      path.join(inspectionRoot, "objects", "info", "alternates"),
+      `${quoteGitConfig(path.resolve(params.root, objects))}\n`,
+    );
+    await fs
+      .copyFile(path.resolve(params.root, shallow), path.join(inspectionRoot, "shallow"))
+      .catch((error: unknown) => {
+        if (!hasErrnoCode(error, "ENOENT")) {
+          throw error;
+        }
+      });
+    await command(inspectionRoot, ["update-ref", "--stdin"], false, {
+      timeoutMs: params.timeoutMs,
+      input: refs,
+    });
+    await command(
+      inspectionRoot,
+      headRef ? ["symbolic-ref", "HEAD", headRef] : ["update-ref", "--no-deref", "HEAD", head],
+    );
     const config = await command(
       params.root,
       [
@@ -187,11 +225,11 @@ export async function withGitTargetInspectionRoot<T>(
       );
     return await inspect(inspectionRoot, runInspectionCommand);
   } finally {
-    // Only this invocation's private inspection clone, never the installed checkout.
+    // Only this invocation's private inspection repository, never the installed checkout.
     await cleanupUpdateTemporaryDirectory({
       directory: temporaryRoot,
       root: params.root,
-      name: "git target inspection cleanup",
+      name: "git-target-inspection-cleanup",
       onWarning: params.onWarning,
     });
   }
@@ -342,14 +380,14 @@ export async function fetchGitUpdateTarget(params: {
   if (fetch.exitCode !== 0 || channel === "dev") {
     return fetch.exitCode === 0;
   }
-  const remote = await runStep(targetStep("git remote", ["git", "-C", root, "remote"], root));
+  const remote = await runStep(targetStep("git-remote", ["git", "-C", root, "remote"], root));
   if (remote.exitCode !== 0) {
     return false;
   }
   const remotes = normalizeStringEntries((remote.stdoutTail ?? "").split("\n"));
   const tracked = await runStep(
     targetStep(
-      "git config update upstream",
+      "git-config-update-upstream",
       ["git", "-C", root, "config", "--get", `branch.${DEV_BRANCH}.remote`],
       root,
     ),
@@ -360,7 +398,7 @@ export async function fetchGitUpdateTarget(params: {
   const tagRemote = resolveReleaseTagRemote(remotes, (tracked.stdoutTail ?? "").trim());
   if (!tagRemote) {
     steps.push({
-      name: "git release remote",
+      name: "git-release-remote",
       command: "git remote",
       cwd: root,
       durationMs: 0,
@@ -374,7 +412,7 @@ export async function fetchGitUpdateTarget(params: {
   // even when Git config enables it, so operator-only tags survive.
   const tags = await runStep(
     workStep(
-      `git fetch tags ${tagRemote}`,
+      "git-fetch-tags",
       [
         "git",
         "-C",

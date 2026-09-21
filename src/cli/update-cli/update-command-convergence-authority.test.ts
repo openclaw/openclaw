@@ -39,6 +39,8 @@ vi.mock("../../runtime.js", () => ({
 }));
 
 import { convergeUpdatePlugins } from "./update-command-convergence.js";
+import * as postCore from "./update-command-post-core.js";
+import * as sourceRuntime from "./update-command-runtime.js";
 
 const snapshot: ConfigFileSnapshot = {
   path: "/isolated/openclaw.json",
@@ -83,6 +85,97 @@ beforeEach(() => {
 afterEach(() => vi.unstubAllEnvs());
 
 describe("candidate convergence Doctor dispatch authority", () => {
+  it.each(["runtime", "plugins"] as const)(
+    "parks before %s changes while converging in the candidate runtime",
+    async (changed) => {
+      vi.stubEnv("OPENCLAW_COMPATIBILITY_HOST_VERSION", "0.0.1");
+      const events: string[] = [];
+      const park = vi.fn(async () => {
+        events.push("park");
+      });
+      const assertCurrent = vi.fn();
+      const runtime = vi
+        .spyOn(sourceRuntime, "completeSourceUpdateRuntime")
+        .mockImplementation(async (params) => {
+          expect(process.env.OPENCLAW_COMPATIBILITY_HOST_VERSION).toBe("2026.9.4");
+          if (changed === "runtime") {
+            await params.beforePublication?.();
+            await params.beforePersistentEffect?.();
+            events.push("publish");
+          }
+          return { changed: changed === "runtime" };
+        });
+      const delegate = vi
+        .spyOn(postCore, "continuePostCoreUpdateInFreshProcess")
+        .mockImplementation(async () => {
+          throw new Error("Candidate runtime must not delegate convergence again");
+        });
+      mocks.convergeCandidate.mockImplementation(async (params) => {
+        expect(process.env.OPENCLAW_COMPATIBILITY_HOST_VERSION).toBe("2026.9.4");
+        params.assertCurrent();
+        events.push("candidate-plugins");
+        return {
+          pluginUpdate: { ...pluginUpdate, changed: changed === "plugins" },
+          configSnapshot: snapshot,
+        };
+      });
+      try {
+        const result = await convergeUpdatePlugins({
+          candidateRuntime: true,
+          coreAlreadyCurrent: true,
+          result: {
+            status: "skipped",
+            reason: "already-current",
+            mode: "git",
+            root: "/isolated",
+            steps: [],
+            durationMs: 0,
+          },
+          root: "/isolated",
+          installKindChanged: false,
+          configSnapshot: snapshot,
+          requestedChannel: null,
+          storedChannel: null,
+          channel: "stable",
+          downgradeRisk: false,
+          opts: { json: true, yes: true },
+          preUpdatePluginInstallRecords: {},
+          startedAt: Date.now(),
+          updateStepTimeoutMs: 5_000,
+          packageUpdateNodeRunner: "/selected/node",
+          beforeRuntimePublication: park,
+          beforeDoctor: park,
+          assertCurrent,
+        });
+        expect(runtime).toHaveBeenCalledOnce();
+        expect(mocks.convergeCandidate).toHaveBeenCalledOnce();
+        expect(delegate).not.toHaveBeenCalled();
+        expect(park).toHaveBeenCalledOnce();
+        expect(events).toEqual(
+          changed === "runtime"
+            ? ["park", "publish", "candidate-plugins"]
+            : ["candidate-plugins", "park"],
+        );
+        expect(result.resultWithPostUpdate.status).toBe("ok");
+        expect(result.resultWithPostUpdate.steps).toEqual(
+          changed === "runtime"
+            ? [expect.objectContaining({ name: "source runtime publication", exitCode: 0 })]
+            : [],
+        );
+        if (changed === "plugins") {
+          expect(mocks.runExec).toHaveBeenCalled();
+          expect(mocks.runExec.mock.calls.every(([command]) => command === "/selected/node")).toBe(
+            true,
+          );
+        }
+        expect(process.env.OPENCLAW_COMPATIBILITY_HOST_VERSION).toBe("0.0.1");
+      } finally {
+        runtime.mockRestore();
+        delegate.mockRestore();
+      }
+    },
+  );
+
   it.each([
     "live",
     "entrypoint-revocation",

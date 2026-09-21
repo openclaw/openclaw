@@ -447,9 +447,11 @@ class ChatQuestionPanel extends OpenClawLightDomElement {
             type="button"
             @click=${() => this.setCollapsed(false)}
             aria-label=${t("chat.questions.expand")}
+            aria-expanded="false"
           >
             <span
-              >${model.collapsedLabel ? html`<strong>${model.collapsedLabel}</strong> · ${question.question}` : question.header}</span
+              ><strong>${model.title}</strong> ·
+              ${model.collapsedLabel ? html`${model.collapsedLabel} · ${question.question}` : question.header}</span
             >
             ${model.collapsedLabel ? nothing : html`<span class="chat-question-panel__progress">${progress}</span>`}
             <span class="chat-question-panel__chevron">${icons.chevronDown}</span>
@@ -476,6 +478,7 @@ class ChatQuestionPanel extends OpenClawLightDomElement {
             type="button"
             @click=${() => this.setCollapsed(true)}
             aria-label=${t("chat.questions.collapse")}
+            aria-expanded="true"
           >
             ${icons.chevronDown}
           </button>

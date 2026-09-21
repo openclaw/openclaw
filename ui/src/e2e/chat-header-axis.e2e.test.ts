@@ -210,7 +210,7 @@ suite.define(() => {
           const style = getComputedStyle(element);
           return { bottom: style.marginBottom, left: style.marginLeft, right: style.marginRight };
         });
-        expect(margins).toEqual({ bottom: "40px", left: "4px", right: "4px" });
+        expect(margins).toEqual({ bottom: "40px", left: "12px", right: "12px" });
       } finally {
         await suite.closeBrowserContext(context);
       }

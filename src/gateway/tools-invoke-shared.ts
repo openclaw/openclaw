@@ -34,6 +34,7 @@ import type { GatewayClient } from "./server-methods/shared-types.js";
 import { withOperatorToolGatewayAuthority } from "./server-plugin-in-process-dispatch.js";
 import { createSyntheticPluginRuntimeClient } from "./server-plugin-runtime-client.js";
 import { resolveRequestedSessionAgentId } from "./session-request-agent.js";
+import { authorizeSessionAgentRun } from "./session-sharing-policy.js";
 import {
   authorizeResolvedSessionMutation,
   resolveSessionSharingTarget,
@@ -256,12 +257,24 @@ async function invokeGatewayToolWithSignal(
     operatorRoleActor: params.operatorRoleActor,
     scopes: params.senderIsOwner ? [ADMIN_SCOPE] : [...(params.operatorScopes ?? [])],
   });
-  const primarySessionAuthorizationError = authorizeResolvedSessionMutation({
-    cfg: params.cfg,
-    client,
-    sessionKey,
+  const sessionEntry = loadGatewaySessionEntryReadOnly(sessionKey, {
     agentId: selectedAgentId,
-  });
+  }).entry;
+  const primarySessionAuthorizationError =
+    authorizeResolvedSessionMutation({
+      cfg: params.cfg,
+      client,
+      sessionKey,
+      agentId: selectedAgentId,
+    }) ??
+    // Standalone calls cannot create the sandbox provenance a normal session run records.
+    (!sessionEntry
+      ? authorizeSessionAgentRun({
+          cfg: params.cfg,
+          client,
+          target: { agentId: selectedAgentId, canonicalKey: sessionKey },
+        })
+      : null);
   if (primarySessionAuthorizationError) {
     return {
       ok: false,
@@ -321,9 +334,6 @@ async function invokeGatewayToolWithSignal(
       };
     }
   }
-  const sessionEntry = loadGatewaySessionEntryReadOnly(sessionKey, {
-    agentId: selectedAgentId,
-  }).entry;
   if (
     isAgentHarnessSessionKey(sessionKey) &&
     (!sessionEntry || isAgentHarnessSessionStoreEntryProtected(sessionKey, sessionEntry))

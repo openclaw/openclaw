@@ -277,7 +277,7 @@ describe("doctor --fix include write ownership", () => {
         expect(repairPanels()).not.toContain("retired runtime tuning knobs");
         expect(repairPanels()).not.toContain("canonical agent roster");
 
-        await expect(runWriteConfigHealth(ctx)).resolves.toBeUndefined();
+        await expect(runWriteConfigHealth(ctx)).resolves.toBe(false);
 
         // Neither queued repair reached disk, so neither is reported as done.
         expect(ctx.configWriteRefusal).toBe("include-ownership");

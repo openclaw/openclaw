@@ -27,6 +27,18 @@ const {
 describe("runDaemonInstall", () => {
   setupInstallTests();
 
+  it("provides readiness guidance after successful service registration", async () => {
+    await runDaemonInstall({ json: true, force: true });
+    expect(installDaemonServiceAndEmitMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        successMessage: expect.stringMatching(
+          /readiness has not been checked.*openclaw gateway status.*openclaw health/,
+        ),
+        onVerified: expect.any(Function),
+      }),
+    );
+  });
+
   it("refuses update-owned gateway defaults when authority expires during write preparation", async () => {
     const snapshot = await readConfigFileSnapshotMock();
     readConfigFileSnapshotMock.mockResolvedValue({ ...snapshot, sourceConfig: {} });

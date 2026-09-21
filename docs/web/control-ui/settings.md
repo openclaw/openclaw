@@ -275,6 +275,12 @@ update policy, and active or most recent update. **Update now** opens a
 confirmation showing the target and restart impact. Choose **Update and restart**
 to start; canceling leaves the Gateway untouched.
 
+For `dev` git updates, the confirmation, sidebar, and available-update status
+show the installed → target short commit SHAs on a separate line below the commit
+count. **Compare on GitHub** opens a comparison when the tracked upstream is
+a GitHub repository; other installs show plain revisions. This distinguishes
+revisions that share a version number.
+
 After confirmation, one update view shows the ordered phases, current or last
 step details, and verification results for the service, version, plugins,
 channels, and inference. The details area follows new lines until you scroll up.
@@ -401,8 +407,10 @@ Find **Labs** in the **System** section of the Settings sidebar, after **Infrast
 
 **Settings → Labs → Custom plugin UI** enables native pages, widgets, actions,
 and view replacements from user-installed plugins. It defaults to off and
-writes `gateway.controlUi.experimental.customPlugins`. Restart the Gateway and
-reload connected browser tabs after changing it.
+writes `gateway.controlUi.experimental.customPlugins`. Changes apply without
+restarting the Gateway, and connected pages refresh their plugin views
+automatically. After disabling it, reload browser tabs to clear plugin
+JavaScript that already ran.
 
 Only enable it for plugin authors you trust: native UI runs in the Control UI
 origin with the signed-in operator's Gateway authority. Native UI from enabled

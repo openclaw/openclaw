@@ -159,11 +159,15 @@ export async function countFailedDeliveryQueueEntries(
 export function countPendingDeliveryQueueEntries(
   queueNames: readonly string[],
   stateDir?: string,
+  context?: DeliveryQueueStateContext,
 ): number {
   if (queueNames.length === 0) {
     return 0;
   }
-  return countPendingDeliveryQueueEntriesInDatabase(openStateDatabase(stateDir), queueNames);
+  return countPendingDeliveryQueueEntriesInDatabase(
+    openStateDatabase(stateDir, context),
+    queueNames,
+  );
 }
 
 /** Inventory retired custody without opening a writer or creating state. */

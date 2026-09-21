@@ -212,8 +212,19 @@ The pill carries inline controls:
 
 Edit, Pause, and Clear do not send slash commands or add chat turns. Controls
 target the displayed Goal ID, so a stale button cannot change a replacement
-Goal. If a request is interrupted, retry it unchanged. A successful replay
-refreshes the current state instead of restoring an old Goal snapshot.
+Goal. If a request is interrupted or its acknowledgment does not arrive within
+30 seconds, the UI reports an unconfirmed outcome. Use **Check outcome** in the
+recovery notice, even if the goal changed or was cleared. This retries the saved action
+unchanged to reconcile it with the Gateway receipt. The original request stays
+in this browser tab across reconnects and reloads; it is never retried
+automatically. The UI does not send goal controls if the connection has no
+account-scoped recovery identity. Incognito requests stay in memory only. A successful replay
+refreshes the current state instead of restoring an old Goal snapshot or
+starting another continuation. Dismissing an error or cancelling an editor
+does not cancel a mutation already sent to the Gateway. After 24 hours, the saved
+request expires and its literal payload is removed; **Review current goal** refreshes
+state before another decision. Forgetting this browser or switching authenticated
+accounts removes that Gateway's previous account recovery payloads.
 
 The action buttons are unavailable without a connection. The expand chevron
 keeps working. Concurrent Goal actions are rejected while an operation is

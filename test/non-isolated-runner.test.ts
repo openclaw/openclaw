@@ -10,6 +10,7 @@ import type { JsonTestResults } from "vitest/node";
 import type { VitestReportCapture } from "../scripts/lib/vitest-report-capture.mts";
 import { resolveTestNodeExecPath } from "../src/test-utils/node-process.js";
 import { runVitestShutdownCommand } from "./helpers/vitest-shutdown-command.ts";
+import { agentReaderFixtureFiles } from "./non-isolated-runner.agent-reader-fixtures.ts";
 import { gatewayWorkerLifetimeFixtureFiles } from "./non-isolated-runner.gateway-lifecycle-fixtures.ts";
 import { mockResolutionFixtureFiles } from "./non-isolated-runner.mock-resolution-fixtures.ts";
 import { testApiLifecycleFixtureFiles } from "./non-isolated-runner.test-api-fixtures.ts";
@@ -100,7 +101,7 @@ it("starts with an empty, attribute-free body and native default focus", () => {
   return files;
 }
 
-function fixtureFiles(): Record<string, string> {
+function fixtureFiles(fixtureRoot: string): Record<string, string> {
   const sourcePath = (name: string) => JSON.stringify(path.join(repoRoot, "src", name));
   const payloadImports = `import { createRequire } from "node:module";
 import { queryObjects } from "node:v8";
@@ -431,6 +432,7 @@ it("reloads the redirected mock after a real import", () => {
     ...mockResolutionFixtureFiles,
     ...testApiLifecycleFixtureFiles(repoRoot),
     ...documentFocusFixtureFiles(),
+    ...agentReaderFixtureFiles(repoRoot, fixtureRoot),
   };
 }
 
@@ -476,8 +478,8 @@ async function assertCompletion(
   const report: JsonTestResults = JSON.parse(await fs.readFile(expected.reportPath, "utf8"));
   expect(report.testResults.map((file) => file.name).toSorted()).toEqual(expected.files);
   expect(report).toMatchObject({
-    numTotalTests: 51,
-    numPassedTests: 50,
+    numTotalTests: 53,
+    numPassedTests: 52,
     numPendingTests: 1,
     numFailedTests: 0,
     numTodoTests: 0,
@@ -517,7 +519,7 @@ async function verifyRunnerCleanup(signal: AbortSignal) {
   try {
     const vitestPackageDir = path.dirname(require.resolve("vitest/package.json"));
     await fs.symlink(path.dirname(vitestPackageDir), path.join(root, "node_modules"), "junction");
-    const files = fixtureFiles();
+    const files = fixtureFiles(root);
     for (const [name, content] of Object.entries(files)) {
       await fs.mkdir(path.dirname(path.join(root, name)), { recursive: true });
       await fs.writeFile(path.join(root, name), content, "utf8");

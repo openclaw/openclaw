@@ -10,7 +10,7 @@ const { hasPairedCardRenderer } = vi.hoisted(() => ({
 vi.mock("../infra/device-pairing.js", () => ({ hasPairedCardRenderer }));
 
 const SENTENCE =
-  "Create a card with progress_card only for substantial work with at least two meaningful sequential steps, never for greetings, quick questions, or single-step requests. Update or clear existing cards as needed.";
+  "Create a card with progress_card only for substantial work with at least two meaningful sequential steps, never for greetings, quick questions, or single-step requests. For measurable work with a known total, prefer a leading progress bar labeled with what is measured and observed completed/total counts; never invent percentages. Update or clear existing cards as needed.";
 
 function append(params: {
   config?: Parameters<typeof appendProgressCardSystemPrompt>[0]["config"];

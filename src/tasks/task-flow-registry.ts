@@ -233,10 +233,11 @@ export function ensureTaskFlowRegistryReady(options?: { refreshProjection?: bool
   if (options?.refreshProjection === false || (!projectionDirty && dirtyFlowIds.size === 0)) {
     return;
   }
-  const restored = getTaskFlowRegistryStore().loadSnapshot();
+  const flowIds = projectionDirty ? undefined : [...dirtyFlowIds];
+  const restored = getTaskFlowRegistryStore().loadSnapshot(flowIds);
   const previous = flows;
   const next = new Map(previous);
-  for (const flowId of next.keys()) {
+  for (const flowId of flowIds ?? next.keys()) {
     if (!restored.flows.has(flowId)) {
       next.delete(flowId);
     }
@@ -335,43 +336,15 @@ function isCurrentTaskFlowDatabase(admission: OpenClawStateDatabaseReadAdmission
   return current?.key === admission.identity.key;
 }
 
-export async function reconcileTaskFlowWorkerReceipts(
-  context: OpenClawStateWorkerContext,
-  flowIds: readonly string[],
-): Promise<void> {
-  if (flowIds.length === 0) {
-    return;
-  }
-  context.admission.assertCurrent();
-  if (!isCurrentTaskFlowDatabase(context.admission)) {
-    return;
-  }
-  const store = getTaskFlowRegistryStore();
-  await ensureTaskFlowRegistryReadyAsync(context);
-  for (const flowId of new Set(flowIds)) {
-    context.admission.assertCurrent();
-    if (!isCurrentTaskFlowDatabase(context.admission) || getTaskFlowRegistryStore() !== store) {
-      return;
-    }
-    // The receipt is already committed; publication still rereads the canonical row.
-    await runTaskFlowRegistryWorkerMutation(
-      { flowId, admission: context.admission },
-      () => Promise.resolve(),
-      () => store.readFlowAsync(context, flowId),
-    );
-  }
-}
-
 /** Worker receipts reconcile durable rows without resetting live task or delivery owners. */
-export async function runTaskFlowRegistryWorkerMutation<T>(
+export function beginTaskFlowRegistryWorkerMutation(
   context: {
     flowId: string;
     admission: OpenClawStateDatabaseReadAdmission;
     onPublicationError?: (error: unknown) => void;
   },
-  mutate: () => Promise<T>,
   readCurrent: () => Promise<TaskFlowRecord | undefined>,
-): Promise<T> {
+): () => Promise<void> {
   const { flowId, admission } = context;
   const store = getTaskFlowRegistryStore();
   admission.assertCurrent();
@@ -385,12 +358,7 @@ export async function runTaskFlowRegistryWorkerMutation<T>(
   pendingFlowWrites.set(flowId, pending);
   dirtyFlowIds.add(flowId);
   projectionEpoch += 1;
-  try {
-    return await mutate();
-  } catch (error) {
-    log.warn("Failed to persist task-flow worker mutation", { flowId, error });
-    throw error;
-  } finally {
+  return async () => {
     dirtyFlowIds.add(flowId);
     projectionEpoch += 1;
     let reconciled = false;
@@ -432,6 +400,22 @@ export async function runTaskFlowRegistryWorkerMutation<T>(
       }
       completion.resolve();
     }
+  };
+}
+
+export async function runTaskFlowRegistryWorkerMutation<T>(
+  context: Parameters<typeof beginTaskFlowRegistryWorkerMutation>[0],
+  mutate: () => Promise<T>,
+  readCurrent: () => Promise<TaskFlowRecord | undefined>,
+): Promise<T> {
+  const settle = beginTaskFlowRegistryWorkerMutation(context, readCurrent);
+  try {
+    return await mutate();
+  } catch (error) {
+    log.warn("Failed to persist task-flow worker mutation", { flowId: context.flowId, error });
+    throw error;
+  } finally {
+    await settle();
   }
 }
 

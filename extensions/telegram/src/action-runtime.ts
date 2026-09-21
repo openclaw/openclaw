@@ -769,22 +769,12 @@ export async function handleTelegramAction(
       accountId,
       context: options,
     });
-    const token = resolveTelegramToken(cfg, { accountId }).token;
-    if (!token) {
-      throw new Error(
-        "Telegram bot token missing. Set TELEGRAM_BOT_TOKEN or channels.telegram.botToken.",
-      );
-    }
-    const result = await telegramActionRuntime.deleteMessageTelegram(
-      authorizedChatId,
-      messageId ?? 0,
-      {
-        cfg,
-        token,
-        accountId: accountId ?? undefined,
-        gatewayClientScopes: options?.gatewayClientScopes,
-      },
-    );
+    const result = await telegramActionRuntime.deleteMessageTelegram(authorizedChatId, messageId, {
+      cfg,
+      accountId: accountId ?? undefined,
+      gatewayClientScopes: options?.gatewayClientScopes,
+      assertPlatformSendAuthorized: options?.assertDirectAdapterHandoff,
+    });
     if (!result.ok) {
       return jsonResult({ ok: false, deleted: false, warning: result.warning });
     }

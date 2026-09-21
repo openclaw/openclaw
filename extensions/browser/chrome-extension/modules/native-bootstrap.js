@@ -173,6 +173,9 @@ export function createNativeBootstrapController({ chromeApi = chrome, getPairing
           nonce,
         });
       } catch (error) {
+        if (!isCurrent()) {
+          return { status: "superseded" };
+        }
         if (error === NATIVE_MESSAGE_TIMEOUT || isHostMissing(error)) {
           const code = error === NATIVE_MESSAGE_TIMEOUT ? "native_host_timeout" : "host_not_found";
           await writeState("retrying", code);

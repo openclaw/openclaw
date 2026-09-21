@@ -45,6 +45,16 @@ describe("Git candidate activation", () => {
   let virtualStoreLayout: VirtualStoreLayout;
 
   beforeEach(async () => {
+    // Keep fixture-local identity authoritative during candidate rebases.
+    vi.stubEnv("GIT_CONFIG_COUNT", "0");
+    for (const key of [
+      "GIT_AUTHOR_NAME",
+      "GIT_AUTHOR_EMAIL",
+      "GIT_COMMITTER_NAME",
+      "GIT_COMMITTER_EMAIL",
+    ]) {
+      vi.stubEnv(key, undefined);
+    }
     directory = await fs.realpath(
       await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-git-candidate-")),
     );
@@ -299,12 +309,10 @@ describe("Git candidate activation", () => {
     const result = await update();
 
     expect(result.status, JSON.stringify(result)).toBe("ok");
-    const runtimeSteps = result.steps.filter((step) =>
-      step.name.startsWith("preflight node runtime ("),
-    );
+    const runtimeSteps = result.steps.filter((step) => step.name === "preflight-node-runtime");
     expect(runtimeSteps).toHaveLength(1);
     expect(runtimeSteps[0]).toMatchObject({
-      name: `preflight node runtime (${incompatibleCandidate.slice(0, 8)})`,
+      name: "preflight-node-runtime",
       exitCode: 1,
     });
     const runtimeOutput = `${runtimeSteps[0]?.stdoutTail ?? ""}\n${runtimeSteps[0]?.stderrTail ?? ""}`;
@@ -312,11 +320,11 @@ describe("Git candidate activation", () => {
     expect(runtimeOutput).toContain(nodeRuntime.path);
     expect(runtimeOutput).toContain(nodeRuntime.version);
     expect(packageManagerCommands).toContainEqual(["pnpm", "build"]);
-    expect(
-      result.steps.some(
-        (step) => step.name === `preflight checkout (${olderCandidate.slice(0, 8)})`,
-      ),
-    ).toBe(true);
+    expect(result.steps.filter((step) => step.name === "preflight-checkout")).toMatchObject(
+      [incompatibleCandidate, olderCandidate].map((sha) => ({
+        command: expect.stringContaining(`checkout --detach ${sha}`),
+      })),
+    );
     expect(events).toEqual(["build", "validate", "stop", "migrate"]);
     expect(await git(root, "rev-parse", "HEAD")).toBe(olderCandidate);
     await expectRuntime(root, olderCandidate);
@@ -362,16 +370,15 @@ describe("Git candidate activation", () => {
       status: "error",
       reason: "preflight-node-runtime-incompatible",
     });
-    const runtimeSteps = result.steps.filter((step) =>
-      step.name.startsWith("preflight node runtime ("),
-    );
-    expect(runtimeSteps).toMatchObject(
+    const runtimeSteps = result.steps.filter((step) => step.name === "preflight-node-runtime");
+    expect(result.steps.filter((step) => step.name === "preflight-checkout")).toMatchObject(
       [latestCandidate, olderCandidate, upstreamBase].map((sha) => ({
-        name: `preflight node runtime (${sha.slice(0, 8)})`,
-        exitCode: 1,
+        command: expect.stringContaining(`checkout --detach ${sha}`),
       })),
     );
+    expect(runtimeSteps).toHaveLength(3);
     for (const step of runtimeSteps) {
+      expect(step.exitCode).toBe(1);
       const output = `${step.stdoutTail ?? ""}\n${step.stderrTail ?? ""}`;
       expect(output).toContain(requiredEngine);
       expect(output).toContain(nodeRuntime.path);
@@ -583,7 +590,7 @@ describe("Git candidate activation", () => {
         expect(result).toMatchObject({ status: "error", reason: "preflight-no-good-commit" });
         expect(result.steps).toContainEqual(
           expect.objectContaining({
-            name: expect.stringContaining("clean check"),
+            name: "preflight-update-clean-check",
             exitCode: 1,
             stdoutTail: expect.stringContaining("pnpm-workspace.yaml"),
           }),
@@ -650,7 +657,7 @@ describe("Git candidate activation", () => {
       if (localCommit) {
         expect(await fs.readFile(path.join(root, "local.txt"), "utf8")).toBe("operator change\n");
         const committer = await git(root, "log", "-1", "--format=%cn <%ce>");
-        expect.soft(committer === "OpenClaw Test <openclaw@example.com>").toBe(true);
+        expect.soft(committer).toBe("OpenClaw Test <openclaw@example.com>");
       }
       await expectRuntime(root, current);
       const manifest: { virtualStoreDir: string } = JSON.parse(
@@ -722,7 +729,7 @@ describe("Git candidate activation", () => {
       // The existing fallback can retain the old candidate without creating a commit.
       expect(result.status, JSON.stringify(result)).toBe("ok");
       expect(
-        result.steps.some((step) => /preflight rebase \(/u.test(step.name) && step.exitCode !== 0),
+        result.steps.some((step) => step.name === "preflight-rebase" && step.exitCode !== 0),
       ).toBe(true);
       expect(abortTimeouts.length).toBeGreaterThan(0);
       for (const timeoutMs of abortTimeouts) {
@@ -940,7 +947,7 @@ describe("Git candidate activation", () => {
       expect(await git(root, "rev-parse", "HEAD")).toBe(expectedSha);
       expect(result.steps).toContainEqual(
         expect.objectContaining({
-          name: "git rollback verify HEAD",
+          name: "git-rollback-verify-head",
           exitCode: restoreSource ? 0 : 1,
           stdoutTail: expectedSha,
           ...(restoreSource ? {} : { stderrTail: `expected ${beforeSha}, found ${candidateSha}` }),
@@ -957,7 +964,7 @@ describe("Git candidate activation", () => {
         });
         expect(result.steps).toContainEqual(
           expect.objectContaining({
-            name: "git runtime rollback",
+            name: "git-runtime-rollback",
             exitCode: 1,
             stderrTail: expect.stringContaining(distBackup),
           }),

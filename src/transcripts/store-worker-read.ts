@@ -1,6 +1,10 @@
-import type { DatabaseSync } from "node:sqlite";
 import { runSqliteDeferredTransactionSync } from "../infra/sqlite-transaction.js";
+import { getSqliteWorkerStateContext } from "../infra/sqlite-worker-state-context.js";
+import type { OpenClawStateDatabase } from "../state/openclaw-state-db-contract.js";
+import { ensureMeetingTranscriptsSchema } from "./sqlite-schema.js";
+import { createPreparedTranscriptDateReader } from "./store-date-preparation.js";
 import {
+  queryTranscriptReadEntries,
   readLatestTranscriptEntry,
   readStoredTranscriptNotes,
   readTranscriptEntry,
@@ -23,11 +27,26 @@ import type { TranscriptReadCommand, TranscriptReadOperations } from "./store-wo
 
 /** Expected reader refusals retain their domain type; native failures use the shared codec. */
 export function executeTranscriptRead(
-  database: DatabaseSync,
+  target: { database: OpenClawStateDatabase; path: string },
   command: TranscriptReadCommand,
 ): TranscriptReadOperations[keyof TranscriptReadOperations]["output"] {
+  ensureMeetingTranscriptsSchema({
+    ...target,
+    env: getSqliteWorkerStateContext().environment,
+    readOnly: command.input.readOnly,
+  });
+  const database = target.database.db;
   try {
     switch (command.type) {
+      case "transcripts.readEntries":
+        return {
+          ok: true,
+          value: queryTranscriptReadEntries(
+            database,
+            command.input.params,
+            createPreparedTranscriptDateReader(),
+          ),
+        };
       case "transcripts.summarySnapshot":
         return {
           ok: true,

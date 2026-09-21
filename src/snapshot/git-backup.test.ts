@@ -846,6 +846,7 @@ describe("Git-backed SQLite snapshots", () => {
     expect(restored.tables.every((table) => table.ok)).toBe(true);
     expect(restored.manifest.tables).toEqual(manifest.tables);
     expect(manifest.tables).not.toHaveProperty("session_transcript_index_state");
+    expect(manifest.tables).not.toHaveProperty("session_transcript_fts_rows");
     if (process.platform !== "win32") {
       expect((await fs.stat(restoredPath)).mode & 0o777).toBe(0o600);
     }

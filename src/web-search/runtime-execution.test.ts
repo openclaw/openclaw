@@ -1,5 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
+import { ToolAuthorizationError } from "../agents/tool-input-error.js";
 import type { WebSearchProviderToolDefinition } from "../plugins/web-provider-types.js";
+import { SecretSurfaceUnavailableError } from "../secrets/runtime-degraded-state.js";
 import { createWebSearchTestProvider } from "../test-utils/web-provider-runtime.test-helpers.js";
 import { executeWebSearchCandidates } from "./runtime-execution.js";
 
@@ -13,6 +15,32 @@ function candidate(id: string, execute: WebSearchProviderToolDefinition["execute
 }
 
 describe("executeWebSearchCandidates", () => {
+  it.each([
+    new ToolAuthorizationError("Search is not authorized for this run"),
+    new SecretSurfaceUnavailableError({
+      ownerKind: "capability",
+      ownerId: "web-search:first",
+      state: "unavailable",
+      paths: [],
+      refKeys: [],
+      reason: "credential unavailable",
+    }),
+  ])("does not fall back after trusted $name preflight denial", async (failure) => {
+    const fallback = vi.fn(async () => ({ results: [] }));
+    const result = executeWebSearchCandidates({
+      candidates: [
+        candidate("first", async () => {
+          throw failure;
+        }),
+        candidate("fallback", fallback),
+      ],
+      args: { query: "synthetic query" },
+      allowFallback: true,
+    });
+    await expect(result).rejects.toBe(failure);
+    expect(fallback).not.toHaveBeenCalled();
+  });
+
   it("tries every fallback and retains the first error with its cause", async () => {
     const cause = new Error("first transport failure");
     const firstError = new Error("first provider failed", { cause });
@@ -31,7 +59,7 @@ describe("executeWebSearchCandidates", () => {
       args: { query: "synthetic query" },
       allowFallback: true,
     });
-    await expect(result).rejects.toBe(firstError);
+    await expect(result).rejects.toMatchObject({ provider: "first", cause: firstError });
     expect(firstError.cause).toBe(cause);
     expect(attempts).toEqual(["first", "second"]);
   });
@@ -78,7 +106,7 @@ describe("executeWebSearchCandidates", () => {
           'web_search provider "first" returned missing_fixture_api_key',
         );
       } else {
-        await expect(result).rejects.toBe(thrown);
+        await expect(result).rejects.toMatchObject({ provider: "first", cause: thrown });
       }
     },
   );

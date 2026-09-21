@@ -422,6 +422,7 @@ export async function withUpdateCommandExecutor<T>(
               (options?.legacyPackageHandoff
                 ? captureManagedUpdateLeaseDatabaseIdentity(databasePath)
                 : undefined);
+            databasePath = existingIdentity?.databasePath ?? databasePath;
             store = createManagedHandoffLeaseStore({
               databasePath,
               serviceManagerEnv: resolveServiceManagerEnv(),

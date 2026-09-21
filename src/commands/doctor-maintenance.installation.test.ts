@@ -3,11 +3,13 @@ import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { applyCliProfileEnv } from "../cli/profile.js";
+import { writeOpenClawConfig } from "../config/test-helpers.js";
 import type { GatewayServiceCommandConfig } from "../daemon/service-types.js";
 import { GatewayServiceAuthorityError } from "../daemon/service-update-authority.js";
 import type { GatewayService } from "../daemon/service.js";
 import { createMockGatewayService, mockSystemAccountHome } from "../daemon/service.test-helpers.js";
 import { readLoadedSystemdServiceRuntime } from "../daemon/systemd-loaded-runtime.js";
+import { writeDoctorGatewayConfig } from "../flows/doctor-health-contribution-runners.gateway.js";
 import * as sqliteSnapshotSource from "../infra/sqlite-snapshot-source.js";
 import { readUpdateRunDriver } from "../infra/update-run-driver.js";
 import { createUpdateRun } from "../infra/update-run-ledger.js";
@@ -19,12 +21,14 @@ import {
 import { withEnvAsync } from "../test-utils/env.js";
 import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
 import { maybeRepairGatewayServiceConfig } from "./doctor-gateway-services.js";
+import { prepareWriterContext } from "./doctor-gateway-services.writer-order.test-support.js";
 import { beginDoctorMaintenance } from "./doctor-maintenance.js";
 import { stoppedSystemdBinding } from "./doctor-maintenance.test-support.js";
 import { createDoctorPrompter } from "./doctor-prompter.js";
 
 const mocks = vi.hoisted(() => ({
   service: vi.fn<() => GatewayService>(),
+  resident: vi.fn<() => { pid: number } | undefined>(),
   activeRoot: "",
   runtimeDirectory: "",
   runtimePath: "",
@@ -36,6 +40,23 @@ const mocks = vi.hoisted(() => ({
   suspend: vi.fn<typeof import("../daemon/schtasks.js").suspendScheduledTaskAutoStartForUpdate>(),
   resume: vi.fn<typeof import("../daemon/schtasks.js").resumeScheduledTaskAutoStartAfterUpdate>(),
 }));
+vi.mock("../gateway/call.js", async (original) => {
+  const { gatewayMaintenanceResponse } = await import("../gateway/health-response.test-support.js");
+  return {
+    ...(await original<typeof import("../gateway/call.js")>()),
+    callGatewayCli: gatewayMaintenanceResponse(() => mocks.resident()),
+  };
+});
+
+vi.mock("../daemon/systemd-exec.js", async (original) => {
+  const { gatewayMaintenanceSystemdShow } =
+    await import("../gateway/health-response.test-support.js");
+  return {
+    ...(await original<typeof import("../daemon/systemd-exec.js")>()),
+    execSystemctlUser: gatewayMaintenanceSystemdShow,
+  };
+});
+
 vi.mock("@clack/prompts", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@clack/prompts")>()),
   confirm: mocks.confirm,
@@ -124,6 +145,7 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const originalStdinIsTTY = Object.getOwnPropertyDescriptor(process.stdin, "isTTY");
 beforeEach(() => {
   vi.clearAllMocks();
+  mocks.resident.mockReset();
   mocks.audit.mockResolvedValue({ ok: true, issues: [] });
   mocks.installPlanBuilt = false;
   for (const native of [mocks.suspend, mocks.resume]) {
@@ -150,6 +172,7 @@ async function runInstallationCase(params: {
   platform: "linux" | "darwin" | "win32";
   mode: "maintenance" | "direct";
   installFails?: boolean;
+  tokenRecovery?: "success" | "refused" | "service-failure" | "writer-unavailable";
   revoked?: "unchanged" | "restored" | "recovery-pending" | "unclassified";
   initiallyStopped?: boolean;
   releaseStateBeforeFinish?: boolean;
@@ -252,17 +275,23 @@ async function runInstallationCase(params: {
         environment: {
           HOME: home,
           PATH: "/usr/bin:/bin",
+          ...(params.tokenRecovery ? { OPENCLAW_GATEWAY_TOKEN: "maintenance-fixture-token" } : {}),
           ...(params.profile ? { OPENCLAW_PROFILE: params.profile } : {}),
         },
       };
       const originalCommand = structuredClone(command);
       let running = !initiallyStopped;
+      const pid = 4200;
+      mocks.resident.mockImplementation(() => (running ? { pid } : undefined));
       let nativeInspectionReads = 0;
       let inspectionClock = 0;
       let inspectingRuntime = false;
       let competingUpdateStarted = false;
       const installationInspectionElapsedMs: number[] = [];
       const events: string[] = [];
+      let writerContext: Awaited<ReturnType<typeof prepareWriterContext>> | undefined;
+      let configPath: string | undefined;
+      let originalConfig: string | undefined;
       const service = createMockGatewayService({
         isAbsent: async () => false,
         isLoaded: async () => true,
@@ -315,7 +344,11 @@ async function runInstallationCase(params: {
               }
             }
           }
-          return { status: running ? "running" : "stopped", systemd: { managerUid: 2001 } };
+          return {
+            status: running ? "running" : "stopped",
+            ...(running ? { pid } : {}),
+            systemd: { managerUid: 2001 },
+          };
         },
         stop: async () => {
           events.push("stop");
@@ -328,6 +361,14 @@ async function runInstallationCase(params: {
         install: async (plan) => {
           expect(getOpenClawDatabaseMaintenanceScope()).toBeUndefined();
           events.push("install");
+          if (params.tokenRecovery) {
+            expect(writerContext?.cfgForPersistence.gateway?.auth?.token).toBe(
+              "maintenance-fixture-token",
+            );
+            expect(JSON.parse(await fs.readFile(configPath!, "utf8")).gateway.auth.token).toBe(
+              "maintenance-fixture-token",
+            );
+          }
           if (params.revoked) {
             throw new GatewayServiceAuthorityError(
               new Error("Doctor custody was released"),
@@ -357,6 +398,11 @@ async function runInstallationCase(params: {
             runtime,
             options: { repair: true, nonInteractive: !params.consent?.interactive },
           }),
+          {
+            writeConfig: async () => {
+              throw new Error("Installation-only repair must not request a config write.");
+            },
+          },
         );
         const notes = mocks.note.mock.calls.flat().join("\n");
         expect(notes).toContain(`${oldRoot} (2026.9.4)`);
@@ -398,6 +444,14 @@ async function runInstallationCase(params: {
         }
         return;
       }
+      if (params.tokenRecovery) {
+        configPath = await writeOpenClawConfig(home, {
+          gateway: { mode: "local", port: 19989 },
+          plugins: { enabled: false },
+        });
+        originalConfig = await fs.readFile(configPath, "utf8");
+        writerContext = await prepareWriterContext(configPath);
+      }
       const maintenance = await beginDoctorMaintenance({
         root: mocks.activeRoot,
         options: { repair: true, nonInteractive: true },
@@ -427,11 +481,48 @@ async function runInstallationCase(params: {
         }
         let finishError: unknown;
         try {
-          await maintenance?.finish({
-            gateway: { auth: { mode: "token", token: "synthetic-doctor-token" } },
-          });
+          await maintenance?.finish(
+            writerContext?.cfg ?? {
+              gateway: { auth: { mode: "token", token: "synthetic-doctor-token" } },
+            },
+            writerContext && params.tokenRecovery !== "writer-unavailable"
+              ? async (nextConfig) => {
+                  events.push("write-config");
+                  return writeDoctorGatewayConfig(
+                    writerContext!,
+                    params.tokenRecovery === "refused"
+                      ? { ...nextConfig, gateway: { ...nextConfig.gateway, port: 0 } }
+                      : nextConfig,
+                  );
+                }
+              : undefined,
+          );
         } catch (error) {
           finishError = error;
+        }
+        if (params.tokenRecovery) {
+          expect(finishError).toBeUndefined();
+          const bytes = await fs.readFile(configPath!, "utf8");
+          const refused =
+            params.tokenRecovery === "refused" || params.tokenRecovery === "writer-unavailable";
+          expect(events).toEqual([
+            "stop",
+            "repair-state",
+            ...(params.tokenRecovery === "writer-unavailable" ? [] : ["write-config"]),
+            ...(refused ? [] : ["install"]),
+          ]);
+          if (refused) {
+            expect(bytes).toBe(originalConfig);
+            expect(writerContext?.cfg.gateway?.auth?.token).toBeUndefined();
+            expect(running).toBe(false);
+            expect(command).toEqual(originalCommand);
+            expect(mocks.health).not.toHaveBeenCalled();
+          } else {
+            expect(JSON.parse(bytes).gateway.auth.token).toBe("maintenance-fixture-token");
+            expect(writerContext?.cfgForPersistence).toEqual(writerContext?.cfg);
+            expect(running).toBe(!installFails);
+          }
+          return;
         }
         if (params.inspectionScenario === "competing-update") {
           expect(competingUpdateStarted).toBe(true);
@@ -536,6 +627,17 @@ async function runInstallationCase(params: {
     },
   );
 }
+
+it.each(["success", "refused", "service-failure", "writer-unavailable"] as const)(
+  "delegates maintenance token recovery before native service mutation (%s)",
+  async (tokenRecovery) =>
+    runInstallationCase({
+      platform: "linux",
+      mode: "maintenance",
+      tokenRecovery,
+      installFails: tokenRecovery === "service-failure",
+    }),
+);
 
 it.each(["success", "install-failed", "already-stopped"] as const)(
   "Doctor handles two-prefix drift through maintenance finish (%s)",

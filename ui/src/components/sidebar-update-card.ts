@@ -22,6 +22,7 @@ import "../styles/sidebar-update-card.css";
 import { icons } from "./icons.ts";
 import { isUpdateRunAttentionVisible } from "./sidebar-attention-update.ts";
 import "./tooltip.ts";
+import { renderUpdateGitRevisions } from "./update-git-revisions.ts";
 
 registerSidebarAttentionEnglish();
 
@@ -488,6 +489,7 @@ class SidebarUpdateCard extends OpenClawLightDomContentsElement {
               </button>`
             : nothing
         }
+        ${actionable && !busy ? renderUpdateGitRevisions(this.updateSchedule, this.updateAvailable) : nothing}
       </div>
     `;
   }

@@ -30,6 +30,7 @@ function sameUpdateAvailable(a: UpdateAvailable | null, b: UpdateAvailable | nul
     a.currentSha === b.currentSha &&
     a.upstreamRef === b.upstreamRef &&
     a.upstreamSha === b.upstreamSha &&
+    a.repositoryUrl === b.repositoryUrl &&
     a.commitsBehind === b.commitsBehind &&
     JSON.stringify(a.commits) === JSON.stringify(b.commits)
   );

@@ -1,4 +1,3 @@
-// Browser tests cover invoke browser plugin behavior.
 import fs from "node:fs/promises";
 import os from "node:os";
 import nodePath from "node:path";
@@ -10,7 +9,6 @@ import {
   BROWSER_PROXY_OWNED_TAB_CLOSE_PATH,
 } from "../browser-proxy-envelope.js";
 import type { BrowserServerState } from "../browser/server-context.js";
-import { toErrorObject } from "../infra/errors.js";
 import { firstBrowserDispatchRequest, stagedReportUpload } from "./invoke-browser.test-support.js";
 
 const BROWSER_PROXY_MAX_FILES = 256;
@@ -74,48 +72,11 @@ const uploadMocks = vi.hoisted(() => ({
   ensureBrowserProxyUploadCleanup: vi.fn(async () => {}),
 }));
 
-vi.mock("../sdk-config.js", () => ({
+vi.mock("../sdk-config.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../sdk-config.js")>()),
   getRuntimeConfig: configMocks.loadConfig,
   getRuntimeConfigSourceSnapshot: () => configMocks.sourceConfig,
   loadConfig: configMocks.loadConfig,
-}));
-
-vi.mock("../sdk-node-runtime.js", () => ({
-  withTimeout: vi.fn(
-    async (
-      run: (signal: AbortSignal | undefined) => Promise<unknown>,
-      timeoutMs?: number,
-      label?: string,
-    ) => {
-      const resolved =
-        typeof timeoutMs === "number" && Number.isFinite(timeoutMs)
-          ? Math.max(1, Math.floor(timeoutMs))
-          : undefined;
-      if (!resolved) {
-        return await run(undefined);
-      }
-      const abortCtrl = new AbortController();
-      const timeoutError = new Error(`${label ?? "request"} timed out`);
-      const timer = setTimeout(() => abortCtrl.abort(timeoutError), resolved);
-      try {
-        return await Promise.race([
-          run(abortCtrl.signal),
-          new Promise<never>((_, reject) => {
-            abortCtrl.signal.addEventListener(
-              "abort",
-              () =>
-                reject(
-                  toErrorObject(abortCtrl.signal.reason ?? timeoutError, "Non-Error rejection"),
-                ),
-              { once: true },
-            );
-          }),
-        ]);
-      } finally {
-        clearTimeout(timer);
-      }
-    },
-  ),
 }));
 
 vi.mock("../sdk-setup-tools.js", () => ({
@@ -151,43 +112,6 @@ vi.mock("../browser/config.js", () => ({
 }));
 
 vi.mock("../browser-proxy-upload.js", () => uploadMocks);
-
-vi.mock("../browser/request-policy.js", () => ({
-  isPersistentBrowserProfileMutation: vi.fn((method: string, path: string) => {
-    if (method === "POST" && (path === "/profiles/create" || path === "/reset-profile")) {
-      return true;
-    }
-    return method === "DELETE" && /^\/profiles\/[^/]+$/.test(path);
-  }),
-  isBrowserHostLocalRoute: vi.fn((method: string, path: string) => {
-    if (method === "POST" && path === "/profiles/import") {
-      return true;
-    }
-    return method === "GET" && path === "/system-profiles";
-  }),
-  normalizeBrowserRequestPath: vi.fn((path: string) => path),
-  resolveRequestedBrowserProfile: vi.fn(
-    ({
-      query,
-      body,
-      profile,
-    }: {
-      query?: Record<string, unknown>;
-      body?: unknown;
-      profile?: string;
-    }) => {
-      if (query && typeof query.profile === "string" && query.profile.trim()) {
-        return query.profile.trim();
-      }
-      const bodyProfile =
-        body && typeof body === "object" ? (body as { profile?: unknown }).profile : undefined;
-      if (typeof bodyProfile === "string" && bodyProfile.trim()) {
-        return bodyProfile.trim();
-      }
-      return typeof profile === "string" && profile.trim() ? profile.trim() : undefined;
-    },
-  ),
-}));
 
 vi.mock("../browser/routes/dispatcher.js", () => ({
   createBrowserRouteDispatcher: dispatcherMocks.createBrowserRouteDispatcher,

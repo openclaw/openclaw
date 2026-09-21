@@ -1,7 +1,8 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { Type } from "typebox";
-import { afterEach, expect, it, vi } from "vitest";
+import ts from "typescript";
+import { afterEach, expect, it } from "vitest";
 import { createCodeModeToolApiFile } from "./code-mode-tool-api.js";
 import { applyCodeModeCatalog } from "./code-mode.js";
 import {
@@ -33,61 +34,70 @@ it("infers literal and union selectors while keeping dynamic and missing inputs 
   });
   applyCodeModeCatalog({ ...h.ctx, tools: [...h.tools, tool] });
   const exec = expectDefined(h.tools[0], "Code Mode exec");
-  const result = resultDetails(
-    await exec.execute("literal-and-union", {
-      language: "typescript",
-      typecheck: true,
-      code: `
-      const list = await records({kind: "list"});
-      const status = await records({kind: "status"});
-      const choice: "list" | "status" = Math.random() > 0.5 ? "list" : "status";
-      const selected = await records({kind: choice});
-      const selectedCount: number = "rows" in selected ? selected.rows.length : selected.total;
-      const dynamic: string = "status";
-      const broad = await records({kind: dynamic});
-      const omitted = await records();
-      const broadCount: number = "rows" in broad ? broad.rows.length : broad.total;
-      const omittedCount: number = "rows" in omitted ? omitted.rows.length : omitted.total;
-      const explicit = await records(undefined);
-      const explicitCount: number = "rows" in explicit ? explicit.rows.length : explicit.total;
-      return [list.rows.length, status.total, selectedCount, broadCount, omittedCount, explicitCount];
-    `,
+  const declaration = resultDetails(
+    await exec.execute("read-records-contract", {
+      code: 'return await API.read("tools/records.d.ts");',
     }),
   );
+  expect(declaration.status).toBe("completed");
+  const file = declaration.value as { content: string };
+  const composition = `
+    const list = await records({kind: "list"});
+    const status = await records({kind: "status"});
+    const choice = Math.random() > 0.5 ? "list" : "status";
+    const selected = await records({kind: choice});
+    const selectedCount = "rows" in selected ? selected.rows.length : selected.total;
+    let dynamic = "status";
+    const broad = await records({kind: dynamic});
+    const omitted = await records();
+    const broadCount = "rows" in broad ? broad.rows.length : broad.total;
+    const omittedCount = "rows" in omitted ? omitted.rows.length : omitted.total;
+    const explicit = await records(undefined);
+    const explicitCount = "rows" in explicit ? explicit.rows.length : explicit.total;
+    return [list.rows.length, status.total, selectedCount, broadCount, omittedCount, explicitCount];
+  `;
+  const fileName = "/records-consumer.ts";
+  const source = ts.createSourceFile(
+    fileName,
+    `${file.content}
+async function consume() { ${composition} }
+async function checkContracts(kind: string, choice: "list" | "status") {
+  const list = await records({kind: "list"});
+  // @ts-expect-error A list result has rows, not a total.
+  list.total;
+  const dynamic = await records({kind});
+  // @ts-expect-error A broad selector cannot promise rows.
+  dynamic.rows;
+  const selected = await records({kind: choice});
+  // @ts-expect-error A union selector cannot promise rows.
+  selected.rows;
+  const omitted = await records();
+  // @ts-expect-error Missing selectors keep all output branches.
+  omitted.rows;
+  // @ts-expect-error A generic selector cannot supply an omitted runtime argument.
+  await records<{kind: "list"}>();
+}`,
+    ts.ScriptTarget.ESNext,
+    true,
+  );
+  const options = { noEmit: true, strict: true, types: [], target: ts.ScriptTarget.ESNext };
+  const host = ts.createCompilerHost(options);
+  const original = host.getSourceFile.bind(host);
+  host.getSourceFile = (name, ...args) => (name === fileName ? source : original(name, ...args));
+  const program = ts.createProgram([fileName], options, host);
+  expect(
+    ts
+      .getPreEmitDiagnostics(program)
+      .map((diagnostic) => ts.flattenDiagnosticMessageText(diagnostic.messageText, "\n")),
+  ).toEqual([]);
+  expect(tool.execute).not.toHaveBeenCalled();
+
+  const result = resultDetails(await exec.execute("literal-and-union", { code: composition }));
   expect(result, JSON.stringify(result)).toMatchObject({
     status: "completed",
     value: [2, 2, 2, 2, 2, 2],
   });
-  vi.mocked(tool.execute).mockClear();
-  for (const code of [
-    'const result = await records({kind:"list"}); return result.total;',
-    'const kind: string = "list"; const result = await records({kind}); return result.rows;',
-    'const kind: "list" | "status" = Math.random() > 0.5 ? "list" : "status"; const result = await records({kind}); return result.rows;',
-    "const result = await records(); return result.rows;",
-  ]) {
-    const refused = resultDetails(
-      await exec.execute("invalid-selection", { language: "typescript", typecheck: true, code }),
-    );
-    expect(refused).toMatchObject({
-      status: "failed",
-      code: "invalid_input",
-      error: expect.stringContaining("does not exist"),
-    });
-  }
-  expect(tool.execute).not.toHaveBeenCalled();
-  const omittedGeneric = resultDetails(
-    await exec.execute("omitted-generic", {
-      language: "typescript",
-      typecheck: true,
-      code: 'const result = await records<{kind:"list"}>(); return result.rows.length;',
-    }),
-  );
-  expect(omittedGeneric).toMatchObject({
-    status: "failed",
-    code: "invalid_input",
-    error: expect.stringContaining("Expected 1 arguments"),
-  });
-  expect(tool.execute).not.toHaveBeenCalled();
+  expect(tool.execute).toHaveBeenCalledTimes(6);
 });
 
 it("keeps a large set of action declarations within the complete output allowance", async () => {

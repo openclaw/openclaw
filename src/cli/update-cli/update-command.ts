@@ -70,6 +70,8 @@ export async function updateCommand(inputOpts: UpdateCommandOptions): Promise<vo
       root: resolveUpdateCommandAdmissionRoot(prepared),
       invocationCwd,
       pkgOwnership: prepared.pkgOwnership,
+      expectedForeground:
+        prepared.controlPlaneUpdateSentinelMeta?.completionOwner === "gateway-restart" || undefined,
     });
     const { updateStateNeedsInitialization } = await import("./update-command-initialization.js");
     assertUpdatePackageActivationAdmission(root, { serviceRoot });
@@ -103,6 +105,8 @@ async function runAdmittedUpdate(
     invocationCwd,
     initialization,
     pkgOwnership: prepared.pkgOwnership,
+    expectedForeground:
+      prepared.controlPlaneUpdateSentinelMeta?.completionOwner === "gateway-restart" || undefined,
     installKind: prepared.installKind,
   });
   const opts = { ...inputOpts, run };

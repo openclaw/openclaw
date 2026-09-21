@@ -197,7 +197,7 @@ export class DraftPlaceState {
   }
 
   get cloudSelection() {
-    return this.cloudMachines.selection(this.cloudProfileIdValue);
+    return this.cloudMachines.selection(this.cloudProfileIdValue, this.gateway.cloudProfiles);
   }
 
   get agentsHydrated(): boolean {

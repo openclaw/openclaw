@@ -3,8 +3,6 @@ use crate::gateway_operation_queue::GatewayOperationQueue;
 use crate::keep_awake::{KeepAwake, Status as KeepAwakeStatus};
 use crate::quickchat;
 use crate::DesktopState;
-use std::fs;
-use std::path::{Path, PathBuf};
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc, Mutex,
@@ -25,10 +23,6 @@ const NO_UPDATE_ACTION_LABEL: &str = "No update action available";
 const START_AT_LOGIN_ID: &str = "start-at-login";
 const KEEP_AWAKE_ID: &str = "keep-computer-awake";
 const QUICKCHAT_SHORTCUT_ID: &str = "quickchat-shortcut";
-const GLOBAL_SHORTCUT_ID: &str = "global-shortcut";
-pub(crate) const GLOBAL_SHORTCUT: &str = "CmdOrCtrl+Shift+O";
-// Marker presence is the durable user opt-out across restarts; no config schema on purpose.
-const GLOBAL_SHORTCUT_DISABLED_MARKER: &str = "global-shortcut-disabled";
 const START_ID: &str = "start-gateway";
 const STOP_ID: &str = "stop-gateway";
 const RESTART_ID: &str = "restart-gateway";
@@ -231,23 +225,6 @@ pub fn build(
             )
         })
         .transpose()?;
-    let global_shortcut_enabled = global_shortcuts_supported.then(|| {
-        !global_shortcut_disabled_marker(app)
-            .as_deref()
-            .is_some_and(global_shortcut_marker_exists)
-    });
-    let global_shortcut = global_shortcut_enabled
-        .map(|enabled| {
-            CheckMenuItem::with_id(
-                app,
-                GLOBAL_SHORTCUT_ID,
-                "Enable Global Shortcut",
-                true,
-                enabled,
-                None::<&str>,
-            )
-        })
-        .transpose()?;
     let start = MenuItem::with_id(app, START_ID, "Start Gateway", false, None::<&str>)?;
     let stop = MenuItem::with_id(app, STOP_ID, "Stop Gateway", false, None::<&str>)?;
     let restart = MenuItem::with_id(app, RESTART_ID, "Restart Gateway", false, None::<&str>)?;
@@ -267,11 +244,6 @@ pub fn build(
     } else {
         menu_builder
     };
-    let menu_builder = if let Some(global_shortcut) = global_shortcut.as_ref() {
-        menu_builder.item(global_shortcut)
-    } else {
-        menu_builder
-    };
     let menu = menu_builder
         .separator()
         .items(&[&start, &stop, &restart])
@@ -287,7 +259,6 @@ pub fn build(
     #[cfg(not(target_os = "macos"))]
     let tray_icon = tauri::image::Image::from_bytes(include_bytes!("../icons/32x32.png"))?;
     let menu_quickchat_shortcut = quickchat_shortcut.clone();
-    let menu_global_shortcut = global_shortcut.clone();
     let tray_builder = TrayIconBuilder::with_id("openclaw-main")
         .icon(tray_icon)
         .menu(&menu)
@@ -298,7 +269,6 @@ pub fn build(
                 &state,
                 &start_at_login,
                 menu_quickchat_shortcut.as_ref(),
-                menu_global_shortcut.as_ref(),
                 event.id().as_ref(),
             );
         })
@@ -340,13 +310,6 @@ pub fn build(
             set_quickchat_shortcut_checked(quickchat_shortcut, false);
         } else {
             quickchat_state.set_shortcut_registered(true);
-        }
-    }
-    if let (Some(true), Some(global_shortcut)) = (global_shortcut_enabled, global_shortcut.as_ref())
-    {
-        if let Err(error) = app.global_shortcut().register(GLOBAL_SHORTCUT) {
-            eprintln!("Could not register global shortcut {GLOBAL_SHORTCUT}: {error}");
-            set_global_shortcut_checked(global_shortcut, false);
         }
     }
 
@@ -425,7 +388,6 @@ fn handle_menu(
     state: &DesktopState,
     start_at_login: &CheckMenuItem<tauri::Wry>,
     quickchat_shortcut: Option<&CheckMenuItem<tauri::Wry>>,
-    global_shortcut: Option<&CheckMenuItem<tauri::Wry>>,
     id: &str,
 ) {
     match id {
@@ -467,11 +429,6 @@ fn handle_menu(
         QUICKCHAT_SHORTCUT_ID => {
             if let Some(quickchat_shortcut) = quickchat_shortcut {
                 toggle_quickchat_shortcut(app, quickchat_shortcut);
-            }
-        }
-        GLOBAL_SHORTCUT_ID => {
-            if let Some(global_shortcut) = global_shortcut {
-                toggle_global_shortcut(app, global_shortcut);
             }
         }
         START_ID => {
@@ -557,76 +514,6 @@ fn toggle_quickchat_shortcut(app: &AppHandle, item: &CheckMenuItem<tauri::Wry>) 
     }
 }
 
-fn toggle_global_shortcut(app: &AppHandle, item: &CheckMenuItem<tauri::Wry>) {
-    let manager = app.global_shortcut();
-    let enabled = manager.is_registered(GLOBAL_SHORTCUT);
-    let next = !enabled;
-    let result = if next {
-        manager.register(GLOBAL_SHORTCUT)
-    } else {
-        manager.unregister(GLOBAL_SHORTCUT)
-    };
-    match result {
-        Ok(()) => {
-            let registered = manager.is_registered(GLOBAL_SHORTCUT);
-            persist_global_shortcut_state(app, registered);
-            set_global_shortcut_checked(item, registered);
-        }
-        Err(error) => {
-            eprintln!("Could not update global shortcut {GLOBAL_SHORTCUT}: {error}");
-            set_global_shortcut_checked(item, enabled);
-        }
-    }
-}
-
-fn global_shortcut_disabled_marker(app: &impl Manager<tauri::Wry>) -> Option<PathBuf> {
-    match app.path().app_config_dir() {
-        Ok(path) => Some(path.join(GLOBAL_SHORTCUT_DISABLED_MARKER)),
-        Err(error) => {
-            eprintln!("Could not resolve global shortcut preference path: {error}");
-            None
-        }
-    }
-}
-
-fn global_shortcut_marker_exists(path: &Path) -> bool {
-    match path.try_exists() {
-        Ok(exists) => exists,
-        Err(error) => {
-            eprintln!("Could not read global shortcut preference: {error}");
-            false
-        }
-    }
-}
-
-fn persist_global_shortcut_state(app: &AppHandle, registered: bool) {
-    let Some(marker) = global_shortcut_disabled_marker(app) else {
-        return;
-    };
-    let result = if registered {
-        match fs::remove_file(&marker) {
-            Ok(()) => Ok(()),
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
-            Err(error) => Err(error),
-        }
-    } else {
-        marker
-            .parent()
-            .map(fs::create_dir_all)
-            .transpose()
-            .and_then(|_| fs::write(&marker, b""))
-    };
-    if let Err(error) = result {
-        eprintln!("Could not persist global shortcut preference: {error}");
-    }
-}
-
-fn set_global_shortcut_checked(item: &CheckMenuItem<tauri::Wry>, checked: bool) {
-    if let Err(error) = item.set_checked(checked) {
-        eprintln!("Could not update global shortcut menu state: {error}");
-    }
-}
-
 fn set_quickchat_shortcut_checked(item: &CheckMenuItem<tauri::Wry>, checked: bool) {
     if let Err(error) = item.set_checked(checked) {
         eprintln!("Could not update Quick Chat shortcut menu state: {error}");
@@ -662,7 +549,6 @@ fn toggle_autostart(app: &AppHandle, item: &CheckMenuItem<tauri::Wry>) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::time::{SystemTime, UNIX_EPOCH};
 
     #[test]
     fn linux_shortcut_support_follows_x11_session_facts() {
@@ -683,25 +569,5 @@ mod tests {
             Some(":0"),
         ));
         assert!(!linux_global_shortcuts_supported(None, None, None));
-    }
-
-    #[test]
-    fn global_shortcut_marker_tracks_user_opt_out() {
-        let unique = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .expect("clock before Unix epoch")
-            .as_nanos();
-        let directory = std::env::temp_dir().join(format!(
-            "openclaw-global-shortcut-test-{}-{unique}",
-            std::process::id()
-        ));
-        fs::create_dir_all(&directory).expect("create test directory");
-        let marker = directory.join(GLOBAL_SHORTCUT_DISABLED_MARKER);
-
-        assert!(!global_shortcut_marker_exists(&marker));
-        fs::write(&marker, b"").expect("write opt-out marker");
-        assert!(global_shortcut_marker_exists(&marker));
-
-        fs::remove_dir_all(directory).expect("remove test directory");
     }
 }

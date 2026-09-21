@@ -289,6 +289,22 @@ async function readPagesViaPlaywright(
       const contexts = opts.requireCompleteTargetList ? browser.contexts() : [];
       let publication = createDeferred<void>();
       const wake = () => publication.resolve();
+      const observedPages = new Set<Page>();
+      let nativeTargetsChanged = false;
+      const onPageClosed = () => {
+        nativeTargetsChanged = true;
+        wake();
+      };
+      const observePage = (page: Page) => {
+        if (!observedPages.has(page)) {
+          observedPages.add(page);
+          page.on("close", onPageClosed);
+        }
+      };
+      const onPage = (page: Page) => {
+        observePage(page);
+        wake();
+      };
       let disconnected = false;
       const onDisconnected = () => {
         disconnected = true;
@@ -297,13 +313,15 @@ async function readPagesViaPlaywright(
       // CDP discovery can finish before Playwright initializes and publishes each Page.
       // Subscribe before discovery so publication during either read cannot be lost.
       for (const context of contexts) {
-        context.on("page", wake);
+        context.on("page", onPage);
+        for (const page of context.pages()) {
+          observePage(page);
+        }
       }
       browser.on("disconnected", onDisconnected);
       signal.addEventListener("abort", wake, { once: true });
       try {
-        let nativeTargetIds: Set<string> | undefined;
-        if (opts.requireCompleteTargetList) {
+        const readNativeTargetIds = async () => {
           const session = browser.newBrowserCDPSession();
           let detaching: Promise<void> | undefined;
           const detach = () => {
@@ -328,7 +346,7 @@ async function readPagesViaPlaywright(
             if (!Array.isArray(result.targetInfos)) {
               throw new Error("Browser target enumeration was unavailable.");
             }
-            nativeTargetIds = new Set(
+            return new Set(
               result.targetInfos
                 .filter(
                   (info) => info.type === "page" && !isBlockedTarget(opts.cdpUrl, info.targetId),
@@ -339,14 +357,16 @@ async function readPagesViaPlaywright(
             signal.removeEventListener("abort", onAbort);
             detach();
           }
-        }
+        };
+        let nativeTargetIds = opts.requireCompleteTargetList
+          ? await readNativeTargetIds()
+          : undefined;
         for (;;) {
           publication = createDeferred<void>();
           signal.throwIfAborted();
           if (disconnected) {
             throw new Error("Browser disconnected during page enumeration.");
           }
-          const remainingTargetIds = nativeTargetIds ? new Set(nativeTargetIds) : undefined;
           const pages = await getAllPages(browser);
           const candidatePages = pages.filter((page) => !isBlockedPageRef(opts.cdpUrl, page));
           const pageResults = await Promise.all(
@@ -356,6 +376,9 @@ async function readPagesViaPlaywright(
                 targetInfo = await pageTargetInfo(page);
               } catch (err) {
                 if (isRecoverablePlaywrightDisconnectError(err)) {
+                  if (page.isClosed() && browser.isConnected()) {
+                    return { status: "closed" as const };
+                  }
                   throw err;
                 }
                 targetInfo = null;
@@ -386,6 +409,17 @@ async function readPagesViaPlaywright(
             }),
           );
           signal.throwIfAborted();
+          if (disconnected) {
+            throw new Error("Browser disconnected during page enumeration.");
+          }
+          if (
+            nativeTargetIds &&
+            (nativeTargetsChanged || pageResults.some((result) => result.status === "closed"))
+          ) {
+            nativeTargetsChanged = false;
+            nativeTargetIds = await readNativeTargetIds();
+          }
+          const remainingTargetIds = nativeTargetIds ? new Set(nativeTargetIds) : undefined;
           // Keep page order and native snapshot identities. A quarantined Page reference
           // cannot identify a missing native target without exposing its metadata.
           const resolvedPages = pageResults.flatMap((result) =>
@@ -407,7 +441,10 @@ async function readPagesViaPlaywright(
         }
       } finally {
         for (const context of contexts) {
-          context.off("page", wake);
+          context.off("page", onPage);
+        }
+        for (const page of observedPages) {
+          page.off("close", onPageClosed);
         }
         browser.off("disconnected", onDisconnected);
         signal.removeEventListener("abort", wake);

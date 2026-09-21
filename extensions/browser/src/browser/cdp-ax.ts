@@ -1,5 +1,5 @@
 import type { CDPSession } from "playwright-core";
-/** Raw accessibility node subset read from CDP Accessibility.getFullAXTree. */
+/** Native accessibility node fields used by browser snapshots. */
 export type RawAXNode = {
   nodeId?: string;
   ignored?: boolean;
@@ -9,6 +9,7 @@ export type RawAXNode = {
   description?: { value?: string };
   childIds?: string[];
   backendDOMNodeId?: number;
+  frameId?: string;
   properties?: { name: string; value: { value?: unknown } }[];
 };
 

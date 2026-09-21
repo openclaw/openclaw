@@ -76,6 +76,39 @@ describeControlUiE2e("Control UI fenced code blocks", () => {
     await server?.close();
   });
 
+  it.each([8, 12])("clips %i block-art lines to seven rendered rows", async (lineCount) => {
+    const context = await browser.newContext({ viewport: { width: 1280, height: 900 } });
+    const page = await context.newPage();
+    const art = Array.from({ length: lineCount }, () => "██  ██  ██").join("\n");
+    await installMockGateway(page, {
+      historyMessages: [{ role: "assistant", content: "```\n" + art + "\n```", timestamp: 1000 }],
+    });
+    try {
+      await page.goto(server.baseUrl + "chat");
+      const code = page.locator(".code-block-wrapper.is-collapsible code.markdown-block-art");
+      await code.waitFor();
+      for (const width of [1280, 390]) {
+        await page.setViewportSize({ width, height: 900 });
+        const geometry = await code.evaluate((element) => ({
+          height: element.getBoundingClientRect().height,
+          lineHeight: Number.parseFloat(getComputedStyle(element).lineHeight),
+          scrollHeight: element.scrollHeight,
+        }));
+        // Fractional line boxes are rounded by layout; a whole extra row is not.
+        expect(geometry.height).toBeCloseTo(7 * geometry.lineHeight, 0);
+        expect(geometry.scrollHeight).toBeGreaterThan(geometry.height);
+      }
+      const collapsedHeight = await code.evaluate((element) => element.clientHeight);
+      await page.locator(".code-block-expand").click();
+      expect(await code.evaluate((element) => element.clientHeight)).toBeGreaterThan(
+        collapsedHeight,
+      );
+      expect(await code.textContent()).toBe(art + "\n");
+    } finally {
+      await context.close();
+    }
+  });
+
   it("preserves indented code from history through streaming and copying", async () => {
     const context = await browser.newContext({
       locale: "en-US",
@@ -379,6 +412,10 @@ describeControlUiE2e("Control UI fenced code blocks", () => {
           });
         }
 
+        // JSON starts in Tree; Raw retains the shared fence preview and wrap contract.
+        await shortBubble.getByRole("button", { name: "Raw", exact: true }).click();
+        await longBubble.getByRole("button", { name: "Raw", exact: true }).click();
+
         // A fence at or under the preview budget stays whole and offers no reveal.
         expect(await shortBubble.locator(".code-block-wrapper.is-collapsible").count()).toBe(0);
         expect(await shortBubble.locator(".code-block-expand").count()).toBe(0);
@@ -399,6 +436,12 @@ describeControlUiE2e("Control UI fenced code blocks", () => {
         const clippedHeight = await longWrapper
           .locator(".code-block-viewport")
           .evaluate((viewport) => viewport.clientHeight);
+        const visibleCodeHeight = await longWrapper.locator("pre code").evaluate((code) => ({
+          height: code.getBoundingClientRect().height,
+          lineHeight: Number.parseFloat(getComputedStyle(code).lineHeight),
+        }));
+        // The hidden-line label counts seven visible lines, not an eighth clipped row.
+        expect(visibleCodeHeight.height).toBe(7 * visibleCodeHeight.lineHeight);
         await expand.click();
         await expect.poll(() => longWrapper.getAttribute("class")).toContain("is-expanded");
         expect(await expand.isVisible()).toBe(false);

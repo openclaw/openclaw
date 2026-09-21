@@ -68,6 +68,7 @@ export type PluginStateWorkerOperations = {
   };
   "pluginState.count": { input: Namespace; output: Result<number, PluginStateWorkerFailure> };
   "pluginState.clear": { input: Namespace; output: Result<void, PluginStateWorkerFailure> };
+  "pluginState.sweep": { input: undefined; output: Result<number, PluginStateWorkerFailure> };
 };
 
 export const pluginStateWorkerOperations = {
@@ -150,6 +151,11 @@ export const pluginStateWorkerOperations = {
     operation: "clear",
     code: "PLUGIN_STATE_WRITE_FAILED",
     message: "Failed to clear plugin state namespace.",
+  },
+  "pluginState.sweep": {
+    operation: "sweep",
+    code: "PLUGIN_STATE_WRITE_FAILED",
+    message: "Failed to sweep expired plugin state entries.",
   },
 } as const satisfies Record<
   keyof PluginStateWorkerOperations,

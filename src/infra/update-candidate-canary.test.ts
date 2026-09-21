@@ -131,7 +131,7 @@ describe("update candidate canary", () => {
       expect(result).toMatchObject({ status: "error", phase: "snapshot" });
       const failed = result.steps.at(-1);
       expect(failed).toMatchObject({
-        name: "Preparing update checks",
+        name: "candidate-state-snapshot",
         exitCode: 1,
         snapshotCapacity: {
           reason: "snapshot-capacity-insufficient",
@@ -186,16 +186,16 @@ describe("update candidate canary", () => {
     try {
       const result = await validateUpdateCandidateCanary(canaryStateOptions(1_000));
       expect(result).toMatchObject({ status: "error", phase: "doctor" });
-      expect(result.logTail.join("\n")).toContain("deadline exceeded");
-      expect(result.steps.at(-1)).toMatchObject({ exitCode: 1 });
-      expect(result.steps.at(-1)?.stderrTail).toContain("deadline exceeded");
+      expect(result.logTail.join("\n")).toContain("checks phase timed out");
+      expect(result.steps.at(-1)).toMatchObject({ exitCode: null, termination: "timeout" });
+      expect(result.steps.at(-1)?.stderrTail).toContain("checks phase timed out");
       const detail = updateRunStepsFromResultStep(result.steps.at(-1)!).at(-1)?.detail;
       expect(detail).toContain("Distinct connection detail");
-      expect(detail).toContain("deadline exceeded");
+      expect(detail).toContain("checks phase timed out");
       const report = renderUpdateRunReport(
         updateRunReportInputFromResult({ ...result, mode: "git", root }),
       );
-      expect(report.markdown).toContain("deadline exceeded");
+      expect(report.markdown).toContain("checks phase timed out");
     } finally {
       clock.mockRestore();
     }
@@ -222,7 +222,7 @@ describe("update candidate canary", () => {
       expect(result, result.logTail.join("\n")).toMatchObject({ status: "ok", phase: "readiness" });
       expect(result.durationMs).toBeGreaterThanOrEqual(300_001);
       expect(result.steps).toContainEqual(
-        expect.objectContaining({ name: "Checking Gateway startup", exitCode: 0 }),
+        expect.objectContaining({ name: "candidate-gateway-startup", exitCode: 0 }),
       );
       expect(result.logTail.join("\n")).toContain("readyz: ready");
       await expect(fs.access(childEnv.OPENCLAW_STATE_DIR!)).rejects.toMatchObject({
@@ -266,7 +266,7 @@ describe("update candidate canary", () => {
           expect(result.logTail.join("\n")).toContain("deadline exceeded");
         } else {
           expect(result.steps).toContainEqual(
-            expect.objectContaining({ name: "Checking data migrations", exitCode: 0 }),
+            expect.objectContaining({ name: "candidate-doctor", exitCode: 0 }),
           );
           expect(result.logTail.join("\n")).toContain("readyz: ready");
         }
@@ -362,7 +362,7 @@ describe("update candidate canary", () => {
       stubHealthyGateway();
       const result = await validateUpdateCandidateCanary(canaryStateOptions(3_000));
       expect(result.status).toBe(expectedStatus);
-      const step = result.steps.find((entry) => entry.name === "Checking data migrations");
+      const step = result.steps.find((entry) => entry.name === "candidate-doctor");
       expect(step?.exitCode).toBe(exitCode);
       if (receipt.status === "advisory") {
         expect(step?.advisory).toEqual({
@@ -423,7 +423,7 @@ describe("update candidate canary", () => {
       if (proceeds) {
         expect(result.steps).toContainEqual(
           expect.objectContaining({
-            name: "Checking plugins",
+            name: "candidate-plugins",
             exitCode: 0,
             stdoutTail: 'Plugin "fixture" could not be loaded during the update preview.',
           }),
@@ -451,11 +451,11 @@ describe("update candidate canary", () => {
       const result = await validateUpdateCandidateCanary({ ...canaryStateOptions(3000), onStep });
       expect(result.status).toBe("ok");
       expect(result.steps).toContainEqual(
-        expect.objectContaining({ name: "Checking Gateway startup", exitCode: 0 }),
+        expect.objectContaining({ name: "candidate-gateway-startup", exitCode: 0 }),
       );
       expect(result.steps).toContainEqual(
         expect.objectContaining({
-          name: "Removing temporary update files",
+          name: "candidate-state-cleanup",
           advisory: expect.objectContaining({
             message: expect.stringContaining("synthetic cleanup permission denied"),
           }),
@@ -496,7 +496,7 @@ describe("update candidate canary", () => {
     expect(result).not.toHaveProperty("checkpointContinuation");
     expect(result.steps).toEqual([
       expect.objectContaining({
-        name: "Checking update recovery",
+        name: "candidate-recovery",
         exitCode: null,
         stdoutTail: "This version uses the current updater to finish installation",
       }),
@@ -561,13 +561,13 @@ describe("update candidate canary", () => {
     });
     expect(result).not.toHaveProperty("checkpointContinuation");
     expect(result.steps.map((step) => step.name)).toEqual([
-      "Preparing update checks",
-      "Checking data migrations",
-      "Checking update health",
-      "Checking configuration",
-      "Checking plugins",
-      "Checking update recovery",
-      "Checking Gateway startup",
+      "candidate-state-snapshot",
+      "candidate-doctor",
+      "candidate-doctor-lint",
+      "candidate-config",
+      "candidate-plugins",
+      "candidate-recovery",
+      "candidate-gateway-startup",
     ]);
     expect(completed.map((step) => step.name)).toEqual(result.steps.map((step) => step.name));
     expect(completed.map((step) => step.argv.slice(1, 3))).toEqual([
@@ -853,7 +853,7 @@ describe("update candidate canary", () => {
     const result = await validateUpdateCandidateCanary(canaryStateOptions(3_000));
     expect(result).toMatchObject({ status: "error", phase: "runtime" });
     expect(result.steps.at(-1)).toMatchObject({
-      name: "Checking update recovery",
+      name: "candidate-recovery",
       exitCode: 1,
     });
     expect(mocks.spawn.mock.calls.some(([, args]) => args.includes("--update-canary"))).toBe(false);

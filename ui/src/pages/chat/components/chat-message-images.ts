@@ -170,7 +170,7 @@ class MessageImageResourceDirective extends AsyncDirective {
             ? t("chat.imageLightbox.loadFailed")
             : undefined;
       if (reason === undefined) {
-        return this.present(this.renderImageFrame(image, nothing, "checking"));
+        return this.present(this.renderImagePlaceholder(image));
       }
       return this.present(
         this.renderImageFrame(
@@ -289,39 +289,33 @@ class MessageImageResourceDirective extends AsyncDirective {
   private renderImageFrame(
     img: ImageBlock,
     content: TemplateResult | typeof nothing,
-    state?: "checking" | "loading" | "unavailable",
+    state?: "loading" | "unavailable",
   ) {
     const sized =
       Number.isFinite(img.width) &&
       img.width! > 0 &&
       Number.isFinite(img.height) &&
       img.height! > 0;
-    const ratio = sized ? img.width! / img.height! : undefined;
-    const pending = state === "checking" || state === "loading";
-    const compact = state === "unavailable" || state === "checking" || (!sized && pending);
-    const previewWidth = ratio
+    const pending = state === "loading";
+    const compact = state === "unavailable";
+    const ratio = sized ? img.width! / img.height! : 3 / 2;
+    const previewWidth = sized
       ? img.width! < MIN_CHAT_IMAGE_PREVIEW_WIDTH
         ? MIN_CHAT_IMAGE_PREVIEW_WIDTH
         : Math.min(img.width!, 400, 360 * ratio)
       : 400;
     const width = compact ? Math.max(MIN_CHAT_IMAGE_PREVIEW_WIDTH, previewWidth) : previewWidth;
-    const height = ratio ? Math.min(360, width / ratio) : undefined;
-    // Only loadable images with known dimensions reserve preview geometry.
-    // Unknown images use their intrinsic size; gallery tiles keep their own layout.
+    const height = Math.min(360, width / ratio);
+    // An in-flight metadata read is not a permission denial. Only confirmed
+    // unavailable images use cards; loading stays plain until the read settles.
+    // Unknown decoded images still use their intrinsic size, not the loading ratio.
     return html`<span
-      class="chat-image-frame ${sized || compact ? "chat-image-frame--image" : ""} ${this.managed && !compact ? "chat-image-frame--managed" : ""} ${compact ? "chat-image-frame--compact" : ""}"
-      style=${`--chat-image-width: ${width}px; --chat-image-min-width: ${MIN_CHAT_IMAGE_PREVIEW_WIDTH}px; --chat-image-ratio: ${!compact && height ? `${width} / ${height}` : "auto"}`}
+      class="chat-image-frame ${sized || pending || compact ? "chat-image-frame--image" : ""} ${this.managed && !compact ? "chat-image-frame--managed" : ""} ${compact ? "chat-image-frame--compact" : ""}"
+      style=${`--chat-image-width: ${width}px; --chat-image-min-width: ${MIN_CHAT_IMAGE_PREVIEW_WIDTH}px; --chat-image-ratio: ${compact ? "auto" : `${width} / ${height}`}`}
       aria-busy=${pending ? "true" : "false"}
       role=${pending ? "status" : nothing}
       aria-label=${pending ? t("common.loading") : nothing}
-      >${
-        compact && pending
-          ? renderAssistantAttachmentStatusCard({
-              label: img.fileName ?? img.alt ?? t("chat.imageLightbox.untitled"),
-              badge: t("common.loading"),
-            })
-          : content
-      }</span
+      >${content}</span
     >`;
   }
 

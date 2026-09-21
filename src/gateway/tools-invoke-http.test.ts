@@ -536,7 +536,7 @@ describe("POST /tools/invoke", () => {
             definitions: {
               guest: {
                 sessions: { others: "view" },
-                agents: ["guest-agent"],
+                agents: ["main", "guest-agent"],
                 scopes: ["operator.write"],
               },
             },

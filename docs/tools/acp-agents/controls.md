@@ -95,6 +95,12 @@ thinking level in sync with that response. A model switch may lower the level or
 remove thinking support; subsequent turns and reconnects use the accepted
 selection instead of replaying the old level. Backend defaults do not become new
 session overrides, and the model reference keeps its OpenClaw provider prefix.
+
+With Cursor, model requests can use exact advertised IDs, selectors with one
+advertised variant, or OpenClaw `provider/model` references to either. Unknown or
+ambiguous requests fail visibly. An exact advertised ID that contains `/` takes
+precedence over interpreting it as a provider-qualified reference.
+
 Model overrides are validated before prompt submission, including after reconnect.
 Unsupported inherited defaults dropped during new session initialization are not
 saved as overrides.

@@ -1,3 +1,4 @@
+import type { WorkspaceSkillStatusFacts } from "../discovery/status.types.js";
 import type { SkillEntry } from "../types.js";
 import type { PluginSkillRoot } from "./plugin-skill-root.js";
 
@@ -12,6 +13,7 @@ export type WorkspaceSkillSources = {
   entries: Array<SkillEntry & { sourceOrder?: number }>;
   executionEntries: SkillEntry[];
   runtime: { platform: string; bins: string[] };
+  status?: WorkspaceSkillStatusFacts;
 };
 
 export type WorkspaceSkillSourceRequest = {
@@ -22,6 +24,7 @@ export type WorkspaceSkillSourceRequest = {
   limits: ResolvedSkillDiscoveryLimits;
   /** Requirements from Gateway-owned Library selections also run on the workspace host. */
   additionalBins: string[];
+  status?: { skillCardKey?: string };
 };
 
 export type WorkspaceSkillSource = {

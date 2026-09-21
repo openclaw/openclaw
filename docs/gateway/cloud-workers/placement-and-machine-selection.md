@@ -77,6 +77,16 @@ Private repository fetches use the effective shared [`tools.github`](/gateway/co
 
 Repository setup uses the existing executable `.openclaw/worktree-setup.sh` contract on the node. It runs only when creation requested setup as an administrator and the current dispatch caller is also an administrator. An interrupted initial setup requires an administrator to retry dispatch unless the node attests that the admitted setup already completed. Prepared adoption and checkpoint restoration do not rerun setup. There is no local source from which to copy `.worktreeinclude` files.
 
+## Provider identity in the picker
+
+Cloud profile rows and the selected Place chip show the configured backend, including AWS, Azure, Daytona, Google Cloud, and Hetzner. Machine0 and Incus use a server glyph; local containers use a box; other backends use a cloud. The profile name remains unchanged, and accessible labels include the backend even when a profile is named `production`. Renaming a profile never changes its provider mark.
+
+In New Session and Move, recognized cloud-provider profiles appear before local containers, Incus infrastructure, and custom or unidentified backends. Each group stays alphabetical by profile name. Machine0 belongs to the cloud-provider group even though it uses a server glyph; profile names never determine the group. The Gateway and paired-device sections keep their existing order.
+
+On phones, the New Session environment and workspace controls stack vertically and grow to at most 90% of the available row width. Long selected names stay on one line and fade at the trailing edge instead of wrapping. The operating-system and machine summary sits below the environment name without a leading separator. Desktop controls remain horizontal.
+
+Providers may supply this optional read-only identity through their presentation hook. If it is unavailable, the picker keeps a generic icon. The display ID does not change routing, allocation, permissions, or operating-system and machine selection.
+
 <a id="choose-a-machine-class-per-session" />
 
 ## Choose an operating system and machine class per session

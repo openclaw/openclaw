@@ -222,7 +222,9 @@ final class DashboardWindowController: NSWindowController, WKNavigationDelegate,
         self.webView = DashboardWebView(
             frame: NSRect(origin: .zero, size: DashboardWindowLayout.windowSize),
             configuration: config)
-        self.webView.setValue(true, forKey: "drawsBackground")
+        // Let the native window show through before the document paints its theme.
+        // underPageBackgroundColor alone leaves WebKit's initial white canvas opaque.
+        self.webView.setValue(false, forKey: "drawsBackground")
         self.webView.underPageBackgroundColor = .windowBackgroundColor
         // The Control UI routes via pushState, so WKWebView's back-forward list
         // carries in-app navigation; the web titlebar buttons use this list.

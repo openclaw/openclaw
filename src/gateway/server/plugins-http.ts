@@ -11,7 +11,9 @@ import { runPluginHttpRoute } from "../../plugins/http-route-owner.js";
 import type { PluginHttpRouteRegistration, PluginRegistry } from "../../plugins/registry.js";
 import { withPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
 import { rejectWebSocketUpgrade } from "../../shared/websocket-upgrade-reject.js";
+import { onUserProfilesChanged } from "../../state/user-profile-events.js";
 import { respondControlUiPluginAuthCookieProbe } from "../control-ui-plugin-auth-cookie.js";
+import { prepareGatewayRecipientProfile } from "../expected-profile.js";
 import { finishFailedGatewayHttpResponse } from "../http-common.js";
 import type { AuthorizedGatewayHttpRequest } from "../http-utils.js";
 import type { GatewayRequestContext, GatewayRequestOptions } from "../server-methods/types.js";
@@ -62,7 +64,7 @@ function createPluginRouteRuntimeClient(
 ): GatewayRequestOptions["client"] {
   const authenticatedUserProfile = requestAuth?.authenticatedUserProfile;
   const operatorRoleActor = requestAuth?.operatorRoleActor;
-  return {
+  const client: NonNullable<GatewayRequestOptions["client"]> = {
     connId: `plugin-http:${clientIp ?? "unknown"}`,
     ...(clientIp ? { clientIp } : {}),
     ...(authenticatedUserProfile ? { authenticatedUserProfile } : {}),
@@ -80,6 +82,25 @@ function createPluginRouteRuntimeClient(
       scopes: [...scopes],
     },
   };
+  prepareGatewayRecipientProfile(client);
+  return client;
+}
+
+async function withPluginRouteRuntimeScope<T>(
+  scope: PluginRouteRuntimeScope,
+  run: () => Promise<T>,
+): Promise<T> {
+  // HTTP clients are not in the connected-client set. Keep their prepared role/aliases
+  // current across handler and projection awaits, using the same publication owner.
+  const client = scope.client;
+  const stop = client?.authenticatedUserProfile
+    ? onUserProfilesChanged(() => prepareGatewayRecipientProfile(client))
+    : undefined;
+  try {
+    return await withPluginRuntimeGatewayRequestScope(scope, run);
+  } finally {
+    stop?.();
+  }
 }
 
 type PluginRouteRuntimeDispatchContext = {
@@ -263,7 +284,7 @@ export function createGatewayPluginRequestHandler(params: {
       }
       try {
         const runRoute = async () =>
-          (await withPluginRuntimeGatewayRequestScope(
+          (await withPluginRouteRuntimeScope(
             createPluginRouteRuntimeScope({
               registry,
               route,
@@ -344,7 +365,7 @@ export function createGatewayPluginUpgradeHandler(params: {
         const handled = await runWithGatewayUpgradeWorkAdmission(
           socket,
           async () =>
-            (await withPluginRuntimeGatewayRequestScope(
+            (await withPluginRouteRuntimeScope(
               createPluginRouteRuntimeScope({
                 registry,
                 route,

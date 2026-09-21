@@ -1,5 +1,6 @@
 import { html, nothing } from "lit";
 import type { ChatAccountSelection } from "../../../../../packages/gateway-protocol/src/index.ts";
+import { resolveModelRuntimeRoute } from "../../../../../src/shared/model-runtime-route.js";
 import type {
   ModelAuthStatusResult,
   ModelCatalogEntry,
@@ -344,11 +345,13 @@ export function renderChatModelControls(props: ChatModelControlsProps) {
     const isDefault =
       option.value.trim().toLowerCase() === normalizedDefaultModel ||
       (catalogEntry !== undefined && catalogEntry === defaultCatalogEntry);
-    // Runtime meta labels only operator-pinned runtimes (models/provider config);
-    // implicit/default resolution stays unlabeled so ordinary rows stay clean.
+    // Anthropic route labels need the resolved runtime even when it was not explicitly pinned.
     const agentRuntime = catalogEntry?.agentRuntime;
     const agentRuntimeId =
-      agentRuntime && (agentRuntime.source === "model" || agentRuntime.source === "provider")
+      agentRuntime &&
+      (agentRuntime.source === "model" ||
+        agentRuntime.source === "provider" ||
+        resolveModelRuntimeRoute(catalogEntry?.provider ?? "", agentRuntime.id))
         ? agentRuntime.id.trim()
         : undefined;
     const pickerOption: ChatModelPickerOption = {
@@ -370,6 +373,14 @@ export function renderChatModelControls(props: ChatModelControlsProps) {
     };
     if (agentRuntimeId) {
       pickerOption.agentRuntimeId = agentRuntimeId;
+    }
+    if (
+      isDefault &&
+      isSessionRuntimePinned(props.selectedSession?.agentRuntime) &&
+      resolveModelRuntimeRoute(pickerOption.provider)
+    ) {
+      // Default clears the runtime pin; session-scoped metadata describes the route being left.
+      pickerOption.agentRuntimeId = undefined;
     }
     if (catalogEntry?.contextWindow) {
       pickerOption.contextWindow = catalogEntry.contextWindow;

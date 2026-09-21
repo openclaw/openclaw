@@ -1,7 +1,8 @@
 // Exercises legacy values through the actual snapshot, Doctor, atomic write, and reread.
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, describe, expect, it } from "vitest";
+import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { getCliProcessTestTimeout } from "../cli/cli-process-child.test-helpers.js";
 import { readConfigFileSnapshot } from "../config/config.js";
 import { writeOpenClawConfig } from "../config/test-helpers.js";
@@ -15,9 +16,12 @@ import {
   createBuiltRuntime,
   runBuiltRuntime,
 } from "./doctor-config-preflight.process.test-support.js";
-import { withDoctorConfigPreflightHome } from "./doctor-config-preflight.test-support.js";
+import { useDoctorConfigPreflightHome } from "./doctor-config-preflight.test-support.js";
 
 const CLI_CHILD_TIMEOUT_MS = 60_000;
+const runtimeDirs = useAutoCleanupTempDirTracker(afterAll);
+const withDoctorConfigPreflightHome = useDoctorConfigPreflightHome();
+let runtimeRoot: string | undefined;
 
 async function repairConfig(configPath: string) {
   const ctx = await prepareDoctorContext(configPath);
@@ -66,7 +70,9 @@ describe("Doctor legacy config composition", () => {
         }
         raw.gateway.port = await getFreePort();
         const configPath = await writeOpenClawConfig(home, raw);
-        const runtimeRoot = createBuiltRuntime(path.join(home, "cli"));
+        const cliRuntime = (runtimeRoot ??= createBuiltRuntime(
+          runtimeDirs.make("openclaw-doctor-legacy-runtime-"),
+        ));
         const env: NodeJS.ProcessEnv = {
           PATH: process.env.PATH,
           SystemRoot: process.env.SystemRoot,
@@ -80,7 +86,7 @@ describe("Doctor legacy config composition", () => {
           NO_COLOR: "1",
         };
         const run = async (args: string[], expected = 0) => {
-          const result = await runBuiltRuntime(runtimeRoot, env, args, CLI_CHILD_TIMEOUT_MS);
+          const result = await runBuiltRuntime(cliRuntime, env, args, CLI_CHILD_TIMEOUT_MS);
           const output = `${result.stdout}\n${result.stderr}`;
           expect(result.code, output).toBe(expected);
         };

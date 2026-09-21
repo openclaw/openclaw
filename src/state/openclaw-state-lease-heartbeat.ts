@@ -1,10 +1,11 @@
-import { Worker } from "node:worker_threads";
+import type { Worker } from "node:worker_threads";
 import { runtimeProcessEntrypoints } from "../infra/runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import {
   acquireStateDatabaseHandleLease,
   retainHeldStateDatabaseCoordinator,
 } from "../infra/state-database-coordinator.js";
+import { createCpuTrackedWorker } from "../infra/worker-cpu.js";
 import { runInDetachedAsyncContext } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import {
@@ -27,6 +28,10 @@ export function startOpenClawStateLeaseHeartbeat(
   const shared = new BigInt64Array(new SharedArrayBuffer(4 * BigInt64Array.BYTES_PER_ELEMENT));
   Atomics.store(shared, state.expiresAt, BigInt(params.expiresAt));
   const url = resolveRuntimeWorkerUrl(runtimeProcessEntrypoints.stateLeaseHeartbeat);
+  const workerArgv = resolveRuntimeWorkerArgv(url);
+  // Source aliases belong to the parent-selected tsconfig, not an unrelated cwd.
+  // Keep the lease worker isolated from every other ambient environment setting.
+  const sourceTsconfig = workerArgv.length > 1 ? process.env.TSX_TSCONFIG_PATH : undefined;
   // Retain a parent-owned physical lease through native worker teardown. A forced
   // Worker.terminate() need not run JS cleanup; the exit event does attest that
   // native source handles have settled before this last guard is released.
@@ -48,28 +53,27 @@ export function startOpenClawStateLeaseHeartbeat(
   let worker: Worker;
   try {
     // Native stdio ports can outlive termination and retain their creation context.
-    worker = runInDetachedAsyncContext(
-      () =>
-        new Worker(url, {
-          workerData: {
-            path: params.path,
-            existingOnly: params.existingOnly,
-            ...(coordinator ? { parentCoordinatorRetained: true as const } : {}),
-            identity: {
-              scope: params.identity.scope,
-              key: params.identity.key,
-              owner: params.identity.owner,
-            },
-            leaseMs: params.leaseMs,
-            heartbeatMs: params.heartbeatMs,
-            processOwner: params.processOwner,
-            shared: shared.buffer,
-          } satisfies LeaseHeartbeatWorkerData,
-          env: {},
-          execArgv: resolveRuntimeWorkerArgv(url).slice(0, -1),
-          stdout: true,
-          stderr: true,
-        }),
+    worker = runInDetachedAsyncContext(() =>
+      createCpuTrackedWorker(url, {
+        workerData: {
+          path: params.path,
+          existingOnly: params.existingOnly,
+          ...(coordinator ? { parentCoordinatorRetained: true as const } : {}),
+          identity: {
+            scope: params.identity.scope,
+            key: params.identity.key,
+            owner: params.identity.owner,
+          },
+          leaseMs: params.leaseMs,
+          heartbeatMs: params.heartbeatMs,
+          processOwner: params.processOwner,
+          shared: shared.buffer,
+        } satisfies LeaseHeartbeatWorkerData,
+        env: sourceTsconfig ? { TSX_TSCONFIG_PATH: sourceTsconfig } : {},
+        execArgv: workerArgv.slice(0, -1),
+        stdout: true,
+        stderr: true,
+      }),
     );
   } catch (error) {
     release();

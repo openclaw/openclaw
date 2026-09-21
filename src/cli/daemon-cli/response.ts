@@ -249,6 +249,8 @@ export async function installDaemonServiceAndEmit(params: {
   emit: (payload: Omit<DaemonActionResponse, "action">) => void;
   fail: (message: string, hints?: string[]) => void;
   install: () => Promise<void>;
+  /** Distinguishes successful registration from application readiness. */
+  successMessage?: string;
   /**
    * Runs only after the service has been written AND verified as loaded, but
    * before the success payload is emitted. Use this for post-success
@@ -296,6 +298,7 @@ export async function installDaemonServiceAndEmit(params: {
   params.emit({
     ok: true,
     result: "installed",
+    ...(params.successMessage ? { message: params.successMessage } : {}),
     service: buildDaemonServiceSnapshot(params.service, installed),
     warnings: params.warnings.length ? params.warnings : undefined,
   });

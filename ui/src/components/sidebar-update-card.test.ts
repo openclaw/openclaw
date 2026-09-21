@@ -18,6 +18,7 @@ type SidebarUpdateCardElement = HTMLElement & {
   canUpdate: boolean;
   canHoldUpdate: boolean;
   onUpdate: () => void;
+  onDismiss?: () => void;
   refreshRequired: boolean;
   onRefresh: () => Promise<boolean>;
   onHoldUpdate: () => Promise<boolean>;
@@ -222,7 +223,13 @@ describe("SidebarUpdateCard", () => {
 
   it("renders an available update and narrates it after the Gateway drops its metadata", async () => {
     const element = await mount(
-      { currentVersion: "1.0.0", latestVersion: "1.0.0", channel: "dev", commitsBehind: 246 },
+      {
+        currentVersion: "1.0.0",
+        latestVersion: "1.0.0",
+        channel: "dev",
+        commitsBehind: 246,
+        currentSha: "1234567890abcdef",
+      },
       {
         channel: "dev",
         autoEnabled: false,
@@ -237,6 +244,9 @@ describe("SidebarUpdateCard", () => {
     expect(element.querySelector(".sidebar-update-card__action")?.textContent).toContain(
       "246 commits behind",
     );
+    expect(
+      [...element.querySelectorAll(".update-git-revisions code")].map((code) => code.textContent),
+    ).toEqual(["12345678", "abc1234d"]);
 
     element.updateBusy = true;
     await element.updateComplete;
@@ -313,6 +323,8 @@ describe("SidebarUpdateCard", () => {
       channel: "stable",
     });
     element.compact = true;
+    element.onDismiss = vi.fn();
+    element.onUpdate = vi.fn();
     await element.updateComplete;
 
     expect(element.querySelector(".sidebar-issues-panel__entity")?.textContent).toBe(
@@ -321,6 +333,13 @@ describe("SidebarUpdateCard", () => {
     expect(element.querySelector(".sidebar-update-card__action")?.textContent).toContain(
       "Update Gateway",
     );
+    const dismiss = element.querySelector<HTMLButtonElement>(".sidebar-issues-panel__dismiss")!;
+    expect(dismiss.getAttribute("aria-label")).toBe("Dismiss Update available");
+    expect(dismiss.querySelector("svg")).not.toBeNull();
+    dismiss.click();
+    expect(element.onDismiss).toHaveBeenCalledOnce();
+    expect(element.onUpdate).not.toHaveBeenCalled();
+    expect(element.querySelector("details")?.open).toBe(false);
   });
 
   it("keeps an unauthorized update discoverable without allowing activation", async () => {

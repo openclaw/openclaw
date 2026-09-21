@@ -1,7 +1,10 @@
 // Firecrawl plugin module implements firecrawl client behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { parseFiniteNumber } from "openclaw/plugin-sdk/number-runtime";
-import { readProviderJsonObjectResponse } from "openclaw/plugin-sdk/provider-http";
+import {
+  ProviderHttpError,
+  readProviderJsonObjectResponse,
+} from "openclaw/plugin-sdk/provider-http";
 import {
   DEFAULT_CACHE_TTL_MINUTES,
   markdownToText,
@@ -261,7 +264,10 @@ async function postFirecrawlJson<T>(
           truncateSanitizedExternalContent(detail, 1_000).text,
           "web_fetch",
         );
-        throw new Error(`${params.errorLabel} API error (${response.status}): ${safeDetail}`);
+        throw new ProviderHttpError(
+          `${params.errorLabel} API error (${response.status}): ${safeDetail}`,
+          { status: response.status },
+        );
       }
       return await parse(response);
     },

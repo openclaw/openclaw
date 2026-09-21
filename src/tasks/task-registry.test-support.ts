@@ -3,6 +3,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
 import { withTestDir } from "../test-helpers/temp-dir.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import { cleanupSessionStateForTest } from "../test-utils/session-state-cleanup.js";
 import { clearTaskRegistrySqliteForTests } from "../test-utils/task-registry-sqlite.js";
 import {
   createInMemoryTaskFlowRegistryStore,
@@ -167,9 +168,13 @@ export async function withTaskRegistryTempDir<T>(
       try {
         return await run(root);
       } finally {
-        // Close both sqlite-backed registries before Windows temp-dir cleanup tries to remove them.
-        resetTaskRegistryForTests({ persist: false });
-        resetTaskFlowRegistryForTests({ persist: false });
+        // Drain worker-backed state while the fixture's files and environment still exist.
+        try {
+          await cleanupSessionStateForTest({ stateDir: root, rootPath: root });
+        } finally {
+          resetTaskRegistryForTests({ persist: false });
+          resetTaskFlowRegistryForTests({ persist: false });
+        }
       }
     });
   });

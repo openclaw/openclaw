@@ -364,6 +364,234 @@ describe("committed pending input release", () => {
     database().db.prepare("SELECT * FROM session_input_completions").all();
   const pendingCount = () =>
     database().db.prepare("SELECT COUNT(*) AS count FROM session_pending_inputs").get()?.count;
+  const transcriptRows = () =>
+    database()
+      .db.prepare("SELECT seq, event_json, created_at FROM transcript_events ORDER BY seq")
+      .all();
+
+  it.each(["pending", "completed", "transcript", "prepared transcript", "public pending"] as const)(
+    "matches a shipped settle source by its whole request hash (%s)",
+    async (state) => {
+      const runId = "announce:settle-cohort";
+      const original = {
+        ...message(runId),
+        display: false as const,
+        provenance: {
+          kind: "inter_session" as const,
+          sourceTool: "subagent_settle",
+          sourceChannel: "internal",
+          sourceSessionKey: "child-b",
+        },
+      };
+      const prepareMessageAfterIdempotencyCheck = (candidate: PersistedUserTurnMessage) =>
+        state === "prepared transcript"
+          ? { ...candidate, content: "Approved synthetic input" }
+          : candidate;
+      const first = await stage(runId, {
+        message: original,
+        trackCompletion: state !== "public pending",
+        prepareMessageAfterIdempotencyCheck,
+      });
+      const originalHash = database()
+        .db.prepare("SELECT request_hash FROM session_pending_inputs")
+        .get()?.request_hash;
+      if (state === "completed") {
+        // Handled private input can leave only its hash/outcome, not a transcript.
+        first.complete!(buildAgentRunTerminalOutcome({ status: "ok" }));
+        expect(readSessionSubmittedInput(scope(), `${runId}:user`)).toBeUndefined();
+      }
+      if (state.endsWith("transcript")) {
+        promoteSync(first);
+        expect(pendingCount()).toBe(0);
+        expect(completionRows()).toEqual([]);
+      }
+      first.finish("interrupted");
+      const acceptedOrder = () =>
+        database()
+          .db.prepare(
+            "SELECT seq, input_id, request_hash, message_json, accepted_at FROM session_pending_inputs ORDER BY seq",
+          )
+          .all();
+      const beforeReplay = acceptedOrder();
+      const beforeTranscript = transcriptRows();
+      rotateAgentEventLifecycleGeneration();
+      closeOpenClawAgentDatabasesForTest();
+      const replay = stage(runId, {
+        message: {
+          ...original,
+          provenance: { ...original.provenance, sourceSessionKey: "child-a" },
+        },
+        trackCompletion: state !== "public pending",
+        replaySourceSessionKeys: ["child-a", "child-b"],
+        prepareMessageAfterIdempotencyCheck,
+      });
+      if (state === "public pending") {
+        // Matching identity never grants ordinary input new execution custody.
+        await expect(replay).rejects.toThrow("Pending input ownership ended");
+        expect(acceptedOrder()).toEqual(beforeReplay);
+        return;
+      }
+      const receipt = await replay;
+      expect(acceptedOrder()).toEqual(beforeReplay);
+      expect(receipt.message.provenance).toEqual(original.provenance);
+      if (state === "completed") {
+        expect(receipt.completion).toMatchObject({ reason: "completed" });
+        expect(() => receipt.run(() => {})).toThrow("already completed");
+      } else {
+        expect(receipt.completion).toBeUndefined();
+        expect(receipt.run(() => "resumed")).toBe("resumed");
+        receipt.complete!(buildAgentRunTerminalOutcome({ status: "ok" }));
+        expect(completionRows()).toMatchObject([{ request_hash: originalHash }]);
+      }
+      expect(transcriptRows()).toEqual(beforeTranscript);
+    },
+  );
+
+  it.each([
+    ...(
+      ["content", "sender", "tool", "run", "outside cohort", "session", "authority"] as const
+    ).map((difference) => ({ state: "completed" as const, difference })),
+    ...(["content", "run", "outside cohort", "authority after prepare", "malformed"] as const).map(
+      (difference) => ({ state: "transcript" as const, difference }),
+    ),
+  ])(
+    "does not substitute a settle $state when $difference differs",
+    async ({ state, difference }) => {
+      const runId = "announce:guarded-settle";
+      const original = {
+        ...message(runId),
+        __openclaw: { senderIsOwner: false, senderId: "original" },
+        provenance: {
+          kind: "inter_session" as const,
+          sourceTool: "subagent_settle",
+          sourceChannel: "internal",
+          sourceSessionKey: "child-b",
+        },
+      };
+      const first = await stage(runId, { message: original, trackCompletion: true });
+      if (state === "transcript") {
+        promoteSync(first);
+        if (difference === "malformed") {
+          database()
+            .db.prepare(
+              "UPDATE transcript_events SET event_json = json_set(event_json, '$.message.role', 'assistant') WHERE json_extract(event_json, '$.message.idempotencyKey') = ?",
+            )
+            .run(`${runId}:user`);
+        }
+      } else {
+        first.complete!(buildAgentRunTerminalOutcome({ status: "ok" }));
+      }
+      first.finish("interrupted");
+      const before = completionRows();
+      const beforeTranscript = transcriptRows();
+      if (difference === "session") {
+        await upsertSessionEntryCore(scope(), { sessionId: "replacement-session", updatedAt: 2 });
+      }
+      let current = true;
+      const replay = stageSessionPendingInput(scope(), {
+        runId: difference === "run" ? "announce:other-run" : runId,
+        trackCompletion: true,
+        replaySourceSessionKeys:
+          difference === "outside cohort" ? ["child-a"] : ["child-a", "child-b"],
+        assertCurrent: () => {
+          if (difference === "authority" || !current) {
+            throw new Error("source owner changed");
+          }
+        },
+        prepareMessageAfterIdempotencyCheck: (candidate) => {
+          if (difference === "authority after prepare") {
+            current = false;
+          }
+          return candidate;
+        },
+        message: {
+          ...original,
+          ...(difference === "content" ? { content: "different result" } : {}),
+          ...(difference === "sender"
+            ? { __openclaw: { senderIsOwner: false, senderId: "other" } }
+            : {}),
+          provenance: {
+            ...original.provenance,
+            sourceSessionKey: "child-a",
+            ...(difference === "tool" ? { sourceTool: "sessions_send" } : {}),
+          },
+        },
+      });
+      if (difference === "session") {
+        await expect(replay).resolves.toBeUndefined();
+      } else {
+        await expect(replay).rejects.toThrow(
+          difference === "tool"
+            ? "requires an internal settle request"
+            : difference === "authority" || difference === "authority after prepare"
+              ? "source owner changed"
+              : difference === "malformed"
+                ? "invalid persisted user message"
+                : state === "transcript"
+                  ? difference === "run"
+                    ? "conflicts with the accepted run"
+                    : difference === "outside cohort"
+                      ? "committed source is outside the frozen settle cohort"
+                      : "conflicts with the committed input"
+                  : "conflicts with the accepted input",
+        );
+      }
+      expect(completionRows()).toEqual(before);
+      expect(transcriptRows()).toEqual(beforeTranscript);
+    },
+  );
+
+  it.each(["missing", "outside cohort", "wrong tool"] as const)(
+    "rejects a committed %s source before lossy preparation",
+    async (source) => {
+      const runId = "announce:lossy-settle";
+      const incoming: PersistedUserTurnMessage = {
+        ...message(runId),
+        provenance: {
+          kind: "inter_session",
+          sourceTool: "subagent_settle",
+          sourceSessionKey: "child-b",
+        },
+      };
+      const committedProvenance =
+        source === "missing"
+          ? undefined
+          : {
+              kind: "inter_session" as const,
+              sourceTool: source === "wrong tool" ? "sessions_send" : "subagent_settle",
+              sourceSessionKey: source === "outside cohort" ? "child-outside" : "child-b",
+            };
+      const lossyPrepare = (candidate: PersistedUserTurnMessage): PersistedUserTurnMessage => {
+        const { provenance: _provenance, ...rest } = candidate;
+        return { ...rest, ...(committedProvenance ? { provenance: committedProvenance } : {}) };
+      };
+      const first = await stage(runId, {
+        message: incoming,
+        trackCompletion: true,
+        prepareMessageAfterIdempotencyCheck: lossyPrepare,
+      });
+      promoteSync(first);
+      first.finish("interrupted");
+      expect(pendingCount()).toBe(0);
+      expect(completionRows()).toEqual([]);
+      const before = transcriptRows();
+      let preparations = 0;
+      await expect(
+        stage(runId, {
+          message: incoming,
+          trackCompletion: true,
+          replaySourceSessionKeys: ["child-a", "child-b"],
+          prepareMessageAfterIdempotencyCheck: (candidate) => {
+            preparations += 1;
+            return lossyPrepare(candidate);
+          },
+        }),
+      ).rejects.toThrow("committed source is outside the frozen settle cohort");
+      expect(preparations).toBe(0);
+      expect(completionRows()).toEqual([]);
+      expect(transcriptRows()).toEqual(before);
+    },
+  );
 
   it("opens a same-version store without completion tracking and installs it only on private use", async () => {
     const version = database().db.prepare("PRAGMA user_version").get();

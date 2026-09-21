@@ -34,10 +34,10 @@ import { createCronServiceState } from "../service/state.js";
 import { loadCronStore, saveCronStore } from "../store.js";
 import type { CronJob, CronJobPatch, CronStoredJob, CronToolsAllowProvenance } from "../types.js";
 import { cronStoreKey } from "./key.js";
+import { bindCronRunReceiptExecution } from "./run-receipt-execution-binding.js";
 import {
   assertCronRunReceiptCurrent,
   activateCronRunReceiptInDatabase,
-  bindCronRunReceiptExecution,
   claimCronRunReceiptInDatabase,
   CronRunReceiptConflictError,
   CronRunReceiptRevisionError,
@@ -793,8 +793,8 @@ describe("cron run receipt store", () => {
       }),
     };
 
-    expect(bindCronRunReceiptExecution({ admitted, handle: abandoned })).toBe("missing");
-    expect(bindCronRunReceiptExecution({ admitted, handle: replacement })).toBe("bound");
+    expect(await bindCronRunReceiptExecution({ admitted, handle: abandoned })).toBe("missing");
+    expect(await bindCronRunReceiptExecution({ admitted, handle: replacement })).toBe("bound");
     expect(
       openOpenClawStateDatabase()
         .db.prepare(
@@ -832,7 +832,7 @@ describe("cron run receipt store", () => {
       const handle = claim(storePath, job, 1_000 + index * 2);
       finishedReceiptIds.push(handle.receiptId);
       if (index === 0 || index === 69) {
-        expect(bindCronRunReceiptExecution({ admitted, handle })).toBe("bound");
+        expect(await bindCronRunReceiptExecution({ admitted, handle })).toBe("bound");
         await retireTriggerState(handle);
       }
       finishCronRunReceipt({
@@ -849,7 +849,7 @@ describe("cron run receipt store", () => {
       }
     }
     const active = claim(storePath, job, 2_000);
-    expect(bindCronRunReceiptExecution({ admitted, handle: active })).toBe("bound");
+    expect(await bindCronRunReceiptExecution({ admitted, handle: active })).toBe("bound");
     await retireTriggerState(active);
 
     const retained = receipts(storePath, job.id);

@@ -506,9 +506,7 @@ export async function appendNarrativeEntry(params: {
       // staged inputs and prior diary quotes must survive until this commit.
       if (
         sourceKeys.some((key) => !currentSources?.[key]) ||
-        params.recentDiaryEntries?.some(
-          (block) => !currentDiary.has(clampDreamDiaryContextEntry(block)),
-        )
+        params.recentDiaryEntries?.some((block) => !currentDiary.has(block))
       ) {
         return { content: existing, result: undefined, shouldWrite: false };
       }

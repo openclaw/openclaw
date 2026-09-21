@@ -1,5 +1,5 @@
 import path from "node:path";
-import { afterAll, afterEach, aroundAll } from "vitest";
+import { afterAll, aroundAll } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
 import { withIsolatedTestHome } from "../../../../test/test-env.js";
 import { withStateDatabaseCoordinatorRuntimeDirectory } from "../../../infra/state-database-coordinator.js";
@@ -19,11 +19,12 @@ export function setupPluginInstallTestState(): {
       runSuite,
     ),
   );
-  afterAll(testHome.cleanup);
   const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
-    afterEach(async () => {
+    afterAll(async () => {
+      // Reuse lease storage between cases and drain it before removing its files.
       await closeOpenClawStateDatabaseAsync();
       cleanup();
+      testHome.cleanup();
     }),
   );
   return {

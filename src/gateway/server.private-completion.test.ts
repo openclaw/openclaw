@@ -740,13 +740,8 @@ describe("private subagent completion processing receipts", () => {
           });
         }
       } finally {
-        clearInterval(timers.tickInterval);
-        clearInterval(timers.healthInterval);
-        clearInterval(timers.dedupeCleanup);
-        clearInterval(timers.worktreeCleanup);
-        timers.skillUsageCleanup();
-        await timers.stopMediaCleanup();
-        await timers.stopSessionColdStorageMaintenance();
+        await timers.stopPeriodicTasks();
+        await timers.skillUsageCleanup();
         vi.useRealTimers();
         releaseTerminalWrite.resolve();
         release.resolve();

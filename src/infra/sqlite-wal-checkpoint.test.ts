@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { performance } from "node:perf_hooks";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { requireNodeSqlite } from "./node-sqlite.js";
@@ -9,6 +10,57 @@ import { configureSqliteWalMaintenance } from "./sqlite-wal.js";
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
 describe("SQLite WAL checkpoint observations", () => {
+  it("recycles an oversized completed WAL during admitted periodic maintenance without waiting for readers", () => {
+    vi.useFakeTimers();
+    const databasePath = path.join(tempDirs.make("openclaw-wal-recycle-"), "state.sqlite");
+    const { DatabaseSync } = requireNodeSqlite();
+    const writer = new DatabaseSync(databasePath);
+    let reader: InstanceType<typeof DatabaseSync> | undefined;
+    let admitted = false;
+    const maintenance = configureSqliteWalMaintenance(writer, {
+      databasePath,
+      autoCheckpointPages: 0,
+      busyTimeoutMs: 5_000,
+      checkpointIntervalMs: 100,
+      runMaintenance: (operation) => admitted && operation(),
+    });
+    try {
+      writer.exec(
+        "CREATE TABLE payload(value BLOB); INSERT INTO payload VALUES(zeroblob(1048576));",
+      );
+      for (let index = 0; index < 65; index++) {
+        writer.exec("UPDATE payload SET value=randomblob(1048576)");
+      }
+      const oversized = fs.statSync(`${databasePath}-wal`).size;
+      expect(oversized).toBeGreaterThan(64 * 1024 * 1024);
+      vi.advanceTimersByTime(100);
+      expect(fs.statSync(`${databasePath}-wal`).size).toBe(oversized);
+      reader = new DatabaseSync(databasePath, { readOnly: true });
+      reader.exec("BEGIN");
+      expect(reader.prepare("SELECT length(value) AS bytes FROM payload").get()?.bytes).toBe(
+        1048576,
+      );
+      admitted = true;
+      const started = performance.now();
+      vi.advanceTimersByTime(100);
+      expect(performance.now() - started).toBeLessThan(1_000);
+      expect(fs.statSync(`${databasePath}-wal`).size).toBe(oversized);
+      expect(writer.prepare("PRAGMA busy_timeout").get()?.timeout).toBe(5_000);
+      reader.exec("ROLLBACK");
+      vi.advanceTimersByTime(100);
+      expect(fs.statSync(`${databasePath}-wal`).size).toBeLessThanOrEqual(64 * 1024 * 1024);
+      expect(maintenance.health?.state).toBe("complete");
+      expect(writer.prepare("SELECT length(value) AS bytes FROM payload").get()?.bytes).toBe(
+        1048576,
+      );
+    } finally {
+      reader?.close();
+      maintenance.close();
+      writer.close();
+      vi.useRealTimers();
+    }
+  });
+
   it("keeps a completed checkpoint successful when file-size observation fails", () => {
     const databasePath = path.join(tempDirs.make("openclaw-wal-size-error-"), "state.sqlite");
     const { DatabaseSync } = requireNodeSqlite();

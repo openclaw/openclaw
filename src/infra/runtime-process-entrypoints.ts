@@ -134,6 +134,11 @@ export const runtimeProcessEntrypoints = {
     sourceWorkerName: "update-candidate-state.worker",
     distWorkerPath: "infra/update-candidate-state.worker.js",
   },
+  doctorLint: {
+    currentModuleUrl,
+    sourceWorkerName: "../commands/doctor-lint.worker",
+    distWorkerPath: "commands/doctor-lint.worker.js",
+  },
   databaseVerify: {
     currentModuleUrl,
     sourceWorkerName: "../state/openclaw-database-verify.worker",

@@ -1,7 +1,7 @@
 /** Worker-only canonical context construction and bounded value helpers. */
 import type { DatabaseSync } from "node:sqlite";
-import type { ExecutionIdentityContextV1 } from "../../packages/gateway-protocol/src/index.js";
-import { validateExecutionIdentityContextV1 } from "../../packages/gateway-protocol/src/index.js";
+import { validateExecutionIdentityContextV1 } from "../../packages/gateway-protocol/src/audit-run-validators.js";
+import type { ExecutionIdentityContextV1 } from "../../packages/gateway-protocol/src/schema/audit-run.js";
 import { pseudonymizeExecutionIdentityRef } from "./audit-identity.js";
 import type { ExecutionIdentityAdmissionEnvelope } from "./execution-identity-admission.js";
 import { sortUniqueExecutionIdentityEntries } from "./execution-identity-ordering.js";

@@ -412,7 +412,31 @@ process.emit=function(kind,message,...args){
   itUnix.each(["active", "inactive"] as const)(
     "keeps the fixer alive during %s primary maintenance",
     async (primary) => {
-      const boundary = await start("startup", undefined, primary);
+      const boundary = await start("startup", undefined, primary, async (root) => {
+        const file = path.join(root, "maintenance.mjs");
+        const source = await fs.readFile(file, "utf8");
+        await fs.writeFile(
+          file,
+          source.replace(
+            "if(process.argv[2]==='inactive'){",
+            `
+const write = fs.writeFileSync;
+fs.writeFileSync = function(file, ...args) {
+  if (typeof file === "string" && file.startsWith(primaryFile)) {
+    // Observe the real controller between truncate and write, not only after publication.
+    write(file, "");
+    const scope = JSON.parse(fs.readFileSync(root + "/scope.json", "utf8")).name;
+    const probe = process.getBuiltinModule("child_process").spawnSync(
+      process.execPath, [root + "/bin/systemctl", "--user", "show", scope], {encoding:"utf8"},
+    );
+    event("primary-snapshot-observed", {status:probe.status});
+  }
+  return write(file, ...args);
+};
+if(process.argv[2]==='inactive'){`,
+          ),
+        );
+      });
       await ready(boundary);
       expect(await boundary.control("commit")).toBe("committed");
       await fixing(boundary);
@@ -432,6 +456,9 @@ process.emit=function(kind,message,...args){
           "outside",
         );
       } else {
+        expect(events.find((event) => event.kind === "primary-snapshot-observed")).toMatchObject({
+          status: 0,
+        });
         expect(events.find((event) => event.kind === "doctor-maintenance")).toMatchObject({
           admitted: true,
         });

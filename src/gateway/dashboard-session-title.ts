@@ -15,7 +15,7 @@ import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { withTimeout } from "../infra/fs-safe.js";
 import { parseAgentSessionKey } from "../sessions/session-key-utils.js";
 import { runWithAsyncWorkResources } from "../shared/async-work-resources.js";
-import { AsyncWorkScope, getAsyncWorkSignal } from "../shared/async-work-scope.js";
+import { getAsyncWorkSignal, trackAsyncWork } from "../shared/async-work-scope.js";
 import type { ChatAttachment } from "./chat-attachments.js";
 import { resolveStoredSessionKeyForAgentStore } from "./session-store-key.js";
 import {
@@ -94,10 +94,19 @@ export function buildDashboardSessionTitleSource(params: {
   return truncateUtf16Safe(source.trim(), DASHBOARD_SESSION_TITLE_SOURCE_MAX_CHARS);
 }
 
-type SessionTitleAttempt =
-  | { kind: "persisted" }
-  | { kind: "skipped" }
-  | { kind: "in-flight"; settled: Promise<boolean> };
+type SessionTitleParams = {
+  cfg: OpenClawConfig;
+  agentId: string;
+  entry: SessionEntry | undefined;
+  sessionId: string;
+  sessionKey: string;
+  storePath: string;
+  currentUserMessage?: string;
+  userMessage: string;
+  commitGuard?: () => void;
+  withSource?: WorktreeSourceStage;
+  retryFailedJoin?: boolean;
+};
 
 function isAutoTitleSessionKey(sessionKey: string): boolean {
   const rest = parseAgentSessionKey(sessionKey)?.rest ?? "";
@@ -155,14 +164,12 @@ async function generateDashboardSessionTitle(params: {
   agentId: string;
   entry?: DashboardSessionTitleModelEntry;
   userMessage: string;
-  attachments?: readonly ChatAttachment[];
   utilityOnly?: boolean;
   abortSignal?: AbortSignal;
   assertCurrent?: () => void;
 }): Promise<string | null> {
   const sourceText = buildDashboardSessionTitleSource({
     message: params.userMessage,
-    attachments: params.attachments,
   });
   if (!sourceText || sourceText.startsWith("/")) {
     return null;
@@ -188,14 +195,13 @@ async function generateDashboardSessionTitle(params: {
     primaryProvider: regularModel.provider,
     primaryModelRef: regularModelRef,
   });
-  const boundedSource = truncateUtf16Safe(sourceText, DASHBOARD_SESSION_TITLE_SOURCE_MAX_CHARS);
   try {
     const { generateConversationLabelWithFallback } =
       await import("../auto-reply/reply/conversation-label-generator.js");
     params.assertCurrent?.();
     params.abortSignal?.throwIfAborted();
     const generated = await generateConversationLabelWithFallback({
-      userMessage: boundedSource,
+      userMessage: sourceText,
       prompt: DASHBOARD_SESSION_TITLE_PROMPT,
       cfg: params.cfg,
       agentId: params.agentId,
@@ -215,10 +221,6 @@ async function generateDashboardSessionTitle(params: {
   } catch {
     params.assertCurrent?.();
     params.abortSignal?.throwIfAborted();
-    if (params.utilityOnly) {
-      return null;
-    }
-    // Fall through to the two-word name; keep provider errors private.
   }
   // Speculative utility-only naming must not persist a provisional title that
   // would skip the healthy primary-model pass after send.
@@ -250,15 +252,13 @@ export async function prepareDashboardSessionTitle(params: {
 
 /** Worktree callers bound their own wait without cancelling another naming owner's request. */
 export async function generateWorktreeSessionTitle(
-  params: Parameters<typeof maybeGenerateSessionTitle>[0] & {
+  params: SessionTitleParams & {
     onError: (error: unknown) => void;
     onPersisted: () => void;
   },
 ): Promise<string | undefined> {
-  const request = maybeGenerateSessionTitle(params).then(async (attempt) => {
-    if (attempt.kind === "in-flight") {
-      await attempt.settled;
-    } else if (attempt.kind === "persisted") {
+  const request = maybeGenerateSessionTitle(params).then((persisted) => {
+    if (persisted) {
       params.onPersisted();
     }
   });
@@ -285,57 +285,32 @@ export async function generateWorktreeSessionTitle(
     : readCurrent();
 }
 
-export async function maybeGenerateDashboardSessionTitle(params: {
-  cfg: OpenClawConfig;
-  agentId: string;
-  entry: SessionEntry | undefined;
-  sessionId: string;
-  sessionKey: string;
-  storePath: string;
-  currentUserMessage?: string;
-  userMessage: string;
-}): Promise<boolean> {
-  const sourceText = params.userMessage.trim();
-  if (
-    !isDashboardSessionTitleCandidate({
-      sessionKey: params.sessionKey,
-      userMessage: sourceText,
-    })
-  ) {
-    return false;
-  }
-  // Only the writer emits sessions.changed. A failed join can retry once under
-  // this caller's authority after the previous request has left the registry.
-  let attempt = await maybeGenerateSessionTitle({ ...params, userMessage: sourceText });
-  if (attempt.kind === "in-flight" && !(await attempt.settled.catch(() => false))) {
-    attempt = await maybeGenerateSessionTitle({ ...params, userMessage: sourceText });
-  }
-  return attempt.kind === "persisted";
+export async function maybeGenerateDashboardSessionTitle(
+  params: SessionTitleParams,
+): Promise<boolean> {
+  return (
+    isDashboardSessionTitleCandidate(params) &&
+    (await maybeGenerateSessionTitle({ ...params, retryFailedJoin: true }))
+  );
 }
 
-export async function maybeGenerateSessionTitle(params: {
-  cfg: OpenClawConfig;
-  agentId: string;
-  entry: SessionEntry | undefined;
-  sessionId: string;
-  sessionKey: string;
-  storePath: string;
-  currentUserMessage?: string;
-  userMessage: string;
-  commitGuard?: () => void;
-  withSource?: WorktreeSourceStage;
-}): Promise<SessionTitleAttempt> {
+/** Joins existing work; only the caller that persists a title returns true. */
+export async function maybeGenerateSessionTitle(params: SessionTitleParams): Promise<boolean> {
   const sessionKey = resolveStoredSessionKeyForAgentStore(params);
   const scope = { agentId: params.agentId, sessionKey, storePath: params.storePath };
   const entry = loadSessionEntry(scope);
   if (hasExplicitSessionName(entry) || entry?.sessionId !== params.sessionId) {
-    return { kind: "skipped" };
+    return false;
   }
 
   const requestTarget = { ...scope, sessionId: params.sessionId };
   const existing = sessionTitleRequests.get(requestTarget);
   if (existing) {
-    return { kind: "in-flight", settled: existing };
+    const persisted = await (params.retryFailedJoin ? existing.catch(() => false) : existing);
+    // A failed join can retry once with fresh session state and this caller's authority.
+    return !persisted && params.retryFailedJoin
+      ? await maybeGenerateSessionTitle({ ...params, retryFailedJoin: false })
+      : false;
   }
 
   // A retry may be triggered by a later send or by discussion open. Always
@@ -357,7 +332,7 @@ export async function maybeGenerateSessionTitle(params: {
       ? params.userMessage.trim()
       : transcriptText);
   if (!sourceText) {
-    return { kind: "skipped" };
+    return false;
   }
 
   const generate = (abortSignal?: AbortSignal) =>
@@ -412,48 +387,24 @@ export async function maybeGenerateSessionTitle(params: {
         params.commitGuard?.();
         return await finish(generate());
       }
-      const parentSignal = getAsyncWorkSignal();
-      return await runWithAsyncWorkResources(async (onAcquired) => {
-        const generationWork = new AsyncWorkScope();
-        const runInGenerationContext = generationWork.run(() => AsyncLocalStorage.snapshot());
-        const cancelFromParent = () =>
-          runInGenerationContext(() => generationWork.beginClose(parentSignal?.reason));
-        onAcquired({
-          release: async () => {
-            try {
-              await AsyncWorkScope.runWhenAllIdle(
-                () => [generationWork],
-                () => runInGenerationContext(() => generationWork.drain()),
-              );
-            } finally {
-              parentSignal?.removeEventListener("abort", cancelFromParent);
-            }
-          },
-        });
-        parentSignal?.addEventListener("abort", cancelFromParent, { once: true });
-        if (parentSignal?.aborted) {
-          cancelFromParent();
-        }
-        let pending: { completion: Promise<string | null> };
-        try {
-          pending = await withSource((source) => {
+      return await runWithAsyncWorkResources(
+        async () => {
+          const runInGenerationContext = AsyncLocalStorage.snapshot();
+          const pending = await withSource((source) => {
             params.commitGuard?.();
             source.assertCurrent();
-            // This is the existing generation-start check, not provider dispatch authority.
+            // Release source custody during inference; reacquire it only to persist.
             const completion = runInGenerationContext(() =>
-              generationWork.track(() => generate(generationWork.signal)),
+              trackAsyncWork(() => generate(getAsyncWorkSignal())),
             );
             void completion.catch(() => undefined);
             return { completion };
           });
           return await finish(pending.completion);
-        } catch (error) {
-          runInGenerationContext(() => generationWork.beginClose(error));
-          await runInGenerationContext(() => generationWork.drain());
-          throw error;
-        }
-      });
+        },
+        { cancelOnError: true },
+      );
     }),
   );
-  return (await request) ? { kind: "persisted" } : { kind: "skipped" };
+  return await request;
 }

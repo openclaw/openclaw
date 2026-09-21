@@ -436,6 +436,15 @@ When bundle MCP is enabled, OpenClaw:
 - loads enabled bundle-MCP servers for the current workspace and merges them with any existing backend MCP config or settings shape
 - rewrites the launch config using the backend-owned integration mode from the owning plugin.
 
+The loopback bridge sends keepalive bytes while a tool response or notification
+stream is idle, so HTTP idle timeouts do not interrupt long-running tools. These
+bytes are not tool results or agent progress; client request deadlines and the
+overall agent turn timeout still apply.
+
+After plugin replacement, new CLI turns resolve bridge tools against the current
+plugin generation without restarting the listener. Retired plugin instances remain
+unavailable, and each turn still needs its own active context grant.
+
 With the Gateway's MCP bridge, channel-origin CLI turns can use the `message`
 tool for permitted reads and same-conversation actions, including reactions. The
 bridge retains the admitted sender, account, and conversation; channel access and

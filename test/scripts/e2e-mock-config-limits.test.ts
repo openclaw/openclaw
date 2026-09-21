@@ -963,8 +963,7 @@ describe("mock OpenAI response markers", () => {
       };
       const first = await request();
       expect(first.output?.[0]).toMatchObject({ name: "exec", type: "function_call" });
-      expect(JSON.parse(first.output[0].arguments)).toMatchObject({
-        language: "javascript",
+      expect(JSON.parse(first.output[0].arguments)).toEqual({
         code: expect.stringContaining('MCP.fixture.lookupNote({ id: "alpha" })'),
       });
 

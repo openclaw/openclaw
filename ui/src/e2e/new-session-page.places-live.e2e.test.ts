@@ -196,7 +196,7 @@ suite.define(() => {
       await expect
         .poll(() => tooltipTitleText(profile))
         .toBe(
-          "The codex runtime cannot use this cloud worker. Choose a compatible cloud worker or run locally.",
+          "Cloud worker provider: crabbox, The codex runtime cannot use this cloud worker. Choose a compatible cloud worker or run locally.",
         );
       await page.keyboard.press("Escape");
 

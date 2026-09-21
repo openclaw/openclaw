@@ -122,7 +122,7 @@ it.each([false, true])(
       expect(
         result.steps.some(
           (step) =>
-            step.name === "local package overrides" && step.advisory?.message.includes(recoveryDir),
+            step.name === "local-package-overrides" && step.advisory?.message.includes(recoveryDir),
         ),
       ).toBe(true);
       finishUpdateRun(run.runId, { status: "succeeded" }, { env: run.env });

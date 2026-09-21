@@ -98,8 +98,8 @@ type OpenAIInternalRealtimeVoiceProviderApi = {
   }) => {
     config: RealtimeVoiceProviderConfig;
     clientHints?: {
-      modelSource: "gateway";
-      gatewayRelaySupported: false;
+      modelSource?: "gateway";
+      gatewayRelaySupported: boolean;
     };
   };
   validateGatewayRelayLaunch?: (ctx: {

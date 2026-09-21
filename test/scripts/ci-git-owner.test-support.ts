@@ -148,6 +148,7 @@ export async function runCiGitStep(options: {
   lsRemoteResults?: { output: string; code: number | "hang" | "cleanup-failure" }[];
   realClock?: boolean;
   realDrain?: boolean;
+  readyFetchClockAdvanceSeconds?: number;
   objects?: Record<string, { probe?: number; code?: number; text: string }>;
   cooperativeTrees?: boolean;
   cancelDuringBackoff?: boolean;
@@ -550,6 +551,13 @@ ${run}`;
         : false;
       return {
         ...report,
+        ...(options.readyFetchClockAdvanceSeconds === undefined
+          ? {}
+          : {
+              fetchClockAdvancedSeconds:
+                options.readyFetchClockAdvanceSeconds *
+                readdirSync(root).filter((name) => /^fetch-tick-\d+\.json$/u.test(name)).length,
+            }),
         authHeaderPresent,
         initialBranch: publisherFixture?.initialBranch,
         publication: publisherFixture?.inspect(report.output, false),

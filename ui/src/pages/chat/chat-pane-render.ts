@@ -30,7 +30,7 @@ import {
   resolveUiConfiguredMainKey,
 } from "../../lib/sessions/session-key.ts";
 import { showToast } from "../../lib/toast.ts";
-import { mutateChatGoal, submitChatGoalDraft } from "./chat-goals.ts";
+import { chatGoalRecovery, mutateChatGoal, submitChatGoalDraft } from "./chat-goals.ts";
 import { clearChatHistory } from "./chat-history-actions.ts";
 import { isInitialChatHistoryUnavailable } from "./chat-history-state.ts";
 import { resolveChatMessageAccess } from "./chat-message-access.ts";
@@ -362,6 +362,14 @@ export class ChatPane extends ChatPaneLayoutRender {
       disabledBanner:
         sessionDisabledBanner ?? placementComposer.disabledBanner ?? modelUnavailableBanner,
     };
+    const progressCardRefresh =
+      canDismissProgressCard &&
+      composerAvailability.canSend &&
+      !catalogKey &&
+      !suggestionViewer &&
+      progressPresentation
+        ? this.captureProgressCardRefreshAction()
+        : undefined;
     const selfProfileId = selfUser?.identity?.type === "profile" ? selfUser.identity.id : null;
     const mentionsUnsupported = Boolean(
       catalogKey || suggestionViewer || selectedSession?.incognito || !selfProfileId,
@@ -409,6 +417,7 @@ export class ChatPane extends ChatPaneLayoutRender {
       progressCardIdentity: progressPresentation?.identity,
       gatewayScope: gatewayPresentationScope(this.context.gateway),
       progressCardInitialLoading: this.progressCardInitialLoading,
+      progressCardRefresh,
       collapseTaskProgress: state.settings.chatCollapseTaskProgress === true,
       readingHistory: state.chatReadingHistory,
       onProgressManipulate: () => {
@@ -589,13 +598,6 @@ export class ChatPane extends ChatPaneLayoutRender {
                   followUpModeOverride ? { followUpMode: followUpModeOverride } : undefined,
                   submissionAction,
                 ),
-      // Checkpoint deep-link carries the archived filter so the row stays findable.
-      onOpenSessionCheckpoints: () => {
-        const status = selectedSessionArchived ? "&status=archived" : "";
-        this.context.navigate("sessions", {
-          search: `?session=${encodeURIComponent(state.sessionKey)}${status}`,
-        });
-      },
       onUseSystemDefaultMicrophone: state.realtimeTalkUseSystemDefault ?? undefined,
       onToggleRealtimeTalk: () => void state.toggleRealtimeTalk(),
       onSelectRealtimeVoice: (voice) => void state.selectRealtimeTalkVoice(voice),
@@ -617,6 +619,7 @@ export class ChatPane extends ChatPaneLayoutRender {
         : (id) => void state.steerQueuedChatMessage(id),
       onQueueMove: sessionParticipationBlocked ? undefined : state.moveQueuedChatMessage,
       queuedEdit: createChatPaneQueuedEditProps(state, sessionParticipationBlocked),
+      goalRecovery: chatGoalRecovery(state),
       onGoalAction: (goalId, action) => void mutateChatGoal(state, { goalId, action }),
       goalDraftMode: state.chatGoalDraftMode ?? null,
       currentSessionId: state.currentSessionId,

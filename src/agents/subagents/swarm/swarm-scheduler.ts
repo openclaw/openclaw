@@ -18,6 +18,7 @@ type SwarmLaunch = {
   /** Release preparation only after an abandoned launch can no longer use it. */
   onRemoved?: (reason: SwarmRemovalReason) => Promise<void>;
   lifecycleOwner?: object;
+  signal?: AbortSignal;
 };
 
 type QueuedSwarmRun = {
@@ -29,6 +30,7 @@ type QueuedSwarmRun = {
   pendingLaunch?: Promise<void>;
   removal?: Promise<void>;
   callbackWork?: AsyncWorkScope;
+  removeAbortListener?: () => void;
   holds: number;
   retryReady: boolean;
 };
@@ -104,6 +106,8 @@ function finalizeRemovedRun(
   item: QueuedSwarmRun,
   reason: SwarmRemovalReason = "cancelled",
 ): Promise<void> {
+  item.removeAbortListener?.();
+  item.removeAbortListener = undefined;
   const onRemoved = item.launch?.onRemoved;
   if (item.launch && !item.removal) {
     pendingRemovals.add(item);
@@ -129,6 +133,8 @@ function finalizeRemovedRun(
 }
 
 async function startQueuedRun(lane: SwarmGroupLane, item: QueuedSwarmRun, launch: SwarmLaunch) {
+  item.removeAbortListener?.();
+  item.removeAbortListener = undefined;
   lane.active.add(item.runId);
   runLocations.set(item.runId, { lane, state: "active", item });
   publishCapacityChange(item);
@@ -158,6 +164,10 @@ async function startQueuedRun(lane: SwarmGroupLane, item: QueuedSwarmRun, launch
     lane.queue.unshift(item);
     runLocations.set(item.runId, { lane, state: "queued", item });
     publishLaneCapacityChange(lane, previouslyFull);
+    bindSwarmLaunchSignal(item, launch.signal);
+    if (runLocations.get(item.runId)?.item !== item) {
+      return;
+    }
     const timer = setTimeout(
       () => {
         item.retryReady = true;
@@ -169,6 +179,25 @@ async function startQueuedRun(lane: SwarmGroupLane, item: QueuedSwarmRun, launch
       isFastTestRuntimeEnv() ? 1 : 1_000,
     );
     timer.unref?.();
+  }
+}
+
+function bindSwarmLaunchSignal(item: QueuedSwarmRun, signal?: AbortSignal): void {
+  item.removeAbortListener?.();
+  item.removeAbortListener = undefined;
+  if (!signal) {
+    return;
+  }
+  const abort = () => {
+    const location = runLocations.get(item.runId);
+    if (location?.state === "queued" && location.item === item) {
+      removeQueuedSwarmRun(item.runId);
+    }
+  };
+  item.removeAbortListener = () => signal.removeEventListener("abort", abort);
+  signal.addEventListener("abort", abort, { once: true });
+  if (signal.aborted) {
+    abort();
   }
 }
 
@@ -298,7 +327,9 @@ export function activateSwarmRun(
     onStartFailure: bindSwarmLaunchWork(params.onStartFailure, item),
     onRemoved: onRemoved && bindSwarmLaunchWork(onRemoved),
     lifecycleOwner: params.lifecycleOwner,
+    signal: params.signal,
   };
+  bindSwarmLaunchSignal(item, params.signal);
   publishCapacityChange(item);
   pumpLane(lane);
 }
@@ -412,6 +443,9 @@ export function holdQueuedSwarmRun(runId: string) {
 
 const testing = {
   reset() {
+    for (const location of runLocations.values()) {
+      location.item?.removeAbortListener?.();
+    }
     lanes.clear();
     runLocations.clear();
     pendingRemovals.clear();

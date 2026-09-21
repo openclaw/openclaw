@@ -227,6 +227,48 @@
     },
     {
       "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/components/provider-icon.ts",
+      "text": "AWS"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/components/provider-icon.ts",
+      "text": "Azure"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/components/provider-icon.ts",
+      "text": "Daytona"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/components/provider-icon.ts",
+      "text": "Google Cloud"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/components/provider-icon.ts",
+      "text": "Hetzner"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/components/provider-icon.ts",
+      "text": "Machine0"
+    },
+    {
+      "count": 1,
       "kind": "html-text",
       "name": "text",
       "path": "ui/src/components/settings-sidebar.ts",
@@ -455,6 +497,20 @@
       "name": "text",
       "path": "ui/src/pages/new-session/cloud-target.ts",
       "text": "openclaw update"
+    },
+    {
+      "count": 1,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/pages/new-session/where-chip.test-support.ts",
+      "text": "Build runner"
+    },
+    {
+      "count": 2,
+      "kind": "object-property",
+      "name": "label",
+      "path": "ui/src/pages/new-session/where-chip.test-support.ts",
+      "text": "Duplicate runner"
     },
     {
       "count": 1,

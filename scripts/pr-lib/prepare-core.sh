@@ -15,14 +15,16 @@ checkout_prep_branch() {
 resolve_pr_author_access_at_prepare() {
   # This lookup is optional: ordinary access refusals retain unknown access;
   # an exhausted/throttled API budget must stop preparation with its diagnostics.
-  local author="$1" repo_nwo response permission exit_code
-  repo_nwo=$(pr_gh repo view --json nameWithOwner --jq .nameWithOwner) || {
+  local author="$1" repo repo_nwo repo_host response permission exit_code
+  repo=$(pr_gh repo view --json nameWithOwner,url) || {
     exit_code=$?
     [ "$exit_code" -ne 75 ] || return 1
     printf 'unknown\n'
     return
   }
-  if response=$(pr_gh api "repos/$repo_nwo/collaborators/$author/permission") &&
+  repo_nwo=$(printf '%s\n' "$repo" | jq -er '.nameWithOwner') || return 1
+  repo_host=$(printf '%s\n' "$repo" | jq -er '.url | capture("^https://(?<host>[^/]+)/").host') || return 1
+  if response=$(pr_gh author-permission "$repo_nwo" "$repo_host" "$author") &&
     permission=$(printf '%s\n' "$response" | jq -er '.permission | select(type == "string")' 2>/dev/null); then
     case "$permission" in
       admin | write) printf 'maintainer\n' ;;
@@ -364,6 +366,10 @@ prepare_push() {
   local lease_sha="$PREP_PUBLICATION_LEASE_SHA"
   prep_head_sha="$PREP_PUBLICATION_HEAD_SHA"
   local push_result_env=".local/prepare-push-result.env"
+  if [ "${GATES_MODE:-}" = github_pending ] && [ "${HOSTED_GATES_TARGET_HEAD_SHA:-}" != "$prep_head_sha" ]; then
+    echo "Deferred GitHub gates do not match the prepared head; re-run prepare-gates." >&2
+    return 1
+  fi
 
   verify_pr_head_branch_matches_expected "$pr" "$PR_HEAD"
   push_prep_head_to_pr_branch "$pr" "$PR_HEAD" "$prep_head_sha" "$lease_sha" "$push_result_env" || return $?
@@ -383,6 +389,10 @@ prepare_push() {
     finalize_remote_crabbox_aws_gate "$pr" "$prep_head_sha"
     # shellcheck disable=SC1091
     source .local/gates.env
+  elif [ "${GATES_MODE:-}" = github_pending ]; then
+    # Publication can assign a new OID to the verified prepared tree.
+    write_gates_env_stamp "$pr" "${DOCS_ONLY:-false}" "${CHANGELOG_REQUIRED:-false}" \
+      github_pending "" "" "$prep_head_sha" "" "" "" "" || return 1
   fi
 
   local contrib="${PR_AUTHOR:-}"
@@ -396,12 +406,16 @@ prepare_push() {
     coauthor_email=""
   fi
 
+  if [ "${GATES_MODE:-}" = github_pending ]; then
+    printf '%s\n' "- Required GitHub gates deferred; push succeeded to branch $PR_HEAD." >> .local/prep.md
+  else
+    printf '%s\n' "- Gates passed and push succeeded to branch $PR_HEAD." >> .local/prep.md
+  fi
   cat >> .local/prep.md <<EOF_PREP
-- Gates passed and push succeeded to branch $PR_HEAD.
 - Gate mode: ${GATES_MODE:-unknown}.
 - Verified the remote PR head tree matches the local prep head.
 EOF_PREP
-  if [ -n "${REMOTE_GATES_LEASE_ID:-}" ]; then
+  if [ "${GATES_MODE:-}" != github_pending ] && [ -n "${REMOTE_GATES_LEASE_ID:-}" ]; then
     cat >> .local/prep.md <<EOF_PREP
 - Remote gate stamp: ${REMOTE_GATES_PROVIDER:-unknown} ${REMOTE_GATES_RUN_ID:+run ${REMOTE_GATES_RUN_ID}, }lease ${REMOTE_GATES_LEASE_ID}${REMOTE_GATES_RUN_URL:+ (${REMOTE_GATES_RUN_URL})}.
 EOF_PREP
