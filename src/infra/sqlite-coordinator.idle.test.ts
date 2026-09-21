@@ -170,50 +170,57 @@ describe("idle SQLite coordinator connections", () => {
     expect(database.isOpen).toBe(false);
   });
 
-  it("disposes only idle connections inside a removed runtime root", () => {
-    const { directory } = fixture();
-    const root = path.join(directory, "owned");
-    fs.mkdirSync(root);
-    const idlePath = path.join(root, "idle.sqlite");
-    const heldPath = path.join(root, "held.sqlite");
-    const otherPath = path.join(directory, "owned-other.sqlite");
-    for (const location of [idlePath, heldPath, otherPath]) {
-      fs.writeFileSync(location, "");
-    }
-    const acquire = (location: string) =>
-      captureCoordinatorDatabase(() =>
-        tryAcquireSharedSqliteCoordinator(location, { keepAlive: true }),
-      );
-    const idle = acquire(idlePath);
-    const held = acquire(heldPath);
-    const other = acquire(otherPath);
-    idle.result?.release();
-    other.result?.release();
-    try {
-      closeIdleSqliteCoordinators(root);
-      expect(idle.database.isOpen).toBe(false);
-      fs.unlinkSync(idlePath);
-      expect(held.database.isOpen).toBe(true);
-      expect(held.database.isTransaction).toBe(true);
-      expect(other.database.isOpen).toBe(true);
-      const open = vi.spyOn(nodeSqlite, "openNodeSqliteDatabase");
-      const reused = tryAcquireSharedSqliteCoordinator(otherPath, { keepAlive: true });
-      try {
-        expect(reused).not.toBeNull();
-        expect(open).not.toHaveBeenCalled();
-      } finally {
-        reused?.release();
-        open.mockRestore();
+  it.each(["coordinator", "qa-runtime"] as const)(
+    "disposes only idle connections inside a removed runtime root through %s",
+    async (entryPoint) => {
+      const dispose =
+        entryPoint === "qa-runtime"
+          ? (await import("../plugin-sdk/qa-runtime.js")).closeQaRuntimeStores
+          : closeIdleSqliteCoordinators;
+      const { directory } = fixture();
+      const root = path.join(directory, "owned");
+      fs.mkdirSync(root);
+      const idlePath = path.join(root, "idle.sqlite");
+      const heldPath = path.join(root, "held.sqlite");
+      const otherPath = path.join(directory, "owned-other.sqlite");
+      for (const location of [idlePath, heldPath, otherPath]) {
+        fs.writeFileSync(location, "");
       }
-      held.result?.release();
-      closeIdleSqliteCoordinators(root);
-      fs.rmSync(root, { recursive: true });
-      expect(other.database.isOpen).toBe(true);
-    } finally {
-      held.result?.release({ keepAlive: false });
-      closeIdleSqliteCoordinators(directory);
-    }
-  });
+      const acquire = (location: string) =>
+        captureCoordinatorDatabase(() =>
+          tryAcquireSharedSqliteCoordinator(location, { keepAlive: true }),
+        );
+      const idle = acquire(idlePath);
+      const held = acquire(heldPath);
+      const other = acquire(otherPath);
+      idle.result?.release();
+      other.result?.release();
+      try {
+        await dispose(root);
+        expect(idle.database.isOpen).toBe(false);
+        fs.unlinkSync(idlePath);
+        expect(held.database.isOpen).toBe(true);
+        expect(held.database.isTransaction).toBe(true);
+        expect(other.database.isOpen).toBe(true);
+        const open = vi.spyOn(nodeSqlite, "openNodeSqliteDatabase");
+        const reused = tryAcquireSharedSqliteCoordinator(otherPath, { keepAlive: true });
+        try {
+          expect(reused).not.toBeNull();
+          expect(open).not.toHaveBeenCalled();
+        } finally {
+          reused?.release();
+          open.mockRestore();
+        }
+        held.result?.release();
+        await dispose(root);
+        fs.rmSync(root, { recursive: true });
+        expect(other.database.isOpen).toBe(true);
+      } finally {
+        held.result?.release({ keepAlive: false });
+        closeIdleSqliteCoordinators(directory);
+      }
+    },
+  );
 
   it.each([false, true])(
     "retains only unfinished scoped cleanup after close failures (physically closed: %s)",
@@ -228,14 +235,16 @@ describe("idle SQLite coordinator connections", () => {
         owner.result?.release();
         return owner;
       });
-      const failures = owners.map((_, index) => new Error(`native close ${index} failed`));
+      const failures: Error[] = [];
       const closes = owners.map(({ database }, index) => {
+        const failure = new Error(`native close ${index} failed`);
+        failures.push(failure);
         const close = database.close.bind(database);
         return vi.spyOn(database, "close").mockImplementationOnce(() => {
           if (physicallyClosed) {
             close();
           }
-          throw failures[index];
+          throw failure;
         });
       });
       try {
