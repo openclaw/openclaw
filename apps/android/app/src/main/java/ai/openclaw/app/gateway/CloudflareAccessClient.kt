@@ -126,7 +126,19 @@ internal class CloudflareAccessClient(
       response: Reply,
       origin: CloudflareAccessOrigin,
     ): Boolean {
-      if (response.code !in setOf(301, 302, 303, 307, 308, 401, 403) || !origin.contains(response.url)) return false
+      if (!origin.contains(response.url)) return false
+      // cloudflared treats a decoded login-path prefix on a 302 as a hint, never as application identity.
+      // Metadata is still verified at the original gateway URL; the Location is never followed.
+      if (response.code == 302 &&
+        runCatching {
+          val location = response.headers["Location"]?.takeIf { it.isNotEmpty() } ?: return@runCatching false
+          val path = resolvedRedirectPath(java.net.URI(response.url), location)
+          path?.startsWith("/cdn-cgi/access/login") == true
+        }.getOrDefault(false)
+      ) {
+        return true
+      }
+      if (response.code !in setOf(301, 302, 303, 307, 308, 401, 403)) return false
       val header = response.headers["WWW-Authenticate"] ?: return false
       if (header.length > 8192) return false
       val parts = header.split(Regex("\\s+"), limit = 2)
@@ -139,6 +151,38 @@ internal class CloudflareAccessClient(
       val namespace = "/.well-known/cloudflare-access-protected-resource"
       return uri.scheme.equals("https", ignoreCase = true) && uri.rawQuery == null &&
         (uri.path == namespace || uri.path.startsWith("$namespace/"))
+    }
+
+    private fun resolvedRedirectPath(
+      base: java.net.URI,
+      reference: String,
+    ): String? {
+      val uri = java.net.URI(reference)
+      // Go preserves scheme-less triple-leading slashes as path; URI discards the empty authority.
+      val raw = if (reference.startsWith("///")) reference.substringBefore('?').substringBefore('#') else uri.rawPath ?: return null
+      val path =
+        when {
+          uri.isAbsolute || uri.rawAuthority != null || raw.startsWith("/") -> raw
+          raw.isEmpty() -> base.rawPath
+          else -> base.rawPath.substringBeforeLast('/', "") + "/" + raw
+        }
+      if (path.isEmpty()) return ""
+      // Go resolves literal dots on the escaped path. URI.normalize also collapses
+      // empty segments, while OkHttp resolves encoded dots; neither preserves this contract.
+      val segments = ArrayDeque<String>()
+      for (segment in path.split('/').drop(1)) {
+        when (segment) {
+          "." -> Unit
+          ".." -> if (segments.isNotEmpty()) segments.removeLast()
+          else -> segments.addLast(segment)
+        }
+      }
+      if (path.endsWith("/.") || path.endsWith("/..")) segments.addLast("")
+      // A relative dot prefix keeps a leading // in the path, never in the authority.
+      return java.net
+        .URI("./" + segments.joinToString("/"))
+        .path
+        .drop(1)
     }
 
     suspend fun send(

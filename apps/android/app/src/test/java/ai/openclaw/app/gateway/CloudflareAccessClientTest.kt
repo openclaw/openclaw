@@ -89,6 +89,146 @@ class CloudflareAccessClientTest {
       assertFalse(CloudflareAccessClient.isChallenge(reply(ordinary, 302, mapOf("WWW-Authenticate" to "Cloudflare-Access resource_metadata=\"https://other.example.test/.well-known/cloudflare-access-protected-resource/\"")), application.origin))
     }
 
+  @Test fun loginRedirectsVerifyMetadataAtTheOriginalGatewayUrl() =
+    runBlocking {
+      for (location in listOf(
+        "https://login.example.test/cdn-cgi/access/login/gateway.example.test?opaque=ignored",
+        "/cdn-cgi/access/login?opaque=ignored",
+        "../cdn-cgi/access/login",
+        "/cdn-cgi/access/login-extra",
+        "/%63dn-cgi/access/login",
+        "/other/../cdn-cgi/access/login",
+        "https://login.example.test/other/../cdn-cgi/access/login",
+        "//login.example.test/other/../cdn-cgi/access/login",
+        "/cdn-cgi/access/login/%2e%2e/ordinary",
+        "/cdn-cgi/access/login%2Fchild",
+        "/cdn-cgi/access/login//child",
+        "../../../cdn-cgi/access/login",
+        "///../../cdn-cgi/access/login",
+      )) {
+        for (unusableChallenge in listOf(false, true)) {
+          val gatewayUrl = "${application.origin.uri}/gateway%20space/%2Fsocket"
+          val keysUrl = "${application.issuer}/cdn-cgi/access/certs"
+          val requests = mutableListOf<Request>()
+          val client =
+            CloudflareAccessClient { request, _, _ ->
+              requests += request
+              when (requests.size) {
+                1 -> {
+                  reply(
+                    request,
+                    302,
+                    buildMap {
+                      put("Location", location)
+                      if (unusableChallenge) put("WWW-Authenticate", "Basic realm=\"unrelated\"")
+                    },
+                  )
+                }
+
+                2 -> {
+                  reply(request, 200, mapOf("Cf-Access-Metadata" to CloudflareAccessTestTokens.metadata()))
+                }
+
+                3 -> {
+                  reply(request, 200, body = CloudflareAccessTestTokens.jwks)
+                }
+
+                else -> {
+                  error("Unexpected discovery request")
+                }
+              }
+            }
+          assertEquals(application, client.discover(gatewayUrl.replaceFirst("https:", "wss:")))
+          assertEquals(listOf("GET", "HEAD", "GET"), requests.map { it.method })
+          assertEquals(listOf(gatewayUrl, gatewayUrl, keysUrl), requests.map { it.url.toString() })
+          assertEquals("true", requests[1].header("Cf-Access-Metadata-Request"))
+          assertEquals(CloudflareAccessClient.userAgent, requests[1].header("User-Agent"))
+          requests.forEach {
+            assertNull(it.header("Cookie"))
+            assertNull(it.header("Authorization"))
+            assertNull(it.header("Cf-Access-Token"))
+          }
+        }
+      }
+    }
+
+  @Test fun nonAccessAndMalformedRedirectsRemainOrdinary() =
+    runBlocking {
+      val original = Request.Builder().url("${application.origin.uri}/gateway/socket").build()
+      for ((status, location) in listOf(
+        200 to "/cdn-cgi/access/login",
+        301 to "/cdn-cgi/access/login",
+        303 to "/cdn-cgi/access/login",
+        307 to "/cdn-cgi/access/login",
+        308 to "/cdn-cgi/access/login",
+        302 to "",
+        302 to "/login",
+        302 to "/cdn-cgi/access/login%ZZ",
+        302 to "?next=/cdn-cgi/access/login",
+        401 to "/cdn-cgi/access/login",
+        302 to "/cdn-cgi/access/login/../ordinary",
+        302 to "https://login.example.test/cdn-cgi/access/login/../ordinary",
+        302 to "//login.example.test/cdn-cgi/access/login/../ordinary",
+        302 to "/cdn-cgi//access/login",
+        302 to "///cdn-cgi/access/login",
+        302 to "///cdn-cgi/access/login?next=ignored",
+        302 to "/other/%2e%2e/cdn-cgi/access/login",
+        302 to "../../../../ordinary",
+        302 to "/other//../cdn-cgi/access/login",
+        302 to "/other/..//cdn-cgi/access/login",
+      )) {
+        var requests = 0
+        val client =
+          CloudflareAccessClient { request, _, _ ->
+            requests++
+            reply(request, status, mapOf("Location" to location))
+          }
+        assertNull(client.discover(original.url.toString()))
+        assertEquals(1, requests)
+      }
+      assertFalse(CloudflareAccessClient.isChallenge(reply(original, 302), application.origin))
+      val malformedHeaders = Headers.Builder().addUnsafeNonAscii("Location", "/cdn-cgi/access/login\nignored").build()
+      assertFalse(
+        CloudflareAccessClient.isChallenge(
+          CloudflareAccessClient.Reply(original.url.toString(), 302, malformedHeaders, byteArrayOf()),
+          application.origin,
+        ),
+      )
+      val foreign = Request.Builder().url("https://other.example.test:8443/").build()
+      assertFalse(CloudflareAccessClient.isChallenge(reply(foreign, 302, mapOf("Location" to "/cdn-cgi/access/login")), application.origin))
+      val login = Request.Builder().url("${application.origin.uri}/cdn-cgi/access/login").build()
+      assertTrue(CloudflareAccessClient.isChallenge(reply(login, 302, mapOf("Location" to "?next=ignored")), application.origin))
+    }
+
+  @Test fun loginHintStillRejectsMissingOrUnverifiedMetadata() =
+    runBlocking {
+      val good = CloudflareAccessTestTokens.metadata()
+      val parts = good.split('.').toMutableList()
+      val signature = Base64.getUrlDecoder().decode(parts[2]).also { it[0] = (it[0].toInt() xor 1).toByte() }
+      parts[2] = Base64.getUrlEncoder().withoutPadding().encodeToString(signature)
+      for ((token, expectedRequests) in listOf(
+        null to 2,
+        "not-a-jwt" to 2,
+        CloudflareAccessTestTokens.metadata("other.example.test") to 2,
+        parts.joinToString(".") to 3,
+      )) {
+        var requests = 0
+        val client =
+          CloudflareAccessClient { request, _, _ ->
+            requests++
+            when (requests) {
+              1 -> reply(request, 302, mapOf("Location" to "/cdn-cgi/access/login"))
+              2 -> reply(request, 200, token?.let { mapOf("Cf-Access-Metadata" to it) }.orEmpty())
+              3 -> reply(request, 200, body = CloudflareAccessTestTokens.jwks)
+              else -> error("Unexpected discovery request")
+            }
+          }
+        val failure = runCatching { client.discover(application.origin.uri.toString()) }.exceptionOrNull()
+        assertEquals(CloudflareAccessException.Kind.InvalidApplication, (failure as? CloudflareAccessException)?.kind)
+        assertEquals(expectedRequests, requests)
+      }
+    }
+
   @Test fun probeMetadataAndKeysPreserveTransportFailuresAndCancellation() =
     runBlocking {
       for (failedRequest in 1..3) {
