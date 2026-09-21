@@ -9,6 +9,7 @@ export {
   resetPluginStateStoreForTests,
 } from "../plugin-state/plugin-state-store.js";
 export { setMaxMemoryHostEventsForTests } from "../memory-host-sdk/event-store.js";
+export { createPluginStateKernelStore } from "../plugin-state/plugin-state-kernel.test-helpers.js";
 export { createPluginBlobKernelStore } from "../plugin-state/plugin-blob-store.test-helpers.js";
 export {
   createPluginBlobStoreForTests,

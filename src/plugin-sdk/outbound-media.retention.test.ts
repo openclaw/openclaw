@@ -1,4 +1,8 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  createOpenClawTestState,
+  type OpenClawTestState,
+} from "../test-utils/openclaw-test-state.js";
 import type {
   HostedOutboundMediaChunkRecord,
   HostedOutboundMediaMetaRecord,
@@ -6,6 +10,8 @@ import type {
 import { createHostedOutboundMediaStore } from "./outbound-media.js";
 import {
   createPluginStateKeyedStoreForTests,
+  createPluginStateKernelStore,
+  openOpenClawStateDatabase,
   resetPluginStateStoreForTests,
 } from "./plugin-state-test-runtime.js";
 import * as webMedia from "./web-media.js";
@@ -22,6 +28,22 @@ function prepare(store: ReturnType<typeof createHostedOutboundMediaStore>) {
 }
 
 describe("hosted outbound media post-expiry retention", () => {
+  let testState: OpenClawTestState;
+  beforeAll(async () => {
+    testState = await createOpenClawTestState({ label: "media-retention-clock" });
+  });
+  afterAll(async () => {
+    resetPluginStateStoreForTests();
+    await testState.cleanup();
+  });
+  // entries() filters expired rows; only unfiltered SQL proves physical deletion.
+  const physicalRows = () =>
+    openOpenClawStateDatabase({ env: testState.env })
+      .db.prepare(
+        "SELECT namespace, created_at, expires_at, expires_at - created_at AS ttl_ms FROM plugin_state_entries WHERE plugin_id = ? ORDER BY namespace, entry_key",
+      )
+      .all("fixture-plugin");
+
   beforeEach(() => {
     resetPluginStateStoreForTests();
     vi.restoreAllMocks();
@@ -39,13 +61,13 @@ describe("hosted outbound media post-expiry retention", () => {
   });
 
   it("denies new reads at logical expiry and deletes rows after serving grace", async () => {
-    const metadataStore = createPluginStateKeyedStoreForTests<HostedOutboundMediaMetaRecord>(
+    const metadataStore = createPluginStateKernelStore<HostedOutboundMediaMetaRecord>(
       "fixture-plugin",
-      { namespace: "retained-ttl-media", maxEntries: 10 },
+      { env: testState.env, namespace: "retained-ttl-media", maxEntries: 10 },
     );
-    const chunkStore = createPluginStateKeyedStoreForTests<HostedOutboundMediaChunkRecord>(
+    const chunkStore = createPluginStateKernelStore<HostedOutboundMediaChunkRecord>(
       "fixture-plugin",
-      { namespace: "retained-ttl-media-chunks", maxEntries: 100 },
+      { env: testState.env, namespace: "retained-ttl-media-chunks", maxEntries: 100 },
     );
     const store = createHostedOutboundMediaStore({
       metadataStore,
@@ -60,15 +82,43 @@ describe("hosted outbound media post-expiry retention", () => {
       maxChunkRows: 100,
     });
 
+    // Logical expiry is resolved at 1000, before media loading. Model 50ms of
+    // loading without a sleep so cleanup at 1201 must delete still-live rows.
+    vi.mocked(webMedia.loadWebMedia).mockImplementationOnce(async () => {
+      vi.setSystemTime(1_050);
+      return { buffer: Buffer.from("image-bytes"), kind: "image", contentType: "image/png" };
+    });
     await prepare(store);
+    const retainedRows = physicalRows();
+    expect(retainedRows).toHaveLength(4);
+    expect(retainedRows).toEqual([
+      { namespace: "retained-ttl-media", created_at: 1_050, expires_at: 1_250, ttl_ms: 200 },
+      ...Array.from({ length: 3 }, () => ({
+        namespace: "retained-ttl-media-chunks",
+        created_at: 1_050,
+        expires_at: 1_250,
+        ttl_ms: 200,
+      })),
+    ]);
+    await expect(store.read(MEDIA_ID)).resolves.toMatchObject({
+      metadata: { expiresAt: 1_100 },
+      buffer: Buffer.from("image-bytes"),
+    });
+    vi.setSystemTime(1_100);
+    await expect(store.readMetadata(MEDIA_ID)).resolves.toBeNull();
     vi.setSystemTime(1_101);
     await expect(store.readMetadata(MEDIA_ID)).resolves.toBeNull();
     await store.cleanupExpired();
     expect(await metadataStore.entries()).toHaveLength(1);
     expect(await chunkStore.entries()).toHaveLength(3);
 
+    expect(physicalRows()).toEqual(retainedRows);
     vi.setSystemTime(1_201);
+    expect(await metadataStore.entries()).toHaveLength(1);
+    expect(await chunkStore.entries()).toHaveLength(3);
+    expect(physicalRows()).toEqual(retainedRows);
     await store.cleanupExpired();
+    expect(physicalRows()).toEqual([]);
     expect(await metadataStore.entries()).toEqual([]);
     expect(await chunkStore.entries()).toEqual([]);
   });
@@ -81,12 +131,14 @@ describe("hosted outbound media post-expiry retention", () => {
     ];
     let idIndex = 0;
     const store = createHostedOutboundMediaStore({
-      metadataStore: createPluginStateKeyedStoreForTests("fixture-plugin", {
+      metadataStore: createPluginStateKernelStore("fixture-plugin", {
+        env: testState.env,
         namespace: "grace-capacity-media",
         maxEntries: 1,
         overflowPolicy: "reject-new",
       }),
-      chunkStore: createPluginStateKeyedStoreForTests("fixture-plugin", {
+      chunkStore: createPluginStateKernelStore("fixture-plugin", {
+        env: testState.env,
         namespace: "grace-capacity-media-chunks",
         maxEntries: 10,
         overflowPolicy: "reject-new",
