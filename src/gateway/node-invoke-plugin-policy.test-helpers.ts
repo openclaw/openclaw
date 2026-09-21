@@ -84,7 +84,7 @@ export function createContext(opts?: {
   return {
     context,
     invoke,
-    async nextApproval(operation: Promise<unknown>): Promise<PluginApprovalRecord> {
+    nextApproval: async (operation: Promise<unknown>): Promise<PluginApprovalRecord> => {
       const manager = context.pluginApprovalManager;
       if (!manager) {
         throw new Error("expected plugin approval manager");
