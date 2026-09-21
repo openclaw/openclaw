@@ -27,10 +27,11 @@ search-only ------------------------------------------------------------> existi
 ## The four PRs
 
 1. **#153625 — cognitive trajectories**
-   - generic internal `DynamicsProfile` contract
-   - deliberately small preset catalog
+   - generic internal `DynamicsProfile` + spawn-requirements contract
+   - deliberately small preset catalog over that contract
    - bounded information handoff
-   - verifier requests the existing sandbox owner with `sandbox: "require"`
+   - resolved requirements, not profile-name branches, drive sandbox/evidence enforcement
+   - verifier requirements ask the existing sandbox owner for `sandbox: "require"`
    - no unsandboxed downgrade
 
 2. **#153627 — population thermodynamics**
@@ -56,6 +57,7 @@ search-only ------------------------------------------------------------> existi
 All four PRs share the same constraints:
 
 - profiles and phases are search semantics, not permissions
+- preset names never accumulate authority; resolved generic requirements drive enforcement
 - unknown telemetry stays unknown
 - local saturation is not averaged away
 - disagreement creates measurement demand
