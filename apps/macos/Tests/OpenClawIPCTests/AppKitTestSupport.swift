@@ -1,6 +1,7 @@
 import AppKit
 import ApplicationServices
 import CoreGraphics
+import Darwin
 import Testing
 
 @MainActor
@@ -48,21 +49,77 @@ enum AppKitTestSupport {
     nonisolated static func sampleStalledProcess() -> DispatchWorkItem {
         let pid = ProcessInfo.processInfo.processIdentifier
         let diagnostic = DispatchWorkItem {
+            guard ProcessInfo.processInfo.environment["CI"] == "true" else { return }
             FileHandle.standardError.write(Data("[appkit-test] sampling stalled rendered test\n".utf8))
-            let sample = Process()
-            sample.executableURL = URL(fileURLWithPath: "/usr/bin/sample")
-            sample.arguments = [String(pid), "1", "1"]
-            sample.standardOutput = FileHandle.standardError
-            sample.standardError = FileHandle.standardError
-            do {
-                try sample.run()
-                sample.waitUntilExit()
-            } catch {
-                FileHandle.standardError.write(Data("[appkit-test] sample failed: \(error)\n".utf8))
-            }
+            self.runDiagnostic(
+                name: "thread sample", executable: "/usr/bin/sample", arguments: [String(pid), "1", "1"])
+            self.runDiagnostic(
+                name: "concurrency dump", executable: "/usr/bin/sudo",
+                arguments: ["-n", "/usr/bin/swift-inspect", "dump-concurrency", String(pid)],
+                requiresTaskDump: true)
         }
         DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 60, execute: diagnostic)
         return diagnostic
+    }
+
+    private nonisolated static func runDiagnostic(
+        name: String,
+        executable: String,
+        arguments: [String],
+        requiresTaskDump: Bool = false)
+    {
+        let outputURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("openclaw-native-diagnostic-\(UUID().uuidString).log")
+        var retainOutput = false
+        defer {
+            if !retainOutput { try? FileManager.default.removeItem(at: outputURL) }
+        }
+        do {
+            try Data().write(to: outputURL, options: .withoutOverwriting)
+            let output = try FileHandle(forWritingTo: outputURL)
+            defer { try? output.close() }
+            let process = Process()
+            process.executableURL = URL(fileURLWithPath: executable)
+            process.arguments = arguments
+            process.standardOutput = output
+            process.standardError = output
+            let exited = DispatchSemaphore(value: 0)
+            process.terminationHandler = { _ in exited.signal() }
+            try process.run()
+            let timedOut = exited.wait(timeout: .now() + 15) != .success
+            if timedOut {
+                if process.isRunning { _ = kill(process.processIdentifier, SIGTERM) }
+                if exited.wait(timeout: .now() + 2) != .success {
+                    if process.isRunning { _ = kill(process.processIdentifier, SIGKILL) }
+                    guard exited.wait(timeout: .now() + 2) == .success else {
+                        retainOutput = true
+                        FileHandle.standardError
+                            .write(
+                                Data(
+                                    "[appkit-test] \(name) cleanup unverified for owned PID \(process.processIdentifier); retained \(outputURL.path)\n"
+                                        .utf8))
+                        return
+                    }
+                }
+            }
+            try output.close()
+            let data = try Data(contentsOf: outputURL)
+            let text = String(decoding: data, as: UTF8.self)
+            FileHandle.standardError
+                .write(Data("[appkit-test] \(name): exit=\(process.terminationStatus) timedOut=\(timedOut)\n".utf8))
+            FileHandle.standardError.write(data)
+            if requiresTaskDump,
+               timedOut || process.terminationStatus != 0 ||
+               !text.split(separator: "\n").contains("TASKS") ||
+               !(text.contains("async backtrace:") || text.contains("resume function:"))
+            {
+                FileHandle.standardError
+                    .write(Data("[appkit-test] concurrency dump unavailable; exit status alone is not task evidence\n"
+                            .utf8))
+            }
+        } catch {
+            FileHandle.standardError.write(Data("[appkit-test] \(name) unavailable: \(error)\n".utf8))
+        }
     }
 
     static func accessibilityElements(in root: AnyObject) async throws -> [AnyObject] {
