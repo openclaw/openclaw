@@ -1,0 +1,196 @@
+title: Telegram DM and forum participant identity inspection
+
+scenario:
+  id: telegram-participant-identity-inspection
+  surface: channels
+  coverage:
+    primary:
+      - gateway.identity-and-presence-apis
+  objective: Verify real Telegram DM and forum-topic admissions preserve the same person's pseudonym across routes, distinguish a second leased participant, and retain bounded redacted execution identity across one Gateway restart.
+  gatewayConfigPatch:
+    logging:
+      audit:
+        enabled: true
+        executionIdentity: true
+  successCriteria:
+    - The primary leased user receives a DM reply and both leased participants receive replies in the configured forum topic.
+    - Each turn has one newly admitted run and distinct execution context; the primary person's pseudonym is stable across DM and forum while the additional person's differs.
+    - audit.run.inspect and audit CLI JSON and human output agree, retain bounded pseudonyms, and expose no raw participant, room, or message content.
+    - Exact execution identity survives one lifecycle-owned Gateway restart, and generic decision displays remain unverified.
+  docsRefs:
+    - docs/gateway/audit.md
+    - docs/cli/audit.md
+    - docs/concepts/qa-e2e-automation/channel-qa-reference.md
+  codeRefs:
+    - extensions/qa-lab/src/live-transports/telegram/adapter.runtime.ts
+    - extensions/qa-lab/src/live-transports/telegram/userbot-skill.runtime.ts
+  execution:
+    kind: flow
+    channel: telegram
+    suiteIsolation: isolated
+    isolationReason: Enables identity before admission and inspects the same isolated audit database across a Gateway replacement restart.
+    timeoutMs: 300000
+    retryCount: 0
+    summary: Run with qa telegram --scenario telegram-participant-identity-inspection --provider-mode mock-openai. Requires one Convex-leased Test Server userbot credential with distinct primary and additional participants, forumGroupId, and forumTopicId. Uses the existing live adapter and no live model; incomplete fixtures fail without fallback.
+    config:
+      requiredChannelDriver: live
+      requiredProviderMode: mock-openai
+      requireParticipantIdentityFixture: true
+      turns:
+        - conversation: { id: qa-telegram-identity-dm, kind: direct }
+          participantIndex: 0
+          forum: false
+        - conversation: { id: qa-telegram-identity-forum, kind: group }
+          participantIndex: 0
+          forum: true
+        - conversation: { id: qa-telegram-identity-forum, kind: group }
+          participantIndex: 1
+          forum: true
+
+flow:
+  steps:
+    - name: inspects leased Telegram people across DM and forum executions
+      actions:
+        - assert:
+            expr: "transport.id === 'telegram' && env.providerMode === config.requiredProviderMode"
+            message: Telegram participant identity proof requires the live Telegram adapter and mock-openai provider
+        - assert:
+            expr: "typeof telegramIdentityFixture !== 'undefined' && telegramIdentityFixture.participantAliases?.[0] === 'primary' && telegramIdentityFixture.participantAliases.length >= 2 && new Set(telegramIdentityFixture.participantAliases).size === telegramIdentityFixture.participantAliases.length && Number.isSafeInteger(telegramIdentityFixture.forumTopicId) && telegramIdentityFixture.forumTopicId > 0"
+            message: Telegram participant identity proof requires distinct leased participant aliases and forumTopicId from the prepared fixture
+        - call: waitForGatewayHealthy
+          args: [{ ref: env }, 60000]
+        - call: waitForTransportReady
+          args: [{ ref: env }, 60000]
+        - resetTransport: true
+        - set: proofs
+          value: []
+        - set: privateReferences
+          value: []
+        - set: isSafeInspection
+          value:
+            lambda:
+              params: [value, privateRefs]
+              expr: >-
+                value.identity?.state === 'present' &&
+                Buffer.byteLength(JSON.stringify(value.identity.context), 'utf8') <= 16384 &&
+                [value.identity.context.invoker.principal?.principalRef, value.identity.context.invoker.principal?.domainRef, value.identity.context.runtimeInstance.runtimeRef, ...(value.identity.context.ingress.sourceRef === undefined ? [] : [value.identity.context.ingress.sourceRef]), ...value.identity.context.assurance.map((item) => item.evidenceRef), ...value.identity.context.applicableGrants.map((item) => item.grantRef)].every((ref) => typeof ref === 'string' && /^hmac-sha256:v1:[a-f0-9]{32}:[a-f0-9]{64}$/.test(ref)) &&
+                value.identity.context.assurance.length <= 16 && value.identity.context.applicableGrants.length <= 16 &&
+                value.identity.context.assurance.some((item) => item.kind === 'channel-admission' && item.strength === 'boundary-verified') &&
+                value.decisionDisplays.length <= 100 && !Object.hasOwn(value, 'decisions') &&
+                value.decisionDisplays.some((receipt) => receipt.action.family === 'decision') &&
+                value.decisionDisplays.filter((receipt) => receipt.action.family === 'decision').every((receipt) => receipt.provenance.state === 'unverified') &&
+                privateRefs.every((ref) => !JSON.stringify(value).includes(ref))
+        - forEach:
+            items: { ref: config.turns }
+            item: turn
+            index: turnIndex
+            actions:
+              - set: marker
+                value: { expr: "`QA-TELEGRAM-IDENTITY-${turnIndex}-${randomUUID()}`" }
+              - set: runsBefore
+                value:
+                  expr: "[...new Set((await runQaCli(env, ['audit', '--kind', 'agent_run', '--limit', '500', '--json'], { timeoutMs: 60000, json: true })).events.map((event) => event.runId).filter((id) => typeof id === 'string'))]"
+              - sendInbound:
+                  conversation: { ref: turn.conversation }
+                  senderId:
+                    { expr: "telegramIdentityFixture.participantAliases[turn.participantIndex]" }
+                  threadId:
+                    {
+                      expr: "turn.forum ? String(telegramIdentityFixture.forumTopicId) : undefined",
+                    }
+                  text: { expr: "`${turn.forum ? '@openclaw ' : ''}Reply exactly: ${marker}`" }
+                saveAs: inbound
+              - waitForOutbound:
+                  conversation: { ref: turn.conversation }
+                  threadId:
+                    {
+                      expr: "turn.forum ? String(telegramIdentityFixture.forumTopicId) : undefined",
+                    }
+                  textIncludes: { ref: marker }
+                  timeoutMs: 60000
+              - call: waitForCondition
+                saveAs: nativeReplies
+                args:
+                  - lambda:
+                      expr: "(replies => replies.length ? replies : undefined)(readTelegramMessages().filter((reply) => reply.text.includes(marker)))"
+                  - 60000
+                  - 250
+              - assert:
+                  expr: "nativeReplies.every((reply) => turn.forum ? reply.forumTopicId === telegramIdentityFixture.forumTopicId && reply.chatId < 0 : !reply.forumTopicId && reply.chatId > 0)"
+                  message: Telegram reply must be observed in the requested DM or leased forum topic
+              - set: privateReferences
+                value:
+                  expr: "[...new Set([...privateReferences, inbound.senderId, turn.conversation.id, marker, ...nativeReplies.flatMap((reply) => [String(reply.chatId), String(reply.senderId)])])]"
+              - call: waitForCondition
+                saveAs: newRunIds
+                args:
+                  - lambda:
+                      async: true
+                      expr: "(ids => ids.length ? ids : undefined)([...new Set((await runQaCli(env, ['audit', '--kind', 'agent_run', '--limit', '500', '--json'], { timeoutMs: 60000, json: true })).events.map((event) => event.runId).filter((id) => typeof id === 'string' && !runsBefore.includes(id)))])"
+                  - 60000
+                  - 250
+              - assert:
+                  expr: "newRunIds.length === 1"
+                  message: Telegram turn must produce exactly one newly admitted run
+              - call: waitForCondition
+                saveAs: runInspection
+                args:
+                  - lambda:
+                      async: true
+                      expr: "env.gateway.call('audit.run.inspect', { runId: newRunIds[0], decisionLimit: 100 }).then((value) => value.identity?.state === 'present' && value.decisionDisplays.some((receipt) => receipt.action.family === 'decision') ? value : undefined)"
+                  - 60000
+                  - 250
+              - assert:
+                  expr: "runInspection.run.runId === newRunIds[0] && runInspection.run.executionId === runInspection.identity.context.executionId && runInspection.identity.context.runId === newRunIds[0] && runInspection.identity.context.invoker.state === 'present' && runInspection.identity.context.invoker.principal?.kind === 'person' && runInspection.identity.context.ingress.kind === 'channel' && runInspection.identity.context.ingress.state === 'present'"
+                  message: Telegram audit inspection must retain the admitted person and channel ingress for this exact run
+              - set: exactInspection
+                value:
+                  expr: "await env.gateway.call('audit.run.inspect', { executionId: runInspection.identity.context.executionId, decisionLimit: 100 })"
+              - set: cliInspection
+                value:
+                  expr: "await runQaCli(env, ['audit', '--execution', runInspection.identity.context.executionId, '--explain', '--json'], { timeoutMs: 60000, json: true })"
+              - set: humanInspection
+                value:
+                  expr: "await runQaCli(env, ['audit', '--execution', runInspection.identity.context.executionId, '--explain'], { timeoutMs: 60000 })"
+              - assert:
+                  expr: "[exactInspection, cliInspection].every((value) => value.run.executionId === runInspection.identity.context.executionId && JSON.stringify(value.identity.context) === JSON.stringify(runInspection.identity.context)) && humanInspection.includes('Invoker [present]') && humanInspection.includes(runInspection.identity.context.invoker.principal.principalRef) && humanInspection.includes('Decisions')"
+                  message: Telegram exact RPC and CLI inspections must agree with run discovery
+              - assert:
+                  expr: "[runInspection, exactInspection, cliInspection].every((value) => isSafeInspection(value, privateReferences)) && privateReferences.every((ref) => !humanInspection.includes(ref))"
+                  message: Telegram inspection must retain bounded redacted identity and unverified generic decisions
+              - set: proofs
+                value:
+                  expr: "[...proofs, { context: exactInspection.identity.context, senderId: inbound.senderId }]"
+        - assert:
+            expr: "proofs.length === 3 && new Set(proofs.map((proof) => proof.context.executionId)).size === 3 && new Set(proofs.map((proof) => proof.context.contextId)).size === 3 && proofs[0].senderId === proofs[1].senderId && proofs[1].senderId !== proofs[2].senderId && proofs[0].context.invoker.principal.principalRef === proofs[1].context.invoker.principal.principalRef && proofs[1].context.invoker.principal.principalRef !== proofs[2].context.invoker.principal.principalRef"
+            message: Telegram DM and forum must preserve the same primary person and distinguish the additional participant in three distinct execution contexts
+      detailsExpr: "proofs.map((proof) => `run=${proof.context.runId}; execution=${proof.context.executionId}`).join('; ')"
+
+    - name: preserves exact Telegram identity across one Gateway restart
+      actions:
+        - call: env.gateway.restartAfterStateMutation
+          args:
+            - lambda:
+                async: true
+                expr: Promise.resolve()
+        - call: waitForGatewayHealthy
+          args: [{ ref: env }, 60000]
+        - call: waitForTransportReady
+          args: [{ ref: env }, 60000]
+        - forEach:
+            items: { ref: proofs }
+            item: proof
+            actions:
+              - set: restartedRpc
+                value:
+                  expr: "await env.gateway.call('audit.run.inspect', { executionId: proof.context.executionId, decisionLimit: 100 })"
+              - set: restartedCli
+                value:
+                  expr: "await runQaCli(env, ['audit', '--execution', proof.context.executionId, '--explain', '--json'], { timeoutMs: 60000, json: true })"
+              - set: restartedHuman
+                value:
+                  expr: "await runQaCli(env, ['audit', '--execution', proof.context.executionId, '--explain'], { timeoutMs: 60000 })"
+              - assert:
+                  expr: "[restartedRpc, restartedCli].every((value) => isSafeInspection(value, privateReferences) && value.run.executionId === proof.context.executionId && JSON.stringify(value.identity.context) === JSON.stringify(proof.context)) && restartedHuman.includes('Invoker [present]') && restartedHuman.includes(proof.context.invoker.principal.principalRef) && restartedHuman.includes('Decisions') && privateReferences.every((ref) => !restartedHuman.includes(ref))"
+                  message: Telegram exact participant identity changed or exposed private references after restart
+      detailsExpr: "`restart-stable executions=${proofs.length}`"

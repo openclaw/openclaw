@@ -45,6 +45,7 @@ vi.mock("./userbot-skill.runtime.js", () => ({
   loadTelegramUserbotSkillRuntime: mocks.loadTelegramUserbotSkillRuntime,
 }));
 
+import { readQaScenarioById } from "../../scenario-catalog.js";
 import { createTelegramQaTransportAdapter } from "./adapter.runtime.js";
 
 const credential = {
@@ -60,12 +61,28 @@ const credential = {
   tdlibVersion: "1.8.67",
 } as const;
 
-async function prepareMessageReader(
+const identityCredential = {
+  ...credential,
+  forumGroupId: "-100456",
+  forumTopicId: 42,
+  participants: [
+    {
+      alias: "second",
+      testerUserId: "101",
+      tdlibArchiveBase64: "Yg==",
+      tdlibArchiveSha256: "b".repeat(64),
+      tdlibVersion: "1.8.67",
+    },
+  ],
+};
+
+async function prepareFlow(
   adapter: Awaited<ReturnType<typeof createTelegramQaTransportAdapter>>,
+  config: Record<string, unknown> = {},
 ) {
   const stateRoot = mocks.createStateRoot.mock.results.at(-1)?.value;
-  const prepared = await adapter.prepareFlow?.({
-    config: {},
+  return await adapter.prepareFlow?.({
+    config,
     scenarioId: "telegram-entities",
     scenarioTitle: "Telegram native entities",
     gateway: {
@@ -79,6 +96,12 @@ async function prepareMessageReader(
     outputDir: stateRoot,
     timeoutMs: 30_000,
   });
+}
+
+async function prepareMessageReader(
+  adapter: Awaited<ReturnType<typeof createTelegramQaTransportAdapter>>,
+) {
+  const prepared = await prepareFlow(adapter);
   const read = prepared?.readTelegramMessages;
   if (typeof read !== "function") {
     throw new Error("Telegram flow did not expose native message observations");
@@ -402,22 +425,8 @@ describe("Telegram QA transport adapter", () => {
   });
 
   it("keeps DM, group, forum, and mixed leased participants distinct", async () => {
-    const payload = {
-      ...credential,
-      forumGroupId: "-100456",
-      forumTopicId: 42,
-      participants: [
-        {
-          alias: "second",
-          testerUserId: "101",
-          tdlibArchiveBase64: "Yg==",
-          tdlibArchiveSha256: "b".repeat(64),
-          tdlibVersion: "1.8.67",
-        },
-      ],
-    };
     mocks.acquireQaCredentialLease.mockResolvedValueOnce({
-      payload,
+      payload: identityCredential,
       heartbeat: mocks.leaseHeartbeat,
       release: mocks.leaseRelease,
     });
@@ -449,6 +458,10 @@ describe("Telegram QA transport adapter", () => {
       messages: { addInboundMessage, addOutboundMessage, editMessage },
     } as never);
     try {
+      const scenario = readQaScenarioById("telegram-participant-identity-inspection");
+      await expect(prepareFlow(adapter, scenario.execution.config)).resolves.toMatchObject({
+        telegramIdentityFixture: { participantAliases: ["primary", "second"], forumTopicId: 42 },
+      });
       expect(mocks.userbotStart.mock.calls.map(([input]) => input.expectedUserId)).toEqual([
         "100",
         "101",
@@ -569,6 +582,32 @@ describe("Telegram QA transport adapter", () => {
     expect(mocks.userbotClose).toHaveBeenCalledTimes(2);
     expect(mocks.leaseRelease).toHaveBeenCalledOnce();
   });
+
+  it.each(["participants", "forumGroupId", "forumTopicId"] as const)(
+    "fails the cataloged identity scenario clearly when the lease lacks %s",
+    async (missing) => {
+      mocks.acquireQaCredentialLease.mockResolvedValueOnce({
+        payload: { ...identityCredential, [missing]: undefined },
+        heartbeat: mocks.leaseHeartbeat,
+        release: mocks.leaseRelease,
+      });
+      const adapter = await createTelegramQaTransportAdapter({
+        adapterOptions: {},
+        messages: {},
+      } as never);
+      try {
+        const scenario = readQaScenarioById("telegram-participant-identity-inspection");
+        await expect(prepareFlow(adapter, scenario.execution.config)).rejects.toThrow(
+          "requires one leased credential with distinct participants, forumGroupId, and forumTopicId",
+        );
+        expect(mocks.userbotSend).not.toHaveBeenCalled();
+      } finally {
+        await adapter.cleanup?.();
+        await adapter.cleanupAfterGatewayStop?.();
+      }
+      expect(mocks.leaseRelease).toHaveBeenCalledOnce();
+    },
+  );
 
   it("rejects an unconfirmed participant receipt without recording synthetic identity", async () => {
     mocks.userbotSend.mockResolvedValueOnce({ messageId: 10, senderId: 999, chatId: -100123 });
