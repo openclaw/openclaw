@@ -336,17 +336,65 @@ describe("check-cli-bootstrap-imports", () => {
     ]);
   });
 
-  it("accepts the self-contained worker deploy artifacts with builtin imports", () => {
+  it("accepts builtin imports and forward exports without treating source text as imports", () => {
+    const root = makeTempRoot();
+    const source = [
+      "#!/usr/bin/env node",
+      "export { available };",
+      'import fs from "node:fs";',
+      "const available = Boolean(fs);",
+      `const text = ${JSON.stringify('require("string-only")')};`,
+      String.raw`const expression = /require\("regex-only"\)/;`,
+      '// import("comment-only");',
+      'const interpolated = `require("template-only") ${import("node:fs")}`;',
+      'import "node:os"',
+    ].join("\n");
+    for (const artifact of workerDeployArtifactNames) {
+      writeFixture(root, `dist/worker/${artifact}`, source);
+    }
+
+    expect(collectWorkerDeployArtifactErrors({ rootDir: root })).toEqual([]);
+  });
+
+  it.each([
+    {
+      label: "duplicate bindings across statements",
+      source: 'let value; import "node:fs"; let value;',
+      message: "Identifier 'value' has already been declared",
+    },
+    {
+      label: "duplicate exports across statements",
+      source: 'const value = 1; export { value }; import "node:fs"; export { value };',
+      message: "Duplicate export 'value'",
+    },
+    {
+      label: "unresolved forward exports at EOF",
+      source: 'export { missing }; import "node:fs";',
+      message: "Export 'missing' is not defined",
+    },
+    {
+      label: "module strictness after completed statements",
+      source: "const value = 1; with ({}) {}",
+      message: "'with' in strict mode",
+    },
+    {
+      label: "invalid syntax after an external import",
+      source: 'import "earlier-external"; const = 1;',
+      message: "Unexpected token",
+    },
+  ])("preserves module syntax validation for $label", ({ source, message }) => {
     const root = makeTempRoot();
     for (const artifact of workerDeployArtifactNames) {
       writeFixture(
         root,
         `dist/worker/${artifact}`,
-        'import fs from "node:fs";\nexport const available = Boolean(fs);\n',
+        artifact === "worker.mjs" ? source : "export {};\n",
       );
     }
 
-    expect(collectWorkerDeployArtifactErrors({ rootDir: root })).toEqual([]);
+    expect(collectWorkerDeployArtifactErrors({ rootDir: root })).toEqual([
+      expect.stringContaining(`is not parseable JavaScript: ${message}`),
+    ]);
   });
 
   it("accepts no worker artifact directory when the target has no worker contract", () => {
@@ -380,8 +428,17 @@ describe("check-cli-bootstrap-imports", () => {
         'import "left-pad";',
         'await import("./lazy.mjs");',
         '__require("json5");',
+        '__require2("numbered");',
+        '(__require)("parenthesized");',
+        '__require?.("optional");',
+        'const interpolated = `literal ${import("template-expression")}`;',
+        String.raw`__r\u0065quire("escaped");`,
+        'function nested() { require("nested"); }',
+        'export * from "export-all";',
+        'export { value } from "export-named";',
         'createRequire(import.meta.url)("../../package.json");',
         'moduleNamespace.createRequire(import.meta.url)("@openclaw/fs-safe/temp");',
+        'import "final-external"',
       ].join("\n"),
     );
     writeFixture(root, "dist/worker/github-exec-launcher.mjs", 'import "yaml";\n');
@@ -405,8 +462,17 @@ describe("check-cli-bootstrap-imports", () => {
       'Worker deploy artifact dist/worker/worker.mjs retains runtime import "../../package.json" instead of bundling it.',
       'Worker deploy artifact dist/worker/worker.mjs retains runtime import "./lazy.mjs" instead of bundling it.',
       'Worker deploy artifact dist/worker/worker.mjs retains runtime import "@openclaw/fs-safe/temp" instead of bundling it.',
+      'Worker deploy artifact dist/worker/worker.mjs retains runtime import "escaped" instead of bundling it.',
+      'Worker deploy artifact dist/worker/worker.mjs retains runtime import "export-all" instead of bundling it.',
+      'Worker deploy artifact dist/worker/worker.mjs retains runtime import "export-named" instead of bundling it.',
+      'Worker deploy artifact dist/worker/worker.mjs retains runtime import "final-external" instead of bundling it.',
       'Worker deploy artifact dist/worker/worker.mjs retains runtime import "json5" instead of bundling it.',
       'Worker deploy artifact dist/worker/worker.mjs retains runtime import "left-pad" instead of bundling it.',
+      'Worker deploy artifact dist/worker/worker.mjs retains runtime import "nested" instead of bundling it.',
+      'Worker deploy artifact dist/worker/worker.mjs retains runtime import "numbered" instead of bundling it.',
+      'Worker deploy artifact dist/worker/worker.mjs retains runtime import "optional" instead of bundling it.',
+      'Worker deploy artifact dist/worker/worker.mjs retains runtime import "parenthesized" instead of bundling it.',
+      'Worker deploy artifact dist/worker/worker.mjs retains runtime import "template-expression" instead of bundling it.',
       "Worker deploy artifact emits unstaged runtime asset dist/worker/lazy.mjs.",
       "Worker deploy artifact must not contain a dependency manifest or lifecycle scripts.",
     ]);
