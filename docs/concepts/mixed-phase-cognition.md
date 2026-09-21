@@ -68,3 +68,7 @@ still decide what can actually execute.
 
 A phase is descriptive telemetry. A control action is a recommendation. Neither
 is authority.
+
+## Related
+
+- [Liquid Software Factory PR stack](/concepts/liquid-software-factory-stack) for the four-layer review topology.
