@@ -148,7 +148,7 @@ export function registerLeaseServiceRestorationTests(params: {
         argv: ["update", command, "--yes", "--json", "--timeout", "15"],
       });
 
-      expect(stop.mock.calls.filter(([params]) => params.phase !== "inspect")).toHaveLength(1);
+      expect(stop.mock.calls.filter(([{ phase }]) => phase !== "inspect")).toHaveLength(1);
       expect(restart).toHaveBeenCalledOnce();
       expect(await fs.readFile(serviceState, "utf8")).toBe(restartFails ? "stopped" : "running");
       if (restartFails) {
