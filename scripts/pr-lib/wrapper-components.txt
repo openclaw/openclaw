@@ -622,6 +622,7 @@ src/infra/lifecycle-write-custody.ts
 src/infra/map-size.ts
 src/infra/net/configured-local-origin-bypass.ts
 src/infra/net/fetch-guard.ts
+src/infra/net/fetch-request-authority.ts
 src/infra/net/form-data.ts
 src/infra/net/guarded-body-stream.ts
 src/infra/net/hostname.ts
