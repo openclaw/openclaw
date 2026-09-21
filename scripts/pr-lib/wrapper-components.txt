@@ -708,6 +708,7 @@ src/infra/sqlite-snapshot-single-flight.ts
 src/infra/sqlite-snapshot-source.ts
 src/infra/sqlite-snapshot-staging-owner.ts
 src/infra/sqlite-snapshot-staging.ts
+src/infra/sqlite-snapshot-wal-prefix.ts
 src/infra/sqlite-source-handle.ts
 src/infra/sqlite-store.worker.ts
 src/infra/sqlite-strict.ts
