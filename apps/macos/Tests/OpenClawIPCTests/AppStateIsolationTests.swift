@@ -446,7 +446,7 @@ final class ProfileChatPreferencesTests: XCTestCase {
             return elements.first {
                 let value: Any? = $0.accessibilityValue?()
                 return $0.accessibilityIdentifier?() == "chat-composer-inline-model" &&
-                    $0.accessibilityLabel?() == "Model" && value as? String == selection
+                    AppKitTestSupport.accessibilityName(of: $0) == "Model" && value as? String == selection
             }
         }
     }
