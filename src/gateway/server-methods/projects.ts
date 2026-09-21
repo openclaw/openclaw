@@ -400,7 +400,13 @@ export function createProjectsHandlers(service: ProjectWorktreeService): Gateway
                 loadEntries: (target) =>
                   projection
                     .selectEntries({ storePath: target.storePath, sortBy: null })
-                    .map((row) => ({ sessionKey: row.key, entry: row.storedEntry ?? row.entry })),
+                    .map((row) => ({
+                      sessionKey: row.key,
+                      entry: row.storedEntry ?? row.entry,
+                      keyBytes: Buffer.from(row.key),
+                    }))
+                    // SQLite's binary key order breaks locale-equal recency ties.
+                    .toSorted((left, right) => Buffer.compare(left.keyBytes, right.keyBytes)),
               }).store;
             }
             assertCurrent();

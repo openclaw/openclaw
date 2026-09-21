@@ -121,7 +121,7 @@ test("projects.list returns only the caller's deterministic resolved recents", a
       ["operator.write"],
       targetProfile.id,
     );
-    expect((writeResult?.payload as { recents?: unknown[] } | undefined)?.recents).toEqual([
+    const expectedRecents = [
       { kind: "project", projectId: project.id, displayName: "Registered" },
       { kind: "repository", url: repository.url, displayName: "hello-world" },
       { kind: "folder", folder: "/work/scratch", displayName: "scratch" },
@@ -131,7 +131,10 @@ test("projects.list returns only the caller's deterministic resolved recents", a
         folder: `/work/folder-${index}`,
         displayName: `folder-${index}`,
       })),
-    ]);
+    ];
+    expect((writeResult?.payload as { recents?: unknown[] } | undefined)?.recents).toEqual(
+      expectedRecents,
+    );
     projection = await createSessionRowProjection({ cfg, modelCatalog: [] });
     do {
       await projection.ensureMaterialized();
@@ -175,13 +178,70 @@ test("projects.list returns only the caller's deterministic resolved recents", a
       expect(updated?.payload).toMatchObject({
         recents: [
           { kind: "folder", folder: "/work/updated", displayName: "updated" },
-          ...(writeResult?.payload as { recents: unknown[] }).recents.slice(0, 7),
+          ...expectedRecents.slice(0, 7),
         ],
       });
       expect(workerReads.mock.calls.length).toBe(0);
     } finally {
       workerReads.mockRestore();
     }
+    const tiedKeys = ["agent:main:e\u0301", "agent:main:é"] as const;
+    expect(tiedKeys[0].localeCompare(tiedKeys[1])).toBe(0);
+    for (const [index, sessionKey] of tiedKeys.entries()) {
+      replaceSessionEntrySync(
+        { agentId: "main", sessionKey },
+        {
+          sessionId: `tie-${index}`,
+          updatedAt: 3_000,
+          createdActor: actor,
+          spawnedCwd: `/work/tie-${index}`,
+        },
+      );
+    }
+    do {
+      await projection.ensureMaterialized();
+    } while (projection.needsMaterialization);
+    const tiedRecents = [
+      ...tiedKeys.map((_, index) => ({
+        kind: "folder",
+        folder: `/work/tie-${index}`,
+        displayName: `tie-${index}`,
+      })),
+      { kind: "folder", folder: "/work/updated", displayName: "updated" },
+      ...expectedRecents.slice(0, 5),
+    ];
+    const workerGolden = await invokeProjectMethod(
+      "projects.list",
+      { includeObserved: true },
+      cfg,
+      ["operator.write"],
+      targetProfile.id,
+    );
+    expect((workerGolden?.payload as { recents?: unknown[] } | undefined)?.recents).toEqual(
+      tiedRecents,
+    );
+    replaceSessionEntrySync(
+      { agentId: "main", sessionKey: tiedKeys[0] },
+      {
+        sessionId: "tie-0",
+        updatedAt: 3_000,
+        createdActor: actor,
+        spawnedCwd: "/work/tie-0",
+        label: "Updated without changing recency",
+      },
+    );
+    const afterPublication = await invokeProjectMethod(
+      "projects.list",
+      {},
+      cfg,
+      ["operator.write"],
+      targetProfile.id,
+      registeredProjectsHandlers,
+      projection,
+    );
+    expect((afterPublication?.payload as { recents?: unknown[] } | undefined)?.recents).toEqual(
+      tiedRecents,
+    );
     const anonymous = await invokeProjectMethod("projects.list", {}, cfg, ["operator.read"]);
     expect(anonymous?.payload).not.toHaveProperty("recents");
     const external = new (requireNodeSqlite().DatabaseSync)(openOpenClawStateDatabase().path);
