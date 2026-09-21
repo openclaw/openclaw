@@ -521,6 +521,7 @@ if (args[0] === 'pr' && args[1] === 'view') {
         headRefOid: control.metadata.headRefOid,
         author: { ...control.metadata.author, __typename: 'User' },
         isMergeQueueEnabled: control.metadata.isMergeQueueEnabled,
+        viewerMergeHeadlineText: 'Fixture merge headline',
         viewerMergeBodyText: 'Reviewed fixture body',
       } } } };
     } else if (args.some(arg => arg.includes('ref(qualifiedName:'))) {

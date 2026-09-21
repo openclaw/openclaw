@@ -1041,7 +1041,7 @@ mainline_drift_requires_sync() {
   export DRIFT_LOCALE_PROBE
   evaluate_actual_drift "$@"
 }
-merge_verify 42 '{"replacementHead":"","autoMergeRequested":false,"observation":null}' || exit 1
+merge_verify 42 '{"replacementHead":"","autoMergeRequested":false,"observation":null,"qualifiedRefusal":false}' || exit 1
 printf 'caller-locale=%s\\n' "$LC_ALL"
 `);
       const output = result.stdout + result.stderr;
@@ -1166,7 +1166,7 @@ fi`,
     f.configure({ moveAtChecks: true });
     f.env.OPENCLAW_PR_STRICT_DRIFT = "1";
     const result = f.shell(
-      `mainline_drift_requires_sync() { return 2; }\nmerge_verify 42 '{"replacementHead":"","autoMergeRequested":false,"observation":null}' || exit 1`,
+      `mainline_drift_requires_sync() { return 2; }\nmerge_verify 42 '{"replacementHead":"","autoMergeRequested":false,"observation":null,"qualifiedRefusal":false}' || exit 1`,
     );
     expect(result.status, result.stdout + result.stderr).toBe(1);
     expect(result.stderr).toContain("unable to evaluate mainline drift");

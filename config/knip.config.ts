@@ -179,6 +179,8 @@ const repositoryScriptEntries = [
   "scripts/pr-lib/merge-body.mjs!",
   // merge.sh executes legacy capture qualification as a standalone Node CLI.
   "scripts/pr-lib/merge-legacy-refusal.mjs!",
+  // merge.sh and merge-outcome.sh execute refusal qualification by path.
+  "scripts/pr-lib/merge-pre-dispatch-refusal.mjs!",
   // merge-outcome.sh launches the REST adapter as a standalone Node CLI.
   "scripts/pr-lib/merge-rest.mjs!",
   "scripts/pr-lib/review-artifacts.mjs!",

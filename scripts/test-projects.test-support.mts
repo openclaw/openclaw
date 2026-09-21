@@ -2539,7 +2539,16 @@ const SEMANTIC_TOOLING_TARGET_PATTERNS: Array<[RegExp, string[]]> = [
     /^(?:git-hooks\/pre-commit|scripts\/pre-commit\/(?:guard-staged-content\.mjs|filter-staged-files\.mjs|format-staged\.sh|run-node-tool\.sh)|test\/git-hooks-pre-commit\.test-support\.ts)$/u,
     ["test/git-hooks-pre-commit.test.ts", "test/git-hooks-pre-commit-boundaries.test.ts"],
   ],
-  [/^scripts\/pr$/u, ["pr-merge", "pr-merge-outcome", "pr-operation-lock", "pr-wrappers"]],
+  [
+    /^scripts\/pr$/u,
+    [
+      "pr-merge",
+      "pr-merge-outcome",
+      "pr-merge-qualified-refusal",
+      "pr-operation-lock",
+      "pr-wrappers",
+    ],
+  ],
   [
     /^scripts\/pr-lib\/crabbox-gate-contract\.mjs$/u,
     ["pr-crabbox-gate-publisher", "pr-crabbox-merge-bypass"],
@@ -2710,8 +2719,8 @@ const SEMANTIC_TOOLING_TARGET_PATTERNS: Array<[RegExp, string[]]> = [
   [/^scripts\/run-node\.(?:mjs|mts)$/u, [runNode]],
   [/^scripts\/ios-write-swift-filelist\.m[jt]s$/u, ["ios-run"]],
   [
-    /^scripts\/pr-lib\/(?:merge(?:-outcome)?\.sh|merge-legacy-refusal\.mjs)$/u,
-    ["pr-merge", "pr-merge-outcome"],
+    /^scripts\/pr-lib\/(?:merge(?:-outcome)?\.sh|merge-(?:legacy|pre-dispatch)-refusal\.mjs)$/u,
+    ["pr-merge", "pr-merge-outcome", "pr-merge-pre-dispatch-refusal", "pr-merge-qualified-refusal"],
   ],
   [/^scripts\/plugin-clawhub-publish\.sh$/u, ["test/plugin-clawhub-release.test.ts"]],
   [/^scripts\/openclaw-npm-postpublish-verify\.ts$/u, [npmPostpublish]],
