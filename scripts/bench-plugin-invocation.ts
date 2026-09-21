@@ -1,6 +1,7 @@
 // Run with pnpm bench:plugins:invocation.
 import { AsyncLocalStorage } from "node:async_hooks";
 import { performance } from "node:perf_hooks";
+import { mock } from "node:test";
 import { PluginInstance } from "../src/plugins/plugin-instance.js";
 import { createEmptyPluginRegistry } from "../src/plugins/registry-empty.js";
 import { createPluginRecord } from "../src/plugins/status.test-helpers.js";
@@ -58,16 +59,9 @@ try {
     let frames = 0;
     let wraps = 0;
     let entries = 0;
-    // oxlint-disable-next-line typescript/unbound-method -- Interception forwards the original receiver with Reflect.apply and restores this exact method.
-    const run = AsyncLocalStorage.prototype.run;
+    const run = mock.method(AsyncLocalStorage.prototype, "run");
     const ProxyConstructor = Proxy;
     const enter = Reflect.get(PluginInstance.prototype, "enter");
-    AsyncLocalStorage.prototype.run = new Proxy(run, {
-      apply(target, receiver, args) {
-        frames++;
-        return Reflect.apply(target, receiver, args);
-      },
-    });
     Reflect.set(
       PluginInstance.prototype,
       "enter",
@@ -88,8 +82,10 @@ try {
       for (let index = 0; index < iterations; index++) {
         scenario.run();
       }
+      frames = run.mock.callCount();
     } finally {
-      AsyncLocalStorage.prototype.run = run;
+      run.mock.restore();
+      run.mock.resetCalls();
       globalThis.Proxy = ProxyConstructor;
       Reflect.set(PluginInstance.prototype, "enter", enter);
     }

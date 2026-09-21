@@ -33,20 +33,9 @@ function readPluginMember(
   invoke: (run: () => unknown) => unknown,
   receiver = object,
 ): unknown {
-  for (let source: object | null = object; source; source = Object.getPrototypeOf(source)) {
-    if (types.isProxy(source)) {
-      return invoke(() => Reflect.get(object, key, receiver));
-    }
-    const descriptor = Object.getOwnPropertyDescriptor(source, key);
-    if (descriptor) {
-      return "value" in descriptor
-        ? descriptor.value
-        : descriptor.get
-          ? invoke(() => Reflect.get(object, key, receiver))
-          : undefined;
-    }
-  }
-  return undefined;
+  return pluginMemberNeedsAdmission(object, key)
+    ? invoke(() => Reflect.get(object, key, receiver))
+    : Reflect.get(object, key, receiver);
 }
 
 function pluginMemberNeedsAdmission(object: object, key: PropertyKey, getters = true): boolean {
