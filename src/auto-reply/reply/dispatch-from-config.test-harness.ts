@@ -41,6 +41,7 @@ import {
   noAbortResult,
   parseGenericThreadSessionInfo,
   placementContextMocks,
+  resetReplyDispatchOutcomeMock,
   resetPluginTtsAndThreadMocks,
   runtimePluginMocks,
   sessionBindingMocks,
@@ -546,6 +547,7 @@ export const describe0BeforeEach0 = () => {
     }
     return (await tryDispatchAcpReplyHook(event as never, ctx as never)) ?? undefined;
   });
+  resetReplyDispatchOutcomeMock();
   hookMocks.registry.plugins = [];
   internalHookMocks.createInternalHookEvent.mockClear();
   internalHookMocks.createInternalHookEvent.mockImplementation(createInternalHookEventPayload);
@@ -624,6 +626,7 @@ export const describe1BeforeEach0 = () => {
   hookMocks.runner.runBeforeDispatch.mockResolvedValue(undefined);
   hookMocks.runner.runReplyDispatch.mockClear();
   hookMocks.runner.runReplyDispatch.mockResolvedValue(undefined);
+  resetReplyDispatchOutcomeMock();
   hookMocks.runner.hasHooks.mockImplementation(
     (hookName?: string) => hookName === "before_dispatch",
   );
@@ -659,6 +662,7 @@ export const describe2BeforeEach0 = () => {
     (hookName?: string) => hookName === "reply_dispatch",
   );
   hookMocks.runner.runReplyDispatch.mockResolvedValue(undefined);
+  resetReplyDispatchOutcomeMock();
   hookMocks.runner.runBeforeDispatch.mockResolvedValue(undefined);
   threadInfoMocks.parseSessionThreadInfo.mockReset();
   threadInfoMocks.parseSessionThreadInfo.mockImplementation(parseGenericThreadSessionInfo);

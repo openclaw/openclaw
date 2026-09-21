@@ -3,9 +3,13 @@ import type { PluginHookReplyDispatchContext } from "../../plugins/hook-types.js
 import { createUserTurnTranscriptRecorder } from "../../sessions/user-turn-transcript.js";
 import type { ReplyDispatchRun } from "../get-reply-options.types.js";
 import {
+  acpMocks,
   createDispatcher,
+  createHookCtx,
+  diagnosticMocks,
   emptyConfig,
   hookMocks,
+  resetReplyDispatchOutcomeMock,
   sessionBindingMocks,
   sessionStoreMocks,
 } from "./dispatch-from-config.shared.test-harness.js";
@@ -24,6 +28,90 @@ describe("dispatchReplyFromConfig reply hook scope", () => {
   beforeEach(() => {
     describe0BeforeEach0();
     setNoAbort();
+    resetReplyDispatchOutcomeMock();
+  });
+
+  it.each([false, true])("keeps ACP command resolution and reset tail=%s", async (tail) => {
+    hookMocks.runner.hasHooks.mockImplementation((name) => name === "reply_dispatch");
+    let dispatchCount = 0;
+    hookMocks.runner.runReplyDispatchOutcome.mockImplementation(async () => {
+      dispatchCount += 1;
+      return tail && dispatchCount === 2
+        ? { status: "error", error: "ACP reset tail failed" }
+        : { status: "declined" };
+    });
+    const dispatcher = createDispatcher();
+    const replyResolver = vi.fn(async (ctx) => {
+      if (tail) {
+        ctx.AcpDispatchTailAfterReset = true;
+        return undefined;
+      }
+      return { text: "ACP status" };
+    });
+    const command = tail ? "/new continue the task" : "/acp status";
+    await dispatchReplyFromConfig({
+      ctx: {
+        ...createHookCtx(),
+        SessionKey: "agent:test:acp:command",
+        Body: command,
+        BodyForAgent: command,
+        BodyForCommands: command,
+        commandText: command,
+      },
+      cfg: { diagnostics: { enabled: true } },
+      dispatcher,
+      replyResolver,
+    });
+    expect(replyResolver).toHaveBeenCalledOnce();
+    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith(
+      tail ? expect.objectContaining({ isError: true }) : { text: "ACP status" },
+    );
+    expect(hookMocks.runner.runReplyDispatchOutcome).toHaveBeenCalledTimes(tail ? 2 : 1);
+    expect(diagnosticMocks.logMessageProcessed).toHaveBeenCalledOnce();
+    expect(
+      diagnosticMocks.logSessionStateChange.mock.calls.filter(([event]) => event.state === "idle"),
+    ).toHaveLength(1);
+  });
+
+  it("keeps an ACP failure notice silent when the child is parent-owned", async () => {
+    const sessionKey = "agent:test:acp:background-child";
+    const entry = { sessionId: "background-child", spawnedBy: "agent:test:parent" };
+    hookMocks.runner.runReplyDispatchOutcome.mockResolvedValue({
+      status: "error",
+      error: "ACP failed after starting work",
+    });
+    const dispatcher = createDispatcher();
+    const replyResolver = vi.fn(async () => ({ text: "ordinary fallback" }));
+
+    await acpMocks.readAcpSessionEntry.withImplementation(
+      () => ({
+        agentId: "test",
+        sessionKey,
+        entry,
+        acp: {
+          backend: "acpx",
+          agent: "fixture",
+          runtimeSessionName: "background-child",
+          mode: "persistent",
+          state: "idle",
+          lastActivityAt: 1,
+        },
+      }),
+      async () => {
+        await dispatchReplyFromConfig({
+          ctx: { ...createHookCtx(), SessionKey: sessionKey },
+          cfg: emptyConfig,
+          dispatcher,
+          replyResolver,
+        });
+      },
+    );
+
+    expect(replyResolver).not.toHaveBeenCalled();
+    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
+    expect(diagnosticMocks.logMessageProcessed).toHaveBeenCalledWith(
+      expect.objectContaining({ outcome: "error", reason: "acp_dispatch_unclaimed" }),
+    );
   });
 
   it.each<{
@@ -147,6 +235,7 @@ describe("dispatchReplyFromConfig reply hook scope", () => {
     const ctx = buildTestCtx({
       Body: "hello",
       BodyForAgent: "hello",
+      ...(scenario.tail ? { CommandBody: "/new continue" } : {}),
       SessionKey: sourceKey,
       Provider: "discord",
       Surface: "discord",

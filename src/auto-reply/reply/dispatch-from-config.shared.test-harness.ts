@@ -102,9 +102,28 @@ const hookMocks = vi.hoisted(() => ({
         _ctx: unknown,
       ) => Promise<PluginHookReplyDispatchResult | undefined>
     >(async () => undefined),
+    runReplyDispatchOutcome:
+      vi.fn<
+        (
+          eventValue: PluginHookReplyDispatchEvent,
+          context: unknown,
+        ) => Promise<
+          | { status: "handled"; result: PluginHookReplyDispatchResult }
+          | { status: "declined" }
+          | { status: "error"; error: string }
+        >
+      >(),
     runReplyPayloadSending: vi.fn(async () => undefined),
   },
 }));
+
+export function resetReplyDispatchOutcomeMock(): void {
+  hookMocks.runner.runReplyDispatchOutcome.mockReset();
+  hookMocks.runner.runReplyDispatchOutcome.mockImplementation(async (event, context) => {
+    const result = await hookMocks.runner.runReplyDispatch(event, context);
+    return result?.handled ? { status: "handled", result } : { status: "declined" };
+  });
+}
 const internalHookMocks = vi.hoisted(() => ({
   createInternalHookEvent: vi.fn(),
   triggerInternalHook: vi.fn(async () => {}),
