@@ -3,7 +3,6 @@ import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { Readable } from "node:stream";
 import JSZip from "jszip";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createZipCentralDirectoryArchive } from "../test-utils/zip-central-directory-fixture.js";
@@ -19,6 +18,7 @@ const archiveCleanupMock = vi.fn();
 const resolveLatestVersionFromPackageMock = vi.fn();
 const resolveCompatibilityHostVersionMock = vi.fn();
 const installPluginFromArchiveMock = vi.fn();
+const MAX_TEST_ARCHIVE_ENTRY_BYTES = 1024;
 
 vi.mock("../infra/clawhub-spec.js", () => ({
   parseClawHubPluginSpec: (...args: unknown[]) => parseClawHubPluginSpecMock(...args),
@@ -69,7 +69,7 @@ vi.mock("../infra/archive.js", async () => {
     ...actual,
     DEFAULT_MAX_ENTRIES: 50_000,
     DEFAULT_MAX_EXTRACTED_BYTES: 512 * 1024 * 1024,
-    DEFAULT_MAX_ENTRY_BYTES: 256 * 1024 * 1024,
+    DEFAULT_MAX_ENTRY_BYTES: MAX_TEST_ARCHIVE_ENTRY_BYTES,
   };
 });
 
@@ -2385,65 +2385,34 @@ describe("installPluginFromClawHub", () => {
     expect(installPluginFromArchiveMock).not.toHaveBeenCalled();
   });
 
-  it("rejects fallback verification when _meta.json exceeds the per-file size limit", async () => {
-    const { archivePath } = await createClawHubArchive({
-      "_meta.json": '{"slug":"demo","version":"2026.3.22"}',
-      "openclaw.plugin.json": '{"id":"demo"}',
-    });
-    const oversizedMetaEntry = {
-      name: "_meta.json",
-      dir: false,
-      _data: { uncompressedSize: 256 * 1024 * 1024 + 1 },
-      nodeStream: vi.fn(),
-    } as unknown as JSZip.JSZipObject;
-    const listedFileEntry = {
-      name: "openclaw.plugin.json",
-      dir: false,
-      _data: { uncompressedSize: 13 },
-      nodeStream: () => Readable.from([Buffer.from('{"id":"demo"}')]),
-    } as unknown as JSZip.JSZipObject;
-    const loadAsyncSpy = vi.spyOn(JSZip, "loadAsync").mockResolvedValueOnce({
-      files: {
-        "_meta.json": oversizedMetaEntry,
-        "openclaw.plugin.json": listedFileEntry,
-      },
-    } as unknown as JSZip);
-    fetchClawHubPackageVersionMock.mockResolvedValueOnce({
-      version: {
-        version: "2026.3.22",
-        createdAt: 0,
-        changelog: "",
-        files: [
-          {
-            path: "openclaw.plugin.json",
-            size: 13,
-            sha256: sha256Hex('{"id":"demo"}'),
-          },
-        ],
-        compatibility: {
-          pluginApiRange: ">=2026.3.22",
-          minGatewayVersion: "2026.3.0",
+  it.each([
+    { sizeBytes: MAX_TEST_ARCHIVE_ENTRY_BYTES, succeeds: true },
+    { sizeBytes: MAX_TEST_ARCHIVE_ENTRY_BYTES + 1, succeeds: false },
+  ])(
+    "enforces the _meta.json per-file size limit at $sizeBytes bytes",
+    async ({ sizeBytes, succeeds }) => {
+      await mockClawHubFallbackArchive({
+        entries: {
+          "_meta.json": '{"slug":"demo","version":"2026.3.22"}'.padEnd(sizeBytes, " "),
+          "openclaw.plugin.json": '{"id":"demo"}',
         },
-      },
-    });
-    downloadClawHubPackageArchiveMock.mockResolvedValueOnce({
-      archivePath,
-      integrity: "sha256-not-used-in-fallback",
-      cleanup: archiveCleanupMock,
-    });
+      });
 
-    const result = await installPluginFromClawHub({
-      spec: "clawhub:demo",
-    });
+      const result = await installPluginFromClawHub({ spec: "clawhub:demo" });
 
-    loadAsyncSpy.mockRestore();
-    expectInstallFailureFields(
-      result,
-      CLAWHUB_INSTALL_ERROR_CODE.ARCHIVE_INTEGRITY_MISMATCH,
-      'ClawHub archive fallback verification rejected "_meta.json" because it exceeds the per-file size limit.',
-    );
-    expect(installPluginFromArchiveMock).not.toHaveBeenCalled();
-  });
+      if (succeeds) {
+        expect(expectInstallSuccess(result).pluginId).toBe("demo");
+        expect(installPluginFromArchiveMock).toHaveBeenCalledOnce();
+      } else {
+        expectInstallFailureFields(
+          result,
+          CLAWHUB_INSTALL_ERROR_CODE.ARCHIVE_INTEGRITY_MISMATCH,
+          'ClawHub archive fallback verification rejected "_meta.json" because it exceeds the per-file size limit.',
+        );
+        expect(installPluginFromArchiveMock).not.toHaveBeenCalled();
+      }
+    },
+  );
 
   it.each(["file", "directory"] as const)(
     "rejects fallback verification when actual ZIP %s entries exceed the entry limit",
