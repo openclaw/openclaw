@@ -13,6 +13,29 @@ function failure(runId = "run-1", diagnostic = summary) {
   };
 }
 describe("run error presentation ownership", () => {
+  it.each([
+    ["custom", "This turn did not run:"],
+    ["custom", "This turn ended before a reply:"],
+    ["assistant", "Error:"],
+  ])("matches decorated %s diagnostics after the %s wrapper", (role, prefix) => {
+    const diagnostic = "⚠️ Authentication failed near 🧭.\nCheck the account.";
+    const content = prefix + " " + diagnostic;
+    const row = {
+      ...failure("run-1", diagnostic),
+      role,
+      customType: "run-failed-before-reply",
+      content,
+    };
+    expect(readTranscriptRunError(row)).toBe(content);
+    expect(hasTranscriptRunError([row], { runId: "run-1", summary: diagnostic })).toBe(true);
+    expect(
+      hasTranscriptRunError([row], {
+        runId: "run-1",
+        summary: diagnostic.replace("🧭", "⚠️"),
+      }),
+    ).toBe(false);
+    expect(row.content).toBe(content);
+  });
   it("transfers only an exact run and normalized diagnostic, without changing messages", () => {
     const row = failure();
     const messages = [row];

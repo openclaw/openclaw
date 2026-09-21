@@ -14,7 +14,7 @@ suite.define(() => {
       async ({ page }) => {
         const sessionKey = "agent:main:main";
         const diagnostic =
-          "Request failed.\nFile /workspace/example.txt could not be read.\npassword=synthetic-password";
+          "⚠️ Request failed.\nFile /workspace/example.txt could not be read.\npassword=synthetic-password";
         const safeDiagnostic = diagnostic.replace("synthetic-password", "[redacted]");
         const gateway = await installMockGateway(page, { sessionKey });
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionKey));

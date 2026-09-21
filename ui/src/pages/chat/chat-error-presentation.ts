@@ -7,9 +7,14 @@ import { normalizeMessage } from "../../lib/chat/message-normalizer.ts";
 import type { ChatRunError } from "./run-lifecycle.ts";
 
 function normalizeDiagnostic(text: string): string {
-  return formatWebUiIconErrorText(text)
-    .trim()
-    .replace(/^(?:Error:|This turn did not run:|This turn ended before a reply:)\s*/iu, "")
+  const undecorated = formatWebUiIconErrorText(text).trim();
+  const diagnostic = undecorated.replace(
+    /^(?:Error:|This turn did not run:|This turn ended before a reply:)\s*/iu,
+    "",
+  );
+  // A transcript wrapper can hide the diagnostic's own leading decoration.
+  // Only unwrap that boundary; meaningful emoji inside the body stays intact.
+  return (diagnostic === undecorated ? diagnostic : formatWebUiIconErrorText(diagnostic))
     .replace(/\s+/gu, " ")
     .trim();
 }
