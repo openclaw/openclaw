@@ -94,3 +94,7 @@ replay/source-revocation behavior, unchanged legacy calls, and refusal to downgr
 a sandbox-required verifier.
 
 A real native collector transcript remains the strongest missing end-to-end proof.
+
+## Related
+
+- [Liquid Software Factory PR stack](/concepts/liquid-software-factory-stack) for the four-layer review topology.
