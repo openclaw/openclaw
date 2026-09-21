@@ -469,8 +469,6 @@ export const CORE_GATEWAY_METHOD_SPECS = [
     { startup: true, controlPlaneWrite: true },
   ],
   ["models.probe", "models-probe", "operator.admin", "<=2026.7"],
-  ["webSearch.status", "web-search", "operator.read", "2026.9"],
-  ["webSearch.test", "web-search", "operator.admin", "2026.9"],
   // Memory migration reads host assistant state and writes agent workspaces.
   ["migrations.memory.plan", "migrations", "operator.admin", "2026.7"],
   ["migrations.memory.apply", "migrations", "operator.admin", "2026.7", CONTROL_PLANE_WRITE],
@@ -703,4 +701,6 @@ export const CORE_GATEWAY_METHOD_SPECS = [
   ["themes.import", "themes", "operator.write", "2026.9"],
   ["controlUi.githubDetail", "control-ui", "operator.read", "2026.9"],
   ["progressCard.refresh", "progress-card", "operator.write", "2026.9"],
+  ["webSearch.status", "web-search", "operator.read", "2026.9"],
+  ["webSearch.test", "web-search", "operator.admin", "2026.9"],
 ] as const satisfies readonly CoreGatewayMethodSpecRow[];
