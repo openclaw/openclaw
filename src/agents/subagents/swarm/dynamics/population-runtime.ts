@@ -43,6 +43,7 @@ export function assessHostCollectorPopulation(params: {
   if (!Number.isSafeInteger(params.maxConcurrent) || params.maxConcurrent < 1) {
     throw new Error("maxConcurrent must be a positive safe integer");
   }
+
   const runIds = new Set<string>();
   const records = params.records.map((record) => {
     const runId = requireNonEmptyText(record.runId, "collector run id");
@@ -52,7 +53,10 @@ export function assessHostCollectorPopulation(params: {
     runIds.add(runId);
     return { runId, terminalStatus: record.terminalStatus };
   });
-  const activeCount = records.filter((record) => record.terminalStatus === null).length;
+
+  const activeCount = records.filter(
+    (record) => record.terminalStatus === null,
+  ).length;
   const resourcePressure = Math.min(1, activeCount / params.maxConcurrent);
   const observations = records.map((record) => ({
     replicaId: record.runId,
