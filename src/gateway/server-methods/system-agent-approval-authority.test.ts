@@ -667,13 +667,19 @@ describe("prepareDelegatedSystemAgentApproval", () => {
     const ownerController = new AbortController();
     const observerController = new AbortController();
     const turnClaim = workerTurnClaim("turn-3");
-    const prepareForLease = async (signal: AbortSignal) =>
+    const ownerApprovalAuthority = claimAgentRunApprovalAuthority(authority, [
+      ownerController.signal,
+    ]);
+    const prepareForLease = async (
+      signal: AbortSignal,
+      approvalAuthority = claimAgentRunApprovalAuthority(authority, [signal]),
+    ) =>
       await withGatewayToolCallerIdentity(
         {
           agentId: "main",
           sessionKey: "agent:main:main",
           operationalRunInstance,
-          approvalAuthority: claimAgentRunApprovalAuthority(authority, [signal]),
+          approvalAuthority,
           approvalSignals: [signal],
           workerTurnClaim: turnClaim,
         },
@@ -687,7 +693,9 @@ describe("prepareDelegatedSystemAgentApproval", () => {
           }),
       );
 
-    const ownerResolution = await (await prepareForLease(ownerController.signal))(proposal);
+    const ownerResolution = await (
+      await prepareForLease(ownerController.signal, ownerApprovalAuthority)
+    )(proposal);
     if (ownerResolution.kind !== "approval") {
       throw new Error("expected a human approval request");
     }
@@ -703,6 +711,9 @@ describe("prepareDelegatedSystemAgentApproval", () => {
     await expect(manager.listPendingRecords()).resolves.toEqual([
       expect.objectContaining({ id: ownerResolution.id }),
     ]);
+    await expect(manager.getSnapshot(ownerResolution.id)).resolves.toMatchObject({
+      agentRuntimeDelegatedAuthority: { claimId: ownerApprovalAuthority.claimId },
+    });
     expect(resolveOperatorApproval).not.toHaveBeenCalled();
     await expect(manager.resolve(ownerResolution.id, "allow-once", "operator-ui")).resolves.toBe(
       true,
