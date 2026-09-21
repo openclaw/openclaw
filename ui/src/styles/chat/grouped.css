@@ -779,6 +779,12 @@ img.chat-avatar {
     --chat-footer-detail-position: absolute;
   }
 
+  /* Extra turn space must not center the name before touch actions wrap below it. */
+  .chat-group.user.chat-group--peer .chat-group-footer {
+    align-content: flex-start;
+    align-items: flex-start;
+  }
+
   .chat-group.user.chat-group--peer .chat-group-footer-actions {
     flex-basis: 100%;
     justify-content: flex-end;
