@@ -112,6 +112,7 @@ export function resolveDynamicsProfile(id: string): ResolvedDynamicsProfile {
   const digestInput = stableProfileInput(profile);
   return {
     ...profile,
+    requirements: { ...profile.requirements },
     digestInput: `sha256:${createHash("sha256").update(digestInput).digest("hex")}`,
   };
 }
