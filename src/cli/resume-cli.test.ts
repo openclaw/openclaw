@@ -479,15 +479,21 @@ describe("resume command registration", () => {
 
 describe("real Gateway session boundary", () => {
   let harness: Awaited<ReturnType<typeof startMinimalRealGateway>>;
+  let closeHarness: (() => Promise<void>) | undefined;
 
   beforeAll(async () => {
-    harness = await startMinimalRealGateway([
-      { agentId: "work", key: "agent:work:global", visibility: "shared" },
-      { agentId: "main", key: "agent:main:alpha" },
-    ]);
+    harness = await startMinimalRealGateway({
+      sessions: [
+        { agentId: "work", key: "agent:work:global", visibility: "shared" },
+        { agentId: "main", key: "agent:main:alpha" },
+      ],
+      registerCleanup: (cleanup) => {
+        closeHarness = cleanup;
+      },
+    });
   });
 
-  afterAll(() => harness.close());
+  afterAll(() => closeHarness?.());
 
   it("preserves an agent-qualified global session through the TUI handoff", async () => {
     const { GatewayChatClient } =
@@ -610,7 +616,7 @@ describe("real Gateway session boundary", () => {
       clientVersion: "test",
       platform: "test",
       mode: GATEWAY_CLIENT_MODES.NODE,
-      deviceIdentity: harness.createDeviceIdentity("reconnect"),
+      deviceIdentity: await harness.createDeviceIdentity("reconnect"),
       hostDeps: {
         loadDeviceAuthToken: () => authState.value,
         storeDeviceAuthToken,

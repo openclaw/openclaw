@@ -209,9 +209,13 @@ describe("Gateway reachability over real sockets", () => {
     expect((await checkDashboardReadiness(url, rpc)).result.ready).toBe(true);
   });
 
-  it("accepts a real Gateway auth rejection as reachable without starting another service", async () => {
-    const gateway = await startMinimalRealGateway();
-    cleanups.push(() => gateway.close());
+  it("accepts a real Gateway auth rejection as reachable without starting another service", async ({
+    signal,
+  }) => {
+    const gateway = await startMinimalRealGateway({
+      signal,
+      registerCleanup: (cleanup) => cleanups.push(cleanup),
+    });
     const rejected = await probeGatewayStatus({
       url: gateway.url,
       token: "synthetic-wrong-token",

@@ -20,6 +20,10 @@ function createWritableTextBuffer(): NodeJS.WritableStream & { text: () => strin
   });
 }
 
+async function rejectMissingBridge(): Promise<never> {
+  throw new Error("native hook relay bridge not found");
+}
+
 describe("native hook relay CLI", () => {
   it("parses the internal cold-path argument vector", async () => {
     const invokeBridge = vi.fn(async () => ({ stdout: "", stderr: "", exitCode: 0 }));
@@ -114,6 +118,7 @@ describe("native hook relay CLI", () => {
         ),
         stdout,
         stderr,
+        invokeBridge: rejectMissingBridge,
         callGateway: callGateway as never,
       },
     );
@@ -160,6 +165,7 @@ describe("native hook relay CLI", () => {
         stdin: createReadableTextStream("{}"),
         stdout,
         stderr,
+        invokeBridge: rejectMissingBridge,
         callGateway: callGateway as never,
       },
     );
@@ -607,6 +613,7 @@ describe("native hook relay CLI", () => {
         stdin: createReadableTextStream("{}"),
         stdout,
         stderr,
+        invokeBridge: rejectMissingBridge,
         callGateway: callGateway as never,
       },
     );
@@ -641,6 +648,7 @@ describe("native hook relay CLI", () => {
         stdin: createReadableTextStream("{}"),
         stdout,
         stderr,
+        invokeBridge: rejectMissingBridge,
         callGateway: callGateway as never,
       },
     );
@@ -668,6 +676,7 @@ describe("native hook relay CLI", () => {
         stdin: createReadableTextStream("{}"),
         stdout,
         stderr,
+        invokeBridge: rejectMissingBridge,
         callGateway: callGateway as never,
       },
     );
@@ -697,6 +706,7 @@ describe("native hook relay CLI", () => {
         stdin: createReadableTextStream("{}"),
         stdout,
         stderr,
+        invokeBridge: rejectMissingBridge,
         callGateway: callGateway as never,
       },
     );
@@ -724,6 +734,7 @@ describe("native hook relay CLI", () => {
         stdin: createReadableTextStream("{}"),
         stdout,
         stderr,
+        invokeBridge: rejectMissingBridge,
         callGateway: callGateway as never,
       },
     );
