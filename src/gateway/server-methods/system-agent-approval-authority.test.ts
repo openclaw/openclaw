@@ -602,15 +602,15 @@ describe("prepareDelegatedSystemAgentApproval", () => {
       );
 
       expect(secondApprovalId).toBe(firstApprovalId);
-      expect(await manager.listPendingRecords()).toHaveLength(1);
-      expect((await manager.getSnapshot(firstApprovalId))?.agentRuntimeDelegatedAuthority).toMatchObject({
-        claimId: firstAuthority.claimId,
+      await expect(manager.listPendingRecords()).resolves.toHaveLength(1);
+      await expect(manager.getSnapshot(firstApprovalId)).resolves.toMatchObject({
+        agentRuntimeDelegatedAuthority: { claimId: firstAuthority.claimId },
       });
       expect(resolveOperatorApproval).not.toHaveBeenCalled();
       const completion = session.pendingApproval?.completion;
       expect(completion).toBeDefined();
       (abortLease === "first" ? firstController : secondController).abort();
-      expect(await manager.resolve(firstApprovalId, "allow-once", "operator-ui")).toBe(applies);
+      await expect(manager.resolve(firstApprovalId, "allow-once", "operator-ui")).resolves.toBe(applies);
       await completion;
       if (applies) {
         expect(resolveOperatorApproval).toHaveBeenCalledWith(
