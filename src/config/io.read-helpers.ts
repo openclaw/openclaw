@@ -67,21 +67,33 @@ export function collectEnvRefPaths(
   pathLocal: string,
   output: Map<string, string>,
 ): void {
-  if (typeof value === "string") {
-    if (containsEnvVarReference(value)) {
-      output.set(pathLocal, value);
+  const pending: Array<{ value: unknown; path: string }> = [{ value, path: pathLocal }];
+  while (pending.length > 0) {
+    const current = pending.pop();
+    if (!current) {
+      continue;
     }
-    return;
-  }
-  if (Array.isArray(value)) {
-    value.forEach((item, index) => {
-      collectEnvRefPaths(item, `${pathLocal}[${index}]`, output);
-    });
-    return;
-  }
-  if (isRecord(value)) {
-    for (const [key, child] of Object.entries(value)) {
-      collectEnvRefPaths(child, pathLocal ? `${pathLocal}.${key}` : key, output);
+    if (typeof current.value === "string") {
+      if (containsEnvVarReference(current.value)) {
+        output.set(current.path, current.value);
+      }
+      continue;
+    }
+    if (Array.isArray(current.value)) {
+      for (let index = current.value.length - 1; index >= 0; index -= 1) {
+        pending.push({ value: current.value[index], path: `${current.path}[${index}]` });
+      }
+      continue;
+    }
+    if (isRecord(current.value)) {
+      const entries = Object.entries(current.value);
+      for (let index = entries.length - 1; index >= 0; index -= 1) {
+        const [key, child] = entries[index]!;
+        pending.push({
+          value: child,
+          path: current.path ? `${current.path}.${key}` : key,
+        });
+      }
     }
   }
 }

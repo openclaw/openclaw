@@ -3400,6 +3400,40 @@ describe("config io write", () => {
     );
   });
 
+  itWithHome("preserves env refs through a deeply nested model parameter write", async (home) => {
+    let deep: unknown = "${DEEP_MODEL_ENV}";
+    for (let depth = 0; depth < 300; depth += 1) {
+      deep = { x: deep };
+    }
+    const config = {
+      agents: { defaults: { models: { "openai/test": { params: { deep } } } } },
+      gateway: { mode: "local", port: 18789 },
+    };
+    const { configPath } = await writeConfigFixture(home, config);
+    const io = createFastConfigIO(home, {
+      configPath,
+      env: {
+        OPENCLAW_TEST_FAST: "1",
+        DEEP_MODEL_ENV: "resolved-deep-value",
+      } as NodeJS.ProcessEnv,
+    });
+
+    const snapshot = await io.readConfigFileSnapshot();
+    expect(snapshot.valid).toBe(true);
+    await io.writeConfigFile({
+      ...snapshot.config,
+      gateway: { ...snapshot.config.gateway, port: 19002 },
+    });
+
+    const persisted = JSON.parse(await fs.readFile(configPath, "utf-8")) as typeof config;
+    let persistedDeep: unknown = persisted.agents?.defaults?.models?.["openai/test"]?.params?.deep;
+    for (let depth = 0; depth < 300; depth += 1) {
+      persistedDeep = (persistedDeep as { x: unknown }).x;
+    }
+    expect(persistedDeep).toBe("${DEEP_MODEL_ENV}");
+    expect(persisted.gateway?.port).toBe(19002);
+  });
+
   itWithHome("preserves fresh source env refs in runtime-based transforms", async (home) => {
     const { configPath } = await writeConfigFixture(home, {
       gateway: { mode: "local", auth: { mode: "token", token: "${TOKEN_B}" } },
