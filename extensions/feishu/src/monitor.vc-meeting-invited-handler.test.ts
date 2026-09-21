@@ -14,6 +14,7 @@ const monitorWebSocketMock = vi.hoisted(() => vi.fn(async () => {}));
 const monitorWebhookMock = vi.hoisted(() => vi.fn(async () => {}));
 const createFeishuThreadBindingManagerMock = vi.hoisted(() => vi.fn(() => ({ stop: vi.fn() })));
 const dedupMocks = vi.hoisted(() => ({
+  claimUnprocessedFeishuMessage: vi.fn(),
   warmupDedupFromPluginState: vi.fn(async () => 0),
   hasProcessedFeishuMessage: vi.fn(async () => false),
 }));
@@ -42,9 +43,8 @@ vi.mock("./thread-bindings.js", () => ({
 }));
 
 vi.mock("./dedup.js", async () => {
-  const actual = await vi.importActual<typeof import("./dedup.js")>("./dedup.js");
   return {
-    ...actual,
+    claimUnprocessedFeishuMessage: dedupMocks.claimUnprocessedFeishuMessage,
     warmupDedupFromPluginState: dedupMocks.warmupDedupFromPluginState,
     hasProcessedFeishuMessage: dedupMocks.hasProcessedFeishuMessage,
   };
@@ -123,7 +123,16 @@ const vcEvent = {
 describe("createFeishuVcMeetingInvitedHandler", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    handleFeishuMessageMock.mockReset();
     handleFeishuMessageMock.mockResolvedValue(undefined);
+    dedupMocks.claimUnprocessedFeishuMessage.mockReset();
+    dedupMocks.claimUnprocessedFeishuMessage.mockImplementation(async () => ({
+      kind: "claimed" as const,
+      handle: {
+        commit: vi.fn(async () => true),
+        release: vi.fn(),
+      },
+    }));
     dedupMocks.warmupDedupFromPluginState.mockResolvedValue(0);
     dedupMocks.hasProcessedFeishuMessage.mockResolvedValue(false);
   });
@@ -213,6 +222,40 @@ describe("createFeishuVcMeetingInvitedHandler", () => {
     });
   });
 
+  it("releases a failed invite claim so the provider retry can dispatch", async () => {
+    const firstClaim = {
+      commit: vi.fn(async () => true),
+      release: vi.fn(),
+    };
+    const secondClaim = {
+      commit: vi.fn(async () => true),
+      release: vi.fn(),
+    };
+    dedupMocks.claimUnprocessedFeishuMessage
+      .mockResolvedValueOnce({ kind: "claimed", handle: firstClaim })
+      .mockResolvedValueOnce({ kind: "claimed", handle: secondClaim });
+    handleFeishuMessageMock
+      .mockRejectedValueOnce(new Error("agent dispatch failed"))
+      .mockResolvedValueOnce(undefined);
+    const runtime = createRuntimeSpies();
+    const handler = createFeishuVcMeetingInvitedHandler({
+      cfg: buildConfig(),
+      accountId: "default",
+      runtime,
+      channelRuntime: buildChannelRuntime(),
+      fireAndForget: false,
+      autoJoin: true,
+    });
+
+    await handler(vcEvent);
+    await handler(vcEvent);
+
+    expect(firstClaim.release).toHaveBeenCalledOnce();
+    expect(firstClaim.commit).not.toHaveBeenCalled();
+    expect(secondClaim.commit).toHaveBeenCalledOnce();
+    expect(handleFeishuMessageMock).toHaveBeenCalledTimes(2);
+  });
+
   it("uses user_id as the DM target when open_id is unavailable", async () => {
     const handler = createFeishuVcMeetingInvitedHandler({
       cfg: buildConfig(),
@@ -264,6 +307,16 @@ describe("monitorSingleAccount VC event registration", () => {
   beforeEach(() => {
     handlers = {};
     vi.clearAllMocks();
+    handleFeishuMessageMock.mockReset();
+    handleFeishuMessageMock.mockResolvedValue(undefined);
+    dedupMocks.claimUnprocessedFeishuMessage.mockReset();
+    dedupMocks.claimUnprocessedFeishuMessage.mockImplementation(async () => ({
+      kind: "claimed" as const,
+      handle: {
+        commit: vi.fn(async () => true),
+        release: vi.fn(),
+      },
+    }));
     dedupMocks.warmupDedupFromPluginState.mockResolvedValue(0);
     createEventDispatcherMock.mockReturnValue({
       register: vi.fn((registered: Record<string, (data: unknown) => Promise<void>>) => {

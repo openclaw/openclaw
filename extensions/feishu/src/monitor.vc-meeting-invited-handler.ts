@@ -2,6 +2,8 @@ import * as crypto from "node:crypto";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { ClawdbotConfig, PluginRuntime, RuntimeEnv } from "../runtime-api.js";
 import { handleFeishuMessage, type FeishuMessageEvent } from "./bot.js";
+import { claimUnprocessedFeishuMessage, type FeishuMessageProcessingClaim } from "./dedup.js";
+import type { FeishuIngressLifecycle } from "./feishu-ingress.js";
 import { setFeishuSyntheticDirectPreDispatchTarget } from "./synthetic-event-target.js";
 
 const FEISHU_MEETING_NUMBER_PATTERN = /^\d{9}$/;
@@ -137,6 +139,7 @@ async function dispatchVcMeetingInvitedTurn(params: {
   runtime?: RuntimeEnv;
   channelRuntime?: PluginRuntime["channel"];
   turn: VcMeetingInvitedTurn;
+  turnAdoptionLifecycle: FeishuIngressLifecycle;
   trackTask?: (task: Promise<void>) => void;
 }): Promise<void> {
   params.runtime?.log?.(
@@ -153,7 +156,35 @@ async function dispatchVcMeetingInvitedTurn(params: {
     event,
     runtime: params.runtime,
     channelRuntime: params.channelRuntime,
+    turnAdoptionLifecycle: params.turnAdoptionLifecycle,
   });
+}
+
+function createVcInviteAdoptionLifecycle(
+  claim: FeishuMessageProcessingClaim,
+): FeishuIngressLifecycle {
+  let settled = false;
+  const settle = async (action: () => void | Promise<void>) => {
+    if (settled) {
+      return;
+    }
+    settled = true;
+    await action();
+  };
+
+  return {
+    abortSignal: new AbortController().signal,
+    onAdopted: async () =>
+      await settle(async () => {
+        await claim.commit();
+      }),
+    onDeferred: () => {},
+    onAdoptionFinalizing: () => {},
+    onAbandoned: async () =>
+      await settle(async () => {
+        claim.release({ error: new Error("feishu-vc-invite-dispatch-failed") });
+      }),
+  };
 }
 
 export function createFeishuVcMeetingInvitedHandler(params: {
@@ -189,6 +220,19 @@ export function createFeishuVcMeetingInvitedHandler(params: {
         );
         return;
       }
+      const claim = await claimUnprocessedFeishuMessage({
+        messageId: turn.turnId,
+        namespace: accountId,
+        log,
+      });
+      if (claim.kind === "duplicate" || claim.kind === "inflight") {
+        log(`feishu[${accountId}]: dropping ${claim.kind} vc meeting invite ${turn.turnId}`);
+        return;
+      }
+      if (claim.kind !== "claimed") {
+        return;
+      }
+      const turnAdoptionLifecycle = createVcInviteAdoptionLifecycle(claim.handle);
       const promise = dispatchVcMeetingInvitedTurn({
         trackTask: params.trackTask,
         cfg,
@@ -196,15 +240,23 @@ export function createFeishuVcMeetingInvitedHandler(params: {
         runtime,
         channelRuntime: params.channelRuntime,
         turn,
+        turnAdoptionLifecycle,
       });
-      params.trackTask?.(promise);
+      const settledPromise = promise.then(
+        async () => await turnAdoptionLifecycle.onAdopted(),
+        async (err: unknown) => {
+          await turnAdoptionLifecycle.onAbandoned();
+          throw err;
+        },
+      );
+      params.trackTask?.(settledPromise);
       if (fireAndForget) {
-        promise.catch((err: unknown) => {
+        settledPromise.catch((err: unknown) => {
           error(`feishu[${accountId}]: error handling vc meeting invited event: ${String(err)}`);
         });
         return;
       }
-      await promise;
+      await settledPromise;
     } catch (err) {
       error(`feishu[${accountId}]: error handling vc meeting invited event: ${String(err)}`);
     }
