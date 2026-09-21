@@ -292,7 +292,7 @@ class CloudflareAccessClientTest {
         server
           .url("/")
           .newBuilder()
-          .host(address.hostAddress)
+          .host(checkNotNull(address.hostAddress))
           .build()
       assertThrows(SSLException::class.java) {
         runBlocking { CloudflareAccessClient.send(Request.Builder().url(url).build(), 0, 5) }
