@@ -22,6 +22,7 @@ type Scenario = {
   sourcePlugin?: boolean;
   helpFailure?: "exit" | "timeout";
   failProbe?: number;
+  dirtyState?: boolean;
 };
 
 function sha256(file: string): string {
@@ -82,6 +83,10 @@ function runScenario(scenario: Scenario = {}) {
   const bundled = scenario.bundled ?? channel === "telegram";
   mkdirSync(bin);
   mkdirSync(home);
+  mkdirSync(join(home, ".openclaw"));
+  if (scenario.dirtyState) {
+    writeFileSync(join(home, ".openclaw", "existing-state"), "unrelated fixture state");
+  }
   mkdirSync(packageRoot);
   writeFileSync(eventsPath, "");
   if (bundled) {
@@ -124,6 +129,8 @@ if (help) {
 } else if (args[0] === "channels" && args[1] === "add" && env.BUNDLED === "0") {
   if (current && !fs.existsSync(dependencyPath())) fail("external channel needs consent first");
   if (!current) installChannelDependency();
+} else if (args[0] === "identity") {
+  console.log("execution-fixture");
 }
 function dependencyPath() {
   const dep = { telegram: "grammy", discord: "discord-api-types", slack: "@slack/bolt" }[env.OPENCLAW_NPM_ONBOARD_CHANNEL];
@@ -143,6 +150,12 @@ function installChannelDependency() {
 if [ "$1" = scripts/e2e/lib/npm-onboard-channel-agent/assertions.mjs ]; then
   exec "$REAL_NODE" "$FIXTURE_CLI" assertion "\${@:2}"
 fi
+if [ "$1" = scripts/e2e/lib/npm-onboard-channel-agent/execution-identity.mjs ]; then
+  if [ "$2" = clean-home ]; then exec "$REAL_NODE" "$@"; fi
+  # Projection/storage assertions have their own real SQLite support tests.
+  [ "$2" = verify ] || exit 0
+  exec "$REAL_NODE" "$FIXTURE_CLI" identity "\${@:2}"
+fi
 exec "$REAL_NODE" "$@"
 `,
     { mode: 0o755 },
@@ -156,10 +169,17 @@ exec "$REAL_NODE" "$@"
     throw new Error("npm onboarding container program not found");
   }
   const testState = `
+OPENCLAW_TEST_STATE_HOME="$HOME"
+export OPENCLAW_STATE_DIR="$HOME/.openclaw"
+export OPENCLAW_CONFIG_PATH="$OPENCLAW_STATE_DIR/openclaw.json"
 openclaw_e2e_install_package() { mkdir -p "$HOME/.openclaw"; }
 openclaw_e2e_package_root() { printf '%s' "$PACKAGE_ROOT"; }
+openclaw_e2e_package_entrypoint() { printf '%s/openclaw.mjs' "$PACKAGE_ROOT"; }
 openclaw_e2e_start_mock_openai() { :; }
 openclaw_e2e_wait_mock_openai() { :; }
+openclaw_e2e_start_gateway() { "$FIXTURE_CLI" gateway-start; printf '%s' fixture-gateway; }
+openclaw_e2e_wait_gateway_ready() { :; }
+openclaw_e2e_stop_process() { if [ -n "$1" ]; then "$FIXTURE_CLI" gateway-stop; fi; }
 `;
   const registryEnv = scenario.registry ? registryFixture(root, scenario) : {};
   if (scenario.corruptRegistry) {
@@ -209,6 +229,40 @@ openclaw_e2e_wait_mock_openai() { :; }
 }
 
 describe("npm onboarding fixture consent", () => {
+  it("inspects the admitted local turn with the installed CLI across Gateway restart", () => {
+    const { result, events, detail } = runScenario();
+    expect(result.status, detail).toBe(0);
+    const optIn = events.findIndex(
+      (args) => args.join(" ") === "config set logging.audit.executionIdentity true",
+    );
+    const turn = events.findIndex((args) => args[0] === "agent");
+    expect(optIn).toBeGreaterThanOrEqual(0);
+    expect(optIn).toBeLessThan(turn);
+    expect(events.filter((args) => args[0] === "agent")).toHaveLength(1);
+    expect(
+      events
+        .slice(turn + 1)
+        .filter((args) =>
+          ["gateway-start", "gateway-stop", "audit"].some((name) => name === args[0]),
+        )
+        .map((args) => args.slice(0, 3)),
+    ).toEqual([
+      ["gateway-start"],
+      ["audit", "--run", "npm-onboard-channel-agent"],
+      ["gateway-stop"],
+      ["gateway-start"],
+      ["audit", "--execution", "execution-fixture"],
+      ["gateway-stop"],
+    ]);
+  });
+
+  it("rejects inherited state before installing or admitting a turn", () => {
+    const { result, events, detail } = runScenario({ dirtyState: true });
+    expect(result.status).not.toBe(0);
+    expect(detail).toContain("package proof inherited existing state");
+    expect(events).toEqual([]);
+  });
+
   it.each([false, true])("selects the reviewed Codex source with registry=%s", (registry) => {
     const { result, events, installs, detail } = runScenario({ registry });
     expect(result.status, detail).toBe(0);
