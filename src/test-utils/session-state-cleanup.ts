@@ -1,10 +1,8 @@
 // Cleans session-related shared state after tests.
 import { closeAuthProfileReadPool } from "../agents/auth-profiles/sqlite-read-pool.js";
 import { waitForSessionTranscriptIndexReconcilesInStateDir } from "../config/sessions/session-transcript-reconcile.js";
-import {
-  clearSessionStoreCacheForTest,
-  drainSessionStoreWriterQueuesForTest,
-} from "../config/sessions/store-writer-state.js";
+import { clearSessionStoreCacheForTest } from "../config/sessions/store-writer-state.js";
+import { drainSessionStoreWriterQueuesForTest } from "../config/sessions/store-writer-state.test-support.js";
 import { drainFileLockStateForTest } from "../infra/file-lock.js";
 import { closeOpenClawAgentDatabasesAsync } from "../state/openclaw-agent-db-lifecycle.js";
 import { closeOpenClawStateDatabaseByPathAsync } from "../state/openclaw-state-db.js";

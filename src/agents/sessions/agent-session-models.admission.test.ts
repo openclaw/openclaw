@@ -1,6 +1,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { drainStoreWriterQueuesForTest } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import {
   loadTranscriptEvents,
@@ -11,7 +12,6 @@ import {
   toDatabaseOptions,
 } from "../../config/sessions/session-accessor.sqlite-scope.js";
 import { createDeferredCore } from "../../shared/deferred.js";
-import { drainStoreWriterQueuesForTest } from "../../shared/store-writer-queue.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
 import {
   runOpenClawAgentWriteAdmission,

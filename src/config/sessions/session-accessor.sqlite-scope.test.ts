@@ -15,7 +15,7 @@ import type {
   SqliteSessionWriteDiagnostics,
 } from "./session-accessor.sqlite-contract.js";
 import { runExclusiveSqliteSessionWrite } from "./session-accessor.sqlite-scope.js";
-import { drainSessionStoreWriterQueuesForTest } from "./store-writer-state.js";
+import { drainSessionStoreWriterQueuesForTest } from "./store-writer-state.test-support.js";
 
 afterEach(() => vi.restoreAllMocks());
 
