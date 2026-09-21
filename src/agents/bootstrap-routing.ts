@@ -33,6 +33,8 @@ type BootstrapRoutingInput = {
 /** Bootstrap placement decision consumed by system/runtime context assembly. */
 type WorkspaceBootstrapRouting = {
   bootstrapMode: BootstrapMode;
+  /** Every workspace bootstrap file reached the prompt, so a continuation can skip re-injection. */
+  deliversCompleteWorkspaceContext: boolean;
   includeBootstrapInSystemContext: boolean;
   includeBootstrapInRuntimeContext: boolean;
 };
@@ -57,6 +59,8 @@ function resolveBootstrapRouting(params: BootstrapRoutingInput): WorkspaceBootst
 
   return {
     bootstrapMode,
+    // "none" with nothing pending means no BOOTSTRAP.md content was withheld.
+    deliversCompleteWorkspaceContext: bootstrapMode === "full" || !params.workspaceBootstrapPending,
     includeBootstrapInSystemContext: bootstrapMode === "full",
     includeBootstrapInRuntimeContext: false,
   };

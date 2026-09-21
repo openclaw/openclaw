@@ -17,6 +17,7 @@ async function resolveBootstrapContext(params: {
   bootstrapContextMode?: string;
   bootstrapContextRunKind?: BootstrapContextRunKind;
   bootstrapMode?: "full" | "limited" | "none";
+  deliversCompleteWorkspaceContext?: boolean;
   completed?: boolean;
   resolver?: () => Promise<{ bootstrapFiles: unknown[]; contextFiles: unknown[] }>;
 }) {
@@ -35,6 +36,7 @@ async function resolveBootstrapContext(params: {
     bootstrapContextMode: params.bootstrapContextMode ?? "full",
     bootstrapContextRunKind: params.bootstrapContextRunKind ?? "default",
     bootstrapMode: params.bootstrapMode ?? "none",
+    deliversCompleteWorkspaceContext: params.deliversCompleteWorkspaceContext ?? false,
     hasCompletedBootstrapTurn,
     resolveBootstrapContextForRun,
   });
@@ -145,11 +147,35 @@ describe("embedded attempt context injection", () => {
       bootstrapContextMode: "full",
       bootstrapContextRunKind: "default",
       bootstrapMode: "full",
+      deliversCompleteWorkspaceContext: true,
       resolver,
     });
 
     expect(result.shouldRecordCompletedBootstrapTurn).toBe(true);
     expect(result.bootstrapFiles).toEqual([{ name: "AGENTS.md", content: "bootstrap context" }]);
+  });
+
+  it("records completion for a workspace whose onboarding is already done", async () => {
+    // A completed workspace resolves bootstrapMode "none" on every turn, which on
+    // its own would make the continuation-skip marker impossible to earn.
+    const { result } = await resolveBootstrapContext({
+      contextInjectionMode: "continuation-skip",
+      bootstrapMode: "none",
+      deliversCompleteWorkspaceContext: true,
+    });
+
+    expect(result.isContinuationTurn).toBe(false);
+    expect(result.shouldRecordCompletedBootstrapTurn).toBe(true);
+  });
+
+  it("does not let a cron maintenance turn record bootstrap completion", async () => {
+    const { result } = await resolveBootstrapContext({
+      bootstrapContextRunKind: "cron",
+      bootstrapMode: "none",
+      deliversCompleteWorkspaceContext: true,
+    });
+
+    expect(result.shouldRecordCompletedBootstrapTurn).toBe(false);
   });
 
   it.each(["heartbeat"] as const)(

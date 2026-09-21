@@ -111,6 +111,7 @@ export async function prepareEmbeddedAttemptBootstrap(params: {
     bootstrapContextMode: attempt.bootstrapContextMode,
     bootstrapContextRunKind: attempt.bootstrapContextRunKind ?? "default",
     bootstrapMode,
+    deliversCompleteWorkspaceContext: bootstrapRouting.deliversCompleteWorkspaceContext,
     hasCompletedBootstrapTurn: hasCompletedBootstrapTurnForAttempt,
     resolveBootstrapContextForRun: async () => {
       const bootstrapFiles =

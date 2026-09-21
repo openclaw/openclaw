@@ -57,6 +57,24 @@ describe("resolveWorkspaceBootstrapRouting", () => {
     expect(routing.bootstrapMode).toBe("limited");
     expect(routing.includeBootstrapInSystemContext).toBe(false);
     expect(routing.includeBootstrapInRuntimeContext).toBe(false);
+    expect(routing.deliversCompleteWorkspaceContext).toBe(false);
+  });
+
+  it("records a completed workspace as delivering the whole bootstrap context", async () => {
+    // A setup-complete workspace has no BOOTSTRAP.md to withhold, so its turns
+    // carry every bootstrap file even though onboarding leaves the mode at "none".
+    const routing = await resolveWorkspaceBootstrapRouting({
+      isWorkspaceBootstrapPending: vi.fn(async () => false),
+      trigger: "user",
+      isPrimaryRun: true,
+      isCanonicalWorkspace: true,
+      effectiveWorkspace: "/tmp/openclaw-workspace",
+      resolvedWorkspace: "/tmp/openclaw-workspace",
+      hasBootstrapFileAccess: true,
+    });
+
+    expect(routing.bootstrapMode).toBe("none");
+    expect(routing.deliversCompleteWorkspaceContext).toBe(true);
   });
 
   it("treats hook-provided BOOTSTRAP.md content as pending bootstrap context", async () => {
