@@ -244,6 +244,11 @@ describe("test-projects args", () => {
       config: "test/vitest/vitest.process.config.ts",
     },
     {
+      title: "routes raw-source SQLite cache probes to the process owner",
+      target: "src/infra/sqlite-readonly-worker.compile-cache.process.test.ts",
+      config: "test/vitest/vitest.cli-process.config.ts",
+    },
+    {
       title: "routes the Git backup outcome consumer to the infra config",
       target: "src/snapshot/git-backup.test.ts",
       config: "test/vitest/vitest.infra.config.ts",

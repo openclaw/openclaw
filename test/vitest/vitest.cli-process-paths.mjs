@@ -54,6 +54,7 @@ export const cliProcessTestFiles = [
   "src/cli/state-dir-gateway-check.server.test.ts",
   "src/cli/cron-cli/cron-suppression.gateway.test.ts",
   "src/state/openclaw-database-verify.process.test.ts",
+  "src/infra/sqlite-readonly-worker.compile-cache.process.test.ts",
 ];
 
 const cliProcessTestFileSet = new Set(cliProcessTestFiles);
