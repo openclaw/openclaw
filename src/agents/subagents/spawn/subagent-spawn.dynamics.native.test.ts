@@ -1,5 +1,4 @@
 import "./subagent-spawn-model.mocks.shared.js";
-
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -106,45 +105,51 @@ describe("native dynamics spawn boundary", () => {
     }
   });
 
-  it("carries verifier guidance through the real native spawn path when sandbox admission succeeds", async () => {
-    await writeConfig("all");
-    const requests: Array<{ method: string; params: Record<string, unknown> }> = [];
-    subagentSpawnTesting.setDepsForTest({
-      hasInProcessGatewayContext: () => true,
-      dispatchGatewayMethodInProcess: async <T>(
-        method: string,
-        params: Record<string, unknown>,
-      ) => {
-        requests.push({ method, params });
-        return { runId: "native-dynamics-run", status: "accepted" } as T;
-      },
-    });
+  it(
+    "carries verifier guidance through the real native spawn path when sandbox admission succeeds",
+    async () => {
+      await writeConfig("all");
+      const requests: Array<{ method: string; params: Record<string, unknown> }> = [];
+      subagentSpawnTesting.setDepsForTest({
+        hasInProcessGatewayContext: () => true,
+        dispatchGatewayMethodInProcess: async <T>(
+          method: string,
+          params: Record<string, unknown>,
+        ) => {
+          requests.push({ method, params });
+          return { runId: "native-dynamics-run", status: "accepted" } as T;
+        },
+      });
 
-    const result = await launchPreparedVerifier();
+      const result = await launchPreparedVerifier();
 
-    expect(result).toMatchObject({ status: "accepted" });
-    const launch = requests.find((request) => request.method === "agent");
-    expect(launch).toBeDefined();
-    expect(launch?.params.message).toEqual(expect.stringContaining("independent-verifier"));
-    expect(launch?.params.message).toEqual(expect.stringContaining("sha256:candidate"));
-    expect(launch?.params.message).toEqual(
-      expect.stringContaining("Check the referenced candidate without changing it"),
-    );
-  });
+      expect(result).toMatchObject({ status: "accepted" });
+      const launch = requests.find((request) => request.method === "agent");
+      expect(launch).toBeDefined();
+      expect(launch?.params.message).toEqual(expect.stringContaining("independent-verifier"));
+      expect(launch?.params.message).toEqual(expect.stringContaining("sha256:candidate"));
+      expect(launch?.params.message).toEqual(
+        expect.stringContaining("Check the referenced candidate without changing it"),
+      );
+    },
+  );
 
-  it("fails closed before native dispatch when a verifier requires an unavailable sandbox", async () => {
-    const dispatchGatewayMethodInProcess = vi.fn(async () => {
-      throw new Error("sandbox-required verifier must not dispatch unsandboxed");
-    });
-    subagentSpawnTesting.setDepsForTest({
-      hasInProcessGatewayContext: () => true,
-      dispatchGatewayMethodInProcess,
-    });
+  it(
+    "fails closed before native dispatch when a verifier requires an unavailable sandbox",
+    async () => {
+      const dispatchGatewayMethodInProcess = vi.fn(async () => {
+        throw new Error("sandbox-required verifier must not dispatch unsandboxed");
+      });
+      subagentSpawnTesting.setDepsForTest({
+        hasInProcessGatewayContext: () => true,
+        dispatchGatewayMethodInProcess,
+      });
 
-    const result = await launchPreparedVerifier();
+      const result = await launchPreparedVerifier();
 
-    expect(result.status).toBe("forbidden");
-    expect(result.error).toEqual(expect.stringContaining("sandbox"));
-    expect(dispatchGatewayMethodInProcess).not.toHaveBeenCalled();
-  });
+      expect(result.status).toBe("forbidden");
+      expect(result.error).toEqual(expect.stringContaining("sandbox"));
+      expect(dispatchGatewayMethodInProcess).not.toHaveBeenCalled();
+    },
+  );
 });
