@@ -59,7 +59,7 @@ function releaseDynamicsGroup(groupId: string): void {
 }
 
 function retainDynamicsGroup(groupId: string, ctx: ToolSearchToolContext): void {
-  retainDynamicsGroup(groupId, params.ctx);
+  dynamicsGroups.add(groupId);
   if (dynamicsGroupLifetimes.has(groupId)) {
     return;
   }
