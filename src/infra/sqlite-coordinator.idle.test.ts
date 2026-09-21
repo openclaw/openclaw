@@ -173,10 +173,17 @@ describe("idle SQLite coordinator connections", () => {
   it.each(["coordinator", "qa-runtime"] as const)(
     "disposes only idle connections inside a removed runtime root through %s",
     async (entryPoint) => {
-      const dispose =
+      const qaCloser =
         entryPoint === "qa-runtime"
           ? (await import("../plugin-sdk/qa-runtime.js")).closeQaRuntimeStores
-          : closeIdleSqliteCoordinators;
+          : undefined;
+      const dispose = async (root: string) => {
+        if (qaCloser) {
+          await qaCloser(root);
+        } else {
+          closeIdleSqliteCoordinators(root);
+        }
+      };
       const { directory } = fixture();
       const root = path.join(directory, "owned");
       fs.mkdirSync(root);
