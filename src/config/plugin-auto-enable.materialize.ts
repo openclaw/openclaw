@@ -73,6 +73,37 @@ function isPluginDenied(cfg: OpenClawConfig, pluginId: string): boolean {
   return Array.isArray(deny) && deny.includes(pluginId);
 }
 
+/**
+ * True when materialization discards an auto-enable candidate for `pluginId`
+ * before it can affect the config: the plugin is denied or explicitly disabled.
+ * Materialization ignores such ids everywhere, including prefer-over ordering,
+ * so a caller that must do expensive work to produce a candidate can drop them.
+ *
+ * Channel-backed ids also resolve enablement through `channels.<id>.enabled`,
+ * which is why this reads the channel branch too.
+ */
+export function isIgnoredAutoEnablePluginId(cfg: OpenClawConfig, pluginId: string): boolean {
+  return isPluginDenied(cfg, pluginId) || isPluginExplicitlyDisabled(cfg, pluginId);
+}
+
+/**
+ * True when materialization discards an already-enabled candidate for
+ * `pluginId`, unless a restrictive allowlist still excludes the plugin (in which
+ * case it is materialized and allowlisted).
+ *
+ * Dropping such a candidate is not automatically safe: prefer-over ordering is
+ * resolved across the whole candidate set, so an already-enabled plugin can
+ * still suppress another candidate. Callers must confirm the plugin declares no
+ * preference before skipping it.
+ */
+export function isAlreadyEnabledAutoEnablePluginId(cfg: OpenClawConfig, pluginId: string): boolean {
+  const allow = cfg.plugins?.allow;
+  if (Array.isArray(allow) && allow.length > 0 && !allow.includes(pluginId)) {
+    return false;
+  }
+  return cfg.plugins?.entries?.[pluginId]?.enabled === true;
+}
+
 function isPluginExplicitlySelected(cfg: OpenClawConfig, pluginId: string): boolean {
   const allow = cfg.plugins?.allow;
   if (Array.isArray(allow) && allow.includes(pluginId)) {
