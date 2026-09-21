@@ -1,5 +1,6 @@
 // Process-local placement-grant retention and final-boundary revalidation.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createOperationalRunInstanceRef } from "../agents/admitted-run-context.js";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
@@ -25,7 +26,6 @@ import {
   createOperatorClient,
   DEMO_COMMAND,
   DEMO_PARAMS,
-  expectSinglePendingApproval,
   setDangerousDemoCommandRegistry,
 } from "./node-invoke-plugin-policy.test-helpers.js";
 import {
@@ -445,6 +445,28 @@ describe("placement standing grants", () => {
       validateAgentRuntimeApprovalAuthority: () => true,
     });
     context.placementStandingGrants = placementStandingGrants;
+    let requested = createDeferred();
+    context.broadcastToConnIds = vi.fn((event) => {
+      if (event === "plugin.approval.requested") {
+        requested.resolve();
+      }
+    });
+    const nextApproval = async (operation: Promise<unknown>) => {
+      await Promise.race([
+        requested.promise,
+        operation.then(() => {
+          throw new Error("Node policy completed without requesting approval");
+        }),
+      ]);
+      requested = createDeferred();
+      const records = await manager.listPendingRecords();
+      expect(records).toHaveLength(1);
+      const [record] = records;
+      if (!record) {
+        throw new Error("expected pending approval");
+      }
+      return record;
+    };
     const invoke = vi.fn(async (input: Parameters<typeof context.nodeRegistry.invoke>[0]) => {
       if (input.isDispatchAuthorized?.() === false) {
         return {
@@ -495,7 +517,7 @@ describe("placement standing grants", () => {
       params: DEMO_PARAMS,
       sessionKey: SESSION_KEY,
     });
-    const identityOnlyApproval = await expectSinglePendingApproval(manager);
+    const identityOnlyApproval = await nextApproval(identityOnlyLaunch);
     expect(identityOnlyApproval.request.allowedDecisions).not.toContain("allow-always");
     expect(identityOnlyApproval.request.placementGrant).toBeNull();
     expect(await manager.resolve(identityOnlyApproval.id, "deny")).toBe(true);
@@ -516,7 +538,7 @@ describe("placement standing grants", () => {
       );
 
     const legacyLaunch = launch();
-    const legacyApproval = await expectSinglePendingApproval(manager);
+    const legacyApproval = await nextApproval(legacyLaunch);
     expect(legacyApproval.request.allowedDecisions).not.toContain("allow-always");
     expect(legacyApproval.request.placementGrant).toBeNull();
     expect(await manager.resolve(legacyApproval.id, "deny")).toBe(true);
@@ -524,7 +546,7 @@ describe("placement standing grants", () => {
 
     policy.policy.standingApproval = { kind: "placement", scope: "demo.exec-placement" };
     const firstLaunch = launch();
-    const firstApproval = await expectSinglePendingApproval(manager);
+    const firstApproval = await nextApproval(firstLaunch);
     expect(firstApproval.request.placementGrant).toMatchObject({
       sessionId: SESSION_ID,
       nodeId: NODE_ID,
@@ -549,14 +571,14 @@ describe("placement standing grants", () => {
         .where("session_id", "=", SESSION_ID),
     );
     const staleLaunch = launch();
-    const staleApproval = await expectSinglePendingApproval(manager);
+    const staleApproval = await nextApproval(staleLaunch);
     placementAuthorityActive = false;
     expect(await manager.resolve(staleApproval.id, "allow-always")).toBe(false);
     await expect(staleLaunch).resolves.toMatchObject({ ok: false, code: "DENIED" });
     placementAuthorityActive = true;
 
     const movedLaunch = launch();
-    const movedApproval = await expectSinglePendingApproval(manager);
+    const movedApproval = await nextApproval(movedLaunch);
     expect(movedApproval.id).not.toBe(firstApproval.id);
     expect(movedApproval.request.placementGrant).toMatchObject({ placementGeneration: 5 });
     expect(await manager.resolve(movedApproval.id, "deny")).toBe(true);
