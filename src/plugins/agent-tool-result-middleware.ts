@@ -17,6 +17,7 @@ import {
 const AGENT_TOOL_RESULT_MIDDLEWARE_RUNTIMES = [
   "openclaw",
   "codex",
+  "agentsapi",
 ] as const satisfies AgentToolResultMiddlewareRuntime[];
 
 const AGENT_TOOL_RESULT_MIDDLEWARE_RUNTIME_SET = new Set<string>(
@@ -37,7 +38,8 @@ export function normalizeAgentToolResultMiddlewareRuntimes(
 ): AgentToolResultMiddlewareRuntime[] {
   const requested = options?.runtimes;
   if (!requested) {
-    return [...AGENT_TOOL_RESULT_MIDDLEWARE_RUNTIMES];
+    // New runtimes require explicit opt-in; existing manifest declarations remain valid.
+    return ["openclaw", "codex"];
   }
   return normalizeAgentToolResultMiddlewareRuntimeIds(requested);
 }

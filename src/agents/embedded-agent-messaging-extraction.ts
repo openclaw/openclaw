@@ -40,16 +40,17 @@ export function extractMessagingToolSourceReplyPayload(
   if (text) {
     payload.text = text;
   }
-  const mediaUrl = readStringValue(sourceReply.mediaUrl) ?? readStringValue(details.mediaUrl);
-  if (mediaUrl) {
-    payload.mediaUrl = mediaUrl;
-  }
   const rawMediaUrls = Array.isArray(sourceReply.mediaUrls)
     ? sourceReply.mediaUrls
     : Array.isArray(details.mediaUrls)
       ? details.mediaUrls
       : [];
   const mediaUrls = rawMediaUrls.filter((value): value is string => typeof value === "string");
+  const mediaUrl =
+    readStringValue(sourceReply.mediaUrl) ?? readStringValue(details.mediaUrl) ?? mediaUrls[0];
+  if (mediaUrl) {
+    payload.mediaUrl = mediaUrl;
+  }
   if (mediaUrls.length > 0) {
     payload.mediaUrls = mediaUrls;
   }

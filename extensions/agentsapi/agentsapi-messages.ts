@@ -10,7 +10,7 @@ import {
   type NormalizedUsage,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { calculateCost, type AssistantMessage } from "openclaw/plugin-sdk/llm";
-import type { AgentsApiEvent, AgentsApiItem } from "./agentsapi-client.js";
+import type { AgentsApiEvent, AgentsApiItem, AgentsApiTurn } from "./agentsapi-client.js";
 import { AgentsApiNativeToolProjection } from "./agentsapi-native-tool-projection.js";
 import {
   appendAgentsApiTranscriptMessage,
@@ -21,7 +21,7 @@ import {
 } from "./agentsapi-transcript.js";
 
 type AgentEvent = Parameters<NonNullable<AgentHarnessAttemptParamsV2["onAgentEvent"]>>[0];
-type NativeTurn = SDKTurn | NonNullable<AgentsApiEvent["turn"]>;
+type NativeTurn = SDKTurn | AgentsApiTurn | NonNullable<AgentsApiEvent["turn"]>;
 type AgentsApiReply = {
   lastAssistant?: AssistantMessage;
   usage?: NormalizedUsage;

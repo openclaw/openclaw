@@ -1,4 +1,5 @@
 import { setTimeout as delay } from "node:timers/promises";
+import { APIConnectionError, APIError, APIUserAbortError } from "openai";
 import type { Turn } from "openai/resources/beta/agents/sessions/turns";
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -6,6 +7,8 @@ import {
   AgentsApiClient,
   AgentsApiError,
   type AgentsApiEvent,
+  type AgentsApiFunctionCall,
+  type AgentsApiFunctionResult,
   type AgentsApiItem,
 } from "./agentsapi-client.js";
 
@@ -22,6 +25,11 @@ export function createAgentsApiSession(options: {
   onSettled?: () => void;
   onUsageError?: (error: unknown) => void;
   onTranscriptOrderingGap?: () => void;
+  executeFunction?: (call: AgentsApiFunctionCall) => Promise<FunctionExecutionResult>;
+  onFunctionResult?: (
+    call: AgentsApiFunctionCall,
+    result: FunctionExecutionResult,
+  ) => void | Promise<void>;
 }) {
   const { client, cleanupClient, sessionId, signal, assertCurrent } = options;
   let streamController = new AbortController();
@@ -45,6 +53,7 @@ export function createAgentsApiSession(options: {
   const excludedItemIds = new Set<string>();
   let latestInputTurnId: string | undefined;
   let usageTurns: Promise<Turn[]> | undefined;
+  let terminatedByTool = false;
 
   const isAvailable = () => submitted && !stopped && !settled && !rootTurn && !signal.aborted;
   const submit = (text: string) => {
@@ -101,9 +110,6 @@ export function createAgentsApiSession(options: {
     if (session.status === "failed") {
       throw new Error(session.error ?? "Agents API session failed");
     }
-    if (session.status === "requires_action") {
-      throw new Error("Agents API MVP cannot continue: agent.session.requires_action");
-    }
   };
   const readAdmittedTurns = async (readClient: AgentsApiClient, readSignal: AbortSignal) => {
     const turns = await readClient.turns(sessionId, readSignal, baselineTurnId);
@@ -119,7 +125,7 @@ export function createAgentsApiSession(options: {
       latest?.status === "failed"
         ? new AgentsApiError(latest.error?.message ?? "Agents API turn failed", latest.error ?? {})
         : undefined;
-    cancelled = latest?.status === "cancelled";
+    cancelled = !terminatedByTool && latest?.status === "cancelled";
     return turns;
   };
   const readItemsByTurn = async (readClient: AgentsApiClient, readSignal: AbortSignal) => {
@@ -258,6 +264,136 @@ export function createAgentsApiSession(options: {
       if (baselineTurnId) {
         excludedTurnIds.add(baselineTurnId);
       }
+      const relayedCalls = new Set<string>();
+      const relayFunctions = async (): Promise<void> => {
+        assertCurrent();
+        signal.throwIfAborted();
+        if (!options.executeFunction) {
+          throw new Error("Agents API MVP cannot continue: agent.session.requires_action");
+        }
+        let submissionFence = submission;
+        await submissionFence;
+        assertCurrent();
+        const calls = await client.pendingFunctionCalls(sessionId, signal);
+        if (!calls.length) {
+          return;
+        }
+        const turns = await readAdmittedTurns(client, signal);
+        assertCurrent();
+        if (submissionFence !== submission) {
+          return relayFunctions();
+        }
+        const latestTurn = turns.at(-1);
+        if (!latestTurn) {
+          throw new Error("Agents API function request has no current attempt root turn");
+        }
+        latestInputTurnId = latestTurn.id;
+        const admittedCount = admittedMessageCount;
+        let itemsByTurn: Map<string, AgentsApiItem[]> | undefined;
+        // This optional history barrier must not retire valid hosted work for
+        // a transient read failure or wait indefinitely before a Gateway action.
+        const prefixSignal = AbortSignal.any([signal, AbortSignal.timeout(5_000)]);
+        try {
+          itemsByTurn = await readItemsByTurn(client, prefixSignal);
+          assertCurrent();
+        } catch (error) {
+          signal.throwIfAborted();
+          assertCurrent();
+          const prefixAborted =
+            prefixSignal.aborted &&
+            (error === prefixSignal.reason || error instanceof APIUserAbortError);
+          if (!prefixAborted && !isAgentsApiOptionalHistoryReadFailure(error)) {
+            throw error;
+          }
+          options.onTranscriptOrderingGap?.();
+          assertCurrent();
+        }
+        for (const call of calls) {
+          if (
+            call.turn_id !== latestTurn.id ||
+            !["in_progress", "waiting"].includes(latestTurn.status)
+          ) {
+            throw new Error(
+              "Agents API function request belongs to a different or settled root turn",
+            );
+          }
+          const identity = `${sessionId}:${call.turn_id}:${call.call_id}`;
+          if (relayedCalls.has(identity)) {
+            continue;
+          }
+          // Retrieved native invocations and completed text precede this host
+          // receipt. Later items must not overtake its canonical function slot.
+          const items = itemsByTurn?.get(call.turn_id);
+          const callIndex =
+            items?.findIndex(
+              (item) => item.type === "function_call" && item.call_id === call.call_id,
+            ) ?? -1;
+          if (items && callIndex >= 0) {
+            const transcriptReady = await projectSavedState(
+              turns.map((turn) => ({
+                turn,
+                items:
+                  turn.id === call.turn_id
+                    ? items.slice(0, callIndex)
+                    : (itemsByTurn!.get(turn.id) ?? []),
+              })),
+              signal,
+            );
+            assertCurrent();
+            if (!transcriptReady) {
+              options.onTranscriptOrderingGap?.();
+              assertCurrent();
+            }
+          } else {
+            options.onTranscriptOrderingGap?.();
+            assertCurrent();
+          }
+          if (submissionFence !== submission || admittedCount !== admittedMessageCount) {
+            // A steer admitted during the barrier invalidates this captured
+            // function batch. Re-read it without repeating a claimed action.
+            return relayFunctions();
+          }
+          // Claim before execution so duplicate events cannot repeat a Gateway side effect.
+          relayedCalls.add(identity);
+          const result = await options.executeFunction(call);
+          assertCurrent();
+          signal.throwIfAborted();
+          submission = submission.then(() => {
+            assertCurrent();
+            signal.throwIfAborted();
+            admittedSubmission = client.toolResult(
+              sessionId,
+              call,
+              result,
+              AbortSignal.timeout(60_000),
+            );
+            return admittedSubmission;
+          });
+          void submission.catch(() => {});
+          const acknowledgementFence = submission;
+          await acknowledgementFence;
+          submissionFence = acknowledgementFence;
+          await options.onFunctionResult?.(call, result);
+          assertCurrent();
+          if (result.terminate || result.sourceReplyDelivered) {
+            // Acknowledge the host's delivered reply before retiring native work.
+            await cleanupClient.cancel(sessionId, AbortSignal.timeout(30_000));
+            terminatedByTool = true;
+            await settleFromSavedState();
+            if (
+              !settled ||
+              !rootTurn ||
+              !["completed", "cancelled"].includes(rootTurn.status ?? "")
+            ) {
+              throw new Error(
+                "Agents API tool termination did not settle its native root turn and inputs",
+              );
+            }
+            streamController.abort();
+            return;
+          }
+        }
+      };
       let events = await client.subscribe(
         sessionId,
         AbortSignal.any([signal, streamController.signal]),
@@ -274,6 +410,12 @@ export function createAgentsApiSession(options: {
         const session = await client.session(sessionId, signal);
         assertCurrent();
         assertSessionUsable(session);
+        if (session.status === "requires_action") {
+          await relayFunctions();
+          if (settled) {
+            return;
+          }
+        }
         settled = Boolean(
           rootTurn &&
           rootTurn.id === snapshot.turns.at(-1)?.id &&
@@ -446,7 +588,11 @@ export function createAgentsApiSession(options: {
             );
           }
           if (event.type === "agent.session.requires_action") {
-            throw new Error("Agents API MVP cannot continue: agent.session.requires_action");
+            await relayFunctions();
+            if (settled) {
+              break;
+            }
+            continue;
           }
           if (["agent.session.failed", "agent.session.environment.failed"].includes(event.type)) {
             const nativeError = event.environment?.error ?? event.error;
@@ -487,7 +633,7 @@ export function createAgentsApiSession(options: {
       if (turnFailure) {
         throw turnFailure;
       }
-      return { turn: rootTurn, cancelled };
+      return { turn: rootTurn, cancelled, terminatedByTool };
     },
     async reconcileAfterClose(cleanupSignal: AbortSignal): Promise<Turn | undefined> {
       if (!closed) {
@@ -520,6 +666,11 @@ export function createAgentsApiSession(options: {
   };
 }
 
+type FunctionExecutionResult = AgentsApiFunctionResult & {
+  sourceReplyDelivered?: true;
+  terminate?: true;
+};
+
 function isTerminalTurn(status: string): boolean {
   return ["completed", "failed", "cancelled"].includes(status);
 }
@@ -537,4 +688,11 @@ function isAgentsApiTransportDisconnect(error: unknown): boolean {
     return true;
   }
   return error.cause instanceof Error && isAgentsApiTransportDisconnect(error.cause);
+}
+
+function isAgentsApiOptionalHistoryReadFailure(error: unknown): boolean {
+  return (
+    error instanceof APIConnectionError ||
+    (error instanceof APIError && (error.status === 429 || (error.status ?? 0) >= 500))
+  );
 }

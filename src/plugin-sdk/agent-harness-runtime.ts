@@ -258,6 +258,7 @@ export {
   isDeliveredMessagingToolSendToCurrentSource,
 } from "../agents/embedded-agent-messaging-extraction.js";
 export {
+  collectMessagingMediaUrlsFromRecord,
   extractToolResultMediaArtifact,
   filterToolResultMediaUrls,
 } from "../agents/embedded-agent-tool-media.js";

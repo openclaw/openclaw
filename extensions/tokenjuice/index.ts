@@ -8,7 +8,7 @@ export default definePluginEntry({
   description: "Compacts exec and bash tool results with tokenjuice reducers.",
   register(api) {
     api.registerAgentToolResultMiddleware(createTokenjuiceAgentToolResultMiddleware(), {
-      runtimes: ["openclaw", "codex"],
+      runtimes: ["openclaw", "codex", "agentsapi"],
     });
   },
 });

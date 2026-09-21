@@ -40,6 +40,18 @@ const sessionSchema = z.looseObject({
     ]),
   ),
 });
+const turnSchema = z.looseObject({
+  id: z.string(),
+  session_id: z.string(),
+  subagent_id: z.string().nullable(),
+  status: z.enum(["queued", "in_progress", "waiting", "completed", "failed", "cancelled"]),
+  error: errorSchema.nullable(),
+  usage: usageSchema.nullable(),
+  agent_id: z.string().optional(),
+  created_at: z.number().optional(),
+  started_at: z.number().nullable().optional(),
+  completed_at: z.number().nullable().optional(),
+});
 const textPartSchema = z.looseObject({ type: z.string(), text: z.string().optional() });
 // Validate native correlation and projection fields while retaining complete payloads.
 const itemSchema = z.looseObject({
@@ -114,16 +126,29 @@ const eventSchema = z.looseObject({
 });
 export type AgentsApiEvent = z.infer<typeof eventSchema>;
 export type AgentsApiItem = z.infer<typeof itemSchema>;
+export type AgentsApiTurn = z.infer<typeof turnSchema>;
+export type AgentsApiFunctionCall = z.infer<typeof functionCallSchema>;
+export type AgentsApiFunctionDeclaration = {
+  type: "function";
+  name: string;
+  description: string;
+  parameters: Record<string, unknown>;
+  defer_loading?: boolean;
+};
 export type AgentsApiReasoning = {
   effort?: "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max" | null;
   summary?: "concise" | "detailed" | "auto" | null;
 };
-/** The SDK owns the wire protocol; OpenClaw retains native session authority. */
+export type AgentsApiFunctionResult =
+  | { success: true; output: string }
+  | { success: false; error: string };
+
+/** Session lifecycle uses the SDK; tool replies retain their existing request contract. */
 export class AgentsApiClient {
   private readonly sessions: OpenAI["beta"]["agents"]["sessions"];
 
   constructor(
-    apiKey: string,
+    private readonly apiKey: string,
     private readonly assertCurrent: () => void,
   ) {
     this.sessions = new OpenAI({
@@ -163,6 +188,7 @@ export class AgentsApiClient {
     model: string,
     reasoningEffort?: AgentReasoningParam["effort"],
     extras?: {
+      functions?: AgentsApiFunctionDeclaration[];
       reasoning?: AgentsApiReasoning;
     },
   ): Promise<string> {
@@ -177,7 +203,7 @@ export class AgentsApiClient {
               ? undefined
               : { effort: reasoningEffort },
           multi_agent: { enabled: false },
-          tools: [{ type: "web_search", mode: "live" }],
+          tools: [{ type: "web_search", mode: "live" }, ...(extras?.functions ?? [])],
         },
         environment: { type: "openai_hosted" },
       },
@@ -227,6 +253,57 @@ export class AgentsApiClient {
       throw new Error("Agents API returned a different session");
     }
     return session;
+  }
+
+  async pendingFunctionCalls(
+    sessionId: string,
+    signal: AbortSignal,
+  ): Promise<AgentsApiFunctionCall[]> {
+    const session = sessionSchema.parse(await this.session(sessionId, signal));
+    if (session.status === "failed") {
+      throw new Error(session.error ?? "Agents API session failed");
+    }
+    if (session.status !== "requires_action") {
+      return [];
+    }
+    const calls: AgentsApiFunctionCall[] = [];
+    for (const action of session.required_actions) {
+      if (action.type !== "function_call") {
+        throw new Error("Agents API hosted prototype cannot reconnect an environment_connection");
+      }
+      calls.push(action);
+    }
+    return calls;
+  }
+
+  async toolResult(
+    sessionId: string,
+    call: AgentsApiFunctionCall,
+    result: AgentsApiFunctionResult,
+    signal: AbortSignal,
+  ): Promise<void> {
+    await this.input(sessionId, signal, {
+      type: "agent.session.input.tool_result",
+      turn_id: call.turn_id,
+      call_id: call.call_id,
+      ...(result.success
+        ? { success: true, output: result.output }
+        : { success: false, error: result.error }),
+    });
+  }
+
+  async turn(sessionId: string, turnId: string, signal: AbortSignal): Promise<AgentsApiTurn> {
+    const response = await this.request(
+      `/${encodeURIComponent(sessionId)}/turns/${encodeURIComponent(turnId)}`,
+      "GET",
+      signal,
+    );
+    const turn = turnSchema.parse(await response.json());
+    this.assertCurrent();
+    if (turn.id !== turnId || turn.session_id !== sessionId || turn.subagent_id !== null) {
+      throw new Error("Agents API returned a turn outside the requested root session");
+    }
+    return turn;
   }
 
   async turns(sessionId: string, signal: AbortSignal, after?: string, latestOnly = false) {
@@ -312,6 +389,79 @@ export class AgentsApiClient {
       }
     }
     return items;
+  }
+
+  private async input(sessionId: string, signal: AbortSignal, event: unknown): Promise<void> {
+    const response = await this.request(
+      `/${encodeURIComponent(sessionId)}/events`,
+      "POST",
+      signal,
+      {
+        events: [event],
+      },
+    );
+    await response.body?.cancel();
+  }
+
+  private async request(
+    path: string,
+    method: string,
+    signal: AbortSignal,
+    body?: unknown,
+  ): Promise<Response> {
+    this.assertCurrent();
+    signal.throwIfAborted();
+    const headers = {
+      Authorization: `Bearer ${this.apiKey}`,
+      "OpenAI-Beta": "agents=v1",
+      "Content-Type": "application/json",
+      Accept: "text/event-stream, application/json",
+      ...(method === "POST" ? { "Idempotency-Key": randomUUID() } : {}),
+    };
+    let response: Response;
+    for (let attempt = 0; ; attempt++) {
+      this.assertCurrent();
+      const guarded = await fetchWithSsrFGuard({
+        url: `https://api.openai.com/v1/agents/sessions${path}`,
+        signal,
+        beforeRequest: this.assertCurrent,
+        init: {
+          method,
+          headers,
+          ...(body !== undefined ? { body: JSON.stringify(body) } : {}),
+        },
+      });
+      response = responseWithRelease(guarded.response, guarded.release);
+      if (response.status !== 503 || attempt === 2) {
+        break;
+      }
+      await response.body?.cancel();
+      await delay(1_000, undefined, { signal });
+    }
+    try {
+      this.assertCurrent();
+    } catch (error) {
+      await response.body?.cancel().catch(() => undefined);
+      throw error;
+    }
+    if (!response.ok) {
+      const result: unknown = await response.json();
+      const parsed = z.object({ error: errorSchema }).safeParse(result);
+      throw new AgentsApiError(
+        `Agents API ${method} ${path}: HTTP ${response.status}${parsed.success ? `: ${parsed.data.error.message}` : ""}`,
+        {
+          status: response.status,
+          ...(parsed.success
+            ? {
+                code: parsed.data.error.code,
+                type: parsed.data.error.type,
+                param: parsed.data.error.param,
+              }
+            : {}),
+        },
+      );
+    }
+    return response;
   }
 }
 
