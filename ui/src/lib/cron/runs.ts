@@ -12,6 +12,7 @@ import { formatUiError } from "../format-error.ts";
 import type { CronState } from "./types.ts";
 
 type CronRunsLoadStatus = "ok" | "error" | "skipped";
+export type CronRunsViewState = "idle" | "pending" | "failed" | "ready";
 
 function normalizeCronRunsPageMeta(params: {
   totalRaw: unknown;
@@ -102,6 +103,18 @@ function ownsCronRunsRequest(state: CronState, request: CronRunsRequestIdentity)
   );
 }
 
+export function getCronRunsViewState(state: CronState): CronRunsViewState {
+  const active = activeCronRunsRequests.get(state);
+  if (active && ownsCronRunsRequest(state, active)) {
+    return "pending";
+  }
+  const view = cronRunsViews.get(state);
+  if (!view || !matchesCronRunsView(state, view)) {
+    return "idle";
+  }
+  return state.cronRunsError === null ? "ready" : "failed";
+}
+
 export async function loadCronRuns(
   state: CronState,
   opts?: { append?: boolean; coalesce?: boolean },
@@ -151,7 +164,6 @@ export async function loadCronRuns(
     append,
   };
   activeCronRunsRequests.set(state, request);
-  cronRunsViews.set(state, request);
   // Retained rows cannot authorize an append until their replacement page arrives.
   if (!append) {
     state.cronRunsHasMore = false;
@@ -175,6 +187,7 @@ export async function loadCronRuns(
     if (!ownsCronRunsRequest(state, request)) {
       return "skipped";
     }
+    cronRunsViews.set(state, request);
     state.cronRunsError = null;
     const entries = Array.isArray(res.entries) ? res.entries : [];
     state.cronRuns = append ? [...state.cronRuns, ...entries] : entries;
@@ -193,6 +206,7 @@ export async function loadCronRuns(
     if (!ownsCronRunsRequest(state, request) || request.queued) {
       return "skipped";
     }
+    cronRunsViews.set(state, request);
     state.cronRunsError = formatUiError(err);
     return "error";
   } finally {

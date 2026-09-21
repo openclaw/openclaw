@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import type { UpdateRunRecord } from "../../infra/update-run-record.js";
-import type { UpdateRunResult } from "../../infra/update-runner.js";
+import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import { runInteractiveUpdateFailureAction } from "./update-command-report.js";
 
 const mocks = vi.hoisted(() => ({

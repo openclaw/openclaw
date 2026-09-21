@@ -3,11 +3,18 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { isDeepStrictEqual } from "node:util";
 import { getRuntimeConfig } from "../config/io.js";
 import { roleScopesAllow } from "../shared/operator-scope-compat.js";
-import { getUserProfileListItem } from "../state/user-profiles.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
 import { resolveControlUiPluginAuthCookieGrants } from "./control-ui-plugin-auth-cookie.js";
-import { applyHttpOperatorRoleScopeCeiling, resolveHttpProfile } from "./http-auth-user-profile.js";
+import {
+  applyHttpOperatorRoleScopeCeiling,
+  checkHttpCookieUserProfile,
+} from "./http-auth-user-profile.js";
 import { sendUnauthorized } from "./http-common.js";
+import { getBearerToken } from "./http-header-value.js";
+import {
+  bindHttpOperatorAccessAuthority,
+  sendGatewayHttpAuthFailure,
+} from "./http-operator-access.js";
 import { normalizeOperatorScopeList } from "./operator-scopes.js";
 import { resolveSharedGatewaySessionGeneration } from "./server/ws-shared-generation.js";
 
@@ -15,11 +22,13 @@ type CookieRequestAuth = NonNullable<ReturnType<typeof authorizeControlUiPluginC
 
 export function authorizeControlUiPluginCookieRequest(
   req: IncomingMessage,
-  params: { requestPath: string; authGeneration: string | undefined },
+  params: { requestPath: string; authGeneration: string | undefined; res?: ServerResponse },
 ) {
   // WebSocket upgrades bypass this HTTP-only handoff and use
   // checkGatewayHttpRequestAuth directly in attachGatewayUpgradeHandler.
-  if (req.method !== "GET" && req.method !== "HEAD") {
+  // Explicit owner/staff credentials retain their own authority even when an
+  // unrelated visitor cookie remains in the browser.
+  if (getBearerToken(req) || (req.method !== "GET" && req.method !== "HEAD")) {
     return null;
   }
   // Native plugins and the UI they serve share the Gateway's trusted in-process
@@ -33,26 +42,28 @@ export function authorizeControlUiPluginCookieRequest(
     return null;
   }
   const cfg = getRuntimeConfig();
-  let authenticatedProfile: Partial<ReturnType<typeof resolveHttpProfile>> = {};
-  const profileId = grants[0]?.profileId;
-  if (grants.some((grant) => grant.profileId !== profileId) || (cfg.gateway?.roles && !profileId)) {
+  const profileAuth = checkHttpCookieUserProfile(
+    cfg,
+    grants.map((grant) => grant.profileId),
+  );
+  if (!profileAuth.ok) {
+    if (profileAuth.authResult.reason === "operator_access_denied" && params.res) {
+      sendGatewayHttpAuthFailure(params.res, profileAuth.authResult);
+    }
     return null;
   }
-  // A signed viewer identity also narrows session sharing when named roles are disabled.
-  // Only genuinely unbound legacy grants retain the anonymous shared-secret behavior.
-  if (profileId) {
-    try {
-      const profile = getUserProfileListItem(profileId);
-      authenticatedProfile = resolveHttpProfile(profile.id, profile.updatedAt, cfg);
-    } catch {
-      return null;
-    }
-  }
+  const authenticatedProfile = profileAuth.profile;
   for (const grant of grants) {
     grant.scopes =
       normalizeOperatorScopeList(
         applyHttpOperatorRoleScopeCeiling(grant.scopes, authenticatedProfile),
       ) ?? [];
+  }
+  if (
+    params.res &&
+    !bindHttpOperatorAccessAuthority(params.res, authenticatedProfile.operatorAccessAuthority)
+  ) {
+    return null;
   }
   return {
     requestAuth: {
@@ -81,6 +92,8 @@ export function bindControlUiPluginCookieRequestAuthority(
     if (params.res.writableEnded || params.res.destroyed) {
       throw new Error("HTTP request authority expired");
     }
+    // A renewed grant may satisfy a new request, never revive this original source.
+    cookieAuth.requestAuth.operatorAccessAuthority?.assertCurrent();
     // Reuse the cookie/profile owner, including expiry and the current auth
     // generation. Admission does not extend a browser grant across awaited work.
     const current = authorizeControlUiPluginCookieRequest(params.req, {

@@ -23,33 +23,30 @@ import {
 import {
   executeCronStateCommand,
   isCronStateWorkerCommand,
+  prepareCronStateWorkerCommand,
 } from "../cron/store/dispatch.worker.js";
-import {
-  acquireFleetCellOperationInDatabase,
-  assertFleetCellOperationInDatabase,
-  deleteFleetCellInDatabase,
-  heartbeatFleetCellOperationInDatabase,
-  releaseFleetCellOperationInDatabase,
-  reserveFleetCellInDatabase,
-  updateFleetCellImageInDatabase,
-} from "../fleet/registry.kernel.js";
+import { executeFleetRegistryCommand } from "../fleet/registry.worker.js";
 import { readPendingRepositoryGitHubPublicationInDatabase } from "../gateway/github-repository-publication.kernel.js";
 import {
   readManagedImageRecordInDatabase,
   listManagedImageRecordEntriesInDatabase,
   listManagedImageOriginalMediaIdsInDatabase,
 } from "../gateway/managed-image-record-store.kernel.js";
+import {
+  executeOperatorApprovalCommand,
+  isOperatorApprovalCommand,
+} from "../gateway/operator-approval-store.worker.js";
 import { registerSessionGroupInDatabase } from "../gateway/session-group-registration.kernel.js";
 import { readDeferredPluginMigrations } from "../infra/deferred-plugin-migrations.js";
 import * as deliveryQueue from "../infra/delivery-queue.worker.js";
 import * as deviceAuth from "../infra/device-auth-store.kernel.js";
+import { executeDevicePairingMutationInWorker } from "../infra/device-pairing-dispatch.worker.js";
+import { isDevicePairingMutationCommand } from "../infra/device-pairing-worker-contract.js";
 import { commitExecAuthorizationsInWorker } from "../infra/exec-approvals-authorization.worker.js";
 import { executeCurrentConversationBindingCommand } from "../infra/outbound/current-conversation-bindings.worker.js";
 import { executePromotionCommand } from "../infra/promotions-feed.worker.js";
-import {
-  readApnsRegistrationFromDatabase,
-  readApnsRegistrationsFromDatabase,
-} from "../infra/push-apns-store.js";
+import { isApnsRegistrationWorkerCommand } from "../infra/push-apns-store.worker-contract.js";
+import { executeApnsRegistrationCommand } from "../infra/push-apns-store.worker.js";
 import { readPersistedVapidKeyPairInDatabase } from "../infra/push-web-store.kernel.js";
 import { executeWebPushCommand } from "../infra/push-web-store.worker.js";
 import { isSessionDeliveryCommand } from "../infra/session-delivery-queue.worker-contract.js";
@@ -140,6 +137,10 @@ type Operations = OpenClawStateWorkerOperations &
 
 const log = createSubsystemLogger("state/worker");
 
+export function prepareSharedStateCommand(type: PropertyKey): Promise<void> | undefined {
+  return prepareCronStateWorkerCommand(type);
+}
+
 export function executeSharedStateCommand(
   command: Exclude<
     SqliteWorkerCommand<Operations>,
@@ -149,12 +150,18 @@ export function executeSharedStateCommand(
   open: () => OpenClawStateDatabase,
   hasNativeDatabase: boolean,
 ): Operations[keyof Operations]["output"] {
-  if (command.type === "execApprovals.commitAuthorizations") {
-    return commitExecAuthorizationsInWorker(command.input, {
+  if (command.type === "execApprovals.commitAuthorizations" || isOperatorApprovalCommand(command)) {
+    const databaseOptions = {
       database: open(),
       path: context.databasePath,
       env: getSqliteWorkerStateContext().environment,
-    });
+    };
+    return command.type === "execApprovals.commitAuthorizations"
+      ? commitExecAuthorizationsInWorker(command.input, databaseOptions)
+      : executeOperatorApprovalCommand(command, databaseOptions);
+  }
+  if (isDevicePairingMutationCommand(command)) {
+    return executeDevicePairingMutationInWorker(command, open());
   }
   if (command.type === "agentDatabases.releaseExitedLease") {
     return executeAgentDatabaseCleanupCommand(
@@ -428,6 +435,7 @@ export function executeSharedStateCommand(
     case "transcripts.summaryRevision":
     case "transcripts.summarySnapshot":
     case "transcripts.utterances":
+    case "transcripts.exportDigest":
     case "transcripts.summary": {
       return executeTranscriptRead({ database, path: context.databasePath }, command);
     }
@@ -443,11 +451,8 @@ export function executeSharedStateCommand(
   if (command.type === "managedImages.originalMediaIds") {
     return listManagedImageOriginalMediaIdsInDatabase(database.db);
   }
-  if (command.type === "apns.registration.read") {
-    return readApnsRegistrationFromDatabase(database.db, command.input);
-  }
-  if (command.type === "apns.registrations.read") {
-    return readApnsRegistrationsFromDatabase(database.db, command.input);
+  if (isApnsRegistrationWorkerCommand(command)) {
+    return executeApnsRegistrationCommand(command, database);
   }
   if (command.type === "plugins.catalogSnapshot.read") {
     return readHostedCatalogSnapshotInDatabase(database.db, command.input.url);
@@ -527,37 +532,7 @@ export function executeSharedStateCommand(
     command.type === "fleet.operation.heartbeat" ||
     command.type === "fleet.operation.release"
   ) {
-    return runOpenClawStateWriteTransaction(({ db }) => {
-      switch (command.type) {
-        case "fleet.cell.reserve":
-          assertFleetCellOperationInDatabase(
-            db,
-            command.input.tenantId,
-            command.input.operationOwner,
-          );
-          return reserveFleetCellInDatabase(db, command.input);
-        case "fleet.cell.updateImage":
-          assertFleetCellOperationInDatabase(
-            db,
-            command.input.tenantId,
-            command.input.operationOwner,
-          );
-          return updateFleetCellImageInDatabase(db, command.input.tenantId, command.input.image);
-        case "fleet.cell.delete":
-          assertFleetCellOperationInDatabase(
-            db,
-            command.input.tenantId,
-            command.input.operationOwner,
-          );
-          return deleteFleetCellInDatabase(db, command.input.tenantId);
-        case "fleet.operation.acquire":
-          return acquireFleetCellOperationInDatabase(db, command.input);
-        case "fleet.operation.heartbeat":
-          return heartbeatFleetCellOperationInDatabase(db, command.input);
-        case "fleet.operation.release":
-          return releaseFleetCellOperationInDatabase(db, command.input);
-      }
-    }, writeOptions);
+    return executeFleetRegistryCommand(command, writeOptions);
   }
   if (command.type === "agentProvenance.readBatch" || command.type === "agentProvenance.list") {
     ensureAgentProvenanceSchema(writeOptions);

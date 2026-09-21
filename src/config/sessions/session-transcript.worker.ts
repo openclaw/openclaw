@@ -272,19 +272,13 @@ serveWorkerTasks(
             };
           }
           if (request.kind === "session-preview") {
-            const { readSessionPreviewItemsFromTranscript } =
-              await import("../../gateway/session-transcript-preview.js");
+            const { readSessionPreviewItemsReadOnly } =
+              await import("../../gateway/session-transcript-preview-reader.js");
             return {
               ok: true,
               ...(await withHistoryDatabase(request.database, () => ({
                 kind: "session-preview" as const,
-                items: readSessionPreviewItemsFromTranscript(
-                  request.scope,
-                  request.maxItems,
-                  request.maxChars,
-                  "display",
-                  { readOnly: true },
-                ),
+                items: readSessionPreviewItemsReadOnly(request),
               }))),
             };
           }

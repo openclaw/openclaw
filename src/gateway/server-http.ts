@@ -350,6 +350,10 @@ export function createGatewayHttpServer(opts: {
         allowRealIpFallback,
         rateLimiter,
       };
+      const operatorAuth = () => ({
+        ...routeAuth,
+        resolveGatewayContext: opts.getGatewayRequestContext?.()?.resolveGatewayContext,
+      });
       const controlUiRouteOptions = {
         basePath: controlUiBasePath,
         config: configSnapshot,
@@ -495,7 +499,7 @@ export function createGatewayHttpServer(opts: {
         (await getEmbeddingsHttpModule()).handleOpenAiEmbeddingsHttpRequest(req, res, routeAuth),
       );
       addAdmittedStage(scopedRequestPath === "/tools/invoke", async () =>
-        (await getToolsInvokeHttpModule()).handleToolsInvokeHttpRequest(req, res, routeAuth),
+        (await getToolsInvokeHttpModule()).handleToolsInvokeHttpRequest(req, res, operatorAuth()),
       );
       addAdmittedStage(/^\/sessions\/[^/]+\/kill$/.test(scopedRequestPath), async () =>
         (await getSessionKillHttpModule()).handleSessionKillHttpRequest(req, res, routeAuth),
@@ -534,18 +538,16 @@ export function createGatewayHttpServer(opts: {
       );
       addAdmittedStage(openResponsesEnabled && scopedRequestPath === "/v1/responses", async () =>
         (await getOpenResponsesHttpModule()).handleOpenResponsesHttpRequest(req, res, {
-          ...routeAuth,
+          ...operatorAuth(),
           config: openResponsesConfig,
-          resolveGatewayContext: opts.getGatewayRequestContext?.()?.resolveGatewayContext,
         }),
       );
       addAdmittedStage(
         openAiChatCompletionsEnabled && scopedRequestPath === "/v1/chat/completions",
         async () =>
           (await getOpenAiHttpModule()).handleOpenAiHttpRequest(req, res, {
-            ...routeAuth,
+            ...operatorAuth(),
             config: openAiChatCompletionsConfig,
-            resolveGatewayContext: opts.getGatewayRequestContext?.()?.resolveGatewayContext,
           }),
       );
       const approvalDocument = isControlUiApprovalDocumentPath({

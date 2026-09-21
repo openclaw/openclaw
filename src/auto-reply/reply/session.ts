@@ -103,10 +103,10 @@ import {
 import { assertPreparedSkillLibrarySelection } from "../../skills/library/selection.js";
 import {
   deliveryContextFromSession,
-  normalizeSessionDeliveryState,
   sessionDeliveryOrigin,
   sessionDeliveryRoute,
-} from "../../utils/delivery-context.shared.js";
+} from "../../utils/delivery-context.read.js";
+import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 import { isInternalMessageChannel } from "../../utils/message-channel.js";
 import { resolveCommandTurnTargetSessionKey } from "../command-turn-context.js";
 import type {

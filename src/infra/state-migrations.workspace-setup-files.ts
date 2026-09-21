@@ -6,6 +6,7 @@ import {
   LEGACY_WORKSPACE_ATTESTATION_MAX_BYTES,
   WORKSPACE_DOCTOR_CLAIM_SUFFIX,
 } from "../agents/workspace-legacy-state.js";
+import { pinDirectory, requireDirectorySync } from "./directory-durability.js";
 import { formatErrorMessage } from "./errors.js";
 import { readFileWindowFully } from "./file-read.js";
 import { LegacyMigrationSourceClaim } from "./state-migrations.source-snapshot.js";
@@ -88,7 +89,26 @@ export async function archiveWorkspaceSetupSource(
   // The receipt publishes only a verified backup. A crash during creation leaves
   // an unreferenced artifact, so the next attempt can safely use a fresh name.
   if (!existingArchivePath) {
-    await sourceRoot.create(relativePath, snapshot.buffer, { mode: 0o600 });
+    const parent = await pinDirectory(await sourceRoot.resolve(path.dirname(relativePath)));
+    try {
+      // Buffered exclusive creation avoids native no-replace rename on FUSE.
+      await sourceRoot.create(relativePath, snapshot.buffer, {
+        mode: 0o600,
+        renameIdentity: "verify-content-with-lock",
+      });
+      const archive = await sourceRoot.open(relativePath, {
+        hardlinks: "reject",
+        symlinks: "reject",
+      });
+      try {
+        await archive.handle.sync();
+      } finally {
+        await archive[Symbol.asyncDispose]();
+      }
+      requireDirectorySync(await parent.sync(), "Workspace setup archive directory");
+    } finally {
+      await parent.close();
+    }
   }
   const archived = await readBoundedRegularFile({
     sourceRoot,

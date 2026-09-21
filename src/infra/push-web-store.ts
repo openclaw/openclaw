@@ -116,7 +116,8 @@ export function withBoundWebPushSubscriptions<T>(
   stateDir: string | undefined,
   prepare: (
     subscriptions: WebPushWorkerOperations["webPush.listBoundWebPushSubscriptions"]["output"],
-  ) => WebPushSnapshotAction<T> | undefined,
+    assertCurrent: () => void,
+  ) => WebPushSnapshotAction<T> | undefined | Promise<WebPushSnapshotAction<T> | undefined>,
 ) {
   const captured = context(stateDir);
   return useWebPushStoreSnapshot(

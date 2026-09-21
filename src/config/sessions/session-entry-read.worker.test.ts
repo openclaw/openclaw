@@ -1,11 +1,17 @@
+import fs from "node:fs";
+import path from "node:path";
 import { expect, it, vi } from "vitest";
 import { trackSqliteStatementExecutions } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { closeOpenClawAgentDatabaseByPathAsync } from "../../state/openclaw-agent-db-lifecycle.js";
 import { OpenClawAgentDatabaseReadOnlyScope } from "../../state/openclaw-agent-db-readonly-scope.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
-import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
+import {
+  openOpenClawAgentDatabase,
+  resolveOpenClawAgentSqlitePath,
+} from "../../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { writeSessionEntry } from "./session-accessor.sqlite-entry-store.js";
+import { readSessionBackingFacts } from "./session-backing-facts.js";
 import { captureCanonicalSessionReaderContinuation } from "./session-canonical-key.js";
 import { readExactSessionEntriesWithLifecycle } from "./session-entry-read.worker.js";
 
@@ -70,3 +76,27 @@ it("publishes exact-read admission only after commit and reuses it on the retain
     }
   });
 });
+
+it.each(["worker", "synchronous"] as const)(
+  "refuses unavailable backing metadata in the %s reader instead of reporting missing sessions",
+  async (reader) => {
+    await withOpenClawTestState({ scenario: "minimal" }, async ({ env }) => {
+      const storePath = resolveOpenClawAgentSqlitePath({ agentId: "main", env });
+      const sessionKeys = ["agent:main:subagent:retained"];
+      const read = () =>
+        reader === "worker"
+          ? readExactSessionEntriesWithLifecycle({
+              kind: "session-exact-entries",
+              database: { agentId: "main", path: storePath },
+              env,
+              sessionKeys,
+              projection: "backing",
+            }).entries
+          : readSessionBackingFacts({ storePath, sessionKeys, env });
+      expect(read()).toEqual([]);
+      fs.mkdirSync(path.dirname(storePath), { recursive: true });
+      fs.writeFileSync(storePath, "");
+      expect(read).toThrow("Session metadata unavailable (schema-missing)");
+    });
+  },
+);

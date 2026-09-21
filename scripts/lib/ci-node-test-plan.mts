@@ -777,6 +777,46 @@ const PINNED_WORKER_COMPACT_GROUP_RE =
   /^core-tooling(?:-\d+(?:-hosted-\d+)?|-isolated)$|^core-runtime-tui-pty$|^core-runtime-infra-process$|^core-runtime-config$|^core-runtime-media-ui-(?:\d+|support)$|^agentic-cli(?:-process)?$|^agentic-gateway-(?:core-\d+|methods)$/u;
 const PINNED_COMPACT_GROUP_ENV = { OPENCLAW_VITEST_MAX_WORKERS: "2" };
 
+function isAutoReplyReplyGroup(group: NodeTestShardGroup): boolean {
+  return (
+    group.configs.length === 1 &&
+    group.configs[0] === "test/vitest/vitest.auto-reply-reply.config.ts"
+  );
+}
+
+function compactEffectiveFileWorkers(group: NodeTestShardGroup, fileCount: number): number {
+  return isAutoReplyReplyGroup(group) ? Math.max(1, Math.min(2, fileCount)) : 1;
+}
+
+function readSerialAutoReplySplitSeconds(
+  group: NodeTestShardGroup,
+  profile: "blacksmith" | "github",
+): number | undefined {
+  if (!isAutoReplyReplyGroup(group) || !group.includePatterns?.length) {
+    return undefined;
+  }
+  const { OPENCLAW_VITEST_MAX_WORKERS: _workers, ...env } = group.env ?? {};
+  const legacy = createCompactSplitTimingGeneration({
+    configs: group.configs,
+    env,
+    parentShardName: group.shard_name,
+    stripes: [group.includePatterns],
+  });
+  return readCompleteSplitGenerationSeconds(profile, legacy.selectorKey);
+}
+
+function parallelCompactFallbackSeconds(
+  group: NodeTestShardGroup,
+  seconds: number,
+  profile: "blacksmith" | "github" = "blacksmith",
+): number {
+  // A complete legacy generation can be newer than its parent; partial or changed inventories cannot.
+  return (
+    Math.max(seconds, readSerialAutoReplySplitSeconds(group, profile) ?? 0) /
+    compactEffectiveFileWorkers(group, group.includePatterns?.length ?? 1)
+  );
+}
+
 function isParallelAgentsCoreGroup(group: NodeTestShardGroup): boolean {
   return group.configs.length === 1 && group.configs[0] === agentVitestProjectOwners.core.config;
 }
@@ -893,6 +933,14 @@ function applyCompactGroupWorkerPins(
   group: NodeTestShardGroup,
   runnerBackend: string | undefined,
 ): NodeTestShardGroup {
+  if (isAutoReplyReplyGroup(group)) {
+    // Keep serial observations separate so refitted parallel walls are never divided again.
+    return {
+      ...group,
+      env: { ...group.env, ...PINNED_COMPACT_GROUP_ENV },
+      timing_key: `${group.shard_name}-parallel-2`,
+    };
+  }
   if (isParallelGatewayServerGroup(group)) {
     // New measurements must not be divided again after serial files become parallel.
     return {
@@ -949,21 +997,26 @@ function estimateDefaultCompactGroupSeconds(group: NodeTestShardGroup): number {
         "blacksmith",
         COMPACT_GROUP_SECONDS_HINTS.get(group.shard_name),
       )
-    : (readSerialAgentsCoreSeconds(group, "blacksmith") ??
+    : ((isAutoReplyReplyGroup(group)
+        ? readCompactGroupTimings("blacksmith")[group.shard_name]
+        : undefined) ??
+      readSerialAgentsCoreSeconds(group, "blacksmith") ??
       (isParallelAgentsCoreGroup(group)
         ? COMPACT_LARGE_GROUP_STRIPE_SECONDS_HINTS.get(group.shard_name)
         : undefined) ??
       COMPACT_GROUP_SECONDS_HINTS.get(group.shard_name));
   if (hint !== undefined) {
-    return hint / effectiveAgentsCoreWorkers(group);
+    return parallelCompactFallbackSeconds(group, hint) / effectiveAgentsCoreWorkers(group);
   }
   if (Array.isArray(group.includePatterns)) {
     if (/^core-tooling-\d+$/u.test(group.shard_name)) {
       return group.includePatterns.reduce((seconds, file) => seconds + toolingFileWeight(file), 0);
     }
     return (
-      Math.max(3, Math.round(group.includePatterns.length * DEFAULT_SECONDS_PER_TEST_FILE)) /
-      effectiveAgentsCoreWorkers(group)
+      parallelCompactFallbackSeconds(
+        group,
+        Math.max(3, Math.round(group.includePatterns.length * DEFAULT_SECONDS_PER_TEST_FILE)),
+      ) / effectiveAgentsCoreWorkers(group)
     );
   }
   return DEFAULT_WHOLE_GROUP_SECONDS;
@@ -982,10 +1035,17 @@ function readUnmeasuredCompactHint(
   group: NodeTestShardGroup,
   hints: ReadonlyMap<string, number>,
 ): number | undefined {
-  return (readCompactGroupSeconds(group, "blacksmith") ??
-    readSerialAgentsCoreSeconds(group, "blacksmith")) === undefined
-    ? hints.get(group.shard_name)
-    : undefined;
+  const timings = readCompactGroupTimings("blacksmith");
+  if (
+    readCompactGroupSeconds(group, "blacksmith") !== undefined ||
+    readSerialAgentsCoreSeconds(group, "blacksmith") !== undefined ||
+    (isAutoReplyReplyGroup(group) && timings[group.shard_name] !== undefined) ||
+    readSerialAutoReplySplitSeconds(group, "blacksmith") !== undefined
+  ) {
+    return undefined;
+  }
+  const hint = hints.get(group.shard_name);
+  return hint === undefined ? undefined : parallelCompactFallbackSeconds(group, hint);
 }
 
 function estimateHybridCompactGroupSeconds(group: NodeTestShardGroup, seconds: number): number {
@@ -1036,13 +1096,17 @@ function estimateCompactGroupSeconds(
         "github",
         COMPACT_GITHUB_GROUP_SECONDS_HINTS.get(group.shard_name),
       )
-    : (readSerialAgentsCoreSeconds(group, "github") ??
+    : ((isAutoReplyReplyGroup(group)
+        ? readCompactGroupTimings("github")[group.shard_name]
+        : undefined) ??
+      readSerialAgentsCoreSeconds(group, "github") ??
       COMPACT_GITHUB_GROUP_SECONDS_HINTS.get(group.shard_name));
   return Math.max(
     serialFloor,
     hint === undefined
       ? Math.round(defaultSeconds * COMPACT_GITHUB_GROUP_SECONDS_SCALE)
-      : hint / effectiveAgentsCoreWorkers(group),
+      : parallelCompactFallbackSeconds(group, hint, "github") / effectiveAgentsCoreWorkers(group),
+    parallelCompactFallbackSeconds(group, 0, "github"),
   );
 }
 
@@ -1062,7 +1126,11 @@ function estimateCompactStripeSeconds(
       ] ?? 0;
     return runnerBackend === "hybrid" ? estimateHybridCompactGroupSeconds(group, seconds) : seconds;
   }
-  if (runnerBackend === "github" || isParallelGatewayServerGroup(group)) {
+  if (
+    runnerBackend === "github" ||
+    isParallelGatewayServerGroup(group) ||
+    isAutoReplyReplyGroup(group)
+  ) {
     return estimateCompactGroupSeconds(group, runnerBackend);
   }
   const blacksmithSeconds =
@@ -1257,8 +1325,7 @@ function createAutoReplyReplySplitShards(): NodeTestSplitShard[] {
 
   return Object.entries(groups)
     .flatMap(([groupName, includePatterns]) => {
-      // The commands bucket alone serializes ~3 minutes; stripe it so packing
-      // can spread that runtime across jobs.
+      // Retain separate command stripes so packing can spread their import cost across jobs.
       if (groupName === "auto-reply-reply-commands") {
         return createStripedBatches(
           includePatterns,
@@ -1313,6 +1380,7 @@ function resolveCommandShardName(file: string): string {
     }
     if (
       [
+        "doctor-session-sqlite.active-settlement.test.ts",
         "doctor-session-sqlite.receipt-recovery.test.ts",
         "doctor-session-transcripts.missing-index.test.ts",
       ].includes(name)
@@ -2955,7 +3023,9 @@ function splitOversizedCompactGroup(
   const measuredProfileSeconds = estimateCompactGroupSeconds(group, runnerBackend);
   const measuredHostedSeconds = estimateCompactGroupSeconds(group, "github");
   const parallelGateway = isParallelGatewayServerGroup(group);
-  const parentWorkers = effectiveAgentsCoreWorkers(group);
+  const parentWorkers = isAutoReplyReplyGroup(group)
+    ? compactEffectiveFileWorkers(group, group.includePatterns?.length ?? 1)
+    : effectiveAgentsCoreWorkers(group);
   // Whole parallel walls and sums of split invocations have different worker costs.
   const splitTimingParent = `${compactGroupTimingKey(group)}${parallelGateway ? "-stripes" : ""}`;
   const splitTimingPrefix = `${splitTimingParent}#selector-`;
@@ -3261,7 +3331,9 @@ function splitOversizedCompactGroup(
     if (isParallelAgentsCoreGroup(group) && childTimings[timingKey] !== undefined) {
       return { group: child, seconds: estimateCompactStripeSeconds(child, runnerBackend) };
     }
-    const childWorkers = effectiveAgentsCoreWorkers(child);
+    const childWorkers = isAutoReplyReplyGroup(child)
+      ? compactEffectiveFileWorkers(child, patterns.length)
+      : effectiveAgentsCoreWorkers(child);
     const weight = patterns.reduce((seconds, file) => seconds + weightForFile(file), 0);
     const projectedSeconds = parallelGateway
       ? serialSeconds > 0

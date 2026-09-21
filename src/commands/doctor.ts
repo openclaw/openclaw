@@ -189,8 +189,10 @@ async function maybeCreateSessionSqliteGithubIssue(
     }
     return;
   }
+  const { resolveDoctorRepairMode } = await import("./doctor-repair-mode.js");
+  const canPrompt = options.json !== true && resolveDoctorRepairMode(options).canPrompt;
   let approved = options.yes === true;
-  if (!approved && options.nonInteractive !== true && options.json !== true) {
+  if (canPrompt) {
     const { promptYesNo } = await import("../cli/prompt.js");
     approved = await promptYesNo(
       "Create a GitHub issue in openclaw/openclaw with the sanitized recovery report?",
@@ -198,9 +200,12 @@ async function maybeCreateSessionSqliteGithubIssue(
     );
   }
   if (!approved) {
-    supportIssue.github = { status: "skipped" };
+    const message = canPrompt
+      ? "GitHub issue creation skipped: confirmation was declined."
+      : "GitHub issue creation skipped: noninteractive recovery requires --yes.";
+    supportIssue.github = { message, status: "skipped" };
     if (shouldLog) {
-      runtime.log("session-sqlite recover: GitHub issue creation skipped");
+      runtime.log(`session-sqlite recover: ${message}`);
     }
     return;
   }

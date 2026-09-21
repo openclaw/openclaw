@@ -28,6 +28,7 @@ import {
   type SqliteTransactionOptions,
 } from "../infra/sqlite-transaction.js";
 import { isSqliteSchemaVersionError } from "../infra/sqlite-user-version.js";
+import { createSqliteWalReclamationResult } from "../infra/sqlite-wal-reclamation.js";
 import { registerSqliteWalWriteAdmission } from "../infra/sqlite-wal-write-admission.js";
 import {
   configureSqliteConnectionPragmas,
@@ -526,6 +527,7 @@ function* openOpenClawAgentDatabaseSteps(
           path: pathname,
           walMaintenance: openedWalMaintenance ?? {
             checkpoint: () => false,
+            reclaimFreePages: createSqliteWalReclamationResult,
             close: () => false,
           },
         } satisfies OpenClawAgentDatabase);

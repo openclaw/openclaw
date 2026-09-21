@@ -220,8 +220,8 @@ describe("hosted Gateway tool routing", () => {
       bindApprovalRequesterMetadata({ record, client });
       record.agentRuntimeDelegatedAuthority =
         client?.internal?.agentRuntimeIdentity?.delegatedAuthority;
-      const decision = manager.register(record, 60_000);
-      expect(manager.resolve(record.id, "allow-once")).toBe(true);
+      const decision = (await manager.register(record, 60_000)).decision;
+      expect(await manager.resolve(record.id, "allow-once")).toBe(true);
       await decision;
       respond(true, { id: record.id });
     });

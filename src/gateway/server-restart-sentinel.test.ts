@@ -33,6 +33,7 @@ import {
 import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.js";
 import { resolveRuntimeServiceVersion } from "../version.js";
 import {
+  createGeneratedMediaDeliveryEntry,
   expectCapturedQueueContext,
   expectRecordFields,
   mockCallArg,
@@ -147,7 +148,7 @@ const mocks = vi.hoisted(() => {
       legacyKey: undefined,
     })),
     deliveryContextFromSession: vi.fn<
-      typeof import("../utils/delivery-context.shared.js").deliveryContextFromSession
+      typeof import("../utils/delivery-context.read.js").deliveryContextFromSession
     >(() => undefined),
     mergeDeliveryContext: vi.fn<
       typeof import("../utils/delivery-context.shared.js").mergeDeliveryContext
@@ -361,9 +362,13 @@ vi.mock("./session-utils.js", async (importOriginal) => ({
   loadSessionEntry: mocks.loadSessionEntry,
 }));
 
+vi.mock("../utils/delivery-context.read.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../utils/delivery-context.read.js")>()),
+  deliveryContextFromSession: mocks.deliveryContextFromSession,
+}));
+
 vi.mock("../utils/delivery-context.shared.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../utils/delivery-context.shared.js")>()),
-  deliveryContextFromSession: mocks.deliveryContextFromSession,
   mergeDeliveryContext: mocks.mergeDeliveryContext,
 }));
 
@@ -572,14 +577,8 @@ function expectContinuationDispatchFields(
   return params;
 }
 
-type GeneratedMediaDeliveryEntry = Extract<
-  Parameters<typeof deliverQueuedSessionDelivery>[0]["entry"],
-  { kind: "agentTurn" }
->;
-
 function deliverGeneratedMedia(
-  overrides: Partial<GeneratedMediaDeliveryEntry> &
-    Pick<GeneratedMediaDeliveryEntry, "id" | "messageId">,
+  overrides: Parameters<typeof createGeneratedMediaDeliveryEntry>[0],
   stateDir?: string,
   resolveGatewayContext?: () => undefined,
 ) {
@@ -592,21 +591,7 @@ function deliverGeneratedMedia(
             env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
           }),
     ...(resolveGatewayContext ? { resolveGatewayContext } : {}),
-    entry: {
-      kind: "agentTurn",
-      sessionKey: "agent:main:main",
-      message: "generated image ready",
-      enqueuedAt: 1,
-      retryCount: 0,
-      route: { channel: "discord", to: "channel:123", chatType: "channel" },
-      inputProvenance: {
-        kind: "inter_session",
-        sourceChannel: "internal",
-        sourceTool: "image_generate",
-      },
-      sourceReplyDeliveryMode: "automatic",
-      ...overrides,
-    },
+    entry: createGeneratedMediaDeliveryEntry(overrides),
   });
 }
 
@@ -1153,8 +1138,13 @@ describe("scheduleRestartSentinelWake", () => {
         const delivery = await vi.importActual<
           typeof import("../utils/delivery-context.shared.js")
         >("../utils/delivery-context.shared.js");
+        const deliveryRead = await vi.importActual<
+          typeof import("../utils/delivery-context.read.js")
+        >("../utils/delivery-context.read.js");
         mocks.loadSessionEntry.mockImplementation(sessionUtils.loadSessionEntry);
-        mocks.deliveryContextFromSession.mockImplementation(delivery.deliveryContextFromSession);
+        mocks.deliveryContextFromSession.mockImplementation(
+          deliveryRead.deliveryContextFromSession,
+        );
         mocks.mergeDeliveryContext.mockImplementation(delivery.mergeDeliveryContext);
       } else {
         mocks.deliveryContextFromSession.mockReturnValue({ channel: "webchat" });
@@ -3832,9 +3822,9 @@ describe("scheduleRestartSentinelWake", () => {
             }),
           },
         }));
-        const delivery = await vi.importActual<
-          typeof import("../utils/delivery-context.shared.js")
-        >("../utils/delivery-context.shared.js");
+        const delivery = await vi.importActual<typeof import("../utils/delivery-context.read.js")>(
+          "../utils/delivery-context.read.js",
+        );
         mocks.deliveryContextFromSession.mockImplementation(delivery.deliveryContextFromSession);
       } else {
         mocks.deliveryContextFromSession.mockReturnValue(context);

@@ -11,6 +11,24 @@ import { getAgentJobSession, setGatewayDedupeEntry, waitForAgentJob } from "./ag
 let runSequence = 0;
 
 describe("waitForAgentJob settled execution", () => {
+  it("observes completed hidden refreshes without treating acceptance as completion", async () => {
+    const runId = `progress-card-refresh:completed-${runSequence++}`;
+    const dedupe = new Map<string, DedupeEntry>();
+    for (const status of ["accepted", "completed"] as const) {
+      setGatewayDedupeEntry({
+        dedupe,
+        key: `chat:${runId}`,
+        entry: { ts: Date.now(), ok: true, payload: { runId, status } },
+      });
+      const result = await waitForAgentJob({ runId, source: "chat", timeoutMs: 0 });
+      if (status === "accepted") {
+        expect(result).toBeNull();
+      } else {
+        expect(result).toMatchObject({ status: "ok" });
+      }
+    }
+  });
+
   it("normalizes an outer timeout after yield before publishing the wait snapshot", async () => {
     const runId = `outer-timeout-after-yield-${runSequence++}`;
     const waiter = waitForAgentJob({ runId, timeoutMs: 60_000 });

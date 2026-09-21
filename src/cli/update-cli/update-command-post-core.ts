@@ -41,7 +41,7 @@ import {
   type PreUpdateConfigRestoreInput,
 } from "../../infra/update-post-core-context.js";
 import { UpdateFailureFactSchema } from "../../infra/update-run-schema.js";
-import type { UpdateRunResult } from "../../infra/update-runner.js";
+import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import {
   createUpdateTimeoutHandoff,
   isOmittedUpdateTimeout,

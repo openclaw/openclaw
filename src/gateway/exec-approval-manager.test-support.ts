@@ -1,12 +1,30 @@
 import { randomUUID } from "node:crypto";
 import path from "node:path";
-import type { TestContext } from "vitest";
+import { vi, type TestContext } from "vitest";
 import { createFixtureLifetime } from "../../test/helpers/fixture-lifetime.js";
 import type { ExecApprovalRequestPayload } from "../infra/exec-approvals.js";
-import { closeOpenClawStateDatabaseByPath } from "../state/openclaw-state-db-cache.js";
+import { closeOpenClawStateDatabaseByPathAsync } from "../state/openclaw-state-db-cache.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { ExecApprovalManager } from "./exec-approval-manager.js";
 import type { ExecApprovalManagerOptions } from "./exec-approval-manager.types.js";
+import * as operatorApprovalStore from "./operator-approval-store.js";
+
+/** Vitest clocks are process-local; send controlled time through the store's existing input. */
+export function installTestApprovalClock(): (() => void) | undefined {
+  const forceDeny = operatorApprovalStore.forceDenyOperatorApproval;
+  if (vi.isMockFunction(forceDeny)) {
+    return undefined;
+  }
+  const spy = vi
+    .spyOn(operatorApprovalStore, "forceDenyOperatorApproval")
+    .mockImplementation((params) => {
+      if (params.nowMs === undefined && (vi.isFakeTimers() || vi.isMockFunction(Date.now))) {
+        return forceDeny({ ...params, nowMs: Date.now() });
+      }
+      return forceDeny(params);
+    });
+  return () => spy.mockRestore();
+}
 
 /** Each manager owns a real store, including when two managers reuse an approval id. */
 export function createTestApprovalManager<TPayload = ExecApprovalRequestPayload>(
@@ -14,6 +32,8 @@ export function createTestApprovalManager<TPayload = ExecApprovalRequestPayload>
   options: Omit<ExecApprovalManagerOptions<TPayload>, "persistence"> = {},
 ): ExecApprovalManager<TPayload> {
   test.signal.throwIfAborted();
+  const restoreClock = installTestApprovalClock();
+  test.onTestFinished(() => restoreClock?.());
   const fixture = createFixtureLifetime();
   let manager: ExecApprovalManager<TPayload> | undefined;
   let databasePath: string | undefined = undefined;
@@ -22,7 +42,7 @@ export function createTestApprovalManager<TPayload = ExecApprovalRequestPayload>
     void fixture.verifyCleanup(async () => {
       await manager?.drain();
       if (databasePath) {
-        closeOpenClawStateDatabaseByPath(databasePath);
+        await closeOpenClawStateDatabaseByPathAsync(databasePath);
       }
     });
     return fixture.cleanup();

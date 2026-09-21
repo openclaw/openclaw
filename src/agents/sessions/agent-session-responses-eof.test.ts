@@ -25,6 +25,12 @@ registerAgentSessionLoopTestLifecycle();
 it.each([
   { failure: "eof", recover: true },
   { failure: "max_output_tokens", recover: true },
+  { failure: "max_output_tokens", responseStatus: "absent", recover: true },
+  ...["completed", "failed", "cancelled", "in_progress", "queued"].map((responseStatus) => ({
+    failure: "max_output_tokens",
+    responseStatus,
+    recover: false,
+  })),
   { failure: "content_filter", recover: false },
   { failure: "unknown", recover: false },
   { failure: "completed", recover: false },
@@ -45,8 +51,16 @@ it.each([
   { failure: "identity_early_failed", recover: false },
   { failure: "identity_terminal_refusal", recover: false },
 ])(
-  "handles Responses $failure after settled tools (recovery: $recover, repeated: $repeatFailure, output: $beforeConflict)",
-  async ({ failure, recover, retryEnabled, repeatFailure, beforeConflict, unprovenRequest }) => {
+  "handles Responses $failure after settled tools (status: $responseStatus, recovery: $recover, repeated: $repeatFailure, output: $beforeConflict)",
+  async ({
+    failure,
+    recover,
+    retryEnabled,
+    responseStatus,
+    repeatFailure,
+    beforeConflict,
+    unprovenRequest,
+  }) => {
     const identityFailure = failure.startsWith("identity_");
     const filteredConflict = failure === "identity_content_filter";
     const earlyConflict =
@@ -209,7 +223,12 @@ it.each([
               type: failure === "completed" ? "response.completed" : "response.incomplete",
               response: {
                 id: "resp_incomplete",
-                status: failure === "completed" ? "completed" : "incomplete",
+                ...(responseStatus === "absent"
+                  ? {}
+                  : {
+                      status:
+                        responseStatus ?? (failure === "completed" ? "completed" : "incomplete"),
+                    }),
                 incomplete_details: { reason: failure },
                 output: [
                   {

@@ -9,13 +9,29 @@ import {
   isBlockedHostnameOrIp,
   resolvePinnedHostnameWithPolicy,
 } from "openclaw/plugin-sdk/ssrf-runtime";
-import { type RawData, WebSocket, WebSocketServer } from "openclaw/plugin-sdk/websocket-runtime";
+import {
+  type RawData,
+  rejectWebSocketUpgrade,
+  WebSocket,
+  WebSocketServer,
+} from "openclaw/plugin-sdk/websocket-runtime";
 import { createCodexInferenceContext } from "./inference-context.js";
 import { isJsonObject } from "./protocol.js";
 
 const MAX_BODY_BYTES = 32 * 1024 * 1024;
 const MAX_ERROR_BODY_BYTES = 1024 * 1024;
-const MAX_CONNECTIONS = 16;
+const MAX_REQUESTS = 16;
+const MAX_WEBSOCKETS = 64;
+const IDLE_WEBSOCKET_MS = 60_000;
+const OVERLOADED = "Codex inference relay is busy; retry on a fresh connection.";
+const OVERLOAD_HEADERS = { "content-type": "application/json", "retry-after": "1" };
+const OVERLOAD_BODY = JSON.stringify({
+  type: "error",
+  status: 503,
+  // Native treats backend server_is_overloaded as terminal; local saturation must retry.
+  error: { type: "server_error", code: "inference_relay_busy", message: OVERLOADED },
+  headers: { "retry-after": "1" },
+});
 const compress = promisify(zstdCompress);
 const decompress = promisify(zstdDecompress);
 const HOP_HEADERS = new Set([
@@ -52,6 +68,8 @@ export async function createCodexInferenceProxy(params: {
     "/" + generateSecureToken({ bytes: 32, redact: true }) + upstream.pathname.replace(/\/$/, "");
   const active = new Set<AbortController>();
   const sockets = new Set<WebSocket>();
+  const connections = new Set<() => void>();
+  const idleConnections = new Set<() => void>();
   const wss = new WebSocketServer({
     noServer: true,
     maxPayload: MAX_BODY_BYTES,
@@ -117,8 +135,12 @@ export async function createCodexInferenceProxy(params: {
     void (async () => {
       try {
         const { target, sampling } = resolveTarget(req);
-        if (req.method !== "POST" || active.size >= MAX_CONNECTIONS) {
+        if (req.method !== "POST") {
           throw new Error(FAILURE);
+        }
+        if (active.size >= MAX_REQUESTS) {
+          res.writeHead(503, { ...OVERLOAD_HEADERS, connection: "close" }).end(OVERLOAD_BODY);
+          return;
         }
         active.add(controller);
         const wire = await readProxyBody(req, MAX_BODY_BYTES);
@@ -176,7 +198,9 @@ export async function createCodexInferenceProxy(params: {
       }
     })();
   });
-  server.maxConnections = MAX_CONNECTIONS;
+  // Leave HTTP/failure-response headroom beyond the separately bounded WS pool.
+  // This last-resort TCP ceiling must not be the normal inference admission limit.
+  server.maxConnections = MAX_WEBSOCKETS + MAX_REQUESTS * 4;
   server.requestTimeout = 30_000;
   server.headersTimeout = 10_000;
   server.on("upgrade", (req, socket, head) => {
@@ -185,7 +209,11 @@ export async function createCodexInferenceProxy(params: {
       let local: WebSocket | undefined;
       let proxyAgent: ReturnType<typeof createNodeProxyAgent>;
       const controller = new AbortController();
+      let idleTimer: ReturnType<typeof setTimeout> | undefined;
       const close = () => {
+        clearTimeout(idleTimer);
+        connections.delete(close);
+        idleConnections.delete(close);
         controller.abort();
         active.delete(controller);
         remote?.terminate();
@@ -201,10 +229,22 @@ export async function createCodexInferenceProxy(params: {
       };
       try {
         const { target, sampling } = resolveTarget(req);
-        if (!sampling || active.size >= MAX_CONNECTIONS) {
+        if (!sampling) {
           throw new Error(FAILURE);
         }
-        active.add(controller);
+        if (connections.size >= MAX_WEBSOCKETS) {
+          // Prefer reclaiming the oldest proven-idle transport to rejecting new work.
+          idleConnections.values().next().value?.();
+        }
+        if (connections.size >= MAX_WEBSOCKETS) {
+          rejectWebSocketUpgrade(socket, {
+            status: 503,
+            headers: { "Retry-After": "1" },
+            body: { contentType: "application/json", text: OVERLOAD_BODY },
+          });
+          return;
+        }
+        connections.add(close);
         socket.once("close", close);
         socket.once("error", close);
         const signal = AbortSignal.any([lifetime.signal, controller.signal]);
@@ -274,6 +314,15 @@ export async function createCodexInferenceProxy(params: {
               accepted.once("error", close);
               accepted.once("close", close);
               let releaseFrame = () => {};
+              const idle = () => {
+                active.delete(controller);
+                idleConnections.delete(close);
+                idleConnections.add(close);
+                clearTimeout(idleTimer);
+                idleTimer = setTimeout(close, IDLE_WEBSOCKET_MS);
+                idleTimer.unref();
+              };
+              idle();
               accepted.on("message", (data, binary) => {
                 try {
                   if (binary) {
@@ -281,6 +330,17 @@ export async function createCodexInferenceProxy(params: {
                   }
                   const prepared = prepare(rawBytes(data), true);
                   prepared.assertCurrent();
+                  // Native serializes response.create calls on a reusable connection.
+                  if (active.has(controller)) {
+                    throw new Error(FAILURE);
+                  }
+                  if (active.size >= MAX_REQUESTS) {
+                    accepted.send(OVERLOAD_BODY, { binary: false }, close);
+                    return;
+                  }
+                  clearTimeout(idleTimer);
+                  idleConnections.delete(close);
+                  active.add(controller);
                   // A WS may serve later turns. Replace the old generation's abort listener.
                   releaseFrame();
                   const onAbort = () => close();
@@ -311,9 +371,16 @@ export async function createCodexInferenceProxy(params: {
                   close();
                   return;
                 }
+                // Prewarm and completed responses retain their WS for later turns,
+                // but no longer own an in-flight request slot. Unknown events never
+                // prove quiescence; leave the stream active until native closes it.
+                const terminal = !binary && isTerminalResponse(rawBytes(data));
                 accepted.send(data, { binary }, (error) => {
                   if (error) {
                     close();
+                  } else if (terminal && connections.has(close)) {
+                    // Do not evict a transport while its final frame is still buffered.
+                    idle();
                   }
                 });
               });
@@ -332,6 +399,9 @@ export async function createCodexInferenceProxy(params: {
     context.close();
     for (const controller of active) {
       controller.abort();
+    }
+    for (const closeConnection of connections) {
+      closeConnection();
     }
     for (const socket of sockets) {
       socket.terminate();
@@ -364,6 +434,22 @@ export async function createCodexInferenceProxy(params: {
   } catch (error) {
     close();
     throw error;
+  }
+}
+
+function isTerminalResponse(bytes: Buffer): boolean {
+  try {
+    const event: unknown = JSON.parse(bytes.toString("utf8"));
+    return (
+      isJsonObject(event) &&
+      (event.type === "response.failed" ||
+        event.type === "response.incomplete" ||
+        (event.type === "response.completed" &&
+          isJsonObject(event.response) &&
+          typeof event.response.id === "string"))
+    );
+  } catch {
+    return false;
   }
 }
 

@@ -189,9 +189,8 @@ A different observed identity still refuses the
 handoff. Scheduled Tasks using `InteractiveToken` remain supported; this does not
 require storing a task password.
 
-This target-CLI protection does not cover every Doctor or plugin child, the
-in-process service preparation before package mutation, or the separate
-deferred-install activation checks.
+This target-CLI protection does not cover every Doctor or plugin child or the
+in-process service preparation before package mutation.
 
 ## Options
 

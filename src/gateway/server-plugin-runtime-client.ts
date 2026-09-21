@@ -9,6 +9,7 @@ import type { AdmittedRunOperatorAuthority } from "../agents/admitted-run-contex
 import type { RuntimeContextFragment } from "../agents/internal-runtime-context.js";
 import { isKnownCoreToolId } from "../agents/tool-catalog.js";
 import { normalizeToolPolicyName } from "../agents/tool-policy.js";
+import type { PluginGatewayAccessAuthority } from "../plugins/gateway-access-policy.types.js";
 import { getActivePluginRegistry } from "../plugins/runtime.js";
 import type { PluginSubagentRequesterContext } from "../plugins/runtime/subagent-requester-context.js";
 import type { RuntimePluginToolGrant } from "../plugins/runtime/tool-grant.js";
@@ -38,6 +39,7 @@ export function createSyntheticPluginRuntimeClient(params?: {
   agentRunTracking?: GatewayAgentRunTaskOwner;
   operatorRoleActor?: GatewayOperatorRoleActor;
   operatorRunAuthority?: AdmittedRunOperatorAuthority;
+  operatorAccessAuthority?: PluginGatewayAccessAuthority;
   cronRunContinuation?: boolean;
   internalDeliveryMediaUrls?: string[];
   runtimeContextFragments?: RuntimeContextFragment[];
@@ -76,6 +78,9 @@ export function createSyntheticPluginRuntimeClient(params?: {
       ...(params?.operatorRoleActor ? { operatorRoleActor: params.operatorRoleActor } : {}),
       ...(params?.operatorRunAuthority
         ? { operatorRunAuthority: params.operatorRunAuthority }
+        : {}),
+      ...(params?.operatorAccessAuthority
+        ? { operatorAccessAuthority: params.operatorAccessAuthority }
         : {}),
       ...(params?.sessionCreation ? { sessionCreation: params.sessionCreation } : {}),
       ...(params?.agentToolCaller ? { agentToolCaller: params.agentToolCaller } : {}),

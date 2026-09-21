@@ -27,7 +27,7 @@ import {
 import {
   sessionDeliveryChannel,
   sessionDeliveryOrigin,
-} from "../../utils/delivery-context.shared.js";
+} from "../../utils/delivery-context.read.js";
 import { isDeliverableMessageChannel } from "../../utils/message-channel.js";
 import {
   clearAutoFallbackPrimaryProbeSelection,

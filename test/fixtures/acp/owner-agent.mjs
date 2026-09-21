@@ -2,6 +2,7 @@
 // Synthetic ACP peer: persists its own conversation so restart tests must really load it.
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
+import http from "node:http";
 import path from "node:path";
 import { Readable, Writable } from "node:stream";
 import { setTimeout as delay } from "node:timers/promises";
@@ -12,6 +13,10 @@ const modelControls = process.argv.slice(3).includes("--model-controls");
 const holdModeControl = process.argv.slice(3).includes("--hold-mode-control");
 const holdNewSession = process.argv.slice(3).includes("--hold-new-session");
 const holdPromptReply = process.argv.slice(3).includes("--hold-prompt-reply");
+const promptGateUrl = process.argv
+  .slice(3)
+  .find((value) => value.startsWith("--prompt-gate-url="))
+  ?.slice("--prompt-gate-url=".length);
 const captureWorkerEnv = process.argv.slice(3).includes("--capture-worker-env");
 const sessions = new Map();
 const configOptions = (state) => [
@@ -152,6 +157,16 @@ const connection = new AgentSideConnection(
           },
         },
       });
+      if (promptGateUrl) {
+        await new Promise((resolve, reject) => {
+          const request = http.get(promptGateUrl, { agent: false }, (response) => {
+            response.resume();
+            response.once("end", resolve);
+            response.once("error", reject);
+          });
+          request.once("error", reject);
+        });
+      }
       if (holdPromptReply) {
         await holdControl("prompt-reply", sessionId);
         await client.sessionUpdate({

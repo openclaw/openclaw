@@ -8,12 +8,14 @@ import {
   sendMethodNotAllowed,
   sendMissingScopeForbidden,
 } from "./http-common.js";
+import { sendGatewayHttpAuthFailure } from "./http-operator-access.js";
 import {
   authorizeGatewayHttpRequestOrReply,
   type AuthorizedGatewayHttpRequest,
   resolveTrustedHttpOperatorScopes,
 } from "./http-utils.js";
 import { authorizeOperatorScopesForMethod } from "./method-scopes.js";
+import { hasCurrentGatewayOperatorAccess } from "./operator-access-policy.js";
 
 /** Handles a gateway POST JSON endpoint and returns the parsed body when authorized. */
 export async function handleGatewayPostJsonEndpoint(
@@ -32,7 +34,11 @@ export async function handleGatewayPostJsonEndpoint(
       requestAuth: AuthorizedGatewayHttpRequest,
     ) => string[];
   },
-): Promise<false | { body: unknown; requestAuth: AuthorizedGatewayHttpRequest } | undefined> {
+): Promise<
+  | false
+  | { body: unknown; requestAuth: AuthorizedGatewayHttpRequest; operatorScopes: string[] }
+  | undefined
+> {
   const url = new URL(req.url ?? "/", "http://localhost");
   if (url.pathname !== opts.pathname) {
     return false;
@@ -55,14 +61,11 @@ export async function handleGatewayPostJsonEndpoint(
     return undefined;
   }
 
+  const operatorScopes =
+    opts.resolveOperatorScopes?.(req, requestAuth) ??
+    resolveTrustedHttpOperatorScopes(req, requestAuth);
   if (opts.requiredOperatorMethod) {
-    const requestedScopes =
-      opts.resolveOperatorScopes?.(req, requestAuth) ??
-      resolveTrustedHttpOperatorScopes(req, requestAuth);
-    const scopeAuth = authorizeOperatorScopesForMethod(
-      opts.requiredOperatorMethod,
-      requestedScopes,
-    );
+    const scopeAuth = authorizeOperatorScopesForMethod(opts.requiredOperatorMethod, operatorScopes);
     if (!scopeAuth.allowed) {
       sendMissingScopeForbidden(res, scopeAuth.missingScope);
       return undefined;
@@ -73,6 +76,12 @@ export async function handleGatewayPostJsonEndpoint(
   if (body === undefined) {
     return undefined;
   }
+  if (!hasCurrentGatewayOperatorAccess(requestAuth.operatorAccessAuthority)) {
+    if (!res.writableEnded && !res.destroyed) {
+      sendGatewayHttpAuthFailure(res, { ok: false, reason: "operator_access_denied" });
+    }
+    return undefined;
+  }
 
-  return { body, requestAuth };
+  return { body, requestAuth, operatorScopes };
 }

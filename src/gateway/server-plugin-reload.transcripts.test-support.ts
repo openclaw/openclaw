@@ -45,6 +45,7 @@ export async function startTranscriptReloadFixtureSidecars(
       minimalTestGateway: false,
       cfgAtStart: config,
       getConfig: fixture.getConfig,
+      getReadiness: () => ({ ready: true, failing: [], uptimeMs: 0 }),
       bindHost: "127.0.0.1",
       bindHosts: ["127.0.0.1"],
       port: 0,

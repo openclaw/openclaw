@@ -1,6 +1,6 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, test } from "vitest";
-import { buildSessionPreviewItems } from "./session-utils.fs.js";
+import { buildSessionPreviewItems } from "./session-display-projection.js";
 
 describe("buildSessionPreviewItems bounded projection", () => {
   test.each([

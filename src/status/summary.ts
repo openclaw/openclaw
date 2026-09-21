@@ -48,7 +48,7 @@ import { createLazyImportLoader } from "../shared/lazy-promise.js";
 import { createLazyRuntimeSurface } from "../shared/lazy-runtime.js";
 import { sortAndLimitBy } from "../shared/sort-and-limit.js";
 import { readOpenClawStateWalHealth } from "../state/openclaw-state-db-cache.js";
-import { deliveryContextFromSession } from "../utils/delivery-context.shared.js";
+import { deliveryContextFromSession } from "../utils/delivery-context.read.js";
 import { resolveRuntimeServiceVersion } from "../version.js";
 import { buildStatusCliProjection } from "./cli-projection.js";
 import {

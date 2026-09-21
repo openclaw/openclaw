@@ -13,6 +13,18 @@ describes each migration source and what to do when one stays blocked.
 
 `openclaw doctor --fix` is the only owner for persistent file-to-SQLite migrations. It validates and claims each recognized source, writes and verifies canonical rows, records a migration receipt, then removes the retired source. Runtime code does not perform lazy imports or fallback reads.
 
+Gateway startup invokes the same migration owners under exclusive maintenance
+ownership before checking runtime readiness. This lets container image upgrades
+complete agent schema, shared-state, session, and workspace migrations without
+an offline operator command. Startup preserves verified SQLite copies before
+schema upgrades, plus Doctor's normal config backups and legacy-file archives.
+An unsafe required store exits with code 78 and its specific reason. Refused default
+or system agents never produce a healthy readiness response. Unused legacy stores,
+including loose `agent/settings.json` files without an agent owner, remain untouched
+and deferred. Startup records an advisory and continues independent migrations;
+Doctor reports the retained source for follow-up. An advisory never hides a separate
+required-store refusal.
+
 When a refused step blocks later work, each blocked execution receipt keeps
 `refusal.code: "blocked-by-prior-refusal"` and includes `originatingRefusal` with
 the first refusal's `stepId`, reason `code`, and human-readable `message`.

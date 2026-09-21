@@ -14,6 +14,7 @@ import { sessionObserverScopeKey } from "../session-observer-model.js";
 import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
 import { resolveSessionSubscriptionKey } from "../session-subscription-keys.js";
 import { resolveSessionStoreKey } from "../session-utils.js";
+import { canAccessApprovalSession } from "./approval-record-lookup.js";
 import { sessionsListHandler } from "./sessions-read.js";
 import { requireSessionKey } from "./sessions-shared.js";
 import type { GatewayRequestHandlers } from "./types.js";
@@ -95,7 +96,15 @@ export const sessionSubscriptionHandlers: GatewayRequestHandlers = {
     const sessionKeys = declarations.replace(connId, canonicalKeys);
     respond(true, { sessionKeys }, undefined);
   },
-  "sessions.messages.subscribe": ({ params, client, context, respond }) => {
+  "sessions.messages.subscribe": async ({
+    params,
+    client,
+    context,
+    respond,
+    sessionMutationAuthorization,
+    hasCurrentClientAuthority,
+    signal,
+  }) => {
     if (
       !assertValidParams(
         params,
@@ -147,7 +156,26 @@ export const sessionSubscriptionHandlers: GatewayRequestHandlers = {
           { includeApprovals: true, provisional: true },
         );
         try {
-          approvalReplay = context.listSessionPendingApprovals?.(subscriptionKey, client);
+          let prepared;
+          do {
+            prepared = await context.listSessionPendingApprovals?.(subscriptionKey, client);
+          } while (prepared && !prepared.isCurrent());
+          approvalReplay = prepared?.replay;
+          sessionMutationAuthorization?.assertCurrent();
+          if (
+            client?.invalidated ||
+            signal?.aborted ||
+            hasCurrentClientAuthority?.() === false ||
+            !canReviewOperatorApproval(client) ||
+            !canAccessApprovalSession({
+              cfg: context.getRuntimeConfig(),
+              client,
+              sessionKey: canonicalKey,
+              agentId: requestedAgentId,
+            })
+          ) {
+            throw new Error("session approval replay authority is no longer active");
+          }
         } catch (error) {
           rollbackSubscription?.();
           context.logGateway.error(`session approval replay failed: ${String(error)}`);

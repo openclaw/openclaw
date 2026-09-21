@@ -133,6 +133,32 @@ export function readCursor(
   );
 }
 
+function readMaterialCursors(
+  db: DatabaseSync,
+  watcherSessionKeys: readonly string[],
+  targetSessionKey: string,
+): Map<string, SessionWatchCursorRow> | undefined {
+  // Node binds lone surrogates as U+FFFD. Aliased keys must observe earlier writes.
+  if (watcherSessionKeys.length <= 1 || watcherSessionKeys.some((key) => !key.isWellFormed())) {
+    return undefined;
+  }
+  const cursors = new Map<string, SessionWatchCursorRow>();
+  for (let offset = 0; offset < watcherSessionKeys.length; offset += 500) {
+    const rows = executeSqliteQuerySync(
+      db,
+      getSessionStateKysely(db)
+        .selectFrom("session_watch_cursors")
+        .selectAll()
+        .where("target_session_key", "=", targetSessionKey)
+        .where("watcher_session_key", "in", watcherSessionKeys.slice(offset, offset + 500)),
+    ).rows;
+    for (const row of rows) {
+      cursors.set(row.watcher_session_key, row);
+    }
+  }
+  return cursors;
+}
+
 export function isAmbientGroupWatchCursor(row: SessionWatchCursorRow | undefined): boolean {
   return row?.provenance === SESSION_WATCH_PROVENANCE_AMBIENT_GROUP;
 }
@@ -176,13 +202,14 @@ export function upsertSeedCursor(params: {
 
 function updateMaterialCursor(params: {
   db: DatabaseSync;
+  current: SessionWatchCursorRow | undefined;
   watcherSessionKey: string;
   watcherStorePath?: string;
   targetSessionKey: string;
   sequence: number;
   now: number;
 }): { lastSeenSequence: number; queueOnly: boolean; watcherStorePath: string | null } {
-  const current = readCursor(params.db, params.watcherSessionKey, params.targetSessionKey);
+  const { current } = params;
   const watcherStorePath = current
     ? (current.watcher_store_path ?? null)
     : (params.watcherStorePath ?? null);
@@ -304,6 +331,14 @@ export function recordSessionStateEventInDatabase(
   const watcherSessionKeys = [
     ...new Set([...(input.watcherSessionKeys ?? []), ...registeredWatcherKeys]),
   ].filter((key) => Boolean(key) && isNotifiableWatcherKey(key));
+  const cursors =
+    NOTIFY_BY_KIND[input.kind] && watcherSessionKeys.length > 1
+      ? readMaterialCursors(
+          db,
+          watcherSessionKeys.filter((key) => key !== input.actorId),
+          input.sessionKey,
+        )
+      : undefined;
   for (const watcherSessionKey of watcherSessionKeys) {
     if (input.kind === "child_spawned") {
       upsertSeedCursor({
@@ -321,6 +356,9 @@ export function recordSessionStateEventInDatabase(
     }
     const materialCursor = updateMaterialCursor({
       db,
+      current: cursors
+        ? cursors.get(watcherSessionKey)
+        : readCursor(db, watcherSessionKey, input.sessionKey),
       watcherSessionKey,
       watcherStorePath: input.watcherStorePaths?.[watcherSessionKey],
       targetSessionKey: input.sessionKey,

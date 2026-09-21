@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { isDeepStrictEqual } from "node:util";
 import { resolveServiceManagerEnv } from "../../daemon/service-process-env.js";
 import { resolveUpdateInstallRoot } from "../../infra/update-install-root.js";
 import {
@@ -11,7 +12,6 @@ import {
   type ManagedHandoffLease,
   type ManagedHandoffParent,
 } from "../../infra/update-managed-service-handoff-lease.js";
-import { isCurrentManagedServiceUpdateHandoffProcess } from "../../infra/update-managed-service-handoff.js";
 import type { UpdateRecoveryFence } from "../../infra/update-run-recovery.js";
 import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
 import { withCommandProcessScope } from "../../process/exec-spawn.js";
@@ -29,7 +29,7 @@ import {
   type LegacyUpdateExecutorParent,
 } from "./update-command-executor-legacy.js";
 import { createUpdateIdentityWarningReporter } from "./update-command-identity-warning.js";
-import { UpdateCommandRecoveryPendingError } from "./update-command-recovery.js";
+import { UpdateCommandRecoveryPendingError } from "./update-command-recovery-error.js";
 import { createUpdateOperationDeadline } from "./update-operation-deadline.js";
 
 /** A live invocation, never a serialized claim, PID or recovered history row. */
@@ -146,25 +146,39 @@ export async function withDelegatedUpdateCommandExecutor<T>(
         if (active || activation.failure) {
           activation.assertCurrent();
         }
+        // Several lineage roles can name the same full lease. Share only this
+        // assertion's successful checks; every later assertion reads live state.
+        const checkedParents: ManagedHandoffParent[] = [];
+        const checkedReceivers: ManagedHandoffLease[] = [];
+        const parentIsCurrent = (lease: ManagedHandoffParent) => {
+          if (checkedParents.some((checked) => isDeepStrictEqual(checked, lease))) {
+            return true;
+          }
+          if (!store.current(lease) || !isLive(lease.helper) || !isLive(lease.executor)) {
+            return false;
+          }
+          checkedParents.push(lease);
+          return true;
+        };
+        const receiverIsCurrent = (lease: ManagedHandoffLease) => {
+          if (checkedReceivers.some((checked) => isDeepStrictEqual(checked, lease))) {
+            return true;
+          }
+          if (!store.owns(lease, "executor")) {
+            return false;
+          }
+          checkedReceivers.push(lease);
+          return true;
+        };
         if (
           !active ||
-          !store.current(original) ||
-          !isLive(original.helper) ||
-          !isLive(original.executor) ||
-          !store.current(parent) ||
-          !isLive(parent.helper) ||
-          !isLive(parent.executor) ||
-          !store.current(spawner) ||
-          !isLive(spawner.helper) ||
-          !isLive(spawner.executor) ||
-          !store.owns(originalChild, "executor") ||
-          !store.owns(child, "executor") ||
+          !parentIsCurrent(original) ||
+          !parentIsCurrent(parent) ||
+          !parentIsCurrent(spawner) ||
+          !receiverIsCurrent(originalChild) ||
+          !receiverIsCurrent(child) ||
           (retained &&
-            (!retainedChild ||
-              !store.current(retained) ||
-              !isLive(retained.helper) ||
-              !isLive(retained.executor) ||
-              !store.owns(retainedChild, "executor")))
+            (!retainedChild || !parentIsCurrent(retained) || !receiverIsCurrent(retainedChild)))
         ) {
           throw new UpdateCommandRecoveryPendingError(
             "The update process no longer has permission to continue.",
@@ -461,6 +475,8 @@ export async function withUpdateCommandExecutor<T>(
               found.lease.helper.pid !== process.pid &&
               found.lease.executor.pid === process.pid
             ) {
+              const { isCurrentManagedServiceUpdateHandoffProcess } =
+                await import("../../infra/update-managed-service-handoff.js");
               const handedOff = await isCurrentManagedServiceUpdateHandoffProcess({
                 root: key,
                 runId,

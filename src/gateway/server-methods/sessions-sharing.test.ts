@@ -717,8 +717,8 @@ describe("session sharing handlers", () => {
       const requestContext = {
         ...context(vi.fn()),
         execApprovalManager: {
-          lookupApprovalId: () => ({ kind: "exact", id: "approval-1" }),
-          getSnapshot: () => ({ request: { sessionKey, agentId: "main" } }),
+          lookupLocalApprovalId: () => ({ kind: "exact", id: "approval-1" }),
+          getLocalSnapshot: () => ({ request: { sessionKey, agentId: "main" } }),
         },
       } as unknown as GatewayRequestContext;
       const mutations: Array<[string, Record<string, unknown>]> = [

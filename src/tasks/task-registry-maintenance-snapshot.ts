@@ -68,6 +68,7 @@ export async function visitTaskRegistryMaintenanceTasks(
     cronHistoryOverflowTaskIds: ReadonlySet<string>,
     assertOwnerCurrent: () => void,
   ) => Promise<void>,
+  prepareBatch?: (tasks: readonly TaskRecord[], now: number) => Promise<void>,
 ): Promise<{ read: TaskRegistryMaintenanceRead; deferred: number }> {
   const prepareRead = async (previous?: TaskRegistryMaintenanceRead) => {
     previous?.assertOwnerCurrent();
@@ -93,6 +94,19 @@ export async function visitTaskRegistryMaintenanceTasks(
     if (needsPreparation) {
       read = await prepareRead(read);
       needsPreparation = false;
+    }
+    if (prepareBatch && index % TASK_MAINTENANCE_BATCH_SIZE === 0) {
+      const candidates = taskIds.slice(index, index + TASK_MAINTENANCE_BATCH_SIZE).flatMap((id) => {
+        const task = source.getTaskRegistryMaintenanceTask(
+          read,
+          id,
+          now,
+          cronHistoryOverflowTaskIds,
+        );
+        return task && task !== "needs-preparation" ? [task] : [];
+      });
+      await prepareBatch(candidates, now);
+      read = await prepareRead(read);
     }
     let selected = source.getTaskRegistryMaintenanceTask(
       read,

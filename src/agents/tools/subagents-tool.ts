@@ -21,11 +21,15 @@ import {
 import { getTaskExecutionObservation } from "../../tasks/task-execution-observation.js";
 import { cancelDetachedTaskRunById } from "../../tasks/task-executor.js";
 import { onTaskRegistryChange } from "../../tasks/task-registry.store.js";
+import type { TaskRegistryObserverEvent } from "../../tasks/task-registry.store.types.js";
 import type { TaskRecord, TaskStatus } from "../../tasks/task-registry.types.js";
 import { resolveTaskSessionAgentId } from "../../tasks/task-session-identity.js";
 import { TASK_STATUS_DETAIL_MAX_CHARS, sanitizeTaskStatusText } from "../../tasks/task-status.js";
 import { optionalPositiveIntegerSchema, optionalStringEnum } from "../schema/typebox.js";
-import { ensureSubagentControllerOwnsRun } from "../subagents/registry/subagent-control-scope.js";
+import {
+  ensureSubagentControllerOwnsRun,
+  isSubagentRunVisibleToSession,
+} from "../subagents/registry/subagent-control-scope.js";
 import {
   DEFAULT_RECENT_MINUTES,
   listControlledSubagentRuns,
@@ -33,6 +37,7 @@ import {
   resolveSubagentController,
 } from "../subagents/registry/subagent-control.js";
 import { buildSubagentList } from "../subagents/registry/subagent-list.js";
+import { buildLatestSubagentRunReadIndex } from "../subagents/registry/subagent-registry-read.js";
 import { onSubagentRegistryPersisted } from "../subagents/registry/subagent-registry-state.js";
 import type { AnyAgentTool } from "./common.js";
 import {
@@ -112,7 +117,14 @@ function readTaskTree(
     });
   }
   const visibleTasks = new Set<string>();
-  const controlledRunsByOwner = new Map<string, ReturnType<typeof listControlledSubagentRuns>>();
+  const subagentReadIndex =
+    subagentOwnership === "retained"
+      ? undefined
+      : buildLatestSubagentRunReadIndex(
+          tasks.flatMap((task) =>
+            task.runtime === "subagent" && task.childSessionKey ? [task.childSessionKey] : [],
+          ),
+        );
   const acpControlOwners = new Map<string, string | undefined>();
   let changed = true;
   while (changed) {
@@ -137,23 +149,17 @@ function readTaskTree(
         task.runId &&
         task.childSessionKey
       ) {
-        const owner = `${taskRequesterAgentId ?? ""}\0${task.ownerKey}`;
-        let controlledRuns = controlledRunsByOwner.get(owner);
-        if (!controlledRuns) {
-          controlledRuns = listControlledSubagentRuns(task.ownerKey, taskRequesterAgentId, cfg);
-          controlledRunsByOwner.set(owner, controlledRuns);
-        }
+        const run = subagentReadIndex?.getLatestSubagentRun(task.childSessionKey);
         if (
-          !controlledRuns.some(
-            (run) =>
-              run.childSessionKey === task.childSessionKey &&
-              (run.taskRunId ?? run.runId) === task.runId &&
-              (subagentOwnership !== "controlled" ||
-                [...visibleSessions.values()].some(
-                  (controller) =>
-                    ensureSubagentControllerOwnsRun({ cfg, controller, entry: run }) === undefined,
-                )),
-          )
+          !run ||
+          !taskRequesterAgentId ||
+          !isSubagentRunVisibleToSession(run, task.ownerKey, taskRequesterAgentId, cfg) ||
+          (run.taskRunId ?? run.runId) !== task.runId ||
+          (subagentOwnership === "controlled" &&
+            ![...visibleSessions.values()].some(
+              (controller) =>
+                ensureSubagentControllerOwnsRun({ cfg, controller, entry: run }) === undefined,
+            ))
         ) {
           continue;
         }
@@ -223,6 +229,8 @@ function mapTask(task: TaskRecord) {
 function waitForSelectedTasks(params: {
   taskIds: string[];
   readTasks: () => TaskRecord[];
+  taskChangeAffectsRead: (event?: TaskRegistryObserverEvent) => boolean;
+  subagentChangeAffectsRead: (sessionKeys?: readonly (string | undefined)[]) => boolean;
   timeoutMs: number;
   signal?: AbortSignal;
 }) {
@@ -303,8 +311,16 @@ function waitForSelectedTasks(params: {
         finish();
       });
     };
-    const unsubscribeTasks = onTaskRegistryChange(wake);
-    const unsubscribeSubagents = onSubagentRegistryPersisted(wake);
+    const unsubscribeTasks = onTaskRegistryChange((event) => {
+      if (params.taskChangeAffectsRead(event)) {
+        wake();
+      }
+    });
+    const unsubscribeSubagents = onSubagentRegistryPersisted((keys) => {
+      if (params.subagentChangeAffectsRead(keys)) {
+        wake();
+      }
+    });
     unsubscribe = () => {
       unsubscribeTasks();
       unsubscribeSubagents();
@@ -396,16 +412,6 @@ export function createSubagentsTool(opts: SubagentsToolOptions = {}): AnyAgentTo
           : prepared
             ? prepared.listTaskRecordsForOwnerTree(owners)
             : listTaskRecordsForOwnerTree(owners);
-      const readTreeTasks = () => {
-        const current = readScope();
-        return readTaskTree(
-          listTasks(current.allowedOwnerKeys),
-          current.allowedOwnerKeys,
-          current.controllerAgentId,
-          current.cfg,
-          "visible",
-        ).tasks;
-      };
 
       if (action === "wait") {
         const taskIds = [...new Set(readStringArrayParam(params, "taskIds", { required: true }))];
@@ -416,9 +422,56 @@ export function createSubagentsTool(opts: SubagentsToolOptions = {}): AnyAgentTo
           60,
           readNonNegativeIntegerParam(params, "timeoutSeconds") ?? 30,
         );
+        let dependencies = new Set(taskIds);
+        let ancestorSessionKeys = new Set<string>();
+        let subagentSessionKeys = new Set<string>();
+        const readSelectedTasks = () => {
+          const current = readScope();
+          const isRootTask = (task: Readonly<TaskRecord>) =>
+            taskOwnerMatches(
+              task,
+              current.allowedOwnerKeys,
+              current.controllerAgentId,
+              current.cfg,
+            );
+          const candidates = opts.listTasks
+            ? opts.listTasks()
+            : prepared!.listTaskRecordsWithAncestors(taskIds, isRootTask);
+          dependencies = new Set([...taskIds, ...candidates.map((task) => task.taskId)]);
+          ancestorSessionKeys = new Set(
+            candidates.flatMap((task) => (isRootTask(task) ? [] : [task.ownerKey])),
+          );
+          subagentSessionKeys = new Set(
+            candidates.flatMap((task) =>
+              task.runtime === "subagent" && task.childSessionKey ? [task.childSessionKey] : [],
+            ),
+          );
+          return readTaskTree(
+            candidates,
+            current.allowedOwnerKeys,
+            current.controllerAgentId,
+            current.cfg,
+            "visible",
+          ).tasks;
+        };
+        const taskChangeAffectsRead = (event?: TaskRegistryObserverEvent) => {
+          if (!event || event.kind === "restored") {
+            return true;
+          }
+          const taskId = event.kind === "upserted" ? event.task.taskId : event.taskId;
+          return (
+            dependencies.has(taskId) ||
+            [event.previous, event.kind === "upserted" ? event.task : undefined].some(
+              (task) => task?.childSessionKey && ancestorSessionKeys.has(task.childSessionKey),
+            )
+          );
+        };
         const result = await waitForSelectedTasks({
           taskIds,
-          readTasks: readTreeTasks,
+          readTasks: readSelectedTasks,
+          taskChangeAffectsRead,
+          subagentChangeAffectsRead: (keys) =>
+            !keys?.length || keys.some((key) => key !== undefined && subagentSessionKeys.has(key)),
           timeoutMs: timeoutSeconds * 1_000,
           signal,
         });

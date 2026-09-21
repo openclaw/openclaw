@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import { channel } from "node:diagnostics_channel";
 import fs from "node:fs";
 import path from "node:path";
@@ -7,9 +8,12 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { openNodeSqliteDatabase } from "../../infra/node-sqlite.js";
 import * as queue from "../../shared/store-writer-queue.js";
+import { closeCachedOpenClawAgentDatabase } from "../../state/openclaw-agent-db-lifecycle.js";
+import { clearOpenClawAgentDatabaseValidationCache } from "../../state/openclaw-agent-db-validation-cache.js";
 import {
   closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
+  getOpenClawAgentDatabaseIfOpen,
   openOpenClawAgentDatabase,
   resolveIncognitoOpenClawAgentSqlitePath,
 } from "../../state/openclaw-agent-db.js";
@@ -191,9 +195,16 @@ it.each([
               sessionKey,
             ),
           ).toEqual({ current_session_id: originalId });
-          // The pass has warmed A while pruning. Clear it before the REAL lazy
-          // loader so a missing scope handoff cannot hide behind its cached handle.
-          closeOpenClawAgentDatabasesForTest(state.root);
+          // Evict the host handle before the lazy loader without revoking this active sweep's workers.
+          const cached = getOpenClawAgentDatabaseIfOpen({
+            agentId: target.agentId ?? "main",
+            path: databasePath,
+            env: state.env,
+          });
+          assert(cached);
+          closeCachedOpenClawAgentDatabase(cached, { eviction: true });
+          clearOpenClawAgentDatabaseValidationCache(state.root);
+          expect(cached.db.isOpen).toBe(false);
         }
         return await deleteEntry(...args);
       },

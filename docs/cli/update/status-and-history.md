@@ -227,10 +227,11 @@ Native service-stop observations do not advance the update's recorded phase.
 If the Control UI cannot read fresh progress, it shows the read error alongside
 the last recorded run; use **Check status** to retry without starting another update.
 
-Phases are `requested`, `staging`, `validating`, optional `repairing`, `activating`,
-`restarting`, `verifying`, and `finished`. Status is `running`, `succeeded`,
-`failed`, `rolled-back`, or `skipped`. Repair may also follow `verifying` when
-automatic rollback cannot complete. Phase timings, repair attempts, and
+Phases are `requested`, `staging`, `validating`, `activating`, `restarting`,
+`verifying`, and `finished`. Status is `running`, `succeeded`, `failed`,
+`rolled-back`, or `skipped`. Older updater records can also contain `repairing`
+and inference-repair attempts. Current inference repair belongs to post-failure
+triage and does not rewrite the update outcome. Phase timings, repair attempts, and
 verification facts are included only when observed. Chat reports are limited to 1,500 characters;
 `update.runs.get` preserves the bounded record for detailed inspection.
 

@@ -459,6 +459,7 @@ src/config/validation.types.ts
 src/config/value-tree.ts
 src/config/version.ts
 src/config/web-search-legacy-provider-keys.ts
+src/config/write-authority.ts
 src/config/write-lock.ts
 src/config/zod-schema.agent-defaults-base.ts
 src/config/zod-schema.agent-defaults.ts
@@ -532,6 +533,7 @@ src/infra/abort-signal.ts
 src/infra/acquire-with-wait.ts
 src/infra/approval-resolution-ref.ts
 src/infra/backoff.ts
+src/infra/backup-scratch.ts
 src/infra/boundary-file-read.ts
 src/infra/boundary-path.ts
 src/infra/bun-sqlite-library.ts
@@ -711,12 +713,14 @@ src/infra/sqlite-snapshot-staging-owner.ts
 src/infra/sqlite-snapshot-staging.ts
 src/infra/sqlite-snapshot-wal-prefix.ts
 src/infra/sqlite-source-handle.ts
+src/infra/sqlite-staging-token.ts
 src/infra/sqlite-store.worker.ts
 src/infra/sqlite-strict.ts
 src/infra/sqlite-terminal-open-latch.ts
 src/infra/sqlite-transaction.ts
 src/infra/sqlite-user-version.ts
 src/infra/sqlite-wal-checkpoint.ts
+src/infra/sqlite-wal-reclamation.ts
 src/infra/sqlite-wal-split-brain.ts
 src/infra/sqlite-wal-write-admission.ts
 src/infra/sqlite-wal.ts

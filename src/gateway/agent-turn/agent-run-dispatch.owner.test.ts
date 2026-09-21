@@ -288,6 +288,65 @@ describe("Gateway dispatch task creation ownership", () => {
     expect(emitFinal).toHaveBeenCalledOnce();
   });
 
+  it("settles cancellation when source retirement races committed task creation", async () => {
+    const { runId, sessionKey, context, entry, task } = createTrackedDispatch();
+    const creation = createDeferred<CreatedDetachedTaskRun>();
+    let sourceCurrent = true;
+    const settleUnstarted = vi.fn<CreatedDetachedTaskRun["settleUnstarted"]>(
+      async (terminal, canSettle) => {
+        if (!canSettle(task)) {
+          return false;
+        }
+        Object.assign(task, terminal);
+        return true;
+      },
+    );
+    mocks.createTaskReceipt.mockReturnValue(creation.promise);
+    const emitFinal = vi.fn();
+    const completion = dispatchAgentRunFromGateway({
+      assertCurrent() {
+        if (!sourceCurrent) {
+          throw new Error("operator source authority is no longer active");
+        }
+      },
+      assertSettlementCurrent() {},
+      ingressOpts: { message: task.task, sessionKey, allowModelOverride: false },
+      runId,
+      dedupeKeys: [`agent:${runId}`],
+      admittedRunEntry: entry,
+      abortController: entry.controller,
+      cleanupAbortController: vi.fn(),
+      io: { emitAcceptance: vi.fn(), emitFinal },
+      context,
+      taskTrackingMode: "cli",
+    });
+    sourceCurrent = false;
+    entry.controller.abort();
+    creation.resolve(taskReceipt(task, settleUnstarted));
+    await completion;
+
+    expect(mocks.agentCommand).not.toHaveBeenCalled();
+    expect(mocks.bindTaskRunOwner).not.toHaveBeenCalled();
+    expect(settleUnstarted).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ status: "cancelled" }),
+      expect.any(Function),
+    );
+    expect(task.status).toBe("cancelled");
+    expect(emitFinal).toHaveBeenCalledExactlyOnceWith(
+      [
+        true,
+        expect.objectContaining({
+          runId,
+          status: "timeout",
+          summary: "aborted",
+          stopReason: "rpc",
+        }),
+        undefined,
+      ],
+      { runId },
+    );
+  });
+
   it.each(["current", "different-session", "adopted-task"] as const)(
     "waits for task creation before activation and respects owner replacement (%s)",
     async (replacement) => {

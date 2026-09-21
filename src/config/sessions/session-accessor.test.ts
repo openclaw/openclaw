@@ -36,7 +36,7 @@ import type { TrajectoryEvent } from "../../trajectory/types.js";
 import {
   deliveryContextFromSession,
   sessionDeliveryRoute,
-} from "../../utils/delivery-context.shared.js";
+} from "../../utils/delivery-context.read.js";
 import type { OpenClawConfig } from "../types.openclaw.js";
 import {
   applySessionEntryReplacements,

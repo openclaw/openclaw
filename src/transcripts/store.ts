@@ -37,7 +37,7 @@ import {
 } from "./store-artifacts.js";
 import { prepareTranscriptDateReader } from "./store-date-preparation.js";
 import { TranscriptsSummaryChangedError } from "./store-errors.js";
-import { transcriptJsonlDigest, writeTranscriptJsonlArtifact } from "./store-export-jsonl.js";
+import { writeTranscriptJsonlArtifact } from "./store-export-jsonl.js";
 import {
   assertTranscriptExportPathAvailable,
   hasAliasedCanonicalTranscriptExportPathOwner,
@@ -173,7 +173,11 @@ export class TranscriptsStore {
     }
     const hashes: Record<string, string> = {
       "metadata.json": sha256Hex(`${JSON.stringify(storedSession, null, 2)}\n`),
-      "transcript.jsonl": transcriptJsonlDigest(this.database().db, storedSession),
+      "transcript.jsonl": await this.readWorker("transcripts.exportDigest", {
+        params: {
+          session: { sessionId: storedSession.sessionId, startedAt: storedSession.startedAt },
+        },
+      }),
     };
     const summary = await this.readSummary(storedSession);
     if (summary.summary) {

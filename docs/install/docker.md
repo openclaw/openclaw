@@ -228,9 +228,29 @@ Run `docker compose` from the repo root. If you enabled `OPENCLAW_EXTRA_MOUNTS` 
 ### Upgrading container images
 
 When you replace the OpenClaw image but keep the same mounted state/config, the
-new Gateway runs startup-safe upgrade migrations and plugin convergence before
+new Gateway runs Doctor's upgrade migrations under exclusive maintenance ownership and plugin convergence before
 readiness. Routine image upgrades should not require a separate
 `openclaw doctor --fix` pass.
+
+This includes agent database schema upgrades, shared-state audit migrations, and
+legacy workspace setup imports. Before advancing database schemas, startup saves
+verified SQLite copies beside the originals as
+`<database>.pre-startup-migration-<id>.bak`. The shared database and affected agent
+databases use the same backup ID. Config backups and retired workspace-file
+archives follow the normal Doctor repair rules. Keep these files with your
+pre-upgrade backup; a rollback must restore the matching state as well as the old
+image. See [rollback](/install/updating#rollback).
+
+On FUSE filesystems such as Unraid's `shfs`, a missing native no-replace rename
+does not require an operator step. The migration owner publishes a complete,
+exclusive hardlink, syncs it before removing the old name, and can recover an
+interrupted source/claim pair without replacing another file. This preserves the
+source inode and exact bytes. The filesystem must support same-directory hardlinks
+and directory synchronization when native no-replace rename is unavailable.
+
+Readiness remains false while the default or system agent database is refused,
+and the readiness response includes the admission reason. A refused optional
+agent remains isolated while healthy agents can serve requests.
 
 Missing or drifted canonical SQLite indexes are rebuilt by the schema migration
 owner before session startup completes. Repair warnings identify the agent,
@@ -239,8 +259,15 @@ reports list all affected databases in stable path order. Missing required table
 incompatible columns, and other changes that cannot be reconstructed safely still require Doctor; startup
 does not recreate a missing data table as an empty one.
 
-If startup cannot complete those repairs safely, the Gateway exits instead of
-reporting healthy. With a restart policy, Docker, Podman, or Kubernetes may show
+Startup exits with code `78` when required state cannot be migrated safely:
+for example, source identities conflict, data is unreadable, another writer owns
+the state, or the filesystem provides no safe, durable way to publish a claim.
+The retained source, claim, and backups are recovery inputs; do not delete them to
+silence the error. If the filesystem lacks the required primitives, stop the
+Gateway and expose the same data through its native backing filesystem before
+retrying (for example, an Unraid pool path instead of the `shfs` share).
+
+With a restart policy, Docker, Podman, or Kubernetes may show
 the Gateway container restarting. Keep the mounted state volume, then run the
 same image once with `openclaw doctor --fix` as the container command, using the
 same state/config mounts the Gateway uses:

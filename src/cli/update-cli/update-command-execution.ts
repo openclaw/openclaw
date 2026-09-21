@@ -18,7 +18,7 @@ import {
 import { recordUpdateRunPhase } from "../../infra/update-run-ledger.js";
 import { isFailedUpdateStep } from "../../infra/update-run-step.js";
 import { readCurrentGitUpdateRecovery } from "../../infra/update-runner-git-recovery.js";
-import type { UpdateRunResult } from "../../infra/update-runner.js";
+import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
 import { defaultRuntime } from "../../runtime.js";
 import {
@@ -39,7 +39,7 @@ import {
 import { createUpdateCommandExecutionGuards } from "./update-command-execution-guards.js";
 import type { MutableUpdateExecutionParams } from "./update-command-execution.types.js";
 import {
-  createBeforeGitMutation,
+  assertReadableGitTarget,
   recordInspectedGitTarget,
 } from "./update-command-git-admission.js";
 import { updateGitInstall } from "./update-command-git.js";
@@ -510,10 +510,8 @@ export async function executeMutableUpdate(
     await stopManagedServiceBeforeMutableUpdate(roots);
     await recheckSchemas(admittedTargetSchemaVersions);
     assertExecutionCurrent();
-    // Git owns this fence after its post-stop schema check completes.
-    if (params.updateInstallKind === "package") {
-      preManagedServiceStop?.windowsTaskAutoStartRecovery?.beginMutation();
-    }
+    // Both install paths enter mutation only after the post-stop schema/authority fence.
+    preManagedServiceStop?.windowsTaskAutoStartRecovery?.beginMutation();
     mutationStarted = true;
     params.onActivation?.();
   };
@@ -609,15 +607,11 @@ export async function executeMutableUpdate(
         },
         beforeGitMutation:
           params.updateInstallKind === "git"
-            ? createBeforeGitMutation({
-                updateRun: opts.run,
-                roots: gitMutationRoots ?? [params.root],
-                stopManagedService: beforeActivate,
-                getPreManagedServiceStop: () => preManagedServiceStop,
-                checkTargetSchemas: recheckSchemas,
-                prepareMutableUpdate: () =>
-                  prepareMutableUpdate(ownedManagedUpdateContext?.env ?? admission?.managedEnv),
-              })
+            ? async (target) => {
+                assertReadableGitTarget(target);
+                admittedTargetSchemaVersions = target.schemaVersions;
+                await beforeActivate(gitMutationRoots ?? [params.root]);
+              }
             : undefined,
         allowGatewayServiceRepair: false,
         allowGatewayActivation: false,

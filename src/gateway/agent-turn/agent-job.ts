@@ -440,11 +440,13 @@ function parseDedupeObservation(entry: DedupeEntry): DedupeObservation {
   }
 
   const terminalStatus =
-    status === "ok" || status === "timeout" || status === "error"
-      ? status
-      : entry.ok
-        ? undefined
-        : "error";
+    status === "completed"
+      ? "ok"
+      : status === "ok" || status === "timeout" || status === "error"
+        ? status
+        : entry.ok
+          ? undefined
+          : "error";
   if (!terminalStatus) {
     return { state: "untracked" };
   }

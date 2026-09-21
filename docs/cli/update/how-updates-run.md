@@ -293,29 +293,17 @@ The database-schema preflight still refuses incompatible downgrades. These older
 targets do not support automatic schema-neutral rollback; see
 [Downgrade finalization](/install/updating#roll-back-a-package-install).
 
-Blocking update validation failures enter a bounded `repairing` phase using
-configured inference. These include failed required Doctor checks, invalid config
-or state, invalid or unattributed plugin-registry results, and failed core startup
-or readiness checks. The updater reruns the failed check after each attempt and
-activates only after it passes. Failed or unavailable repair discards the
-staged update and leaves the serving Gateway untouched.
-After Doctor migrations complete and validation children shut down, repair reuses
-that private copy and its completed checks. If no usable inference route exists,
-the attempt is skipped without another snapshot or Doctor pass. Incomplete
-migrations or unconfirmed child shutdown require a fresh private copy instead.
-Successful repair of a private copy does not mean the update was applied:
-the updater validates a fresh copy of the update again before activation. If that check
-fails, the report retains the failed update and the command exits nonzero even
-when the previous Gateway remains healthy. Successful updates with warnings
-exit zero.
-Pre-activation repair uses disposable copied state and configuration, then
-independently validates surviving update changes before activation, and
-`repair-requires-config-change` reports changed top-level keys that require
-operator-run `openclaw doctor --fix` or `openclaw triage`. Post-activation
-finalization may use live repair when compatibility-checked package rollback is
-unsafe or fails. See
-[Unattended repair](/install/updating#unattended-repair-on-your-own-inference) for
-budgets, permitted repairs, and attempt reports.
+Blocking validation failures discard the staged update without stopping the
+serving Gateway. The updater does not run inference or repair the disposable
+validation copy. After a failed update has settled and released its ownership,
+eligible failures can enter post-failure triage. Triage preserves the original
+failed outcome; a repaired installation does not turn that update into success.
+See [Unattended repair](/install/updating#unattended-repair-on-your-own-inference).
+
+Published 2026.9.4 updaters can still request an inference-repair worker from the
+candidate. The candidate preserves that wire protocol and returns repair
+unavailable without loading inference or changing operator state. The installed
+updater still owns that first hop and its failure reporting.
 
 Only `activating` stops the managed service. Its offline work includes the package
 or checkout swap, required `doctor --fix` migrations, and state compatibility
@@ -454,16 +442,12 @@ authorize restarting the new version.
 
 If the config file changed after the activation Doctor pass or the databases are
 not schema-neutral, automatic rollback is refused with
-`state-migrated-no-rollback`. The updater enters `repairing` on the installed
-version, also used if rollback itself fails. If the previous package was
-already restored, repair targets that version. Between repair attempts, the
-updater starts or restarts a stopped or unhealthy service once and reruns the
-post-restart verification checks. Successful verification finishes the run as
-`succeeded` for the new version, or `rolled-back` for the restored release with a
-nonzero command exit. Failed repair preserves the original failure and attempt summaries.
-Use the recorded diagnostics and [Triage](/cli/triage) for remaining failures,
-preserving migrated state. These temporary validation
-snapshots are not a full-state backup; see [Rollback](/install/updating#rollback).
+`state-migrated-no-rollback`. The updater preserves the failed outcome and migrated state. If rollback
+itself fails, it retains the package and service recovery diagnostics. Optional
+post-failure [Triage](/cli/triage) starts only after update ownership and service
+compensation settle; it does not rewrite the failed update or grant new restart
+authority. These temporary validation snapshots are not a full-state backup;
+see [Rollback](/install/updating#rollback).
 If schema state cannot be verified, rollback is refused with
 `rollback-state-unverified`; unknown state never counts as schema-neutral.
 
@@ -472,7 +456,7 @@ If schema state cannot be verified, rollback is refused with
 Service-manager commands and helper acknowledgements share the activation or
 recovery allowance. Slow inspection or teardown does not impose a separate
 five- or thirty-second command cutoff. Service installation also forwards one
-caller budget through staging, sealing, and load; the parent owns cancellation.
+caller budget through installation and activation; the parent owns cancellation.
 
 When an agent runs `openclaw update` inside a systemd user service or macOS
 LaunchAgent Gateway, the CLI hands the update to the same managed-service helper
@@ -482,8 +466,7 @@ not a completed update. The acknowledging CLI exits with code `75` (`EX_TEMPFAIL
 so scripts cannot mistake accepted background work for a completed update. The
 detached helper remains the settlement authority; use the printed status and
 health commands to retrieve its terminal result. The helper launches staging and validation outside the
-Gateway process tree while the old Gateway keeps serving, including during
-bounded update repair. It parks the Gateway
+Gateway process tree while the old Gateway keeps serving. It parks the Gateway
 only when the orchestrator reaches `activating`, then completes the existing
 commit-or-cancel handoff. Keep stdout connected to the agent: stopping the service
 can terminate the surrounding exec shell (SIGTERM or exit 143), including commands

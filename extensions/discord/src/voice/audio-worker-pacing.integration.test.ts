@@ -43,6 +43,9 @@ async function measure(workerOwned: boolean): Promise<number[]> {
   const producer = launch("producer", port2, state);
   try {
     await ready;
+    if (local) {
+      expect(local.times.length, "ready means source audio is being consumed").toBeGreaterThan(0);
+    }
     await delay(250);
     const until = performance.now() + 500;
     while (performance.now() < until) {

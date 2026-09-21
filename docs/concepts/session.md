@@ -338,6 +338,22 @@ The warning recommends raising `session.maintenance.maxDiskBytes` or exporting
 and deleting unneeded sessions. Checks resume on subsequent activity;
 `openclaw sessions cleanup --enforce` remains available immediately.
 
+An incomplete SQLite WAL checkpoint is a separate deferral. Cleanup preserves
+archives and history instead of deleting more data behind the blocked checkpoint.
+The result records `deferredReason: "checkpoint-incomplete"`, WAL bytes before and
+after, and the checkpoint outcome. Automatic and manual budget passes remain
+deferred until the checkpoint owner observes a completed checkpoint; elapsed time
+or a budget change alone does not retry pruning. Normal periodic checkpointing
+continues, and subsequent activity can resume cleanup after recovery.
+
+Look for `session history disk budget deferred until a completed WAL checkpoint is observed`
+in the Gateway log. Its checkpoint fields include bounded operation names for
+explicitly tracked readers, connection and thread IDs, and open-transaction flags.
+Collecting these facts does not keep connections open or change worker retirement.
+They do not prove which connection holds the blocking SQLite read mark. Raw native
+statements outside explicit reader tracking, other workers, and other processes
+can remain unidentified. No transcript contents, SQL text, or bound values are included.
+
 If you previously used DM isolation and later returned `session.dmScope` to
 `main`, preview stale peer-keyed DM rows with
 `openclaw sessions cleanup --dry-run --fix-dm-scope`. Applying the same flag

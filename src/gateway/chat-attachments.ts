@@ -17,6 +17,7 @@ import type { PromptImageOrderEntry } from "../media/prompt-image-order.js";
 import { sniffMimeFromBase64 } from "../media/sniff-mime-from-base64.js";
 import { deleteMediaBuffer, saveMediaBuffer } from "../media/store.js";
 import { DEFAULT_CHAT_ATTACHMENT_MAX_BYTES } from "./chat-attachment-policy.js";
+import { registerMediaCleanupDrain } from "./server-media-cleanup-lifecycle.js";
 import { formatForLog } from "./ws-log.js";
 
 export type ChatAttachment = {
@@ -58,7 +59,10 @@ export async function discardPreparedInboundMedia(
   refs: readonly Pick<OffloadedRef, "id">[],
   log?: { warn: (message: string) => void },
 ): Promise<void> {
-  const results = await Promise.allSettled(refs.map((ref) => deleteMediaBuffer(ref.id, "inbound")));
+  const deletion = Promise.allSettled(refs.map((ref) => deleteMediaBuffer(ref.id, "inbound")));
+  // Request cleanup can detach after ACK or rejection; shutdown still owns its file removals.
+  registerMediaCleanupDrain(deletion.then(() => undefined));
+  const results = await deletion;
   for (const [index, result] of results.entries()) {
     if (result.status === "rejected" && log) {
       log.warn(

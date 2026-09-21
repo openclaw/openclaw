@@ -100,6 +100,12 @@ export type { GatewayOperatorRoleActor };
 
 export type { RespondFn } from "./response-types.js";
 
+export type PreparedSessionApprovalReplay = {
+  replay: SessionApprovalReplay;
+  /** Check in the response frame; a publication may race promise delivery. */
+  isCurrent: () => boolean;
+};
+
 /** Minimal hosted OpenClaw contract retained by the gateway request router. */
 /**
  * Structural mirror of the engine's SystemAgentAssistantTurn. Kept local as a
@@ -209,7 +215,7 @@ type GatewayKernelContext = {
   questionManager?: QuestionManager;
   scopeUpgradeCoordinator?: ScopeUpgradeCoordinator;
   /** Exact authority cancels bound approvals; legacy run ids cancel only unbound exec requests. */
-  cancelRunBoundApprovals?: (target: string | AgentRunDelegatedAuthority) => number;
+  cancelRunBoundApprovals?: (target: string | AgentRunDelegatedAuthority) => Promise<number>;
   pluginApprovalManager?: ExecApprovalManager<PluginApprovalRequestPayload>;
   placementStandingGrants?: PlacementStandingGrantRuntime;
   systemAgentApprovalManager?: ExecApprovalManager<SystemAgentApprovalRequestPayload>;
@@ -242,7 +248,7 @@ type GatewayKernelContext = {
   listSessionPendingApprovals?: (
     sessionKey: string,
     client: GatewayClient | null,
-  ) => SessionApprovalReplay;
+  ) => Promise<PreparedSessionApprovalReplay>;
   loadGatewayModelCatalog: (params?: {
     agentId?: string;
     agentDir?: string;

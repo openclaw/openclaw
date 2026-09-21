@@ -11,15 +11,15 @@ read_when:
 OpenClaw exposes four user-facing update channels:
 
 - stable: the promoted regular release on npm `latest`
-- extended-stable: the trailing completed month's `.33+` maintenance line on
-  npm `extended-stable`
+- extended-stable: a `.33+` maintenance line from either of the two trailing
+  completed months on npm `extended-stable`
 - beta: prerelease tags on npm `beta`
 - dev: the moving head of `main`
 
-Extended-stable ships the trailing month's Gateway, official npm plugins, and
-Docker images without moving regular `latest` or `main` selectors. Each release
-also has a GitHub Release with shared validation evidence that is never marked
-Latest.
+Extended-stable ships a Gateway from either of the two trailing completed
+months, along with official npm plugins and Docker images, without moving
+regular `latest` or `main` selectors. Each release also has a GitHub Release
+with shared validation evidence that is never marked Latest.
 
 Tideclaw alpha builds are a separate internal prerelease track (npm dist-tag `alpha`), covered under [NPM workflow inputs](#npm-workflow-inputs) and [Release test boxes](#release-test-boxes).
 
@@ -35,7 +35,7 @@ Tideclaw alpha builds are a separate internal prerelease track (npm dist-tag `al
 - Alpha/nightly builds use the next unreleased patch train and increment only `alpha.N` for repeated builds. Once that patch has a beta, new alpha builds move to the following patch.
 - npm versions are immutable: never delete, republish, or reuse a published tag. Cut the next prerelease number or the next monthly patch instead.
 - `latest` continues to follow the current regular/daily npm line. For core and every published official plugin, `beta` must always resolve to a version greater than or equal to `latest` under semver ordering; a same-train prerelease is older than its final release.
-- `extended-stable` means the supported trailing-month Gateway distribution, beginning at patch `33`; patch `34` and later are maintenance releases on that monthly line
+- `extended-stable` means a supported Gateway distribution from either trailing completed month, beginning at patch `33`; patch `34` and later are maintenance releases on that monthly line
 - Regular final and regular correction releases publish to npm `beta` by default; release operators can target `latest` explicitly, or promote a vetted beta build later
 - Gateway extended-stable publishes core, every npm-publishable official plugin,
   and its Docker images at one exact version; see the dedicated workflow below.
@@ -164,9 +164,10 @@ bytes still require their own qualification.
 For completed month `YYYY.M`, create `extended-stable/YYYY.M.33` and publish
 `.33+` from that branch. Tag, branch, checkout, package version, preflight, and
 validation must identify one commit. Before `.33`, protected `main` must contain
-a final version below patch `33` exactly one calendar month later, making the
-release the trailing completed month. Maintenance patches remain eligible only
-while that holds; the older line retires when `main` advances another month.
+a final version below patch `33` one or two calendar months later, making the
+release one of the two trailing completed months. Maintenance patches remain
+eligible only while that holds; the older line retires when `main` advances a
+third month.
 The shared publisher checks live `main` before dispatching publication children;
 each plugin checks it again immediately before npm publication, including
 trusted-main recovery. Saved qualification does not authorize a retired line.

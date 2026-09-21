@@ -2,12 +2,12 @@ import { channel } from "node:diagnostics_channel";
 import { statSync } from "node:fs";
 import { performance } from "node:perf_hooks";
 import { isDeepStrictEqual } from "node:util";
-import { isMainThread, threadId } from "node:worker_threads";
 import { toStringifiedError } from "@openclaw/normalization-core/error-coercion";
-import { redactIdentifier } from "@openclaw/normalization-core/node-crypto";
-import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import { formatErrorMessageWithCode } from "../../infra/errors.js";
 import { SQLITE_IDLE_HANDLE_TTL_MS } from "../../infra/sqlite-handle-lifecycle.js";
+import {
+  publishSqliteWalCheckpointHealth,
+  type SqliteWalHealth,
+} from "../../infra/sqlite-wal-checkpoint.js";
 import { captureStateDatabaseCoordinatorRuntime } from "../../infra/state-database-coordinator.js";
 import { createSubsystemLogger } from "../../logging/subsystem.js";
 import { KeyedAsyncQueue } from "../../plugin-sdk/keyed-async-queue.js";
@@ -41,6 +41,7 @@ import type {
   SqliteSessionReclamationResult,
 } from "./session-accessor.sqlite-lifecycle-types.js";
 import { revokeSqliteReclamationCommit } from "./session-accessor.sqlite-reclamation-commit.js";
+import { logSqliteReclamationWorkerOutcome } from "./session-accessor.sqlite-reclamation-worker-diagnostics.js";
 import {
   withSqliteMutationWorkerCoordination,
   type SqliteMutationWorkerCoordination,
@@ -96,10 +97,10 @@ type WorkerCleanup = { cleanupWarnings: string[]; settled: boolean };
 export type SqliteReclamationWorkerMessage =
   | SqliteMutationWorkerMessage<SqliteSessionReclamationResult>
   | { type: "lease"; receipt: OpenClawAgentDatabaseWorkerLeaseReceipt }
+  | { type: "checkpoint"; operationId: number; health: SqliteWalHealth }
   | ({ type: "closed" } & WorkerCleanup);
 
 const log = createSubsystemLogger("session-sqlite");
-const SLOW_RECLAMATION_WORKER_MS = 1_000;
 type ReclamationWorkerSlot = { worker?: SqliteReclamationWorker; execution?: CanonicalWorkerPool };
 const retained = resolveGlobalSingleton<ReclamationWorkerSlot>(
   Symbol.for("openclaw.sessionReclamationWorker"),
@@ -182,7 +183,7 @@ async function useReclamationWorker<T>(
 }
 
 /** Retains only the admitted connection; each caller owns its plan, claim and commit gate. */
-class SqliteReclamationWorker {
+export class SqliteReclamationWorker {
   private transport?: SqliteMutationWorkerTransport;
   private workerThreadId?: number;
   private ended?: Promise<void>;
@@ -259,6 +260,10 @@ class SqliteReclamationWorker {
     if (!this.matches(options, claim)) {
       throw new Error("SQLite session reclamation database owner is no longer current");
     }
+    this.assertPathCurrent();
+  }
+
+  private assertPathCurrent(): void {
     const file = statSync(this.options.path, { bigint: true });
     if (`${file.dev}:${file.ino}` !== this.identity) {
       throw new Error("SQLite session reclamation database path was replaced");
@@ -393,49 +398,16 @@ class SqliteReclamationWorker {
             ]),
         }),
     );
-    const observeCompletion = (outcome: "resolved" | "rejected", failure?: unknown) => {
-      const elapsedMs = Math.round(performance.now() - startedAt);
-      if (outcome === "rejected" || elapsedMs >= SLOW_RECLAMATION_WORKER_MS) {
-        const failureText = (value: unknown) => {
-          const text = formatErrorMessageWithCode(value);
-          return truncateUtf16Safe(
-            params.sessionId
-              ? text.replaceAll(params.sessionId, redactIdentifier(params.sessionId))
-              : text,
-            2_048,
-          );
-        };
-        log.warn(
-          elapsedMs >= SLOW_RECLAMATION_WORKER_MS
-            ? "slow SQLite reclamation Worker operation"
-            : "SQLite reclamation Worker failed",
-          {
-            pid: process.pid,
-            threadId,
-            isMainThread,
-            reclamationKind: params.diagnostics?.kind ?? params.kind,
-            workerThreadId: this.workerThreadId,
-            elapsedMs,
-            outcome,
-            exitCode,
-            ...(outcome === "rejected"
-              ? {
-                  ...(params.sessionId
-                    ? { sessionIdHash: redactIdentifier(params.sessionId) }
-                    : {}),
-                  error: failureText(failure),
-                  errorFrame: failureText(
-                    toStringifiedError(failure)
-                      .stack?.split("\n")
-                      .find((line) => line.trimStart().startsWith("at "))
-                      ?.trim() ?? "",
-                  ),
-                }
-              : {}),
-          },
-        );
-      }
-    };
+    const observeCompletion = (outcome: "resolved" | "rejected", failure?: unknown) =>
+      logSqliteReclamationWorkerOutcome({
+        startedAt,
+        outcome,
+        failure,
+        kind: params.diagnostics?.kind ?? params.kind,
+        workerThreadId: this.workerThreadId,
+        exitCode,
+        sessionId: params.sessionId,
+      });
     void operation
       .then(
         () => observeCompletion("resolved"),
@@ -464,7 +436,9 @@ class SqliteReclamationWorker {
       this.operationId = transport.initialOperationId;
     }
     worker.on("message", (message: SqliteReclamationWorkerMessage) => {
-      if (message.type === "closed") {
+      if (message.type === "checkpoint") {
+        this.observeCheckpoint(message);
+      } else if (message.type === "closed") {
         this.cleanup = message;
         this.healthyCloseAcknowledged = this.closeRequested && message.settled;
         this.closed.resolve();
@@ -518,6 +492,28 @@ class SqliteReclamationWorker {
       });
     });
     return transport;
+  }
+
+  private observeCheckpoint(
+    message: Extract<SqliteReclamationWorkerMessage, { type: "checkpoint" }>,
+  ): void {
+    if (
+      this.retired ||
+      this.failure ||
+      !this.lease ||
+      message.operationId !== this.operationId ||
+      (this.revoked && !this.closeRequested)
+    ) {
+      return;
+    }
+    try {
+      this.stateContext.admission.assertCurrent();
+      this.assertPathCurrent();
+      // Native close keeps its admitted custody after new requests are revoked.
+      publishSqliteWalCheckpointHealth(this.options.path, message.health);
+    } catch {
+      // A retired state owner cannot publish late diagnostics or change native settlement.
+    }
   }
 
   private requestTermination(transport: SqliteMutationWorkerTransport): void {

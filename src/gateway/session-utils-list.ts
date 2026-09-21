@@ -162,6 +162,18 @@ function resolveSessionsListDefaultsAgentId(
 type RecordRow = ReturnType<SessionRowProjection["selectEntries"]>[number];
 const sentinel = (key: string) => key === "global" || key === "unknown";
 
+// Retain one broad selection per resident owner; keyed reads never displace it.
+const sessionRowSelections = new WeakMap<
+  SessionRowProjection,
+  {
+    revision: number;
+    scope: ReturnType<SessionRowProjection["state"]["scope"]>;
+    activeOnly: boolean;
+    winners: Map<string, RecordRow>;
+    entries: SessionEntryPair[];
+  }
+>();
+
 /** Preserve federation before caller visibility and activity filters. */
 export function prepareSessionRowSelection(
   projection: SessionRowProjection,
@@ -171,58 +183,73 @@ export function prepareSessionRowSelection(
     rowContext?: SessionListRowContext;
   },
 ) {
-  const { cfg, modelCatalog, scope, rowContext: residentContext } = projection.state;
+  const { cfg, modelCatalog, scope, revision, rowContext: residentContext } = projection.state;
   const selectedScope = scope(opts);
   const now = prepared?.now ?? Date.now();
   const rowContext = prepared?.rowContext ?? {
     ...residentContext,
     subagentRuns: residentContext.subagentRuns.atTime(now),
   };
-  const rows = projection
-    .selectEntries({
-      agentId: selectedScope.agentId,
-      key: prepared?.key,
-      sessionIdOrKey: prepared?.sessionIdOrKey,
-      sortBy: null,
-    })
-    .filter(
-      (row) =>
-        selectedScope.paths.has(row.storeTarget.storePath) &&
-        (!selectedScope.configuredAgentIds ||
-          isConfiguredGatewaySessionEntry(
-            cfg,
-            selectedScope.configuredAgentIds,
-            row.key,
-            row.entry,
-          )),
-    );
-  const winners = new Map<string, RecordRow>();
-  const keyFor = (row: RecordRow) =>
-    sentinel(row.key) && opts.activeOnly ? JSON.stringify([row.key, row.agentId]) : row.key;
-  for (const row of rows) {
-    const key = keyFor(row);
-    const previous = winners.get(key);
-    if (previous && !sentinel(row.key)) {
-      throw canonicalSessionKeyMigrationRequiredError(
-        `duplicate rows resolve to canonical session key ${row.key}`,
+  const keyed = prepared?.key !== undefined || prepared?.sessionIdOrKey !== undefined;
+  const activeOnly = opts.activeOnly === true;
+  let selection = keyed ? undefined : sessionRowSelections.get(projection);
+  if (
+    !selection ||
+    selection.revision !== revision ||
+    selection.scope !== selectedScope ||
+    selection.activeOnly !== activeOnly
+  ) {
+    const rows = projection
+      .selectEntries({
+        agentId: selectedScope.agentId,
+        key: prepared?.key,
+        sessionIdOrKey: prepared?.sessionIdOrKey,
+        sortBy: null,
+      })
+      .filter(
+        (row) =>
+          selectedScope.paths.has(row.storeTarget.storePath) &&
+          (!selectedScope.configuredAgentIds ||
+            isConfiguredGatewaySessionEntry(
+              cfg,
+              selectedScope.configuredAgentIds,
+              row.key,
+              row.entry,
+            )),
       );
+    const winners = new Map<string, RecordRow>();
+    const keyFor = (row: RecordRow) =>
+      sentinel(row.key) && opts.activeOnly ? JSON.stringify([row.key, row.agentId]) : row.key;
+    for (const row of rows) {
+      const key = keyFor(row);
+      const previous = winners.get(key);
+      if (previous && !sentinel(row.key)) {
+        throw canonicalSessionKeyMigrationRequiredError(
+          `duplicate rows resolve to canonical session key ${row.key}`,
+        );
+      }
+      // Equal precedence retains the first resident row, as a stable sort would.
+      if (
+        !previous ||
+        selectedScope.paths.get(row.storeTarget.storePath)! <
+          selectedScope.paths.get(previous.storeTarget.storePath)!
+      ) {
+        winners.set(key, row);
+      }
     }
-    // Equal precedence retains the first resident row, as a stable sort would.
-    if (
-      !previous ||
-      selectedScope.paths.get(row.storeTarget.storePath)! <
-        selectedScope.paths.get(previous.storeTarget.storePath)!
-    ) {
-      winners.set(key, row);
+    const entries: SessionEntryPair[] = [];
+    for (const row of rows) {
+      const key = keyFor(row);
+      if (winners.get(key) === row) {
+        entries.push([key, row.entry]);
+      }
+    }
+    selection = { revision, scope: selectedScope, activeOnly, winners, entries };
+    if (!keyed) {
+      sessionRowSelections.set(projection, selection);
     }
   }
-  const entries: SessionEntryPair[] = [];
-  for (const row of rows) {
-    const key = keyFor(row);
-    if (winners.get(key) === row) {
-      entries.push([key, row.entry]);
-    }
-  }
+  const { winners, entries } = selection;
   return {
     cfg,
     opts,
@@ -303,7 +330,8 @@ export function prepareProjectedSessionList(params: {
   // Person references resolve against the full visible roster before candidate filtering.
   if (!opts.spawnedBy && !opts.involvingProfileId) {
     const { revision } = projection.state;
-    const key = JSON.stringify([exactKey, opts]);
+    const { limit: _limit, offset: _offset, ...candidateOptions } = opts;
+    const key = JSON.stringify([exactKey, candidateOptions]);
     let cached = sessionListCandidates.get(projection);
     if (cached?.revision !== revision || cached.key !== key) {
       cached = {

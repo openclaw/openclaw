@@ -51,7 +51,7 @@ import { readAgentDatabaseAdmissionRefusal } from "../../state/agent-database-ad
 import {
   sessionDeliveryChannel,
   sessionDeliveryOrigin,
-} from "../../utils/delivery-context.shared.js";
+} from "../../utils/delivery-context.read.js";
 import { resolveCommandTurnTargetSessionKey } from "../command-turn-context.js";
 import type { GetReplyOptions } from "../get-reply-options.types.js";
 import { DEFAULT_HEARTBEAT_ACK_MAX_CHARS, stripHeartbeatToken } from "../heartbeat.js";

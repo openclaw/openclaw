@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, vi } from "vitest";
-import type { UpdateRunResult } from "../../infra/update-runner.js";
+import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import type { captureTargetDatabaseSchemaContext } from "./schema-preflight.js";
 import type { executeMutableUpdate } from "./update-command-execution.js";
 import type { PreManagedServiceStop } from "./update-command-service.js";

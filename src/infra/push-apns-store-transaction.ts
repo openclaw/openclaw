@@ -15,6 +15,7 @@ type ApnsRegistrationDatabase = Pick<
 export function nextApnsRegistrationVersion(
   nodeId: string,
   previousVersions: readonly number[],
+  nowMs = Date.now(),
 ): number {
   let latest = -1;
   for (const version of previousVersions) {
@@ -26,7 +27,7 @@ export function nextApnsRegistrationVersion(
   if (latest === Number.MAX_SAFE_INTEGER) {
     throw new Error(`APNs registration version exhausted for node ${nodeId}`);
   }
-  return Math.max(Date.now(), latest + 1);
+  return Math.max(nowMs, latest + 1);
 }
 
 /** Tombstones and deletes one APNs owner inside the caller's shared-state transaction. */

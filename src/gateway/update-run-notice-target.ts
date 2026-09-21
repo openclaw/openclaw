@@ -12,11 +12,13 @@ import { createSubsystemLogger } from "../logging/subsystem.js";
 import { resolveChannelAccountEntry } from "../routing/account-lookup.js";
 import { normalizeAccountId } from "../routing/session-key.js";
 import {
-  type DeliveryContext,
   deliveryContextFromSession,
+  sessionDeliveryOrigin,
+} from "../utils/delivery-context.read.js";
+import {
+  type DeliveryContext,
   hasDeliveryTargetFields,
   mergeDeliveryContext,
-  sessionDeliveryOrigin,
 } from "../utils/delivery-context.shared.js";
 import { isInternalMessageChannel } from "../utils/message-channel.js";
 import { resolveGatewayLifecycleNoticeRoute } from "./server-restart-sentinel-notice.js";

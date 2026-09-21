@@ -52,7 +52,7 @@ import {
   applyPostPluginConfigValidation,
   POST_PLUGIN_DOCTOR_EXECUTION_FAILED_REASON,
 } from "./update-command-post-plugin-validation.js";
-import { UpdateCommandRecoveryPendingError } from "./update-command-recovery.js";
+import { UpdateCommandRecoveryPendingError } from "./update-command-recovery-error.js";
 import {
   disableUpdatedPackageCompileCacheEnv,
   stripGatewayServiceMarkerEnv,

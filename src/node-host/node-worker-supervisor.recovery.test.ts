@@ -163,13 +163,20 @@ describe("node worker supervisor recovery", () => {
         "stopped-former-owner",
         retainsCompletedTurn ? "background-start" : operation === "anchor-lost" ? "tree" : "wait",
       );
-      const previous = spawnSupervisorOwner({ bundleRoot, env, input, root });
+      const previous = spawnSupervisorOwner({
+        bundleRoot,
+        env,
+        input,
+        root,
+        waitForCompletedTurn: retainsCompletedTurn,
+      });
       spawned.add(previous);
       const receipt = JSON.parse(await waitForChildLine(previous)) as NodeWorkerLaunchReceipt;
       const anchor = receipt.worker!;
       ownedProcessGroups.push(anchor);
       const capacitySnapshots: Array<{ total: number; available: number }> = [];
       const totalCapacity = ["initialize", "environment-stop"].includes(operation) ? 2 : 1;
+      const capacityUnavailable = createDeferred();
       const capacityReleased = createDeferred();
       const replacement = createNodeWorkerSupervisor({
         bundleRoot,
@@ -177,6 +184,9 @@ describe("node worker supervisor recovery", () => {
         capacity: totalCapacity,
         onCapacityChanged: (capacity) => {
           capacitySnapshots.push(capacity);
+          if (capacity.available === 0) {
+            capacityUnavailable.resolve();
+          }
           if (capacity.available === totalCapacity) {
             capacityReleased.resolve();
           }
@@ -204,12 +214,10 @@ describe("node worker supervisor recovery", () => {
       await (async () => {
         const journal = new NodeWorkerJournalWorker({ env });
         const turns = new NodeWorkerTurnStore(journal);
-        if (retainsCompletedTurn) {
-          await vi.waitFor(async () =>
-            expect((await turns.get(input.launchId))?.state).toBe("completed"),
-          );
-        }
         const completed = retainsCompletedTurn ? await turns.get(input.launchId) : undefined;
+        if (retainsCompletedTurn) {
+          expect(completed?.state).toBe("completed");
+        }
         if (completed) {
           const observer = createNodeWorkerSupervisor({ bundleRoot, env, capacity: 1 });
           try {
@@ -241,9 +249,8 @@ describe("node worker supervisor recovery", () => {
           initialized = true;
         });
         void initialization.catch(() => undefined);
-        await vi.waitFor(() =>
-          expect(capacitySnapshots.at(-1)).toEqual({ total: totalCapacity, available: 0 }),
-        );
+        await racePromiseWithAbortSignal(capacityUnavailable.promise, testSignal);
+        expect(capacitySnapshots.at(-1)).toEqual({ total: totalCapacity, available: 0 });
         expect(initialized).toBe(false);
         if (
           [
@@ -256,7 +263,6 @@ describe("node worker supervisor recovery", () => {
           ].includes(operation) ||
           completed
         ) {
-          await vi.waitFor(() => expect(initialized).toBe(true), { timeout: 5_000 });
           await initialization;
           const store = new NodeWorkerLaunchStore(journal);
           expect(await store.get(input.launchId)).toMatchObject({
@@ -442,7 +448,7 @@ describe("node worker supervisor recovery", () => {
         });
         void closing.catch(() => undefined);
 
-        await vi.waitFor(() => expect(closed).toBe(true), { timeout: 1_000 });
+        await closing;
         expect(initialized).toBe(true);
         expect(inspectNodeWorkerProcessIdentity(anchor)).toBe("live");
         expect(await new NodeWorkerLaunchStore(journal).get(input.launchId)).toMatchObject({

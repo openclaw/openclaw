@@ -10,8 +10,11 @@ import {
 import { readWorkspaceStateSnapshotForDirectoryInDatabase } from "../agents/workspace-state-store.kernel.js";
 import { ExecutionDecisionCursorError } from "../audit/execution-decision-receipts.js";
 import { inspectExecutionIdentityRunInDatabase } from "../audit/execution-identity-context.js";
+import { observeCronRunRecoveryInDatabase } from "../cron/store/run-recovery.read.js";
 import { getFleetCellInDatabase, listFleetCellsInDatabase } from "../fleet/registry.kernel.js";
+import { listTerminalOperatorApprovalsInDatabase } from "../gateway/operator-approval-store.kernel.js";
 import { readWorkerSessionPlacementProjectionInDatabase } from "../gateway/worker-environments/placement-read-projection.js";
+import { executeDevicePairingRead } from "../infra/device-pairing-read.kernel.js";
 import { readExecApprovalsConfigRow } from "../infra/exec-approvals-sqlite.js";
 import { inspectCurrentConversationBindingRecordInDatabase } from "../infra/outbound/current-conversation-bindings.kernel.js";
 import { runSqliteDeferredTransactionSync } from "../infra/sqlite-transaction.js";
@@ -74,6 +77,28 @@ function isReadRequest(input: unknown): input is OpenClawStateReadRequest {
         typeof input.command.conversation.conversationId === "string" &&
         (input.command.conversation.parentConversationId === undefined ||
           typeof input.command.conversation.parentConversationId === "string")) ||
+      (input.command.type === "cron.observeRunRecovery" &&
+        typeof input.command.storeKey === "string" &&
+        Array.isArray(input.command.proposals) &&
+        input.command.proposals.every(
+          (proposal: unknown) =>
+            isRecord(proposal) &&
+            typeof proposal.jobId === "string" &&
+            (proposal.queuedAtMs === undefined || typeof proposal.queuedAtMs === "number") &&
+            (proposal.runningAtMs === undefined || typeof proposal.runningAtMs === "number"),
+        )) ||
+      (input.command.type === "devicePairing.list" && typeof input.command.nowMs === "number") ||
+      (input.command.type === "devicePairing.lookup" &&
+        typeof input.command.deviceId === "string") ||
+      (input.command.type === "devicePairing.pending" &&
+        typeof input.command.requestId === "string" &&
+        typeof input.command.nowMs === "number") ||
+      (input.command.type === "devicePairing.bootstrapContext" &&
+        isRecord(input.command.input) &&
+        typeof input.command.input.token === "string" &&
+        typeof input.command.input.deviceId === "string" &&
+        typeof input.command.input.publicKey === "string" &&
+        typeof input.command.input.nowMs === "number") ||
       input.command.type === "admit" ||
       input.command.type === "exec-approvals.read" ||
       ((input.command.type === "skills.library.descriptions" ||
@@ -108,6 +133,7 @@ function isReadRequest(input: unknown): input is OpenClawStateReadRequest {
         (input.command.input.includeRunId === undefined ||
           typeof input.command.input.includeRunId === "string")) ||
       input.command.type === "fleet.list" ||
+      (input.command.type === "operatorApprovals.history" && isRecord(input.command.input)) ||
       input.command.type === "nodeHost.config" ||
       (input.command.type === "onboardingRecommendations.read" &&
         typeof input.command.configKey === "string") ||
@@ -190,6 +216,22 @@ serveOwnedWorkerTasks(
                     ),
                   };
                 }
+                if (command.type === "cron.observeRunRecovery") {
+                  return {
+                    ok: true,
+                    type: command.type,
+                    sourceAdmitted,
+                    observation: observeCronRunRecoveryInDatabase(db, command),
+                  };
+                }
+                if (
+                  command.type === "devicePairing.list" ||
+                  command.type === "devicePairing.lookup" ||
+                  command.type === "devicePairing.pending" ||
+                  command.type === "devicePairing.bootstrapContext"
+                ) {
+                  return executeDevicePairingRead(db, input.databasePath, command);
+                }
                 if (command.type === "pluginBlob.lookup") {
                   return {
                     ok: true,
@@ -258,6 +300,14 @@ serveOwnedWorkerTasks(
                     value: tableExists(db, "skill_library_entries")
                       ? selectSkillLibraryRevisionManifestsBatch(db, command.input)
                       : undefined,
+                  };
+                }
+                if (command.type === "operatorApprovals.history") {
+                  return {
+                    ok: true,
+                    type: command.type,
+                    sourceAdmitted,
+                    history: listTerminalOperatorApprovalsInDatabase(command.input, db),
                   };
                 }
                 if (command.type === "onboardingRecommendations.read") {

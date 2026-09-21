@@ -856,6 +856,61 @@ it.each([
   },
 );
 
+it("captures cron recovery markers and charges their retained bytes before dispatch", async () => {
+  const { pathname, options } = source();
+  const context = captureOpenClawStateWorkerContext(options);
+  const location = { context, location: pathname, checkFreshAdmission: false };
+  const authority = { signal: new AbortController().signal, assertCurrent: () => {} };
+  const command = {
+    type: "cron.observeRunRecovery" as const,
+    storeKey: "租户🦞",
+    proposals: [
+      { jobId: "任务雪", queuedAtMs: 1, runningAtMs: 2 },
+      { jobId: "运行🌊", runningAtMs: 3 },
+    ],
+  };
+  const expected = structuredClone(command);
+  const transport = createOpenClawStateReadTransport(command);
+  const baseline = createOpenClawStateReadTransport({ type: "fleet.list" });
+  command.storeKey = "changed partition";
+  command.proposals[0]!.jobId = "changed before preparation";
+  command.proposals[0]!.queuedAtMs = 9;
+  const dispatch = createDeferredCore();
+  const baselineTask = queueTask(dispatch.promise);
+  const task = queueTask(dispatch.promise);
+  const baselineRead = baseline.read(location, authority);
+  const read = transport.read(location, authority);
+  try {
+    const [baseOptions, submittedOptions] = await Promise.all([
+      baselineTask.submitted,
+      task.submitted,
+    ]);
+    const expectedBytes =
+      Buffer.byteLength(expected.type) -
+      Buffer.byteLength("fleet.list") +
+      Buffer.byteLength(expected.storeKey) +
+      expected.proposals.reduce((total, entry) => total + Buffer.byteLength(entry.jobId), 24);
+    expect(submittedOptions.inputBytes).toBe(Number(baseOptions.inputBytes) + expectedBytes);
+    command.proposals.splice(0);
+    dispatch.resolve();
+    expect((await task.captured).command).toEqual(expected);
+    baselineTask.result.resolve(emptyReply);
+    task.result.resolve({
+      ok: true,
+      type: expected.type,
+      sourceAdmitted: true,
+      observation: { kind: "observed", proposals: [] },
+    });
+    await Promise.all([baselineRead, read]);
+  } finally {
+    dispatch.resolve();
+    baselineTask.result.resolve(emptyReply);
+    task.result.resolve(emptyReply);
+    await Promise.allSettled([baselineRead, read]);
+    await Promise.all([baseline.close(), transport.close()]);
+  }
+});
+
 it("captures and charges independent snapshot and schema paths before queued dispatch", async () => {
   const { root, options } = source();
   const context = { ...captureOpenClawStateWorkerContext(options), existingSchemaPath: undefined };

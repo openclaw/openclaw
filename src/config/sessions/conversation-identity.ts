@@ -10,9 +10,11 @@ import {
 } from "../../routing/conversation-ref.js";
 import {
   deliveryContextFromSession,
+  sessionDeliveryOrigin,
+} from "../../utils/delivery-context.read.js";
+import {
   mergeDeliveryContext,
   normalizeDeliveryContext,
-  sessionDeliveryOrigin,
 } from "../../utils/delivery-context.shared.js";
 import type { DeliveryContext } from "../../utils/delivery-context.types.js";
 import {

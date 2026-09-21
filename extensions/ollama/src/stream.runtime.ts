@@ -494,38 +494,13 @@ function estimateOllamaCompletionTokens(
   return estimateTokensFromChars(chars);
 }
 
-function resolveUsageCount(
-  value: number | undefined,
-  fallback: OllamaUsageFallback["input"],
-): number {
-  if (typeof value === "number" && Number.isFinite(value) && value >= 0) {
-    return value;
-  }
-  // Provider counters, including zero, avoid scanning and serializing history for estimates.
+function resolveUsageFallback(fallback: OllamaUsageFallback["input"]): number {
   const estimate = typeof fallback === "function" ? fallback() : fallback;
-  if (typeof estimate === "number" && Number.isFinite(estimate) && estimate > 0) {
-    return estimate;
-  }
-  return 0;
+  return resolveOptionalUsageCount(estimate) ?? 0;
 }
 
 function resolveOptionalUsageCount(value: number | undefined): number | undefined {
   return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
-}
-
-function hasMeasuredOllamaUsage(response: OllamaChatResponse): boolean {
-  // Ollama reports prompt_eval_count and eval_count on every terminal /api/chat
-  // response. Only a valid measured pair may anchor the context precheck; a
-  // missing or invalid counter falls back to a character estimate and must not
-  // be promoted into an authoritative context snapshot.
-  return (
-    typeof response.prompt_eval_count === "number" &&
-    Number.isFinite(response.prompt_eval_count) &&
-    response.prompt_eval_count >= 0 &&
-    typeof response.eval_count === "number" &&
-    Number.isFinite(response.eval_count) &&
-    response.eval_count >= 0
-  );
 }
 
 type InputContentPart =
@@ -892,22 +867,20 @@ export function buildAssistantMessage(
     }
   }
 
-  const promptTokens = resolveUsageCount(response.prompt_eval_count, usageFallback?.input);
-  const outputTokens = resolveUsageCount(response.eval_count, usageFallback?.output);
+  const reportedPromptTokens = resolveOptionalUsageCount(response.prompt_eval_count);
+  const reportedOutputTokens = resolveOptionalUsageCount(response.eval_count);
+  // Provider counters, including zero, avoid scanning and serializing history for estimates.
+  const promptTokens = reportedPromptTokens ?? resolveUsageFallback(usageFallback?.input);
+  const outputTokens = reportedOutputTokens ?? resolveUsageFallback(usageFallback?.output);
   const reportedCacheRead = resolveOptionalUsageCount(response.prompt_eval_cached_count);
   // Ollama includes cached tokens in prompt_eval_count; OpenClaw records input as uncached.
   const cacheRead =
     reportedCacheRead === undefined ? undefined : Math.min(reportedCacheRead, promptTokens);
-  // Anchor the mid-turn context precheck on Ollama's measured prompt size when
-  // both counters are present; otherwise the precheck falls back to a character
-  // estimate (~2x too high) and compacts well before the real context budget.
-  const contextUsage = hasMeasuredOllamaUsage(response)
-    ? {
-        state: "available" as const,
-        promptTokens,
-        totalTokens: promptTokens + outputTokens,
-      }
-    : undefined;
+  // Estimated fallbacks are not provider measurements and cannot anchor context.
+  const contextUsage: Usage["contextUsage"] =
+    reportedPromptTokens !== undefined && reportedOutputTokens !== undefined
+      ? { state: "available", promptTokens, totalTokens: promptTokens + outputTokens }
+      : undefined;
 
   return buildStreamAssistantMessage({
     model: modelInfo,
@@ -916,6 +889,7 @@ export function buildAssistantMessage(
     usage: buildUsageWithNoCost({
       input: promptTokens - (cacheRead ?? 0),
       output: outputTokens,
+      contextUsage,
       ...(cacheRead === undefined
         ? {}
         : {
@@ -923,7 +897,6 @@ export function buildAssistantMessage(
             cacheWrite: 0,
             totalTokens: promptTokens + outputTokens,
           }),
-      ...(contextUsage ? { contextUsage } : {}),
     }),
   });
 }

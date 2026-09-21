@@ -689,8 +689,8 @@ describe("session sharing policy", () => {
       const context = {
         chatAbortControllers: new Map([["run-1", { sessionKey: "global", agentId: "work" }]]),
         execApprovalManager: {
-          lookupApprovalId: () => ({ kind: "exact", id: "approval-1" }),
-          getSnapshot: () => ({ request: { sessionKey: "global", agentId: "work" } }),
+          lookupLocalApprovalId: () => ({ kind: "exact", id: "approval-1" }),
+          getLocalSnapshot: () => ({ request: { sessionKey: "global", agentId: "work" } }),
         },
         getRuntimeConfig: () => cfg,
       } as never;

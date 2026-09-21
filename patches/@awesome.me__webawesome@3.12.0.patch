@@ -723,7 +723,7 @@ index 593bac0b7708fc0e908f9f8de650e45f8b3610ec..66e09365025b0e593e38d8410c8019d6
    }
  };
 diff --git a/dist/chunks/chunk.KZJTFPDQ.js b/dist/chunks/chunk.KZJTFPDQ.js
-index 11de1ac9d650dc1e2db6922f8fb6cd217bc13a4d..439bc19d31d5e0a82efcf56e1a576703000179e7 100644
+index 11de1ac9d650dc1e2db6922f8fb6cd217bc13a4d..287223ce3a16e03424e85a330b985e899e3f31c3 100644
 --- a/dist/chunks/chunk.KZJTFPDQ.js
 +++ b/dist/chunks/chunk.KZJTFPDQ.js
 @@ -58,17 +58,16 @@ var openDropdowns = /* @__PURE__ */ new Set();
@@ -910,7 +910,7 @@ index 11de1ac9d650dc1e2db6922f8fb6cd217bc13a4d..439bc19d31d5e0a82efcf56e1a576703
      }
      if (changedProperties.has("size")) {
        this.syncItemSizes();
-@@ -300,104 +265,94 @@ var WaDropdown = class extends WebAwesomeElement {
+@@ -300,104 +265,96 @@ var WaDropdown = class extends WebAwesomeElement {
      );
      items.forEach((item) => item.size = this.size);
    }
@@ -1028,6 +1028,7 @@ index 11de1ac9d650dc1e2db6922f8fb6cd217bc13a4d..439bc19d31d5e0a82efcf56e1a576703
 +    // Join canceled animation cleanup before reusing its class. Show and hide share
 +    // one CSS animation name, so overlapping helpers cannot own separate animations.
 +    this.menu.classList.remove("show", "hide");
++    const focused = [...activeElements()].pop();
 +    await this.menuAnimation;
 +    if (!isCurrent()) return;
 +    this.menuAnimation = animateWithClass(this.menu, open ? "show" : "hide");
@@ -1039,7 +1040,7 @@ index 11de1ac9d650dc1e2db6922f8fb6cd217bc13a4d..439bc19d31d5e0a82efcf56e1a576703
 +      if (!isCurrent()) return;
 +      // Input accepted during cleanup or popup rendering already owns the selection.
 +      const submenu = this.getCurrentSubmenuItem();
-+      const items = submenu ? this.getSubmenuItems(submenu) : this.getItems();
++      const items = submenu ? this.getSubmenuItems(submenu, true) : this.getItems(true);
 +      const content = this.defaultSlot.assignedElements({ flatten: true });
 +      const ownsFocus = (element) => element instanceof HTMLElement &&
 +        element.closest("wa-dropdown") === this && !element.matches(":disabled, [disabled]") &&
@@ -1048,8 +1049,9 @@ index 11de1ac9d650dc1e2db6922f8fb6cd217bc13a4d..439bc19d31d5e0a82efcf56e1a576703
 +      const autofocusItem = focusedItem ? void 0 : [...this.querySelectorAll("[autofocus]")].find(
 +        (element) => ownsFocus(element) && element.getClientRects().length > 0
 +      );
-+      const initialItem = focusedItem ?? autofocusItem ?? items[0];
-+      if (initialItem) {
++      const initialItem = focusedItem ?? autofocusItem ?? items.find((item) => !item.disabled);
++      // Owned input is authoritative; newer outside focus also supersedes initialization.
++      if (initialItem && (focusedItem || [...activeElements()].pop() === focused)) {
 +        items.forEach((item) => item.active = item === initialItem);
 +        if (initialItem.localName === "wa-dropdown-item") initialItem.active = true;
 +        if (!focusedItem) initialItem.focus({ preventScroll: true });
@@ -1089,7 +1091,7 @@ index 11de1ac9d650dc1e2db6922f8fb6cd217bc13a4d..439bc19d31d5e0a82efcf56e1a576703
    }
    /** Handles clicks on the menu. */
    handleMenuClick(event) {
-@@ -405,8 +360,6 @@ var WaDropdown = class extends WebAwesomeElement {
+@@ -405,8 +362,6 @@ var WaDropdown = class extends WebAwesomeElement {
      if (!item || item.disabled) return;
      if (item.hasSubmenu) {
        if (!item.submenuOpen) {
@@ -1098,7 +1100,7 @@ index 11de1ac9d650dc1e2db6922f8fb6cd217bc13a4d..439bc19d31d5e0a82efcf56e1a576703
          item.submenuOpen = true;
        }
        event.stopPropagation();
-@@ -433,60 +386,57 @@ var WaDropdown = class extends WebAwesomeElement {
+@@ -433,60 +388,57 @@ var WaDropdown = class extends WebAwesomeElement {
    handleTriggerClick() {
      this.open = !this.open;
    }
@@ -1198,7 +1200,7 @@ index 11de1ac9d650dc1e2db6922f8fb6cd217bc13a4d..439bc19d31d5e0a82efcf56e1a576703
      if (!item.submenuElement) return;
      const isRtl = this.localize.dir() === "rtl";
      const placement = isRtl ? "left-start" : "right-start";
-@@ -506,6 +456,7 @@ var WaDropdown = class extends WebAwesomeElement {
+@@ -506,6 +458,7 @@ var WaDropdown = class extends WebAwesomeElement {
          })
        ]
      }).then(({ x, y, placement: placement2 }) => {
@@ -1519,7 +1521,7 @@ index bedb1923179f2a73be2eaf24e8c1a3c35718683d..04dc1c15097ad58de31a8670e2c870d3
  /** Parses a CSS duration and returns the number of milliseconds. */
  export declare function parseDuration(duration: number | string): number;
 diff --git a/dist-cdn/chunks/chunk.63RYV7SI.js b/dist-cdn/chunks/chunk.63RYV7SI.js
-index 886b0e05a9d51bbe6636d1e394d49ef4edfb84fc..822128149d8167429d120a868a729c4964593cc1 100644
+index 886b0e05a9d51bbe6636d1e394d49ef4edfb84fc..45902a28071c6a90dfeb29b8667f0ac3267100aa 100644
 --- a/dist-cdn/chunks/chunk.63RYV7SI.js
 +++ b/dist-cdn/chunks/chunk.63RYV7SI.js
 @@ -68,17 +68,16 @@ var openDropdowns = /* @__PURE__ */ new Set();
@@ -1706,7 +1708,7 @@ index 886b0e05a9d51bbe6636d1e394d49ef4edfb84fc..822128149d8167429d120a868a729c49
      }
      if (changedProperties.has("size")) {
        this.syncItemSizes();
-@@ -310,104 +275,94 @@ var WaDropdown = class extends WebAwesomeElement {
+@@ -310,104 +275,96 @@ var WaDropdown = class extends WebAwesomeElement {
      );
      items.forEach((item) => item.size = this.size);
    }
@@ -1824,6 +1826,7 @@ index 886b0e05a9d51bbe6636d1e394d49ef4edfb84fc..822128149d8167429d120a868a729c49
 +    // Join canceled animation cleanup before reusing its class. Show and hide share
 +    // one CSS animation name, so overlapping helpers cannot own separate animations.
 +    this.menu.classList.remove("show", "hide");
++    const focused = [...activeElements()].pop();
 +    await this.menuAnimation;
 +    if (!isCurrent()) return;
 +    this.menuAnimation = animateWithClass(this.menu, open ? "show" : "hide");
@@ -1835,7 +1838,7 @@ index 886b0e05a9d51bbe6636d1e394d49ef4edfb84fc..822128149d8167429d120a868a729c49
 +      if (!isCurrent()) return;
 +      // Input accepted during cleanup or popup rendering already owns the selection.
 +      const submenu = this.getCurrentSubmenuItem();
-+      const items = submenu ? this.getSubmenuItems(submenu) : this.getItems();
++      const items = submenu ? this.getSubmenuItems(submenu, true) : this.getItems(true);
 +      const content = this.defaultSlot.assignedElements({ flatten: true });
 +      const ownsFocus = (element) => element instanceof HTMLElement &&
 +        element.closest("wa-dropdown") === this && !element.matches(":disabled, [disabled]") &&
@@ -1844,8 +1847,9 @@ index 886b0e05a9d51bbe6636d1e394d49ef4edfb84fc..822128149d8167429d120a868a729c49
 +      const autofocusItem = focusedItem ? void 0 : [...this.querySelectorAll("[autofocus]")].find(
 +        (element) => ownsFocus(element) && element.getClientRects().length > 0
 +      );
-+      const initialItem = focusedItem ?? autofocusItem ?? items[0];
-+      if (initialItem) {
++      const initialItem = focusedItem ?? autofocusItem ?? items.find((item) => !item.disabled);
++      // Owned input is authoritative; newer outside focus also supersedes initialization.
++      if (initialItem && (focusedItem || [...activeElements()].pop() === focused)) {
 +        items.forEach((item) => item.active = item === initialItem);
 +        if (initialItem.localName === "wa-dropdown-item") initialItem.active = true;
 +        if (!focusedItem) initialItem.focus({ preventScroll: true });
@@ -1885,7 +1889,7 @@ index 886b0e05a9d51bbe6636d1e394d49ef4edfb84fc..822128149d8167429d120a868a729c49
    }
    /** Handles clicks on the menu. */
    handleMenuClick(event) {
-@@ -415,8 +370,6 @@ var WaDropdown = class extends WebAwesomeElement {
+@@ -415,8 +372,6 @@ var WaDropdown = class extends WebAwesomeElement {
      if (!item || item.disabled) return;
      if (item.hasSubmenu) {
        if (!item.submenuOpen) {
@@ -1894,7 +1898,7 @@ index 886b0e05a9d51bbe6636d1e394d49ef4edfb84fc..822128149d8167429d120a868a729c49
          item.submenuOpen = true;
        }
        event.stopPropagation();
-@@ -443,60 +396,57 @@ var WaDropdown = class extends WebAwesomeElement {
+@@ -443,60 +398,57 @@ var WaDropdown = class extends WebAwesomeElement {
    handleTriggerClick() {
      this.open = !this.open;
    }
@@ -1994,7 +1998,7 @@ index 886b0e05a9d51bbe6636d1e394d49ef4edfb84fc..822128149d8167429d120a868a729c49
      if (!item.submenuElement) return;
      const isRtl = this.localize.dir() === "rtl";
      const placement = isRtl ? "left-start" : "right-start";
-@@ -516,6 +466,7 @@ var WaDropdown = class extends WebAwesomeElement {
+@@ -516,6 +468,7 @@ var WaDropdown = class extends WebAwesomeElement {
          })
        ]
      }).then(({ x: x2, y, placement: placement2 }) => {

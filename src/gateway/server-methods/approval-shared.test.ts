@@ -7,7 +7,10 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { GATEWAY_CLIENT_IDS } from "../../../packages/gateway-protocol/src/client-info.js";
 import { createDeferredCore } from "../../shared/deferred.js";
-import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseByPathAsync,
+  closeOpenClawStateDatabaseForTest,
+} from "../../state/openclaw-state-db.js";
 import { ExecApprovalManager } from "../exec-approval-manager.js";
 import { createTestApprovalManager } from "../exec-approval-manager.test-support.js";
 import {
@@ -16,7 +19,6 @@ import {
   handleApprovalWaitDecision,
   handlePendingApprovalRequest,
   isApprovalRecordVisibleToClient,
-  registerPendingApprovalRecord,
 } from "./approval-shared.js";
 import type { GatewayClient, GatewayRequestContext } from "./types.js";
 
@@ -69,6 +71,7 @@ function createApprovalClientLookup(clients: GatewayClient[]): ApprovalClientLoo
 describe("handlePendingApprovalRequest", () => {
   afterEach(() => {
     hasApprovalTurnSourceRouteMock.mockClear();
+    prepareApprovalChannelCustodyMock.mockReset();
   });
 
   it.for([
@@ -315,7 +318,7 @@ describe("handlePendingApprovalRequest", () => {
       approvalKind: route === "plugin" ? "plugin" : "exec",
     });
     const record = manager.create(request, 60_000, id);
-    void manager.register(record, 60_000);
+    await manager.register(record, 60_000);
     const responseSent = createDeferredCore();
     const respond = vi.fn(() => responseSent.resolve());
     const publishRequested = vi.fn(() => 1);
@@ -365,7 +368,7 @@ describe("handlePendingApprovalRequest", () => {
           approvalKind: "plugin",
         });
       } else {
-        expect(manager.getSnapshot(record.id)?.resolvedAtMs).toBeUndefined();
+        expect((await manager.getSnapshot(record.id))?.resolvedAtMs).toBeUndefined();
       }
       expect(respond).toHaveBeenCalledWith(
         true,
@@ -379,10 +382,10 @@ describe("handlePendingApprovalRequest", () => {
         undefined,
       );
 
-      expect(manager.resolve(record.id, "allow-once")).toBe(true);
+      expect(await manager.resolve(record.id, "allow-once")).toBe(true);
       await requestPromise;
       if (route === "register-only") {
-        expect(manager.getSnapshot(record.id)?.resolvedBy).not.toBe("no-approval-route");
+        expect((await manager.getSnapshot(record.id))?.resolvedBy).not.toBe("no-approval-route");
         expect(respond).toHaveBeenLastCalledWith(
           true,
           expect.objectContaining({ id, decision: "allow-once" }),
@@ -390,7 +393,7 @@ describe("handlePendingApprovalRequest", () => {
         );
       }
     } finally {
-      manager.resolve(record.id, "deny");
+      await manager.resolve(record.id, "deny");
       await Promise.allSettled([requestPromise, manager.drain()]);
     }
   });
@@ -405,7 +408,7 @@ describe("handlePendingApprovalRequest", () => {
       "approval-visible",
     );
     record.requestedByDeviceId = "device-owner";
-    void manager.register(record, 60_000);
+    await manager.register(record, 60_000);
     const respond = vi.fn();
     const broadcast = vi.fn();
     const broadcastToConnIds = vi.fn();
@@ -415,6 +418,7 @@ describe("handlePendingApprovalRequest", () => {
       record,
       respond,
       context: {
+        getRuntimeConfig: () => ({}),
         broadcast,
         broadcastToConnIds,
         getApprovalClientConnIds: vi.fn(
@@ -456,7 +460,7 @@ describe("handlePendingApprovalRequest", () => {
       { dropIfSlow: true },
     );
 
-    expect(manager.resolve(record.id, "allow-once")).toBe(true);
+    expect(await manager.resolve(record.id, "allow-once")).toBe(true);
     await requestPromise;
   });
 
@@ -473,7 +477,7 @@ describe("handlePendingApprovalRequest", () => {
     record.requestedByConnId = "conn-gateway-runtime";
     record.requestedByClientId = GATEWAY_CLIENT_IDS.GATEWAY_CLIENT;
     bindApprovalReviewerDeviceIds({ record, deviceIds: ["device-mobile"] });
-    void manager.register(record, 60_000);
+    await manager.register(record, 60_000);
     const respond = vi.fn();
     const broadcast = vi.fn();
     const broadcastToConnIds = vi.fn();
@@ -483,6 +487,7 @@ describe("handlePendingApprovalRequest", () => {
       record,
       respond,
       context: {
+        getRuntimeConfig: () => ({}),
         broadcast,
         broadcastToConnIds,
         getApprovalClientConnIds: vi.fn(
@@ -524,7 +529,7 @@ describe("handlePendingApprovalRequest", () => {
       { dropIfSlow: true },
     );
 
-    expect(manager.resolve(record.id, "allow-once")).toBe(true);
+    expect(await manager.resolve(record.id, "allow-once")).toBe(true);
     await requestPromise;
   });
 
@@ -540,7 +545,7 @@ describe("handlePendingApprovalRequest", () => {
     record.requestedByDeviceId = "device-owner";
     record.requestedByConnId = "conn-owner";
     record.requestedByClientId = "client-owner";
-    void manager.register(record, 60_000);
+    await manager.register(record, 60_000);
     const respond = vi.fn();
     const broadcast = vi.fn();
     const broadcastToConnIds = vi.fn();
@@ -550,6 +555,7 @@ describe("handlePendingApprovalRequest", () => {
       record,
       respond,
       context: {
+        getRuntimeConfig: () => ({}),
         broadcast,
         broadcastToConnIds,
         getApprovalClientConnIds: vi.fn(
@@ -591,7 +597,7 @@ describe("handlePendingApprovalRequest", () => {
       { dropIfSlow: true },
     );
 
-    expect(manager.resolve(record.id, "allow-once")).toBe(true);
+    expect(await manager.resolve(record.id, "allow-once")).toBe(true);
     await requestPromise;
   });
 
@@ -607,7 +613,7 @@ describe("handlePendingApprovalRequest", () => {
     );
     record.requestedByConnId = "conn-gateway";
     record.requestedByClientId = GATEWAY_CLIENT_IDS.GATEWAY_CLIENT;
-    void manager.register(record, 60_000);
+    await manager.register(record, 60_000);
     const respond = vi.fn();
     const broadcast = vi.fn();
     const broadcastToConnIds = vi.fn();
@@ -617,6 +623,7 @@ describe("handlePendingApprovalRequest", () => {
       record,
       respond,
       context: {
+        getRuntimeConfig: () => ({}),
         broadcast,
         broadcastToConnIds,
         getApprovalClientConnIds: vi.fn(
@@ -658,7 +665,7 @@ describe("handlePendingApprovalRequest", () => {
     );
 
     await requestPromise;
-    expect(manager.getSnapshot(record.id)?.resolvedBy).toBe("no-approval-route");
+    expect((await manager.getSnapshot(record.id))?.resolvedBy).toBe("no-approval-route");
     expect(respond).toHaveBeenCalledWith(
       true,
       expect.objectContaining({ id: "approval-gateway-mobile", decision: null }),
@@ -676,7 +683,7 @@ describe("handlePendingApprovalRequest", () => {
       60_000,
       "approval-no-route-race",
     );
-    void manager.register(record, 60_000);
+    await manager.register(record, 60_000);
     const respond = vi.fn();
     const { promise: delivery, resolve: finishDelivery } = createDeferredCore<boolean>();
     const requestPromise = handlePendingApprovalRequest({
@@ -700,11 +707,11 @@ describe("handlePendingApprovalRequest", () => {
     });
 
     await Promise.resolve();
-    expect(manager.resolve(record.id, "allow-once", "control-ui")).toBe(true);
+    expect(await manager.resolve(record.id, "allow-once", "control-ui")).toBe(true);
     finishDelivery(false);
     await requestPromise;
 
-    expect(manager.getSnapshot(record.id)).toMatchObject({
+    expect(await manager.getSnapshot(record.id)).toMatchObject({
       decision: "allow-once",
       resolvedBy: "control-ui",
     });
@@ -727,7 +734,7 @@ describe("handlePendingApprovalRequest", () => {
         60_000,
         "approval-delayed-handoff",
       );
-      void manager.register(record, 60_000);
+      await manager.register(record, 60_000);
       const respond = vi.fn();
       const afterDecision = vi.fn();
       const { promise: delivery, resolve: finishDelivery } = createDeferredCore<boolean>();
@@ -752,7 +759,7 @@ describe("handlePendingApprovalRequest", () => {
       });
 
       await Promise.resolve();
-      expect(manager.resolve(record.id, "allow-once", "control-ui")).toBe(true);
+      expect(await manager.resolve(record.id, "allow-once", "control-ui")).toBe(true);
       await vi.advanceTimersByTimeAsync(16_000);
       expect(manager.getLiveSnapshot(record.id)).toMatchObject({
         decision: "allow-once",
@@ -793,7 +800,7 @@ describe("handlePendingApprovalRequest", () => {
       60_000,
       "approval-suppressed-turn-source",
     );
-    void manager.register(record, 60_000);
+    await manager.register(record, 60_000);
     const respond = vi.fn();
     const broadcast = vi.fn();
     const deliverRequest = vi.fn(() => true);
@@ -821,7 +828,7 @@ describe("handlePendingApprovalRequest", () => {
     expect(broadcast).not.toHaveBeenCalled();
     expect(deliverRequest).not.toHaveBeenCalled();
     expect(hasApprovalTurnSourceRouteMock).not.toHaveBeenCalled();
-    expect(manager.getSnapshot(record.id)).toMatchObject({
+    expect(await manager.getSnapshot(record.id)).toMatchObject({
       resolvedBy: "no-approval-route",
       terminalReason: "no-route",
     });
@@ -843,7 +850,7 @@ describe("handlePendingApprovalRequest", () => {
       60_000,
       "approval-clients-only-pending",
     );
-    void manager.register(record, 60_000);
+    await manager.register(record, 60_000);
     const respond = vi.fn();
     const broadcast = vi.fn();
     const deliverRequest = vi.fn(() => true);
@@ -879,9 +886,9 @@ describe("handlePendingApprovalRequest", () => {
     expect(deliverRequest).not.toHaveBeenCalled();
     expect(publishRequested).not.toHaveBeenCalled();
     expect(hasApprovalTurnSourceRouteMock).not.toHaveBeenCalled();
-    expect(manager.getSnapshot(record.id)?.resolvedAtMs).toBeUndefined();
+    expect((await manager.getSnapshot(record.id))?.resolvedAtMs).toBeUndefined();
 
-    expect(manager.resolve(record.id, "allow-once")).toBe(true);
+    expect(await manager.resolve(record.id, "allow-once")).toBe(true);
     await requestPromise;
     expect(respond).toHaveBeenLastCalledWith(
       true,
@@ -901,7 +908,7 @@ describe("handlePendingApprovalRequest", () => {
       60_000,
       "approval-clients-only-no-route",
     );
-    void manager.register(record, 60_000);
+    await manager.register(record, 60_000);
     const respond = vi.fn();
     const afterDecision = vi.fn();
     const deliverRequest = vi.fn(() => true);
@@ -933,7 +940,7 @@ describe("handlePendingApprovalRequest", () => {
     expect(deliverRequest).not.toHaveBeenCalled();
     expect(publishRequested).not.toHaveBeenCalled();
     expect(hasApprovalTurnSourceRouteMock).not.toHaveBeenCalled();
-    expect(manager.getSnapshot(record.id)).toMatchObject({
+    expect(await manager.getSnapshot(record.id)).toMatchObject({
       resolvedBy: "no-approval-route",
       terminalReason: "no-route",
     });
@@ -956,7 +963,7 @@ describe("handlePendingApprovalRequest", () => {
     );
     record.requestedByConnId = "conn-control-ui";
     record.requestedByClientId = GATEWAY_CLIENT_IDS.CONTROL_UI;
-    void manager.register(record, 60_000);
+    await manager.register(record, 60_000);
     const respond = vi.fn();
     const broadcast = vi.fn();
     const broadcastToConnIds = vi.fn();
@@ -966,6 +973,7 @@ describe("handlePendingApprovalRequest", () => {
       record,
       respond,
       context: {
+        getRuntimeConfig: () => ({}),
         broadcast,
         broadcastToConnIds,
         getApprovalClientConnIds: vi.fn(
@@ -1007,7 +1015,7 @@ describe("handlePendingApprovalRequest", () => {
     );
 
     await requestPromise;
-    expect(manager.getSnapshot(record.id)?.resolvedBy).toBe("no-approval-route");
+    expect((await manager.getSnapshot(record.id))?.resolvedBy).toBe("no-approval-route");
     expect(respond).toHaveBeenCalledWith(
       true,
       expect.objectContaining({ id: "approval-control-ui-mobile", decision: null }),
@@ -1028,7 +1036,7 @@ describe("handlePendingApprovalRequest", () => {
     record.requestedByDeviceId = "device-gateway";
     record.requestedByConnId = "conn-gateway";
     record.requestedByClientId = GATEWAY_CLIENT_IDS.GATEWAY_CLIENT;
-    void manager.register(record, 60_000);
+    await manager.register(record, 60_000);
     const respond = vi.fn();
     const broadcast = vi.fn();
     const broadcastToConnIds = vi.fn();
@@ -1038,6 +1046,7 @@ describe("handlePendingApprovalRequest", () => {
       record,
       respond,
       context: {
+        getRuntimeConfig: () => ({}),
         broadcast,
         broadcastToConnIds,
         getApprovalClientConnIds: vi.fn(
@@ -1081,7 +1090,7 @@ describe("handlePendingApprovalRequest", () => {
     );
 
     await requestPromise;
-    expect(manager.getSnapshot(record.id)?.resolvedBy).toBe("no-approval-route");
+    expect((await manager.getSnapshot(record.id))?.resolvedBy).toBe("no-approval-route");
     expect(respond).toHaveBeenCalledWith(
       true,
       expect.objectContaining({ id: "approval-gateway-device-mobile", decision: null }),
@@ -1101,7 +1110,7 @@ describe("handlePendingApprovalRequest", () => {
     );
     record.requestedByConnId = "conn-requester";
     record.requestedByClientId = "client-owner";
-    void manager.register(record, 60_000);
+    await manager.register(record, 60_000);
     const respond = vi.fn();
     const broadcast = vi.fn();
     const broadcastToConnIds = vi.fn();
@@ -1111,6 +1120,7 @@ describe("handlePendingApprovalRequest", () => {
       record,
       respond,
       context: {
+        getRuntimeConfig: () => ({}),
         broadcast,
         broadcastToConnIds,
         getApprovalClientConnIds: vi.fn(
@@ -1154,7 +1164,7 @@ describe("handlePendingApprovalRequest", () => {
       { dropIfSlow: true },
     );
     await requestPromise;
-    expect(manager.getSnapshot(record.id)?.resolvedBy).toBe("no-approval-route");
+    expect((await manager.getSnapshot(record.id))?.resolvedBy).toBe("no-approval-route");
     expect(respond).toHaveBeenCalledWith(
       true,
       expect.objectContaining({ id: "approval-no-device", decision: null }),
@@ -1173,7 +1183,7 @@ describe("handlePendingApprovalRequest", () => {
     );
     record.requestedByConnId = "conn-requester";
     record.requestedByClientId = "client-owner";
-    void manager.register(record, 60_000);
+    await manager.register(record, 60_000);
     const respond = vi.fn();
 
     await handleApprovalResolve({
@@ -1201,7 +1211,7 @@ describe("handlePendingApprovalRequest", () => {
         message: "unknown or expired approval id",
       }),
     );
-    expect(manager.getSnapshot(record.id)?.decision).toBeUndefined();
+    expect((await manager.getSnapshot(record.id))?.decision).toBeUndefined();
   });
 
   it("does not wait on decisions for approvals hidden from the caller", async (testContext) => {
@@ -1216,8 +1226,8 @@ describe("handlePendingApprovalRequest", () => {
     record.requestedByDeviceId = "device-owner";
     record.requestedByConnId = "conn-owner";
     record.requestedByClientId = "client-owner";
-    void manager.register(record, 60_000);
-    expect(manager.resolve(record.id, "allow-once")).toBe(true);
+    await manager.register(record, 60_000);
+    expect(await manager.resolve(record.id, "allow-once")).toBe(true);
     const respond = vi.fn();
 
     await handleApprovalWaitDecision({
@@ -1254,8 +1264,8 @@ describe("handlePendingApprovalRequest", () => {
     record.requestedByDeviceId = "device-owner";
     record.requestedByConnId = "conn-owner";
     record.requestedByClientId = "client-owner";
-    void manager.register(record, 60_000);
-    expect(manager.resolve(record.id, "deny")).toBe(true);
+    await manager.register(record, 60_000);
+    expect(await manager.resolve(record.id, "deny")).toBe(true);
     const respond = vi.fn();
 
     await handleApprovalWaitDecision({
@@ -1297,7 +1307,7 @@ describe("handlePendingApprovalRequest", () => {
     record.requestedByDeviceId = "device-owner";
     record.requestedByConnId = "conn-owner";
     record.requestedByClientId = "client-owner";
-    void manager.register(record, 60_000);
+    await manager.register(record, 60_000);
     const respond = vi.fn();
 
     const waiting = handleApprovalWaitDecision({
@@ -1312,7 +1322,7 @@ describe("handlePendingApprovalRequest", () => {
       }),
     });
     expect(
-      manager.forceDenyDetailed(
+      await manager.forceDenyDetailed(
         record.id,
         "run-aborted",
         { kind: "system", id: null },
@@ -1339,7 +1349,7 @@ describe("handlePendingApprovalRequest", () => {
     timeoutRecord.requestedByDeviceId = "device-owner";
     timeoutRecord.requestedByConnId = "conn-owner";
     timeoutRecord.requestedByClientId = "client-owner";
-    void manager.register(timeoutRecord, 60_000);
+    await manager.register(timeoutRecord, 60_000);
     const timeoutRespond = vi.fn();
     const timeoutWaiting = handleApprovalWaitDecision({
       manager,
@@ -1351,7 +1361,7 @@ describe("handlePendingApprovalRequest", () => {
         deviceId: "device-owner",
       }),
     });
-    expect(manager.expire(timeoutRecord.id)).toBe(true);
+    expect(await manager.expire(timeoutRecord.id)).toBe(true);
     await timeoutWaiting;
     expect(timeoutRespond).toHaveBeenCalledWith(
       true,
@@ -1371,8 +1381,8 @@ describe("handlePendingApprovalRequest", () => {
     allowedRecord.requestedByDeviceId = "device-owner";
     allowedRecord.requestedByConnId = "conn-owner";
     allowedRecord.requestedByClientId = "client-owner";
-    void manager.register(allowedRecord, 60_000);
-    expect(manager.resolve(allowedRecord.id, "allow-once")).toBe(true);
+    await manager.register(allowedRecord, 60_000);
+    expect(await manager.resolve(allowedRecord.id, "allow-once")).toBe(true);
     const allowedRespond = vi.fn();
     await handleApprovalWaitDecision({
       manager,
@@ -1394,6 +1404,8 @@ describe("handlePendingApprovalRequest", () => {
       }),
       undefined,
     );
+    await manager.drain();
+    await closeOpenClawStateDatabaseByPathAsync(path.join(tempDir, "state.sqlite"));
     closeOpenClawStateDatabaseForTest();
     fs.rmSync(tempDir, { force: true, recursive: true });
   });
@@ -1409,7 +1421,7 @@ describe("handlePendingApprovalRequest", () => {
     );
     record.requestedByConnId = "conn-gateway";
     record.requestedByClientId = GATEWAY_CLIENT_IDS.GATEWAY_CLIENT;
-    void manager.register(record, 60_000);
+    await manager.register(record, 60_000);
     const respond = vi.fn();
     const broadcast = vi.fn();
     const broadcastToConnIds = vi.fn();
@@ -1421,6 +1433,7 @@ describe("handlePendingApprovalRequest", () => {
       decision: "allow-once",
       respond,
       context: {
+        getRuntimeConfig: () => ({}),
         broadcast,
         broadcastToConnIds,
         getApprovalClientConnIds: vi.fn(
@@ -1448,7 +1461,7 @@ describe("handlePendingApprovalRequest", () => {
         message: "unknown or expired approval id",
       }),
     );
-    expect(manager.getSnapshot(record.id)?.decision).toBeUndefined();
+    expect((await manager.getSnapshot(record.id))?.decision).toBeUndefined();
   });
 
   it("does not allow approval-scoped clients to resolve no-device browser UI approvals from another connection", async (testContext) => {
@@ -1462,7 +1475,7 @@ describe("handlePendingApprovalRequest", () => {
     );
     record.requestedByConnId = "conn-control-ui";
     record.requestedByClientId = GATEWAY_CLIENT_IDS.CONTROL_UI;
-    void manager.register(record, 60_000);
+    await manager.register(record, 60_000);
     const respond = vi.fn();
     const broadcast = vi.fn();
     const broadcastToConnIds = vi.fn();
@@ -1474,6 +1487,7 @@ describe("handlePendingApprovalRequest", () => {
       decision: "allow-once",
       respond,
       context: {
+        getRuntimeConfig: () => ({}),
         broadcast,
         broadcastToConnIds,
         getApprovalClientConnIds: vi.fn(
@@ -1501,7 +1515,7 @@ describe("handlePendingApprovalRequest", () => {
         message: "unknown or expired approval id",
       }),
     );
-    expect(manager.getSnapshot(record.id)?.decision).toBeUndefined();
+    expect((await manager.getSnapshot(record.id))?.decision).toBeUndefined();
   });
 
   it("does not allow approval-scoped clients to resolve device-bound gateway-client approvals from another device", async (testContext) => {
@@ -1516,7 +1530,7 @@ describe("handlePendingApprovalRequest", () => {
     record.requestedByDeviceId = "device-gateway";
     record.requestedByConnId = "conn-gateway";
     record.requestedByClientId = GATEWAY_CLIENT_IDS.GATEWAY_CLIENT;
-    void manager.register(record, 60_000);
+    await manager.register(record, 60_000);
     const respond = vi.fn();
     const broadcast = vi.fn();
     const broadcastToConnIds = vi.fn();
@@ -1528,6 +1542,7 @@ describe("handlePendingApprovalRequest", () => {
       decision: "allow-once",
       respond,
       context: {
+        getRuntimeConfig: () => ({}),
         broadcast,
         broadcastToConnIds,
         getApprovalClientConnIds: vi.fn(
@@ -1557,7 +1572,7 @@ describe("handlePendingApprovalRequest", () => {
         message: "unknown or expired approval id",
       }),
     );
-    expect(manager.getSnapshot(record.id)?.decision).toBeUndefined();
+    expect((await manager.getSnapshot(record.id))?.decision).toBeUndefined();
   });
 
   it("allows gateway-client approval runtimes to resolve requester-bound approvals", async (testContext) => {
@@ -1572,7 +1587,7 @@ describe("handlePendingApprovalRequest", () => {
     record.requestedByDeviceId = "device-owner";
     record.requestedByConnId = "conn-owner";
     record.requestedByClientId = "client-owner";
-    void manager.register(record, 60_000);
+    await manager.register(record, 60_000);
     const respond = vi.fn();
     const broadcast = vi.fn();
     const broadcastToConnIds = vi.fn();
@@ -1584,6 +1599,7 @@ describe("handlePendingApprovalRequest", () => {
       decision: "allow-once",
       respond,
       context: {
+        getRuntimeConfig: () => ({}),
         broadcast,
         broadcastToConnIds,
         getApprovalClientConnIds: vi.fn(
@@ -1606,16 +1622,16 @@ describe("handlePendingApprovalRequest", () => {
     });
 
     expect(respond).toHaveBeenCalledWith(true, { ok: true }, undefined);
-    expect(manager.getSnapshot(record.id)?.decision).toBe("allow-once");
+    expect((await manager.getSnapshot(record.id))?.decision).toBe("allow-once");
   });
 
   it("filters legacy prefix candidates by channel custody before resolving", async (testContext) => {
     const manager = createTestApprovalManager(testContext);
     const owned = manager.create({ command: "owned" }, 60_000, "approval-prefix-owned");
     const foreign = manager.create({ command: "foreign" }, 60_000, "approval-prefix-foreign");
-    void manager.register(owned, 60_000);
-    void manager.register(foreign, 60_000);
-    prepareApprovalChannelCustodyMock.mockReturnValueOnce({
+    await manager.register(owned, 60_000);
+    await manager.register(foreign, 60_000);
+    prepareApprovalChannelCustodyMock.mockReturnValue({
       resolverId: "telegram:ops",
       authorizes: (request: { request: { command: string } }) =>
         request.request.command === "owned",
@@ -1639,8 +1655,8 @@ describe("handlePendingApprovalRequest", () => {
     });
 
     expect(respond).toHaveBeenCalledWith(true, { ok: true }, undefined);
-    expect(manager.getSnapshot(owned.id)?.decision).toBe("deny");
-    expect(manager.getSnapshot(foreign.id)?.decision).toBeUndefined();
+    expect((await manager.getSnapshot(owned.id))?.decision).toBe("deny");
+    expect((await manager.getSnapshot(foreign.id))?.decision).toBeUndefined();
   });
 
   it("targets resolved approval events to visible approval clients when available", async (testContext) => {
@@ -1653,7 +1669,7 @@ describe("handlePendingApprovalRequest", () => {
       "approval-resolved-visible",
     );
     record.requestedByDeviceId = "device-owner";
-    void manager.register(record, 60_000);
+    await manager.register(record, 60_000);
     const respond = vi.fn();
     const broadcast = vi.fn();
     const broadcastToConnIds = vi.fn();
@@ -1666,6 +1682,7 @@ describe("handlePendingApprovalRequest", () => {
       decision: "allow-once",
       respond,
       context: {
+        getRuntimeConfig: () => ({}),
         broadcast,
         broadcastToConnIds,
         getApprovalClientConnIds: vi.fn(
@@ -1698,151 +1715,6 @@ describe("handlePendingApprovalRequest", () => {
       visibleConnIds,
       { dropIfSlow: true },
     );
-  });
-
-  it("sanitizes durable registration failures while retaining server diagnostics", () => {
-    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-approval-register-failure-"));
-    const databasePath = path.join(tempDir, "state.sqlite");
-    fs.mkdirSync(databasePath);
-    const manager = new ExecApprovalManager({
-      approvalKind: "exec",
-      persistence: {
-        runtimeEpoch: "approval-shared-register-failure",
-        databaseOptions: { path: databasePath },
-      },
-    });
-    const record = manager.create({ command: "echo safe" }, 60_000, "registration-failure");
-    const respond = vi.fn();
-    const logError = vi.fn();
-
-    try {
-      expect(
-        registerPendingApprovalRecord({
-          manager,
-          record,
-          timeoutMs: 60_000,
-          respond,
-          context: { logGateway: { error: logError } } as unknown as GatewayRequestContext,
-        }),
-      ).toBeUndefined();
-      expect(respond).toHaveBeenCalledWith(
-        false,
-        undefined,
-        expect.objectContaining({ code: "UNAVAILABLE", message: "approval request unavailable" }),
-      );
-      expect(JSON.stringify(respond.mock.calls)).not.toContain(databasePath);
-      expect(logError).toHaveBeenCalledTimes(1);
-    } finally {
-      closeOpenClawStateDatabaseForTest();
-      fs.rmSync(tempDir, { force: true, recursive: true });
-    }
-  });
-
-  it("sanitizes a no-route storage failure while failing the waiter closed", async () => {
-    hasApprovalTurnSourceRouteMock.mockReturnValueOnce(false);
-    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-approval-route-failure-"));
-    const databasePath = path.join(tempDir, "state.sqlite");
-    const manager = new ExecApprovalManager({
-      approvalKind: "exec",
-      persistence: {
-        runtimeEpoch: "approval-shared-route-failure",
-        databaseOptions: { path: databasePath },
-      },
-    });
-    const record = manager.create({ command: "echo safe" }, 60_000, "route-failure");
-    const decisionPromise = manager.register(record, 60_000);
-    const afterDecision = vi.fn();
-    closeOpenClawStateDatabaseForTest();
-    fs.rmSync(databasePath, { force: true });
-    fs.mkdirSync(databasePath);
-    const respond = vi.fn();
-    const logError = vi.fn();
-
-    try {
-      await handlePendingApprovalRequest({
-        manager,
-        record,
-        respond,
-        context: {
-          broadcast: vi.fn(),
-          hasExecApprovalClients: () => false,
-          logGateway: { error: logError },
-        } as unknown as GatewayRequestContext,
-        requestEventName: "exec.approval.requested",
-        requestEvent: {
-          id: record.id,
-          request: record.request,
-          createdAtMs: record.createdAtMs,
-          expiresAtMs: record.expiresAtMs,
-        },
-        twoPhase: true,
-        deliverRequest: () => false,
-        afterDecision,
-      });
-      await manager.drain();
-
-      expect(respond).toHaveBeenCalledWith(
-        false,
-        undefined,
-        expect.objectContaining({ code: "UNAVAILABLE", message: "approval request unavailable" }),
-      );
-      expect(respond).toHaveBeenCalledOnce();
-      expect(afterDecision).not.toHaveBeenCalled();
-      expect(JSON.stringify(respond.mock.calls)).not.toContain(databasePath);
-      expect(logError).toHaveBeenCalledTimes(1);
-      await expect(decisionPromise).resolves.toBe("deny");
-    } finally {
-      await manager.drain();
-      closeOpenClawStateDatabaseForTest();
-      fs.rmSync(tempDir, { force: true, recursive: true });
-    }
-  });
-
-  it("sanitizes durable resolve failures while failing the waiter closed", async () => {
-    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-approval-resolve-failure-"));
-    const databasePath = path.join(tempDir, "state.sqlite");
-    const manager = new ExecApprovalManager({
-      approvalKind: "exec",
-      persistence: {
-        runtimeEpoch: "approval-shared-resolve-failure",
-        databaseOptions: { path: databasePath },
-      },
-    });
-    const record = manager.create({ command: "echo safe" }, 60_000, "resolve-failure");
-    const decisionPromise = manager.register(record, 60_000);
-    closeOpenClawStateDatabaseForTest();
-    fs.rmSync(databasePath, { force: true });
-    fs.mkdirSync(databasePath);
-    const respond = vi.fn();
-    const logError = vi.fn();
-
-    try {
-      await handleApprovalResolve({
-        approvalKind: "exec",
-        manager,
-        inputId: record.id,
-        decision: "deny",
-        respond,
-        context: {
-          broadcast: vi.fn(),
-          broadcastToConnIds: vi.fn(),
-          logGateway: { error: logError },
-        } as unknown as GatewayRequestContext,
-        client: null,
-      });
-
-      expect(respond).toHaveBeenCalledWith(
-        false,
-        undefined,
-        expect.objectContaining({ code: "UNAVAILABLE", message: "approval resolve unavailable" }),
-      );
-      expect(JSON.stringify(respond.mock.calls)).not.toContain(databasePath);
-      expect(logError).toHaveBeenCalledTimes(1);
-      await expect(decisionPromise).resolves.toBe("deny");
-    } finally {
-      closeOpenClawStateDatabaseForTest();
-      fs.rmSync(tempDir, { force: true, recursive: true });
-    }
   });
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

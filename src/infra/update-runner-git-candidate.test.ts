@@ -9,20 +9,13 @@ import type { UpdateDoctorConfigChange } from "./update-doctor-config.js";
 import { UpdateRequesterRevokedError } from "./update-requester-authority.js";
 import {
   expectRuntime,
+  runFixtureGit as git,
   resolveCandidateNodeRuntimeForTest,
   writeRuntime,
 } from "./update-runner-git-candidate.test-support.js";
 import { prepareGitRuntimePromotion } from "./update-runner-git-runtime.js";
 import { updateGitCheckout } from "./update-runner-git.js";
 import type { CommandRunner, UpdateRunnerOptions } from "./update-runner-types.js";
-
-async function git(root: string, ...args: string[]) {
-  const result = await runCommandWithTimeout(["git", "-C", root, ...args], { timeoutMs: 5000 });
-  if (result.code !== 0) {
-    throw new Error(result.stderr);
-  }
-  return result.stdout.trim();
-}
 
 type VirtualStoreLayout =
   | "node_modules/.pnpm"
@@ -106,11 +99,6 @@ describe("Git candidate activation", () => {
         }
         return { code: 0, stdout: argv[1] === "--version" ? "12.0.0" : "", stderr: "" };
       }
-      if (argv.includes("doctor")) {
-        expect(stopped).toBe(true);
-        events.push("migrate");
-        return { code: 0, stdout: "", stderr: "" };
-      }
       throw new Error(`Unexpected command: ${argv.join(" ")}`);
     };
   });
@@ -128,7 +116,7 @@ describe("Git candidate activation", () => {
     return git(remote, "rev-parse", "HEAD");
   }
 
-  function update(opts: UpdateRunnerOptions = {}) {
+  function update(opts: Partial<UpdateRunnerOptions> = {}) {
     return updateGitCheckout({
       gitRoot: root,
       runCommand,
@@ -137,6 +125,18 @@ describe("Git candidate activation", () => {
       startedAt: Date.now(),
       opts: {
         channel: "dev",
+        inspectGitTarget: async () => {},
+        runGitDoctor: async (doctorRoot) => {
+          expect(stopped).toBe(true);
+          events.push("migrate");
+          return {
+            name: "openclaw doctor",
+            command: "CLI activation doctor",
+            cwd: doctorRoot,
+            durationMs: 0,
+            exitCode: 0,
+          };
+        },
         validateCandidate: async (candidateRoot) => {
           expect(stopped).toBe(false);
           expect(await git(root, "rev-parse", "HEAD")).toBe(beforeSha);
@@ -174,7 +174,7 @@ describe("Git candidate activation", () => {
         return execute(argv, options);
       };
       expect((await update({ timeoutMs })).status).toBe("ok");
-      for (const work of ["install", "build", "doctor", "fetch", "checkout"]) {
+      for (const work of ["install", "build", "fetch", "checkout"]) {
         const command = commands.find(({ argv }) => argv.includes(work));
         expect(command, work).toBeDefined();
         expect(command?.timeoutMs, work).toBe(timeoutMs);
@@ -416,17 +416,15 @@ describe("Git candidate activation", () => {
   });
 
   it.each([
-    { mutation: "untracked", inspection: false },
-    { mutation: "untracked", inspection: true },
-    { mutation: "tracked", inspection: false },
-    { mutation: "head", inspection: false },
-    { mutation: "branch", inspection: false },
+    { mutation: "untracked" },
+    { mutation: "tracked" },
+    { mutation: "head" },
+    { mutation: "branch" },
   ] as const)(
-    "preserves $mutation source changes made during validation without stopping the service (database inspection: $inspection)",
-    async ({ mutation, inspection }) => {
+    "preserves $mutation source changes made during validation without stopping the service",
+    async ({ mutation }) => {
       await advanceRemote();
       const result = await update({
-        ...(inspection ? { inspectGitTarget: async () => undefined } : {}),
         validateCandidate: async () => {
           if (mutation === "untracked") {
             await fs.mkdir(path.join(root, "dist.openclaw-update-operator.tmp"));
@@ -513,7 +511,7 @@ describe("Git candidate activation", () => {
         vi.stubEnv(key, operatorStore);
       }
       vi.stubEnv("OPENCLAW_UPDATE_PREFLIGHT_LINT", "1");
-      const candidateCommands = ["install", "build", "ui:build", "openclaw", "lint"];
+      const candidateCommands = ["install", "build", "ui:build", "lint"];
       const command = runCommand;
       runCommand = async (argv, options) => {
         if (argv[0] !== "pnpm") {
@@ -566,7 +564,7 @@ describe("Git candidate activation", () => {
       };
       const result = await update({
         devTarget: { mode: "detached", ref: target },
-        validateCandidate: undefined,
+        validateCandidate: async () => {},
         prepareGitExposure: async (cwd, sha, env) => {
           expect(sha).toBe(target);
           expect(env).toBeDefined();
@@ -615,20 +613,18 @@ describe("Git candidate activation", () => {
   );
 
   it.each([
-    { layout: "node_modules/.pnpm", localCommit: false, inspection: false },
-    { layout: "node_modules/.cache/jiti", localCommit: false, inspection: false },
-    { layout: "node_modules/.vite/deps", localCommit: false, inspection: false },
-    { layout: "node_modules/.pnpm", localCommit: true, inspection: false },
-    { layout: ".pnpm", localCommit: false, inspection: false },
-    { layout: "cache/deps", localCommit: false, inspection: false },
-    { layout: "../store", localCommit: false, inspection: false },
-    { layout: "external", localCommit: false, inspection: false },
-    { layout: "symlink", localCommit: false, inspection: false },
-    { layout: "node_modules/.pnpm", localCommit: false, inspection: true },
-    { layout: "node_modules/.pnpm", localCommit: true, inspection: true },
+    { layout: "node_modules/.pnpm", localCommit: false },
+    { layout: "node_modules/.cache/jiti", localCommit: false },
+    { layout: "node_modules/.vite/deps", localCommit: false },
+    { layout: "node_modules/.pnpm", localCommit: true },
+    { layout: ".pnpm", localCommit: false },
+    { layout: "cache/deps", localCommit: false },
+    { layout: "../store", localCommit: false },
+    { layout: "external", localCommit: false },
+    { layout: "symlink", localCommit: false },
   ] as const)(
-    "activates the validated $layout runtime (preserving local commits: $localCommit, database inspection: $inspection)",
-    async ({ layout, localCommit, inspection }) => {
+    "activates the validated $layout runtime (preserving local commits: $localCommit)",
+    async ({ layout, localCommit }) => {
       virtualStoreLayout = layout;
       await writeRuntime(root, beforeSha, path.join(directory, "shared-store"), layout);
       const target = await advanceRemote();
@@ -645,7 +641,7 @@ describe("Git candidate activation", () => {
       const unrelated = path.join(root, "operator-project", "node_modules", "keep.cjs");
       await fs.mkdir(path.dirname(unrelated), { recursive: true });
       await fs.writeFile(unrelated, "operator-owned");
-      const result = await update(inspection ? { inspectGitTarget: async () => undefined } : {});
+      const result = await update();
       expect(await fs.readFile(unrelated, "utf8")).toBe("operator-owned");
       expect(result.status, JSON.stringify(result)).toBe("ok");
       expect(events).toEqual(["build", "validate", "stop", "migrate"]);
@@ -687,58 +683,52 @@ describe("Git candidate activation", () => {
     },
   );
 
-  it.each([false, true])(
-    "preserves a local upstream without inventing a remote ref (database inspection: %s)",
-    async (inspection) => {
-      const target = await advanceRemote();
-      await git(root, "fetch", "origin");
-      await git(root, "branch", "operator-target", target);
-      await git(root, "config", "branch.main.remote", ".");
-      await git(root, "config", "branch.main.merge", "refs/heads/operator-target");
-      const result = await update(inspection ? { inspectGitTarget: async () => undefined } : {});
-      expect(result.status, JSON.stringify(result)).toBe("ok");
-      expect(await git(root, "rev-parse", "HEAD")).toBe(target);
-      expect(await git(root, "rev-parse", "--symbolic-full-name", "@{upstream}")).toBe(
-        "refs/heads/operator-target",
-      );
-      await expectRuntime(root, target);
-    },
-  );
+  it("preserves a local upstream without inventing a remote ref", async () => {
+    const target = await advanceRemote();
+    await git(root, "fetch", "origin");
+    await git(root, "branch", "operator-target", target);
+    await git(root, "config", "branch.main.remote", ".");
+    await git(root, "config", "branch.main.merge", "refs/heads/operator-target");
+    const result = await update();
+    expect(result.status, JSON.stringify(result)).toBe("ok");
+    expect(await git(root, "rev-parse", "HEAD")).toBe(target);
+    expect(await git(root, "rev-parse", "--symbolic-full-name", "@{upstream}")).toBe(
+      "refs/heads/operator-target",
+    );
+    await expectRuntime(root, target);
+  });
 
-  it.each([false, true])(
-    "preserves required signatures when a candidate rebase fails (database inspection: %s)",
-    async (inspection) => {
-      await advanceRemote();
-      await fs.writeFile(path.join(root, "local.txt"), "operator change\n");
-      await git(root, "add", "local.txt");
-      await git(root, "commit", "-m", "local change");
-      beforeSha = await git(root, "rev-parse", "HEAD");
-      await writeRuntime(root, beforeSha, path.join(directory, "shared-store"), virtualStoreLayout);
-      // A deliberately non-signing executable rejects Git's signing request without a key.
-      await git(root, "config", "gpg.program", process.execPath);
-      await git(root, "config", "commit.gpgSign", "true");
-      const abortTimeouts: Array<number | undefined> = [];
-      const execute = runCommand;
-      runCommand = (argv, options) => {
-        if (argv.includes("rebase") && argv.includes("--abort")) {
-          abortTimeouts.push(options.timeoutMs);
-        }
-        return execute(argv, options);
-      };
-      const result = await update(inspection ? { inspectGitTarget: async () => undefined } : {});
-      // The existing fallback can retain the old candidate without creating a commit.
-      expect(result.status, JSON.stringify(result)).toBe("ok");
-      expect(
-        result.steps.some((step) => step.name === "preflight-rebase" && step.exitCode !== 0),
-      ).toBe(true);
-      expect(abortTimeouts.length).toBeGreaterThan(0);
-      for (const timeoutMs of abortTimeouts) {
-        expect(timeoutMs).toBe(5_000);
+  it("preserves required signatures when a candidate rebase fails", async () => {
+    await advanceRemote();
+    await fs.writeFile(path.join(root, "local.txt"), "operator change\n");
+    await git(root, "add", "local.txt");
+    await git(root, "commit", "-m", "local change");
+    beforeSha = await git(root, "rev-parse", "HEAD");
+    await writeRuntime(root, beforeSha, path.join(directory, "shared-store"), virtualStoreLayout);
+    // A deliberately non-signing executable rejects Git's signing request without a key.
+    await git(root, "config", "gpg.program", process.execPath);
+    await git(root, "config", "commit.gpgSign", "true");
+    const abortTimeouts: Array<number | undefined> = [];
+    const execute = runCommand;
+    runCommand = (argv, options) => {
+      if (argv.includes("rebase") && argv.includes("--abort")) {
+        abortTimeouts.push(options.timeoutMs);
       }
-      expect(await git(root, "rev-parse", "HEAD")).toBe(beforeSha);
-      await expectRuntime(root, beforeSha);
-    },
-  );
+      return execute(argv, options);
+    };
+    const result = await update();
+    // The existing fallback can retain the old candidate without creating a commit.
+    expect(result.status, JSON.stringify(result)).toBe("ok");
+    expect(
+      result.steps.some((step) => step.name === "preflight-rebase" && step.exitCode !== 0),
+    ).toBe(true);
+    expect(abortTimeouts.length).toBeGreaterThan(0);
+    for (const timeoutMs of abortTimeouts) {
+      expect(timeoutMs).toBe(5_000);
+    }
+    expect(await git(root, "rev-parse", "HEAD")).toBe(beforeSha);
+    await expectRuntime(root, beforeSha);
+  });
 
   it("omits generated tool caches while preserving runtime files during promotion", async () => {
     const target = await advanceRemote();
@@ -793,7 +783,14 @@ describe("Git candidate activation", () => {
     expect(await fs.readFile(path.join(root, "node_modules", "identity.cjs"), "utf8")).toContain(
       beforeSha,
     );
-    expect(await fs.readdir(path.join(root, ".artifacts"))).toEqual([]);
+    expect(
+      await fs.readdir(path.join(root, ".artifacts")).catch((error: unknown) => {
+        if (!hasErrnoCode(error, "ENOENT")) {
+          throw error;
+        }
+        return [];
+      }),
+    ).toEqual([]);
   });
 
   it.each(["working", "staged", "committed"] as const)(
@@ -828,7 +825,9 @@ describe("Git candidate activation", () => {
       expect(stopped).toBe(false);
       expect(await git(root, "rev-parse", "HEAD")).toBe(beforeSha);
       expect(await fs.readFile(path.join(root, "openclaw.mjs"), "utf8")).toBe("export {};\n");
-      expect(await fs.readdir(path.join(root, ".artifacts"))).toEqual([]);
+      await expect(fs.stat(path.join(root, ".artifacts"))).rejects.toMatchObject({
+        code: "ENOENT",
+      });
     },
   );
 

@@ -298,7 +298,7 @@ describe("Doctor agent lease admission", () => {
       const before = fs.readFileSync(pathname);
 
       expect(() => assertNoOpenClawAgentDatabaseLeasesReadOnly({ env: state.env })).toThrow(
-        /malformed database schema/,
+        /legacy-workshop-review-index/,
       );
       expect(fs.readFileSync(pathname)).toEqual(before);
       const doctor = await doctorMaintenance.beginDoctorMaintenance({

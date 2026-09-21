@@ -5,7 +5,7 @@ import { prepareUpdateFailureReport } from "../../infra/update-failure-report-pr
 import { getUpdateRun } from "../../infra/update-run-ledger.js";
 import type { UpdateRunRecord } from "../../infra/update-run-record.js";
 import { UPDATE_RUN_HEARTBEAT_MS } from "../../infra/update-run-timeouts.js";
-import type { UpdateRunResult } from "../../infra/update-runner.js";
+import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import { defaultRuntime } from "../../runtime.js";
 import { formatCliJsonFailure } from "../failure-output.js";
 import { createUpdateProgress, printResult } from "./progress.js";

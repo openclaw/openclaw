@@ -235,7 +235,7 @@ describe("draining Gateway completion ownership", () => {
       const owner = root
         .run(async () => {
           const record = manager.create({ command: "echo ok" }, 60_000, "approval-owned");
-          const decision = manager.register(record, 60_000);
+          const decision = (await manager.register(record, 60_000)).decision;
           ownerReady.resolve();
           return await decision;
         })
@@ -245,8 +245,8 @@ describe("draining Gateway completion ownership", () => {
 
       const suspension = tryBeginGatewaySuspendAdmission(() => {});
       expect(suspension?.drain()).toBe(true);
-      const handler = vi.fn<GatewayRequestHandler>(({ respond }) => {
-        respond(true, { applied: manager.resolve("approval-owned", "allow-once") });
+      const handler = vi.fn<GatewayRequestHandler>(async ({ respond }) => {
+        respond(true, { applied: await manager.resolve("approval-owned", "allow-once") });
       });
       const shape = method === "approval.resolve" ? { kind: "exec", decision: "allow-once" } : {};
 

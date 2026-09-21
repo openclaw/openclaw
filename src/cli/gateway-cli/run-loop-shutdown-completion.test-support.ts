@@ -124,13 +124,14 @@ export function registerShutdownCompletionTests({
   );
 
   it.each([true, false])(
-    "bounds abandoned cleanup after managed parking (restore commit=%s)",
+    "bounds abandoned cleanup after an exhausted deferral and managed parking (restore commit=%s)",
     async (restoreCommitted) => {
       vi.clearAllMocks();
       process.env.OPENCLAW_SYSTEMD_UNIT = "openclaw-gateway.service";
       setPlatform("linux");
       consumeGatewayRestartIntent.mockReturnValueOnce({
         force: true,
+        drainBudgetExhausted: true,
         reason: "update.run",
         successorOwner: managedUpdateSuccessorOwner,
       });
@@ -172,14 +173,16 @@ export function registerShutdownCompletionTests({
   it("retains external supervisor recovery when timeout prevents a restart handoff", async () => {
     vi.clearAllMocks();
     process.env.OPENCLAW_SUPERVISOR_MODE = "external";
-    consumeGatewayRestartIntent.mockReturnValueOnce({ force: true });
+    consumeGatewayRestartIntent.mockReturnValueOnce({ force: true, drainBudgetExhausted: true });
     await withIsolatedSignals(async ({ captureSignal }) => {
       const { close, runtime } = await createSignaledLoopHarness();
       close.mockReturnValue(new Promise<void>(() => {}));
       vi.useFakeTimers();
       try {
         captureSignal("SIGUSR2")();
-        await vi.advanceTimersByTimeAsync(325_000);
+        await vi.advanceTimersByTimeAsync(9_999);
+        expect(runtime.exit).not.toHaveBeenCalled();
+        await vi.advanceTimersByTimeAsync(1);
         expect(writeGatewayRestartHandoffSync).not.toHaveBeenCalled();
         expect(runtime.exit).toHaveBeenCalledExactlyOnceWith(1);
       } finally {
@@ -221,7 +224,7 @@ export function registerShutdownCompletionTests({
   it("retains the restart deadline when a managed update arrives after final cleanup fails", async () => {
     vi.clearAllMocks();
     process.env.OPENCLAW_SUPERVISOR_MODE = "external";
-    consumeGatewayRestartIntent.mockReturnValueOnce({ force: true });
+    consumeGatewayRestartIntent.mockReturnValueOnce({ force: true, drainBudgetExhausted: true });
     restartGatewayProcessWithFreshPid.mockReturnValueOnce({ mode: "supervised" });
     await withIsolatedSignals(async ({ captureSignal }) => {
       const { close, start, runtime, exited } = await createSignaledLoopHarness(undefined, true);
@@ -230,7 +233,7 @@ export function registerShutdownCompletionTests({
       vi.useFakeTimers();
       try {
         restartSignal();
-        await vi.advanceTimersByTimeAsync(10_000);
+        await vi.advanceTimersByTimeAsync(0);
         expect(close).toHaveBeenCalledOnce();
         expect(gatewayLog.error).toHaveBeenCalledWith(
           "gateway lifecycle completion failed: shutdown cleanup failed",
@@ -241,7 +244,7 @@ export function registerShutdownCompletionTests({
           successorOwner: managedUpdateSuccessorOwner,
         });
         restartSignal();
-        await vi.advanceTimersByTimeAsync(314_999);
+        await vi.advanceTimersByTimeAsync(9_999);
         expect(runtime.exit).not.toHaveBeenCalled();
         await vi.advanceTimersByTimeAsync(1);
         expect(runtime.exit).toHaveBeenCalledExactlyOnceWith(1);

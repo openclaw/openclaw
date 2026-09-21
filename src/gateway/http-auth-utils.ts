@@ -1,16 +1,14 @@
 // Gateway HTTP auth helpers.
 // Authenticates HTTP endpoints and derives trusted operator scopes.
 import type { IncomingMessage, ServerResponse } from "node:http";
-import {
-  normalizeLowercaseStringOrEmpty,
-  normalizeOptionalString,
-} from "@openclaw/normalization-core/string-coerce";
+import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { getRuntimeConfig } from "../config/io.js";
 import type { GatewayOperatorRoleDefinition } from "../config/types.gateway.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { verifyDeviceToken } from "../infra/device-pairing-tokens.js";
 import { listDevicePairing } from "../infra/device-pairing.js";
 import { verifyPairingToken } from "../infra/pairing-token.js";
+import type { PluginGatewayAccessAuthority } from "../plugins/gateway-access-policy.types.js";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import {
   AUTH_RATE_LIMIT_SCOPE_DEVICE_TOKEN,
@@ -34,7 +32,8 @@ import {
 } from "./http-auth-plugin-cookie.js";
 import {
   applyHttpOperatorRoleScopeCeiling,
-  resolveAuthenticatedHttpUserProfile,
+  checkAuthenticatedHttpUserProfile,
+  type AuthenticatedHttpUserProfile,
   usesSharedSecretGatewayMethod,
 } from "./http-auth-user-profile.js";
 import {
@@ -43,6 +42,11 @@ import {
   sendMissingScopeForbidden,
   sendUnauthorized,
 } from "./http-common.js";
+import { getBearerToken, getHeader } from "./http-header-value.js";
+import {
+  bindHttpOperatorAccessAuthority,
+  sendGatewayHttpAuthFailure,
+} from "./http-operator-access.js";
 import {
   prepareGatewayIngressAttribution,
   PROXY_ATTRIBUTION_REQUIRED_REASON,
@@ -60,26 +64,7 @@ import { resolveSharedGatewaySessionGeneration } from "./server/ws-shared-genera
 const CONTROL_UI_OPERATOR_READ_SCOPE = "operator.read";
 const CONTROL_UI_OPERATOR_ROLE = "operator";
 
-export function getHeader(req: IncomingMessage, name: string): string | undefined {
-  const raw = req.headers[normalizeLowercaseStringOrEmpty(name)];
-  if (typeof raw === "string") {
-    return raw;
-  }
-  if (Array.isArray(raw)) {
-    return raw[0];
-  }
-  return undefined;
-}
-
-export function getBearerToken(req: IncomingMessage): string | undefined {
-  // Bearer parsing is intentionally minimal: callers pass the extracted token
-  // into the shared gateway auth verifier for constant-time comparison.
-  const raw = normalizeOptionalString(getHeader(req, "authorization")) ?? "";
-  if (!normalizeLowercaseStringOrEmpty(raw).startsWith("bearer ")) {
-    return undefined;
-  }
-  return normalizeOptionalString(raw.slice(7));
-}
+export { getBearerToken, getHeader } from "./http-header-value.js";
 
 type SharedSecretGatewayAuth = Pick<ResolvedGatewayAuth, "mode">;
 export type AuthorizedGatewayHttpRequest = {
@@ -91,11 +76,10 @@ export type AuthorizedGatewayHttpRequest = {
   authenticatedUserProfile?: GatewayClient["authenticatedUserProfile"];
   operatorRolePolicy?: GatewayOperatorRoleDefinition;
   operatorRoleActor?: { kind: "system" };
+  operatorAccessAuthority?: PluginGatewayAccessAuthority;
   controlUiPluginGrants?: ControlUiPluginTabAuthGrant[];
   controlUiPluginGrant?: ControlUiPluginTabAuthGrant;
 };
-type AuthenticatedHttpUserProfile = Awaited<ReturnType<typeof resolveAuthenticatedHttpUserProfile>>;
-
 export type GatewayHttpRequestAuthCheckResult =
   | {
       ok: true;
@@ -343,15 +327,13 @@ export async function authorizeControlUiReadRequestOrReply(
     return null;
   }
   const cfg = getRuntimeConfig();
-  let authenticatedProfile;
-  try {
-    authenticatedProfile = await resolveAuthenticatedHttpUserProfile({
-      authResult,
-      cfg,
-      req: params.req,
-    });
-  } catch {
-    sendGatewayAuthFailure(params.res, { ok: false, reason: "user_profile_unavailable" });
+  const profileAuth = await checkAuthenticatedHttpUserProfile({ authResult, cfg, req: params.req });
+  if (!profileAuth.ok) {
+    sendGatewayHttpAuthFailure(params.res, profileAuth.authResult);
+    return null;
+  }
+  const authenticatedProfile = profileAuth.profile;
+  if (!bindHttpOperatorAccessAuthority(params.res, authenticatedProfile.operatorAccessAuthority)) {
     return null;
   }
   const authMethod = authResult.method ?? "none";
@@ -418,7 +400,10 @@ async function authorizeGatewayHttpRequestWithOrReply(
 ): Promise<AuthorizedGatewayHttpRequest | null> {
   const result = await checkGatewayHttpRequestAuthWith(params, authorizeConnect, allowDeviceToken);
   if (!result.ok) {
-    sendGatewayAuthFailure(params.res, result.authResult);
+    sendGatewayHttpAuthFailure(params.res, result.authResult);
+    return null;
+  }
+  if (!bindHttpOperatorAccessAuthority(params.res, result.requestAuth.operatorAccessAuthority)) {
     return null;
   }
   return result.requestAuth;
@@ -471,9 +456,13 @@ export async function authorizePluginGatewayHttpRequestOrReply(
   const cookieAuth = authorizeControlUiPluginCookieRequest(params.req, {
     requestPath: params.requestPath,
     authGeneration,
+    res: params.res,
   });
   if (cookieAuth) {
     return bindControlUiPluginCookieRequestAuthority(cookieAuth, params);
+  }
+  if (params.res.writableEnded || params.res.destroyed) {
+    return null;
   }
   const requestAuth = await authorizeGatewayHttpRequestWithOrReply(
     params,
@@ -540,16 +529,15 @@ async function checkGatewayHttpRequestAuthWith(
   if (!authResult.ok) {
     return { ok: false, authResult };
   }
-  let authenticatedProfile;
-  try {
-    authenticatedProfile = await resolveAuthenticatedHttpUserProfile({
-      authResult,
-      cfg: params.cfg ?? getRuntimeConfig(),
-      req: params.req,
-    });
-  } catch {
-    return { ok: false, authResult: { ok: false, reason: "user_profile_unavailable" } };
+  const profileAuth = await checkAuthenticatedHttpUserProfile({
+    authResult,
+    cfg: params.cfg ?? getRuntimeConfig(),
+    req: params.req,
+  });
+  if (!profileAuth.ok) {
+    return profileAuth;
   }
+  const authenticatedProfile = profileAuth.profile;
   return {
     ok: true,
     requestAuth: {

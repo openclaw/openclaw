@@ -1,6 +1,7 @@
 // HTTP endpoint adapter for invoking gateway tools from OpenAI-compatible clients.
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { withPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import { normalizeMessageChannel } from "../utils/message-channel.js";
 import type { AuthRateLimiter } from "./auth-rate-limit.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
@@ -16,6 +17,10 @@ import {
   resolveOpenAiCompatibleHttpOperatorScopes,
   resolveOpenAiCompatibleHttpSenderIsOwner,
 } from "./http-utils.js";
+import { hasCurrentGatewayOperatorAccess } from "./operator-access-policy.js";
+import { resolveGatewayOperatorRoleActor } from "./operator-role-policy.js";
+import type { GatewayContextResolver } from "./server-methods/types.js";
+import { createSyntheticPluginRuntimeClient } from "./server-plugin-runtime-client.js";
 import { invokeGatewayTool, type ToolsInvokeInput } from "./tools-invoke-shared.js";
 
 const DEFAULT_BODY_BYTES = 2 * 1024 * 1024;
@@ -30,6 +35,7 @@ export async function handleToolsInvokeHttpRequest(
     trustedProxies?: string[];
     allowRealIpFallback?: boolean;
     rateLimiter?: AuthRateLimiter;
+    resolveGatewayContext?: GatewayContextResolver;
   },
 ): Promise<boolean> {
   let url: URL;
@@ -70,6 +76,10 @@ export async function handleToolsInvokeHttpRequest(
     return true;
   }
   const abortController = new AbortController();
+  const operatorAccessAuthority = requestAuth.operatorAccessAuthority;
+  const signal = operatorAccessAuthority
+    ? AbortSignal.any([abortController.signal, operatorAccessAuthority.signal])
+    : abortController.signal;
   const stopWatchingDisconnect = watchClientDisconnect(req, res, abortController);
 
   try {
@@ -78,7 +88,7 @@ export async function handleToolsInvokeHttpRequest(
       res,
       opts.maxBodyBytes ?? DEFAULT_BODY_BYTES,
     );
-    if (bodyUnknown === undefined || abortController.signal.aborted) {
+    if (bodyUnknown === undefined || signal.aborted) {
       return true;
     }
     const body = (bodyUnknown ?? {}) as ToolsInvokeInput;
@@ -91,22 +101,47 @@ export async function handleToolsInvokeHttpRequest(
     const agentTo = normalizeOptionalString(getHeader(req, "x-openclaw-message-to"));
     const agentThreadId = normalizeOptionalString(getHeader(req, "x-openclaw-thread-id"));
     const senderIsOwner = resolveOpenAiCompatibleHttpSenderIsOwner(req, requestAuth);
-    const outcome = await invokeGatewayTool({
-      cfg,
-      input: body,
-      messageChannel: messageChannel ?? undefined,
-      accountId,
-      agentTo,
-      agentThreadId,
+    const client = createSyntheticPluginRuntimeClient({
       authenticatedUserProfile: requestAuth.authenticatedUserProfile,
       operatorRoleActor: requestAuth.operatorRoleActor,
-      operatorScopes,
-      senderIsOwner,
-      conversationReadOrigin: "direct-operator",
-      toolCallIdPrefix: "http",
-      signal: abortController.signal,
+      operatorAccessAuthority,
+      scopes: operatorScopes,
     });
-    if (abortController.signal.aborted) {
+    const context = opts.resolveGatewayContext?.();
+    if (resolveGatewayOperatorRoleActor(client)?.kind === "operator" && !context) {
+      sendJson(res, 503, {
+        error: { message: "Gateway context is unavailable; retry shortly.", type: "unavailable" },
+      });
+      return true;
+    }
+    const outcome = await withPluginRuntimeGatewayRequestScope(
+      {
+        client,
+        context,
+        resolveGatewayContext: opts.resolveGatewayContext,
+        signal,
+        hasCurrentClientAuthority: () =>
+          !signal.aborted && hasCurrentGatewayOperatorAccess(operatorAccessAuthority),
+        isWebchatConnect: () => false,
+      },
+      () =>
+        invokeGatewayTool({
+          cfg,
+          input: body,
+          messageChannel: messageChannel ?? undefined,
+          accountId,
+          agentTo,
+          agentThreadId,
+          authenticatedUserProfile: requestAuth.authenticatedUserProfile,
+          operatorRoleActor: requestAuth.operatorRoleActor,
+          operatorScopes,
+          senderIsOwner,
+          conversationReadOrigin: "direct-operator",
+          toolCallIdPrefix: "http",
+          signal,
+        }),
+    );
+    if (signal.aborted) {
       return true;
     }
     if (outcome.ok) {
@@ -116,6 +151,7 @@ export async function handleToolsInvokeHttpRequest(
     }
   } finally {
     stopWatchingDisconnect();
+    abortController.abort(new Error("HTTP tool invocation authority ended"));
   }
 
   return true;

@@ -111,7 +111,7 @@ describe("exec approval signed agent runtime", () => {
 
     await handler(opts);
 
-    expect(manager.listPendingRecords()).toHaveLength(0);
+    expect(await manager.listPendingRecords()).toHaveLength(0);
     expect(vi.mocked(opts.respond).mock.calls[0]?.[2]).toMatchObject({
       message: expect.stringContaining("no longer active"),
     });
@@ -131,13 +131,13 @@ describe("exec approval signed agent runtime", () => {
     (opts.params as Record<string, unknown>).security = "full‮looks-deny";
     (opts.params as Record<string, unknown>).ask = "always​ish";
     const pending = handler(opts);
-    await vi.waitFor(() => expect(manager.listPendingRecords()).toHaveLength(1));
-    const record = manager.listPendingRecords()[0]!;
+    await vi.waitFor(async () => expect(await manager.listPendingRecords()).toHaveLength(1));
+    const record = (await manager.listPendingRecords())[0]!;
     expect(record.request.cwd).toBe("/tmp/safe\\u{202E}evil");
     expect(record.request.resolvedPath).toBe("/usr/bin/echo\\u{200B}x");
     expect(record.request.security).toBeNull();
     expect(record.request.ask).toBeNull();
-    manager.resolve(record.id, "deny");
+    await manager.resolve(record.id, "deny");
     await pending;
   });
 
@@ -149,13 +149,13 @@ describe("exec approval signed agent runtime", () => {
     const handler = createExecApprovalHandlers(manager)["exec.approval.request"]!;
     const opts = requestOptions(identity(false), () => active);
     const pending = handler(opts);
-    await vi.waitFor(() => expect(manager.listPendingRecords()).toHaveLength(1));
-    const record = manager.listPendingRecords()[0]!;
+    await vi.waitFor(async () => expect(await manager.listPendingRecords()).toHaveLength(1));
+    const record = (await manager.listPendingRecords())[0]!;
     active = false;
 
     await expect(manager.awaitDecision(record.id)).resolves.toBeNull();
     await pending;
-    expect(manager.getSnapshot(record.id)).toMatchObject({ status: "cancelled" });
+    expect(await manager.getSnapshot(record.id)).toMatchObject({ status: "cancelled" });
   });
 
   it.each([
@@ -179,7 +179,7 @@ describe("exec approval signed agent runtime", () => {
     const approvalId = String(
       (vi.mocked(opts.context.broadcast).mock.calls[0]?.[1] as { id?: unknown } | undefined)?.id,
     );
-    expect(manager.getSnapshot(approvalId)?.request).toMatchObject({
+    expect((await manager.getSnapshot(approvalId))?.request).toMatchObject({
       agentId: "main",
       sessionKey: "agent:main:session-1",
       sessionId: null,
@@ -211,7 +211,7 @@ describe("exec approval signed agent runtime", () => {
           .get(),
       ).toBeUndefined();
     }
-    manager.resolve(approvalId, "deny");
+    await manager.resolve(approvalId, "deny");
     await pending;
   });
 });

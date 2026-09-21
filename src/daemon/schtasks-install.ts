@@ -409,9 +409,6 @@ async function activateScheduledTask(
 export async function installScheduledTask(
   args: GatewayServiceInstallArgs,
 ): Promise<{ scriptPath: string }> {
-  if (args.beforeLoad) {
-    throw new Error("Deferred native service load is not supported on this platform.");
-  }
   let restoreTask: Awaited<ReturnType<typeof backupScheduledTaskDefinition>> | undefined;
   let staged: Awaited<ReturnType<typeof writeScheduledTaskScript>> | undefined;
   const warn = args.warn ?? ((message: string) => args.stdout.write(`${message}\n`));

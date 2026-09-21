@@ -57,20 +57,25 @@ function createSessionNodes(db: DatabaseSync): void {
   `);
 }
 
-function backfillSessionNodes(db: DatabaseSync): void {
+type LegacySessionMigrationSelect = { columns: string; sql: string };
+
+/** Live entries take precedence over routes, then retained generations. */
+function createLegacySessionNodeSelects(
+  db: DatabaseSync,
+): Array<LegacySessionMigrationSelect & { replace: boolean }> {
+  const selects: Array<LegacySessionMigrationSelect & { replace: boolean }> = [];
   const entryColumns = readSqliteTableColumns(db, "session_entries");
   if (entryColumns) {
     const status = migratedColumn(entryColumns, "status", "NULL");
-    db.exec(`
-      INSERT OR REPLACE INTO session_nodes (
-        session_key, current_session_id, entry_json, updated_at, status,
+    selects.push({
+      replace: true,
+      columns: `session_key, current_session_id, entry_json, updated_at, status,
         created_at, created_via, created_actor_type, created_actor_id,
         parent_session_key, spawned_by, fork_source_session_key,
         fork_source_session_id, fork_source_entry_id, label, display_name,
         category, icon, pinned_at, archived_at, last_read_at,
-        last_interaction_at, last_activity_at
-      )
-      SELECT
+        last_interaction_at, last_activity_at`,
+      sql: `SELECT
         session_key,
         session_id,
         entry_json,
@@ -106,36 +111,43 @@ function backfillSessionNodes(db: DatabaseSync): void {
         ${jsonNumber("$.lastReadAt")},
         ${jsonNumber("$.lastInteractionAt")},
         ${jsonNumber("$.lastActivityAt")}
-      FROM session_entries;
-    `);
+      FROM session_entries`,
+    });
   }
-
-  const routeColumns = readSqliteTableColumns(db, "session_routes");
-  if (routeColumns) {
-    db.exec(`
-      INSERT OR IGNORE INTO session_nodes (
-        session_key, current_session_id, entry_json, updated_at
-      )
-      SELECT session_key, session_id, '{}', updated_at
-      FROM session_routes;
-    `);
+  if (readSqliteTableColumns(db, "session_routes")) {
+    selects.push({
+      replace: false,
+      columns: `session_key, current_session_id, entry_json, updated_at`,
+      sql: `SELECT session_key, session_id, '{}', updated_at
+      FROM session_routes`,
+    });
   }
-
   // Legacy history can contain a generation whose key has neither a live entry
   // nor a route. It still needs one node owner so the flipped FK can retain it.
-  db.exec(`
-    INSERT OR IGNORE INTO session_nodes (
-      session_key, current_session_id, entry_json, updated_at
-    )
-    SELECT session_key, session_id, '{}', updated_at
-    FROM sessions;
-  `);
+  selects.push({
+    replace: false,
+    columns: `session_key, current_session_id, entry_json, updated_at`,
+    sql: `SELECT session_key, session_id, '{}', updated_at
+    FROM sessions`,
+  });
+  return selects;
 }
 
-function migrateSessionWindows(db: DatabaseSync): void {
+function backfillSessionNodes(db: DatabaseSync): void {
+  for (const projection of createLegacySessionNodeSelects(db)) {
+    db.exec(`INSERT OR ${projection.replace ? "REPLACE" : "IGNORE"} INTO session_nodes
+      (${projection.columns}) ${projection.sql};`);
+  }
+}
+
+/** Project the legacy window owner with the migration's entry/route precedence. */
+function createLegacySessionWindowSelect(
+  db: DatabaseSync,
+  source: "sessions" | "session_windows",
+): LegacySessionMigrationSelect | undefined {
   const columns = readSqliteTableColumns(db, "sessions");
   if (!columns) {
-    return;
+    return undefined;
   }
   const entryColumns = readSqliteTableColumns(db, "session_entries");
   const routeColumns = readSqliteTableColumns(db, "session_routes");
@@ -144,8 +156,8 @@ function migrateSessionWindows(db: DatabaseSync): void {
   const entryOwner = entryColumns
     ? `(SELECT se.session_key
         FROM session_entries AS se
-        INNER JOIN session_windows AS owner_window ON owner_window.session_id = se.session_id
-        WHERE se.session_id = session_windows.session_id
+        INNER JOIN ${source} AS owner_window ON owner_window.session_id = se.session_id
+        WHERE se.session_id = ${source}.session_id
         ORDER BY CASE WHEN se.session_key = owner_window.session_key THEN 0 ELSE 1 END,
                  se.updated_at DESC,
                  se.session_key ASC
@@ -154,8 +166,8 @@ function migrateSessionWindows(db: DatabaseSync): void {
   const routeOwner = routeColumns
     ? `(SELECT sr.session_key
         FROM session_routes AS sr
-        INNER JOIN session_windows AS owner_window ON owner_window.session_id = sr.session_id
-        WHERE sr.session_id = session_windows.session_id
+        INNER JOIN ${source} AS owner_window ON owner_window.session_id = sr.session_id
+        WHERE sr.session_id = ${source}.session_id
         ORDER BY CASE WHEN sr.session_key = owner_window.session_key THEN 0 ELSE 1 END,
                  sr.updated_at DESC,
                  sr.session_key ASC
@@ -164,14 +176,61 @@ function migrateSessionWindows(db: DatabaseSync): void {
   const currentEntryJson = entryColumns
     ? `(SELECT se.entry_json
         FROM session_entries AS se
-        INNER JOIN session_windows AS owner_window ON owner_window.session_id = se.session_id
-        WHERE se.session_id = session_windows.session_id
+        INNER JOIN ${source} AS owner_window ON owner_window.session_id = se.session_id
+        WHERE se.session_id = ${source}.session_id
         ORDER BY CASE WHEN se.session_key = owner_window.session_key THEN 0 ELSE 1 END,
                  se.updated_at DESC,
                  se.session_key ASC
         LIMIT 1)`
     : "NULL";
 
+  return {
+    columns: `session_id, session_key, previous_session_id, reason, session_scope,
+      created_at, updated_at, transcript_updated_at, transcript_observed_at,
+      session_entry_provenance, acp_owned, plugin_owner_id,
+      hook_external_content_source, started_at, ended_at, status, chat_type,
+      channel, account_id, primary_conversation_id, model_provider, model,
+      agent_harness_id, parent_session_key, spawned_by, display_name`,
+    sql: `SELECT
+      session_id,
+      COALESCE(${entryOwner}, ${routeOwner}, session_key),
+      CASE
+        WHEN json_valid(${currentEntryJson})
+        THEN NULLIF(trim(CAST(json_extract(${currentEntryJson}, '$.previousSessionId') AS TEXT)), '')
+        ELSE NULL
+      END,
+      NULL,
+      ${migratedColumn(columns, "session_scope", "'conversation'")},
+      created_at,
+      updated_at,
+      ${migratedColumn(columns, "transcript_updated_at", "NULL")},
+      ${migratedColumn(columns, "transcript_observed_at", "NULL")},
+      ${migratedColumn(columns, "session_entry_provenance", "0")},
+      ${migratedColumn(columns, "acp_owned", "0")},
+      ${migratedColumn(columns, "plugin_owner_id", "NULL")},
+      ${migratedColumn(columns, "hook_external_content_source", "NULL")},
+      ${migratedColumn(columns, "started_at", "NULL")},
+      ${migratedColumn(columns, "ended_at", "NULL")},
+      ${migratedColumn(columns, "status", "NULL")},
+      ${migratedColumn(columns, "chat_type", "NULL")},
+      ${migratedColumn(columns, "channel", "NULL")},
+      ${migratedColumn(columns, "account_id", "NULL")},
+      ${migratedColumn(columns, "primary_conversation_id", "NULL")},
+      ${migratedColumn(columns, "model_provider", "NULL")},
+      ${migratedColumn(columns, "model", "NULL")},
+      ${migratedColumn(columns, "agent_harness_id", "NULL")},
+      ${migratedColumn(columns, "parent_session_key", "NULL")},
+      ${migratedColumn(columns, "spawned_by", "NULL")},
+      ${migratedColumn(columns, "display_name", "NULL")}
+    FROM ${source}`,
+  };
+}
+
+function migrateSessionWindows(db: DatabaseSync): void {
+  const projection = createLegacySessionWindowSelect(db, "session_windows");
+  if (!projection) {
+    return;
+  }
   // SQLite rewrites child FK targets on RENAME even while enforcement is off.
   // Rebuilding under the renamed owner keeps every transcript child attached.
   db.exec("ALTER TABLE sessions RENAME TO session_windows;");
@@ -207,46 +266,8 @@ function migrateSessionWindows(db: DatabaseSync): void {
       FOREIGN KEY (session_key) REFERENCES session_nodes(session_key) ON DELETE CASCADE,
       FOREIGN KEY (primary_conversation_id) REFERENCES conversations(conversation_id) ON DELETE SET NULL
     ) STRICT;
-    INSERT INTO session_windows_new (
-      session_id, session_key, previous_session_id, reason, session_scope,
-      created_at, updated_at, transcript_updated_at, transcript_observed_at,
-      session_entry_provenance, acp_owned, plugin_owner_id,
-      hook_external_content_source, started_at, ended_at, status, chat_type,
-      channel, account_id, primary_conversation_id, model_provider, model,
-      agent_harness_id, parent_session_key, spawned_by, display_name
-    )
-    SELECT
-      session_id,
-      COALESCE(${entryOwner}, ${routeOwner}, session_key),
-      CASE
-        WHEN json_valid(${currentEntryJson})
-        THEN NULLIF(trim(CAST(json_extract(${currentEntryJson}, '$.previousSessionId') AS TEXT)), '')
-        ELSE NULL
-      END,
-      NULL,
-      ${migratedColumn(columns, "session_scope", "'conversation'")},
-      created_at,
-      updated_at,
-      ${migratedColumn(columns, "transcript_updated_at", "NULL")},
-      ${migratedColumn(columns, "transcript_observed_at", "NULL")},
-      ${migratedColumn(columns, "session_entry_provenance", "0")},
-      ${migratedColumn(columns, "acp_owned", "0")},
-      ${migratedColumn(columns, "plugin_owner_id", "NULL")},
-      ${migratedColumn(columns, "hook_external_content_source", "NULL")},
-      ${migratedColumn(columns, "started_at", "NULL")},
-      ${migratedColumn(columns, "ended_at", "NULL")},
-      ${migratedColumn(columns, "status", "NULL")},
-      ${migratedColumn(columns, "chat_type", "NULL")},
-      ${migratedColumn(columns, "channel", "NULL")},
-      ${migratedColumn(columns, "account_id", "NULL")},
-      ${migratedColumn(columns, "primary_conversation_id", "NULL")},
-      ${migratedColumn(columns, "model_provider", "NULL")},
-      ${migratedColumn(columns, "model", "NULL")},
-      ${migratedColumn(columns, "agent_harness_id", "NULL")},
-      ${migratedColumn(columns, "parent_session_key", "NULL")},
-      ${migratedColumn(columns, "spawned_by", "NULL")},
-      ${migratedColumn(columns, "display_name", "NULL")}
-    FROM session_windows;
+    INSERT INTO session_windows_new (${projection.columns})
+    ${projection.sql};
     DROP TABLE session_windows;
     ALTER TABLE session_windows_new RENAME TO session_windows;
   `);

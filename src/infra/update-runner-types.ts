@@ -146,38 +146,25 @@ type GitUpdateTarget = {
 };
 
 export type UpdateRunnerOptions = {
-  runId?: string;
-  cwd?: string;
-  argv1?: string;
-  tag?: string;
   channel?: UpdateChannel;
   devTarget?: DevUpdateTarget;
-  deferConfiguredPluginInstallRepair?: boolean;
-  allowGatewayServiceRepair?: boolean;
-  allowGatewayActivation?: boolean;
   /** Expose a new checkout only after target admission; subsequent work uses the published path. */
   publishGitCheckout?: () => Promise<string>;
   /** Read-only admission before executing a fetched candidate; never stops a service. */
-  inspectGitTarget?: (target: GitUpdateTarget) => Promise<void>;
-  /** Admit the built candidate after validation, before retention or activation. */
-  inspectGitCandidate?: (candidateRoot: string) => Promise<void>;
+  inspectGitTarget: (target: GitUpdateTarget) => Promise<void>;
   /** Admit required preparation after no-op detection, before allocating the candidate worktree. */
   beforeGitStaging?: () => Promise<{ step: UpdateStepResult; failureReason: string }>;
-  validateCandidate?: (root: string) => Promise<void>;
+  validateCandidate: (root: string) => Promise<void>;
   /** CLI-owned activation Doctor retains its config writer and requester authority. */
-  runGitDoctor?: (root: string) => Promise<UpdateStepResult | null>;
+  runGitDoctor: (root: string) => Promise<UpdateStepResult | null>;
   prepareGitExposure?: (
     candidateRoot: string,
     candidateSha: string,
     env: NodeJS.ProcessEnv | undefined,
   ) => Promise<void>;
-  beforeGitMutation?: (target: GitUpdateTarget) => Promise<{
-    allowGatewayServiceRepair?: boolean;
-    allowGatewayActivation?: boolean;
-  } | void>;
+  beforeGitMutation?: (target: GitUpdateTarget) => Promise<void>;
   /** Operator-selected work deadline; omission leaves work unbounded, not probes or cleanup. */
   timeoutMs?: number;
-  runCommand?: CommandRunner;
   progress?: UpdateStepProgress;
 };
 

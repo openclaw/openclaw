@@ -9,7 +9,7 @@ import {
 import {
   deliveryContextFromSession,
   sessionDeliveryOrigin,
-} from "../../utils/delivery-context.shared.js";
+} from "../../utils/delivery-context.read.js";
 import type { SessionEntry } from "./types.js";
 
 type SessionCanonicalDeliveryEvidence = Pick<SessionEntry, "delivery" | "groupId">;

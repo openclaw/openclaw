@@ -562,7 +562,6 @@ src/gateway/openai-http.test.ts
 src/gateway/openai-http.ts
 src/gateway/openresponses-http.test.ts
 src/gateway/openresponses-http.ts
-src/gateway/operator-approval-store.ts
 src/gateway/server-channels.test.ts
 src/gateway/server-channels.ts
 src/gateway/server-chat.agent-events.test.ts
@@ -658,7 +657,6 @@ src/infra/state-migrations.storage.ts
 src/infra/state-migrations.test.ts
 src/infra/update-global.ts
 src/infra/update-managed-service-handoff.ts
-src/infra/update-runner.test.ts
 src/infra/update-startup.test.ts
 src/infra/update-startup.ts
 src/interactive/payload.ts

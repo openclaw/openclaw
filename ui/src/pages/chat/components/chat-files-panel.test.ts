@@ -33,6 +33,15 @@ function host(): SessionWorkspaceHost {
     requestUpdate: vi.fn(),
   };
 }
+
+// Arm after synchronous open/close notifications and before settling a controlled read.
+function nextWorkspaceUpdate(state: SessionWorkspaceHost) {
+  const updated = new Promise<void>((resolve) => {
+    vi.mocked(state.requestUpdate!).mockImplementationOnce(() => resolve());
+  });
+  return vi.waitFor(() => updated);
+}
+
 afterEach(() => document.body.replaceChildren());
 describe("workspace file tabs", () => {
   it("revalidates a clean file on explicit reopen without replacing its tab", async () => {
@@ -43,18 +52,16 @@ describe("workspace file tabs", () => {
     });
     state.sessions.getFile = getFile;
     openSessionWorkspaceFile(state, { path: "notes.md" });
-    await vi.waitFor(() =>
-      expect(getSessionWorkspace(state).previews[0]?.content).toMatchObject({ content: "OLD" }),
-    );
+    await nextWorkspaceUpdate(state);
+    expect(getSessionWorkspace(state).previews[0]?.content).toMatchObject({ content: "OLD" });
     const preview = getSessionWorkspace(state).previews[0]!;
     getFile.mockResolvedValue({
       sessionKey: state.sessionKey,
       file: { name: "notes.md", path: "notes.md", content: "NEW", hash: "new" },
     });
     openSessionWorkspaceFile(state, { path: "notes.md", line: 2 });
-    await vi.waitFor(() =>
-      expect(preview.content).toMatchObject({ content: "NEW", navigation: { line: 2 } }),
-    );
+    await nextWorkspaceUpdate(state);
+    expect(preview.content).toMatchObject({ content: "NEW", navigation: { line: 2 } });
     expect(getSessionWorkspace(state).previews).toEqual([preview]);
     expect(getSessionWorkspace(state).activePreviewId).toBe(preview.id);
   });
@@ -77,9 +84,8 @@ describe("workspace file tabs", () => {
       );
     state.sessions.getFile = getFile;
     openSessionWorkspaceFile(state, { path: "draft.md" });
-    await vi.waitFor(() =>
-      expect(getSessionWorkspace(state).previews[0]?.content.kind).toBe("file"),
-    );
+    await nextWorkspaceUpdate(state);
+    expect(getSessionWorkspace(state).previews[0]?.content.kind).toBe("file");
     const preview = getSessionWorkspace(state).previews[0]!;
     const content = preview.content;
     if (content.kind !== "file") {
@@ -91,12 +97,11 @@ describe("workspace file tabs", () => {
       }
       openSessionWorkspaceFile(state, { path: "draft.md" });
       if (timing === "during read") {
-        await vi.waitFor(() => expect(getFile).toHaveBeenCalledTimes(2));
+        expect(getFile).toHaveBeenCalledTimes(2);
         setFileDraft(content, { content: "UNSAVED", expectedHash: "old" });
+        const updated = nextWorkspaceUpdate(state);
         resolveRead({ ...initial, file: { ...initial.file, content: "NEW", hash: "new" } });
-        await new Promise((resolve) => {
-          setTimeout(resolve, 0);
-        });
+        await updated;
       } else {
         expect(getFile).toHaveBeenCalledTimes(1);
       }
@@ -127,13 +132,12 @@ describe("workspace file tabs", () => {
         );
       state.sessions.getFile = getFile;
       openSessionWorkspaceFile(state, { path: "stale.md" });
-      await vi.waitFor(() =>
-        expect(getSessionWorkspace(state).previews[0]?.content.kind).toBe("file"),
-      );
+      await nextWorkspaceUpdate(state);
+      expect(getSessionWorkspace(state).previews[0]?.content.kind).toBe("file");
       const preview = getSessionWorkspace(state).previews[0]!;
       const content = preview.content;
       openSessionWorkspaceFile(state, { path: "stale.md" });
-      await vi.waitFor(() => expect(getFile).toHaveBeenCalledTimes(2));
+      expect(getFile).toHaveBeenCalledTimes(2);
       if (change === "session") {
         state.sessionKey = "agent:main:other";
       }
@@ -144,10 +148,9 @@ describe("workspace file tabs", () => {
         closeSessionWorkspacePreview(state, preview.id);
       }
       const workspace = getSessionWorkspace(state);
+      const updated = nextWorkspaceUpdate(state);
       resolveRead({ ...initial, file: { ...initial.file, content: "STALE" } });
-      await new Promise((resolve) => {
-        setTimeout(resolve, 0);
-      });
+      await updated;
       expect(preview.content).toBe(content);
       expect(workspace.previews).toEqual([]);
     },
@@ -184,9 +187,8 @@ describe("workspace file tabs", () => {
             }),
         );
       openSessionWorkspaceFile(state, { path: "notes.md" });
-      await vi.waitFor(() =>
-        expect(getSessionWorkspace(state).previews[0]?.content.kind).toBe("file"),
-      );
+      await nextWorkspaceUpdate(state);
+      expect(getSessionWorkspace(state).previews[0]?.content.kind).toBe("file");
       const retained = getSessionWorkspace(state).previews[0]!;
       openSessionWorkspaceFile(state, { path: olderPath });
       openSessionWorkspaceFile(state, { path: "/workspace/notes.md" });
@@ -199,25 +201,27 @@ describe("workspace file tabs", () => {
         }
       };
       const newer = () => pending.get("/workspace/notes.md")!.resolve(response);
+      const firstUpdated = nextWorkspaceUpdate(state);
       if (order === "older first") {
         older();
       } else {
         newer();
       }
-      await new Promise((resolve) => {
-        setTimeout(resolve, 0);
-      });
+      await firstUpdated;
       if (unrelatedError) {
         state.sessions.listFiles = vi.fn().mockRejectedValue(new Error("List failed"));
         loadSessionWorkspace(state, getSessionWorkspace(state), true);
-        await vi.waitFor(() => expect(getSessionWorkspace(state).error).toBe("List failed"));
+        await nextWorkspaceUpdate(state);
+        expect(getSessionWorkspace(state).error).toBe("List failed");
       }
+      const secondUpdated = nextWorkspaceUpdate(state);
       if (order === "older first") {
         newer();
       } else {
         older();
       }
-      await vi.waitFor(() => expect(getSessionWorkspace(state).previews).toEqual([retained]));
+      await secondUpdated;
+      expect(getSessionWorkspace(state).previews).toEqual([retained]);
       expect(retained.content).toMatchObject({ content: "CURRENT" });
       expect(getSessionWorkspace(state).error).toBe(unrelatedError ? "List failed" : null);
     },
@@ -247,9 +251,8 @@ describe("workspace file tabs", () => {
     const getFile = vi.fn().mockResolvedValue(response);
     state.sessions.getFile = getFile;
     openSessionWorkspaceFile(state, { path: firstPath, line: 2 });
-    await vi.waitFor(() =>
-      expect(getSessionWorkspace(state).previews[0]?.content.kind).toBe("file"),
-    );
+    await nextWorkspaceUpdate(state);
+    expect(getSessionWorkspace(state).previews[0]?.content.kind).toBe("file");
     const retained = getSessionWorkspace(state).previews[0]!;
     const originalContent = retained.content;
     if (originalContent.kind !== "file") {
@@ -264,7 +267,8 @@ describe("workspace file tabs", () => {
       file: { ...response.file, content: "New disk buffer" },
     });
     openSessionWorkspaceFile(state, { path: aliasPath, line: 7 });
-    await vi.waitFor(() => expect(getSessionWorkspace(state).previews).toEqual([retained]));
+    await nextWorkspaceUpdate(state);
+    expect(getSessionWorkspace(state).previews).toEqual([retained]);
     expect(retained.content).toMatchObject({
       content: dirty ? "Original buffer" : "New disk buffer",
       navigation: { line: 7 },
@@ -279,9 +283,13 @@ describe("workspace file tabs", () => {
     expect(retained.content).toMatchObject({ navigation: { line: 9 } });
     closeSessionWorkspacePreview(state, retained.id);
     openSessionWorkspaceFile(state, { path: aliasPath });
-    await vi.waitFor(() =>
-      expect(getSessionWorkspace(state).previews[0]?.content.kind).toBe("file"),
-    );
+    const updated = nextWorkspaceUpdate(state);
+    // A clean line-9 revalidation also settles after close; join both pending reads.
+    if (!dirty) {
+      await nextWorkspaceUpdate(state);
+    }
+    await updated;
+    expect(getSessionWorkspace(state).previews[0]?.content.kind).toBe("file");
     expect(getFile).toHaveBeenCalledTimes(dirty ? 3 : 4);
   });
 
@@ -309,17 +317,19 @@ describe("workspace file tabs", () => {
     };
     openSessionWorkspaceFile(state, { path: "README.md", line: 2 });
     openSessionWorkspaceFile(state, { path: "/workspace/README.md", line: 7 });
+    const aliasUpdated = nextWorkspaceUpdate(state);
     pending.get("/workspace/README.md")!(response);
-    await vi.waitFor(() =>
-      expect(getSessionWorkspace(state).previews[1]?.content.kind).toBe("file"),
-    );
+    await aliasUpdated;
+    expect(getSessionWorkspace(state).previews[1]?.content.kind).toBe("file");
     const retained = getSessionWorkspace(state).previews[1]!;
     openSessionWorkspacePreview(state, "attachment:other", "other.txt", {
       kind: "markdown",
       content: "Other",
     });
+    const olderUpdated = nextWorkspaceUpdate(state);
     pending.get("README.md")!(response);
-    await vi.waitFor(() => expect(getSessionWorkspace(state).previews).toHaveLength(2));
+    await olderUpdated;
+    expect(getSessionWorkspace(state).previews).toHaveLength(2);
     expect(getSessionWorkspace(state).previews[0]).toBe(retained);
     expect(getSessionWorkspace(state).activePreviewId).toBe("attachment:other");
     expect(retained.content).toMatchObject({ navigation: { line: 7 } });
@@ -350,24 +360,23 @@ describe("workspace file tabs", () => {
       };
       state.sessions.getFile = vi.fn().mockResolvedValue(response);
       openSessionWorkspaceFile(state, { path: "asset.png" });
-      await vi.waitFor(() =>
-        expect(getSessionWorkspace(state).previews[0]?.content.kind).not.toBe("loading"),
-      );
+      await nextWorkspaceUpdate(state);
+      expect(getSessionWorkspace(state).previews[0]?.content.kind).not.toBe("loading");
       const original = getSessionWorkspace(state).previews[0]!;
       openSessionWorkspaceFile(state, { path: "/workspace/asset.png" });
-      await vi.waitFor(() => expect(getSessionWorkspace(state).previews).toEqual([original]));
+      await nextWorkspaceUpdate(state);
+      expect(getSessionWorkspace(state).previews).toEqual([original]);
       expect(getSessionWorkspace(state).activePreviewId).toBe(original.id);
       vi.mocked(state.sessions.getFile).mockResolvedValue({
         ...response,
         file: { ...response.file, content: "TkVX", size: 1024 },
       });
       openSessionWorkspaceFile(state, { path: "asset.png" });
-      await vi.waitFor(() =>
-        expect(original.content).toMatchObject(
-          previewKind === "image"
-            ? { src: "data:image/png;base64,TkVX" }
-            : { rawText: expect.stringContaining("1,024 bytes") },
-        ),
+      await nextWorkspaceUpdate(state);
+      expect(original.content).toMatchObject(
+        previewKind === "image"
+          ? { src: "data:image/png;base64,TkVX" }
+          : { rawText: expect.stringContaining("1,024 bytes") },
       );
       expect(getSessionWorkspace(state).previews).toEqual([original]);
     },
@@ -435,16 +444,16 @@ describe("workspace file tabs", () => {
     );
     openSessionWorkspaceFile(state, { path: "pending.ts", line: 2 });
     openSessionWorkspaceFile(state, { path: "pending.ts", line: 7 });
+    const updated = nextWorkspaceUpdate(state);
     resolve({
       sessionKey: state.sessionKey,
       file: { name: "pending.ts", path: "pending.ts", content: "one\ntwo" },
     });
-    await vi.waitFor(() =>
-      expect(getSessionWorkspace(state).previews[0]?.content).toMatchObject({
-        kind: "file",
-        line: 7,
-      }),
-    );
+    await updated;
+    expect(getSessionWorkspace(state).previews[0]?.content).toMatchObject({
+      kind: "file",
+      line: 7,
+    });
     expect(state.sessions.getFile).toHaveBeenCalledOnce();
     expect(getSessionWorkspace(state).previews).toHaveLength(1);
   });
@@ -480,6 +489,7 @@ describe("workspace file tabs", () => {
       title: "b.txt",
       src: "/media/b.txt",
     });
+    const backgroundUpdated = nextWorkspaceUpdate(state);
     resolve({
       sessionKey: state.sessionKey,
       root: "/workspace",
@@ -491,14 +501,14 @@ describe("workspace file tabs", () => {
         contentEncoding: "utf8",
       },
     });
-    await vi.waitFor(() =>
-      expect(getSessionWorkspace(state).previews[0]?.content.kind).toBe("file"),
-    );
+    await backgroundUpdated;
+    expect(getSessionWorkspace(state).previews[0]?.content.kind).toBe("file");
     expect(getSessionWorkspace(state).activePreviewId).toBe("attachment:b");
     openSessionWorkspaceFile(state, { path: "c.txt" });
     closeSessionWorkspacePreview(state, "file:c.txt");
+    const closedUpdated = nextWorkspaceUpdate(state);
     resolve({ sessionKey: state.sessionKey, file: { name: "c.txt", path: "c.txt", content: "C" } });
-    await Promise.resolve();
+    await closedUpdated;
     expect(getSessionWorkspace(state).previews.map((entry) => entry.id)).toEqual([
       "file:a.txt",
       "attachment:b",
@@ -516,13 +526,11 @@ describe("workspace file tabs", () => {
       });
     state.sessions.getFile = getFile;
     openSessionWorkspaceFile(state, { path: "retry.txt" });
-    await vi.waitFor(() =>
-      expect(getSessionWorkspace(state).previews[0]?.content.kind).toBe("unavailable"),
-    );
+    await nextWorkspaceUpdate(state);
+    expect(getSessionWorkspace(state).previews[0]?.content.kind).toBe("unavailable");
     openSessionWorkspaceFile(state, { path: "retry.txt" });
-    await vi.waitFor(() =>
-      expect(getSessionWorkspace(state).previews[0]?.content.kind).toBe("file"),
-    );
+    await nextWorkspaceUpdate(state);
+    expect(getSessionWorkspace(state).previews[0]?.content.kind).toBe("file");
     expect(getSessionWorkspace(state).previews).toHaveLength(1);
     expect(getFile).toHaveBeenCalledTimes(2);
   });

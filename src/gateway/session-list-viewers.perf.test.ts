@@ -308,17 +308,18 @@ test("preserves viewer pages across publications while bounding shared predicate
     const release = retainSessionListForegroundWork();
     const projection = await createSessionRowProjection({ cfg, modelCatalog: [] });
     const predicate = vi.spyOn(visibility, "isSystemCreatedSessionRow");
+    const selectEntries = vi.spyOn(projection, "selectEntries");
     const opts = { limit: 2, ownerFirst: true, excludeSystem: true };
     const golden = [
       [
-        { ids: ["b", "a", "c"], total: 4 },
-        { ids: ["c", "f"], total: 3 },
-        { ids: ["f", "b", "c"], total: 4 },
+        { ids: ["b", "a", "c"], order: ["b", "c", "f", "a"], total: 4 },
+        { ids: ["c", "f"], order: ["c", "f", "a"], total: 3 },
+        { ids: ["f", "b", "c"], order: ["b", "c", "f", "a"], total: 4 },
       ],
       [
-        { ids: ["b", "d"], total: 2 },
-        { ids: ["d", "b"], total: 2 },
-        { ids: ["f", "d"], total: 3 },
+        { ids: ["b", "d"], order: ["d", "b"], total: 2 },
+        { ids: ["d", "b"], order: ["d", "b"], total: 2 },
+        { ids: ["f", "d"], order: ["f", "d", "b"], total: 3 },
       ],
     ];
     try {
@@ -326,13 +327,14 @@ test("preserves viewer pages across publications while bounding shared predicate
         // The first viewer primes only viewer-independent membership.
         await listProjectedSessions({ projection, client: clients[0], opts });
         predicate.mockClear();
+        selectEntries.mockClear();
         for (const [index, client] of clients.entries()) {
           const result = await listProjectedSessions({ projection, client, opts });
           const expected = golden[revision]![index]!;
           expect({
             ids: result.sessions.map((row) => row.sessionId),
             total: result.totalCount,
-          }).toEqual(expected);
+          }).toEqual({ ids: expected.ids, total: expected.total });
           expect(result.count).toBe(expected.ids.length);
           expect(result.hasMore).toBe(expected.total > 2);
           expect(result.nextOffset).toBe(expected.total > 2 ? 2 : null);
@@ -345,8 +347,24 @@ test("preserves viewer pages across publications while bounding shared predicate
                   : "viewer",
             ),
           );
+          for (const page of [
+            { limit: 1, offset: 1 },
+            { limit: 2, offset: 1 },
+            { limit: 1, offset: 2 },
+          ]) {
+            const next = await listProjectedSessions({
+              projection,
+              client,
+              opts: { ...opts, ...page },
+            });
+            expect(next.sessions.map((row) => row.sessionId)).toEqual(
+              expected.order.slice(page.offset, page.offset + page.limit),
+            );
+            expect(next.totalCount).toBe(expected.total);
+          }
         }
         expect.soft(predicate.mock.calls.length).toBe(0);
+        expect.soft(selectEntries.mock.calls.length).toBe(0);
         if (revision === 0) {
           replaceSessionEntrySync(
             { agentId: "main", sessionKey: "agent:main:a" },
@@ -374,6 +392,7 @@ test("preserves viewer pages across publications while bounding shared predicate
       }
     } finally {
       predicate.mockRestore();
+      selectEntries.mockRestore();
       projection.dispose();
       release();
     }

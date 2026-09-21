@@ -2247,6 +2247,7 @@ describe("scripts/test-projects changed-target routing", () => {
   it.each([
     ["src/agents/**/*.test.ts", "test/vitest/vitest.agents.config.ts"],
     ["test/plugins", "test/vitest/vitest.tooling.config.ts"],
+    ["test/scripts", "test/vitest/vitest.tooling.config.ts"],
     ["src/plugin-state", "test/vitest/vitest.unit.config.ts"],
   ])("preserves watch selection across database ownership for %s", (target, owner) => {
     expect(buildVitestRunPlans(["--watch", target])).toEqual([
@@ -3057,14 +3058,6 @@ describe("scripts/test-projects changed-target routing", () => {
     expect(() => buildVitestRunPlans(["--watch", "src/cli"])).toThrow(
       "watch mode with mixed test suites is not supported",
     );
-  });
-
-  it("keeps broad shell helper watch targets in one tooling shard", () => {
-    expectSingleVitestRunPlan(buildVitestRunPlans(["--watch", "test/scripts"], process.cwd()), {
-      config: "test/vitest/vitest.tooling.config.ts",
-      includePatterns: ["test/scripts/**/*.test.ts"],
-      watchMode: true,
-    });
   });
 
   it("preserves post-separator Vitest args without parsing them as targets", () => {

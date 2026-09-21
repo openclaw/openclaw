@@ -6,10 +6,8 @@ import { loadSessionEntryReadOnly } from "../../../config/sessions/session-acces
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
 import { isHeartbeatEnabledForAgent } from "../../../infra/heartbeat-summary.js";
 import { areHeartbeatsEnabled } from "../../../infra/heartbeat-wake.js";
-import {
-  deliveryContextFromSession,
-  hasDeliveryTargetFields,
-} from "../../../utils/delivery-context.shared.js";
+import { deliveryContextFromSession } from "../../../utils/delivery-context.read.js";
+import { hasDeliveryTargetFields } from "../../../utils/delivery-context.shared.js";
 import { resolveAgentConfig, resolveSessionAgentIds } from "../../agent-scope.js";
 
 export function isHeartbeatEnabledForSessionAgent(params: {

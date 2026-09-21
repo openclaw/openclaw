@@ -17,7 +17,7 @@ const fileState = z.strictObject({
   mtimeMs: z.number().finite(),
   ctimeMs: z.number().finite(),
 });
-export const GatewayServiceStagedFilesSchema = z.strictObject({
+const GatewayServiceStagedFilesSchema = z.strictObject({
   files: z
     .array(
       z.strictObject({

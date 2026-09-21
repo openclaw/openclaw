@@ -2620,9 +2620,8 @@ src/gateway/node-pairing-ssh-verify.ts	1
 src/gateway/node-registry-private.ts	1
 src/gateway/node-registry.ts	2
 src/gateway/openai-agent-run-usage.ts	1
-src/gateway/openai-http.ts	22
+src/gateway/openai-http.ts	20
 src/gateway/operator-approval-snapshot.ts	4
-src/gateway/operator-approval-store.ts	8
 src/gateway/operator-scopes.ts	1
 src/gateway/plugin-activation-runtime-config.ts	2
 src/gateway/portals/portal-service.ts	1
@@ -2974,7 +2973,6 @@ src/infra/unhandled-rejections.ts	6
 src/infra/update-check-package-target.ts	2
 src/infra/update-global.ts	3
 src/infra/update-package-manager.ts	1
-src/infra/update-runner-install-surface.ts	1
 src/infra/voicewake-routing.ts	4
 src/infra/warning-filter.ts	4
 src/infra/windows-gateway-firewall-diagnostics.ts	3

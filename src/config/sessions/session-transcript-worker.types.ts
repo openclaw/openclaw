@@ -91,7 +91,13 @@ export type SessionTranscriptHistoryWorkerInput = {
 export type SessionPreviewWorkerInput = {
   kind: "session-preview";
   database: { agentId: string; path: string };
-  scope: SessionTranscriptReadScope;
+  target: {
+    agentId: string;
+    sessionId: string;
+    sessionKey?: string;
+    entryValidationKey?: string;
+  };
+  env?: NodeJS.ProcessEnv;
   maxItems: number;
   maxChars: number;
   admission?: UserTurnTranscriptAdmissionReceipt;
@@ -152,6 +158,8 @@ export type SessionExactEntriesWorkerInput = {
   env: NodeJS.ProcessEnv;
   sessionKeys: readonly string[];
   lifecycleSessionKey?: string;
+  projection?: "full" | "backing";
+  continuation?: CanonicalSessionReaderContinuation;
 };
 
 export type SessionExactEntriesWorkerResult = {

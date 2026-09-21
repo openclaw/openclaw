@@ -862,6 +862,171 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     },
   );
 
+  it.each([
+    { profile: "blacksmith", owner: "auto-reply-reply-state-routing", fallback: 60, measured: 99 },
+    { profile: "hybrid", owner: "auto-reply-reply-state-routing", fallback: 52, measured: 86 },
+    { profile: "github", owner: "auto-reply-reply-state-routing", fallback: 60, measured: 99 },
+    { profile: "blacksmith", owner: "auto-reply-reply-dispatch-core", fallback: 120, measured: 99 },
+  ])(
+    "prices $owner on $profile at two workers without discounting new measurements",
+    ({ profile, owner, fallback, measured }) => {
+      const original = fullSuiteVitestShards.slice();
+      const config = "test/vitest/vitest.auto-reply-reply.config.ts";
+      fullSuiteVitestShards.splice(
+        0,
+        fullSuiteVitestShards.length,
+        ...original
+          .map((shard) => ({
+            ...shard,
+            projects: shard.projects.filter((candidate) => candidate === config),
+          }))
+          .filter((shard) => shard.projects.length > 0),
+      );
+      try {
+        const owners = createNodeTestShards();
+        const timings = Object.fromEntries(owners.map((shard) => [shard.shardName, 0]));
+        timings[owner] = 120;
+        vi.spyOn(testTimings, "readCompactGroupTimings").mockReturnValue(timings);
+        const options = {
+          includeReleaseOnlyPluginShards: false,
+          compactMode: "pull-request" as const,
+          runnerBackend: profile,
+        };
+        const before = createNodeTestShardBundles(options);
+        expect(
+          before.reduce(
+            (sum, job) => sum + expectDefined(job.predictedSeconds, "predicted compact seconds"),
+            0,
+          ),
+        ).toBe(fallback);
+        expect(
+          before
+            .flatMap((job) => job.groups)
+            .every((group) => group.env?.OPENCLAW_VITEST_MAX_WORKERS === "2"),
+        ).toBe(true);
+        const current = expectDefined(
+          before.flatMap((job) => job.groups).find((group) => group.shard_name === owner),
+          "parallel owner",
+        );
+        expect(current.timing_key).not.toBe(owner);
+        const files = expectDefined(current.includePatterns, "complete parallel owner inventory");
+        if (files.length > 1) {
+          const legacy = createCompactSplitTimingGeneration({
+            configs: current.configs,
+            parentShardName: owner,
+            stripes: [files.slice(0, 1), files.slice(1)],
+          });
+          const mismatched = createCompactSplitTimingGeneration({
+            configs: current.configs,
+            parentShardName: owner,
+            stripes: [files.slice(1)],
+          });
+          const complete = Object.fromEntries(legacy.timingKeys.map((key) => [key, 120]));
+          for (const scenario of [
+            { observations: { [legacy.timingKeys[0]!]: 240 }, expected: fallback },
+            { observations: { [mismatched.timingKeys[0]!]: 240 }, expected: fallback },
+            { observations: complete, expected: profile === "hybrid" ? 104 : 120 },
+          ]) {
+            Object.assign(timings, scenario.observations);
+            const plan = createNodeTestShardBundles(options);
+            expect(
+              plan.reduce(
+                (sum, job) =>
+                  sum + expectDefined(job.predictedSeconds, "predicted compact seconds"),
+                0,
+              ),
+            ).toBe(scenario.expected);
+            for (const key of Object.keys(scenario.observations)) {
+              delete timings[key];
+            }
+          }
+          Object.assign(timings, complete);
+        }
+        timings[current.timing_key!] = 99;
+        const after = createNodeTestShardBundles(options);
+        expect(
+          after.reduce(
+            (sum, job) => sum + expectDefined(job.predictedSeconds, "predicted compact seconds"),
+            0,
+          ),
+        ).toBe(measured);
+        expect(
+          after.flatMap((job) => job.groups.flatMap((group) => group.includePatterns!)).toSorted(),
+        ).toEqual(owners.flatMap((shard) => shard.includePatterns!).toSorted());
+      } finally {
+        fullSuiteVitestShards.splice(0, fullSuiteVitestShards.length, ...original);
+      }
+    },
+  );
+
+  it("retains each singleton auto-reply stripe's full cost when splitting a parallel parent", () => {
+    const original = fullSuiteVitestShards.slice();
+    const config = "test/vitest/vitest.auto-reply-reply.config.ts";
+    const owner = "auto-reply-reply-state-routing";
+    const files = expectDefined(
+      defaultShards.find((shard) => shard.shardName === owner)?.includePatterns,
+      "mutable planner inventory fixture",
+    );
+    const originalFiles = files.slice();
+    fullSuiteVitestShards.splice(
+      0,
+      fullSuiteVitestShards.length,
+      ...original
+        .map((shard) => ({
+          ...shard,
+          projects: shard.projects.filter((candidate) => candidate === config),
+        }))
+        .filter((shard) => shard.projects.length > 0),
+    );
+    try {
+      files.splice(
+        0,
+        files.length,
+        "src/auto-reply/reply/parallel-fixture-a.test.ts",
+        "src/auto-reply/reply/parallel-fixture-b.test.ts",
+      );
+      const timings = {
+        ...Object.fromEntries(createNodeTestShards().map((shard) => [shard.shardName, 0])),
+        [owner]: 400,
+      };
+      vi.spyOn(testTimings, "readCompactGroupTimings").mockReturnValue(timings);
+      const options = {
+        compactMode: "pull-request" as const,
+        includeReleaseOnlyPluginShards: false,
+        runnerBackend: "github",
+      };
+      const plan = createNodeTestShardBundles(options);
+      const children = plan.flatMap((job) =>
+        job.groups.filter((group) => group.shard_name.startsWith(`${owner}-hosted-`)),
+      );
+      expect(children).toHaveLength(2);
+      expect(children.map((group) => group.includePatterns?.length)).toEqual([1, 1]);
+      expect(children.flatMap((group) => group.includePatterns!).toSorted()).toEqual(files);
+      expect(
+        plan.reduce(
+          (sum, job) => sum + expectDefined(job.predictedSeconds, "predicted compact seconds"),
+          0,
+        ),
+      ).toBe(400);
+      Object.assign(timings, Object.fromEntries(children.map((group) => [group.timing_key!, 200])));
+      const measured = createNodeTestShardBundles(options);
+      expect(
+        measured.reduce(
+          (sum, job) => sum + expectDefined(job.predictedSeconds, "predicted compact seconds"),
+          0,
+        ),
+      ).toBe(400);
+      expect(
+        measured.flatMap((job) =>
+          job.groups.filter((group) => group.shard_name.startsWith(`${owner}-hosted-`)),
+        ),
+      ).toEqual(children);
+    } finally {
+      files.splice(0, files.length, ...originalFiles);
+      fullSuiteVitestShards.splice(0, fullSuiteVitestShards.length, ...original);
+    }
+  });
+
   it.each(["blacksmith", "github", "hybrid"])(
     "prices serial Gateway server measurements at two workers and preserves parallel samples (%s)",
     (runnerBackend) => {
@@ -2891,6 +3056,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       "src/commands/doctor-session-sqlite.test.ts",
     ]);
     expect(owners.get("agentic-commands-doctor-sessions-cron-sqlite-recovery")).toEqual([
+      "src/commands/doctor-session-sqlite.active-settlement.test.ts",
       "src/commands/doctor-session-sqlite.receipt-recovery.test.ts",
       "src/commands/doctor-session-transcripts.missing-index.test.ts",
     ]);
@@ -4949,11 +5115,17 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       const timingFamilies = (plan: typeof before) => {
         const families = new Map<string, Array<{ group: Group; part: number }>>();
         for (const group of plan.flatMap((shard) => shard.groups)) {
-          if (/^core-tooling-\d+-hosted-\d+$/u.test(group.shard_name)) {
+          const parallelAutoReply =
+            group.configs.length === 1 &&
+            group.configs[0] === "test/vitest/vitest.auto-reply-reply.config.ts";
+          if (parallelAutoReply || /^core-tooling-\d+-hosted-\d+$/u.test(group.shard_name)) {
             expect(group.timing_key).toBeDefined();
           }
           if (group.timing_key === undefined) {
             continue;
+          }
+          if (parallelAutoReply) {
+            expect(group.env?.OPENCLAW_VITEST_MAX_WORKERS).toBe("2");
           }
           const isParallelServer =
             group.configs.length === 1 &&
@@ -4967,9 +5139,9 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
           }
           const key = parseCompactSplitTimingKey(group.timing_key);
           if (!key) {
-            expect(isParallelServer).toBe(true);
+            expect(parallelAutoReply || isParallelServer).toBe(true);
             expect(group.timing_key).toBe(
-              `${group.shard_name}${parallelTimingSuffix(group.includePatterns)}`,
+              `${group.shard_name}${parallelAutoReply ? "-parallel-2" : parallelTimingSuffix(group.includePatterns)}`,
             );
             continue;
           }
@@ -4981,7 +5153,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
             (shard) => shard.shardName === parentName,
           )?.includePatterns;
           expect(parent, "timing key parent must match hosted group name").toBe(
-            `${parentName}${isParallelServer ? `${parallelTimingSuffix(parentFiles)}-stripes` : parallelAgentsCore ? "-parallel" : ""}`,
+            `${parentName}${parallelAutoReply ? "-parallel-2" : isParallelServer ? `${parallelTimingSuffix(parentFiles)}-stripes` : parallelAgentsCore ? "-parallel" : ""}`,
           );
           expect(part, "timing key part must match hosted group ordinal").toBe(
             hostedName ? Number(hostedName[2]) : 1,

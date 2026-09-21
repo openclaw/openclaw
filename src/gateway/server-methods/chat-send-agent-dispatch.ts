@@ -171,6 +171,8 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
     hasCronCreatorAuthority: cronCreatorAuthority !== undefined,
     suppressReplies: progressRefresh,
     retainWorkAdmission: retainGatewayWorkAdmission,
+    armOperatorRunCancellation: admission.armOperatorRunCancellation,
+    retireOperatorRunCancellation: admission.retireOperatorRunCancellation,
   });
   let acceptedMessageInjection = false;
   const classifyDispatchFailure = (error: unknown) =>
@@ -378,6 +380,7 @@ export function startChatDispatch(params: StartChatDispatchParams): void {
                 onAgentRunStart: (runId, _identity, options) => {
                   replyDispatchRun = options;
                   if (activeRunAbort.markExecutionStarted()) {
+                    admission.armOperatorRunCancellation();
                     emitSessionsChanged(context, {
                       sessionKey,
                       agentId,

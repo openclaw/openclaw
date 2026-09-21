@@ -133,6 +133,8 @@ While the request is pending, the previous card and its last-update time remain 
 
 An active agent receives the request at its next supported steering boundary without interrupting a running tool or answering a pending question. If steering is unavailable, the request waits for a status-only turn. An idle agent can update the card with read-only context tools and `progress_card`; refreshing does not authorize it to resume stopped work or change the task goal. The control request and standalone refresh output remain hidden from chat, including reloaded history. Normal replies from an already-active task remain visible.
 
+Steering targets the current session's own run. If the parent has yielded while subagents continue working, refresh uses a separate status-only turn in the parent session.
+
 The action uses the session’s existing write permissions. Dashboard and hovercard placements remain read-only.
 
 ## Gateway requests

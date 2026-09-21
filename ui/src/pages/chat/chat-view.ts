@@ -91,6 +91,9 @@ export type ChatProps = Omit<
   ChatTaskSuggestionTrayProps &
   ChatPlacementStartupNoticeProps & {
     transcript: ChatTranscriptController;
+    asyncQuestionStorage?:
+      | import("../../lib/chat/composer-draft-store.runtime.ts").DurableComposerDraftScope
+      | null;
     onAsyncQuestionSubmit?: (message: string) => Promise<boolean>;
     presented?: boolean;
     historyState?: ChatState;

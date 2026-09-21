@@ -51,7 +51,8 @@ export function createAcpSessionStoreEntry(params: {
 export function createTaskRegistryMaintenanceHarness(params: {
   tasks: TaskRecord[];
   sessionStore?: Record<string, SessionEntry>;
-  listSessionEntries?: TaskRegistryMaintenanceRuntime["listSessionEntries"];
+  readSessionBackingFacts?: TaskRegistryMaintenanceRuntime["readSessionBackingFacts"];
+  readSessionBackingFactsInWorker?: TaskRegistryMaintenanceRuntime["readSessionBackingFactsInWorker"];
   resolveStorePath?: TaskRegistryMaintenanceRuntime["resolveStorePath"];
   deriveSessionChatTypeFromKey?: TaskRegistryMaintenanceRuntime["deriveSessionChatTypeFromKey"];
   acpEntry?: AcpSessionStoreEntry["entry"];
@@ -91,13 +92,15 @@ export function createTaskRegistryMaintenanceHarness(params: {
             entry: undefined,
             storeReadFailed: false,
           } satisfies AcpSessionStoreEntry),
-    listSessionEntries:
-      params.listSessionEntries ??
-      (() =>
-        Object.entries(sessionStore).map(([sessionKey, entry]) => ({
-          sessionKey,
-          entry,
-        }))),
+    readSessionBackingFacts:
+      params.readSessionBackingFacts ??
+      ((scope) =>
+        scope.sessionKeys.flatMap((sessionKey) =>
+          sessionStore[sessionKey] ? [{ sessionKey, entry: sessionStore[sessionKey] }] : [],
+        )),
+    readSessionBackingFactsInWorker:
+      params.readSessionBackingFactsInWorker ??
+      (async (scopes) => scopes.map((scope) => runtime.readSessionBackingFacts(scope))),
     resolveStorePath: params.resolveStorePath ?? (() => ""),
     ...(params.deriveSessionChatTypeFromKey
       ? { deriveSessionChatTypeFromKey: params.deriveSessionChatTypeFromKey }
@@ -244,7 +247,8 @@ export function configureTaskRegistryMaintenanceRuntimeForTest(params: {
     listSessionBindingsBySession: () => params.sessionBindings ?? [],
     loadCloseAcpSession: params.loadCloseAcpSession ?? (async () => params.closeAcpSession),
     unbindSessionBindings: params.unbindSessionBindings,
-    listSessionEntries: () => [],
+    readSessionBackingFacts: () => [],
+    readSessionBackingFactsInWorker: async (scopes) => scopes.map(() => []),
     resolveStorePath: () => "",
     parseAgentSessionKey: () => null as ParsedAgentSessionKey | null,
     isCronJobActive: () => false,

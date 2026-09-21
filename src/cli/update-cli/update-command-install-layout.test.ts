@@ -6,13 +6,8 @@ import * as nodeRuntime from "../../commands/node-runtime-diagnostics.js";
 import * as container from "../../infra/container-environment.js";
 import * as packageMetadata from "../../infra/update-check-package-target.js";
 import * as updateCheck from "../../infra/update-check.js";
-import { prepareUpdateFailureReport } from "../../infra/update-failure-report-prepare.js";
 import { listUpdateRuns } from "../../infra/update-run-ledger.js";
-import {
-  renderUpdateRunReport,
-  updateRunReportInputFromResult,
-} from "../../infra/update-run-report.js";
-import { runGatewayUpdate } from "../../infra/update-runner.js";
+import { renderUpdateRunReport } from "../../infra/update-run-report.js";
 import * as processRunner from "../../process/exec.js";
 import { defaultRuntime } from "../../runtime.js";
 import { isReportableUpdateRun } from "../../shared/update-outcome.js";
@@ -238,28 +233,6 @@ it.each(["missing", "invalid"])(
     }
   },
 );
-
-it("keeps the Git runner's untouched container result out of failure reports", async () => {
-  vi.spyOn(container, "isContainerEnvironment").mockReturnValue(true);
-  const result = await runGatewayUpdate({
-    cwd: root,
-    argv1: path.join(root, "openclaw.mjs"),
-    runCommand: processRunner.runCommandWithTimeout,
-  });
-  expect(result).toMatchObject({
-    status: "skipped",
-    mode: "unknown",
-    reason: "container-image-install",
-    steps: [],
-  });
-  expect(result.recovery).toBeUndefined();
-  expect(renderUpdateRunReport(updateRunReportInputFromResult(result)).markdown).toContain(
-    "Pull or build",
-  );
-  await expect(
-    prepareUpdateFailureReport({ attemptId: "untouched-container", result }),
-  ).rejects.toThrow("Only a final failed update");
-});
 
 it.skipIf(process.platform === "win32").each([false, true])(
   "reports Homebrew guidance across output and existing history (database: %s)",

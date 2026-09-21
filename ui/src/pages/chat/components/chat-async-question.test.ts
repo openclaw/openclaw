@@ -9,8 +9,8 @@ import {
   createAsyncQuestionPanelProps,
   renderAsyncQuestionSummary,
   readAsyncQuestions,
-  type AsyncQuestionDraft,
 } from "./chat-async-question.ts";
+import type { AsyncQuestionDraft } from "./chat-async-question.types.ts";
 import "./chat-question-card.ts";
 
 const container = document.createElement("div");

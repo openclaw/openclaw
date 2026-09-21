@@ -139,42 +139,45 @@ describe("buildAssistantMessage", () => {
     expect(msg.stopReason).toBe("length");
   });
 
-  it("anchors contextUsage on measured prompt/eval counters", () => {
-    const response = makeOllamaResponse({ content: "ok" });
+  it("anchors context usage on measured prompt and output including cached tokens", () => {
+    const response = {
+      ...makeOllamaResponse({ content: "ok" }),
+      prompt_eval_cached_count: 80,
+    };
     const msg = buildAssistantMessage(response, MODEL_INFO);
-    expect(msg.usage.contextUsage).toEqual({
-      state: "available",
-      promptTokens: 100,
-      totalTokens: 150,
+    expect(msg.usage).toMatchObject({
+      input: 20,
+      cacheRead: 80,
+      contextUsage: { state: "available", promptTokens: 100, totalTokens: 150 },
     });
   });
 
-  it("omits contextUsage when the prompt counter is missing", () => {
-    const response = {
+  it("omits context usage when the prompt counter is missing", () => {
+    const response: Parameters<typeof buildAssistantMessage>[0] = {
       model: "qwen3.5",
       created_at: new Date().toISOString(),
       message: { role: "assistant", content: "ok" },
       done: true,
       eval_count: 50,
     };
-    const msg = buildAssistantMessage(response, MODEL_INFO);
+    const msg = buildAssistantMessage(response, MODEL_INFO, { input: 321, output: 123 });
     expect(msg.usage.contextUsage).toBeUndefined();
   });
 
-  it("omits contextUsage when the eval counter is missing", () => {
-    const response = {
+  it("omits context usage when the output counter is missing", () => {
+    const response: Parameters<typeof buildAssistantMessage>[0] = {
       model: "qwen3.5",
       created_at: new Date().toISOString(),
       message: { role: "assistant", content: "ok" },
       done: true,
       prompt_eval_count: 100,
     };
-    const msg = buildAssistantMessage(response, MODEL_INFO);
+    const msg = buildAssistantMessage(response, MODEL_INFO, { input: 321, output: 123 });
     expect(msg.usage.contextUsage).toBeUndefined();
   });
 
-  it("omits contextUsage when counters are not valid measurements", () => {
-    const response = {
+  it("does not promote invalid counters or fallback estimates into measured context", () => {
+    const response: Parameters<typeof buildAssistantMessage>[0] = {
       model: "qwen3.5",
       created_at: new Date().toISOString(),
       message: { role: "assistant", content: "ok" },
@@ -182,7 +185,7 @@ describe("buildAssistantMessage", () => {
       prompt_eval_count: -1,
       eval_count: 50,
     };
-    const msg = buildAssistantMessage(response, MODEL_INFO);
+    const msg = buildAssistantMessage(response, MODEL_INFO, { input: 321, output: 123 });
     expect(msg.usage.contextUsage).toBeUndefined();
   });
 });

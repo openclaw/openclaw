@@ -68,7 +68,7 @@ export function captureGatewayOperatorRunAuthority(params: {
   const isGatewayCurrent = () =>
     !resolveGatewayContext ||
     (gatewayContext !== undefined && resolveGatewayContext() === gatewayContext);
-  const sourceAuthority = params.sourceAuthority;
+  const sourceAuthority = params.sourceAuthority ?? client.internal?.operatorAccessAuthority;
   const scopes = Object.freeze([...(client.connect.scopes ?? [])]);
   const policyClient: GatewayClient = {
     connect: {

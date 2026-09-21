@@ -15,9 +15,11 @@ import {
 } from "../../../packages/gateway-protocol/src/index.js";
 import { findMarkdownImageSpans } from "../../../packages/markdown-core/src/image-spans.js";
 import { AgentSelectionRequiredError } from "../../agents/agent-scope-config.js";
+import { resolveSessionTranscriptReadFence } from "../../config/sessions/session-transcript-read-fence.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { isImageMediaFact, readPersistedMediaFacts } from "../../media/media-facts.js";
 import { parseAgentSessionKey, resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
+import { readSessionTranscriptUpdateVersion } from "../../sessions/transcript-events.js";
 import {
   ASSISTANT_DISPLAY_CONTENT_FIELD,
   readAssistantDisplayContent,
@@ -59,6 +61,14 @@ type ArtifactCollectionOptions = {
   includeDownloadData?: boolean;
   downloadArtifactId?: string;
 };
+
+const queuedArtifactDownloads = new Map<
+  string,
+  {
+    ids: Set<string>;
+    result: Promise<{ sessionKey: string; artifacts: ArtifactRecord[] }>;
+  }
+>();
 
 function createArtifactRequestAccess(request: GatewayRequestHandlerOptions) {
   const { assertCurrent } = readGatewayRequestMutationAuthority(request);
@@ -160,7 +170,7 @@ function collectArtifactsFromMessage(params: {
   taskId?: string;
   messageRole?: ArtifactQuery["messageRole"];
   includeDownloadData?: boolean;
-  downloadArtifactId?: string;
+  downloadArtifactIds?: Set<string>;
   imagesOnly?: boolean;
 }): void {
   const msg = asOptionalRecord(params.message);
@@ -240,9 +250,11 @@ function collectArtifactsFromMessage(params: {
             title,
             type,
           });
-    const includeData = params.downloadArtifactId
-      ? params.downloadArtifactId === id
-      : params.includeDownloadData !== false;
+    // Preserve the first match without inspecting or normalizing sibling payloads.
+    if (params.downloadArtifactIds && !params.downloadArtifactIds.delete(id)) {
+      continue;
+    }
+    const includeData = params.includeDownloadData !== false;
     const download = resolveBlockDownload(attachment ?? block, { includeData });
     const source = asOptionalRecord(block.source);
     const previewOnly = params.imagesOnly && !parseManagedOutgoingArtifactId(id);
@@ -343,23 +355,53 @@ async function loadArtifacts(
     });
     return { ...page, sessionKey };
   }
-  await visitSessionMessagesAsync(scope, (message, seq) => {
-    collectArtifactsFromMessage({
-      message,
-      messageFallbackSeq: seq,
-      collection,
-      sessionKey,
-      runId: query.runId,
-      taskId: query.taskId,
-      messageRole: query.messageRole,
-      includeDownloadData: opts.includeDownloadData,
-      downloadArtifactId: opts.downloadArtifactId,
+  const downloadIds = opts.downloadArtifactId ? new Set([opts.downloadArtifactId]) : undefined;
+  const queuedKey =
+    downloadIds && !resolveSessionTranscriptReadFence(scope)
+      ? JSON.stringify([
+          storePath,
+          scope.agentId,
+          sessionKey,
+          sessionId,
+          entry.lifecycleRevision,
+          query.runId,
+          query.taskId,
+          query.messageRole,
+          readSessionTranscriptUpdateVersion(),
+        ])
+      : undefined;
+  const queued = queuedKey ? queuedArtifactDownloads.get(queuedKey) : undefined;
+  if (queued && opts.downloadArtifactId) {
+    queued.ids.add(opts.downloadArtifactId);
+    return queued.result;
+  }
+  const collect = async () => {
+    // Close before target resolution or snapshot acquisition, including empty/error reads.
+    // Later requests must start a fresh scan; only already queued downloads share this one.
+    if (queuedKey) {
+      queuedArtifactDownloads.delete(queuedKey);
+    }
+    await visitSessionMessagesAsync(scope, (message, seq) => {
+      collectArtifactsFromMessage({
+        message,
+        messageFallbackSeq: seq,
+        collection,
+        sessionKey,
+        runId: query.runId,
+        taskId: query.taskId,
+        messageRole: query.messageRole,
+        includeDownloadData: opts.includeDownloadData,
+        downloadArtifactIds: downloadIds,
+      });
     });
-  });
-  return {
-    sessionKey,
-    artifacts,
+    return { sessionKey, artifacts };
   };
+  if (!queuedKey || !downloadIds) {
+    return collect();
+  }
+  const result = Promise.resolve().then(collect);
+  queuedArtifactDownloads.set(queuedKey, { ids: downloadIds, result });
+  return result;
 }
 
 function requireQueryable(params: ArtifactQuery, respond: RespondFn): boolean {

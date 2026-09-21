@@ -150,6 +150,7 @@ suite.define(() => {
           await expect.poll(() => preview.count()).toBe(1);
           await page.keyboard.press("ArrowUp");
           await expect.poll(focusedMarkerId).toBe("position-rail-0");
+          await captureUiProof(suite, page, "chat-position-rail", "keyboard-exploration.png");
           await expect.poll(() => rail.locator('[tabindex="0"]').count()).toBe(1);
           await page.keyboard.press("Tab");
           expect(await focusedMarkerId()).toBeNull();
@@ -157,6 +158,7 @@ suite.define(() => {
           const reentryId = await currentMarkerId();
           await page.keyboard.press("Tab");
           await expect.poll(focusedMarkerId).toBe(reentryId);
+          await captureUiProof(suite, page, "chat-position-rail", "native-tab-reentry.png");
           await page.keyboard.press("Shift+Tab");
           expect(await transcript.evaluate((element) => element === document.activeElement)).toBe(
             true,

@@ -844,7 +844,7 @@ export async function createOpenClawTestInstance(
     args: string[],
     attemptStderr: string[],
   ): OpenClawTestProcess => {
-    const [command = "node", ...prefixArgs] = options.gatewayCommandPrefix ?? [];
+    const [command = process.execPath, ...prefixArgs] = options.gatewayCommandPrefix ?? [];
     signal?.throwIfAborted();
     const next = spawnManagedChild(command, [...prefixArgs, ...args], {
       cwd,
@@ -925,7 +925,7 @@ export async function createOpenClawTestInstance(
         const commandEntrypoint = await entrypoint();
         signal?.throwIfAborted();
         return await runCommand({
-          args: [commandOptions.execPath ?? "node", ...commandEntrypoint, ...args],
+          args: [commandOptions.execPath ?? process.execPath, ...commandEntrypoint, ...args],
           cwd,
           env,
           timeoutMs: commandOptions.timeoutMs ?? COMMAND_TIMEOUT_MS,

@@ -282,7 +282,8 @@ suite.define(() => {
           if (durable.status !== "not-found") {
             throw new Error("confirmed deletion did not leave a durable retirement fence");
           }
-          const revision = Date.now();
+          // Retirement fences can lead the wall clock; a new edit must advance that fence.
+          const revision = Math.max(Date.now(), (durable.revision ?? 0) + 1);
           local.sessions[scopeKey] = {
             draft: "post-confirm local replacement",
             draftRevision: revision,

@@ -7,10 +7,7 @@ import type {
 } from "../../lib/chat/chat-types.ts";
 import { readHumanMentions } from "../../lib/chat/human-mentions.ts";
 import { outboxPayloadMatchesOwner } from "../../lib/chat/outbox-payload-store.runtime.ts";
-import {
-  MAX_STORED_QUEUE_ITEMS,
-  type StoredComposerSession,
-} from "../../lib/chat/outbox-store-codec.ts";
+import { MAX_STORED_QUEUE_ITEMS } from "../../lib/chat/outbox-store-codec.ts";
 import {
   captureDraftReplacement,
   nextDraftRevision,
@@ -29,7 +26,6 @@ import {
   writeStoredOutboxStore as writeStore,
   type ChatComposerScope,
   type StoredChatOutboxScope,
-  type StoredComposerState,
 } from "../../lib/chat/outbox-store.ts";
 import {
   resolveUiConversationIdentity,
@@ -43,6 +39,7 @@ import {
   queueItemVersionMatches,
   queueItemsEqual,
   serializeQueueItemForScope,
+  writeStoredComposerSession,
 } from "./composer-queue-serialization.ts";
 import {
   captureDurableChatAttachments,
@@ -112,32 +109,6 @@ type ChatComposerPersistOptions = {
   draftRevision?: number;
   expectedDraftRevision?: number;
 };
-
-function writeStoredComposerSession(
-  store: StoredComposerState,
-  storeSessionKey: string,
-  session: StoredComposerSession | null,
-  queue: ChatQueueItem[],
-): void {
-  if (
-    !session?.draft &&
-    !session?.goalMode &&
-    session?.draftRevision === undefined &&
-    queue.length === 0
-  ) {
-    delete store.sessions[storeSessionKey];
-    return;
-  }
-  store.sessions[storeSessionKey] = {
-    ...(session?.awaitingDefaults ? { awaitingDefaults: true } : {}),
-    ...(session?.draft ? { draft: session.draft } : {}),
-    ...(session?.draftMentions ? { draftMentions: session.draftMentions } : {}),
-    ...(session?.goalMode ? { goalMode: session.goalMode } : {}),
-    ...(session?.draftRevision !== undefined ? { draftRevision: session.draftRevision } : {}),
-    ...(queue.length ? { queue } : {}),
-    updatedAt: Date.now(),
-  };
-}
 
 type ChatComposerDraftRevisionState = ReturnType<typeof readDraftRevisionState>;
 
@@ -639,6 +610,11 @@ export class ChatComposerPersistence {
 
   get active(): boolean {
     return this.ready;
+  }
+
+  get durableScope() {
+    const state = this.getState();
+    return state ? this.resolveDurableScope(state) : null;
   }
 
   get draftRevision(): number {

@@ -17,7 +17,7 @@ import {
 import { resolveProjectedAgentRunProgressState } from "../infra/agent-run-registry.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { classifySessionKind } from "../sessions/classify-session-kind.js";
-import { sessionDeliveryChannel, sessionDeliveryOrigin } from "../utils/delivery-context.shared.js";
+import { sessionDeliveryChannel, sessionDeliveryOrigin } from "../utils/delivery-context.read.js";
 import type {
   SessionListActiveRunProjector,
   SessionListRowContext,

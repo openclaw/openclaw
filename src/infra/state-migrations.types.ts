@@ -27,7 +27,7 @@ export type SessionStoreAliasPlan = {
   hasUnresolvedIdentity: boolean;
 };
 
-export type LegacyStateDetection = {
+export type LegacyStateDetection = Pick<MigrationMessages, "warningDisposition" | "outcome"> & {
   doctorOnlyStateMigrations?: boolean;
   targetAgentId: string;
   targetMainKey: string;

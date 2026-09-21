@@ -67,6 +67,9 @@ export async function signalGatewayRestart(
     env?: NodeJS.ProcessEnv;
   },
 ) {
+  const restartIntent = params.restartIntent?.force
+    ? { force: true, drainBudgetMs: params.restartIntent.waitMs }
+    : params.restartIntent;
   if (params.enforceRestartConfig) {
     await assertUnmanagedGatewayRestartEnabled(port);
   }
@@ -144,7 +147,7 @@ export async function signalGatewayRestart(
             ownerId: previousLockIdentity.ownerId,
             port,
           },
-          ...(params.restartIntent ? { restartIntent: params.restartIntent } : {}),
+          ...(restartIntent ? { restartIntent } : {}),
         },
         localPortOverride: port,
         ignoreEnvUrlOverride: true,

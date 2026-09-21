@@ -3,6 +3,7 @@ import { Socket } from "node:net";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { GIT_COAUTHOR_PREFERENCE_KEY } from "../../packages/gateway-protocol/src/schema/user-profile-constants.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { createSubsystemLogger } from "../logging/subsystem.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { getUserPreferences, setUserPreferences } from "../state/user-preferences.js";
 import { onUserProfilesChanged } from "../state/user-profile-events.js";
@@ -18,7 +19,7 @@ import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createAuthenticatedGitHubIdentitySync } from "./github-user-identity.js";
 import { resolveAuthenticatedHttpUserProfile } from "./http-auth-user-profile.js";
 import { invalidateOperatorRolePolicy } from "./operator-role-policy.js";
-import { resolveGatewayConnectUserProfile } from "./server/ws-connection/connect-user-profile.js";
+import { resolveGatewayConnectProfileAdmission } from "./server/ws-connection/connect-user-profile.js";
 
 const accessOrigin = "https://team.cloudflareaccess.com";
 const accountIdClaim = "https://openclaw.ai/github-account-id";
@@ -70,6 +71,34 @@ function accessRequest(principal = "ada@example.test", config = cfg, issuer = ac
   return { req, authResult, cfg: config };
 }
 
+function resolveWsProfileAdmission(request: ReturnType<typeof accessRequest>) {
+  return resolveGatewayConnectProfileAdmission({
+    context: {
+      configSnapshot: request.cfg,
+      handler: {
+        connId: "oidc-profile-admission",
+        logWsControl: createSubsystemLogger("test/oidc-profile-admission"),
+        close: vi.fn(),
+      },
+      markHandshakeFailure: vi.fn(),
+      sendHandshakeErrorResponse: vi.fn(),
+      releasePendingNodePairingCleanup: async () => {},
+    },
+    state: {
+      authResult: request.authResult,
+      authMethod: request.authResult.method,
+      role: "operator",
+    },
+    ownerProfileExpected: false,
+    authenticatedUserId: request.authResult.user,
+    resolveAuthenticatedGitHubIdentity: createAuthenticatedGitHubIdentitySync({
+      authResult: request.authResult,
+      authConfig: request.cfg.gateway?.auth,
+      requestHeaders: request.req.headers,
+    }),
+  });
+}
+
 function identityResponse(payload: unknown, status = 200) {
   return new Response(JSON.stringify(payload), { status });
 }
@@ -112,17 +141,8 @@ describe("Cloudflare Access OIDC profile resolution", () => {
           accountId: 101,
           login: "canonical-ada",
         });
-        const connected = await resolveGatewayConnectUserProfile({
-          ownerProfileExpected: false,
-          authenticatedUserId: request.authResult.user,
-          authResult: request.authResult,
-          resolveAuthenticatedGitHubIdentity: createAuthenticatedGitHubIdentitySync({
-            authResult: request.authResult,
-            authConfig: githubCfg.gateway?.auth,
-            requestHeaders: request.req.headers,
-          }),
-        });
-        expect(connected).toEqual(http.authenticatedUserProfile);
+        const connected = await resolveWsProfileAdmission(request);
+        expect(connected).toEqual({ ok: true, profile: http.authenticatedUserProfile });
         expect(transport).toHaveBeenCalledTimes(3);
       } finally {
         request.req.destroy();
@@ -353,17 +373,11 @@ describe("Cloudflare Access OIDC profile resolution", () => {
           const httpProfile = await resolveAuthenticatedHttpUserProfile(request);
           expect(httpProfile.authenticatedUserProfile?.profileId).toBe(profile.id);
           expect(httpProfile.operatorRolePolicy?.scopes).toEqual(["operator.admin"]);
-          const connectedProfile = await resolveGatewayConnectUserProfile({
-            ownerProfileExpected: false,
-            authenticatedUserId: request.authResult.user,
-            authResult: request.authResult,
-            resolveAuthenticatedGitHubIdentity: createAuthenticatedGitHubIdentitySync({
-              authResult: request.authResult,
-              authConfig: cfg.gateway?.auth,
-              requestHeaders: request.req.headers,
-            }),
+          const connectedProfile = await resolveWsProfileAdmission(request);
+          expect(connectedProfile).toEqual({
+            ok: true,
+            profile: httpProfile.authenticatedUserProfile,
           });
-          expect(connectedProfile).toEqual(httpProfile.authenticatedUserProfile);
           expect(getUserProfileListItem(profile.id)).toEqual(before);
           expect(transport).toHaveBeenCalledTimes(2);
           expect(

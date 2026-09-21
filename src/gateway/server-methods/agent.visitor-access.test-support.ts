@@ -18,7 +18,7 @@ import { toolsInvokeHandlers } from "./tools-invoke.js";
 import type { GatewayContextResolver, GatewayRequestContext } from "./types.js";
 import { usersHandlers } from "./users.js";
 
-export type Grant = { createdAt: number; expiresAt: number };
+export type Grant = { grantId?: string; createdAt: number; expiresAt: number };
 
 export const visitorTestStateOptions = {
   label: "visitor-admitted-caller",
@@ -37,6 +37,7 @@ export function createVisitorGatewayConfig(workspaceDir: string): OpenClawConfig
         default: "guest",
         definitions: {
           guest: {
+            accessPolicyPlugin: "visitor-access",
             sessions: { others: "view" },
             agents: ["main"],
             scopes: [SESSION_WRITE_SCOPE],

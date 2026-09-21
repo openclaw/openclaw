@@ -201,6 +201,7 @@ vi.mock("./update-command-post-core.js", async (importOriginal) => ({
 }));
 
 import { readPackageVersion, resolveUpdateRoot, tryWriteCompletionCache } from "./shared.js";
+import { registerConvergenceCompletionTests } from "./update-command-convergence-completion.test-support.js";
 import { convergeUpdatePlugins } from "./update-command-convergence.js";
 import { updateFinalizeCommand } from "./update-command-finalize.js";
 import {
@@ -619,6 +620,8 @@ describe("update plugin lifecycle lease boundaries", () => {
       );
     },
   );
+
+  registerConvergenceCompletionTests({ mocks, validConfigSnapshot, successfulPluginUpdate });
 
   it("keeps the plugin and error class when convergence fails", async () => {
     vi.mocked(updatePluginsAfterCoreUpdate).mockResolvedValueOnce({

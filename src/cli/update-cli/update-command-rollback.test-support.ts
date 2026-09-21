@@ -11,7 +11,7 @@ import type { ConfigFileSnapshot, OpenClawConfig } from "../../config/types.js";
 import { readUpdateStateSchemaVersions } from "../../infra/update-candidate-state.js";
 import { prepareUpdateFailureReport } from "../../infra/update-failure-report-prepare.js";
 import { updateRecoverySchema } from "../../infra/update-recovery.js";
-import type { UpdateRunResult } from "../../infra/update-runner.js";
+import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import { CommandProcessCleanupError } from "../../process/exec-result.js";
 import type { UpdateConfigSnapshot } from "./update-command-config-snapshot.js";
 import { rollbackFailedUpdate } from "./update-command-rollback.js";

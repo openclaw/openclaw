@@ -1,6 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { trackSqliteStatementExecutions } from "../../test/helpers/sqlite-statement-execution-counter.js";
-import { cleanupTempDirs, makeTempDir } from "../../test/helpers/temp-dir.js";
 import { drainFormattedSystemEvents } from "../auto-reply/reply/session-system-events.js";
 import { upsertSessionEntryCore } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -12,9 +11,7 @@ import {
   peekSystemEventEntries,
   resetSystemEventsForTest,
 } from "../infra/system-events.js";
-import { closeOpenClawAgentDatabasesAsync } from "../state/openclaw-agent-db.js";
 import {
-  closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
@@ -41,73 +38,22 @@ import {
   registerSessionStateWatch,
   sweepSessionStateWatchNotices,
 } from "./session-state-events.js";
+import {
+  child,
+  cleanupSessionStateTestState,
+  createDatabaseOptions,
+  eventInput,
+  nestedWatcher,
+  readCursor,
+  seedChild,
+  watcher,
+} from "./session-state-events.test-support.js";
 
 const SESSION_STATE_MAX_ROWS = 50_000;
 const SESSION_STATE_RETENTION_MS = 30 * 24 * 60 * 60_000;
-const tempDirs: string[] = [];
-const watcher = "agent:main:main";
-const nestedWatcher = "agent:main:subagent:parent";
-const child = "agent:main:subagent:child";
 const group = "agent:main:telegram:group:room-1";
 const cfg = {} as OpenClawConfig;
 let disposeHeartbeatWakeHandler: (() => void) | undefined;
-
-function createDatabaseOptions() {
-  const stateDir = makeTempDir(tempDirs, "openclaw-session-state-");
-  vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
-  return { env: { ...process.env, OPENCLAW_STATE_DIR: stateDir } };
-}
-
-function eventInput(
-  overrides: Partial<Parameters<typeof recordSessionStateEvent>[0]> = {},
-): Parameters<typeof recordSessionStateEvent>[0] {
-  return {
-    sessionKey: child,
-    sessionId: "session-child",
-    agentId: "main",
-    kind: "human_direct_message",
-    actorType: "human",
-    summary: "human message via test",
-    watcherSessionKeys: [watcher],
-    ...overrides,
-  };
-}
-
-function readCursor(
-  database: ReturnType<typeof createDatabaseOptions>,
-  watcherSessionKey = watcher,
-  targetSessionKey = child,
-) {
-  return openOpenClawStateDatabase(database)
-    .db.prepare(
-      `SELECT last_seen_sequence, notified_sequence, material_sequence
-       FROM session_watch_cursors
-       WHERE watcher_session_key = ? AND target_session_key = ?`,
-    )
-    .get(watcherSessionKey, targetSessionKey) as
-    | {
-        last_seen_sequence: number;
-        notified_sequence: number;
-        material_sequence: number;
-      }
-    | undefined;
-}
-
-function seedChild(
-  database: ReturnType<typeof createDatabaseOptions>,
-  watcherSessionKey = watcher,
-) {
-  return recordSessionStateEvent(
-    eventInput({
-      kind: "child_spawned",
-      actorType: "agent",
-      actorId: watcherSessionKey,
-      dedupeKey: `child-spawned:${watcherSessionKey}`,
-      watcherSessionKeys: [watcherSessionKey],
-    }),
-    database,
-  );
-}
 
 async function createWatcherSession(
   database: ReturnType<typeof createDatabaseOptions>,
@@ -122,14 +68,7 @@ async function createWatcherSession(
 afterEach(async () => {
   disposeHeartbeatWakeHandler?.();
   disposeHeartbeatWakeHandler = undefined;
-  vi.useRealTimers();
-  await closeOpenClawAgentDatabasesAsync();
-  await closeOpenClawStateDatabaseAsync();
-  closeOpenClawStateDatabaseForTest();
-  resetSystemEventsForTest();
-  resetHeartbeatEventsForTest();
-  cleanupTempDirs(tempDirs);
-  vi.unstubAllEnvs();
+  await cleanupSessionStateTestState();
 });
 
 describe("session state events", () => {

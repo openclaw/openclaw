@@ -1,6 +1,12 @@
-import { afterEach, expect, it } from "vitest";
+import { pathToFileURL } from "node:url";
+import { Worker } from "node:worker_threads";
+import { afterEach, expect, it, vi } from "vitest";
 import { beginDoctorMaintenance } from "../commands/doctor-maintenance.js";
 import { acquireGatewayLock } from "../infra/gateway-lock.js";
+import * as workerUrls from "../infra/runtime-worker-url.js";
+import { captureCoordinatorDatabase } from "../infra/sqlite-coordinator.test-support.js";
+import * as workerStores from "../infra/sqlite-worker-store.js";
+import { acquireGatewayLifecycleCoordinator } from "../infra/state-database-coordinator.js";
 import { buildFlowRecord } from "../tasks/task-flow-registry.records.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { registerOpenClawAgentDatabaseAsyncResource } from "./openclaw-agent-db-resources.js";
@@ -267,3 +273,66 @@ it.each([false, true])(
     });
   },
 );
+
+it("reopens shared state after another owner completes failed-admission cleanup", async () => {
+  await withOpenClawTestState({ label: "shared-worker-cleanup-handoff" }, async (state) => {
+    const context = captureOpenClawStateWorkerContext({ env: state.env });
+    const databasePath = context.admission.databasePath;
+    const { result: gateway, database } = captureCoordinatorDatabase(() =>
+      acquireGatewayLifecycleCoordinator({
+        databasePath,
+        runtimeDirectory: context.coordinatorRuntime.directory,
+      }),
+    );
+    openOpenClawStateDatabase({ env: state.env });
+    await closeOpenClawStateDatabaseAsync();
+    const backendPath = await state.writeText(
+      "failed-open.mjs",
+      `
+      export function createSqliteWorkerBackend() {
+        throw new Error("Fixture shared-state factory failed");
+      }
+    `,
+    );
+    const opening = vi
+      .spyOn(workerUrls, "resolveRuntimeWorkerUrl")
+      .mockReturnValueOnce(pathToFileURL(backendPath));
+    const close = vi.spyOn(database, "close").mockImplementationOnce(() => {
+      throw new Error("Fixture native coordinator close remains pending");
+    });
+    const dispatch = vi.spyOn(Worker.prototype, "postMessage").mockImplementationOnce(function (
+      this: Worker,
+      ...args
+    ) {
+      dispatch.mockRestore();
+      const result = this.postMessage(...args);
+      gateway.release();
+      return result;
+    });
+    const read = () =>
+      executeOpenClawStateWorker(captureOpenClawStateWorkerContext({ env: state.env }), {
+        type: "flows.list",
+        input: { ownerKey: "agent:main:cleanup-handoff" },
+      });
+    try {
+      await expect(read()).rejects.toThrow("SQLite worker failure and cleanup failed");
+      opening.mockRestore();
+      dispatch.mockRestore();
+      expect(database.isOpen).toBe(true);
+      expect(workerStores.hasUnclaimedSharedStateSqliteCleanup(databasePath)).toBe(true);
+      await expect(read()).rejects.toThrow("Shared-state SQLite cleanup is pending");
+
+      await workerStores.closeUnclaimedSharedStateSqliteWorkers(databasePath);
+      expect(database.isOpen).toBe(false);
+      expect(workerStores.hasUnclaimedSharedStateSqliteCleanup(databasePath)).toBe(false);
+      await expect(read()).resolves.toEqual([]);
+    } finally {
+      opening.mockRestore();
+      dispatch.mockRestore();
+      close.mockRestore();
+      await workerStores.closeUnclaimedSharedStateSqliteWorkers(databasePath);
+      await closeOpenClawStateDatabaseAsync();
+      gateway.release();
+    }
+  });
+});

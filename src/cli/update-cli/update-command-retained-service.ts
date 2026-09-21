@@ -12,7 +12,7 @@ import {
   withUpdateCommandExecutorChild,
 } from "./update-command-executor.js";
 import { prepareUpdateCommandNativeGate } from "./update-command-native-gate.js";
-import { UpdateCommandRecoveryPendingError } from "./update-command-recovery.js";
+import { UpdateCommandRecoveryPendingError } from "./update-command-recovery-error.js";
 
 /** Real retained admission plus native-controller custody, never service health. */
 export async function withRetainedUpdateServiceAuthority<T>(

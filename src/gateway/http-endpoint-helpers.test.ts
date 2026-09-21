@@ -101,10 +101,12 @@ describe("handleGatewayPostJsonEndpoint", () => {
       trustDeclaredOperatorScopes: true,
     });
     vi.mocked(readJsonBodyOrError).mockResolvedValue({ hello: "world" });
+    vi.mocked(resolveTrustedHttpOperatorScopes).mockReturnValue(["operator.write"]);
     const result = await handleEndpoint();
     expect(result).toEqual({
       body: { hello: "world" },
       requestAuth: { trustDeclaredOperatorScopes: true },
+      operatorScopes: ["operator.write"],
     });
   });
 
@@ -113,12 +115,14 @@ describe("handleGatewayPostJsonEndpoint", () => {
       trustDeclaredOperatorScopes: true,
     });
     vi.mocked(readJsonBodyOrError).mockResolvedValue({ ok: true });
+    vi.mocked(resolveTrustedHttpOperatorScopes).mockReturnValue(["operator.write"]);
 
     const result = await handleEndpoint({ request: { host: "[" } });
 
     expect(result).toEqual({
       body: { ok: true },
       requestAuth: { trustDeclaredOperatorScopes: true },
+      operatorScopes: ["operator.write"],
     });
   });
 
@@ -175,6 +179,7 @@ describe("handleGatewayPostJsonEndpoint", () => {
     expect(result).toEqual({
       body: { ok: true },
       requestAuth: { authMethod: "token", trustDeclaredOperatorScopes: false },
+      operatorScopes: ["operator.admin", "operator.write"],
     });
   });
 });

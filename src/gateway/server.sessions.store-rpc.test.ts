@@ -9,7 +9,7 @@ import * as sessionDirs from "../agents/session-dirs.js";
 import { loadSessionEntry } from "../config/sessions/session-accessor.js";
 import type { CronJob } from "../cron/types.js";
 import { withEnvAsync } from "../test-utils/env.js";
-import { deliveryContextFromSession } from "../utils/delivery-context.shared.js";
+import { deliveryContextFromSession } from "../utils/delivery-context.read.js";
 import { initializeSessionReadContext } from "./server-methods/sessions-read-cache.test-support.js";
 import {
   loadTranscriptRows,

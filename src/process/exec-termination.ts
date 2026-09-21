@@ -128,8 +128,12 @@ export function createCommandTerminationController(params: {
         while (groupAlive()) {
           const currentStart = getFileLockProcessStartTime(childPid);
           const remaining = deadline - Date.now();
-          if ((currentStart !== null && currentStart !== originalStart) || remaining <= 0) {
+          if (currentStart !== null && currentStart !== originalStart) {
             cleanup = "uncertain";
+            return;
+          }
+          if (remaining <= 0) {
+            cleanup = groupAlive() ? "uncertain" : "forced";
             return;
           }
           await new Promise<void>((resolve) => {

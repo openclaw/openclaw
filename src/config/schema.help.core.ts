@@ -149,7 +149,7 @@ export const CORE_FIELD_HELP: Record<string, string> = {
   "gateway.roles.definitions":
     "Nonempty administrator-named role definitions bundling the closed session-sharing, sandbox-isolation, agent-access, and operator-scope policies applied to authenticated user profiles.",
   "gateway.roles.definitions.*":
-    "One named operator role. Every definition must explicitly provide its session-sharing policy, allowed session and run agents, and operator-scope ceiling, and can require sandbox isolation for newly created sessions.",
+    "One named operator role. Every definition must explicitly provide its session-sharing policy, allowed session and run agents, and operator-scope ceiling, and can require sandbox isolation for newly created sessions and a plugin access policy.",
   "gateway.roles.definitions.*.sessions":
     "Session-sharing permissions granted to this role for sessions created by other authenticated people; a person's own sessions remain owner-accessible.",
   "gateway.roles.definitions.*.sessions.others":
@@ -160,6 +160,8 @@ export const CORE_FIELD_HELP: Record<string, string> = {
     'Agents available when this role creates sessions or starts runs: set "*" to allow every agent, list agent IDs to allow only those agents, or use an empty list to disable both.',
   "gateway.roles.definitions.*.scopes":
     "Closed list of operator scopes granted as this role's maximum connection authority. Requested, paired, identity-granted, and upgraded scopes are intersected with this list.",
+  "gateway.roles.definitions.*.accessPolicyPlugin":
+    "Optional exact plugin ID whose Gateway access policy must authorize this role. Access is denied when the plugin is missing, disabled, fails to load, or supplies no current authority. Unavailable plugin IDs remain valid configuration so independent staff roles and the Gateway owner can repair access. Omitting this field adds no plugin dependency.",
   "gateway.trustedProxies":
     "CIDR/IP allowlist of upstream proxies permitted to provide forwarded client identity headers. Keep this list narrow so untrusted hops cannot impersonate users.",
   "gateway.allowRealIpFallback":

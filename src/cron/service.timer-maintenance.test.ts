@@ -1,6 +1,7 @@
 import { Cron } from "croner";
 import { describe, expect, it, vi } from "vitest";
 import { setupCronServiceSuite, writeCronStoreSnapshot } from "./service.test-harness.js";
+import * as scheduleMaintenance from "./service/schedule-maintenance.js";
 import { createCronServiceState } from "./service/state.js";
 import { onTimer } from "./service/timer.test-support.js";
 import { getCronJobsStoreRevision, loadCronJobsStoreWithConfigJobsReadOnly } from "./store.js";
@@ -60,16 +61,23 @@ async function runTimer(jobs: CronJob[], nowMs: number) {
   });
   state.schedulerStarted = true;
   sqliteTransactionLabels.length = 0;
-  await onTimer(state);
-  if (state.timer) {
-    clearTimeout(state.timer);
-    state.timer = null;
+  const maintenance = vi.spyOn(scheduleMaintenance, "recomputeUnownedCronSchedules");
+  try {
+    await onTimer(state);
+    expect(sqliteTransactionLabels.filter((label) => label === "cron.schedule-unowned")).toEqual(
+      [],
+    );
+    return {
+      jobs: state.store?.jobs ?? [],
+      maintenanceCount: maintenance.mock.calls.length,
+    };
+  } finally {
+    maintenance.mockRestore();
+    if (state.timer) {
+      clearTimeout(state.timer);
+      state.timer = null;
+    }
   }
-  return {
-    jobs: state.store?.jobs ?? [],
-    maintenanceCount: sqliteTransactionLabels.filter((label) => label === "cron.schedule-unowned")
-      .length,
-  };
 }
 
 describe("cron timer maintenance admission", () => {
@@ -152,6 +160,7 @@ describe("cron timer maintenance admission", () => {
     // Observe the real tick after fixture persistence, including its final armed timer.
     const previousRuns = vi.spyOn(Cron.prototype, "previousRuns");
     const timers = vi.spyOn(globalThis, "setTimeout");
+    const maintenance = vi.spyOn(scheduleMaintenance, "recomputeUnownedCronSchedules");
     sqliteTransactionLabels.length = 0;
     try {
       await onTimer(state);
@@ -161,6 +170,7 @@ describe("cron timer maintenance admission", () => {
       );
       expect(getCronJobsStoreRevision(storePath)).toBe(revision);
       expect(sqliteTransactionLabels).toEqual([]);
+      expect(maintenance).not.toHaveBeenCalled();
       expect(state.deps.runIsolatedAgentJob).not.toHaveBeenCalled();
       expect(state.deps.enqueueSystemEvent).not.toHaveBeenCalled();
       expect(state.deps.requestHeartbeat).not.toHaveBeenCalled();
@@ -175,6 +185,7 @@ describe("cron timer maintenance admission", () => {
     } finally {
       previousRuns.mockRestore();
       timers.mockRestore();
+      maintenance.mockRestore();
       if (state.timer) {
         clearTimeout(state.timer);
         state.timer = null;

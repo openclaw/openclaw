@@ -77,8 +77,11 @@ export async function createTempHomeEnv(prefix: string): Promise<TempHomeEnv> {
   return {
     home,
     restore: async () => {
-      await cleanupSessionStateForTest({ stateDir }).catch(() => undefined);
-      snapshot.restore();
+      try {
+        await cleanupSessionStateForTest({ stateDir });
+      } finally {
+        snapshot.restore();
+      }
       await fs.rm(home, { recursive: true, force: true });
     },
   };

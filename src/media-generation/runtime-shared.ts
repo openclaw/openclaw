@@ -13,7 +13,7 @@ import {
 import type { AgentModelConfig } from "../config/types.agents-shared.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { formatErrorMessage, toErrorObject } from "../infra/errors.js";
-import { isProviderApiKeyConfigured } from "../plugin-sdk/provider-auth.js";
+import { isProviderApiKeyConfigured } from "../plugins/provider-auth-availability.js";
 import { getProviderEnvVarsCore } from "../secrets/provider-env-vars.js";
 
 // Shared media-generation runtime helpers for provider fallback, request

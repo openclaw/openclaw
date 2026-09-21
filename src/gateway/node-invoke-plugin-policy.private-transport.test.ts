@@ -81,14 +81,14 @@ describe("private node policy transport", () => {
 
     const approval = await expectSinglePendingApproval(manager);
     expect(privateTransport.invoke).not.toHaveBeenCalled();
-    expect(manager.resolve(approval.id, "allow-once")).toBe(true);
+    expect(await manager.resolve(approval.id, "allow-once")).toBe(true);
     await expect(result).resolves.toMatchObject({ ok: true, payload: { completed: true } });
     expect(registration.policy.classifyRisk).toHaveBeenCalledOnce();
     expect(handle).toHaveBeenCalledOnce();
     expect(privateTransport.invoke).toHaveBeenCalledOnce();
     expect(privateTransport.invoke.mock.calls[0]?.[0]).not.toHaveProperty("deadlineAtMs");
     expect(onNodeCommandDispatched).toHaveBeenCalledOnce();
-    expect(manager.getSnapshot(approval.id)?.consumedDecision).toBe("allow-once");
+    expect((await manager.getSnapshot(approval.id))?.consumedDecision).toBe("allow-once");
     expect(node.commands).toEqual([]);
     expect(invoke).not.toHaveBeenCalled();
   });

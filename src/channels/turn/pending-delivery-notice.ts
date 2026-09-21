@@ -5,8 +5,8 @@ import {
 import { appendAssistantMessageToSessionTranscript } from "../../config/sessions/transcript.js";
 import { getGatewayRecoveryRuntime } from "../../gateway/server-recovery-runtime-context.js";
 import { findDeliveryIntentOwner } from "../../infra/outbound/delivery-queue-storage.js";
+import { deliveryContextFromSession } from "../../utils/delivery-context.read.js";
 import {
-  deliveryContextFromSession,
   deliveryContextKey,
   normalizeDeliveryContext,
 } from "../../utils/delivery-context.shared.js";

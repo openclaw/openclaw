@@ -224,7 +224,7 @@ describe("extended-stable npm release request", () => {
     mainPackageVersion: "2026.7.2",
   };
 
-  it("accepts .33 and later patches only in the trailing completed month", () => {
+  it("accepts .33 and later patches in either trailing completed month", () => {
     expect(validateExtendedStableNpmReleaseRequest(valid)).toEqual({
       extendedStable: true,
       releaseVersion: "2026.6.33",
@@ -240,6 +240,12 @@ describe("extended-stable npm release request", () => {
     expect(
       validateExtendedStableNpmReleaseRequest({
         ...valid,
+        mainPackageVersion: "2026.8.1",
+      }),
+    ).toMatchObject({ extendedStable: true, releaseVersion: "2026.6.33" });
+    expect(
+      validateExtendedStableNpmReleaseRequest({
+        ...valid,
         releaseTag: "v2026.12.33",
         npmWorkflowRef: "refs/heads/extended-stable/2026.12.33",
         packageVersion: "2026.12.33",
@@ -252,12 +258,12 @@ describe("extended-stable npm release request", () => {
   });
 
   it.each([
-    ["main two months ahead", "2026.8.1", "2026.7"],
-    ["main many months ahead", "2027.1.1", "2026.12"],
-    ["main a year-plus ahead", "2028.12.32", "2028.11"],
-  ])("rejects %s", (_label, mainPackageVersion, expectedMonth) => {
+    ["main three months ahead", "2026.9.1", "2026.8 or 2026.7"],
+    ["main many months ahead", "2027.1.1", "2026.12 or 2026.11"],
+    ["main a year-plus ahead", "2028.12.32", "2028.11 or 2028.10"],
+  ])("rejects %s", (_label, mainPackageVersion, expectedMonths) => {
     expect(() => validateExtendedStableNpmReleaseRequest({ ...valid, mainPackageVersion })).toThrow(
-      `Extended-stable publishes only the trailing completed month: protected main ${mainPackageVersion} allows ${expectedMonth}.PATCH, not 2026.6.33. Retire the older line; publishing a retired line requires an explicit maintainer decision.`,
+      `Extended-stable publishes only the two trailing completed months: protected main ${mainPackageVersion} allows ${expectedMonths}.PATCH, not 2026.6.33. Retire the older line; publishing a retired line requires an explicit maintainer decision.`,
     );
   });
 

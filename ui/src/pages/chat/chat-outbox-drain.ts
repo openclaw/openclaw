@@ -259,9 +259,12 @@ async function drainStoredChatOutbox(
     if (!outbox) {
       return "empty";
     }
-    // Explicit active-run sends may bypass older queued rows; other admissions keep FIFO.
+    // Fresh active-run sends bypass older rows, including when the Gateway resolves the mode.
     const freshActiveRunItem = outbox.queue.find(
-      (entry) => lane.freshAdmissions.has(entry.id) && Boolean(entry.queueMode),
+      (entry) =>
+        lane.freshAdmissions.has(entry.id) &&
+        (entry.queueMode ||
+          (!entry.intent && lane.pendingOptions.get(entry.id)?.allowActiveRunSend)),
     );
     const storedItem =
       freshActiveRunItem ??

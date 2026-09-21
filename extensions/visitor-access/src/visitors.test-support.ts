@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/plugin-entry";
 import { vi } from "vitest";
 import type { PluginRuntime, PluginStateKeyedStore } from "../api.js";
@@ -8,6 +9,15 @@ import { VisitorAccessService, type VisitorGrant } from "./visitors.js";
 
 export const NOW = Date.parse("2026-08-28T12:00:00.000Z");
 export const DAY_MS = 86_400_000;
+const services = new Set<VisitorAccessService>();
+
+export function closeVisitorFixtures(): void {
+  for (const service of services) {
+    service.close();
+  }
+  services.clear();
+}
+
 const config: VisitorAccessConfig = {
   accountId: "test-account",
   appId: "test-app",
@@ -19,6 +29,7 @@ const config: VisitorAccessConfig = {
 const policiesPath = "/client/v4/accounts/test-account/access/apps/test-app/policies";
 export type GatewayRoles = NonNullable<NonNullable<OpenClawConfig["gateway"]>["roles"]>;
 export const guestRole: GatewayRoles["definitions"][string] = {
+  accessPolicyPlugin: "visitor-access",
   sessions: { others: "view" },
   agents: ["main"],
   scopes: ["operator.sessions.write"],
@@ -42,7 +53,13 @@ type PolicyFixture = {
 };
 
 export function visitorGrant(email: string, overrides: Partial<VisitorGrant> = {}): VisitorGrant {
-  return { email, createdAt: NOW - DAY_MS, expiresAt: NOW + DAY_MS, ...overrides };
+  return {
+    grantId: randomUUID(),
+    email,
+    createdAt: NOW - DAY_MS,
+    expiresAt: NOW + DAY_MS,
+    ...overrides,
+  };
 }
 
 export function visitorFixture(
@@ -217,6 +234,7 @@ export function visitorFixture(
     createVisitorAccessReader(runtime),
     fetcher,
   );
+  services.add(service);
   return {
     cloudflare,
     fetcher,

@@ -41,7 +41,7 @@ type LegacyPluginStateImportDatabase = Pick<OpenClawStateKyselyDatabase, "plugin
 
 export async function migrateLegacyPluginStateSidecar(params: {
   stateDir: string;
-}): Promise<{ changes: string[]; warnings: string[] }> {
+}): Promise<MigrationMessages> {
   const sourcePath = resolveLegacyPluginStateSidecarPath(params.stateDir);
   if (!migrationFileExists(sourcePath)) {
     const changes: string[] = [];
@@ -144,6 +144,8 @@ export async function migrateLegacyPluginStateSidecar(params: {
     if (conflictedKeys.length > 0) {
       return {
         changes,
+        // Both copies remain intact; unrelated repairs can still finish safely.
+        warningDisposition: "recoverable",
         warnings: [
           `Left plugin-state sidecar in place because ${conflictedKeys.length} ${conflictedKeys.length === 1 ? "row differs" : "rows differ"} from shared state without a newer canonical timestamp. First key: ${conflictedKeys[0]}`,
         ],

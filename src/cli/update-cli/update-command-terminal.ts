@@ -11,7 +11,7 @@ import { getUpdateRun, recordUpdateRunPhase } from "../../infra/update-run-ledge
 import { assertUpdateRecoveryAdmission } from "../../infra/update-run-recovery-admission.js";
 import { isUpdateGatewayReadinessPending } from "../../infra/update-run-step.js";
 import { readCurrentGitUpdateRecovery } from "../../infra/update-runner-git-recovery.js";
-import type { UpdateRunResult, UpdateStepResult } from "../../infra/update-runner.js";
+import type { UpdateRunResult, UpdateStepResult } from "../../infra/update-runner-types.js";
 import { hasCommandProcessCleanupError } from "../../process/exec-result.js";
 import { defaultRuntime } from "../../runtime.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
@@ -20,7 +20,7 @@ import { printResult } from "./progress.js";
 import { parseUpdateTimeoutMs, type UpdateCommandOptions } from "./shared.js";
 import { UpdateActivationTimeoutError } from "./update-command-activation.js";
 import type { FinishUpdateParams } from "./update-command-finish-types.js";
-import { UpdateCommandRecoveryPendingError } from "./update-command-recovery.js";
+import { UpdateCommandRecoveryPendingError } from "./update-command-recovery-error.js";
 import {
   recordUpdateResultNextAction,
   failUpdateCommandRun,
