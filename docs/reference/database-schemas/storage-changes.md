@@ -138,8 +138,11 @@ account without repeating network verification. Empty repository results retain
 the non-repository workspace owner's fallback. Database-open behavior, publication
 writes, schemas, and retention are unchanged.
 
-Project recents and observed checkouts prepare durable session listings through
-the existing session-transcript worker. Federation captures physical targets,
+Default project recents reuse the Gateway's resident session-row projection after
+readiness, including archived metadata. The combined-store loader retains physical
+store selection, sentinel precedence, and process-local incognito reads. Observed
+checkout requests prepare durable session listings through the existing
+session-transcript worker. Federation captures physical targets,
 options, and a transferable environment before waiting, preserving canonical
 keys, ordering, and admission diagnostics; unavailable reads remain errors.
 The Gateway resolves current profile aliases and disclosure
