@@ -274,7 +274,7 @@ export function reclaimSqliteSessionInTransaction(
   const result = reclaimSqliteRowsInTransaction(plan, callbacks);
   callbacks.afterCommit?.();
   if (result.kind === "history-eviction" && result.value.deleted) {
-    reclaimSqliteFreePagesBestEffort(plan.databaseOptions);
+    reclaimSqliteFreePagesBestEffort(plan.databaseOptions, callbacks.beforeMutation);
   }
   return result;
 }
@@ -407,10 +407,14 @@ function reclaimSqliteRowsInTransaction(
   return { kind: plan.kind, value };
 }
 
-function reclaimSqliteFreePagesBestEffort(databaseOptions: ReclamationDatabaseOptions): void {
+function reclaimSqliteFreePagesBestEffort(
+  databaseOptions: ReclamationDatabaseOptions,
+  beforeMutation?: () => void,
+): void {
   try {
+    beforeMutation?.();
     const database = openOpenClawAgentDatabase(databaseOptions);
-    database.walMaintenance.reclaimFreePages({ checkpointMode: "PASSIVE" });
+    database.walMaintenance.reclaimFreePages({ checkpointMode: "PASSIVE", beforeMutation });
   } catch {
     // Deletion is already durable. The next budget pass can reclaim pages.
   }
