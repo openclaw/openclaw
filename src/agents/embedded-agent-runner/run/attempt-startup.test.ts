@@ -26,7 +26,7 @@ vi.mock("../../../skills/runtime/embedded-run-entries.js", () => ({
 }));
 
 vi.mock("../../../skills/loading/workspace-skill-prompt.js", () => ({
-  resolveSkillsPrompt: vi.fn(() => "skills prompt"),
+  resolveSkillsContext: vi.fn(() => ({ prompt: "skills prompt", skills: [] })),
 }));
 
 vi.mock("../sandbox-skills.js", () => ({

@@ -179,10 +179,16 @@ export function createCodeModeHarness(
     catalogRef?: ToolSearchCatalogRef;
     codeModeSkills?: readonly CodeModeSkill[];
     forceRestartSafeTools?: boolean;
+    skillSearchEnabled?: boolean;
   } = {},
 ) {
   const catalogRef = params.catalogRef ?? createToolSearchCatalogRef();
-  const config = { tools: { codeMode: true } } as never;
+  const config = {
+    tools: { codeMode: true },
+    ...(params.skillSearchEnabled === undefined
+      ? {}
+      : { skills: { experimental: { search: params.skillSearchEnabled } } }),
+  } as never;
   const ctx = {
     config,
     runtimeConfig: config,

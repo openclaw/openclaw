@@ -2549,7 +2549,7 @@ export const en: TranslationMap & {
       "Labs contains experimental capabilities that may change, break, or disappear between releases.",
     sectionTitle: "Experimental features",
     sectionDescription:
-      "Changes save without restarting the Gateway. Code Mode and Tool Search apply to future agent runs.",
+      "Changes save without restarting the Gateway. Code Mode, Skill Search, and Tool Search apply to future agent runs.",
     documentation: "Documentation",
     restartRequired: "Gateway restart required.",
     saveErrorTitle: "Could not update feature",
@@ -2558,6 +2558,11 @@ export const en: TranslationMap & {
       title: "Code Mode",
       description:
         "Set the global default for compact, sandboxed JavaScript tool workflows. On selects Auto for evaluated models; Off disables the default. Per-model Code Mode overrides are in Agent Defaults → Models (Advanced).",
+    },
+    skillSearch: {
+      title: "Skill Search",
+      description:
+        "Enable optional local search across eligible skills without enlarging the prompt. Requires Code Mode. Disabled by default.",
     },
 
     swarm: {

@@ -1,4 +1,4 @@
-import { resolveSkillsPrompt } from "../../skills/loading/workspace-skill-prompt.js";
+import { resolveSkillsContext } from "../../skills/loading/workspace-skill-prompt.js";
 import { resolveEmbeddedRunSkillEntries } from "../../skills/runtime/embedded-run-entries.js";
 import {
   applySkillEnvOverrides,
@@ -85,7 +85,7 @@ export async function prepareEmbeddedSkills(params: {
       skillsWorkspaceDir,
       skillsPromptWorkspaceDir,
     });
-    const skillsPrompt = await resolveSkillsPrompt({
+    const { prompt: skillsPrompt, skills: candidates } = await resolveSkillsContext({
       assertCurrent: params.assertCurrent,
       contextTokenBudget: params.attempt.contextTokenBudget,
       skillsSnapshot,
@@ -146,10 +146,8 @@ export async function prepareEmbeddedSkills(params: {
           return await workspaceAccess.skillResources.readInstructions(location, { signal });
         }
       : undefined;
-    const candidates = skillsSnapshot?.resolvedSkills ?? skillEntries.map((entry) => entry.skill);
     const codeModeSkills = params.includeCodeModeSkills
       ? resolveCodeModeSkills({
-          skillsPrompt,
           candidates,
           reader: sandboxSkillReader,
         })

@@ -39,8 +39,6 @@ function buildRenderedSkillsPrompt(params: {
   format: SkillsPromptFormat;
   includeLimitNote?: boolean;
 }): string {
-  // resolveCodeModeSkills in src/agents/code-mode-skills.ts parses this exact format; update both together.
-  // The production-renderer parity test in src/agents/code-mode.skills.test.ts enforces this coupling.
   const truncated = params.skills.length < params.total;
   const limitNote =
     params.includeLimitNote === false
@@ -73,7 +71,7 @@ export function formatSkillsForPromptBounded(params: SkillsPromptParams): string
   return prepareSkillsForPrompt(params).prompt;
 }
 
-/** Keep resource selection tied to the exact catalog admitted by the prompt budget. */
+/** Bound the display projection without changing the runtime catalog. */
 export function prepareSkillsForPrompt(params: SkillsPromptParams): {
   prompt: string;
   skills: Skill[];

@@ -3,6 +3,7 @@ import { MEDIA_AUDIO_FIELD_LABELS } from "./media-audio-field-metadata.js";
 import { GATEWAY_FIELD_LABELS } from "./schema.gateway-labels.js";
 import { AGENT_MODEL_FIELD_LABELS } from "./schema.labels.agent-models.js";
 import { SESSION_FIELD_LABELS } from "./schema.labels.session.js";
+import { SKILL_FIELD_LABELS } from "./schema.labels.skills.js";
 import { WORKSPACE_FIELD_LABELS } from "./schema.labels.workspace.js";
 import { META_FIELD_LABELS } from "./schema.meta.js";
 import { NODE_CAPABILITY_FIELD_LABELS } from "./schema.node-capabilities.js";
@@ -394,11 +395,7 @@ export const FIELD_LABELS: Record<string, string> = {
   "broadcast.*.mentionGating": "Agent Group Mention Selection",
   "broadcast.*.maxRounds": "Agent Group Maximum Rounds",
   "broadcast.*.maxTurns": "Agent Group Maximum Turns",
-  "skills.load.extraDirs": "Extra Skill Directories",
-  "skills.load.allowSymlinkTargets": "Allowed Skill Symlink Targets",
-  "skills.load.watch": "Watch Skills",
-  "skills.workshop.autonomous.mode": "Skill Workshop Autonomous Mode",
-  "agents.defaults.skills": "Skills",
+  ...SKILL_FIELD_LABELS,
   "agents.defaults.subagents.delegationMode": "Sub-agent Delegation Mode",
   "agents.entries.*.subagents.delegationMode": "Sub-agent Delegation Mode",
   ...WORKSPACE_FIELD_LABELS,

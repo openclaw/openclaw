@@ -1061,7 +1061,7 @@ describe("runEmbeddedAttempt context engine sessionKey forwarding", () => {
         skillsSnapshot: undefined,
       },
     );
-    expectFields(mockParams(hoisted.resolveSkillsPromptForRunMock, 0, "skills prompt params"), {
+    expectFields(mockParams(hoisted.resolveSkillsContextForRunMock, 0, "skills prompt params"), {
       workspaceDir: sandboxWorkspace,
       skillsSnapshot: undefined,
     });

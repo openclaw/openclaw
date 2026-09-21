@@ -819,8 +819,40 @@ Keep descriptions short and descriptive to minimize prompt overhead.
 For small context windows, the OpenClaw embedded runtime further shortens the
 descriptions in the already-admitted catalog. It retains every admitted name,
 location, and loading note, even when these exceed the description budget.
-Full skill instructions and saved snapshots are unchanged; Code Mode can still
-read every admitted skill. Native harnesses retain their own prompt policy.
+Full skill instructions are unchanged. By default, OpenClaw Code Mode keeps
+`skills.list()` and `skills.read(name)` limited to the prompt-admitted catalog.
+Prompt limits do not become a broader discovery surface unless you opt in to
+Skill Search.
+
+## Skill Search
+
+Skill Search is an experimental, default-off feature in **Settings → Labs**.
+It requires [Code Mode](/tools/code-mode) and enables local, on-demand discovery
+without enlarging or reordering the prompt directory. Set the boolean config
+key `skills.experimental.search` to `true` to enable it:
+
+```json5
+{
+  skills: { experimental: { search: true } },
+}
+```
+
+With the setting off or absent, Code Mode retains its prompt-admitted
+`skills.list()` and `skills.read(name)` behavior. No `skills.search` API or
+search hint is exposed. Only the boolean `true` enables the experiment.
+
+When enabled, `skills.search(query, { limit: 5 })` searches eligible
+model-invocable skills even when their names were omitted from the prompt.
+`skills.list()` lists that broader catalog, and `skills.read(name)` reads the
+complete instructions. Search makes no model or network requests and does not
+load or execute the instructions.
+
+Manual-only skills and skills excluded by agent/session policy, dependencies,
+unavailable-secret gates, or other availability gates remain excluded. Read-tool
+restrictions, prepared sandbox and remote readers, explicit user references,
+and the existing snapshot refresh lifecycle remain unchanged. Native harnesses
+retain their own discovery and prompt policy. See
+[Skill discovery](/tools/code-mode/guest-api#skill-discovery) for the API.
 
 ## Related
 

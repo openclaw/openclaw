@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { isSkillSearchEnabled } from "../skills/experimental.js";
 import { clampNumber } from "../utils.js";
 import { createCodeModeCatalogProjection } from "./code-mode-catalog.js";
 import { awaitCodeModeDeadline } from "./code-mode-deadline.js";
@@ -370,6 +371,7 @@ export async function runCodeModeScriptHeadless(params: {
         apiFiles: createCodeModeApiFilesForRun(namespaceRuntime, swarmEnabled),
         namespaces,
         swarmEnabled,
+        skillSearchEnabled: isSkillSearchEnabled(params.ctx.runtimeConfig ?? params.ctx.config),
       },
       config,
       deadline,

@@ -8,6 +8,7 @@ import { createLazyRuntimeNamedExport } from "../shared/lazy-runtime.js";
 import { parseNodeList } from "../shared/node-list-parse.js";
 import type { NodeListNode } from "../shared/node-list-types.js";
 import { resolveEligibleNodeFromList } from "../shared/node-resolve.js";
+import { isSkillSearchEnabled } from "../skills/experimental.js";
 import { resolveSafeTimeoutDelayMs } from "../utils/timer-delay.js";
 import { getBeforeToolCallFailureDisposition } from "./agent-tools.before-tool-call.js";
 import { redactCodeModeCatalogIds, type CodeModeCatalogProjection } from "./code-mode-catalog.js";
@@ -15,7 +16,7 @@ import type { CodeModeNamespaceRuntime } from "./code-mode-namespaces.js";
 import type { CodeModeReplyLease } from "./code-mode-program-data.js";
 import type { CodeModeResultsAccess } from "./code-mode-results.js";
 import type { PendingBridgeRequest } from "./code-mode-runtime.js";
-import { readCodeModeSkill } from "./code-mode-skills.js";
+import { readCodeModeSkill, searchCodeModeSkills } from "./code-mode-skills.js";
 import { createCodeModeToolApiFile } from "./code-mode-tool-api.js";
 import { consumeMcpCodeModeGuestResult } from "./mcp-content.js";
 import type { AgentToolUpdateCallback } from "./runtime/index.js";
@@ -406,6 +407,13 @@ export async function runBridgeRequest(params: {
         signal?.throwIfAborted();
         requireCodeModeSwarmEnabled(params.ctx);
         value = await handlers[params.request.method](params);
+        break;
+      }
+      case "skillsSearch": {
+        if (!isSkillSearchEnabled(params.ctx.runtimeConfig ?? params.ctx.config)) {
+          throw new ToolInputError("Skill Search is disabled for this run.");
+        }
+        value = searchCodeModeSkills(params.ctx.codeModeSkills ?? [], values[0], values[1]);
         break;
       }
       case "skillsList": {

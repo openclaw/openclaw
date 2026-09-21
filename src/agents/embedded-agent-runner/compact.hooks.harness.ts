@@ -972,7 +972,7 @@ export async function loadCompactHooksHarness(options: { durableSession?: boolea
   });
 
   vi.doMock("../../skills/loading/workspace-skill-prompt.js", () => ({
-    resolveSkillsPrompt: resolveSkillsPromptMock,
+    resolveSkillsContext: () => ({ prompt: resolveSkillsPromptMock(), skills: [] }),
   }));
 
   vi.doMock("../agent-scope.js", async () => {

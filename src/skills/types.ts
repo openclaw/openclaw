@@ -126,7 +126,7 @@ export type SkillEligibilityContext = {
   };
 };
 
-export const WORKSPACE_SKILLS_PROMPT_FORMAT_VERSION = 6;
+export const WORKSPACE_SKILLS_PROMPT_FORMAT_VERSION = 8;
 
 export type SkillSnapshot = {
   librarySelections?: import("../../packages/gateway-protocol/src/schema/skill-library.js").SkillLibrarySelection[];
@@ -147,6 +147,9 @@ export type SkillSnapshot = {
   skillOverrides?: Record<string, boolean>;
   /** Effective node-exec eligibility used to select connected node-hosted skills. */
   nodeSkillsEligibility?: SkillEligibilityContext["nodeSkills"];
+  /** Records the discovery projection so changing the Labs gate refreshes cached snapshots. */
+  searchEnabled?: true;
+  /** Runtime-only model sources: prompt-admitted by default, all eligible when search is enabled. */
   resolvedSkills?: Skill[];
   /** Present only when a session merges skills from distinct agent and execution roots. */
   skillRoots?: {

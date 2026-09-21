@@ -515,6 +515,10 @@ export const RUNTIME_FIELD_HELP: Record<string, string> = {
     "Restrict video understanding by channel, chat type, or source key. Keep this narrow in busy or untrusted channels to control processing.",
   "tools.media.video.attachments":
     "Choose which matching video attachments are processed. Use first-only handling unless multi-video analysis is intentional.",
+  "skills.experimental":
+    "Opt-in Labs features for skill discovery. Leave unset to keep standard skill behavior.",
+  "skills.experimental.search":
+    "Enable local skill search in Code Mode and make all eligible skills discoverable beyond prompt limits. Off by default; requires Code Mode. Changes apply to future agent runs and refresh the skill snapshot without changing eligibility or tool-execution policy.",
   "skills.load.extraDirs":
     "Additional shared skill roots to scan at lowest precedence. Use this for sibling repos or shared skill packs that should be available without copying them into the OpenClaw workspace.",
   "skills.load.allowSymlinkTargets":

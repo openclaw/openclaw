@@ -3,11 +3,17 @@ import { createSubsystemLogger } from "../../logging/subsystem.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import { resolveEffectiveAgentSkillsLimits } from "../discovery/agent-filter.js";
 import { filterPromptVisibleSkillEntries } from "../discovery/skill-index.js";
+import { isSkillSearchEnabled } from "../experimental.js";
 import type { SkillEligibilityContext, SkillEntry, SkillSnapshot } from "../types.js";
 import { WORKSPACE_SKILLS_PROMPT_FORMAT_VERSION } from "../types.js";
 import { hasUnavailableSkillSecretOwners, isSkillSecretOwnerUnavailable } from "./config.js";
 import { resolveSkillKey } from "./frontmatter.js";
-import { compactSkillsPromptForContext, escapeSkillXml, type Skill } from "./skill-contract.js";
+import {
+  compactSkillsPromptForContext,
+  escapeSkillXml,
+  selectPromptSkills,
+  type Skill,
+} from "./skill-contract.js";
 import { compactPromptSkills } from "./skill-paths.js";
 import { prepareSkillsForPrompt } from "./skill-prompt-limits.js";
 import { resolveWorkspaceSkillPromptEntries } from "./workspace-skill-loader.js";
@@ -42,7 +48,16 @@ async function resolveWorkspaceSkillPromptState(
   const { eligible, skillFilter } = await resolveWorkspaceSkillPromptEntries(workspaceDir, opts);
   const promptEntries = filterPromptVisibleSkillEntries(eligible);
   const remoteNote = opts?.eligibility?.remote?.note?.trim();
-  const resolvedSkills = promptEntries.map((entry) => entry.skill);
+  // Exposure overrides are resolved above; carry that effective policy into runtime sources.
+  const selectedSkills: Skill[] = [];
+  for (const { skill } of promptEntries) {
+    selectedSkills.push(
+      skill.disableModelInvocation ? { ...skill, disableModelInvocation: false } : skill,
+    );
+  }
+  const resolvedSkills = opts?.preserveEntryOrder
+    ? selectedSkills
+    : selectedSkills.toSorted((a, b) => a.name.localeCompare(b.name, "en"));
   const limits = opts?.config?.skills?.limits;
   const agentLimits = resolveEffectiveAgentSkillsLimits(opts?.config, opts?.agentId);
   const prepared = prepareSkillsForPrompt({
@@ -55,11 +70,13 @@ async function resolveWorkspaceSkillPromptState(
     remoteNote,
     preserveOrder: opts?.preserveEntryOrder,
   });
-  const byName = new Map(resolvedSkills.map((skill) => [skill.name, skill]));
+  const admittedNames = new Set(prepared.skills.map((skill) => skill.name));
   return {
     eligible,
     prompt: prepared.prompt,
-    resolvedSkills: prepared.skills.map((skill) => byName.get(skill.name)!),
+    resolvedSkills: isSkillSearchEnabled(opts?.config)
+      ? resolvedSkills
+      : resolvedSkills.filter((skill) => admittedNames.has(skill.name)),
     skillFilter,
   };
 }
@@ -89,6 +106,7 @@ export async function buildSkillSnapshot(
     resolvedSkills,
     version: opts?.snapshotVersion,
     promptFormatVersion: WORKSPACE_SKILLS_PROMPT_FORMAT_VERSION,
+    ...(isSkillSearchEnabled(opts?.config) ? { searchEnabled: true as const } : {}),
   };
 }
 
@@ -105,28 +123,32 @@ type ResolveSkillsPromptParams = {
   assertCurrent?: () => void;
 };
 
+type SkillsContext = { prompt: string; skills: Skill[] };
+
 async function buildSkillsPromptFromEntries(
   params: ResolveSkillsPromptParams,
   entries: SkillEntry[] | undefined,
-): Promise<string> {
+): Promise<SkillsContext> {
   if (!entries || entries.length === 0) {
-    return "";
+    return { prompt: "", skills: [] };
   }
-  const { prompt } = await buildSkillSnapshot(params.workspaceDir, {
+  const { prompt, resolvedSkills } = await buildSkillSnapshot(params.workspaceDir, {
     entries,
     config: params.config,
     agentId: params.agentId,
     eligibility: params.eligibility,
+    skillFilter: params.skillsSnapshot?.skillFilter,
+    skillOverrides: params.skillsSnapshot?.skillOverrides,
     preserveEntryOrder: params.preserveEntryOrder,
     assertCurrent: params.assertCurrent,
   });
-  return prompt.trim() ? prompt : "";
+  return { prompt: prompt.trim() ? prompt : "", skills: resolvedSkills ?? [] };
 }
 
 async function rebuildAfterUnsafeSnapshot(
   params: ResolveSkillsPromptParams,
   reason: "unsupported-prompt-format" | "legacy-skill-identity" | "invalid-catalog-structure",
-): Promise<string> {
+): Promise<SkillsContext> {
   skillsLogger.warn(
     "Cached skills prompt could not be safely filtered; rebuilding from current skill entries.",
     { reason },
@@ -138,15 +160,32 @@ async function rebuildAfterUnsafeSnapshot(
   return buildSkillsPromptFromEntries(params, entries);
 }
 
-async function resolveSkillsPromptCatalog(params: ResolveSkillsPromptParams): Promise<string> {
-  const snapshotPrompt = params.skillsSnapshot?.prompt?.trim();
-  if (params.skillsSnapshot && !snapshotPrompt) {
-    return "";
-  }
+async function resolveSkillsPromptCatalog(
+  params: ResolveSkillsPromptParams,
+): Promise<SkillsContext> {
+  const snapshot = params.skillsSnapshot;
+  const snapshotPrompt = snapshot?.prompt?.trim() ?? "";
+  // Cold snapshots retain eligibility identities but omit runtime sources on disk.
+  // Hydrate through the same policy owner, never from the presentation subset.
+  const hydrated =
+    snapshot &&
+    !snapshot.resolvedSkills &&
+    snapshot.skills.length &&
+    (snapshotPrompt || isSkillSearchEnabled(params.config))
+      ? await buildSkillsPromptFromEntries(params, params.entries ?? (await params.loadEntries?.()))
+      : undefined;
+  const availableNames = new Set(
+    snapshot?.skills
+      .filter((entry) => !isSkillSecretOwnerUnavailable(entry.skillKey ?? entry.name))
+      .map((entry) => entry.name),
+  );
+  const skills = (snapshot?.resolvedSkills ?? hydrated?.skills ?? []).filter(
+    (skill) => !skill.disableModelInvocation && availableNames.has(skill.name),
+  );
   const snapshotHasLegacySkillIdentity = params.skillsSnapshot?.skills.some(
     (skill) => !skill.skillKey,
   );
-  if (snapshotPrompt) {
+  if (snapshot) {
     const snapshotHasUnavailableSkill =
       params.skillsSnapshot?.skills.some((skill) =>
         isSkillSecretOwnerUnavailable(skill.skillKey ?? skill.name),
@@ -161,6 +200,9 @@ async function resolveSkillsPromptCatalog(params: ResolveSkillsPromptParams): Pr
     if (snapshotHasLegacySkillIdentity && hasUnavailableSkillSecretOwners()) {
       return rebuildAfterUnsafeSnapshot(params, "legacy-skill-identity");
     }
+    if (!snapshotPrompt) {
+      return { prompt: "", skills };
+    }
     const unavailableNames = new Set(
       params.skillsSnapshot?.skills
         .filter(
@@ -169,7 +211,7 @@ async function resolveSkillsPromptCatalog(params: ResolveSkillsPromptParams): Pr
         .map((skill) => escapeSkillXml(skill.name)),
     );
     if (unavailableNames.size === 0) {
-      return snapshotPrompt;
+      return { prompt: snapshotPrompt, skills };
     }
     const catalogOpen = "<available_skills>";
     const catalogClose = "</available_skills>";
@@ -205,14 +247,29 @@ async function resolveSkillsPromptCatalog(params: ResolveSkillsPromptParams): Pr
     if (tail.trim()) {
       return rebuildAfterUnsafeSnapshot(params, "invalid-catalog-structure");
     }
-    return `${snapshotPrompt.slice(0, bodyStart)}${filteredBody}${tail}${snapshotPrompt.slice(catalogEnd)}`.trim();
+    return {
+      prompt:
+        `${snapshotPrompt.slice(0, bodyStart)}${filteredBody}${tail}${snapshotPrompt.slice(catalogEnd)}`.trim(),
+      skills,
+    };
   }
   return buildSkillsPromptFromEntries(params, params.entries);
 }
 
+/** Resolve one policy-owned catalog; the prompt is only its bounded projection. */
+export async function resolveSkillsContext(
+  params: ResolveSkillsPromptParams,
+): Promise<SkillsContext> {
+  const context = await resolveSkillsPromptCatalog(params);
+  return {
+    ...context,
+    skills: isSkillSearchEnabled(params.config)
+      ? context.skills
+      : selectPromptSkills(context.prompt, context.skills),
+    prompt: compactSkillsPromptForContext(context.prompt, params.contextTokenBudget),
+  };
+}
+
 export async function resolveSkillsPrompt(params: ResolveSkillsPromptParams): Promise<string> {
-  return compactSkillsPromptForContext(
-    await resolveSkillsPromptCatalog(params),
-    params.contextTokenBudget,
-  );
+  return (await resolveSkillsContext(params)).prompt;
 }

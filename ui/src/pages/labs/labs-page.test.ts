@@ -180,6 +180,15 @@ describe("LabsPage", () => {
       note: "labs: update codeMode",
     },
     {
+      label: "Skill Search",
+      sourceConfig: {
+        skills: { experimental: { search: true }, entries: { weather: { enabled: false } } },
+        tools: { codeMode: { enabled: "auto" } },
+      },
+      expectedPatch: { skills: { experimental: { search: null } } },
+      note: "labs: update skillSearch",
+    },
+    {
       label: "Custom plugin UI",
       sourceConfig: { gateway: { controlUi: { experimental: { customPlugins: true } } } },
       expectedPatch: { gateway: { controlUi: { experimental: { customPlugins: null } } } },
@@ -246,6 +255,15 @@ describe("LabsPage", () => {
       note: "labs: update codeMode",
     },
     {
+      label: "Skill Search",
+      sourceConfig: {
+        skills: { experimental: { search: false }, entries: { weather: { enabled: false } } },
+        tools: { codeMode: { enabled: false } },
+      },
+      expectedPatch: { skills: { experimental: { search: true } } },
+      note: "labs: update skillSearch",
+    },
+    {
       label: "Custom plugin UI",
       sourceConfig: {},
       expectedPatch: { gateway: { controlUi: { experimental: { customPlugins: true } } } },
@@ -281,15 +299,35 @@ describe("LabsPage", () => {
   it("shows default provenance", async () => {
     const inherited = await mountPage({});
     expect(labRow(inherited.page, "Code Mode").textContent).not.toContain("Using default:");
+    expect(labToggle(inherited.page, "Skill Search").checked).toBe(false);
+    expect(labRow(inherited.page, "Skill Search").textContent).not.toContain("Default:");
     inherited.provider.remove();
 
     const overridden = await mountPage({
+      skills: { experimental: { search: true } },
       tools: {
         codeMode: { enabled: "auto" },
         swarm: { enabled: false },
       },
     });
     expect(labRow(overridden.page, "Code Mode").textContent).toContain("Default: Disabled");
+    expect(labToggle(overridden.page, "Skill Search").checked).toBe(true);
+    expect(labRow(overridden.page, "Skill Search").textContent).toContain("Default: Disabled");
+  });
+});
+
+describe("LabsPage skill search enablement", () => {
+  it.each([
+    ["Code Mode alone", { tools: { codeMode: { enabled: true } } }],
+    ["empty experiments", { skills: { experimental: {} } }],
+    ["explicit false", { skills: { experimental: { search: false } } }],
+    ["string true", { skills: { experimental: { search: "true" } } }],
+  ])("keeps %s off until the boolean opt-in", async (_label, config) => {
+    const { page, provider, runtimeConfig } = await mountPage(config);
+
+    expect(labToggle(page, "Skill Search").checked).toBe(false);
+    expect(runtimeConfig.patch).not.toHaveBeenCalled();
+    provider.remove();
   });
 });
 

@@ -1,3 +1,4 @@
+import { isSkillSearchEnabled } from "../skills/experimental.js";
 import type { AgentRunApprovalWait } from "./agent-run-approval-wait.js";
 import { codeModeReplayIdForToolCall, isCodeModeSwarmAvailable } from "./code-mode-bridge.js";
 import {
@@ -126,6 +127,7 @@ export async function runCodeModeExec(params: {
         apiFiles,
         namespaces: namespaceRuntime.descriptors,
         swarmEnabled,
+        skillSearchEnabled: isSkillSearchEnabled(params.ctx.runtimeConfig ?? params.ctx.config),
       },
       remainingMs + CODE_MODE_WORKER_WATCHDOG_GRACE_MS,
       undefined,

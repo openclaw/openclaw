@@ -703,7 +703,6 @@ describe("remote-exec skill resources", () => {
         }
         await fs.writeFile(filePath, "Instructions changed after transfer");
         const [codeModeSkill] = resolveCodeModeSkills({
-          skillsPrompt: resources!.snapshot.prompt,
           candidates: [selected],
           reader: async () => {
             throw new Error("Paired nodes have no Gateway filesystem bridge");
@@ -806,7 +805,7 @@ describe("remote-exec skill resources", () => {
         skillKey: "stale",
         primaryEnv: "STALE_SKILL_API_KEY",
       });
-      snapshot.prompt += "\nstale";
+      snapshot.prompt = formatSkillsCompactForPrompt(snapshot.resolvedSkills!);
       await fs.rm(staleBaseDir, { recursive: true });
       await fs.symlink(path.join(workspace, "missing-stale-target"), staleBaseDir, "dir");
 

@@ -71,6 +71,23 @@ Most skills configuration lives under `skills` in
   change. Covers nested files under grouped skill roots.
 </ParamField>
 
+## Experimental (`skills.experimental`)
+
+<ParamField path="skills.experimental.search" type="boolean" default="false">
+  Enable optional local Skill Search in Code Mode. Only `true` enables it.
+  Also available under **Settings → Labs → Skill Search**; Code Mode must be
+  enabled separately. Changes apply to future agent runs.
+</ParamField>
+
+With the setting off or absent, `skills.list()` and `skills.read(name)` remain
+limited to prompt-admitted skills, and no `skills.search` API or search hint is
+exposed. Opting in broadens list/read to the eligible model-invocable catalog
+and adds `skills.search(query, { limit? })`, without enlarging the prompt.
+Agent/session policy, manual-only restrictions, dependencies, unavailable-secret
+gates, and read-tool restrictions still apply. See
+[Skill Search](/tools/skills#skill-search) and
+[Skill discovery](/tools/code-mode/guest-api#skill-discovery).
+
 ## Install (`skills.install`)
 
 <ParamField path="skills.install.preferBrew" type="boolean" default="true">

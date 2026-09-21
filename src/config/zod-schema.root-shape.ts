@@ -446,6 +446,12 @@ export const OpenClawSchemaShape = {
   mcp: McpConfigSchema,
   skills: z
     .strictObject({
+      experimental: z
+        .strictObject({
+          /** Labs: search all eligible skills from Code Mode. Off by default. */
+          search: z.boolean().optional(),
+        })
+        .optional(),
       /** Optional bundled-skill allowlist (only affects bundled skills). */
       allowBundled: z.array(z.string()).optional(),
       load: z

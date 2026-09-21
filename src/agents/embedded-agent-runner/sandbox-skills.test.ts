@@ -4,8 +4,12 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { createSyntheticSourceInfo } from "../../skills/loading/skill-contract.js";
-import { resolveSkillsPrompt } from "../../skills/loading/workspace-skill-prompt.js";
+import {
+  buildSkillSnapshot,
+  resolveSkillsPrompt,
+} from "../../skills/loading/workspace-skill-prompt.js";
 import { resolveEmbeddedRunSkillEntries } from "../../skills/runtime/embedded-run-entries.js";
+import { createFixtureSkillEntry } from "../../skills/test-support/test-helpers.js";
 import type { SkillSnapshot } from "../../skills/types.js";
 import {
   mapSandboxSkillEntriesForPrompt,
@@ -35,6 +39,40 @@ const snapshot: SkillSnapshot = {
 };
 
 describe("resolveSandboxSkillRuntimeInputs", () => {
+  it("remaps the bounded Library directory without advertising every searchable skill", async () => {
+    const selected = await buildSkillSnapshot("/workspace", {
+      entries: [createFixtureSkillEntry("alpha"), createFixtureSkillEntry("beta")],
+      config: { skills: { experimental: { search: true }, limits: { maxSkillsInPrompt: 1 } } },
+    });
+    selected.librarySelections = [
+      { skillId: "pin", revision: "a".repeat(64), name: "alpha", ownerProfileId: null },
+    ];
+    const prepared = resolveSandboxSkillRuntimeInputs({
+      skillsAnchorWorkspace: "/workspace",
+      skillsSnapshot: selected,
+      sandbox: {
+        enabled: true,
+        workspaceAccess: "ro",
+        containerWorkdir: "/workspace",
+        skillUsagePaths: ["alpha", "beta"].map((name) => ({
+          skillName: name,
+          skillFile: `/skills/${name}/SKILL.md`,
+          readPath: `/workspace/skills/${name}/SKILL.md`,
+          skillSource: "workspace",
+        })),
+      },
+    });
+    expect(prepared.skillsSnapshot?.resolvedSkills?.map((skill) => skill.name)).toEqual([
+      "alpha",
+      "beta",
+    ]);
+    expect(prepared.skillsSnapshot?.prompt).toContain("<name>alpha</name>");
+    expect(prepared.skillsSnapshot?.prompt).not.toContain("<name>beta</name>");
+    expect(prepared.skillsSnapshot?.prompt).toContain(
+      "<location>/workspace/skills/alpha/SKILL.md</location>",
+    );
+  });
+
   it("keeps snapshots for non-sandboxed runs", () => {
     expect(
       resolveSandboxSkillRuntimeInputs({

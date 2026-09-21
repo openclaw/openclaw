@@ -235,7 +235,12 @@ export const CODE_MODE_CONTROLLER_SOURCE = String.raw`
     get: async (idOrName) => nodeHandle(await request("nodes", ["get", idOrName])),
   });
 
+  const skillSearchEnabled = globalThis.__openclawSkillSearchEnabled === true;
+  delete globalThis.__openclawSkillSearchEnabled;
   const skills = Object.freeze({
+    ...(skillSearchEnabled ? {
+      search: (query, options) => request("skillsSearch", options === undefined ? [query] : [query, options]),
+    } : {}),
     list: () => request("skillsList", []),
     read: (name) => request("skillsRead", [name]),
   });

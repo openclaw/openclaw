@@ -25,5 +25,7 @@ export type SessionSkillSnapshot = {
    * src/skills/runtime/embedded-run-entries.ts rebuilds it from disk.
    */
   resolvedSkills?: Skill[];
+  /** Catalog projection used by the opt-in Skill Search lab; participates in refresh. */
+  searchEnabled?: true;
   version?: number;
 };

@@ -8,7 +8,11 @@ import { setActiveDegradedSecretOwners } from "../../secrets/runtime-degraded-st
 import { writeSkill } from "../test-support/e2e-test-helpers.js";
 import { createCanonicalFixtureSkill } from "../test-support/test-helpers.js";
 import { WORKSPACE_SKILLS_PROMPT_FORMAT_VERSION, type SkillEntry } from "../types.js";
-import { buildSkillSnapshot, resolveSkillsPrompt } from "./workspace-skill-prompt.js";
+import {
+  buildSkillSnapshot,
+  resolveSkillsContext,
+  resolveSkillsPrompt,
+} from "./workspace-skill-prompt.js";
 
 const loggingMocks = vi.hoisted(() => ({ warn: vi.fn() }));
 
@@ -46,6 +50,18 @@ function createEntry(name: string): SkillEntry {
 }
 
 describe("resolveSkillsPrompt", () => {
+  it("does not hydrate an empty saved directory when search is off", async () => {
+    const loadEntries = vi.fn(async () => [createEntry("demo")]);
+    expect(
+      await resolveSkillsContext({
+        workspaceDir: "/workspace",
+        skillsSnapshot: { prompt: "", skills: [{ name: "demo", skillKey: "demo" }] },
+        loadEntries,
+      }),
+    ).toEqual({ prompt: "", skills: [] });
+    expect(loadEntries).not.toHaveBeenCalled();
+  });
+
   it.each([8_192, 32_768])(
     "compacts descriptions at %i tokens without changing admitted skill resources",
     async (contextTokenBudget) => {
@@ -73,7 +89,6 @@ describe("resolveSkillsPrompt", () => {
         await resolveSkillsPrompt({ workspaceDir: "/tmp/openclaw", skillsSnapshot: snapshot }),
       ).toBe(original);
       const resources = resolveCodeModeSkills({
-        skillsPrompt: projected,
         candidates: snapshot.resolvedSkills!,
       });
       expect(resources.map((skill) => skill.name)).toEqual(

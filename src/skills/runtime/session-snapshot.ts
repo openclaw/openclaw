@@ -3,6 +3,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { pruneMapToMaxSize } from "../../infra/map-size.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import { matchesSkillFilter } from "../discovery/filter.js";
+import { isSkillSearchEnabled } from "../experimental.js";
 import { buildSkillSnapshot } from "../loading/workspace-skill-prompt.js";
 import { normalizeWorkspaceSkillRoots } from "../loading/workspace-skill-roots.js";
 import { WORKSPACE_SKILLS_PROMPT_FORMAT_VERSION } from "../types.js";
@@ -104,6 +105,7 @@ export async function resolveReusableWorkspaceSkillSnapshot(
     stableStringify(librarySelections) !==
     stableStringify(params.existingSnapshot?.librarySelections);
   const shouldRefresh =
+    (params.existingSnapshot?.searchEnabled === true) !== isSkillSearchEnabled(params.config) ||
     libraryChanged ||
     promptFormatChanged ||
     skillVersionChanged ||

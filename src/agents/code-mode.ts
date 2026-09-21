@@ -5,6 +5,7 @@
 import { Type } from "typebox";
 import { getAgentToolExecutionContext } from "../../packages/agent-core/src/tool-execution-context.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { isSkillSearchEnabled } from "../skills/experimental.js";
 import { finalizeAgentToolAvailability } from "./agent-tool-availability.js";
 import type { HookContext } from "./agent-tools.before-tool-call.js";
 import { CODE_MODE_NODES_TOOL_ID, isCodeModeSwarmAvailable } from "./code-mode-bridge.js";
@@ -162,7 +163,9 @@ function createCodeModeExecDescription(
       ? "\n- nodes: paired Gateway nodes; nodes.list(), (await nodes.get(id)).invoke(command, params)\n"
       : "";
   const skillsGuidance = ctx.codeModeSkills?.length
-    ? " Skills are available through the async `skills` global: use `await skills.list()` and `await skills.read(name)`."
+    ? isSkillSearchEnabled(ctx.runtimeConfig ?? ctx.config)
+      ? " Skills are available through the async `skills` global: `await skills.search(query, { limit: 5 })` searches eligible skills, including those omitted from the prompt. Use English queries; limit is 1–20. `await skills.list()` lists them; `await skills.read(name)` reads complete instructions."
+      : " Skills are available through the async `skills` global: use `await skills.list()` and `await skills.read(name)`."
     : "";
   const { maxOutputBytes, timeoutMs } = config;
   // The catalog already reserves built-in namespace globals without constructing their runtimes.

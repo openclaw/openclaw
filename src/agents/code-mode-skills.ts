@@ -1,5 +1,14 @@
 import { readFile } from "node:fs/promises";
-import { decodeSkillXml, type Skill } from "../skills/loading/skill-contract.js";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
+import type { Skill } from "../skills/loading/skill-contract.js";
+import { ToolInputError } from "./tool-input-error.js";
+import {
+  buildLexicalIndex,
+  scoreLexical,
+  tokenizeDocument,
+  tokenizeQuery,
+} from "./tool-search-ranking.js";
 
 export type CodeModeSkill = {
   name: string;
@@ -14,45 +23,70 @@ export type CodeModeSkillReader = (params: {
   signal?: AbortSignal;
 }) => Promise<string>;
 
-const SKILL_NAME_PATTERN = /^[ ]{4}<name>(.*)<\/name>$/mu;
-const SKILL_LOCATION_PATTERN = /^[ ]{4}<location>(.*)<\/location>$/mu;
-
-function readSkillField(block: string, pattern: RegExp): string | undefined {
-  const match = pattern.exec(block)?.[1];
-  return match === undefined ? undefined : decodeSkillXml(match);
-}
-
-/** Select Code Mode skills from the exact catalog rendered into this run's prompt. */
+/** Adapt policy-selected, runtime-mapped sources without using prompt text as authority. */
 export function resolveCodeModeSkills(params: {
-  skillsPrompt: string;
   candidates: readonly Skill[];
   reader?: CodeModeSkillReader;
 }): CodeModeSkill[] {
-  const catalog = /<available_skills>\n([\s\S]*?)\n<\/available_skills>/u.exec(
-    params.skillsPrompt,
-  )?.[1];
-  if (!catalog) {
-    return [];
-  }
-  const candidatesByName = new Map(params.candidates.map((skill) => [skill.name, skill]));
-  const result: CodeModeSkill[] = [];
-  for (const match of catalog.matchAll(/^[ ]{2}<skill>\n([\s\S]*?)\n[ ]{2}<\/skill>$/gmu)) {
-    const block = match[1] ?? "";
-    const name = readSkillField(block, SKILL_NAME_PATTERN);
-    const location = readSkillField(block, SKILL_LOCATION_PATTERN);
-    const source = name ? candidatesByName.get(name) : undefined;
-    if (!name || !location || !source) {
-      continue;
-    }
-    result.push({
-      name,
+  return params.candidates
+    .filter((skill) => !skill.disableModelInvocation)
+    .map((source) => ({
+      name: source.name,
       description: [source.description, source.locationNote].filter(Boolean).join("\n"),
-      location,
+      location: source.filePath,
       source: { filePath: source.filePath, readContent: source.readContent },
       reader: params.reader,
-    });
+    }));
+}
+
+const indexes = new WeakMap<
+  readonly CodeModeSkill[],
+  ReturnType<typeof buildLexicalIndex<CodeModeSkill>>
+>();
+
+/** Search only the prepared catalog. A miss is not evidence that no procedure could help. */
+export function searchCodeModeSkills(
+  skills: readonly CodeModeSkill[],
+  query: unknown,
+  options?: unknown,
+) {
+  if (typeof query !== "string" || query.length > 4096) {
+    throw new ToolInputError("skills.search query must be a string of at most 4096 characters.");
   }
-  return result;
+  if (options !== undefined && !isRecord(options)) {
+    throw new ToolInputError("skills.search options must be an object.");
+  }
+  const limit = isRecord(options) ? (options.limit ?? 5) : 5;
+  if (typeof limit !== "number" || !Number.isInteger(limit) || limit < 1 || limit > 20) {
+    throw new ToolInputError("skills.search limit must be an integer between 1 and 20.");
+  }
+  const exact = query.trim().toLowerCase();
+  const exactMatches = skills.filter((skill) => skill.name.toLowerCase() === exact);
+  let index = indexes.get(skills);
+  if (!index) {
+    index = buildLexicalIndex(
+      skills.map((skill) => ({
+        value: skill,
+        terms: tokenizeDocument(skill.name + " " + skill.description),
+      })),
+    );
+    indexes.set(skills, index);
+  }
+  const matches = scoreLexical(index, tokenizeQuery(query))
+    .filter(({ value }) => !exactMatches.includes(value))
+    .toSorted(
+      (a, b) =>
+        Number(b.matchedLiteral) - Number(a.matchedLiteral) ||
+        b.score - a.score ||
+        a.value.name.localeCompare(b.value.name, "en"),
+    );
+  return [...exactMatches, ...matches.map(({ value }) => value)]
+    .slice(0, limit)
+    .map(({ name, description, location }) => ({
+      name,
+      description: truncateUtf16Safe(description, 500),
+      location,
+    }));
 }
 
 export async function readCodeModeSkill(

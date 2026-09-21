@@ -106,6 +106,7 @@ describe("Code Mode worker lifecycle", () => {
         __openclawNamespaces: [],
         __openclawApiFiles: [],
         __openclawSwarmEnabled: false,
+        __openclawSkillSearchEnabled: false,
         __openclawMaxPendingToolCalls: config.maxPendingToolCalls,
       })) {
         vm.hostToHandle(value).consume((handle) => vm.global.setProp(name, handle));

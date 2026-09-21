@@ -4,7 +4,7 @@ import {
   prepareSkillBundle,
   SKILL_LIBRARY_MAX_PATH_COMPONENTS,
 } from "../../skills/library/bundle.js";
-import { formatSkillsForPromptBounded } from "../../skills/loading/skill-prompt-limits.js";
+import { remapSkillsPrompt } from "../../skills/loading/skill-contract.js";
 import { prepareSkillResourceDelivery } from "../../skills/runtime/resources.js";
 import type { SkillSnapshot } from "../../skills/types.js";
 import { NODE_WORKER_WORKSPACE_STDIN_MAX_BYTES } from "../../worker/node-workspace-protocol.js";
@@ -276,7 +276,7 @@ export async function transferSkillResources(params: {
         ...params.snapshot,
         skills,
         resolvedSkills,
-        prompt: formatSkillsForPromptBounded({ skills: resolvedSkills, preserveOrder: true }),
+        prompt: remapSkillsPrompt(params.snapshot.prompt, resolvedSkills),
       },
       mounts,
       assertCurrent: check,

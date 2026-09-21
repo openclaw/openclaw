@@ -143,6 +143,7 @@ function createHostRequestHandler(params: {
       method !== "namespace" &&
       method !== "agentSpawn" &&
       method !== "agentWait" &&
+      method !== "skillsSearch" &&
       method !== "skillsList" &&
       method !== "skillsRead" &&
       method !== "sleep" &&
@@ -248,6 +249,7 @@ async function createVm(input: CodeModeWorkerPayload, bridge: BridgeState): Prom
         ["__openclawNamespaces", input.namespaces],
         ["__openclawApiFiles", input.apiFiles ?? []],
         ["__openclawSwarmEnabled", input.swarmEnabled === true],
+        ["__openclawSkillSearchEnabled", input.skillSearchEnabled === true],
         ["__openclawMaxPendingToolCalls", input.config.maxPendingToolCalls],
       ] as const) {
         vm.hostToHandle(value).consume((handle) => vm.global.setProp(name, handle));
@@ -662,6 +664,7 @@ async function main(
               ? (input.namespaces as CodeModeNamespaceDescriptor[])
               : [],
             swarmEnabled: input.swarmEnabled === true,
+            skillSearchEnabled: input.skillSearchEnabled === true,
           },
           channel,
         ),

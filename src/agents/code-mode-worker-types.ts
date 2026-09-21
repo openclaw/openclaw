@@ -18,6 +18,7 @@ type CodeModeBridgeMethod =
   | "namespace"
   | "agentSpawn"
   | "agentWait"
+  | "skillsSearch"
   | "skillsList"
   | "skillsRead"
   | "sleep"
@@ -63,6 +64,7 @@ type CodeModeWorkerInput =
       apiFiles?: CodeModeApiVirtualFile[];
       namespaces: CodeModeNamespaceDescriptor[];
       swarmEnabled?: boolean;
+      skillSearchEnabled?: boolean;
     }
   | {
       kind: "resume";

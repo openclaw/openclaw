@@ -65,6 +65,7 @@ async function runCodeModeAgent(params: {
   programs: Array<string | { wait: true }>;
   hiddenTools: AnyAgentTool[];
   codeModeSkills?: CodeModeSkill[];
+  skillSearchEnabled?: boolean;
   harness?:
     | ReturnType<typeof createCodeModeHarness>
     | ReturnType<typeof createSubscribedCodeModeHarness>;
@@ -75,7 +76,11 @@ async function runCodeModeAgent(params: {
   ) => void;
 }) {
   const harness =
-    params.harness ?? createCodeModeHarness({ codeModeSkills: params.codeModeSkills });
+    params.harness ??
+    createCodeModeHarness({
+      codeModeSkills: params.codeModeSkills,
+      skillSearchEnabled: params.skillSearchEnabled,
+    });
   const { config, catalogRef } = harness;
   const ctx = "ctx" in harness ? harness.ctx : harness;
   const tools = params.abortSignal
@@ -561,6 +566,11 @@ describe("Code Mode agent-loop error recovery", () => {
       value: ["demo"],
     },
     { name: "skills.read", discovery: 'await skills.read("demo")', value: "Demo instructions" },
+    {
+      name: "skills.search",
+      discovery: '(await skills.search("demo")).map((skill) => skill.name)',
+      value: ["demo"],
+    },
   ])(
     "continues ordinary recovery after $name metadata and a guest error",
     async ({ discovery, value }) => {
@@ -569,6 +579,7 @@ describe("Code Mode agent-loop error recovery", () => {
       );
       const { agent, providerContexts } = await runCodeModeAgent({
         hiddenTools: [complete],
+        skillSearchEnabled: true,
         codeModeSkills: [
           {
             name: "demo",

@@ -227,7 +227,10 @@ describe("runEmbeddedAttempt skill policy projections", () => {
         skillEntries: [createFixtureSkillEntry("demo")],
         loadSkillEntries: vi.fn(() => [createFixtureSkillEntry("demo")]),
       });
-      hoisted.resolveSkillsPromptForRunMock.mockReturnValue(skillsPrompt);
+      hoisted.resolveSkillsContextForRunMock.mockReturnValue({
+        prompt: skillsPrompt,
+        skills: [createFixtureSkillEntry("demo").skill],
+      });
       await createContextEngineAttemptRunner({
         contextEngine: createContextEngineBootstrapAndAssemble(),
         sessionKey: session.sessionKey,
@@ -335,7 +338,10 @@ describe("runEmbeddedAttempt skill policy projections", () => {
         skillEntries: [createFixtureSkillEntry("demo")],
         loadSkillEntries: vi.fn(() => [createFixtureSkillEntry("demo")]),
       });
-      hoisted.resolveSkillsPromptForRunMock.mockReturnValue(skillsPrompt);
+      hoisted.resolveSkillsContextForRunMock.mockReturnValue({
+        prompt: skillsPrompt,
+        skills: [createFixtureSkillEntry("demo").skill],
+      });
 
       await createContextEngineAttemptRunner({
         contextEngine: createContextEngineBootstrapAndAssemble(),

@@ -5,7 +5,7 @@
  * copies instead of reusing host-path snapshots.
  */
 import path from "node:path";
-import { formatSkillsForPromptBounded } from "../../skills/loading/skill-prompt-limits.js";
+import { remapSkillsPrompt } from "../../skills/loading/skill-contract.js";
 import type {
   SkillEligibilityContext,
   SkillSnapshot,
@@ -175,9 +175,11 @@ export function resolveSandboxSkillRuntimeInputs(params: {
       skillsWorkspaceDir,
       skillsPromptWorkspaceDir,
     });
-    // An explicit empty snapshot excludes instructions; it has no host paths to remap.
+    // Only an empty catalog excludes instructions; an empty display can still have sources.
     let selectedSnapshot =
-      params.skillsSnapshot && !params.skillsSnapshot.prompt.trim()
+      params.skillsSnapshot &&
+      !params.skillsSnapshot.prompt.trim() &&
+      !params.skillsSnapshot.resolvedSkills?.length
         ? params.skillsSnapshot
         : undefined;
     if (params.skillsSnapshot?.librarySelections?.length) {
@@ -205,7 +207,7 @@ export function resolveSandboxSkillRuntimeInputs(params: {
       selectedSnapshot = {
         ...params.skillsSnapshot,
         resolvedSkills,
-        prompt: formatSkillsForPromptBounded({ skills: resolvedSkills, preserveOrder: true }),
+        prompt: remapSkillsPrompt(params.skillsSnapshot.prompt, resolvedSkills),
       };
     }
     return {

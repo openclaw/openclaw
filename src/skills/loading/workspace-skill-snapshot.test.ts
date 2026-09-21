@@ -347,7 +347,6 @@ describe("buildSkillSnapshot", () => {
         snapshot.resolvedSkills?.map((skill) => skill.filePath),
       );
       const codeModeSkills = resolveCodeModeSkills({
-        skillsPrompt: snapshot.prompt,
         candidates: fallback.skillEntries.map((entry) => entry.skill),
       });
       const projectSkill = codeModeSkills.find((skill) => skill.name === "project-only");
