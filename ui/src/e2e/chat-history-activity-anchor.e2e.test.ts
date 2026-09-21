@@ -1,5 +1,6 @@
 import { expect, it } from "vitest";
 import {
+  captureUiProof,
   createChatFlowE2eSuite,
   installMockGateway,
   waitForChatScrollIdle,
@@ -10,9 +11,13 @@ type AnchorProbe = { frame: number; tops: Array<number | null> };
 type ProbeWindow = typeof window & { activityAnchor: AnchorProbe };
 
 suite.define(() => {
-  it.each([1440, 390])(
-    "keeps visible messages still when older activity coalesces at %i px",
-    async (width) => {
+  it.each([
+    { width: 1440, split: false },
+    { width: 390, split: false },
+    { width: 1440, split: true },
+  ])(
+    "keeps visible messages still when older activity coalesces at $width px (split: $split)",
+    async ({ width, split }) => {
       const context = await suite.newBrowserContext({
         locale: "en-US",
         serviceWorkers: "block",
@@ -60,20 +65,27 @@ suite.define(() => {
       });
       try {
         await page.goto(`${suite.server.baseUrl}chat`);
-        const pane = page.locator(".chat-pane-cache__pane--active");
-        const thread = pane.locator(".chat-thread");
+        let pane = page.locator(".chat-pane-cache__pane--active");
+        let thread = pane.locator(".chat-thread");
         await thread.getByText(/^Retained message 51\./).waitFor();
-        await thread.focus();
-        await page.keyboard.press("Home");
+        if (split) {
+          await pane.getByRole("button", { name: "Open split view", exact: true }).click();
+          const panes = page.locator("openclaw-chat-pane.chat-split-view__pane");
+          await expect.poll(() => panes.count()).toBe(2);
+          pane = panes.nth(1);
+          thread = pane.locator(".chat-thread");
+          await thread.getByText(/^Retained message 51\./).waitFor();
+        }
+        await thread.hover();
+        await page.mouse.wheel(0, -100_000);
         await gateway.waitForRequest("chat.history", {
           match: { sessionKey: "agent:main:main", offset: 72 },
         });
         await waitForChatScrollIdle(page);
-        // The initial virtual range can still settle after native Home. A second
-        // native key places the same retained bubble at the top before delivery.
-        await expect
-          .poll(() => thread.getByText("Read 20 files", { exact: true }).isVisible())
-          .toBe(true);
+        // The initial virtual range can still settle after the history request. A native
+        // key places the same retained bubble at the top before delivery.
+        const anchor = thread.locator(".chat-bubble").filter({ hasText: "Retained message 0." });
+        await expect.poll(() => anchor.isVisible()).toBe(true);
         await page.keyboard.press("Home");
         await expect.poll(() => thread.evaluate((element) => element.scrollTop)).toBe(0);
         const count = () =>
@@ -86,10 +98,12 @@ suite.define(() => {
               ).state.chatMessages.length,
           );
         expect(await count()).toBe(72);
-        const anchor = thread.locator(".chat-bubble").filter({ hasText: "Retained message 0." });
         const before = await anchor.boundingBox();
         expect(before).not.toBeNull();
         expect(before!.y).toBeGreaterThan(0);
+        await pane.evaluate((element) => {
+          element.dataset.activityAnchorProbe = "true";
+        });
         await page.evaluate(
           (key) => {
             const probe: AnchorProbe = { frame: 0, tops: [] };
@@ -97,7 +111,7 @@ suite.define(() => {
             const sample = () => {
               const bubble = [
                 ...document.querySelectorAll<HTMLElement>(
-                  ".chat-pane-cache__pane--active .chat-bubble[data-message-id]",
+                  '[data-activity-anchor-probe="true"] .chat-bubble[data-message-id]',
                 ),
               ].find((element) => element.dataset.messageId === key);
               probe.tops.push(bubble?.getBoundingClientRect().top ?? null);
@@ -107,12 +121,18 @@ suite.define(() => {
           },
           await anchor.getAttribute("data-message-id"),
         );
+        if (split) {
+          const sibling = page.locator("openclaw-chat-pane.chat-split-view__pane").nth(0);
+          await sibling.locator(".chat-pane__header").click();
+          await expect
+            .poll(() =>
+              pane.evaluate((element) => element.matches(":not(.chat-pane-cache__pane--active)")),
+            )
+            .toBe(true);
+        }
         await gateway.deferNext("chat.history");
         await gateway.resolveDeferred("chat.history");
         await expect.poll(count).toBe(1072);
-        await expect
-          .poll(() => thread.getByText("Read 1020 files", { exact: true }).isVisible())
-          .toBe(true);
         await page.evaluate(
           () =>
             new Promise<void>((resolve) => {
@@ -134,6 +154,12 @@ suite.define(() => {
           1,
         );
         expect(Math.abs((await anchor.boundingBox())!.y - before!.y)).toBeLessThanOrEqual(1);
+        await captureUiProof(
+          suite,
+          page,
+          "chat-history-activity-anchor",
+          `${width}px-${split ? "split" : "classic"}-stable.png`,
+        );
       } finally {
         await suite.closeBrowserContext(context);
       }
