@@ -337,6 +337,7 @@ function buildUsageWithNoCost(params: {
   cacheWrite?: number;
   cacheTelemetry?: Usage["cacheTelemetry"];
   totalTokens?: number;
+  contextUsage?: Usage["contextUsage"];
 }): Usage {
   const input = params.input ?? 0;
   const output = params.output ?? 0;
@@ -355,6 +356,7 @@ function buildUsageWithNoCost(params: {
     cacheTelemetry,
     totalTokens: params.totalTokens ?? input + output,
     cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 },
+    ...(params.contextUsage ? { contextUsage: params.contextUsage } : {}),
   };
 }
 
@@ -509,6 +511,21 @@ function resolveUsageCount(
 
 function resolveOptionalUsageCount(value: number | undefined): number | undefined {
   return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
+}
+
+function hasMeasuredOllamaUsage(response: OllamaChatResponse): boolean {
+  // Ollama reports prompt_eval_count and eval_count on every terminal /api/chat
+  // response. Only a valid measured pair may anchor the context precheck; a
+  // missing or invalid counter falls back to a character estimate and must not
+  // be promoted into an authoritative context snapshot.
+  return (
+    typeof response.prompt_eval_count === "number" &&
+    Number.isFinite(response.prompt_eval_count) &&
+    response.prompt_eval_count >= 0 &&
+    typeof response.eval_count === "number" &&
+    Number.isFinite(response.eval_count) &&
+    response.eval_count >= 0
+  );
 }
 
 type InputContentPart =
@@ -881,6 +898,16 @@ export function buildAssistantMessage(
   // Ollama includes cached tokens in prompt_eval_count; OpenClaw records input as uncached.
   const cacheRead =
     reportedCacheRead === undefined ? undefined : Math.min(reportedCacheRead, promptTokens);
+  // Anchor the mid-turn context precheck on Ollama's measured prompt size when
+  // both counters are present; otherwise the precheck falls back to a character
+  // estimate (~2x too high) and compacts well before the real context budget.
+  const contextUsage = hasMeasuredOllamaUsage(response)
+    ? {
+        state: "available" as const,
+        promptTokens,
+        totalTokens: promptTokens + outputTokens,
+      }
+    : undefined;
 
   return buildStreamAssistantMessage({
     model: modelInfo,
@@ -896,6 +923,7 @@ export function buildAssistantMessage(
             cacheWrite: 0,
             totalTokens: promptTokens + outputTokens,
           }),
+      ...(contextUsage ? { contextUsage } : {}),
     }),
   });
 }

@@ -138,6 +138,53 @@ describe("buildAssistantMessage", () => {
     const msg = buildAssistantMessage(response, MODEL_INFO);
     expect(msg.stopReason).toBe("length");
   });
+
+  it("anchors contextUsage on measured prompt/eval counters", () => {
+    const response = makeOllamaResponse({ content: "ok" });
+    const msg = buildAssistantMessage(response, MODEL_INFO);
+    expect(msg.usage.contextUsage).toEqual({
+      state: "available",
+      promptTokens: 100,
+      totalTokens: 150,
+    });
+  });
+
+  it("omits contextUsage when the prompt counter is missing", () => {
+    const response = {
+      model: "qwen3.5",
+      created_at: new Date().toISOString(),
+      message: { role: "assistant", content: "ok" },
+      done: true,
+      eval_count: 50,
+    };
+    const msg = buildAssistantMessage(response, MODEL_INFO);
+    expect(msg.usage.contextUsage).toBeUndefined();
+  });
+
+  it("omits contextUsage when the eval counter is missing", () => {
+    const response = {
+      model: "qwen3.5",
+      created_at: new Date().toISOString(),
+      message: { role: "assistant", content: "ok" },
+      done: true,
+      prompt_eval_count: 100,
+    };
+    const msg = buildAssistantMessage(response, MODEL_INFO);
+    expect(msg.usage.contextUsage).toBeUndefined();
+  });
+
+  it("omits contextUsage when counters are not valid measurements", () => {
+    const response = {
+      model: "qwen3.5",
+      created_at: new Date().toISOString(),
+      message: { role: "assistant", content: "ok" },
+      done: true,
+      prompt_eval_count: -1,
+      eval_count: 50,
+    };
+    const msg = buildAssistantMessage(response, MODEL_INFO);
+    expect(msg.usage.contextUsage).toBeUndefined();
+  });
 });
 
 describe("createOllamaStreamFn thinking events", () => {
