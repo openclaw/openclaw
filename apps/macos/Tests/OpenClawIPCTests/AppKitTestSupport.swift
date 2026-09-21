@@ -23,6 +23,7 @@ enum AppKitTestSupport {
     }
 
     static func startApplication() async throws {
+        FileHandle.standardError.write(Data("[appkit-test] preparing application\n".utf8))
         let application = self.application
         guard !application.isRunning else { return }
         await withCheckedContinuation { continuation in
@@ -30,11 +31,17 @@ enum AppKitTestSupport {
             // Otherwise macOS 27 can stop Swift's outer loop and exit before test completion.
             RunLoop.main.perform(inModes: [.common]) {
                 MainActor.assumeIsolated {
-                    continuation.resume()
+                    FileHandle.standardError.write(Data("[appkit-test] entering application run loop\n".utf8))
+                    let started = Timer(timeInterval: 0, repeats: false) { _ in
+                        continuation.resume()
+                    }
+                    RunLoop.main.add(started, forMode: .common)
                     application.run()
+                    FileHandle.standardError.write(Data("[appkit-test] application run loop returned\n".utf8))
                 }
             }
         }
+        FileHandle.standardError.write(Data("[appkit-test] resumed inside application run loop\n".utf8))
         try #require(application.isRunning)
     }
 
