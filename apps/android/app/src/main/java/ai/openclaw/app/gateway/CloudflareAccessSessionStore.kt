@@ -15,7 +15,7 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import java.util.UUID
 
-/** One browser attempt and revisioned ingress grant per authority; Gateway pairing is separately owned. */
+/** One ingress grant per authority; matching Access applications share a browser attempt. */
 internal class CloudflareAccessSessionStore(
   private val scope: CoroutineScope,
   private val persistence: Persistence,
@@ -49,6 +49,7 @@ internal class CloudflareAccessSessionStore(
 
   private class Attempt(
     val id: UUID,
+    val application: CloudflareAccessApplication,
     val task: Deferred<Snapshot>,
   )
 
@@ -95,7 +96,12 @@ internal class CloudflareAccessSessionStore(
   ): Deferred<Snapshot> =
     mutex.withLock {
       val origin = application.origin
-      attempts[origin]?.let { return@withLock it.task }
+      attempts[origin]?.let {
+        if (it.application == application) return@withLock it.task
+        // Different path policies may share an authority, but not a browser transfer.
+        // Old cleanup waits for this Mutex and only owns its captured attempt ID.
+        cancelAttempt(origin)
+      }
       val id = UUID.randomUUID()
       val task =
         scope.async(start = CoroutineStart.UNDISPATCHED) {
@@ -139,7 +145,7 @@ internal class CloudflareAccessSessionStore(
             throw error
           }
         }
-      attempts[origin] = Attempt(id, task)
+      attempts[origin] = Attempt(id, application, task)
       setState(origin, State.SigningIn)
       ++revision
       task

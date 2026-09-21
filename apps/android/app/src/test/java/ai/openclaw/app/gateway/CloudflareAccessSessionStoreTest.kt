@@ -2,12 +2,20 @@ package ai.openclaw.app.gateway
 
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.supervisorScope
+import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.withContext
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
@@ -52,7 +60,7 @@ class CloudflareAccessSessionStoreTest {
           grant.await()
         }, retireTransports = { storage.events += "retire" })
       val first = store.signIn(application) {}
-      val second = store.signIn(application) {}
+      val second = store.signIn(application.copy()) {}
       assertSame(first, second)
       runCurrent()
       assertEquals(1, attempts)
@@ -63,6 +71,114 @@ class CloudflareAccessSessionStoreTest {
       assertSame(snapshot, store.snapshot(application.origin))
       assertEquals(CloudflareAccessSessionStore.State.Authenticated, store.states.value[application.origin])
     }
+
+  @Test fun differentApplicationsReplaceTheAttemptWithoutAcceptingItsLateGrant() =
+    runTest {
+      for (unconfined in listOf(false, true)) {
+        for (differentIssuer in listOf(false, true)) {
+          val replacement =
+            if (differentIssuer) {
+              application.copy(issuer = CloudflareAccessJWT.issuer("other.cloudflareaccess.com"))
+            } else {
+              application.copy(audience = "other-audience")
+            }
+          val storage = Storage()
+          val firstGrant = CompletableDeferred<CloudflareAccessSession>()
+          val secondGrant = CompletableDeferred<CloudflareAccessSession>()
+          val owner = SupervisorJob()
+          val scope = CoroutineScope(owner + if (unconfined) Dispatchers.Unconfined else StandardTestDispatcher(testScheduler))
+          val applications = mutableListOf<CloudflareAccessApplication>()
+          val firstSession = CloudflareAccessTestTokens.session()
+          val secondSession = sessionFor(replacement)
+          val store =
+            CloudflareAccessSessionStore(scope, storage.persistence, authenticate = { selected, _ ->
+              applications += selected
+              if (selected == application) {
+                withContext(NonCancellable) { firstGrant.await() }
+              } else {
+                assertEquals(replacement, selected)
+                secondGrant.await()
+              }
+            }, retireTransports = { storage.events += "retire" })
+          try {
+            val first = store.signIn(application) {}
+            runCurrent()
+            assertEquals(listOf(application), applications)
+            val second = store.signIn(replacement) {}
+            assertNotSame(first, second)
+            assertTrue(first.isCancelled)
+            assertSame(second, store.signIn(replacement.copy()) {})
+            runCurrent()
+            assertEquals(listOf(application, replacement), applications)
+            secondGrant.complete(secondSession)
+            val snapshot = second.await()
+            assertEquals(replacement, snapshot.session.application)
+
+            // A ignores cancellation until after B commits. Its exact attempt ID
+            // must fence both persistence and terminal cleanup when it returns.
+            firstGrant.complete(firstSession)
+            assertTrue(runCatching { first.await() }.exceptionOrNull() is CancellationException)
+            assertSame(snapshot, store.snapshot(application.origin))
+            assertEquals(CloudflareAccessSessionStore.State.Authenticated, store.states.value[application.origin])
+            assertEquals(listOf("retire", "delete", "save"), storage.events)
+            val persisted = CloudflareAccessSession.decode(checkNotNull(storage.values[application.origin]))
+            assertEquals(replacement, persisted.application)
+            assertEquals(secondSession.subject, persisted.subject)
+          } finally {
+            firstGrant.complete(firstSession)
+            secondGrant.complete(secondSession)
+            owner.cancelAndJoin()
+          }
+        }
+      }
+    }
+
+  @Test fun differentApplicationBeforeDispatchDoesNotStartOrRetainTheOldTransfer() =
+    runTest {
+      val replacement = application.copy(audience = "other-audience")
+      val session = sessionFor(replacement)
+      val grant = CompletableDeferred<CloudflareAccessSession>()
+      val applications = mutableListOf<CloudflareAccessApplication>()
+      val storage = Storage()
+      val store =
+        CloudflareAccessSessionStore(backgroundScope, storage.persistence, authenticate = { selected, _ ->
+          applications += selected
+          grant.await()
+        }, retireTransports = { storage.events += "retire" })
+      val first = store.signIn(application) {}
+      val second = store.signIn(replacement) {}
+      try {
+        assertNotSame(first, second)
+        assertTrue(first.isCancelled)
+        assertTrue(applications.isEmpty())
+        runCurrent()
+        assertTrue(runCatching { first.await() }.exceptionOrNull() is CancellationException)
+        assertEquals(listOf(replacement), applications)
+        assertSame(second, store.signIn(replacement.copy()) {})
+        grant.complete(session)
+        val snapshot = second.await()
+        assertSame(snapshot, store.snapshot(application.origin))
+        assertEquals(listOf("retire", "delete", "save"), storage.events)
+      } finally {
+        grant.complete(session)
+        first.cancelAndJoin()
+        second.cancelAndJoin()
+      }
+    }
+
+  private fun sessionFor(application: CloudflareAccessApplication): CloudflareAccessSession {
+    val subject = "replacement-subject"
+    val expires = System.currentTimeMillis() / 1000.0 + 3600
+    val claims =
+      JsonObject(
+        CloudflareAccessTestTokens.claims(subject, expires) +
+          mapOf(
+            "iss" to JsonPrimitive(application.issuer.toString()),
+            "aud" to JsonArray(listOf(JsonPrimitive(application.audience))),
+          ),
+      )
+    return CloudflareAccessSession(application, subject, expires, CloudflareAccessTestTokens.token(claims))
+  }
 
   @Test fun cancelledDeferredBeforeDispatchAllowsFreshCoalescedSignIn() =
     runTest {
