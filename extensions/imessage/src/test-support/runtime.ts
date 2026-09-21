@@ -1,6 +1,5 @@
 // Imessage plugin module implements runtime behavior.
 import fs from "node:fs";
-import path from "node:path";
 import type {
   OpenKeyedStoreOptions,
   PluginStateSyncKeyedStore,
@@ -14,8 +13,12 @@ import {
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import type { PluginRuntime } from "openclaw/plugin-sdk/runtime-store";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
+import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterAll, vi } from "vitest";
 import { setIMessageRuntime } from "../runtime.js";
+
+// Vitest runs afterAll hooks in reverse order, so databases close before directory removal.
+const tempDirs = useAutoCleanupTempDirTracker(afterAll);
 
 afterAll(async () => {
   const { closeOpenClawStateDatabaseAsync } =
@@ -25,7 +28,7 @@ afterAll(async () => {
 
 function createIMessageTestEnv(): NodeJS.ProcessEnv & { OPENCLAW_STATE_DIR: string } {
   const stateDir = fs.realpathSync(
-    fs.mkdtempSync(path.join(resolvePreferredOpenClawTmpDir(), "openclaw-imessage-state-")),
+    tempDirs.make("openclaw-imessage-state-", resolvePreferredOpenClawTmpDir()),
   );
   return { ...process.env, OPENCLAW_STATE_DIR: stateDir };
 }
