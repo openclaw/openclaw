@@ -11,7 +11,22 @@ describe("cognitive dynamics profiles", () => {
     expect(first.contextBoundary).toBe("artifact-only");
     expect(first.mutationBudget).toBe(0);
     expect(first.verificationWeight).toBe(1);
+    expect(first.requirements).toEqual({
+      sandbox: "require",
+      candidateDigest: "required",
+      artifactRefs: "required",
+    });
     expect(first.digestInput).toMatch(/^sha256:[0-9a-f]{64}$/);
+  });
+
+  it("keeps enforcement requirements generic instead of attaching authority to profile names", () => {
+    for (const id of ["explorer", "builder", "critic", "glass-breaker"] as const) {
+      expect(resolveDynamicsProfile(id).requirements).toEqual({
+        sandbox: "inherit",
+        candidateDigest: "optional",
+        artifactRefs: "optional",
+      });
+    }
   });
 
   it("rejects unknown profiles instead of accepting arbitrary dynamics", () => {
@@ -20,10 +35,10 @@ describe("cognitive dynamics profiles", () => {
     );
   });
 
-  it("resolves the deliberately small documented profile catalog", () => {
-    for (const id of ["explorer", "builder", "critic", "independent-verifier", "glass-breaker"]) {
-      expect(resolveDynamicsProfile(id).id).toBe(id);
-    }
+  it("ships a deliberately small first profile catalog", () => {
+    const ids = ["explorer", "builder", "critic", "independent-verifier", "glass-breaker"] as const;
+
+    expect(ids.map((id) => resolveDynamicsProfile(id).id)).toEqual(ids);
   });
 });
 
