@@ -313,6 +313,8 @@ export function createMergeOutcomeFixtureHarness() {
       admin: false,
       audit: false,
       gates: "pass",
+      requiredCheckName: "CI",
+      refusalCapture: "error: string rewrite protection blocked unsafe input\n",
       ciExit: 0,
       duringChecks: null as null | { head?: string; artifact?: string; bodyPath?: string },
       review: true,
@@ -533,7 +535,7 @@ else if(args[0]==="pr"&&args[1]==="checks") {
   if(s.duringChecks?.bodyPath) fs.writeFileSync(s.duringChecks.bodyPath,"Changed later");
   if(s.duringChecks?.head) s.pr.headRefOid=s.duringChecks.head;
   if(s.duringChecks?.artifact) fs.appendFileSync(process.env.FIXTURE_REPO+"/.worktrees/pr-123/.local/"+s.duringChecks.artifact,"\\n# changed during checks\\n");
-  out([{name:"CI",bucket:s.gates,state:s.gates==="pass"?"SUCCESS":"FAILURE"}]);}
+  out([{name:s.requiredCheckName,bucket:s.gates,state:s.gates==="pass"?"SUCCESS":"FAILURE"}]);}
 else if(args[0]==="pr"&&args[1]==="view") {
   const fields=args[args.indexOf("--json")+1].split(",");
   if(fields.includes("headRefName")&&!fields.includes("headRefOid")) fail("missing live cleanup metadata");
@@ -543,6 +545,10 @@ else if(args[0]==="pr"&&args[1]==="view") {
   if(args.includes("--jq")) {const q=args[args.indexOf("--jq")+1];out(q===".state"?pr.state:q===".mergeCommit.oid"?pr.mergeCommit?.oid??"null":pr.url);}
   else out(pr);
 } else if((args[0]==="pr"&&args[1]==="merge")||restMerge||graphqlMerge) {
+  if(s.mode==="octopool-refusal") {
+    if(process.env.OCTOPOOL_DIAGNOSTICS!=="1"||!args.includes("--subject")) fail("missing protected merge publication inputs");
+    save();process.stderr.write(s.refusalCapture);process.exit(1);
+  }
   s.mutations++;
   if(s.quotaAt==="mutation") {s.quotaAt="observe";quota();}
   if(restMerge) {
@@ -620,7 +626,7 @@ else if(args[0]==="pr"&&args[1]==="view") {
   s.reads++;save();
   if(s.unavailable) fail("metadata unavailable");
   if(s.invalid) {out({data:{repository:{}}});process.exit(0);}
-  if(args.some(x=>x.includes("viewerMergeBodyText"))) {out({data:{repository:{pullRequest:{...s.pr,viewerMergeBodyText:s.previewBody}}}});}
+  if(args.some(x=>x.includes("viewerMergeBodyText"))) {out({data:{repository:{pullRequest:{...s.pr,viewerMergeHeadlineText:"Fixture merge headline",viewerMergeBodyText:s.previewBody}}}});}
   else {
     if(!args.includes("Cache-Control: max-age=0")) fail("missing independent fresh merge observation");
     if(args.find(arg=>arg.startsWith("query="))!==${JSON.stringify(landingSnapshotQuery)}) fail("landing snapshot query is not supported by the shipped Octopool shim");
@@ -725,7 +731,7 @@ begin_pr_operation_validation_phase
 if [ -n "\${5:-}" ]; then
   merge_complete 123 "$5"
 else
-  merge_run 123 "\${1:-false}" "\${2:-}" "\${3:-}" "\${4:-}" "\${6:-}" "\${7:-false}"
+  merge_run 123 "\${1:-false}" "\${2:-}" "\${3:-}" "\${4:-}" "\${6:-}" "\${7:-false}" "\${8:-}"
 fi
 `,
     );
@@ -760,6 +766,7 @@ fi
       completionOid = "",
       legacyDirectory = "",
       cancelAuto = false,
+      refusalDirectory = "",
     ) => {
       const result = spawnSync(
         nodeExecutable,
@@ -774,6 +781,7 @@ fi
           completionOid,
           legacyDirectory,
           String(cancelAuto),
+          refusalDirectory,
         ],
         {
           cwd,

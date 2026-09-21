@@ -46,9 +46,9 @@ export async function createPreparedTestApprovalManager<TPayload = ExecApprovalR
   return fixture;
 }
 
-function createTestApprovalFixture<TPayload>(
+export function createTestApprovalFixture<TPayload = ExecApprovalRequestPayload>(
   test: TestContext,
-  options: Omit<ExecApprovalManagerOptions<TPayload>, "persistence">,
+  options: Omit<ExecApprovalManagerOptions<TPayload>, "persistence"> = {},
 ) {
   test.signal.throwIfAborted();
   const restoreClock = installTestApprovalClock();
@@ -56,10 +56,22 @@ function createTestApprovalFixture<TPayload>(
   const fixture = createFixtureLifetime();
   let manager: ExecApprovalManager<TPayload> | undefined;
   let databasePath: string | undefined = undefined;
+  const requests: Promise<unknown>[] = [];
+  let body: Promise<unknown> | undefined;
+  async function drainRequests() {
+    try {
+      await manager?.drain();
+    } finally {
+      // Manager retirement settles observers; their outer RPC/policy continuations
+      // still own the database until they have unwound.
+      await Promise.allSettled(requests);
+    }
+  }
   // Register on the actual test, never once through a cached helper module.
   test.onTestFinished(() => {
     void fixture.verifyCleanup(async () => {
-      await manager?.drain();
+      await drainRequests();
+      await Promise.allSettled([body]);
       if (databasePath) {
         await closeOpenClawStateDatabaseByPathAsync(databasePath);
       }
@@ -79,7 +91,26 @@ function createTestApprovalFixture<TPayload>(
       ...options,
       persistence: { runtimeEpoch: randomUUID(), databaseOptions },
     });
-    return { manager, databaseOptions };
+    return {
+      manager,
+      databaseOptions,
+      track: <T>(request: Promise<T>) => {
+        requests.push(request);
+        void request.catch(() => {});
+        return request;
+      },
+      run: <T>(callback: () => Promise<T>) => {
+        const work = fixture.run(async () => {
+          try {
+            return await callback();
+          } finally {
+            await drainRequests();
+          }
+        });
+        body = work;
+        return work;
+      },
+    };
   } catch (error) {
     // A failed open can include failed closure of an unpublished handle.
     // Retain its inputs rather than certify cleanup from an empty cache.

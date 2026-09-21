@@ -79,6 +79,7 @@ import { createUnitFastIsolatedVitestConfig } from "./vitest/vitest.unit-fast-is
 import unitFastRootConfig from "./vitest/vitest.unit-fast-root.config.ts";
 import { createUnitFastVitestConfig } from "./vitest/vitest.unit-fast.config.ts";
 
+const defaultPool = process.platform === "win32" ? "forks" : "threads";
 const patternFiles = createPatternFileHelper("openclaw-vitest-projects-config-");
 const scopedGatewayMethodsIsolatedTestFiles = [
   "server-methods/chat-metadata-runtime.cache.test.ts",
@@ -205,7 +206,7 @@ describe("projects vitest config", () => {
       ]);
       expect(projects.map((project) => project.pool)).toEqual(["forks", "forks"]);
       const original = requireTestConfig(createGatewayVitestConfig(env));
-      expect(original.pool).toBe("threads");
+      expect(original.pool).toBe(defaultPool);
       for (const project of projects) {
         expect(project.runner).toBe(original.runner);
         expect(project.setupFiles).toEqual(original.setupFiles);
@@ -546,25 +547,26 @@ describe("projects vitest config", () => {
   });
 
   it("keeps root projects on their expected pool defaults", () => {
-    expect(requireTestConfig(createGatewayVitestConfig()).pool).toBe("threads");
-    expect(requireTestConfig(createAgentsVitestConfig()).pool).toBe("threads");
-    expect(requireTestConfig(createAgentsCoreVitestConfig()).pool).toBe("threads");
-    expect(requireTestConfig(createAgentsEmbeddedVitestConfig()).pool).toBe("threads");
+    expect(sharedVitestConfig.test.pool).toBe(defaultPool);
+    expect(requireTestConfig(createGatewayVitestConfig()).pool).toBe(defaultPool);
+    expect(requireTestConfig(createAgentsVitestConfig()).pool).toBe(defaultPool);
+    expect(requireTestConfig(createAgentsCoreVitestConfig()).pool).toBe(defaultPool);
+    expect(requireTestConfig(createAgentsEmbeddedVitestConfig()).pool).toBe(defaultPool);
     expect(requireTestConfig(createAgentsEmbeddedIncompleteTurnVitestConfig()).pool).toBe(
-      "threads",
+      defaultPool,
     );
     expect(requireTestConfig(createAgentsEmbeddedOverflowCompactionVitestConfig()).pool).toBe(
-      "threads",
+      defaultPool,
     );
-    expect(requireTestConfig(createAgentsEmbeddedRunVitestConfig()).pool).toBe("threads");
-    expect(requireTestConfig(createAgentsSupportVitestConfig()).pool).toBe("threads");
-    expect(requireTestConfig(createAgentsToolsVitestConfig()).pool).toBe("threads");
-    expect(requireTestConfig(createCommandsLightVitestConfig()).pool).toBe("threads");
+    expect(requireTestConfig(createAgentsEmbeddedRunVitestConfig()).pool).toBe(defaultPool);
+    expect(requireTestConfig(createAgentsSupportVitestConfig()).pool).toBe(defaultPool);
+    expect(requireTestConfig(createAgentsToolsVitestConfig()).pool).toBe(defaultPool);
+    expect(requireTestConfig(createCommandsLightVitestConfig()).pool).toBe(defaultPool);
     expect(requireTestConfig(createCommandsVitestConfig()).pool).toBe("forks");
-    expect(requireTestConfig(createPluginSdkLightVitestConfig()).pool).toBe("threads");
-    expect(requireTestConfig(createUnitFastVitestConfig()).pool).toBe("threads");
+    expect(requireTestConfig(createPluginSdkLightVitestConfig()).pool).toBe(defaultPool);
+    expect(requireTestConfig(createUnitFastVitestConfig()).pool).toBe(defaultPool);
     expect(requireTestConfig(createContractsVitestConfig(pluginContractPatterns)).pool).toBe(
-      "threads",
+      defaultPool,
     );
   });
 
@@ -585,6 +587,7 @@ describe("projects vitest config", () => {
         },
       }),
     ).toEqual({
+      pool: "threads",
       fileParallelism: false,
       maxWorkers: 1,
     });
@@ -600,15 +603,34 @@ describe("projects vitest config", () => {
         },
       }),
     ).toEqual({
+      pool: "threads",
       fileParallelism: true,
       maxWorkers: 3,
     });
   });
 
+  it.each([
+    { isCI: true, override: "4", maxWorkers: 4 },
+    { isCI: true, override: undefined, maxWorkers: 2 },
+    { isCI: false, override: undefined, maxWorkers: 4 },
+  ])(
+    "selects process workers on Windows without reducing parallelism ($isCI, $override)",
+    (scenario) => {
+      expect(
+        resolveSharedVitestWorkerConfig({
+          env: { OPENCLAW_VITEST_MAX_WORKERS: scenario.override },
+          isCI: scenario.isCI,
+          isWindows: true,
+          localScheduling: { fileParallelism: true, maxWorkers: 4, throttledBySystem: false },
+        }),
+      ).toEqual({ pool: "forks", fileParallelism: true, maxWorkers: scenario.maxWorkers });
+    },
+  );
+
   it("keeps contract shards on the non-isolated runner by default", () => {
     const config = createContractsVitestConfig(pluginContractPatterns);
     const testConfig = requireTestConfig(config);
-    expect(testConfig.pool).toBe("threads");
+    expect(testConfig.pool).toBe(defaultPool);
     expect(testConfig.isolate).toBe(false);
     expect(normalizeConfigPath(testConfig.runner)).toBe("test/non-isolated-runner.ts");
     const session = requireTestConfig(contractChannelSessionConfig);
@@ -907,9 +929,9 @@ describe("projects vitest config", () => {
     },
   );
 
-  it("keeps the bundled lane on thread workers with the non-isolated runner", () => {
+  it("keeps the bundled lane on the platform pool with the non-isolated runner", () => {
     const testConfig = requireTestConfig(bundledConfig);
-    expect(testConfig.pool).toBe("threads");
+    expect(testConfig.pool).toBe(defaultPool);
     expect(testConfig.isolate).toBe(false);
     expect(normalizeConfigPath(testConfig.runner)).toBe("test/non-isolated-runner.ts");
   });

@@ -123,6 +123,7 @@ baseline_spec=""
 baseline_version=""
 baseline_plugin_version=""
 baseline_plugin_tarball=""
+published_plugin_registry_args=()
 baseline_companion_availability=""
 baseline_version_expected="0"
 candidate_version=""
@@ -716,6 +717,13 @@ assert_prepublish_plugin_install() {
   if [ -n "$baseline_plugin_tarball" ] && [ "$baseline_plugin_version" = "$candidate_version" ]; then
     published_companion_tarball="$baseline_plugin_tarball"
   fi
+  local index
+  for ((index = 0; index < ${#published_plugin_registry_args[@]}; index += 3)); do
+    if [ "${published_plugin_registry_args[index]}" = "@openclaw/$plugin_id" ] &&
+      [ "${published_plugin_registry_args[index + 1]}" = "$candidate_version" ]; then
+      published_companion_tarball="${published_plugin_registry_args[index + 2]}"
+    fi
+  done
   # Verify the selected archive, including a retained published companion. An empty
   # ClawHub ledger alone cannot prove that the npm primary installed successfully.
   node scripts/e2e/lib/upgrade-survivor/assertions.mjs \
@@ -849,6 +857,20 @@ NODE
 
   if [ "${#registry_args[@]}" -eq 0 ]; then
     [ -n "${OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR:-}" ] || return 0
+  fi
+
+  if [ "$stage" = "candidate" ] && [ -n "${OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR:-}" ]; then
+    local published_rows package_name package_version package_tarball
+    published_rows="$(openclaw_e2e_maybe_timeout "$COMMAND_TIMEOUT" \
+      node scripts/e2e/lib/upgrade-survivor/published-plugin-registry.mjs \
+      "$OPENCLAW_PREPUBLISH_PLUGIN_REGISTRY_DIR" "$fixture_root/published")" || return "$?"
+    published_plugin_registry_args=()
+    if [ -n "$published_rows" ]; then
+      while IFS=$'\t' read -r package_name package_version package_tarball; do
+        published_plugin_registry_args+=("$package_name" "$package_version" "$package_tarball")
+      done <<<"$published_rows"
+      registry_args+=("${published_plugin_registry_args[@]}")
+    fi
   fi
 
   if [ "$SCENARIO" = "legacy-operator-state" ] || [ "$SCENARIO" = "msteams-polls" ]; then
@@ -2019,7 +2041,7 @@ run_live_openai() {
       --session-id upgrade-survivor-live-openai \
       --model "$model" \
       --message "Reply with exactly $marker and no other text." \
-      --thinking off \
+      --thinking low \
       --timeout "$timeout_seconds" \
       --json
   ) >"$LIVE_OPENAI_JSON" 2>"$LIVE_OPENAI_ERR" || status=$?

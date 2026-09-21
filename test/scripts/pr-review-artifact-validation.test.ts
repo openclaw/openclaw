@@ -206,7 +206,7 @@ function runMergeVerification(
         '  test "$*" = "pr view 42 --json number,url,title,state,isDraft,author,baseRefName,baseRefOid,baseRepository,headRefName,headRefOid,headRepository,headRepositoryOwner,isCrossRepository" || return 99',
         `  printf '%s\\n' '${JSON.stringify(observation)}'`,
         "}",
-        `merge_verify 42 '{"replacementHead":"","autoMergeRequested":false,"observation":null}' || exit 1`,
+        `merge_verify 42 '{"replacementHead":"","autoMergeRequested":false,"observation":null,"qualifiedRefusal":false}' || exit 1`,
       ].join("\n"),
       "pr-merge-verification",
       mergeScript,

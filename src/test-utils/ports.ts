@@ -55,7 +55,7 @@ function getPortPool(): PortPool {
   });
 }
 
-async function probePort(port: number): Promise<PortProbe> {
+export async function probeTestPort(port: number): Promise<PortProbe> {
   if (!Number.isFinite(port) || port <= 0 || port > 65535) {
     return { free: false };
   }
@@ -69,14 +69,14 @@ async function probePort(port: number): Promise<PortProbe> {
 }
 
 export async function isPortFree(port: number): Promise<boolean> {
-  return (await probePort(port)).free;
+  return (await probeTestPort(port)).free;
 }
 
 async function isPortBlockFree(start: number, offsets: number[]): Promise<boolean> {
   if (offsets.some((offset) => httpBlockedPorts.has(start + offset))) {
     return false;
   }
-  const probes = await Promise.all(offsets.map((offset) => probePort(start + offset)));
+  const probes = await Promise.all(offsets.map((offset) => probeTestPort(start + offset)));
   for (const probe of probes) {
     // Windows can deny individual candidates; port-zero allocation still surfaces global failures.
     if (

@@ -44,6 +44,10 @@ const jobs = {
 const rolePath = "GET /repos/openclaw/openclaw/collaborators/maintainer/permission";
 const runsPath = `GET ${actions}/workflows/ci.yml/runs`;
 const jobsPath = `GET ${actions}/runs/10/attempts/1/jobs`;
+const files = [
+  { filename: "src/gateway/auth.ts", status: "modified" },
+  { filename: "pnpm-workspace.yaml", status: "modified" },
+];
 
 const historyPath = `GET /repos/openclaw/openclaw/commits/${head}/statuses`;
 const otherReview = {
@@ -70,10 +74,7 @@ function evaluate(routes: Record<string, unknown> = {}, mode = "enforce", deadli
       routes: {
         [`GET ${pullPath}`]: pr,
         [`GET /repos/openclaw/openclaw/commits/${head}/statuses`]: [],
-        [`GET ${pullPath}/files`]: [
-          { filename: "src/gateway/auth.ts", status: "modified" },
-          { filename: "pnpm-workspace.yaml", status: "modified" },
-        ],
+        [`GET ${pullPath}/files`]: files,
         "GET /repos/openclaw/openclaw/pulls/152415": rollout,
         "GET /repos/openclaw/openclaw/issues/7/comments": [],
         "GET /repos/openclaw/openclaw/issues/7/labels": [],
@@ -136,6 +137,65 @@ function evaluate(routes: Record<string, unknown> = {}, mode = "enforce", deadli
 }
 
 describe("combined security review entry point", () => {
+  it.each([
+    { name: "partial file list", initialPr: pr, initialFiles: files.slice(0, 1) },
+    { name: "stale file count", initialPr: { ...pr, changed_files: 3 }, initialFiles: files },
+  ])("recovers a $name before evaluating either guard", ({ initialPr, initialFiles }) => {
+    const result = evaluate({
+      [`GET ${pullPath}`]: { responses: [initialPr, pr] },
+      [`GET ${pullPath}/files`]: { responses: [initialFiles, files] },
+    });
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.waits).toHaveLength(1);
+    expect(result.requests.filter((entry) => entry.path === `${pullPath}/files`)).toHaveLength(2);
+    expect(result.combined.at(-1)).toBe("success");
+    expect(result.reviews.filter((entry) => entry.body?.state === "success")).toHaveLength(2);
+  });
+
+  it("restarts incomplete pagination and still requires approval for recovered sensitive files", () => {
+    const firstPage = Array.from({ length: 100 }, (_, index) => ({
+      filename: `docs/example-${index}.md`,
+      status: "modified",
+    }));
+    const result = evaluate({
+      [`GET ${pullPath}`]: { ...pr, changed_files: 102 },
+      [`GET ${pullPath}/files`]: { responses: [firstPage, [], firstPage, files] },
+      [rolePath]: { role_name: "read" },
+    });
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.waits).toHaveLength(1);
+    expect(result.combined.at(-1)).toBe("failure");
+    expect(result.reviews.some((entry) => entry.body?.state === "success")).toBe(false);
+    const notices = result.requests.map((entry) => entry.body?.body ?? "").join("\n");
+    expect(notices).toContain("/allow-dependencies-change");
+    expect(notices).toContain("/allow-security-sensitive-change");
+  });
+
+  it.each([
+    { name: "head", changedPr: { ...pr, head: { ...pr.head, sha: "d".repeat(40) } } },
+    { name: "target branch", changedPr: { ...pr, base: { ...pr.base, ref: "stable" } } },
+  ])("rejects a changed $name during file-list recovery", ({ changedPr }) => {
+    const result = evaluate({
+      [`GET ${pullPath}`]: { responses: [pr, pr, changedPr] },
+      [`GET ${pullPath}/files`]: { responses: [files.slice(0, 1), files] },
+    });
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("pull request changed");
+    expect(result.requests.some((entry) => entry.body?.state === "success")).toBe(false);
+  });
+
+  it("bounds file-list recovery across both guards and reports the conflicting counts", () => {
+    const result = evaluate({ [`GET ${pullPath}/files`]: files.slice(0, 1) });
+    expect(result.status).toBe(1);
+    expect(result.waits).toHaveLength(3);
+    expect(result.requests.filter((entry) => entry.path === `${pullPath}/files`)).toHaveLength(4);
+    expect(result.stderr).toContain("expected 2, received 1, current count 2");
+    expect(result.stderr).toContain("recovery exhausted");
+    expect(result.stderr).not.toContain("Split the PR");
+    expect(result.requests.some((entry) => entry.body?.state === "success")).toBe(false);
+    expect(result.combined.at(-1)).toBe("failure");
+  });
+
   it.each([
     {
       httpError: 403,
