@@ -68,9 +68,11 @@ const review = await agents.run("Check this candidate against the stated accepta
 });
 ```
 
-The bridge filters the explicit handoff, uses `context: "isolated"`, and passes
-`sandbox: "require"` to the existing native spawn owner for verifier profiles.
-Missing sandbox support is an error; it never silently retries without a sandbox.
+The bridge filters the explicit handoff, uses `context: "isolated"`, and derives
+sandbox/evidence enforcement from the resolved profile requirements. For the
+verifier preset those requirements pass `sandbox: "require"` to the existing
+native spawn owner and require candidate/artifact handoff. Missing sandbox support
+is an error; it never silently retries without a sandbox.
 
 References are caller-provided data, not fetched automatically or treated as authority.
 
