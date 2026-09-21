@@ -30,6 +30,7 @@ vi.mock("./agent-tool-source-execution-guard.js", () => ({
 vi.mock("./subagents/registry/subagent-registry.js", () => ({
   getSwarmRunByLaunchReplayKey: () => state.existing,
   initSubagentRegistry: vi.fn(),
+  listSwarmRunsForGroup: () => [],
 }));
 vi.mock("./subagents/swarm/swarm-collector-capability.js", () => ({
   isCollectorSpawnTool: () => true,
