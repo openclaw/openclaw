@@ -2,6 +2,9 @@ import type {
   WebSearchStatusParams,
   WebSearchStatusResult,
 } from "../../../packages/gateway-protocol/src/index.js";
+import { AUTH_STORE_VERSION } from "../../agents/auth-profiles/constants.js";
+import { getPreparedRuntimeAuthProfileStoreSnapshot } from "../../agents/auth-profiles/store.js";
+import type { AuthProfileStore } from "../../agents/auth-profiles/types.js";
 import { BUILTIN_AGENT_HARNESS_METADATA } from "../../agents/harness/builtin-openclaw-metadata.js";
 import {
   createModelCatalogDecisions,
@@ -33,7 +36,7 @@ type ProviderStatus = WebSearchStatusResult["providers"][number];
 function credentialSource(
   provider: PluginWebSearchProviderEntry,
   config: ReturnType<GatewayRequestContext["getRuntimeConfig"]>,
-  agentDir: string,
+  authStore: AuthProfileStore,
 ): ProviderStatus["credentialSource"] {
   if (provider.requiresCredential === false) {
     return "none";
@@ -56,7 +59,7 @@ function credentialSource(
     return "config";
   }
   return provider.authProviderId &&
-    hasAuthProfileForProvider({ provider: provider.authProviderId, agentDir })
+    hasAuthProfileForProvider({ provider: provider.authProviderId, authStore })
     ? "auth-profile"
     : "missing";
 }
@@ -71,6 +74,11 @@ export async function prepareWebSearchStatus(
   if (!scope.ok) {
     return { error: modelAuthAgentScopeError(scope) };
   }
+  // Missing publication is unavailable auth, never permission to reopen storage on a request.
+  const authStore = getPreparedRuntimeAuthProfileStoreSnapshot(scope.agentDir) ?? {
+    version: AUTH_STORE_VERSION,
+    profiles: {},
+  };
   const defaultModel = resolveDefaultModelForAgent({ cfg: config, agentId: scope.agentId });
   const modelRef = {
     provider: request.modelProvider?.trim() || defaultModel.provider,
@@ -104,11 +112,12 @@ export async function prepareWebSearchStatus(
           provider: entry,
           config,
           agentDir: scope.agentDir,
+          authStore,
         }),
         installed: Boolean(manifest),
         available: availableIds.has(entry.id),
         requiresCredential: entry.requiresCredential !== false,
-        credentialSource: credentialSource(entry, sourceConfig, scope.agentDir),
+        credentialSource: credentialSource(entry, sourceConfig, authStore),
         configPath:
           entry.configPath === null
             ? []
@@ -131,6 +140,7 @@ export async function prepareWebSearchStatus(
     config,
     agentDir: scope.agentDir,
     providers: available,
+    authStore,
   });
   const selected = providers.find((entry) => entry.id === selectedId && entry.available);
   const status: WebSearchStatusResult = {
@@ -218,6 +228,7 @@ export async function prepareWebSearchStatus(
         agentDir: scope.agentDir,
         modelProvider: modelRef.provider,
         modelId: modelRef.model,
+        authStore: catalog.authStore,
         modelApi: evaluation.selectedRoute?.api ?? entry.api,
         modelBaseUrl: evaluation.selectedRoute?.baseUrl ?? entry.baseUrl,
       });

@@ -20,6 +20,9 @@ const mocks = vi.hoisted(() => ({
   native: vi.fn(),
   runtime: vi.fn(),
 }));
+vi.mock("../../agents/auth-profiles/store.js", () => ({
+  getPreparedRuntimeAuthProfileStoreSnapshot: () => undefined,
+}));
 vi.mock("./model-auth-agent-scope.js", () => ({
   resolveModelAuthAgentScope: mocks.scope,
   modelAuthAgentScopeError: vi.fn(),
